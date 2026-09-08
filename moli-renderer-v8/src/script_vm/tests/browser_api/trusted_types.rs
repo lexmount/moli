@@ -1320,13 +1320,18 @@ fn inline_module_graph_roots_use_trusted_types_compliant_source() {
     };
     let html_module = prepared(html_script, 1);
     let svg_module = prepared(svg_script, 2);
+    let source_origin = crate::document_module_graph::ModuleSourceOrigin {
+        url: document_url,
+        line_offset: 0,
+        column_offset: 0,
+    };
 
     assert_eq!(
         vm.inline_module_script_source_for_graph_start(
             &html_module,
             "postMessage('blocked', '*');"
         ),
-        crate::module_runtime::ModuleSource::text(String::new()),
+        crate::module_runtime::ModuleSource::text_with_origin(String::new(), source_origin.clone(),),
         "a module blocked by Trusted Types should enter the graph as an inert root"
     );
 
@@ -1343,8 +1348,10 @@ trustedTypes.createPolicy("default", {
     )
     .expect("inline-module default policy should install");
 
-    let expected =
-        crate::module_runtime::ModuleSource::text("postMessage('transformed', '*');".to_owned());
+    let expected = crate::module_runtime::ModuleSource::text_with_origin(
+        "postMessage('transformed', '*');".to_owned(),
+        source_origin,
+    );
     assert_eq!(
         vm.inline_module_script_source_for_graph_start(
             &html_module,

@@ -54,6 +54,7 @@ impl ScriptVm {
     ) -> std::result::Result<(ModuleRecordEntry, ModuleIdentityHash), ModuleLoadError> {
         match key.kind() {
             ModuleKind::JavaScript => {
+                let origin = source.origin();
                 let Some(source) = source.text_source() else {
                     return Err(ModuleLoadError::new(
                         ModuleLoadStage::Compile,
@@ -66,6 +67,7 @@ impl ScriptVm {
                     source,
                     source_url,
                     fetch_metadata,
+                    origin,
                 )
             }
             ModuleKind::Json | ModuleKind::Css => {
@@ -104,6 +106,7 @@ impl ScriptVm {
         source: &str,
         source_url: &Url,
         fetch_metadata: &crate::module_runtime::ModuleFetchMetadata,
+        source_origin: Option<&crate::document_module_graph::ModuleSourceOrigin>,
     ) -> std::result::Result<(ModuleRecordEntry, ModuleIdentityHash), ModuleLoadError> {
         let mut exception_id = None;
         self.renderer_document_isolate
@@ -121,6 +124,7 @@ impl ScriptVm {
                     &mut scope,
                     source_url.as_str(),
                     fetch_metadata,
+                    source_origin,
                 );
                 let mut compiler_source =
                     v8::script_compiler::Source::new(source_string, Some(&origin));

@@ -1222,8 +1222,15 @@ fn create_module_script_origin<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     resource_name: &str,
     fetch_metadata: &crate::module_runtime::ModuleFetchMetadata,
+    source_origin: Option<&crate::document_module_graph::ModuleSourceOrigin>,
 ) -> v8::ScriptOrigin<'s> {
-    let name = v8::String::new(scope, resource_name).expect("v8 string allocation");
+    let name = v8::String::new(
+        scope,
+        source_origin.map_or(resource_name, |origin| origin.url.as_str()),
+    )
+    .expect("v8 string allocation");
+    // Inline diagnostics identify the source document, while imports continue
+    // to resolve against the module's preparation-time base URL.
     let base_url = Url::parse(resource_name).ok();
     let host_defined_options = base_url.as_ref().and_then(|base_url| {
         crate::util::script_host_defined_options_with_fetch_metadata(
@@ -1236,8 +1243,8 @@ fn create_module_script_origin<'s>(
     v8::ScriptOrigin::new(
         scope,
         name.into(),
-        0,
-        0,
+        source_origin.map_or(0, |origin| origin.line_offset.min(i32::MAX as u32) as i32),
+        source_origin.map_or(0, |origin| origin.column_offset.min(i32::MAX as u32) as i32),
         false,
         -1,
         None,
