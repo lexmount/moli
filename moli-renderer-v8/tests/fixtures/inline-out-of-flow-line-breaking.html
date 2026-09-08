@@ -1,0 +1,86 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>Out-of-flow placeholders preserve text flow</title>
+<style>
+  body { margin:0; font:20px/1.5 monospace }
+  .line { position:relative; white-space:pre-wrap }
+  .placeholder { width:17px; height:13px }
+  .absolute { position:absolute }
+  .fixed { position:fixed }
+  .float-left { float:left; width:0; height:0 }
+  .float-right { float:right; width:0; height:0 }
+</style>
+<body>
+<script>
+  // Compare identical text with and without placeholders. Floats have empty
+  // exclusion areas here: this tests their presence in the text stream, not
+  // the independent effect of float geometry on the available line width.
+  const pairs = [];
+  const wrapping = [
+    ['zero-width', 'WWWWWW', '0px'],
+    ['overflow', 'WWWWWW', '3ch'],
+    ['word-breaks', 'WW WW WW', '4ch'],
+    ['forced-breaks', 'WW\nWW', '4ch'],
+    ['trailing-spaces', 'WW   ', '20ch'],
+  ];
+  function addPair(id, text, width, role, direction, alignment) {
+    const lines = [true, false].map(withPlaceholders => {
+      const line = document.createElement('div');
+      line.className = 'line';
+      line.style.width = width;
+      line.style.direction = direction;
+      line.style.textAlign = alignment;
+      // Keep the same text-node boundaries in both documents. Chromium rounds
+      // each text fragment separately; changing those boundaries would test
+      // fragment rounding as well as placeholder semantics.
+      for (let index = 0; index <= text.length; index++) {
+        if (withPlaceholders && (index === 0 || index === 1 || index >= text.length - 2)) {
+          const placeholder = document.createElement('i');
+          placeholder.className = 'placeholder ' + role;
+          line.appendChild(placeholder);
+        }
+        if (index < text.length) line.appendChild(document.createTextNode(text[index]));
+      }
+      document.body.appendChild(line);
+      return line;
+    });
+    pairs.push({id, lines});
+  }
+  for (const role of ['absolute', 'fixed', 'float-left', 'float-right']) {
+    for (const direction of ['ltr', 'rtl']) {
+      for (const alignment of ['start', 'end', 'center', 'justify']) {
+        for (const [name, text, width] of wrapping) {
+          addPair([role, direction, alignment, name].join('.'),
+            text, width, role, direction, alignment);
+        }
+      }
+      for (const width of ['min-content', 'max-content']) {
+        for (const text of ['WW ', 'WW WW ']) {
+          addPair([role, direction, width, text.length].join('.'),
+            text, width, role, direction, 'start');
+        }
+      }
+    }
+  }
+  function collectInlineFragmentChecks() {
+    const geometry = line => {
+      const origin = line.getBoundingClientRect();
+      const glyphs = [];
+      for (const node of line.childNodes) {
+        if (node.nodeType !== Node.TEXT_NODE) continue;
+        for (let index = 0; index < node.length; index++) {
+          if (node.data[index] !== 'W') continue;
+          const range = document.createRange();
+          range.setStart(node, index);
+          range.setEnd(node, index + 1);
+          const rect = range.getBoundingClientRect();
+          glyphs.push([rect.x-origin.x, rect.y-origin.y, rect.width, rect.height]);
+        }
+      }
+      return [origin.width, origin.height, glyphs];
+    };
+    return pairs.map(({id, lines}) => ({
+      id, actual:geometry(lines[0]), expected:geometry(lines[1]),
+    }));
+  }
+</script>
