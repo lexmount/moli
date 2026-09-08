@@ -833,6 +833,50 @@ html, body { display: block; margin: 0; padding: 0 }
     }
 
     #[test]
+    fn layout_renderer_preserves_empty_inline_fragment_geometry() {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("current-thread runtime should build");
+        runtime.block_on(tokio::task::LocalSet::new().run_until(async move {
+            let mut page = parse_phase_one_html_into_page_vm_for_test_with_env(
+                include_str!("../../../tests/fixtures/empty-inline-fragments.html"),
+                default_test_page_vm_env_config_with(|env| {
+                    env.layout_policy = moli_page_types::LayoutPolicy::OnDemand;
+                }),
+            )
+            .await;
+            for font_size in [16, 64, 4] {
+                page.vm_mut()
+                    .eval(&format!(
+                        "document.getElementById('dynamic-font').style.fontSize = '{font_size}px'"
+                    ))
+                    .expect("update the empty inline's font size");
+                page.vm_mut().sync_live_document_style_sources();
+                page.vm_mut()
+                    .screenshot_layout_snapshot(moli_layout::PaintViewport::new(800, 600, 1.0))
+                    .expect("empty inline fragment layout should succeed")
+                    .expect("fixture should have a document element");
+                let geometry = page
+                    .vm_mut()
+                    .eval("JSON.stringify(collectInlineFragmentChecks())")
+                    .expect("read explicitly published inline geometry");
+                let checks: serde_json::Value =
+                    serde_json::from_str(&geometry).expect("geometry JSON");
+                let checks = checks.as_array().expect("fragment checks");
+                assert_eq!(checks.len(), 37);
+                for check in checks {
+                    assert_eq!(
+                        check["actual"], check["expected"],
+                        "{} with dynamic font size {font_size}",
+                        check["id"],
+                    );
+                }
+            }
+        }));
+    }
+
+    #[test]
     fn layout_renderer_preserves_calc_min_width_in_float_intrinsic_contribution() {
         let runtime = tokio::runtime::Builder::new_current_thread()
             .enable_all()

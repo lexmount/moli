@@ -410,6 +410,25 @@ pub struct LayoutFragmentBoxModel {
     pub margin: LayoutRect,
 }
 
+impl LayoutFragmentBoxModel {
+    pub(crate) fn translated(self, origin: LayoutPoint) -> Self {
+        let translate = |rect: LayoutRect| {
+            LayoutRect::new(
+                rect.x + origin.x,
+                rect.y + origin.y,
+                rect.width,
+                rect.height,
+            )
+        };
+        Self {
+            content: translate(self.content),
+            padding: translate(self.padding),
+            border: translate(self.border),
+            margin: translate(self.margin),
+        }
+    }
+}
+
 /// A geometry fragment kind. IDs contained here are valid only in the same
 /// [`crate::FrozenLayoutTree`].
 #[derive(Clone, Debug, PartialEq, Eq)]

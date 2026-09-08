@@ -1,9 +1,7 @@
 use std::{collections::HashMap, fmt::Debug, hash::Hash, time::Instant};
 
-use taffy::ResolveOrZero;
-
 use crate::layout_tree::{CssSizing, CssSizingBox, LayoutCoordinateSpace};
-use crate::overflow::{OverflowProjection, inset_rect, offset_rect, outset_rect};
+use crate::overflow::{OverflowProjection, offset_rect};
 use crate::stacking::{PaintOrderEvent, build_paint_order};
 use crate::style::ResolvedLayoutTransform;
 use crate::{
@@ -710,7 +708,7 @@ where
             }
             for inline in &context.fragments.boxes {
                 let target = inline.box_id.index();
-                let box_model = inline_fragment_box_model(self.world, index, inline);
+                let box_model = inline.box_model.translated(content_origin);
                 let fragment = self.push_fragment(LayoutFragment {
                     id: LayoutFragmentId::from_index(0),
                     kind: LayoutFragmentKind::InlineBox {
@@ -1235,124 +1233,6 @@ fn finite_point(point: LayoutPoint) -> LayoutPoint {
         if point.x.is_finite() { point.x } else { 0.0 },
         if point.y.is_finite() { point.y } else { 0.0 },
     )
-}
-
-fn inline_fragment_box_model<N>(
-    world: &LayoutWorld<N>,
-    owner_index: usize,
-    fragment: &crate::inline::InlineBoxFragment,
-) -> LayoutFragmentBoxModel
-where
-    N: Copy + Debug + Eq + Hash,
-{
-    let owner = &world.boxes[owner_index];
-    let owner_id = LayoutBoxId::from_index(owner_index);
-    let owner_layout = owner.final_layout;
-    let vertical_leading_gutter =
-        if owner_id == world.root || world.is_viewport_defining_body(owner_id) {
-            0.0
-        } else {
-            owner
-                .style
-                .scrollbar_leading_gutter_thickness(LayoutScrollbarAxis::Vertical, false)
-        };
-    let horizontal_leading_gutter =
-        if owner_id == world.root || world.is_viewport_defining_body(owner_id) {
-            0.0
-        } else {
-            owner
-                .style
-                .scrollbar_leading_gutter_thickness(LayoutScrollbarAxis::Horizontal, false)
-        };
-    let content_origin = LayoutPoint::new(
-        owner_layout.border.left + owner_layout.padding.left + vertical_leading_gutter,
-        owner_layout.border.top + owner_layout.padding.top + horizontal_leading_gutter,
-    );
-    let containing_width = (owner_layout.size.width
-        - owner_layout.border.left
-        - owner_layout.border.right
-        - owner_layout.padding.left
-        - owner_layout.padding.right)
-        - if owner_id == world.root || world.is_viewport_defining_body(owner_id) {
-            0.0
-        } else {
-            owner
-                .style
-                .scrollbar_gutter_thickness(LayoutScrollbarAxis::Vertical)
-        };
-    let containing_width = containing_width.max(0.0);
-    let inline_box = &world.boxes[fragment.box_id.index()];
-    let style = &inline_box.style;
-    let padding = style.taffy.padding.resolve_or_zero(
-        Some(containing_width),
-        crate::style::resolve_stylo_calc_value,
-    );
-    let border = style.taffy.border.resolve_or_zero(
-        Some(containing_width),
-        crate::style::resolve_stylo_calc_value,
-    );
-    let margin = style.taffy.margin.resolve_or_zero(
-        Some(containing_width),
-        crate::style::resolve_stylo_calc_value,
-    );
-    let ltr = style.direction() == crate::style::InlineDirection::Ltr;
-    let has_left_edge = if ltr {
-        fragment.has_start_edge
-    } else {
-        fragment.has_end_edge
-    };
-    let has_right_edge = if ltr {
-        fragment.has_end_edge
-    } else {
-        fragment.has_start_edge
-    };
-    let left_margin = if has_left_edge {
-        margin.left.max(0.0)
-    } else {
-        0.0
-    };
-    let right_margin = if has_right_edge {
-        margin.right.max(0.0)
-    } else {
-        0.0
-    };
-    let left_padding = if has_left_edge { padding.left } else { 0.0 };
-    let right_padding = if has_right_edge { padding.right } else { 0.0 };
-    let left_border = if has_left_edge { border.left } else { 0.0 };
-    let right_border = if has_right_edge { border.right } else { 0.0 };
-    let border_box = LayoutRect::new(
-        content_origin.x + fragment.rect.x + left_margin,
-        content_origin.y + fragment.rect.y - padding.top - border.top,
-        (fragment.rect.width - left_margin - right_margin).max(0.0),
-        fragment.rect.height + padding.top + padding.bottom + border.top + border.bottom,
-    );
-    let padding_box = inset_rect(
-        border_box,
-        border.top,
-        right_border,
-        border.bottom,
-        left_border,
-    );
-    let content_box = inset_rect(
-        padding_box,
-        padding.top,
-        right_padding,
-        padding.bottom,
-        left_padding,
-    );
-    let margin_box = outset_rect(
-        border_box,
-        margin.top,
-        right_margin,
-        margin.bottom,
-        left_margin,
-    );
-    LayoutFragmentBoxModel {
-        content: content_box,
-        padding: padding_box,
-        border: border_box,
-        margin: margin_box,
-    }
 }
 
 #[cfg(test)]

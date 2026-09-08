@@ -15,10 +15,12 @@ use std::{
 };
 
 use parley::{BreakReason, InlineBox, InlineBoxKind, Layout, PositionedLayoutItem, TextStyle};
-use taffy::{MaybeResolve as _, Point, Size};
+use taffy::{MaybeResolve as _, Point, ResolveOrZero as _, Size};
 
 use crate::{
-    LayoutBoxId, LayoutBoxKind, LayoutWorld, PaintColor, PaintRect,
+    LayoutBox, LayoutBoxId, LayoutBoxKind, LayoutFragmentBoxModel, LayoutWorld, PaintColor,
+    PaintRect, ResolvedLayoutStyle,
+    overflow::{inset_rect, outset_rect},
     style::{
         InlineDirection, InlineTextTransform, InlineUnicodeBidi, InlineVerticalAlign,
         InlineWhiteSpaceCollapse, LayoutInlineAlignment,
@@ -379,6 +381,7 @@ pub(crate) struct InlineLineFragment {
     /// CSSOM line geometry continues to use `rect`.
     pub(crate) paint_bounds: InlinePaintBounds,
     pub(crate) baseline: f32,
+    pub(crate) phantom: bool,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
@@ -413,15 +416,19 @@ pub(crate) struct InlineSourceFragment {
 pub(crate) struct InlineBoxFragment {
     pub(crate) line_index: usize,
     pub(crate) box_id: LayoutBoxId,
-    pub(crate) rect: PaintRect,
+    /// Resolved once during final line layout, in the IFC's content space.
+    /// Paint, CSSOM, overflow and positioned layout consume the same boxes.
+    pub(crate) box_model: LayoutFragmentBoxModel,
     pub(crate) has_start_edge: bool,
     pub(crate) has_end_edge: bool,
 }
 
-pub(crate) fn build_inline_fragments(
+pub(crate) fn build_inline_fragments<N>(
     context: &InlineFormattingContext,
     layout: &Layout<TextBrush>,
     line_placements: &[InlineLinePlacement],
+    boxes: &[LayoutBox<N>],
+    containing_width: f32,
 ) -> InlineFragments {
     // Binary overlap lookup relies on both endpoints being monotonic. Validate
     // each immutable normalization product once, rather than rescanning the
@@ -463,6 +470,7 @@ pub(crate) fn build_inline_fragments(
                     InlinePaintBounds::Bounded(line_rect)
                 }),
             baseline: placement.map_or(metrics.baseline, |placement| placement.baseline),
+            phantom: placement.is_some_and(|placement| placement.phantom),
         });
         if let Some(placement) = placement {
             for box_placement in &placement.box_block_placements {
@@ -597,11 +605,15 @@ pub(crate) fn build_inline_fragments(
     fragments.boxes = box_fragments
         .into_iter()
         .filter_map(|((box_index, line_index), accumulator)| {
-            let line_rect = fragments.lines.get(line_index)?.rect;
+            let line = fragments.lines.get(line_index)?;
             Some(InlineBoxFragment {
                 line_index,
                 box_id: LayoutBoxId::from_index(box_index),
-                rect: accumulator.rect(line_rect)?,
+                box_model: accumulator.box_model(
+                    &boxes[box_index].style,
+                    line,
+                    containing_width,
+                )?,
                 has_start_edge: accumulator.has_start_edge,
                 has_end_edge: accumulator.has_end_edge,
             })
@@ -949,10 +961,13 @@ fn resolve_inline_lines(
                 .map_or(fallback_root_bounds, InlineVerticalBounds::from_strut)
         });
         for state in &mut states {
-            state.metrics = (!phantom)
-                .then_some(state.strut)
-                .flatten()
-                .map(InlineVerticalBounds::from_strut);
+            state.metrics = if phantom {
+                // Empty inline fragments still participate in vertical-align,
+                // but their font struts must not create block-axis geometry.
+                Some(InlineVerticalBounds::ZERO)
+            } else {
+                state.strut.map(InlineVerticalBounds::from_strut)
+            };
         }
 
         // One pending list per structural target plus one for the root line
@@ -1099,12 +1114,20 @@ fn resolve_inline_lines(
             let box_block_placements = states
                 .iter()
                 .filter_map(|state| {
-                    let strut = state.strut?;
                     let baseline = root_baseline + state.global_offset;
+                    let (top, height) = if phantom {
+                        (baseline, 0.0)
+                    } else {
+                        let strut = state.strut?;
+                        (
+                            baseline - strut.text_ascent,
+                            (strut.text_ascent + strut.text_descent).max(0.0),
+                        )
+                    };
                     Some(InlineBoxBlockPlacement {
                         box_id: state.box_id,
-                        top: baseline - strut.text_ascent,
-                        height: (strut.text_ascent + strut.text_descent).max(0.0),
+                        top,
+                        height,
                     })
                 })
                 .collect();
@@ -1461,6 +1484,86 @@ struct FragmentAccumulator {
 }
 
 impl FragmentAccumulator {
+    fn box_model(
+        self,
+        style: &ResolvedLayoutStyle,
+        line: &InlineLineFragment,
+        containing_width: f32,
+    ) -> Option<LayoutFragmentBoxModel> {
+        let rect = self.rect(line.rect)?;
+        let resolve = crate::style::resolve_stylo_calc_value;
+        let padding = style
+            .taffy
+            .padding
+            .resolve_or_zero(Some(containing_width), resolve);
+        let border = style
+            .taffy
+            .border
+            .resolve_or_zero(Some(containing_width), resolve);
+        let margin = style
+            .taffy
+            .margin
+            .resolve_or_zero(Some(containing_width), resolve);
+        let (has_left_edge, has_right_edge) = if style.direction() == InlineDirection::Ltr {
+            (self.has_start_edge, self.has_end_edge)
+        } else {
+            (self.has_end_edge, self.has_start_edge)
+        };
+        let left_margin = if has_left_edge {
+            margin.left.max(0.0)
+        } else {
+            0.0
+        };
+        let right_margin = if has_right_edge {
+            margin.right.max(0.0)
+        } else {
+            0.0
+        };
+        // Blink's AddBoxFragmentPlaceholder gives an empty line's inline box
+        // zero block offset/size, including when it has block-axis padding or
+        // borders. Only an actual line gets the font box and those decorations.
+        let (top, height) = if line.phantom {
+            (rect.y, 0.0)
+        } else {
+            (
+                rect.y - padding.top - border.top,
+                rect.height + padding.top + padding.bottom + border.top + border.bottom,
+            )
+        };
+        let border_box = PaintRect::new(
+            rect.x + left_margin,
+            top,
+            (rect.width - left_margin - right_margin).max(0.0),
+            height,
+        );
+        let padding_box = inset_rect(
+            border_box,
+            border.top,
+            if has_right_edge { border.right } else { 0.0 },
+            border.bottom,
+            if has_left_edge { border.left } else { 0.0 },
+        );
+        let content_box = inset_rect(
+            padding_box,
+            padding.top,
+            if has_right_edge { padding.right } else { 0.0 },
+            padding.bottom,
+            if has_left_edge { padding.left } else { 0.0 },
+        );
+        Some(LayoutFragmentBoxModel {
+            content: content_box,
+            padding: padding_box,
+            border: border_box,
+            margin: outset_rect(
+                border_box,
+                margin.top,
+                right_margin,
+                margin.bottom,
+                left_margin,
+            ),
+        })
+    }
+
     fn include(&mut self, rect: PaintRect) {
         self.include_inline_axis(rect.x, rect.width);
         self.min_y = Some(self.min_y.map_or(rect.y, |value| value.min(rect.y)));
