@@ -104,10 +104,11 @@ async fn transfer_during_response_flush(abandon: bool) {
     let (permit, flush) = conn.begin_command_response_flush_permit();
     let mut command_context = CommandDispatchContext::new(flush);
     let mut permit = Some(permit);
-    let projection = projection(
-        &mut conn,
-        DownloadBody::Buffered(b"without frontend".to_vec()),
-    );
+    // This scenario observes an active transfer before completing it under the
+    // response gate. A buffered body can finish before observer admission, putting
+    // its terminal event in the initial batch instead of the background channel.
+    let (body, chunks, completion, _) = stream();
+    let projection = projection(&mut conn, body);
     let mut monitor = projection.observation.clone();
     let mut inline = Vec::new();
     conn.observe_download(projection, &mut inline, true, &mut command_context)
@@ -121,6 +122,9 @@ async fn transfer_during_response_flush(abandon: bool) {
     if abandon {
         drop(permit.take());
     }
+    chunks.send(b"without frontend".to_vec()).unwrap();
+    drop(chunks);
+    completion.send(Ok(())).unwrap();
     assert!(matches!(
         terminal(&mut monitor).await.state,
         DownloadState::Completed { .. }
