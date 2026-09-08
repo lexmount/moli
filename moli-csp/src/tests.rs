@@ -2818,6 +2818,13 @@ fn trusted_types_csp_name_grammar_matches_only_valid_tokens() {
             false
         ));
     }
+    // Test the token matcher directly: delivery rejects this entire directive
+    // before policy-name checks, so parsing it would test an absent directive.
+    assert!(!trusted_type_sources_allow_policy_name(
+        &["valid", "\u{000b}'allow-duplicates'"],
+        "valid",
+        true,
+    ));
 }
 
 #[test]
@@ -2837,6 +2844,16 @@ fn trusted_types_csp_name_grammar_does_not_restrict_unlisted_or_wildcard_names()
                 false
             ));
         }
+        assert!(!policy_allows_trusted_type_policy_name(
+            &ContentSecurityPolicy::from("trusted-types *"),
+            name,
+            true,
+        ));
+        assert!(policy_allows_trusted_type_policy_name(
+            &ContentSecurityPolicy::from("trusted-types * 'allow-duplicates'"),
+            name,
+            true,
+        ));
     }
 }
 

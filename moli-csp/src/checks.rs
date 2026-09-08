@@ -620,6 +620,14 @@ fn policy_allows_trusted_type_policy_name(
     let Some(sources) = directive_source_list(policy, TRUSTED_TYPES) else {
         return true;
     };
+    trusted_type_sources_allow_policy_name(&sources, policy_name, is_duplicate)
+}
+
+fn trusted_type_sources_allow_policy_name(
+    sources: &[&str],
+    policy_name: &str,
+    is_duplicate: bool,
+) -> bool {
     let name_is_allowed = sources.iter().any(|source| {
         let source = *source;
         source == "*"
@@ -633,7 +641,7 @@ fn policy_allows_trusted_type_policy_name(
     let duplicate_is_allowed = !is_duplicate
         || sources
             .iter()
-            .any(|source| csp_keyword_eq(source.trim(), "allow-duplicates"));
+            .any(|source| csp_keyword_eq(source, "allow-duplicates"));
     name_is_allowed && duplicate_is_allowed
 }
 
