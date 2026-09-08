@@ -286,7 +286,7 @@ pub fn set_pathname(url: &mut Url, new_pathname: &str) {
         url.set_path(new_pathname)
     } else if SchemeType::from(url.scheme()).is_special()
         || !new_pathname.is_empty()
-        || !url.has_host()
+        || !url.has_authority()
     {
         let mut path_to_set = String::from("/");
         path_to_set.push_str(new_pathname);
