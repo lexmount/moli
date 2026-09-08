@@ -2610,7 +2610,6 @@ domparsing/DOMParser-parseFromString-xml-internal-subset.html
 domparsing/DOMParser-parseFromString-xml-parsererror.html
 domparsing/DOMParser-parseFromString-xml.html
 domparsing/XMLSerializer-serializeToString.html
-domparsing/insert_adjacent_html.html
 domparsing/tentative/all-stream-methods-with-trusted-types-no-policy.html
 domparsing/tentative/positional-methods-with-trusted-types.html
 domparsing/tentative/positional-methods.html
