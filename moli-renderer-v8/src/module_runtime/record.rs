@@ -19,6 +19,8 @@ pub(crate) struct ModuleRecordEntry {
     compiled_module: v8::Global<v8::Module>,
     requests: Vec<ModuleRequestRecord>,
     wasm_module: Option<WasmModuleRecord>,
+    // Own the evaluation data; the Context's lookup only keeps a weak reference.
+    synthetic_text_module_source: Option<Rc<super::SyntheticTextModuleSource>>,
     state: ModuleRecordState,
 }
 
@@ -33,6 +35,7 @@ impl ModuleRecordEntry {
             compiled_module,
             requests,
             wasm_module: None,
+            synthetic_text_module_source: None,
             state: ModuleRecordState::Compiled,
         }
     }
@@ -48,12 +51,21 @@ impl ModuleRecordEntry {
             compiled_module,
             requests,
             wasm_module: Some(wasm_module),
+            synthetic_text_module_source: None,
             state: ModuleRecordState::Compiled,
         }
     }
 
     pub(crate) fn key(&self) -> &ModuleMapKey {
         &self.key
+    }
+
+    pub(crate) fn with_synthetic_text_module_source(
+        mut self,
+        source: Rc<super::SyntheticTextModuleSource>,
+    ) -> Self {
+        self.synthetic_text_module_source = Some(source);
+        self
     }
 
     pub(crate) fn compiled_module(&self) -> &v8::Global<v8::Module> {
