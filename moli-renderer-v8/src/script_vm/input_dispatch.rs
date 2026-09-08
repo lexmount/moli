@@ -1831,6 +1831,40 @@ impl ScriptVm {
                 return Ok(input_dispatch_outcome(false));
             }
 
+            // Combined keydown/text input includes a cancelable keypress before
+            // editing. Keep both events in this input turn; an explicit char
+            // command already dispatched keypress and must not emit it twice.
+            let handle = if event_name == "keydown" && should_insert_text && !text.is_empty() {
+                // Like Blink's KeyboardEventManager, resolve focus again after
+                // keydown listeners before targeting the character event.
+                let runtime = unsafe { &*runtime_ptr };
+                let Some(handle) = runtime
+                    .active_element_handle()
+                    .or_else(|| runtime.document_focus_fallback_handle())
+                else {
+                    return Ok(input_dispatch_outcome(false));
+                };
+                let Some(keypress) = construct_keyboard_event(
+                    scope,
+                    "keypress",
+                    key,
+                    code,
+                    alt,
+                    ctrl,
+                    meta,
+                    shift,
+                    auto_repeat,
+                ) else {
+                    return Ok(input_dispatch_outcome(false));
+                };
+                if !dispatch_public_event(scope, runtime_ptr, handle, keypress).allows_default() {
+                    return Ok(input_dispatch_outcome(false));
+                }
+                handle
+            } else {
+                handle
+            };
+
             let runtime = unsafe { &mut *runtime_ptr };
             let target = key_target_info(runtime, handle);
 

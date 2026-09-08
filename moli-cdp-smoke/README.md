@@ -145,6 +145,12 @@ workers can partition that selected list with the one-based
 
 The current suite is a strong core smoke gate, not a complete Playwright compatibility suite.
 
+The `dom-input` keypress contract was calibrated on 2026-09-08 against
+headed Debian Chromium 145.0.7632.116 through CDP. It checks the full trusted
+`keydown -> keypress -> beforeinput -> input -> keyup` sequence for Playwright
+typing, cancellation at keypress, the distinct `rawKeyDown` and `char` paths,
+and the absence of keyboard events for `Input.insertText`.
+
 The default `webgl-viewport` group was calibrated on 2026-09-07 against
 Debian `/usr/bin/chromium` 145.0.7632.116. It uses the same fixture as the
 renderer tests to check WebGL1/2 on HTML and

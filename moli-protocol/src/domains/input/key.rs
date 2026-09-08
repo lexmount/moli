@@ -48,17 +48,17 @@ pub(super) fn parse_dispatch_key_event(
         return Err("InvalidParams");
     };
 
-    let cdp_event_type = params.r#type.clone();
-    let event_type = match cdp_event_type {
-        KeyEventType::KeyDown | KeyEventType::RawKeyDown => DevToolsKeyEventType::KeyDown,
-        KeyEventType::KeyUp => DevToolsKeyEventType::KeyUp,
-        KeyEventType::Char => DevToolsKeyEventType::KeyPress,
+    // keyDown combines a DOM keydown with a character phase; rawKeyDown
+    // dispatches only keydown, even when the client supplies text.
+    let (event_type, should_insert_text) = match params.r#type {
+        KeyEventType::KeyDown => (
+            DevToolsKeyEventType::KeyDown,
+            params.text.as_deref().is_some_and(|text| !text.is_empty()),
+        ),
+        KeyEventType::RawKeyDown => (DevToolsKeyEventType::KeyDown, false),
+        KeyEventType::KeyUp => (DevToolsKeyEventType::KeyUp, false),
+        KeyEventType::Char => (DevToolsKeyEventType::KeyPress, true),
     };
-    let should_insert_text = cdp_event_type == KeyEventType::Char
-        || matches!(
-            cdp_event_type,
-            KeyEventType::KeyDown | KeyEventType::RawKeyDown
-        ) && params.text.as_deref().is_some_and(|text| !text.is_empty());
 
     Ok(ParsedDispatchKeyEvent {
         event_type,

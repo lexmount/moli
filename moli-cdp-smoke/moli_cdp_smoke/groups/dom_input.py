@@ -192,6 +192,7 @@ async def run_dom_input_group(state: SmokeState) -> None:
     await run_playwright_expect_matcher_workflows(state)
     await run_locator_composition_workflows(state)
     await run_keyboard_editing_workflows(state)
+    await run_keypress_dispatch_workflow(state)
     await run_cdp_control_key_name_workflow(state)
     await run_cdp_input_navigation_replacement_workflows(state)
     await run_mouse_event_workflows(state)
@@ -972,6 +973,80 @@ async def run_keyboard_editing_workflows(state: SmokeState) -> None:
     await page.keyboard.up("b")
 
     state.record("playwright_keyboard_editing_workflows")
+
+
+async def run_keypress_dispatch_workflow(state: SmokeState) -> None:
+    page = await state.context.new_page()
+    session = None
+    try:
+        await page.set_content("""
+            <input id="field">
+            <script>
+              window.__keyEvents = [];
+              window.__cancelAt = false;
+              for (const type of ['keydown', 'keypress', 'beforeinput', 'input', 'keyup']) {
+                document.getElementById('field').addEventListener(type, event => {
+                  __keyEvents.push({type, trusted: event.isTrusted});
+                  if (__cancelAt && type === 'keypress' && event.key === '@')
+                    event.preventDefault();
+                });
+              }
+            </script>
+        """)
+        session = await state.context.new_cdp_session(page)
+        full_sequence = ["keydown", "keypress", "beforeinput", "input", "keyup"]
+
+        async def reset(cancel_at: bool = False) -> None:
+            await page.evaluate("""cancelAt => {
+              const field = document.getElementById('field');
+              field.value = '';
+              field.focus();
+              window.__keyEvents = [];
+              window.__cancelAt = cancelAt;
+            }""", cancel_at)
+
+        async def check(value: str, event_types: list[str], label: str) -> None:
+            assert_equal(
+                await page.evaluate("""() => ({
+                  value: document.getElementById('field').value,
+                  events: __keyEvents,
+                })"""),
+                {"value": value, "events": [{"type": kind, "trusted": True} for kind in event_types]},
+                label,
+            )
+
+        await reset()
+        await page.keyboard.type("a@A")
+        await check("a@A", full_sequence * 3, "Playwright type emits a trusted keypress for every character")
+
+        await reset(cancel_at=True)
+        await page.keyboard.type("a@A")
+        await check(
+            "aA", full_sequence + ["keydown", "keypress", "keyup"] + full_sequence,
+            "canceling keypress prevents only that character's input",
+        )
+
+        for kind, value, event_types in [
+            ("rawKeyDown", "", ["keydown", "keyup"]),
+            ("char", "a", ["keypress", "beforeinput", "input", "keyup"]),
+        ]:
+            await reset()
+            await session.send("Input.dispatchKeyEvent", {
+                "type": kind, "key": "a", "code": "KeyA", "text": "a", "windowsVirtualKeyCode": 65,
+            })
+            await session.send("Input.dispatchKeyEvent", {
+                "type": "keyUp", "key": "a", "code": "KeyA", "windowsVirtualKeyCode": 65,
+            })
+            await check(value, event_types, f"CDP {kind} preserves its character-event semantics")
+
+        await reset()
+        await session.send("Input.insertText", {"text": "a"})
+        await check("a", ["beforeinput", "input"], "insertText does not synthesize keyboard events")
+        state.record("playwright_and_cdp_keypress_dispatch")
+    finally:
+        if session is not None:
+            await session.detach()
+        await page.close()
 
 
 async def run_cdp_control_key_name_workflow(state: SmokeState) -> None:
