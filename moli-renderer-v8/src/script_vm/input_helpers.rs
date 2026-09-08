@@ -2,7 +2,7 @@ use super::ScriptVm;
 use crate::document_runtime::DomHandle;
 use crate::host::ModuleFailurePolicy;
 use crate::module_runtime::{ModuleGraphHandle, ModuleLoadError, ModuleLoadStage};
-use crate::types::ScriptErrorConstructorKind;
+use crate::types::ScriptErrorValue;
 
 pub(super) fn mouse_button_mask(button: i32) -> i32 {
     match button {
@@ -84,7 +84,7 @@ pub(crate) struct PreparedScriptExecutionError {
     message: String,
     module_load_stage: Option<ModuleLoadStage>,
     module_failure_policy: Option<ModuleFailurePolicy>,
-    error_constructor: Option<ScriptErrorConstructorKind>,
+    error_value: Option<ScriptErrorValue>,
     body_activity: PreparedScriptBodyActivity,
 }
 
@@ -94,7 +94,7 @@ impl PreparedScriptExecutionError {
             message: message.into(),
             module_load_stage: None,
             module_failure_policy: None,
-            error_constructor: None,
+            error_value: None,
             body_activity: PreparedScriptBodyActivity::NotEntered,
         }
     }
@@ -104,7 +104,7 @@ impl PreparedScriptExecutionError {
             message: message.into(),
             module_load_stage: None,
             module_failure_policy: None,
-            error_constructor: None,
+            error_value: None,
             body_activity: PreparedScriptBodyActivity::Entered,
         }
     }
@@ -120,7 +120,7 @@ impl PreparedScriptExecutionError {
             message: error.message().to_owned(),
             module_load_stage: Some(error.stage()),
             module_failure_policy: Some(module_failure_policy),
-            error_constructor: error.error_constructor(),
+            error_value: error.error_value(),
             body_activity: PreparedScriptBodyActivity::NotEntered,
         }
     }
@@ -130,7 +130,7 @@ impl PreparedScriptExecutionError {
             message: message.into(),
             module_load_stage: Some(ModuleLoadStage::Fetch),
             module_failure_policy: Some(ModuleFailurePolicy::TopLevelLoadFailure),
-            error_constructor: None,
+            error_value: None,
             body_activity: PreparedScriptBodyActivity::NotEntered,
         }
     }
@@ -147,8 +147,8 @@ impl PreparedScriptExecutionError {
         self.module_failure_policy
     }
 
-    pub(crate) fn error_constructor(&self) -> Option<ScriptErrorConstructorKind> {
-        self.error_constructor
+    pub(crate) fn error_value(&self) -> Option<ScriptErrorValue> {
+        self.error_value
     }
 
     pub(crate) fn body_activity(&self) -> PreparedScriptBodyActivity {

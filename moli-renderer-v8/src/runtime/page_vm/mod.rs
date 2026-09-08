@@ -36,7 +36,7 @@ use crate::script_vm::{
     PostParseLifecycleAdvance, PostParsePageOwnedTask, RendererDocumentIsolateHandle,
 };
 use crate::script_vm::{PreparedScriptExecutionOutcome, RendererDocumentIsolateBootstrap};
-use crate::types::ScriptErrorConstructorKind;
+use crate::types::ScriptErrorValue;
 use crate::types::ScriptSkipReason;
 use moli_page_types::{
     ContentSecurityPolicyIssueSnapshot, ContentSecurityPolicyViolationType, InspectorIssueSnapshot,
@@ -430,14 +430,8 @@ fn wrap_native_esm_module_load_error(
     prefix: &str,
     error: crate::module_runtime::ModuleLoadError,
 ) -> crate::module_runtime::ModuleLoadError {
-    let wrapped = crate::module_runtime::ModuleLoadError::new(
-        error.stage(),
-        format!("{prefix}: {}", error.message()),
-    );
-    match error.error_constructor() {
-        Some(error_constructor) => wrapped.with_error_constructor(error_constructor),
-        None => wrapped,
-    }
+    let message = format!("{prefix}: {}", error.message());
+    error.with_message(message)
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -490,7 +484,7 @@ enum PageOwnedScriptFailureClassification {
     Typed {
         dynamic_kind: crate::dynamic_script_owner::DynamicScriptFailureKind,
         module_failure_policy: Option<crate::host::ModuleFailurePolicy>,
-        error_constructor: Option<ScriptErrorConstructorKind>,
+        error_value: Option<ScriptErrorValue>,
     },
 }
 
@@ -507,7 +501,7 @@ impl PageOwnedScriptFailureClassification {
                         script, stage,
                     ),
                 module_failure_policy: error.module_failure_policy(),
-                error_constructor: error.error_constructor(),
+                error_value: error.error_value(),
             },
         )
     }
@@ -523,7 +517,7 @@ impl PageOwnedScriptFailureClassification {
                 error.stage(),
             ),
             module_failure_policy: Some(module_failure_policy),
-            error_constructor: error.error_constructor(),
+            error_value: error.error_value(),
         }
     }
 }
@@ -601,14 +595,14 @@ fn complete_prepared_script_execution_failure(
             PageOwnedScriptFailureClassification::Typed {
                 dynamic_kind,
                 module_failure_policy,
-                error_constructor,
+                error_value,
             } => vm.finish_runtime_owned_script_failure_with_kind(
                 dynamic_script_owner_id,
                 &script,
                 &error,
                 dynamic_kind,
                 module_failure_policy,
-                error_constructor,
+                error_value,
             ),
             PageOwnedScriptFailureClassification::LegacyMessageText => {
                 vm.finish_runtime_owned_script_failure(dynamic_script_owner_id, &script, &error);
@@ -620,34 +614,34 @@ fn complete_prepared_script_execution_failure(
             Some(script.url.as_str()),
         );
     } else if vm.parser_owned_module_reports_failure_immediately(&script) {
-        let (module_failure_policy, error_constructor) = match failure_classification {
+        let (module_failure_policy, error_value) = match failure_classification {
             PageOwnedScriptFailureClassification::Typed {
                 module_failure_policy,
-                error_constructor,
+                error_value,
                 ..
-            } => (module_failure_policy, error_constructor),
+            } => (module_failure_policy, error_value),
             PageOwnedScriptFailureClassification::LegacyMessageText => (None, None),
         };
         vm.dispatch_parser_owned_module_failure_and_finish_settlement_best_effort(
             &script,
             &error,
             module_failure_policy,
-            error_constructor,
+            error_value,
         );
     } else {
-        let (module_failure_policy, error_constructor) = match failure_classification {
+        let (module_failure_policy, error_value) = match failure_classification {
             PageOwnedScriptFailureClassification::Typed {
                 module_failure_policy,
-                error_constructor,
+                error_value,
                 ..
-            } => (module_failure_policy, error_constructor),
+            } => (module_failure_policy, error_value),
             PageOwnedScriptFailureClassification::LegacyMessageText => (None, None),
         };
         vm.enqueue_script_failure_lifecycle_work_best_effort(
             &script,
             &error,
             module_failure_policy,
-            error_constructor,
+            error_value,
         );
     }
     complete_prepared_script_execution_failure_report(script, error)
@@ -663,13 +657,12 @@ fn complete_page_owned_prepared_script_execution_failure_body(
     prepared_script_activity: crate::script_vm::PreparedScriptBodyActivity,
 ) -> PageOwnedScriptExecutionOutcome {
     let terminal_activity = if completion_owner.is_runtime_owned() {
-        let (dynamic_kind, module_failure_policy, error_constructor) = match failure_classification
-        {
+        let (dynamic_kind, module_failure_policy, error_value) = match failure_classification {
             PageOwnedScriptFailureClassification::Typed {
                 dynamic_kind,
                 module_failure_policy,
-                error_constructor,
-            } => (dynamic_kind, module_failure_policy, error_constructor),
+                error_value,
+            } => (dynamic_kind, module_failure_policy, error_value),
             PageOwnedScriptFailureClassification::LegacyMessageText => (
                 crate::dynamic_script_owner::DynamicScriptOwner::legacy_message_failure_kind(
                     &script, &error,
@@ -684,40 +677,40 @@ fn complete_page_owned_prepared_script_execution_failure_body(
             &error,
             dynamic_kind,
             module_failure_policy,
-            error_constructor,
+            error_value,
         )
     } else if vm.parser_owned_inline_importmap_reports_window_error_immediately(&script) {
         vm.report_window_error_body_best_effort(&error, Some(script.url.as_str()), None);
         crate::script_vm::ScriptTerminalBodyActivity::EventDispatchAttempted
     } else if vm.parser_owned_module_reports_failure_immediately(&script) {
-        let (module_failure_policy, error_constructor) = match failure_classification {
+        let (module_failure_policy, error_value) = match failure_classification {
             PageOwnedScriptFailureClassification::Typed {
                 module_failure_policy,
-                error_constructor,
+                error_value,
                 ..
-            } => (module_failure_policy, error_constructor),
+            } => (module_failure_policy, error_value),
             PageOwnedScriptFailureClassification::LegacyMessageText => (None, None),
         };
         vm.dispatch_current_prepared_script_error_body_best_effort(
             &script,
             &error,
             module_failure_policy,
-            error_constructor,
+            error_value,
         )
     } else {
-        let (module_failure_policy, error_constructor) = match failure_classification {
+        let (module_failure_policy, error_value) = match failure_classification {
             PageOwnedScriptFailureClassification::Typed {
                 module_failure_policy,
-                error_constructor,
+                error_value,
                 ..
-            } => (module_failure_policy, error_constructor),
+            } => (module_failure_policy, error_value),
             PageOwnedScriptFailureClassification::LegacyMessageText => (None, None),
         };
         vm.enqueue_script_failure_lifecycle_work_best_effort(
             &script,
             &error,
             module_failure_policy,
-            error_constructor,
+            error_value,
         );
         crate::script_vm::ScriptTerminalBodyActivity::NoEventDispatch
     };
@@ -806,13 +799,13 @@ async fn execute_prepared_script_on_script_execution_lane(
             let failure_classification =
                 PageOwnedScriptFailureClassification::from_prepared_script_error(&script, &error);
             if let Some(claim) = runtime_script_claim.take() {
-                let (module_failure_policy, error_constructor) = match failure_classification {
+                let (module_failure_policy, error_value) = match failure_classification {
                     PageOwnedScriptFailureClassification::LegacyMessageText => (None, None),
                     PageOwnedScriptFailureClassification::Typed {
                         module_failure_policy,
-                        error_constructor,
+                        error_value,
                         ..
-                    } => (module_failure_policy, error_constructor),
+                    } => (module_failure_policy, error_value),
                 };
                 let message = error.into_message();
                 let terminal_activity = vm.finish_claimed_runtime_owned_script_failure_body(
@@ -820,7 +813,7 @@ async fn execute_prepared_script_on_script_execution_lane(
                     &script,
                     &message,
                     module_failure_policy,
-                    error_constructor,
+                    error_value,
                 );
                 return complete_prepared_script_execution_failure_report_with_activity(
                     script,
@@ -2666,7 +2659,7 @@ impl PageVm {
                 PageOwnedScriptFailureClassification::Typed {
                     dynamic_kind,
                     module_failure_policy,
-                    error_constructor,
+                    error_value,
                 },
             ) if dynamic_kind.is_deferrable_module() => {
                 self.vm_mut()
@@ -2676,7 +2669,7 @@ impl PageVm {
                         message.clone(),
                         dynamic_kind,
                         module_failure_policy,
-                        error_constructor,
+                        error_value,
                     );
                 (
                     complete_prepared_script_execution_failure_report(

@@ -6,7 +6,7 @@ use crate::{
         PreparedScript, PreparedScriptSourceLoadOutcome, SharedScriptSourceLoad,
         prepared_script_with_loaded_source,
     },
-    types::{ScriptErrorConstructorKind, SharedNavigationResponseResult},
+    types::{ScriptErrorValue, SharedNavigationResponseResult},
 };
 
 use super::{DocumentScriptExecutionLane, DocumentScriptSourceFailureLane};
@@ -21,7 +21,7 @@ use super::{DocumentScriptExecutionLane, DocumentScriptSourceFailureLane};
 pub(crate) struct PageOwnedDocumentScriptSourceFailure {
     message: String,
     module_failure_policy: Option<ModuleFailurePolicy>,
-    error_constructor: Option<ScriptErrorConstructorKind>,
+    error_value: Option<ScriptErrorValue>,
 }
 
 impl PageOwnedDocumentScriptSourceFailure {
@@ -29,19 +29,19 @@ impl PageOwnedDocumentScriptSourceFailure {
         Self {
             message,
             module_failure_policy: None,
-            error_constructor: None,
+            error_value: None,
         }
     }
 
     pub(crate) fn runtime_terminal(
         message: String,
         module_failure_policy: Option<ModuleFailurePolicy>,
-        error_constructor: Option<ScriptErrorConstructorKind>,
+        error_value: Option<ScriptErrorValue>,
     ) -> Self {
         Self {
             message,
             module_failure_policy,
-            error_constructor,
+            error_value,
         }
     }
 
@@ -55,13 +55,9 @@ impl PageOwnedDocumentScriptSourceFailure {
     ) -> (
         String,
         Option<ModuleFailurePolicy>,
-        Option<ScriptErrorConstructorKind>,
+        Option<ScriptErrorValue>,
     ) {
-        (
-            self.message,
-            self.module_failure_policy,
-            self.error_constructor,
-        )
+        (self.message, self.module_failure_policy, self.error_value)
     }
 }
 
