@@ -329,11 +329,12 @@ pub(crate) fn parser_prepared_script_page_owned_work(
     }
 }
 
-/// Convert a parser preparation terminal into the lifecycle task that reports
-/// the exact failure. The terminal never enters a generic runtime queue.
+/// Report an internal parser preparation failure. External-source failures
+/// instead queue an element error on the DOM-manipulation task source.
 pub(crate) fn parser_script_preparation_failure_page_owned_work(
     failure: ParserScriptPreparationFailure,
 ) -> PostParsePageOwnedWork {
+    assert!(!failure.is_external_source_failure());
     let (_, _, message) = failure.into_parts();
     PostParsePageOwnedWork::lifecycle_work(PostParseLifecycleWork::ReportWindowScriptFailure(
         WindowScriptFailureReportTask::new(message, None),
