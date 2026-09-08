@@ -68,14 +68,16 @@ fn test_relative_empty() {
 }
 
 #[test]
-fn test_strip_trailing_spaces_from_opaque_path() {
+fn test_preserve_encoded_trailing_space_in_opaque_path() {
     let mut url: Url = "data:space   ?query".parse().unwrap();
+    assert_eq!(url.as_str(), "data:space  %20?query");
     url.set_query(None);
-    assert_eq!(url.as_str(), "data:space");
+    assert_eq!(url.as_str(), "data:space  %20");
 
     let mut url: Url = "data:space   #hash".parse().unwrap();
+    assert_eq!(url.as_str(), "data:space  %20#hash");
     url.set_fragment(None);
-    assert_eq!(url.as_str(), "data:space");
+    assert_eq!(url.as_str(), "data:space  %20");
 }
 
 #[test]

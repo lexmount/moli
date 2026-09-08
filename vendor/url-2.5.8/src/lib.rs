@@ -384,32 +384,6 @@ impl Url {
         url
     }
 
-    /// https://url.spec.whatwg.org/#potentially-strip-trailing-spaces-from-an-opaque-path
-    fn strip_trailing_spaces_from_opaque_path(&mut self) {
-        if !self.cannot_be_a_base() {
-            return;
-        }
-
-        if self.fragment_start.is_some() {
-            return;
-        }
-
-        if self.query_start.is_some() {
-            return;
-        }
-
-        let trailing_space_count = self
-            .serialization
-            .chars()
-            .rev()
-            .take_while(|c| *c == ' ')
-            .count();
-
-        let start = self.serialization.len() - trailing_space_count;
-
-        self.serialization.truncate(start);
-    }
-
     /// Parse a string as an URL, with this URL as the base URL.
     ///
     /// The inverse of this is [`make_relative`].
@@ -1592,7 +1566,6 @@ impl Url {
             self.mutate(|parser| parser.parse_fragment(parser::Input::new_no_trim(input)))
         } else {
             self.fragment_start = None;
-            self.strip_trailing_spaces_from_opaque_path();
         }
     }
 
@@ -1658,9 +1631,6 @@ impl Url {
             });
         } else {
             self.query_start = None;
-            if fragment.is_none() {
-                self.strip_trailing_spaces_from_opaque_path();
-            }
         }
 
         self.restore_already_parsed_fragment(fragment);
