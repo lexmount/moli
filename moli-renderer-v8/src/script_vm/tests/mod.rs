@@ -2376,6 +2376,7 @@ mod svg_image_aspect_ratio_receivers;
 mod svg_number_validation;
 mod svg_root_factory_receivers;
 mod svg_switch_mpath_interfaces;
+mod string_timers;
 mod svg_value_factories;
 
 mod idb_cursor_native_receivers;
