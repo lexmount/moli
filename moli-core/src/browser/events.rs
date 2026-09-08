@@ -10,6 +10,10 @@ pub enum BrowserEvent {
     ContextCreated(BrowserContextId),
     ContextDisposed(BrowserContextId),
     WebContentsCreated(WebContentsHandle),
+    WebContentsActivated {
+        web_contents: WebContentsHandle,
+        previous: Option<WebContentsHandle>,
+    },
     DocumentCommitted(DocumentHandle),
     WebContentsClosed {
         web_contents: WebContentsHandle,
@@ -21,6 +25,13 @@ pub enum BrowserEvent {
 pub struct BrowserEventRecord {
     pub sequence: BrowserSequence,
     pub event: BrowserEvent,
+}
+
+/// The physical selection and its revision, read at one Browser owner boundary.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct WebContentsSelection {
+    pub web_contents: WebContentsHandle,
+    pub sequence: BrowserSequence,
 }
 
 /// Physical membership at one Browser owner boundary. A lagged observer must
@@ -61,20 +72,26 @@ impl Default for BrowserEventStream {
 }
 
 impl BrowserEventStream {
-    pub(super) fn publish(&mut self, event: BrowserEvent) {
-        self.publish_committed(BrowserSequence::allocate(), event);
+    pub(super) fn publish(&mut self, event: BrowserEvent) -> BrowserEventRecord {
+        self.publish_committed(BrowserSequence::allocate(), event)
     }
 
-    pub(super) fn publish_committed(&mut self, sequence: BrowserSequence, event: BrowserEvent) {
+    pub(super) fn publish_committed(
+        &mut self,
+        sequence: BrowserSequence,
+        event: BrowserEvent,
+    ) -> BrowserEventRecord {
         assert!(
             sequence > self.sequence,
             "Browser events must follow commit order"
         );
         self.sequence = sequence;
-        let _ = self.sender.send(BrowserEventRecord {
+        let record = BrowserEventRecord {
             sequence: self.sequence,
             event,
-        });
+        };
+        let _ = self.sender.send(record);
+        record
     }
 
     pub(super) fn subscribe(
@@ -106,6 +123,71 @@ mod tests {
     use broadcast::error::TryRecvError;
 
     #[tokio::test]
+    async fn activation_receipts_observe_native_order_without_reselecting_on_completion() {
+        let service = BrowserService::start().unwrap();
+        let browser = service.handle();
+        let context = browser
+            .create_context(
+                BrowserContextStoragePartitionHandles::memory(),
+                StoragePartitionKind::Ephemeral,
+                None,
+                None,
+            )
+            .unwrap();
+        let other = browser
+            .create_context(
+                BrowserContextStoragePartitionHandles::memory(),
+                StoragePartitionKind::Ephemeral,
+                None,
+                None,
+            )
+            .unwrap();
+        let (first, _) = context.create_web_contents(Default::default()).unwrap();
+        let (second, _) = context.create_web_contents(Default::default()).unwrap();
+        assert!(context.select_web_contents(first.id()));
+        let (snapshot, mut events) = browser.subscribe().unwrap();
+        assert!(other.activate_web_contents(first).is_err());
+        assert_eq!(events.try_recv(), Err(TryRecvError::Empty));
+        let select_second = context.activate_web_contents(second).unwrap();
+        assert_eq!(context.selected_web_contents_handle(), Some(second));
+        let second_event = events.try_recv().unwrap();
+        assert_eq!(
+            context.selected_web_contents_snapshot(),
+            Some(WebContentsSelection {
+                web_contents: second,
+                sequence: second_event.sequence,
+            })
+        );
+        assert_eq!(
+            second_event.event,
+            BrowserEvent::WebContentsActivated {
+                web_contents: second,
+                previous: Some(first),
+            }
+        );
+        let select_first = context.activate_web_contents(first).unwrap();
+        let first_event = events.try_recv().unwrap();
+        assert_eq!(
+            first_event.event,
+            BrowserEvent::WebContentsActivated {
+                web_contents: first,
+                previous: Some(second),
+            }
+        );
+        assert!(snapshot.sequence < second_event.sequence);
+        assert!(second_event.sequence < first_event.sequence);
+        assert_eq!(select_first.wait().await.unwrap(), first_event);
+        assert_eq!(select_second.wait().await.unwrap(), second_event);
+        assert_eq!(context.selected_web_contents_handle(), Some(first));
+        assert_eq!(events.try_recv(), Err(TryRecvError::Empty));
+        assert_eq!(
+            browser.subscribe().unwrap().0.selected_web_contents,
+            [first]
+        );
+        service.shutdown();
+    }
+
+    #[tokio::test]
     async fn web_contents_close_publishes_exact_membership_and_native_selection() {
         let service = BrowserService::start().unwrap();
         let browser = service.handle();
@@ -124,9 +206,9 @@ mod tests {
         assert_eq!(snapshot.web_contents, [first, second]);
         assert_eq!(snapshot.selected_web_contents, [first]);
         let close = browser.close_web_contents(first).unwrap();
-        assert_eq!(close.activated, Some(second));
         assert_eq!(context.selected_web_contents_handle(), Some(second));
         let closed = events.try_recv().unwrap();
+        assert_eq!(closed, close.event);
         assert_eq!(
             closed.event,
             BrowserEvent::WebContentsClosed {

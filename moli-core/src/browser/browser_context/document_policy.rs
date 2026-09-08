@@ -388,28 +388,31 @@ impl BrowserContext {
         Ok(batch)
     }
 
-    pub(in crate::browser) fn start_selected_document_visibility_update(
+    pub(in crate::browser) fn start_web_contents_visibility_update(
         &self,
         handle: crate::browser::WebContentsHandle,
-    ) -> Option<PendingPageCommand> {
-        if self
-            .web_contents_has_pending_javascript_dialog(handle)
-            .ok()?
-        {
-            return None;
+        foreground: bool,
+    ) -> Result<Option<PendingDocumentPolicyUpdate>, String> {
+        if self.web_contents_has_pending_javascript_dialog(handle)? {
+            return Ok(None);
         }
-        let contents = self.web_contents(handle).ok()?;
-        let document = contents.main_frame.current_document.as_ref()?;
+        let contents = self.web_contents(handle)?;
+        let Some(document) = self.document_handle_for_web_contents(handle)? else {
+            return Ok(None);
+        };
         let source = contents
-            .page_surface(true, None, None, None)
+            .page_surface(foreground, None, None, None)
             .visibility_script();
-        document
+        let pending = self
+            .document(document)?
             .page
             .start_page_surface_override_script(&source)
-            .map_err(
-                |error| tracing::warn!(%error, "failed to activate surviving WebContents surface"),
-            )
-            .ok()
+            .map_err(|error| error.to_string())?;
+        Ok(Some(PendingDocumentPolicyUpdate {
+            document,
+            kind: DocumentPolicyUpdateKind::PageSurfaceOverride,
+            pending,
+        }))
     }
 
     pub fn page_surface_for_web_contents(

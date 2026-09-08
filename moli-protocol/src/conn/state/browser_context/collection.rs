@@ -130,18 +130,6 @@ impl BrowserContext {
         true
     }
 
-    pub(super) fn select_registered_web_contents(
-        &mut self,
-        handle: WebContentsHandle,
-    ) -> Result<(), String> {
-        if !self.browser_context.contains_web_contents(handle) {
-            return Err("WebContents unavailable".into());
-        }
-        let selected = self.browser_context.select_web_contents(handle.id());
-        debug_assert!(selected, "registered WebContents must be selectable");
-        Ok(())
-    }
-
     pub(crate) fn selected_web_contents_id(&self) -> Option<WebContentsId> {
         self.browser_context.selected_web_contents_id()
     }

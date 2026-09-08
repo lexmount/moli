@@ -1,153 +1,148 @@
-use crate::conn::{BackgroundProtocolEvent, BrowserContext, CdpConnection, CommandOwnerScope};
+use crate::conn::{BackgroundProtocolEvent, CdpConnection, CommandOwnerScope};
+use moli_core::browser::{
+    BrowserEvent, BrowserEventRecord, BrowserSequence, PendingWebContentsActivation,
+    WebContentsHandle,
+};
 
-/// The stable Target identities on both sides of one foreground selection.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub(crate) struct TargetActivationTransition {
-    selected_target_id: String,
-    previous_active_target_id: Option<String>,
-}
-
-impl TargetActivationTransition {
-    pub(crate) fn new(
-        selected_target_id: impl Into<String>,
-        previous_active_target_id: Option<String>,
-    ) -> Self {
-        Self {
-            selected_target_id: selected_target_id.into(),
-            previous_active_target_id,
-        }
-    }
-
-    fn selected_target_id(&self) -> &str {
-        &self.selected_target_id
-    }
-
-    fn previous_active_target_id(&self) -> Option<&str> {
-        self.previous_active_target_id.as_deref()
-    }
-
-    fn deactivated_target_id(&self) -> Option<&str> {
-        self.previous_active_target_id()
-            .filter(|target_id| *target_id != self.selected_target_id())
-    }
-
-    fn changed_active_target(&self) -> bool {
-        self.previous_active_target_id() != Some(self.selected_target_id())
-    }
-}
-
-/// Successful target selection and the Page events caused by its visibility change.
-///
-/// The events stay attached to the completion so every activation entry point
-/// must preserve their position relative to its own response or owner action.
+/// Page events stay with the command's completion so they precede its response.
 #[derive(Debug)]
 pub(crate) struct CompletedTargetActivation {
     protocol_events: Vec<BackgroundProtocolEvent>,
 }
 
 impl CompletedTargetActivation {
-    fn new(protocol_events: Vec<BackgroundProtocolEvent>) -> Self {
-        Self { protocol_events }
-    }
-
     pub(crate) fn into_protocol_events(self) -> Vec<BackgroundProtocolEvent> {
         self.protocol_events
     }
 }
 
 impl CdpConnection {
-    /// Completes the renderer-surface half of a foreground transition that was
-    /// staged synchronously while creating a new target.
-    pub(crate) async fn complete_staged_target_activation_async(
+    pub fn project_browser_web_contents_activation(
         &mut self,
-        transition: &TargetActivationTransition,
-    ) -> CompletedTargetActivation {
-        let Some(previous_target_id) = transition.deactivated_target_id() else {
-            return CompletedTargetActivation::new(Vec::new());
+        record: BrowserEventRecord,
+    ) -> Vec<BackgroundProtocolEvent> {
+        let BrowserEvent::WebContentsActivated {
+            web_contents,
+            previous,
+        } = record.event
+        else {
+            return Vec::new();
         };
-        let protocol_events = self
-            .page_screencast_session_ids_for_target(previous_target_id)
-            .into_iter()
-            .map(|session_id| {
-                BackgroundProtocolEvent::page_screencast_visibility_changed(
-                    session_id.as_deref(),
-                    false,
-                )
-            })
-            .collect();
-        let previous = self.browser_web_contents_for_target(previous_target_id);
-        if let Err(error) = async {
-            let previous = previous?;
-            self.apply_browser_page_surface_async(previous, false)
-                .await
-                .map(drop)
-        }
-        .await
+        self.project_browser_selection(web_contents, previous, record.sequence)
+    }
+
+    /// Both command replies and the event subscription observe the same native
+    /// occurrence. Snapshot recovery supplies its own observation high-water mark.
+    pub(in crate::conn) fn project_browser_selection(
+        &mut self,
+        selected: WebContentsHandle,
+        previous: Option<WebContentsHandle>,
+        sequence: BrowserSequence,
+    ) -> Vec<BackgroundProtocolEvent> {
+        let Some(native_selection) = self
+            .browser
+            .context_handle(selected.context())
+            .ok()
+            .and_then(|context| context.selected_web_contents_snapshot())
+        else {
+            return Vec::new();
+        };
+        let Some(context) = self.browser_context_by_browser_id_mut(selected.context()) else {
+            return Vec::new();
+        };
+        if context
+            .projected_selection
+            .is_some_and(|(seen, _)| seen >= sequence)
+            || native_selection.web_contents != selected
+            || native_selection.sequence > sequence
         {
-            tracing::warn!(
-                target_id = previous_target_id,
-                selected_target_id = transition.selected_target_id(),
-                %error,
-                "failed to update Page visibility after target activation"
-            );
+            return Vec::new();
         }
-        CompletedTargetActivation::new(protocol_events)
+        let Some(target) = context.page_targets.get_for_web_contents(selected.id()) else {
+            return Vec::new();
+        };
+        let selected_target_id = target.target_id().to_owned();
+        let previous = context
+            .projected_selection
+            .map(|(_, contents)| contents)
+            .or_else(|| {
+                previous
+                    .filter(|handle| handle.context() == selected.context())
+                    .map(|handle| handle.id())
+            });
+        let changed = previous != Some(selected.id());
+        let previous_target_id = previous
+            .filter(|id| *id != selected.id())
+            .and_then(|id| context.page_targets.get_for_web_contents(id))
+            .map(|target| target.target_id().to_owned());
+        context.projected_selection = Some((sequence, selected.id()));
+        if self
+            .browser_context
+            .as_ref()
+            .is_some_and(|context| context.browser_context_id() == selected.context())
+        {
+            self.refresh_active_browser_context_loader();
+        }
+        // Recovery advances the observation watermark for every Context, but
+        // must not reactivate unchanged peers. An explicit native activation of
+        // the already-selected Page still carries this exact selection revision.
+        if changed || native_selection.sequence == sequence {
+            self.notify_target_host_activated(&selected_target_id);
+        }
+        let mut events = Vec::new();
+        if changed {
+            for (target_id, visible) in previous_target_id
+                .as_deref()
+                .map(|target| (target, false))
+                .into_iter()
+                .chain(std::iter::once((selected_target_id.as_str(), true)))
+            {
+                events.extend(
+                    self.page_screencast_session_ids_for_target(target_id)
+                        .into_iter()
+                        .map(|session| {
+                            BackgroundProtocolEvent::page_screencast_visibility_changed(
+                                session.as_deref(),
+                                visible,
+                            )
+                        }),
+                );
+            }
+        }
+        events
+    }
+
+    pub(crate) async fn project_target_activation_async(
+        &mut self,
+        pending: PendingWebContentsActivation,
+    ) -> CompletedTargetActivation {
+        let protocol_events = match pending.wait().await {
+            Ok(event) => self.project_browser_web_contents_activation(event),
+            Err(error) => {
+                tracing::warn!(%error, "created target activation did not complete");
+                Vec::new()
+            }
+        };
+        CompletedTargetActivation { protocol_events }
     }
 
     pub(crate) async fn select_page_target_for_connection_async(
         &mut self,
         target_id: &str,
     ) -> anyhow::Result<Option<CompletedTargetActivation>> {
-        let previous_active_target_id = self
-            .browser_context
-            .as_ref()
-            .and_then(BrowserContext::active_target_id_owned);
-        let transition = TargetActivationTransition::new(target_id, previous_active_target_id);
-        let hidden_screencast_sessions = transition
-            .deactivated_target_id()
-            .map(|active_target_id| self.page_screencast_session_ids_for_target(active_target_id))
-            .unwrap_or_default();
-        let handle = {
-            let Some(browser_context) = self.browser_context.as_ref() else {
-                anyhow::bail!("BrowserContextNotLoaded");
-            };
-            let Some(handle) = browser_context.web_contents_handle_for_target(target_id) else {
-                return Ok(None);
-            };
-            handle
+        let Some(context) = self.browser_context.as_ref() else {
+            anyhow::bail!("BrowserContextNotLoaded");
         };
-        if let Err(error) = self.select_browser_web_contents_async(handle).await {
-            return Err(anyhow::anyhow!(error));
-        }
-        if self.browser_context.is_none() {
+        let Some(handle) = context.web_contents_handle_for_target(target_id) else {
             return Ok(None);
-        }
-        self.refresh_active_browser_context_loader();
-        self.notify_target_host_activated(target_id);
-
-        let mut protocol_events = Vec::new();
-        if transition.changed_active_target() {
-            // Chromium's PageHandler reports RenderWidgetHost visibility only
-            // while that attachment has an active screencast. Hide the old
-            // surface before exposing the selected one.
-            protocol_events.extend(hidden_screencast_sessions.into_iter().map(|session_id| {
-                BackgroundProtocolEvent::page_screencast_visibility_changed(
-                    session_id.as_deref(),
-                    false,
-                )
-            }));
-            protocol_events.extend(
-                self.page_screencast_session_ids_for_target(target_id)
-                    .into_iter()
-                    .map(|session_id| {
-                        BackgroundProtocolEvent::page_screencast_visibility_changed(
-                            session_id.as_deref(),
-                            true,
-                        )
-                    }),
-            );
-        }
-        Ok(Some(CompletedTargetActivation::new(protocol_events)))
+        };
+        let event = self
+            .select_browser_web_contents_async(handle)
+            .await
+            .map_err(anyhow::Error::msg)?;
+        Ok(Some(CompletedTargetActivation {
+            protocol_events: self.project_browser_web_contents_activation(event),
+        }))
     }
 
     pub(crate) fn page_screencast_session_ids_for_target(

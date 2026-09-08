@@ -59,13 +59,16 @@ impl CdpScheduler {
     ) -> ProtocolOutputSequence {
         let mut output = self.project_initial_browser_snapshot().await;
         let events = match event {
-            Ok(BrowserEventRecord { event, .. }) => match event {
+            Ok(record @ BrowserEventRecord { event, sequence }) => match event {
                 BrowserEvent::ContextCreated(context) => {
                     self.conn.project_created_browser_context(context);
                     Vec::new()
                 }
                 BrowserEvent::WebContentsCreated(handle) => {
                     self.conn.project_created_web_contents(handle).await
+                }
+                BrowserEvent::WebContentsActivated { .. } => {
+                    self.conn.project_browser_web_contents_activation(record)
                 }
                 BrowserEvent::DocumentCommitted(document) => {
                     self.conn.project_browser_document_commit(document).await
@@ -78,7 +81,7 @@ impl CdpScheduler {
                     activated,
                 } => {
                     self.conn
-                        .project_closed_web_contents(web_contents, activated)
+                        .project_closed_web_contents(web_contents, activated, sequence)
                         .await
                 }
             },
@@ -115,6 +118,140 @@ mod tests {
     use super::*;
     use moli_core::browser::BrowserService;
     use moli_protocol::CdpInitialStoragePartition;
+
+    #[tokio::test]
+    async fn native_activation_projects_once_and_recovers_current_selection_after_real_lag() {
+        use moli_core::browser::{
+            BrowserContextStoragePartitionHandles, StoragePartitionKind, WebContentsCreation,
+        };
+        use moli_protocol::{CdpTargetHostLifecycleDelta, CdpTargetHostLifecycleObserver};
+        for lagged in [false, true] {
+            let service = BrowserService::start().unwrap();
+            let browser = service.handle();
+            let context = browser
+                .create_context(
+                    BrowserContextStoragePartitionHandles::memory(),
+                    StoragePartitionKind::Ephemeral,
+                    None,
+                    None,
+                )
+                .unwrap();
+            let (first, _) = context
+                .create_web_contents(WebContentsCreation::with_initial_document(
+                    "about:blank#activation-first".into(),
+                    None,
+                    None,
+                ))
+                .unwrap();
+            let (second, _) = context
+                .create_web_contents(WebContentsCreation::with_initial_document(
+                    "about:blank#activation-second".into(),
+                    None,
+                    None,
+                ))
+                .unwrap();
+            context
+                .activate_web_contents(first)
+                .unwrap()
+                .wait()
+                .await
+                .unwrap();
+            let changes = std::sync::Arc::new(parking_lot::Mutex::new(Vec::new()));
+            let observed = changes.clone();
+            let (mut scheduler, _) = CdpScheduler::new_with_initial_state_runtime_config(
+                browser.clone(),
+                CdpInitialStoragePartition::memory(),
+                Default::default(),
+            );
+            scheduler
+                .conn
+                .set_target_host_lifecycle_observer(CdpTargetHostLifecycleObserver::new(
+                    move |delta| observed.lock().push(delta),
+                ));
+            scheduler.drain_browser_events().await;
+            let second_targets = std::mem::take(&mut *changes.lock())
+                .into_iter()
+                .filter_map(|change| match change {
+                    CdpTargetHostLifecycleDelta::Created(info)
+                        if info.url == "about:blank#activation-second" =>
+                    {
+                        info.target_id.map(|id| id.into_string())
+                    }
+                    _ => None,
+                })
+                .collect::<Vec<_>>();
+            assert_eq!(second_targets.len(), 2, "Page and Tab directory entries");
+            let stale = context
+                .activate_web_contents(second)
+                .unwrap()
+                .wait()
+                .await
+                .unwrap();
+            context
+                .activate_web_contents(first)
+                .unwrap()
+                .wait()
+                .await
+                .unwrap();
+            let current = context
+                .activate_web_contents(second)
+                .unwrap()
+                .wait()
+                .await
+                .unwrap();
+            if lagged {
+                for _ in 0..130 {
+                    let transient = browser
+                        .create_context(
+                            BrowserContextStoragePartitionHandles::memory(),
+                            StoragePartitionKind::Ephemeral,
+                            None,
+                            None,
+                        )
+                        .unwrap();
+                    assert!(transient.remove().unwrap());
+                }
+            }
+            let native = browser.subscribe().unwrap().0;
+            scheduler.drain_browser_events().await;
+            let activated = std::mem::take(&mut *changes.lock())
+                .into_iter()
+                .filter_map(|change| match change {
+                    CdpTargetHostLifecycleDelta::Activated { target_id } => Some(target_id),
+                    _ => None,
+                })
+                .collect::<Vec<_>>();
+            assert_eq!(activated.len(), 2, "lagged={lagged}: {activated:?}");
+            assert!(
+                second_targets
+                    .iter()
+                    .all(|target| activated.contains(target))
+            );
+            assert!(
+                scheduler
+                    .conn
+                    .project_browser_web_contents_activation(stale)
+                    .is_empty()
+            );
+            assert!(
+                scheduler
+                    .conn
+                    .project_browser_web_contents_activation(current)
+                    .is_empty()
+            );
+            assert!(
+                changes.lock().is_empty(),
+                "replayed occurrences must be inert"
+            );
+            assert_eq!(
+                browser.subscribe().unwrap().0,
+                native,
+                "projection must not mutate native selection"
+            );
+            assert_eq!(context.selected_web_contents_handle(), Some(second));
+            service.shutdown();
+        }
+    }
 
     #[tokio::test]
     async fn native_created_pages_are_adopted_at_start_live_and_after_real_lag() {
@@ -266,7 +403,11 @@ mod tests {
             assert!(
                 scheduler
                     .conn
-                    .project_closed_web_contents(handle, None)
+                    .project_closed_web_contents(
+                        handle,
+                        None,
+                        browser.subscribe().unwrap().0.sequence
+                    )
                     .await
                     .is_empty()
             );
@@ -297,7 +438,11 @@ mod tests {
             assert!(
                 scheduler
                     .conn
-                    .project_closed_web_contents(handle, None)
+                    .project_closed_web_contents(
+                        handle,
+                        None,
+                        browser.subscribe().unwrap().0.sequence
+                    )
                     .await
                     .is_empty()
             );

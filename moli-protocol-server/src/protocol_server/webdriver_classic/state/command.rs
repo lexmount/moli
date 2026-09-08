@@ -155,10 +155,9 @@ impl ClassicPendingRuntime {
     }
 
     pub(super) fn deadline(&self) -> Option<tokio::time::Instant> {
-        match (self.deadline, self.navigation_deadline) {
-            (Some(a), Some(b)) => Some(a.min(b)),
-            (a, b) => a.or(b),
-        }
+        // Dispatch and navigation retry already install their own deadline.
+        // Retained navigation bookkeeping must not time out a later script.
+        self.deadline
     }
 
     pub(super) fn command_id(&self) -> Option<u64> {
@@ -281,5 +280,73 @@ impl ClassicPendingRuntime {
                 result,
                 page_residence: self.page_residence,
             });
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn runtime_dispatch_does_not_inherit_completed_navigation_deadline() {
+        let service = moli_core::browser::BrowserService::start().unwrap();
+        let (mut scheduler, mut receivers) = CdpScheduler::new_with_initial_state_runtime_config(
+            service.handle(),
+            moli_protocol::CdpInitialStoragePartition::memory(),
+            Default::default(),
+        );
+        let initialized = scheduler.execute_internal_protocol_message(&mut receivers,
+            serde_json::json!({"id": 1, "method": "Target.createTarget", "params": {"url": "about:blank"}}),
+        ).await.unwrap_or_else(|failure| panic!("{:?}", failure.into_parts().1)).into_messages();
+        let target = initialized
+            .iter()
+            .find(|message| message["id"] == 1)
+            .and_then(|message| message["result"]["targetId"].as_str())
+            .unwrap_or_else(|| panic!("created test Page: {initialized:?}"));
+        for script_timeout in [None, Some(Duration::from_secs(30))] {
+            let context = ClassicDevToolsCommandContext::with_target_id("deadline-test", target);
+            let command = moli_protocol_webdriver_classic::execute_sync_command(
+                &context,
+                &serde_json::json!({"script": "return new Promise(() => {})", "args": []}),
+            )
+            .unwrap();
+            let (response_tx, mut response) = oneshot::channel();
+            // Model the owner boundary after the exact navigation has completed:
+            // its old deadline is retained for navigation retries, not execution.
+            let navigation_deadline = tokio::time::Instant::now();
+            let pending = ClassicPendingRuntime {
+                command,
+                timeout: script_timeout,
+                navigation_timeout: Some(Duration::from_millis(100)),
+                navigation_deadline: Some(navigation_deadline),
+                deadline: Some(navigation_deadline),
+                expected_page: None,
+                page_residence: None,
+                terminate_on_timeout: false,
+                phase: RuntimePhase::Command,
+                response_tx,
+                wait: RuntimeWait::Navigation,
+            }
+            .dispatch(&mut scheduler, &mut receivers)
+            .await
+            .unwrap_or_else(|| {
+                panic!(
+                    "script must remain pending: {:?}",
+                    response.try_recv().map(|execution| execution.result)
+                )
+            });
+            assert!(matches!(pending.wait, RuntimeWait::Dispatch(_)));
+            assert_eq!(
+                pending.deadline(),
+                pending.deadline,
+                "execution must use its own deadline, not the completed navigation deadline"
+            );
+            assert_eq!(pending.deadline().is_some(), script_timeout.is_some());
+            if let Some(deadline) = pending.deadline() {
+                assert!(deadline > navigation_deadline);
+            }
+            pending.cancel(&mut scheduler);
+        }
+        service.shutdown();
     }
 }

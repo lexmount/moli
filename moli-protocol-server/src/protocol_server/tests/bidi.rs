@@ -34,7 +34,7 @@ async fn native_browser_page_is_discovered_shared_and_retained_across_frontends(
     let BrowserInitialDocumentAdmission::Build(build) = context
         .start_initial_document(
             native,
-            context.inherited_document_policy(Default::default(), &[], None),
+            context.inherited_document_policy(Default::default(), &[], None, None),
         )
         .unwrap()
     else {
@@ -109,6 +109,134 @@ async fn native_browser_page_is_discovered_shared_and_retained_across_frontends(
         observed["result"]["result"]["value"], "native document",
         "{observed}"
     );
+
+    let (peer, _) = context
+        .create_web_contents(WebContentsCreation::with_initial_document(
+            "about:blank#native-activation-peer".into(),
+            None,
+            None,
+        ))
+        .unwrap();
+    let peer_attached = recv_until_match(&mut cdp, |event| {
+        event["method"] == "Target.attachedToTarget"
+            && event["params"]["targetInfo"]["url"] == "about:blank#native-activation-peer"
+    })
+    .await;
+    let peer_sid = peer_attached.last().unwrap()["params"]["sessionId"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    assert_eq!(
+        cdp_runtime_evaluate_string(&mut cdp, &peer_sid, 40, "location.href").await,
+        "about:blank#native-activation-peer"
+    );
+    let peer_document = context.document_handle(peer).unwrap().unwrap();
+    for (id, session) in [(41, &sid), (42, &peer_sid)] {
+        let started = send_cdp_command(
+            &mut cdp,
+            id,
+            "Page.startScreencast",
+            Some(session),
+            json!({}),
+        )
+        .await;
+        assert!(
+            bidi_message_by_id(&started, id).get("error").is_none(),
+            "{started:?}"
+        );
+    }
+    context
+        .activate_web_contents(peer)
+        .unwrap()
+        .wait()
+        .await
+        .unwrap();
+    let activated = recv_until_match(&mut cdp, |event| {
+        event["method"] == "Page.screencastVisibilityChanged"
+            && event["sessionId"] == peer_sid
+            && event["params"]["visible"] == true
+    })
+    .await;
+    let visibility = |messages: &[serde_json::Value]| {
+        messages
+            .iter()
+            .filter(|event| event["method"] == "Page.screencastVisibilityChanged")
+            .map(|event| {
+                (
+                    event["sessionId"].as_str().unwrap().to_owned(),
+                    event["params"]["visible"].as_bool().unwrap(),
+                )
+            })
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(
+        visibility(&activated),
+        [(sid.clone(), false), (peer_sid.clone(), true)]
+    );
+    let visible = send_bidi_command_response(
+        &mut bidi,
+        40,
+        "script.evaluate",
+        json!({
+            "expression":"[document.hidden, document.hasFocus(), nativeMarker].join(',')",
+            "target":{"context":target}, "awaitPromise":false,
+        }),
+    )
+    .await;
+    assert_eq!(
+        visible["result"]["result"]["value"], "true,false,native document",
+        "{visible}"
+    );
+    assert_eq!(
+        cdp_runtime_evaluate_string(
+            &mut cdp,
+            &peer_sid,
+            43,
+            "[document.hidden, document.hasFocus()].join(',')"
+        )
+        .await,
+        "false,true"
+    );
+    let mut restored = send_cdp_command(
+        &mut cdp,
+        44,
+        "Target.activateTarget",
+        None,
+        json!({"targetId":target}),
+    )
+    .await;
+    assert!(
+        bidi_message_by_id(&restored, 44).get("error").is_none(),
+        "{restored:?}"
+    );
+    restored.extend(send_cdp_command(&mut cdp, 45, "Target.getTargets", None, json!({})).await);
+    assert_eq!(
+        visibility(&restored),
+        [(peer_sid.clone(), false), (sid.clone(), true)],
+        "the native occurrence and command completion must project one visibility transition"
+    );
+    assert_eq!(context.document_handle(native).unwrap(), Some(document));
+    assert_eq!(context.document_handle(peer).unwrap(), Some(peer_document));
+    assert_eq!(context.selected_web_contents_handle(), Some(native));
+    for (id, session) in [(46, &sid), (47, &peer_sid)] {
+        let stopped = send_cdp_command(
+            &mut cdp,
+            id,
+            "Page.stopScreencast",
+            Some(session),
+            json!({}),
+        )
+        .await;
+        assert!(
+            bidi_message_by_id(&stopped, id).get("error").is_none(),
+            "{stopped:?}"
+        );
+    }
+    context
+        .close_web_contents(peer)
+        .unwrap()
+        .close_async()
+        .await;
 
     send_cdp_command(
         &mut cdp,

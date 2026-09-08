@@ -115,7 +115,7 @@ impl BrowserContext {
         let session_storage_store = match web_contents {
             Some(handle) => self.web_contents(handle)?.session_storage.store().clone(),
             None => self
-                .selected_web_contents
+                .selected_web_contents_id()
                 .and_then(|id| self.web_contents.get(&id))
                 .map(|contents| contents.session_storage.store().clone())
                 .unwrap_or_else(new_shared_web_storage_store),
@@ -130,7 +130,7 @@ impl BrowserContext {
     #[doc(hidden)]
     pub fn resource_storage_handles_for_test(&self) -> BrowserContextResourceStorageHandles {
         let session_storage_store = self
-            .selected_web_contents
+            .selected_web_contents_id()
             .and_then(|id| self.web_contents.get(&id))
             .map(|contents| contents.session_storage.store().clone())
             .unwrap_or_else(new_shared_web_storage_store);
@@ -381,7 +381,7 @@ impl BrowserContext {
     pub fn selected_session_storage_store_for_test(&self) -> Option<&SharedWebStorageStore> {
         Some(
             self.web_contents
-                .get(&self.selected_web_contents?)?
+                .get(&self.selected_web_contents_id()?)?
                 .session_storage
                 .store(),
         )

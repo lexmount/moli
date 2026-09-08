@@ -83,7 +83,8 @@ impl BrowserContext {
     }
 
     pub fn selected_web_contents_handle(&self) -> Option<WebContentsHandle> {
-        Some(WebContentsHandle::new(self.id, self.selected_web_contents?))
+        self.selected_web_contents
+            .map(|selection| selection.web_contents)
     }
 
     pub fn web_contents_handle_for_window_id(&self, window_id: u64) -> Option<WebContentsHandle> {

@@ -12,29 +12,6 @@ use crate::devtools_runtime::{
 use moli_core::browser::{WebContentsCreation, WebContentsHandle};
 use moli_core::network::SharedWebStorageStore;
 
-pub(crate) struct PendingWebContentsSelection {
-    admission_error: Option<String>,
-    surface_updates: Vec<moli_core::browser::PendingDocumentPolicyBatch>,
-}
-
-pub(crate) struct CompletedWebContentsSelection {
-    admission_error: Option<String>,
-    surface_updates: Vec<moli_core::browser::CompletedDocumentPolicyBatch>,
-}
-
-impl PendingWebContentsSelection {
-    pub(crate) async fn wait(self) -> CompletedWebContentsSelection {
-        let mut surface_updates = Vec::with_capacity(self.surface_updates.len());
-        for update in self.surface_updates {
-            surface_updates.push(update.wait().await);
-        }
-        CompletedWebContentsSelection {
-            admission_error: self.admission_error,
-            surface_updates,
-        }
-    }
-}
-
 impl BrowserContext {
     pub(in crate::conn) fn take_closed_web_contents_projection(
         &mut self,
@@ -143,7 +120,7 @@ impl BrowserContext {
         session_id: Option<String>,
         url: String,
         initial_empty_document_url: Option<String>,
-    ) {
+    ) -> moli_core::browser::PendingWebContentsActivation {
         let creation = WebContentsCreation::with_initial_document(
             initial_empty_document_url.unwrap_or_else(|| url.clone()),
             None,
@@ -160,8 +137,9 @@ impl BrowserContext {
         let handle = self
             .web_contents_handle_for_target(&target_id)
             .expect("newly inserted target must have WebContents");
-        self.select_registered_web_contents(handle)
-            .expect("newly inserted WebContents must be selectable");
+        self.browser_context
+            .activate_web_contents(handle)
+            .expect("newly inserted WebContents must be selectable")
     }
 
     pub(crate) fn reusable_window_open_target_name(target_name: &str) -> Option<&str> {
@@ -447,66 +425,6 @@ impl BrowserContext {
             session_id,
             &moli_page_types::DevToolsSessionKey::Primary,
         )
-    }
-
-    pub(crate) fn start_select_web_contents(
-        &mut self,
-        selected: WebContentsHandle,
-        browser_globals: &crate::conn::BrowserGlobalOverrides,
-    ) -> Result<PendingWebContentsSelection, String> {
-        let selected_has_dialog = self.web_contents_has_pending_javascript_dialog(selected)?;
-        let previous = self.selected_web_contents_handle();
-        if previous == Some(selected) {
-            return Ok(PendingWebContentsSelection {
-                admission_error: None,
-                surface_updates: Vec::new(),
-            });
-        }
-        let previous_has_dialog = previous
-            .map(|handle| self.web_contents_has_pending_javascript_dialog(handle))
-            .transpose()?
-            .unwrap_or(false);
-        self.select_registered_web_contents(selected)?;
-
-        let mut admission_error = None;
-        let mut surface_updates = Vec::new();
-        if !selected_has_dialog && !previous_has_dialog {
-            for (handle, foreground) in
-                std::iter::once((selected, true)).chain(previous.map(|handle| (handle, false)))
-            {
-                let Some(document) = self.document_handle_for_web_contents(handle)? else {
-                    continue;
-                };
-                match self.start_document_page_surface_update(
-                    document,
-                    foreground,
-                    browser_globals.network_conditions,
-                    browser_globals.geolocation.as_ref(),
-                ) {
-                    Ok(update) => surface_updates.push(update),
-                    Err(error) => {
-                        admission_error.get_or_insert(error);
-                    }
-                }
-            }
-        }
-        Ok(PendingWebContentsSelection {
-            admission_error,
-            surface_updates,
-        })
-    }
-
-    pub(crate) fn finish_select_web_contents(
-        &mut self,
-        completed: CompletedWebContentsSelection,
-    ) -> Result<(), String> {
-        let mut first_error = completed.admission_error;
-        for update in completed.surface_updates {
-            if let Err(error) = self.browser_context.finish_document_policy_batch(update) {
-                first_error.get_or_insert(error);
-            }
-        }
-        first_error.map_or(Ok(()), Err)
     }
 
     pub(crate) fn begin_active_target_initial_empty_document(&mut self, initial_url: String) {
@@ -1636,12 +1554,13 @@ mod tests {
         let handle = context
             .web_contents_handle_for_target("TID-selected")
             .unwrap();
-        let completed = context
-            .start_select_web_contents(handle, &Default::default())
+        context
+            .browser_context
+            .activate_web_contents(handle)
             .unwrap()
             .wait()
-            .await;
-        context.finish_select_web_contents(completed).unwrap();
+            .await
+            .unwrap();
 
         assert_eq!(context.active_target_id(), Some("TID-selected"));
         assert!(
@@ -1850,12 +1769,13 @@ mod tests {
         let handle = context
             .web_contents_handle_for_target("TID-pending-bg")
             .expect("pending background target should remain selectable");
-        let completed = context
-            .start_select_web_contents(handle, &Default::default())
+        context
+            .browser_context
+            .activate_web_contents(handle)
             .unwrap()
             .wait()
-            .await;
-        context.finish_select_web_contents(completed).unwrap();
+            .await
+            .unwrap();
 
         assert_eq!(
             context.runtime_slot_diagnostics_for_target(context.active_target_id().unwrap())["loadedPageAbsenceReason"],
@@ -1903,7 +1823,7 @@ mod tests {
             Some("SID-second-loaded"),
         )
         .await;
-        let mut context = ctx.conn.browser_context.take().unwrap();
+        let context = ctx.conn.browser_context.take().unwrap();
         let first_attachment = context
             .background_targets()
             .nth(1)
@@ -1925,12 +1845,13 @@ mod tests {
             .map(|target| target.target_id().to_owned())
             .expect("loaded background target should be selectable");
         let handle = context.web_contents_handle_for_target(&selected).unwrap();
-        let completed = context
-            .start_select_web_contents(handle, &Default::default())
+        context
+            .browser_context
+            .activate_web_contents(handle)
             .unwrap()
             .wait()
-            .await;
-        context.finish_select_web_contents(completed).unwrap();
+            .await
+            .unwrap();
 
         assert_eq!(selected, "TID-first-loaded");
         assert_eq!(context.active_target_id(), Some("TID-first-loaded"));
@@ -1988,7 +1909,7 @@ mod tests {
             Some("SID-background-route"),
         )
         .await;
-        let mut context = ctx.conn.browser_context.take().unwrap();
+        let context = ctx.conn.browser_context.take().unwrap();
         let active_attachment = context
             .active_page_target()
             .runtime_slot
@@ -2002,13 +1923,12 @@ mod tests {
         let handle = context
             .web_contents_handle_for_target("TID-background-route")
             .unwrap();
-        let completed = context
-            .start_select_web_contents(handle, &Default::default())
+        context
+            .browser_context
+            .activate_web_contents(handle)
             .unwrap()
             .wait()
-            .await;
-        context
-            .finish_select_web_contents(completed)
+            .await
             .expect("target selection should succeed");
 
         assert_eq!(
@@ -2069,13 +1989,12 @@ mod tests {
             .set_session_observation_cursor_at_counts_for_test(None, 4, 5);
 
         let handle = context.web_contents_handle_for_target("TID-bg").unwrap();
-        let completed = context
-            .start_select_web_contents(handle, &Default::default())
+        context
+            .browser_context
+            .activate_web_contents(handle)
             .unwrap()
             .wait()
-            .await;
-        context
-            .finish_select_web_contents(completed)
+            .await
             .expect("target selection should not fail");
 
         assert_eq!(context.active_target_id(), Some("TID-bg"));

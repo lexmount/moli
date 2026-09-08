@@ -577,15 +577,15 @@ pub(crate) async fn execute_devtools_create_target_command_async_with_protocol_e
         Err(error) => return (Err(error), Vec::new(), None),
     };
     let result = execution.result;
-    let creation_commit = execution.commit;
+    let mut creation_commit = execution.commit;
     let mut protocol_events = Vec::new();
     let (initial_document_events, renderer_output_predecessor) = conn
         .ensure_created_target_initial_document_page(&result.target_id)
         .await;
     protocol_events.extend(initial_document_events);
-    if let Some(activation) = creation_commit.activation() {
+    if let Some(activation) = creation_commit.take_activation() {
         protocol_events.extend(
-            conn.complete_staged_target_activation_async(activation)
+            conn.project_target_activation_async(activation)
                 .await
                 .into_protocol_events(),
         );
@@ -729,11 +729,11 @@ pub(crate) async fn complete_pending_target_command(
         }
         CompletedTargetCommandKind::CreateTarget {
             response_plan,
-            creation_commit,
+            mut creation_commit,
             initial_document,
         } => {
-            let activation_events = if let Some(activation) = creation_commit.activation() {
-                conn.complete_staged_target_activation_async(activation)
+            let activation_events = if let Some(activation) = creation_commit.take_activation() {
+                conn.project_target_activation_async(activation)
                     .await
                     .into_protocol_events()
             } else {

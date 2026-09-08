@@ -34,7 +34,8 @@ pub use emulation::{
     viewport_surface_install_script,
 };
 pub use events::{
-    BrowserEvent, BrowserEventReceiver, BrowserEventRecord, BrowserSnapshot, WebContentsSnapshot,
+    BrowserEvent, BrowserEventReceiver, BrowserEventRecord, BrowserSnapshot, WebContentsSelection,
+    WebContentsSnapshot,
 };
 pub use owner::{
     BrowserBuiltInitialDocument, BrowserCommittedInitialDocument, BrowserContextHandle,
@@ -42,7 +43,7 @@ pub use owner::{
     BrowserInitialDocumentAdmission, BrowserInitialDocumentBuild, BrowserInterceptedNavigationLoad,
     BrowserInterceptedNavigationResponse, BrowserNavigationLoad, BrowserPreparedDocumentNavigation,
     BrowserPreparedNavigationResponse, BrowserService, PendingDocumentRetirement,
-    PendingWebContentsClose, WebContentsCreation,
+    PendingWebContentsActivation, PendingWebContentsClose, WebContentsCreation,
 };
 pub use permissions::{PermissionDefaults, PermissionOverrides};
 pub use renderer_residence::RendererPageResidenceIdentity;

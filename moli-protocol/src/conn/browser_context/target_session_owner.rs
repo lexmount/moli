@@ -1083,11 +1083,15 @@ impl CdpConnection {
         let Ok(closing) = self.browser.close_web_contents(handle) else {
             return Vec::new();
         };
-        let activated = closing.activated;
+        let record = closing.event;
+        let moli_core::browser::BrowserEvent::WebContentsClosed { activated, .. } = record.event
+        else {
+            unreachable!("Browser close must return its committed close occurrence");
+        };
         closing.close_async().await;
         // The command executor already owns its automation lifecycle output;
         // only an independently observed Browser close must synthesize it.
-        self.retire_closed_web_contents(handle, activated, notifications)
+        self.retire_closed_web_contents(handle, activated, record.sequence, notifications)
             .await
     }
 

@@ -12,6 +12,8 @@ use indexmap::IndexMap;
 use parking_lot::Mutex;
 use tokio::sync::{mpsc, oneshot};
 
+mod activation;
+pub use activation::PendingWebContentsActivation;
 mod navigation;
 pub use navigation::{
     BrowserBuiltInitialDocument, BrowserCommittedInitialDocument, BrowserDocumentMaterialization,
@@ -411,28 +413,41 @@ impl BrowserHandle {
             let activated = was_selected
                 .then(|| context.selected_web_contents_handle())
                 .flatten();
-            let surface = activated
-                .and_then(|selected| context.start_selected_document_visibility_update(selected));
+            let surface = activated.and_then(|selected| {
+                context.start_web_contents_visibility_update(selected, true).unwrap_or_else(|error| {
+                    tracing::warn!(%error, "failed to activate surviving WebContents surface");
+                    None
+                })
+            });
             browser.navigation_work.remove_web_contents(handle);
-            browser
+            let event = browser
                 .events
                 .publish(super::BrowserEvent::WebContentsClosed {
                     web_contents: handle,
                     activated,
                 });
             let (completion_tx, completion) = oneshot::channel();
+            let local_sender = browser.local_sender.clone();
             tokio::task::spawn_local(async move {
                 closing.close_async().await;
-                if let Some(surface) = surface
-                    && let Err(error) = surface.wait().await
-                {
-                    tracing::warn!(%error, "surviving WebContents surface update did not complete");
-                }
-                let _ = completion_tx.send(());
+                let surface = match surface {
+                    Some(surface) => Some(surface.wait().await),
+                    None => None,
+                };
+                let _ = local_sender.send(Box::new(move |browser| {
+                    if let Some(surface) = surface {
+                        let result = browser.context_mut(handle.context())
+                            .and_then(|context| context.finish_document_policy_update(surface));
+                        if let Err(error) = result {
+                            tracing::warn!(%error, "surviving WebContents surface update did not complete");
+                        }
+                    }
+                    let _ = completion_tx.send(());
+                }));
             });
             Ok(PendingWebContentsClose {
                 completion,
-                activated,
+                event,
             })
         })?
     }
@@ -495,8 +510,8 @@ pub struct BrowserContextHandle {
 /// Completion of a Browser-owned WebContents teardown.
 pub struct PendingWebContentsClose {
     completion: oneshot::Receiver<()>,
-    /// Native successor when closing the selected page; background closes do not activate.
-    pub activated: Option<WebContentsHandle>,
+    /// The exact committed close occurrence, including any selected successor.
+    pub event: super::BrowserEventRecord,
 }
 
 impl PendingWebContentsClose {
@@ -667,27 +682,24 @@ impl BrowserContextHandle {
                     .collect::<Vec<_>>();
                 let closing = browser.context_mut(context)?.close_all_web_contents();
                 browser.navigation_work.remove_context(context);
-                for web_contents in handles {
-                    browser
-                        .events
-                        .publish(super::BrowserEvent::WebContentsClosed {
-                            web_contents,
-                            activated: None,
-                        });
-                }
                 Ok::<_, String>(
-                    closing
+                    handles
                         .into_iter()
-                        .map(|closing| {
+                        .zip(closing)
+                        .map(|(web_contents, closing)| {
+                            let event =
+                                browser
+                                    .events
+                                    .publish(super::BrowserEvent::WebContentsClosed {
+                                        web_contents,
+                                        activated: None,
+                                    });
                             let (completion_tx, completion) = oneshot::channel();
                             tokio::task::spawn_local(async move {
                                 closing.close_async().await;
                                 let _ = completion_tx.send(());
                             });
-                            PendingWebContentsClose {
-                                completion,
-                                activated: None,
-                            }
+                            PendingWebContentsClose { completion, event }
                         })
                         .collect(),
                 )
@@ -757,7 +769,21 @@ impl BrowserContextHandle {
     }
 
     pub fn select_web_contents(&self, id: super::WebContentsId) -> bool {
-        self.update_live(move |context| context.select_web_contents(id))
+        // Selection is committed at admission. The Browser owns the remaining
+        // visibility work even when the native caller does not await its reply.
+        self.browser
+            .activate_web_contents(WebContentsHandle::new(self.id, id))
+            .is_ok()
+    }
+
+    pub fn activate_web_contents(
+        &self,
+        handle: WebContentsHandle,
+    ) -> Result<PendingWebContentsActivation, String> {
+        if handle.context() != self.id {
+            return Err("WebContents belongs to another BrowserContext".into());
+        }
+        self.browser.activate_web_contents(handle)
     }
 
     pub fn selected_web_contents_id(&self) -> Option<super::WebContentsId> {
@@ -768,6 +794,12 @@ impl BrowserContextHandle {
 
     pub fn selected_web_contents_handle(&self) -> Option<WebContentsHandle> {
         self.read(BrowserContext::selected_web_contents_handle)
+            .ok()
+            .flatten()
+    }
+
+    pub fn selected_web_contents_snapshot(&self) -> Option<super::WebContentsSelection> {
+        self.read(BrowserContext::selected_web_contents_snapshot)
             .ok()
             .flatten()
     }

@@ -73,29 +73,6 @@ impl BrowserContext {
             .start_document_policy_update(document, update)
     }
 
-    pub(crate) fn start_document_page_surface_update(
-        &mut self,
-        document: moli_core::browser::DocumentHandle,
-        foreground: bool,
-        global_network_conditions: Option<moli_core::browser::EmulatedNetworkConditions>,
-        global_geolocation: Option<&moli_core::browser::EmulatedGeolocationOverrideState>,
-    ) -> Result<PendingDocumentPolicyBatch, String> {
-        self.browser_context.start_document_page_surface_update(
-            document,
-            foreground,
-            global_network_conditions,
-            global_geolocation,
-        )
-    }
-
-    pub(crate) fn finish_document_policy_update(
-        &mut self,
-        completed: CompletedDocumentPolicyUpdate,
-    ) -> Result<(), String> {
-        self.browser_context
-            .finish_document_policy_update(completed)
-    }
-
     pub(crate) fn start_web_contents_fetch_interception_update(
         &mut self,
         web_contents: moli_core::browser::WebContentsHandle,

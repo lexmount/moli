@@ -287,6 +287,59 @@ async fn browser_service_navigates_queries_replaces_and_closes_without_devtools(
 }
 
 #[tokio::test]
+async fn native_selection_updates_both_documents_without_replacing_them_or_their_policy() {
+    let server = FixtureServer::spawn().await.unwrap();
+    let service = BrowserService::start().unwrap();
+    let (context, first) = context_with_contents(&service);
+    let first_document = navigate(&context, first, &server.url("/static")).await;
+    let (peer, _) = context.create_web_contents(Default::default()).unwrap();
+    let peer_document = navigate(&context, peer, &server.url("/static")).await;
+    assert!(context.select_web_contents(first.id()));
+    for (document, foreground) in [(first_document, true), (peer_document, false)] {
+        let pending = context
+            .start_document_page_surface_update(
+                document,
+                foreground,
+                Some(crate::browser::EmulatedNetworkConditions::offline()),
+                None,
+            )
+            .unwrap();
+        context
+            .finish_document_policy_batch(pending.wait().await)
+            .unwrap();
+    }
+    let expression = "[document.hidden, document.hasFocus(), navigator.onLine].join(',')";
+    for (selected, expected_first, expected_peer) in [
+        (peer, "true,false,false", "false,true,false"),
+        (first, "false,true,false", "true,false,false"),
+    ] {
+        assert!(context.select_web_contents(selected.id()));
+        assert_eq!(context.selected_web_contents_handle(), Some(selected));
+        for (document, expected) in [
+            (first_document, expected_first),
+            (peer_document, expected_peer),
+        ] {
+            assert_eq!(
+                context
+                    .evaluate_document_expression_for_test(document, expression, false)
+                    .await
+                    .unwrap()["value"],
+                expected,
+                "native activation must update visibility and preserve offline policy on both exact Documents"
+            );
+        }
+        assert_eq!(
+            context.document_handle(first).unwrap(),
+            Some(first_document)
+        );
+        assert_eq!(context.document_handle(peer).unwrap(), Some(peer_document));
+    }
+    assert_eq!(context.loaded_document_count(), 2);
+    service.shutdown();
+    server.shutdown().await;
+}
+
+#[tokio::test]
 async fn native_web_contents_close_activates_loaded_peer_without_devtools() {
     let server = FixtureServer::spawn().await.unwrap();
     let service = BrowserService::start().unwrap();
@@ -316,7 +369,13 @@ async fn native_web_contents_close_activates_loaded_peer_without_devtools() {
         "true,false,false"
     );
     let close = service.handle().close_web_contents(first).unwrap();
-    assert_eq!(close.activated, Some(peer));
+    assert_eq!(
+        close.event.event,
+        crate::browser::BrowserEvent::WebContentsClosed {
+            web_contents: first,
+            activated: Some(peer),
+        }
+    );
     close.close_async().await;
     assert_eq!(context.selected_web_contents_handle(), Some(peer));
     assert!(context.contains_web_contents(unloaded));

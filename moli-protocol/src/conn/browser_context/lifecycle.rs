@@ -92,7 +92,10 @@ impl CdpConnection {
                     .iter()
                     .copied()
                     .find(|selected| selected.context() == handle.context());
-                events.extend(self.project_closed_web_contents(handle, activated).await);
+                events.extend(
+                    self.project_closed_web_contents(handle, activated, snapshot.sequence)
+                        .await,
+                );
             }
         }
         for context in snapshot.contexts {
@@ -103,6 +106,9 @@ impl CdpConnection {
         }
         for document in snapshot.documents {
             events.extend(self.project_browser_document_commit(document).await);
+        }
+        for selected in snapshot.selected_web_contents {
+            events.extend(self.project_browser_selection(selected, None, snapshot.sequence));
         }
         events
     }
@@ -125,15 +131,22 @@ impl CdpConnection {
         &mut self,
         handle: moli_core::browser::WebContentsHandle,
         activated: Option<moli_core::browser::WebContentsHandle>,
+        sequence: moli_core::browser::BrowserSequence,
     ) -> Vec<BackgroundProtocolEvent> {
-        self.retire_closed_web_contents(handle, activated, PageCloseNotifications::BrowserEvent)
-            .await
+        self.retire_closed_web_contents(
+            handle,
+            activated,
+            sequence,
+            PageCloseNotifications::BrowserEvent,
+        )
+        .await
     }
 
     pub(in crate::conn) async fn retire_closed_web_contents(
         &mut self,
         handle: moli_core::browser::WebContentsHandle,
         activated: Option<moli_core::browser::WebContentsHandle>,
+        sequence: moli_core::browser::BrowserSequence,
         notifications: PageCloseNotifications,
     ) -> Vec<BackgroundProtocolEvent> {
         let Some(context) = self.browser_context_by_browser_id_mut(handle.context()) else {
@@ -177,24 +190,7 @@ impl CdpConnection {
             .await,
         );
         if let Some(activated) = activated {
-            let selected = self
-                .browser_context_by_browser_id(activated.context())
-                .filter(|context| context.selected_web_contents_handle() == Some(activated))
-                .and_then(|context| context.page_targets.get_for_web_contents(activated.id()))
-                .map(|target| target.target_id().to_owned());
-            if let Some(selected) = selected {
-                self.notify_target_host_activated(&selected);
-                events.extend(
-                    self.page_screencast_session_ids_for_target(&selected)
-                        .into_iter()
-                        .map(|session| {
-                            BackgroundProtocolEvent::page_screencast_visibility_changed(
-                                session.as_deref(),
-                                true,
-                            )
-                        }),
-                );
-            }
+            events.extend(self.project_browser_selection(activated, Some(handle), sequence));
         }
         events
     }

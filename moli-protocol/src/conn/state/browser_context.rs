@@ -94,6 +94,11 @@ pub(crate) use page_state::LoadedNavigationPageCommit;
 pub struct BrowserContext {
     pub id: String,
     pub(crate) page_targets: PageAgentHostRegistry,
+    /// Observer high-water mark and last exposed selection; never native selection authority.
+    pub(in crate::conn) projected_selection: Option<(
+        moli_core::browser::BrowserSequence,
+        moli_core::browser::WebContentsId,
+    )>,
     /// Test-only cookie overrides, inherited by the first page fixture.
     #[cfg(test)]
     pub(crate) default_document_cookie_manager_surface: BrowserContextCookieManagerSurface,
@@ -323,6 +328,7 @@ impl BrowserContext {
         Self {
             id,
             page_targets: PageAgentHostRegistry::default(),
+            projected_selection: None,
             #[cfg(test)]
             default_document_cookie_manager_surface: BrowserContextCookieManagerSurface::default(),
             target_popup_ids: HashMap::new(),
@@ -1311,7 +1317,8 @@ impl BrowserContext {
         let handle = self
             .web_contents_handle_for_target(&target_id)
             .expect("registered page target must have WebContents");
-        self.select_registered_web_contents(handle)
+        self.browser_context
+            .activate_web_contents(handle)
             .expect("registered WebContents must remain selectable");
     }
 
