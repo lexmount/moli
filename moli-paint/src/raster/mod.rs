@@ -18,15 +18,16 @@ use filters::{apply_software_color_filter, backend_filter, is_software_color_fil
 use moli_layout::{
     PaintBlendMode, PaintBorderColors, PaintBorderStyle, PaintBorderStyles, PaintBoxShadow,
     PaintBrush, PaintCaptureSurface, PaintColor, PaintCompositeMode, PaintCornerRadii,
-    PaintCornerRadius, PaintEdgeSizes, PaintFragment, PaintGradientColorSpace, PaintGradientExtend,
-    PaintGradientHueDirection, PaintImage, PaintImageSampling, PaintLineCap, PaintLineJoin,
-    PaintPath, PaintPathElement, PaintRect, PaintShape, PaintSnapshot, PaintStroke, PaintSvgImage,
-    PaintTextDecoration, PaintTextDecorationStyle, PaintTextShadow, PaintTransform2D,
-    pixel_snap_paint_axis, pixel_snap_paint_axis_allowing_zero, pixel_snap_paint_rect,
+    PaintCornerRadius, PaintEdgeSizes, PaintFragment, PaintGradientAlphaSpace,
+    PaintGradientColorSpace, PaintGradientExtend, PaintGradientHueDirection, PaintImage,
+    PaintImageSampling, PaintLineCap, PaintLineJoin, PaintPath, PaintPathElement, PaintRect,
+    PaintShape, PaintSnapshot, PaintStroke, PaintSvgImage, PaintTextDecoration,
+    PaintTextDecorationStyle, PaintTextShadow, PaintTransform2D, pixel_snap_paint_axis,
+    pixel_snap_paint_axis_allowing_zero, pixel_snap_paint_rect,
 };
 use peniko::{
     BlendMode, Blob, Color, Compose, Extend, Fill, Gradient, ImageAlphaType, ImageBrush, ImageData,
-    ImageFormat, ImageQuality, ImageSampler, Mix,
+    ImageFormat, ImageQuality, ImageSampler, InterpolationAlphaSpace, Mix,
     color::{ColorSpaceTag, HueDirection},
     kurbo::{
         Affine, BezPath, Cap, Circle, Ellipse, Insets, Join, PathEl, Point, Rect, RoundedRect,
@@ -367,7 +368,8 @@ fn fragment_auxiliary_units(snapshot: &PaintSnapshot, fragment: &PaintFragment) 
             .path
             .elements
             .len()
-            .saturating_add(stroke.dash_pattern.len()),
+            .saturating_add(stroke.dash_pattern.len())
+            .saturating_add(brush_units(&stroke.brush)),
         PaintFragment::TextShadow(shadow) => shadow.run.normalized_coords.len(),
         PaintFragment::GlyphRun(run) => run.normalized_coords.len(),
         PaintFragment::SvgImage(image) => snapshot
@@ -1618,7 +1620,7 @@ fn backend_glyph_transform(skew_radians: Option<f32>) -> Option<Affine> {
 
 fn paint_stroke(scene: &mut impl PaintScene, stroke: &PaintStroke, scale: f64) {
     let width = f64::from(finite_nonnegative(stroke.width));
-    if width <= 0.0 || stroke.color.alpha <= 0.0 {
+    if width <= 0.0 {
         return;
     }
     let mut backend_stroke = Stroke::new(width);
@@ -1637,26 +1639,32 @@ fn paint_stroke(scene: &mut impl PaintScene, stroke: &PaintStroke, scale: f64) {
         .collect();
     backend_stroke.dash_offset = f64::from(finite_or_zero(stroke.dash_offset));
     let path = to_backend_path(&stroke.path);
+    let (brush, brush_transform) = backend_brush(&stroke.brush);
     scene.stroke(
         &backend_stroke,
         device_transform(stroke.transform, scale),
-        to_backend_color(stroke.color),
-        None,
+        peniko::BrushRef::from(&brush),
+        brush_transform,
         &path,
     );
 }
 
 fn paint_fill(scene: &mut impl PaintScene, shape: &BezPath, brush: &PaintBrush, transform: Affine) {
+    let (brush, brush_transform) = backend_brush(brush);
+    scene.fill(
+        Fill::NonZero,
+        transform,
+        peniko::BrushRef::from(&brush),
+        brush_transform,
+        shape,
+    );
+}
+
+fn backend_brush(brush: &PaintBrush) -> (peniko::Brush, Option<Affine>) {
     match brush {
-        PaintBrush::Solid(color) => scene.fill(
-            Fill::NonZero,
-            transform,
-            to_backend_color(*color),
-            None,
-            shape,
-        ),
+        PaintBrush::Solid(color) => (to_backend_color(*color).into(), None),
         PaintBrush::LinearGradient(gradient) => {
-            let gradient = Gradient::new_linear(
+            let gradient_brush = Gradient::new_linear(
                 (f64::from(gradient.start.x), f64::from(gradient.start.y)),
                 (f64::from(gradient.end.x), f64::from(gradient.end.y)),
             )
@@ -1664,11 +1672,17 @@ fn paint_fill(scene: &mut impl PaintScene, shape: &BezPath, brush: &PaintBrush, 
             .with_interpolation_cs(to_backend_gradient_color_space(
                 gradient.interpolation.color_space,
             ))
+            .with_interpolation_alpha_space(backend_gradient_alpha_space(
+                gradient.interpolation.alpha_space,
+            ))
             .with_hue_direction(to_backend_gradient_hue_direction(
                 gradient.interpolation.hue_direction,
             ))
             .with_stops(backend_gradient_stops(&gradient.stops).as_slice());
-            scene.fill(Fill::NonZero, transform, &gradient, None, shape);
+            (
+                gradient_brush.into(),
+                Some(to_backend_transform(gradient.transform)),
+            )
         }
         PaintBrush::RadialGradient(gradient) => {
             let gradient_brush = Gradient::new_two_point_radial(
@@ -1687,17 +1701,17 @@ fn paint_fill(scene: &mut impl PaintScene, shape: &BezPath, brush: &PaintBrush, 
             .with_interpolation_cs(to_backend_gradient_color_space(
                 gradient.interpolation.color_space,
             ))
+            .with_interpolation_alpha_space(backend_gradient_alpha_space(
+                gradient.interpolation.alpha_space,
+            ))
             .with_hue_direction(to_backend_gradient_hue_direction(
                 gradient.interpolation.hue_direction,
             ))
             .with_stops(backend_gradient_stops(&gradient.stops).as_slice());
-            scene.fill(
-                Fill::NonZero,
-                transform,
-                &gradient_brush,
+            (
+                gradient_brush.into(),
                 Some(to_backend_transform(gradient.transform)),
-                shape,
-            );
+            )
         }
         PaintBrush::ConicGradient(gradient) => {
             let gradient_brush = Gradient::new_sweep(
@@ -1709,18 +1723,25 @@ fn paint_fill(scene: &mut impl PaintScene, shape: &BezPath, brush: &PaintBrush, 
             .with_interpolation_cs(to_backend_gradient_color_space(
                 gradient.interpolation.color_space,
             ))
+            .with_interpolation_alpha_space(backend_gradient_alpha_space(
+                gradient.interpolation.alpha_space,
+            ))
             .with_hue_direction(to_backend_gradient_hue_direction(
                 gradient.interpolation.hue_direction,
             ))
             .with_stops(backend_gradient_stops(&gradient.stops).as_slice());
-            scene.fill(
-                Fill::NonZero,
-                transform,
-                &gradient_brush,
+            (
+                gradient_brush.into(),
                 Some(to_backend_transform(gradient.transform)),
-                shape,
-            );
+            )
         }
+    }
+}
+
+fn backend_gradient_alpha_space(space: PaintGradientAlphaSpace) -> InterpolationAlphaSpace {
+    match space {
+        PaintGradientAlphaSpace::Premultiplied => InterpolationAlphaSpace::Premultiplied,
+        PaintGradientAlphaSpace::Unpremultiplied => InterpolationAlphaSpace::Unpremultiplied,
     }
 }
 

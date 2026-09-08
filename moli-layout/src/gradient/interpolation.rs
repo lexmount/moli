@@ -154,6 +154,7 @@ fn paint_interpolation(method: ColorInterpolationMethod) -> Option<PaintGradient
     Some(PaintGradientInterpolation {
         color_space,
         hue_direction,
+        ..Default::default()
     })
 }
 

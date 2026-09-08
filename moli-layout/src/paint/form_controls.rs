@@ -86,7 +86,7 @@ pub(super) fn project_form_control_appearance<N>(
                 };
                 snapshot.push_fragment(PaintFragment::Stroke(PaintStroke {
                     path,
-                    color: PaintColor::WHITE,
+                    brush: PaintBrush::Solid(PaintColor::WHITE),
                     width: 2.0 * scale,
                     join: PaintLineJoin::Round,
                     start_cap: PaintLineCap::Round,
@@ -100,7 +100,7 @@ pub(super) fn project_form_control_appearance<N>(
                 fill(shape, PaintColor::WHITE);
                 snapshot.push_fragment(PaintFragment::Stroke(PaintStroke {
                     path: rounded_rect_path(rect, frame_radius),
-                    color: accent,
+                    brush: PaintBrush::Solid(accent),
                     width: 1.0,
                     join: PaintLineJoin::Miter,
                     start_cap: PaintLineCap::Butt,

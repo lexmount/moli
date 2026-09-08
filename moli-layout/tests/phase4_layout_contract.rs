@@ -2430,7 +2430,7 @@ fn form_controls_have_deterministic_intrinsic_geometry_content_and_basic_appeara
         matches!(
             fragment,
             PaintFragment::Stroke(stroke)
-                if stroke.color == PaintColor::WHITE
+                if stroke.brush == moli_layout::PaintBrush::Solid(PaintColor::WHITE)
                     && stroke.width > 0.0
                     && stroke.start_cap == moli_layout::PaintLineCap::Round
                     && stroke.end_cap == moli_layout::PaintLineCap::Round

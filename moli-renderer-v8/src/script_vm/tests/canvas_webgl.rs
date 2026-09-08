@@ -701,7 +701,7 @@ fn html_canvas_linear_gradient_surface_is_available_for_fingerprinting_scripts()
 
     assert_eq!(
         result,
-        r##"{"createType":"function","addType":"function","instance":true,"tag":"[object CanvasGradient]","addStops":"ok","badOffset":"IndexSizeError","badCoordinate":"NotSupportedError"}"##
+        r##"{"createType":"function","addType":"function","instance":true,"tag":"[object CanvasGradient]","addStops":"ok","badOffset":"IndexSizeError","badCoordinate":"TypeError"}"##
     );
 }
 
@@ -1259,7 +1259,7 @@ fn canvas_context_state_uses_private_slots_for_reflection_and_spoofing() {
 
     assert_eq!(
         result,
-        r##"{"initialOwnSlots":"","defaults":"#000000|10px sans-serif|true|low|1|source-over","beforeSpoof":"#ff0000|20px Arial|false|high|0.5|source-over","ownSlotsAfterSetter":"","beforeSpoofPixel":"255,0,0,255","afterSpoof":"#ff0000|20px Arial|false|high|0.5|source-over","afterSpoofPixel":"255,0,0,255","ownSlotsAfterSpoof":"__moliCanvasContextFillStyle,__moliCanvasContextFont,__moliCanvasContextGlobalAlpha,__moliCanvasContextGlobalCompositeOperation,__moliCanvasContextImageSmoothingEnabled,__moliCanvasContextImageSmoothingQuality","widthSame":true,"fakeFillStyleError":"TypeError","instance":true}"##
+        r##"{"initialOwnSlots":"","defaults":"#000000|10px sans-serif|true|low|1|source-over","beforeSpoof":"#ff0000|20px Arial|false|high|0.5|source-over","ownSlotsAfterSetter":"","beforeSpoofPixel":"255,0,0,128","afterSpoof":"#ff0000|20px Arial|false|high|0.5|source-over","afterSpoofPixel":"255,0,0,128","ownSlotsAfterSpoof":"__moliCanvasContextFillStyle,__moliCanvasContextFont,__moliCanvasContextGlobalAlpha,__moliCanvasContextGlobalCompositeOperation,__moliCanvasContextImageSmoothingEnabled,__moliCanvasContextImageSmoothingQuality","widthSame":true,"fakeFillStyleError":"TypeError","instance":true}"##
     );
 }
 

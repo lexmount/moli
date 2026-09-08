@@ -15172,6 +15172,7 @@ fn decode_png_dimensions_from_data_url(data_url: &str) -> (u32, u32) {
 
 mod browser_api;
 mod canvas_arguments;
+mod canvas_gradients;
 mod canvas_paths;
 mod canvas_webgl;
 mod dom_elements;
