@@ -38,6 +38,7 @@ mod structured_clone;
 mod transferable_streams;
 mod traversal;
 mod trusted_types;
+mod trusted_types_attributes;
 mod web_audio;
 mod webrtc;
 mod webrtc_events;

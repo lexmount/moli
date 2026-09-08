@@ -55,6 +55,21 @@ fn policy_owner_dispatch_scope(scope: &mut v8::PinScope<'_, '_>) -> OwnerDispatc
     OwnerDispatchScope::Top
 }
 
+fn policy_owner_dispatch_scope_for_global<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    global: v8::Local<'s, v8::Object>,
+) -> OwnerDispatchScope {
+    if let Some(handle) = get_private_value(scope, global, CHILD_BROWSING_CONTEXT_HANDLE_SLOT)
+        .and_then(|value| child_window_handle_from_marker_data(scope, value))
+    {
+        return OwnerDispatchScope::Child(handle);
+    }
+    if let Some(id) = crate::native_bridge::lightweight_popup_id_from_window(scope, global) {
+        return OwnerDispatchScope::LightweightPopup(id);
+    }
+    OwnerDispatchScope::Top
+}
+
 impl DocumentCspOutcome {
     pub(crate) fn blocks_request(&self) -> bool {
         matches!(self, Self::Blocked(_))
@@ -185,6 +200,17 @@ impl JsContextHost {
                     .content_security_reporting_endpoints,
             ),
         )
+    }
+
+    pub(crate) fn trusted_types_for_script_requirements_for_global<'s>(
+        &self,
+        scope: &mut v8::PinScope<'s, '_>,
+        global: v8::Local<'s, v8::Object>,
+    ) -> TrustedTypesForScriptRequirements {
+        self.trusted_types_for_script_requirements_for_owner(
+            policy_owner_dispatch_scope_for_global(scope, global),
+        )
+        .unwrap_or_default()
     }
 
     fn trusted_types_sink_csp_violations_for_owner(
@@ -1018,8 +1044,23 @@ impl JsContextHost {
         sink: &str,
         sample: &str,
     ) {
+        let owner = policy_owner_dispatch_scope(scope);
         self.dispatch_trusted_types_sink_csp_violation_event_with_location_best_effort(
-            scope, host_ptr, sink, sample, true,
+            scope, host_ptr, owner, sink, sample, true,
+        );
+    }
+
+    pub(crate) fn dispatch_trusted_types_sink_csp_violation_event_for_global_best_effort<'s>(
+        &mut self,
+        scope: &mut v8::PinScope<'s, '_>,
+        host_ptr: *mut JsContextHost,
+        global: v8::Local<'s, v8::Object>,
+        sink: &str,
+        sample: &str,
+    ) {
+        let owner = policy_owner_dispatch_scope_for_global(scope, global);
+        self.dispatch_trusted_types_sink_csp_violation_event_with_location_best_effort(
+            scope, host_ptr, owner, sink, sample, true,
         );
     }
 
@@ -1033,8 +1074,9 @@ impl JsContextHost {
         sink: &str,
         sample: &str,
     ) {
+        let owner = policy_owner_dispatch_scope(scope);
         self.dispatch_trusted_types_sink_csp_violation_event_with_location_best_effort(
-            scope, host_ptr, sink, sample, false,
+            scope, host_ptr, owner, sink, sample, false,
         );
     }
 
@@ -1059,6 +1101,7 @@ impl JsContextHost {
         &mut self,
         scope: &mut v8::PinScope<'s, '_>,
         host_ptr: *mut JsContextHost,
+        owner: OwnerDispatchScope,
         sink: &str,
         sample: &str,
         capture_current_script_location: bool,
@@ -1066,7 +1109,6 @@ impl JsContextHost {
         let source_location = (capture_current_script_location && !self.active_inspector_dispatch)
             .then(|| current_script_violation_location(scope))
             .flatten();
-        let owner = policy_owner_dispatch_scope(scope);
         for mut violation in self.trusted_types_sink_csp_violations_for_owner(owner, sink, sample) {
             if let Some((source_file, line_number, column_number)) = &source_location {
                 violation.source_file.clone_from(source_file);

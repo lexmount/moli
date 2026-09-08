@@ -3255,8 +3255,6 @@ svg/types/scripted/SVGLength-px.html
 svg/types/scripted/SVGLength-rem.html
 svg/types/scripted/SVGLength-rlh.html
 svg/types/scripted/SVGLength-viewport.html
-trusted-types/Element-setAttribute-respects-Elements-node-documents-globals-CSP-after-adoption-from-TT-realm.html
-trusted-types/Element-setAttribute-respects-Elements-node-documents-globals-CSP-after-adoption-from-non-TT-realm.html
 trusted-types/ServiceWorkerContainer-register-from-DedicatedWorker.https.html
 trusted-types/ServiceWorkerContainer-register-from-ServiceWorker.https.html
 trusted-types/ServiceWorkerContainer-register-from-SharedWorker.https.html
@@ -3266,7 +3264,6 @@ trusted-types/trusted-types-report-only.html
 trusted-types/trusted-types-reporting-for-DedicatedWorker-ServiceWorkerContainer-register.https.html
 trusted-types/trusted-types-reporting-for-ServiceWorker-ServiceWorkerContainer-register.https.html
 trusted-types/trusted-types-reporting-for-SharedWorker-ServiceWorkerContainer-register.https.html
-trusted-types/trusted-types-secondary-document.html
 uievents/order-of-events/focus-events/focus-automated-blink-webkit.html
 viewport/viewport-segments.html
 wasm/core/memory64/table64.wast.js.html

@@ -6737,7 +6737,7 @@ fn detached_document_adopts_live_namespaced_attributes() {
 
     assert_eq!(
         result,
-        "native||value|value|true|data-real,a:flag|flag||urn:attr|flag|value"
+        "native||value|value|true|data-real,a:flag|a:flag|a|urn:attr|flag|value"
     );
 }
 #[test]

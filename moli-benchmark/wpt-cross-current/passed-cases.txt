@@ -8238,6 +8238,8 @@ trusted-types/Document-write-appending-line-feed.html
 trusted-types/Document-write.html
 trusted-types/Element-insertAdjacentHTML.html
 trusted-types/Element-outerHTML.html
+trusted-types/Element-setAttribute-respects-Elements-node-documents-globals-CSP-after-adoption-from-TT-realm.html
+trusted-types/Element-setAttribute-respects-Elements-node-documents-globals-CSP-after-adoption-from-non-TT-realm.html
 trusted-types/Element-setAttribute.html
 trusted-types/Element-setAttributeNS.html
 trusted-types/Element-toggleAttribute.html
@@ -8412,6 +8414,7 @@ trusted-types/trusted-types-reporting-for-Window-setTimeout-setInterval.html
 trusted-types/trusted-types-reporting.html
 trusted-types/trusted-types-sandbox-allow-scripts.html
 trusted-types/trusted-types-sandbox-no-allow-scripts.html
+trusted-types/trusted-types-secondary-document.html
 trusted-types/trusted-types-source-file-path.html
 trusted-types/trusted-types-svg-script-set-href.html
 trusted-types/trusted-types-tojson.html
