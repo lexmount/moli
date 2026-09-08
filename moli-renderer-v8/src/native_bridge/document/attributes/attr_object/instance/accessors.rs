@@ -142,6 +142,14 @@ pub(super) fn attr_instance_value_setter<'a>(
     args: v8::PropertyCallbackArguments<'a>,
     _rv: v8::ReturnValue<'_, ()>,
 ) {
+    // V8 native data-property callbacks enter in the caller's context, unlike
+    // Web IDL setter functions. Keep conversion errors in the Attr's realm;
+    // the sink policy is separately selected from its owner's node document.
+    let attr = args.holder();
+    let context = attr
+        .get_creation_context(scope)
+        .unwrap_or_else(|| scope.get_current_context());
+    let scope: &mut v8::PinScope<'a, '_> = &mut v8::ContextScope::new(scope, context);
     let string_value = match webidl::convert::<webidl::DomString>(
         scope,
         value,
@@ -153,7 +161,6 @@ pub(super) fn attr_instance_value_setter<'a>(
             return;
         }
     };
-    let attr = args.holder();
     let Some(state) = attr_state_object(scope, attr) else {
         return;
     };
