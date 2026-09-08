@@ -671,7 +671,6 @@ fn start_worker_module_graph_fetch(
     let request_initiator_url = request.initiator_url().clone();
     let requested_module_type = request.module_type().map(str::to_owned);
     let requested_kind = request.kind();
-    let request_credentials_mode = request.credentials_mode();
     let response_content_security_policies = content_security_policies.clone();
     let response_content_security_report_only_policies =
         content_security_report_only_policies.clone();
@@ -726,14 +725,6 @@ fn start_worker_module_graph_fetch(
                     csp_violation = Some(violation);
                     return Err(message);
                 }
-                crate::network_host::validate_fetch_response_security_policy(
-                    &request_initiator_url,
-                    &response.final_url,
-                    &response.headers,
-                    moli_fetch::RequestMode::Cors,
-                    request_credentials_mode,
-                    Default::default(),
-                )?;
                 if requested_kind == WorkerModuleKind::WebAssembly {
                     crate::worker::ensure_worker_wasm_module_mime(&response)?;
                 } else {

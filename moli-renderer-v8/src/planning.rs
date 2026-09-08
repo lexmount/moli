@@ -701,6 +701,9 @@ pub(crate) fn external_script_credentials_mode(
 ) -> RequestCredentialsMode {
     match kind {
         ScriptKind::Module => module_script_credentials_mode(metadata.cross_origin.as_deref()),
+        ScriptKind::Classic if metadata.cross_origin.is_some() => {
+            module_script_credentials_mode(metadata.cross_origin.as_deref())
+        }
         ScriptKind::Classic | ScriptKind::ImportMap | ScriptKind::DataBlock => {
             RequestCredentialsMode::Include
         }
@@ -1178,6 +1181,24 @@ mod tests {
             external_script_credentials_mode(ScriptKind::Classic, &metadata),
             RequestCredentialsMode::Include
         );
+    }
+
+    #[test]
+    fn classic_cors_script_uses_the_crossorigin_credentials_mode() {
+        for (cross_origin, expected) in [
+            ("anonymous", RequestCredentialsMode::SameOrigin),
+            ("", RequestCredentialsMode::SameOrigin),
+            ("use-credentials", RequestCredentialsMode::Include),
+        ] {
+            let metadata = ScriptFetchMetadata {
+                cross_origin: Some(cross_origin.to_owned()),
+                ..ScriptFetchMetadata::default()
+            };
+            assert_eq!(
+                external_script_credentials_mode(ScriptKind::Classic, &metadata),
+                expected
+            );
+        }
     }
 
     #[test]

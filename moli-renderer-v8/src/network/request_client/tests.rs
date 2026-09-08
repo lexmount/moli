@@ -31,6 +31,8 @@ use crate::network::{BrowserResourceRuntimeOwner, BrowserResourceRuntimeOwnerRoo
 use crate::protocol_types::OptionalResourceFetchMask;
 use crate::types::SubresourceResourceType;
 
+mod script_cors;
+
 #[test]
 fn loader_clones_share_one_browser_resource_runtime() {
     let loader = ResourceRequestClient::new(&FetchConfig::default()).expect("loader");

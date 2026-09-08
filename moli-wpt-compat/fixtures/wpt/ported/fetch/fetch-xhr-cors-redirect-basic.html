@@ -79,7 +79,7 @@ promise_test(async function () {
 
 promise_test(async function () {
   const response = await fetch(alternate_url("/wpt/runtime/cors/redirect/to-same-origin-echo"));
-  assert_equals(response.type, "basic");
+  assert_equals(response.type, "cors");
   assert_true(response.redirected, "fetch response should expose redirect state");
   assert_true(response.url.endsWith("/wpt/runtime/cors/redirect/same-origin-echo"));
   const payload = JSON.parse(await response.text());
@@ -99,7 +99,7 @@ promise_test(async function () {
 
 promise_test(async function () {
   const response = await fetch("/wpt/runtime/cors/redirect/to-alt-to-same-origin-echo");
-  assert_equals(response.type, "basic");
+  assert_equals(response.type, "cors");
   assert_true(response.redirected, "fetch response should expose redirect state");
   assert_true(response.url.endsWith("/wpt/runtime/cors/redirect/same-origin-echo"));
   const payload = JSON.parse(await response.text());
@@ -119,7 +119,7 @@ promise_test(async function () {
 
 promise_test(async function () {
   const response = await fetch("/wpt/runtime/cors/redirect/to-cross-site-to-same-origin-echo");
-  assert_equals(response.type, "basic");
+  assert_equals(response.type, "cors");
   assert_true(response.redirected, "fetch response should expose redirect state");
   assert_true(response.url.endsWith("/wpt/runtime/cors/redirect/same-origin-echo"));
   const payload = JSON.parse(await response.text());

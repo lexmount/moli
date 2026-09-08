@@ -46,6 +46,8 @@ pub(in crate::network) struct ScriptTextCacheKey {
     page_cache_partition_id: u64,
     url: String,
     credentials_mode: String,
+    request_mode: String,
+    request_origin: Option<String>,
     site_context: String,
     site_for_cookies_origin: String,
     top_frame_origin: String,
@@ -588,6 +590,10 @@ pub(in crate::network) fn script_text_cache_key(request: &Request) -> ScriptText
         page_cache_partition_id: 0,
         url: request.url.as_str().to_owned(),
         credentials_mode: request.credentials_mode.as_ref().to_owned(),
+        request_mode: request.request_mode.as_ref().to_owned(),
+        request_origin: request
+            .request_origin()
+            .map(|origin| origin.ascii_serialization().to_owned()),
         site_context: format!("{:?}", request.cookie_context.site_context),
         site_for_cookies_origin: script_cache_partition_url_component(
             browser_context.site_for_cookies_url.as_ref(),
@@ -767,6 +773,8 @@ fn script_text_key_retained_bytes(key: &ScriptTextCacheKey) -> usize {
     key.url
         .len()
         .saturating_add(key.credentials_mode.len())
+        .saturating_add(key.request_mode.len())
+        .saturating_add(key.request_origin.as_deref().map_or(0, str::len))
         .saturating_add(key.site_context.len())
         .saturating_add(key.site_for_cookies_origin.len())
         .saturating_add(key.top_frame_origin.len())

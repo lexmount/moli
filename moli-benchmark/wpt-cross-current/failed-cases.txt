@@ -2951,7 +2951,6 @@ html/semantics/scripting-1/the-script-element/json-module/json-module-service-wo
 html/semantics/scripting-1/the-script-element/microtasks/checkpoint-after-window-onerror-module.html
 html/semantics/scripting-1/the-script-element/microtasks/checkpoint-after-window-onerror.html
 html/semantics/scripting-1/the-script-element/microtasks/checkpoint-after-workerglobalscope-onerror.html
-html/semantics/scripting-1/the-script-element/module/crossorigin.html
 html/semantics/scripting-1/the-script-element/module/dynamic-import/alpha/base-url-worker-importScripts.html
 html/semantics/scripting-1/the-script-element/module/dynamic-import/code-cache-base-url.html
 html/semantics/scripting-1/the-script-element/module/inline-async-execorder.html

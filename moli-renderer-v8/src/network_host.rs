@@ -32,7 +32,7 @@ pub(crate) use self::async_fetch::{
     fetch_browser_subresource_raw_stream_with_preflight_headers_and_network_metadata,
     fetch_browser_subresource_with_preflight_and_network_metadata,
     fetch_browser_subresource_with_preflight_headers,
-    fetch_browser_subresource_with_preflight_headers_and_network_metadata,
+    fetch_browser_subresource_with_preflight_headers_and_network_metadata, fetch_cors_script_text,
     spawn_async_subresource_fetch, spawn_async_subresource_fetch_with_redirect_chain,
 };
 pub(crate) use self::beacon::{navigator_send_beacon_callback, send_link_audit_ping};
@@ -150,7 +150,7 @@ pub(crate) use self::response::{
     build_fetch_response_object_from_subresource_body_for_request_mode,
     build_filtered_cached_response_object,
     build_navigation_preload_response_object_from_stream_for_request_mode,
-    cors_preflight_request_headers_for_origin, filter_cors_exposed_response_headers,
+    cors_preflight_request_headers_for_origin, cors_request_origin_after_redirects,
     filter_cors_exposed_response_headers_for_origin, is_cors_policy_failure_message,
     materialize_response_object_body, materialize_response_object_body_with_chunk_callback,
     materialize_response_object_head,
@@ -159,10 +159,8 @@ pub(crate) use self::response::{
     validate_cors_preflight_response_for_origin, validate_cors_response,
     validate_cors_response_for_origin,
     validate_cross_origin_embedder_and_document_isolation_policy,
-    validate_cross_origin_resource_policy, validate_fetch_response_security_policy,
-    validate_fetch_response_security_policy_for_origin,
+    validate_cross_origin_resource_policy, validate_fetch_response_security_policy_for_origin,
     validate_fetch_response_security_policy_with_body,
-    validate_fetch_response_security_policy_with_body_classified,
     validate_fetch_response_security_policy_with_body_classified_for_origin,
     validate_fetch_response_security_policy_with_body_for_origin,
 };

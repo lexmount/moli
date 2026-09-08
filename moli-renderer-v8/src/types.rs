@@ -548,6 +548,17 @@ impl PendingSubresourceFetchState {
             .unwrap_or_else(|| moli_url::WebOrigin::from_url(&self.info.document_url))
     }
 
+    pub(super) fn response_request_origin<'a>(
+        &self,
+        redirects: impl IntoIterator<Item = (&'a Url, &'a Url)>,
+    ) -> moli_url::WebOrigin {
+        let origin = self.request_origin();
+        if self.request_mode != moli_fetch::RequestMode::Cors {
+            return origin;
+        }
+        crate::network_host::cors_request_origin_after_redirects(&origin, redirects)
+    }
+
     pub(super) fn detach_keepalive_window_fetch(&mut self) -> bool {
         let PendingSubresourceExecutionContext::WindowFetch(context) = &self.execution_context
         else {

@@ -71,15 +71,14 @@ fn response_filter(
 ) -> FetchResponseFilter {
     if is_redirect_status(head.status) {
         FetchResponseFilter::OpaqueRedirect
-    } else if request_mode == RequestMode::NoCors && no_cors_response_is_opaque(document_url, head)
-    {
+    } else if request_mode == RequestMode::NoCors && response_crosses_origin(document_url, head) {
         FetchResponseFilter::Opaque
     } else {
         FetchResponseFilter::None
     }
 }
 
-fn no_cors_response_is_opaque(document_url: &url::Url, head: &moli_fetch::ResponseHead) -> bool {
+fn response_crosses_origin(document_url: &url::Url, head: &moli_fetch::ResponseHead) -> bool {
     !moli_url::same_origin(document_url, &head.final_url)
         || head.redirect_chain.iter().any(|redirect| {
             !moli_url::same_origin(document_url, &redirect.from_url)
@@ -89,26 +88,15 @@ fn no_cors_response_is_opaque(document_url: &url::Url, head: &moli_fetch::Respon
 
 fn compute_fetch_response_type(
     document_url: &url::Url,
-    response_url: &url::Url,
+    head: &moli_fetch::ResponseHead,
     filter: FetchResponseFilter,
 ) -> &'static str {
-    // The fixtures that drove this helper were checking `Response.type`, not just status/body.
-    // Returning `"basic"` unconditionally looked harmless at first because our fetch stack does
-    // not yet model the full Fetch standard response filtering pipeline (`opaque`,
-    // `opaqueredirect`, etc.). In practice that shortcut breaks a useful compatibility signal:
-    // browser-facing code distinguishes same-origin subresource fetches from cross-origin ones
-    // through `Response.type`.
-    //
-    // We intentionally keep the rule narrow and deterministic here:
-    // - same origin => `basic`
-    // - different origin => `cors`
-    //
-    // This is not a complete Fetch implementation, but it preserves the observable behavior that
-    // our current runtime can support without pretending every response is same-origin.
+    // Crossing an origin taints the response even if a later redirect returns
+    // to the client's origin. The final URL alone cannot restore a basic response.
     match filter {
         FetchResponseFilter::Opaque => "opaque",
         FetchResponseFilter::OpaqueRedirect => "opaqueredirect",
-        FetchResponseFilter::None if moli_url::same_origin(document_url, response_url) => "basic",
+        FetchResponseFilter::None if !response_crosses_origin(document_url, head) => "basic",
         FetchResponseFilter::None => "cors",
     }
 }
@@ -295,10 +283,7 @@ fn build_fetch_response_object_head<'s>(
     filtered_surface_url: Option<&str>,
 ) -> v8::Local<'s, v8::Object> {
     let status = filtered_response_status(head, filter);
-    // `Response.type` must be derived from the final resolved URL, not the request URL string or
-    // the redirect start point. A redirect chain can cross origins, and the JS surface is meant
-    // to describe the response object the page actually observes after redirects settle.
-    let response_type = compute_fetch_response_type(document_url, &head.final_url, filter);
+    let response_type = compute_fetch_response_type(document_url, head, filter);
     let obj = FetchResponseHeadDeclaration::new(
         status as f64,
         (200..300).contains(&status),

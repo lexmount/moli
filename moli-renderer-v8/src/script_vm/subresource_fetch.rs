@@ -3140,7 +3140,7 @@ impl ScriptVm {
                 if !skip_fetch_security_validation {
                     crate::network_host::validate_fetch_response_security_policy_with_body_for_origin(
                         &pending.info.document_url,
-                        &pending.request_origin(),
+                        &pending.response_request_origin(response.redirect_chain.iter().map(|redirect| (&redirect.from_url, &redirect.to_url))),
                         &response.final_url,
                         &response.headers,
                         response.body_bytes(),
@@ -3314,7 +3314,7 @@ impl ScriptVm {
                                 .then(|| {
                                     crate::network_host::validate_fetch_response_security_policy_with_body_for_origin(
                                         &pending.info.document_url,
-                                        &pending.request_origin(),
+                                        &pending.response_request_origin(response.redirect_chain.iter().map(|redirect| (&redirect.from_url, &redirect.to_url))),
                                         &response.final_url,
                                         &response.headers,
                                         response.body_bytes(),
@@ -3599,7 +3599,7 @@ impl ScriptVm {
                 ) {
                     let validation = crate::network_host::validate_fetch_response_security_policy_with_body_classified_for_origin(
                         &pending.info.document_url,
-                        &pending.request_origin(),
+                        &pending.response_request_origin(response.redirect_chain.iter().map(|redirect| (&redirect.from_url, &redirect.to_url))),
                         &response.final_url,
                         &response.headers,
                         response.body_bytes(),
@@ -3697,7 +3697,7 @@ impl ScriptVm {
                     ) {
                         observable_response.headers =
                             crate::network_host::filter_cors_exposed_response_headers_for_origin(
-                                &pending.request_origin(),
+                                &pending.response_request_origin(observable_response.redirect_chain.iter().map(|redirect| (&redirect.from_url, &redirect.to_url))),
                                 &observable_response.final_url,
                                 &observable_response.headers,
                                 pending.credentials_mode,
@@ -4396,7 +4396,13 @@ impl ScriptVm {
                 .or_else(|| {
                     crate::network_host::validate_fetch_response_security_policy_for_origin(
                         &pending.info.document_url,
-                        &pending.request_origin(),
+                        &pending.response_request_origin(
+                            started
+                                .head
+                                .redirect_chain
+                                .iter()
+                                .map(|redirect| (&redirect.from_url, &redirect.to_url)),
+                        ),
                         &started.head.final_url,
                         &started.head.headers,
                         pending.request_mode,
@@ -4598,7 +4604,7 @@ impl ScriptVm {
                 .then(|| {
                     crate::network_host::validate_fetch_response_security_policy_for_origin(
                         &pending.info.document_url,
-                        &pending.request_origin(),
+                        &pending.response_request_origin(started.head.redirect_chain.iter().map(|redirect| (&redirect.from_url, &redirect.to_url))),
                         &started.head.final_url,
                         &started.head.headers,
                         pending.request_mode,
@@ -4790,7 +4796,7 @@ impl ScriptVm {
                 SubresourceResourceType::Fetch | SubresourceResourceType::Xhr
             ) {
                 observable_head.headers = crate::network_host::filter_cors_exposed_response_headers_for_origin(
-                    &pending.request_origin(),
+                    &pending.response_request_origin(observable_head.redirect_chain.iter().map(|redirect| (&redirect.from_url, &redirect.to_url))),
                     &observable_head.final_url,
                     &observable_head.headers,
                     pending.credentials_mode,
@@ -5696,7 +5702,9 @@ impl ScriptVm {
                             trace_fields,
                             record_started,
                         );
-                        let request_origin = streaming.pending.request_origin();
+                        let request_origin = streaming
+                            .pending
+                            .response_request_origin(streaming.head.redirect_chain.iter().map(|redirect| (&redirect.from_url, &redirect.to_url)));
                         if let PendingSubresourceContinuation::Xhr(xhr) =
                             streaming.pending.continuation
                             && let Some(response_body) = xhr_delivery_body

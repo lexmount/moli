@@ -10196,7 +10196,7 @@ async fn spawn_child_external_parser_module_ready_lane_server() -> (
         let body = r#"parent.__childExternalParserModuleEvents.push("module:" + (globalThis === self));
 globalThis.__childExternalParserModuleValue = 188;"#;
         let response = format!(
-            "HTTP/1.1 200 OK\r\nContent-Type: application/javascript\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+            "HTTP/1.1 200 OK\r\nContent-Type: application/javascript\r\nAccess-Control-Allow-Origin: http://child-parser-module-driver.test\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
             body.len(),
             body
         );

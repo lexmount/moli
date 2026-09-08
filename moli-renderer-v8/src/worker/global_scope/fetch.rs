@@ -5,6 +5,7 @@ use crate::service_worker_runtime::{
     ServiceWorkerRuntimeService,
 };
 use crate::types::{AsyncSubresourceNetworkContext, SubresourcePolicyContext};
+use moli_url::WebOrigin;
 
 pub(in crate::worker) fn record_worker_subresource_failure(
     state: &WorkerGlobalState,
@@ -2478,8 +2479,22 @@ pub(in crate::worker) fn start_worker_streaming_fetch(
         let Some(pending) = state_ref.pending_fetches.get_mut(&started.fetch_id) else {
             return;
         };
-        if let Err(message) = validate_fetch_response_security_policy(
+        let request_origin = WebOrigin::from_url(&pending.document_url);
+        let request_origin = if pending.request_mode == RequestMode::Cors {
+            cors_request_origin_after_redirects(
+                &request_origin,
+                started
+                    .head
+                    .redirect_chain
+                    .iter()
+                    .map(|redirect| (&redirect.from_url, &redirect.to_url)),
+            )
+        } else {
+            request_origin
+        };
+        if let Err(message) = validate_fetch_response_security_policy_for_origin(
             &pending.document_url,
+            &request_origin,
             &started.head.final_url,
             &started.head.headers,
             pending.request_mode,
@@ -2491,8 +2506,8 @@ pub(in crate::worker) fn start_worker_streaming_fetch(
             None
         } else {
             let mut observable_head = started.head.clone();
-            observable_head.headers = filter_cors_exposed_response_headers(
-                &pending.document_url,
+            observable_head.headers = filter_cors_exposed_response_headers_for_origin(
+                &request_origin,
                 &observable_head.final_url,
                 &observable_head.headers,
                 pending.credentials_mode,
@@ -2809,10 +2824,23 @@ pub(in crate::worker) fn drain_worker_fetch_completion_result(
     match completion.result {
         Ok(response) => {
             let response_head = response.head();
+            let request_origin = WebOrigin::from_url(&pending.document_url);
+            let request_origin = if pending.request_mode == RequestMode::Cors {
+                cors_request_origin_after_redirects(
+                    &request_origin,
+                    response_head
+                        .redirect_chain
+                        .iter()
+                        .map(|redirect| (&redirect.from_url, &redirect.to_url)),
+                )
+            } else {
+                request_origin
+            };
             let security_validation = match &response {
                 WorkerFetchResponse::Materialized(response) => {
-                    validate_fetch_response_security_policy_with_body_classified(
+                    validate_fetch_response_security_policy_with_body_classified_for_origin(
                         &pending.document_url,
+                        &request_origin,
                         &response_head.final_url,
                         &response_head.headers,
                         response.body_bytes(),
@@ -2829,8 +2857,9 @@ pub(in crate::worker) fn drain_worker_fetch_completion_result(
                         ))
                     })
                     .and_then(|body_bytes| {
-                        validate_fetch_response_security_policy_with_body_classified(
+                        validate_fetch_response_security_policy_with_body_classified_for_origin(
                             &pending.document_url,
+                            &request_origin,
                             &response_head.final_url,
                             &response_head.headers,
                             &body_bytes,
@@ -2882,8 +2911,8 @@ pub(in crate::worker) fn drain_worker_fetch_completion_result(
                     },
                 ));
             }
-            let filtered_headers = filter_cors_exposed_response_headers(
-                &pending.document_url,
+            let filtered_headers = filter_cors_exposed_response_headers_for_origin(
+                &request_origin,
                 &response_head.final_url,
                 &response_head.headers,
                 pending.credentials_mode,

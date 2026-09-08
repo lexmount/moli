@@ -414,8 +414,16 @@ fn send_synchronous_network_xhr(
     };
 
     let result = result.and_then(|response| {
-        crate::network_host::validate_fetch_response_security_policy_with_body(
+        let request_origin = crate::network_host::cors_request_origin_after_redirects(
+            &moli_url::WebOrigin::from_url(&prepared.document_url),
+            response
+                .redirect_chain
+                .iter()
+                .map(|redirect| (&redirect.from_url, &redirect.to_url)),
+        );
+        crate::network_host::validate_fetch_response_security_policy_with_body_for_origin(
             &prepared.document_url,
+            &request_origin,
             &response.final_url,
             &response.headers,
             response.body_bytes(),
@@ -437,12 +445,20 @@ fn send_synchronous_network_xhr(
                     &response,
                 ),
             );
-            let observable_headers = crate::network_host::filter_cors_exposed_response_headers(
-                &prepared.document_url,
-                &response.final_url,
-                &response.headers,
-                prepared.credentials_mode,
+            let request_origin = crate::network_host::cors_request_origin_after_redirects(
+                &moli_url::WebOrigin::from_url(&prepared.document_url),
+                response
+                    .redirect_chain
+                    .iter()
+                    .map(|redirect| (&redirect.from_url, &redirect.to_url)),
             );
+            let observable_headers =
+                crate::network_host::filter_cors_exposed_response_headers_for_origin(
+                    &request_origin,
+                    &response.final_url,
+                    &response.headers,
+                    prepared.credentials_mode,
+                );
             host.record_subresource_network(
                 SubresourceNetworkRecord::success_with_body(
                     prepared.frame_id,

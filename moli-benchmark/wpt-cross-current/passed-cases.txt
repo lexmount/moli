@@ -6435,6 +6435,7 @@ html/semantics/scripting-1/the-script-element/module/choice-of-error-2.html
 html/semantics/scripting-1/the-script-element/module/choice-of-error-3.html
 html/semantics/scripting-1/the-script-element/module/compilation-error-1.html
 html/semantics/scripting-1/the-script-element/module/compilation-error-2.html
+html/semantics/scripting-1/the-script-element/module/crossorigin.html
 html/semantics/scripting-1/the-script-element/module/currentScript-null.html
 html/semantics/scripting-1/the-script-element/module/custom-element-exception.html
 html/semantics/scripting-1/the-script-element/module/duplicated-imports-1.html

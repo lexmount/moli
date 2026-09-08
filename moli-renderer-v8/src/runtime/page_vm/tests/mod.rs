@@ -77,6 +77,7 @@ use moli_websocket::test_support::{
 use serde_json::json;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpListener;
+use tokio::sync::oneshot;
 use tokio::task::JoinHandle;
 use tokio::time::sleep;
 use url::Url;
@@ -4707,22 +4708,9 @@ async fn page_vm_child_defer_classic_source_failure_releases_parser_order_slot()
 #[tokio::test]
 async fn page_vm_moved_child_defer_disposes_in_flight_slot_before_later_module() {
     run_page_vm_async_test(async move {
-        let (base_url, server) = spawn_path_response_http_server(vec![
-            (
-                "/moved-child-defer.js",
-                "HTTP/1.1 200 OK",
-                "parent.__movedChildDeferEvents.push('classic-ran');".to_owned(),
-                Duration::from_millis(80),
-            ),
-            (
-                "/later-moved-module.js",
-                "HTTP/1.1 200 OK",
-                "parent.__movedChildDeferEvents.push('module-ran');".to_owned(),
-                Duration::ZERO,
-            ),
-        ])
-        .await;
-        let loader = crate::network::ResourceRequestClient::new(&FetchConfig::default()).expect("loader");
+        let (base_url, release_classic, server) = spawn_moved_child_defer_http_server().await;
+        let loader =
+            crate::network::ResourceRequestClient::new(&FetchConfig::default()).expect("loader");
         let document_url = Url::parse(&format!("{base_url}/page")).expect("page url");
         let page_vm = test_page_vm_with_loader_and_document_url(&loader, Vec::new(), document_url);
         let local_executor = page_vm.local_executor.clone();
@@ -4767,7 +4755,10 @@ async fn page_vm_moved_child_defer_disposes_in_flight_slot_before_later_module()
                 ))?;
 
                 for _ in 0..12 {
-                    let Some(_) = page_vm.run_next_child_frame_task_source_for_semantic_test().await else {
+                    let Some(_) = page_vm
+                        .run_next_child_frame_task_source_for_semantic_test()
+                        .await
+                    else {
                         break;
                     };
                 }
@@ -4778,8 +4769,13 @@ async fn page_vm_moved_child_defer_disposes_in_flight_slot_before_later_module()
                 );
 
                 let mut classic_completion = None;
+                let mut module_completion = false;
+                let mut release_classic = Some(release_classic);
                 for _ in 0..4 {
-                    if !page_vm.page_resource_completion_queue().has_ready_completion() {
+                    if !page_vm
+                        .page_resource_completion_queue()
+                        .has_ready_completion()
+                    {
                         tokio::time::timeout(
                             Duration::from_secs(2),
                             wait_for_typed_page_resource_completion(&mut page_vm),
@@ -4787,30 +4783,44 @@ async fn page_vm_moved_child_defer_disposes_in_flight_slot_before_later_module()
                         .await
                         .expect("moved child defer completion should arrive");
                     }
-                    let completion =
-                        run_next_resource_completion_as_typed_page_turn(&mut page_vm)?;
+                    let completion = run_next_resource_completion_as_typed_page_turn(&mut page_vm)?;
                     if matches!(
                         completion.action.source(),
                         RendererOwnerResourceActivitySource::ChildClassicScript
                     ) {
                         classic_completion = Some(completion);
+                    } else {
+                        assert!(
+                            matches!(
+                                completion.action.source(),
+                                RendererOwnerResourceActivitySource::ModuleGraphFetch
+                            ),
+                            "the only other completion is the later module root"
+                        );
+                        run_expected_child_module_script_terminal_turn(
+                            &mut page_vm,
+                            "module terminal retained behind the moved classic defer",
+                        )
+                        .await;
+                        module_completion = true;
+                        // Make the later module ready while the classic source
+                        // is still pending, without relying on transport timing.
+                        release_classic
+                            .take()
+                            .expect("one module completion")
+                            .send(())
+                            .expect("classic response should still be gated");
+                    }
+                    if classic_completion.is_some() && module_completion {
                         break;
                     }
-                    assert!(
-                        matches!(
-                            completion.action.source(),
-                            RendererOwnerResourceActivitySource::ModuleGraphFetch
-                        ),
-                        "the only completion allowed ahead of the moved classic defer is its later module root"
-                    );
-                    run_expected_child_module_script_terminal_turn(
-                        &mut page_vm,
-                        "module terminal retained behind the moved classic defer",
-                    )
-                    .await;
                 }
                 classic_completion
-                    .expect("classic source completion must arrive after retained module terminals");
+                    .expect("classic source completion must arrive before the script is moved");
+                assert!(
+                    module_completion,
+                    "later module must be ready before testing defer-slot release"
+                );
                 page_vm.vm_mut().eval(
                     r#"
 (() => {
@@ -4858,15 +4868,27 @@ async fn page_vm_moved_child_defer_disposes_in_flight_slot_before_later_module()
                         ChildFrameSemanticTurnKind::DocumentLifecycle,
                         "moved defer complete transition",
                     ),
-                    (ChildFrameSemanticTurnKind::HostLoad, "moved defer iframe load"),
+                    (
+                        ChildFrameSemanticTurnKind::HostLoad,
+                        "moved defer iframe load",
+                    ),
                 ] {
                     sources.push(
-                        run_expected_child_frame_task_source_after_realm_prerequisite_for_wait(&mut page_vm, source, label)
-                            .await,
+                        run_expected_child_frame_task_source_after_realm_prerequisite_for_wait(
+                            &mut page_vm,
+                            source,
+                            label,
+                        )
+                        .await,
                     );
                 }
                 let final_events = page_vm.vm_mut().eval("__movedChildDeferEvents.join('|')")?;
-                assert_eq!(page_vm.run_next_child_frame_task_source_for_semantic_test().await, None);
+                assert_eq!(
+                    page_vm
+                        .run_next_child_frame_task_source_for_semantic_test()
+                        .await,
+                    None
+                );
                 Ok::<_, anyhow::Error>((events_after_dispose, sources, final_events))
             })
             .await
@@ -4887,7 +4909,9 @@ async fn page_vm_moved_child_defer_disposes_in_flight_slot_before_later_module()
             final_events,
             "before|after|ready:interactive|moved|module-ran|module-load|dcl|ready:complete|load"
         );
-        server.await.expect("moved child defer server should finish");
+        server
+            .await
+            .expect("moved child defer server should finish");
     })
     .await;
 }
@@ -14542,6 +14566,53 @@ async fn spawn_path_response_http_server(
         }
     });
     (format!("http://{addr}"), server)
+}
+
+async fn spawn_moved_child_defer_http_server() -> (String, oneshot::Sender<()>, JoinHandle<()>) {
+    let listener = TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("bind defer fixture");
+    let base_url = format!("http://{}", listener.local_addr().unwrap());
+    let (release_classic, classic_released) = oneshot::channel();
+    let task = tokio::spawn(async move {
+        let mut classic_released = Some(classic_released);
+        let mut responses = Vec::new();
+        for _ in 0..2 {
+            let (mut stream, _) = listener.accept().await.expect("accept script request");
+            let request = read_http_request_head(&mut stream).await.unwrap();
+            let path = request
+                .lines()
+                .next()
+                .unwrap()
+                .split_whitespace()
+                .nth(1)
+                .unwrap();
+            let (body, gate) = match path {
+                "/moved-child-defer.js" => (
+                    "parent.__movedChildDeferEvents.push('classic-ran');",
+                    Some(classic_released.take().expect("one classic request")),
+                ),
+                "/later-moved-module.js" => {
+                    ("parent.__movedChildDeferEvents.push('module-ran');", None)
+                }
+                _ => panic!("unexpected script path: {path}"),
+            };
+            responses.push(tokio::spawn(async move {
+                if let Some(gate) = gate {
+                    gate.await.expect("test should release classic response");
+                }
+                let response = format!(
+                    "HTTP/1.1 200 OK\r\nContent-Type: text/javascript\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                    body.len()
+                );
+                stream.write_all(response.as_bytes()).await.unwrap();
+            }));
+        }
+        for response in responses {
+            response.await.expect("script response task");
+        }
+    });
+    (base_url, release_classic, task)
 }
 
 async fn spawn_concurrent_path_response_http_server(

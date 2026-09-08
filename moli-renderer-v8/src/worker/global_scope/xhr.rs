@@ -1,5 +1,6 @@
 use super::*;
 use crossbeam_channel::{after, bounded, never, select};
+use moli_url::WebOrigin;
 use moli_webapi_declare::WebApiObject;
 use std::thread;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
@@ -643,7 +644,7 @@ fn send_synchronous_worker_xhr(
     };
 
     match result {
-        Ok(response) => {
+        Ok(mut response) => {
             let response_head = response.head();
             let redirect_status = if response_head.redirect_chain.is_empty() {
                 crate::content_security_policy::ContentSecurityPolicyRedirectStatus::NoRedirect
@@ -696,8 +697,15 @@ fn send_synchronous_worker_xhr(
                 throw_synchronous_xhr_failure(scope, xhr, &request_url_text, "NetworkError");
                 return;
             }
-            if let Err(message) = validate_cors_response(
-                &prepared.document_url,
+            let request_origin = cors_request_origin_after_redirects(
+                &WebOrigin::from_url(&prepared.document_url),
+                response_head
+                    .redirect_chain
+                    .iter()
+                    .map(|redirect| (&redirect.from_url, &redirect.to_url)),
+            );
+            if let Err(message) = validate_cors_response_for_origin(
+                &request_origin,
                 &response_head.final_url,
                 &response_head.headers,
                 prepared.credentials_mode,
@@ -725,6 +733,12 @@ fn send_synchronous_worker_xhr(
                 SubresourceResourceType::Xhr,
                 response_head,
                 SubresourceResponseBody::from_fetch_response(&response),
+            );
+            response.headers = filter_cors_exposed_response_headers_for_origin(
+                &request_origin,
+                &response.final_url,
+                &response.headers,
+                prepared.credentials_mode,
             );
             apply_xhr_response(scope, xhr, response);
         }
@@ -1069,8 +1083,15 @@ pub(in crate::worker) fn drain_worker_xhr_completion(
     match completion.result {
         Ok(response) => {
             let response_head = response.head();
-            match validate_cors_response(
-                &pending.document_url,
+            let request_origin = cors_request_origin_after_redirects(
+                &WebOrigin::from_url(&pending.document_url),
+                response_head
+                    .redirect_chain
+                    .iter()
+                    .map(|redirect| (&redirect.from_url, &redirect.to_url)),
+            );
+            match validate_cors_response_for_origin(
+                &request_origin,
                 &response_head.final_url,
                 &response_head.headers,
                 pending.credentials_mode,
@@ -1104,8 +1125,8 @@ pub(in crate::worker) fn drain_worker_xhr_completion(
                                     },
                                 ));
                             }
-                            response_head.headers = filter_cors_exposed_response_headers(
-                                &pending.document_url,
+                            response_head.headers = filter_cors_exposed_response_headers_for_origin(
+                                &request_origin,
                                 &response_head.final_url,
                                 &response_head.headers,
                                 pending.credentials_mode,

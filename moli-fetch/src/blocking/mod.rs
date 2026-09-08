@@ -328,12 +328,42 @@ fn append_browser_subresource_headers(
     request_url: &Url,
     redirect_chain: &[RedirectInfo],
 ) {
-    let Some(metadata) = request.browser_request_metadata() else {
-        return;
-    };
     if !matches!(request_url.scheme(), "http" | "https") {
         return;
     }
+    let Some(metadata) = request.browser_request_metadata() else {
+        if matches!(
+            request.resource_type,
+            crate::RequestResourceType::Script
+                | crate::RequestResourceType::ParserBlockingScript
+                | crate::RequestResourceType::ClassicAsyncOrDeferScript
+                | crate::RequestResourceType::LatePreloadScript
+        ) {
+            append_header_if_missing(outgoing, "Accept", "*/*".to_owned());
+            append_header_if_missing(
+                outgoing,
+                "Accept-Language",
+                config.browser_identity().accept_language().to_owned(),
+            );
+            append_header_if_missing(
+                outgoing,
+                "Sec-Fetch-Site",
+                request_sec_fetch_site(request, request_url),
+            );
+            append_header_if_missing(
+                outgoing,
+                "Sec-Fetch-Mode",
+                request.request_mode.as_ref().to_owned(),
+            );
+            append_header_if_missing(outgoing, "Sec-Fetch-Dest", "script".to_owned());
+            if let Some(origin) = request_origin_header_value(request, request_url, redirect_chain)
+            {
+                append_header_if_missing(outgoing, "Origin", origin);
+            }
+            append_browser_client_hints(outgoing, config);
+        }
+        return;
+    };
 
     match metadata {
         BrowserRequestMetadata::Audio

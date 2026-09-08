@@ -36,6 +36,20 @@ pub(crate) fn is_cors_policy_failure_message(message: &str) -> bool {
     message.contains("CORS check failed:") || message.contains("CORS preflight failed:")
 }
 
+pub(crate) fn cors_request_origin_after_redirects<'a>(
+    request_origin: &WebOrigin,
+    redirects: impl IntoIterator<Item = (&'a url::Url, &'a url::Url)>,
+) -> WebOrigin {
+    if redirects
+        .into_iter()
+        .any(|(from, to)| !same_origin(from, to) && !request_origin.same_origin_url(from))
+    {
+        WebOrigin::Opaque
+    } else {
+        request_origin.clone()
+    }
+}
+
 pub(crate) fn validate_cors_response(
     document_url: &url::Url,
     response_url: &url::Url,
@@ -588,7 +602,8 @@ pub(crate) fn validate_cors_preflight_response_for_origin(
     Ok(())
 }
 
-pub(crate) fn filter_cors_exposed_response_headers(
+#[cfg(test)]
+fn filter_cors_exposed_response_headers(
     document_url: &url::Url,
     response_url: &url::Url,
     response_headers: &[(String, String)],
@@ -678,6 +693,44 @@ mod tests {
 
     fn url(value: &str) -> url::Url {
         url::Url::parse(value).expect("valid URL")
+    }
+
+    #[test]
+    fn cors_response_validation_uses_the_redirect_tainted_origin() {
+        let home = url("https://page.test/a");
+        let away = url("https://script.test/b");
+        let elsewhere = url("https://other.test/c");
+        let origin = WebOrigin::from_url(&home);
+        assert_eq!(
+            cors_request_origin_after_redirects(&origin, [(&home, &away)]),
+            origin
+        );
+        for redirects in [
+            vec![(&away, &elsewhere)],
+            vec![(&home, &away), (&away, &home)],
+        ] {
+            let tainted = cors_request_origin_after_redirects(&origin, redirects);
+            assert!(tainted.is_opaque());
+            assert!(
+                validate_cors_response_for_origin(
+                    &tainted,
+                    &home,
+                    &[("access-control-allow-origin".into(), "null".into())],
+                    RequestCredentialsMode::SameOrigin,
+                )
+                .is_ok()
+            );
+            assert!(
+                validate_cors_response_for_origin(
+                    &tainted,
+                    &home,
+                    &[],
+                    RequestCredentialsMode::SameOrigin,
+                )
+                .is_err(),
+                "returning to the initial origin must not bypass CORS"
+            );
+        }
     }
 
     #[test]
