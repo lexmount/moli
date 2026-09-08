@@ -6311,6 +6311,7 @@ html/semantics/scripting-1/the-script-element/async_001.htm
 html/semantics/scripting-1/the-script-element/async_002.htm
 html/semantics/scripting-1/the-script-element/async_011.htm
 html/semantics/scripting-1/the-script-element/css-module/charset-bom.html
+html/semantics/scripting-1/the-script-element/css-module/cors-crossorigin-requests.html
 html/semantics/scripting-1/the-script-element/css-module/css-module-parse-error.html
 html/semantics/scripting-1/the-script-element/css-module/import-css-module-basic.html
 html/semantics/scripting-1/the-script-element/css-module/import-css-module-dynamic.html
@@ -6476,6 +6477,7 @@ html/semantics/scripting-1/the-script-element/import-attributes/empty-attributes
 html/semantics/scripting-1/the-script-element/import-attributes/invalid-import-errors-order.html
 html/semantics/scripting-1/the-script-element/import-attributes/invalid-type-attribute-error.html
 html/semantics/scripting-1/the-script-element/import-attributes/unsupported-attribute.html
+html/semantics/scripting-1/the-script-element/json-module/cors-crossorigin-requests.html
 html/semantics/scripting-1/the-script-element/json-module/integrity.html
 html/semantics/scripting-1/the-script-element/json-module/module.html
 html/semantics/scripting-1/the-script-element/json-module/parse-error.html
