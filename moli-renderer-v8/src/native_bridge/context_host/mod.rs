@@ -104,6 +104,7 @@ mod html_serialization;
 mod image_decodes;
 mod image_loads;
 mod image_resources;
+mod script_preparation_errors;
 pub(crate) use image_resources::{
     CssImageResourceAdmission, CssImageResourceRequestIdentity, ImageResponseDescriptor,
     ScannedImagePreloadAdmission,
@@ -1001,6 +1002,7 @@ pub(crate) struct PageScriptHost {
     intersection_observer_tasks:
         Option<Box<intersection_observer_tasks::IntersectionObserverTaskState>>,
     file_entry_file_callbacks: file_entry_file_callbacks::FileEntryFileCallbackState,
+    script_preparation_errors: script_preparation_errors::ScriptPreparationErrorState,
     pending_selectedcontent_updates: HashSet<DomHandle>,
     user_interaction_tasks: user_interaction_tasks::UserInteractionTaskState,
     pending_image_load_events: HashMap<DomHandle, PendingImageLoadEvent>,
