@@ -150,3 +150,31 @@ async fn child_synthetic_text_module_shares_static_and_dynamic_records() -> Resu
     );
     Ok(())
 }
+
+#[tokio::test(flavor = "multi_thread")]
+async fn invalid_child_synthetic_json_does_not_prevent_valid_parser_module_execution() -> Result<()>
+{
+    let html = r#"<!doctype html>
+        <script>window.result = [];</script>
+        <script type="module">
+            import value from 'data:application/json,not-json' with { type: 'json' };
+            window.result.push('invalid module executed');
+        </script>
+        <script type="module">
+            import value from 'data:application/json,{"answer":42}' with { type: 'json' };
+            window.result.push(value.answer + ':' +
+                (Object.getPrototypeOf(value) === Object.prototype));
+        </script>"#;
+    let expression = format!(
+        r#"new Promise(resolve => {{
+            const frame = document.createElement('iframe');
+            frame.onload = () => resolve(JSON.stringify(frame.contentWindow.result));
+            frame.srcdoc = {};
+            document.body.appendChild(frame);
+        }})"#,
+        serde_json::to_string(html)?
+    );
+    let result = evaluate_child_synthetic_expression(&expression).await?;
+    assert_eq!(result["value"], r#"["42:true"]"#, "{result:?}");
+    Ok(())
+}
