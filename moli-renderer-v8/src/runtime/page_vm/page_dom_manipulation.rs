@@ -27,6 +27,11 @@ impl PageVm {
                 .map(|outcome| {
                     outcome.map_action(PageDomManipulationTurnAction::FileEntryFileCallback)
                 }),
+            RendererPageDomManipulationTask::ScriptPreparationError(task) => self
+                .apply_selected_page_script_preparation_error_turn(task)
+                .map(|outcome| {
+                    outcome.map_action(PageDomManipulationTurnAction::ScriptPreparationError)
+                }),
             RendererPageDomManipulationTask::ImageLoadEvent(task) => self
                 .apply_selected_page_image_load_event_turn(task)
                 .map(|outcome| outcome.map_action(PageDomManipulationTurnAction::ImageLoadEvent)),

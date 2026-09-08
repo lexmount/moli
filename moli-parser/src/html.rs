@@ -196,6 +196,7 @@ pub struct ParserScriptPreparationFailure {
     position: usize,
     mode: ScriptMode,
     message: String,
+    external_source: bool,
     element_state_transition: ParserScriptElementStateTransition,
 }
 
@@ -263,8 +264,22 @@ impl ParserScriptPreparationFailure {
             position,
             mode,
             message,
+            external_source: false,
             element_state_transition: ParserScriptElementStateTransition::None,
         }
+    }
+
+    pub(crate) fn external_source(position: usize, mode: ScriptMode, message: String) -> Self {
+        Self {
+            external_source: true,
+            ..Self::new(position, mode, message)
+        }
+    }
+
+    /// Empty or unparseable external URLs fire an element error event. Keep
+    /// these separate from failures of the parser's own preparation machinery.
+    pub fn is_external_source_failure(&self) -> bool {
+        self.external_source
     }
 
     pub(crate) fn with_element_state_transition(
