@@ -22,15 +22,15 @@ struct TrustedTypeObjectDeclaration<'scope> {
     value: v8::Local<'scope, v8::String>,
 }
 
-#[derive(Default, WebApiObject)]
-#[webapi(plain)]
-struct TrustedTypePrototypeDeclaration {
-    #[webapi(method = "toString", callback = trusted_type_to_string_callback, length = 0)]
+#[derive(WebApiObject)]
+#[webapi(fragment, enumerable)]
+struct TrustedTypePrototypeDeclaration<'scope> {
+    kind: v8::Local<'scope, v8::String>,
+
+    #[webapi(method = "toString", callback = trusted_type_to_string_callback, data = self.kind, length = 0)]
     to_string: (),
-    #[webapi(method = "toJSON", callback = trusted_type_to_string_callback, length = 0)]
+    #[webapi(method = "toJSON", callback = trusted_type_to_string_callback, data = self.kind, length = 0)]
     to_json: (),
-    #[webapi(method, callback = trusted_type_to_string_callback, length = 0)]
-    value_of: (),
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -101,6 +101,16 @@ pub const TRUSTED_TYPE_KINDS: [TrustedTypeKind; 3] = [
     TrustedTypeKind::ScriptUrl,
 ];
 
+pub fn trusted_type_kind<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    value: v8::Local<'s, v8::Value>,
+) -> Option<TrustedTypeKind> {
+    let object = v8::Local::<v8::Object>::try_from(value).ok()?;
+    TRUSTED_TYPE_KINDS
+        .into_iter()
+        .find(|kind| kind.interface().is_instance(scope, object))
+}
+
 pub struct TrustedTypeConstructorBinding<'s> {
     pub kind: TrustedTypeKind,
     pub constructor: v8::Local<'s, v8::Function>,
@@ -126,16 +136,17 @@ pub fn build_trusted_type_constructor<'s>(
     kind: TrustedTypeKind,
 ) -> Result<TrustedTypeConstructorBinding<'s>> {
     let name = kind.constructor_name();
-    let constructor = v8::Function::builder(trusted_type_illegal_constructor_callback)
-        .length(0)
-        .build(scope)
+    let template = v8::FunctionTemplate::new(scope, trusted_type_illegal_constructor_callback);
+    template.read_only_prototype();
+    let constructor = template
+        .get_function(scope)
         .ok_or_else(|| anyhow!("failed to create {name} constructor"))?;
     constructor.set_name(v8str(scope, name));
     let prototype = constructor
         .get(scope, v8str(scope, "prototype").into())
         .and_then(|value| v8::Local::<v8::Object>::try_from(value).ok())
         .ok_or_else(|| anyhow!("{name}.prototype missing"))?;
-    TrustedTypePrototypeDeclaration::default()
+    TrustedTypePrototypeDeclaration::new(v8str(scope, kind.constructor_name()))
         .initialize(scope, prototype)
         .map_err(|error| anyhow!("failed to initialize {name}.prototype declaration: {error}"))?;
     prototype
@@ -143,7 +154,7 @@ pub fn build_trusted_type_constructor<'s>(
             scope,
             v8::Symbol::get_to_string_tag(scope).into(),
             v8str(scope, name).into(),
-            v8::PropertyAttribute::DONT_ENUM,
+            v8::PropertyAttribute::DONT_ENUM | v8::PropertyAttribute::READ_ONLY,
         )
         .unwrap_or(false)
         .then_some(())
@@ -163,6 +174,15 @@ pub fn install_trusted_script_code_like_constructor<'s>(
     let constructor = template
         .get_function(scope)
         .ok_or_else(|| anyhow!("failed to create TrustedScript code-like constructor"))?;
+    let prototype = constructor
+        .get(scope, v8str(scope, "prototype").into())
+        .and_then(|value| v8::Local::<v8::Object>::try_from(value).ok())
+        .ok_or_else(|| anyhow!("TrustedScript code-like constructor prototype missing"))?;
+    TrustedTypePrototypeDeclaration::new(v8str(scope, TrustedTypeKind::Script.constructor_name()))
+        .initialize(scope, prototype)
+        .map_err(|error| {
+            anyhow!("failed to initialize TrustedScript code-like carrier: {error}")
+        })?;
     set_private_value(
         scope,
         global,
@@ -215,6 +235,12 @@ fn trusted_type_to_string_callback<'s>(
     mut rv: v8::ReturnValue<'_, v8::Value>,
 ) {
     let this = args.this();
+    if !trusted_type_kind(scope, this.into())
+        .is_some_and(|kind| v8str(scope, kind.constructor_name()).strict_equals(args.data()))
+    {
+        throw_type_error(scope, "Illegal invocation");
+        return;
+    }
     let Some(value) = get_private_value(scope, this, TRUSTED_TYPE_VALUE_SLOT) else {
         throw_type_error(scope, "Illegal invocation");
         return;

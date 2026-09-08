@@ -5,7 +5,7 @@ use crate::util::{get_private_value, set_private_value};
 use crate::web_api_interfaces;
 use crate::webidl;
 use moli_webapi::trusted_values::*;
-pub(crate) use moli_webapi::trusted_values::{TrustedTypeKind, trusted_type_string};
+pub(crate) use moli_webapi::trusted_values::{TrustedTypeKind, trusted_type_kind, trusted_type_string};
 use moli_webapi_declare::{WebApiFunctionTemplate, WebApiObject};
 
 mod policy_callbacks;
@@ -18,12 +18,8 @@ use policy_callbacks::{
 #[cfg(test)]
 pub(crate) use realm_state::trusted_types_lazy_state_materialized;
 
-const TRUSTED_TYPE_POLICY_PROTOTYPE_SLOT: &str = "__moliTrustedTypePolicyPrototype";
-const TRUSTED_TYPE_POLICY_CONSTRUCTOR_SLOT: &str = "__moliTrustedTypePolicyConstructor";
-const TRUSTED_TYPES_POLICY_NAME_SLOT: &str = "__moliTrustedTypesPolicyName";
-const TRUSTED_TYPE_POLICY_FACTORY_CONSTRUCTOR_SLOT: &str =
-    "__moliTrustedTypePolicyFactoryConstructor";
 const TRUSTED_TYPES_DEFAULT_POLICY_SLOT: &str = "__moliTrustedTypesDefaultPolicy";
+const TRUSTED_TYPES_POLICY_NAME_SLOT: &str = "__moliTrustedTypesPolicyName";
 const TRUSTED_TYPES_CREATED_POLICY_NAMES_SLOT: &str = "__moliTrustedTypesCreatedPolicyNames";
 const TRUSTED_TYPES_EMPTY_HTML_SLOT: &str = "__moliTrustedTypesEmptyHTML";
 const TRUSTED_TYPES_EMPTY_SCRIPT_SLOT: &str = "__moliTrustedTypesEmptyScript";
@@ -44,27 +40,30 @@ struct TrustedTypePolicyFactoryInterfaceDeclaration {
     #[webapi(
         method,
         callback = trusted_types_create_policy_callback,
-        length = 2,
+        length = 1,
         enumerable
     )]
     create_policy: (),
     #[webapi(
         method = "isHTML",
-        callback = trusted_types_is_html_callback,
+        callback = trusted_types_is_type_callback,
+        data = crate::util::callback_data_index_value(scope, 0),
         length = 1,
         enumerable
     )]
     is_html: (),
     #[webapi(
         method,
-        callback = trusted_types_is_script_callback,
+        callback = trusted_types_is_type_callback,
+        data = crate::util::callback_data_index_value(scope, 1),
         length = 1,
         enumerable
     )]
     is_script: (),
     #[webapi(
         method = "isScriptURL",
-        callback = trusted_types_is_script_url_callback,
+        callback = trusted_types_is_type_callback,
+        data = crate::util::callback_data_index_value(scope, 2),
         length = 1,
         enumerable
     )]
@@ -114,6 +113,13 @@ struct TrustedTypesFactoryObjectDeclaration<'scope> {
     empty_script: v8::Local<'scope, v8::Object>,
     #[webapi(slot = TRUSTED_TYPES_CREATED_POLICY_NAMES_SLOT)]
     created_policy_names: v8::Local<'scope, v8::Array>,
+}
+
+#[derive(webidl::WebIdlArgs)]
+#[webidl(prefix = "TrustedTypePolicyFactory")]
+struct TrustedTypesPredicateArgs<'scope> {
+    #[webidl(required)]
+    value: v8::Local<'scope, v8::Value>,
 }
 
 #[derive(webidl::WebIdlArgs)]
@@ -184,8 +190,6 @@ struct TrustedTypePolicyInterfaceDeclaration {
 #[derive(WebApiObject)]
 #[webapi(interface = web_api_interfaces::TrustedTypePolicy)]
 struct TrustedTypePolicyObjectDeclaration<'scope> {
-    #[webapi(prototype)]
-    prototype: v8::Local<'scope, v8::Object>,
     #[webapi(slot = TRUSTED_TYPES_POLICY_NAME_SLOT)]
     name: v8::Local<'scope, v8::String>,
 }
@@ -615,16 +619,6 @@ fn apply_default_trusted_type_policy_outcome_for_global<'s>(
     }
 }
 
-pub(crate) fn trusted_type_kind<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    value: v8::Local<'s, v8::Value>,
-) -> Option<TrustedTypeKind> {
-    let object = v8::Local::<v8::Object>::try_from(value).ok()?;
-    TRUSTED_TYPE_KINDS
-        .into_iter()
-        .find(|kind| kind.interface().is_instance(scope, object))
-}
-
 fn js_value_to_string<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     value: v8::Local<'s, v8::Value>,
@@ -702,16 +696,9 @@ fn trusted_types_create_policy_callback<'s>(
     }
 
     let policy_name = v8_string(scope, &name).unwrap_or_else(|| v8::String::empty(scope));
-    let global = scope.get_current_context().global(scope);
-    let prototype = get_private_value(scope, global, TRUSTED_TYPE_POLICY_PROTOTYPE_SLOT)
-        .and_then(|value| v8::Local::<v8::Object>::try_from(value).ok())
-        .expect("the policy prototype must be captured when the factory materializes");
-    let policy = TrustedTypePolicyObjectDeclaration {
-        prototype,
-        name: policy_name,
-    }
-    .bind(scope)
-    .expect("TrustedTypePolicy declaration should bind");
+    let policy = TrustedTypePolicyObjectDeclaration::new(policy_name)
+        .bind(scope)
+        .expect("TrustedTypePolicy declaration should bind");
     install_policy_callbacks(scope, policy, callbacks);
 
     if name == "default" {
@@ -781,6 +768,18 @@ fn trusted_types_policy_name_allowed(
     unsafe { &mut *host_ptr }.allows_trusted_type_policy_name_by_csp(scope, name, is_duplicate)
 }
 
+fn trusted_type_policy_name_getter_callback<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: v8::FunctionCallbackArguments<'s>,
+    mut rv: v8::ReturnValue<'_, v8::Value>,
+) {
+    let Some(name) = get_private_value(scope, args.this(), TRUSTED_TYPES_POLICY_NAME_SLOT) else {
+        throw_type_error(scope, "Illegal invocation");
+        return;
+    };
+    rv.set(name);
+}
+
 fn trusted_type_policy_create_callback<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     args: v8::FunctionCallbackArguments<'s>,
@@ -833,28 +832,23 @@ fn trusted_type_policy_create_callback<'s>(
     rv.set(object.into());
 }
 
-fn trusted_types_is_html_callback<'s>(
+fn trusted_types_is_type_callback<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'_, v8::Value>,
 ) {
-    rv.set_bool(trusted_type_string(scope, args.get(0), TrustedTypeKind::Html).is_some());
-}
-
-fn trusted_types_is_script_callback<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    args: v8::FunctionCallbackArguments<'s>,
-    mut rv: v8::ReturnValue<'_, v8::Value>,
-) {
-    rv.set_bool(trusted_type_string(scope, args.get(0), TrustedTypeKind::Script).is_some());
-}
-
-fn trusted_types_is_script_url_callback<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    args: v8::FunctionCallbackArguments<'s>,
-    mut rv: v8::ReturnValue<'_, v8::Value>,
-) {
-    rv.set_bool(trusted_type_string(scope, args.get(0), TrustedTypeKind::ScriptUrl).is_some());
+    let Some(parsed) = webidl::parse_args::<TrustedTypesPredicateArgs<'s>>(scope, &args) else {
+        return;
+    };
+    let Some(kind) = crate::util::callback_data_item(
+        scope,
+        &args,
+        &TRUSTED_TYPE_KINDS,
+        "TrustedTypePolicyFactory type predicates",
+    ) else {
+        return;
+    };
+    rv.set_bool(trusted_type_kind(scope, parsed.value) == Some(kind));
 }
 
 fn trusted_types_get_attribute_type_callback<'s>(
@@ -1205,16 +1199,4 @@ fn throw_eval_error(scope: &mut v8::PinScope<'_, '_>, message: &str) {
     }
     let message = v8_string(scope, message).unwrap_or_else(|| v8::String::empty(scope));
     scope.throw_exception(v8::Exception::error(scope, message));
-}
-
-fn trusted_type_policy_name_getter_callback<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    args: v8::FunctionCallbackArguments<'s>,
-    mut rv: v8::ReturnValue<'_, v8::Value>,
-) {
-    let Some(name) = get_private_value(scope, args.this(), TRUSTED_TYPES_POLICY_NAME_SLOT) else {
-        throw_type_error(scope, "Illegal invocation");
-        return;
-    };
-    rv.set(name);
 }
