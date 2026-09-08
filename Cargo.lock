@@ -214,7 +214,7 @@ dependencies = [
  "axum-core",
  "base64 0.22.1",
  "bytes",
- "form_urlencoded 1.2.2 (registry+https://github.com/rust-lang/crates.io-index)",
+ "form_urlencoded",
  "futures-util",
  "http",
  "http-body",
@@ -225,7 +225,7 @@ dependencies = [
  "matchit",
  "memchr",
  "mime",
- "percent-encoding 2.3.2 (registry+https://github.com/rust-lang/crates.io-index)",
+ "percent-encoding",
  "pin-project-lite",
  "serde_core",
  "serde_json",
@@ -1553,15 +1553,7 @@ version = "1.2.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "cb4cb245038516f5f85277875cdaa4f7d2c9a0fa0468de06ed190163b1581fcf"
 dependencies = [
- "percent-encoding 2.3.2 (registry+https://github.com/rust-lang/crates.io-index)",
-]
-
-[[package]]
-name = "form_urlencoded"
-version = "1.2.2"
-source = "git+https://github.com/lexmount/rust-url?rev=ca9fcad2b99f20c30c28a618ad78410f6fd31161#ca9fcad2b99f20c30c28a618ad78410f6fd31161"
-dependencies = [
- "percent-encoding 2.3.2 (git+https://github.com/lexmount/rust-url?rev=ca9fcad2b99f20c30c28a618ad78410f6fd31161)",
+ "percent-encoding",
 ]
 
 [[package]]
@@ -2120,7 +2112,8 @@ checksum = "b9e0384b61958566e926dc50660321d12159025e767c18e043daf26b70104c39"
 [[package]]
 name = "idna"
 version = "1.1.0"
-source = "git+https://github.com/lexmount/rust-url?rev=ca9fcad2b99f20c30c28a618ad78410f6fd31161#ca9fcad2b99f20c30c28a618ad78410f6fd31161"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "3b0875f23caa03898994f6ddc501886a45c7d3d62d04d2d90788d47be1b1e4de"
 dependencies = [
  "idna_adapter",
  "smallvec",
@@ -2183,7 +2176,7 @@ dependencies = [
  "boxed_error",
  "deno_error",
  "indexmap",
- "percent-encoding 2.3.2 (registry+https://github.com/rust-lang/crates.io-index)",
+ "percent-encoding",
  "serde",
  "serde_json",
  "thiserror",
@@ -2868,7 +2861,7 @@ dependencies = [
  "moli-html-input-temporal",
  "moli-html-input-type",
  "moli-html2md",
- "percent-encoding 2.3.2 (registry+https://github.com/rust-lang/crates.io-index)",
+ "percent-encoding",
  "selectors",
  "serde",
  "serde_json",
@@ -3245,7 +3238,7 @@ dependencies = [
  "moli-v8-platform",
  "moli-web-mime",
  "parking_lot",
- "percent-encoding 2.3.2 (registry+https://github.com/rust-lang/crates.io-index)",
+ "percent-encoding",
  "sanitize-filename",
  "serde",
  "serde_json",
@@ -3294,7 +3287,7 @@ dependencies = [
  "moli-protocol-webdriver-classic",
  "moli-trace",
  "parking_lot",
- "percent-encoding 2.3.2 (registry+https://github.com/rust-lang/crates.io-index)",
+ "percent-encoding",
  "png",
  "serde_json",
  "socket2",
@@ -3418,7 +3411,7 @@ dependencies = [
  "moli-window-features",
  "moli-xpath",
  "parking_lot",
- "percent-encoding 2.3.2 (registry+https://github.com/rust-lang/crates.io-index)",
+ "percent-encoding",
  "png",
  "precomputed-hash",
  "read-fonts",
@@ -3472,7 +3465,7 @@ dependencies = [
  "moli-css-parse",
  "moli-dom",
  "parking_lot",
- "percent-encoding 2.3.2 (registry+https://github.com/rust-lang/crates.io-index)",
+ "percent-encoding",
  "precomputed-hash",
  "selectors",
  "stylo",
@@ -3524,7 +3517,7 @@ dependencies = [
  "moli-opfs",
  "moli-storage-key",
  "parking_lot",
- "percent-encoding 2.3.2 (registry+https://github.com/rust-lang/crates.io-index)",
+ "percent-encoding",
  "serde",
  "serde_json",
 ]
@@ -4122,7 +4115,7 @@ checksum = "1d7ccb0e8e7c9f1fb75e0700b2c75d9d854e534a7a356b13d2936893651f2b98"
 dependencies = [
  "cow-utils",
  "oxc-miette",
- "percent-encoding 2.3.2 (registry+https://github.com/rust-lang/crates.io-index)",
+ "percent-encoding",
 ]
 
 [[package]]
@@ -4363,11 +4356,6 @@ name = "percent-encoding"
 version = "2.3.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "9b4f627cb1b25917193a259e49bdad08f671f8d9708acfd5fe0a8c1455d87220"
-
-[[package]]
-name = "percent-encoding"
-version = "2.3.2"
-source = "git+https://github.com/lexmount/rust-url?rev=ca9fcad2b99f20c30c28a618ad78410f6fd31161#ca9fcad2b99f20c30c28a618ad78410f6fd31161"
 
 [[package]]
 name = "phf"
@@ -5136,7 +5124,7 @@ version = "0.7.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d3491c14715ca2294c4d6a88f15e84739788c1d030eed8c110436aafdaa2f3fd"
 dependencies = [
- "form_urlencoded 1.2.2 (registry+https://github.com/rust-lang/crates.io-index)",
+ "form_urlencoded",
  "itoa",
  "ryu",
  "serde",
@@ -6286,11 +6274,10 @@ checksum = "8ecb6da28b8a351d773b68d5825ac39017e680750f980f3a1a85cd8dd28a47c1"
 [[package]]
 name = "url"
 version = "2.5.8"
-source = "git+https://github.com/lexmount/rust-url?rev=ca9fcad2b99f20c30c28a618ad78410f6fd31161#ca9fcad2b99f20c30c28a618ad78410f6fd31161"
 dependencies = [
- "form_urlencoded 1.2.2 (git+https://github.com/lexmount/rust-url?rev=ca9fcad2b99f20c30c28a618ad78410f6fd31161)",
+ "form_urlencoded",
  "idna",
- "percent-encoding 2.3.2 (git+https://github.com/lexmount/rust-url?rev=ca9fcad2b99f20c30c28a618ad78410f6fd31161)",
+ "percent-encoding",
  "serde",
  "serde_derive",
 ]
