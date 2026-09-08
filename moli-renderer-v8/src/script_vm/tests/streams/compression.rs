@@ -15,7 +15,7 @@ JSON.stringify([CompressionStream, DecompressionStream].map(C => {
     same: stream.readable === stream.readable && stream.writable === stream.writable,
     newRequired: throws(() => C('gzip')),
     notTransform: throws(() => Object.getOwnPropertyDescriptor(TransformStream.prototype, 'readable').get.call(stream)),
-    formats: [undefined, '', 'GZIP', 'gzip ', 'zip', Symbol()].every(f => throws(() => new C(f))),
+    formats: [undefined, '', 'GZIP', 'gzip ', 'zip', 'br', 'BROTLI', 'brotli ', Symbol()].every(f => throws(() => new C(f))),
     receiver: ['readable','writable'].every(key => {
       const get = Object.getOwnPropertyDescriptor(C.prototype, key).get;
       return [C.prototype, {}, Object.create(C.prototype), other, new TransformStream()]
@@ -41,7 +41,7 @@ fn compression_streams_roundtrip_through_response_and_multiple_buffer_sources() 
 globalThis.compressionResult = 'pending';
 (async () => {
   const result = [];
-  for (const format of ['deflate-raw','deflate','gzip']) {
+  for (const format of ['deflate-raw','deflate','gzip','brotli']) {
     const source = new ReadableStream({start(c) {
       c.enqueue(new Uint8Array([65,66]).buffer);
       c.enqueue(new DataView(new Uint8Array([0,67,68,0]).buffer, 1, 2));
@@ -66,7 +66,7 @@ globalThis.compressionResult = 'pending';
 "#).unwrap();
     assert_eq!(
         vm.eval("JSON.stringify(compressionResult)").unwrap(),
-        r#"[["ABCDEF","",true],["ABCDEF","",true],["ABCDEF","",true]]"#
+        r#"[["ABCDEF","",true],["ABCDEF","",true],["ABCDEF","",true],["ABCDEF","",true]]"#
     );
 }
 
@@ -86,7 +86,7 @@ globalThis.compressionErrors = 'pending';
       results.push(await Promise.all([rejects(reader.read()), rejects(writer.write(chunk))]));
     }
   }
-  for (const format of ['deflate-raw','deflate','gzip']) {
+  for (const format of ['deflate-raw','deflate','gzip','brotli']) {
     const source = new ReadableStream({start(c) { c.enqueue(new Uint8Array([65])); c.close(); }});
     const bytes = new Uint8Array(await new Response(source.pipeThrough(new CompressionStream(format))).arrayBuffer());
     for (const bad of [bytes.slice(0,-1), new Uint8Array([...bytes,0]), new Uint8Array([255,255])]) {
@@ -100,7 +100,7 @@ globalThis.compressionErrors = 'pending';
     let result = vm.eval("JSON.stringify(compressionErrors)").unwrap();
     let result: serde_json::Value = serde_json::from_str(&result).unwrap();
     let result = result.as_array().unwrap();
-    assert_eq!(result.len(), 17);
+    assert_eq!(result.len(), 20);
     for value in &result[..8] {
         assert_eq!(*value, serde_json::json!(["TypeError", "TypeError"]));
     }
@@ -135,26 +135,67 @@ globalThis.compressionCancellation = 'pending';
 (async () => {
   const reason = {};
   const result = [];
-  for (const C of [CompressionStream, DecompressionStream]) {
-    const s = new C('deflate');
-    const writer = s.writable.getWriter();
-    const closed = writer.closed.catch(e => e === reason);
-    const write = writer.write(new Uint8Array([1])).catch(e => e === reason);
-    await s.readable.cancel(reason);
-    result.push(await closed, await write);
-    const aborted = new C('gzip');
-    const reader = aborted.readable.getReader();
-    const read = reader.read().catch(e => e === reason);
-    await aborted.writable.abort(reason);
-    result.push(await read);
+  for (const format of ['deflate-raw','deflate','gzip','brotli']) {
+    for (const C of [CompressionStream, DecompressionStream]) {
+      const s = new C(format);
+      const writer = s.writable.getWriter();
+      const closed = writer.closed.catch(e => e === reason);
+      const write = writer.write(new Uint8Array([1])).catch(e => e === reason);
+      await s.readable.cancel(reason);
+      result.push(await closed, await write);
+      const aborted = new C(format);
+      const reader = aborted.readable.getReader();
+      const read = reader.read().catch(e => e === reason);
+      await aborted.writable.abort(reason);
+      result.push(await read);
+    }
   }
   return result;
 })().then(result => compressionCancellation = result, e => compressionCancellation = e.message);
 "#,
     )
     .unwrap();
+    let result = vm.eval("JSON.stringify(compressionCancellation)").unwrap();
     assert_eq!(
-        vm.eval("JSON.stringify(compressionCancellation)").unwrap(),
-        "[true,true,true,true,true,true]"
+        serde_json::from_str::<Vec<bool>>(&result).unwrap(),
+        vec![true; 24]
     );
+}
+
+#[test]
+fn brotli_compression_preserves_backpressure_and_flushes_on_close() {
+    let mut vm = stream_test_vm();
+    vm.eval(
+        r#"
+globalThis.brotliEvents = [];
+globalThis.brotliStream = new CompressionStream('brotli');
+globalThis.brotliWriter = brotliStream.writable.getWriter();
+brotliWriter.write(new Uint8Array([65,66])).then(() => brotliEvents.push('write'));
+"#,
+    )
+    .unwrap();
+    assert_eq!(vm.eval("JSON.stringify(brotliEvents)").unwrap(), "[]");
+    vm.eval(
+        r#"
+globalThis.brotliBytes = new Response(brotliStream.readable).arrayBuffer();
+"#,
+    )
+    .unwrap();
+    assert_eq!(
+        vm.eval("JSON.stringify(brotliEvents)").unwrap(),
+        r#"["write"]"#
+    );
+    vm.eval(
+        r#"
+globalThis.brotliResult = 'pending';
+(async () => {
+  await brotliWriter.close();
+  const bytes = await brotliBytes;
+  const source = new ReadableStream({start(c) { c.enqueue(bytes); c.close(); }});
+  return await new Response(source.pipeThrough(new DecompressionStream('brotli'))).text();
+})().then(value => brotliResult = value, error => brotliResult = error.message);
+"#,
+    )
+    .unwrap();
+    assert_eq!(vm.eval("brotliResult").unwrap(), "AB");
 }

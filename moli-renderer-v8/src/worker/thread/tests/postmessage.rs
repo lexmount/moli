@@ -7,7 +7,7 @@ async fn worker_compression_streams_roundtrip_all_formats() {
         r#"
         (async () => {
             const result = [];
-            for (const format of ['deflate-raw', 'deflate', 'gzip']) {
+            for (const format of ['deflate-raw', 'deflate', 'gzip', 'brotli']) {
                 const source = new ReadableStream({start(c) {
                     c.enqueue(new TextEncoder().encode('worker 压缩流'));
                     c.close();
@@ -29,7 +29,12 @@ async fn worker_compression_streams_roundtrip_all_formats() {
     let result: serde_json::Value = serde_json::from_str(&expect_post_json(msg)).unwrap();
     assert_eq!(
         result,
-        serde_json::json!(["worker 压缩流", "worker 压缩流", "worker 压缩流"])
+        serde_json::json!([
+            "worker 压缩流",
+            "worker 压缩流",
+            "worker 压缩流",
+            "worker 压缩流"
+        ])
     );
 }
 

@@ -382,6 +382,26 @@ dependencies = [
 ]
 
 [[package]]
+name = "brotli-sys"
+version = "0.3.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "4445dea95f4c2b41cde57cc9fee236ae4dbae88d8fcbdb4750fc1bb5d86aaecd"
+dependencies = [
+ "cc",
+ "libc",
+]
+
+[[package]]
+name = "brotli2"
+version = "0.3.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "0cb036c3eade309815c15ddbacec5b22c4d1f3983a774ab2eac2e3e9ea85568e"
+dependencies = [
+ "brotli-sys",
+ "libc",
+]
+
+[[package]]
 name = "brotlic-sys"
 version = "0.2.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2857,12 +2877,14 @@ dependencies = [
  "anyhow",
  "app_units",
  "base64 0.22.1",
+ "brotli2",
  "crossbeam-channel",
  "cssparser",
  "curl",
  "data-url",
  "encoding_rs",
  "euclid",
+ "fastrand",
  "flate2",
  "futures-util",
  "html-escape",

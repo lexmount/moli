@@ -83,6 +83,12 @@ mod tests {
 
     #[test]
     fn abandoned_codecs_are_reclaimed_on_gc_and_isolate_drop() {
+        for format in [Format::Gzip, Format::Brotli] {
+            assert_abandoned_codec_is_reclaimed(format);
+        }
+    }
+
+    fn assert_abandoned_codec_is_reclaimed(format: Format) {
         moli_v8_test_util::ensure_v8();
         let state = {
             let mut isolate = v8::Isolate::new(Default::default());
@@ -92,7 +98,7 @@ mod tests {
                 let context = v8::Context::new(scope, Default::default());
                 let scope = &mut v8::ContextScope::new(scope, context);
                 let object = v8::Object::new(scope);
-                initialize(scope, object, Codec::new(Format::Gzip, false));
+                initialize(scope, object, Codec::new(format, false));
                 Rc::downgrade(&get(scope, object))
             };
             isolate.low_memory_notification();
@@ -110,7 +116,7 @@ mod tests {
             let context = v8::Context::new(scope, Default::default());
             let scope = &mut v8::ContextScope::new(scope, context);
             let object = v8::Object::new(scope);
-            initialize(scope, object, Codec::new(Format::Gzip, true));
+            initialize(scope, object, Codec::new(format, true));
             Rc::downgrade(&get(scope, object))
         };
         assert!(state.upgrade().is_none());

@@ -18,6 +18,7 @@ wpt-extensions = []
 anyhow = "1.0.100"
 app_units = "0.7.8"
 base64 = "0.22"
+brotli2 = "0.3.2"
 crossbeam-channel = "0.5.15"
 cssparser = "0.37"
 data-url = "0.3.2"
@@ -121,6 +122,7 @@ v8 = { version = "152.2.0", features = ["v8_enable_pointer_compression"] }
 v8 = "152.2.0"
 
 [dev-dependencies]
+fastrand = "2.3.0"
 moli-fetch = { path = "../moli-fetch", features = ["test-support"] }
 moli-parser = { path = "../moli-parser", features = ["test-support"] }
 moli-page-types = { path = "../moli-page-types", features = ["test-support"] }
