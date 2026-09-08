@@ -1,5 +1,7 @@
 use url::Url;
 
+#[cfg(any(test, feature = "test-support"))]
+use crate::page::RendererDocumentLifecycleEvent;
 use crate::{
     browser::{
         DocumentHandle, DocumentId, NavigationId, NavigationRequestLoadPolicy,
@@ -14,7 +16,7 @@ use crate::{
             RetiringDocument, SameDocumentNavigationCommitted,
         },
     },
-    page::{RendererDocumentLifecycleEvent, SameDocumentHistoryUpdate},
+    page::SameDocumentHistoryUpdate,
 };
 
 use super::BrowserContext;
@@ -799,25 +801,6 @@ impl BrowserContext {
         self.web_contents
             .values()
             .any(|contents| contents.navigation().has_inflight_background_navigation())
-    }
-
-    pub fn apply_renderer_document_lifecycle(
-        &mut self,
-        renderer_page: RendererPageResidenceIdentity,
-        event: RendererDocumentLifecycleEvent,
-    ) -> Option<crate::browser::web_contents::DocumentLifecycleEvent> {
-        self.web_contents
-            .values_mut()
-            .find(|contents| {
-                contents
-                    .main_frame
-                    .current_document
-                    .as_ref()
-                    .is_some_and(|document| {
-                        RendererPageResidenceIdentity::from_page(&document.page) == renderer_page
-                    })
-            })?
-            .apply_document_lifecycle(event)
     }
 
     #[cfg(any(test, feature = "test-support"))]

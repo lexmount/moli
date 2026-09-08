@@ -217,38 +217,75 @@ async fn disappearing_agent_host_cannot_cancel_an_admitted_browser_commit() {
             .unwrap()["value"],
         42
     );
-    let snapshot = artifacts.lifecycle_snapshot;
+    let (_, mut events) = owner.conn.subscribe_browser_events().unwrap();
+    let stopped = owner
+        .browser_context
+        .start_document_lifecycle_stop(document)
+        .unwrap()
+        .wait()
+        .await;
+    owner
+        .browser_context
+        .finish_document_lifecycle_stop(stopped)
+        .unwrap();
+    let snapshot = tokio::time::timeout(std::time::Duration::from_secs(5), async {
+        loop {
+            if let moli_core::browser::BrowserEvent::DocumentLifecycleChanged(snapshot) =
+                events.recv().await.unwrap().event
+                && snapshot.document == document
+                && snapshot.lifecycle.terminated.is_some()
+            {
+                break snapshot.lifecycle;
+            }
+        }
+    })
+    .await
+    .expect("a native lifecycle must progress after its AgentHost disappears");
+    let terminated = snapshot.terminated.unwrap();
     let event = RendererDocumentLifecycleEvent {
         frame: snapshot.frame,
         document: snapshot.document,
         epoch: snapshot.epoch,
-        sequence: u64::MAX,
-        timestamp_micros: 100,
+        sequence: terminated.sequence,
+        timestamp_micros: terminated.timestamp_micros,
         kind: RendererDocumentLifecycleEventKind::Terminated {
             last_reached: Some(RendererDocumentLifecycleMilestone::Load),
-            reason: moli_core::page::RendererDocumentTerminationReason::RestartedByDocumentOpen,
+            reason: terminated.reason,
         },
     };
     assert!(
         owner
-            .apply_renderer_document_lifecycle(
+            .conn
+            .browser
+            .wait_for_renderer_document_lifecycle(
                 renderer_page,
                 RendererDocumentLifecycleEvent {
                     document: event.document.successor_for_testing(),
                     ..event
                 }
             )
+            .await
             .is_none()
     );
     let occurrence = owner
-        .apply_renderer_document_lifecycle(renderer_page, event)
+        .conn
+        .browser
+        .wait_for_renderer_document_lifecycle(renderer_page, event)
+        .await
         .unwrap();
     assert_eq!(occurrence.document(), expected_document);
     assert_eq!(occurrence.event(), event);
-    assert!(
+    assert_eq!(
         owner
-            .apply_renderer_document_lifecycle(renderer_page, event)
-            .is_none()
+            .conn
+            .browser
+            .wait_for_renderer_document_lifecycle(renderer_page, event)
+            .await,
+        Some(occurrence)
+    );
+    assert_eq!(
+        events.try_recv(),
+        Err(tokio::sync::broadcast::error::TryRecvError::Empty)
     );
     assert_eq!(
         owner
@@ -300,7 +337,7 @@ async fn creation_projection_cannot_rewind_native_progress_or_retarget_a_replace
         },
     };
     let occurrence = owner
-        .apply_renderer_document_lifecycle(renderer_page, terminated)
+        .apply_renderer_document_lifecycle_for_test(renderer_page, terminated)
         .unwrap();
     let native = owner.renderer_document_lifecycle_authoritative_snapshot_for_target(TARGET);
     // Projection is delayed until after the Browser has accepted more progress.
@@ -356,7 +393,7 @@ async fn creation_projection_cannot_rewind_native_progress_or_retarget_a_replace
     );
     assert!(
         owner
-            .apply_renderer_document_lifecycle(renderer_page, terminated)
+            .apply_renderer_document_lifecycle_for_test(renderer_page, terminated)
             .is_none()
     );
     assert!(
@@ -657,6 +694,7 @@ async fn page_with_installed_dialog_for_test() -> (
             ),
         )
         .unwrap();
+    let key = key.unwrap();
     let wrong_document = moli_core::browser::DocumentHandle::new(
         moli_core::browser::WebContentsHandle::new(
             document.web_contents().context(),
@@ -806,10 +844,6 @@ async fn browser_dialog_retirement_follows_admitted_document_lifecycle_without_p
             .web_contents_has_pending_javascript_dialog(handle)
             .unwrap()
     );
-    let renderer = owner
-        .browser_context
-        .document_renderer_residence(document)
-        .unwrap();
     let terminated = RendererDocumentLifecycleEvent {
         frame: snapshot.frame,
         document: snapshot.document,
@@ -822,16 +856,16 @@ async fn browser_dialog_retirement_follows_admitted_document_lifecycle_without_p
         },
     };
     assert!(
-        owner
+        !owner
             .browser_context
-            .apply_renderer_document_lifecycle(
-                renderer,
+            .apply_document_lifecycle_for_test(
+                document,
                 RendererDocumentLifecycleEvent {
                     document: snapshot.document.successor_for_testing(),
                     ..terminated
                 }
             )
-            .is_none()
+            .unwrap()
     );
     assert!(
         owner
@@ -843,8 +877,8 @@ async fn browser_dialog_retirement_follows_admitted_document_lifecycle_without_p
     assert!(
         owner
             .browser_context
-            .apply_renderer_document_lifecycle(renderer, terminated)
-            .is_some()
+            .apply_document_lifecycle_for_test(document, terminated)
+            .unwrap()
     );
     assert!(
         !owner
@@ -857,8 +891,8 @@ async fn browser_dialog_retirement_follows_admitted_document_lifecycle_without_p
     assert!(
         owner
             .browser_context
-            .apply_renderer_document_lifecycle(
-                renderer,
+            .apply_document_lifecycle_for_test(
+                document,
                 RendererDocumentLifecycleEvent {
                     epoch: RendererLifecycleEpoch(snapshot.epoch.0 + 1),
                     sequence: u64::MAX - 1,
@@ -868,7 +902,7 @@ async fn browser_dialog_retirement_follows_admitted_document_lifecycle_without_p
                     ..terminated
                 }
             )
-            .is_some()
+            .unwrap()
     );
     assert_eq!(
         owner
@@ -924,7 +958,7 @@ async fn dialog_disable_and_exact_detach_dismiss_only_their_browser_dialogs() {
         &peer,
         "FRAME-dialog-owner".into(),
         document_handle,
-        key,
+        key.unwrap(),
     ));
     owner.disable_devtools_page_domain_for_target(TARGET, &DevToolsSessionKey::Primary);
     assert!(!primary_completion.finish(true, "late primary".into()));

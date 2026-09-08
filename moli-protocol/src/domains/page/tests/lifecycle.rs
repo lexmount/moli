@@ -911,6 +911,15 @@ async fn set_lifecycle_events_enabled_replays_only_protocol_visible_load_state()
             )
     );
     let load_stamp = wait_for_authoritative_renderer_load(&mut ctx, "SID-visible").await;
+    ctx.wait_until_scheduler_state("exact renderer load reached the hidden tail", |conn| {
+        conn.browser_context
+            .as_ref()
+            .and_then(|context| {
+                context.renderer_document_lifecycle_projected_sequence_for_target("TID-visible")
+            })
+            .is_some_and(|sequence| sequence >= load_stamp.sequence)
+    })
+    .await;
     assert!(
         ctx.conn
             .renderer_document_lifecycle_authoritative_state_for_session_owner(Some("SID-visible"))
@@ -1637,7 +1646,7 @@ async fn runtime_document_close_releases_lifecycle_at_response_flush() {
     )
     .await;
     ctx.wait_until_scheduler_state("initial document load before held response flush", |conn| {
-        conn.renderer_document_lifecycle_authoritative_state_for_session_owner(Some("SID-1"))
+        conn.renderer_document_lifecycle_visible_state_for_session_owner(Some("SID-1"))
             .is_some_and(|(_, snapshot)| snapshot.load.is_some())
     })
     .await;

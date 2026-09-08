@@ -3047,10 +3047,17 @@ impl RendererRuntimeCommandOutputRecorder {
     }
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum RendererRuntimeInspectorResponseTerminal {
+    Published,
+    Abandoned,
+    Canceled,
+}
+
 struct RendererRuntimeInspectorResponseChannelState {
     next_lease_id: u64,
     active_lease_id: Option<u64>,
-    open: bool,
+    terminal: Option<RendererRuntimeInspectorResponseTerminal>,
     tx: Option<oneshot::Sender<RendererRuntimeInspectorAsyncCompletion>>,
     session_response_settlement_tx:
         Option<oneshot::Sender<RendererRuntimeInspectorSessionResponseSettlement>>,
@@ -3069,6 +3076,7 @@ impl std::fmt::Debug for RendererRuntimeInspectorResponseChannel {
             .debug_struct("RendererRuntimeInspectorResponseChannel")
             .field("delivery", &self.delivery)
             .field("active_lease_id", &state.active_lease_id)
+            .field("terminal", &state.terminal)
             .field("has_receiver", &state.tx.is_some())
             .finish()
     }
@@ -3094,7 +3102,7 @@ impl RendererRuntimeInspectorResponseChannel {
                 state: Arc::new(Mutex::new(RendererRuntimeInspectorResponseChannelState {
                     next_lease_id: 1,
                     active_lease_id: None,
-                    open: true,
+                    terminal: None,
                     tx: Some(tx),
                     session_response_settlement_tx: None,
                 })),
@@ -3120,7 +3128,7 @@ impl RendererRuntimeInspectorResponseChannel {
                     state: Arc::new(Mutex::new(RendererRuntimeInspectorResponseChannelState {
                         next_lease_id: 1,
                         active_lease_id: None,
-                        open: true,
+                        terminal: None,
                         tx: None,
                         session_response_settlement_tx: None,
                     })),
@@ -3146,7 +3154,7 @@ impl RendererRuntimeInspectorResponseChannel {
     ) -> Option<RendererRuntimeInspectorResponseSender> {
         let lease_id = {
             let mut state = self.state.lock();
-            if !state.open {
+            if state.terminal.is_some() {
                 return None;
             }
             let lease_id = state.next_lease_id;
@@ -3177,10 +3185,17 @@ impl RendererRuntimeInspectorResponseChannel {
     ///
     /// Attachment replacement uses this to prevent the retired renderer from
     /// publishing while the protocol session still owns terminal completion.
-    /// A response that already claimed the channel wins and returns `false`.
+    /// An already-published response wins and returns `false`; sender loss
+    /// without an admitted response still leaves terminal work to the session.
     pub fn try_revoke_active_lease(&self) -> bool {
         let mut state = self.state.lock();
-        if !state.open || state.active_lease_id.is_none() {
+        if state.terminal == Some(RendererRuntimeInspectorResponseTerminal::Abandoned) {
+            // Last-sender loss or rejected transport admission produced no
+            // frontend response. The protocol session still owes its terminal.
+            state.terminal = Some(RendererRuntimeInspectorResponseTerminal::Canceled);
+            return true;
+        }
+        if state.terminal.is_some() || state.active_lease_id.is_none() {
             return false;
         }
         state.active_lease_id = None;
@@ -3189,7 +3204,7 @@ impl RendererRuntimeInspectorResponseChannel {
 
     pub fn cancel(&self) {
         let mut state = self.state.lock();
-        state.open = false;
+        state.terminal = Some(RendererRuntimeInspectorResponseTerminal::Canceled);
         state.active_lease_id = None;
         state.tx.take();
         state.session_response_settlement_tx.take();
@@ -3205,7 +3220,7 @@ impl RendererRuntimeInspectorResponseChannel {
             if state.active_lease_id != Some(lease_id) {
                 return Err(completion);
             }
-            state.open = false;
+            state.terminal = Some(RendererRuntimeInspectorResponseTerminal::Published);
             state.active_lease_id = None;
             state.tx.take()
         };
@@ -3220,7 +3235,7 @@ impl RendererRuntimeInspectorResponseChannel {
         lease_id: u64,
     ) -> Option<oneshot::Receiver<RendererRuntimeInspectorSessionResponseSettlement>> {
         let mut state = self.state.lock();
-        if !state.open
+        if state.terminal.is_some()
             || state.active_lease_id != Some(lease_id)
             || state.session_response_settlement_tx.is_some()
         {
@@ -3233,28 +3248,53 @@ impl RendererRuntimeInspectorResponseChannel {
 
     fn cancel_lease(&self, lease_id: u64) -> bool {
         let mut state = self.state.lock();
-        if !state.open || state.active_lease_id != Some(lease_id) {
+        if state.terminal.is_some() || state.active_lease_id != Some(lease_id) {
             return false;
         }
-        state.open = false;
+        state.terminal = Some(RendererRuntimeInspectorResponseTerminal::Abandoned);
         state.active_lease_id = None;
         state.tx.take();
         state.session_response_settlement_tx.take();
         true
     }
 
-    fn claim_session_lease(
+    fn send_session_response(
         &self,
         lease_id: u64,
-    ) -> Result<Option<oneshot::Sender<RendererRuntimeInspectorSessionResponseSettlement>>, ()>
-    {
+        host: &RendererDevToolsSessionOutputHost,
+        completion: RendererRuntimeInspectorAsyncCompletion,
+        response_succeeded: bool,
+    ) -> Result<
+        RendererRuntimeInspectorSessionResponseSettlement,
+        RendererRuntimeInspectorAsyncCompletion,
+    > {
         let mut state = self.state.lock();
-        if !state.open || state.active_lease_id != Some(lease_id) {
-            return Err(());
+        if state.terminal.is_some() || state.active_lease_id != Some(lease_id) {
+            return Err(completion);
         }
-        state.open = false;
+        // Publication and replacement arbitrate the same lease. Claiming it
+        // before transport admission would lose the frontend terminal when
+        // the old Document's stream has already closed.
+        let published = host.publish(completion);
         state.active_lease_id = None;
-        Ok(state.session_response_settlement_tx.take())
+        let settlement_tx = state.session_response_settlement_tx.take();
+        match published {
+            Ok(fence) => {
+                state.terminal = Some(RendererRuntimeInspectorResponseTerminal::Published);
+                let settlement = RendererRuntimeInspectorSessionResponseSettlement::new(
+                    fence,
+                    response_succeeded,
+                );
+                if let Some(settlement_tx) = settlement_tx {
+                    let _ = settlement_tx.send(settlement.clone());
+                }
+                Ok(settlement)
+            }
+            Err(completion) => {
+                state.terminal = Some(RendererRuntimeInspectorResponseTerminal::Abandoned);
+                Err(completion)
+            }
+        }
     }
 }
 
@@ -3299,13 +3339,21 @@ impl RendererRuntimeInspectorResponseLease {
             .take_session_response_settlement_receiver(self.lifetime.lease_id)
     }
 
-    fn claim_session(
+    fn send_session_response(
         &self,
-    ) -> Result<Option<oneshot::Sender<RendererRuntimeInspectorSessionResponseSettlement>>, ()>
-    {
-        self.lifetime
-            .channel
-            .claim_session_lease(self.lifetime.lease_id)
+        host: &RendererDevToolsSessionOutputHost,
+        completion: RendererRuntimeInspectorAsyncCompletion,
+        response_succeeded: bool,
+    ) -> Result<
+        RendererRuntimeInspectorSessionResponseSettlement,
+        RendererRuntimeInspectorAsyncCompletion,
+    > {
+        self.lifetime.channel.send_session_response(
+            self.lifetime.lease_id,
+            host,
+            completion,
+            response_succeeded,
+        )
     }
 }
 
@@ -3411,10 +3459,6 @@ impl RendererRuntimeInspectorResponseDestination {
             Self::AdapterReply(lease) => lease.send_adapter_reply(completion).map(|()| None),
             Self::DevToolsSessionPending(_) => Err(completion),
             Self::DevToolsSession { lease, host } => {
-                let settlement_tx = match lease.claim_session() {
-                    Ok(settlement_tx) => settlement_tx,
-                    Err(()) => return Err(completion),
-                };
                 let mut responses =
                     completion
                         .output
@@ -3437,15 +3481,9 @@ impl RendererRuntimeInspectorResponseDestination {
                     return Err(completion);
                 }
                 let response_succeeded = response.get("error").is_none();
-                let fence = host.publish(completion)?;
-                let settlement = RendererRuntimeInspectorSessionResponseSettlement::new(
-                    fence,
-                    response_succeeded,
-                );
-                if let Some(settlement_tx) = settlement_tx {
-                    let _ = settlement_tx.send(settlement.clone());
-                }
-                Ok(Some(settlement))
+                lease
+                    .send_session_response(&host, completion, response_succeeded)
+                    .map(Some)
             }
         }
     }
@@ -3492,7 +3530,7 @@ impl RendererRuntimeInspectorResponseSender {
             state: Arc::new(Mutex::new(RendererRuntimeInspectorResponseChannelState {
                 next_lease_id: 2,
                 active_lease_id: Some(1),
-                open: true,
+                terminal: None,
                 tx: Some(tx),
                 session_response_settlement_tx: None,
             })),
@@ -3819,6 +3857,21 @@ mod renderer_runtime_inspector_response_channel_tests {
         assert_eq!(rx.await.unwrap().call_id, 1);
     }
 
+    #[test]
+    fn retired_session_sender_leaves_terminal_completion_to_protocol() {
+        let attachment = RendererAgentAttachmentId::allocate();
+        let (channel, receiver) = RendererRuntimeInspectorResponseChannel::new_for_delivery(
+            moli_page_types::RendererInspectorResponseDelivery::SessionSink,
+        );
+        assert!(receiver.is_none());
+        drop(channel.activate_sender(1, Some(attachment)));
+        assert!(
+            channel.try_revoke_active_lease(),
+            "a retired renderer that published no response cannot consume the session's terminal reply"
+        );
+        assert!(!channel.try_revoke_active_lease());
+    }
+
     #[tokio::test]
     async fn direct_response_has_no_implicit_process_global_predecessor() {
         let (channel, rx) = RendererRuntimeInspectorResponseChannel::new();
@@ -4063,6 +4116,10 @@ mod renderer_runtime_inspector_response_channel_tests {
             .expect("successful transport admission should settle the session call");
         let (fence, response_succeeded) = settlement.into_parts();
         assert!(response_succeeded);
+        assert!(
+            !channel.try_revoke_active_lease(),
+            "an admitted session response wins over attachment retirement"
+        );
         assert_eq!(transport.diagnostics().pending_observation_messages, 1);
         assert!(
             transport.diagnostics().admitted_essential_messages >= 3,
@@ -4147,6 +4204,10 @@ mod renderer_runtime_inspector_response_channel_tests {
             "transport rejection must close rather than satisfy the settlement waiter"
         );
         assert!(channel.try_activate_sender(32, Some(attachment)).is_none());
+        assert!(
+            channel.try_revoke_active_lease(),
+            "rejected publication must leave terminal completion to the protocol session"
+        );
         assert!(matches!(
             transport_rx.recv().await,
             Some(RendererOutputTransportMessage::StreamControl(

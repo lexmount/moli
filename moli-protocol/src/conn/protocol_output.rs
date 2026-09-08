@@ -29,17 +29,36 @@ impl CdpConnection {
         )
     }
 
-    /// Native admission uses physical renderer residence, never a frontend
-    /// route or a lifecycle visibility barrier.
-    pub(crate) fn apply_renderer_document_lifecycle(
-        &mut self,
+    pub(crate) async fn wait_for_renderer_document_lifecycle(
+        &self,
         renderer_page: super::RendererPageResidenceIdentity,
         event: moli_core::page::RendererDocumentLifecycleEvent,
     ) -> Option<super::DocumentLifecycleEvent> {
-        self.browser_context
-            .iter_mut()
-            .chain(self.inactive_browser_contexts.iter_mut())
-            .find_map(|context| context.apply_renderer_document_lifecycle(renderer_page, event))
+        #[cfg(test)]
+        for context in self.browser_contexts() {
+            for target in context.page_targets.iter() {
+                if !context.target_has_loaded_page(target.target_id())
+                    && context.routes_renderer_page_for_target(target.target_id(), renderer_page)
+                {
+                    let snapshot = context
+                        .renderer_document_lifecycle_authoritative_snapshot_for_target(
+                            target.target_id(),
+                        )?;
+                    return (snapshot.frame == event.frame
+                        && snapshot.document == event.document
+                        && snapshot.sequence() >= event.sequence)
+                        .then(|| {
+                            super::DocumentLifecycleEvent::new(
+                                context.target_document_id(target.target_id()).unwrap(),
+                                event,
+                            )
+                        });
+                }
+            }
+        }
+        self.browser
+            .wait_for_renderer_document_lifecycle(renderer_page, event)
+            .await
     }
 
     pub(crate) fn project_document_lifecycle_events_for_owner(

@@ -305,7 +305,7 @@ impl BrowserContext {
         &mut self,
         document: DocumentHandle,
         dialog: RendererPendingJavaScriptDialog,
-    ) -> Result<JavaScriptDialogKey, String> {
+    ) -> Result<Option<JavaScriptDialogKey>, String> {
         self.browser_context
             .install_document_javascript_dialog(document, dialog)
     }

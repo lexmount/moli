@@ -7344,7 +7344,9 @@ fn command_dispatch_completes_dom_sync_and_error_commands_without_legacy_fallbac
 #[tokio::test(flavor = "multi_thread")]
 async fn command_dispatch_completes_live_page_preload_without_legacy_fallback() {
     let mut ctx = crate::testing::TestContext::new();
-    let mut browser_context = BrowserContext::new("BID-page-preload-live".to_owned());
+    let mut browser_context = ctx
+        .conn
+        .new_browser_context_fixture_for_test("BID-page-preload-live");
     browser_context.set_active_target_id("TID-page-preload-live".to_owned());
     browser_context.attach_active_session("SID-page-preload-live");
     ctx.conn
@@ -8511,7 +8513,9 @@ async fn pending_security_tls_keeps_background_owner_route_across_completion() {
 #[tokio::test(flavor = "multi_thread")]
 async fn command_dispatch_completes_live_fetch_enable_without_legacy_fallback() {
     let mut ctx = crate::testing::TestContext::new();
-    let mut browser_context = BrowserContext::new("BID-fetch-live".to_owned());
+    let mut browser_context = ctx
+        .conn
+        .new_browser_context_fixture_for_test("BID-fetch-live");
     browser_context.set_active_target_id("TID-fetch-live".to_owned());
     ctx.conn
         .install_browser_context_fixture_for_test(browser_context);
@@ -8746,7 +8750,9 @@ async fn devtools_network_intercept_commands_route_to_fetch_owner() {
 #[tokio::test(flavor = "multi_thread")]
 async fn command_dispatch_completes_live_fetch_disable_without_legacy_fallback() {
     let mut ctx = crate::testing::TestContext::new();
-    let mut browser_context = BrowserContext::new("BID-fetch-disable-live".to_owned());
+    let mut browser_context = ctx
+        .conn
+        .new_browser_context_fixture_for_test("BID-fetch-disable-live");
     browser_context.set_active_target_id("TID-fetch-disable-live".to_owned());
     browser_context
         .active_page_target_mut()

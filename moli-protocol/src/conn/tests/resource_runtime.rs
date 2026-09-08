@@ -1862,7 +1862,7 @@ async fn direct_network_enable_routes_to_inactive_active_owner_without_activatin
 async fn direct_runtime_evaluate_routes_to_inactive_active_owner_without_activating_slot() {
     let mut ctx = crate::testing::TestContext::new();
 
-    let mut inactive = BrowserContext::new("BID-B".into());
+    let mut inactive = ctx.conn.new_browser_context_fixture_for_test("BID-B");
     inactive.set_active_target_id("TID-B".to_owned());
     inactive.attach_active_session("SID-B");
     inactive.active_page_target_mut().devtools_sessions
@@ -1906,7 +1906,9 @@ async fn direct_runtime_evaluate_routes_to_inactive_active_owner_without_activat
 #[tokio::test]
 async fn direct_runtime_evaluate_document_replacement_lifecycle_uses_inactive_owner() {
     let mut ctx = crate::testing::TestContext::new();
-    let mut inactive = BrowserContext::new("BID-document-replacement".into());
+    let mut inactive = ctx
+        .conn
+        .new_browser_context_fixture_for_test("BID-document-replacement");
     inactive.set_active_target_id("TID-document-replacement".to_owned());
     inactive.attach_active_session("SID-document-replacement");
     inactive.active_page_target_mut().devtools_sessions
@@ -2190,7 +2192,9 @@ fn devtools_target_context_resolves_background_page_without_ambient_route() {
 async fn direct_runtime_evaluate_same_document_navigation_updates_inactive_owner() {
     let mut ctx = crate::testing::TestContext::new();
     let initial_url = "data:text/html,<!doctype html><title>same-doc</title>".to_owned();
-    let mut inactive = BrowserContext::new("BID-same-document".into());
+    let mut inactive = ctx
+        .conn
+        .new_browser_context_fixture_for_test("BID-same-document");
     inactive.set_active_target_id("TID-same-document".to_owned());
     inactive.attach_active_session("SID-same-document");
     inactive.active_page_target_mut().devtools_sessions
@@ -2263,7 +2267,9 @@ async fn direct_runtime_evaluate_same_document_navigation_updates_inactive_owner
 async fn direct_runtime_evaluate_javascript_dialog_uses_inactive_background_owner() {
     let mut ctx = crate::testing::TestContext::new();
     let page_url = "data:text/html,<!doctype html><title>dialog-owner</title>".to_owned();
-    let mut inactive = BrowserContext::new("BID-dialog-background".into());
+    let mut inactive = ctx
+        .conn
+        .new_browser_context_fixture_for_test("BID-dialog-background");
     inactive.register_page_target_url_fixture(
         "TID-dialog-background".to_owned(),
         Some("SID-dialog-background".to_owned()),
@@ -2368,7 +2374,9 @@ async fn direct_runtime_evaluate_javascript_dialog_uses_inactive_background_owne
 async fn direct_runtime_evaluate_popup_creates_target_in_inactive_background_owner() {
     let mut ctx = crate::testing::TestContext::new();
     let page_url = "data:text/html,<!doctype html><title>popup-owner</title>";
-    let mut inactive = BrowserContext::new("BID-popup-background".into());
+    let mut inactive = ctx
+        .conn
+        .new_browser_context_fixture_for_test("BID-popup-background");
     inactive.register_page_target_url_fixture(
         "TID-popup-background".to_owned(),
         Some("SID-popup-background".to_owned()),
@@ -2450,7 +2458,7 @@ async fn direct_runtime_evaluate_popup_creates_target_in_inactive_background_own
 async fn direct_runtime_evaluate_self_popup_does_not_navigate_active_target_for_inactive_owner() {
     let mut ctx = crate::testing::TestContext::new();
 
-    let mut active = BrowserContext::new("BID-active".into());
+    let mut active = ctx.conn.new_browser_context_fixture_for_test("BID-active");
     active.set_active_target_id("TID-active".to_owned());
     active.attach_active_session("SID-active");
     active.set_target_url("https://active.example/current".to_owned());
@@ -2513,7 +2521,9 @@ async fn direct_runtime_evaluate_self_popup_does_not_navigate_active_target_for_
 async fn direct_runtime_evaluate_file_chooser_uses_inactive_background_owner() {
     let mut ctx = crate::testing::TestContext::new();
     let page_url = "data:text/html,<!doctype html><input id='picker' type='file' multiple>";
-    let mut inactive = BrowserContext::new("BID-file-background".into());
+    let mut inactive = ctx
+        .conn
+        .new_browser_context_fixture_for_test("BID-file-background");
     inactive.register_page_target_url_fixture(
         "TID-file-background".to_owned(),
         Some("SID-file-background".to_owned()),
@@ -2588,7 +2598,7 @@ async fn direct_runtime_evaluate_file_chooser_uses_inactive_background_owner() {
 async fn direct_runtime_evaluate_routes_to_inactive_attached_owner_without_activating_slot() {
     let mut ctx = crate::testing::TestContext::new();
 
-    let mut inactive = BrowserContext::new("BID-B".into());
+    let mut inactive = ctx.conn.new_browser_context_fixture_for_test("BID-B");
     inactive.set_active_target_id("TID-B".to_owned());
     inactive.attach_active_session("SID-primary");
     assert!(inactive.assign_attached_session_to_target("TID-B", "SID-attached".to_owned()));
@@ -2997,7 +3007,7 @@ async fn direct_network_enable_for_loaded_background_owner_starts_at_network_tai
     let mut ctx = crate::testing::TestContext::new();
     let page_url = format!("http://{addr}/page");
 
-    let mut inactive = BrowserContext::new("BID-B".into());
+    let mut inactive = ctx.conn.new_browser_context_fixture_for_test("BID-B");
     inactive.register_page_target_url_fixture(
         "TID-background".to_owned(),
         Some("SID-background".to_owned()),
@@ -3093,7 +3103,7 @@ async fn direct_background_command_does_not_emit_active_observable_output_under_
 async fn direct_console_routes_to_inactive_active_owner_without_activating_slot() {
     let mut ctx = crate::testing::TestContext::new();
     let page_url = "data:text/html,<!doctype html><script>console.warn('boot warning')</script>";
-    let mut inactive = BrowserContext::new("BID-B".into());
+    let mut inactive = ctx.conn.new_browser_context_fixture_for_test("BID-B");
     inactive.set_active_target_id("TID-B".to_owned());
     inactive.attach_active_session("SID-B");
     ctx.conn
@@ -3314,7 +3324,7 @@ async fn direct_console_routes_to_loaded_background_owner_and_advances_backgroun
     let page_url =
         "data:text/html,<!doctype html><script>console.warn('background warning')</script>";
 
-    let mut inactive = BrowserContext::new("BID-B".into());
+    let mut inactive = ctx.conn.new_browser_context_fixture_for_test("BID-B");
     inactive.register_page_target_url_fixture(
         "TID-background".to_owned(),
         Some("SID-background".to_owned()),
@@ -3562,7 +3572,7 @@ async fn direct_log_enable_routes_to_loaded_background_owner_without_replaying_c
 async fn direct_log_disable_routes_to_inactive_active_owner_without_activating_slot() {
     let mut ctx = crate::testing::TestContext::new();
     let page_url = "data:text/html,<!doctype html><script>console.warn('boot warning')</script>";
-    let mut inactive = BrowserContext::new("BID-B".into());
+    let mut inactive = ctx.conn.new_browser_context_fixture_for_test("BID-B");
     inactive.set_active_target_id("TID-B".to_owned());
     inactive.attach_active_session("SID-B");
     inactive.active_page_target_mut().devtools_sessions

@@ -34,8 +34,8 @@ pub use emulation::{
     viewport_surface_install_script,
 };
 pub use events::{
-    BrowserEvent, BrowserEventReceiver, BrowserEventRecord, BrowserSnapshot, WebContentsSelection,
-    WebContentsSnapshot,
+    BrowserEvent, BrowserEventReceiver, BrowserEventRecord, BrowserSnapshot,
+    DocumentLifecycleSnapshot, WebContentsSelection, WebContentsSnapshot,
 };
 pub use owner::{
     BrowserBuiltInitialDocument, BrowserCommittedInitialDocument, BrowserContextHandle,

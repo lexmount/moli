@@ -13,6 +13,7 @@ use parking_lot::Mutex;
 use tokio::sync::{mpsc, oneshot};
 
 mod activation;
+mod document_lifecycle;
 mod downloads;
 pub use activation::PendingWebContentsActivation;
 mod navigation;
@@ -164,11 +165,31 @@ impl Browser {
         tokio::task::spawn_local(async move {
             let (context, result) = operation(context).await;
             let _ = local_sender.send(Box::new(move |browser| {
+                // Test-only async Context borrowing temporarily removes its
+                // registry entry. Catch up the original journals before the
+                // fixture reply; native callbacks during that borrow could
+                // not resolve the Context. Production never removes it here.
+                let progress = context
+                    .web_contents_handles()
+                    .filter_map(|contents| {
+                        let document =
+                            context.document_handle_for_web_contents(contents).ok()??;
+                        let mut renderer = context
+                            .document(document)
+                            .ok()?
+                            .page
+                            .observe_document_lifecycle()?;
+                        Some((document, renderer.snapshot()))
+                    })
+                    .collect::<Vec<_>>();
                 let previous = browser.contexts.insert(id, context);
                 debug_assert!(
                     previous.is_none(),
                     "BrowserContext identity must remain unique during local work"
                 );
+                for (document, snapshot) in progress {
+                    browser.commit_document_lifecycle(document, snapshot);
+                }
                 let _ = completion_tx.send(result);
             }));
         });
@@ -371,6 +392,43 @@ impl BrowserHandle {
         .flatten()
     }
 
+    /// Waits for already-produced renderer progress to cross the native owner
+    /// boundary. This is observation only: frontend ingress cannot apply an
+    /// event, reset lifecycle state, or select a replacement Document.
+    pub async fn wait_for_renderer_document_lifecycle(
+        &self,
+        renderer: super::RendererPageResidenceIdentity,
+        event: crate::page::RendererDocumentLifecycleEvent,
+    ) -> Option<super::web_contents::DocumentLifecycleEvent> {
+        let (document, mut progress) = self
+            .execute(move |browser| {
+                let document = browser
+                    .contexts
+                    .values()
+                    .find_map(|context| context.document_for_renderer(renderer))?;
+                let host = browser
+                    .context_mut(document.web_contents().context())
+                    .ok()?
+                    .document_mut(document)
+                    .ok()?;
+                Some((document, host.lifecycle.observe_committed()?))
+            })
+            .ok()??;
+        loop {
+            let snapshot = *progress.borrow_and_update();
+            if snapshot.frame != event.frame || snapshot.document != event.document {
+                return None;
+            }
+            if snapshot.sequence() >= event.sequence {
+                return Some(super::web_contents::DocumentLifecycleEvent::new(
+                    document.id(),
+                    event,
+                ));
+            }
+            progress.changed().await.ok()?;
+        }
+    }
+
     /// Subscribe and snapshot in the same owner turn, without a gap between
     /// observing existing Contexts and receiving their subsequent lifecycle.
     pub fn subscribe(
@@ -393,6 +451,16 @@ impl BrowserHandle {
                             .document_handle_for_web_contents(contents)
                             .ok()
                             .flatten()
+                    })
+                }),
+                browser.contexts.values().flat_map(|context| {
+                    context.web_contents_handles().filter_map(|contents| {
+                        let document =
+                            context.document_handle_for_web_contents(contents).ok()??;
+                        Some(super::DocumentLifecycleSnapshot {
+                            document,
+                            lifecycle: context.document_lifecycle_snapshot(document).ok()??,
+                        })
                     })
                 }),
                 browser
@@ -1124,19 +1192,6 @@ impl BrowserContextHandle {
         })?
     }
 
-    pub fn apply_renderer_document_lifecycle(
-        &self,
-        renderer_page: super::RendererPageResidenceIdentity,
-        event: crate::page::RendererDocumentLifecycleEvent,
-    ) -> Option<super::web_contents::DocumentLifecycleEvent> {
-        // Renderer and Browser events use independent channels. A publication
-        // selected before Context disposal may reach this boundary afterwards;
-        // absence must reject the occurrence, not revive or panic on its owner.
-        self.update(move |context| context.apply_renderer_document_lifecycle(renderer_page, event))
-            .ok()
-            .flatten()
-    }
-
     forward_context_read! {
         fn controlled_service_worker_window_client_ids(registration_id: u64, version_id: u64) -> Vec<u64>;
         fn set_service_worker_pause_on_start_for_version(version_id: u64, pause: bool) -> bool;
@@ -1389,7 +1444,7 @@ impl BrowserContextHandle {
     }
 
     forward_context_try_update! {
-        fn install_document_javascript_dialog(document: super::DocumentHandle, dialog: crate::page::RendererPendingJavaScriptDialog) -> super::web_contents::JavaScriptDialogKey;
+        fn install_document_javascript_dialog(document: super::DocumentHandle, dialog: crate::page::RendererPendingJavaScriptDialog) -> Option<super::web_contents::JavaScriptDialogKey>;
     }
 
     pub fn document_javascript_dialog_snapshot(

@@ -37,6 +37,9 @@ impl CdpConnection {
         else {
             return false;
         };
+        let Some(key) = key else {
+            return true;
+        };
         if owner.browser_context.project_javascript_dialog_for_session(
             &owner.target_id,
             &owner.session_key,

@@ -444,8 +444,8 @@ impl TestContext {
         session_id: Option<&str>,
     ) {
         // The build reply may precede the renderer's load continuation. First
-        // observe load on this exact Document, then fence its published tail;
-        // a diagnostics reply alone can overtake the load continuation.
+        // observe protocol-visible load on this exact Document, then fence its
+        // published tail; native progress alone does not drain protocol ingress.
         let owner = crate::conn::CommandOwnerScope::capture(&self.conn, session_id);
         let document = self
             .conn
@@ -456,7 +456,7 @@ impl TestContext {
                 conn.resolve_browser_document_for_owner(&owner),
                 Ok(document)
             );
-            conn.renderer_document_lifecycle_authoritative_state_for_session_owner(session_id)
+            conn.renderer_document_lifecycle_visible_state_for_session_owner(session_id)
                 .is_some_and(|(_, snapshot)| snapshot.load.is_some())
         })
         .await;
@@ -2247,11 +2247,11 @@ pub(crate) async fn wait_until_frame_stopped_loading(ctx: &mut TestContext, fram
     .await;
 }
 
-/// Wait for the renderer-owned load fact of one exact document generation.
+/// Wait for protocol-visible renderer load of one exact document generation.
 ///
-/// Unlike `Page.frameStoppedLoading`, the authoritative binding carries the
-/// loader id, so a test cannot accidentally accept a terminal event left by an
-/// older document in the same frame.
+/// The binding's loader id rejects earlier documents in the same frame. Native
+/// load can precede protocol ingress, so tests retaining frontend node or remote
+/// object ids must also wait for the new document's projection to catch up.
 #[cfg(test)]
 pub(crate) async fn wait_until_renderer_document_load(
     ctx: &mut TestContext,
@@ -2261,7 +2261,7 @@ pub(crate) async fn wait_until_renderer_document_load(
 ) {
     let description = format!("renderer load for {frame_id}/{loader_id}");
     ctx.wait_until_scheduler_state(&description, |conn| {
-        conn.renderer_document_lifecycle_authoritative_state_for_session_owner(session_id)
+        conn.renderer_document_lifecycle_visible_state_for_session_owner(session_id)
             .is_some_and(|(binding, snapshot)| {
                 binding.frame_id == frame_id
                     && binding.loader_id == loader_id

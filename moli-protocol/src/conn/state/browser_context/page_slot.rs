@@ -77,6 +77,7 @@ impl CommittedRendererDocumentBinding {
 struct RendererDocumentLifecycleProtocolState {
     binding: Option<CommittedRendererDocumentBinding>,
     visible: Option<RendererDocumentLifecycleSnapshot>,
+    last_sequence: Option<u64>,
     load_visibility: RendererDocumentLoadVisibility,
 }
 
@@ -632,9 +633,7 @@ impl BrowserContext {
         lifecycle: DocumentLifecycle,
     ) {
         let snapshot = lifecycle.snapshot().expect("fixture lifecycle");
-        let previous = self
-            .document_lifecycle_snapshot_for_target(target_id)
-            .map(|snapshot| (snapshot.frame, snapshot.document, snapshot.epoch));
+        let previous = self.document_lifecycle_snapshot_for_target(target_id);
         let web_contents = self
             .web_contents_handle_for_target(target_id)
             .expect("registered Target must reference live WebContents");
@@ -643,6 +642,15 @@ impl BrowserContext {
             .document_handle(web_contents)
             .expect("registered Target must reference live WebContents");
         if let Some(document) = physical_document {
+            // Binding a frontend fixture cannot roll a live native journal
+            // back to the earlier Page-creation handoff.
+            if previous.is_some_and(|current| {
+                current.frame == snapshot.frame
+                    && current.document == snapshot.document
+                    && current.sequence() >= snapshot.sequence()
+            }) {
+                return;
+            }
             self.browser_context
                 .install_document_lifecycle_for_test(document, lifecycle)
                 .expect("current fixture Document");
@@ -654,7 +662,8 @@ impl BrowserContext {
                 .expect("current fixture Document")
                 .lifecycle = lifecycle;
         }
-        if previous != Some((snapshot.frame, snapshot.document, snapshot.epoch))
+        if previous.map(|snapshot| (snapshot.frame, snapshot.document, snapshot.epoch))
+            != Some((snapshot.frame, snapshot.document, snapshot.epoch))
             || snapshot.terminated.is_some()
         {
             let handle = self.web_contents_handle_for_target(target_id).unwrap();
@@ -1386,6 +1395,7 @@ impl BrowserContext {
             .renderer_document_lifecycle = RendererDocumentLifecycleProtocolState {
             binding: Some(binding),
             visible: Some(initial_snapshot),
+            last_sequence: None,
             load_visibility: RendererDocumentLoadVisibility::default(),
         };
         self.page_slot_for_target_mut(target_id)
@@ -1494,6 +1504,19 @@ impl BrowserContext {
                 );
                 continue;
             }
+            // Native progress may already be ahead of this FIFO. Deduplication
+            // belongs to the projection, including its not-yet-visible tail.
+            let protocol = &mut self
+                .page_slot_for_target_mut(target_id)
+                .expect("registered Target projection")
+                .renderer_document_lifecycle;
+            if protocol
+                .last_sequence
+                .is_some_and(|sequence| event.sequence <= sequence)
+            {
+                continue;
+            }
+            protocol.last_sequence = Some(event.sequence);
             if restarts_same_document {
                 self.page_slot_for_target_mut(target_id)
                     .expect("registered Target projection")
@@ -1574,6 +1597,16 @@ impl BrowserContext {
         accepted
     }
 
+    #[cfg(test)]
+    pub(crate) fn renderer_document_lifecycle_projected_sequence_for_target(
+        &self,
+        target_id: &str,
+    ) -> Option<u64> {
+        self.page_slot_for_target(target_id)?
+            .renderer_document_lifecycle
+            .last_sequence
+    }
+
     pub(crate) fn renderer_document_lifecycle_binding_for_target(
         &self,
         target_id: &str,
@@ -1599,34 +1632,46 @@ impl BrowserContext {
             })
     }
 
+    #[cfg(test)]
     pub(crate) fn renderer_document_lifecycle_authoritative_snapshot_for_target(
         &self,
         target_id: &str,
     ) -> Option<RendererDocumentLifecycleSnapshot> {
-        #[cfg(test)]
-        {
-            self.document_lifecycle_snapshot_for_target(target_id)
-        }
-
-        #[cfg(not(test))]
-        {
-            let document = self.document_handle_for_target(target_id)?;
-            self.browser_context
-                .document_lifecycle_snapshot(document)
-                .ok()?
-        }
+        self.document_lifecycle_snapshot_for_target(target_id)
     }
 
-    pub(crate) fn apply_renderer_document_lifecycle(
+    fn renderer_document_lifecycle_projected_snapshot_for_target(
+        &self,
+        target_id: &str,
+    ) -> Option<RendererDocumentLifecycleSnapshot> {
+        let protocol = &self
+            .page_slot_for_target(target_id)?
+            .renderer_document_lifecycle;
+        let mut snapshot = protocol.visible?;
+        // A DevTools waiter observes FIFO receipt, including output held by a
+        // visibility barrier. Native progress alone cannot release that gate.
+        for &event in &protocol.load_visibility.deferred_tail {
+            snapshot.apply_event(event);
+        }
+        Some(snapshot)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn apply_renderer_document_lifecycle_for_test(
         &mut self,
         renderer_page: RendererPageResidenceIdentity,
         event: RendererDocumentLifecycleEvent,
     ) -> Option<crate::conn::DocumentLifecycleEvent> {
-        if let Some(occurrence) = self
-            .browser_context
-            .apply_renderer_document_lifecycle(renderer_page, event)
-        {
-            return Some(occurrence);
+        if let Some(document) = self.page_targets.iter().find_map(|target| {
+            self.routes_renderer_page_for_target(target.target_id(), renderer_page)
+                .then(|| self.document_handle_for_target(target.target_id()))
+                .flatten()
+        }) {
+            return self
+                .browser_context
+                .apply_document_lifecycle_for_test(document, event)
+                .ok()?
+                .then(|| crate::conn::DocumentLifecycleEvent::new(document.id(), event));
         }
         #[cfg(test)]
         {
@@ -1669,8 +1714,7 @@ impl BrowserContext {
         if binding.loader_id != expected_loader_id {
             return None;
         }
-        let snapshot =
-            self.renderer_document_lifecycle_authoritative_snapshot_for_target(target_id)?;
+        let snapshot = self.renderer_document_lifecycle_projected_snapshot_for_target(target_id)?;
         let id = self
             .page_slot_for_target_mut(target_id)
             .expect("registered Target projection")
@@ -1714,7 +1758,7 @@ impl BrowserContext {
             );
         }
         let Some(snapshot) =
-            self.renderer_document_lifecycle_authoritative_snapshot_for_target(target_id)
+            self.renderer_document_lifecycle_projected_snapshot_for_target(target_id)
         else {
             return RendererDocumentLifecycleObserver::resolved(
                 RendererDocumentLifecycleObservation::Unavailable,
@@ -1774,7 +1818,7 @@ impl BrowserContext {
             return false;
         };
         let snapshot_reached_load = self
-            .renderer_document_lifecycle_authoritative_snapshot_for_target(target_id)
+            .renderer_document_lifecycle_projected_snapshot_for_target(target_id)
             .is_some_and(|snapshot| {
                 snapshot.document == binding.renderer_document
                     && snapshot.epoch == binding.renderer_epoch
@@ -1855,7 +1899,7 @@ impl BrowserContext {
         else {
             return false;
         };
-        self.renderer_document_lifecycle_authoritative_snapshot_for_target(target_id)
+        self.renderer_document_lifecycle_projected_snapshot_for_target(target_id)
             .is_some_and(|snapshot| {
                 snapshot.document == observation.binding.renderer_document
                     && snapshot.epoch == observation.binding.renderer_epoch

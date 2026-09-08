@@ -1,6 +1,8 @@
+#[cfg(any(test, feature = "test-support"))]
+use crate::page::{RendererDocumentLifecycleEvent, RendererDocumentLifecycleEventKind};
 use crate::{
     browser::{MainFrameSlotId, WebContentsId},
-    page::{Page, RendererDocumentLifecycleEvent, RendererDocumentLifecycleEventKind},
+    page::Page,
     runtime::NavigationEngine,
 };
 
@@ -195,6 +197,7 @@ impl WebContents {
             .is_some_and(|document| document.page.observe_renderer_page_state(snapshot))
     }
 
+    #[cfg(any(test, feature = "test-support"))]
     pub fn apply_document_lifecycle(
         &mut self,
         event: RendererDocumentLifecycleEvent,
@@ -225,6 +228,29 @@ impl WebContents {
             self.navigation.mark_initial_empty_document_exited();
         }
         Some(DocumentLifecycleEvent::new(document.id, event))
+    }
+
+    pub(in crate::browser) fn observe_native_document_lifecycle(
+        &mut self,
+        snapshot: crate::page::RendererDocumentLifecycleSnapshot,
+    ) -> bool {
+        let Some(document) = self.main_frame.current_document.as_mut() else {
+            return false;
+        };
+        let restarted = document
+            .lifecycle
+            .snapshot()
+            .is_some_and(|previous| previous.epoch != snapshot.epoch);
+        if !document.lifecycle.observe_native_snapshot(snapshot) {
+            return false;
+        }
+        if restarted || snapshot.terminated.is_some() {
+            self.javascript_dialogs.clear();
+        }
+        if restarted {
+            self.navigation.mark_initial_empty_document_exited();
+        }
+        true
     }
 
     pub fn replace_document(&mut self, next: Option<DocumentHost>) -> Option<Page> {

@@ -1009,6 +1009,7 @@ impl BrowserContextHandle {
                         lifecycle.browser_sequence,
                         crate::browser::BrowserEvent::DocumentCommitted(document),
                     );
+                    browser.observe_document_lifecycle(document);
                     Ok(BrowserCommittedInitialDocument {
                         key,
                         snapshot,
@@ -1229,6 +1230,7 @@ impl BrowserContextHandle {
                 commit.lifecycle.browser_sequence,
                 crate::browser::BrowserEvent::DocumentCommitted(document),
             );
+            browser.observe_document_lifecycle(document);
             let (completion_tx, completion) = oneshot::channel();
             tokio::task::spawn_local(async move {
                 commit.retirement.close().await;

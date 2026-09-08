@@ -111,6 +111,215 @@ async fn navigate(
 }
 
 #[tokio::test]
+async fn native_document_lifecycle_advances_without_a_devtools_output_consumer() {
+    let service = BrowserService::start().unwrap();
+    let browser = service.handle();
+    let (context, contents) = context_with_contents(&service);
+    let (_, mut events) = browser.subscribe().unwrap();
+    let document = navigate(
+        &context,
+        contents,
+        "data:text/html,<title>native lifecycle</title>",
+    )
+    .await;
+    tokio::time::timeout(std::time::Duration::from_secs(5), async {
+        loop {
+            if let crate::browser::BrowserEvent::DocumentLifecycleChanged(snapshot) =
+                events.recv().await.unwrap().event
+                && snapshot.document == document
+                && snapshot.lifecycle.load.is_some()
+            {
+                assert_eq!(
+                    context.document_lifecycle_snapshot(document).unwrap(),
+                    Some(snapshot.lifecycle)
+                );
+                assert!(
+                    browser
+                        .subscribe()
+                        .unwrap()
+                        .0
+                        .document_lifecycles
+                        .contains(&snapshot)
+                );
+                break;
+            }
+        }
+    })
+    .await
+    .expect("native load progress must be committed and published without DevTools ingress");
+    let before = context
+        .document_lifecycle_snapshot(document)
+        .unwrap()
+        .unwrap();
+    context
+        .evaluate_document_expression_for_test(document, "document.open(); 'opened'", false)
+        .await
+        .unwrap();
+    let after = context
+        .document_lifecycle_snapshot(document)
+        .unwrap()
+        .unwrap();
+    assert_eq!(after.document, before.document);
+    assert!(after.epoch.0 > before.epoch.0);
+    assert!(after.started.sequence > before.sequence());
+    assert_eq!(context.document_handle(contents).unwrap(), Some(document));
+    service.shutdown();
+}
+
+fn next_document_commit(
+    events: &mut crate::browser::BrowserEventReceiver,
+    document: DocumentHandle,
+) -> crate::browser::BrowserEventRecord {
+    loop {
+        let event = events
+            .try_recv()
+            .expect("commit publishes before returning");
+        if event.event == crate::browser::BrowserEvent::DocumentCommitted(document) {
+            return event;
+        }
+        assert!(matches!(
+            event.event,
+            crate::browser::BrowserEvent::DocumentLifecycleChanged(_)
+        ));
+    }
+}
+
+#[tokio::test]
+async fn native_document_stop_retires_dialogs_and_late_observers_without_devtools() {
+    use crate::page::{
+        RendererJavaScriptDialogCompletion, RendererJavaScriptDialogId,
+        RendererJavaScriptDialogSource, RendererPendingJavaScriptDialog,
+    };
+    use std::{
+        future::Future,
+        task::{Context, Waker},
+    };
+    let service = BrowserService::start().unwrap();
+    let browser = service.handle();
+    let (context, contents) = context_with_contents(&service);
+    let document = navigate(&context, contents, "data:text/html,native-stop").await;
+    let renderer = context.document_renderer_residence(document).unwrap();
+    let source = context
+        .document_lifecycle_snapshot(document)
+        .unwrap()
+        .unwrap();
+    let dialog = |id, completion| {
+        RendererPendingJavaScriptDialog::new(
+            RendererJavaScriptDialogId::new(id),
+            source.into(),
+            RendererJavaScriptDialogSource::RootFrame,
+            "data:text/html,native-stop".into(),
+            "alert".into(),
+            "native dialog".into(),
+            String::new(),
+            Some(completion),
+        )
+    };
+    let original_completion = RendererJavaScriptDialogCompletion::pending();
+    assert!(
+        context
+            .install_document_javascript_dialog(document, dialog(1, original_completion.clone()))
+            .unwrap()
+            .is_some()
+    );
+    let (_, mut events) = browser.subscribe().unwrap();
+    let stopped = context
+        .start_document_lifecycle_stop(document)
+        .unwrap()
+        .wait()
+        .await;
+    context.finish_document_lifecycle_stop(stopped).unwrap();
+    let terminal = tokio::time::timeout(std::time::Duration::from_secs(5), async {
+        loop {
+            if let crate::browser::BrowserEvent::DocumentLifecycleChanged(snapshot) =
+                events.recv().await.unwrap().event
+                && snapshot.document == document
+                && snapshot.lifecycle.terminated.is_some()
+            {
+                break snapshot;
+            }
+        }
+    })
+    .await
+    .unwrap();
+    assert!(
+        !context
+            .web_contents_has_pending_javascript_dialog(contents)
+            .unwrap()
+    );
+    assert!(!original_completion.finish(true, "late".into()));
+    assert!(!original_completion.wait().accepted);
+    let late_completion = RendererJavaScriptDialogCompletion::pending();
+    assert!(
+        context
+            .install_document_javascript_dialog(document, dialog(2, late_completion.clone()))
+            .unwrap()
+            .is_none()
+    );
+    assert!(!late_completion.finish(true, "resurrection".into()));
+    assert!(!late_completion.wait().accepted);
+    // Force actual bounded-stream lag. Recovery must retain the same physical
+    // Document's terminal state, even with no protocol projection at all.
+    for _ in 0..130 {
+        let transient = browser
+            .create_context(
+                BrowserContextStoragePartitionHandles::memory(),
+                StoragePartitionKind::Ephemeral,
+                None,
+                None,
+            )
+            .unwrap();
+        transient.remove().unwrap();
+    }
+    assert!(matches!(
+        events.try_recv(),
+        Err(tokio::sync::broadcast::error::TryRecvError::Lagged(_))
+    ));
+    assert!(
+        browser
+            .subscribe()
+            .unwrap()
+            .0
+            .document_lifecycles
+            .contains(&terminal)
+    );
+
+    let unproduced = crate::page::RendererDocumentLifecycleEvent {
+        frame: source.frame,
+        document: source.document,
+        epoch: source.epoch,
+        sequence: u64::MAX,
+        timestamp_micros: 0,
+        kind: crate::page::RendererDocumentLifecycleEventKind::Milestone(
+            crate::page::RendererDocumentLifecycleMilestone::Load,
+        ),
+    };
+    let observation = browser.wait_for_renderer_document_lifecycle(renderer, unproduced);
+    tokio::pin!(observation);
+    assert!(
+        observation
+            .as_mut()
+            .poll(&mut Context::from_waker(Waker::noop()))
+            .is_pending()
+    );
+    browser
+        .close_web_contents(contents)
+        .unwrap()
+        .close_async()
+        .await;
+    assert!(observation.await.is_none());
+    assert!(
+        browser
+            .subscribe()
+            .unwrap()
+            .0
+            .document_lifecycles
+            .is_empty()
+    );
+    service.shutdown();
+}
+
+#[tokio::test]
 async fn native_document_commits_publish_exact_occurrences_and_recover_current_snapshot() {
     let service = BrowserService::start().unwrap();
     let browser = service.handle();
@@ -118,7 +327,7 @@ async fn native_document_commits_publish_exact_occurrences_and_recover_current_s
     let (before, mut events) = browser.subscribe().unwrap();
     assert!(before.documents.is_empty());
     let first = navigate(&context, contents, "data:text/html,<title>first</title>").await;
-    let first_event = events.try_recv().unwrap();
+    let first_event = next_document_commit(&mut events, first);
     assert_eq!(
         first_event.event,
         crate::browser::BrowserEvent::DocumentCommitted(first)
@@ -137,7 +346,7 @@ async fn native_document_commits_publish_exact_occurrences_and_recover_current_s
         "data:text/html,<title>first</title>"
     );
     let second = navigate(&context, contents, "data:text/html,<title>second</title>").await;
-    let second_event = events.try_recv().unwrap();
+    let second_event = next_document_commit(&mut events, second);
     assert_eq!(
         second_event.event,
         crate::browser::BrowserEvent::DocumentCommitted(second)
@@ -147,15 +356,17 @@ async fn native_document_commits_publish_exact_occurrences_and_recover_current_s
     assert_eq!(browser.document_for_renderer(first_renderer), None);
     let (current, _) = browser.subscribe().unwrap();
     assert_eq!(current.documents, [second]);
-    assert_eq!(current.sequence, second_event.sequence);
+    assert!(current.sequence >= second_event.sequence);
     assert_eq!(
         context.document_commit_snapshot(second).unwrap().frame_slot,
         snapshot.frame_slot
     );
-    assert_eq!(
-        events.try_recv(),
-        Err(tokio::sync::broadcast::error::TryRecvError::Empty)
-    );
+    while let Ok(event) = events.try_recv() {
+        assert!(matches!(
+            event.event,
+            crate::browser::BrowserEvent::DocumentLifecycleChanged(_)
+        ));
+    }
     let pending = start_load(&context, contents);
     assert_eq!(
         browser.document_for_renderer(pending.renderer_page()),
@@ -197,12 +408,10 @@ async fn retired_context_rejects_late_renderer_lifecycle_without_affecting_peer(
     let (peer, peer_contents) = context_with_contents(&service);
     let peer_document = navigate(&peer, peer_contents, "data:text/html,surviving").await;
     assert!(
-        context
-            .apply_renderer_document_lifecycle(renderer, event)
-            .is_none()
-    );
-    assert!(
-        peer.apply_renderer_document_lifecycle(renderer, event)
+        service
+            .handle()
+            .wait_for_renderer_document_lifecycle(renderer, event)
+            .await
             .is_none()
     );
     assert_eq!(
@@ -215,8 +424,10 @@ async fn retired_context_rejects_late_renderer_lifecycle_without_affecting_peer(
     );
     service.shutdown();
     assert!(
-        context
-            .apply_renderer_document_lifecycle(renderer, event)
+        service
+            .handle()
+            .wait_for_renderer_document_lifecycle(renderer, event)
+            .await
             .is_none()
     );
 }

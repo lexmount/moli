@@ -265,10 +265,11 @@ pub(crate) use self::document_lifecycle::{
 pub use self::document_lifecycle::{
     RendererDocumentLifecycleEvent, RendererDocumentLifecycleEventKind,
     RendererDocumentLifecycleIdentity, RendererDocumentLifecycleMilestone,
-    RendererDocumentLifecycleSnapshot, RendererDocumentLifecycleWaitOutcome,
-    RendererDocumentLifecycleWaiter, RendererDocumentTerminationReason, RendererDocumentToken,
-    RendererFrameToken, RendererLifecycleEpoch, RendererLifecycleEventStamp,
-    RendererLifecycleStartReason, RendererLifecycleTerminationStamp, RendererPageCreationArtifacts,
+    RendererDocumentLifecycleObservation, RendererDocumentLifecycleSnapshot,
+    RendererDocumentLifecycleWaitOutcome, RendererDocumentLifecycleWaiter,
+    RendererDocumentTerminationReason, RendererDocumentToken, RendererFrameToken,
+    RendererLifecycleEpoch, RendererLifecycleEventStamp, RendererLifecycleStartReason,
+    RendererLifecycleTerminationStamp, RendererPageCreationArtifacts,
 };
 pub(crate) use self::javascript_dialog::{
     RendererJavaScriptDialogBroker, RendererJavaScriptDialogRuntime, RendererJavaScriptDialogWatch,

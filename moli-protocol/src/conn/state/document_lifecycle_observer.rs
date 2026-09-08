@@ -1,10 +1,10 @@
 use tokio::sync::watch;
 
-/// The authoritative result of observing one exact renderer Document milestone.
+/// Protocol receipt of one exact renderer Document milestone.
 ///
 /// `Pending` is transport state only. Every other variant is terminal and is
-/// published by the Page-slot lifecycle authority that owns the exact
-/// Document/epoch binding. A generic renderer wake never changes this value.
+/// published by the Page-slot projection with the exact Document/epoch
+/// binding. Native progress and generic wakes alone never change this value.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum RendererDocumentLifecycleObservation {
     Pending,
@@ -48,7 +48,7 @@ impl RendererDocumentLifecycleObservationPublisher {
 /// A move-only wait token for one exact renderer Document milestone.
 ///
 /// The token is deliberately independent of renderer wake routing. Its state
-/// changes only when the Page-slot lifecycle authority observes the requested
+/// changes only when the Page-slot projection consumes the requested
 /// milestone, termination, replacement, or loss of the owning Page slot.
 #[derive(Debug)]
 pub(crate) struct RendererDocumentLifecycleObserver {

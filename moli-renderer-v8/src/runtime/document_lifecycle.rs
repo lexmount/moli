@@ -147,6 +147,19 @@ pub struct RendererDocumentLifecycleSnapshot {
 }
 
 impl RendererDocumentLifecycleSnapshot {
+    pub fn sequence(&self) -> u64 {
+        [
+            Some(self.started.sequence),
+            self.dom_content_loaded.map(|stamp| stamp.sequence),
+            self.load.map(|stamp| stamp.sequence),
+            self.terminated.map(|stamp| stamp.sequence),
+        ]
+        .into_iter()
+        .flatten()
+        .max()
+        .expect("a lifecycle has a start")
+    }
+
     /// Applies an event already validated by its lifecycle owner.
     ///
     /// This also supports projections that omit a cancelled event tail. Exact
@@ -183,6 +196,28 @@ impl RendererDocumentLifecycleSnapshot {
                 });
             }
         }
+    }
+}
+
+/// Read-only native progress for the exact renderer lifecycle journal.
+///
+/// The snapshot and change subscription are one watch channel: a Browser
+/// subscribing after Page construction cannot lose the creation/commit gap.
+/// Progress coalesces without retaining an unbounded event backlog. Protocol
+/// output keeps its independent concrete FIFO for frontend visibility.
+#[derive(Clone, Debug)]
+pub struct RendererDocumentLifecycleObservation {
+    receiver: tokio::sync::watch::Receiver<RendererDocumentLifecycleSnapshot>,
+}
+
+impl RendererDocumentLifecycleObservation {
+    pub fn snapshot(&mut self) -> RendererDocumentLifecycleSnapshot {
+        *self.receiver.borrow_and_update()
+    }
+
+    pub async fn changed(&mut self) -> Option<RendererDocumentLifecycleSnapshot> {
+        self.receiver.changed().await.ok()?;
+        Some(self.snapshot())
     }
 }
 
@@ -334,6 +369,7 @@ pub(crate) enum RendererDocumentLifecycleTransition {
 pub(crate) struct RendererDocumentLifecycleJournal {
     frame: RendererFrameToken,
     current_snapshot: RendererDocumentLifecycleSnapshot,
+    native_progress: tokio::sync::watch::Sender<RendererDocumentLifecycleSnapshot>,
     next_document_id: RendererLifecycleDocumentId,
     next_sequence: u64,
     initial_handoff_complete: bool,
@@ -381,6 +417,12 @@ impl RendererDocumentLifecycleJournalHandle {
 
     pub(crate) fn current_snapshot(&self) -> RendererDocumentLifecycleSnapshot {
         self.0.borrow().current_snapshot
+    }
+
+    pub(crate) fn observe(&self) -> RendererDocumentLifecycleObservation {
+        RendererDocumentLifecycleObservation {
+            receiver: self.0.borrow().native_progress.subscribe(),
+        }
     }
 
     pub(crate) fn pending_document_replacement_drive_admission(
@@ -597,17 +639,19 @@ impl RendererDocumentLifecycleJournal {
             },
         };
         trace_lifecycle_transition(&event);
+        let snapshot = RendererDocumentLifecycleSnapshot {
+            frame,
+            document,
+            epoch,
+            started,
+            dom_content_loaded: None,
+            load: None,
+            terminated: None,
+        };
         Self {
             frame,
-            current_snapshot: RendererDocumentLifecycleSnapshot {
-                frame,
-                document,
-                epoch,
-                started,
-                dom_content_loaded: None,
-                load: None,
-                terminated: None,
-            },
+            current_snapshot: snapshot,
+            native_progress: tokio::sync::watch::channel(snapshot).0,
             next_document_id: RendererLifecycleDocumentId::INITIAL.successor(),
             next_sequence: 2,
             initial_handoff_complete: false,
@@ -1119,6 +1163,7 @@ impl RendererDocumentLifecycleJournal {
 
     fn push_event(&mut self, event: RendererDocumentLifecycleEvent) {
         trace_lifecycle_transition(&event);
+        self.native_progress.send_replace(self.current_snapshot);
         if self.initial_handoff_complete {
             if let Some(recorder) = &self.command_turn_output {
                 recorder.push_document_lifecycle_event(event);
@@ -1161,6 +1206,48 @@ mod tests {
 
     fn journal() -> RendererDocumentLifecycleJournal {
         RendererDocumentLifecycleJournal::new_initial_at(PageId::new_for_testing(7), 10)
+    }
+
+    #[tokio::test]
+    async fn native_observation_covers_late_subscription_coalescing_and_producer_exit() {
+        let mut journal = journal();
+        let creation = journal.take_page_creation_artifacts();
+        finish(
+            &mut journal,
+            RendererDocumentLifecycleMilestone::DomContentLoaded,
+            20,
+        );
+        // Subscribe after construction, with no output journal/DevTools route.
+        let mut observation = RendererDocumentLifecycleObservation {
+            receiver: journal.native_progress.subscribe(),
+        };
+        let subscribed = observation.snapshot();
+        assert!(subscribed.sequence() > creation.lifecycle_snapshot.sequence());
+        assert!(subscribed.dom_content_loaded.is_some());
+        for timestamp in 30..230 {
+            assert!(
+                journal
+                    .restart_current_document_at(
+                        RendererLifecycleStartReason::ExplicitDocumentOpen,
+                        RendererDocumentTerminationReason::RestartedByDocumentOpen,
+                        timestamp,
+                    )
+                    .is_ok()
+            );
+        }
+        finish(
+            &mut journal,
+            RendererDocumentLifecycleMilestone::DomContentLoaded,
+            240,
+        );
+        finish(&mut journal, RendererDocumentLifecycleMilestone::Load, 250);
+        let latest = journal.current_snapshot;
+        assert_eq!(latest.document, subscribed.document);
+        assert_eq!(latest.epoch.0, subscribed.epoch.0 + 200);
+        assert!(latest.load.is_some());
+        drop(journal);
+        assert_eq!(observation.changed().await, Some(latest));
+        assert_eq!(observation.changed().await, None);
     }
 
     #[test]

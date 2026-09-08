@@ -15,6 +15,7 @@ pub enum BrowserEvent {
         previous: Option<WebContentsHandle>,
     },
     DocumentCommitted(DocumentHandle),
+    DocumentLifecycleChanged(DocumentLifecycleSnapshot),
     DownloadCreated(super::DownloadRecordSnapshot),
     DownloadUpdated(std::sync::Arc<super::DownloadEvent>),
     WebContentsClosed {
@@ -45,7 +46,14 @@ pub struct BrowserSnapshot {
     pub web_contents: Vec<WebContentsHandle>,
     pub selected_web_contents: Vec<WebContentsHandle>,
     pub documents: Vec<DocumentHandle>,
+    pub document_lifecycles: Vec<DocumentLifecycleSnapshot>,
     pub downloads: Vec<super::DownloadRecordSnapshot>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct DocumentLifecycleSnapshot {
+    pub document: DocumentHandle,
+    pub lifecycle: crate::page::RendererDocumentLifecycleSnapshot,
 }
 
 /// Current physical Page identity and URL read in one Browser owner turn.
@@ -103,6 +111,7 @@ impl BrowserEventStream {
         web_contents: impl Iterator<Item = WebContentsHandle>,
         selected_web_contents: impl Iterator<Item = WebContentsHandle>,
         documents: impl Iterator<Item = DocumentHandle>,
+        document_lifecycles: impl Iterator<Item = DocumentLifecycleSnapshot>,
         downloads: impl Iterator<Item = super::DownloadRecordSnapshot>,
     ) -> (BrowserSnapshot, BrowserEventReceiver) {
         (
@@ -112,6 +121,7 @@ impl BrowserEventStream {
                 web_contents: web_contents.collect(),
                 selected_web_contents: selected_web_contents.collect(),
                 documents: documents.collect(),
+                document_lifecycles: document_lifecycles.collect(),
                 downloads: downloads.collect(),
             },
             self.sender.subscribe(),
@@ -311,6 +321,7 @@ mod tests {
             std::iter::empty(),
             std::iter::empty(),
             std::iter::empty(),
+            std::iter::empty(),
         );
         for _ in 0..257 {
             stream.publish(BrowserEvent::ContextCreated(context));
@@ -318,6 +329,7 @@ mod tests {
         assert_eq!(slow.try_recv(), Err(TryRecvError::Lagged(1)));
         let (snapshot, mut recovered) = stream.subscribe(
             std::iter::once(context),
+            std::iter::empty(),
             std::iter::empty(),
             std::iter::empty(),
             std::iter::empty(),

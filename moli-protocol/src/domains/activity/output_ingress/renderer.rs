@@ -121,20 +121,8 @@ async fn ingest_renderer_output_publication(
         // The stream was bound to exactly one owner when it opened. If that
         // owner has since retired, the cursor is still admitted so response
         // fences cannot hang, but its historical records must not be projected
-        // into a replacement target or browser context. Native lifecycle does
-        // not depend on an AgentHost route: exact Browser residence admits it.
-        if let Some(renderer_page) =
-            crate::conn::RendererPageResidenceIdentity::from_residence(stream.residence())
-        {
-            for record in publication.into_records() {
-                if let RendererOutputItem::Observation(
-                    moli_core::RendererProtocolObservation::DocumentLifecycle(event),
-                ) = record.into_parts().1
-                {
-                    conn.apply_renderer_document_lifecycle(renderer_page, event);
-                }
-            }
-        }
+        // into a replacement target or browser context. Native lifecycle
+        // progresses independently in the Browser owner.
         return;
     };
     let records = publication.into_records();
@@ -185,20 +173,6 @@ async fn project_renderer_output_records_for_owner(
 ) {
     for record in records {
         let (renderer_cause, mut item) = record.into_parts();
-        // Admit each native event in FIFO order before any frontend route or
-        // response barrier can filter/delay its projection. Do not pre-apply a
-        // whole batch ahead of earlier owner actions (for example dialogs).
-        let lifecycle = if let RendererOutputItem::Observation(
-            moli_core::RendererProtocolObservation::DocumentLifecycle(event),
-        ) = &item
-        {
-            crate::conn::RendererPageResidenceIdentity::from_residence(cursor.stream().residence())
-                .and_then(|renderer_page| {
-                    conn.apply_renderer_document_lifecycle(renderer_page, *event)
-                })
-        } else {
-            None
-        };
         if projection == RendererPublicationProjection::InspectionOnly {
             match &mut item {
                 RendererOutputItem::Observation(
@@ -255,40 +229,52 @@ async fn project_renderer_output_records_for_owner(
                     .await;
             }
             RendererOutputItem::Observation(observation) => {
-                let outputs = if matches!(
-                    &observation,
-                    moli_core::RendererProtocolObservation::DocumentLifecycle(_)
-                ) {
-                    let Some(lifecycle) = lifecycle else {
-                        continue;
-                    };
-                    PreparedProtocolOutputs::from_browser_document_lifecycle_event(lifecycle)
-                } else if let moli_core::RendererProtocolObservation::Network {
-                    source_document,
-                    item,
-                } = &observation
-                {
-                    let Some(outputs) = PreparedProtocolOutputs::from_renderer_network_observation(
-                        conn,
-                        owner,
-                        crate::conn::RendererPageResidenceIdentity::from_residence(
-                            cursor.stream().residence(),
-                        ),
-                        *source_document,
+                let outputs =
+                    if let moli_core::RendererProtocolObservation::DocumentLifecycle(event) =
+                        &observation
+                    {
+                        let Some(renderer) =
+                            crate::conn::RendererPageResidenceIdentity::from_residence(
+                                cursor.stream().residence(),
+                            )
+                        else {
+                            continue;
+                        };
+                        let Some(lifecycle) = conn
+                            .wait_for_renderer_document_lifecycle(renderer, *event)
+                            .await
+                        else {
+                            continue;
+                        };
+                        PreparedProtocolOutputs::from_browser_document_lifecycle_event(lifecycle)
+                    } else if let moli_core::RendererProtocolObservation::Network {
+                        source_document,
                         item,
-                    ) else {
-                        continue;
+                    } = &observation
+                    {
+                        let Some(outputs) =
+                            PreparedProtocolOutputs::from_renderer_network_observation(
+                                conn,
+                                owner,
+                                crate::conn::RendererPageResidenceIdentity::from_residence(
+                                    cursor.stream().residence(),
+                                ),
+                                *source_document,
+                                item,
+                            )
+                        else {
+                            continue;
+                        };
+                        outputs
+                    } else {
+                        PreparedProtocolOutputs::from_renderer_observation(
+                            conn,
+                            owner,
+                            cursor.stream().residence(),
+                            cursor.stream().renderer_agent(),
+                            &observation,
+                        )
                     };
-                    outputs
-                } else {
-                    PreparedProtocolOutputs::from_renderer_observation(
-                        conn,
-                        owner,
-                        cursor.stream().residence(),
-                        cursor.stream().renderer_agent(),
-                        &observation,
-                    )
-                };
                 order
                     .route_publication_outputs(
                         conn,
@@ -401,6 +387,32 @@ mod tests {
                 ),
                 ..started
             };
+            // Native progress is committed independently, before this
+            // frontend visibility exercise. Ingress has no lifecycle writer.
+            let context = conn.browser_context_by_id_mut(CONTEXT).unwrap();
+            assert!(
+                context
+                    .apply_renderer_document_lifecycle_for_test(renderer_page, dcl)
+                    .is_some()
+            );
+            assert!(
+                context
+                    .apply_renderer_document_lifecycle_for_test(renderer_page, load)
+                    .is_some()
+            );
+            let binding = context
+                .renderer_document_lifecycle_binding_for_target(TARGET)
+                .unwrap()
+                .clone();
+            let observer = context.register_exact_renderer_document_lifecycle_observer_for_target(
+                TARGET,
+                &binding,
+                RendererDocumentLifecycleMilestone::Load,
+            );
+            assert_eq!(
+                observer.observation(),
+                crate::conn::RendererDocumentLifecycleObservation::Pending
+            );
             let records = [dcl, load, dcl]
                 .into_iter()
                 .map(|event| {
@@ -450,6 +462,21 @@ mod tests {
                 .unwrap();
             assert_eq!(native.dom_content_loaded.unwrap().sequence, dcl.sequence);
             assert_eq!(native.load.unwrap().sequence, load.sequence);
+            let expected = if projection == Some(RendererPublicationProjection::CurrentOwner) {
+                crate::conn::RendererDocumentLifecycleObservation::Reached
+            } else {
+                crate::conn::RendererDocumentLifecycleObservation::Pending
+            };
+            assert_eq!(observer.observation(), expected);
+            let late_observer = conn
+                .browser_context_by_id_mut(CONTEXT)
+                .unwrap()
+                .register_exact_renderer_document_lifecycle_observer_for_target(
+                    TARGET,
+                    &binding,
+                    RendererDocumentLifecycleMilestone::Load,
+                );
+            assert_eq!(late_observer.observation(), expected);
             let deferred = conn
                 .release_renderer_document_load_visibility_barrier_for_owner(
                     &owner,

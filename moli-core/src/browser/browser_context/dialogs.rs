@@ -33,15 +33,34 @@ impl BrowserContext {
         &mut self,
         document: DocumentHandle,
         dialog: RendererPendingJavaScriptDialog,
-    ) -> Result<JavaScriptDialogKey, String> {
+    ) -> Result<Option<JavaScriptDialogKey>, String> {
         if let Err(error) = self.ensure_document_current(document) {
             let _ = dialog.finish(false, String::new());
             return Err(error);
         }
-        Ok(self
-            .web_contents_mut(document.web_contents())?
-            .javascript_dialogs
-            .install(document.id(), dialog))
+        let source = dialog.source_document();
+        if self
+            .document(document)?
+            .lifecycle
+            .snapshot()
+            .is_some_and(|snapshot| {
+                snapshot.frame == source.frame
+                    && snapshot.document == source.document
+                    && (snapshot.epoch.0 > source.epoch.0
+                        || (snapshot.epoch == source.epoch && snapshot.terminated.is_some()))
+            })
+        {
+            // Native progress can precede the concrete frontend FIFO. Preserve
+            // the historical opening output, but never resurrect its modal
+            // capability after document.open/termination retired that epoch.
+            let _ = dialog.finish(false, String::new());
+            return Ok(None);
+        }
+        Ok(Some(
+            self.web_contents_mut(document.web_contents())?
+                .javascript_dialogs
+                .install(document.id(), dialog),
+        ))
     }
 
     pub fn document_javascript_dialog_snapshot(
