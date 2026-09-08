@@ -431,7 +431,7 @@ async fn runtime_child_frame_fetch_subresource_interception_uses_child_frame_att
     async fn top() -> impl IntoResponse {
         (
             [(CONTENT_TYPE.as_str(), "text/html")],
-            "<!doctype html><html><body><iframe src=\"/child\"></iframe></body></html>",
+            "<!doctype html><html><body><iframe></iframe></body></html>",
         )
     }
 
@@ -491,6 +491,37 @@ async fn runtime_child_frame_fetch_subresource_interception_uses_child_frame_att
     .await;
     ctx.expect_result(36_401, json!({}), Some("SID-1"));
 
+    enable_runtime_async(&mut ctx, "SID-1", 36_403).await;
+    // Observe Page events before starting the navigation under test. Runtime
+    // setup discards pre-existing events, so an eager iframe src can race it.
+    // Also finish this setup navigation before enabling Fetch interception:
+    // only the child's subsequent subresource request should be paused.
+    ctx.process_async(json!({
+        "id": 36_499,
+        "method": "Runtime.evaluate",
+        "sessionId": "SID-1",
+        "params": {
+            "expression": format!(
+                "document.querySelector('iframe').src = {}",
+                serde_json::to_string(&child_url).unwrap()
+            )
+        }
+    }))
+    .await;
+    let navigation = take_response_by_id(&mut ctx, 36_499);
+    assert_eq!(navigation["result"]["result"]["value"], json!(child_url));
+    wait_until_scheduler_message(
+        &mut ctx,
+        "child frame navigated before child fetch",
+        |message| {
+            message["method"] == json!("Page.frameNavigated")
+                && message["sessionId"] == json!("SID-1")
+                && message["params"]["frame"]["id"] == json!(child_frame_id)
+                && message["params"]["frame"]["url"] == json!(child_url)
+        },
+    )
+    .await;
+
     ctx.process_async(json!({
         "id": 36_402,
         "method": "Fetch.enable",
@@ -498,17 +529,6 @@ async fn runtime_child_frame_fetch_subresource_interception_uses_child_frame_att
     }))
     .await;
     ctx.expect_result(36_402, json!({}), Some("SID-1"));
-    enable_runtime_async(&mut ctx, "SID-1", 36_403).await;
-    wait_until_message(
-        &mut ctx,
-        "SID-1",
-        "child frame navigated before child fetch",
-        |message| {
-            message["method"] == json!("Page.frameNavigated")
-                && message["params"]["frame"]["id"] == json!(child_frame_id)
-        },
-    )
-    .await;
 
     ctx.process_async(json!({
         "id": 36_404,
