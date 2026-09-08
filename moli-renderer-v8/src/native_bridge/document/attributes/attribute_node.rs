@@ -199,20 +199,14 @@ pub(in crate::native_bridge) fn detached_set_attribute_node_method_callback<'a>(
     mut rv: v8::ReturnValue<'_, v8::Value>,
 ) {
     if let Some((runtime_ptr, _)) = detached_native_element_runtime_and_handle(scope, args.this()) {
-        let mut handled = false;
         custom_elements::with_custom_element_reaction_scope(scope, runtime_ptr, |scope| {
             if let Some(value) = detached_native_set_attribute_node(scope, args.this(), args.get(0))
             {
                 rv.set(value);
-                handled = true;
             }
         });
-        if handled {
-            return;
-        }
-    }
-    if let Some(value) = detached_native_set_attribute_node(scope, args.this(), args.get(0)) {
-        rv.set(value);
+        // A native receiver was handled even when conversion threw. Retrying
+        // would invoke the default policy twice and can swallow its exception.
         return;
     }
     match detached_method_forward(scope, args, "__setAttributeNodeForLiveElement") {
