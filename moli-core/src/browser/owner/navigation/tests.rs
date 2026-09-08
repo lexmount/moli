@@ -98,16 +98,78 @@ async fn navigate(
         .await
         .unwrap();
     let committed = context.commit_document_navigation(built.page).unwrap();
-    assert_eq!(committed.web_contents, contents.id());
-    assert_eq!(committed.navigation, navigation);
+    assert_eq!(committed.snapshot.document.web_contents(), contents);
+    assert_eq!(committed.snapshot.metadata.navigation, Some(navigation));
     committed
         .post_response_continuation
         .expect("Browser commit must release the native DocumentCommit boundary without DevTools")
         .release();
     committed.retirement.close().await;
     // Dropping the unused inspection endpoint must not retire the Document.
-    drop(committed.inspection_endpoint);
+    drop(committed.snapshot.inspection_endpoint);
     context.document_handle(contents).unwrap().unwrap()
+}
+
+#[tokio::test]
+async fn native_document_commits_publish_exact_occurrences_and_recover_current_snapshot() {
+    let service = BrowserService::start().unwrap();
+    let browser = service.handle();
+    let (context, contents) = context_with_contents(&service);
+    let (before, mut events) = browser.subscribe().unwrap();
+    assert!(before.documents.is_empty());
+    let first = navigate(&context, contents, "data:text/html,<title>first</title>").await;
+    let first_event = events.try_recv().unwrap();
+    assert_eq!(
+        first_event.event,
+        crate::browser::BrowserEvent::DocumentCommitted(first)
+    );
+    let snapshot = browser.document_commit_snapshot(first).unwrap();
+    let first_renderer = context.document_renderer_residence(first).unwrap();
+    assert_eq!(browser.document_for_renderer(first_renderer), Some(first));
+    assert_eq!(snapshot.metadata.lifecycle.document, first.id());
+    assert_eq!(
+        snapshot.metadata.lifecycle.browser_sequence,
+        first_event.sequence
+    );
+    assert!(first_event.sequence > before.sequence);
+    assert_eq!(
+        snapshot.metadata.info.as_ref().unwrap().url.as_str(),
+        "data:text/html,<title>first</title>"
+    );
+    let second = navigate(&context, contents, "data:text/html,<title>second</title>").await;
+    let second_event = events.try_recv().unwrap();
+    assert_eq!(
+        second_event.event,
+        crate::browser::BrowserEvent::DocumentCommitted(second)
+    );
+    assert!(second_event.sequence > first_event.sequence);
+    assert!(browser.document_commit_snapshot(first).is_err());
+    assert_eq!(browser.document_for_renderer(first_renderer), None);
+    let (current, _) = browser.subscribe().unwrap();
+    assert_eq!(current.documents, [second]);
+    assert_eq!(current.sequence, second_event.sequence);
+    assert_eq!(
+        context.document_commit_snapshot(second).unwrap().frame_slot,
+        snapshot.frame_slot
+    );
+    assert_eq!(
+        events.try_recv(),
+        Err(tokio::sync::broadcast::error::TryRecvError::Empty)
+    );
+    let pending = start_load(&context, contents);
+    assert_eq!(
+        browser.document_for_renderer(pending.renderer_page()),
+        Some(DocumentHandle::new(contents, pending.document_id()))
+    );
+    drop(pending);
+    browser
+        .close_web_contents(contents)
+        .unwrap()
+        .close_async()
+        .await;
+    assert!(browser.document_commit_snapshot(second).is_err());
+    assert!(browser.subscribe().unwrap().0.documents.is_empty());
+    service.shutdown();
 }
 
 #[tokio::test]

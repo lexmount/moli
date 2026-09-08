@@ -95,6 +95,15 @@ impl DocumentProjectionFence {
 pub(crate) struct RendererAgentBinding {
     attachment: RendererAgentAttachment,
     endpoint: RendererInspectionEndpoint,
+    restore_task: Option<tokio::task::JoinHandle<()>>,
+}
+
+impl Drop for RendererAgentBinding {
+    fn drop(&mut self) {
+        if let Some(task) = self.restore_task.take() {
+            task.abort();
+        }
+    }
 }
 
 impl fmt::Debug for RendererAgentBinding {
@@ -377,6 +386,7 @@ impl DevToolsRendererChannel {
                     endpoint.agent_token(),
                 ),
                 endpoint,
+                restore_task: None,
             })
             .map(|previous| previous.attachment()))
     }
@@ -387,6 +397,43 @@ impl DevToolsRendererChannel {
 
     pub(crate) fn current_binding(&self) -> Option<&RendererAgentBinding> {
         self.current.as_ref()
+    }
+
+    /// Maintenance of this exact inspection attachment. Waiting for a Main
+    /// command must not occupy the protocol actor or block its IO commands.
+    pub(crate) fn restore_native_document_sessions(
+        &mut self,
+        sessions: &super::devtools_session::DevToolsSessionRegistry,
+    ) -> Result<(), String> {
+        let binding = self.current.as_mut().ok_or("NoDocumentLoaded")?;
+        let snapshots = sessions.runtime_inspector_restore_snapshots();
+        let bindings = sessions.runtime_bindings_for_renderer();
+        if snapshots.is_empty() && bindings.is_empty() {
+            return Ok(());
+        }
+        let pending = binding
+            .runtime_inspection(None)
+            .start_apply_runtime_protocol_state(
+                &snapshots,
+                &[],
+                &bindings,
+                &sessions.primary().runtime_bindings,
+            )
+            .map_err(|error| error.to_string())?;
+        let attachment = binding.attachment;
+        binding.restore_task = Some(tokio::spawn(async move {
+            // Records already enter the concrete renderer stream. There is no
+            // frontend response and no second publication or current-Target lookup.
+            if let Err(error) = PendingPageCommand::from_inspector_main_route(pending)
+                .wait()
+                .await
+                .and_then(|completed| completed.into_unit_page_command_turn())
+            {
+                tracing::warn!(%error, document = attachment.document().get(),
+                    "native Document inspection restore failed");
+            }
+        }));
+        Ok(())
     }
 
     pub(crate) fn begin_document_projection(
@@ -416,12 +463,16 @@ impl DevToolsRendererChannel {
         DevToolsRendererChannelError,
     > {
         self.ensure_open()?;
-        if self.pending_document_projection.is_some() {
-            return Err(DevToolsRendererChannelError::ProjectionPending);
+        if self
+            .current()
+            .is_some_and(|current| current.browser_sequence() >= browser_sequence)
+        {
+            return Err(DevToolsRendererChannelError::StaleProjectionFence);
         }
-        if !self.pending_document_navigations.contains(&navigation) {
-            return Err(DevToolsRendererChannelError::UnknownNavigation);
-        }
+        // Browser commits need not originate in a DevTools navigation. A newer
+        // physical occurrence replaces any older, still-unpublished fence.
+        self.held_attachment = self.current();
+        self.pending_document_navigations.insert(navigation);
         let previous = self.attach_current(document, browser_sequence, endpoint)?;
         self.pending_document_navigations
             .retain(|pending| *pending == navigation);
@@ -656,7 +707,6 @@ impl DevToolsRendererChannel {
 pub(crate) enum DevToolsRendererChannelError {
     Closed,
     DuplicateNavigation,
-    UnknownNavigation,
     ProjectionPending,
     StaleProjectionFence,
     StaleAttachment,
@@ -668,7 +718,6 @@ impl fmt::Display for DevToolsRendererChannelError {
         formatter.write_str(match self {
             Self::Closed => "renderer channel is closed",
             Self::DuplicateNavigation => "renderer channel navigation is already in flight",
-            Self::UnknownNavigation => "renderer channel navigation is not in flight",
             Self::ProjectionPending => "renderer Document projection is still pending",
             Self::StaleProjectionFence => "renderer Document projection fence is stale",
             Self::StaleAttachment => "renderer Inspector output belongs to a stale attachment",
@@ -1204,6 +1253,69 @@ mod tests {
         assert_eq!(released.len(), 2);
         assert_eq!(batch_marker(&released[0]), Some("new"));
         assert!(released[1].has_renderer_protocol_response());
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn native_commits_supersede_unpublished_fences_without_devtools_navigation_admission() {
+        let (_browser, page) = inspection_page().await;
+        let mut channel = DevToolsRendererChannel::default();
+        let first_document = DocumentId::allocate();
+        let first_sequence = BrowserSequence::allocate();
+        let (_, first_fence) = channel
+            .document_committed(
+                NavigationId::allocate(),
+                first_document,
+                first_sequence,
+                page.renderer_inspection_endpoint(),
+            )
+            .unwrap();
+        let first = channel.current().unwrap();
+        assert!(
+            channel
+                .route_current_output(
+                    first.id(),
+                    vec![batch(page.renderer_devtools_agent_token(), "superseded")]
+                )
+                .unwrap()
+                .is_empty()
+        );
+        let second_document = DocumentId::allocate();
+        let (_, second_fence) = channel
+            .document_committed(
+                NavigationId::allocate(),
+                second_document,
+                BrowserSequence::allocate(),
+                page.renderer_inspection_endpoint(),
+            )
+            .unwrap();
+        let second = channel.current().unwrap();
+        assert_eq!(
+            channel.publish_document_projection(first_fence),
+            Err(DevToolsRendererChannelError::StaleProjectionFence)
+        );
+        assert!(matches!(
+            channel.document_committed(
+                NavigationId::allocate(),
+                first_document,
+                first_sequence,
+                page.renderer_inspection_endpoint(),
+            ),
+            Err(DevToolsRendererChannelError::StaleProjectionFence)
+        ));
+        assert_eq!(channel.current(), Some(second));
+        assert!(
+            channel
+                .route_current_output(
+                    second.id(),
+                    vec![batch(page.renderer_devtools_agent_token(), "current")]
+                )
+                .unwrap()
+                .is_empty()
+        );
+        channel.publish_document_projection(second_fence).unwrap();
+        let output = channel.take_released_output();
+        assert_eq!(output.len(), 1);
+        assert_eq!(batch_marker(&output[0]), Some("current"));
     }
 
     #[tokio::test(flavor = "multi_thread")]

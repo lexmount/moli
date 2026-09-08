@@ -4,6 +4,7 @@ use crate::domains::log::{SessionOwnerLogControlResult, SessionOwnerLogEnableRes
 use serde_json::Value;
 
 mod dialog_owner;
+mod document_commit;
 mod emulation_owner;
 mod fetch_owner;
 mod lifecycle;

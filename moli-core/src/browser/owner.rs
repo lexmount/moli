@@ -313,6 +313,31 @@ impl BrowserHandle {
             .unwrap_or(false)
     }
 
+    pub fn document_commit_snapshot(
+        &self,
+        document: super::DocumentHandle,
+    ) -> Result<super::web_contents::DocumentCommitSnapshot, String> {
+        self.execute(move |browser| {
+            browser
+                .context(document.web_contents().context())?
+                .document_commit_snapshot(document)
+        })?
+    }
+
+    pub fn document_for_renderer(
+        &self,
+        renderer: super::RendererPageResidenceIdentity,
+    ) -> Option<super::DocumentHandle> {
+        self.execute(move |browser| {
+            browser
+                .contexts
+                .values()
+                .find_map(|context| context.document_for_renderer(renderer))
+        })
+        .ok()
+        .flatten()
+    }
+
     /// Subscribe and snapshot in the same owner turn, without a gap between
     /// observing existing Contexts and receiving their subsequent lifecycle.
     pub fn subscribe(
@@ -329,6 +354,14 @@ impl BrowserHandle {
                     .contexts
                     .values()
                     .filter_map(BrowserContext::selected_web_contents_handle),
+                browser.contexts.values().flat_map(|context| {
+                    context.web_contents_handles().filter_map(|contents| {
+                        context
+                            .document_handle_for_web_contents(contents)
+                            .ok()
+                            .flatten()
+                    })
+                }),
             )
         })
     }
@@ -1284,6 +1317,7 @@ impl BrowserContextHandle {
 
     forward_context_try_read! {
         fn document_handle_for_web_contents(handle: WebContentsHandle) -> Option<super::DocumentHandle>;
+        fn document_commit_snapshot(document: super::DocumentHandle) -> super::web_contents::DocumentCommitSnapshot;
         fn start_set_document_content(document: super::DocumentHandle, frame_id: String, html: String) -> super::PendingSetDocumentContent;
         fn start_top_level_same_document_navigation(document: super::DocumentHandle, url: String) -> super::PendingTopLevelSameDocumentNavigation;
         fn start_capture_document_screencast_frame(document: super::DocumentHandle, request: crate::page::RendererCaptureScreencastFrameRequest) -> super::PendingCaptureDocumentScreencastFrame;

@@ -247,7 +247,8 @@ impl TargetRuntimeSlot {
         &mut self,
         replacements: PreparedRendererCallReplacements,
     ) {
-        self.pending_renderer_call_replacements = replacements;
+        self.pending_renderer_call_replacements
+            .supersede_with(replacements);
     }
 
     pub(crate) fn document_projection_is_pending(&self) -> bool {
@@ -261,6 +262,14 @@ impl TargetRuntimeSlot {
 
     pub(crate) fn current_renderer_inspection_binding(&self) -> Option<&RendererAgentBinding> {
         self.devtools_renderer_channel.current_binding()
+    }
+
+    pub(crate) fn restore_native_document_sessions(
+        &mut self,
+        sessions: &crate::conn::state::devtools_session::DevToolsSessionRegistry,
+    ) -> Result<(), String> {
+        self.devtools_renderer_channel
+            .restore_native_document_sessions(sessions)
     }
 
     #[cfg(test)]

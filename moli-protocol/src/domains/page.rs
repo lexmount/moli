@@ -152,6 +152,9 @@ pub(crate) use navigation::{
     MaterializedNavigationCompletion, complete_materialized_navigation_into_buffer_async,
     emit_prepared_child_frame_activity, push_superseded_navigation_result,
 };
+pub(crate) use navigation_commit::{
+    fail_navigation_inspection_sessions, release_document_projection_output_async,
+};
 use prepared_navigation::{
     PagePreparedSameDocumentNavigation, PagePreparedTopLevelLocationNavigation,
 };

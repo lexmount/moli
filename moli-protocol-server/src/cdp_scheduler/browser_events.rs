@@ -53,11 +53,20 @@ impl CdpScheduler {
         event: BrowserEventInput,
     ) -> ProtocolOutputSequence {
         let mut closed = Vec::new();
+        let mut documents = Vec::new();
         let disposed = match event {
             Ok(BrowserEventRecord {
                 event: BrowserEvent::ContextCreated(_) | BrowserEvent::WebContentsCreated(_),
                 ..
             }) => return ProtocolOutputSequence::empty(),
+            Ok(BrowserEventRecord {
+                event: BrowserEvent::DocumentCommitted(document),
+                ..
+            }) => {
+                return ProtocolOutputSequence::from_background_events(
+                    self.conn.project_browser_document_commit(document).await,
+                );
+            }
             Ok(BrowserEventRecord {
                 event: BrowserEvent::ContextDisposed(context),
                 ..
@@ -84,6 +93,7 @@ impl CdpScheduler {
                 let contexts =
                     if let Some((snapshot, receiver)) = live {
                         self.browser_event_rx = Some(receiver);
+                        documents = snapshot.documents;
                         closed =
                             self.conn
                                 .projected_web_contents()
@@ -121,6 +131,11 @@ impl CdpScheduler {
                 self.conn
                     .project_closed_web_contents(handle, activated)
                     .await,
+            ));
+        }
+        for document in documents {
+            output.append(ProtocolOutputSequence::from_background_events(
+                self.conn.project_browser_document_commit(document).await,
             ));
         }
         output
