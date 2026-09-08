@@ -11,6 +11,28 @@ use moli_fetch::{
 
 const MAX_MANUAL_CORS_REDIRECTS: usize = 20;
 
+/// Script fetches need CORS authorization before following every redirect,
+/// even though their browser-generated GET requests do not require preflight.
+pub(crate) async fn fetch_cors_script_text(
+    loader: &ResourceRequestClient,
+    request: Request,
+    cancel_handle: FetchCancelHandle,
+) -> Result<Response, String> {
+    let observed = fetch_browser_subresource_raw_stream_with_manual_preflight_redirects(
+        loader,
+        request,
+        Some(cancel_handle),
+        Vec::new(),
+        None,
+    )
+    .await?;
+    observed
+        .into_response()
+        .into_lossy_materialized_text_response()
+        .await
+        .map_err(format_network_error)
+}
+
 #[cfg(test)]
 pub(crate) async fn fetch_browser_subresource_with_preflight(
     loader: ResourceRequestClient,
@@ -196,28 +218,6 @@ pub(super) async fn fetch_subresource_hop(
     }))
 }
 
-pub(crate) fn browser_request_needs_manual_preflight_redirects(
-    request: &Request,
-    preflight_request_headers: &[(String, String)],
-) -> bool {
-    matches!(
-        request.browser_request_metadata(),
-        Some(
-            BrowserRequestMetadata::Fetch
-                | BrowserRequestMetadata::EventSource
-                | BrowserRequestMetadata::JsonModule
-                | BrowserRequestMetadata::TextModule
-                | BrowserRequestMetadata::Manifest
-                | BrowserRequestMetadata::StyleModule
-                | BrowserRequestMetadata::Xhr,
-        )
-    ) && request.request_mode == RequestMode::Cors
-        && request.cookie_context.initiator_url.is_some()
-        && (request.use_cors_preflight()
-            || !is_cors_safelisted_method(&request.method)
-            || !moli_fetch::cors_unsafe_request_header_names(preflight_request_headers).is_empty())
-}
-
 struct ManualCorsRedirectState {
     request: Request,
     preflight_request_headers: Vec<(String, String)>,
@@ -271,10 +271,16 @@ impl ManualCorsRedirectState {
             &mut self.request,
             head,
             network_response_extra_info,
+            moli_fetch::RedirectSource::Network,
             web_security_disabled,
         )?;
         if transition == SubresourceResponseTransition::FollowedRedirect {
-            self.preflight_request_headers = self.request.request_headers.to_byte_strings();
+            self.preflight_request_headers.retain(|(name, _)| {
+                self.request
+                    .request_headers
+                    .iter()
+                    .any(|(remaining, _)| name.eq_ignore_ascii_case(remaining))
+            });
         }
         Ok(transition)
     }
@@ -430,7 +436,12 @@ pub(crate) fn next_redirect_url(
     final_url
         .join(&location)
         .or_else(|_| url::Url::parse(&location))
-        .map(Some)
+        .map(|mut url| {
+            if !location.contains('#') {
+                url.set_fragment(final_url.fragment());
+            }
+            Some(url)
+        })
         .map_err(|error| {
             format!("failed to resolve redirect location `{location}` from {final_url}: {error}")
         })
@@ -1111,6 +1122,7 @@ mod tests {
                     from_cache: false,
                     cache_state: Default::default(),
                     negotiated_http_version: None,
+                    preload_state: Default::default(),
                 },
                 None,
                 false,
@@ -1125,16 +1137,26 @@ mod tests {
     #[test]
     fn follow_rejects_an_invalid_final_redirect_location_without_parsing_manual_redirects() {
         let url = Url::parse("https://origin.test/source").unwrap();
-        let headers = vec![("Location".to_owned(), b"http://[".to_vec())];
+        let mut head = ResponseHead {
+            final_url: url.clone(),
+            status: 302,
+            status_text: None,
+            headers: vec![("Location".to_owned(), b"http://[".to_vec())],
+            request_cookie_report: None,
+            cookie_set_reports: Vec::new(),
+            redirected: false,
+            redirect_chain: Vec::new(),
+            from_cache: false,
+            cache_state: Default::default(),
+            preload_state: Default::default(),
+            negotiated_http_version: None,
+        };
         for mode in [RequestRedirectMode::Follow, RequestRedirectMode::Error] {
-            assert!(validate_redirect_mode_parts(&url, 302, &headers, mode).is_err());
+            assert!(validate_redirect_mode_response_head(&head, mode).is_err());
         }
-        assert!(
-            validate_redirect_mode_parts(&url, 302, &headers, RequestRedirectMode::Manual).is_ok()
-        );
-        assert!(
-            validate_redirect_mode_parts(&url, 200, &headers, RequestRedirectMode::Follow).is_ok()
-        );
+        assert!(validate_redirect_mode_response_head(&head, RequestRedirectMode::Manual).is_ok());
+        head.status = 200;
+        assert!(validate_redirect_mode_response_head(&head, RequestRedirectMode::Follow).is_ok());
     }
 
     #[test]

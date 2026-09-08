@@ -388,6 +388,7 @@ impl ControlledResourceLoad {
             from_cache: false,
             cache_state: Default::default(),
             negotiated_http_version: None,
+            preload_state: Default::default(),
         })
     }
 
@@ -689,6 +690,7 @@ impl ControlledResourceLoad {
                     &mut self.request,
                     response.head.clone(),
                     network_response_extra_info,
+                    moli_fetch::RedirectSource::Network,
                     self.load.request_client().web_security_disabled(),
                 )?
             } else {
@@ -696,6 +698,7 @@ impl ControlledResourceLoad {
                     &mut self.request,
                     response.head.clone(),
                     network_response_extra_info,
+                    moli_fetch::RedirectSource::Network,
                     self.load.request_client().web_security_disabled(),
                 )?
             };

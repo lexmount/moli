@@ -99,6 +99,7 @@ fn browser_client_rejects_http_requests_even_with_an_initiator() -> Result<()> {
     owner.handle().apply_network_policy(browser)?;
     Ok(())
 }
+mod script_cors;
 
 #[test]
 fn loader_clones_share_one_browser_resource_runtime() {
@@ -1005,10 +1006,28 @@ async fn browser_resource_text_checks_cors_on_a_shared_script_cache_hit() -> Res
         .with_credentials_mode(RequestCredentialsMode::SameOrigin)
         .with_browser_request_metadata(BrowserRequestMetadata::Script)
         .with_script_fetch_metadata(ScriptFetchRequestMetadata::default());
-    loader
-        .fetch_cacheable_script_text_stream(request.clone())
+    let response = loader
+        .fetch_text_stream(request.clone().with_request_mode(RequestMode::NoCors))
         .await?;
     server.await??;
+
+    // Populate the transport cache below the script fetch's CORS check so
+    // the browser resource fetch exercises validation on a completed hit.
+    let cache_request = loader.apply_network_policy(request.clone())?;
+    let (key, lookup) = loader.lookup_cached_script_text(&cache_request, "test");
+    let super::ScriptTextCacheLookup::Owner(subscription) = lookup else {
+        panic!("the CORS script cache entry should start empty");
+    };
+    loader.complete_cached_script_text_load(
+        &key,
+        subscription.load(),
+        &cache_request,
+        Ok(response),
+    );
+    assert!(matches!(
+        loader.lookup_cached_script_text(&cache_request, "test").1,
+        super::ScriptTextCacheLookup::CompletedHit(_)
+    ));
 
     let error = loader
         .fetch_browser_resource_text(request)

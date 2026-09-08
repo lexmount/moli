@@ -4,6 +4,7 @@ use moli_v8_util::{get_private_object, get_private_value, set_private_value, v8_
 use moli_webapi_declare::WebApiObject;
 
 pub(super) const RESPONSE_METADATA_SLOT: &str = "__moliResponseMetadata";
+const CORS_HEADERS_SLOT: &str = "__moliResponseMetadataCorsHeaders";
 const TYPE_SLOT: &str = "__moliResponseMetadataType";
 const URL_LIST_SLOT: &str = "__moliResponseMetadataUrls";
 const TIMING_SLOT: &str = "__moliResponseMetadataTiming";
@@ -12,6 +13,8 @@ const REDIRECTED_SLOT: &str = "__moliResponseMetadataRedirected";
 #[derive(WebApiObject)]
 #[webapi(plain)]
 struct ResponseMetadataDeclaration<'scope> {
+    #[webapi(slot = CORS_HEADERS_SLOT)]
+    cors_exposed_header_names: v8::Local<'scope, v8::Value>,
     #[webapi(slot = TYPE_SLOT)]
     response_type: &'static str,
     #[webapi(slot = URL_LIST_SLOT)]
@@ -41,7 +44,22 @@ pub fn set_response_metadata<'s>(
         })
         .collect();
     let urls = v8::Array::new_with_elements(scope, &values);
+    let cors_headers: v8::Local<'s, v8::Value> =
+        if let Some(names) = &metadata.cors_exposed_header_names {
+            let names = names
+                .iter()
+                .map(|name| {
+                    v8_string(scope, name)
+                        .expect("native header name fits V8")
+                        .into()
+                })
+                .collect::<Vec<_>>();
+            v8::Array::new_with_elements(scope, &names).into()
+        } else {
+            v8::null(scope).into()
+        };
     let value = ResponseMetadataDeclaration::new(
+        cors_headers,
         metadata.response_type.as_str(),
         urls,
         metadata.timing_allow_passed,
@@ -71,7 +89,19 @@ pub fn response_metadata<'s>(
                 .ok()
         })
         .collect::<Option<Vec<_>>>()?;
+    let cors_headers = get_private_value(scope, metadata, CORS_HEADERS_SLOT)?;
+    let cors_exposed_header_names = if cors_headers.is_null_or_undefined() {
+        None
+    } else {
+        let names = v8::Local::<v8::Array>::try_from(cors_headers).ok()?;
+        Some(
+            (0..names.length())
+                .map(|index| Some(names.get_index(scope, index)?.to_rust_string_lossy(scope)))
+                .collect::<Option<Vec<_>>>()?,
+        )
+    };
     Some(FetchResponseMetadata {
+        cors_exposed_header_names,
         response_type,
         url_list,
         timing_allow_passed: get_private_value(scope, metadata, TIMING_SLOT)?.boolean_value(scope),
