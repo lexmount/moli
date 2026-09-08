@@ -823,6 +823,13 @@ globalThis.__childModuleDeferFailureOrderFirst = 1;
     <script id="first-module-defer-success" type="module" src="{first_script_url}"><\/script>
     <script id="second-module-defer-failure" type="module" src="{second_script_url}"><\/script>
     <script>
+      addEventListener("error", event => {{
+        parent.__childModuleDeferFailureOrderEvents.push("window-error:" + (
+          event instanceof ErrorEvent && event.error instanceof SyntaxError &&
+          event.target === window && event.isTrusted
+        ));
+        event.preventDefault();
+      }});
       document.getElementById("first-module-defer-success").addEventListener("load", () => {{
         parent.__childModuleDeferFailureOrderEvents.push("first-load");
       }});
@@ -957,8 +964,8 @@ globalThis.__childModuleDeferFailureOrderFirst = 1;
                     page_vm
                         .vm_mut()
                         .eval("__childModuleDeferFailureOrderEvents.join('|')")?,
-                    "before:true|after:undefined|first-module:true|first-load|second-error",
-                    "later graph failure should dispatch only after the earlier module-defer completes"
+                    "before:true|after:undefined|first-module:true|first-load|window-error:true|second-load",
+                    "later parse failure should report to its Window and fire external script load only after the earlier module-defer completes"
                 );
                 followup_sources.push(
                     run_expected_child_frame_task_source_after_realm_prerequisite_for_wait(
@@ -1019,7 +1026,7 @@ globalThis.__childModuleDeferFailureOrderFirst = 1;
         );
         assert_eq!(
             events_after_second_completion, "before:true|after:undefined",
-            "faster second graph failure completion must not dispatch script error before earlier parser module"
+            "faster second graph failure completion must not report an exception before the earlier parser module"
         );
         assert_eq!(
             events_after_second_module_owner, "before:true|after:undefined",
@@ -1031,7 +1038,7 @@ globalThis.__childModuleDeferFailureOrderFirst = 1;
         );
         assert_eq!(
             events_after_blocked_second_terminal, "before:true|after:undefined",
-            "blocked later graph failure should not dispatch script error or iframe load"
+            "blocked later graph failure should not report an exception or dispatch script or iframe load"
         );
         assert!(matches!(
             first_completion.action.source(),
@@ -1058,7 +1065,7 @@ globalThis.__childModuleDeferFailureOrderFirst = 1;
         );
         assert_eq!(
             final_events,
-            "before:true|after:undefined|first-module:true|first-load|second-error|load",
+            "before:true|after:undefined|first-module:true|first-load|window-error:true|second-load|load",
             "later graph failure should preserve parser module document order and keep iframe load on HostLoad"
         );
 
@@ -2252,181 +2259,7 @@ globalThis.__childDynamicImportLeafValue = 701;
     })
     .await;
 }
-#[tokio::test]
-async fn page_vm_child_module_graph_failure_blocks_host_load_until_error_dispatches() {
-    run_page_vm_async_test(async move {
-        let (base_url, server) = spawn_path_response_http_server(vec![(
-            "/child-bad-module.js",
-            "HTTP/1.1 200 OK",
-            "import {".to_owned(),
-            Duration::from_millis(200),
-        )])
-        .await;
-        let loader = crate::network::ResourceRequestClient::new(&FetchConfig::default()).expect("loader");
-        let document_url = Url::parse(&format!("{base_url}/page")).expect("page url");
-        let page_vm = test_page_vm_with_loader_and_document_url(&loader, Vec::new(), document_url);
-        let local_executor = page_vm.local_executor.clone();
 
-        let (
-            pre_completion_sources,
-            events_before_completion,
-            resource_ready_before_wait,
-            completion_source,
-            events_after_module_owner,
-            graph_failure_source,
-            events_after_graph_failure,
-            host_load_source,
-            final_events,
-        ) = local_executor
-            .run(async move {
-                let mut page_vm = page_vm;
-                let script_url = format!("{base_url}/child-bad-module.js");
-                page_vm.vm_mut().eval(&format!(
-                    r#"
-(() => {{
-  globalThis.__childModuleFailureHostLoadEvents = [];
-  const root = document.documentElement || document.appendChild(document.createElement("html"));
-  const body = document.body || root.appendChild(document.createElement("body"));
-  const frame = document.createElement("iframe");
-  frame.onload = () => globalThis.__childModuleFailureHostLoadEvents.push("frame-load");
-  frame.srcdoc = `
-    <script>parent.__childModuleFailureHostLoadEvents.push("before:" + (globalThis === self));<\/script>
-    <script id="bad-module" type="module" src="{script_url}"><\/script>
-    <script>
-      document.getElementById("bad-module").addEventListener("load", () => {{
-        parent.__childModuleFailureHostLoadEvents.push("script-load");
-      }});
-      document.getElementById("bad-module").addEventListener("error", () => {{
-        parent.__childModuleFailureHostLoadEvents.push("script-error");
-      }});
-      parent.__childModuleFailureHostLoadEvents.push("after");
-    <\/script>
-  `;
-  body.appendChild(frame);
-}})()
-"#
-                ))?;
-
-                let mut pre_completion_sources = Vec::new();
-                let mut events_before_completion = String::new();
-                for _ in 0..8 {
-                    let source = page_vm.run_next_child_frame_task_source_for_semantic_test().await;
-                    events_before_completion = page_vm
-                        .vm_mut()
-                        .eval("__childModuleFailureHostLoadEvents.join('|')")?;
-                    if let Some(source) = source {
-                        pre_completion_sources.push(source);
-                    }
-                    if source.is_none()
-                        || page_vm.has_ready_page_websocket_task_for_test()
-                        || events_before_completion.contains("frame-load")
-                    {
-                        break;
-                    }
-                }
-                let resource_ready_before_wait = page_vm
-                    .page_resource_completion_queue()
-                    .has_ready_completion();
-
-                if !page_vm.page_resource_completion_queue().has_ready_completion() {
-                    let arrived = tokio::time::timeout(
-                        Duration::from_secs(2),
-                        wait_for_typed_page_resource_completion(&mut page_vm),
-                    )
-                    .await
-                    .expect("child bad module completion should arrive before timeout");
-                    assert!(arrived, "child bad module completion sender should remain open");
-                }
-
-                let completion =
-                    run_next_resource_completion_as_typed_page_turn(&mut page_vm)?;
-                let completion_source = completion.action.source();
-
-                run_expected_child_module_script_terminal_turn(
-                    &mut page_vm,
-                    "child graph-failure module terminal",
-                )
-                .await;
-                let events_after_module_owner = page_vm
-                    .vm_mut()
-                    .eval("__childModuleFailureHostLoadEvents.join('|')")?;
-
-                let graph_failure_source = page_vm.run_next_child_frame_task_source_for_semantic_test().await;
-                let events_after_graph_failure = page_vm
-                    .vm_mut()
-                    .eval("__childModuleFailureHostLoadEvents.join('|')")?;
-
-                let host_load_source = Some(
-                    run_child_domcontentloaded_then_host_load_for_wait(
-                        &mut page_vm,
-                        "child module graph-failure iframe load",
-                    )
-                    .await,
-                );
-                let final_events = page_vm
-                    .vm_mut()
-                    .eval("__childModuleFailureHostLoadEvents.join('|')")?;
-
-                Ok::<_, anyhow::Error>((
-                    pre_completion_sources,
-                    events_before_completion,
-                    resource_ready_before_wait,
-                    completion_source,
-                    events_after_module_owner,
-                    graph_failure_source,
-                    events_after_graph_failure,
-                    host_load_source,
-                    final_events,
-                ))
-            })
-            .await
-            .expect("page vm child bad module HostLoad gate test should run");
-
-        assert!(
-            pre_completion_sources.contains(&ChildFrameSemanticTurnKind::ParserModuleRootStart),
-            "pre-completion turns should start the module root fetch from its typed source: {pre_completion_sources:?}"
-        );
-        assert!(
-            !resource_ready_before_wait,
-            "delayed bad module response should leave a window to prove HostLoad is gated before completion"
-        );
-        assert_eq!(
-            events_before_completion, "before:true|after",
-            "pending bad module script must block iframe load before resource completion"
-        );
-        assert_eq!(
-            completion_source,
-            RendererOwnerResourceActivitySource::ModuleGraphFetch
-        );
-        assert_eq!(
-            events_after_module_owner, "before:true|after",
-            "module owner event should not dispatch script error or iframe load inline"
-        );
-        assert_eq!(
-            graph_failure_source,
-            Some(ChildFrameSemanticTurnKind::DocumentScriptReady),
-            "graph failure should dispatch through DocumentScriptReady"
-        );
-        assert_eq!(
-            events_after_graph_failure, "before:true|after|script-error",
-            "graph failure should dispatch script error without iframe load"
-        );
-        assert_eq!(
-            host_load_source,
-            Some(ChildFrameSemanticTurnKind::HostLoad),
-            "iframe load should remain a later HostLoad source after graph failure"
-        );
-        assert_eq!(
-            final_events, "before:true|after|script-error|frame-load",
-            "HostLoad should dispatch iframe load only after graph failure finalizes"
-        );
-
-        server
-            .await
-            .expect("child bad module HostLoad gate server should finish");
-    })
-    .await;
-}
 #[tokio::test]
 async fn page_vm_child_module_dependency_completion_queues_module_script_terminal_work() {
     run_page_vm_async_test(async move {
@@ -2960,6 +2793,189 @@ parent.__childModuleDependencyFailureEvents.push("root:" + depValue);
         server
             .await
             .expect("child module dependency failure server should finish");
+    })
+    .await;
+}
+
+#[tokio::test]
+async fn page_vm_child_module_parse_failure_blocks_host_load_until_exception_is_reported() {
+    run_page_vm_async_test(async move {
+        let (base_url, server) = spawn_path_response_http_server(vec![(
+            "/child-bad-module.js",
+            "HTTP/1.1 200 OK",
+            "import {".to_owned(),
+            Duration::from_millis(200),
+        )])
+        .await;
+        let loader = crate::network::ResourceRequestClient::new(&FetchConfig::default()).expect("loader");
+        let document_url = Url::parse(&format!("{base_url}/page")).expect("page url");
+        let page_vm = test_page_vm_with_loader_and_document_url(&loader, Vec::new(), document_url);
+        let local_executor = page_vm.local_executor.clone();
+
+        let (
+            pre_completion_sources,
+            events_before_completion,
+            resource_ready_before_wait,
+            completion_source,
+            events_after_module_owner,
+            graph_failure_source,
+            events_after_graph_failure,
+            host_load_source,
+            final_events,
+        ) = local_executor
+            .run(async move {
+                let mut page_vm = page_vm;
+                let script_url = format!("{base_url}/child-bad-module.js");
+                page_vm.vm_mut().eval(&format!(
+                    r#"
+(() => {{
+  globalThis.__childModuleFailureHostLoadEvents = [];
+  const root = document.documentElement || document.appendChild(document.createElement("html"));
+  const body = document.body || root.appendChild(document.createElement("body"));
+  const frame = document.createElement("iframe");
+  frame.onload = () => globalThis.__childModuleFailureHostLoadEvents.push("frame-load");
+  frame.srcdoc = `
+    <script>parent.__childModuleFailureHostLoadEvents.push("before:" + (globalThis === self));<\/script>
+    <script id="bad-module" type="module" src="{script_url}"><\/script>
+    <script>
+      addEventListener("error", event => {{
+        parent.__childModuleFailureHostLoadEvents.push("window-error:" + (
+          event instanceof ErrorEvent && event.error instanceof SyntaxError &&
+          event.target === window && event.isTrusted
+        ));
+        event.preventDefault();
+      }});
+      document.getElementById("bad-module").addEventListener("load", () => {{
+        parent.__childModuleFailureHostLoadEvents.push("script-load");
+      }});
+      document.getElementById("bad-module").addEventListener("error", () => {{
+        parent.__childModuleFailureHostLoadEvents.push("script-error");
+      }});
+      parent.__childModuleFailureHostLoadEvents.push("after");
+    <\/script>
+  `;
+  body.appendChild(frame);
+}})()
+"#
+                ))?;
+
+                let mut pre_completion_sources = Vec::new();
+                let mut events_before_completion = String::new();
+                for _ in 0..8 {
+                    let source = page_vm.run_next_child_frame_task_source_for_semantic_test().await;
+                    events_before_completion = page_vm
+                        .vm_mut()
+                        .eval("__childModuleFailureHostLoadEvents.join('|')")?;
+                    if let Some(source) = source {
+                        pre_completion_sources.push(source);
+                    }
+                    if source.is_none()
+                        || page_vm.has_ready_page_websocket_task_for_test()
+                        || events_before_completion.contains("frame-load")
+                    {
+                        break;
+                    }
+                }
+                let resource_ready_before_wait = page_vm
+                    .page_resource_completion_queue()
+                    .has_ready_completion();
+
+                if !page_vm.page_resource_completion_queue().has_ready_completion() {
+                    let arrived = tokio::time::timeout(
+                        Duration::from_secs(2),
+                        wait_for_typed_page_resource_completion(&mut page_vm),
+                    )
+                    .await
+                    .expect("child bad module completion should arrive before timeout");
+                    assert!(arrived, "child bad module completion sender should remain open");
+                }
+
+                let completion =
+                    run_next_resource_completion_as_typed_page_turn(&mut page_vm)?;
+                let completion_source = completion.action.source();
+
+                run_expected_child_module_script_terminal_turn(
+                    &mut page_vm,
+                    "child graph-failure module terminal",
+                )
+                .await;
+                let events_after_module_owner = page_vm
+                    .vm_mut()
+                    .eval("__childModuleFailureHostLoadEvents.join('|')")?;
+
+                let graph_failure_source = page_vm.run_next_child_frame_task_source_for_semantic_test().await;
+                let events_after_graph_failure = page_vm
+                    .vm_mut()
+                    .eval("__childModuleFailureHostLoadEvents.join('|')")?;
+
+                let host_load_source = Some(
+                    run_child_domcontentloaded_then_host_load_for_wait(
+                        &mut page_vm,
+                        "child module graph-failure iframe load",
+                    )
+                    .await,
+                );
+                let final_events = page_vm
+                    .vm_mut()
+                    .eval("__childModuleFailureHostLoadEvents.join('|')")?;
+
+                Ok::<_, anyhow::Error>((
+                    pre_completion_sources,
+                    events_before_completion,
+                    resource_ready_before_wait,
+                    completion_source,
+                    events_after_module_owner,
+                    graph_failure_source,
+                    events_after_graph_failure,
+                    host_load_source,
+                    final_events,
+                ))
+            })
+            .await
+            .expect("page vm child bad module HostLoad gate test should run");
+
+        assert!(
+            pre_completion_sources.contains(&ChildFrameSemanticTurnKind::ParserModuleRootStart),
+            "pre-completion turns should start the module root fetch from its typed source: {pre_completion_sources:?}"
+        );
+        assert!(
+            !resource_ready_before_wait,
+            "delayed bad module response should leave a window to prove HostLoad is gated before completion"
+        );
+        assert_eq!(
+            events_before_completion, "before:true|after",
+            "pending bad module script must block iframe load before resource completion"
+        );
+        assert_eq!(
+            completion_source,
+            RendererOwnerResourceActivitySource::ModuleGraphFetch
+        );
+        assert_eq!(
+            events_after_module_owner, "before:true|after",
+            "module owner event should not report an exception or dispatch script or iframe load inline"
+        );
+        assert_eq!(
+            graph_failure_source,
+            Some(ChildFrameSemanticTurnKind::DocumentScriptReady),
+            "graph failure should dispatch through DocumentScriptReady"
+        );
+        assert_eq!(
+            events_after_graph_failure, "before:true|after|window-error:true|script-load",
+            "parse failure should report to its Window and fire external script load without iframe load"
+        );
+        assert_eq!(
+            host_load_source,
+            Some(ChildFrameSemanticTurnKind::HostLoad),
+            "iframe load should remain a later HostLoad source after graph failure"
+        );
+        assert_eq!(
+            final_events, "before:true|after|window-error:true|script-load|frame-load",
+            "HostLoad should dispatch iframe load only after graph failure finalizes"
+        );
+
+        server
+            .await
+            .expect("child bad module HostLoad gate server should finish");
     })
     .await;
 }

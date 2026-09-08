@@ -1,6 +1,6 @@
 use super::*;
 
-async fn queue_child_module_document_script_ready(
+pub(super) async fn queue_child_module_document_script_ready(
     page_vm: &mut PageVm,
     base_url: &str,
     create_reaction_child: bool,
