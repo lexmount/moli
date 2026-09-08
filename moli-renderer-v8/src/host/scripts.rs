@@ -21,7 +21,7 @@ use crate::{
     {
         module_runtime::ModuleOwnerState,
         planning::{PreparedScript, ScriptSource},
-        types::{ScriptErrorConstructorKind, ScriptKind, ScriptMode, ScriptSourceKind},
+        types::{ScriptErrorValue, ScriptKind, ScriptMode, ScriptSourceKind},
     },
 };
 use std::collections::HashMap;
@@ -1077,13 +1077,13 @@ impl HostScriptScheduler {
         &self,
         message: &str,
         filename: Option<&str>,
-        error_constructor: Option<ScriptErrorConstructorKind>,
+        error_value: Option<ScriptErrorValue>,
     ) -> PostParseLifecycleWork {
         PostParseLifecycleWork::ReportWindowScriptFailure(
-            WindowScriptFailureReportTask::new_with_error_constructor(
+            WindowScriptFailureReportTask::new_with_error_value(
                 message,
                 filename.map(std::borrow::ToOwned::to_owned),
-                error_constructor,
+                error_value,
             ),
         )
     }
@@ -1096,7 +1096,7 @@ impl HostScriptScheduler {
         message: &str,
         filename: Option<&str>,
         module_failure_policy: Option<ModuleFailurePolicy>,
-        error_constructor: Option<ScriptErrorConstructorKind>,
+        error_value: Option<ScriptErrorValue>,
     ) -> Vec<PostParseLifecycleWork> {
         let mut tasks = Vec::new();
         let message = normalize_module_link_failure_message(message, filename);
@@ -1130,7 +1130,7 @@ impl HostScriptScheduler {
             tasks.push(self.plan_window_script_failure_report_lifecycle_work(
                 &message,
                 filename,
-                error_constructor,
+                error_value,
             ));
         }
 
@@ -1166,7 +1166,7 @@ impl HostScriptScheduler {
         message: &str,
         filename: Option<&str>,
         module_failure_policy: Option<ModuleFailurePolicy>,
-        error_constructor: Option<ScriptErrorConstructorKind>,
+        error_value: Option<ScriptErrorValue>,
     ) -> Vec<PageTask> {
         self.plan_script_failure_lifecycle_work(
             kind,
@@ -1175,7 +1175,7 @@ impl HostScriptScheduler {
             message,
             filename,
             module_failure_policy,
-            error_constructor,
+            error_value,
         )
         .into_iter()
         .map(PostParseLifecycleWork::into_page_task)
