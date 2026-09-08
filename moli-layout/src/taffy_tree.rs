@@ -2301,7 +2301,7 @@ where
                         margins,
                     });
                 }
-                InlineObjectRole::OutOfFlow(_) => {
+                InlineObjectRole::OutOfFlow(_) | InlineObjectRole::CollapsedText => {
                     inline_box.width = 0.0;
                     inline_box.height = 0.0;
                 }
@@ -2341,7 +2341,7 @@ where
                     } else {
                         (margins.right, padding.right, border.right)
                     };
-                    inline_box.width = (margin + padding + border).max(0.0);
+                    inline_box.width = margin + padding + border;
                     inline_box.height = 0.0;
                     let object_index = usize::try_from(inline_box.id)
                         .expect("Parley returned an inline object id outside usize");

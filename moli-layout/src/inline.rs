@@ -15,8 +15,7 @@ use std::{
 };
 
 use parley::{
-    BaseDirection, BreakReason, InlineBox, InlineBoxBidi, InlineBoxKind, Layout,
-    PositionedLayoutItem, TextStyle,
+    BaseDirection, BreakReason, InlineBox, InlineBoxKind, Layout, PositionedLayoutItem, TextStyle,
 };
 use taffy::{MaybeResolve as _, Point, ResolveOrZero as _, Size};
 
@@ -111,6 +110,7 @@ pub(crate) enum InlineObjectRole {
     OutOfFlow(OutOfFlowDisplay),
     StartEdge,
     EndEdge,
+    CollapsedText,
 }
 
 /// Positioning blockifies the used display. Inline layout must retain the
@@ -499,7 +499,7 @@ pub(crate) fn build_inline_fragments<N>(
     debug_assert!(output_ranges_are_monotonic(&context.text_units));
     debug_assert!(output_ranges_are_monotonic(&context.source_map));
     let mut fragments = InlineFragments::default();
-    let mut box_fragments = HashMap::<(usize, usize), FragmentAccumulator>::new();
+    let mut box_fragments = HashMap::<(usize, usize), InlineBoxFragmentAccumulator>::new();
     let mut source_fragments = HashMap::<SourceFragmentKey, FragmentAccumulator>::new();
     let style_paint_outsets = layout
         .styles()
@@ -540,6 +540,7 @@ pub(crate) fn build_inline_fragments<N>(
                 box_fragments
                     .entry((box_placement.box_id.index(), line_index))
                     .or_default()
+                    .bounds
                     .include_block_axis(box_placement.top, box_placement.height);
             }
         }
@@ -598,6 +599,7 @@ pub(crate) fn build_inline_fragments<N>(
                         box_fragments
                             .entry((ancestor.index(), line_index))
                             .or_default()
+                            .bounds
                             .include_inline_axis(rect.x, rect.width);
                     }
                 }
@@ -639,12 +641,14 @@ pub(crate) fn build_inline_fragments<N>(
                     .entry((ancestor.index(), line_index))
                     .or_default();
                 if let Some(rect) = rect {
-                    accumulator.include_inline_axis(rect.x, rect.width);
+                    accumulator.bounds.include_inline_axis(rect.x, rect.width);
                 } else if matches!(
                     object.role,
                     InlineObjectRole::StartEdge | InlineObjectRole::EndEdge
                 ) {
-                    accumulator.include_inline_axis(positioned.x, positioned.width);
+                    accumulator
+                        .bounds
+                        .include_inline_axis(positioned.x, positioned.width);
                 }
             }
             match object.role {
@@ -652,14 +656,19 @@ pub(crate) fn build_inline_fragments<N>(
                     let accumulator = box_fragments
                         .entry((object.box_id.index(), line_index))
                         .or_default();
-                    accumulator.include_inline_axis(positioned.x, positioned.width);
-                    accumulator.has_start_edge |= object.role == InlineObjectRole::StartEdge
-                        && boxes[object.box_id.index()].inline_start_edge;
-                    accumulator.has_end_edge |= object.role == InlineObjectRole::EndEdge
-                        && boxes[object.box_id.index()].inline_end_edge;
+                    let child = &boxes[object.box_id.index()];
+                    accumulator.include_edge(
+                        object.role == InlineObjectRole::StartEdge,
+                        child,
+                        positioned.x,
+                        positioned.width,
+                        positioned.is_rtl(),
+                        containing_width,
+                    );
                 }
                 InlineObjectRole::Atomic
                 | InlineObjectRole::Float
+                | InlineObjectRole::CollapsedText
                 | InlineObjectRole::OutOfFlow(_) => {}
             }
         }
@@ -975,7 +984,9 @@ fn resolve_inline_lines(
                                 .and_then(|index| structural_edge_contributions.get(index))
                                 .copied()
                                 .unwrap_or(false),
-                            InlineObjectRole::Float | InlineObjectRole::OutOfFlow(_) => false,
+                            InlineObjectRole::Float
+                            | InlineObjectRole::CollapsedText
+                            | InlineObjectRole::OutOfFlow(_) => false,
                         }),
                         glyph_key: None,
                         anchor: LineVerticalAnchor::Root,
@@ -1588,18 +1599,73 @@ struct FragmentAccumulator {
     min_y: Option<f32>,
     max_x: Option<f32>,
     max_y: Option<f32>,
+}
+
+/// Text/range geometry is a union of glyph bounds. An inline box additionally
+/// owns its border edges: negative child margins or glyph overhang must not
+/// move those edges, and negative margins must not erase padding or borders.
+#[derive(Clone, Copy, Debug, Default)]
+struct InlineBoxFragmentAccumulator {
+    bounds: FragmentAccumulator,
+    border_left: Option<f32>,
+    border_right: Option<f32>,
     has_start_edge: bool,
     has_end_edge: bool,
 }
 
-impl FragmentAccumulator {
+impl InlineBoxFragmentAccumulator {
+    fn include_edge<N>(
+        &mut self,
+        start: bool,
+        child: &LayoutBox<N>,
+        x: f32,
+        advance: f32,
+        rtl: bool,
+        containing_width: f32,
+    ) {
+        let applies_decoration = if start {
+            child.inline_start_edge
+        } else {
+            child.inline_end_edge
+        };
+        let margin = if applies_decoration {
+            let margins = child.style.taffy.margin.resolve_or_zero(
+                Some(containing_width),
+                crate::style::resolve_stylo_calc_value,
+            );
+            if start == (child.style.direction() == InlineDirection::Ltr) {
+                margins.left
+            } else {
+                margins.right
+            }
+        } else {
+            0.0
+        };
+        self.bounds.include_inline_axis(x, advance);
+        if start != rtl {
+            let border = x + margin;
+            self.border_left = Some(
+                self.border_left
+                    .map_or(border, |previous| previous.min(border)),
+            );
+        } else {
+            let border = x + advance - margin;
+            self.border_right = Some(
+                self.border_right
+                    .map_or(border, |previous| previous.max(border)),
+            );
+        }
+        self.has_start_edge |= start && applies_decoration;
+        self.has_end_edge |= !start && applies_decoration;
+    }
+
     fn box_model(
         self,
         style: &ResolvedLayoutStyle,
         line: &InlineLineFragment,
         containing_width: f32,
     ) -> Option<LayoutFragmentBoxModel> {
-        let rect = self.rect(line.rect)?;
+        let rect = self.bounds.rect(line.rect)?;
         let resolve = crate::style::resolve_stylo_calc_value;
         let padding = style
             .taffy
@@ -1618,16 +1684,8 @@ impl FragmentAccumulator {
         } else {
             (self.has_end_edge, self.has_start_edge)
         };
-        let left_margin = if has_left_edge {
-            margin.left.max(0.0)
-        } else {
-            0.0
-        };
-        let right_margin = if has_right_edge {
-            margin.right.max(0.0)
-        } else {
-            0.0
-        };
+        let left_margin = if has_left_edge { margin.left } else { 0.0 };
+        let right_margin = if has_right_edge { margin.right } else { 0.0 };
         // Blink's AddBoxFragmentPlaceholder gives an empty line's inline box
         // zero block offset/size, including when it has block-axis padding or
         // borders. Only an actual line gets the font box and those decorations.
@@ -1639,12 +1697,9 @@ impl FragmentAccumulator {
                 rect.height + padding.top + padding.bottom + border.top + border.bottom,
             )
         };
-        let border_box = PaintRect::new(
-            rect.x + left_margin,
-            top,
-            (rect.width - left_margin - right_margin).max(0.0),
-            height,
-        );
+        let left = self.border_left.unwrap_or(rect.x);
+        let right = self.border_right.unwrap_or(rect.right());
+        let border_box = PaintRect::new(left, top, (right - left).max(0.0), height);
         let padding_box = inset_rect(
             border_box,
             border.top,
@@ -1672,7 +1727,9 @@ impl FragmentAccumulator {
             )),
         })
     }
+}
 
+impl FragmentAccumulator {
     fn include(&mut self, rect: PaintRect) {
         self.include_inline_axis(rect.x, rect.width);
         self.min_y = Some(self.min_y.map_or(rect.y, |value| value.min(rect.y)));
@@ -1956,24 +2013,14 @@ impl InlineBuildInput {
                 builder.push_style_run(style_indices[*style_slot], range.clone());
             }
         }
-        for (object_id, (byte_index, object, kind)) in self.objects.iter().enumerate() {
-            let bidi = match object.role {
-                InlineObjectRole::StartEdge => InlineBoxBidi::StartBoundary,
-                InlineObjectRole::EndEdge => InlineBoxBidi::EndBoundary,
-                InlineObjectRole::Atomic
-                | InlineObjectRole::Float
-                | InlineObjectRole::OutOfFlow(_) => InlineBoxBidi::Neutral,
-            };
-            builder.push_inline_box_with_bidi(
-                InlineBox {
-                    id: u64::try_from(object_id).expect("one IFC exceeded the u64 object limit"),
-                    kind: *kind,
-                    index: *byte_index,
-                    width: 0.0,
-                    height: 0.0,
-                },
-                bidi,
-            );
+        for (object_id, (byte_index, _, kind)) in self.objects.iter().enumerate() {
+            builder.push_inline_box(InlineBox {
+                id: u64::try_from(object_id).expect("one IFC exceeded the u64 object limit"),
+                kind: *kind,
+                index: *byte_index,
+                width: 0.0,
+                height: 0.0,
+            });
         }
         let layout = builder.build(&self.text);
         let font_metrics = styles
@@ -2297,6 +2344,7 @@ impl InlineNormalizer {
         transform: InlineTextTransform,
         ancestors: &[LayoutBoxId],
     ) {
+        let initial_units = self.units.len();
         let mut utf16_offset = 0;
         let mut characters = text.char_indices().peekable();
         if let Some(pending) = self.pending_carriage_return.take() {
@@ -2372,6 +2420,25 @@ impl InlineNormalizer {
             for character in transformed {
                 self.push_character(box_id, character, mode, ancestors, vec![origin.clone()]);
             }
+        }
+        // Whitespace from another text node may collapse into an earlier
+        // pending space. Keep its source-order boundary: a subsequent break
+        // belongs after this text item, even when opening inline edges or
+        // positioned objects surround it. No synthetic character is needed.
+        if self.units.len() == initial_units
+            && !text.is_empty()
+            && self
+                .pending
+                .as_ref()
+                .is_some_and(|pending| pending.style_box != box_id)
+        {
+            self.push_object(
+                box_id,
+                InlineObjectRole::CollapsedText,
+                InlineBoxKind::TextBoundary,
+                ancestors,
+                InlineVerticalAlign::default(),
+            );
         }
     }
 
@@ -2532,7 +2599,7 @@ impl InlineNormalizer {
         self.push_object(
             box_id,
             InlineObjectRole::StartEdge,
-            InlineBoxKind::InFlow,
+            InlineBoxKind::StartBoundary,
             ancestors,
             vertical_align,
         );
@@ -2549,7 +2616,7 @@ impl InlineNormalizer {
         self.push_object(
             box_id,
             InlineObjectRole::EndEdge,
-            InlineBoxKind::InFlow,
+            InlineBoxKind::EndBoundary,
             ancestors,
             vertical_align,
         );
@@ -3176,6 +3243,71 @@ mod tests {
     }
 
     #[test]
+    fn collapsed_text_preserves_order_between_opening_and_positioned_items() {
+        let root = LayoutBoxId::from_index(0);
+        let inline = LayoutBoxId::from_index(1);
+        let mut normalizer = InlineNormalizer::new(root);
+        normalizer.push_text(
+            LayoutBoxId::from_index(2),
+            "WW ",
+            InlineWhiteSpaceCollapse::Collapse,
+            InlineTextTransform::None,
+            &[],
+        );
+        normalizer.open_inline(
+            inline,
+            InlineUnicodeBidi::Normal,
+            InlineDirection::Ltr,
+            &[],
+            InlineVerticalAlign::default(),
+        );
+        normalizer.push_text(
+            LayoutBoxId::from_index(3),
+            " \n ",
+            InlineWhiteSpaceCollapse::Collapse,
+            InlineTextTransform::None,
+            &[inline],
+        );
+        normalizer.push_object(
+            LayoutBoxId::from_index(4),
+            InlineObjectRole::OutOfFlow(OutOfFlowDisplay::Block),
+            InlineBoxKind::OutOfFlow,
+            &[inline],
+            InlineVerticalAlign::default(),
+        );
+        normalizer.push_text(
+            LayoutBoxId::from_index(5),
+            "WW",
+            InlineWhiteSpaceCollapse::Collapse,
+            InlineTextTransform::None,
+            &[inline],
+        );
+        normalizer.close_inline(
+            inline,
+            InlineUnicodeBidi::Normal,
+            &[],
+            InlineVerticalAlign::default(),
+        );
+        let input = normalizer.finish();
+        assert_eq!(input.text, "WW WW");
+        assert_eq!(
+            input
+                .objects
+                .iter()
+                .map(|(index, _, kind)| (*index, *kind))
+                .collect::<Vec<_>>(),
+            [
+                (3, InlineBoxKind::StartBoundary),
+                (3, InlineBoxKind::TextBoundary),
+                (3, InlineBoxKind::OutOfFlow),
+                (5, InlineBoxKind::EndBoundary),
+            ]
+        );
+        assert_eq!(input.units.len(), 5);
+        assert_eq!(input.units[2].style_box, LayoutBoxId::from_index(2));
+    }
+
+    #[test]
     fn inline_box_layout_edges_share_the_css_subpixel_grid() {
         let first = inline_box_layout_rect(PaintRect::new(0.006, -0.006, 0.006, 0.006));
         let second = inline_box_layout_rect(PaintRect::new(0.012, 0.0, 0.012, 0.0));
@@ -3206,6 +3338,7 @@ mod tests {
             InlineObjectRole::Atomic => InlineBoxKind::InFlow,
             InlineObjectRole::Float => InlineBoxKind::CustomOutOfFlow,
             InlineObjectRole::OutOfFlow(_) => InlineBoxKind::OutOfFlow,
+            InlineObjectRole::CollapsedText => InlineBoxKind::TextBoundary,
             InlineObjectRole::StartEdge | InlineObjectRole::EndEdge => {
                 panic!("use open_inline/close_inline for structural boundaries")
             }
@@ -3236,11 +3369,11 @@ mod tests {
     #[test]
     fn out_of_flow_objects_do_not_interrupt_collapsible_whitespace() {
         for role in OUT_OF_FLOW_ROLES {
-            for (before, after, expected, object_index) in [
-                ("A \t", " \nB", "A B", 2),
-                (" \n", " \tB", "B", 0),
-                ("A \n", " \t", "A", 1),
-                (" \t", "\n ", "", 0),
+            for (before, after, expected, object_index, collapsed_text) in [
+                ("A \t", " \nB", "A B", 2, false),
+                (" \n", " \tB", "B", 0, false),
+                ("A \n", " \t", "A", 1, true),
+                (" \t", "\n ", "", 0, true),
             ] {
                 let input = normalize_around_object(
                     before,
@@ -3249,9 +3382,16 @@ mod tests {
                     InlineWhiteSpaceCollapse::Collapse,
                 );
                 assert_eq!(input.text, expected, "{role:?}: {before:?}, {after:?}");
-                assert_eq!(input.objects.len(), 1);
+                assert_eq!(input.objects.len(), 1 + usize::from(collapsed_text));
                 assert_eq!(input.objects[0].0, object_index, "{role:?}");
                 assert_eq!(input.objects[0].1.role, role);
+                if collapsed_text {
+                    let (index, object, kind) = &input.objects[1];
+                    assert_eq!(*index, expected.len());
+                    assert_eq!(object.role, InlineObjectRole::CollapsedText);
+                    assert_eq!(object.box_id, LayoutBoxId::from_index(3));
+                    assert_eq!(*kind, InlineBoxKind::TextBoundary);
+                }
             }
         }
     }

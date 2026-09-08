@@ -1,0 +1,66 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>Non-atomic inline boundary layout</title>
+<style>
+  body { margin:0; font:20px/1.5 monospace }
+  .line { width:3.5em }
+  .decorated { padding-inline:.5em; border-inline:1px solid }
+  .closing { padding-right:1em }
+  .negative { margin-left:1em; margin-right:-1em }
+  .absolute { position:absolute }
+  .atomic { display:inline-block; width:2em; height:1em }
+</style>
+<body>
+<script>
+  const patterns = [
+    ['opening', 'WW <span class="decorated">WW</span>', 'WW <br><span class="decorated">WW</span>'],
+    ['closing', 'WW <span class="closing">WW</span>', 'WW <br><span class="closing">WW</span>'],
+    ['out-of-flow', 'WW <span class="decorated"><i class="absolute"></i>WW<i class="absolute"></i></span>',
+      'WW <br><span class="decorated"><i class="absolute"></i>WW<i class="absolute"></i></span>'],
+    ['atomic', 'WW <span class="decorated"><i class="atomic"></i></span>',
+      'WW <br><span class="decorated"><i class="atomic"></i></span>'],
+    ['negative', '<span class="negative target">WWWW</span>', '<span class="target">WWWW</span>', 1],
+    ['negative-padding-start', '<span class="target" style="margin-left:-1em;padding-left:1em">WWWW</span>',
+      '<span class="target" style="padding-left:1em">WWWW</span>', -1],
+    ['negative-padding-end', '<span class="target" style="margin-right:-1em;padding-right:1em">WWWW</span>',
+      '<span class="target" style="padding-right:1em">WWWW</span>'],
+  ];
+  const pairs = patterns.flatMap(([id, test, reference, shift = 0]) =>
+    (id.startsWith('negative') ? ['ltr'] : ['ltr', 'rtl']).map(direction => {
+    const lines = [test, reference].map(markup => {
+      const line = document.createElement('div');
+      line.className = 'line';
+      line.dir = direction;
+      line.innerHTML = markup;
+      document.body.appendChild(line);
+      return line;
+    });
+    return {id: id + '-' + direction, lines, shift};
+  }));
+  function collectInlineFragmentChecks() {
+    function geometry(line, shift = 0) {
+      const origin = line.getBoundingClientRect();
+      const dx = shift * parseFloat(getComputedStyle(line).fontSize);
+      const rect = r => [r.x-origin.x+dx, r.y-origin.y, r.width, r.height];
+      const glyphs = [];
+      function walk(node) {
+        if (node.nodeType === Node.TEXT_NODE) {
+          for (let index=0; index<node.length; index++) {
+            if (node.data[index] !== 'W') continue;
+            const range = document.createRange();
+            range.setStart(node, index);
+            range.setEnd(node, index+1);
+            glyphs.push(rect(range.getBoundingClientRect()));
+          }
+        } else {
+          for (const child of node.childNodes) walk(child);
+        }
+      }
+      walk(line);
+      return [origin.width, origin.height, glyphs,
+        Array.from(line.querySelectorAll('.decorated,.closing,.atomic,.target'), element =>
+          Array.from(element.getClientRects(), rect))];
+    }
+    return pairs.map(({id, lines, shift}) => ({id, actual:geometry(lines[0]), expected:geometry(lines[1], shift)}));
+  }
+</script>
