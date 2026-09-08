@@ -1083,6 +1083,12 @@ impl ScriptVm {
                         }
                     }
                 }
+                // Child script elements own their evaluation rejection, just
+                // like main-document scripts. Do not publish the internal
+                // evaluation promise as an unhandled author promise.
+                if let Some(promise) = promise {
+                    promise.mark_as_handled();
+                }
                 if let Err(error) = Self::perform_microtask_checkpoints(&mut scope, None) {
                     return Ok(Err(ModuleLoadError::new(
                         ModuleLoadStage::Evaluate,
