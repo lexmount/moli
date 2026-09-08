@@ -1535,6 +1535,7 @@ fn service_worker_storage_apis_use_explicit_registration_storage_key() {
 // ─── Basic tests ────────────────────────────────────────────────────
 
 mod abort_signal_statics;
+mod cors_redirects;
 mod lazy_storage;
 mod lifecycle;
 mod message_port_transfer;
