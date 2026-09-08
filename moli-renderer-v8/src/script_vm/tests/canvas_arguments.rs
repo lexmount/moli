@@ -175,3 +175,24 @@ fn canvas_hex_alpha_is_accepted_and_preserved_for_fill_and_stroke() {
         );
     }
 }
+
+#[test]
+fn canvas_global_alpha_scales_only_alpha_not_rgb_for_fill_stroke_stroke_rect() {
+    // A straight red path at globalAlpha 0.5 must keep RGB at (255,0,0) and
+    // halve only the alpha. Previously the RGB channels were also scaled,
+    // reading back [128,0,0,128] instead of [255,0,0,128].
+    check(
+        r#"
+      ctx.fillStyle='red';ctx.strokeStyle='red';ctx.globalAlpha=0.5;
+      ctx.rect(0,0,10,10);ctx.fill();ctx.beginPath();
+      ctx.lineWidth=2;ctx.moveTo(20,20);ctx.lineTo(40,20);ctx.stroke();
+      ctx.strokeRect(60,5,20,20);
+      return JSON.stringify([
+        Array.from(ctx.getImageData(5,5,1,1).data),
+        Array.from(ctx.getImageData(25,20,1,1).data),
+        Array.from(ctx.getImageData(60,12,1,1).data)
+      ]);
+    "#,
+        "[[255,0,0,128],[255,0,0,128],[255,0,0,128]]",
+    );
+}

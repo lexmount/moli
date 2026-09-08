@@ -1490,12 +1490,18 @@ fn recording_stroke_color<'s>(
     apply_global_alpha(rgba, context_global_alpha(scope, context))
 }
 
+/// Applies `globalAlpha` to a **straight** (non-premultiplied) RGBA8 color.
+///
+/// Per the spec, `globalAlpha` multiplies the alpha component only; the straight
+/// RGB channels are left unchanged. Scaling RGB here would darken the color
+/// before Vello premultiplies it internally, so a red path at `globalAlpha=0.5`
+/// would read back as `[128,0,0,128]` instead of `[255,0,0,128]`.
 fn apply_global_alpha(rgba: [u8; 4], global_alpha: f64) -> [u8; 4] {
     let a = global_alpha.clamp(0.0, 1.0);
     [
-        (f64::from(rgba[0]) * a + 0.5) as u8,
-        (f64::from(rgba[1]) * a + 0.5) as u8,
-        (f64::from(rgba[2]) * a + 0.5) as u8,
+        rgba[0],
+        rgba[1],
+        rgba[2],
         (f64::from(rgba[3]) * a + 0.5) as u8,
     ]
 }
