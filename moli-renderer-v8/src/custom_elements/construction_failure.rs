@@ -46,6 +46,7 @@ pub(super) fn report_custom_element_construction_failure<'s>(
     };
     if let Some(constructor) = constructor {
         let report = V8ExceptionReport {
+            muted_errors: false,
             summary: message,
             source: None,
             line: None,

@@ -1,3 +1,4 @@
+use super::handle::WorkerErrorPhase;
 mod module_map;
 mod tree;
 
@@ -103,6 +104,10 @@ pub(super) struct WorkerModuleFetchedSource {
 #[derive(Clone)]
 pub(super) enum WorkerModuleSource {
     Text(String),
+    TextWithOrigin {
+        source: String,
+        origin: Box<module_tree::ModuleSourceOrigin>,
+    },
     Binary(Vec<u8>),
 }
 
@@ -327,21 +332,21 @@ impl WorkerModuleSource {
 
     pub(super) fn len(&self) -> usize {
         match self {
-            Self::Text(source) => source.len(),
+            Self::Text(source) | Self::TextWithOrigin { source, .. } => source.len(),
             Self::Binary(bytes) => bytes.len(),
         }
     }
 
     fn text_source(&self) -> Option<&str> {
         match self {
-            Self::Text(source) => Some(source),
+            Self::Text(source) | Self::TextWithOrigin { source, .. } => Some(source),
             Self::Binary(_) => None,
         }
     }
 
     fn binary_source(&self) -> Option<&[u8]> {
         match self {
-            Self::Text(_) => None,
+            Self::Text(_) | Self::TextWithOrigin { .. } => None,
             Self::Binary(bytes) => Some(bytes),
         }
     }
@@ -1857,6 +1862,10 @@ fn compile_worker_module_record(
     if let Some(bytes) = source.binary_source() {
         return compile_worker_wasm_module_record(scope, bytes, source_url);
     }
+    let diagnostic_origin = match source {
+        WorkerModuleSource::TextWithOrigin { origin, .. } => Some(origin.as_ref()),
+        _ => None,
+    };
     let Some(source) = source.text_source() else {
         return Err(Box::new(worker_bootstrap_error(
             scope,
@@ -1868,7 +1877,7 @@ fn compile_worker_module_record(
     let try_catch = pin!(v8::TryCatch::new(scope));
     let mut scope = try_catch.init();
     let source_str = v8::String::new(&scope, source).expect("v8 string allocation");
-    let origin = create_module_script_origin(&mut scope, source_url.as_str());
+    let origin = create_module_script_origin(&mut scope, source_url.as_str(), diagnostic_origin);
     let mut compiler_source = v8::script_compiler::Source::new(source_str, Some(&origin));
     let Some(module) = v8::script_compiler::compile_module(&scope, &mut compiler_source) else {
         let exception = scope.exception();
@@ -2148,6 +2157,7 @@ pub(super) fn worker_bootstrap_error(
         v8::String::new(scope, summary).map(|message| v8::Exception::syntax_error(scope, message));
     WorkerBootstrapError::new(
         V8ExceptionReport {
+            muted_errors: false,
             summary: summary.to_owned(),
             source: Some(script_url.to_owned()),
             line: Some(1),
@@ -2174,6 +2184,7 @@ fn worker_bootstrap_value_error(
         .unwrap_or_else(|| "module worker evaluation failed".to_owned());
     WorkerBootstrapError::new(
         V8ExceptionReport {
+            muted_errors: false,
             summary,
             source: Some(script_url.to_owned()),
             line: Some(1),
@@ -2519,13 +2530,14 @@ fn throw_worker_synthetic_module_error<'s>(
 
 pub(super) fn worker_dynamic_import_callback<'s, 'i>(
     scope: &mut v8::PinScope<'s, 'i>,
-    _host_defined_options: v8::Local<'s, v8::Data>,
+    host_defined_options: v8::Local<'s, v8::Data>,
     resource_name: v8::Local<'s, v8::Value>,
     specifier: v8::Local<'s, v8::String>,
     import_attributes: v8::Local<'s, v8::FixedArray>,
 ) -> Option<v8::Local<'s, v8::Promise>> {
     queue_worker_dynamic_import(
         scope,
+        host_defined_options,
         resource_name,
         specifier,
         import_attributes,
@@ -2535,6 +2547,7 @@ pub(super) fn worker_dynamic_import_callback<'s, 'i>(
 
 fn queue_worker_dynamic_import<'s>(
     scope: &mut v8::PinScope<'s, '_>,
+    host_defined_options: v8::Local<'s, v8::Data>,
     resource_name: v8::Local<'s, v8::Value>,
     specifier: v8::Local<'s, v8::String>,
     import_attributes: v8::Local<'s, v8::FixedArray>,
@@ -2583,7 +2596,9 @@ fn queue_worker_dynamic_import<'s>(
         );
         return Some(promise);
     }
-    let base_url = resource_url;
+    let base_url =
+        crate::util::script_base_url_from_host_defined_options(scope, host_defined_options)
+            .or(resource_url);
     let Some(base_url) = base_url else {
         reject_worker_dynamic_import_resolver(
             scope,
@@ -2637,6 +2652,7 @@ pub(super) fn worker_dynamic_import_with_phase_callback<'s, 'i>(
             }
             queue_worker_dynamic_import(
                 scope,
+                host_defined_options,
                 resource_name,
                 specifier,
                 import_attributes,
@@ -2729,13 +2745,19 @@ fn reject_unsupported_worker_dynamic_import_phase<'s>(
 fn create_module_script_origin<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     url: &str,
+    origin: Option<&module_tree::ModuleSourceOrigin>,
 ) -> v8::ScriptOrigin<'s> {
-    let name = v8::String::new(scope, url).expect("v8 string allocation");
+    let name = v8::String::new(scope, origin.map_or(url, |origin| origin.url.as_str()))
+        .expect("v8 string allocation");
     v8::ScriptOrigin::new(
         scope,
         name.into(),
-        0,
-        0,
+        origin.map_or(0, |origin| {
+            i32::try_from(origin.line_offset).unwrap_or(i32::MAX)
+        }),
+        origin.map_or(0, |origin| {
+            i32::try_from(origin.column_offset).unwrap_or(i32::MAX)
+        }),
         false,
         -1,
         None,

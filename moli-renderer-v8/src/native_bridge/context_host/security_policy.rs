@@ -9,6 +9,7 @@ use crate::{
         ContentSecurityPolicyRedirectStatus, ContentSecurityPolicyReportingEndpoints,
         ContentSecurityPolicyScriptElementRequest, ContentSecurityPolicyStyleElementRequest,
         ContentSecurityPolicyViolationEventFields, TrustedTypesForScriptRequirements,
+        current_script_violation_location,
     },
     context_bootstrap::CHILD_BROWSING_CONTEXT_HANDLE_SLOT,
     document_runtime::{

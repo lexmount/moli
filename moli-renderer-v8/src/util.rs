@@ -10,7 +10,7 @@ pub use moli_v8_util::{
     global_constructor_object, global_constructor_prototype,
     initialize_ecmascript_intrinsic_registry, new_null_prototype_object, object_bool_property,
     object_chain_contains, object_defined_string_property, object_non_empty_string_property,
-    object_number_property, object_own_static_string_property, object_property_as_array,
+    object_number_property, object_own_static_property_as_array, object_own_static_string_property, object_property_as_array,
     object_property_as_object, object_string_property, private_key, register_ecmascript_intrinsic,
     registered_ecmascript_constructor, registered_ecmascript_prototype, set_null_prototype,
     set_private_value, throw_range_error, throw_type_error, v8_string, v8str, walk_object_chain,
@@ -441,6 +441,33 @@ fn script_host_defined_options_as_fixed_array<'s>(
     v8::Local::<v8::FixedArray>::try_from(host_defined_options).ok()
 }
 
+pub(crate) fn script_muted_errors_from_host_defined_options(
+    scope: &mut v8::PinScope<'_, '_>,
+    host_defined_options: v8::Local<'_, v8::Data>,
+) -> Option<bool> {
+    // Validate the shared marker before reading the optional provenance field.
+    script_base_url_from_host_defined_options(scope, host_defined_options)?;
+    let options = script_host_defined_options_as_fixed_array(host_defined_options)?;
+    if options.length() < 6 {
+        return None;
+    }
+    let value = v8::Local::<v8::Value>::try_from(options.get(scope, 5)?).ok()?;
+    value.is_boolean().then_some(value.is_true())
+}
+
+pub(crate) fn script_request_url_from_host_defined_options(
+    scope: &mut v8::PinScope<'_, '_>,
+    host_defined_options: v8::Local<'_, v8::Data>,
+) -> Option<Url> {
+    script_base_url_from_host_defined_options(scope, host_defined_options)?;
+    let options = script_host_defined_options_as_fixed_array(host_defined_options)?;
+    if options.length() < 7 {
+        return None;
+    }
+    let value = v8::Local::<v8::String>::try_from(options.get(scope, 6)?).ok()?;
+    Url::parse(&value.to_rust_string_lossy(scope)).ok()
+}
+
 pub(crate) fn script_base_url_from_continuation_data(
     scope: &mut v8::PinScope<'_, '_>,
 ) -> Option<Url> {
@@ -462,7 +489,7 @@ pub(crate) fn script_host_defined_options_with_base_url_and_nonce<'s>(
     base_url: &Url,
     nonce: Option<&str>,
 ) -> Option<v8::Local<'s, v8::Data>> {
-    script_host_defined_options_with_fetch_metadata(scope, base_url, nonce, false)
+    script_host_defined_options_with_fetch_metadata(scope, base_url, nonce, false, false, None)
 }
 
 pub(crate) fn script_host_defined_options_with_fetch_metadata<'s>(
@@ -470,6 +497,8 @@ pub(crate) fn script_host_defined_options_with_fetch_metadata<'s>(
     base_url: &Url,
     nonce: Option<&str>,
     parser_inserted: bool,
+    muted_errors: bool,
+    request_url: Option<&Url>,
 ) -> Option<v8::Local<'s, v8::Data>> {
     // V8 15.2 looks up Function/indirect-eval cache entries before resolving
     // the caller script. Partition caller metadata without disabling caching.
@@ -477,8 +506,9 @@ pub(crate) fn script_host_defined_options_with_fetch_metadata<'s>(
     let partition = format!(
         "\n// moli-referrer:{}",
         moli_crypto::sha256_hex(format!(
-            "{base_url}\0{}\0{parser_inserted}",
-            nonce.unwrap_or_default()
+            "{base_url}\0{}\0{parser_inserted}\0{muted_errors}\0{}",
+            nonce.unwrap_or_default(),
+            request_url.map(Url::as_str).unwrap_or_default()
         ))
     );
     let marker = v8_string(scope, SCRIPT_BASE_URL_HOST_DEFINED_OPTIONS_MARKER)?;
@@ -493,12 +523,15 @@ pub(crate) fn script_host_defined_options_with_fetch_metadata<'s>(
         },
     )?;
     let partition = v8_string(scope, &partition)?;
-    let options = v8::PrimitiveArray::new(scope, 5);
+    let request_url = v8_string(scope, request_url.map(Url::as_str).unwrap_or_default())?;
+    let options = v8::PrimitiveArray::new(scope, 7);
     options.set(scope, 0, marker.into());
     options.set(scope, 1, value.into());
     options.set(scope, 2, nonce.into());
     options.set(scope, 3, parser_metadata.into());
     options.set(scope, 4, partition.into());
+    options.set(scope, 5, v8::Boolean::new(scope, muted_errors).into());
+    options.set(scope, 6, request_url.into());
     Some(options.into())
 }
 
@@ -950,28 +983,6 @@ pub(crate) fn utf16_next_scalar_boundary(units: &[u16], offset: usize) -> usize 
     next
 }
 
-pub(crate) fn utf16_units_contain_unpaired_surrogate(units: &[u16]) -> bool {
-    let mut index = 0;
-    while index < units.len() {
-        let unit = units[index];
-        if (0xD800..=0xDBFF).contains(&unit) {
-            if units
-                .get(index + 1)
-                .is_some_and(|next| (0xDC00..=0xDFFF).contains(next))
-            {
-                index += 2;
-                continue;
-            }
-            return true;
-        }
-        if (0xDC00..=0xDFFF).contains(&unit) {
-            return true;
-        }
-        index += 1;
-    }
-    false
-}
-
 #[cfg(test)]
 #[path = "util_codegen_tests.rs"]
 mod generated_code_tests;
@@ -988,6 +999,28 @@ pub(crate) fn private_string_property<'s>(
     })
 }
 
+pub(crate) fn apply_webidl_constructor_prototype_fallback<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    receiver: v8::Local<'s, v8::Object>,
+    new_target: v8::Local<'s, v8::Value>,
+    default_constructor_name: &str,
+) {
+    // V8 has already read `NewTarget.prototype` while preparing the native
+    // constructor receiver. Do not read it again: a Proxy getter must run only
+    // once. V8 represents a non-object result with NewTarget's realm-local
+    // Object prototype, which lets us replace precisely that fallback with
+    // the WebIDL interface's default prototype from the same realm.
+    if !receiver_uses_new_target_realm_object_fallback(scope, receiver, new_target) {
+        return;
+    }
+    let Some(prototype) =
+        new_target_realm_constructor_prototype(scope, new_target, default_constructor_name)
+    else {
+        return;
+    };
+    let _ = receiver.set_prototype(scope, prototype.into());
+}
+
 #[cfg(test)]
 mod tests {
     use std::pin::pin;
@@ -996,8 +1029,10 @@ mod tests {
         SCRIPT_BASE_URL_HOST_DEFINED_OPTIONS_MARKER, object_chain_contains,
         script_base_url_from_host_defined_options,
         script_host_defined_options_with_base_url_and_nonce,
-        script_host_defined_options_with_fetch_metadata, script_nonce_from_host_defined_options,
-        script_parser_inserted_from_host_defined_options, utf16_replace_units_range_lossy,
+        script_host_defined_options_with_fetch_metadata,
+        script_muted_errors_from_host_defined_options, script_nonce_from_host_defined_options,
+        script_parser_inserted_from_host_defined_options,
+        script_request_url_from_host_defined_options, utf16_replace_units_range_lossy,
         utf16_slice_lossy, utf16_split_units_lossy, utf16_units, walk_object_chain,
     };
     use crate::ensure_v8_for_test as ensure_v8;
@@ -1076,10 +1111,93 @@ mod tests {
             script_parser_inserted_from_host_defined_options(scope, options),
             Some(false)
         );
+        assert_eq!(
+            script_muted_errors_from_host_defined_options(scope, options),
+            Some(false)
+        );
 
-        let parser_options =
-            script_host_defined_options_with_fetch_metadata(scope, &base_url, Some("abc123"), true)
-                .expect("parser-inserted host-defined options should allocate");
+        assert_eq!(
+            script_request_url_from_host_defined_options(scope, options),
+            None
+        );
+        let request_url = Url::parse("https://request.test/redirect.js").unwrap();
+        let muted = script_host_defined_options_with_fetch_metadata(
+            scope,
+            &base_url,
+            None,
+            false,
+            true,
+            Some(&request_url),
+        )
+        .unwrap();
+        assert_eq!(
+            script_muted_errors_from_host_defined_options(scope, muted),
+            Some(true)
+        );
+        assert_eq!(
+            script_request_url_from_host_defined_options(scope, muted),
+            Some(request_url)
+        );
+        for fields in [
+            vec![
+                SCRIPT_BASE_URL_HOST_DEFINED_OPTIONS_MARKER,
+                base_url.as_str(),
+            ],
+            vec![
+                SCRIPT_BASE_URL_HOST_DEFINED_OPTIONS_MARKER,
+                base_url.as_str(),
+                "",
+                "not-parser-inserted",
+                "true",
+            ],
+            vec![
+                "not-moli",
+                base_url.as_str(),
+                "",
+                "not-parser-inserted",
+                "true",
+            ],
+        ] {
+            let untrusted = primitive_host_defined_options(scope, &fields);
+            assert_eq!(
+                script_muted_errors_from_host_defined_options(scope, untrusted),
+                None
+            );
+            assert_eq!(
+                script_request_url_from_host_defined_options(scope, untrusted),
+                None
+            );
+        }
+        for (marker, request) in [
+            (SCRIPT_BASE_URL_HOST_DEFINED_OPTIONS_MARKER, "not a URL"),
+            ("not-moli", "https://private.test/source.js"),
+        ] {
+            let untrusted = primitive_host_defined_options(
+                scope,
+                &[
+                    marker,
+                    base_url.as_str(),
+                    "",
+                    "not-parser-inserted",
+                    "",
+                    request,
+                ],
+            );
+            assert_eq!(
+                script_request_url_from_host_defined_options(scope, untrusted),
+                None
+            );
+        }
+
+        let parser_options = script_host_defined_options_with_fetch_metadata(
+            scope,
+            &base_url,
+            Some("abc123"),
+            true,
+            false,
+            None,
+        )
+        .expect("parser-inserted host-defined options should allocate");
         assert_eq!(
             script_parser_inserted_from_host_defined_options(scope, parser_options),
             Some(true)

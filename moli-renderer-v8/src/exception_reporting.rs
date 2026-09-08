@@ -15,6 +15,8 @@ const VALUE_DEBUG_OBJECT_SUMMARY_MAX_BYTES: usize = 240 * 4;
 
 #[derive(Clone)]
 pub(super) struct V8ExceptionReport {
+    /// Script-origin taint supplied by V8, retained until web-facing reporting.
+    pub(super) muted_errors: bool,
     pub(super) summary: String,
     pub(super) source: Option<String>,
     pub(super) line: Option<usize>,
@@ -251,6 +253,7 @@ pub(super) fn build_exception_report_without_stack<'s>(
         .map(|line| line.to_rust_string_lossy(scope))
         .filter(|line| !line.is_empty());
     V8ExceptionReport {
+        muted_errors: message.is_some_and(|message| message.is_opaque()),
         summary,
         source,
         line,
@@ -824,6 +827,7 @@ fn invoke_callback_with_report_inner<'s>(
             if scope.is_execution_terminating() {
                 let _ = scope.rethrow();
                 captured_report = Some(V8ExceptionReport {
+                    muted_errors: false,
                     summary: format!("{callback_kind} `{callback_name}` was terminated"),
                     source: None,
                     line: None,
@@ -854,6 +858,7 @@ fn invoke_callback_with_report_inner<'s>(
     let _ = callback_kind;
     returned_value.ok_or_else(|| {
         Box::new(captured_report.unwrap_or_else(|| V8ExceptionReport {
+            muted_errors: false,
             summary: format!("{callback_kind} `{callback_name}` threw"),
             source: None,
             line: None,
@@ -887,25 +892,6 @@ fn invoke_callback_with_reporting<'s>(
         args,
     )
     .map_err(|report| report.formatted_error(callback_kind, callback_name))
-}
-
-pub(super) fn invoke_event_handler<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    handler_name: &str,
-    handler: v8::Local<'s, v8::Function>,
-    receiver: v8::Local<'s, v8::Value>,
-    args: &[v8::Local<'s, v8::Value>],
-) -> std::result::Result<v8::Global<v8::Value>, String> {
-    invoke_callback_with_reporting(
-        scope,
-        "event handler",
-        "host event handler threw",
-        CallbackExceptionLogLevel::Debug,
-        handler_name,
-        handler,
-        receiver,
-        args,
-    )
 }
 
 pub(super) fn invoke_callback<'s>(
