@@ -4,6 +4,7 @@ use crate::{
         ContentSecurityPolicyNonUrlKind, ContentSecurityPolicyRedirectStatus,
         ContentSecurityPolicyReportingEndpoints, ContentSecurityPolicyScriptElementRequest,
         ContentSecurityPolicyViolationEventFields, TrustedTypesForScriptRequirements,
+        current_script_violation_location,
     },
     context_bootstrap::CHILD_BROWSING_CONTEXT_HANDLE_SLOT,
     document_runtime::{

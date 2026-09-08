@@ -1239,6 +1239,8 @@ fn create_module_script_origin<'s>(
             base_url,
             fetch_metadata.nonce(),
             fetch_metadata.parser_inserted,
+            false,
+            None,
         )
     });
     v8::ScriptOrigin::new(

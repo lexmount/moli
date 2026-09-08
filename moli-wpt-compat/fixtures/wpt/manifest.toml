@@ -11463,7 +11463,7 @@ wait_until = "load"
 timeout_ms = 5000
 suite = "smoke"
 tags = ["worker"]
-notes = "Manual smoke port for dedicated worker importScripts rejecting direct cross-origin URLs and same-origin redirects that land on cross-origin targets with NetworkError. Same-origin importScripts injection and blob-url importScripts are covered separately."
+notes = "Manual smoke port for dedicated worker importScripts executing direct and redirected cross-origin scripts, retaining their side effects while replacing their thrown exceptions with NetworkError. Same-origin importScripts injection and blob-url importScripts are covered separately."
 
 [[test]]
 id = "worker-importscripts-blob-basic"

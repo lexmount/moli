@@ -30,7 +30,8 @@ pub(crate) struct WorkerGlobalState {
     pub(in crate::worker) global_kind: crate::worker::thread::WorkerGlobalKind,
     /// Whether this worker was constructed as a classic or module worker.
     pub(in crate::worker) script_kind: crate::worker::thread::WorkerScriptKind,
-    /// Base URL used to resolve relative worker script fetches.
+    /// Worker global URL and settings base, unchanged by importScripts().
+    /// Imported scripts carry their separate import base in V8 ScriptOrigin.
     pub(in crate::worker) current_script_url: Option<Url>,
     /// Referrer policy parsed from the top-level worker script response.
     pub(in crate::worker) referrer_policy: Option<String>,
