@@ -1580,9 +1580,9 @@ mod canvas_transfer_to_image_bitmap;
 mod canvas_transform_snapshots;
 mod geometry_point_transform;
 
-mod tls;
-
 mod canvas_fill_rect;
+mod tls;
+mod trusted_types_reporting;
 mod xhr_failure;
 
 mod payment_events;

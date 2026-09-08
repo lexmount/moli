@@ -1185,8 +1185,8 @@ impl PageScriptHost {
             return true;
         };
         // SAFETY: PageScriptHost is owned by the ScriptVm that owns this DocumentRuntime.
-        let check = unsafe { &*self.document_runtime }
-            .trusted_type_policy_name_csp_check_for_document(
+        let mut violations = unsafe { &*self.document_runtime }
+            .trusted_type_policy_name_csp_violations_for_document(
                 snapshot.document_handle,
                 &snapshot.document_url,
                 &snapshot.policy_container.response_content_security_policies,
@@ -1199,34 +1199,24 @@ impl PageScriptHost {
                 policy_name,
                 is_duplicate,
             );
-        let (report_only_violations, enforced_violations) = check.into_violations();
-        let mut report_only_violation = report_only_violations.into_iter().next();
-        let mut enforced_violation = enforced_violations.into_iter().next();
         if !self.active_inspector_dispatch
             && let Some((source_file, line_number, column_number)) =
                 crate::content_security_policy::current_script_violation_location(scope)
         {
-            for violation in [&mut enforced_violation, &mut report_only_violation]
-                .into_iter()
-                .flatten()
-            {
+            for violation in &mut violations {
                 violation.source_file.clone_from(&source_file);
                 violation.line_number = line_number;
                 violation.column_number = column_number;
             }
         }
-
         let host_ptr: *mut PageScriptHost = self;
-        let allowed = enforced_violation.is_none();
+        let allowed = !violations
+            .iter()
+            .any(|violation| violation.disposition == ContentSecurityPolicyDisposition::Enforce);
         // Policy creation reports expose CSP list ordering. Response policy
         // state is partitioned by disposition, with enforce policies modeled
         // before report-only policies, so preserve that order here.
-        if let Some(violation) = enforced_violation {
-            self.dispatch_content_security_policy_violation_event_for_owner_best_effort(
-                scope, host_ptr, owner, &violation,
-            );
-        }
-        if let Some(violation) = report_only_violation {
+        for violation in violations {
             self.dispatch_content_security_policy_violation_event_for_owner_best_effort(
                 scope, host_ptr, owner, &violation,
             );
