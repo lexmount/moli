@@ -39,7 +39,7 @@ impl Source {
         }
     }
 
-    fn fallback_metadata(&self) -> DownloadMetadata {
+    pub(super) fn fallback_metadata(&self) -> DownloadMetadata {
         match self {
             Self::Request(request) => DownloadMetadata::new(
                 request.request.url.as_str(),

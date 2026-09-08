@@ -2,6 +2,176 @@ use super::*;
 use moli_fetch::FetchCancelHandle;
 use tokio::sync::{mpsc, oneshot};
 
+fn contents_for_test() -> WebContentsHandle {
+    WebContentsHandle::new(
+        super::super::BrowserContextId::allocate(),
+        super::super::WebContentsId::allocate(),
+    )
+}
+
+#[tokio::test]
+async fn browser_denied_download_preserves_hint_without_a_transfer_or_foreign_source() {
+    use crate::browser::{
+        BrowserContextStoragePartitionHandles, BrowserService, StoragePartitionKind,
+    };
+    let service = BrowserService::start().unwrap();
+    let browser = service.handle();
+    let context = browser
+        .create_context(
+            BrowserContextStoragePartitionHandles::memory(),
+            StoragePartitionKind::Ephemeral,
+            None,
+            None,
+        )
+        .unwrap();
+    let (contents, _) = context.create_web_contents(Default::default()).unwrap();
+    let (_, mut events) = browser.subscribe().unwrap();
+    assert!(
+        context
+            .deny_download(contents_for_test(), "blob:source".into(), Vec::new(), None)
+            .is_err()
+    );
+    assert!(events.try_recv().is_err());
+    let mut observation = context
+        .deny_download(
+            contents,
+            "blob:source".into(),
+            Vec::new(),
+            Some("suggested.txt".into()),
+        )
+        .unwrap();
+    let crate::browser::BrowserEvent::DownloadCreated(created) = events.try_recv().unwrap().event
+    else {
+        panic!("missing native denied occurrence")
+    };
+    assert_eq!(created.event.snapshot, observation.snapshot());
+    assert_eq!(created.event.snapshot.state, DownloadState::Canceled);
+    assert_eq!(
+        created
+            .event
+            .snapshot
+            .metadata
+            .as_ref()
+            .unwrap()
+            .suggested_filename,
+        "suggested.txt"
+    );
+    assert!(observation.next_update().await.is_none());
+    assert!(context.cancel_download(observation.guid()).is_none());
+    assert!(context.read_download_artifact(observation.guid()).is_none());
+    let snapshot = browser.subscribe().unwrap().0;
+    assert_eq!(snapshot.downloads.len(), 1);
+    assert_eq!(snapshot.downloads[0].event, created.event);
+    service.shutdown();
+}
+
+impl AdmittedDownload {
+    // These manager unit tests drive the same progress/state boundary locally.
+    // BrowserService tests below exercise the actual owner sequence and stream.
+    fn observe_for_test(self) -> DownloadObservation {
+        let Self {
+            mut observation,
+            state,
+            progress,
+        } = self;
+        let initial = observation.event();
+        if let Some(mut progress) = progress {
+            tokio::spawn(async move {
+                while progress.changed().await.is_ok() {
+                    state.send_replace(Arc::new(DownloadEvent {
+                        sequence: BrowserSequence::allocate(),
+                        web_contents: initial.web_contents,
+                        guid: initial.guid.clone(),
+                        snapshot: progress.borrow_and_update().clone(),
+                    }));
+                }
+            });
+        }
+        observation
+    }
+}
+
+#[tokio::test]
+async fn browser_owner_publishes_download_admission_without_devtools() {
+    use crate::browser::{
+        BrowserContextStoragePartitionHandles, BrowserService, StoragePartitionKind,
+    };
+    let directory = TestDirectory::new();
+    let service = BrowserService::start().unwrap();
+    let browser = service.handle();
+    let context = browser
+        .create_context(
+            BrowserContextStoragePartitionHandles::memory(),
+            StoragePartitionKind::Ephemeral,
+            None,
+            None,
+        )
+        .unwrap();
+    let (contents, _) = context.create_web_contents(Default::default()).unwrap();
+    let (_, mut events) = browser.subscribe().unwrap();
+    let (body, producer) = stream();
+    let mut observation = context
+        .start_download_response(
+            contents,
+            &directory.policy(),
+            Url::parse("https://download.test/report.txt").unwrap(),
+            Vec::new(),
+            body,
+        )
+        .unwrap()
+        .unwrap();
+    let created = events
+        .try_recv()
+        .expect("Browser admission must publish before returning");
+    let crate::browser::BrowserEvent::DownloadCreated(record) = created.event else {
+        panic!("expected native download admission")
+    };
+    let event = record.event;
+    assert_eq!(created.sequence, event.sequence);
+    assert_eq!(event.guid, observation.guid());
+    assert_eq!(event.web_contents, contents);
+    assert_eq!(event.snapshot.state, DownloadState::Active);
+    let first = event.sequence;
+    producer.chunks.send(b"native".to_vec()).unwrap();
+    wait_for(&mut observation, |snapshot| snapshot.received_bytes == 6).await;
+    drop(producer.chunks);
+    producer.completion.send(Ok(())).unwrap();
+    let completed = terminal(&mut observation).await;
+    assert_eq!(completed.received_bytes, 6);
+    let mut previous = first;
+    loop {
+        let record = events.recv().await.unwrap();
+        let crate::browser::BrowserEvent::DownloadUpdated(event) = record.event else {
+            panic!("unexpected native event during one download");
+        };
+        assert_eq!(record.sequence, event.sequence);
+        assert!(event.sequence > previous);
+        previous = event.sequence;
+        assert_eq!(event.web_contents, contents);
+        assert_eq!(event.guid, observation.guid());
+        if event.snapshot.state != DownloadState::Active {
+            assert_eq!(event.snapshot, completed);
+            let snapshot = browser.subscribe().unwrap().0;
+            assert!(snapshot.sequence >= event.sequence);
+            assert_eq!(snapshot.downloads.len(), 1);
+            assert_eq!(snapshot.downloads[0].event, event);
+            break;
+        }
+    }
+    assert_eq!(
+        context
+            .read_download_artifact(observation.guid())
+            .unwrap()
+            .unwrap()
+            .await
+            .unwrap()
+            .unwrap(),
+        b"native"
+    );
+    drop(observation);
+    service.shutdown();
+}
+
 struct TestDirectory(PathBuf);
 impl TestDirectory {
     fn new() -> Self {
@@ -72,6 +242,7 @@ fn start(
 ) -> DownloadObservation {
     manager
         .start_response(
+            contents_for_test(),
             &directory.policy(),
             Url::parse("https://download.test/report.txt").unwrap(),
             Vec::new(),
@@ -79,6 +250,7 @@ fn start(
         )
         .unwrap()
         .unwrap()
+        .observe_for_test()
 }
 
 async fn wait_for(
@@ -331,13 +503,15 @@ async fn admission_freezes_policy_and_guid_naming() {
     policy.behavior = DownloadBehavior::AllowAndName;
     let mut observation = manager
         .start_response(
+            contents_for_test(),
             &policy,
             Url::parse("https://download.test/report.txt").unwrap(),
             Vec::new(),
             DownloadBody::Buffered(b"saved".to_vec()),
         )
         .unwrap()
-        .unwrap();
+        .unwrap()
+        .observe_for_test();
     policy.behavior = DownloadBehavior::Deny;
     policy.download_path = None;
     assert_eq!(
@@ -346,17 +520,21 @@ async fn admission_freezes_policy_and_guid_naming() {
             artifact_path: directory.0.join(observation.guid())
         }
     );
-    assert!(
-        manager
-            .start_response(
-                &policy,
-                Url::parse("https://download.test/denied").unwrap(),
-                Vec::new(),
-                DownloadBody::Buffered(Vec::new())
-            )
-            .unwrap()
-            .is_none()
-    );
+    let mut denied = manager
+        .start_response(
+            contents_for_test(),
+            &policy,
+            Url::parse("https://download.test/denied").unwrap(),
+            Vec::new(),
+            DownloadBody::Buffered(Vec::new()),
+        )
+        .unwrap()
+        .unwrap()
+        .observe_for_test();
+    assert_eq!(denied.snapshot().state, DownloadState::Canceled);
+    assert_eq!(denied.snapshot().received_bytes, 0);
+    assert!(denied.next_update().await.is_none());
+    assert_eq!(directory.files(), [directory.0.join(observation.guid())]);
 }
 
 #[tokio::test]
@@ -417,13 +595,15 @@ async fn network_download_runs_without_a_frontend_and_uses_response_filename() {
     let mut manager = DownloadManager::default();
     let mut observation = manager
         .start_request(
+            contents_for_test(),
             &directory.policy(),
             client.clone(),
             Request::get(&url).unwrap(),
             Some("from-hint.txt".into()),
         )
         .unwrap()
-        .unwrap();
+        .unwrap()
+        .observe_for_test();
     assert_eq!(
         observation.snapshot().metadata.unwrap().suggested_filename,
         "from-hint.txt"
@@ -480,13 +660,15 @@ async fn context_retirement_cancels_network_download_before_response_headers() {
     let mut manager = DownloadManager::default();
     let mut observation = manager
         .start_request(
+            contents_for_test(),
             &directory.policy(),
             client.clone(),
             Request::get(&url).unwrap(),
             None,
         )
         .unwrap()
-        .unwrap();
+        .unwrap()
+        .observe_for_test();
     request_arrived.await.unwrap();
     drop(manager);
     assert_eq!(

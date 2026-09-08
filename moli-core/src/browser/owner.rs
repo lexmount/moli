@@ -13,6 +13,7 @@ use parking_lot::Mutex;
 use tokio::sync::{mpsc, oneshot};
 
 mod activation;
+mod downloads;
 pub use activation::PendingWebContentsActivation;
 mod navigation;
 pub use navigation::{
@@ -394,6 +395,10 @@ impl BrowserHandle {
                             .flatten()
                     })
                 }),
+                browser
+                    .contexts
+                    .values()
+                    .flat_map(|context| context.downloads.snapshots()),
             )
         })
     }
@@ -1299,15 +1304,47 @@ impl BrowserContextHandle {
 
     pub fn start_download_request(
         &self,
+        web_contents: WebContentsHandle,
         policy: &super::DownloadPolicy,
         client: crate::network::ResourceRequestClient,
         request: moli_fetch::Request,
         suggested_filename: Option<String>,
     ) -> Result<Option<super::DownloadObservation>, String> {
         let policy = policy.clone();
-        self.try_update(move |context| {
-            context.start_download_request(&policy, client, request, suggested_filename)
-        })
+        let context = self.id;
+        self.browser.execute(move |browser| {
+            let admitted = browser.context_mut(context)?.start_download_request(
+                web_contents,
+                &policy,
+                client,
+                request,
+                suggested_filename,
+            )?;
+            Ok(admitted.map(|admitted| browser.admit_download(admitted)))
+        })?
+    }
+
+    pub fn deny_download(
+        &self,
+        web_contents: WebContentsHandle,
+        url: String,
+        headers: Vec<(String, String)>,
+        suggested_filename: Option<String>,
+    ) -> Result<super::DownloadObservation, String> {
+        let context = self.id;
+        self.browser.execute(move |browser| {
+            let context = browser.context_mut(context)?;
+            if !context.contains_web_contents(web_contents) {
+                return Err("WebContents unavailable".into());
+            }
+            let admitted = context.downloads.deny(
+                web_contents,
+                &url,
+                &headers,
+                suggested_filename.as_deref(),
+            )?;
+            Ok(browser.admit_download(admitted))
+        })?
     }
 
     pub fn start_download_response(
@@ -1319,9 +1356,17 @@ impl BrowserContextHandle {
         body: super::DownloadBody,
     ) -> Result<Option<super::DownloadObservation>, String> {
         let policy = policy.clone();
-        self.try_update(move |context| {
-            context.start_download_response(web_contents, &policy, url, headers, body)
-        })
+        let context = self.id;
+        self.browser.execute(move |browser| {
+            let admitted = browser.context_mut(context)?.start_download_response(
+                web_contents,
+                &policy,
+                url,
+                headers,
+                body,
+            )?;
+            Ok(admitted.map(|admitted| browser.admit_download(admitted)))
+        })?
     }
 
     pub fn cancel_download(&self, guid: &str) -> Option<Result<(), super::DownloadAccessError>> {

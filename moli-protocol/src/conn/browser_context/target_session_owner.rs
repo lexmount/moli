@@ -1083,7 +1083,7 @@ impl CdpConnection {
         let Ok(closing) = self.browser.close_web_contents(handle) else {
             return Vec::new();
         };
-        let record = closing.event;
+        let record = closing.event.clone();
         let moli_core::browser::BrowserEvent::WebContentsClosed { activated, .. } = record.event
         else {
             unreachable!("Browser close must return its committed close occurrence");

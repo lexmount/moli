@@ -2,8 +2,8 @@ use std::path::PathBuf;
 
 use crate::{
     browser::{
-        BrowserContextId, DocumentHandle, DownloadManager, DownloadPolicy, PermissionOverrides,
-        WebContentsHandle, WebContentsId, WebContentsSelection,
+        BrowserContextId, DocumentHandle, DownloadPolicy, PermissionOverrides, WebContentsHandle,
+        WebContentsId, WebContentsSelection,
     },
     network::{SharedWebStorageStore, new_shared_web_storage_store},
     runtime::{
@@ -216,7 +216,7 @@ pub struct BrowserContext {
     browser_identity_override: Option<BrowserIdentityProfile>,
     permission_overrides: PermissionOverrides,
     download_policy: Option<DownloadPolicy>,
-    downloads: DownloadManager,
+    pub(in crate::browser) downloads: super::downloads::DownloadManager,
     // The Browser collection and its only selector have the same lifetime.
     // Keep insertion order when choosing a replacement foreground page.
     web_contents: IndexMap<WebContentsId, WebContents>,
@@ -350,7 +350,7 @@ impl BrowserContext {
             browser_identity_override: None,
             permission_overrides: PermissionOverrides::default(),
             download_policy: None,
-            downloads: DownloadManager::default(),
+            downloads: super::downloads::DownloadManager::default(),
             web_contents: IndexMap::new(),
             selected_web_contents: None,
             renderer_output_transport_sender: None,

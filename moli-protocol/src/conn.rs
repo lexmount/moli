@@ -1080,6 +1080,7 @@ pub struct CdpConnection {
     // Browser profile, download and global IO state.
     download_policy: moli_core::browser::DownloadPolicy,
     download_subscriptions: download_policy::DownloadSubscriptions,
+    download_projections: HashMap<String, Arc<Mutex<downloads::DownloadProjection>>>,
     next_global_io_stream_id: u64,
     base_browser_identity: moli_browser_profile::BrowserIdentityProfile,
     pub(crate) browser_global_overrides: BrowserGlobalOverrides,
@@ -1162,6 +1163,7 @@ impl CdpConnection {
             install_default_target_on_auto_attach: false,
             download_policy: moli_core::browser::DownloadPolicy::default(),
             download_subscriptions: download_policy::DownloadSubscriptions::default(),
+            download_projections: HashMap::new(),
             next_bc_id: 0,
             next_global_io_stream_id: 0,
             next_target_id: 0,

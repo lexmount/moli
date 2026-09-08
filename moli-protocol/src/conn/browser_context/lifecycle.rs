@@ -110,6 +110,10 @@ impl CdpConnection {
         for selected in snapshot.selected_web_contents {
             events.extend(self.project_browser_selection(selected, None, snapshot.sequence));
         }
+        for download in snapshot.downloads {
+            events.extend(self.project_created_browser_download(download));
+        }
+        events.extend(self.project_retired_context_downloads());
         events
     }
 
@@ -226,7 +230,7 @@ impl CdpConnection {
                 .map(|index| self.inactive_browser_contexts.swap_remove(index))
         };
         let Some(mut removed) = removed else {
-            return Vec::new();
+            return self.project_retired_context_downloads();
         };
         // Selecting a remaining DevTools projection must not reconfigure a
         // Browser Context: this is an observation, not another transaction.
@@ -250,6 +254,7 @@ impl CdpConnection {
             events.extend(self.project_retired_target(info, sessions, true).await);
         }
         removed.retire_page_projections();
+        events.extend(self.project_retired_context_downloads());
         events
     }
 

@@ -34,8 +34,13 @@ impl BrowserContext {
             &browser_globals.extra_headers,
             browser_globals.network_conditions,
         )?;
-        self.browser_context
-            .start_download_request(policy, client, request, suggested_filename)
+        self.browser_context.start_download_request(
+            web_contents,
+            policy,
+            client,
+            request,
+            suggested_filename,
+        )
     }
 
     pub(in crate::conn) fn start_download_response(

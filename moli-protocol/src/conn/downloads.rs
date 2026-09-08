@@ -1,9 +1,12 @@
+use std::sync::Arc;
+
 use moli_core::browser::{
-    DownloadAccessError, DownloadBody, DownloadObservation, DownloadPolicy, DownloadSnapshot,
-    DownloadState, WebContentsHandle,
+    BrowserSequence, DownloadAccessError, DownloadBody, DownloadEvent, DownloadObservation,
+    DownloadPolicy, DownloadSnapshot, DownloadState, WebContentsHandle,
 };
 use moli_core::page::RendererPendingDownloadActivation;
 use moli_fetch::Request;
+use parking_lot::Mutex;
 use url::Url;
 
 use super::{
@@ -43,14 +46,6 @@ struct BrowserDownloadObserver {
 struct PageDownloadObserver {
     session_id: Option<String>,
     subscription_generation: u64,
-}
-
-impl DownloadEventRoute {
-    fn has_observers(&self) -> bool {
-        self.automation_events_enabled
-            || !self.browser_observers.is_empty()
-            || !self.page_observers.is_empty()
-    }
 }
 
 impl CdpConnection {
@@ -138,68 +133,56 @@ impl CdpConnection {
             return Ok(());
         }
         let observation = if policy.behavior.is_canceled_without_download() {
-            if !event_route.has_observers() {
-                return Ok(());
-            }
             let (url, headers) = activation
                 .response
                 .as_ref()
-                .map(|response| (response.final_url.as_str(), response.headers.as_slice()))
-                .unwrap_or((activation.url.as_str(), &[]));
-            Some(DownloadObservation::denied(
-                url,
-                headers,
-                activation.suggested_filename.as_deref(),
-            )?)
+                .map(|response| (response.final_url.clone(), response.headers.clone()))
+                .unwrap_or_else(|| (activation.url.clone(), Vec::new()));
+            Some(
+                self.browser
+                    .context_handle(web_contents.context())?
+                    .deny_download(web_contents, url, headers, activation.suggested_filename)?,
+            )
+        } else if let Some(response) = activation.response {
+            let url = Url::parse(&response.final_url)
+                .or_else(|_| Url::parse(&activation.url))
+                .map_err(|error| format!("invalid download url: {error}"))?;
+            self.browser_context_by_browser_id_mut(web_contents.context())
+                .expect("exact download Context was resolved without yielding")
+                .start_download_response(
+                    web_contents,
+                    &policy,
+                    url,
+                    response.headers,
+                    DownloadBody::Buffered(response.body),
+                )?
         } else {
-            if policy.download_path.is_none() {
-                return Ok(());
+            let mut request = Request::get(&activation.url)
+                .map_err(|error| format!("invalid download url: {error}"))?;
+            request.request_headers = request_headers;
+            request = request
+                .with_top_level_navigation_cookie_context()
+                .with_page_network_policy();
+            if let Some(initiator_url) = &initiator_url {
+                request = request.with_initiator_url(initiator_url);
             }
-            if let Some(response) = activation.response {
-                let url = Url::parse(&response.final_url)
-                    .or_else(|_| Url::parse(&activation.url))
-                    .map_err(|error| format!("invalid download url: {error}"))?;
-                self.browser_context_by_browser_id_mut(web_contents.context())
-                    .expect("exact download Context was resolved without yielding")
-                    .start_download_response(
-                        web_contents,
-                        &policy,
-                        url,
-                        response.headers,
-                        DownloadBody::Buffered(response.body),
-                    )?
-            } else {
-                let mut request = Request::get(&activation.url)
-                    .map_err(|error| format!("invalid download url: {error}"))?;
-                request.request_headers = request_headers;
-                request = request
-                    .with_top_level_navigation_cookie_context()
-                    .with_page_network_policy();
-                if let Some(initiator_url) = &initiator_url {
-                    request = request.with_initiator_url(initiator_url);
-                }
-                let fetch_defaults = self.document_fetch_defaults();
-                let browser_globals = self.browser_global_overrides.clone();
-                self.browser_context_by_browser_id_mut(web_contents.context())
-                    .expect("exact download Context was resolved without yielding")
-                    .start_download_request(
-                        web_contents,
-                        fetch_defaults,
-                        &policy,
-                        request,
-                        activation.suggested_filename,
-                        &browser_globals,
-                    )?
-            }
+            let fetch_defaults = self.document_fetch_defaults();
+            let browser_globals = self.browser_global_overrides.clone();
+            self.browser_context_by_browser_id_mut(web_contents.context())
+                .expect("exact download Context was resolved without yielding")
+                .start_download_request(
+                    web_contents,
+                    fetch_defaults,
+                    &policy,
+                    request,
+                    activation.suggested_filename,
+                    &browser_globals,
+                )?
         };
         if let Some(observation) = observation {
             self.observe_download(
-                DownloadProjection {
-                    frame_id,
-                    event_route,
-                    observation,
-                    started: false,
-                },
+                DownloadProjection::new(frame_id, event_route, observation.guid().to_owned()),
+                observation,
                 out,
                 allow_background_events,
                 command_context,
@@ -240,12 +223,12 @@ impl CdpConnection {
             .start_download_response(web_contents, &policy, final_url, headers, body)?;
         if let Some(observation) = observation {
             self.observe_download(
-                DownloadProjection {
-                    frame_id: state.frame_id.clone(),
+                DownloadProjection::new(
+                    state.frame_id.clone(),
                     event_route,
-                    observation,
-                    started: false,
-                },
+                    observation.guid().to_owned(),
+                ),
+                observation,
                 out,
                 true,
                 command_context,
@@ -256,15 +239,17 @@ impl CdpConnection {
     }
 
     async fn observe_download(
-        &self,
+        &mut self,
         mut projection: DownloadProjection,
+        mut observation: DownloadObservation,
         out: &mut Vec<BackgroundProtocolEvent>,
         allow_background_events: bool,
         command_context: &mut CommandDispatchContext,
     ) {
-        let initial = projection.observation.snapshot();
-        let terminal = initial.state != DownloadState::Active;
-        let events = projection.project(initial);
+        let initial = observation.event();
+        projection.observation = Some(observation.clone());
+        let terminal = initial.snapshot.state != DownloadState::Active;
+        let events = projection.observe(&initial);
         if allow_background_events && let Some(sender) = self.background_event_sender() {
             let response_flush = command_context.response_flush().receiver();
             if response_flush.is_some() {
@@ -272,34 +257,137 @@ impl CdpConnection {
             } else {
                 send_background_download_events(&sender, events);
             }
-            if !terminal {
-                tokio::spawn(async move {
-                    // This gates observation only. The Browser task was admitted
-                    // before this wait and outlives an abandoned frontend response.
-                    if !wait_for_command_response_flush(response_flush).await {
-                        return;
-                    }
-                    while let Some(snapshot) = projection.observation.next_update().await {
-                        let terminal = snapshot.state != DownloadState::Active;
-                        send_background_download_events(&sender, projection.project(snapshot));
-                        if terminal {
-                            break;
+            projection.response_flush = response_flush.clone();
+            projection.background_sender = Some(sender.clone());
+            let projection = Arc::new(Mutex::new(projection));
+            self.download_projections
+                .insert(initial.guid.clone(), projection.clone());
+            if response_flush.is_some() {
+                command_context
+                    .response_flush()
+                    .defer_until_response_flush(move || {
+                        let mut projection = projection.lock();
+                        if response_flush.as_ref().is_some_and(|flush| *flush.borrow()) {
+                            if let Some(snapshot) = projection.pending.take() {
+                                send_background_download_events(
+                                    &sender,
+                                    projection.project(snapshot),
+                                );
+                            }
+                        } else {
+                            projection.abandoned = true;
+                            projection.pending = None;
                         }
-                    }
-                });
+                    });
             }
         } else {
             out.extend(events);
             if !terminal {
-                while let Some(snapshot) = projection.observation.next_update().await {
-                    let terminal = snapshot.state != DownloadState::Active;
-                    out.extend(projection.project(snapshot));
-                    if terminal {
+                while observation.next_update().await.is_some() {
+                    let event = observation.event();
+                    out.extend(projection.observe(&event));
+                    if event.snapshot.state != DownloadState::Active {
                         break;
                     }
                 }
             }
+            self.download_projections
+                .insert(initial.guid.clone(), Arc::new(Mutex::new(projection)));
         }
+    }
+
+    /// Consume a committed native occurrence; this observer never drives the
+    /// transfer and never rediscovers its source through the selected Target.
+    pub fn project_created_browser_download(
+        &mut self,
+        record: moli_core::browser::DownloadRecordSnapshot,
+    ) -> Vec<BackgroundProtocolEvent> {
+        let event = record.event;
+        if !self.download_projections.contains_key(&event.guid) {
+            let Some(context) = self.browser_context_by_browser_id(event.web_contents.context())
+            else {
+                return Vec::new();
+            };
+            let Some(target) = context
+                .page_targets
+                .get_for_web_contents(event.web_contents.id())
+            else {
+                return Vec::new();
+            };
+            let frame_id = target.target_id().to_owned();
+            let owner = CommandOwnerScope::for_route(super::CdpSessionRoute::PageTarget {
+                browser_context_id: context.id.clone(),
+                target_id: frame_id.clone(),
+                session_key: moli_page_types::DevToolsSessionKey::Primary,
+            });
+            let automation = self.automation_download_events_enabled_for_context(Some(&context.id));
+            let route = self.download_event_route(&owner, automation);
+            self.download_projections.insert(
+                event.guid.clone(),
+                Arc::new(Mutex::new(DownloadProjection::new(
+                    frame_id,
+                    route,
+                    event.guid.clone(),
+                ))),
+            );
+        }
+        self.download_projections
+            .get(&event.guid)
+            .expect("download projection just installed")
+            .lock()
+            .observation = Some(record.observation);
+        self.project_browser_download(event)
+    }
+
+    pub fn project_browser_download(
+        &mut self,
+        event: Arc<DownloadEvent>,
+    ) -> Vec<BackgroundProtocolEvent> {
+        let Some(projection) = self.download_projections.get(&event.guid) else {
+            return Vec::new();
+        };
+        let mut projection = projection.lock();
+        let events = projection.observe(&event);
+        // Flush callbacks and subsequent native updates share one frontend
+        // FIFO. Returning a later update directly could overtake queued output.
+        let events = if let Some(sender) = &projection.background_sender {
+            send_background_download_events(sender, events);
+            Vec::new()
+        } else {
+            events
+        };
+        drop(projection);
+        if event.snapshot.state != DownloadState::Active
+            && self
+                .browser_context_by_browser_id(event.web_contents.context())
+                .is_none()
+        {
+            self.download_projections.remove(&event.guid);
+        }
+        events
+    }
+
+    pub(crate) fn project_retired_context_downloads(&mut self) -> Vec<BackgroundProtocolEvent> {
+        let live = self
+            .browser_contexts()
+            .map(|context| context.browser_context_id())
+            .collect::<std::collections::HashSet<_>>();
+        // This is read-only access to the originally admitted record, not a
+        // lookup in a replacement Context. Resubscription plus this observation
+        // closes the gap even when cleanup finished after Context disposal.
+        let updates = self
+            .download_projections
+            .values()
+            .filter_map(|projection| {
+                let mut projection = projection.lock();
+                let event = projection.observation.as_mut()?.event();
+                (!live.contains(&event.web_contents.context())).then_some(event)
+            })
+            .collect::<Vec<_>>();
+        updates
+            .into_iter()
+            .flat_map(|event| self.project_browser_download(event))
+            .collect()
     }
 
     pub(crate) fn cancel_download(&self, guid: &str) -> Result<(), String> {
@@ -369,19 +457,62 @@ fn download_access_error(error: DownloadAccessError) -> String {
     .to_owned()
 }
 
-struct DownloadProjection {
+pub(super) struct DownloadProjection {
     frame_id: String,
     event_route: DownloadEventRoute,
-    observation: DownloadObservation,
+    guid: String,
+    observation: Option<DownloadObservation>,
     started: bool,
+    sequence: Option<BrowserSequence>,
+    pending: Option<DownloadSnapshot>,
+    response_flush: Option<tokio::sync::watch::Receiver<bool>>,
+    background_sender: Option<BackgroundEventSender>,
+    abandoned: bool,
 }
 
 impl DownloadProjection {
+    fn new(frame_id: String, event_route: DownloadEventRoute, guid: String) -> Self {
+        Self {
+            frame_id,
+            event_route,
+            guid,
+            observation: None,
+            started: false,
+            sequence: None,
+            pending: None,
+            response_flush: None,
+            background_sender: None,
+            abandoned: false,
+        }
+    }
+
+    fn observe(&mut self, event: &DownloadEvent) -> Vec<BackgroundProtocolEvent> {
+        if self
+            .sequence
+            .is_some_and(|sequence| sequence >= event.sequence)
+        {
+            return Vec::new();
+        }
+        self.sequence = Some(event.sequence);
+        if self.abandoned {
+            return Vec::new();
+        }
+        if self
+            .response_flush
+            .as_ref()
+            .is_some_and(|flush| !*flush.borrow())
+        {
+            self.pending = Some(event.snapshot.clone());
+            return Vec::new();
+        }
+        self.project(event.snapshot.clone())
+    }
+
     fn project(&mut self, snapshot: DownloadSnapshot) -> Vec<BackgroundProtocolEvent> {
         let Some(metadata) = snapshot.metadata else {
             return Vec::new();
         };
-        let guid = self.observation.guid();
+        let guid = &self.guid;
         let mut events = Vec::new();
         if !self.started {
             events.extend(download_will_begin_events(
@@ -452,20 +583,6 @@ fn send_background_download_events(
         let _ = sender.send(event);
     }
 }
-async fn wait_for_command_response_flush(
-    mut receiver: Option<tokio::sync::watch::Receiver<bool>>,
-) -> bool {
-    let Some(receiver) = receiver.as_mut() else {
-        return true;
-    };
-    while !*receiver.borrow() {
-        if receiver.changed().await.is_err() {
-            return false;
-        }
-    }
-    true
-}
-
 fn download_will_begin_events(
     event_route: &DownloadEventRoute,
     frame_id: &str,

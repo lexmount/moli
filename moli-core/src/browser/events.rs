@@ -5,7 +5,7 @@ use super::{
 };
 
 /// A committed Browser lifetime change, with no protocol or session identity.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub enum BrowserEvent {
     ContextCreated(BrowserContextId),
     ContextDisposed(BrowserContextId),
@@ -15,13 +15,15 @@ pub enum BrowserEvent {
         previous: Option<WebContentsHandle>,
     },
     DocumentCommitted(DocumentHandle),
+    DownloadCreated(super::DownloadRecordSnapshot),
+    DownloadUpdated(std::sync::Arc<super::DownloadEvent>),
     WebContentsClosed {
         web_contents: WebContentsHandle,
         activated: Option<WebContentsHandle>,
     },
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct BrowserEventRecord {
     pub sequence: BrowserSequence,
     pub event: BrowserEvent,
@@ -43,6 +45,7 @@ pub struct BrowserSnapshot {
     pub web_contents: Vec<WebContentsHandle>,
     pub selected_web_contents: Vec<WebContentsHandle>,
     pub documents: Vec<DocumentHandle>,
+    pub downloads: Vec<super::DownloadRecordSnapshot>,
 }
 
 /// Current physical Page identity and URL read in one Browser owner turn.
@@ -90,7 +93,7 @@ impl BrowserEventStream {
             sequence: self.sequence,
             event,
         };
-        let _ = self.sender.send(record);
+        let _ = self.sender.send(record.clone());
         record
     }
 
@@ -100,6 +103,7 @@ impl BrowserEventStream {
         web_contents: impl Iterator<Item = WebContentsHandle>,
         selected_web_contents: impl Iterator<Item = WebContentsHandle>,
         documents: impl Iterator<Item = DocumentHandle>,
+        downloads: impl Iterator<Item = super::DownloadRecordSnapshot>,
     ) -> (BrowserSnapshot, BrowserEventReceiver) {
         (
             BrowserSnapshot {
@@ -108,6 +112,7 @@ impl BrowserEventStream {
                 web_contents: web_contents.collect(),
                 selected_web_contents: selected_web_contents.collect(),
                 documents: documents.collect(),
+                downloads: downloads.collect(),
             },
             self.sender.subscribe(),
         )
@@ -305,6 +310,7 @@ mod tests {
             std::iter::empty(),
             std::iter::empty(),
             std::iter::empty(),
+            std::iter::empty(),
         );
         for _ in 0..257 {
             stream.publish(BrowserEvent::ContextCreated(context));
@@ -312,6 +318,7 @@ mod tests {
         assert_eq!(slow.try_recv(), Err(TryRecvError::Lagged(1)));
         let (snapshot, mut recovered) = stream.subscribe(
             std::iter::once(context),
+            std::iter::empty(),
             std::iter::empty(),
             std::iter::empty(),
             std::iter::empty(),

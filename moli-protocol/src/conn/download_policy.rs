@@ -125,7 +125,6 @@ impl CdpConnection {
             .unwrap_or_else(|| self.download_policy.clone())
     }
 
-    #[cfg(test)]
     pub(crate) fn automation_download_events_enabled_for_context(
         &self,
         context_id: Option<&str>,

@@ -1,9 +1,10 @@
-use std::{collections::HashMap, path::PathBuf};
+use std::{collections::HashMap, path::PathBuf, sync::Arc};
 
 use moli_fetch::{Request, StreamingRawResponse};
 use tokio::sync::watch;
 use url::Url;
 
+use super::{BrowserSequence, WebContentsHandle};
 use crate::network::ResourceRequestClient;
 
 mod naming;
@@ -64,12 +65,37 @@ pub struct DownloadSnapshot {
     pub state: DownloadState,
 }
 
+/// One exact Browser-owned download revision, including its physical source.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct DownloadEvent {
+    pub sequence: BrowserSequence,
+    pub web_contents: WebContentsHandle,
+    pub guid: String,
+    pub snapshot: DownloadSnapshot,
+}
+
 /// Read-only observation. Dropping it never cancels Browser work. Slow observers
 /// retain only the latest progress, not an unbounded queue of network chunks.
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct DownloadObservation {
     guid: String,
-    updates: watch::Receiver<DownloadSnapshot>,
+    updates: watch::Receiver<Arc<DownloadEvent>>,
+}
+
+impl PartialEq for DownloadObservation {
+    fn eq(&self, other: &Self) -> bool {
+        self.guid == other.guid && self.updates.same_channel(&other.updates)
+    }
+}
+impl Eq for DownloadObservation {}
+
+/// A frozen native revision together with read-only access to that exact
+/// record. A retired Context cannot be queried again, but existing observers
+/// can still recover its transfer's cleanup result after event-stream lag.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct DownloadRecordSnapshot {
+    pub event: Arc<DownloadEvent>,
+    pub observation: DownloadObservation,
 }
 
 impl DownloadObservation {
@@ -78,31 +104,30 @@ impl DownloadObservation {
     }
 
     pub fn snapshot(&mut self) -> DownloadSnapshot {
+        self.event().snapshot.clone()
+    }
+
+    pub fn event(&mut self) -> Arc<DownloadEvent> {
         self.updates.borrow_and_update().clone()
+    }
+
+    pub fn record_snapshot(&mut self) -> DownloadRecordSnapshot {
+        DownloadRecordSnapshot {
+            event: self.event(),
+            observation: self.clone(),
+        }
     }
 
     pub async fn next_update(&mut self) -> Option<DownloadSnapshot> {
         self.updates.changed().await.ok()?;
         Some(self.snapshot())
     }
+}
 
-    /// A denied activation has an observable lifetime but no transfer or artifact.
-    pub fn denied(
-        url: &str,
-        headers: &[(String, String)],
-        hint: Option<&str>,
-    ) -> Result<Self, String> {
-        let (_, updates) = watch::channel(DownloadSnapshot {
-            metadata: Some(DownloadMetadata::new(url, headers, hint)),
-            received_bytes: 0,
-            total_bytes: Some(0),
-            state: DownloadState::Canceled,
-        });
-        Ok(Self {
-            guid: naming::generate_download_guid()?,
-            updates,
-        })
-    }
+pub(in crate::browser) struct AdmittedDownload {
+    pub observation: DownloadObservation,
+    pub state: watch::Sender<Arc<DownloadEvent>>,
+    pub progress: Option<watch::Receiver<DownloadSnapshot>>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -113,27 +138,29 @@ pub enum DownloadAccessError {
 }
 
 /// One BrowserContext's download authority. Only admission mutates this collection;
-/// a transfer can publish to its own record, never insert or resurrect records.
+/// transfer reports are committed to their original records by the Browser owner.
 /// Dropping the manager closes all cancellation leases, independent of observers.
 #[derive(Default)]
-pub struct DownloadManager {
+pub(in crate::browser) struct DownloadManager {
     records: HashMap<String, DownloadRecord>,
 }
 
 struct DownloadRecord {
-    cancel: watch::Sender<bool>,
-    updates: watch::Receiver<DownloadSnapshot>,
+    cancel: Option<watch::Sender<bool>>,
+    updates: watch::Receiver<Arc<DownloadEvent>>,
 }
 
 impl DownloadManager {
     pub fn start_request(
         &mut self,
+        web_contents: WebContentsHandle,
         policy: &DownloadPolicy,
         client: ResourceRequestClient,
         request: Request,
         suggested_filename: Option<String>,
-    ) -> Result<Option<DownloadObservation>, String> {
+    ) -> Result<Option<AdmittedDownload>, String> {
         self.start(
+            web_contents,
             policy,
             transfer::Source::Request(Box::new(transfer::DownloadRequest {
                 client,
@@ -145,34 +172,96 @@ impl DownloadManager {
 
     pub fn start_response(
         &mut self,
+        web_contents: WebContentsHandle,
         policy: &DownloadPolicy,
         url: Url,
         headers: Vec<(String, String)>,
         body: DownloadBody,
-    ) -> Result<Option<DownloadObservation>, String> {
-        self.start(policy, transfer::Source::Response { url, headers, body })
+    ) -> Result<Option<AdmittedDownload>, String> {
+        self.start(
+            web_contents,
+            policy,
+            transfer::Source::Response { url, headers, body },
+        )
+    }
+
+    pub fn deny(
+        &mut self,
+        web_contents: WebContentsHandle,
+        url: &str,
+        headers: &[(String, String)],
+        hint: Option<&str>,
+    ) -> Result<AdmittedDownload, String> {
+        self.admit_denied(web_contents, DownloadMetadata::new(url, headers, hint))
+    }
+
+    fn admit_denied(
+        &mut self,
+        web_contents: WebContentsHandle,
+        metadata: DownloadMetadata,
+    ) -> Result<AdmittedDownload, String> {
+        self.admit(
+            web_contents,
+            DownloadSnapshot {
+                metadata: Some(metadata),
+                received_bytes: 0,
+                total_bytes: Some(0),
+                state: DownloadState::Canceled,
+            },
+            None,
+        )
     }
 
     fn start(
         &mut self,
+        web_contents: WebContentsHandle,
         policy: &DownloadPolicy,
         source: transfer::Source,
-    ) -> Result<Option<DownloadObservation>, String> {
-        if !policy.behavior.allows_download() {
-            return Ok(None);
+    ) -> Result<Option<AdmittedDownload>, String> {
+        if policy.behavior.is_canceled_without_download() {
+            return self
+                .admit_denied(web_contents, source.fallback_metadata())
+                .map(Some);
         }
         let Some(root) = policy.download_path.as_ref() else {
             return Ok(None);
         };
-        let guid = naming::generate_download_guid()?;
         let initial = DownloadSnapshot {
             metadata: source.initial_metadata(),
             received_bytes: 0,
             total_bytes: None,
             state: DownloadState::Active,
         };
-        let (state, updates) = watch::channel(initial);
         let (cancel, cancellation) = watch::channel(false);
+        let mut admitted = self.admit(web_contents, initial.clone(), Some(cancel))?;
+        let (progress, observed) = watch::channel(initial);
+        tokio::spawn(transfer::run(
+            source,
+            PathBuf::from(root),
+            policy.behavior,
+            admitted.observation.guid.clone(),
+            progress,
+            cancellation,
+        ));
+        admitted.progress = Some(observed);
+        Ok(Some(admitted))
+    }
+
+    fn admit(
+        &mut self,
+        web_contents: WebContentsHandle,
+        snapshot: DownloadSnapshot,
+        cancel: Option<watch::Sender<bool>>,
+    ) -> Result<AdmittedDownload, String> {
+        let guid = naming::generate_download_guid()?;
+        let (state, updates) = watch::channel(Arc::new(DownloadEvent {
+            sequence: BrowserSequence::allocate(),
+            web_contents,
+            guid: guid.clone(),
+            snapshot,
+        }));
+        // A denied activation has an observable terminal occurrence, but no
+        // transfer item to cancel or open. Preserve that public access contract.
         self.records.insert(
             guid.clone(),
             DownloadRecord {
@@ -180,25 +269,37 @@ impl DownloadManager {
                 updates: updates.clone(),
             },
         );
-        tokio::spawn(transfer::run(
-            source,
-            PathBuf::from(root),
-            policy.behavior,
-            guid.clone(),
+        Ok(AdmittedDownload {
+            observation: DownloadObservation { guid, updates },
             state,
-            cancellation,
-        ));
-        Ok(Some(DownloadObservation { guid, updates }))
+            progress: None,
+        })
+    }
+
+    pub fn snapshots(&self) -> impl Iterator<Item = DownloadRecordSnapshot> + '_ {
+        self.records.values().map(|record| {
+            let event = record.updates.borrow().clone();
+            DownloadRecordSnapshot {
+                observation: DownloadObservation {
+                    guid: event.guid.clone(),
+                    updates: record.updates.clone(),
+                },
+                event,
+            }
+        })
     }
 
     pub fn cancel(&self, guid: &str) -> Option<Result<(), DownloadAccessError>> {
         let record = self.records.get(guid)?;
-        Some(if record.updates.borrow().state == DownloadState::Active {
-            record.cancel.send_replace(true);
-            Ok(())
-        } else {
-            Err(DownloadAccessError::AlreadyTerminal)
-        })
+        let cancel = record.cancel.as_ref()?;
+        Some(
+            if record.updates.borrow().snapshot.state == DownloadState::Active {
+                cancel.send_replace(true);
+                Ok(())
+            } else {
+                Err(DownloadAccessError::AlreadyTerminal)
+            },
+        )
     }
 
     pub fn read_artifact(
@@ -206,7 +307,8 @@ impl DownloadManager {
         guid: &str,
     ) -> Option<Result<tokio::task::JoinHandle<Result<Vec<u8>, String>>, DownloadAccessError>> {
         let record = self.records.get(guid)?;
-        Some(match &record.updates.borrow().state {
+        record.cancel.as_ref()?;
+        Some(match &record.updates.borrow().snapshot.state {
             DownloadState::Active => Err(DownloadAccessError::InProgress),
             DownloadState::Canceled => Err(DownloadAccessError::NoArtifact),
             DownloadState::Completed { artifact_path } => {

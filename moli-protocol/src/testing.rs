@@ -53,6 +53,7 @@ pub struct TestContext {
     background_navigation_completion_rx:
         tokio::sync::mpsc::UnboundedReceiver<crate::domains::page::BackgroundNavigationCompletion>,
     background_navigation_scheduler_enabled: bool,
+    browser_event_rx: Option<moli_core::browser::BrowserEventReceiver>,
 }
 
 struct PendingTestRuntimeDeferredReply {
@@ -191,6 +192,25 @@ enum TestSchedulerInputKind {
     BackgroundNavigationCompletion,
     RuntimeDeferredReply,
     RendererPublication,
+    NativeDownload,
+}
+
+// Fixture handlers still install other native projections explicitly. Downloads
+// use the production Browser stream, never a separate transfer observer task.
+async fn recv_native_download_input(
+    receiver: &mut Option<moli_core::browser::BrowserEventReceiver>,
+) -> Result<moli_core::browser::BrowserEvent, tokio::sync::broadcast::error::RecvError> {
+    use moli_core::browser::BrowserEvent;
+    let Some(receiver) = receiver.as_mut() else {
+        return std::future::pending().await;
+    };
+    loop {
+        if let event @ (BrowserEvent::DownloadCreated(_) | BrowserEvent::DownloadUpdated(_)) =
+            receiver.recv().await?.event
+        {
+            return Ok(event);
+        }
+    }
 }
 
 impl Default for TestContext {
@@ -306,6 +326,7 @@ impl TestContext {
             background_navigation_completion_tx,
             background_navigation_completion_rx,
             background_navigation_scheduler_enabled: false,
+            browser_event_rx: None,
         }
     }
 
@@ -326,6 +347,7 @@ impl TestContext {
         self.conn.set_background_navigation_completion_sender(
             self.background_navigation_completion_tx.clone(),
         );
+        self.browser_event_rx = Some(self.conn.subscribe_browser_events().unwrap().1);
         self.background_navigation_scheduler_enabled = true;
     }
 
@@ -1330,6 +1352,58 @@ impl TestContext {
         }
     }
 
+    fn project_native_download_input(
+        &mut self,
+        event: Result<moli_core::browser::BrowserEvent, tokio::sync::broadcast::error::RecvError>,
+    ) -> Vec<BackgroundProtocolEvent> {
+        match event {
+            Ok(moli_core::browser::BrowserEvent::DownloadCreated(event)) => {
+                self.conn.project_created_browser_download(event)
+            }
+            Ok(moli_core::browser::BrowserEvent::DownloadUpdated(event)) => {
+                self.conn.project_browser_download(event)
+            }
+            Ok(_) => unreachable!("test download ingress filters other native events"),
+            Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {
+                let (snapshot, receiver) = self.conn.subscribe_browser_events().unwrap();
+                self.browser_event_rx = Some(receiver);
+                let mut events = snapshot
+                    .downloads
+                    .into_iter()
+                    .flat_map(|event| self.conn.project_created_browser_download(event))
+                    .collect::<Vec<_>>();
+                events.extend(self.conn.project_retired_context_downloads());
+                events
+            }
+            Err(tokio::sync::broadcast::error::RecvError::Closed) => {
+                self.browser_event_rx = None;
+                Vec::new()
+            }
+        }
+    }
+
+    fn try_native_download_input(
+        &mut self,
+    ) -> Option<Result<moli_core::browser::BrowserEvent, tokio::sync::broadcast::error::RecvError>>
+    {
+        use moli_core::browser::BrowserEvent;
+        use tokio::sync::broadcast::error::{RecvError, TryRecvError};
+        loop {
+            match self.browser_event_rx.as_mut()?.try_recv() {
+                Ok(record) => {
+                    if let event @ (BrowserEvent::DownloadCreated(_)
+                    | BrowserEvent::DownloadUpdated(_)) = record.event
+                    {
+                        return Some(Ok(event));
+                    }
+                }
+                Err(TryRecvError::Empty) => return None,
+                Err(TryRecvError::Lagged(count)) => return Some(Err(RecvError::Lagged(count))),
+                Err(TryRecvError::Closed) => return Some(Err(RecvError::Closed)),
+            }
+        }
+    }
+
     async fn run_one_ready_test_scheduler_turn(&mut self) -> TestSchedulerTurnOutcome {
         let mut work = VecDeque::new();
         let input_kind = if self.background_navigation_scheduler_enabled
@@ -1344,6 +1418,11 @@ impl TestContext {
         {
             work.push_back(TestSchedulerWork::BackgroundEvent(event));
             TestSchedulerInputKind::BackgroundEvent
+        } else if let Some(event) = self.try_native_download_input() {
+            work.push_back(TestSchedulerWork::ProtocolEvents(
+                self.project_native_download_input(event),
+            ));
+            TestSchedulerInputKind::NativeDownload
         } else if !self.pending_runtime_deferred_replies.is_empty() {
             match self.runtime_inspector_response_ready_rx.try_recv() {
                 Ok(response) => {
@@ -1456,6 +1535,10 @@ impl TestContext {
                     work.push_back(TestSchedulerWork::BackgroundEvent(event));
                     TestSchedulerInputKind::BackgroundEvent
                 }
+                event = recv_native_download_input(&mut self.browser_event_rx) => {
+                    work.push_back(TestSchedulerWork::ProtocolEvents(self.project_native_download_input(event)));
+                    TestSchedulerInputKind::NativeDownload
+                }
                 maybe_publication = self.renderer_publication_rx.recv() => {
                     let Some(publication) = maybe_publication else {
                         return TestSchedulerTurnOutcome::Idle;
@@ -1480,6 +1563,10 @@ impl TestContext {
                     };
                     work.push_back(TestSchedulerWork::BackgroundEvent(event));
                     TestSchedulerInputKind::BackgroundEvent
+                }
+                event = recv_native_download_input(&mut self.browser_event_rx) => {
+                    work.push_back(TestSchedulerWork::ProtocolEvents(self.project_native_download_input(event)));
+                    TestSchedulerInputKind::NativeDownload
                 }
                 maybe_publication = self.renderer_publication_rx.recv() => {
                     let Some(publication) = maybe_publication else {
@@ -2284,6 +2371,7 @@ mod tests {
             background_navigation_completion_tx,
             background_navigation_completion_rx,
             background_navigation_scheduler_enabled: false,
+            browser_event_rx: None,
         };
         let opened = |page_id| {
             RendererOutputTransportMessage::from(RendererOutputStreamControl::Opened {

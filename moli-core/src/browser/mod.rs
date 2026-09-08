@@ -25,8 +25,8 @@ pub use captured_body::{
 pub use document_lifecycle::DocumentLifecycle;
 pub use document_lifetime::{DocumentLifetime, DocumentLifetimeObserver, DocumentRetirement};
 pub use downloads::{
-    DownloadAccessError, DownloadBehavior, DownloadBody, DownloadManager, DownloadMetadata,
-    DownloadObservation, DownloadPolicy, DownloadSnapshot, DownloadState,
+    DownloadAccessError, DownloadBehavior, DownloadBody, DownloadEvent, DownloadMetadata,
+    DownloadObservation, DownloadPolicy, DownloadRecordSnapshot, DownloadSnapshot, DownloadState,
 };
 pub use emulation::{
     EmulatedDeviceMetrics, EmulatedGeolocationOverride, EmulatedGeolocationOverrideState,
