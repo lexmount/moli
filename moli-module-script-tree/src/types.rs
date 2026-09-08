@@ -516,9 +516,22 @@ impl FetchedModuleSource {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ModuleSourceOrigin {
+    /// Diagnostic source identity, independent of the module resolution base.
+    pub url: Url,
+    /// Zero-based offsets into the containing source document.
+    pub line_offset: u32,
+    pub column_offset: u32,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ModuleSource {
     /// Share decoded text across fetch clients and the renderer's compiled record.
     Text(Arc<str>),
+    TextWithOrigin {
+        source: Arc<str>,
+        origin: Box<ModuleSourceOrigin>,
+    },
     /// Share immutable Wasm bytes across fetch clients and compilation.
     Binary(Arc<[u8]>),
 }

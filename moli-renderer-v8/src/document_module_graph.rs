@@ -25,7 +25,7 @@ pub(crate) use key::{
 pub(crate) use map::DocumentModuleMapCore;
 pub(crate) use record::{
     ModuleGraphFetchedSource, ModuleImportPhase, ModuleRequestRecord, ModuleResolvedDependency,
-    ModuleSource,
+    ModuleSource, ModuleSourceOrigin,
 };
 pub(crate) use terminal::{
     ModuleMapFetchClient, ModuleMapTerminalClients, ModuleMapTerminalNotification,
