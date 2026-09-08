@@ -51,6 +51,88 @@ return 'ok';
 }
 
 #[test]
+fn url_components_encode_carets_only_in_hierarchical_paths() {
+    assert_url_components(
+        r#"
+for (const [name, create] of factories) {
+  for (const prefix of ['https://host', 'file://', 'custom:', 'custom://host']) {
+    const object = create(prefix + '/a^b/%5e?^#^');
+    assert(object.href === prefix + '/a%5Eb/%5e?^#^', name + ': path caret encoded once');
+    assert(object.pathname === '/a%5Eb/%5e', name + ': pathname uses the path encode set');
+    object.pathname = '/^/%5e';
+    assert(object.href === prefix + '/%5E/%5e?^#^', name + ': pathname setter shares encoding');
+    object.search = '^';
+    object.hash = '^';
+    assert(object.search === '?^' && object.hash === '#^', name + ': suffix carets are literal');
+  }
+  const opaque = create('data:a b^c?^#^');
+  assert(opaque.href === 'data:a b^c?^#^', name + ': opaque path uses its own encode set');
+  opaque.pathname = '/replacement^';
+  assert(opaque.pathname === 'a b^c', name + ': opaque pathname is not mutable');
+}
+"#,
+    );
+}
+
+#[test]
+fn url_components_encode_the_final_opaque_space_during_parsing() {
+    assert_url_components(
+        r#"
+for (const [name, create] of factories) {
+  for (const [input, path] of [
+    ['payload ', 'payload%20'], ['payload   ', 'payload  %20'],
+    ['payload \t\n\r', 'payload%20'], ['payload \t \n \r', 'payload  %20'],
+    ['payload%20', 'payload%20'], ['payload %3F', 'payload %3F'],
+  ]) {
+    for (const suffix of ['?', '#', '?q', '#h', '?q#h', '?#']) {
+      const object = create('data:' + input + suffix);
+      const expected = 'data:' + path + suffix;
+      assert(object.href === expected, name + ': canonical href at construction: ' + expected);
+      assert(object.pathname === path, name + ': canonical path before any setter');
+      assert(new URL(object.href).href === expected, name + ': serialization is stable');
+      object.href = 'custom:' + input + suffix;
+      assert(object.href === 'custom:' + path + suffix, name + ': href replacement shares parsing');
+    }
+  }
+}
+"#,
+    );
+}
+
+#[test]
+fn url_components_opaque_path_is_stable_across_suffix_and_search_params_mutations() {
+    assert_url_components(
+        r#"
+const base = 'data:payload  %20';
+for (const [name, create] of factories) {
+  for (const first of ['search', 'hash']) {
+    const object = create('data:payload   ?q#h');
+    const params = object.searchParams;
+    object[first] = '';
+    assert(object.href === base + (first === 'search' ? '#h' : '?q'), name + ': clearing one suffix');
+    object[first === 'search' ? 'hash' : 'search'] = '';
+    assert(object.href === base, name + ': clearing both suffixes preserves the path');
+    object.search = '?';
+    object.hash = '#';
+    assert(object.href === base + '?#', name + ': empty suffixes keep their delimiters');
+    if (params) {
+      assert(object.searchParams === params, name + ': setters retain searchParams identity');
+      params.append('q', 'value');
+      assert(object.href === base + '?q=value#', name + ': append does not modify path');
+      params.delete('q');
+      assert(object.href === base + '#', name + ': delete removes only the query');
+      params.sort();
+      assert(object.href === base + '#', name + ': sorting empty params preserves the path');
+      object.hash = '';
+      assert(object.href === base, name + ': removing the final suffix preserves the path');
+    }
+  }
+}
+"#,
+    );
+}
+
+#[test]
 fn url_components_empty_getters_preserve_href() {
     assert_url_components(
         r#"

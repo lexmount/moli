@@ -48,11 +48,37 @@ References:
 <https://url.spec.whatwg.org/#concept-url-serializer>, and
 <https://url.spec.whatwg.org/#dom-url-pathname>.
 
-The upstream WPT data is unchanged. The 39 file parsing/setter tests and seven
-hierarchical setter tests fixed by these patches were removed from
-`tests/expected_failures.txt`; the one remaining upstream expected failure is
-retained. The obsolete unit-test expectation of a host/drive-letter syntax
-violation is replaced with an explicit preservation and no-violation assertion.
+Path percent-encoding also follows the current URL Standard:
+
+- Include "^" in the hierarchical path encode set, including path setters and
+  path-segment mutation, without changing opaque paths, queries, or fragments.
+- When parsing an opaque path, encode only the last space immediately before
+  "?" or "#". Lookahead ignores ASCII tabs and newlines just as parsing does.
+- Preserve that encoded path when removing a query or fragment. The obsolete
+  trailing-space stripping algorithm and the V8-only query-removal workaround
+  are no longer needed.
+
+References:
+<https://url.spec.whatwg.org/#path-percent-encode-set>,
+<https://url.spec.whatwg.org/#cannot-be-a-base-url-path-state>,
+<https://url.spec.whatwg.org/#dom-url-search>, and
+<https://url.spec.whatwg.org/#dom-url-hash>.
+The normative snapshot used for this update is
+<https://url.spec.whatwg.org/commit-snapshots/55d6699373ba68a16ec182f34222a74ed8bc3dac/>.
+
+The 39 file parsing/setter tests and seven hierarchical setter tests fixed by
+these patches were removed from `tests/expected_failures.txt`; the one remaining
+upstream expected failure is retained. The obsolete unit-test expectations of
+a host/drive-letter syntax violation and opaque-path space stripping are
+replaced with explicit preservation assertions.
+
+Eleven vendored WPT records (two parsing cases and nine setter cases) had
+expectations predating the current caret and opaque-space rules. Their expected
+results are synchronized with the corresponding records in
+<https://github.com/web-platform-tests/wpt/blob/258f285de043b79e44324228c0fd800b38d21879/url/resources/urltestdata.json>
+and
+<https://github.com/web-platform-tests/wpt/blob/258f285de043b79e44324228c0fd800b38d21879/url/resources/setters_tests.json>.
+Their inputs, all other expected results, and the WPT driver are unchanged.
 
 Packaging adjustment: `debug_metadata/url.natvis` is copied from the same pinned
 upstream revision, and its include path is made package-local so the
@@ -66,7 +92,7 @@ cargo test --manifest-path vendor/url-2.5.8/Cargo.toml --all-features
 
 Workspace regressions live in `moli-url/src/file_url.rs`,
 `moli-url/src/hierarchical_path.rs`,
+`moli-url/src/path_encoding.rs`,
 `moli-renderer-v8/src/script_vm/tests/url_components.rs`, and
-`moli-url-policy/src/tests.rs`. Remaining opaque-path and percent-encoding
-conformance issues are separate work; these patches do not change resource
-access permissions.
+`moli-url-policy/src/tests.rs`. These patches do not change resource access
+permissions.
