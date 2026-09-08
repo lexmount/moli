@@ -401,37 +401,32 @@ fn content_security_policy_url_violation_for_checked_url_with_redirect_status_di
 }
 
 pub fn content_security_policy_trusted_types_sink_violation_with_disposition_and_reporting_endpoints(
-    policies: &[ContentSecurityPolicy],
+    policy: &ContentSecurityPolicy,
     protected_url: &Url,
     sink: &str,
     sample: &str,
     disposition: ContentSecurityPolicyDisposition,
     reporting_endpoints: &ContentSecurityPolicyReportingEndpoints,
 ) -> Option<ContentSecurityPolicyUrlViolation> {
-    policies.iter().find_map(|policy| {
-        if !policy_requires_trusted_types_for_script(policy) {
-            return None;
-        }
-        let document_uri = protected_url.to_string();
-        Some(ContentSecurityPolicyUrlViolation {
-            effective_directive: REQUIRE_TRUSTED_TYPES_FOR,
-            blocked_uri: "trusted-types-sink".to_owned(),
-            source_file: document_uri.clone(),
-            document_uri,
-            original_policy: policy.as_str().to_owned(),
-            disposition,
-            report_uri_endpoints: content_security_policy_report_uri_endpoints(
-                policy,
-                protected_url,
-            ),
-            report_to_endpoints: content_security_policy_report_to_endpoints(
-                policy,
-                reporting_endpoints,
-            ),
-            sample: trusted_types_sink_violation_sample(sink, sample),
-            line_number: 0,
-            column_number: 0,
-        })
+    if !policy_requires_trusted_types_for_script(policy) {
+        return None;
+    }
+    let document_uri = protected_url.to_string();
+    Some(ContentSecurityPolicyUrlViolation {
+        effective_directive: REQUIRE_TRUSTED_TYPES_FOR,
+        blocked_uri: "trusted-types-sink".to_owned(),
+        source_file: document_uri.clone(),
+        document_uri,
+        original_policy: policy.as_str().to_owned(),
+        disposition,
+        report_uri_endpoints: content_security_policy_report_uri_endpoints(policy, protected_url),
+        report_to_endpoints: content_security_policy_report_to_endpoints(
+            policy,
+            reporting_endpoints,
+        ),
+        sample: trusted_types_sink_violation_sample(sink, sample),
+        line_number: 0,
+        column_number: 0,
     })
 }
 
@@ -1476,36 +1471,31 @@ fn trusted_types_violation_sample(sample: &str) -> String {
 }
 
 pub fn content_security_policy_trusted_types_policy_violation_with_disposition_and_reporting_endpoints(
-    policies: &[ContentSecurityPolicy],
+    policy: &ContentSecurityPolicy,
     protected_url: &Url,
     policy_name: &str,
     is_duplicate: bool,
     disposition: ContentSecurityPolicyDisposition,
     reporting_endpoints: &ContentSecurityPolicyReportingEndpoints,
 ) -> Option<ContentSecurityPolicyUrlViolation> {
-    policies.iter().find_map(|policy| {
-        if policy_allows_trusted_type_policy_name(policy, policy_name, is_duplicate) {
-            return None;
-        }
-        let document_uri = protected_url.to_string();
-        Some(ContentSecurityPolicyUrlViolation {
-            effective_directive: TRUSTED_TYPES,
-            blocked_uri: "trusted-types-policy".to_owned(),
-            source_file: document_uri.clone(),
-            document_uri,
-            original_policy: policy.as_str().to_owned(),
-            disposition,
-            report_uri_endpoints: content_security_policy_report_uri_endpoints(
-                policy,
-                protected_url,
-            ),
-            report_to_endpoints: content_security_policy_report_to_endpoints(
-                policy,
-                reporting_endpoints,
-            ),
-            sample: trusted_types_violation_sample(policy_name),
-            line_number: 0,
-            column_number: 0,
-        })
+    if policy_allows_trusted_type_policy_name(policy, policy_name, is_duplicate) {
+        return None;
+    }
+    let document_uri = protected_url.to_string();
+    Some(ContentSecurityPolicyUrlViolation {
+        effective_directive: TRUSTED_TYPES,
+        blocked_uri: "trusted-types-policy".to_owned(),
+        source_file: document_uri.clone(),
+        document_uri,
+        original_policy: policy.as_str().to_owned(),
+        disposition,
+        report_uri_endpoints: content_security_policy_report_uri_endpoints(policy, protected_url),
+        report_to_endpoints: content_security_policy_report_to_endpoints(
+            policy,
+            reporting_endpoints,
+        ),
+        sample: trusted_types_violation_sample(policy_name),
+        line_number: 0,
+        column_number: 0,
     })
 }
