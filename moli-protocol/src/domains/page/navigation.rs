@@ -3087,7 +3087,6 @@ async fn complete_materialized_navigation_into_buffer_inner_async(
     command_context: &mut crate::conn::CommandDispatchContext,
 ) {
     let navigation_owner = state.owner.clone();
-    let navigation_session_id = navigation_owner.session_id().map(str::to_owned);
     let mut document_projection_release = None;
     match navigation {
         network::MaterializedNavigationLoadOutcome::ResponseCommitReady(navigation) => {
@@ -3135,52 +3134,18 @@ async fn complete_materialized_navigation_into_buffer_inner_async(
             .emit_navigation_error_into_buffer(out, &error_text);
         }
     }
-    let primary_protocol_session_id = conn
-        .runtime_session_owner_primary_session_id_for_owner(&navigation_owner)
-        .or_else(|| navigation_session_id.clone());
-    let (routed_renderer_output, renderer_call_replacements) = document_projection_release
-        .or_else(|| {
-            conn.finish_navigation_without_document_projection_for_owner(&navigation_owner, &token)
-        })
-        .map(|finish| (finish.released_output, finish.renderer_call_replacements))
-        .unwrap_or_default();
-    if !routed_renderer_output.is_empty() {
-        let mut background_events = Vec::new();
-        crate::domains::runtime::push_routed_renderer_runtime_inspector_message_batch_background_events(
-            conn,
-            &mut background_events,
-            routed_renderer_output,
-            primary_protocol_session_id.as_deref(),
-        );
-        out.extend_background_events_after_messages(background_events);
-    }
-    if let Some(renderer_call_replacements) = renderer_call_replacements {
-        let (new_attachment_id, terminations, replays, failed_sessions) =
-            renderer_call_replacements.into_parts();
-        super::navigation_commit::fail_navigation_inspection_sessions(
+    let release = document_projection_release.or_else(|| {
+        conn.finish_navigation_without_document_projection_for_owner(&navigation_owner, &token)
+    });
+    if let Some(release) = release {
+        super::navigation_commit::release_document_projection_output_async(
             conn,
             out,
             command_context,
             &navigation_owner,
-            failed_sessions,
-            "Inspector call identity exhausted during navigation replay",
-        );
-        let termination_events = conn.terminate_prepared_renderer_calls_after_navigation(
-            terminations,
-            "Inspected target navigated or closed",
-        );
-        out.extend_background_events_after_messages(termination_events);
-        match conn
-            .replay_prepared_renderer_calls_after_navigation_async(replays, new_attachment_id)
-            .await
-        {
-            Ok(events) => out.extend_background_events_after_messages(events),
-            Err(error) => tracing::warn!(
-                %error,
-                session_id = navigation_session_id.as_deref(),
-                "failed to replay renderer Inspector commands after navigation"
-            ),
-        }
+            release,
+        )
+        .await;
     }
     conn.clear_pending_document_navigation_for_owner_if_matches(&navigation_owner, &token);
 }

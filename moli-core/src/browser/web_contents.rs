@@ -47,8 +47,8 @@ mod session_storage;
 #[cfg(test)]
 mod tests;
 mod window;
-pub use document_host::DocumentHost;
 pub use document_host::DocumentLifecycleEvent;
+pub use document_host::{DocumentCommitMetadata, DocumentCommitSnapshot, DocumentHost};
 pub use emulation_policy::{EmulationPolicy, EmulationPolicyChange};
 use javascript_dialog::JavaScriptDialogs;
 pub use javascript_dialog::{

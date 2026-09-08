@@ -299,8 +299,53 @@ async fn commit_and_project_loaded_navigation_async(
     Some((commit.lifecycle, projection_fence))
 }
 
+pub(crate) async fn release_document_projection_output_async(
+    conn: &mut CdpConnection,
+    out: &mut CommandOutputBuffer,
+    command_context: &mut CommandDispatchContext,
+    owner: &crate::conn::CommandOwnerScope,
+    release: crate::conn::DocumentProjectionOutputRelease,
+) {
+    let primary_session_id = conn
+        .runtime_session_owner_primary_session_id_for_owner(owner)
+        .or_else(|| owner.session_id().map(str::to_owned));
+    let mut events = Vec::new();
+    crate::domains::runtime::push_routed_renderer_runtime_inspector_message_batch_background_events(
+        conn,
+        &mut events,
+        release.released_output,
+        primary_session_id.as_deref(),
+    );
+    out.extend_background_events_after_messages(events);
+    if let Some(replacements) = release.renderer_call_replacements {
+        let (attachment, terminations, replays, failed_sessions) = replacements.into_parts();
+        fail_navigation_inspection_sessions(
+            conn,
+            out,
+            command_context,
+            owner,
+            failed_sessions,
+            "Inspector call identity exhausted during navigation replay",
+        );
+        out.extend_background_events_after_messages(
+            conn.terminate_prepared_renderer_calls_after_navigation(
+                terminations,
+                "Inspected target navigated or closed",
+            ),
+        );
+        match conn
+            .replay_prepared_renderer_calls_after_navigation_async(replays, attachment)
+            .await
+        {
+            Ok(events) => out.extend_background_events_after_messages(events),
+            Err(error) => tracing::warn!(%error, session_id = owner.session_id(),
+                "failed to replay renderer Inspector commands after navigation"),
+        }
+    }
+}
+
 /// Rebind failures are session failures, never Browser crash or close commands.
-pub(super) fn fail_navigation_inspection_sessions(
+pub(crate) fn fail_navigation_inspection_sessions(
     conn: &mut CdpConnection,
     out: &mut CommandOutputBuffer,
     command_context: &mut CommandDispatchContext,

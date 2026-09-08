@@ -6,6 +6,29 @@ use crate::domains::activity::{
 use moli_core::RendererOutputTransportMessage;
 
 impl CdpConnection {
+    pub(crate) fn native_renderer_page_output_owner(
+        &self,
+        renderer: super::RendererPageResidenceIdentity,
+    ) -> Option<crate::domains::activity::RendererPublicationOwner> {
+        let document = self.browser.document_for_renderer(renderer)?;
+        let context = self.browser_context_by_browser_id(document.web_contents().context())?;
+        let target = context
+            .page_targets
+            .get_for_web_contents(document.web_contents().id())?;
+        Some(
+            crate::domains::activity::RendererPublicationOwner::PageTarget {
+                browser_context_id: context.id.clone(),
+                target_id: Some(target.target_id().to_owned()),
+                renderer_page: renderer,
+                page_owner: super::TargetPageResidenceIdentity::new(
+                    context.id.clone(),
+                    Some(target.target_id().to_owned()),
+                    document.id(),
+                ),
+            },
+        )
+    }
+
     /// Native admission uses physical renderer residence, never a frontend
     /// route or a lifecycle visibility barrier.
     pub(crate) fn apply_renderer_document_lifecycle(
@@ -43,7 +66,15 @@ impl CdpConnection {
         match control {
             moli_core::RendererOutputStreamControl::Opened { stream } => {
                 let residence = stream.residence();
-                let owners = crate::domains::activity::renderer_publication_owners(self, residence);
+                let owners = if self
+                    .scheduler_state
+                    .renderer_output_ingress
+                    .has_owner_reservation(residence)
+                {
+                    Vec::new()
+                } else {
+                    crate::domains::activity::renderer_publication_owners(self, residence)
+                };
                 let owner = match owners.as_slice() {
                     [] => None,
                     [owner] => Some(owner.clone()),

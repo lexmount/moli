@@ -1,5 +1,5 @@
 use super::BrowserContext;
-use crate::browser::{DocumentHandle, WebContentsHandle};
+use crate::browser::{DocumentHandle, RendererPageResidenceIdentity, WebContentsHandle};
 use crate::page::{
     CompletedPageCommand, PendingPageCommand, RendererCaptureScreencastFrameReply,
     RendererCaptureScreencastFrameRequest, RendererCaptureScreenshotReply,
@@ -209,6 +209,32 @@ pub struct DocumentSnapshot {
 }
 
 impl BrowserContext {
+    /// Resolve a physical renderer reservation, including a candidate that has
+    /// not committed yet. This is never a lookup of a selected/current Target.
+    pub fn document_for_renderer(
+        &self,
+        renderer: RendererPageResidenceIdentity,
+    ) -> Option<DocumentHandle> {
+        self.web_contents.values().find_map(|contents| {
+            let handle = WebContentsHandle::new(self.id(), contents.id());
+            if let Some(document) = contents.main_frame.current_document.as_ref()
+                && RendererPageResidenceIdentity::from_page(&document.page) == renderer
+            {
+                return Some(DocumentHandle::new(handle, document.id));
+            }
+            let navigation = contents.navigation();
+            if let Some((id, document)) = navigation.pending_document()
+                && navigation.accepts_document_preparation(id, renderer)
+            {
+                return Some(DocumentHandle::new(handle, document));
+            }
+            navigation
+                .initial_document_build()
+                .filter(|build| build.key.renderer() == renderer)
+                .map(|build| DocumentHandle::new(handle, build.key.document()))
+        })
+    }
+
     #[cfg(any(test, feature = "test-support"))]
     #[doc(hidden)]
     pub async fn apply_document_cookie_facade_overrides_for_test(
@@ -287,6 +313,22 @@ impl BrowserContext {
             .as_ref()
             .map(|document| document.id);
         Ok(document.map(|document| DocumentHandle::new(handle, document)))
+    }
+
+    pub fn document_commit_snapshot(
+        &self,
+        handle: DocumentHandle,
+    ) -> Result<crate::browser::web_contents::DocumentCommitSnapshot, String> {
+        let document = self.document(handle)?;
+        Ok(crate::browser::web_contents::DocumentCommitSnapshot {
+            document: handle,
+            frame_slot: self.web_contents(handle.web_contents())?.main_frame.id(),
+            metadata: document
+                .commit
+                .clone()
+                .ok_or("Document has no committed occurrence")?,
+            inspection_endpoint: document.page.renderer_inspection_endpoint(),
+        })
     }
 
     pub fn start_set_document_content(

@@ -18,6 +18,11 @@ pub(crate) struct LoadedNavigationPageCommit {
         Option<RendererPageCommandPostResponseContinuation>,
 }
 
+pub(crate) struct DocumentInspectionProjection {
+    pub(crate) fence: Result<Option<DocumentProjectionFence>, DevToolsRendererChannelError>,
+    pub(crate) replaced_page_owner: Option<TargetPageResidenceIdentity>,
+}
+
 impl BrowserContext {
     pub(in crate::conn) fn start_initial_document_for_target(
         &mut self,
@@ -57,39 +62,18 @@ impl BrowserContext {
         };
         let target_id = target_id.as_str();
         let loader_id = self.target_initial_empty_document_loader_id_if_current(target_id);
-        let retiring = self.begin_document_projection_replacement_for_target(target_id, None);
-        let target = self
-            .page_targets
-            .get_mut(target_id)
-            .expect("resolved projection");
-        if let Err(error) = target.runtime_slot.project_initial_document_inspection(
-            commit.key.document(),
-            commit.lifecycle.browser_sequence,
-            commit.inspection_endpoint,
-        ) {
+        let lifecycle = commit.snapshot.metadata.lifecycle.clone();
+        let Some(projection) = self.project_document_commit_snapshot(target_id, commit.snapshot)
+        else {
+            return Ok(commit.diagnostics);
+        };
+        if let Err(error) = projection.fence {
             tracing::warn!(%error, "initial document inspection projection failed");
         }
-        target
-            .owner_state
-            .clear_committed_document_navigation_state();
-        self.clear_target_loaded_document_session_state(target_id);
-        self.reset_document_projection_for_target(
-            target_id,
-            true,
-            TargetPageAbsenceReason::NoTarget,
-        );
-        self.finish_document_projection_replacement_for_target(target_id, retiring);
-        let runtime = &mut self
-            .page_targets
-            .get_mut(target_id)
-            .expect("resolved projection")
-            .runtime_slot;
-        runtime.reset_subresource_cursor();
-        runtime.clear_websocket_artifacts();
         if let Some(loader_id) = loader_id {
             let _ = self.project_committed_document_lifecycle_for_target(
                 target_id,
-                commit.lifecycle,
+                lifecycle,
                 None,
                 target_id.to_owned(),
                 loader_id,
@@ -395,14 +379,15 @@ impl BrowserContext {
             .browser_context
             .commit_document_navigation(prepared)
             .map_err(anyhow::Error::msg)?;
-        debug_assert_eq!(commit.navigation, navigation);
+        debug_assert_eq!(commit.snapshot.metadata.navigation, Some(navigation));
+        let lifecycle = commit.snapshot.metadata.lifecycle.clone();
         let Some(target_id) = self
             .page_targets
-            .get_for_web_contents(commit.web_contents)
+            .get_for_web_contents(commit.snapshot.document.web_contents().id())
             .map(|target| target.target_id().to_owned())
         else {
             return Ok(LoadedNavigationPageCommit {
-                lifecycle: commit.lifecycle,
+                lifecycle,
                 inspection_projection: Err(DevToolsRendererChannelError::Closed),
                 replaced_page_owner: None,
                 previous_document_retirement: commit.retirement,
@@ -410,53 +395,105 @@ impl BrowserContext {
             });
         };
         let target_id = target_id.as_str();
-        debug_assert_eq!(self.target_document_id(target_id), Some(commit.document));
-        debug_assert_eq!(
-            self.browser_context
-                .web_contents_identity(
-                    self.web_contents_handle_for_target(target_id)
-                        .expect("resolved WebContents"),
+        let projection = self.project_document_commit_snapshot(target_id, commit.snapshot);
+        let (inspection_projection, replaced_page_owner) = projection.map_or(
+            (Err(DevToolsRendererChannelError::Closed), None),
+            |projection| {
+                (
+                    projection
+                        .fence
+                        .and_then(|fence| fence.ok_or(DevToolsRendererChannelError::Closed)),
+                    projection.replaced_page_owner,
                 )
-                .ok(),
-            Some((commit.web_contents, commit.frame_slot)),
+            },
         );
+        Ok(LoadedNavigationPageCommit {
+            lifecycle,
+            inspection_projection,
+            replaced_page_owner,
+            previous_document_retirement: commit.retirement,
+            committed_document_post_response_continuation: commit.post_response_continuation,
+        })
+    }
+
+    /// Both command completion and the Browser event stream consume the same
+    /// immutable occurrence. The event never acquires navigation commit authority.
+    pub(crate) fn project_document_commit_snapshot(
+        &mut self,
+        target_id: &str,
+        commit: moli_core::browser::web_contents::DocumentCommitSnapshot,
+    ) -> Option<DocumentInspectionProjection> {
+        if self.web_contents_handle_for_target(target_id) != Some(commit.document.web_contents())
+            || self.target_document_id(target_id) != Some(commit.document.id())
+        {
+            return None;
+        }
+        let metadata = commit.metadata;
+        if self
+            .renderer_document_lifecycle_binding_for_target(target_id)
+            .is_some_and(|binding| binding.browser_sequence >= metadata.lifecycle.browser_sequence)
+        {
+            return None;
+        }
+        let previous_attachment = self
+            .page_targets
+            .get(target_id)?
+            .runtime_slot
+            .current_renderer_attachment();
+        if previous_attachment.is_some_and(|current| {
+            current.browser_sequence() >= metadata.lifecycle.browser_sequence
+        }) {
+            return None;
+        }
 
         // Consume the completed Browser occurrence. No DevTools operation below
         // can veto it, restore its pending navigation or roll back the Document.
         let retiring_projection = self.begin_document_projection_replacement_for_target(
             target_id,
-            commit.previous_document.zip(commit.previous_renderer),
+            metadata.previous_document.zip(metadata.previous_renderer),
         );
         let target = self
             .page_targets
             .get_mut(target_id)
             .expect("resolved target projection");
-        let inspection_projection = target
-            .runtime_slot
-            .project_committed_document_inspection(
-                commit.navigation,
-                commit.document,
-                commit.lifecycle.browser_sequence,
-                commit.inspection_endpoint,
-            )
-            .map(|(previous, fence)| {
-                if let Some(previous) = previous {
-                    let new_attachment = target
-                        .runtime_slot
-                        .current_renderer_attachment()
-                        .expect("successful inspection rebind");
-                    let primary_session_id = target.session_id().map(str::to_owned);
-                    let replacements = target.devtools_sessions.prepare_renderer_call_replacements(
-                        primary_session_id.as_deref(),
-                        previous.id(),
-                        new_attachment.id(),
-                    );
-                    target
-                        .runtime_slot
-                        .install_pending_renderer_call_replacements(replacements);
-                }
-                fence
-            });
+        let inspection_projection = if let Some(navigation) = metadata.navigation {
+            target
+                .runtime_slot
+                .project_committed_document_inspection(
+                    navigation,
+                    commit.document.id(),
+                    metadata.lifecycle.browser_sequence,
+                    commit.inspection_endpoint,
+                )
+                .map(|(previous, fence)| {
+                    if let Some(previous) = previous {
+                        let new_attachment = target
+                            .runtime_slot
+                            .current_renderer_attachment()
+                            .expect("successful inspection rebind");
+                        let primary_session_id = target.session_id().map(str::to_owned);
+                        let replacements =
+                            target.devtools_sessions.prepare_renderer_call_replacements(
+                                primary_session_id.as_deref(),
+                                previous.id(),
+                                new_attachment.id(),
+                            );
+                        target
+                            .runtime_slot
+                            .install_pending_renderer_call_replacements(replacements);
+                    }
+                    Some(fence)
+                })
+        } else {
+            target
+                .runtime_slot
+                .project_initial_document_inspection(
+                    commit.document.id(),
+                    metadata.lifecycle.browser_sequence,
+                    commit.inspection_endpoint,
+                )
+                .map(|()| None)
+        };
         self.reset_document_projection_for_target(
             target_id,
             true,
@@ -469,10 +506,12 @@ impl BrowserContext {
         target
             .owner_state
             .clear_committed_document_navigation_state();
-        target.owner_state.committed_document_title = Some(commit.info.title);
-        target.set_target_url(commit.info.url.to_string());
-        target.set_target_security_origin(commit.info.security_origin);
-        target.set_target_secure_context_type(commit.info.secure_context_type);
+        if let Some(info) = metadata.info.as_ref() {
+            target.owner_state.committed_document_title = Some(info.title.clone());
+            target.set_target_url(info.url.to_string());
+            target.set_target_security_origin(info.security_origin.clone());
+            target.set_target_secure_context_type(info.secure_context_type.clone());
+        }
         self.clear_target_loaded_document_session_state(target_id);
         self.retain_navigation_projections_for_target(target_id);
         self.finish_document_projection_replacement_for_target(target_id, retiring_projection);
@@ -483,19 +522,18 @@ impl BrowserContext {
             .runtime_slot;
         runtime.reset_subresource_cursor();
         runtime.clear_websocket_artifacts();
-        let replaced_page_owner = commit.previous_document.map(|document_id| {
+        // A lagged observer may still project an earlier Document than the
+        // immediate native predecessor. Retire its actual inspection owner.
+        let replaced_page_owner = previous_attachment.map(|attachment| {
             TargetPageResidenceIdentity::new(
                 self.id.clone(),
                 Some(target_id.to_owned()),
-                document_id,
+                attachment.document(),
             )
         });
-        Ok(LoadedNavigationPageCommit {
-            lifecycle: commit.lifecycle,
-            inspection_projection,
+        Some(DocumentInspectionProjection {
+            fence: inspection_projection,
             replaced_page_owner,
-            previous_document_retirement: commit.retirement,
-            committed_document_post_response_continuation: commit.post_response_continuation,
         })
     }
 }

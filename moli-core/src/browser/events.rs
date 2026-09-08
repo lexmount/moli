@@ -1,6 +1,6 @@
 use tokio::sync::broadcast;
 
-use super::{BrowserContextId, BrowserSequence, WebContentsHandle};
+use super::{BrowserContextId, BrowserSequence, DocumentHandle, WebContentsHandle};
 
 /// A committed Browser lifetime change, with no protocol or session identity.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -8,6 +8,7 @@ pub enum BrowserEvent {
     ContextCreated(BrowserContextId),
     ContextDisposed(BrowserContextId),
     WebContentsCreated(WebContentsHandle),
+    DocumentCommitted(DocumentHandle),
     WebContentsClosed {
         web_contents: WebContentsHandle,
         activated: Option<WebContentsHandle>,
@@ -28,6 +29,7 @@ pub struct BrowserSnapshot {
     pub contexts: Vec<BrowserContextId>,
     pub web_contents: Vec<WebContentsHandle>,
     pub selected_web_contents: Vec<WebContentsHandle>,
+    pub documents: Vec<DocumentHandle>,
 }
 
 pub type BrowserEventReceiver = broadcast::Receiver<BrowserEventRecord>;
@@ -49,7 +51,15 @@ impl Default for BrowserEventStream {
 
 impl BrowserEventStream {
     pub(super) fn publish(&mut self, event: BrowserEvent) {
-        self.sequence = BrowserSequence::allocate();
+        self.publish_committed(BrowserSequence::allocate(), event);
+    }
+
+    pub(super) fn publish_committed(&mut self, sequence: BrowserSequence, event: BrowserEvent) {
+        assert!(
+            sequence > self.sequence,
+            "Browser events must follow commit order"
+        );
+        self.sequence = sequence;
         let _ = self.sender.send(BrowserEventRecord {
             sequence: self.sequence,
             event,
@@ -61,6 +71,7 @@ impl BrowserEventStream {
         contexts: impl Iterator<Item = BrowserContextId>,
         web_contents: impl Iterator<Item = WebContentsHandle>,
         selected_web_contents: impl Iterator<Item = WebContentsHandle>,
+        documents: impl Iterator<Item = DocumentHandle>,
     ) -> (BrowserSnapshot, BrowserEventReceiver) {
         (
             BrowserSnapshot {
@@ -68,6 +79,7 @@ impl BrowserEventStream {
                 contexts: contexts.collect(),
                 web_contents: web_contents.collect(),
                 selected_web_contents: selected_web_contents.collect(),
+                documents: documents.collect(),
             },
             self.sender.subscribe(),
         )
@@ -195,14 +207,19 @@ mod tests {
     fn lagged_browser_events_require_an_atomic_snapshot_and_new_subscription() {
         let mut stream = BrowserEventStream::default();
         let context = BrowserContextId::allocate();
-        let (_, mut slow) =
-            stream.subscribe(std::iter::empty(), std::iter::empty(), std::iter::empty());
+        let (_, mut slow) = stream.subscribe(
+            std::iter::empty(),
+            std::iter::empty(),
+            std::iter::empty(),
+            std::iter::empty(),
+        );
         for _ in 0..257 {
             stream.publish(BrowserEvent::ContextCreated(context));
         }
         assert_eq!(slow.try_recv(), Err(TryRecvError::Lagged(1)));
         let (snapshot, mut recovered) = stream.subscribe(
             std::iter::once(context),
+            std::iter::empty(),
             std::iter::empty(),
             std::iter::empty(),
         );

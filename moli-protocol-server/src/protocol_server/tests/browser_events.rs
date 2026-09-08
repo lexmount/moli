@@ -21,6 +21,76 @@ pub(super) async fn server_with_browser() -> (
 }
 
 #[tokio::test]
+async fn websocket_document_commit_observation_does_not_duplicate_protocol_navigation() {
+    let (addr, server, browser) = server_with_browser().await;
+    let (mut socket, _) =
+        connect_async(format!("ws://{addr}/devtools/browser/{DEFAULT_BROWSER_ID}"))
+            .await
+            .unwrap();
+    let context_id = cdp_create_browser_context(&mut socket, 1).await;
+    let target = cdp_create_attached_target(&mut socket, 2, &context_id).await;
+    for (id, method) in [(5, "Page.enable"), (6, "Runtime.enable")] {
+        send_cdp_command(&mut socket, id, method, Some(&target.session_id), json!({})).await;
+    }
+    let url = "data:text/html,<title>one-commit</title>";
+    send_cdp_command_without_wait(
+        &mut socket,
+        7,
+        "Page.navigate",
+        Some(&target.session_id),
+        json!({"url": url}),
+    )
+    .await;
+    let mut messages = recv_until_match(&mut socket, |message| {
+        message["sessionId"] == target.session_id
+            && message["method"] == "Page.frameNavigated"
+            && message["params"]["frame"]["url"] == url
+    })
+    .await;
+    messages.extend(
+        send_cdp_command(
+            &mut socket,
+            8,
+            "Runtime.evaluate",
+            Some(&target.session_id),
+            json!({"expression": "document.title"}),
+        )
+        .await,
+    );
+    assert_eq!(
+        messages.iter().find(|message| message["id"] == 8).unwrap()["result"]["result"]["value"],
+        "one-commit"
+    );
+    assert_eq!(
+        messages
+            .iter()
+            .filter(|message| message["sessionId"] == target.session_id
+                && message["method"] == "Page.frameNavigated"
+                && message["params"]["frame"]["url"] == url)
+            .count(),
+        1
+    );
+    assert!(
+        browser
+            .subscribe()
+            .unwrap()
+            .0
+            .documents
+            .iter()
+            .any(|document| browser
+                .document_commit_snapshot(*document)
+                .is_ok_and(|snapshot| snapshot
+                    .metadata
+                    .info
+                    .as_ref()
+                    .is_some_and(|info| info.url.as_str() == url)))
+    );
+    socket.close(None).await.unwrap();
+    server.abort();
+    let _ = server.await;
+}
+
+#[tokio::test]
 async fn websocket_native_context_disposal_retires_pending_calls_and_exact_sessions() {
     native_lifetime_retirement(false).await;
 }

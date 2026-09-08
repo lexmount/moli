@@ -571,6 +571,29 @@ pub(crate) struct PreparedRendererCallReplacements {
 }
 
 impl PreparedRendererCallReplacements {
+    pub(crate) fn supersede_with(&mut self, mut next: Self) {
+        if next.new_attachment_id.is_some() {
+            // Session-sink termination revokes its response lease without
+            // rotating the call's original attachment. A second native commit
+            // cannot select it again, so retain its one terminal obligation.
+            next.terminations
+                .extend(self.terminations.drain(..).filter(|entry| {
+                    matches!(
+                        entry.termination,
+                        PreparedRendererCallTermination::SessionSink { .. }
+                    )
+                }));
+            for session in self.failed_session_ids.drain(..) {
+                if !next.failed_session_ids.contains(&session) {
+                    next.failed_session_ids.push(session);
+                }
+            }
+        }
+        // Replays and adapter replies have already rotated to next's exact
+        // attachment. Their superseded leases must not execute a second time.
+        *self = next;
+    }
+
     pub(crate) fn is_empty(&self) -> bool {
         self.terminations.is_empty()
             && self.replays.is_empty()
@@ -1212,6 +1235,52 @@ impl DevToolsDomStorageSessionState {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn superseding_unpublished_document_preserves_terminal_calls_and_only_latest_replays() {
+        use moli_page_types::{RendererAgentAttachmentId, RendererInspectorResponseDelivery};
+        let [first, second, third] = std::array::from_fn(|_| RendererAgentAttachmentId::allocate());
+        let mut sessions = DevToolsSessionRegistry::default();
+        let mut calls = Vec::new();
+        for (id, method) in [(1, "Runtime.evaluate"), (2, "Runtime.enable")] {
+            let payload = serde_json::json!({"id": id, "method": method, "params": {}}).to_string();
+            let parsed = moli_protocol_cdp::ParsedCdpCommand::parse_str(&payload).unwrap();
+            calls.push(
+                sessions
+                    .primary_mut()
+                    .try_register_renderer_call(
+                        id,
+                        Some(first),
+                        RendererCommandDescriptor::from_frontend_policy(
+                            payload.clone(),
+                            parsed.renderer_policy(),
+                            RendererInspectorResponseDelivery::SessionSink,
+                        ),
+                    )
+                    .unwrap(),
+            );
+        }
+        let mut pending = sessions.prepare_renderer_call_replacements(None, first, second);
+        assert_eq!(pending.terminations.len(), 1);
+        assert_eq!(pending.replays.len(), 1);
+        let next = sessions.prepare_renderer_call_replacements(None, second, third);
+        assert!(next.terminations.is_empty());
+        assert_eq!(next.replays.len(), 1);
+        pending.supersede_with(next);
+        assert_eq!(pending.new_attachment_id, Some(third));
+        assert_eq!(pending.terminations.len(), 1);
+        assert_eq!(
+            pending.terminations[0]
+                .termination
+                .correlation()
+                .dispatched_attachment_id(),
+            Some(first)
+        );
+        assert_eq!(pending.replays.len(), 1);
+        pending.supersede_with(Default::default());
+        assert!(pending.is_empty());
+        drop(calls);
+    }
 
     #[test]
     fn consumed_emulation_handler_preserves_new_peer_policy_on_cleanup_retry() {
