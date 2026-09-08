@@ -160,6 +160,7 @@ mod parser_written_script_residence;
 mod popup_document_completion;
 mod preferred_aspect_ratio;
 mod rendering_update;
+mod script_preparation_error;
 mod service_worker;
 mod service_worker_client_message;
 mod service_worker_internal;
