@@ -59,6 +59,9 @@ fn json_charge(value: &serde_json::Value) -> usize {
 
 fn observation_transport_charge_bytes(observation: &RendererProtocolObservation) -> usize {
     match observation {
+        RendererProtocolObservation::Popup(event) => {
+            string_charge(event.url()).saturating_add(string_charge(event.target_name()))
+        }
         RendererProtocolObservation::JavaScriptDialog(event) => [
             event.source_url.as_str(),
             event.dialog_type.as_str(),
@@ -133,9 +136,6 @@ fn owner_action_transport_charge_bytes(action: &RendererOwnerAction) -> usize {
                     .saturating_add(response.body.capacity());
             }
             total
-        }
-        RendererOwnerAction::Popup(event) => {
-            string_charge(event.url()).saturating_add(string_charge(event.target_name()))
         }
         RendererOwnerAction::ChildFrameTree { event, .. } => match event {
             crate::protocol_types::ChildFrameTreeEventSnapshot::Attached(event) => {

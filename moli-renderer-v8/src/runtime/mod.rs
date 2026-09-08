@@ -71,6 +71,7 @@ mod page_state;
 mod page_surface;
 mod page_turn_scheduler;
 mod page_vm;
+mod popup;
 pub(crate) use page_vm::dom_agent_state::RendererDomAgentState;
 mod phase_one;
 mod protocol_output;
@@ -357,24 +358,24 @@ pub use self::page_surface::{
     RendererPendingPopupActivation, RendererPendingSameDocumentNavigation,
     RendererPendingTopLevelHistoryTraversal, RendererPendingWindowOpenEvent,
     RendererPerformanceMetricSnapshot, RendererPointerEventProperties,
-    RendererPopupActivationSource, RendererPopupDisposition, RendererResourceTextSearchOutcome,
-    RendererRuntimeCommandOutput, RendererRuntimeEvaluationResult, RendererRuntimeHeapSpaceUsage,
-    RendererRuntimeHeapUsage, RendererRuntimeInspectorAsyncCompletion,
-    RendererRuntimeInspectorMessage, RendererRuntimeInspectorMessageBatch,
-    RendererRuntimeInspectorProtocolMessage, RendererRuntimeInspectorProtocolMessageValueMut,
-    RendererRuntimeInspectorResponseChannel, RendererRuntimeInspectorResponseSender,
-    RendererRuntimeObservableSourceItem, RendererRuntimeObservableSourceSummary,
-    RendererRuntimeRealmInfo, RendererRuntimeRemoteObject, RendererRuntimeRemoteObjectResolution,
-    RendererScriptExecutionMemoryDiagnostics, RendererScriptSourceMemoryDiagnostics,
-    RendererScrollIntoViewResult, RendererServiceWorkerConsoleMessage,
-    RendererServiceWorkerExceptionMessage, RendererServiceWorkerFetchDiagnostic,
-    RendererServiceWorkerFetchDiagnosticResult, RendererServiceWorkerTargetEvent,
-    RendererServiceWorkerTargetInfo, RendererServiceWorkerVersionStatus,
-    RendererSetDocumentContentResult, RendererSharedWorkerConsoleMessage,
-    RendererSharedWorkerTargetEvent, RendererSharedWorkerTargetInfo, RendererStyleSheetHeader,
-    RendererStyleSheetInventoryUpdate, RendererStyleSheetPayload, RendererSyntheticResponseBody,
-    RendererTextSearchMatch, RendererTouchPoint, RendererWindowDocumentSource,
-    RuntimeConsoleMessageSnapshot,
+    RendererPopupActivationSource, RendererPopupDisposition, RendererPopupOpening,
+    RendererPopupOpeningId, RendererResourceTextSearchOutcome, RendererRuntimeCommandOutput,
+    RendererRuntimeEvaluationResult, RendererRuntimeHeapSpaceUsage, RendererRuntimeHeapUsage,
+    RendererRuntimeInspectorAsyncCompletion, RendererRuntimeInspectorMessage,
+    RendererRuntimeInspectorMessageBatch, RendererRuntimeInspectorProtocolMessage,
+    RendererRuntimeInspectorProtocolMessageValueMut, RendererRuntimeInspectorResponseChannel,
+    RendererRuntimeInspectorResponseSender, RendererRuntimeObservableSourceItem,
+    RendererRuntimeObservableSourceSummary, RendererRuntimeRealmInfo, RendererRuntimeRemoteObject,
+    RendererRuntimeRemoteObjectResolution, RendererScriptExecutionMemoryDiagnostics,
+    RendererScriptSourceMemoryDiagnostics, RendererScrollIntoViewResult,
+    RendererServiceWorkerConsoleMessage, RendererServiceWorkerExceptionMessage,
+    RendererServiceWorkerFetchDiagnostic, RendererServiceWorkerFetchDiagnosticResult,
+    RendererServiceWorkerTargetEvent, RendererServiceWorkerTargetInfo,
+    RendererServiceWorkerVersionStatus, RendererSetDocumentContentResult,
+    RendererSharedWorkerConsoleMessage, RendererSharedWorkerTargetEvent,
+    RendererSharedWorkerTargetInfo, RendererStyleSheetHeader, RendererStyleSheetInventoryUpdate,
+    RendererStyleSheetPayload, RendererSyntheticResponseBody, RendererTextSearchMatch,
+    RendererTouchPoint, RendererWindowDocumentSource, RuntimeConsoleMessageSnapshot,
 };
 pub(crate) use self::page_surface::{
     RendererCommandTurnOutputRecorder, RendererDevToolsSessionOutputHost,
@@ -410,6 +411,8 @@ use self::phase_one::PendingPhaseOneResidence;
 pub(in crate::runtime) use self::phase_one::{
     PhaseOneResidenceAdmission, PhaseOneRestoreRequirement,
 };
+pub(crate) use self::popup::RendererPopupBroker;
+pub use self::popup::RendererPopupInputReceiver;
 pub(crate) use self::protocol_output::{
     PendingRendererOutputRecord, RendererSettledOutput, RendererTurnOutputJournal,
 };

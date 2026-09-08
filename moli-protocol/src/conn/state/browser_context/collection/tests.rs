@@ -99,7 +99,7 @@ fn window_and_crash_state_outlive_the_devtools_projection() {
     let surface = context.web_contents_window_surface(handle).unwrap();
     let opener = WebContentsId::allocate();
     context
-        .set_web_contents_window_name(handle, Some("report".into()))
+        .set_web_contents_window_name_for_test(handle, Some("report".into()))
         .unwrap();
     context
         .browser_context
@@ -299,7 +299,6 @@ async fn close_retires_projection_waiters_and_channel_before_the_owned_page_tear
     context.bind_page_navigation_engines(Default::default(), None);
     context.set_active_target_id("TID-close");
     context.attach_active_session("SID-close");
-    context.target_popup_ids.insert("TID-close".into(), 7);
     let InitialDocumentAdmission::Build(build) = context
         .start_initial_document_for_target("TID-close", Default::default(), &Default::default())
         .unwrap()
@@ -322,7 +321,12 @@ async fn close_retires_projection_waiters_and_channel_before_the_owned_page_tear
     assert!(!context.browser_context.contains_web_contents(handle));
     assert!(context.page_targets.is_empty());
     assert_eq!(context.selected_web_contents_id(), None);
-    assert!(context.target_popup_ids.is_empty());
+    assert!(
+        context
+            .browser_context
+            .web_contents_renderer_popup_sources(handle)
+            .is_err()
+    );
     assert_eq!(projection.session_id(), Some("SID-close"));
     assert!(
         !projection

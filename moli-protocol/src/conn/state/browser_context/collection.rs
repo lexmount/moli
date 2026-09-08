@@ -22,14 +22,62 @@ impl BrowserContext {
         {
             return false;
         }
-        self.page_targets.insert(PageAgentHost::new(
+        let url = if snapshot.document.is_none() {
+            snapshot
+                .popup
+                .as_ref()
+                .map(|popup| popup.requested_url.clone())
+                .unwrap_or_else(|| snapshot.url.clone())
+        } else {
+            snapshot.url.clone()
+        };
+        let creator = self
+            .browser_context
+            .web_contents_initial_document_state(snapshot.handle)
+            .ok()
+            .flatten()
+            .and_then(|initial| initial.creator().cloned());
+        let identity = if url::Url::parse(&url)
+            .ok()
+            .as_ref()
+            .is_some_and(moli_url::is_about_blank)
+            && let Some(creator) = creator
+        {
+            TargetIdentityState::new(
+                url,
+                creator.security_origin().to_owned(),
+                creator.secure_context_type().to_owned(),
+            )
+        } else {
+            TargetIdentityState::with_url(url)
+        };
+        let opener_frame_id = snapshot.popup.as_ref().and_then(|popup| {
+            let opener = popup.opener?;
+            let target = self.target_id_for_web_contents(opener.id())?;
+            Some(match &popup.source_window {
+                Some(moli_core::page::RendererWindowDocumentSource::ChildFrame {
+                    frame_id,
+                    ..
+                }) => frame_id.clone(),
+                _ => target.to_owned(),
+            })
+        });
+        let mut target = PageAgentHost::new(
             target_id,
             None,
-            TargetIdentityState::with_url(snapshot.url.clone()),
+            identity,
             snapshot.handle.id(),
             snapshot.main_frame,
             TargetPageSlot::empty_for_initial_document_page_build(),
-        ))
+        );
+        target.opener_frame_id = opener_frame_id;
+        self.page_targets.insert(target)
+    }
+
+    pub(crate) fn target_id_for_web_contents(&self, id: WebContentsId) -> Option<&str> {
+        self.page_targets
+            .get_for_web_contents(id)
+            .map(PageAgentHost::target_id)
     }
 
     #[cfg(test)]
@@ -229,7 +277,8 @@ impl BrowserContext {
             .update_web_contents_window_surface(handle, state, width, height, x, y)
     }
 
-    pub(crate) fn set_web_contents_window_name(
+    #[cfg(test)]
+    pub(crate) fn set_web_contents_window_name_for_test(
         &mut self,
         handle: WebContentsHandle,
         name: Option<String>,
@@ -238,7 +287,8 @@ impl BrowserContext {
             .set_web_contents_window_name(handle, name)
     }
 
-    pub(crate) fn set_web_contents_opener(
+    #[cfg(test)]
+    pub(crate) fn set_web_contents_opener_for_test(
         &mut self,
         handle: WebContentsHandle,
         opener: Option<WebContentsHandle>,

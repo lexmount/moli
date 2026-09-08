@@ -38,6 +38,54 @@ impl CdpConnection {
         &mut self,
         handle: moli_core::browser::WebContentsHandle,
     ) -> Vec<BackgroundProtocolEvent> {
+        self.project_created_web_contents_inner(handle, false).await
+    }
+
+    pub(crate) async fn wait_for_renderer_popup(
+        &self,
+        opening: std::sync::Arc<moli_core::page::RendererPopupOpening>,
+    ) -> Option<moli_core::browser::BrowserPopupAdmission> {
+        self.browser.wait_for_renderer_popup(opening).await
+    }
+
+    pub(crate) async fn project_observed_popup(
+        &mut self,
+        handle: moli_core::browser::WebContentsHandle,
+    ) -> Vec<BackgroundProtocolEvent> {
+        self.pending_popup_projections.remove(&handle);
+        self.project_created_web_contents_inner(handle, true).await
+    }
+
+    /// A retired/unobserved renderer stream cannot strand a committed Window.
+    /// These entries retain only native handles, never an output or its storage.
+    pub(crate) async fn project_unobserved_popups(&mut self) -> Vec<BackgroundProtocolEvent> {
+        let mut events = Vec::new();
+        for handle in self
+            .pending_popup_projections
+            .iter()
+            .copied()
+            .collect::<Vec<_>>()
+        {
+            let pending = self
+                .browser
+                .web_contents_snapshot(handle)
+                .ok()
+                .and_then(|snapshot| snapshot.popup)
+                .and_then(|popup| popup.pending_renderer_opening())
+                .is_some();
+            if !pending {
+                self.pending_popup_projections.remove(&handle);
+                events.extend(self.project_created_web_contents_inner(handle, false).await);
+            }
+        }
+        events
+    }
+
+    async fn project_created_web_contents_inner(
+        &mut self,
+        handle: moli_core::browser::WebContentsHandle,
+        observed: bool,
+    ) -> Vec<BackgroundProtocolEvent> {
         if self
             .browser_context_by_browser_id(handle.context())
             .is_some_and(|context| {
@@ -50,9 +98,35 @@ impl CdpConnection {
             return Vec::new();
         }
         let Ok(snapshot) = self.browser.web_contents_snapshot(handle) else {
+            self.pending_popup_projections.remove(&handle);
             return Vec::new();
         };
+        if !observed
+            && snapshot
+                .popup
+                .as_ref()
+                .and_then(|popup| popup.pending_renderer_opening())
+                .is_some()
+        {
+            self.pending_popup_projections.insert(handle);
+            return Vec::new();
+        }
         self.project_created_browser_context(handle.context());
+        let mut events = Vec::new();
+        if let Some(opener) = snapshot.popup.as_ref().and_then(|popup| popup.opener)
+            && opener != handle
+            && self.browser.web_contents_snapshot(opener).is_ok()
+        {
+            events.extend(Box::pin(self.project_created_web_contents_inner(opener, false)).await);
+            if self
+                .browser_context_by_browser_id(opener.context())
+                .and_then(|context| context.target_id_for_web_contents(opener.id()))
+                .is_none()
+            {
+                self.pending_popup_projections.insert(handle);
+                return events;
+            }
+        }
         let target_id = self.gen_target_id();
         let Some(context) = self.browser_context_by_browser_id_mut(handle.context()) else {
             return Vec::new();
@@ -60,14 +134,31 @@ impl CdpConnection {
         if !context.adopt_web_contents(&snapshot, target_id.clone()) {
             return Vec::new();
         }
-        let mut events = crate::domains::target::project_browser_created_target(
-            self,
-            &target_id,
-            snapshot.document.is_some(),
-        )
-        .await;
+        self.pending_popup_projections.remove(&handle);
+        events.extend(if snapshot.popup.is_some() {
+            crate::domains::target::project_browser_popup_target(self, &target_id, &snapshot).await
+        } else {
+            crate::domains::target::project_browser_created_target(
+                self,
+                &target_id,
+                snapshot.document.is_some(),
+            )
+            .await
+        });
         if let Some(document) = snapshot.document {
             events.extend(self.project_browser_document_commit(document).await);
+        }
+        if let Some(selection) = self
+            .browser
+            .context_handle(handle.context())
+            .ok()
+            .and_then(|context| context.selected_web_contents_snapshot())
+        {
+            events.extend(self.project_browser_selection(
+                selection.web_contents,
+                None,
+                selection.sequence,
+            ));
         }
         events
     }

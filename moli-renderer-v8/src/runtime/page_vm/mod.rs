@@ -1140,6 +1140,7 @@ pub(crate) struct PageVmRuntimeHooks {
     owner_wake: Option<RendererOwnerWakeSender>,
     page_creation_progress: Option<super::RendererPageCreationProgress>,
     javascript_dialog_runtime: RendererJavaScriptDialogRuntime,
+    popup_broker: super::RendererPopupBroker,
     resource_task_runner: Option<crate::network::RendererResourceTaskRunner>,
     pub(crate) browser_context_runtime: super::RendererBrowserContextRuntime,
     document_lifecycle: Option<RendererDocumentLifecycleJournalHandle>,
@@ -1202,6 +1203,7 @@ impl PageVmRuntimeHooks {
             owner_wake: None,
             page_creation_progress: None,
             javascript_dialog_runtime: RendererJavaScriptDialogRuntime::default(),
+            popup_broker: super::RendererPopupBroker::default(),
             resource_task_runner: None,
             browser_context_runtime,
             document_lifecycle: None,
@@ -1271,6 +1273,7 @@ impl PageVmRuntimeHooks {
             crate::page_task_queue::RendererPageTaskTestResidence::new(Some(owner_wake.clone()));
         Self {
             javascript_dialog_runtime: RendererJavaScriptDialogRuntime::default(),
+            popup_broker: super::RendererPopupBroker::default(),
             owner_wake: Some(owner_wake),
             page_creation_progress: None,
             resource_task_runner: Some(residence.resource_task_runner()),
@@ -1310,6 +1313,7 @@ impl PageVmRuntimeHooks {
     ) -> Self {
         Self {
             javascript_dialog_runtime: RendererJavaScriptDialogRuntime::default(),
+            popup_broker: super::RendererPopupBroker::default(),
             owner_wake: Some(owner_wake),
             page_creation_progress: None,
             resource_task_runner: Some(
@@ -2057,6 +2061,10 @@ impl PageVm {
 
     pub(super) fn javascript_dialog_broker(&self) -> RendererJavaScriptDialogBroker {
         self.runtime_hooks.javascript_dialog_runtime.broker()
+    }
+
+    pub(super) fn popup_broker(&self) -> super::RendererPopupBroker {
+        self.runtime_hooks.popup_broker.clone()
     }
 
     pub(super) fn has_live_script_vm(&self) -> bool {
@@ -4275,6 +4283,7 @@ impl PageVm {
             env.reserved_service_worker_client_id,
         )?;
         let mut vm = vm_bootstrap.finish()?;
+        vm.bind_popup_broker(runtime_hooks.popup_broker.clone());
         vm.set_document_navigator_identity(&env.navigator_identity);
         vm.set_layout_policy(env.layout_policy);
         vm.install_page_task_capabilities(page_task_capabilities);

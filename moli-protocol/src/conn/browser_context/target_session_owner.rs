@@ -1095,53 +1095,6 @@ impl CdpConnection {
             .await
     }
 
-    pub(crate) async fn rollback_incomplete_popup_target_without_event_async(
-        &mut self,
-        browser_context_id: Option<&str>,
-        target_id: &str,
-    ) {
-        self.rollback_top_level_target_tab_sessions_without_event(target_id);
-
-        let browser_context_id = browser_context_id.map(str::to_owned).or_else(|| {
-            self.browser_contexts()
-                .find(|browser_context| {
-                    browser_context.is_active_target(target_id)
-                        || browser_context.background_target(target_id).is_some()
-                })
-                .map(|browser_context| browser_context.id.clone())
-        });
-
-        let mut page_session_ids = Vec::new();
-        if let Some(browser_context_id) = browser_context_id {
-            let browser = self.browser.clone();
-            let target = self
-                .browser_context_by_id_mut(&browser_context_id)
-                .and_then(|browser_context| {
-                    let handle = browser_context.web_contents_handle_for_target(target_id)?;
-                    let closing = browser.close_web_contents(handle).ok()?;
-                    let mut target = browser_context.take_closed_web_contents_projection(handle)?;
-                    target.runtime_slot.retire_for_target_close();
-                    Some((target, closing))
-                });
-            if let Some((target, closing)) = target {
-                page_session_ids.extend(
-                    target
-                        .devtools_sessions
-                        .attached_session_ids()
-                        .map(str::to_owned),
-                );
-                if let Some(session_id) = target.session_id() {
-                    page_session_ids.push(session_id.to_owned());
-                }
-                closing.close_async().await;
-            }
-        }
-
-        for session_id in page_session_ids {
-            self.rollback_attached_session_without_event(&session_id);
-        }
-    }
-
     pub(crate) fn target_session_owner_aggregate_fetch_config_for_owner(
         &self,
         owner: &CommandOwnerScope,

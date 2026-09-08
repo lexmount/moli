@@ -8,8 +8,8 @@ use crate::runtime::{
     RendererDocumentSourcedSameDocumentNavigation,
     RendererDocumentSourcedTopLevelLocationNavigation, RendererDomMutationEventBatch,
     RendererJavaScriptDialogOpening, RendererMainDocumentCommit, RendererPendingDownloadActivation,
-    RendererPendingFileChooserActivation, RendererPendingPopupActivation,
-    RendererPendingTopLevelHistoryTraversal, RendererRuntimeCommandCausalIdentity,
+    RendererPendingFileChooserActivation, RendererPendingTopLevelHistoryTraversal,
+    RendererPopupOpening, RendererRuntimeCommandCausalIdentity,
     RendererRuntimeInspectorMessageBatch, RendererServiceWorkerTargetEvent,
     RendererSharedWorkerTargetEvent,
 };
@@ -33,7 +33,6 @@ pub struct RendererDocumentTitleChanged {
 pub enum RendererOwnerAction {
     FileChooser(RendererPendingFileChooserActivation),
     Download(RendererPendingDownloadActivation),
-    Popup(RendererPendingPopupActivation),
     ChildFrameTree {
         source_document: RendererDocumentLifecycleIdentity,
         event: ChildFrameTreeEventSnapshot,
@@ -78,6 +77,7 @@ pub enum RendererOwnerAction {
 /// protocol-boundary responsibility.
 #[derive(Clone, Debug, PartialEq)]
 pub enum RendererProtocolObservation {
+    Popup(std::sync::Arc<RendererPopupOpening>),
     JavaScriptDialog(std::sync::Arc<RendererJavaScriptDialogOpening>),
     MainDocumentCommit(RendererMainDocumentCommit),
     DocumentTitleChanged(RendererDocumentTitleChanged),

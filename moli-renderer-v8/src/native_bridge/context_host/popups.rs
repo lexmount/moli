@@ -4016,42 +4016,35 @@ impl JsContextHost {
         activation: RendererPendingPopupActivation,
         window_open_event: Option<crate::RendererPendingWindowOpenEvent>,
     ) {
+        let Some(opening) = self.popup_broker.accept(activation) else {
+            return;
+        };
         let mut items = Vec::with_capacity(1 + usize::from(window_open_event.is_some()));
         if let Some(event) = window_open_event {
             items.push(crate::runtime::RendererOutputItem::Observation(
                 crate::runtime::RendererProtocolObservation::WindowOpen(event),
             ));
         }
-        items.push(crate::runtime::RendererOutputItem::OwnerAction(
-            crate::runtime::RendererOwnerAction::Popup(activation.clone()),
+        items.push(crate::runtime::RendererOutputItem::Observation(
+            crate::runtime::RendererProtocolObservation::Popup(opening),
         ));
         let published = self.append_live_turn_items(items);
-        if published {
-            return;
-        }
         #[cfg(test)]
-        self.pending_popup_activations.push(activation);
+        let _ = published;
         #[cfg(not(test))]
-        {
-            let _ = activation;
-            panic!("a production popup must have a concrete renderer output sink");
-        }
+        assert!(
+            published,
+            "a production popup must have a concrete renderer output sink"
+        );
     }
 
     #[cfg(test)]
     pub(crate) fn take_pending_popup_activations(&mut self) -> Vec<RendererPendingPopupActivation> {
-        std::mem::take(&mut self.pending_popup_activations)
+        self.popup_broker.take_pending()
     }
 
     pub(crate) fn pending_popup_activation_count(&self) -> usize {
-        #[cfg(test)]
-        {
-            self.pending_popup_activations.len()
-        }
-        #[cfg(not(test))]
-        {
-            0
-        }
+        self.popup_broker.pending_count()
     }
 }
 

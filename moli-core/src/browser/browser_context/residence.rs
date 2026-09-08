@@ -105,6 +105,24 @@ impl BrowserContext {
         Some(WebContentsHandle::new(self.id, id))
     }
 
+    pub fn web_contents_for_renderer_popup(
+        &self,
+        renderer: crate::browser::RendererPageResidenceIdentity,
+        popup: u64,
+    ) -> Option<WebContentsHandle> {
+        let id = self
+            .web_contents
+            .values()
+            .find(|contents| {
+                contents
+                    .window
+                    .renderer_popup_sources
+                    .contains(&(renderer, popup))
+            })?
+            .id();
+        Some(WebContentsHandle::new(self.id, id))
+    }
+
     pub fn web_contents_opener(
         &self,
         handle: WebContentsHandle,
@@ -130,6 +148,17 @@ impl BrowserContext {
         self.web_contents
             .get(&web_contents)
             .map(|contents| contents.session_storage.deep_clone())
+    }
+
+    pub fn web_contents_renderer_popup_sources(
+        &self,
+        handle: WebContentsHandle,
+    ) -> Result<Vec<(crate::browser::RendererPageResidenceIdentity, u64)>, String> {
+        Ok(self
+            .web_contents(handle)?
+            .window
+            .renderer_popup_sources
+            .clone())
     }
 
     pub fn web_contents_is_crashed(&self, handle: WebContentsHandle) -> Result<bool, String> {

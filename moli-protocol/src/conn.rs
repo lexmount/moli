@@ -56,7 +56,6 @@ mod output;
 #[cfg(test)]
 mod permission_tests;
 mod permissions;
-mod popup_activation_work;
 mod popup_navigation_work;
 mod protocol_output;
 mod renderer_command_turn;
@@ -549,7 +548,6 @@ pub(crate) use output::{
     BackgroundServiceWorkerRegistration, BackgroundServiceWorkerVersion,
     build_command_success_response,
 };
-pub(crate) use popup_activation_work::PopupTargetActivationAction;
 pub(crate) use popup_navigation_work::{
     PopupTargetNavigationKind, PopupTargetNavigationOwnerAction,
 };
@@ -1043,6 +1041,8 @@ pub(crate) struct BrowserGlobalOverrides {
 /// Persistent per-connection state.
 pub struct CdpConnection {
     browser: BrowserHandle,
+    /// Native creations whose still-live renderer observation owns FIFO emission.
+    pending_popup_projections: HashSet<moli_core::browser::WebContentsHandle>,
     webdriver_sessions: HashMap<String, automation_session::WebDriverSessionScope>,
     // Browser/session routing state.
     pub browser_context: Option<BrowserContext>,
@@ -1174,6 +1174,7 @@ impl CdpConnection {
             next_page_domain_subscription_generation: 0,
             next_internal_devtools_command_id: 902_000_000,
             network_request_id_allocator: ConnectionNetworkRequestIdAllocator::default(),
+            pending_popup_projections: HashSet::new(),
             base_browser_identity,
             browser_global_overrides: BrowserGlobalOverrides::default(),
             global_browser_identity_override: None,
@@ -2392,21 +2393,6 @@ impl CdpConnection {
             .push_scheduler_event(CdpSchedulerEvent::ProtocolWorkPublished { work });
     }
 
-    pub(crate) fn publish_popup_target_activation_action(
-        &mut self,
-        action: PopupTargetActivationAction,
-    ) {
-        let publish_sequence = self
-            .scheduler_state
-            .allocate_protocol_work_publish_sequence();
-        let work = crate::domains::activity::ProtocolSchedulerWork::popup_target_activation_action(
-            publish_sequence,
-            action,
-        );
-        self.scheduler_state
-            .push_scheduler_event(CdpSchedulerEvent::ProtocolWorkPublished { work });
-    }
-
     pub(crate) fn publish_page_target_termination_owner_action(
         &mut self,
         action: crate::domains::page::PageTargetTerminationOwnerAction,
@@ -3124,19 +3110,6 @@ impl CdpConnection {
             reason,
             tab_session_ids,
         ))
-    }
-
-    pub(crate) fn rollback_top_level_target_tab_sessions_without_event(
-        &mut self,
-        page_target_id: &str,
-    ) {
-        let Some(closure_plan) = self.remove_tab_for_page_target(page_target_id) else {
-            return;
-        };
-        for session_id in closure_plan.tab_target().session_ids() {
-            self.clear_auto_attach_owner(Some(&session_id));
-            self.rollback_attached_session_without_event(&session_id);
-        }
     }
 
     pub(crate) fn tab_target_id_for_session_id(&self, session_id: &str) -> Option<&str> {

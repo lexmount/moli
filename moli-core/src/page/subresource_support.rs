@@ -8,6 +8,10 @@ use crate::RendererOutputFence;
 use crate::renderer::{RendererPageCommand, RendererPageReply};
 
 impl Page {
+    pub(crate) fn observe_popup_inputs(&self) -> moli_renderer_v8::RendererPopupInputReceiver {
+        self.handle.observe_popup_inputs()
+    }
+
     pub(crate) fn take_pending_javascript_dialogs(&self) -> Vec<RendererPendingJavaScriptDialog> {
         self.handle.take_pending_javascript_dialogs()
     }

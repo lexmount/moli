@@ -3413,50 +3413,6 @@ impl CdpConnection {
                 );
             }
             None => {
-                if message.get("method").and_then(Value::as_str) == Some("Page.windowOpen") {
-                    let params = message.get("params").unwrap_or(&Value::Null);
-                    let Some(url) = params.get("url").and_then(Value::as_str) else {
-                        tracing::warn!("dropping Page.windowOpen without a string url");
-                        return false;
-                    };
-                    let Some(window_name) = params.get("windowName").and_then(Value::as_str) else {
-                        tracing::warn!("dropping Page.windowOpen without a string windowName");
-                        return false;
-                    };
-                    let Some(window_features) =
-                        params.get("windowFeatures").and_then(Value::as_array)
-                    else {
-                        tracing::warn!("dropping Page.windowOpen without windowFeatures");
-                        return false;
-                    };
-                    let Some(user_gesture) = params.get("userGesture").and_then(Value::as_bool)
-                    else {
-                        tracing::warn!("dropping Page.windowOpen without userGesture");
-                        return false;
-                    };
-                    let Some(window_features) = window_features
-                        .iter()
-                        .map(Value::as_str)
-                        .collect::<Option<Vec<_>>>()
-                    else {
-                        tracing::warn!("dropping Page.windowOpen with a non-string window feature");
-                        return false;
-                    };
-                    let window_features = window_features
-                        .into_iter()
-                        .map(str::to_owned)
-                        .collect::<Vec<_>>();
-                    crate::domains::page::emit_page_window_open_background_events_for_owner(
-                        self,
-                        background_events,
-                        owner,
-                        url,
-                        window_name,
-                        &window_features,
-                        user_gesture,
-                    );
-                    return false;
-                }
                 self.register_runtime_remote_object_ids_from_value_for_owner(owner, &message);
                 if let Some(mut event) =
                     RuntimeContextProtocolEvent::from_context_protocol_message(message.clone())

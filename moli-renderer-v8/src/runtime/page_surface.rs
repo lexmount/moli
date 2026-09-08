@@ -35,6 +35,7 @@ pub use javascript_dialog::{
 };
 pub use popup_activation::{
     RendererPendingPopupActivation, RendererPopupActivationSource, RendererPopupDisposition,
+    RendererPopupOpening, RendererPopupOpeningId,
 };
 pub use window_document_source::RendererWindowDocumentSource;
 

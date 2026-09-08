@@ -7064,6 +7064,16 @@ impl ScriptVm {
             .take_pending_popup_activations()
     }
 
+    pub(super) fn bind_popup_broker(&mut self, broker: crate::runtime::RendererPopupBroker) {
+        let mut host = self._context_host.borrow_mut();
+        assert_eq!(
+            host.popup_broker.pending_count(),
+            0,
+            "bind before popup admission"
+        );
+        host.popup_broker = broker;
+    }
+
     #[cfg(test)]
     pub(super) fn take_completed_child_frame_navigation_loads(
         &mut self,

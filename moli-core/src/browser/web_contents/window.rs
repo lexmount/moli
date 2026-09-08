@@ -6,6 +6,8 @@ pub struct Window {
     pub name: Option<String>,
     pub opener: Option<WindowOpener>,
     pub surface: WindowSurface,
+    pub(crate) popup_creation: Option<std::sync::Arc<crate::browser::BrowserPopupCreation>>,
+    pub(crate) renderer_popup_sources: Vec<(crate::browser::RendererPageResidenceIdentity, u64)>,
 }
 
 #[derive(Debug, Clone, Copy)]

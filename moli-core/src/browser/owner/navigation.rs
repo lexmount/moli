@@ -1011,6 +1011,7 @@ impl BrowserContextHandle {
                     );
                     browser.observe_document_lifecycle(document);
                     browser.observe_javascript_dialogs(document);
+                    browser.observe_popup_inputs(document);
                     Ok(BrowserCommittedInitialDocument {
                         key,
                         snapshot,
@@ -1238,6 +1239,7 @@ impl BrowserContextHandle {
             browser.observe_document_lifecycle(document);
             browser.publish_closed_javascript_dialogs(dialogs);
             browser.observe_javascript_dialogs(document);
+            browser.observe_popup_inputs(document);
             let (completion_tx, completion) = oneshot::channel();
             tokio::task::spawn_local(async move {
                 commit.retirement.close().await;

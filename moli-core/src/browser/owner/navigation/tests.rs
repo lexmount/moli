@@ -364,6 +364,48 @@ async fn next_native_dialog(
 }
 
 #[tokio::test]
+async fn native_popup_admission_creates_a_web_contents_without_devtools_ingress() {
+    let service = BrowserService::start().unwrap();
+    let browser = service.handle();
+    let (context, contents) = context_with_contents(&service);
+    let (_, mut events) = browser.subscribe().unwrap();
+    let source = navigate(
+        &context,
+        contents,
+        "data:text/html,<script>window.open('about:blank','native-popup-owner')</script>",
+    )
+    .await;
+    let popup = tokio::time::timeout(std::time::Duration::from_secs(5), async {
+        loop {
+            if let BrowserEvent::WebContentsCreated(popup) = events.recv().await.unwrap().event
+                && popup.context() == context.id()
+                && popup != contents
+                && context.web_contents_window_name(popup).unwrap().as_deref()
+                    == Some("native-popup-owner")
+            {
+                break popup;
+            }
+        }
+    })
+    .await
+    .expect("an accepted window.open must create its native WebContents without CDP ingress");
+    assert_eq!(context.document_handle(contents).unwrap(), Some(source));
+    assert_eq!(
+        context.web_contents_opener(popup).unwrap(),
+        Some((contents.id(), true))
+    );
+    assert_eq!(browser.subscribe().unwrap().0.web_contents.len(), 2);
+    context
+        .close_web_contents(popup)
+        .unwrap()
+        .close_async()
+        .await;
+    assert_eq!(context.document_handle(contents).unwrap(), Some(source));
+    assert_eq!(browser.subscribe().unwrap().0.web_contents, [contents]);
+    service.shutdown();
+}
+
+#[tokio::test]
 async fn native_javascript_dialog_is_admitted_without_devtools_ingress() {
     use crate::page::RendererJavaScriptDialogSource;
     for (kind, script) in [

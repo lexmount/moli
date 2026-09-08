@@ -2994,7 +2994,7 @@ async fn close_clears_loaded_page_state_and_emits_detached_events() {
         .set_next_subresource_fetch_request_id_for_test(5);
     assert!(bc.assign_attached_session_to_target("TID-1", "SID-attached".into()));
     let handle = bc.web_contents_handle_for_target("TID-1").unwrap();
-    bc.set_web_contents_window_name(handle, Some("close-me".into()))
+    bc.set_web_contents_window_name_for_test(handle, Some("close-me".into()))
         .unwrap();
     // An unknown popup has no WebContents capability on which opener state
     // could be installed.

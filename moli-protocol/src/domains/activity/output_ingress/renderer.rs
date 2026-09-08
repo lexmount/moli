@@ -95,7 +95,9 @@ pub(crate) async fn ingest_renderer_output_transport_async(
             }
         }
     }
-    command_context.take_protocol_events()
+    let mut events = command_context.take_protocol_events();
+    events.extend(conn.project_unobserved_popups().await);
+    events
 }
 
 async fn ingest_renderer_output_publication(

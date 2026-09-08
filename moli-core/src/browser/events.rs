@@ -119,6 +119,7 @@ pub struct WebContentsSnapshot {
     pub main_frame: MainFrameSlotId,
     pub document: Option<DocumentHandle>,
     pub url: String,
+    pub popup: Option<std::sync::Arc<super::BrowserPopupCreation>>,
 }
 
 pub type BrowserEventReceiver = broadcast::Receiver<BrowserEventRecord>;

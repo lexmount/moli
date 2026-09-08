@@ -5380,7 +5380,7 @@ async fn same_context_named_popup_reuse_navigates_and_activates_loaded_owner() {
         .web_contents_handle_for_target(&owner.target_id)
         .unwrap();
     browser_context
-        .set_web_contents_window_name(handle, Some("reportWindow".into()))
+        .set_web_contents_window_name_for_test(handle, Some("reportWindow".into()))
         .unwrap();
 
     ctx.process_async(json!({

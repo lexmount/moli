@@ -19,6 +19,7 @@ mod javascript_dialog;
 pub use activation::PendingWebContentsActivation;
 mod navigation;
 mod navigation_events;
+mod popup;
 pub use navigation::{
     BrowserBuiltInitialDocument, BrowserCommittedInitialDocument, BrowserDocumentMaterialization,
     BrowserDocumentNavigationCommit, BrowserInitialDocumentAdmission, BrowserInitialDocumentBuild,
@@ -91,6 +92,7 @@ struct Browser {
     contexts: IndexMap<BrowserContextId, BrowserContext>,
     permission_defaults: super::PermissionDefaults,
     navigation_work: navigation::NavigationWorkRegistry,
+    popup_admissions: popup::PopupAdmissions,
     local_sender: BrowserLocalSender,
     events: super::events::BrowserEventStream,
 }
@@ -101,6 +103,7 @@ impl Browser {
             contexts: IndexMap::new(),
             permission_defaults: super::PermissionDefaults::default(),
             navigation_work: navigation::NavigationWorkRegistry::default(),
+            popup_admissions: popup::PopupAdmissions::default(),
             local_sender,
             events: super::events::BrowserEventStream::default(),
         }
@@ -380,6 +383,7 @@ impl BrowserHandle {
                 main_frame,
                 document,
                 url,
+                popup: context.web_contents(handle)?.window.popup_creation.clone(),
             })
         })?
     }
@@ -942,6 +946,16 @@ impl BrowserContextHandle {
         self.read_live(move |context| context.web_contents_handle_for_window_name(&name))
     }
 
+    pub fn web_contents_for_renderer_popup(
+        &self,
+        renderer: super::RendererPageResidenceIdentity,
+        popup_id: u64,
+    ) -> Option<WebContentsHandle> {
+        self.read(move |context| context.web_contents_for_renderer_popup(renderer, popup_id))
+            .ok()
+            .flatten()
+    }
+
     pub fn clone_session_storage_namespace(
         &self,
         web_contents: super::WebContentsId,
@@ -1102,6 +1116,7 @@ impl BrowserContextHandle {
         fn resolve_history_traversal(handle: WebContentsHandle, destination: super::web_contents::HistoryTraversalDestination) -> super::web_contents::ResolvedHistoryTraversal;
         fn document_service_worker_client_id(handle: super::DocumentHandle) -> u64;
         fn document_renderer_residence(handle: super::DocumentHandle) -> super::RendererPageResidenceIdentity;
+        fn web_contents_renderer_popup_sources(handle: WebContentsHandle) -> Vec<(super::RendererPageResidenceIdentity, u64)>;
         fn document_url(handle: super::DocumentHandle) -> url::Url;
         fn document_title(handle: super::DocumentHandle) -> String;
         fn document_lifecycle_snapshot(handle: super::DocumentHandle) -> Option<crate::page::RendererDocumentLifecycleSnapshot>;

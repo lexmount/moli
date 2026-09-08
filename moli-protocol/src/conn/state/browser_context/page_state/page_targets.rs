@@ -10,7 +10,6 @@ use crate::devtools_runtime::{
     DevToolsBrowserContextId, DevToolsTargetId, DevToolsTargetInfo, DevToolsTargetKind,
 };
 use moli_core::browser::{WebContentsCreation, WebContentsHandle};
-use moli_core::network::SharedWebStorageStore;
 
 impl BrowserContext {
     pub(in crate::conn) fn take_closed_web_contents_projection(
@@ -27,7 +26,6 @@ impl BrowserContext {
             .get_for_web_contents(handle.id())?
             .target_id()
             .to_owned();
-        self.forget_target_popup_id_for_target(&target_id);
         self.page_targets.remove(&target_id)
     }
     pub(crate) fn stage_background_target(
@@ -47,30 +45,6 @@ impl BrowserContext {
             initial_empty_document_url,
             creator,
             None,
-            session_storage_namespace,
-        );
-    }
-
-    pub(crate) fn stage_popup_background_target(
-        &mut self,
-        target_id: String,
-        session_id: Option<String>,
-        url: String,
-        initial_empty_document_url: Option<String>,
-        creator: Option<InitialDocumentCreator>,
-        session_storage_store: Option<SharedWebStorageStore>,
-        initial_empty_document_storage_key: Option<moli_storage_key::MoliStorageKey>,
-    ) {
-        let session_storage_namespace = session_storage_store
-            .map(SessionStorageNamespace::from_store)
-            .or_else(|| self.deep_cloned_session_storage_namespace_for_creator(creator.as_ref()));
-        self.stage_background_target_with_session_storage_namespace(
-            target_id,
-            session_id,
-            url,
-            initial_empty_document_url,
-            creator,
-            initial_empty_document_storage_key,
             session_storage_namespace,
         );
     }
@@ -142,6 +116,7 @@ impl BrowserContext {
             .expect("newly inserted WebContents must be selectable")
     }
 
+    #[cfg(test)]
     pub(crate) fn reusable_window_open_target_name(target_name: &str) -> Option<&str> {
         if target_name.is_empty() || target_name.eq_ignore_ascii_case("_blank") {
             return None;
@@ -149,6 +124,7 @@ impl BrowserContext {
         Some(target_name)
     }
 
+    #[cfg(test)]
     pub(crate) fn target_id_for_window_name(&self, target_name: &str) -> Option<&str> {
         let id = self.web_contents_handle_for_window_name(target_name)?.id();
         self.page_targets
@@ -156,6 +132,7 @@ impl BrowserContext {
             .map(PageAgentHost::target_id)
     }
 
+    #[cfg(test)]
     pub(crate) fn web_contents_handle_for_window_name(
         &self,
         target_name: &str,
@@ -171,36 +148,32 @@ impl BrowserContext {
             .any(|target| target.owner_state.has_attached_child_frame_id(frame_id))
     }
 
-    pub(crate) fn remember_target_popup_id(&mut self, popup_id: Option<u64>, target_id: &str) {
-        if let Some(popup_id) = popup_id
-            && let Some(replaced_popup_id) =
-                self.target_popup_ids.insert(target_id.to_owned(), popup_id)
-            && replaced_popup_id != popup_id
-        {
-            self.dismiss_pending_popup_javascript_dialogs(replaced_popup_id);
-        }
-    }
-
-    pub(crate) fn forget_target_popup_id_for_target(&mut self, target_id: &str) {
-        if let Some(popup_id) = self.target_popup_ids.remove(target_id) {
-            self.dismiss_pending_popup_javascript_dialogs(popup_id);
-        }
-    }
-
     pub(crate) fn target_popup_id(&self, target_id: &str) -> Option<u64> {
-        self.target_popup_ids.get(target_id).copied()
+        let handle = self.web_contents_handle_for_target(target_id)?;
+        self.browser_context
+            .web_contents_renderer_popup_sources(handle)
+            .ok()?
+            .last()
+            .map(|(_, id)| *id)
     }
 
-    pub(crate) fn target_id_for_popup_id(&self, popup_id: u64) -> Option<&str> {
-        self.target_popup_ids
-            .iter()
-            .find_map(|(target_id, candidate)| {
-                (*candidate == popup_id && self.devtools_target_info(target_id).is_some())
-                    .then_some(target_id.as_str())
-            })
+    pub(crate) fn target_id_for_popup_document(
+        &self,
+        document: moli_core::browser::DocumentHandle,
+        popup_id: u64,
+    ) -> Option<&str> {
+        let renderer = self
+            .browser_context
+            .document_renderer_residence(document)
+            .ok()?;
+        let handle = self
+            .browser_context
+            .web_contents_for_renderer_popup(renderer, popup_id)?;
+        self.target_id_for_web_contents(handle.id())
     }
 
-    pub(crate) fn set_target_opener_frame_attribution(
+    #[cfg(test)]
+    pub(crate) fn set_target_opener_frame_attribution_for_test(
         &mut self,
         target_id: &str,
         opener_frame_id: String,
@@ -396,7 +369,8 @@ impl BrowserContext {
         ))
     }
 
-    pub(crate) fn initial_empty_document_creator_for_target(
+    #[cfg(test)]
+    fn initial_empty_document_creator_for_target(
         &self,
         target_id: &str,
     ) -> Option<InitialDocumentCreator> {
@@ -1257,9 +1231,9 @@ mod tests {
             .web_contents_handle_for_target("TID-opener")
             .unwrap();
         context
-            .set_web_contents_opener(popup_handle, Some(opener_handle), true)
+            .set_web_contents_opener_for_test(popup_handle, Some(opener_handle), true)
             .unwrap();
-        context.set_target_opener_frame_attribution("TID-popup", "FRAME-opener".into());
+        context.set_target_opener_frame_attribution_for_test("TID-popup", "FRAME-opener".into());
 
         assert!(context.rekey_active_target("TID-renamed"));
         context.stage_background_target(
@@ -1318,7 +1292,7 @@ mod tests {
             .web_contents_handle_for_target("TID-window")
             .unwrap();
         context
-            .set_web_contents_window_name(handle, Some("report".into()))
+            .set_web_contents_window_name_for_test(handle, Some("report".into()))
             .unwrap();
         assert!(context.rekey_active_target("TID-renamed"));
         context.stage_background_target(
@@ -1352,7 +1326,7 @@ mod tests {
         );
 
         context
-            .set_web_contents_window_name(handle, Some("renamed-report".into()))
+            .set_web_contents_window_name_for_test(handle, Some("renamed-report".into()))
             .unwrap();
         assert_eq!(context.target_id_for_window_name("report"), None);
         assert_eq!(
@@ -1389,10 +1363,10 @@ mod tests {
             .unwrap();
         let exact = context.web_contents_handle_for_target("TID-exact").unwrap();
         context
-            .set_web_contents_window_name(spaced, Some(" ReportWindow ".into()))
+            .set_web_contents_window_name_for_test(spaced, Some(" ReportWindow ".into()))
             .unwrap();
         context
-            .set_web_contents_window_name(exact, Some("ReportWindow".into()))
+            .set_web_contents_window_name_for_test(exact, Some("ReportWindow".into()))
             .unwrap();
         assert_eq!(
             context.target_id_for_window_name(" ReportWindow "),

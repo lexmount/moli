@@ -407,8 +407,7 @@ impl JsContextHost {
             pending_file_chooser_activations: Vec::new(),
             #[cfg(test)]
             pending_download_activations: Vec::new(),
-            #[cfg(test)]
-            pending_popup_activations: Vec::new(),
+            popup_broker: crate::runtime::RendererPopupBroker::default(),
             next_lightweight_popup_id: 1,
             next_lightweight_popup_local_window_id: 1,
             next_lightweight_popup_document_id: 1,

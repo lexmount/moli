@@ -2448,7 +2448,7 @@ async fn direct_runtime_evaluate_popup_creates_target_in_inactive_background_own
         .expect("inactive owner should remain background");
     assert!(
         inactive
-            .background_target(&popup_target_id)
+            .page_target(&popup_target_id)
             .is_some_and(|target| target.target_url() == "https://example.com/owner-popup"),
         "popup target should be staged in the inactive owner browser context"
     );

@@ -26,6 +26,7 @@ pub struct RendererAttachedPage {
     pub(super) devtools_agent_token: RendererDevToolsAgentToken,
     pub(super) page_context_cancel_tx: RendererPageContextCancelSender,
     pub(super) javascript_dialog_broker: RendererJavaScriptDialogBroker,
+    pub(super) popup_broker: RendererPopupBroker,
     pub(super) devtools_target: crate::devtools::target::RendererDevToolsTargetHandle,
     pub(super) script_execution_control:
         crate::script_execution_control::RendererScriptExecutionControl,
@@ -79,6 +80,7 @@ impl RendererAttachedPage {
                     script_execution_control: self.script_execution_control,
                 }),
                 javascript_dialog_broker: self.javascript_dialog_broker,
+                popup_broker: self.popup_broker,
                 committed_document_post_response_continuation: self
                     .committed_document_post_response_continuation,
                 _not_send: PhantomData,
@@ -95,6 +97,7 @@ pub struct RendererPageHandle {
     local_executor: JsLocalExecutor,
     inspection: Option<RendererInspectionEndpoint>,
     javascript_dialog_broker: RendererJavaScriptDialogBroker,
+    popup_broker: RendererPopupBroker,
     committed_document_post_response_continuation:
         Option<RendererPageCommandPostResponseContinuation>,
     _not_send: PhantomData<Rc<()>>,
@@ -231,6 +234,10 @@ impl RendererPageHandle {
 
     pub fn observe_javascript_dialogs(&self) -> RendererJavaScriptDialogObservation {
         self.javascript_dialog_broker.observe()
+    }
+
+    pub fn observe_popup_inputs(&self) -> RendererPopupInputReceiver {
+        self.popup_broker.observe()
     }
 
     pub fn enqueue_async_command(
@@ -393,6 +400,7 @@ impl RendererPageHandle {
             .devtools_target
             .close("Inspector target closed with its Page handle");
         self.javascript_dialog_broker.dismiss_pending();
+        self.popup_broker.close();
         inspection
             .page_context_cancel_tx
             .cancel(RendererPageContextCancelReason::PageClosed);
@@ -509,6 +517,7 @@ impl Drop for RendererPageHandle {
         let token = inspection.token;
         inspection.retire_page();
         self.javascript_dialog_broker.dismiss_pending();
+        self.popup_broker.close();
 
         if is_on_named_owner_execution_lane_for(&self.local_executor)
             && has_current_render_runtime_owner_local_store()

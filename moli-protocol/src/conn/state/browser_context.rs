@@ -102,9 +102,9 @@ pub struct BrowserContext {
     /// Test-only cookie overrides, inherited by the first page fixture.
     #[cfg(test)]
     pub(crate) default_document_cookie_manager_surface: BrowserContextCookieManagerSurface,
-    pub target_popup_ids: HashMap<String, u64>,
     pub(in crate::conn) automation_download_events_enabled: Option<bool>,
-    pending_popup_javascript_dialogs: HashMap<u64, Vec<TargetPreparedJavaScriptDialog>>,
+    pending_popup_javascript_dialogs:
+        HashMap<(moli_core::browser::DocumentHandle, u64), Vec<TargetPreparedJavaScriptDialog>>,
     pub(crate) shared_worker_targets: BTreeMap<SharedWorkerInstanceId, SharedWorkerTargetState>,
     pub(crate) dedicated_worker_targets: BTreeMap<u64, DedicatedWorkerTargetState>,
     pub(crate) service_worker_targets: BTreeMap<u64, ServiceWorkerTargetState>,
@@ -196,22 +196,19 @@ impl BrowserContext {
             .popup_id()
             .expect("only lightweight-popup dialogs may enter popup attachment residence");
         self.pending_popup_javascript_dialogs
-            .entry(popup_id)
+            .entry((dialog.browser_document(), popup_id))
             .or_default()
             .push(dialog);
     }
 
     pub(crate) fn take_pending_popup_javascript_dialogs(
         &mut self,
+        document: moli_core::browser::DocumentHandle,
         popup_id: u64,
     ) -> Vec<TargetPreparedJavaScriptDialog> {
         self.pending_popup_javascript_dialogs
-            .remove(&popup_id)
+            .remove(&(document, popup_id))
             .unwrap_or_default()
-    }
-
-    pub(crate) fn dismiss_pending_popup_javascript_dialogs(&mut self, popup_id: u64) {
-        drop(self.take_pending_popup_javascript_dialogs(popup_id));
     }
 
     /// Isolated projection-unit fixture. Connection integration tests use its
@@ -331,7 +328,6 @@ impl BrowserContext {
             projected_selection: None,
             #[cfg(test)]
             default_document_cookie_manager_surface: BrowserContextCookieManagerSurface::default(),
-            target_popup_ids: HashMap::new(),
             automation_download_events_enabled: None,
             pending_popup_javascript_dialogs: HashMap::new(),
             shared_worker_targets: BTreeMap::new(),

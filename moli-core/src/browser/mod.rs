@@ -13,6 +13,7 @@ mod emulation;
 mod events;
 mod owner;
 mod permissions;
+mod popup;
 mod renderer_residence;
 mod service_workers;
 pub mod web_contents;
@@ -47,6 +48,7 @@ pub use owner::{
     PendingWebContentsActivation, PendingWebContentsClose, WebContentsCreation,
 };
 pub use permissions::{PermissionDefaults, PermissionOverrides};
+pub use popup::{BrowserPopupAdmission, BrowserPopupCreation};
 pub use renderer_residence::RendererPageResidenceIdentity;
 pub use service_workers::ServiceWorkerCommand;
 

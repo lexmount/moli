@@ -190,6 +190,10 @@ impl TargetPreparedJavaScriptDialog {
         self.opening().source_document
     }
 
+    pub(crate) fn browser_document(&self) -> DocumentHandle {
+        self.native_dialog.as_ref().expect("native dialog").document
+    }
+
     pub(crate) fn source_url(&self) -> &str {
         &self.opening().source_url
     }

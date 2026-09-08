@@ -286,7 +286,6 @@ impl BrowserContext {
         for target in projections.iter_mut() {
             target.runtime_slot.retire_for_target_close();
         }
-        self.target_popup_ids.clear();
         self.pending_popup_javascript_dialogs.clear();
         drop(projections);
     }

@@ -164,6 +164,12 @@ impl PreparedProtocolOutputs {
                 )
                 .append_to_output_sink(&mut prepared);
             }
+            RendererProtocolObservation::Popup(opening) => {
+                crate::domains::page::PagePreparedOutputs::from_renderer_popup_opening(
+                    opening.clone(),
+                )
+                .append_to_popup_output_sink(&mut prepared);
+            }
             RendererProtocolObservation::WindowOpen(event) => {
                 crate::domains::page::PagePreparedOutputs::from_renderer_window_open_event(
                     conn,
@@ -233,12 +239,6 @@ impl PreparedProtocolOutputs {
                     conn, owner, activation,
                 )
                 .append_to_output_sink(&mut prepared);
-            }
-            RendererOwnerAction::Popup(activation) => {
-                crate::domains::page::PagePreparedOutputs::from_renderer_popup_activation(
-                    conn, owner, activation,
-                )
-                .append_to_popup_output_sink(&mut prepared);
             }
             RendererOwnerAction::ChildFrameTree {
                 source_document,

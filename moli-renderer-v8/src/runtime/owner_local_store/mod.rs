@@ -1817,6 +1817,7 @@ impl RendererOwnerLocalStore {
                     .publish_pending_document_location_navigation()?;
             }
             let javascript_dialog_broker = entry.page_vm().javascript_dialog_broker();
+            let popup_broker = entry.page_vm().popup_broker();
             let devtools_target = entry.page_vm().devtools_target();
             let script_execution_control = entry.slot.script_execution_control();
             let page_state = Self::commit_current_vm_page_state_on_entry(&mut entry)?;
@@ -1829,6 +1830,7 @@ impl RendererOwnerLocalStore {
             let creation_artifacts = entry.page_vm_mut().take_page_creation_artifacts();
             Ok((
                 javascript_dialog_broker,
+                popup_broker,
                 devtools_target,
                 script_execution_control,
                 page_state,
@@ -1857,6 +1859,7 @@ impl RendererOwnerLocalStore {
         let finalized = result.map(
             |(
                 javascript_dialog_broker,
+                popup_broker,
                 devtools_target,
                 script_execution_control,
                 page_state,
@@ -1871,6 +1874,7 @@ impl RendererOwnerLocalStore {
                         devtools_agent_token,
                         page_context_cancel_tx,
                         javascript_dialog_broker,
+                        popup_broker,
                         devtools_target,
                         script_execution_control,
                         page_state,

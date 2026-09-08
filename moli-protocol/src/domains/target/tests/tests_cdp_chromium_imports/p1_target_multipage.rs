@@ -1258,11 +1258,15 @@ async fn rust_cdp_chromium_target_resetting_opener_clears_popup_opener_reference
         .expect("popup target id")
         .to_owned();
 
-    ctx.conn
+    let opener = ctx
+        .conn
         .browser_context
-        .as_mut()
+        .as_ref()
         .unwrap()
-        .remove_active_page_target_async()
+        .web_contents_handle_for_target("TID-reset-opener")
+        .unwrap();
+    ctx.conn
+        .close_browser_web_contents_async(opener, crate::conn::PageCloseNotifications::BrowserEvent)
         .await;
 
     let popup = ctx

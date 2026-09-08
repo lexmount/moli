@@ -6,7 +6,7 @@ use super::{
     RendererOutputItem, RendererOutputPublication, RendererOutputResidenceIdentity,
     RendererOutputTransportMessage, RendererOutputTransportReceiver, RendererOutputTransportSender,
     RendererOwnerAction, RendererPageCommand, RendererPageHandle, RendererPageReply,
-    RendererPageTestingHandle, RendererPendingPopupActivation, RendererPointerEventProperties,
+    RendererPageTestingHandle, RendererPointerEventProperties,
     RendererPreparedDocumentInspectionConfiguration, RendererPreparedDocumentPolicy,
     RendererProtocolObservation, RendererRuntimeCommandOutput, RendererRuntimeInspectorMessage,
     RendererRuntimeInspectorResponseSender,
@@ -259,13 +259,13 @@ fn publication_document_lifecycle_events(
 fn popup_activations_for_page(
     publications: &[RendererOutputPublication],
     page: &RendererPageHandle,
-) -> Vec<RendererPendingPopupActivation> {
+) -> Vec<std::sync::Arc<crate::RendererPopupOpening>> {
     publications
         .iter()
         .filter(|publication| publication_is_for_page(publication, page))
         .flat_map(RendererOutputPublication::records)
         .filter_map(|record| match record.item() {
-            RendererOutputItem::OwnerAction(RendererOwnerAction::Popup(activation)) => {
+            RendererOutputItem::Observation(RendererProtocolObservation::Popup(activation)) => {
                 Some(activation.clone())
             }
             _ => None,
