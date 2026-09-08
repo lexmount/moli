@@ -13,7 +13,6 @@ use axum::{
     response::{IntoResponse, Response},
 };
 use futures_util::SinkExt;
-use moli_core::RendererOutputTransportMessage;
 use moli_protocol::{
     BackgroundCommandResponsePayload, BackgroundProtocolEvent,
     conn::RuntimeInspectorResponseReady,
@@ -43,7 +42,6 @@ use moli_protocol_webdriver_classic::{
 };
 use parking_lot::Mutex;
 use serde_json::{Value, json};
-use tokio::sync::mpsc;
 use tokio::time::sleep;
 use tracing::warn;
 
@@ -51,9 +49,7 @@ use crate::cdp_scheduler::{
     CdpScheduler, CdpSchedulerEventReceivers, CompletedDevToolsNavigationExecution,
     DevToolsNavigationCommandProgress, DevToolsNavigationCommandWait,
     DevToolsRuntimeCommandProgress, PendingDevToolsNavigationLifecycle,
-    PendingDevToolsRuntimeDeferredReplyExecution, ProtocolAdapterScheduler,
-    ProtocolAdapterSchedulerAdvance, ProtocolAdapterSchedulerInput, ProtocolOutputSequence,
-    RendererOutputTransportFailure,
+    PendingDevToolsRuntimeExecution, ProtocolOutputSequence, RendererOutputTransportFailure,
 };
 
 use super::AppState;
@@ -138,7 +134,7 @@ pub(in crate::protocol_server) struct BidiSocketActor {
 
 pub(crate) enum BidiSocketActorInput {
     Socket(Option<Result<Message, axum::Error>>),
-    AdapterScheduler(ProtocolAdapterSchedulerInput),
+    RuntimeCompletion(Box<moli_protocol::CompletedDevToolsRuntimeCommandDispatch>),
     RuntimeResponseReady(Option<Box<RuntimeInspectorResponseReady>>),
     NavigationCompletion(Result<Box<CompletedDevToolsNavigationExecution>, tokio::task::JoinError>),
 }
@@ -206,7 +202,7 @@ impl BidiSocketActor {
         };
         match pending.pending {
             Some(BidiPendingCommandWait::Runtime(runtime_pending)) => {
-                scheduler.cancel_devtools_runtime_deferred_reply(runtime_pending);
+                scheduler.cancel_devtools_runtime_command(*runtime_pending);
             }
             Some(BidiPendingCommandWait::Navigation(wait)) => {
                 scheduler.retain_detached_navigation(wait);
@@ -218,35 +214,6 @@ impl BidiSocketActor {
         }
         if let Some(previous_target_discovery) = pending.completion.previous_target_discovery {
             scheduler.replace_target_discovery_enabled(previous_target_discovery);
-        }
-    }
-
-    /// Receives the BiDi-side inputs of an attached Classic session.
-    ///
-    /// The adapter scheduler and Runtime completion ingress remain outside the
-    /// socket actor so a Classic-to-BiDi mode switch cannot replace an exact
-    /// load residence or orphan a renderer callback.
-    /// Selection order intentionally remains socket, adapter terminal/turn,
-    /// then Runtime response, matching the pre-unification attached-session
-    /// contract.
-    pub(in crate::protocol_server) async fn recv_attached_input(
-        &mut self,
-        runtime_response_ready_rx: &mut mpsc::UnboundedReceiver<RuntimeInspectorResponseReady>,
-        adapter_scheduler: &mut ProtocolAdapterScheduler,
-        page_javascript_blocked: bool,
-    ) -> BidiSocketActorInput {
-        tokio::select! {
-            biased;
-            message = self.socket.recv() => BidiSocketActorInput::Socket(message),
-            completed = recv_bidi_navigation_completion(&mut self.pending_command) => {
-                BidiSocketActorInput::NavigationCompletion(completed.map(Box::new))
-            }
-            input = adapter_scheduler.recv_input(), if !page_javascript_blocked => {
-                BidiSocketActorInput::AdapterScheduler(input)
-            }
-            response = runtime_response_ready_rx.recv() => {
-                BidiSocketActorInput::RuntimeResponseReady(response.map(Box::new))
-            }
         }
     }
 
@@ -269,30 +236,6 @@ impl BidiSocketActor {
             message,
         )
         .await
-    }
-
-    pub(in crate::protocol_server) async fn handle_background_navigation_completion(
-        &mut self,
-        scheduler: &mut CdpScheduler,
-        receivers: &mut CdpSchedulerEventReceivers,
-        completion: moli_protocol::BackgroundNavigationCompletion,
-    ) -> bool {
-        let output = scheduler
-            .drain_background_navigation_completion_with_progress_barrier(completion, receivers)
-            .await;
-        match output {
-            Ok(output) => {
-                self.send_or_route_protocol_output(scheduler, receivers, output, None)
-                    .await
-            }
-            Err(failure) => {
-                let (output, _error) = failure.into_parts();
-                let _ = self
-                    .send_or_route_protocol_output(scheduler, receivers, output, None)
-                    .await;
-                false
-            }
-        }
     }
 
     pub(in crate::protocol_server) async fn handle_navigation_completion(
@@ -349,17 +292,21 @@ impl BidiSocketActor {
         }
     }
 
-    pub(in crate::protocol_server) async fn handle_renderer_publication(
+    async fn handle_runtime_completion(
         &mut self,
-        adapter_scheduler: &mut ProtocolAdapterScheduler,
         scheduler: &mut CdpScheduler,
         receivers: &mut CdpSchedulerEventReceivers,
-        publication: RendererOutputTransportMessage,
+        completed: moli_protocol::CompletedDevToolsRuntimeCommandDispatch,
     ) -> bool {
-        let output = adapter_scheduler
-            .ingest_renderer_publication(scheduler, publication)
+        let mut command = self
+            .pending_command
+            .take()
+            .expect("Runtime completion owns its command");
+        let pending = command.take_runtime_pending();
+        let progress = scheduler
+            .complete_devtools_runtime_command(receivers, pending, completed)
             .await;
-        self.send_or_route_protocol_output(scheduler, receivers, output, None)
+        self.apply_pending_runtime_progress(scheduler, receivers, command, progress)
             .await
     }
 
@@ -383,27 +330,6 @@ impl BidiSocketActor {
         }
 
         let output = scheduler.route_registered_runtime_inspector_response(response);
-        self.send_or_route_protocol_output(scheduler, receivers, output, None)
-            .await
-    }
-
-    pub(in crate::protocol_server) async fn handle_adapter_scheduler_input(
-        &mut self,
-        adapter_scheduler: &mut ProtocolAdapterScheduler,
-        scheduler: &mut CdpScheduler,
-        receivers: &mut CdpSchedulerEventReceivers,
-        input: ProtocolAdapterSchedulerInput,
-    ) -> bool {
-        let output = match adapter_scheduler.advance_input(scheduler, input).await {
-            ProtocolAdapterSchedulerAdvance::ProtocolResidenceCompleted(output)
-            | ProtocolAdapterSchedulerAdvance::DeferredLoadCompleted { output, .. } => output,
-            ProtocolAdapterSchedulerAdvance::Idle
-            | ProtocolAdapterSchedulerAdvance::ClientTurnYielded
-            | ProtocolAdapterSchedulerAdvance::DeferredLoadStarted { .. }
-            | ProtocolAdapterSchedulerAdvance::StaleDeferredLoadCompletion { .. } => {
-                ProtocolOutputSequence::empty()
-            }
-        };
         self.send_or_route_protocol_output(scheduler, receivers, output, None)
             .await
     }
@@ -505,7 +431,7 @@ impl BidiSocketActor {
         };
         let pending = pending_command.take_runtime_pending();
         let progress = scheduler
-            .advance_devtools_runtime_deferred_reply_after_protocol_output(pending, output)
+            .advance_devtools_runtime_command_after_protocol_output(pending, output)
             .await;
         self.apply_pending_runtime_progress(scheduler, receivers, pending_command, progress)
             .await
@@ -532,9 +458,7 @@ impl BidiSocketActor {
         };
         let pending = pending_command.take_runtime_pending();
         let progress = scheduler
-            .advance_devtools_runtime_deferred_reply_after_renderer_response(
-                receivers, pending, response,
-            )
+            .advance_devtools_runtime_command_after_renderer_response(receivers, pending, response)
             .await;
         self.apply_pending_runtime_progress(scheduler, receivers, pending_command, progress)
             .await
@@ -560,7 +484,7 @@ impl BidiSocketActor {
                 )
                 .await
             }
-            DevToolsRuntimeCommandProgress::PendingDeferredReply {
+            DevToolsRuntimeCommandProgress::Pending {
                 pending,
                 protocol_output,
             } => {
@@ -1468,13 +1392,13 @@ struct BidiPendingCommand {
 }
 
 enum BidiPendingCommandWait {
-    Runtime(Box<PendingDevToolsRuntimeDeferredReplyExecution>),
+    Runtime(Box<PendingDevToolsRuntimeExecution>),
     Navigation(DevToolsNavigationCommandWait),
     NavigationLifecycle(Box<PendingDevToolsNavigationLifecycle>),
 }
 
 impl BidiPendingCommand {
-    fn runtime_pending(&self) -> Option<&PendingDevToolsRuntimeDeferredReplyExecution> {
+    fn runtime_pending(&self) -> Option<&PendingDevToolsRuntimeExecution> {
         match self.pending.as_ref()? {
             BidiPendingCommandWait::Runtime(pending) => Some(pending),
             BidiPendingCommandWait::Navigation(_)
@@ -1482,7 +1406,7 @@ impl BidiPendingCommand {
         }
     }
 
-    fn take_runtime_pending(&mut self) -> Box<PendingDevToolsRuntimeDeferredReplyExecution> {
+    fn take_runtime_pending(&mut self) -> Box<PendingDevToolsRuntimeExecution> {
         match self.pending.take() {
             Some(BidiPendingCommandWait::Runtime(pending)) => pending,
             _ => unreachable!("pending Runtime command must retain its continuation"),
@@ -1490,14 +1414,19 @@ impl BidiPendingCommand {
     }
 }
 
-async fn recv_bidi_navigation_completion(
+async fn recv_bidi_command_completion(
     pending: &mut Option<BidiPendingCommand>,
-) -> Result<CompletedDevToolsNavigationExecution, tokio::task::JoinError> {
+) -> BidiSocketActorInput {
     match pending
         .as_mut()
         .and_then(|pending| pending.pending.as_mut())
     {
-        Some(BidiPendingCommandWait::Navigation(wait)) => wait.await,
+        Some(BidiPendingCommandWait::Navigation(wait)) => {
+            BidiSocketActorInput::NavigationCompletion(wait.await.map(Box::new))
+        }
+        Some(BidiPendingCommandWait::Runtime(wait)) => {
+            BidiSocketActorInput::RuntimeCompletion(Box::new(wait.wait().await))
+        }
         _ => std::future::pending().await,
     }
 }
@@ -1951,6 +1880,25 @@ fn subscribed_bidi_events_from_devtools_event_sources(
 ) -> Vec<serde_json::Value> {
     let mut events = Vec::new();
     for source in sources {
+        let automation = match source {
+            BidiDevToolsEventSource::ProtocolMessageWithAutomationEvent {
+                automation_event,
+                ..
+            }
+            | BidiDevToolsEventSource::AutomationEvent(automation_event) => {
+                Some(automation_event.as_ref())
+            }
+            _ => None,
+        };
+        if scheduler.is_some_and(|scheduler| {
+            !scheduler.webdriver_automation_event_is_visible(
+                bidi.session_id(),
+                automation,
+                owner_context,
+            )
+        }) {
+            continue;
+        }
         match source {
             BidiDevToolsEventSource::ProtocolMessage(message) => {
                 let message_owner_context =
@@ -2185,10 +2133,7 @@ async fn start_bidi_devtools_command(
     };
     if bidi_devtools_command_uses_deferred_runtime_progress(&dispatch.command) {
         return match scheduler
-            .start_devtools_runtime_command_with_deferred_reply_progress(
-                receivers,
-                dispatch.command,
-            )
+            .start_devtools_runtime_command(receivers, dispatch.command)
             .await
         {
             DevToolsRuntimeCommandProgress::Complete(execution) => {
@@ -2199,7 +2144,7 @@ async fn start_bidi_devtools_command(
                     .await,
                 )
             }
-            DevToolsRuntimeCommandProgress::PendingDeferredReply {
+            DevToolsRuntimeCommandProgress::Pending {
                 pending,
                 protocol_output,
             } => {

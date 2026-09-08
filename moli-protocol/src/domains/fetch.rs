@@ -573,6 +573,9 @@ fn fetch_config_devtools_command_owner(
             .target_session_route_for_target_id(target_id.as_str())
             .ok_or_else(|| DevToolsError::new(DevToolsErrorKind::NoSuchTarget, "NoSuchTarget"))?;
         Ok(CommandOwnerScope::for_route(route))
+    } else if context.browser_context_id.is_some() {
+        conn.command_owner_scope_for_devtools_context(context)
+            .ok_or_else(|| DevToolsError::new(DevToolsErrorKind::NoSuchTarget, "NoSuchTarget"))
     } else {
         Ok(CommandOwnerScope::capture(conn, None))
     }

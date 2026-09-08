@@ -357,6 +357,16 @@ impl BrowserContext {
             .set_renderer_output_transport_sender(sender);
     }
 
+    pub(crate) fn snapshot_profile_backed_cookies(&self) -> Option<Vec<StoredCookie>> {
+        // The native Context can retire before its directory event is consumed.
+        // Partition classification and snapshot must be one exact owner read.
+        self.browser_context
+            .snapshot_profile_backed_cookies()
+            .ok()
+            .flatten()
+    }
+
+    #[cfg(test)]
     pub(crate) fn is_profile_backed_storage_partition(&self) -> bool {
         self.browser_context.storage_partition_kind() == StoragePartitionKind::ProfileBacked
     }

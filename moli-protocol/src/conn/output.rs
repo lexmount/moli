@@ -1000,10 +1000,12 @@ impl ProtocolDeliveryEnvelope {
     pub(crate) fn bind_to_root_document_route(
         mut self,
         conn: &CdpConnection,
+        owner: &super::CommandOwnerScope,
         root_document: moli_core::RendererDocumentLifecycleIdentity,
     ) -> Option<Self> {
-        let binding = conn.target_root_document_protocol_attachment_identity_for_session(
-            self.protocol_session_id(),
+        let event_owner = owner.for_target_event_session(conn, self.protocol_session_id());
+        let binding = conn.target_root_document_protocol_attachment_identity_for_owner(
+            &event_owner,
             root_document,
         )?;
         self.route.bind_root_document(binding);

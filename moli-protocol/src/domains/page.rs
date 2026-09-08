@@ -2563,8 +2563,8 @@ mod producer_tests {
         session_id: &str,
         source_document: RendererDocumentLifecycleIdentity,
     ) -> crate::conn::TargetRootDocumentProtocolAttachmentIdentity {
-        conn.target_root_document_protocol_attachment_identity_for_session(
-            Some(session_id),
+        conn.target_root_document_protocol_attachment_identity_for_owner(
+            &crate::conn::CommandOwnerScope::for_session(session_id),
             source_document,
         )
         .expect("test target should expose the exact root Document attachment")
@@ -4391,7 +4391,7 @@ mod producer_tests {
         crate::domains::network::emit_child_document_navigation_network_background_events(
             &mut conn,
             &mut background_events,
-            Some("SID-1"),
+            &crate::conn::CommandOwnerScope::for_session("SID-1"),
             "CHILD-FRAME-LEGACY",
             "LID-CHILD-LEGACY",
             "LID-CHILD-LEGACY",
@@ -4696,7 +4696,7 @@ mod producer_tests {
         super::emit_prepared_child_frame_tree_background_events(
             &mut conn,
             &mut emitted,
-            Some("SID-1"),
+            &crate::conn::CommandOwnerScope::for_session("SID-1"),
             vec![super::PagePreparedChildFrameTreeEvent::Attached {
                 frame_id: child_frame_id.clone(),
                 parent_frame_id: "TID-1".to_owned(),
@@ -4712,7 +4712,7 @@ mod producer_tests {
         super::emit_prepared_child_frame_tree_background_events(
             &mut conn,
             &mut emitted,
-            Some("SID-1"),
+            &crate::conn::CommandOwnerScope::for_session("SID-1"),
             vec![
                 super::PagePreparedChildFrameTreeEvent::Attached {
                     frame_id: child_frame_id.clone(),
@@ -6210,6 +6210,9 @@ async fn execute_devtools_get_frame_trees_command_async(
         let Some(target_id) = target_info.target_id.clone() else {
             continue;
         };
+        if !conn.webdriver_target_is_visible(&command.context, target_id.as_str()) {
+            continue;
+        }
         let frame_tree_command = DevToolsGetFrameTreeCommand {
             context: DevToolsCommandContext {
                 target_id: Some(target_id),

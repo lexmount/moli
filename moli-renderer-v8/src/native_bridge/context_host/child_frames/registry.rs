@@ -113,7 +113,7 @@ impl JsContextHost {
                 let frame_id = existing
                     .as_ref()
                     .map(|entry| entry.frame_id().to_owned())
-                    .unwrap_or_else(|| self.next_child_browsing_context_frame_id());
+                    .unwrap_or_else(Self::next_child_browsing_context_frame_id);
                 let live_bootstrap = existing
                     .as_ref()
                     .map(|entry| entry.live_bootstrap())

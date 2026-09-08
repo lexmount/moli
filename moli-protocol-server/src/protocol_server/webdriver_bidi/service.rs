@@ -14,7 +14,7 @@ pub(crate) struct BidiFrontendAttach {
 struct BidiFrontend {
     actor: BidiSocketActor,
     registry: SharedBidiSessionRegistry,
-    finished_tx: oneshot::Sender<()>,
+    finished_tx: Option<oneshot::Sender<()>>,
 }
 
 #[derive(Default)]
@@ -24,6 +24,39 @@ pub(crate) struct BidiServiceFrontends {
 }
 
 impl BidiServiceFrontends {
+    pub(in crate::protocol_server) fn attach_existing_actor(
+        &mut self,
+        scheduler: &mut CdpScheduler,
+        actor: BidiSocketActor,
+        registry: SharedBidiSessionRegistry,
+    ) {
+        let id = self.next_id;
+        self.next_id = id.checked_add(1).expect("BiDi frontend id space exhausted");
+        scheduler.register_bidi_session(id, actor.bidi.session_id());
+        self.frontends.insert(
+            id,
+            BidiFrontend {
+                actor,
+                registry,
+                finished_tx: None,
+            },
+        );
+    }
+
+    pub(in crate::protocol_server) async fn detach_session(
+        &mut self,
+        scheduler: &mut CdpScheduler,
+        receivers: &mut CdpSchedulerEventReceivers,
+        session: &str,
+    ) {
+        let id = self.frontends.iter().find_map(|(&id, frontend)| {
+            (frontend.actor.bidi.session_id() == Some(session)).then_some(id)
+        });
+        if let Some(id) = id {
+            self.detach(scheduler, receivers, id).await;
+        }
+    }
+
     pub(crate) fn attach(&mut self, attach: BidiFrontendAttach) {
         let id = self.next_id;
         self.next_id = id.checked_add(1).expect("BiDi frontend id space exhausted");
@@ -32,7 +65,7 @@ impl BidiServiceFrontends {
             BidiFrontend {
                 actor: BidiSocketActor::new(attach.socket, attach.web_socket_url),
                 registry: attach.session_registry,
-                finished_tx: attach.finished_tx,
+                finished_tx: Some(attach.finished_tx),
             },
         );
     }
@@ -42,9 +75,7 @@ impl BidiServiceFrontends {
             let input = tokio::select! {
                 biased;
                 message = frontend.actor.socket.recv() => BidiSocketActorInput::Socket(message),
-                completed = recv_bidi_navigation_completion(&mut frontend.actor.pending_command) => {
-                    BidiSocketActorInput::NavigationCompletion(completed.map(Box::new))
-                }
+                completed = recv_bidi_command_completion(&mut frontend.actor.pending_command) => completed,
             };
             (id, input)
         }).collect::<FuturesUnordered<_>>();
@@ -101,8 +132,11 @@ impl BidiServiceFrontends {
                     .handle_runtime_response_ready(scheduler, receivers, *response)
                     .await
             }
-            BidiSocketActorInput::AdapterScheduler(_) => {
-                unreachable!("the shared owner advances its adapter scheduler")
+            BidiSocketActorInput::RuntimeCompletion(completed) => {
+                frontend
+                    .actor
+                    .handle_runtime_completion(scheduler, receivers, *completed)
+                    .await
             }
         };
         scheduler.set_bidi_frontend_turn(None);
@@ -129,8 +163,14 @@ impl BidiServiceFrontends {
                     if event.is_notification() {
                         // Fan out only frozen notifications, never command completions
                         // or the renderer's linear transport/release capabilities.
-                        for &id in self.frontends.keys() {
-                            if Some(id) != origin && session_owner.is_none_or(|owner| owner == id) {
+                        for (&id, frontend) in &self.frontends {
+                            if Some(id) != origin
+                                && session_owner.is_none_or(|owner| owner == id)
+                                && scheduler.webdriver_event_is_visible(
+                                    frontend.actor.bidi.session_id(),
+                                    &event,
+                                )
+                            {
                                 outputs.entry(id).or_default().push(event.clone());
                             }
                         }
@@ -211,7 +251,9 @@ impl BidiServiceFrontends {
             .actor
             .release_session(&mut frontend.registry.lock());
         scheduler.register_bidi_session(id, None);
-        let _ = frontend.finished_tx.send(());
+        if let Some(finished) = frontend.finished_tx {
+            let _ = finished.send(());
+        }
     }
 
     pub(crate) async fn shutdown(

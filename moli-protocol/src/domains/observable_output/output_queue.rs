@@ -365,15 +365,18 @@ impl ObservableSessionRuntimePreparedItems {
     pub(in crate::domains::observable_output) fn materialize_for_owner(
         self,
         conn: &CdpConnection,
-    ) -> Option<(Option<String>, ObservableRuntimePreparedItems)> {
+    ) -> Option<(
+        crate::conn::CommandOwnerScope,
+        ObservableRuntimePreparedItems,
+    )> {
         if !conn.target_page_protocol_attachment_identity_is_current(&self.attachment) {
             return None;
         }
-        let session_id = self.attachment.session_id().map(str::to_owned);
-        let url = conn.runtime_session_owner_target_url(session_id.as_deref())?;
+        let owner = crate::conn::CommandOwnerScope::for_page_attachment(&self.attachment);
+        let url = conn.runtime_session_owner_target_url_for_owner(&owner)?;
         self.items
             .matches_source_identity(&url, self.attachment.page_owner().document_id())
-            .then_some((session_id, self.items))
+            .then_some((owner, self.items))
     }
 }
 
@@ -573,11 +576,11 @@ impl ObservableConsoleLogEmissionCursor {
     pub(in crate::domains::observable_output) fn mark_emitted_for_owner(
         self,
         conn: &mut CdpConnection,
-        session_id: Option<&str>,
+        owner: &crate::conn::CommandOwnerScope,
     ) {
         match self.domain {
             ObservableConsoleLogDomain::Console => {
-                let _ = conn.with_target_owner_state_for_session_mut(session_id, |owner_state| {
+                let _ = conn.with_target_owner_state_for_owner_mut(owner, |owner_state| {
                     owner_state.console_output_state.advance_to_current(
                         TargetConsoleOutputDomain::Console,
                         self.console_end,
@@ -589,14 +592,13 @@ impl ObservableConsoleLogEmissionCursor {
                 let Some(log_cursor) = self.log_cursor else {
                     return;
                 };
-                let _ =
-                    conn.with_target_devtools_session_state_for_session_mut(session_id, |state| {
-                        state.console_output_session_state.mark_log_entries_emitted(
-                            log_cursor.generation(),
-                            self.lifecycle_end,
-                            self.network_end,
-                        );
-                    });
+                let _ = conn.with_target_devtools_session_state_for_owner_mut(owner, |state| {
+                    state.console_output_session_state.mark_log_entries_emitted(
+                        log_cursor.generation(),
+                        self.lifecycle_end,
+                        self.network_end,
+                    );
+                });
             }
         }
     }

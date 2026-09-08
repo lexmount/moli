@@ -15,7 +15,11 @@ impl CdpConnection {
         source_frame_id: String,
         dialog: RendererPendingJavaScriptDialog,
     ) -> bool {
-        let Some(owner) = self.target_session_owner_mut(session_id) else {
+        let scope = match session_id {
+            Some(session) => CommandOwnerScope::for_session(session),
+            None => CommandOwnerScope::for_page_residence(&page_owner),
+        };
+        let Some(owner) = self.target_session_owner_mut_for_owner(&scope) else {
             let _ = dialog.finish(false, String::new());
             return false;
         };

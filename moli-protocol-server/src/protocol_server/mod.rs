@@ -23,9 +23,9 @@ use moli_core::{
     runtime::{NavigationRuntimeConfig, storage_partition::StoragePartitionState},
 };
 use moli_fetch::FetchConfig;
+use moli_protocol::DEFAULT_CDP_PAGE_TARGET_ID;
 #[cfg(test)]
 use moli_protocol::DEFAULT_CDP_TAB_TARGET_ID;
-use moli_protocol::{CdpInitialStoragePartition, DEFAULT_CDP_PAGE_TARGET_ID};
 #[cfg(test)]
 use parking_lot::Mutex;
 use tokio::net::TcpListener;
@@ -43,7 +43,7 @@ mod cdp_socket;
 mod protocol_local_executor;
 mod tcp_options;
 pub(crate) mod webdriver_bidi;
-mod webdriver_classic;
+pub(crate) mod webdriver_classic;
 mod webdriver_files;
 
 use cdp_agent_host::SharedCdpAgentHostDirectory;
@@ -749,11 +749,7 @@ struct AppState {
     cdp_owner_registry: SharedCdpOwnerRegistry,
     devtools_frontend_url: String,
     cookie_profile: SharedCookieProfile,
-    storage_partition: Arc<StoragePartitionState>,
     fetch_config: FetchConfig,
-    optional_resource_fetch_mask: OptionalResourceFetchMask,
-    subframe_loading_enabled: bool,
-    layout_policy: LayoutPolicy,
 }
 
 impl AppState {
@@ -822,22 +818,8 @@ impl AppState {
                 "/devtools/inspector.html?ws={addr}/devtools/page/{DEFAULT_TARGET_ID}"
             ),
             cookie_profile,
-            storage_partition,
             fetch_config: navigation_runtime_config.fetch_config().clone(),
-            optional_resource_fetch_mask: navigation_runtime_config.optional_resource_fetch_mask(),
-            subframe_loading_enabled: navigation_runtime_config.subframe_loading_enabled(),
-            layout_policy: navigation_runtime_config.layout_policy(),
         })
-    }
-
-    fn initial_storage_partition(
-        &self,
-        initial_cookies: Vec<StoredCookie>,
-    ) -> CdpInitialStoragePartition {
-        CdpInitialStoragePartition::from_storage_partition(
-            initial_cookies,
-            self.storage_partition.as_ref(),
-        )
     }
 }
 

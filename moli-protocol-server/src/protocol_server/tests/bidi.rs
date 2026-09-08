@@ -1,6 +1,542 @@
 use super::*;
 
 #[tokio::test]
+async fn classic_busy_session_does_not_starve_renderer_ingress() {
+    let (addr, server) = spawn_test_protocol_server().await;
+    let (mut bidi, peer) = bidi_session_with_context(addr).await;
+    assert_eq!(
+        send_bidi_command_response(
+            &mut bidi, 3, "browsingContext.navigate",
+            json!({"context":peer, "url":"data:text/html,<iframe srcdoc='<p>peer</p>'></iframe>", "wait":"complete"}),
+        ).await["type"],
+        "success"
+    );
+    assert_eq!(
+        send_bidi_command_response(&mut bidi, 4, "session.end", json!({})).await["type"],
+        "success"
+    );
+    bidi.close(None).await.unwrap();
+    let session = classic_new_session_on_server(addr).await;
+    assert_eq!(
+        classic_request_on_server_with_body(
+            addr,
+            "POST",
+            &format!("/session/{session}/url"),
+            json!({"url":"data:text/html,<iframe srcdoc='<p>child</p>'></iframe>"}),
+        )
+        .await,
+        json!({"value":null})
+    );
+    let path = format!("/session/{session}/execute/sync");
+    // Keep requests ready while each renderer command declares and releases
+    // output leases, including commands whose output cursor is already visible.
+    let mut responses = futures_util::stream::iter(0..1024)
+        .map(|round| {
+            let path = &path;
+            async move {
+                let response = classic_request_on_server_with_body(
+                    addr,
+                    "POST",
+                    path,
+                    json!({"script":"return arguments[0]", "args":[round]}),
+                )
+                .await;
+                assert_eq!(response, json!({"value":round}), "command {round}");
+            }
+        })
+        .buffer_unordered(16);
+    while responses.next().await.is_some() {}
+    classic_request_on_server_with_body(addr, "DELETE", &format!("/session/{session}"), json!({}))
+        .await;
+    abort_test_cdp_server(server).await;
+}
+
+#[tokio::test]
+async fn classic_page_outputs_survive_existing_standalone_bidi_page() {
+    let (addr, server) = spawn_test_protocol_server().await;
+    let (mut bidi, peer) = bidi_session_with_context(addr).await;
+    let navigated = send_bidi_command_response(
+        &mut bidi,
+        3,
+        "browsingContext.navigate",
+        json!({"context":peer, "url":"data:text/html,<iframe srcdoc='<p>peer</p>'></iframe>", "wait":"complete"}),
+    ).await;
+    assert_eq!(navigated["type"], "success");
+    let ended = send_bidi_command_response(&mut bidi, 4, "session.end", json!({})).await;
+    assert_eq!(ended["type"], "success");
+    bidi.close(None).await.unwrap();
+    let session = classic_new_session_on_server(addr).await;
+    let navigated = classic_request_on_server_with_body(
+        addr,
+        "POST",
+        &format!("/session/{session}/url"),
+        json!({"url":"data:text/html,<iframe srcdoc='<p>child</p>'></iframe>"}),
+    )
+    .await;
+    assert_eq!(navigated, json!({"value":null}));
+    let observed = classic_request_on_server_with_body(
+        addr,
+        "POST",
+        &format!("/session/{session}/execute/sync"),
+        json!({"script":"return [frames.length, document.querySelector('iframe').contentDocument.body.textContent]", "args":[]}),
+    ).await;
+    assert_eq!(observed, json!({"value":[1,"child"]}));
+    let mut attached = connect_classic_session_bidi_socket(addr, &session).await;
+    let subscription = send_bidi_command_response(
+        &mut attached,
+        1,
+        "session.subscribe",
+        json!({"events":["log.entryAdded", "browsingContext.userPromptOpened"]}),
+    )
+    .await;
+    assert_eq!(subscription["type"], "success");
+    let scheduled = classic_request_on_server_with_body(
+        addr,
+        "POST",
+        &format!("/session/{session}/execute/sync"),
+        json!({"script":"setTimeout(() => { throw new Error('owned asynchronous exception'); }, 0); return null;", "args":[]}),
+    ).await;
+    assert_eq!(scheduled, json!({"value":null}));
+    recv_until_match(&mut attached, |event| {
+        event["method"] == "log.entryAdded"
+            && event["params"]["text"]
+                .as_str()
+                .is_some_and(|text| text.contains("owned asynchronous exception"))
+    })
+    .await;
+    let scheduled = classic_request_on_server_with_body(
+        addr,
+        "POST",
+        &format!("/session/{session}/execute/sync"),
+        json!({"script":"setTimeout(() => alert('owned timer dialog'), 0); return null;", "args":[]}),
+    ).await;
+    assert_eq!(scheduled, json!({"value":null}));
+    recv_until_match(&mut attached, |event| {
+        event["method"] == "browsingContext.userPromptOpened"
+            && event["params"]["message"] == "owned timer dialog"
+    })
+    .await;
+    let accepted = classic_request_on_server_with_body(
+        addr,
+        "POST",
+        &format!("/session/{session}/alert/accept"),
+        json!({}),
+    )
+    .await;
+    assert_eq!(accepted, json!({"value":null}));
+    let switched = classic_request_on_server_with_body(
+        addr,
+        "POST",
+        &format!("/session/{session}/frame"),
+        json!({"id":0}),
+    )
+    .await;
+    assert_eq!(switched, json!({"value":null}));
+    let text = classic_request_on_server_with_body(
+        addr,
+        "POST",
+        &format!("/session/{session}/execute/sync"),
+        json!({"script":"return document.body.textContent", "args":[]}),
+    )
+    .await;
+    assert_eq!(text, json!({"value":"child"}));
+    let switched = classic_request_on_server_with_body(
+        addr,
+        "POST",
+        &format!("/session/{session}/frame"),
+        json!({"id":null}),
+    )
+    .await;
+    assert_eq!(switched, json!({"value":null}));
+    let element = classic_request_on_server_with_body(
+        addr,
+        "POST",
+        &format!("/session/{session}/element"),
+        json!({"using":"css selector", "value":"iframe"}),
+    )
+    .await;
+    let switched = classic_request_on_server_with_body(
+        addr,
+        "POST",
+        &format!("/session/{session}/frame"),
+        json!({"id":element["value"]}),
+    )
+    .await;
+    assert_eq!(switched, json!({"value":null}));
+    let text = classic_request_on_server_with_body(
+        addr,
+        "POST",
+        &format!("/session/{session}/execute/sync"),
+        json!({"script":"return document.body.textContent", "args":[]}),
+    )
+    .await;
+    assert_eq!(text, json!({"value":"child"}));
+    classic_request_on_server_with_body(addr, "DELETE", &format!("/session/{session}"), json!({}))
+        .await;
+    abort_test_cdp_server(server).await;
+}
+
+#[tokio::test]
+async fn classic_bidi_settings_notifications_and_user_contexts_are_session_scoped() {
+    let (addr, server) = spawn_test_protocol_server().await;
+    let first = classic_new_session_on_server(addr).await;
+    let second = classic_new_session_on_server(addr).await;
+    let mut first_bidi = connect_classic_session_bidi_socket(addr, &first).await;
+    let mut second_bidi = connect_classic_session_bidi_socket(addr, &second).await;
+    let first_tree =
+        send_bidi_command_response(&mut first_bidi, 1, "browsingContext.getTree", json!({})).await;
+    let second_tree =
+        send_bidi_command_response(&mut second_bidi, 1, "browsingContext.getTree", json!({})).await;
+    let first_target = first_tree["result"]["contexts"][0]["context"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let second_target = second_tree["result"]["contexts"][0]["context"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let override_result = send_bidi_command_response(
+        &mut first_bidi,
+        2,
+        "emulation.setUserAgentOverride",
+        json!({"userAgent": "Classic scoped UA"}),
+    )
+    .await;
+    assert_eq!(override_result["type"], "success", "{override_result:?}");
+    let observed = send_bidi_command_response(&mut first_bidi, 3, "script.evaluate", json!({"expression": "navigator.userAgent", "target": {"context": first_target}, "awaitPromise": false})).await;
+    assert_eq!(
+        observed["result"]["result"]["value"], "Classic scoped UA",
+        "{observed:?}"
+    );
+    let peer = send_bidi_command_response(&mut second_bidi, 3, "script.evaluate", json!({"expression": "navigator.userAgent", "target": {"context": second_target}, "awaitPromise": false})).await;
+    assert_ne!(
+        peer["result"]["result"]["value"], "Classic scoped UA",
+        "{peer:?}"
+    );
+    let forbidden = send_bidi_command_response(
+        &mut first_bidi,
+        4,
+        "script.evaluate",
+        json!({"expression": "1", "target": {"context": second_target}, "awaitPromise": false}),
+    )
+    .await;
+    assert_eq!(forbidden["type"], "error", "{forbidden:?}");
+    let user_context =
+        send_bidi_command_response(&mut first_bidi, 5, "browser.createUserContext", json!({}))
+            .await;
+    assert_eq!(user_context["type"], "success", "{user_context:?}");
+    let user_context = user_context["result"]["userContext"].as_str().unwrap();
+    let created = send_bidi_command_response(
+        &mut first_bidi,
+        6,
+        "browsingContext.create",
+        json!({"type": "tab", "userContext": user_context}),
+    )
+    .await;
+    assert_eq!(created["type"], "success", "{created:?}");
+    let child = created["result"]["context"].as_str().unwrap().to_owned();
+    let inherited = send_bidi_command_response(&mut first_bidi, 60, "script.evaluate", json!({"expression": "navigator.userAgent", "target": {"context": child}, "awaitPromise": false})).await;
+    assert_eq!(
+        inherited["result"]["result"]["value"], "Classic scoped UA",
+        "new user context must inherit session-wide settings: {inherited:?}"
+    );
+    let peer_contexts =
+        send_bidi_command_response(&mut second_bidi, 5, "browser.getUserContexts", json!({})).await;
+    assert!(
+        peer_contexts["result"]["userContexts"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|item| item["userContext"] != user_context)
+    );
+    let subscribed = send_bidi_command_response(
+        &mut first_bidi,
+        7,
+        "session.subscribe",
+        json!({"events": ["log.entryAdded"]}),
+    )
+    .await;
+    assert_eq!(subscribed["type"], "success", "{subscribed:?}");
+    send_bidi_command_response(&mut second_bidi, 6, "script.evaluate", json!({"expression": "console.log('foreign-classic-log')", "target": {"context": second_target}, "awaitPromise": false})).await;
+    first_bidi.send(WsMessage::Text(json!({"id": 8, "method": "script.evaluate", "params": {"expression": "console.log('owned-classic-log')", "target": {"context": first_target}, "awaitPromise": false}}).to_string().into())).await.unwrap();
+    let events = recv_until_match(&mut first_bidi, |event| {
+        event["method"] == "log.entryAdded" && event["params"]["text"] == "owned-classic-log"
+    })
+    .await;
+    assert!(
+        events
+            .iter()
+            .all(|event| event["params"]["text"] != "foreign-classic-log"),
+        "{events:?}"
+    );
+    classic_request_on_server_with_body(addr, "DELETE", &format!("/session/{first}"), json!({}))
+        .await;
+    let (mut cdp, _) = connect_async(format!("ws://{addr}/devtools/browser/{DEFAULT_BROWSER_ID}"))
+        .await
+        .unwrap();
+    let targets = send_cdp_command(&mut cdp, 1, "Target.getTargets", None, json!({})).await;
+    let targets = bidi_message_by_id(&targets, 1)["result"]["targetInfos"]
+        .as_array()
+        .unwrap();
+    assert!(
+        targets
+            .iter()
+            .all(|target| target["targetId"] != first_target && target["targetId"] != child)
+    );
+    assert!(
+        targets
+            .iter()
+            .any(|target| target["targetId"] == second_target)
+    );
+    classic_request_on_server_with_body(addr, "DELETE", &format!("/session/{second}"), json!({}))
+        .await;
+    abort_test_cdp_server(server).await;
+}
+
+#[tokio::test]
+async fn classic_pending_script_releases_shared_owner_to_cdp_and_peer_session() {
+    let (addr, server) = spawn_test_protocol_server().await;
+    let session = classic_new_session_on_server(addr).await;
+    let peer = classic_new_session_on_server(addr).await;
+    let target = classic_request_on_server_with_body(
+        addr,
+        "GET",
+        &format!("/session/{session}/window"),
+        json!({}),
+    )
+    .await["value"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let (mut cdp, _) = connect_async(format!("ws://{addr}/devtools/page/{target}"))
+        .await
+        .unwrap();
+    send_cdp_command(&mut cdp, 1, "Runtime.enable", None, json!({})).await;
+    let script_session = session.clone();
+    let script = tokio::spawn(async move {
+        classic_request_on_server_with_body(addr, "POST", &format!("/session/{script_session}/execute/async"), json!({
+            "script": "globalThis.classicPeerDone = arguments[arguments.length - 1]; console.log('classic-peer-ready');",
+            "args": []
+        })).await
+    });
+    recv_until_match(&mut cdp, |message| {
+        message["method"] == "Runtime.consoleAPICalled"
+            && message["params"]["args"][0]["value"] == "classic-peer-ready"
+    })
+    .await;
+    let peer_title = classic_request_on_server_with_body(
+        addr,
+        "GET",
+        &format!("/session/{peer}/title"),
+        json!({}),
+    )
+    .await;
+    assert_eq!(peer_title["value"], "");
+    let resolved = send_cdp_command(
+        &mut cdp,
+        2,
+        "Runtime.evaluate",
+        None,
+        json!({"expression": "classicPeerDone(42)"}),
+    )
+    .await;
+    assert!(
+        bidi_message_by_id(&resolved, 2).get("error").is_none(),
+        "{resolved:?}"
+    );
+    assert_eq!(script.await.unwrap()["value"], 42);
+    for session in [&session, &peer] {
+        classic_request_on_server_with_body(
+            addr,
+            "DELETE",
+            &format!("/session/{session}"),
+            json!({}),
+        )
+        .await;
+    }
+    abort_test_cdp_server(server).await;
+}
+
+#[tokio::test]
+async fn classic_page_is_shared_with_cdp_and_standalone_bidi() {
+    let (addr, server) = spawn_test_protocol_server().await;
+    let session = classic_new_session_on_server(addr).await;
+    let target = classic_request_on_server_with_body(
+        addr,
+        "GET",
+        &format!("/session/{session}/window"),
+        json!({}),
+    )
+    .await["value"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let (mut cdp, _) = connect_async(format!("ws://{addr}/devtools/browser/{DEFAULT_BROWSER_ID}"))
+        .await
+        .unwrap();
+    let targets = send_cdp_command(&mut cdp, 1, "Target.getTargets", None, json!({})).await;
+    assert!(
+        bidi_message_by_id(&targets, 1)["result"]["targetInfos"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|info| info["targetId"] == target),
+        "Classic page must be in the canonical AgentHost directory: {targets:?}"
+    );
+    let attached = send_cdp_command(
+        &mut cdp,
+        2,
+        "Target.attachToTarget",
+        None,
+        json!({"targetId": target, "flatten": true}),
+    )
+    .await;
+    let sid = bidi_message_by_id(&attached, 2)["result"]["sessionId"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    send_cdp_command(&mut cdp, 3, "Runtime.evaluate", Some(&sid), json!({"expression": "globalThis.threeFrontendMarker = 41; document.title = 'one physical document'"})).await;
+    let title = classic_request_on_server_with_body(
+        addr,
+        "GET",
+        &format!("/session/{session}/title"),
+        json!({}),
+    )
+    .await;
+    assert_eq!(title["value"], "one physical document");
+    let (mut bidi, _) = connect_async(format!("ws://{addr}/session")).await.unwrap();
+    assert_eq!(
+        send_bidi_command_response(&mut bidi, 1, "session.new", json!({})).await["type"],
+        "success"
+    );
+    let observed = send_bidi_command_response(&mut bidi, 2, "script.evaluate", json!({"expression": "threeFrontendMarker + 1", "target": {"context": target}, "awaitPromise": false})).await;
+    assert_eq!(observed["result"]["result"]["value"], 42, "{observed:?}");
+    cdp.close(None).await.unwrap();
+    let (mut reconnected, _) = connect_async(format!("ws://{addr}/devtools/page/{target}"))
+        .await
+        .unwrap();
+    let marker = send_cdp_command(
+        &mut reconnected,
+        1,
+        "Runtime.evaluate",
+        None,
+        json!({"expression": "threeFrontendMarker"}),
+    )
+    .await;
+    assert_eq!(
+        bidi_message_by_id(&marker, 1)["result"]["result"]["value"],
+        41
+    );
+    classic_request_on_server_with_body(addr, "DELETE", &format!("/session/{session}"), json!({}))
+        .await;
+    let (mut browser, _) =
+        connect_async(format!("ws://{addr}/devtools/browser/{DEFAULT_BROWSER_ID}"))
+            .await
+            .unwrap();
+    let targets = send_cdp_command(&mut browser, 1, "Target.getTargets", None, json!({})).await;
+    assert!(
+        bidi_message_by_id(&targets, 1)["result"]["targetInfos"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|info| info["targetId"] != target)
+    );
+    let peer = send_bidi_command_response(
+        &mut bidi,
+        3,
+        "browsingContext.create",
+        json!({"type": "tab"}),
+    )
+    .await;
+    assert_eq!(
+        peer["type"], "success",
+        "session deletion must not retire the shared owner: {peer:?}"
+    );
+    bidi.close(None).await.unwrap();
+    browser.close(None).await.unwrap();
+    abort_test_cdp_server(server).await;
+}
+
+#[tokio::test]
+async fn classic_sessions_keep_distinct_contexts_in_shared_registry() {
+    let (addr, server) = spawn_test_protocol_server().await;
+    let first = classic_new_session_on_server(addr).await;
+    let second = classic_new_session_on_server(addr).await;
+    let first_target = classic_request_on_server_with_body(
+        addr,
+        "GET",
+        &format!("/session/{first}/window"),
+        json!({}),
+    )
+    .await["value"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let second_target = classic_request_on_server_with_body(
+        addr,
+        "GET",
+        &format!("/session/{second}/window"),
+        json!({}),
+    )
+    .await["value"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    assert_ne!(
+        first_target, second_target,
+        "physical pages must have globally distinct AgentHost identities"
+    );
+    for (session, target) in [(&first, &first_target), (&second, &second_target)] {
+        let windows = classic_request_on_server_with_body(
+            addr,
+            "GET",
+            &format!("/session/{session}/window/handles"),
+            json!({}),
+        )
+        .await;
+        assert_eq!(windows["value"], json!([target]));
+        let mut bidi = connect_classic_session_bidi_socket(addr, session).await;
+        let tree =
+            send_bidi_command_response(&mut bidi, 1, "browsingContext.getTree", json!({})).await;
+        let contexts = tree["result"]["contexts"].as_array().unwrap();
+        assert_eq!(
+            contexts.len(),
+            1,
+            "attached BiDi must keep the Classic session scope: {tree:?}"
+        );
+        assert_eq!(contexts[0]["context"], *target);
+        bidi.close(None).await.unwrap();
+    }
+    let (mut cdp, _) = connect_async(format!("ws://{addr}/devtools/browser/{DEFAULT_BROWSER_ID}"))
+        .await
+        .unwrap();
+    let targets = send_cdp_command(&mut cdp, 1, "Target.getTargets", None, json!({})).await;
+    for target in [&first_target, &second_target] {
+        assert!(
+            bidi_message_by_id(&targets, 1)["result"]["targetInfos"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|info| info["targetId"] == *target)
+        );
+    }
+    classic_request_on_server_with_body(addr, "DELETE", &format!("/session/{first}"), json!({}))
+        .await;
+    let windows = classic_request_on_server_with_body(
+        addr,
+        "GET",
+        &format!("/session/{second}/window/handles"),
+        json!({}),
+    )
+    .await;
+    assert_eq!(windows["value"], json!([second_target]));
+    classic_request_on_server_with_body(addr, "DELETE", &format!("/session/{second}"), json!({}))
+        .await;
+    cdp.close(None).await.unwrap();
+    abort_test_cdp_server(server).await;
+}
+
+#[tokio::test]
 async fn bidi_and_cdp_share_agent_host_across_frontend_disconnect() {
     let (addr, server) = spawn_test_protocol_server().await;
     let (mut bidi, _) = connect_async(format!("ws://{addr}/session")).await.unwrap();

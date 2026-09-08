@@ -28,6 +28,7 @@ pub const DEFAULT_CDP_PAGE_TARGET_ID: &str = "moli-default";
 pub const DEFAULT_CDP_TAB_TARGET_ID: &str = "moli-default-tab";
 
 mod activity_source;
+mod automation_session;
 mod bidi_channel_work;
 mod browser_context;
 mod browser_worker_commands;
@@ -1042,6 +1043,7 @@ pub(crate) struct BrowserGlobalOverrides {
 /// Persistent per-connection state.
 pub struct CdpConnection {
     browser: BrowserHandle,
+    webdriver_sessions: HashMap<String, automation_session::WebDriverSessionScope>,
     // Browser/session routing state.
     pub browser_context: Option<BrowserContext>,
     pub inactive_browser_contexts: Vec<BrowserContext>,
@@ -1119,14 +1121,6 @@ impl CdpConnection {
             .any(BrowserContext::has_pending_javascript_dialog)
     }
 
-    pub fn set_automation_javascript_dialog_handler_enabled(&mut self, enabled: bool) -> bool {
-        let Some(browser_context) = self.browser_context.as_ref() else {
-            return false;
-        };
-        browser_context.set_javascript_dialog_handler_enabled(enabled);
-        true
-    }
-
     pub fn enable_webdriver_bidi_download_events(&mut self) -> bool {
         self.download_subscriptions.enable_webdriver_bidi_events()
     }
@@ -1153,6 +1147,7 @@ impl CdpConnection {
         let base_tls_verify_host = fetch_config.tls_verify_host();
         Self {
             browser,
+            webdriver_sessions: HashMap::new(),
             browser_context: None,
             inactive_browser_contexts: Vec::new(),
             target_discovery_enabled: false,
@@ -1977,6 +1972,13 @@ impl CdpConnection {
         &self,
         context: &DevToolsCommandContext,
     ) -> Option<CommandOwnerScope> {
+        if context
+            .session_id
+            .as_ref()
+            .is_some_and(|id| self.webdriver_sessions.contains_key(id.as_str()))
+        {
+            return self.webdriver_command_owner_scope(context);
+        }
         if let Some(target_id) = context.target_id.as_ref() {
             let route = self
                 .target_session_route_for_target_id(target_id.as_str())
@@ -2876,12 +2878,12 @@ impl CdpConnection {
             .browser_context
             .iter()
             .chain(self.inactive_browser_contexts.iter())
-            .filter(|context| {
-                let is_profile_backed = context.is_profile_backed_storage_partition();
-                saw_profile_backed_context |= is_profile_backed;
-                is_profile_backed
+            .filter_map(|context| {
+                let cookies = context.snapshot_profile_backed_cookies();
+                saw_profile_backed_context |= cookies.is_some();
+                cookies
             })
-            .flat_map(BrowserContext::snapshot_cookies)
+            .flatten()
             .collect();
         saw_profile_backed_context.then_some(cookies)
     }

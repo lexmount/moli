@@ -13,8 +13,8 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpListener;
 use tokio::sync::Notify;
 
-#[test]
-fn session_end_removes_only_its_contexts_but_connection_drop_does_not() {
+#[tokio::test]
+async fn session_end_removes_only_its_contexts_but_connection_drop_does_not() {
     let service = moli_core::browser::BrowserService::start().unwrap();
     let browser = service.handle();
     let mut conn = CdpConnection::new(
@@ -22,12 +22,35 @@ fn session_end_removes_only_its_contexts_but_connection_drop_does_not() {
         CdpInitialStoragePartition::memory(),
         Default::default(),
     );
-    let mut ending_contexts = Vec::new();
-    for id in ["BID-ending-active", "BID-ending-inactive"] {
-        let context = conn.new_browser_context(id.to_owned());
-        ending_contexts.push(context.browser_context_id());
-        conn.insert_browser_context(context);
-    }
+    conn.attach_webdriver_session("ending").unwrap();
+    conn.execute_devtools_command(
+        crate::devtools_runtime::DevToolsCommand::CreateBrowserContext(
+            crate::devtools_runtime::DevToolsCreateBrowserContextCommand {
+                context: crate::devtools_runtime::DevToolsCommandContext {
+                    protocol: crate::devtools_runtime::DevToolsProtocol::WebDriverBidi,
+                    session_id: Some("ending".into()),
+                    target_id: None,
+                    browser_context_id: None,
+                },
+                browser_context_id: None,
+                accept_insecure_certs: None,
+                proxy_server: None,
+                proxy_bypass_list: None,
+                proxy_autoconfig_url: None,
+                proxy_socks_version: None,
+                persistent_partition_id: None,
+            },
+        ),
+    )
+    .await
+    .into_parts()
+    .0
+    .unwrap();
+    let ending_contexts = conn
+        .browser_contexts()
+        .map(|context| context.browser_context_id())
+        .collect::<Vec<_>>();
+    assert_eq!(ending_contexts.len(), 2);
     let mut peer = CdpConnection::new(
         browser.clone(),
         CdpInitialStoragePartition::memory(),
@@ -44,7 +67,8 @@ fn session_end_removes_only_its_contexts_but_connection_drop_does_not() {
             .all(|id| browser.contains_context(*id))
     );
 
-    conn.end_webdriver_session().unwrap();
+    conn.close_webdriver_session("ending").unwrap();
+    assert!(conn.snapshot_profile_backed_cookies().is_none());
 
     assert!(
         ending_contexts

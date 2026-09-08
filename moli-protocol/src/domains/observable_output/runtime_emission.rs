@@ -85,28 +85,27 @@ pub(in crate::domains) fn retain_unemitted_runtime_observable_prepared_source_fo
     runtime_observable_owner_has_unemitted_source(conn, session_id, &summary).then_some(source)
 }
 
-pub(super) fn mark_runtime_observable_emission_cursor_for_session_owner(
+pub(super) fn mark_runtime_observable_emission_cursor_for_owner(
     conn: &mut CdpConnection,
-    session_id: Option<&str>,
+    owner: &CommandOwnerScope,
     cursor: ObservableRuntimeEmissionCursor,
 ) {
     let (context_console_counts, exception_entries) = cursor.into_parts();
-    mark_runtime_observable_activity_emitted_for_session_owner(
+    mark_runtime_observable_activity_emitted_for_owner(
         conn,
-        session_id,
+        owner,
         context_console_counts,
         exception_entries,
     );
 }
 
-fn mark_runtime_observable_activity_emitted_for_session_owner(
+fn mark_runtime_observable_activity_emitted_for_owner(
     conn: &mut CdpConnection,
-    session_id: Option<&str>,
+    owner: &CommandOwnerScope,
     context_console_counts: HashMap<i64, usize>,
     exception_entries: usize,
 ) {
-    let owner_session_id = runtime_observable_owner_session_id(conn, session_id);
-    let _ = conn.with_target_owner_state_for_session_mut(owner_session_id, |owner_state| {
+    let _ = conn.with_target_owner_state_for_owner_mut(owner, |owner_state| {
         owner_state
             .runtime_observable_state
             .mark_emitted_console_counts(context_console_counts);
@@ -151,6 +150,7 @@ fn runtime_observable_owner_has_unemitted_source(
         .has_unemitted_source(summary)
 }
 
+#[cfg(test)]
 fn runtime_observable_owner_session_id<'a>(
     conn: &CdpConnection,
     session_id: Option<&'a str>,
@@ -170,11 +170,11 @@ mod tests {
         RuntimeConsoleMessageSnapshot,
     };
 
-    use crate::conn::DocumentId;
+    use crate::conn::{CommandOwnerScope, DocumentId};
 
     use super::{
         advance_runtime_observable_cursors_to_current_for_session_owner,
-        mark_runtime_observable_activity_emitted_for_session_owner,
+        mark_runtime_observable_activity_emitted_for_owner,
         retain_unemitted_runtime_observable_prepared_source,
         retain_unemitted_runtime_observable_prepared_source_for_session_owner,
     };
@@ -340,9 +340,9 @@ mod tests {
             "attached runtime observable presence should read the inactive owner context"
         );
 
-        mark_runtime_observable_activity_emitted_for_session_owner(
+        mark_runtime_observable_activity_emitted_for_owner(
             &mut conn,
-            Some("SID-attached"),
+            &CommandOwnerScope::for_session("SID-attached"),
             HashMap::from([(7, 1)]),
             1,
         );

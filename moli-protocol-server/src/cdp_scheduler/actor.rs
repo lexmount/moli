@@ -19,6 +19,7 @@ use crate::{
     cdp_frontend::{CdpFrontendCommand, CdpFrontendReceivers},
     cdp_frontend_router::{CdpFrontendRouter, CdpPreparedFrontendCommand},
     protocol_server::webdriver_bidi::{BidiServiceFrontends, BidiSocketActorInput},
+    protocol_server::webdriver_classic::ClassicServiceSessions,
 };
 
 use super::CdpBackgroundEventReceiver;
@@ -233,6 +234,7 @@ async fn run_cdp_scheduler_actor(
     let mut next_in_flight_command_token = 0_u64;
     let mut frontend_control = CdpFrontendControlState::default();
     let mut bidi_frontends = BidiServiceFrontends::default();
+    let mut classic_sessions = ClassicServiceSessions::default();
     let mut frontend_output_rx = scheduler.bind_frontend_output();
     let mut pending_frontend_output = None;
 
@@ -269,6 +271,9 @@ async fn run_cdp_scheduler_actor(
         {
             send_cookie_checkpoint(&mut scheduler, owner_lifecycle.as_ref());
         }
+        classic_sessions
+            .poll(&mut scheduler, &mut scheduler_input_rx.events)
+            .await;
         let browser_output = scheduler.drain_browser_events().await;
         if !flush_protocol_output_with_runtime_deferred_reply_routing(
             &frontend_router,
@@ -280,6 +285,32 @@ async fn run_cdp_scheduler_actor(
             || scheduler.is_browser_closed()
         {
             break;
+        }
+        // Ready frontend requests and completions must not starve the bounded
+        // renderer transport, even when their output cursor is already visible.
+        // Keep this batch finite so producer traffic cannot starve commands, and
+        // finish a previously captured response batch before admitting more input.
+        if scheduler_input_rx
+            .ready_background_inputs_before_runtime_response
+            .is_empty()
+        {
+            for _ in 0..32 {
+                let Ok(publication) = scheduler_input_rx.events.renderer_publication_rx.try_recv()
+                else {
+                    break;
+                };
+                if !ingest_and_flush_renderer_publication(
+                    &frontend_router,
+                    &mut scheduler,
+                    &mut pending_runtime_deferred_replies,
+                    &mut adapter_scheduler,
+                    publication,
+                )
+                .await
+                {
+                    break 'owner;
+                }
+            }
         }
         if scheduler_input_rx
             .events
@@ -308,6 +339,13 @@ async fn run_cdp_scheduler_actor(
             Some(attach) = frontend_receivers.bidi_rx.recv() => {
                 scheduler.conn.install_default_browser_target();
                 bidi_frontends.attach(attach);
+            }
+            Some(attach) = frontend_receivers.classic_rx.recv() => {
+                classic_sessions.attach(&mut scheduler, attach);
+            }
+            (id, input) = classic_sessions.recv(), if scheduler_input_rx.ready_background_inputs_before_runtime_response.is_empty() => {
+                classic_sessions.handle_input(&mut scheduler, &mut scheduler_input_rx.events, &mut bidi_frontends, id, input).await;
+                send_cookie_checkpoint(&mut scheduler, owner_lifecycle.as_ref());
             }
             (id, input) = bidi_frontends.recv(), if scheduler_input_rx.ready_background_inputs_before_runtime_response.is_empty() => {
                 if bidi_frontends.handle_input(&mut scheduler, &mut scheduler_input_rx.events, id, input).await {
@@ -436,6 +474,13 @@ async fn run_cdp_scheduler_actor(
                     break;
                 };
                 if let SchedulerInput::DeferredRuntimeInspectorResponse(ref response) = input
+                    && let Some(id) = classic_sessions.runtime_response_owner(response)
+                {
+                    let SchedulerInput::DeferredRuntimeInspectorResponse(response) = input else { unreachable!() };
+                    classic_sessions.handle_runtime_response(&mut scheduler, &mut scheduler_input_rx.events, &mut bidi_frontends, id, *response).await;
+                    continue;
+                }
+                if let SchedulerInput::DeferredRuntimeInspectorResponse(ref response) = input
                     && let Some(id) = bidi_frontends.runtime_response_owner(response)
                 {
                     let SchedulerInput::DeferredRuntimeInspectorResponse(response) = input else { unreachable!() };
@@ -465,6 +510,7 @@ async fn run_cdp_scheduler_actor(
             }
         }
     }
+    classic_sessions.shutdown(&mut scheduler);
     bidi_frontends
         .shutdown(&mut scheduler, &mut scheduler_input_rx.events)
         .await;
@@ -822,8 +868,10 @@ async fn flush_protocol_output_with_runtime_deferred_reply_routing(
                     {
                         Ok(advance) => advance,
                         Err(response) => {
-                            let mut routed =
-                                route_unmatched_runtime_inspector_response(scheduler, response);
+                            let mut routed = prefix;
+                            routed.append(route_unmatched_runtime_inspector_response(
+                                scheduler, response,
+                            ));
                             routed.append(output);
                             if !routed.is_empty() {
                                 pending_flush

@@ -2451,6 +2451,16 @@ impl CdpConnection {
         &mut self,
         mut command: DevToolsCommand,
     ) -> DevToolsRuntimeCommandTaskStep {
+        if let Err(error) = self.prepare_webdriver_command(&mut command) {
+            return self
+                .complete_devtools_runtime_direct_result(
+                    command.context().clone(),
+                    Err(error),
+                    Vec::new(),
+                    None,
+                )
+                .await;
+        }
         let command_context = command.context().clone();
         if let DevToolsCommand::GetRealms(command) = command {
             let result = execute_devtools_get_realms_command_async(self, command).await;
