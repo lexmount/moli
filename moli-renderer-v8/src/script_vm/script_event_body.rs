@@ -12,6 +12,7 @@ use crate::context_bootstrap::{
     ORIGINAL_WEBASSEMBLY_COMPILE_ERROR_CONSTRUCTOR_SLOT,
     ORIGINAL_WEBASSEMBLY_LINK_ERROR_CONSTRUCTOR_SLOT, dispatch_window_error_event_with_details,
 };
+use crate::frame_owner_model::{FrameDocumentTaskOwner, FrameRealmId};
 use crate::host::ScriptEventTask;
 use crate::module_runtime::{ModuleEntryId, ModuleLoadError};
 use crate::native_bridge::PageScriptHost;
@@ -122,47 +123,79 @@ impl ScriptVm {
                     .map_err(anyhow::Error::msg);
                 }
             }
-            let global = scope.get_current_context().global(scope);
-            let message_value = v8_string(scope, message)
-                .ok_or_else(|| anyhow!("failed to allocate reportError message"))?;
-            let retained = matches!(error_value, Some(ScriptErrorValue::Retained(_)));
-            let error_value = match error_value {
-                Some(ScriptErrorValue::Retained(id)) => {
-                    super::native_module::retained_module_exception(scope, id)?
-                }
-                Some(ScriptErrorValue::Constructor(kind)) => {
-                    window_script_failure_error_value(scope, global, Some(kind), message_value)
-                }
-                None => window_script_failure_error_value(scope, global, None, message_value),
-            };
-            // Location metadata belongs to the ErrorEvent. Never mutate
-            // the original exception (or invoke an author's setter).
-            if !retained
-                && let Some(filename) = filename
-                && let Some(filename_value) = v8_string(scope, filename)
-                && let Ok(error_object) = v8::Local::<v8::Object>::try_from(error_value)
-            {
-                let _ = error_object.set(
-                    scope,
-                    v8str(scope, "fileName").into(),
-                    filename_value.into(),
-                );
-            }
-            // Internal script failure reporting must not call the page-visible
-            // window.reportError function while lifecycle state is unwinding.
-            // Dispatch the equivalent ErrorEvent body directly.
-            dispatch_window_error_event_with_details(
+            dispatch_script_failure_error_body(scope, host_ptr, message, filename, error_value)
+        })
+    }
+
+    pub(crate) fn report_child_window_error_body(
+        &mut self,
+        owner: FrameDocumentTaskOwner,
+        realm_id: FrameRealmId,
+        message: &str,
+        filename: &str,
+        error_value: Option<ScriptErrorValue>,
+    ) -> Result<()> {
+        anyhow::ensure!(
+            self.child_parser_module_route_task_is_current(owner, realm_id),
+            "child module exception reporting owner is no longer current"
+        );
+        self.with_frame_realm_scope(realm_id, |scope, host_ptr| {
+            dispatch_script_failure_error_body(
                 scope,
                 host_ptr,
                 message,
-                filename.unwrap_or(""),
-                0,
-                0,
-                Some(error_value),
+                Some(filename),
+                error_value,
             )
-            .map_err(anyhow::Error::msg)
         })
     }
+}
+
+fn dispatch_script_failure_error_body(
+    scope: &mut v8::PinScope<'_, '_>,
+    host_ptr: *mut PageScriptHost,
+    message: &str,
+    filename: Option<&str>,
+    error_value: Option<ScriptErrorValue>,
+) -> Result<()> {
+    let global = scope.get_current_context().global(scope);
+    let message_value = v8_string(scope, message)
+        .ok_or_else(|| anyhow!("failed to allocate reportError message"))?;
+    let retained = matches!(error_value, Some(ScriptErrorValue::Retained(_)));
+    let error_value = match error_value {
+        Some(ScriptErrorValue::Retained(id)) => {
+            super::native_module::retained_module_exception(scope, id)?
+        }
+        Some(ScriptErrorValue::Constructor(kind)) => {
+            window_script_failure_error_value(scope, global, Some(kind), message_value)
+        }
+        None => window_script_failure_error_value(scope, global, None, message_value),
+    };
+    // Location metadata belongs to the ErrorEvent. Never mutate
+    // the original exception (or invoke an author's setter).
+    if !retained
+        && let Some(filename) = filename
+        && let Some(filename_value) = v8_string(scope, filename)
+        && let Ok(error_object) = v8::Local::<v8::Object>::try_from(error_value)
+    {
+        let _ = error_object.set(
+            scope,
+            v8str(scope, "fileName").into(),
+            filename_value.into(),
+        );
+    }
+    // This body must not call the page-visible reportError function or own
+    // a checkpoint, whether it runs in the main Window or a child realm.
+    dispatch_window_error_event_with_details(
+        scope,
+        host_ptr,
+        message,
+        filename.unwrap_or(""),
+        0,
+        0,
+        Some(error_value),
+    )
+    .map_err(anyhow::Error::msg)
 }
 
 fn window_script_failure_error_value<'s>(
