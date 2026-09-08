@@ -6,7 +6,7 @@ use crate::{
     host::ScriptEventTask,
     planning::PreparedScript,
     stylesheet_blocking::DocumentOwnedBlockingStylesheetDiscoveryInput,
-    types::ScriptErrorConstructorKind,
+    types::ScriptErrorValue,
     types::ScriptRun,
 };
 use url::Url;
@@ -70,23 +70,23 @@ pub(crate) enum PageOwnedInternalLoadingTaskEffect {
 pub(crate) struct WindowScriptFailureReportTask {
     pub(crate) message: String,
     pub(crate) filename: Option<String>,
-    pub(crate) error_constructor: Option<ScriptErrorConstructorKind>,
+    pub(crate) error_value: Option<ScriptErrorValue>,
 }
 
 impl WindowScriptFailureReportTask {
     pub(crate) fn new(message: impl Into<String>, filename: Option<String>) -> Self {
-        Self::new_with_error_constructor(message, filename, None)
+        Self::new_with_error_value(message, filename, None)
     }
 
-    pub(crate) fn new_with_error_constructor(
+    pub(crate) fn new_with_error_value(
         message: impl Into<String>,
         filename: Option<String>,
-        error_constructor: Option<ScriptErrorConstructorKind>,
+        error_value: Option<ScriptErrorValue>,
     ) -> Self {
         Self {
             message: message.into(),
             filename,
-            error_constructor,
+            error_value,
         }
     }
 }

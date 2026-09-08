@@ -46,20 +46,7 @@ pub(super) fn module_load_error_value<'s>(
     error: &ModuleLoadError,
 ) -> Result<v8::Local<'s, v8::Value>> {
     if let Some(id) = error.exception_id() {
-        let global = scope.get_current_context().global(scope);
-        let map = get_private_value(scope, global, MODULE_EXCEPTIONS_SLOT)
-            .and_then(|value| v8::Local::<v8::Map>::try_from(value).ok())
-            .ok_or_else(|| {
-                anyhow::anyhow!("module exception registry missing from request realm")
-            })?;
-        let key = v8::BigInt::new_from_u64(scope, id.0);
-        anyhow::ensure!(
-            map.has(scope, key.into()) == Some(true),
-            "module exception {id:?} does not belong to request realm"
-        );
-        return map
-            .get(scope, key.into())
-            .ok_or_else(|| anyhow::anyhow!("failed to read retained module exception"));
+        return retained_module_exception(scope, id);
     }
     let message = v8_string(scope, error.message())
         .ok_or_else(|| anyhow::anyhow!("failed to allocate module error message"))?;
@@ -71,6 +58,23 @@ pub(super) fn module_load_error_value<'s>(
         message,
     )
     .ok_or_else(|| anyhow::anyhow!("failed to create module error"))
+}
+
+pub(in crate::script_vm) fn retained_module_exception<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    id: ModuleExceptionId,
+) -> Result<v8::Local<'s, v8::Value>> {
+    let global = scope.get_current_context().global(scope);
+    let map = get_private_value(scope, global, MODULE_EXCEPTIONS_SLOT)
+        .and_then(|value| v8::Local::<v8::Map>::try_from(value).ok())
+        .ok_or_else(|| anyhow::anyhow!("module exception registry missing from request realm"))?;
+    let key = v8::BigInt::new_from_u64(scope, id.0);
+    anyhow::ensure!(
+        map.has(scope, key.into()) == Some(true),
+        "module exception {id:?} does not belong to request realm"
+    );
+    map.get(scope, key.into())
+        .ok_or_else(|| anyhow::anyhow!("failed to read retained module exception"))
 }
 
 impl ScriptVm {

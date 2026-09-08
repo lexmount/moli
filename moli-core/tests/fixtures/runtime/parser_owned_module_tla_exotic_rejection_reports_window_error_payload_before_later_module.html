@@ -6,10 +6,13 @@
       window.addEventListener("error", (event) => {
         window.parserOwnedModuleTlaPayloadOrder.push("window-error");
         window.parserOwnedModuleTlaPayloadErrorMessageMatches = Boolean(
-          event.error &&
-            typeof event.error.message === "string" &&
-            event.error.message.length > 0,
+          typeof event.message === "string" && event.message.length > 0,
         );
+        window.parserOwnedModuleTlaPayloadErrorIdentityMatches =
+          event.error === window.parserOwnedModuleTlaPayloadReason &&
+          Object.getPrototypeOf(event.error) === null &&
+          !Object.hasOwn(event.error, "message") &&
+          !Object.hasOwn(event.error, "fileName");
         window.parserOwnedModuleTlaPayloadFilenameMatches =
           typeof event.filename === "string" &&
           event.filename.includes(
@@ -21,7 +24,7 @@
       type="module"
       onerror="window.parserOwnedModuleTlaPayloadOrder.push('script-error');"
     >
-      const reason = Object.create(null);
+      const reason = window.parserOwnedModuleTlaPayloadReason = Object.create(null);
       await Promise.reject(reason);
     </script>
     <script type="module">

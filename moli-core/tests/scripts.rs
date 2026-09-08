@@ -3165,6 +3165,10 @@ async fn dynamic_module_tla_exotic_rejection_reports_window_error_payload_withou
         Some(&JsValueSnapshot::Bool(true))
     );
     assert_eq!(
+        diagnostic_global(&page, "dynamicModuleTlaPayloadErrorIdentityMatches"),
+        Some(&JsValueSnapshot::Bool(true))
+    );
+    assert_eq!(
         diagnostic_global(&page, "dynamicModuleTlaPayloadFilenameMatches"),
         Some(&JsValueSnapshot::Bool(true))
     );
@@ -3850,6 +3854,10 @@ async fn parser_owned_module_tla_exotic_rejection_reports_window_error_payload_w
     );
     assert_eq!(
         diagnostic_global(&page, "parserOwnedModuleTlaPayloadErrorMessageMatches"),
+        Some(&JsValueSnapshot::Bool(true))
+    );
+    assert_eq!(
+        diagnostic_global(&page, "parserOwnedModuleTlaPayloadErrorIdentityMatches"),
         Some(&JsValueSnapshot::Bool(true))
     );
     assert_eq!(
