@@ -434,6 +434,80 @@ fn trusted_type_policy_creation_reports_name_and_duplicate_csp_violations() {
 }
 
 #[test]
+fn trusted_types_csp_name_grammar_preserves_enforcement_and_report_only_delivery() {
+    let policy = "trusted-types valid policy*name policy$name policy?name policy!name";
+    let names = [
+        "valid",
+        "policy*name",
+        "policy$name",
+        "policy?name",
+        "policy!name",
+        "política",
+        "",
+    ];
+    for enforce in [false, true] {
+        let mut vm = new_storage_test_vm("https://trusted-types-name-grammar.test/");
+        if enforce {
+            vm.set_response_content_security_policies(&[
+                policy.to_owned(),
+                "trusted-types ignored política".to_owned(),
+            ]);
+        }
+        vm.set_response_content_security_report_only_policies(&[
+            policy.to_owned(),
+            "trusted-types ignored política".to_owned(),
+        ]);
+        let actual = vm.eval(r#"
+globalThis.policyNameGrammarReports = [];
+document.addEventListener('securitypolicyviolation', event => {
+  policyNameGrammarReports.push([event.sample, event.originalPolicy, event.disposition]);
+});
+JSON.stringify(['valid', 'policy*name', 'policy$name', 'policy?name', 'policy!name', 'política', ''].map(name => {
+  try { return trustedTypes.createPolicy(name).name; }
+  catch (error) { return error instanceof TypeError ? 'TypeError' : error.name; }
+}));
+"#).unwrap();
+        assert_eq!(
+            serde_json::from_str::<serde_json::Value>(&actual).unwrap(),
+            if enforce {
+                serde_json::json!([
+                    "valid",
+                    "TypeError",
+                    "TypeError",
+                    "TypeError",
+                    "TypeError",
+                    "TypeError",
+                    "TypeError"
+                ])
+            } else {
+                serde_json::json!(names)
+            },
+        );
+        assert_eq!(vm.eval("policyNameGrammarReports.length").unwrap(), "0");
+        let expected = names[1..]
+            .iter()
+            .flat_map(|name| {
+                let mut reports = Vec::new();
+                if enforce {
+                    reports.push(serde_json::json!([name, policy, "enforce"]));
+                }
+                reports.push(serde_json::json!([name, policy, "report"]));
+                reports
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(
+            drain_pre_domcontentloaded_non_script_page_tasks_for_test(&mut vm),
+            expected.len(),
+        );
+        let actual = vm.eval("JSON.stringify(policyNameGrammarReports)").unwrap();
+        assert_eq!(
+            serde_json::from_str::<serde_json::Value>(&actual).unwrap(),
+            serde_json::json!(expected),
+        );
+    }
+}
+
+#[test]
 fn trusted_type_policy_creation_reports_every_violated_policy() {
     let enforced = [
         "trusted-types allowed duplicate reportOnly",
