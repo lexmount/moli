@@ -89,7 +89,9 @@ mod module_reactions;
 mod child_parser_module;
 mod child_ready_document_script;
 mod dynamic_import_selected_task_body;
+mod load_error;
 mod main_selected_task;
+use load_error::{module_load_error_value, retain_module_exception};
 pub(crate) use main_selected_task::{
     MainDynamicImportGraphFetchBodySettlement, MainNativeModuleSelectedTaskApplication,
     MainNativeModuleSelectedTaskBodyActivity,

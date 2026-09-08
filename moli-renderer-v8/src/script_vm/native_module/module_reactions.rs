@@ -285,7 +285,10 @@ impl ScriptVm {
         request: PendingDynamicModuleImport,
         message: &str,
     ) -> std::result::Result<(), ModuleLoadError> {
-        self.reject_native_dynamic_module_import_with_constructor(request, message, None)
+        self.reject_native_dynamic_module_import_and_checkpoint(
+            request,
+            &ModuleLoadError::new(ModuleLoadStage::Fetch, message),
+        )
     }
     #[cfg(test)]
     pub(crate) fn reject_native_dynamic_module_import_with_error(
@@ -293,17 +296,12 @@ impl ScriptVm {
         request: PendingDynamicModuleImport,
         error: &ModuleLoadError,
     ) -> std::result::Result<(), ModuleLoadError> {
-        self.reject_native_dynamic_module_import_with_constructor(
-            request,
-            error.message(),
-            error.error_constructor(),
-        )
+        self.reject_native_dynamic_module_import_and_checkpoint(request, error)
     }
-    pub(super) fn reject_native_dynamic_module_import_with_constructor(
+    pub(super) fn reject_native_dynamic_module_import_and_checkpoint(
         &mut self,
         request: PendingDynamicModuleImport,
-        message: &str,
-        error_constructor: Option<ScriptErrorConstructorKind>,
+        error: &ModuleLoadError,
     ) -> std::result::Result<(), ModuleLoadError> {
         self.renderer_document_isolate
             .with_entered_renderer_document_isolate(|isolate| {
@@ -312,14 +310,7 @@ impl ScriptVm {
                 let context = v8::Local::new(scope, request.context());
                 let scope = &mut v8::ContextScope::new(scope, context);
                 let resolver = v8::Local::new(scope, request.resolver());
-                let message = v8_string(scope, message);
-                let exception = message
-                    .and_then(|message| {
-                        error_constructor
-                            .and_then(|kind| script_error_value(scope, kind, message))
-                            .or_else(|| Some(v8::Exception::type_error(scope, message)))
-                    })
-                    .unwrap_or_else(|| v8::undefined(scope).into());
+                let exception = module_load_error_value(scope, error)?;
                 let _ = resolver.reject(scope, exception);
                 Self::perform_microtask_checkpoints(scope, None)?;
                 Ok(())

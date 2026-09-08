@@ -85,9 +85,10 @@ impl ModuleScriptTreeHost for FakeHost {
         attributes: &ModuleAttributesKey,
         requested_phase: ModuleImportPhase,
     ) -> Result<ResolvedModuleRequest, ModuleLoadError> {
-        let source_url = base_url
-            .join(specifier)
-            .map_err(|error| ModuleLoadError::new(ModuleLoadStage::Resolve, error.to_string()))?;
+        let source_url = base_url.join(specifier).map_err(|error| {
+            ModuleLoadError::new(ModuleLoadStage::Resolve, error.to_string())
+                .with_error_constructor(ModuleErrorConstructorKind::TypeError)
+        })?;
         let kind = if attributes
             .attributes
             .iter()
@@ -245,6 +246,25 @@ impl ModuleScriptTreeHost for FakeHost {
 
     fn mark_module_failed(&mut self, _key: ModuleMapKey, _error: ModuleLoadError) -> ModuleEntryId {
         ModuleEntryId(0)
+    }
+
+    fn cache_module_request_error(
+        &mut self,
+        key: ModuleMapKey,
+        error: ModuleLoadError,
+    ) -> ModuleLoadError {
+        let error = error.with_key(key.clone()).with_exception_id(
+            moli_module_script_tree::ModuleExceptionId(self.next_entry_id as u64),
+        );
+        self.next_entry_id += 1;
+        self.entries.insert(
+            key,
+            FakeEntry::Failed {
+                error: error.clone(),
+                phase: ModuleImportPhase::Evaluation,
+            },
+        );
+        error
     }
 }
 
@@ -964,6 +984,91 @@ fn parse_error_result_uses_module_discovery_order_not_completion_order() {
     };
 
     assert_eq!(error, a_error);
+    assert_eq!(host.link_calls, 0);
+}
+
+#[test]
+fn static_request_error_is_cached_before_any_dependency_fetch_starts() {
+    let root_key = key("https://example.test/app/root.mjs");
+    let mut host = FakeHost::new();
+    host.ready(
+        root_key.clone(),
+        ModuleEntryId(1),
+        vec![
+            request("./valid.mjs", ModuleImportPhase::Evaluation),
+            request("http://[", ModuleImportPhase::Evaluation),
+        ],
+    );
+    let mut first = job(inline_root(root_key.clone(), ModuleEntryId(1)));
+    let ModuleScriptTreePoll::Failed(error) = first.poll(&mut host) else {
+        panic!("invalid static request must fail the graph");
+    };
+    assert!(
+        host.started.is_empty(),
+        "all requests must be validated before fetching any"
+    );
+    assert_eq!(error.key.as_deref(), Some(&root_key));
+    assert!(error.exception_id.is_some());
+    assert_eq!(
+        error.error_constructor,
+        Some(ModuleErrorConstructorKind::TypeError)
+    );
+    let mut second = job(external_root(
+        root_key.url.clone(),
+        ModuleImportPhase::Evaluation,
+    ));
+    assert_eq!(
+        second.drive(&mut host),
+        ModuleScriptTreeDrive::Failed(error)
+    );
+    assert!(host.started.is_empty());
+    assert_eq!(host.link_calls, 0);
+}
+
+#[test]
+fn static_request_type_error_waits_for_pending_siblings_and_preserves_network_failure() {
+    let root_key = key("https://example.test/app/root.mjs");
+    let bad_key = key("https://example.test/app/bad.mjs");
+    let mut host = FakeHost::new();
+    host.ready(
+        root_key.clone(),
+        ModuleEntryId(1),
+        vec![
+            request("./bad.mjs", ModuleImportPhase::Evaluation),
+            request("./network.mjs", ModuleImportPhase::Evaluation),
+        ],
+    );
+    host.ready(
+        bad_key.clone(),
+        ModuleEntryId(2),
+        vec![request("http://[", ModuleImportPhase::Evaluation)],
+    );
+    let mut tree = job(inline_root(root_key, ModuleEntryId(1)));
+    let ModuleScriptTreePoll::NeedFetches(mut fetches) = tree.poll(&mut host) else {
+        panic!("root must start its uncached sibling fetch");
+    };
+    assert_eq!(fetches.len(), 1);
+    let ModuleScriptTreeDrive::WaitingForSingleModuleClients(wait) = tree.drive(&mut host) else {
+        panic!("static request failure must wait for the outstanding network fetch");
+    };
+    assert_eq!(wait.client_count, 1);
+    assert!(
+        matches!(host.entries.get(&bad_key), Some(FakeEntry::Failed { error, .. })
+        if error.exception_id.is_some())
+    );
+    let fetch = fetches.pop().unwrap();
+    let error = ModuleLoadError::new(ModuleLoadStage::Fetch, "network failure");
+    let result = tree.resume_single_module(
+        &mut host,
+        fetch.client,
+        ModuleFetchResult {
+            key: fetch.key,
+            client: fetch.client,
+            requested_phase: ModuleImportPhase::Evaluation,
+            outcome: ModuleFetchOutcome::Failed(error.clone()),
+        },
+    );
+    assert_eq!(result, ModuleScriptTreePoll::Failed(error));
     assert_eq!(host.link_calls, 0);
 }
 
