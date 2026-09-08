@@ -2959,7 +2959,6 @@ html/semantics/scripting-1/the-script-element/module/compilation-error-2.html
 html/semantics/scripting-1/the-script-element/module/crossorigin.html
 html/semantics/scripting-1/the-script-element/module/dynamic-import/alpha/base-url-worker-importScripts.html
 html/semantics/scripting-1/the-script-element/module/dynamic-import/code-cache-base-url.html
-html/semantics/scripting-1/the-script-element/module/dynamic-import/dynamic-imports-script-error.html
 html/semantics/scripting-1/the-script-element/module/dynamic-import/string-compilation-nonce-classic.html
 html/semantics/scripting-1/the-script-element/module/dynamic-import/string-compilation-nonce-module.html
 html/semantics/scripting-1/the-script-element/module/error-type-3.html

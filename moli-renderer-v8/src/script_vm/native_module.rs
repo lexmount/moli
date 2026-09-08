@@ -84,7 +84,9 @@ mod child_dynamic_import;
 mod child_parser_module;
 mod child_ready_document_script;
 mod dynamic_import_selected_task_body;
+mod load_error;
 mod main_selected_task;
+use load_error::{module_load_error_value, retain_module_exception};
 pub(crate) use main_selected_task::{
     MainDynamicImportGraphFetchBodySettlement, MainNativeModuleSelectedTaskApplication,
     MainNativeModuleSelectedTaskBodyActivity,
@@ -3334,6 +3336,7 @@ impl ScriptVm {
         source_url: &Url,
         fetch_metadata: &crate::module_runtime::ModuleFetchMetadata,
     ) -> std::result::Result<(ModuleRecordEntry, ModuleIdentityHash), ModuleLoadError> {
+        let mut exception_id = None;
         self.renderer_document_isolate
             .with_entered_renderer_document_isolate(|isolate| {
                 let scope = pin!(v8::HandleScope::new(isolate));
@@ -3354,6 +3357,12 @@ impl ScriptVm {
                     v8::script_compiler::Source::new(source_string, Some(&origin));
                 let module = v8::script_compiler::compile_module(&scope, &mut compiler_source)
                     .ok_or_else(|| {
+                        if let Some(exception) = scope.exception() {
+                            match retain_module_exception(&mut scope, exception) {
+                                Ok(id) => exception_id = Some(id),
+                                Err(error) => return error,
+                            }
+                        }
                         let exception = scope
                             .exception()
                             .and_then(|exception| exception.to_detail_string(&scope))
@@ -3386,7 +3395,10 @@ impl ScriptVm {
             })
             .map_err(|error| {
                 let message = error.to_string();
-                let load_error = ModuleLoadError::new(ModuleLoadStage::Compile, message.clone());
+                let mut load_error = ModuleLoadError::new(ModuleLoadStage::Compile, message.clone());
+                if let Some(exception_id) = exception_id {
+                    load_error = load_error.with_exception_id(exception_id);
+                }
                 if message.starts_with("v8 failed to compile WebAssembly module `") {
                     load_error
                         .with_error_constructor(ScriptErrorConstructorKind::WebAssemblyCompileError)
@@ -4102,7 +4114,10 @@ impl ScriptVm {
         request: PendingDynamicModuleImport,
         message: &str,
     ) -> std::result::Result<(), ModuleLoadError> {
-        self.reject_native_dynamic_module_import_with_constructor(request, message, None)
+        self.reject_native_dynamic_module_import_and_checkpoint(
+            request,
+            &ModuleLoadError::new(ModuleLoadStage::Fetch, message),
+        )
     }
 
     #[cfg(test)]
@@ -4111,18 +4126,13 @@ impl ScriptVm {
         request: PendingDynamicModuleImport,
         error: &ModuleLoadError,
     ) -> std::result::Result<(), ModuleLoadError> {
-        self.reject_native_dynamic_module_import_with_constructor(
-            request,
-            error.message(),
-            error.error_constructor(),
-        )
+        self.reject_native_dynamic_module_import_and_checkpoint(request, error)
     }
 
-    fn reject_native_dynamic_module_import_with_constructor(
+    fn reject_native_dynamic_module_import_and_checkpoint(
         &mut self,
         request: PendingDynamicModuleImport,
-        message: &str,
-        error_constructor: Option<ScriptErrorConstructorKind>,
+        error: &ModuleLoadError,
     ) -> std::result::Result<(), ModuleLoadError> {
         self.renderer_document_isolate
             .with_entered_renderer_document_isolate(|isolate| {
@@ -4131,14 +4141,7 @@ impl ScriptVm {
                 let context = v8::Local::new(scope, request.context());
                 let scope = &mut v8::ContextScope::new(scope, context);
                 let resolver = v8::Local::new(scope, request.resolver());
-                let message = v8_string(scope, message);
-                let exception = message
-                    .and_then(|message| {
-                        error_constructor
-                            .and_then(|kind| script_error_value(scope, kind, message))
-                            .or_else(|| Some(v8::Exception::type_error(scope, message)))
-                    })
-                    .unwrap_or_else(|| v8::undefined(scope).into());
+                let exception = module_load_error_value(scope, error)?;
                 let _ = resolver.reject(scope, exception);
                 Self::perform_microtask_checkpoints(scope, None)?;
                 Ok(())
@@ -5067,6 +5070,7 @@ fn module_import_phase(phase: v8::ModuleImportPhase) -> ModuleImportPhase {
 
 #[cfg(test)]
 mod tests {
+    mod parse_errors;
     use std::pin::pin;
 
     use super::{

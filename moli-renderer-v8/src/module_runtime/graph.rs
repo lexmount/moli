@@ -1518,6 +1518,9 @@ impl<O: NativeModuleTreeDocumentOwnerAdapter> module_tree::ModuleScriptTreeHost
     {
         let entry = local_entry_id(entry);
         let key = self.owner.module_entry_key(entry);
+        if let Some(error) = self.owner.module_failure(entry) {
+            return Err(chromium_error(error).with_key(chromium_module_key(&key)));
+        }
         let base_url = self.owner.module_entry_url(entry);
         let effective_fetch_metadata = self.owner.module_effective_fetch_metadata(entry);
         let requested_modules = self
@@ -1576,6 +1579,23 @@ impl<O: NativeModuleTreeDocumentOwnerAdapter> module_tree::ModuleScriptTreeHost
             local_module_key(&key).unwrap_or_else(|_| ModuleMapKey::java_script(key.url.clone()));
         let entry = self.owner.mark_module_failed(local_key, local_error(error));
         chromium_entry_id(entry)
+    }
+
+    fn cache_module_request_error(
+        &mut self,
+        key: module_tree::ModuleMapKey,
+        error: module_tree::ModuleLoadError,
+    ) -> module_tree::ModuleLoadError {
+        let local_key = match local_module_key(&key) {
+            Ok(key) => key,
+            Err(error) => return chromium_error(error),
+        };
+        let error = match self.owner.preserve_module_load_error(local_error(error)) {
+            Ok(error) => error,
+            Err(error) => return chromium_error(error),
+        };
+        self.owner.mark_module_failed(local_key, error.clone());
+        chromium_error(error).with_key(key)
     }
 }
 
@@ -1878,6 +1898,9 @@ fn local_graph(graph: module_tree::ModuleGraphHandle) -> ModuleGraphHandle {
 fn chromium_error(error: ModuleLoadError) -> module_tree::ModuleLoadError {
     let mut converted =
         module_tree::ModuleLoadError::new(chromium_load_stage(error.stage()), error.message());
+    if let Some(exception_id) = error.exception_id() {
+        converted = converted.with_exception_id(exception_id);
+    }
     if let Some(constructor) = error.error_constructor() {
         let constructor = match constructor {
             ScriptErrorConstructorKind::SyntaxError => {
@@ -1897,6 +1920,9 @@ fn chromium_error(error: ModuleLoadError) -> module_tree::ModuleLoadError {
 
 fn local_error(error: module_tree::ModuleLoadError) -> ModuleLoadError {
     let mut converted = ModuleLoadError::new(local_load_stage(error.stage), error.message);
+    if let Some(exception_id) = error.exception_id {
+        converted = converted.with_exception_id(exception_id);
+    }
     if let Some(constructor) = error.error_constructor {
         converted = converted.with_error_constructor(local_error_constructor(constructor));
     }

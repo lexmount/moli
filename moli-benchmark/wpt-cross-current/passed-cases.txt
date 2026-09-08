@@ -6436,6 +6436,7 @@ html/semantics/scripting-1/the-script-element/module/duplicated-imports-1.html
 html/semantics/scripting-1/the-script-element/module/duplicated-imports-2.html
 html/semantics/scripting-1/the-script-element/module/dynamic-import/code-cache-nonce.html
 html/semantics/scripting-1/the-script-element/module/dynamic-import/delay-load-event.html
+html/semantics/scripting-1/the-script-element/module/dynamic-import/dynamic-imports-script-error.html
 html/semantics/scripting-1/the-script-element/module/dynamic-import/dynamic-imports.html
 html/semantics/scripting-1/the-script-element/module/dynamic-import/inline-event-handler.html
 html/semantics/scripting-1/the-script-element/module/dynamic-import/propagate-nonce-external-classic.html
