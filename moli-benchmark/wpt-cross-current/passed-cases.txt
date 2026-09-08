@@ -8361,6 +8361,7 @@ trusted-types/should-sink-type-mismatch-violation-be-blocked-by-csp-001.html
 trusted-types/should-sink-type-mismatch-violation-be-blocked-by-csp-002-worker.html
 trusted-types/should-sink-type-mismatch-violation-be-blocked-by-csp-003.html
 trusted-types/should-trusted-type-policy-creation-be-blocked-by-csp-001.html
+trusted-types/should-trusted-type-policy-creation-be-blocked-by-csp-002.html
 trusted-types/should-trusted-type-policy-creation-be-blocked-by-csp-003.html
 trusted-types/should-trusted-type-policy-creation-be-blocked-by-csp-004-worker.html
 trusted-types/should-trusted-type-policy-creation-be-blocked-by-csp-005.html

@@ -1195,6 +1195,9 @@ fn policy_allows_trusted_type_policy_name(
         source == "*"
             || (!source.is_empty()
                 && source == policy_name
+                // Only tt-policy-name tokens can whitelist a literal name.
+                // The policy API itself accepts arbitrary strings, including
+                // under a wildcard, so do not validate policy_name globally.
                 && source.bytes().all(|byte| {
                     byte.is_ascii_alphanumeric()
                         || matches!(byte, b'-' | b'#' | b'=' | b'_' | b'/' | b'@' | b'.' | b'%')
@@ -1203,7 +1206,7 @@ fn policy_allows_trusted_type_policy_name(
     let duplicate_is_allowed = !is_duplicate
         || sources
             .iter()
-            .any(|source| csp_keyword_eq(source.trim(), "allow-duplicates"));
+            .any(|source| csp_keyword_eq(source, "allow-duplicates"));
     name_is_allowed && duplicate_is_allowed
 }
 
@@ -3464,7 +3467,7 @@ mod tests {
             let policy = format!("trusted-types {name}");
             let expected = byte.is_ascii_alphanumeric() || b"-#=_/@.%".contains(&byte);
             assert_eq!(
-                policy_allows_trusted_type_policy_name(&policy, &name),
+                policy_allows_trusted_type_policy_name(&policy, &name, false),
                 expected,
                 "invalid tt-policy-name byte {byte:#04x} must not match literally",
             );
@@ -3472,23 +3475,32 @@ mod tests {
         for name in ["none", "allow-duplicates", "A-z_09#=/@.%"] {
             assert!(policy_allows_trusted_type_policy_name(
                 &format!("trusted-types {name}"),
-                name
+                name,
+                false,
             ));
         }
         assert!(policy_allows_trusted_type_policy_name(
             "trusted-types valid policy*name",
-            "valid"
+            "valid",
+            false,
         ));
         assert!(!policy_allows_trusted_type_policy_name(
             "trusted-types valid policy*name",
-            "policy*name"
+            "policy*name",
+            false,
         ));
         for wildcard in ["\u{000b}*", "*\u{000b}", "policy*"] {
             assert!(!policy_allows_trusted_type_policy_name(
                 &format!("trusted-types {wildcard}"),
-                "valid"
+                "valid",
+                false,
             ));
         }
+        assert!(!policy_allows_trusted_type_policy_name(
+            "trusted-types valid \u{000b}'allow-duplicates'",
+            "valid",
+            true,
+        ));
     }
 
     #[test]
@@ -3502,8 +3514,18 @@ mod tests {
             "\0",
         ] {
             for policy in ["", "trusted-types *"] {
-                assert!(policy_allows_trusted_type_policy_name(policy, name));
+                assert!(policy_allows_trusted_type_policy_name(policy, name, false));
             }
+            assert!(!policy_allows_trusted_type_policy_name(
+                "trusted-types *",
+                name,
+                true,
+            ));
+            assert!(policy_allows_trusted_type_policy_name(
+                "trusted-types * 'allow-duplicates'",
+                name,
+                true,
+            ));
         }
     }
 
