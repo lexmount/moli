@@ -1001,12 +1001,14 @@ struct HtmlElementGeometryPrototypeDeclaration {
     #[webapi(
         accessor_property = "offsetWidth",
         enumerable,
+        receiver = super::receivers::html_element,
         getter = node_offset_width_getter_function
     )]
     offset_width: (),
     #[webapi(
         accessor_property = "offsetHeight",
         enumerable,
+        receiver = super::receivers::html_element,
         getter = node_offset_height_getter_function
     )]
     offset_height: (),
@@ -3244,13 +3246,9 @@ fn iframe_content_document_getter_function<'s>(
     mut rv: v8::ReturnValue<'_, v8::Value>,
 ) {
     let receiver = args.this();
-    let Some((runtime_ptr, handle)) = html_element_getter_receiver(
-        scope,
-        receiver,
-        "HTMLIFrameElement",
-        "contentDocument",
-        "iframe",
-    ) else {
+    let Ok((runtime_ptr, handle)) =
+        node_runtime_and_handle_from_object_or_detached(scope, receiver)
+    else {
         return;
     };
     if iframe_is_inside_its_own_child_context_document(scope, runtime_ptr, handle) {
@@ -3314,13 +3312,9 @@ fn iframe_content_window_getter_function<'s>(
     mut rv: v8::ReturnValue<'_, v8::Value>,
 ) {
     let receiver = args.this();
-    let Some((runtime_ptr, handle)) = html_element_getter_receiver(
-        scope,
-        receiver,
-        "HTMLIFrameElement",
-        "contentWindow",
-        "iframe",
-    ) else {
+    let Ok((runtime_ptr, handle)) =
+        node_runtime_and_handle_from_object_or_detached(scope, receiver)
+    else {
         return;
     };
     if iframe_is_inside_its_own_child_context_document(scope, runtime_ptr, handle) {
@@ -3990,9 +3984,9 @@ struct HtmlIFrameElementPrototypeDeclaration {
         setter_data = NullToEmptyDomStringReflection::IframeMarginWidth
     )]
     margin_width: (),
-    #[webapi(accessor_property, getter = iframe_content_document_getter_function)]
+    #[webapi(accessor_property, getter = iframe_content_document_getter_function, receiver = super::receivers::html_iframe_element)]
     content_document: (),
-    #[webapi(accessor_property, getter = iframe_content_window_getter_function)]
+    #[webapi(accessor_property, getter = iframe_content_window_getter_function, receiver = super::receivers::html_iframe_element)]
     content_window: (),
 }
 

@@ -119,3 +119,71 @@ FontFace.prototype.load.call({}).then(
     .unwrap();
     assert_eq!(vm.eval("loadResult").unwrap(), "rejected:TypeError");
 }
+
+#[test]
+fn webidl_receiver_fontface_loaded_getter_rejects_instead_of_throwing() {
+    let mut vm = new_storage_test_vm("https://receiver-check.test/");
+    vm.eval(r#"
+globalThis.loadedFailures = [];
+globalThis.loadedRejections = 0;
+const getLoaded = Object.getOwnPropertyDescriptor(FontFace.prototype, 'loaded').get;
+const face = new FontFace('ReceiverTest', 'local("sans-serif")');
+if (face.loaded !== face.loaded || getLoaded.call(face) !== face.loaded) {
+  loadedFailures.push('lost cached Promise identity');
+}
+for (const receiver of [FontFace.prototype, {}, Object.create(FontFace.prototype), new Proxy(face, {}), null]) {
+  try {
+    const promise = getLoaded.call(receiver);
+    if (!(promise instanceof Promise)) loadedFailures.push('not a Promise');
+    promise.then(
+      () => loadedFailures.push('resolved'),
+      error => {
+        loadedRejections++;
+        if (!(error instanceof TypeError)) loadedFailures.push(error.name);
+      }
+    );
+  } catch (error) {
+    loadedFailures.push('synchronous ' + error.name);
+  }
+}
+"#).unwrap();
+    assert_eq!(
+        vm.eval("JSON.stringify([loadedRejections, loadedFailures])")
+            .unwrap(),
+        "[5,[]]"
+    );
+}
+
+#[test]
+fn webidl_receiver_fontface_promise_errors_use_the_callee_realm() {
+    let mut vm = new_storage_test_vm("https://receiver-check.test/");
+    vm.eval(r#"
+globalThis.realmFailures = [];
+globalThis.realmRejections = 0;
+const html = document.appendChild(document.createElement('html'));
+html.appendChild(document.createElement('body'));
+const frame = document.body.appendChild(document.createElement('iframe'));
+const child = frame.contentWindow;
+const getLoaded = Object.getOwnPropertyDescriptor(child.FontFace.prototype, 'loaded').get;
+const getFamily = Object.getOwnPropertyDescriptor(child.FontFace.prototype, 'family').get;
+try { getFamily.call({}); realmFailures.push('accepted receiver'); }
+catch (error) {
+  if (!(error instanceof child.TypeError) || error instanceof TypeError) realmFailures.push('wrong exception realm');
+}
+for (const promise of [getLoaded.call({}), child.FontFace.prototype.load.call({})]) {
+  if (!(promise instanceof child.Promise) || promise instanceof Promise) realmFailures.push('wrong Promise realm');
+  promise.catch(error => {
+    realmRejections++;
+    if (!(error instanceof child.TypeError) || error instanceof TypeError) realmFailures.push('wrong rejection realm');
+  });
+}
+const face = new child.FontFace('ReceiverTest', 'local("sans-serif")');
+const parentGetLoaded = Object.getOwnPropertyDescriptor(FontFace.prototype, 'loaded').get;
+if (parentGetLoaded.call(face) !== face.loaded) realmFailures.push('cross-realm identity');
+"#).unwrap();
+    assert_eq!(
+        vm.eval("JSON.stringify([realmRejections, realmFailures])")
+            .unwrap(),
+        "[2,[]]"
+    );
+}

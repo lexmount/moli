@@ -324,7 +324,7 @@ struct DocumentMetadataPrototypeDeclaration {
         getter = document_last_modified_getter_function
     )]
     last_modified: (),
-    #[webapi(accessor_property, getter = document_referrer_getter_function)]
+    #[webapi(accessor_property, getter = document_referrer_getter_function, receiver = super::receivers::document)]
     referrer: (),
 }
 
@@ -982,9 +982,9 @@ fn document_referrer_getter_function<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'s, v8::Value>,
 ) {
-    let Some((runtime_ptr, handle)) = document_receiver_runtime_and_handle(scope, args.this())
+    let Ok((runtime_ptr, handle)) =
+        node_runtime_and_handle_from_object_or_detached(scope, args.this())
     else {
-        crate::util::throw_type_error(scope, "Illegal invocation");
         return;
     };
     let runtime = unsafe { &*runtime_ptr };

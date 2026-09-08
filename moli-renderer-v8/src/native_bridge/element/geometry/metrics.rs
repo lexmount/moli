@@ -540,9 +540,6 @@ pub(in crate::native_bridge) fn node_offset_width_getter_function<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     rv: v8::ReturnValue<'_, v8::Value>,
 ) {
-    if !require_html_geometry_receiver(scope, args.this()) {
-        return;
-    }
     set_box_metric_return_value(scope, args.this(), "offsetWidth", rv);
 }
 
@@ -551,29 +548,7 @@ pub(in crate::native_bridge) fn node_offset_height_getter_function<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     rv: v8::ReturnValue<'_, v8::Value>,
 ) {
-    if !require_html_geometry_receiver(scope, args.this()) {
-        return;
-    }
     set_box_metric_return_value(scope, args.this(), "offsetHeight", rv);
-}
-
-fn require_html_geometry_receiver<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    receiver: v8::Local<'s, v8::Object>,
-) -> bool {
-    let valid = node_runtime_and_handle_from_object_or_detached(scope, receiver)
-        .ok()
-        .is_some_and(|(runtime, handle)| {
-            unsafe { &*runtime }
-                .dom_host()
-                .node(handle)
-                .and_then(|node| node.as_element())
-                .is_some_and(|element| element.namespace() == "http://www.w3.org/1999/xhtml")
-        });
-    if !valid {
-        crate::util::throw_type_error(scope, "Illegal invocation");
-    }
-    valid
 }
 
 pub(in crate::native_bridge) fn node_offset_parent_getter_function<'s>(

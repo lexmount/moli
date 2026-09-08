@@ -46,7 +46,9 @@ pub(crate) fn expand_webapi_interface(
     let fields = named_fields(&input.data)?;
     let methods = fields
         .iter()
-        .filter_map(|field| expand_interface_field(field, attrs.rename_all))
+        .filter_map(|field| {
+            expand_interface_field(field, attrs.rename_all, attrs.receiver.as_ref())
+        })
         .collect::<Result<Vec<_>, _>>()?;
 
     let body = quote! {
@@ -560,6 +562,7 @@ fn expand_function_template_fields(
     let mut method_bindings = HashMap::new();
     for (index, field) in fields.iter().enumerate() {
         let mut attrs = parse_field_attrs(field)?;
+        attrs.inherit_receiver(template_attrs.receiver.as_ref())?;
         if template_attrs.default_enumerable
             && attrs.symbol.is_none()
             && (attrs.method
@@ -724,8 +727,9 @@ fn expand_function_template_static_method_field(
     };
     let length = attrs.length.unwrap_or(0);
     let attributes = template_property_attributes(attrs);
+    let callback = expand_callback(callback, attrs, false);
     let member = expand_template_function_member(
-        callback,
+        &callback,
         length,
         attrs.data.as_ref(),
         template_name,
@@ -773,8 +777,9 @@ fn expand_function_template_method_field(
     };
     let length = attrs.length.unwrap_or(0);
     let attributes = template_property_attributes(attrs);
+    let callback = expand_callback(callback, attrs, false);
     let member = expand_template_function_member(
-        callback,
+        &callback,
         length,
         attrs.data.as_ref(),
         template_name,
@@ -864,8 +869,9 @@ fn expand_function_template_accessor_property_field(
             "`accessor_property` field requires #[webapi(getter = path)]",
         ));
     };
+    let getter = expand_callback(getter, attrs, false);
     let getter_member = expand_template_function_member(
-        getter,
+        &getter,
         0,
         attrs.data.as_ref(),
         template_name,
@@ -874,8 +880,9 @@ fn expand_function_template_accessor_property_field(
     );
     let setter = attrs.setter.as_ref().map(|setter| {
         let setter_data = attrs.setter_data.as_ref().or(attrs.data.as_ref());
+        let setter = expand_callback(setter, attrs, true);
         let setter_member = expand_template_function_member(
-            setter,
+            &setter,
             1,
             setter_data,
             template_name,
@@ -1074,11 +1081,15 @@ fn expand_function_template_alias_field(
 fn expand_interface_field(
     field: &Field,
     rename_all: RenameRule,
+    receiver: Option<&syn::Path>,
 ) -> Option<Result<proc_macro2::TokenStream, Error>> {
-    let attrs = match parse_field_attrs(field) {
+    let mut attrs = match parse_field_attrs(field) {
         Ok(attrs) => attrs,
         Err(error) => return Some(Err(error)),
     };
+    if let Err(error) = attrs.inherit_receiver(receiver) {
+        return Some(Err(error));
+    }
     if !attrs.method && !attrs.accessor_property {
         if attrs.has_installation_kind() || attrs.has_installation_attribute() {
             return Some(Err(Error::new(
@@ -1110,8 +1121,9 @@ fn expand_interface_field(
         let enumerable = attrs.enumerable;
         let writable = !attrs.readonly;
         let configurable = !attrs.dont_delete;
+        let callback = expand_callback(callback, &attrs, false);
         let build_function =
-            expand_method_function_builder(callback, length, attrs.data.as_ref(), &name);
+            expand_method_function_builder(&callback, length, attrs.data.as_ref(), &name);
         let field_read = field
             .ident
             .as_ref()
@@ -1179,6 +1191,9 @@ fn expand_object_field(
         Ok(attrs) => attrs,
         Err(error) => return Some(Err(error)),
     };
+    if let Err(error) = attrs.inherit_receiver(object_attrs.receiver.as_ref()) {
+        return Some(Err(error));
+    }
     // Struct-level `#[webapi(data_properties)]` is the only mode where an unannotated
     // field becomes part of the JavaScript surface by default. Without it,
     // unannotated fields are declaration-only inputs that can still be consumed
@@ -1454,7 +1469,8 @@ fn expand_accessor_property_field(
         ));
     }
     let getter = if let Some(getter) = attrs.getter.as_ref() {
-        let getter = expand_accessor_function_builder(getter, 0, attrs.data.as_ref(), &name);
+        let getter = expand_callback(getter, attrs, false);
+        let getter = expand_accessor_function_builder(&getter, 0, attrs.data.as_ref(), &name);
         quote! {
             #getter.ok_or_else(|| {
                 ::moli_webapi_declare::BindError::new(
@@ -1472,7 +1488,8 @@ fn expand_accessor_property_field(
     };
     let setter = attrs.setter.as_ref().map(|setter| {
         let setter_data = attrs.setter_data.as_ref().or(attrs.data.as_ref());
-        expand_accessor_function_builder(setter, 1, setter_data, &name)
+        let setter = expand_callback(setter, attrs, true);
+        expand_accessor_function_builder(&setter, 1, setter_data, &name)
     });
     let setter = match setter {
         Some(setter) => quote! {
@@ -1589,8 +1606,9 @@ fn expand_object_method_field(
     let enumerable = attrs.enumerable;
     let writable = !attrs.readonly;
     let configurable = !attrs.dont_delete;
+    let callback = expand_callback(callback, attrs, false);
     let build_function =
-        expand_method_function_builder(callback, length, attrs.data.as_ref(), &name);
+        expand_method_function_builder(&callback, length, attrs.data.as_ref(), &name);
     let install_method = quote! {
         let function = #build_function.ok_or_else(|| {
             ::moli_webapi_declare::BindError::new(
@@ -1722,8 +1740,56 @@ fn expand_alias_field(
     })
 }
 
-fn expand_accessor_function_builder(
+/// Generate a native callback adapter, without changing callback data or
+/// introducing a JavaScript wrapper. Receiver checks precede argument conversion.
+fn expand_callback(
     callback: &syn::Path,
+    attrs: &crate::attrs::FieldAttrs,
+    is_setter: bool,
+) -> proc_macro2::TokenStream {
+    let returns_promise = attrs.returns_promise && !is_setter;
+    if attrs.receiver.is_none() && !returns_promise {
+        return quote!(#callback);
+    }
+    let receiver_check = attrs.receiver.as_ref().map(|receiver| {
+        quote! {
+            if !#receiver(scope, args.this()) {
+                ::moli_webapi_declare::__private::throw_illegal_invocation(scope);
+                return;
+            }
+        }
+    });
+    let adapter = if returns_promise {
+        quote! {
+            fn __webapi_promise_callback<'s>(
+                scope: &mut ::moli_webapi_declare::v8::PinScope<'s, '_>,
+                args: ::moli_webapi_declare::v8::FunctionCallbackArguments<'s>,
+                rv: ::moli_webapi_declare::v8::ReturnValue<'s>,
+            ) {
+                ::moli_webapi_declare::__private::invoke_promise_callback(
+                    scope, args, rv, __webapi_callback,
+                );
+            }
+            __webapi_promise_callback
+        }
+    } else {
+        quote!(__webapi_callback)
+    };
+    quote! {{
+        fn __webapi_callback<'s>(
+            scope: &mut ::moli_webapi_declare::v8::PinScope<'s, '_>,
+            args: ::moli_webapi_declare::v8::FunctionCallbackArguments<'s>,
+            rv: ::moli_webapi_declare::v8::ReturnValue<'s>,
+        ) {
+            #receiver_check
+            #callback(scope, args, rv);
+        }
+        #adapter
+    }}
+}
+
+fn expand_accessor_function_builder(
+    callback: &proc_macro2::TokenStream,
     length: i32,
     data: Option<&syn::Expr>,
     display_name: &proc_macro2::TokenStream,
@@ -1763,7 +1829,7 @@ fn expand_accessor_function_builder(
 }
 
 fn expand_method_function_builder(
-    callback: &syn::Path,
+    callback: &proc_macro2::TokenStream,
     length: i32,
     data: Option<&syn::Expr>,
     display_name: &proc_macro2::TokenStream,
@@ -1807,7 +1873,7 @@ fn expand_method_function_builder(
 }
 
 fn expand_template_function_member(
-    callback: &syn::Path,
+    callback: &proc_macro2::TokenStream,
     length: i32,
     data: Option<&syn::Expr>,
     template_name: &LitStr,
@@ -2225,6 +2291,37 @@ fn named_fields(data: &Data) -> Result<Vec<Field>, Error> {
 #[cfg(test)]
 mod tests {
     use super::{expand_webapi_function_template, expand_webapi_interface, expand_webapi_object};
+
+    #[test]
+    fn callback_policies_reject_fields_that_cannot_apply_them() {
+        let fields: Vec<syn::Field> = vec![
+            syn::parse_quote!(#[webapi(data_property, receiver = check)] value: ()),
+            syn::parse_quote!(#[webapi(static_method, callback = call, receiver = check)] value: ()),
+            syn::parse_quote!(#[webapi(native_data_property, getter = get, receiver = check)] value: ()),
+            syn::parse_quote!(#[webapi(alias = "other", receiver = check)] value: ()),
+            syn::parse_quote!(#[webapi(data_property, returns_promise)] value: ()),
+            syn::parse_quote!(#[webapi(native_data_property, getter = get, returns_promise)] value: ()),
+            syn::parse_quote!(#[webapi(accessor_property, getter_value = self.getter, receiver = check)] value: ()),
+            syn::parse_quote!(#[webapi(accessor_property, getter_value = self.getter, returns_promise)] value: ()),
+            syn::parse_quote!(#[webapi(method, callback = call, receiver = check, receiver = other)] value: ()),
+        ];
+        for field in fields {
+            assert!(crate::attrs::parse_field_attrs(&field).is_err());
+        }
+    }
+
+    #[test]
+    fn inherited_receiver_cannot_silently_skip_an_already_built_getter() {
+        let input = syn::parse_quote! {
+            #[webapi(interface = "Object", receiver = check)]
+            struct Invalid {
+                #[webapi(accessor_property, getter_value = self.getter)]
+                getter: (),
+            }
+        };
+        let error = expand_webapi_object(input).unwrap_err();
+        assert!(error.to_string().contains("require a Rust callback"));
+    }
 
     #[test]
     fn declaration_only_field_attributes_are_rejected() {

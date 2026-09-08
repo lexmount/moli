@@ -135,7 +135,7 @@ struct IntersectionObserverPrototypeAccessorsDeclaration {
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(name = "IntersectionObserverEntry", enumerable)]
+#[webapi(name = "IntersectionObserverEntry", enumerable, receiver = is_intersection_observer_entry)]
 struct IntersectionObserverEntryPrototypeAccessorsDeclaration {
     #[webapi(accessor_property, getter = intersection_observer_entry_attribute_getter_callback, data = callback_data_index_value(scope, 0))]
     time: (),
@@ -2513,6 +2513,13 @@ fn intersection_observer_attribute_getter_callback(
     );
 }
 
+fn is_intersection_observer_entry<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    receiver: v8::Local<'s, v8::Object>,
+) -> bool {
+    get_private_value(scope, receiver, "__moliIntersectionEntryTime").is_some()
+}
+
 fn intersection_observer_entry_attribute_getter_callback<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     args: v8::FunctionCallbackArguments<'s>,
@@ -2527,10 +2534,8 @@ fn intersection_observer_entry_attribute_getter_callback<'s>(
         rv.set_undefined();
         return;
     };
-    let Some(value) = get_private_value(scope, args.this(), slot) else {
-        throw_type_error(scope, "Illegal invocation");
-        return;
-    };
+    let value =
+        get_private_value(scope, args.this(), slot).unwrap_or_else(|| v8::undefined(scope).into());
     rv.set(value);
 }
 

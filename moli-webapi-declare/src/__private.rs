@@ -1,3 +1,4 @@
+pub use crate::callback::{invoke_promise_callback, throw_illegal_invocation};
 pub use moli_v8_util::{global_constructor_prototype, v8_string, v8str};
 
 /// Complete description of one function installed by
