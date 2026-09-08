@@ -6179,7 +6179,7 @@ async fn worker_classic_websocket_offline_reports_network_failure() {
 }
 
 #[tokio::test]
-async fn worker_importscripts_websocket_resolves_against_imported_script_url() {
+async fn worker_importscripts_websocket_resolves_against_worker_settings_url() {
     ensure_v8();
     let imported_script = r#"
         const events = [];
@@ -6202,7 +6202,7 @@ async fn worker_importscripts_websocket_resolves_against_imported_script_url() {
     )])
     .await;
     let websocket_base_url = base_url.replacen("http://", "ws://", 1);
-    let expected_url = format!("{websocket_base_url}/worker/imported/blocked/imported-ws");
+    let expected_url = format!("{websocket_base_url}/worker/blocked/imported-ws");
     let loader =
         ResourceRequestClient::new(&FetchConfig::default()).expect("worker importScripts loader");
     let mut handle = spawn_worker_with_request_client_and_blocked_url_patterns(
@@ -6212,7 +6212,7 @@ async fn worker_importscripts_websocket_resolves_against_imported_script_url() {
         .into(),
         format!("{base_url}/worker/main.js"),
         loader,
-        vec![format!("{websocket_base_url}/worker/imported/blocked/*")],
+        vec![format!("{websocket_base_url}/worker/blocked/*")],
     );
 
     let network = timeout(TIMEOUT, handle.recv())
