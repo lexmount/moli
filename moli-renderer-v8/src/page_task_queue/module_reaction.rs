@@ -7,7 +7,7 @@ use crate::{
     module_runtime::DynamicModuleImportOwner,
     resource_ready::{ReadyPageTask, RendererPageTaskReadyMetadata},
     runtime::{PageOwnerTurnOutcome, RendererDocumentToken},
-    types::ScriptErrorConstructorKind,
+    types::ScriptErrorValue,
 };
 
 use super::{RendererOwnerWakeSender, RendererOwnerWakeSource, RendererPageTaskReadySignal};
@@ -43,7 +43,7 @@ pub(crate) enum RendererPageModuleReactionEvent {
         document_owner: FrameDocumentTaskOwner,
         reaction_id: u64,
         reason: String,
-        error_constructor: Option<ScriptErrorConstructorKind>,
+        error_value: Option<ScriptErrorValue>,
     },
     ChildParserModuleEvaluationFulfilled {
         document_owner: FrameDocumentTaskOwner,
@@ -55,7 +55,7 @@ pub(crate) enum RendererPageModuleReactionEvent {
         realm_id: FrameRealmId,
         reaction_id: u64,
         reason: String,
-        error_constructor: Option<ScriptErrorConstructorKind>,
+        error_value: Option<ScriptErrorValue>,
     },
     DynamicModuleEvaluationFulfilled {
         import_owner: DynamicModuleImportOwner,
@@ -120,17 +120,17 @@ impl fmt::Debug for RendererPageModuleReactionEvent {
         match self {
             Self::DocumentModuleScriptEvaluationRejected {
                 reason,
-                error_constructor,
+                error_value,
                 ..
             }
             | Self::ChildParserModuleEvaluationRejected {
                 reason,
-                error_constructor,
+                error_value,
                 ..
             } => {
                 debug
                     .field("reason", reason)
-                    .field("error_constructor", error_constructor);
+                    .field("error_value", error_value);
             }
             Self::DynamicModuleEvaluationRejected { .. } => {
                 debug.field("reason", &"<v8::Global<Value>>");

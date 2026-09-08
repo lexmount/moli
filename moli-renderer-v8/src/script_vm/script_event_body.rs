@@ -16,6 +16,7 @@ use crate::context_bootstrap::{
 };
 use crate::host::ScriptEventTask;
 use crate::native_bridge::JsContextHost;
+use crate::types::ScriptErrorValue;
 use crate::util::{get_private_value, v8_string, v8str};
 
 impl ScriptVm {
@@ -51,9 +52,9 @@ impl ScriptVm {
         &mut self,
         message: &str,
         filename: Option<&str>,
-        error_constructor: Option<crate::types::ScriptErrorConstructorKind>,
+        error_value: Option<ScriptErrorValue>,
     ) {
-        if let Err(error) = self.report_window_error_body(message, filename, error_constructor) {
+        if let Err(error) = self.report_window_error_body(message, filename, error_value) {
             self.record_runtime_warning(format_args!(
                 "window script failure body dispatch failed for `{}`: {error}",
                 filename.unwrap_or("")
@@ -65,7 +66,7 @@ impl ScriptVm {
         &mut self,
         message: &str,
         filename: Option<&str>,
-        error_constructor: Option<crate::types::ScriptErrorConstructorKind>,
+        error_value: Option<ScriptErrorValue>,
     ) -> Result<()> {
         let context_ptr: *const v8::Global<v8::Context> = &self.page_default_context;
         let context_host = self._context_host.clone();
@@ -78,13 +79,20 @@ impl ScriptVm {
                 let global = scope.get_current_context().global(scope);
                 let message_value = v8_string(scope, message)
                     .ok_or_else(|| anyhow!("failed to allocate reportError message"))?;
-                let error_value = window_script_failure_error_value(
-                    scope,
-                    global,
-                    error_constructor,
-                    message_value,
-                );
-                if let Some(filename) = filename
+                let retained = matches!(error_value, Some(ScriptErrorValue::Retained(_)));
+                let error_value = match error_value {
+                    Some(ScriptErrorValue::Retained(id)) => {
+                        super::native_module::retained_module_exception(scope, id)?
+                    }
+                    Some(ScriptErrorValue::Constructor(kind)) => {
+                        window_script_failure_error_value(scope, global, Some(kind), message_value)
+                    }
+                    None => window_script_failure_error_value(scope, global, None, message_value),
+                };
+                // Location metadata belongs to the ErrorEvent. Never mutate
+                // the original exception (or invoke an author's setter).
+                if !retained
+                    && let Some(filename) = filename
                     && let Some(filename_value) = v8_string(scope, filename)
                     && let Ok(error_object) = v8::Local::<v8::Object>::try_from(error_value)
                 {
