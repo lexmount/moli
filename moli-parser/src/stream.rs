@@ -386,12 +386,14 @@ fn prepare_parser_script(
             }
         },
         PrepareScriptOutcome::UrlResolutionFailed(error)
-        | PrepareScriptOutcome::EmptyExternalSource(error) => failed_parser_script(
-            position,
-            mode,
-            error,
-            ParserScriptElementStateTransition::MarkAlreadyStarted,
-        ),
+        | PrepareScriptOutcome::EmptyExternalSource(error) => {
+            ParserScriptPreparation::PreparationFailure(
+                ParserScriptPreparationFailure::external_source(position, mode, error)
+                    .with_element_state_transition(
+                        ParserScriptElementStateTransition::MarkAlreadyStarted,
+                    ),
+            )
+        }
         PrepareScriptOutcome::EmptyInlineSource => skipped_parser_script(
             document,
             node_id,
@@ -1711,6 +1713,7 @@ mod tests {
         let ParserScriptHandoff::PreparationFailure { failure, .. } = *handoff else {
             panic!("empty src must not become a blocking classic fetch");
         };
+        assert!(failure.is_external_source_failure());
         assert_eq!(
             failure.element_state_transition(),
             crate::ParserScriptElementStateTransition::MarkAlreadyStarted
@@ -1719,6 +1722,16 @@ mod tests {
         assert_eq!(position, 0);
         assert_eq!(mode, ScriptMode::Normal);
         assert_eq!(message, "empty script src is not fetchable");
+    }
+
+    #[test]
+    fn internal_parser_script_preparation_failure_is_not_an_external_source_error() {
+        let failure = crate::ParserScriptPreparationFailure::new(
+            0,
+            ScriptMode::Normal,
+            "document URL missing during parser script preparation".to_owned(),
+        );
+        assert!(!failure.is_external_source_failure());
     }
 
     #[test]
@@ -1736,6 +1749,7 @@ mod tests {
         let ParserScriptHandoff::PreparationFailure { failure, .. } = *handoff else {
             panic!("invalid src must stay a failed parser preparation");
         };
+        assert!(failure.is_external_source_failure());
         assert_eq!(
             failure.element_state_transition(),
             crate::ParserScriptElementStateTransition::MarkAlreadyStarted

@@ -743,6 +743,7 @@ impl JsContextHost {
                 }
                 LiveDocumentParserStepOutcome::ScriptHandoff(handoff) => {
                     match self.queue_live_child_parser_script_handoff(
+                        scope,
                         child_handle,
                         document_handle,
                         *handoff,
@@ -770,6 +771,7 @@ impl JsContextHost {
 
     fn queue_live_child_parser_script_handoff(
         &mut self,
+        scope: &mut v8::PinScope<'_, '_>,
         child_handle: DomHandle,
         document_handle: DomHandle,
         mut handoff: ParserScriptHandoff,
@@ -915,6 +917,13 @@ impl JsContextHost {
                     node_id,
                     failure.element_state_transition(),
                 );
+                if failure.is_external_source_failure()
+                    && !self.queue_script_preparation_error(scope, node_id)
+                {
+                    return ScriptDisposition::AdmissionFailed {
+                        script_handle: node_id,
+                    };
+                }
                 ScriptDisposition::Continue
             }
         }
@@ -1408,6 +1417,7 @@ impl JsContextHost {
                         continue;
                     }
                     match self.queue_live_child_parser_script_handoff(
+                        scope,
                         child_handle,
                         document_handle,
                         *handoff,

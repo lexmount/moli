@@ -41,6 +41,7 @@ mod post_parse_owner_work;
 mod ready_signal;
 mod rendering_update;
 mod resource_completions;
+mod script_preparation_error;
 mod senders;
 mod service_worker_client_message;
 mod service_worker_internal;
@@ -399,6 +400,12 @@ pub(crate) use self::resource_completions::RendererResourceCompletionTestHarness
 pub(super) use self::resource_completions::{
     RendererOwnerWake, RendererOwnerWakeSender, RendererOwnerWakeSource,
     RendererResourceCompletionSender, RendererTopLevelNavigationHandoff,
+};
+pub(crate) use self::script_preparation_error::{
+    PageScriptPreparationErrorTargetEffect, PageScriptPreparationErrorTurnAction,
+    PageScriptPreparationErrorTurnOutcome, RendererPageScriptPreparationErrorOwner,
+    RendererPageScriptPreparationErrorSender, RendererPageScriptPreparationErrorTask,
+    RendererPageScriptPreparationErrorTaskId,
 };
 pub(crate) use self::senders::PageRuntimeWakeSignal;
 #[cfg(test)]
