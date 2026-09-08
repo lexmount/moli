@@ -113,7 +113,7 @@ impl PageOwnedDocumentScriptHooks for MainPageOwnedDocumentScriptHooks<'_, '_> {
         runtime_script_claim: Option<DynamicScriptPageTaskClaim>,
     ) -> PageOwnedDocumentScriptBodyExecution {
         let source_load = failure.is_source_load();
-        let (error, module_failure_policy, error_constructor) = failure.into_parts();
+        let (error, module_failure_policy, error_value) = failure.into_parts();
         if source_load {
             self.page_vm
                 .vm()
@@ -128,7 +128,7 @@ impl PageOwnedDocumentScriptHooks for MainPageOwnedDocumentScriptHooks<'_, '_> {
                     &script,
                     &error,
                     module_failure_policy,
-                    error_constructor,
+                    error_value,
                 );
             return complete_prepared_script_execution_failure_report_with_activity(
                 script,

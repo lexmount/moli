@@ -707,4 +707,25 @@ struct DependencyCandidate {
 
 fn is_creation_error(error: &ModuleLoadError) -> bool {
     error.stage == ModuleLoadStage::Compile
+        || (error.stage == ModuleLoadStage::Resolve && error.exception_id.is_some())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn retained_values_do_not_turn_link_or_evaluation_failures_into_parse_errors() {
+        for (stage, expected) in [
+            (ModuleLoadStage::Compile, true),
+            (ModuleLoadStage::Resolve, true),
+            (ModuleLoadStage::Fetch, false),
+            (ModuleLoadStage::Instantiate, false),
+            (ModuleLoadStage::Evaluate, false),
+        ] {
+            let error = ModuleLoadError::new(stage, "retained error")
+                .with_exception_id(crate::ModuleExceptionId(1));
+            assert_eq!(is_creation_error(&error), expected, "{stage:?}");
+        }
+    }
 }

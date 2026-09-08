@@ -346,7 +346,7 @@ impl ScriptVm {
                 message,
                 module_failure_policy,
                 source_network_result,
-                error_constructor,
+                error_value,
                 ..
             }) if self.prepared_script_uses_runtime_owned_page_task_execution(&script) => {
                 self.record_runtime_warning(format_args!(
@@ -368,7 +368,7 @@ impl ScriptVm {
                         failure: crate::document_script_scheduler::PageOwnedDocumentScriptSourceFailure::runtime_terminal(
                             message,
                             module_failure_policy,
-                            error_constructor,
+                            error_value,
                         ),
                         source_network_result,
                         runtime_script_claim: Some(runtime_script_claim),
@@ -384,7 +384,7 @@ impl ScriptVm {
                 kind,
                 module_failure_policy,
                 source_network_result,
-                error_constructor,
+                error_value,
             }) => {
                 let _ = (
                     id,
@@ -392,7 +392,7 @@ impl ScriptVm {
                     kind,
                     module_failure_policy,
                     source_network_result,
-                    error_constructor,
+                    error_value,
                 );
                 panic!(
                     "production DynamicScriptOwner failures must carry runtime-owned Page execution identity: {}",
@@ -531,12 +531,12 @@ impl ScriptVm {
         &mut self,
         reaction_id: u64,
         reason: String,
-        error_constructor: Option<crate::types::ScriptErrorConstructorKind>,
+        error_value: Option<crate::types::ScriptErrorValue>,
     ) -> Option<ModuleScriptEvaluationUpdate> {
         self.document_runtime
             .runtime_script_work_mut()
             .dynamic_scripts
-            .mark_module_script_evaluation_rejected(reaction_id, reason, error_constructor)
+            .mark_module_script_evaluation_rejected(reaction_id, reason, error_value)
     }
 
     #[cfg(test)]
@@ -1160,14 +1160,14 @@ impl ScriptVm {
         script: &PreparedScript,
         message: &str,
         module_failure_policy: Option<crate::host::ModuleFailurePolicy>,
-        error_constructor: Option<crate::types::ScriptErrorConstructorKind>,
+        error_value: Option<crate::types::ScriptErrorValue>,
     ) -> crate::script_vm::ScriptTerminalBodyActivity {
         let (dynamic_script_owner_id, lease) = claim.into_parts();
         let settlement = self.apply_runtime_script_failure_terminal_body(
             script,
             message,
             module_failure_policy,
-            error_constructor,
+            error_value,
             lease,
         );
         debug!(
@@ -1211,14 +1211,14 @@ impl ScriptVm {
         script: &PreparedScript,
         message: &str,
         module_failure_policy: Option<crate::host::ModuleFailurePolicy>,
-        error_constructor: Option<crate::types::ScriptErrorConstructorKind>,
+        error_value: Option<crate::types::ScriptErrorValue>,
         lease: MainDocumentScriptLoadDelayLease,
     ) {
         let work = self.document_runtime.plan_script_failure_lifecycle_work(
             script,
             message,
             module_failure_policy,
-            error_constructor,
+            error_value,
         );
         for terminal in work {
             match terminal {
@@ -1262,14 +1262,14 @@ impl ScriptVm {
         script: &PreparedScript,
         message: &str,
         module_failure_policy: Option<crate::host::ModuleFailurePolicy>,
-        error_constructor: Option<crate::types::ScriptErrorConstructorKind>,
+        error_value: Option<crate::types::ScriptErrorValue>,
         lease: MainDocumentScriptLoadDelayLease,
     ) -> RuntimeScriptFailureTerminalBodySettlement {
         let work = self.document_runtime.plan_script_failure_lifecycle_work(
             script,
             message,
             module_failure_policy,
-            error_constructor,
+            error_value,
         );
         let mut activity = crate::script_vm::ScriptTerminalBodyActivity::NoEventDispatch;
         for terminal in work {
@@ -1282,7 +1282,7 @@ impl ScriptVm {
                     self.report_window_error_body_best_effort(
                         &task.message,
                         task.filename.as_deref(),
-                        task.error_constructor,
+                        task.error_value,
                         None,
                     );
                     activity = crate::script_vm::ScriptTerminalBodyActivity::EventDispatchAttempted;
@@ -1415,7 +1415,7 @@ impl ScriptVm {
         message: &str,
         kind: crate::dynamic_script_owner::DynamicScriptFailureKind,
         module_failure_policy: Option<crate::host::ModuleFailurePolicy>,
-        error_constructor: Option<crate::types::ScriptErrorConstructorKind>,
+        error_value: Option<crate::types::ScriptErrorValue>,
     ) -> crate::script_vm::ScriptTerminalBodyActivity {
         if let Some(id) = dynamic_script_owner_id {
             if kind == crate::dynamic_script_owner::DynamicScriptFailureKind::Immediate {
@@ -1434,7 +1434,7 @@ impl ScriptVm {
                         script,
                         message,
                         module_failure_policy,
-                        error_constructor,
+                        error_value,
                         lease,
                     )
                     .activity;
@@ -1442,13 +1442,13 @@ impl ScriptVm {
             self.document_runtime
                 .runtime_script_work_mut()
                 .dynamic_scripts
-                .note_script_failed_with_kind_and_error_constructor(
+                .note_script_failed_with_kind_and_error_value(
                     id,
                     script,
                     message.to_owned(),
                     kind,
                     module_failure_policy,
-                    error_constructor,
+                    error_value,
                 );
             self.enqueue_immediate_runtime_script_work_if_needed();
             return crate::script_vm::ScriptTerminalBodyActivity::NoEventDispatch;
@@ -1463,7 +1463,7 @@ impl ScriptVm {
                     script,
                     message,
                     module_failure_policy,
-                    error_constructor,
+                    error_value,
                     None,
                 );
                 self.enqueue_immediate_runtime_script_work_if_needed();
@@ -1473,7 +1473,7 @@ impl ScriptVm {
                 script,
                 message,
                 module_failure_policy,
-                error_constructor,
+                error_value,
             ) {
                 Ok(FollowupPageTaskDisposition::Skipped) => {}
                 Ok(
@@ -1512,7 +1512,7 @@ impl ScriptVm {
         message: String,
         kind: crate::dynamic_script_owner::DynamicScriptFailureKind,
         module_failure_policy: Option<crate::host::ModuleFailurePolicy>,
-        error_constructor: Option<crate::types::ScriptErrorConstructorKind>,
+        error_value: Option<crate::types::ScriptErrorValue>,
     ) {
         debug_assert!(
             kind.is_deferrable_module(),
@@ -1521,13 +1521,13 @@ impl ScriptVm {
         self.document_runtime
             .runtime_script_work_mut()
             .dynamic_scripts
-            .note_script_failed_with_kind_and_error_constructor(
+            .note_script_failed_with_kind_and_error_value(
                 dynamic_script_owner_id,
                 script,
                 message,
                 kind,
                 module_failure_policy,
-                error_constructor,
+                error_value,
             );
     }
 
@@ -1585,14 +1585,14 @@ impl ScriptVm {
                 kind,
                 module_failure_policy,
                 source_network_result: _,
-                error_constructor,
+                error_value,
             } = terminal;
             if let Some(lease) = lease {
                 self.apply_runtime_script_failure_terminal(
                     &script,
                     &message,
                     module_failure_policy,
-                    error_constructor,
+                    error_value,
                     lease,
                 );
             }
@@ -1629,7 +1629,7 @@ impl ScriptVm {
                 kind,
                 module_failure_policy,
                 source_network_result: _,
-                error_constructor,
+                error_value,
             } = terminal;
             if let Some(lease) = lease {
                 let lease_owner = lease.owner();
@@ -1637,7 +1637,7 @@ impl ScriptVm {
                     &script,
                     &message,
                     module_failure_policy,
-                    error_constructor,
+                    error_value,
                     lease,
                 );
                 if terminal.activity
@@ -1676,7 +1676,7 @@ impl ScriptVm {
         message: &str,
         kind: crate::dynamic_script_owner::DynamicScriptFailureKind,
         module_failure_policy: Option<crate::host::ModuleFailurePolicy>,
-        error_constructor: Option<crate::types::ScriptErrorConstructorKind>,
+        error_value: Option<crate::types::ScriptErrorValue>,
     ) {
         if let Some(id) = dynamic_script_owner_id {
             if kind == crate::dynamic_script_owner::DynamicScriptFailureKind::Immediate {
@@ -1692,7 +1692,7 @@ impl ScriptVm {
                         script,
                         message,
                         module_failure_policy,
-                        error_constructor,
+                        error_value,
                         lease,
                     );
                 }
@@ -1701,13 +1701,13 @@ impl ScriptVm {
             self.document_runtime
                 .runtime_script_work_mut()
                 .dynamic_scripts
-                .note_script_failed_with_kind_and_error_constructor(
+                .note_script_failed_with_kind_and_error_value(
                     id,
                     script,
                     message.to_owned(),
                     kind,
                     module_failure_policy,
-                    error_constructor,
+                    error_value,
                 );
             debug!(
                 dynamic_script_owner_id = ?id,
@@ -1727,7 +1727,7 @@ impl ScriptVm {
                     script,
                     message,
                     module_failure_policy,
-                    error_constructor,
+                    error_value,
                 );
                 self.enqueue_immediate_runtime_script_work_if_needed();
                 return;
@@ -1736,7 +1736,7 @@ impl ScriptVm {
                 script,
                 message,
                 module_failure_policy,
-                error_constructor,
+                error_value,
             ) {
                 Ok(FollowupPageTaskDisposition::Skipped) => {}
                 Ok(

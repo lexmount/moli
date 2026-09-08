@@ -38,7 +38,7 @@ use crate::{
             BroadcastChannelId, DedicatedWorkerId, ImageRequestKey, MessagePortId,
             NetworkBodySourceId, PendingSubresourceAuthState, PendingSubresourceFetchState,
             PendingSubresourceResponseState, PendingWebSocketResponseState,
-            RunningSubresourceFetchState, ScriptErrorConstructorKind, ScriptNetworkOutputItem,
+            RunningSubresourceFetchState, ScriptNetworkOutputItem,
             StreamingSubresourceFetchState, SubresourceNetworkRequestHandle,
         },
         util::{
