@@ -353,6 +353,77 @@ for (const tag of ['a', 'area']) {
 }
 
 #[test]
+fn url_hierarchical_path_mutations_keep_hosts_and_logical_paths_separate() {
+    assert_url_components(
+        r#"
+for (const input of ['custom:/old?q#f', 'custom:/.//old?q#f']) {
+  for (const value of ['//p', '/.//p', '/..//p']) {
+    checkSetter(input, 'pathname', value, 'custom:/.//p?q#f');
+  }
+  checkSetter(input, 'pathname', 'p', 'custom:/p?q#f');
+  checkSetter(input, 'pathname', '', 'custom:/?q#f');
+}
+checkSetter('custom:///old?q#f', 'pathname', '', 'custom://?q#f');
+checkSetter('custom://host/old?q#f', 'pathname', '//p', 'custom://host//p?q#f');
+checkSetter('custom:/.//p?q#f', 'host', 'h:77', 'custom://h:77//p?q#f');
+for (const [name, create] of factories) {
+  for (const hostname of ['h', '', '[::1]']) {
+    const object = create('custom:/.//p?q#f');
+    assert(object.pathname === '//p', name + ': prefix is not part of pathname');
+    object.hostname = hostname;
+    assert(object.href === 'custom://' + hostname + '//p?q#f', name + ': add authority');
+    assert(object.pathname === '//p', name + ': authority change preserves path');
+    assert(object.search === '?q' && object.hash === '#f', name + ': suffix offsets');
+    assert(new URL(object.href).pathname === '//p', name + ': serialized URL round-trips');
+    object.pathname = '';
+    assert(object.href === 'custom://' + hostname + '?q#f', name + ': empty authority path');
+  }
+}
+"#,
+    );
+}
+
+#[test]
+fn url_relative_resolution_distinguishes_special_slashes_and_non_special_backslashes() {
+    assert_url_components(
+        r#"
+for (const [input, base, expected] of [
+  ['///next.test/a/../p?q#f', 'https://user:pass@old.test:123/a/b', 'https://next.test/p?q#f'],
+  ['///\\//\\//next.test/p', 'http://old.test/a/b', 'http://next.test/p'],
+  ['\\p', 'custom://host/a/b', 'custom://host/a/\\p'],
+  ['\\/p', 'custom://host/a/b', 'custom://host/a/\\/p'],
+  ['\\\\p', 'custom://host/a/b', 'custom://host/a/\\\\p'],
+  ['\\p', 'custom:/.//a/b', 'custom:/.//a/\\p'],
+  ['///next', 'custom://host/a/b', 'custom:///next'],
+  ['////next', 'custom:/a/b', 'custom:////next'],
+]) {
+  for (const constructor of [URL, frame.contentWindow.URL]) {
+    assert(new constructor(input, base).href === expected, 'relative constructor: ' + input);
+    assert(constructor.parse(input, base).href === expected, 'relative URL.parse: ' + input);
+    assert(constructor.canParse(input, base), 'relative URL.canParse: ' + input);
+  }
+  for (const owner of [document, frame.contentDocument,
+    document.implementation.createHTMLDocument('relative path')]) {
+    const baseElement = owner.head.appendChild(owner.createElement('base'));
+    baseElement.href = base;
+    for (const tag of ['a', 'area']) {
+      const link = owner.body.appendChild(owner.createElement(tag));
+      link.href = input;
+      assert(link.href === expected, tag + ': relative document base: ' + input);
+      link.remove();
+    }
+    baseElement.remove();
+  }
+}
+for (const constructor of [URL, frame.contentWindow.URL]) {
+  assert(constructor.parse('///?q', 'https://host/') === null, 'empty special host fails');
+  assert(!constructor.canParse('//\\host', 'custom://base/'), 'backslash in opaque host fails');
+}
+"#,
+    );
+}
+
+#[test]
 fn file_url_components_preserve_hosts_drive_letters_and_empty_path_segments() {
     assert_url_components(
         r#"
