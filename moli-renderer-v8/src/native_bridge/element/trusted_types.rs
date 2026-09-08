@@ -265,6 +265,25 @@ pub(in crate::native_bridge) fn trusted_attribute_value_string<'s>(
     value: v8::Local<'s, v8::Value>,
     setter: TrustedAttributeSetter,
 ) -> Option<String> {
+    // Web IDL converts the union before the DOM algorithm observes the node
+    // document. A user-defined toString can adopt the element into another realm.
+    let input_kind = crate::context_bootstrap::trusted_type_kind(scope, value);
+    let value = if input_kind.is_some() || value.is_string() {
+        value
+    } else {
+        let value = match crate::webidl::convert::<crate::webidl::DomString>(
+            scope,
+            value,
+            setter.conversion_context(),
+        ) {
+            Ok(value) => value.0,
+            Err(error) => {
+                crate::webidl::throw_error(scope, &error);
+                return None;
+            }
+        };
+        crate::util::v8_string(scope, &value)?.into()
+    };
     let sink = runtime_and_handle.and_then(|(runtime_ptr, handle)| {
         let element = unsafe { &*runtime_ptr }
             .dom_host()
@@ -276,40 +295,35 @@ pub(in crate::native_bridge) fn trusted_attribute_value_string<'s>(
             attribute_namespace,
             local_name,
         )?;
-        Some((runtime_ptr, sink))
+        Some((runtime_ptr, handle, sink))
     });
 
-    if let Some((runtime_ptr, sink)) = sink {
-        let requirements = unsafe { &*runtime_ptr }.trusted_types_for_script_requirements(scope);
-        return match sink {
-            TrustedAttributeSink::Html(sink) => {
-                crate::context_bootstrap::trusted_html_string_or_throw(
-                    scope,
-                    value,
-                    requirements,
-                    sink,
-                    setter.api_name(),
-                )
-            }
-            TrustedAttributeSink::Script(sink) => {
-                crate::context_bootstrap::trusted_script_string_or_type_error(
-                    scope,
-                    value,
-                    requirements,
-                    &sink,
-                    setter.api_name(),
-                )
-            }
-            TrustedAttributeSink::ScriptUrl(sink) => {
-                crate::context_bootstrap::trusted_script_url_string_or_throw(
-                    scope,
-                    value,
-                    requirements,
-                    sink,
-                    setter.api_name(),
-                )
-            }
+    if let Some((runtime_ptr, handle, sink)) = sink {
+        let context =
+            super::super::node::node_owner_document_relevant_context(scope, runtime_ptr, handle)
+                .unwrap_or_else(|| scope.get_current_context());
+        let global = context.global(scope);
+        let requirements = unsafe { &*runtime_ptr }
+            .trusted_types_for_script_requirements_for_global(scope, global);
+        use crate::context_bootstrap::TrustedTypeKind;
+        let (kind, sink) = match &sink {
+            TrustedAttributeSink::Html(sink) => (TrustedTypeKind::Html, *sink),
+            TrustedAttributeSink::Script(sink) => (TrustedTypeKind::Script, sink.as_str()),
+            TrustedAttributeSink::ScriptUrl(sink) => (TrustedTypeKind::ScriptUrl, *sink),
         };
+        return crate::context_bootstrap::trusted_type_string_or_throw(
+            scope,
+            value,
+            kind,
+            requirements,
+            sink,
+            setter.api_name(),
+            Some(global),
+        );
+    }
+
+    if let Some(kind) = input_kind {
+        return crate::context_bootstrap::trusted_type_string(scope, value, kind);
     }
 
     match crate::webidl::convert::<crate::webidl::DomString>(
