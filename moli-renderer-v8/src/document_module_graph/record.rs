@@ -1,5 +1,6 @@
 use std::sync::Arc;
 
+pub(crate) use moli_module_script_tree::ModuleSourceOrigin;
 use url::Url;
 
 use super::{ModuleAttributesKey, ModuleKind, ModuleMapKey};
@@ -8,6 +9,10 @@ use super::{ModuleAttributesKey, ModuleKind, ModuleMapKey};
 pub(crate) enum ModuleSource {
     /// The fetch pipeline and synthetic evaluation share this immutable allocation.
     Text(Arc<str>),
+    TextWithOrigin {
+        source: Arc<str>,
+        origin: Box<ModuleSourceOrigin>,
+    },
     /// Retained Wasm bytes share the fetch allocation across clones.
     Binary(Arc<[u8]>),
 }
@@ -90,20 +95,37 @@ impl ModuleSource {
         Self::Text(source.into())
     }
 
+    pub(crate) fn text_with_origin(
+        source: impl Into<Arc<str>>,
+        origin: ModuleSourceOrigin,
+    ) -> Self {
+        Self::TextWithOrigin {
+            source: source.into(),
+            origin: Box::new(origin),
+        }
+    }
+
+    pub(crate) fn origin(&self) -> Option<&ModuleSourceOrigin> {
+        match self {
+            Self::TextWithOrigin { origin, .. } => Some(origin),
+            Self::Text(_) | Self::Binary(_) => None,
+        }
+    }
+
     pub(crate) fn binary(bytes: impl Into<Arc<[u8]>>) -> Self {
         Self::Binary(bytes.into())
     }
 
     pub(crate) fn text_source(&self) -> Option<&str> {
         match self {
-            Self::Text(source) => Some(source),
+            Self::Text(source) | Self::TextWithOrigin { source, .. } => Some(source),
             Self::Binary(_) => None,
         }
     }
 
     pub(crate) fn binary_source(&self) -> Option<&[u8]> {
         match self {
-            Self::Text(_) => None,
+            Self::Text(_) | Self::TextWithOrigin { .. } => None,
             Self::Binary(bytes) => Some(bytes),
         }
     }
@@ -111,7 +133,7 @@ impl ModuleSource {
     #[cfg(test)]
     pub(crate) fn len(&self) -> usize {
         match self {
-            Self::Text(source) => source.len(),
+            Self::Text(source) | Self::TextWithOrigin { source, .. } => source.len(),
             Self::Binary(bytes) => bytes.len(),
         }
     }
