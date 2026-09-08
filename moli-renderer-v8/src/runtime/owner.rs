@@ -98,12 +98,23 @@ mod lifecycle_decision;
 
 use self::lifecycle_decision::PendingLifecycleNavigation;
 
-#[derive(Debug, Clone)]
-pub struct RendererPreparedDocumentCommitConfiguration {
+#[derive(Debug, Clone, Default)]
+pub struct RendererPreparedDocumentInspectionConfiguration {
+    /// AgentHost's root-frame wire label; never a Browser object identity.
+    pub root_frame_projection_id: Option<String>,
+    /// Frozen wire occurrence appended between session reset and default-world
+    /// creation. This projects a commit; it does not authorize a Browser commit.
+    pub main_document_commit: Option<RendererMainDocumentCommit>,
     pub document_start_scripts: Vec<DocumentStartScript>,
     pub runtime_bindings: Vec<crate::protocol_types::RuntimeBindingRegistration>,
     pub runtime_inspector_session_restore_snapshots: Vec<RendererInspectorSessionRestoreSnapshot>,
     pub runtime_isolated_worlds: Vec<crate::protocol_types::RuntimeIsolatedWorldDefinition>,
+}
+
+/// Effective Browser policy consumed atomically when materializing a Document.
+/// Inspector session configuration travels through its own restricted ingress.
+#[derive(Debug, Clone)]
+pub struct RendererPreparedDocumentPolicy {
     pub permission_overrides: Vec<crate::protocol_types::PermissionOverrideRegistration>,
     pub extra_http_headers: Vec<(String, String)>,
     pub locale_override: Option<String>,
@@ -183,6 +194,7 @@ pub struct RendererCreateHtmlPageRequest {
 pub struct RendererCreateStreamingRawPageRequest {
     pub root_frame_id: Option<String>,
     pub main_document_commit: Option<RendererMainDocumentCommit>,
+    pub top_level_storage_key: Option<moli_storage_key::MoliStorageKey>,
     pub requested_url: Url,
     pub final_url: Url,
     pub navigation_initiator_url: Option<Url>,
@@ -231,12 +243,13 @@ pub enum RendererOwnerCommand {
         token: RendererPageReservationToken,
         request: RendererCreateStreamingRawPageRequest,
     },
-    UpdatePreparedRendererDocumentCommitConfiguration {
+    ConfigurePreparedDocumentInspection {
         token: RendererPageReservationToken,
-        configuration: RendererPreparedDocumentCommitConfiguration,
+        configuration: RendererPreparedDocumentInspectionConfiguration,
     },
-    CommitPreparedRendererDocument {
-        permit: RendererDocumentCommitPermit,
+    MaterializePreparedRendererDocument {
+        token: RendererPageReservationToken,
+        policy: Option<Box<RendererPreparedDocumentPolicy>>,
     },
     CancelPreparedRendererDocument {
         token: RendererPageReservationToken,
@@ -244,19 +257,6 @@ pub enum RendererOwnerCommand {
     RunAsyncPageCommand {
         token: RendererPageToken,
         command: RendererPageCommand,
-    },
-    RunProtocolPageCommand {
-        token: RendererPageToken,
-        command: RendererPageCommand,
-    },
-    /// Renderer-side cleanup after the browser/protocol owner has already
-    /// disconnected a DevTools session and suspended both of its ingress lanes.
-    /// Replacement frontend work remains queued behind this lifecycle task so
-    /// it cannot reuse the V8 session before destruction completes.
-    FinalizeRuntimeInspectorSessionDetach {
-        token: RendererPageToken,
-        inspector_session_id: Option<String>,
-        pause_guard: RendererRuntimeInspectorSessionDetachGuard,
     },
     WaitForNetworkIdle {
         token: RendererPageToken,
@@ -295,7 +295,7 @@ pub enum RendererOwnerReply {
     PreparedRendererDocumentStored {
         renderer_devtools_agent_token: RendererDevToolsAgentToken,
     },
-    PreparedRendererDocumentCommitConfigurationUpdated,
+    PreparedDocumentInspectionConfigured,
     PreparedRendererDocumentCanceled,
     AsyncPageCommandRan(Box<RendererCommandTurnOutput>),
     RuntimeInspectorSessionResponseSettled {
@@ -303,7 +303,6 @@ pub enum RendererOwnerReply {
         response_succeeded: bool,
     },
     RuntimeInspectorSessionErrorSettled(RendererOutputFence),
-    RuntimeInspectorSessionDetachFinalized(bool),
     PageRemoved,
     TestingCurrentPageState(Arc<RendererPageState>),
     TestingRendererPageView(RendererPageView),
@@ -961,8 +960,7 @@ fn runtime_command_output_scope_owned_by_dispatch(
 
 fn owner_command_timing_label(command: &RendererOwnerCommand) -> Option<&'static str> {
     match command {
-        RendererOwnerCommand::RunAsyncPageCommand { command, .. }
-        | RendererOwnerCommand::RunProtocolPageCommand { command, .. } => {
+        RendererOwnerCommand::RunAsyncPageCommand { command, .. } => {
             renderer_page_command_timing_label(command)
         }
         _ => None,
@@ -980,7 +978,6 @@ fn renderer_command_admission_page_token(
 ) -> Option<RendererPageToken> {
     match command {
         RendererOwnerCommand::RunAsyncPageCommand { token, .. }
-        | RendererOwnerCommand::RunProtocolPageCommand { token, .. }
         | RendererOwnerCommand::WaitForNetworkIdle { token, .. }
         | RendererOwnerCommand::WaitForDomStable { token, .. } => Some(*token),
         _ => None,
@@ -1888,15 +1885,7 @@ impl RendererOwnerHandle {
     }
 
     pub fn refresh_page_view_for_testing(&self, view: RendererPageView) -> Result<()> {
-        self.state.page_table.refresh(
-            view.page_id,
-            view.vm_creation_id,
-            view.view_generation,
-            view.page_state.requested_url.clone(),
-            view.page_state.final_url.clone(),
-            view.page_state.document_title.clone(),
-            view.page_state.status,
-        )
+        self.state.page_table.refresh_view_for_testing(view)
     }
 
     pub fn remove_page_for_testing(&self, page_id: PageId) {
@@ -1937,7 +1926,10 @@ impl RendererOwnerHandle {
     /// observes `Opened` before this release on success, while an early failure
     /// produces only the release. Never move this to the navigation completion
     /// channel: that independent channel cannot order against stream opening.
-    fn release_page_output_reservation(&self, reservation: RendererPageReservationToken) {
+    pub(super) fn release_page_output_reservation(
+        &self,
+        reservation: RendererPageReservationToken,
+    ) {
         if let Some(sender) = self
             .state
             .browser_context_runtime
@@ -2211,6 +2203,7 @@ impl RendererOwnerHandle {
         RendererCreateStreamingRawPageRequest {
             root_frame_id: None,
             main_document_commit: None,
+            top_level_storage_key: None,
             requested_url,
             final_url,
             navigation_initiator_url,
@@ -2431,7 +2424,7 @@ impl RendererOwnerHandle {
                 self.release_page_output_reservation(token);
                 outcome
             }
-            RendererOwnerCommand::UpdatePreparedRendererDocumentCommitConfiguration {
+            RendererOwnerCommand::ConfigurePreparedDocumentInspection {
                 token,
                 configuration,
             } => {
@@ -2444,25 +2437,25 @@ impl RendererOwnerHandle {
                     .into();
                 }
                 match owner_local_store
-                    .update_prepared_document_commit_configuration(token, configuration)
-                    .map(|()| {
-                        RendererOwnerReply::PreparedRendererDocumentCommitConfigurationUpdated
-                    }) {
+                    .configure_prepared_document_inspection(token, configuration)
+                    .map(|()| RendererOwnerReply::PreparedDocumentInspectionConfigured)
+                {
                     Ok(reply) => Ok(reply).into(),
                     Err(error) => Err(error).into(),
                 }
             }
-            RendererOwnerCommand::CommitPreparedRendererDocument { permit } => {
-                let token = permit.prepared_document();
+            RendererOwnerCommand::MaterializePreparedRendererDocument { token, policy } => {
                 if token.local_host_id() != self.state.owner_local_host_id {
                     return Err(anyhow!(
-                        "prepared document commit permit belongs to renderer owner {}, not {}",
+                        "prepared document belongs to renderer owner {}, not {}",
                         token.local_host_id().as_u64(),
                         self.state.owner_local_host_id.as_u64()
                     ))
                     .into();
                 }
-                match owner_local_store.take_prepared_document(token) {
+                match owner_local_store
+                    .take_prepared_document_for_materialization(token, policy.map(|policy| *policy))
+                {
                     Ok(residence) => {
                         self.create_page_reply_from_prepared_document_on_owner_local_store(
                             token.page_id(),
@@ -2486,21 +2479,7 @@ impl RendererOwnerHandle {
                 owner_local_store.cancel_prepared_document(token);
                 Ok(RendererOwnerReply::PreparedRendererDocumentCanceled).into()
             }
-            command @ (RendererOwnerCommand::RunAsyncPageCommand { .. }
-            | RendererOwnerCommand::RunProtocolPageCommand { .. }) => {
-                let (token, command, capture_policy) = match command {
-                    RendererOwnerCommand::RunAsyncPageCommand { token, command } => (
-                        token,
-                        command,
-                        super::RendererPageStateCapturePolicy::FullReport,
-                    ),
-                    RendererOwnerCommand::RunProtocolPageCommand { token, command } => (
-                        token,
-                        command,
-                        super::RendererPageStateCapturePolicy::ProtocolTurn,
-                    ),
-                    _ => unreachable!("combined renderer page command pattern must match"),
-                };
+            RendererOwnerCommand::RunAsyncPageCommand { token, command } => {
                 if moli_trace::cdp_nav_timing_enabled()
                     && let Some(command_label) = renderer_page_command_timing_label(&command)
                 {
@@ -2515,45 +2494,9 @@ impl RendererOwnerHandle {
                     RenderRuntimeTurn::RunLivePageCommand {
                         token,
                         command,
-                        capture_policy,
+                        capture_policy: super::RendererPageStateCapturePolicy::FullReport,
                     },
                 ))
-            }
-            RendererOwnerCommand::FinalizeRuntimeInspectorSessionDetach {
-                token,
-                inspector_session_id,
-                mut pause_guard,
-            } => {
-                let mut entry = match checkout_entry_for_owner_turn_on_bound_owner_local_store(
-                    token,
-                ) {
-                    Ok(entry) => entry,
-                    Err(
-                        LivePageEntryCheckoutError::Retired | LivePageEntryCheckoutError::Missing,
-                    ) => {
-                        pause_guard.complete();
-                        return Ok(RendererOwnerReply::RuntimeInspectorSessionDetachFinalized(
-                            false,
-                        ))
-                        .into();
-                    }
-                    Err(LivePageEntryCheckoutError::Busy) => {
-                        return Err(anyhow!(
-                            "renderer page {} remained checked out while finalizing Inspector session detach",
-                            token.page_id.as_u64()
-                        ))
-                        .into();
-                    }
-                };
-                let detached = entry
-                    .page_vm_mut()
-                    .detach_runtime_inspector_session(inspector_session_id.as_deref());
-                restore_entry_after_command_on_bound_owner_local_store(token, entry);
-                pause_guard.complete();
-                Ok(RendererOwnerReply::RuntimeInspectorSessionDetachFinalized(
-                    detached,
-                ))
-                .into()
             }
             RendererOwnerCommand::WaitForNetworkIdle {
                 token,
@@ -3172,7 +3115,6 @@ impl RendererOwnerHandle {
             && matches!(
                 &command,
                 RendererOwnerCommand::RunAsyncPageCommand { command, .. }
-                    | RendererOwnerCommand::RunProtocolPageCommand { command, .. }
                     if command.interruptible_by_javascript_dialog()
             )
         {
@@ -7126,6 +7068,7 @@ impl RendererOwnerHandle {
         let RendererCreateStreamingRawPageRequest {
             root_frame_id,
             main_document_commit,
+            top_level_storage_key,
             requested_url,
             final_url,
             navigation_initiator_url,
@@ -7240,7 +7183,7 @@ impl RendererOwnerHandle {
                     wpt_extensions_enabled,
                     root_frame_id,
                     main_document_commit,
-                    top_level_storage_key: None,
+                    top_level_storage_key,
                     navigation_bootstrap_entry: None,
                     reserved_service_worker_client_id: reserved_service_worker_client
                         .map(RendererReservedServiceWorkerClient::release),

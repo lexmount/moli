@@ -43,6 +43,7 @@ tikv-jemallocator = { version = "0.7.0", optional = true, default-features = fal
 
 [dev-dependencies]
 libc = "0.2"
+moli-renderer-v8 = { path = "../moli-renderer-v8" }
 moli-test-support = { path = "../moli-test-support" }
 strip-ansi-escapes = "0.2.1"
 

@@ -2,64 +2,8 @@ use super::*;
 
 async fn install_document_content_test_page(ctx: &mut TestContext, url: &str) {
     load_bc_with_session(ctx, "BID-set-content", "TID-1", "SID-1", "about:blank");
-    let committed_document = {
-        let browser_context = ctx.conn.browser_context.as_mut().expect("browser context");
-        browser_context.set_target_url(url.to_owned());
-        browser_context
-            .start_document_navigation_for_active_target(LOADER_ID.to_owned())
-            .expect("document-content test navigation should start")
-    };
-    let mut navigation = ctx
-        .conn
-        .load_navigation_via_runtime_for_session_owner_async(Some("SID-1"), url)
-        .await
-        .expect("document-content test page should load");
-    let artifacts = navigation.page_creation_artifacts;
-    {
-        let browser_context = ctx.conn.browser_context.as_mut().expect("browser context");
-        let renderer_agent_candidate = browser_context
-            .active_page_target_mut()
-            .runtime_slot
-            .prepare_renderer_agent_candidate(&committed_document, &mut navigation.page)
-            .expect("document-content test renderer candidate should attach");
-        browser_context.commit_document_navigation_if_matches(&committed_document);
-        browser_context
-            .active_page_target_mut()
-            .runtime_slot
-            .commit_loaded_navigation_renderer_attachment(
-                &mut navigation.page,
-                Some(renderer_agent_candidate),
-            )
-            .expect("document-content test renderer candidate should commit");
-        browser_context
-            .active_page_target_mut()
-            .runtime_slot
-            .set_loaded_page_for_test(navigation.page);
-        assert!(
-            browser_context
-                .active_page_target_mut()
-                .runtime_slot
-                .finish_renderer_document_navigation(&committed_document)
-                .expect("document-content test renderer navigation should finish")
-                .released_output
-                .is_empty(),
-            "the fixture should not leave buffered Inspector output behind"
-        );
-    }
-    let (binding, _) = ctx.conn.bind_renderer_document_lifecycle_for_owner(
-        &crate::conn::CommandOwnerScope::for_session("SID-1"),
-        artifacts,
-        Some(committed_document),
-        "TID-1".to_owned(),
-        LOADER_ID.to_owned(),
-    );
-    assert!(binding.is_some(), "renderer lifecycle should bind");
-    // The fixture commits an already-running renderer Page directly instead
-    // of going through the production navigation command. Route that exact
-    // Document's initial lifecycle publication before enabling observers.
-    // Otherwise Page.enable can replay its old load while a later
-    // setDocumentContent replacement is running, and a test may mistake the
-    // previous epoch for the replacement's terminal event.
+    ctx.install_navigation_fixture_for_session_owner(url, Some("SID-1"))
+        .await;
     wait_until_renderer_document_load(ctx, Some("SID-1"), "TID-1", LOADER_ID).await;
 }
 
@@ -1705,14 +1649,12 @@ async fn root_set_document_content_unloads_descendant_frame_before_clearing_pare
         .conn
         .start_child_frame_lifecycle_work_for_owner(owner, std::time::Duration::from_secs(2))
         .expect("loaded page should expose child-frame lifecycle work");
-    let completed = pending
-        .wait()
-        .await
-        .expect("srcdoc child lifecycle should complete");
+    let completed = pending.wait().await;
     assert!(
         ctx.conn
-            .complete_child_frame_lifecycle_work_for_session_owner(completed)
+            .finish_document_child_frame_lifecycle_work(completed)
             .expect("srcdoc child lifecycle completion should apply")
+            .0
     );
 
     assert_eq!(

@@ -26,7 +26,10 @@ use moli_fetch::{
     StreamingRawResponse,
 };
 use moli_page_types::{LayoutPolicy, OptionalResourceFetchMask};
-use moli_renderer_v8::new_shared_web_storage_store;
+use moli_renderer_v8::{
+    RendererInspectorCommandEnvelope, RendererInspectorCommandRoute,
+    RendererInspectorIngressTicket, new_shared_web_storage_store,
+};
 use std::{
     fs,
     path::PathBuf,
@@ -161,9 +164,21 @@ async fn query_selector_node_from_live_document(
     page: &mut Page,
     selector: &str,
 ) -> Result<Option<RendererDocumentQuerySelectorNode>> {
-    let pending = page.start_document_query_selector_for_document(selector.to_owned(), false)?;
+    let endpoint = page.renderer_inspection_endpoint();
+    let route = endpoint
+        .dom_inspection(
+            moli_renderer_v8::RendererAgentAttachmentId::allocate(),
+            None,
+        )
+        .start_document_query_selector_for_document_in_inspector_session(
+            true,
+            selector.to_owned(),
+            false,
+        )?;
+    let pending = crate::page::PendingPageCommand::from_inspector_main_route(route);
     let completion = pending.wait().await?;
-    match page.finish_document_query_selector(completion)? {
+    page.observe_renderer_page_state(completion.page_state());
+    match completion.finish_document_query_selector()? {
         RendererDocumentQuerySelectorResolution::Found(nodes) => Ok(nodes.into_iter().next()),
         RendererDocumentQuerySelectorResolution::MissingRoot => Ok(None),
         RendererDocumentQuerySelectorResolution::InvalidSelector(message) => {
@@ -178,14 +193,21 @@ async fn resolve_runtime_object_for_backend_node_id(
     execution_context_id: Option<i64>,
     object_group: Option<&str>,
 ) -> Result<crate::page::DocumentNodeRuntimeObjectResolution> {
-    let pending = page.start_resolve_runtime_object_for_backend_node_id_in_inspector_session(
-        None,
-        backend_node_id,
-        execution_context_id,
-        object_group,
-    )?;
+    let endpoint = page.renderer_inspection_endpoint();
+    let route = endpoint
+        .dom_inspection(
+            moli_renderer_v8::RendererAgentAttachmentId::allocate(),
+            None,
+        )
+        .start_resolve_runtime_object_for_backend_node_id_in_inspector_session(
+            backend_node_id,
+            execution_context_id,
+            object_group,
+        )?;
+    let pending = crate::page::PendingPageCommand::from_inspector_main_route(route);
     let completion = pending.wait().await?;
-    page.finish_resolve_runtime_object_for_backend_node_id(completion)
+    page.observe_renderer_page_state(completion.page_state());
+    completion.finish_resolve_runtime_object_for_backend_node_id()
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -3951,7 +3973,7 @@ async fn renderer_owner_tracks_page_command_epoch_progress() -> Result<()> {
         "first page command should advance owner-side command epoch"
     );
 
-    let _ = page.runtime_enable_events_async().await?;
+    let _ = enable_test_runtime(&mut page).await?;
     assert_eq!(
         renderer_owner.command_epoch(page_id),
         Some(2),
@@ -4484,6 +4506,266 @@ async fn renderer_owner_rejects_stale_page_view_refresh_generation() -> Result<(
     Ok(())
 }
 
+async fn completed_page_title_update(
+    page: &Page,
+    command_id: i32,
+    title: &str,
+) -> Result<crate::page::CompletedPageCommand> {
+    dispatch_test_inspection(
+        page,
+        serde_json::json!({
+            "id": command_id,
+            "method": "Runtime.evaluate",
+            "params": {
+                "expression": format!("document.title = {}; 42", serde_json::to_string(title)?),
+            },
+        }),
+    )
+    .await
+}
+
+// Direct renderer fixtures have no AgentHost/session binding. Keep inspection
+// in test code and leave the Browser cache untouched until explicitly observed.
+async fn dispatch_test_inspection(
+    page: &Page,
+    message: serde_json::Value,
+) -> Result<crate::page::CompletedPageCommand> {
+    let route = page.renderer_inspection_endpoint().enqueue_main_command(
+        RendererInspectorCommandEnvelope::new_main_protocol_on_page_owner(
+            RendererInspectorIngressTicket::new(
+                None,
+                None,
+                RendererInspectorCommandRoute::MainThread,
+            ),
+            None,
+            message.to_string(),
+            None,
+        ),
+    )?;
+    PendingPageCommand::from_inspector_main_route(route)
+        .wait()
+        .await
+}
+
+async fn enable_test_runtime(page: &mut Page) -> Result<Vec<RendererRuntimeInspectorMessage>> {
+    let route = page.renderer_inspection_endpoint().enqueue_main_command(
+        RendererInspectorCommandEnvelope::new_main_runtime_enable_events(
+            RendererInspectorIngressTicket::new(
+                None,
+                None,
+                RendererInspectorCommandRoute::MainThread,
+            ),
+        ),
+    )?;
+    let completion = PendingPageCommand::from_inspector_main_route(route)
+        .wait()
+        .await?;
+    finish_test_inspection(page, completion)
+}
+
+fn finish_test_inspection(
+    page: &mut Page,
+    completion: crate::page::CompletedPageCommand,
+) -> Result<Vec<RendererRuntimeInspectorMessage>> {
+    page.observe_renderer_page_state(completion.page_state());
+    let output = completion.into_runtime_protocol_message_command_turn()?;
+    let (completion, _) = output.into_completion_and_predecessor();
+    Ok(completion
+        .into_runtime_inspector_output()
+        .context("runtime inspection output")?
+        .into_messages())
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn page_cache_observation_rejects_older_completion_without_losing_its_reply() -> Result<()> {
+    let browser = Browser::new(AppConfig::default())?;
+    let mut page = browser
+        .fetch("data:text/html,<title>initial</title>")
+        .await?;
+    let older = completed_page_title_update(&page, 41, "older").await?;
+    let older_predecessor = older.renderer_output_predecessor();
+    let newer = completed_page_title_update(&page, 42, "newer").await?;
+    let _ = page.finish_page_command_turn(newer);
+    assert_eq!(page.document_title(), "newer");
+    assert!(!page.observe_renderer_page_state(older.page_state()));
+
+    let output = page.finish_page_command_turn(older);
+    assert_eq!(
+        page.document_title(),
+        "newer",
+        "late observation must not rewind the Browser cache"
+    );
+    assert_eq!(output.completion().page_state().document_title(), "older");
+    assert_eq!(output.renderer_output_predecessor(), older_predecessor);
+    assert_eq!(
+        output
+            .runtime_inspector_output()
+            .unwrap()
+            .protocol_response(41)
+            .unwrap()["result"]["result"]["value"],
+        42
+    );
+    Ok(())
+}
+
+async fn page_cache_rejects_another_page_completion(same_owner: bool) -> Result<()> {
+    let source_browser = Browser::new(AppConfig::default())?;
+    let destination_browser = if same_owner {
+        source_browser.clone()
+    } else {
+        Browser::new(AppConfig::default())?
+    };
+    let source = source_browser
+        .fetch("data:text/html,<title>source</title>")
+        .await?;
+    let mut destination = destination_browser
+        .fetch("data:text/html,<title>destination</title>")
+        .await?;
+    assert_eq!(
+        source.renderer_owner_local_host_id() == destination.renderer_owner_local_host_id(),
+        same_owner
+    );
+    assert_eq!(
+        source.renderer_page_id() == destination.renderer_page_id(),
+        !same_owner,
+        "different renderer owners deliberately reuse their first PageId"
+    );
+    let destination_title = destination.document_title();
+    let destination_url = destination.final_url().clone();
+    let destination_items = destination
+        .script_execution()
+        .observable_output_items()
+        .to_vec();
+    let completion = completed_page_title_update(&source, 41, "foreign").await?;
+    let predecessor = completion.renderer_output_predecessor();
+    assert!(!destination.observe_renderer_page_state(completion.page_state()));
+
+    let output = destination.finish_page_command_turn(completion);
+    assert_eq!(destination.document_title(), destination_title);
+    assert_eq!(destination.final_url(), &destination_url);
+    assert_eq!(
+        destination.script_execution().observable_output_items(),
+        destination_items
+    );
+    assert_eq!(output.completion().page_state().document_title(), "foreign");
+    assert_eq!(output.renderer_output_predecessor(), predecessor);
+    assert_eq!(
+        output
+            .runtime_inspector_output()
+            .unwrap()
+            .protocol_response(41)
+            .unwrap()["result"]["result"]["value"],
+        42
+    );
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn page_cache_observation_rejects_another_page_in_same_owner() -> Result<()> {
+    page_cache_rejects_another_page_completion(true).await
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn page_cache_observation_rejects_reused_page_id_in_another_owner() -> Result<()> {
+    page_cache_rejects_another_page_completion(false).await
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn page_cache_observation_does_not_consume_the_renderer_reply() -> Result<()> {
+    let browser = Browser::new(AppConfig::default())?;
+    let mut page = browser
+        .fetch("data:text/html,<title>initial</title>")
+        .await?;
+    let completion = completed_page_title_update(&page, 41, "observed").await?;
+    let predecessor = completion.renderer_output_predecessor();
+    let state = completion.page_state();
+    assert!(
+        crate::browser::RendererPageResidenceIdentity::from_page(&page)
+            .matches_residence(state.renderer_residence())
+    );
+    assert!(state.view_generation() > 0);
+    assert_ne!(page.document_title(), "observed");
+    assert!(page.observe_renderer_page_state(state));
+    assert!(
+        page.observe_renderer_page_state(state),
+        "repeated observation is idempotent"
+    );
+    assert_eq!(page.document_title(), "observed");
+
+    let output = completion.into_runtime_protocol_message_command_turn()?;
+    assert_eq!(output.renderer_output_predecessor(), predecessor);
+    assert_eq!(
+        output
+            .runtime_inspector_output()
+            .unwrap()
+            .protocol_response(41)
+            .unwrap()["result"]["result"]["value"],
+        42
+    );
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn renderer_owner_rejects_page_view_from_another_owner_with_reused_page_id() -> Result<()> {
+    let source_browser = Browser::new(AppConfig::default())?;
+    let destination_browser = Browser::new(AppConfig::default())?;
+    let source = source_browser
+        .fetch("data:text/html,<title>source</title>")
+        .await?;
+    let destination = destination_browser
+        .fetch("data:text/html,<title>destination</title>")
+        .await?;
+    assert_eq!(source.renderer_page_id(), destination.renderer_page_id());
+    let owner = destination_browser.js_runtime.renderer_owner_handle();
+    let before = destination
+        .handle_for_testing()
+        .renderer_page_view_async()
+        .await?;
+    let view = source
+        .handle_for_testing()
+        .renderer_page_view_async()
+        .await?;
+    let error = owner
+        .refresh_page_view_for_testing(view)
+        .expect_err("foreign owner snapshot must be rejected");
+    assert!(
+        error
+            .to_string()
+            .contains("mismatched page snapshot provenance")
+    );
+    let after = destination
+        .handle_for_testing()
+        .renderer_page_view_async()
+        .await?;
+    assert_eq!(after.vm_creation_id, before.vm_creation_id);
+    assert_eq!(after.page_state.final_url(), before.page_state.final_url());
+    assert_eq!(
+        after.page_state.document_title(),
+        before.page_state.document_title()
+    );
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn renderer_owner_rejects_page_view_revision_without_its_snapshot() -> Result<()> {
+    let browser = Browser::new(AppConfig::default())?;
+    let page = browser
+        .fetch("data:text/html,<title>source</title>")
+        .await?;
+    let owner = browser.js_runtime.renderer_owner_handle();
+    let mut view = page.handle_for_testing().renderer_page_view_async().await?;
+    view.view_generation += 1;
+    let error = owner
+        .refresh_page_view_for_testing(view)
+        .expect_err("view revision cannot forge a newer snapshot");
+    assert!(
+        error
+            .to_string()
+            .contains("mismatched page snapshot provenance")
+    );
+    Ok(())
+}
+
 #[tokio::test(flavor = "multi_thread")]
 async fn renderer_owner_remove_unknown_page_keeps_never_tracked_state() -> Result<()> {
     let browser = Browser::new(AppConfig::default())?;
@@ -4497,22 +4779,11 @@ async fn renderer_owner_remove_unknown_page_keeps_never_tracked_state() -> Resul
             page_id: unknown_page_id,
             vm_creation_id: 0,
             view_generation: 0,
-            page_state: std::sync::Arc::new(crate::renderer::RendererPageState {
-                requested_url: Url::parse("https://example.com/requested")?,
-                navigation_initiator_url: None,
-                navigation_redirected: false,
-                navigation_redirect_count: 0,
-                navigation_redirect_chain: Vec::new(),
-                final_url: Url::parse("https://example.com/final")?,
-                document_title: String::new(),
-                status: 200,
-                headers: Vec::new(),
-                idle_override: None,
-                service_worker_client_id: 0,
-                dedicated_worker_running_worker_isolate_count: 0,
-                performance_metric_snapshot: Default::default(),
-                script_execution: Arc::new(crate::page::ScriptExecutionReport::default()),
-            }),
+            page_state: Arc::new(crate::renderer::RendererPageState::new_for_test(
+                unknown_page_id,
+                Url::parse("https://example.com/requested")?,
+                Url::parse("https://example.com/final")?,
+            )),
         })
         .expect_err("removing an unknown page should not create a removed tombstone");
     assert!(
@@ -4632,7 +4903,7 @@ async fn renderer_owner_created_page_runs_runtime_protocol_commands() -> Result<
         .await?;
     let mut page = materialize_page_created_reply(&renderer_owner, reply)?;
 
-    let runtime_messages = page.runtime_enable_events_async().await?;
+    let runtime_messages = enable_test_runtime(&mut page).await?;
     assert!(
         !runtime_messages.is_empty(),
         "runtime enable should emit at least one event-like message"
@@ -4975,7 +5246,7 @@ async fn renderer_owner_created_page_runs_input_query_commands() -> Result<()> {
     assert_eq!(rect.width, 120.0);
     assert_eq!(rect.height, 24.0);
 
-    let _ = page.runtime_enable_events_async().await?;
+    let _ = enable_test_runtime(&mut page).await?;
     let default_context_id = page
         .default_execution_context_id_async()
         .await?
@@ -5135,7 +5406,7 @@ async fn renderer_owner_created_page_resolves_backend_node_runtime_object() -> R
         .await?
         .context("target div should exist")?
         .backend_node_id;
-    let _ = page.runtime_enable_events_async().await?;
+    let _ = enable_test_runtime(&mut page).await?;
     let execution_context_id = page
         .default_execution_context_id_async()
         .await?
@@ -5220,7 +5491,7 @@ async fn runtime_object_resolve_uses_live_backend_node_for_stale_snapshot_path()
         .await?
         .context("target div should exist")?
         .backend_node_id;
-    let _ = page.runtime_enable_events_async().await?;
+    let _ = enable_test_runtime(&mut page).await?;
     let execution_context_id = page
         .default_execution_context_id_async()
         .await?
@@ -5234,9 +5505,7 @@ async fn runtime_object_resolve_uses_live_backend_node_for_stale_snapshot_path()
             "returnByValue": true
         }
     });
-    let mutation_pending =
-        page.start_runtime_protocol_message(serde_json::to_string(&mutation)?)?;
-    let mutation_completion = mutation_pending.wait().await?;
+    let mutation_completion = dispatch_test_inspection(&page, mutation).await?;
 
     let resolved_object = resolve_runtime_object_for_backend_node_id(
         &mut page,
@@ -5264,7 +5533,7 @@ async fn runtime_object_resolve_uses_live_backend_node_for_stale_snapshot_path()
         .as_str()
         .context("resolved runtime object should carry an objectId")?;
 
-    let _mutation_messages = page.finish_runtime_protocol_message(mutation_completion)?;
+    let _mutation_messages = finish_test_inspection(&mut page, mutation_completion)?;
     let call = serde_json::json!({
         "id": 92,
         "method": "Runtime.callFunctionOn",
@@ -5274,9 +5543,8 @@ async fn runtime_object_resolve_uses_live_backend_node_for_stale_snapshot_path()
             "returnByValue": true
         }
     });
-    let messages = page
-        .dispatch_runtime_protocol_message_async(&serde_json::to_string(&call)?)
-        .await?;
+    let completion = dispatch_test_inspection(&page, call).await?;
+    let messages = finish_test_inspection(&mut page, completion)?;
     let response =
         runtime_protocol_response_by_id(&messages, 92).context("callFunctionOn should respond")?;
     assert_eq!(
@@ -5351,10 +5619,18 @@ async fn renderer_owner_created_page_runs_inline_stylesheet_commands() -> Result
         .await?;
     let mut page = materialize_page_created_reply(&renderer_owner, reply)?;
 
-    let style_sheet_inventory_pending = page.start_style_sheet_inventory_for_document()?;
+    let endpoint = page.renderer_inspection_endpoint();
+    let inspection = endpoint.css_inspection(
+        moli_renderer_v8::RendererAgentAttachmentId::allocate(),
+        None,
+    );
+    let style_sheet_inventory_pending = crate::page::PendingPageCommand::from_inspector_main_route(
+        inspection.start_style_sheet_inventory()?,
+    );
     let style_sheet_inventory_completion = style_sheet_inventory_pending.wait().await?;
-    let style_sheet_id = page
-        .finish_style_sheet_inventory_for_document(style_sheet_inventory_completion)?
+    page.observe_renderer_page_state(style_sheet_inventory_completion.page_state());
+    let style_sheet_id = style_sheet_inventory_completion
+        .finish_style_sheet_inventory_for_document()?
         .added
         .into_iter()
         .find(|header| header.is_inline)
@@ -5365,11 +5641,13 @@ async fn renderer_owner_created_page_runs_inline_stylesheet_commands() -> Result
         .expect("target div should exist")
         .backend_node_id;
 
-    let computed_before_pending =
-        page.start_computed_style_properties_for_backend_node_id(target_backend_node_id)?;
+    let computed_before_pending = crate::page::PendingPageCommand::from_inspector_main_route(
+        inspection.start_computed_style_for_backend_node(target_backend_node_id)?,
+    );
     let computed_before_completion = computed_before_pending.wait().await?;
-    let computed_before = page
-        .finish_computed_style_properties(computed_before_completion)?
+    page.observe_renderer_page_state(computed_before_completion.page_state());
+    let computed_before = computed_before_completion
+        .finish_computed_style_properties()?
         .unwrap_or_default();
     let display_before = computed_before
         .iter()
@@ -5390,28 +5668,34 @@ async fn renderer_owner_created_page_runs_inline_stylesheet_commands() -> Result
     assert_eq!(width_before, "120px");
     assert_eq!(height_before, "24px");
 
-    let payload_before_pending =
-        page.start_style_sheet_payload_for_style_sheet_id(&style_sheet_id)?;
+    let payload_before_pending = crate::page::PendingPageCommand::from_inspector_main_route(
+        inspection.start_style_sheet_payload(&style_sheet_id)?,
+    );
     let payload_before_completion = payload_before_pending.wait().await?;
+    page.observe_renderer_page_state(payload_before_completion.page_state());
     assert_eq!(
-        page.finish_style_sheet_payload(payload_before_completion)?
+        payload_before_completion
+            .finish_style_sheet_payload()?
             .expect("inline stylesheet payload should be available")
             .text,
         "#target { display: block; }"
     );
 
-    let edit_pending = page.start_set_inline_style_sheet_text_for_style_sheet_id(
-        &style_sheet_id,
-        "#target { display: none; }",
-    )?;
+    let edit_pending = crate::page::PendingPageCommand::from_inspector_main_route(
+        inspection.start_set_style_sheet_text(&style_sheet_id, "#target { display: none; }")?,
+    );
     let edit_completion = edit_pending.wait().await?;
-    assert!(page.finish_set_inline_style_sheet_text(edit_completion)?);
+    page.observe_renderer_page_state(edit_completion.page_state());
+    assert!(edit_completion.finish_set_inline_style_sheet_text()?);
 
-    let payload_after_pending =
-        page.start_style_sheet_payload_for_style_sheet_id(&style_sheet_id)?;
+    let payload_after_pending = crate::page::PendingPageCommand::from_inspector_main_route(
+        inspection.start_style_sheet_payload(&style_sheet_id)?,
+    );
     let payload_after_completion = payload_after_pending.wait().await?;
+    page.observe_renderer_page_state(payload_after_completion.page_state());
     assert_eq!(
-        page.finish_style_sheet_payload(payload_after_completion)?
+        payload_after_completion
+            .finish_style_sheet_payload()?
             .expect("inline stylesheet payload should still be available")
             .text,
         "#target { display: none; }"

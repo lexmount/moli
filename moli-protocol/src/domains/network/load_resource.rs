@@ -52,8 +52,9 @@ pub(super) fn start_load_network_resource_command(
         ));
     };
     let owner_scope = CommandOwnerScope::capture(conn, cmd.session_id);
-    let pending = match conn.loaded_page_mut_for_protocol_access(cmd.session_id) {
-        Ok(page) => page.start_prepare_network_resource_load(
+    let pending = match conn.resolve_browser_document_for_owner(&owner_scope) {
+        Ok(document) => conn.start_network_resource_load_preparation(
+            document,
             frame_id,
             url,
             params.options.disable_cache,
@@ -72,9 +73,9 @@ pub(super) fn start_load_network_resource_command(
     match pending {
         Ok(pending) => NetworkCommandTaskStep::Pending(PendingNetworkCommandDispatch {
             command_id: cmd.id,
-            owner_scope,
             kind: PendingNetworkCommandKind::PrepareNetworkResourceLoad,
-            pending: PendingNetworkCommandWork::page(pending),
+            pending: PendingNetworkCommandWork::NetworkResourcePreparation(pending),
+            owner_scope,
         }),
         Err(error) => {
             NetworkCommandTaskStep::Complete(CommandOutputPlan::error(-32000, error.to_string()))
@@ -88,29 +89,14 @@ pub(super) fn complete_network_resource_preparation(
 ) -> NetworkCommandTaskStep {
     let owner_scope = completed.owner_scope.clone();
     let completion = match completed.completed {
-        CompletedNetworkCommandWork::Page {
-            completed: Ok(completion),
-            ..
-        } => *completion,
-        CompletedNetworkCommandWork::Page {
-            completed: Err(error),
-            ..
-        } => {
-            return NetworkCommandTaskStep::Complete(CommandOutputPlan::error(-32000, error));
-        }
-        CompletedNetworkCommandWork::Resource(_) => {
+        CompletedNetworkCommandWork::NetworkResourcePreparation(completion) => *completion,
+        CompletedNetworkCommandWork::DocumentPolicy(_)
+        | CompletedNetworkCommandWork::ResourceRuntime(_)
+        | CompletedNetworkCommandWork::Resource(_) => {
             return invalid_completion_step();
         }
     };
-    let preparation = match conn
-        .loaded_page_mut_for_protocol_access_for_owner(&owner_scope)
-        .and_then(|page| {
-            if page.renderer_agent_attachment_id() != completion.renderer_agent_attachment_id() {
-                return Err("Document changed while preparing the network resource load".to_owned());
-            }
-            page.finish_prepare_network_resource_load(completion)
-                .map_err(|error| error.to_string())
-        }) {
+    let preparation = match conn.finish_network_resource_load_preparation(completion) {
         Ok(preparation) => preparation,
         Err(message) => {
             return NetworkCommandTaskStep::Complete(CommandOutputPlan::error(-32000, message));
@@ -147,7 +133,9 @@ pub(super) fn complete_network_resource_fetch(
     let owner_scope = completed.owner_scope.clone();
     let outcome = match completed.completed {
         CompletedNetworkCommandWork::Resource(outcome) => outcome,
-        CompletedNetworkCommandWork::Page { .. } => {
+        CompletedNetworkCommandWork::DocumentPolicy(_)
+        | CompletedNetworkCommandWork::ResourceRuntime(_)
+        | CompletedNetworkCommandWork::NetworkResourcePreparation(_) => {
             return invalid_completion_plan();
         }
     };

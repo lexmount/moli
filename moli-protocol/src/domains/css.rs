@@ -1,11 +1,11 @@
-use crate::conn::{CdpConnection, Cmd, CommandOwnerScope};
+use crate::conn::{CdpConnection, Cmd, CommandOwnerScope, RendererDispatchLane};
 use crate::domains::actions::CssAction;
 use crate::domains::command_output::CommandOutputPlan;
 use chromiumoxide_cdp::cdp::browser_protocol::css::{
     GetStyleSheetTextParams as StyleSheetIdParams, SetStyleSheetTextParams,
 };
 use moli_core::page::{
-    CompletedPageCommand, Page, PendingPageCommand, RendererDocumentNodeAttributesResolution,
+    CompletedPageCommand, PendingPageCommand, RendererDocumentNodeAttributesResolution,
 };
 use moli_css_parse::{DeclarationParseOptions, parse_declaration_list};
 use serde::Deserialize;
@@ -44,6 +44,10 @@ pub(crate) enum CssCommandDispatchStep {
     Complete(CommandOutputPlan),
 }
 
+pub(crate) fn command_waits_for_document_projection(cmd: &Cmd<'_>) -> bool {
+    cmd.parse_action::<CssAction>().is_some()
+}
+
 enum PendingCssCommandKind {
     Enable {
         frame_id: String,
@@ -78,6 +82,12 @@ struct PendingCssCommandStartError {
 }
 
 impl PendingCssCommandDispatch {
+    pub(crate) fn renderer_dispatch_lane(&self) -> Option<RendererDispatchLane> {
+        self.pending
+            .renderer_agent_attachment_id()
+            .map(|_| RendererDispatchLane::Main)
+    }
+
     fn from_command(
         conn: &CdpConnection,
         cmd: &Cmd<'_>,
@@ -249,17 +259,15 @@ fn start_pending_get_style_sheet_command(
         _ => return Err(PendingCssCommandStartError::invalid_params()),
     };
     let frame_id = top_frame_id_for_session(conn, cmd.session_id).unwrap_or_default();
-    let renderer_inspector_session_id =
-        conn.target_renderer_runtime_inspector_session_id_for_session(cmd.session_id);
-    let Some(page) = loaded_page_mut_for_session(conn, cmd.session_id) else {
+    let Some(inspection) =
+        css_inspection_for_owner(conn, &CommandOwnerScope::capture(conn, cmd.session_id))
+    else {
         return Err(PendingCssCommandStartError::no_document_loaded());
     };
     let style_sheet_id = params.style_sheet_id.as_ref().to_owned();
-    let pending = page
-        .start_style_sheet_payload_for_style_sheet_id_and_inspector_session(
-            renderer_inspector_session_id,
-            &style_sheet_id,
-        )
+    let pending = inspection
+        .start_style_sheet_payload(&style_sheet_id)
+        .map(PendingPageCommand::from_inspector_main_route)
         .map_err(PendingCssCommandStartError::renderer_error)?;
     Ok(PendingCssCommandDispatch::from_command(
         conn,
@@ -280,18 +288,15 @@ fn start_pending_set_style_sheet_text_command(
         Ok(Some(params)) => params,
         _ => return Err(PendingCssCommandStartError::invalid_params()),
     };
-    let renderer_inspector_session_id =
-        conn.target_renderer_runtime_inspector_session_id_for_session(cmd.session_id);
-    let Some(page) = loaded_page_mut_for_session(conn, cmd.session_id) else {
+    let Some(inspection) =
+        css_inspection_for_owner(conn, &CommandOwnerScope::capture(conn, cmd.session_id))
+    else {
         return Err(PendingCssCommandStartError::no_document_loaded());
     };
     let style_sheet_id = params.style_sheet_id.as_ref().to_owned();
-    let pending = page
-        .start_set_inline_style_sheet_text_for_style_sheet_id_and_inspector_session(
-            renderer_inspector_session_id,
-            &style_sheet_id,
-            &params.text,
-        )
+    let pending = inspection
+        .start_set_style_sheet_text(&style_sheet_id, &params.text)
+        .map(PendingPageCommand::from_inspector_main_route)
         .map_err(PendingCssCommandStartError::renderer_error)?;
     Ok(PendingCssCommandDispatch::from_command(
         conn,
@@ -310,14 +315,14 @@ fn start_pending_get_computed_style_for_node_command(
         _ => return Err(PendingCssCommandStartError::invalid_params()),
     };
     if let Some(object_id) = params.object_id.as_deref() {
-        let Some(page) = loaded_page_mut_for_session(conn, cmd.session_id) else {
+        let Some(inspection) =
+            css_inspection_for_owner(conn, &CommandOwnerScope::capture(conn, cmd.session_id))
+        else {
             return Err(PendingCssCommandStartError::no_document_loaded());
         };
-        let pending = page
-            .start_computed_style_properties_for_object_id_in_inspector_session(
-                cmd.session_id.map(str::to_owned),
-                object_id,
-            )
+        let pending = inspection
+            .start_computed_style_for_object(object_id)
+            .map(PendingPageCommand::from_inspector_main_route)
             .map_err(PendingCssCommandStartError::renderer_error)?;
         return Ok(PendingCssCommandDispatch::from_command(
             conn,
@@ -333,11 +338,15 @@ fn start_pending_get_computed_style_for_node_command(
             cdp_node_id,
         );
     }
-    let Some(page) = loaded_page_mut_for_session(conn, cmd.session_id) else {
+    let Some(inspection) =
+        css_inspection_for_owner(conn, &CommandOwnerScope::capture(conn, cmd.session_id))
+    else {
         return Err(PendingCssCommandStartError::no_document_loaded());
     };
     let pending = if let Some(backend_node_id) = params.backend_node_id {
-        page.start_computed_style_properties_for_backend_node_id(backend_node_id)
+        inspection
+            .start_computed_style_for_backend_node(backend_node_id)
+            .map(PendingPageCommand::from_inspector_main_route)
     } else {
         return Err(PendingCssCommandStartError::node_not_found());
     }
@@ -370,11 +379,14 @@ fn start_pending_inline_style_command(
             kind,
         );
     }
-    let Some(page) = loaded_page_mut_for_session(conn, cmd.session_id) else {
+    let owner = CommandOwnerScope::capture(conn, cmd.session_id);
+    let Some(inspection) = crate::domains::dom::dom_inspection_for_owner(conn, &owner) else {
         return Err(PendingCssCommandStartError::no_document_loaded());
     };
     let pending = if let Some(backend_node_id) = params.backend_node_id {
-        page.start_document_node_attributes_for_backend_node_id(backend_node_id)
+        inspection
+            .start_document_node_attributes_for_backend_node_id(backend_node_id)
+            .map(PendingPageCommand::from_inspector_main_route)
     } else {
         return Err(PendingCssCommandStartError::node_not_found());
     }
@@ -398,60 +410,34 @@ pub(crate) fn complete_pending_css_command(
         completed,
     } = completed;
     let session_id = owner_scope.session_id();
-    let Some(page) = conn
-        .loaded_page_mut_for_protocol_access_for_owner(&owner_scope)
-        .ok()
-    else {
-        return CssCommandDispatchStep::Complete(CommandOutputPlan::error(
-            -32000,
-            "NoDocumentLoaded",
-        ));
+    if let Ok(completion) = &completed
+        && let Err(error) = conn.observe_renderer_inspection_completion(&owner_scope, completion)
+    {
+        return CssCommandDispatchStep::Complete(CommandOutputPlan::error(-32000, error));
+    }
+    let completion = match completed {
+        Ok(completion) => completion,
+        Err(error) => {
+            return CssCommandDispatchStep::Complete(CommandOutputPlan::error(-32000, error));
+        }
     };
     match kind {
-        PendingCssCommandKind::Enable { frame_id } => {
-            let completion = match completed {
-                Ok(completion) => completion,
-                Err(error) => {
-                    return CssCommandDispatchStep::Complete(CommandOutputPlan::error(
-                        -32000, error,
-                    ));
+        PendingCssCommandKind::Enable { frame_id } => CssCommandDispatchStep::Complete(
+            match completion.finish_style_sheet_inventory_for_document() {
+                Ok(update) => {
+                    style_sheets::complete_enable_command_output_plan(&frame_id, session_id, update)
                 }
-            };
-            CssCommandDispatchStep::Complete(
-                match page.finish_style_sheet_inventory_for_document(completion) {
-                    Ok(update) => style_sheets::complete_enable_command_output_plan(
-                        &frame_id, session_id, update,
-                    ),
-                    Err(error) => CommandOutputPlan::error(-32000, error.to_string()),
-                },
-            )
-        }
+                Err(error) => CommandOutputPlan::error(-32000, error.to_string()),
+            },
+        ),
         PendingCssCommandKind::Disable => {
-            let completion = match completed {
-                Ok(completion) => completion,
-                Err(error) => {
-                    return CssCommandDispatchStep::Complete(CommandOutputPlan::error(
-                        -32000, error,
-                    ));
-                }
-            };
-            CssCommandDispatchStep::Complete(
-                match page.finish_reset_css_agent_session(completion) {
-                    Ok(()) => CommandOutputPlan::success(),
-                    Err(error) => CommandOutputPlan::error(-32000, error.to_string()),
-                },
-            )
+            CssCommandDispatchStep::Complete(match completion.finish_reset_css_agent_session() {
+                Ok(()) => CommandOutputPlan::success(),
+                Err(error) => CommandOutputPlan::error(-32000, error.to_string()),
+            })
         }
         PendingCssCommandKind::ResolveFrontendNodeForComputedStyle => {
-            let completion = match completed {
-                Ok(completion) => completion,
-                Err(error) => {
-                    return CssCommandDispatchStep::Complete(CommandOutputPlan::error(
-                        -32000, error,
-                    ));
-                }
-            };
-            let backend_node_id = match page.finish_document_frontend_node_binding(completion) {
+            let backend_node_id = match completion.finish_document_frontend_node_binding() {
                 Ok(resolution) => {
                     match node_references::backend_node_id_from_frontend_resolution(resolution) {
                         Some(backend_node_id) => backend_node_id,
@@ -470,16 +456,24 @@ pub(crate) fn complete_pending_css_command(
                     ));
                 }
             };
-            let pending =
-                match page.start_computed_style_properties_for_backend_node_id(backend_node_id) {
-                    Ok(pending) => pending,
-                    Err(error) => {
-                        return CssCommandDispatchStep::Complete(CommandOutputPlan::error(
-                            -32000,
-                            error.to_string(),
-                        ));
-                    }
-                };
+            let Some(inspection) = css_inspection_for_owner(conn, &owner_scope) else {
+                return CssCommandDispatchStep::Complete(CommandOutputPlan::error(
+                    -32000,
+                    "NoDocumentLoaded",
+                ));
+            };
+            let pending = match inspection
+                .start_computed_style_for_backend_node(backend_node_id)
+                .map(PendingPageCommand::from_inspector_main_route)
+            {
+                Ok(pending) => pending,
+                Err(error) => {
+                    return CssCommandDispatchStep::Complete(CommandOutputPlan::error(
+                        -32000,
+                        error.to_string(),
+                    ));
+                }
+            };
             CssCommandDispatchStep::Pending(PendingCssCommandDispatch {
                 command_id,
                 owner_scope,
@@ -488,15 +482,7 @@ pub(crate) fn complete_pending_css_command(
             })
         }
         PendingCssCommandKind::ResolveFrontendNodeForInlineStyle { kind } => {
-            let completion = match completed {
-                Ok(completion) => completion,
-                Err(error) => {
-                    return CssCommandDispatchStep::Complete(CommandOutputPlan::error(
-                        -32000, error,
-                    ));
-                }
-            };
-            let backend_node_id = match page.finish_document_frontend_node_binding(completion) {
+            let backend_node_id = match completion.finish_document_frontend_node_binding() {
                 Ok(resolution) => {
                     match node_references::backend_node_id_from_frontend_resolution(resolution) {
                         Some(backend_node_id) => backend_node_id,
@@ -515,16 +501,26 @@ pub(crate) fn complete_pending_css_command(
                     ));
                 }
             };
-            let pending =
-                match page.start_document_node_attributes_for_backend_node_id(backend_node_id) {
-                    Ok(pending) => pending,
-                    Err(error) => {
-                        return CssCommandDispatchStep::Complete(CommandOutputPlan::error(
-                            -32000,
-                            error.to_string(),
-                        ));
-                    }
-                };
+            let Some(inspection) =
+                crate::domains::dom::dom_inspection_for_owner(conn, &owner_scope)
+            else {
+                return CssCommandDispatchStep::Complete(CommandOutputPlan::error(
+                    -32000,
+                    "NoDocumentLoaded",
+                ));
+            };
+            let pending = match inspection
+                .start_document_node_attributes_for_backend_node_id(backend_node_id)
+                .map(PendingPageCommand::from_inspector_main_route)
+            {
+                Ok(pending) => pending,
+                Err(error) => {
+                    return CssCommandDispatchStep::Complete(CommandOutputPlan::error(
+                        -32000,
+                        error.to_string(),
+                    ));
+                }
+            };
             CssCommandDispatchStep::Pending(PendingCssCommandDispatch {
                 command_id,
                 owner_scope,
@@ -535,38 +531,18 @@ pub(crate) fn complete_pending_css_command(
         PendingCssCommandKind::GetStyleSheet {
             style_sheet_id,
             frame_id,
-        } => {
-            let completion = match completed {
-                Ok(completion) => completion,
-                Err(error) => {
-                    return CssCommandDispatchStep::Complete(CommandOutputPlan::error(
-                        -32000, error,
-                    ));
-                }
-            };
-            CssCommandDispatchStep::Complete(match page.finish_style_sheet_payload(completion) {
-                Ok(Some(payload)) => style_sheets::get_style_sheet_command_output_plan(
-                    &style_sheet_id,
-                    &frame_id,
-                    payload,
-                ),
-                Ok(None) => {
-                    CommandOutputPlan::error(-32000, "Could not find stylesheet with given id")
-                }
-                Err(error) => CommandOutputPlan::error(-32000, error.to_string()),
-            })
-        }
+        } => CssCommandDispatchStep::Complete(match completion.finish_style_sheet_payload() {
+            Ok(Some(payload)) => style_sheets::get_style_sheet_command_output_plan(
+                &style_sheet_id,
+                &frame_id,
+                payload,
+            ),
+            Ok(None) => CommandOutputPlan::error(-32000, "Could not find stylesheet with given id"),
+            Err(error) => CommandOutputPlan::error(-32000, error.to_string()),
+        }),
         PendingCssCommandKind::SetStyleSheetText { style_sheet_id } => {
-            let completion = match completed {
-                Ok(completion) => completion,
-                Err(error) => {
-                    return CssCommandDispatchStep::Complete(CommandOutputPlan::error(
-                        -32000, error,
-                    ));
-                }
-            };
             CssCommandDispatchStep::Complete(
-                match page.finish_set_inline_style_sheet_text(completion) {
+                match completion.finish_set_inline_style_sheet_text() {
                     Ok(true) => CommandOutputPlan::result(json!({
                         "sourceMapURL": "",
                         "styleSheetId": style_sheet_id,
@@ -579,48 +555,21 @@ pub(crate) fn complete_pending_css_command(
             )
         }
         PendingCssCommandKind::GetComputedStyleForNode => {
-            let completion = match completed {
-                Ok(completion) => completion,
+            CssCommandDispatchStep::Complete(match completion.finish_computed_style_properties() {
+                Ok(Some(properties)) => computed_style_command_output_plan(properties),
+                Ok(None) => CommandOutputPlan::error(-32000, "Could not find node with given id"),
                 Err(error) => {
-                    return CssCommandDispatchStep::Complete(CommandOutputPlan::error(
-                        -32000, error,
-                    ));
+                    CommandOutputPlan::error(-32000, format!("failed to compute style: {error}"))
                 }
-            };
-            CssCommandDispatchStep::Complete(
-                match page.finish_computed_style_properties(completion) {
-                    Ok(Some(properties)) => computed_style_command_output_plan(properties),
-                    Ok(None) => {
-                        CommandOutputPlan::error(-32000, "Could not find node with given id")
-                    }
-                    Err(error) => CommandOutputPlan::error(
-                        -32000,
-                        format!("failed to compute style: {error}"),
-                    ),
-                },
-            )
+            })
         }
         PendingCssCommandKind::GetInlineStyleForNode { kind } => {
-            let completion = match completed {
-                Ok(completion) => completion,
-                Err(error) => {
-                    return CssCommandDispatchStep::Complete(CommandOutputPlan::error(
-                        -32000, error,
-                    ));
-                }
-            };
-            CssCommandDispatchStep::Complete(
-                match page.finish_document_node_attributes(completion) {
-                    Ok(resolution) => {
-                        inline_style_result_from_attributes_resolution(resolution, kind)
-                            .map(CommandOutputPlan::result)
-                            .unwrap_or_else(|error| {
-                                CommandOutputPlan::error(error.code, error.message)
-                            })
-                    }
-                    Err(error) => CommandOutputPlan::error(-32000, error.to_string()),
-                },
-            )
+            CssCommandDispatchStep::Complete(match completion.finish_document_node_attributes() {
+                Ok(resolution) => inline_style_result_from_attributes_resolution(resolution, kind)
+                    .map(CommandOutputPlan::result)
+                    .unwrap_or_else(|error| CommandOutputPlan::error(error.code, error.message)),
+                Err(error) => CommandOutputPlan::error(-32000, error.to_string()),
+            })
         }
     }
 }
@@ -679,11 +628,17 @@ fn add_empty_matched_style_scaffolding(result: &mut Value) {
     result_object.insert("cssKeyframesRules".to_owned(), json!([]));
 }
 
-fn loaded_page_mut_for_session<'a>(
-    conn: &'a mut CdpConnection,
-    session_id: Option<&str>,
-) -> Option<&'a mut Page> {
-    conn.loaded_page_mut_for_protocol_access(session_id).ok()
+fn css_inspection_for_owner<'a>(
+    conn: &'a CdpConnection,
+    owner: &CommandOwnerScope,
+) -> Option<moli_renderer_v8::RendererCssInspection<'a>> {
+    let session = conn.target_renderer_runtime_inspector_session_id_for_owner(owner);
+    conn.renderer_inspection_binding_for_owner(
+        owner,
+        moli_core::page::RendererInspectorCommandRoute::MainThread,
+    )
+    .ok()
+    .map(|binding| binding.css_inspection(session))
 }
 
 fn top_frame_id_for_session(conn: &CdpConnection, session_id: Option<&str>) -> Option<String> {
@@ -751,12 +706,10 @@ fn parse_inline_style_declarations(style_text: &str) -> Vec<CssDeclaration> {
 #[cfg(test)]
 mod tests {
     use super::parse_inline_style_declarations;
-    use crate::conn::{BrowserContext, CdpCommandTaskStep, CdpSchedulerEvent, PageTargetHost};
+    use crate::conn::{BrowserContext, CdpCommandTaskStep, CdpSchedulerEvent};
     use crate::domains::page::LOADER_ID;
     use crate::testing::{TestContext, wait_until_renderer_document_load};
-    use moli_core::page::{
-        CompletedPageCommand, Page, RENDERER_BACKEND_NODE_ID_START, is_renderer_backend_node_id,
-    };
+    use moli_core::page::{RENDERER_BACKEND_NODE_ID_START, is_renderer_backend_node_id};
     use serde_json::Value;
     use serde_json::json;
 
@@ -783,7 +736,7 @@ mod tests {
     }
 
     async fn with_loaded_document_async(ctx: &mut TestContext, html: &str) {
-        let mut bc = crate::conn::BrowserContext::new("BID-1".into());
+        let mut bc = ctx.conn.new_browser_context_fixture_for_test("BID-1");
         bc.set_active_target_id("TID-1");
         ctx.conn.install_browser_context_fixture_for_test(bc);
         ctx.install_navigation_fixture_for_session_owner(&format!("data:text/html,{html}"), None)
@@ -791,21 +744,10 @@ mod tests {
         wait_until_renderer_document_load(ctx, None, "TID-1", LOADER_ID).await;
     }
 
-    fn loaded_page_mut_for_test(ctx: &mut TestContext) -> &mut Page {
-        ctx.conn
-            .browser_context
-            .as_mut()
-            .expect("browser context")
-            .active_page_target_mut()
-            .runtime_slot
-            .loaded_page_mut()
-            .expect("loaded page")
-    }
-
     async fn append_live_css_target_without_refreshing_page_snapshot(
         ctx: &mut TestContext,
         style: &str,
-    ) -> (u32, CompletedPageCommand) {
+    ) -> (u32, crate::conn::CompletedRuntimeProtocolMessageDispatch) {
         with_loaded_document_async(ctx, "<html><body></body></html>").await;
         let cdp_node_id = RENDERER_BACKEND_NODE_ID_START - 1;
         let style_json = serde_json::to_string(style).expect("style should encode as JSON");
@@ -819,7 +761,7 @@ mod tests {
             }})()"#
         );
         let completion = {
-            let page = loaded_page_mut_for_test(ctx);
+            let owner = crate::conn::CommandOwnerScope::capture(&ctx.conn, None);
             let mutation = json!({
                 "id": 910,
                 "method": "Runtime.evaluate",
@@ -828,8 +770,9 @@ mod tests {
                     "returnByValue": true
                 }
             });
-            let pending = page
-                .start_runtime_protocol_message(mutation.to_string())
+            let pending = ctx
+                .conn
+                .start_runtime_protocol_message_for_owner(&owner, mutation.to_string())
                 .expect("runtime mutation should start");
             pending
                 .wait()
@@ -1010,16 +953,17 @@ mod tests {
     #[tokio::test(flavor = "multi_thread")]
     async fn css_loaded_page_methods_target_background_owner_without_activation() {
         let mut ctx = TestContext::new();
-        let background = PageTargetHost::with_url(
+
+        let mut bc = ctx
+            .conn
+            .new_browser_context_fixture_for_test("BID-A".to_owned());
+        bc.set_active_target_id("TID-active".to_owned());
+        bc.attach_active_session("SID-active".to_owned());
+        bc.register_page_target_url_fixture(
             "TID-background".to_owned(),
             Some("SID-background".to_owned()),
             "about:blank".to_owned(),
         );
-
-        let mut bc = BrowserContext::new("BID-A".to_owned());
-        bc.set_active_target_id("TID-active".to_owned());
-        bc.attach_active_session("SID-active".to_owned());
-        bc.insert_page_target_host(background);
         ctx.conn.install_browser_context_fixture_for_test(bc);
         ctx.install_navigation_fixture_for_session_owner(
             "data:text/html,<html><head><style title='owner'>body { color: red; }</style></head><body><div id='target' style='display:flex;width:123px;color:blue'></div></body></html>",
@@ -1141,12 +1085,16 @@ mod tests {
     #[tokio::test(flavor = "multi_thread")]
     async fn css_loaded_page_methods_target_inactive_owner_without_activation() {
         let mut ctx = TestContext::new();
-        let mut active = BrowserContext::new("BID-active".to_owned());
+        let mut active = ctx
+            .conn
+            .new_browser_context_fixture_for_test("BID-active".to_owned());
         active.set_active_target_id("TID-active".to_owned());
         active.attach_active_session("SID-active".to_owned());
         ctx.conn.install_browser_context_fixture_for_test(active);
 
-        let mut inactive = BrowserContext::new("BID-inactive".to_owned());
+        let mut inactive = ctx
+            .conn
+            .new_browser_context_fixture_for_test("BID-inactive".to_owned());
         inactive.set_active_target_id("TID-inactive".to_owned());
         inactive.set_target_url("about:blank".to_owned());
         inactive.attach_active_session("SID-inactive".to_owned());
@@ -1223,9 +1171,8 @@ mod tests {
     #[tokio::test]
     async fn css_enable_and_disable_toggle_browser_context_state() {
         let mut ctx = TestContext::new();
-        ctx.conn.browser_context = Some(crate::conn::BrowserContext::new_with_page_for_test(
-            "BID-1", "TID-1",
-        ));
+        ctx.conn.browser_context =
+            Some(ctx.conn.new_page_target_fixture_for_test("BID-1", "TID-1"));
 
         ctx.process_async(json!({"id": 101, "method": "CSS.enable"}))
             .await;
@@ -1668,27 +1615,11 @@ mod tests {
     #[tokio::test(flavor = "multi_thread")]
     async fn pending_css_command_keeps_background_owner_route_across_completion() {
         let mut ctx = TestContext::new();
-        let active_page = ctx
-            .conn
-            .load_page_via_runtime_async(
-                "data:text/html,<html><head><style>body { color: red; }</style></head><body></body></html>",
-            )
-            .await
-            .expect("active page should load");
-        let background_page = ctx
-            .conn
-            .load_page_via_runtime_async(
-                "data:text/html,<html><head><style>body { color: green; }</style></head><body></body></html>",
-            )
-            .await
-            .expect("background page should load");
 
-        let mut browser_context = BrowserContext::new("BID-css-owner-route".to_owned());
+        let mut browser_context = ctx
+            .conn
+            .new_browser_context_fixture_for_test("BID-css-owner-route".to_owned());
         browser_context.set_active_target_id("TID-css-active".to_owned());
-        browser_context
-            .active_page_target_mut()
-            .runtime_slot
-            .set_loaded_page_for_test(active_page);
         browser_context.stage_background_target(
             "TID-css-background".to_owned(),
             None,
@@ -1696,14 +1627,20 @@ mod tests {
             None,
             None,
         );
-        browser_context
-            .background_target_mut("TID-css-background")
-            .expect("background target")
-            .replace_loaded_page(Some(background_page));
         ctx.conn
             .install_browser_context_fixture_for_test(browser_context);
 
         let background_session = attach_page_session_async(&mut ctx, "TID-css-background").await;
+        ctx.install_quiet_navigation_fixture_for_session_owner(
+            "data:text/html,<html><head><style>body { color: red; }</style></head><body></body></html>",
+            None,
+        )
+        .await;
+        ctx.install_quiet_navigation_fixture_for_session_owner(
+            "data:text/html,<html><head><style>body { color: green; }</style></head><body></body></html>",
+            Some(&background_session),
+        )
+        .await;
         let active_style_sheet_id = inline_style_sheet_id_for_session_async(&mut ctx, None).await;
         let style_sheet_id =
             inline_style_sheet_id_for_session_async(&mut ctx, Some(&background_session)).await;
@@ -1897,10 +1834,12 @@ mod tests {
             })
         );
 
-        let page = loaded_page_mut_for_test(&mut ctx);
-        let _ = page
-            .finish_runtime_protocol_message(mutation_completion)
-            .expect("runtime mutation completion should finish");
+        let _ = ctx
+            .conn
+            .complete_runtime_protocol_message_async(mutation_completion)
+            .await
+            .expect("runtime mutation completion should finish")
+            .expect("Main inspection must retain its frozen command output");
     }
 
     #[tokio::test]
@@ -2017,10 +1956,12 @@ mod tests {
             })
         );
 
-        let page = loaded_page_mut_for_test(&mut ctx);
-        let _ = page
-            .finish_runtime_protocol_message(mutation_completion)
-            .expect("runtime mutation completion should finish");
+        let _ = ctx
+            .conn
+            .complete_runtime_protocol_message_async(mutation_completion)
+            .await
+            .expect("runtime mutation completion should finish")
+            .expect("Main inspection must retain its frozen command output");
     }
 
     #[tokio::test]

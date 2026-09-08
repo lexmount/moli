@@ -160,9 +160,6 @@ impl RenderRuntimeHandle {
             RendererOwnerCommand::RunAsyncPageCommand {
                 command: RendererPageCommand::Inspector(_),
                 ..
-            } | RendererOwnerCommand::RunProtocolPageCommand {
-                command: RendererPageCommand::Inspector(_),
-                ..
             }
         ) {
             return Err(RenderRuntimeEnqueueError {
@@ -174,8 +171,7 @@ impl RenderRuntimeHandle {
         }
         if moli_trace::cdp_nav_timing_enabled() {
             let page_command = match &command {
-                RendererOwnerCommand::RunAsyncPageCommand { command, .. }
-                | RendererOwnerCommand::RunProtocolPageCommand { command, .. } => Some(command),
+                RendererOwnerCommand::RunAsyncPageCommand { command, .. } => Some(command),
                 _ => None,
             };
             if let Some(command_label) =
@@ -305,7 +301,7 @@ mod tests {
     #[test]
     fn raw_owner_admission_rejects_inspector_page_commands() {
         let handle = RenderRuntimeHandle::disconnected();
-        let result = handle.enqueue(RendererOwnerCommand::RunProtocolPageCommand {
+        let result = handle.enqueue(RendererOwnerCommand::RunAsyncPageCommand {
             token: crate::runtime::RendererPageToken::new_for_testing(
                 crate::runtime::PageId::new_for_testing(1),
             ),

@@ -1,8 +1,8 @@
 use super::{LOADER_ID, build_mhtml_snapshot, child_frame_security_identity};
 use crate::conn::{
-    BrowserContext, CdpCommandTaskStep, CdpSchedulerEvent, EmulatedDeviceMetrics,
-    FetchInterceptionPattern, FetchRequestStage, NETWORK_ERROR_PAGE_URL, PageTargetHost,
-    PendingCdpCommandDispatch, ServiceWorkerTargetState, URL_BASE,
+    CdpCommandTaskStep, CdpSchedulerEvent, EmulatedDeviceMetrics, FetchInterceptionPattern,
+    FetchRequestStage, NETWORK_ERROR_PAGE_URL, PendingCdpCommandDispatch, ServiceWorkerTargetState,
+    URL_BASE,
 };
 use crate::devtools_runtime::{
     AutomationEvent, DevToolsCommand, DevToolsCommandContext, DevToolsCommandResult,
@@ -68,23 +68,25 @@ fn renderer_dialog_for_test(
     )
 }
 
-fn target_dialog_for_test(
+fn dialog_projection_for_test(
     page_owner: crate::conn::TargetPageResidenceIdentity,
     frame_id: &str,
-    dialog_type: &str,
-    message: &str,
-    default_prompt: &str,
-    completion: Option<RendererJavaScriptDialogCompletion>,
 ) -> crate::conn::TargetJavaScriptDialog {
+    // Subscription-only fixture. Actual modal work is installed through the
+    // Browser bridge in dialog tests, never stored in this session projection.
+    let document = moli_core::browser::DocumentHandle::new(
+        moli_core::browser::WebContentsHandle::new(
+            moli_core::browser::BrowserContextId::allocate(),
+            moli_core::browser::WebContentsId::allocate(),
+        ),
+        page_owner.document_id(),
+    );
     crate::conn::TargetJavaScriptDialog::new(
-        page_owner,
         frame_id.to_owned(),
-        renderer_dialog_for_test(
-            Some(frame_id),
-            dialog_type,
-            message,
-            default_prompt,
-            completion,
+        document,
+        crate::conn::JavaScriptDialogKey::new(
+            page_owner.document_id(),
+            &renderer_dialog_for_test(Some(frame_id), "alert", "pending", "", None),
         ),
     )
 }
@@ -104,13 +106,12 @@ async fn complete_pending_command_task_for_test(
 }
 
 async fn loaded_page_html_for_test(ctx: &mut TestContext) -> String {
-    let page = ctx
-        .conn
-        .browser_context
-        .as_mut()
-        .and_then(|bc| bc.active_page_target_mut().runtime_slot.loaded_page_mut())
-        .expect("loaded page");
-    page.serialize_html_async()
+    let context = ctx.conn.browser_context.as_mut().expect("browser context");
+    let target_id = context
+        .active_target_id_owned()
+        .expect("active document target");
+    context
+        .serialize_target_html_for_test(&target_id)
         .await
         .expect("loaded page should serialize HTML")
 }
@@ -159,7 +160,7 @@ fn take_main_document_response_pause_after_extra_info(
 }
 
 fn load_bc_with_target(ctx: &mut TestContext, bc_id: &str, target_id: &str, url: &str) {
-    let mut bc = BrowserContext::new(bc_id.into());
+    let mut bc = ctx.conn.new_browser_context_fixture_for_test(bc_id);
     bc.set_active_target_id(target_id);
     bc.set_target_url(url.into());
     ctx.conn.install_browser_context_fixture_for_test(bc);
@@ -171,7 +172,7 @@ fn load_bc_with_session(
     session_id: &str,
     url: &str,
 ) {
-    let mut bc = BrowserContext::new(bc_id.into());
+    let mut bc = ctx.conn.new_browser_context_fixture_for_test(bc_id);
     // Use the same target-staging boundary as production. In particular,
     // about:blank must own an initial-empty-document record before its Page is
     // materialized; setting only target/session/url metadata creates a Page
@@ -194,7 +195,9 @@ fn load_bc_with_session(
     );
 }
 fn load_bc_with_service_worker_target(ctx: &mut TestContext) {
-    let mut bc = BrowserContext::new("BID-service-worker-frame-tree".to_owned());
+    let mut bc = ctx
+        .conn
+        .new_browser_context_fixture_for_test("BID-service-worker-frame-tree".to_owned());
     let target = ServiceWorkerTargetState::new(
         3,
         7,

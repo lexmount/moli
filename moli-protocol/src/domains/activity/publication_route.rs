@@ -12,6 +12,9 @@ use crate::conn::{CdpConnection, CdpSessionRoute, RendererPageResidenceIdentity}
 /// attach or detach without restarting the renderer stream.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) enum RendererPublicationOwner {
+    /// No AgentHost observed this native reservation. Its ordered output is
+    /// consumed without inventing a Target or retaining an unbounded journal.
+    Unobserved,
     PageTarget {
         browser_context_id: String,
         target_id: Option<String>,
@@ -47,6 +50,10 @@ pub(crate) enum RendererPublicationRoute {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum RendererPublicationProjection {
     CurrentOwner,
+    // DOM-agent output, binding calls and terminal Inspector replies need the exact live
+    // binding, not a Protocol-owned Browser Document. This grants no Browser
+    // lifecycle/actions or new Runtime execution-context projection.
+    InspectionOnly,
     RetiringNetworkOnly,
 }
 
@@ -80,14 +87,12 @@ pub(crate) fn renderer_publication_owners(
     residence: RendererOutputResidenceIdentity,
 ) -> Vec<RendererPublicationOwner> {
     match residence {
-        // A Page stream is bound by the navigation/initial-document
-        // transaction that reserved that exact renderer Page. Inferring its
-        // target from the mutable inventory at `Opened` time is ambiguous:
-        // protocol can transiently retain two handles to the same Page while
-        // changing foreground selection. Leave Page
-        // discovery empty and let the explicit binding win in either
-        // open-before-bind or bind-before-open order.
-        RendererOutputResidenceIdentity::Page { .. } => Vec::new(),
+        RendererOutputResidenceIdentity::Page { .. } => vec![
+            conn.native_renderer_page_output_owner(
+                RendererPageResidenceIdentity::from_residence(residence).expect("Page residence"),
+            )
+            .unwrap_or(RendererPublicationOwner::Unobserved),
+        ],
         RendererOutputResidenceIdentity::SharedWorker {
             browser_context_runtime_id,
             ..
@@ -115,8 +120,13 @@ impl RendererPublicationOwner {
     /// Returning `None` means the target/browser context was retired after
     /// this stream opened. Its already-admitted cursor remains settled, but no
     /// historical output may be projected into a replacement owner.
-    pub(crate) fn resolve(&self, conn: &CdpConnection) -> Option<RendererPublicationRoute> {
+    pub(crate) fn resolve(
+        &self,
+        conn: &CdpConnection,
+        stream: moli_core::RendererOutputStreamIdentity,
+    ) -> Option<RendererPublicationRoute> {
         match self {
+            Self::Unobserved => None,
             Self::BrowserContext { browser_context_id } => {
                 if !conn
                     .browser_context
@@ -145,26 +155,33 @@ impl RendererPublicationOwner {
                 .chain(conn.inactive_browser_contexts.iter())
                 .filter(|browser_context| browser_context.id == *browser_context_id)
                 .find_map(|browser_context| {
-                    let projection_for = |runtime_slot: &crate::conn::TargetRuntimeSlot| {
-                        if runtime_slot.routes_current_renderer_page_owner(
-                            *renderer_page,
-                            page_owner.page_attachment_id(),
-                        ) {
-                            Some(RendererPublicationProjection::CurrentOwner)
-                        } else if runtime_slot.routes_retiring_renderer_page_owner(
-                            *renderer_page,
-                            page_owner.page_attachment_id(),
-                        ) {
-                            Some(RendererPublicationProjection::RetiringNetworkOnly)
-                        } else {
-                            None
-                        }
-                    };
+                    let projection_for =
+                        |route_target_id: &str, runtime_slot: &crate::conn::TargetRuntimeSlot| {
+                            if browser_context.routes_current_renderer_page_owner_for_target(
+                                route_target_id,
+                                *renderer_page,
+                                page_owner.document_id(),
+                            ) {
+                                Some(RendererPublicationProjection::CurrentOwner)
+                            } else if runtime_slot
+                                .current_renderer_inspection_binding()
+                                .is_some_and(|binding| binding.routes_output_stream(stream))
+                            {
+                                Some(RendererPublicationProjection::InspectionOnly)
+                            } else if runtime_slot.routes_retiring_renderer_page_owner(
+                                *renderer_page,
+                                page_owner.document_id(),
+                            ) {
+                                Some(RendererPublicationProjection::RetiringNetworkOnly)
+                            } else {
+                                None
+                            }
+                        };
                     let route_for =
                         |runtime_slot: &crate::conn::TargetRuntimeSlot,
                          route_target_id: String,
                          session_id: Option<String>| {
-                            projection_for(runtime_slot).map(|projection| {
+                            projection_for(&route_target_id, runtime_slot).map(|projection| {
                                 RendererPublicationRoute::for_target(
                                     browser_context.id.clone(),
                                     route_target_id,
@@ -184,7 +201,11 @@ impl RendererPublicationOwner {
                         .or_else(|| {
                             target_id
                                 .is_none()
-                                .then(|| browser_context.page_targets.active())
+                                .then(|| {
+                                    browser_context
+                                        .page_targets
+                                        .active(browser_context.selected_web_contents_id())
+                                })
                                 .flatten()
                         });
                     let frozen_route = frozen_target.and_then(|target| {

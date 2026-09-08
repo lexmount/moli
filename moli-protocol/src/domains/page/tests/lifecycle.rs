@@ -52,10 +52,10 @@ fn child_frame_security_identity_matches_chromium_cdp_url_projection() {
 #[test]
 fn page_owner_state_commands_complete_through_command_dispatch() {
     let mut ctx = TestContext::new();
-    ctx.conn.browser_context = Some(BrowserContext::new_with_page_for_test(
-        "BID-PAGE-COMPLETE",
-        "TID-PAGE-COMPLETE",
-    ));
+    ctx.conn.browser_context = Some(
+        ctx.conn
+            .new_page_target_fixture_for_test("BID-PAGE-COMPLETE", "TID-PAGE-COMPLETE"),
+    );
 
     for (id, method, params) in [
         (
@@ -105,7 +105,7 @@ fn page_owner_state_commands_complete_through_command_dispatch() {
         browser_context.active_page_target().devtools_sessions
             [moli_page_types::DevToolsSessionKey::Primary]
             .page_session_state
-            .page_bypass_csp_enabled
+            .page_bypass_csp_enabled()
     );
     assert_eq!(
         browser_context.active_page_target().devtools_sessions
@@ -124,9 +124,7 @@ fn page_owner_state_commands_complete_through_command_dispatch() {
 
     {
         let browser_context = ctx.conn.browser_context.as_mut().expect("browser context");
-        browser_context
-            .renderer_runtime()
-            .set_javascript_dialog_handler_enabled(true);
+        browser_context.set_javascript_dialog_handler_enabled(true);
         let page_session_state = &mut browser_context.active_page_target_mut().devtools_sessions
             [moli_page_types::DevToolsSessionKey::Primary]
             .page_session_state;
@@ -159,9 +157,7 @@ fn page_owner_state_commands_complete_through_command_dispatch() {
             .page_session_state,
     );
     assert!(
-        !browser_context
-            .renderer_runtime()
-            .javascript_dialog_handler_enabled(),
+        !browser_context.javascript_dialog_handler_enabled(),
         "Page.disable should disengage renderer JavaScript dialog handling"
     );
 }
@@ -169,7 +165,6 @@ fn page_owner_state_commands_complete_through_command_dispatch() {
 fn mark_page_domain_enabled(state: &mut crate::conn::TargetPageSessionState) {
     state.page_domain_enabled = true;
     state.page_lifecycle_events = true;
-    state.page_bypass_csp_enabled = true;
     state
         .page_font_families
         .insert("standard".to_owned(), json!("Inter"));
@@ -178,24 +173,22 @@ fn mark_page_domain_enabled(state: &mut crate::conn::TargetPageSessionState) {
     state
         .page_screencast
         .start(crate::conn::PageScreencastConfig::default());
-    state.javascript_dialog_state.push(target_dialog_for_test(
-        crate::conn::TargetPageResidenceIdentity::new_for_test(
-            "BID-dialog".to_owned(),
-            Some("TID-dialog".to_owned()),
-            1,
-        ),
-        "TID-dialog",
-        "alert",
-        "pending",
-        "",
-        None,
-    ));
+    state
+        .javascript_dialog_state
+        .push(dialog_projection_for_test(
+            crate::conn::TargetPageResidenceIdentity::new_for_test(
+                "BID-dialog".to_owned(),
+                Some("TID-dialog".to_owned()),
+                1,
+            ),
+            "TID-dialog",
+        ));
 }
 
 fn assert_page_domain_enabled(state: &crate::conn::TargetPageSessionState) {
     assert!(state.page_domain_enabled);
     assert!(state.page_lifecycle_events);
-    assert!(state.page_bypass_csp_enabled);
+    assert!(state.page_bypass_csp_enabled());
     assert_eq!(
         state.page_font_families.get("standard"),
         Some(&json!("Inter"))
@@ -210,7 +203,7 @@ fn assert_page_domain_enabled(state: &crate::conn::TargetPageSessionState) {
 fn assert_page_domain_disabled(state: &crate::conn::TargetPageSessionState) {
     assert!(!state.page_domain_enabled);
     assert!(!state.page_lifecycle_events);
-    assert!(!state.page_bypass_csp_enabled);
+    assert!(!state.page_bypass_csp_enabled());
     assert!(state.page_font_families.is_empty());
     assert!(!state.page_file_chooser_opened_event_enabled);
     assert!(!state.page_intercept_file_chooser_dialog_enabled);
@@ -248,17 +241,13 @@ fn enable_page_domain_for_session(conn: &mut crate::conn::CdpConnection, session
         state
             .page_session_state
             .javascript_dialog_state
-            .push(target_dialog_for_test(
+            .push(dialog_projection_for_test(
                 crate::conn::TargetPageResidenceIdentity::new_for_test(
                     "BID-dialog".to_owned(),
                     Some("TID-dialog".to_owned()),
                     1,
                 ),
                 "TID-dialog",
-                "alert",
-                "pending",
-                "",
-                None,
             ));
     });
 }
@@ -271,32 +260,11 @@ async fn install_runtime_document_replacement_test_page(ctx: &mut TestContext) -
         "SID-1",
         "about:blank",
     );
-    let navigation = ctx
-        .conn
-        .load_navigation_via_runtime_async("data:text/html,<body>initial</body>")
-        .await
-        .expect("runtime replacement fixture page should load");
-    let artifacts = navigation.page_creation_artifacts;
-    ctx.conn
-        .browser_context
-        .as_mut()
-        .expect("runtime replacement fixture browser context")
-        .active_page_target_mut()
-        .runtime_slot
-        .set_loaded_page_for_test(navigation.page);
-    let (binding, initial_events) = ctx.conn.bind_renderer_document_lifecycle_for_owner(
-        &crate::conn::CommandOwnerScope::for_session("SID-1"),
-        artifacts,
-        None,
-        "TID-1".to_owned(),
-        LOADER_ID.to_owned(),
-    );
-    assert!(binding.is_some());
-    assert_eq!(
-        initial_events.len(),
-        2,
-        "prepared data navigation commits at DOMContentLoaded; load remains renderer-owned tail work"
-    );
+    ctx.install_quiet_navigation_fixture_for_session_owner(
+        "data:text/html,<body>initial</body>",
+        Some("SID-1"),
+    )
+    .await;
     ctx.enable_dom_events_for_test(Some("SID-1"));
 
     ctx.process_async(json!({
@@ -418,9 +386,8 @@ async fn lifecycle_events_enable_without_renderer_binding_does_not_synthesize_re
         .browser_context
         .as_mut()
         .expect("browser context")
-        .active_page_target_mut()
-        .runtime_slot
-        .set_loaded_page_for_test(page);
+        .commit_active_navigation_for_test(page)
+        .await;
 
     let raw = json!({
         "id": 1213,
@@ -479,8 +446,8 @@ async fn assert_page_enable_uses_fresh_initial_document_without_adapter(target_u
         ctx.conn
             .browser_context
             .as_ref()
-            .and_then(|bc| bc.active_page_target().runtime_slot.loaded_page())
-            .is_some_and(|page| page.final_url().as_str() == target_url),
+            .and_then(|bc| bc.target_document_url(bc.active_target_id().unwrap()))
+            .is_some_and(|url| url.as_str() == target_url),
         "Target.createTarget should install the initial about:blank owner page"
     );
 
@@ -506,8 +473,8 @@ async fn assert_page_enable_uses_fresh_initial_document_without_adapter(target_u
         ctx.conn
             .browser_context
             .as_ref()
-            .and_then(|bc| bc.active_page_target().runtime_slot.loaded_page())
-            .is_some_and(|page| page.final_url().as_str() == target_url),
+            .and_then(|bc| bc.target_document_url(bc.active_target_id().unwrap()))
+            .is_some_and(|url| url.as_str() == target_url),
         "Page.enable should keep using the target-lifecycle initial about:blank page"
     );
 }
@@ -542,13 +509,10 @@ async fn enable_succeeds_without_legacy_materialization_adapter_when_page_missin
 
     ctx.expect_result(121, json!({}), Some("SID-PAGE-ENABLE-NO-DOCUMENT"));
     assert!(
-        !ctx.conn
-            .browser_context
-            .as_ref()
-            .expect("browser context")
-            .active_page_target()
-            .runtime_slot
-            .has_loaded_page(),
+        !{
+            let context = &ctx.conn.browser_context.as_ref().expect("browser context");
+            context.target_has_loaded_page(context.active_target_id().unwrap())
+        },
         "Page.enable should not install a loaded page when target lifecycle did not"
     );
 }
@@ -568,6 +532,10 @@ async fn document_open_exits_initial_empty_document_record() {
         create_response["result"]["targetId"].as_str().is_some(),
         "Target.createTarget should return target id: {create_response}"
     );
+    let target_id = create_response["result"]["targetId"]
+        .as_str()
+        .unwrap()
+        .to_owned();
 
     ctx.process_async(json!({
         "id": 131,
@@ -577,8 +545,9 @@ async fn document_open_exits_initial_empty_document_record() {
     ctx.expect_result(131, json!({}), None);
     let before = ctx
         .conn
-        .target_owner_state_for_session(None)
-        .and_then(|owner_state| owner_state.initial_empty_document_state())
+        .browser_context
+        .as_ref()
+        .and_then(|context| context.target_initial_empty_document_state(&target_id))
         .expect("initial empty document record should survive materialization");
     assert!(before.materialized());
     assert!(before.is_on_initial_empty_document());
@@ -595,8 +564,9 @@ async fn document_open_exits_initial_empty_document_record() {
 
     let after = ctx
         .conn
-        .target_owner_state_for_session(None)
-        .and_then(|owner_state| owner_state.initial_empty_document_state())
+        .browser_context
+        .as_ref()
+        .and_then(|context| context.target_initial_empty_document_state(&target_id))
         .expect("initial empty document record should remain for diagnostics");
     assert!(after.exited());
     assert!(!after.is_on_initial_empty_document());
@@ -655,8 +625,8 @@ async fn enable_non_blank_initial_url_loads_through_pending_navigation_path() {
         ctx.conn
             .browser_context
             .as_ref()
-            .and_then(|bc| bc.active_page_target().runtime_slot.loaded_page())
-            .is_some_and(|page| page.final_url().as_str() == page_url),
+            .and_then(|bc| bc.target_document_url(bc.active_target_id().unwrap()))
+            .is_some_and(|url| url.as_str() == page_url),
         "Page.enable pending path should install the initial non-blank document"
     );
 }
@@ -687,7 +657,9 @@ async fn bring_to_front_returns_empty_result() {
 #[tokio::test(flavor = "multi_thread")]
 async fn page_set_download_behavior_reuses_browser_download_state() {
     let mut ctx = TestContext::new();
-    let mut browser_context = BrowserContext::new("BID-PAGE-DOWNLOAD".into());
+    let mut browser_context = ctx
+        .conn
+        .new_browser_context_fixture_for_test("BID-PAGE-DOWNLOAD");
     browser_context.set_active_target_id("TID-PAGE-DOWNLOAD");
     ctx.conn
         .install_browser_context_fixture_for_test(browser_context);
@@ -706,32 +678,45 @@ async fn page_set_download_behavior_reuses_browser_download_state() {
 
     let settings = ctx
         .conn
-        .download_behavior
-        .effective_for_browser_context(Some("BID-PAGE-DOWNLOAD"));
-    assert_eq!(settings.behavior, "allow");
+        .download_policy_for_browser_context(Some("BID-PAGE-DOWNLOAD"));
+    assert_eq!(
+        settings.behavior,
+        moli_core::browser::DownloadBehavior::Allow
+    );
     assert_eq!(
         settings.download_path.as_deref(),
         Some("/tmp/page-downloads")
     );
     assert!(
-        !settings.automation_events_enabled,
+        !ctx.conn
+            .automation_download_events_enabled_for_context(Some("BID-PAGE-DOWNLOAD")),
         "Page.setDownloadBehavior delegates to BrowserHandler::DoSetDownloadBehavior and must not enable Browser download events"
     );
     assert_eq!(
-        ctx.conn.download_behavior.browser_context_id.as_deref(),
-        Some("BID-PAGE-DOWNLOAD")
+        ctx.conn.browser_context.as_ref().unwrap().download_policy(),
+        Some(settings)
     );
-    assert_eq!(ctx.conn.download_behavior.behavior, "default");
-    assert!(!ctx.conn.download_behavior.automation_events_enabled);
+    assert_eq!(
+        ctx.conn.download_policy_for_browser_context(None),
+        moli_core::browser::DownloadPolicy::default()
+    );
+    assert!(
+        !ctx.conn
+            .automation_download_events_enabled_for_context(None)
+    );
 }
 
 #[tokio::test(flavor = "multi_thread")]
 async fn page_set_download_behavior_uses_current_page_context_not_param_context() {
     let mut ctx = TestContext::new();
-    let mut active = BrowserContext::new("BID-PAGE-DOWNLOAD-ACTIVE".into());
+    let mut active = ctx
+        .conn
+        .new_browser_context_fixture_for_test("BID-PAGE-DOWNLOAD-ACTIVE");
     active.set_active_target_id("TID-PAGE-DOWNLOAD-ACTIVE");
     ctx.conn.install_browser_context_fixture_for_test(active);
-    let mut inactive = BrowserContext::new("BID-PAGE-DOWNLOAD-OTHER".into());
+    let mut inactive = ctx
+        .conn
+        .new_browser_context_fixture_for_test("BID-PAGE-DOWNLOAD-OTHER");
     inactive.set_active_target_id("TID-PAGE-DOWNLOAD-OTHER");
     ctx.conn
         .push_inactive_browser_context_fixture_for_test(inactive);
@@ -751,19 +736,23 @@ async fn page_set_download_behavior_uses_current_page_context_not_param_context(
 
     let active_settings = ctx
         .conn
-        .download_behavior
-        .effective_for_browser_context(Some("BID-PAGE-DOWNLOAD-ACTIVE"));
-    assert_eq!(active_settings.behavior, "allow");
+        .download_policy_for_browser_context(Some("BID-PAGE-DOWNLOAD-ACTIVE"));
+    assert_eq!(
+        active_settings.behavior,
+        moli_core::browser::DownloadBehavior::Allow
+    );
     assert_eq!(
         active_settings.download_path.as_deref(),
         Some("/tmp/page-downloads-active")
     );
-    assert!(!active_settings.automation_events_enabled);
+    assert!(
+        !ctx.conn
+            .automation_download_events_enabled_for_context(Some("BID-PAGE-DOWNLOAD-ACTIVE"))
+    );
     assert_eq!(
         ctx.conn
-            .download_behavior
-            .effective_for_browser_context(Some("BID-PAGE-DOWNLOAD-OTHER")),
-        crate::conn::BrowserDownloadBehaviorSettings::default()
+            .download_policy_for_browser_context(Some("BID-PAGE-DOWNLOAD-OTHER")),
+        moli_core::browser::DownloadPolicy::default()
     );
 }
 
@@ -797,7 +786,7 @@ async fn page_set_download_behavior_rejects_without_page_owner() {
 #[tokio::test(flavor = "multi_thread")]
 async fn set_lifecycle_events_enabled_sets_flag() {
     let mut ctx = TestContext::new();
-    let mut bc = BrowserContext::new("BID-1".into());
+    let mut bc = ctx.conn.new_browser_context_fixture_for_test("BID-1");
     bc.set_active_target_id("TID-1");
     ctx.conn.install_browser_context_fixture_for_test(bc);
     ctx.process_async(json!({"id": 1, "method": "Page.setLifecycleEventsEnabled",
@@ -835,9 +824,8 @@ async fn set_lifecycle_events_enabled_replays_loaded_page_events() {
         .browser_context
         .as_mut()
         .unwrap()
-        .active_page_target_mut()
-        .runtime_slot
-        .set_loaded_page_for_test(navigation.page);
+        .commit_active_navigation_for_test(navigation.page)
+        .await;
     let (binding, initial_events) = ctx.conn.bind_renderer_document_lifecycle_for_owner(
         &crate::conn::CommandOwnerScope::for_session("SID-1"),
         navigation.page_creation_artifacts,
@@ -904,9 +892,8 @@ async fn set_lifecycle_events_enabled_replays_only_protocol_visible_load_state()
         .browser_context
         .as_mut()
         .unwrap()
-        .active_page_target_mut()
-        .runtime_slot
-        .set_loaded_page_for_test(navigation.page);
+        .commit_active_navigation_for_test(navigation.page)
+        .await;
     let (binding, initial_events) = ctx.conn.bind_renderer_document_lifecycle_for_owner(
         &crate::conn::CommandOwnerScope::for_session("SID-visible"),
         artifacts,
@@ -998,9 +985,8 @@ async fn set_lifecycle_events_enabled_is_session_local_for_active_attached_sessi
     let artifacts = navigation.page_creation_artifacts;
     let browser_context = ctx.conn.browser_context.as_mut().unwrap();
     browser_context
-        .active_page_target_mut()
-        .runtime_slot
-        .set_loaded_page_for_test(navigation.page);
+        .commit_active_navigation_for_test(navigation.page)
+        .await;
     assert!(
         browser_context.assign_attached_session_to_target("TID-active", "SID-attached".to_owned())
     );
@@ -1064,16 +1050,16 @@ async fn set_lifecycle_events_enabled_is_session_local_for_active_attached_sessi
 #[tokio::test(flavor = "multi_thread")]
 async fn set_lifecycle_events_enabled_is_session_local_for_background_attached_session() {
     let mut ctx = TestContext::new();
-    let background = PageTargetHost::with_url(
+    let mut browser_context = ctx
+        .conn
+        .new_browser_context_fixture_for_test("BID-background-attached-lifecycle".to_owned());
+    browser_context.set_active_target_id("TID-active".to_owned());
+    browser_context.attach_active_session("SID-active".to_owned());
+    browser_context.register_page_target_url_fixture(
         "TID-background".to_owned(),
         Some("SID-background-primary".to_owned()),
         "about:blank".to_owned(),
     );
-
-    let mut browser_context = BrowserContext::new("BID-background-attached-lifecycle".to_owned());
-    browser_context.set_active_target_id("TID-active".to_owned());
-    browser_context.attach_active_session("SID-active".to_owned());
-    browser_context.insert_page_target_host(background);
     assert!(
         browser_context.assign_attached_session_to_target(
             "TID-background",
@@ -1120,7 +1106,9 @@ async fn set_lifecycle_events_enabled_is_session_local_for_background_attached_s
     let browser_context = ctx.conn.browser_context.as_ref().unwrap();
     let background = browser_context
         .background_target("TID-background")
-        .filter(|target| target.has_non_default_session_state())
+        .filter(|target| {
+            browser_context.has_non_default_session_state_for_target(target.target_id())
+        })
         .expect("background target should retain background page session state");
     assert!(
         !background.devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
@@ -1148,6 +1136,17 @@ async fn page_disable_clears_page_handler_state_for_active_attached_session() {
         "about:blank",
     );
     let browser_context = ctx.conn.browser_context.as_mut().unwrap();
+    {
+        let context = &mut *browser_context;
+        let target_id = context
+            .active_target_id_owned()
+            .expect("active fixture target");
+        context.set_devtools_bypass_csp_enabled_for_target(
+            &target_id,
+            &moli_page_types::DevToolsSessionKey::Primary,
+            true,
+        )
+    };
     mark_page_domain_enabled(
         &mut browser_context.active_page_target_mut().devtools_sessions
             [moli_page_types::DevToolsSessionKey::Primary]
@@ -1189,15 +1188,16 @@ async fn page_disable_clears_page_handler_state_for_active_attached_session() {
 #[tokio::test(flavor = "multi_thread")]
 async fn page_disable_clears_page_handler_state_for_background_attached_session() {
     let mut ctx = TestContext::new();
-    let background = PageTargetHost::with_url(
+    let mut browser_context = ctx
+        .conn
+        .new_browser_context_fixture_for_test("BID-background-page-disable".to_owned());
+    browser_context.set_active_target_id("TID-active".to_owned());
+    browser_context.attach_active_session("SID-active".to_owned());
+    browser_context.register_page_target_url_fixture(
         "TID-background".to_owned(),
         Some("SID-background-primary".to_owned()),
         "about:blank#background".to_owned(),
     );
-    let mut browser_context = BrowserContext::new("BID-background-page-disable".to_owned());
-    browser_context.set_active_target_id("TID-active".to_owned());
-    browser_context.attach_active_session("SID-active".to_owned());
-    browser_context.insert_page_target_host(background);
     assert!(
         browser_context.assign_attached_session_to_target(
             "TID-background",
@@ -1205,6 +1205,11 @@ async fn page_disable_clears_page_handler_state_for_background_attached_session(
         )
     );
     {
+        browser_context.set_devtools_bypass_csp_enabled_for_target(
+            "TID-background",
+            &moli_page_types::DevToolsSessionKey::Primary,
+            true,
+        );
         let state = browser_context
             .background_target_mut("TID-background")
             .expect("background target must exist");
@@ -1234,7 +1239,9 @@ async fn page_disable_clears_page_handler_state_for_background_attached_session(
     let browser_context = ctx.conn.browser_context.as_ref().unwrap();
     let background = browser_context
         .background_target("TID-background")
-        .filter(|target| target.has_non_default_session_state())
+        .filter(|target| {
+            browser_context.has_non_default_session_state_for_target(target.target_id())
+        })
         .expect("background target should retain background page session state");
     assert_page_domain_enabled(
         &background.devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
@@ -2016,23 +2023,16 @@ async fn runtime_document_write_preserves_multiple_classic_and_module_script_ord
 async fn add_script_run_immediately_creates_top_level_world_even_when_child_world_name_matches() {
     let mut ctx = TestContext::new();
     load_bc_with_session(&mut ctx, "BID-1", "TID-1", "SID-1", "about:blank");
-    let page = ctx
-        .conn
-        .load_page_via_runtime_async(
-            // Keep the child on its initial empty document. A `srcdoc`
-            // navigation may commit after the preload is registered, in
-            // which case the new-document script correctly runs in that
-            // future child document and no longer isolates runImmediately's
-            // top-level-world behavior.
-            "data:text/html,<body>parent-frame<iframe></iframe></body>",
-        )
-        .await
-        .expect("page should load");
-    let bc = ctx.conn.browser_context.as_mut().expect("browser context");
-    let _ = bc
-        .active_page_target_mut()
-        .runtime_slot
-        .replace_loaded_page(Some(page));
+    ctx.install_quiet_navigation_fixture_for_session_owner(
+        // Keep the child on its initial empty document. A `srcdoc`
+        // navigation may commit after the preload is registered, in
+        // which case the new-document script correctly runs in that
+        // future child document and no longer isolates runImmediately's
+        // top-level-world behavior.
+        "data:text/html,<body>parent-frame<iframe></iframe></body>",
+        Some("SID-1"),
+    )
+    .await;
     ctx.process_async(json!({
         "id": 4120,
         "method": "Runtime.enable",
@@ -2223,16 +2223,17 @@ async fn add_script_run_immediately_installs_matching_bindings_into_new_top_leve
 async fn document_start_script_run_immediately_targets_loaded_background_owner_without_activation()
 {
     let mut ctx = TestContext::new();
-    let background = PageTargetHost::with_url(
+
+    let mut bc = ctx
+        .conn
+        .new_browser_context_fixture_for_test("BID-1".to_owned());
+    bc.set_active_target_id("TID-active".to_owned());
+    bc.attach_active_session("SID-active".to_owned());
+    bc.register_page_target_url_fixture(
         "TID-background".to_owned(),
         Some("SID-background".to_owned()),
         "about:blank".to_owned(),
     );
-
-    let mut bc = BrowserContext::new("BID-1".to_owned());
-    bc.set_active_target_id("TID-active".to_owned());
-    bc.attach_active_session("SID-active".to_owned());
-    bc.insert_page_target_host(background);
     ctx.conn.install_browser_context_fixture_for_test(bc);
     ctx.install_navigation_fixture_for_session_owner(
         "data:text/html,<body>background</body>",
@@ -2311,16 +2312,11 @@ async fn document_start_script_run_immediately_targets_loaded_background_owner_w
 async fn bare_isolated_worlds_do_not_persist_across_navigation() {
     let mut ctx = TestContext::new();
     load_bc_with_session(&mut ctx, "BID-1", "TID-1", "SID-1", "about:blank");
-    let page = ctx
-        .conn
-        .load_page_via_runtime_async("data:text/html,<body>hello</body>")
-        .await
-        .expect("page should load");
-    let bc = ctx.conn.browser_context.as_mut().expect("browser context");
-    let _ = bc
-        .active_page_target_mut()
-        .runtime_slot
-        .replace_loaded_page(Some(page));
+    ctx.install_quiet_navigation_fixture_for_session_owner(
+        "data:text/html,<body>hello</body>",
+        Some("SID-1"),
+    )
+    .await;
     ctx.process_async(json!({
         "id": 49,
         "method": "Runtime.enable",
@@ -2551,17 +2547,13 @@ async fn crash_requires_browser_context() {
 async fn crash_notifies_all_attached_sessions_and_marks_browser_context_crashed() {
     let mut ctx = TestContext::new();
     load_bc_with_session(&mut ctx, "BID-1", "TID-1", "SID-1", "about:blank");
-    let page = ctx
-        .conn
-        .load_page_via_runtime_async("data:text/html,<body>crash-me</body>")
-        .await
-        .expect("page should load");
+    ctx.install_quiet_navigation_fixture_for_session_owner(
+        "data:text/html,<body>crash-me</body>",
+        Some("SID-1"),
+    )
+    .await;
     let bc = ctx.conn.browser_context.as_mut().unwrap();
     assert!(bc.assign_attached_session_to_target("TID-1", "SID-attached".into()));
-    let _ = bc
-        .active_page_target_mut()
-        .runtime_slot
-        .replace_loaded_page(Some(page));
     let active_document_token = bc
         .start_document_navigation_for_active_target("LOADER-crash".to_owned())
         .expect("active target should start document navigation");
@@ -2586,12 +2578,7 @@ async fn crash_notifies_all_attached_sessions_and_marks_browser_context_crashed(
     assert_eq!(attached_inspector["sessionId"], "SID-attached");
 
     let bc = ctx.conn.browser_context.as_ref().unwrap();
-    assert!(
-        bc.active_page_target()
-            .owner_state
-            .target_crash_state
-            .is_crashed()
-    );
+    assert!(bc.target_is_crashed(bc.active_target_id().unwrap()));
     assert!(
         bc.active_page_target().devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
             .runtime_session_state
@@ -2633,47 +2620,38 @@ async fn crash_notifies_all_attached_sessions_and_marks_browser_context_crashed(
             "session {session_id} that observed the crash must observe recovery: {recovery_events:?}"
         );
     }
-    assert!(
-        !ctx.conn
-            .browser_context
-            .as_ref()
-            .expect("browser context")
-            .active_page_target()
-            .owner_state
-            .target_crash_state
-            .is_crashed()
-    );
+    assert!(!{
+        let context = &ctx.conn.browser_context.as_ref().expect("browser context");
+        context.target_is_crashed(context.active_target_id().unwrap())
+    });
 }
 #[tokio::test(flavor = "multi_thread")]
 async fn crash_targets_background_owner_without_activation() {
     let mut ctx = TestContext::new();
-    let background_page = ctx
+    let mut bc = ctx
         .conn
-        .load_page_via_runtime_async("data:text/html,<body>background-crash</body>")
-        .await
-        .expect("background page should load");
-    let mut background = PageTargetHost::with_url(
-        "TID-background".to_owned(),
-        Some("SID-background".to_owned()),
-        background_page.final_url().as_str().to_owned(),
-    );
-    background.replace_loaded_page(Some(background_page));
-
-    let mut bc = BrowserContext::new("BID-1".to_owned());
+        .new_browser_context_fixture_for_test("BID-1".to_owned());
     bc.set_active_target_id("TID-active".to_owned());
     bc.attach_active_session("SID-active".to_owned());
     bc.set_target_url("data:text/html,<title>Active</title><main>active</main>".to_owned());
-    bc.insert_page_target_host(background);
+    bc.register_page_target_url_fixture(
+        "TID-background".to_owned(),
+        Some("SID-background".to_owned()),
+        "about:blank".to_owned(),
+    );
+    ctx.conn.install_browser_context_fixture_for_test(bc);
+    ctx.install_quiet_navigation_fixture_for_session_owner(
+        "data:text/html,<body>background-crash</body>",
+        Some("SID-background"),
+    )
+    .await;
+    let bc = ctx.conn.browser_context.as_mut().unwrap();
     bc.background_target_mut("TID-background")
         .expect("background target must exist")
-        .devtools_sessions[moli_page_types::DevToolsSessionKey::Primary] =
-        crate::conn::DevToolsSessionState {
-            runtime_session_state: crate::conn::TargetRuntimeSessionState {
-                inspector_enabled: true,
-                ..Default::default()
-            },
-            ..Default::default()
-        };
+        .devtools_sessions
+        .primary_mut()
+        .runtime_session_state
+        .inspector_enabled = true;
     let background_document_token = bc
         .start_document_navigation_for_target(
             "TID-background",
@@ -2682,8 +2660,6 @@ async fn crash_targets_background_owner_without_activation() {
         .expect("background target should start document navigation");
     bc.commit_document_navigation_if_matches(&background_document_token);
     assert!(bc.accepts_document_body_completion_event(&background_document_token));
-    ctx.conn.install_browser_context_fixture_for_test(bc);
-
     ctx.process_async(json!({
         "id": 248,
         "method": "Page.crash",
@@ -2705,18 +2681,12 @@ async fn crash_targets_background_owner_without_activation() {
     let background = bc
         .background_target("TID-background")
         .expect("background target should remain background");
-    assert!(!background.has_loaded_page());
+    assert!(!bc.target_has_loaded_page(background.target_id()));
     assert!(
         !bc.accepts_document_body_completion_event(&background_document_token),
         "background Page.crash must reject late body completions for the crashed document"
     );
-    assert!(
-        bc.background_target("TID-background")
-            .expect("background target must exist")
-            .owner_state
-            .target_crash_state
-            .is_crashed()
-    );
+    assert!(bc.target_is_crashed("TID-background"));
 }
 #[tokio::test(flavor = "multi_thread")]
 async fn crash_aborts_paused_request_stage_navigation() {
@@ -2780,11 +2750,11 @@ async fn crash_aborts_background_paused_navigation_without_activation() {
         .browser_context
         .as_mut()
         .unwrap()
-        .insert_page_target_host(PageTargetHost::with_url(
+        .register_page_target_url_fixture(
             "TID-background".to_owned(),
             Some("SID-background".to_owned()),
             "about:blank#background".to_owned(),
-        ));
+        );
 
     ctx.process_async(json!({
         "id": 252,
@@ -2851,7 +2821,7 @@ async fn crash_aborts_background_paused_navigation_without_activation() {
 #[tokio::test(flavor = "multi_thread")]
 async fn crash_without_target_loaded_errors() {
     let mut ctx = TestContext::new();
-    ctx.conn.browser_context = Some(BrowserContext::new("BID-1".into()));
+    ctx.conn.browser_context = Some(ctx.conn.new_browser_context_fixture_for_test("BID-1"));
 
     ctx.process_async(json!({
         "id": 251,
@@ -2949,11 +2919,11 @@ async fn crash_aborts_paused_response_stage_navigation() {
 async fn close_clears_loaded_page_state_and_emits_detached_events() {
     let mut ctx = TestContext::new();
     load_bc_with_session(&mut ctx, "BID-1", "TID-1", "SID-1", "about:blank");
-    let page = ctx
-        .conn
-        .load_page_via_runtime_async("data:text/html,<body>close-me</body>")
-        .await
-        .expect("page should load");
+    ctx.install_quiet_navigation_fixture_for_session_owner(
+        "data:text/html,<body>close-me</body>",
+        Some("SID-1"),
+    )
+    .await;
     let bc = ctx.conn.browser_context.as_mut().unwrap();
     bc.active_page_target_mut().devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
         .page_session_state
@@ -2967,8 +2937,13 @@ async fn close_clears_loaded_page_state_and_emits_detached_events() {
     bc.active_page_target_mut()
         .runtime_slot
         .enable_primary_network_events();
-    bc.active_page_target_mut()
-        .mutate_devtools_network_session_state(
+    {
+        let context = &mut *bc;
+        let target_id = context
+            .active_target_id_owned()
+            .expect("active fixture target");
+        context.mutate_devtools_network_session_state_for_target(
+            &target_id,
             &moli_page_types::DevToolsSessionKey::Primary,
             |network| {
                 network.network_enabled = true;
@@ -2976,7 +2951,8 @@ async fn close_clears_loaded_page_state_and_emits_detached_events() {
                 network.bypass_service_worker = true;
                 network.extra_headers = vec![("X-Test".into(), "1".into())];
             },
-        );
+        )
+    };
     bc.active_page_target_mut().css_enabled = true;
     bc.active_page_target_mut().fetch_owner.configure(
         None,
@@ -2987,14 +2963,13 @@ async fn close_clears_loaded_page_state_and_emits_detached_events() {
             request_stage: FetchRequestStage::Response,
         }],
     );
-    bc.active_page_target_mut()
-        .owner_state
-        .target_crash_state
-        .mark_crashed();
-    let _ = bc
-        .active_page_target_mut()
-        .runtime_slot
-        .replace_loaded_page(Some(page));
+    {
+        let context = &mut *bc;
+        let target_id = context
+            .active_target_id_owned()
+            .expect("active fixture target");
+        context.set_target_crash_state(&target_id, true)
+    };
     let close_document_token = bc
         .start_document_navigation_for_active_target("LOADER-close".to_owned())
         .expect("active target should start document navigation");
@@ -3009,11 +2984,11 @@ async fn close_clears_loaded_page_state_and_emits_detached_events() {
         .runtime_slot
         .set_next_subresource_fetch_request_id_for_test(5);
     assert!(bc.assign_attached_session_to_target("TID-1", "SID-attached".into()));
-    bc.remember_target_window_name("close-me", "TID-1");
-    bc.target_opener_ids
-        .insert("TID-popup-after-close".into(), "TID-1".into());
-    bc.target_opener_frame_ids
-        .insert("TID-popup-after-close".into(), "FRAME-1".into());
+    let handle = bc.web_contents_handle_for_target("TID-1").unwrap();
+    bc.set_web_contents_window_name(handle, Some("close-me".into()))
+        .unwrap();
+    // An unknown popup has no WebContents capability on which opener state
+    // could be installed.
     bc.record_captured_response_body("REQ-old".into(), "body".into(), [Some("SID-1".into())]);
     bc.insert_io_stream("STREAM-old".into(), b"body".to_vec(), 0);
 
@@ -3043,11 +3018,9 @@ async fn close_clears_loaded_page_state_and_emits_detached_events() {
     assert!(!bc.has_active_session());
     assert!(bc.attached_target_id_for_session("SID-attached").is_none());
     assert!(bc.target_id_for_window_name("close-me").is_none());
-    assert!(!bc.target_opener_ids.contains_key("TID-popup-after-close"));
-    assert!(
-        !bc.target_opener_frame_ids
-            .contains_key("TID-popup-after-close")
-    );
+    assert!(bc.target_info("TID-popup-after-close").is_none());
+    assert_eq!(bc.moli_memory_diagnostics()["targetOpenerCount"], 0);
+    assert_eq!(bc.moli_memory_diagnostics()["targetOpenerFrameCount"], 0);
     assert!(!bc.has_loaded_page());
     assert!(
         !bc.accepts_document_body_completion_event(&close_document_token),
@@ -3146,22 +3119,18 @@ async fn close_aborts_background_paused_navigation_without_activation() {
     let mut ctx = TestContext::new();
     load_bc_with_session(&mut ctx, "BID-1", "TID-active", "SID-active", "about:blank");
     let bc = ctx.conn.browser_context.as_mut().unwrap();
-    bc.insert_page_target_host(PageTargetHost::with_url(
+    bc.register_page_target_url_fixture(
         "TID-background".to_owned(),
         Some("SID-background".to_owned()),
         "about:blank#background".to_owned(),
-    ));
+    );
     assert!(bc.assign_attached_session_to_target("TID-background", "SID-attached".to_owned()));
     bc.background_target_mut("TID-background")
         .expect("background target must exist")
-        .devtools_sessions[moli_page_types::DevToolsSessionKey::Primary] =
-        crate::conn::DevToolsSessionState {
-            runtime_session_state: crate::conn::TargetRuntimeSessionState {
-                inspector_enabled: true,
-                ..Default::default()
-            },
-            ..Default::default()
-        };
+        .devtools_sessions
+        .primary_mut()
+        .runtime_session_state
+        .inspector_enabled = true;
 
     ctx.process_async(json!({
         "id": 246,
@@ -3246,7 +3215,7 @@ async fn close_aborts_background_paused_navigation_without_activation() {
 #[tokio::test(flavor = "multi_thread")]
 async fn close_without_target_loaded_errors() {
     let mut ctx = TestContext::new();
-    ctx.conn.browser_context = Some(BrowserContext::new("BID-1".into()));
+    ctx.conn.browser_context = Some(ctx.conn.new_browser_context_fixture_for_test("BID-1"));
 
     ctx.process_async(json!({
         "id": 2460,
@@ -3508,11 +3477,133 @@ async fn close_command_background_events_keep_target_detached_sidecar() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn close_completion_cannot_retarget_a_reused_target_id() {
+    let mut ctx = TestContext::new();
+    load_bc_with_session(
+        &mut ctx,
+        "BID-close-completion",
+        "TID-close-completion",
+        "SID-close-completion",
+        "about:blank",
+    );
+    let old_web_contents = ctx
+        .conn
+        .browser_web_contents_for_target("TID-close-completion")
+        .unwrap();
+
+    let raw = json!({
+        "id": 248,
+        "method": "Page.close",
+        "sessionId": "SID-close-completion"
+    })
+    .to_string();
+    let CdpCommandTaskStep::Pending(pending) = ctx.conn.start_command_dispatch(&raw) else {
+        panic!("Page.close should start through pending dispatch");
+    };
+
+    load_bc_with_session(
+        &mut ctx,
+        "BID-close-completion",
+        "TID-close-completion",
+        "SID-close-completion",
+        "about:blank",
+    );
+    let replacement = ctx
+        .conn
+        .browser_web_contents_for_target("TID-close-completion")
+        .unwrap();
+    assert_ne!(replacement, old_web_contents);
+
+    let CdpCommandTaskStep::Complete(outcome) = ctx
+        .conn
+        .complete_pending_command_dispatch(pending.wait().await)
+        .await
+    else {
+        panic!("stale Page.close completion should settle with an error");
+    };
+    let (_, _, _, _, scheduler_events, _) = outcome.into_renderer_owner_turn_parts();
+    assert!(scheduler_events.is_empty());
+    assert_eq!(
+        ctx.conn
+            .browser_web_contents_for_target("TID-close-completion")
+            .unwrap(),
+        replacement
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn delayed_close_cannot_retarget_a_reused_target_id() {
+    let mut ctx = TestContext::new();
+    load_bc_with_session(
+        &mut ctx,
+        "BID-delayed-close",
+        "TID-delayed-close",
+        "SID-delayed-close",
+        "about:blank",
+    );
+    let old_web_contents = ctx
+        .conn
+        .browser_web_contents_for_target("TID-delayed-close")
+        .unwrap();
+
+    let raw = json!({
+        "id": 248,
+        "method": "Page.close",
+        "sessionId": "SID-delayed-close"
+    })
+    .to_string();
+    let CdpCommandTaskStep::Pending(pending) = ctx.conn.start_command_dispatch(&raw) else {
+        panic!("Page.close should publish delayed termination work");
+    };
+    let CdpCommandTaskStep::Complete(outcome) = ctx
+        .conn
+        .complete_pending_command_dispatch(pending.wait().await)
+        .await
+    else {
+        panic!("Page.close pending dispatch should complete");
+    };
+    let (_, _, _, _, scheduler_events, _) = outcome.into_renderer_owner_turn_parts();
+    let [CdpSchedulerEvent::ProtocolWorkPublished { work }] =
+        <[_; 1]>::try_from(scheduler_events).unwrap()
+    else {
+        unreachable!("array pattern fixes the only event kind")
+    };
+
+    load_bc_with_session(
+        &mut ctx,
+        "BID-delayed-close",
+        "TID-delayed-close",
+        "SID-delayed-close",
+        "about:blank",
+    );
+    let replacement = ctx
+        .conn
+        .browser_web_contents_for_target("TID-delayed-close")
+        .unwrap();
+    assert_ne!(replacement, old_web_contents);
+
+    let outcome = ctx
+        .conn
+        .complete_ready_protocol_scheduler_work_turn(work)
+        .await;
+    let (events, nested_scheduler_events) = outcome.into_protocol_event_parts();
+    assert!(events.is_empty());
+    assert!(nested_scheduler_events.is_empty());
+    assert_eq!(
+        ctx.conn
+            .browser_web_contents_for_target("TID-delayed-close")
+            .unwrap(),
+        replacement
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn set_bypass_csp_accepts_valid_params_and_returns_empty_result() {
     let mut ctx = TestContext::new();
-    ctx.conn.browser_context = Some(BrowserContext::new_with_page_for_test(
-        "BID-PAGE", "TID-PAGE",
-    ));
+    ctx.conn.browser_context = Some(
+        ctx.conn
+            .new_page_target_fixture_for_test("BID-PAGE", "TID-PAGE"),
+    );
     ctx.process_async(json!({
         "id": 2,
         "method": "Page.setBypassCSP",
@@ -3523,7 +3614,7 @@ async fn set_bypass_csp_accepts_valid_params_and_returns_empty_result() {
     assert!(ctx.conn.browser_context.as_ref().is_some_and(|bc| {
         bc.active_page_target().devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
             .page_session_state
-            .page_bypass_csp_enabled
+            .page_bypass_csp_enabled()
     }));
 }
 #[tokio::test(flavor = "multi_thread")]
@@ -3540,9 +3631,10 @@ async fn set_bypass_csp_rejects_invalid_params() {
 #[tokio::test(flavor = "multi_thread")]
 async fn set_font_families_accepts_object_params_and_returns_empty_result() {
     let mut ctx = TestContext::new();
-    ctx.conn.browser_context = Some(BrowserContext::new_with_page_for_test(
-        "BID-PAGE", "TID-PAGE",
-    ));
+    ctx.conn.browser_context = Some(
+        ctx.conn
+            .new_page_target_fixture_for_test("BID-PAGE", "TID-PAGE"),
+    );
     ctx.process_async(json!({
         "id": 4,
         "method": "Page.setFontFamilies",
@@ -3594,9 +3686,10 @@ async fn set_font_families_rejects_invalid_params() {
 #[tokio::test(flavor = "multi_thread")]
 async fn set_intercept_file_chooser_dialog_accepts_valid_params_and_returns_empty_result() {
     let mut ctx = TestContext::new();
-    ctx.conn.browser_context = Some(BrowserContext::new_with_page_for_test(
-        "BID-PAGE", "TID-PAGE",
-    ));
+    ctx.conn.browser_context = Some(
+        ctx.conn
+            .new_page_target_fixture_for_test("BID-PAGE", "TID-PAGE"),
+    );
     ctx.process_async(json!({
         "id": 51,
         "method": "Page.setInterceptFileChooserDialog",
@@ -3840,6 +3933,27 @@ async fn screencast_capture_materializes_jpeg_frame_and_ack_budget() {
             ),
         Some(false),
     );
+
+    let PageScreencastCaptureStart::Pending(stale_capture) = ctx
+        .conn
+        .start_page_screencast_frame_capture(&registration, None)
+    else {
+        panic!("an acknowledged subscription should start another capture");
+    };
+    ctx.conn
+        .replace_document_fixture_for_owner_test(&crate::conn::CommandOwnerScope::for_session(
+            "SID-screencast-frame",
+        ));
+    assert!(matches!(
+        ctx.conn
+            .complete_page_screencast_frame_capture(stale_capture.wait().await),
+        PageScreencastCaptureCompletion::Retry
+    ));
+    assert_eq!(
+        ctx.conn.page_screencast_subscription_status(&registration),
+        PageScreencastSubscriptionStatus::Ready,
+        "an outgoing Document capture must not finish against its replacement",
+    );
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -4046,15 +4160,16 @@ async fn start_screencast_is_session_local_for_active_attached_session() {
 #[tokio::test(flavor = "multi_thread")]
 async fn start_screencast_is_session_local_for_background_attached_session() {
     let mut ctx = TestContext::new();
-    let background = PageTargetHost::with_url(
+    let mut browser_context = ctx
+        .conn
+        .new_browser_context_fixture_for_test("BID-background-screencast".to_owned());
+    browser_context.set_active_target_id("TID-active".to_owned());
+    browser_context.attach_active_session("SID-active".to_owned());
+    browser_context.register_page_target_url_fixture(
         "TID-background".to_owned(),
         Some("SID-background-primary".to_owned()),
         "about:blank#background".to_owned(),
     );
-    let mut browser_context = BrowserContext::new("BID-background-screencast".to_owned());
-    browser_context.set_active_target_id("TID-active".to_owned());
-    browser_context.attach_active_session("SID-active".to_owned());
-    browser_context.insert_page_target_host(background);
     assert!(
         browser_context.assign_attached_session_to_target(
             "TID-background",
@@ -4081,7 +4196,9 @@ async fn start_screencast_is_session_local_for_background_attached_session() {
     let browser_context = ctx.conn.browser_context.as_ref().unwrap();
     let background = browser_context
         .background_target("TID-background")
-        .filter(|target| target.has_non_default_session_state())
+        .filter(|target| {
+            browser_context.has_non_default_session_state_for_target(target.target_id())
+        })
         .expect("background target should retain background page session state");
     assert!(
         !background.devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
@@ -4239,7 +4356,7 @@ async fn repeated_start_invalidates_old_screencast_ack_generation() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn start_screencast_rejects_mock_layout_without_activating_state() {
-    let conn = crate::conn::CdpConnection::new_with_initial_storage_partition_and_runtime_config(
+    let conn = crate::test_support::connection_with_config(
         crate::conn::CdpInitialStoragePartition::memory(),
         moli_core::runtime::NavigationRuntimeConfig::new(
             moli_fetch::FetchConfig::default(),

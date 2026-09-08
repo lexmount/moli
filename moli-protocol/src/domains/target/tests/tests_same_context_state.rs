@@ -32,12 +32,7 @@ async fn same_context_targets_restore_their_own_script_execution_disabled_after_
         "params": {"browserContextId": "BID-9A", "url": "about:blank#second"}
     }))
     .await;
-    let created = ctx.take_one();
-    let second_target_id = created["params"]["targetInfo"]["targetId"]
-        .as_str()
-        .expect("second target id")
-        .to_owned();
-    ctx.expect_result(104171, json!({ "targetId": second_target_id }), None);
+    let second_target_id = take_created_target_id(&mut ctx, 104171);
 
     ctx.process_async(json!({
         "id": 104172,
@@ -100,13 +95,17 @@ async fn same_context_targets_restore_their_own_script_execution_disabled_after_
     .await;
     ctx.expect_result(104176, json!({}), None);
     assert!(
-        ctx.conn
-            .browser_context
-            .as_ref()
-            .expect("active browser context")
-            .active_page_target()
-            .effective_emulation_state
-            .script_execution_disabled
+        {
+            let context = &ctx
+                .conn
+                .browser_context
+                .as_ref()
+                .expect("active browser context");
+            context
+                .target_emulation_policy(context.active_target_id().unwrap())
+                .expect("registered WebContents")
+        }
+        .script_execution_disabled
     );
 
     ctx.process_async(json!({
@@ -150,13 +149,17 @@ async fn same_context_targets_restore_their_own_script_execution_disabled_after_
     .await;
     ctx.expect_result(104179, json!({}), None);
     assert!(
-        !ctx.conn
-            .browser_context
-            .as_ref()
-            .expect("active browser context")
-            .active_page_target()
-            .effective_emulation_state
-            .script_execution_disabled
+        !{
+            let context = &ctx
+                .conn
+                .browser_context
+                .as_ref()
+                .expect("active browser context");
+            context
+                .target_emulation_policy(context.active_target_id().unwrap())
+                .expect("registered WebContents")
+        }
+        .script_execution_disabled
     );
 
     ctx.process_async(json!({
@@ -403,14 +406,13 @@ async fn same_context_targets_restore_their_own_crash_state_after_switching() {
     .await;
     ctx.expect_result(104195, json!({}), Some("SID-active"));
 
-    ctx.conn
-        .browser_context
-        .as_mut()
-        .unwrap()
-        .active_page_target_mut()
-        .owner_state
-        .target_crash_state
-        .mark_crashed();
+    {
+        let context = &mut ctx.conn.browser_context.as_mut().unwrap();
+        let target_id = context
+            .active_target_id_owned()
+            .expect("active fixture target");
+        context.set_target_crash_state(&target_id, true)
+    };
     ctx.conn
         .browser_context
         .as_mut()
@@ -494,16 +496,14 @@ async fn same_context_targets_restore_their_own_crash_state_after_switching() {
     }))
     .await;
     ctx.expect_result(104201, json!({}), None);
-    assert!(
-        ctx.conn
+    assert!({
+        let context = &ctx
+            .conn
             .browser_context
             .as_ref()
-            .expect("active browser context")
-            .active_page_target()
-            .owner_state
-            .target_crash_state
-            .is_crashed()
-    );
+            .expect("active browser context");
+        context.target_is_crashed(context.active_target_id().unwrap())
+    });
 
     ctx.process_async(json!({
         "id": 104202,
@@ -521,16 +521,10 @@ async fn same_context_targets_restore_their_own_crash_state_after_switching() {
         }),
         "first target should still remember its own crash state"
     );
-    assert!(
-        !ctx.conn
-            .browser_context
-            .as_ref()
-            .expect("browser context")
-            .active_page_target()
-            .owner_state
-            .target_crash_state
-            .is_crashed()
-    );
+    assert!(!{
+        let context = &ctx.conn.browser_context.as_ref().expect("browser context");
+        context.target_is_crashed(context.active_target_id().unwrap())
+    });
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -647,10 +641,12 @@ async fn same_context_targets_restore_their_own_domain_enablement_after_switchin
                 .runtime_slot
                 .primary_network_events_enabled()
         );
-        assert!(bc.active_page_target().effective_policy().cache_disabled());
         assert!(
-            bc.active_page_target()
-                .effective_policy()
+            bc.effective_policy_for_target(bc.active_target_id().unwrap())
+                .cache_disabled()
+        );
+        assert!(
+            bc.effective_policy_for_target(bc.active_target_id().unwrap())
                 .bypass_service_worker()
         );
         assert!(bc.active_page_target().css_enabled);
@@ -702,10 +698,12 @@ async fn same_context_targets_restore_their_own_domain_enablement_after_switchin
                 .runtime_slot
                 .primary_network_events_enabled()
         );
-        assert!(!bc.active_page_target().effective_policy().cache_disabled());
         assert!(
-            !bc.active_page_target()
-                .effective_policy()
+            !bc.effective_policy_for_target(bc.active_target_id().unwrap())
+                .cache_disabled()
+        );
+        assert!(
+            !bc.effective_policy_for_target(bc.active_target_id().unwrap())
                 .bypass_service_worker()
         );
         assert!(!bc.active_page_target().css_enabled);
@@ -853,8 +851,7 @@ async fn same_context_targets_restore_their_own_network_artifacts_after_switchin
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn same_context_targets_restore_their_own_page_attachment_id_and_request_counters_after_switching()
- {
+async fn same_context_targets_restore_their_own_document_id_and_request_counters_after_switching() {
     let mut ctx = TestContext::new();
     load_bc_with_titled_page_async(
         &mut ctx,
@@ -870,9 +867,7 @@ async fn same_context_targets_restore_their_own_page_attachment_id_and_request_c
         .attach_active_session("SID-active");
     {
         let bc = ctx.conn.browser_context.as_mut().expect("browser context");
-        bc.active_page_target_mut()
-            .runtime_slot
-            .set_page_attachment_id_for_test(11);
+        bc.set_active_document_fixture_for_test(11);
         bc.set_next_network_request_sequence_for_test(41);
         bc.set_subresource_network_emitted_record_count_for_test(12);
         bc.active_page_target_mut()
@@ -914,9 +909,7 @@ async fn same_context_targets_restore_their_own_page_attachment_id_and_request_c
 
     {
         let bc = ctx.conn.browser_context.as_mut().expect("browser context");
-        bc.active_page_target_mut()
-            .runtime_slot
-            .set_page_attachment_id_for_test(23);
+        bc.set_active_document_fixture_for_test(23);
         bc.set_next_network_request_sequence_for_test(71);
         bc.set_subresource_network_emitted_record_count_for_test(8);
         bc.active_page_target_mut()
@@ -931,10 +924,8 @@ async fn same_context_targets_restore_their_own_page_attachment_id_and_request_c
         let bc = ctx.conn.browser_context.as_ref().expect("browser context");
         assert_eq!(bc.active_target_id(), Some("TID-000000000A"));
         assert_eq!(
-            bc.active_page_target()
-                .runtime_slot
-                .page_attachment_id()
-                .map(crate::conn::TargetPageAttachmentId::get),
+            bc.target_document_id(bc.active_target_id().unwrap())
+                .map(crate::conn::DocumentId::get),
             Some(11)
         );
         assert_eq!(bc.next_network_request_sequence_for_test(), 41);
@@ -960,10 +951,8 @@ async fn same_context_targets_restore_their_own_page_attachment_id_and_request_c
         let bc = ctx.conn.browser_context.as_ref().expect("browser context");
         assert_eq!(bc.active_target_id(), Some(second_target_id.as_str()));
         assert_eq!(
-            bc.active_page_target()
-                .runtime_slot
-                .page_attachment_id()
-                .map(crate::conn::TargetPageAttachmentId::get),
+            bc.target_document_id(bc.active_target_id().unwrap())
+                .map(crate::conn::DocumentId::get),
             Some(23)
         );
         assert_eq!(bc.next_network_request_sequence_for_test(), 71);
@@ -1299,14 +1288,13 @@ async fn same_context_targets_restore_their_own_crash_state_after_session_scoped
     }))
     .await;
     ctx.expect_result(1042021, json!({}), Some("SID-active"));
-    ctx.conn
-        .browser_context
-        .as_mut()
-        .unwrap()
-        .active_page_target_mut()
-        .owner_state
-        .target_crash_state
-        .mark_crashed();
+    {
+        let context = &mut ctx.conn.browser_context.as_mut().unwrap();
+        let target_id = context
+            .active_target_id_owned()
+            .expect("active fixture target");
+        context.set_target_crash_state(&target_id, true)
+    };
     ctx.conn
         .browser_context
         .as_mut()
@@ -1365,16 +1353,14 @@ async fn same_context_targets_restore_their_own_crash_state_after_session_scoped
     }))
     .await;
     ctx.expect_result(1042025, json!({}), None);
-    assert!(
-        ctx.conn
+    assert!({
+        let context = &ctx
+            .conn
             .browser_context
             .as_ref()
-            .expect("active browser context")
-            .active_page_target()
-            .owner_state
-            .target_crash_state
-            .is_crashed()
-    );
+            .expect("active browser context");
+        context.target_is_crashed(context.active_target_id().unwrap())
+    });
 
     ctx.process_async(json!({
         "id": 1042026,
@@ -1416,16 +1402,10 @@ async fn same_context_targets_restore_their_own_crash_state_after_session_scoped
         first_eval["result"]["result"]["value"],
         json!("first-before-crash")
     );
-    assert!(
-        ctx.conn
-            .browser_context
-            .as_ref()
-            .expect("browser context")
-            .active_page_target()
-            .owner_state
-            .target_crash_state
-            .is_crashed()
-    );
+    assert!({
+        let context = &ctx.conn.browser_context.as_ref().expect("browser context");
+        context.target_is_crashed(context.active_target_id().unwrap())
+    });
 
     ctx.process_async(json!({
         "id": 1042029,
@@ -1440,16 +1420,10 @@ async fn same_context_targets_restore_their_own_crash_state_after_session_scoped
         message["method"] == json!("Inspector.targetReloadedAfterCrash")
             && message["sessionId"] == json!("SID-active")
     }));
-    assert!(
-        !ctx.conn
-            .browser_context
-            .as_ref()
-            .expect("browser context")
-            .active_page_target()
-            .owner_state
-            .target_crash_state
-            .is_crashed()
-    );
+    assert!(!{
+        let context = &ctx.conn.browser_context.as_ref().expect("browser context");
+        context.target_is_crashed(context.active_target_id().unwrap())
+    });
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -1572,8 +1546,8 @@ async fn same_context_targets_restore_their_own_domain_enablement_after_session_
                 .runtime_slot
                 .primary_network_events_enabled()
         );
-        assert!(bc.active_page_target().effective_policy().cache_disabled());
-        assert!(bc.active_page_target().effective_policy().bypass_service_worker());
+        assert!(bc.effective_policy_for_target(bc.active_target_id().unwrap()).cache_disabled());
+        assert!(bc.effective_policy_for_target(bc.active_target_id().unwrap()).bypass_service_worker());
         assert!(bc.active_page_target().css_enabled);
         assert!(bc.active_page_target().fetch_owner.is_enabled());
         assert!(bc.active_page_target().fetch_owner.handle_auth_requests());
@@ -1610,8 +1584,8 @@ async fn same_context_targets_restore_their_own_domain_enablement_after_session_
                 .runtime_slot
                 .primary_network_events_enabled()
         );
-        assert!(!bc.active_page_target().effective_policy().cache_disabled());
-        assert!(!bc.active_page_target().effective_policy().bypass_service_worker());
+        assert!(!bc.effective_policy_for_target(bc.active_target_id().unwrap()).cache_disabled());
+        assert!(!bc.effective_policy_for_target(bc.active_target_id().unwrap()).bypass_service_worker());
         assert!(!bc.active_page_target().css_enabled);
         assert!(bc.active_page_target().fetch_owner.is_enabled());
         assert!(!bc.active_page_target().fetch_owner.handle_auth_requests());
@@ -1648,8 +1622,8 @@ async fn same_context_targets_restore_their_own_domain_enablement_after_session_
                 .runtime_slot
                 .primary_network_events_enabled()
         );
-        assert!(bc.active_page_target().effective_policy().cache_disabled());
-        assert!(bc.active_page_target().effective_policy().bypass_service_worker());
+        assert!(bc.effective_policy_for_target(bc.active_target_id().unwrap()).cache_disabled());
+        assert!(bc.effective_policy_for_target(bc.active_target_id().unwrap()).bypass_service_worker());
         assert!(bc.active_page_target().css_enabled);
         assert!(bc.active_page_target().fetch_owner.is_enabled());
         assert!(bc.active_page_target().fetch_owner.handle_auth_requests());

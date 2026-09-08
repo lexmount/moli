@@ -877,22 +877,10 @@ impl RendererOwnerLocalStore {
         }
     }
 
-    pub(super) fn take_prepared_document(
+    pub(super) fn configure_prepared_document_inspection(
         &mut self,
         token: RendererPageReservationToken,
-    ) -> Result<RendererPreparedDocumentResidence> {
-        self.prepared_documents.remove(&token).ok_or_else(|| {
-            anyhow!(
-                "renderer owner no longer tracks prepared document for page {}",
-                token.page_id().as_u64()
-            )
-        })
-    }
-
-    pub(super) fn update_prepared_document_commit_configuration(
-        &mut self,
-        token: RendererPageReservationToken,
-        configuration: crate::runtime::RendererPreparedDocumentCommitConfiguration,
+        configuration: crate::runtime::RendererPreparedDocumentInspectionConfiguration,
     ) -> Result<()> {
         let residence = self.prepared_documents.get_mut(&token).ok_or_else(|| {
             anyhow!(
@@ -900,45 +888,58 @@ impl RendererOwnerLocalStore {
                 token.page_id().as_u64()
             )
         })?;
-        macro_rules! apply_configuration {
-            ($request:expr) => {{
-                let request = $request;
-                request.document_start_scripts = configuration.document_start_scripts;
-                request.runtime_bindings = configuration.runtime_bindings;
-                request.runtime_inspector_session_restore_snapshots =
-                    configuration.runtime_inspector_session_restore_snapshots;
-                request.runtime_isolated_worlds = configuration.runtime_isolated_worlds;
-                request.permission_overrides = configuration.permission_overrides;
-                request.extra_http_headers = configuration.extra_http_headers;
-                request.locale_override = configuration.locale_override;
-                request.timezone_override = configuration.timezone_override;
-                request.script_execution_disabled = configuration.script_execution_disabled;
-                request.bypass_content_security_policy =
-                    configuration.bypass_content_security_policy;
-                request.cpu_throttling_rate = configuration.cpu_throttling_rate;
-                request.emulated_media = configuration.emulated_media;
-                request.idle_override = configuration.idle_override;
-                request.viewport_surface = configuration.viewport_surface;
-                request
-                    .loader
-                    .replace_browser_resource_runtime(configuration.browser_resource_runtime);
-                request.navigator_identity = configuration.navigator_identity;
-                request.network_offline = configuration.network_offline;
-                request
-                    .loader
-                    .set_bypass_service_worker(configuration.bypass_service_worker);
-                request
-                    .loader
-                    .set_cache_disabled(configuration.cache_disabled);
-                request.blocked_url_patterns = configuration.blocked_url_patterns;
-                request.fetch_subresource_interception_enabled =
-                    configuration.fetch_subresource_interception_enabled;
-                request.fetch_subresource_interception_resource_type =
-                    configuration.fetch_subresource_interception_resource_type;
-            }};
+        let request = &mut residence.request;
+        if let Some(frame_id) = configuration.root_frame_projection_id {
+            request.root_frame_id = Some(frame_id);
         }
-        apply_configuration!(&mut residence.request);
+        request.main_document_commit = configuration.main_document_commit;
+        request.document_start_scripts = configuration.document_start_scripts;
+        request.runtime_bindings = configuration.runtime_bindings;
+        request.runtime_inspector_session_restore_snapshots =
+            configuration.runtime_inspector_session_restore_snapshots;
+        request.runtime_isolated_worlds = configuration.runtime_isolated_worlds;
         Ok(())
+    }
+
+    pub(super) fn take_prepared_document_for_materialization(
+        &mut self,
+        token: RendererPageReservationToken,
+        policy: Option<crate::runtime::RendererPreparedDocumentPolicy>,
+    ) -> Result<RendererPreparedDocumentResidence> {
+        let mut residence = self.prepared_documents.remove(&token).ok_or_else(|| {
+            anyhow!(
+                "renderer owner no longer tracks prepared document for page {}",
+                token.page_id().as_u64()
+            )
+        })?;
+        if let Some(policy) = policy {
+            let request = &mut residence.request;
+            request.permission_overrides = policy.permission_overrides;
+            request.extra_http_headers = policy.extra_http_headers;
+            request.locale_override = policy.locale_override;
+            request.timezone_override = policy.timezone_override;
+            request.script_execution_disabled = policy.script_execution_disabled;
+            request.bypass_content_security_policy = policy.bypass_content_security_policy;
+            request.cpu_throttling_rate = policy.cpu_throttling_rate;
+            request.emulated_media = policy.emulated_media;
+            request.idle_override = policy.idle_override;
+            request.viewport_surface = policy.viewport_surface;
+            request
+                .loader
+                .replace_browser_resource_runtime(policy.browser_resource_runtime);
+            request.navigator_identity = policy.navigator_identity;
+            request.network_offline = policy.network_offline;
+            request
+                .loader
+                .set_bypass_service_worker(policy.bypass_service_worker);
+            request.loader.set_cache_disabled(policy.cache_disabled);
+            request.blocked_url_patterns = policy.blocked_url_patterns;
+            request.fetch_subresource_interception_enabled =
+                policy.fetch_subresource_interception_enabled;
+            request.fetch_subresource_interception_resource_type =
+                policy.fetch_subresource_interception_resource_type;
+        }
+        Ok(residence)
     }
 
     pub(super) fn cancel_prepared_document(&mut self, token: RendererPageReservationToken) {
@@ -1621,6 +1622,11 @@ impl RendererOwnerLocalStore {
             response_status,
             response_headers,
             state_capture,
+            RendererOutputResidenceIdentity::Page {
+                owner_local_host_id: owner.local_host_id,
+                page_id: vm.page_id,
+            },
+            0,
         );
         let slot = Self::create_initial_slot_for_vm(owner, &vm, page_state);
         let page_context_cancel_tx = slot.page_context_cancel_sender();
@@ -1672,6 +1678,11 @@ impl RendererOwnerLocalStore {
             response_status,
             response_headers,
             state_capture,
+            RendererOutputResidenceIdentity::Page {
+                owner_local_host_id: owner.local_host_id,
+                page_id: page_vm.page_id,
+            },
+            0,
         );
         let slot = Self::create_initial_slot_for_vm(owner, page_vm, page_state);
         let page_context_cancel_tx = slot.page_context_cancel_sender();
@@ -2469,27 +2480,12 @@ impl RendererOwnerLocalStore {
         entry.slot.refresh_owned_view(view)
     }
 
-    fn commit_next_page_state_on_entry(
-        entry: &LivePageEntry,
-        vm_creation_id: u64,
-        page_state: Arc<RendererPageState>,
-    ) -> Result<()> {
-        Self::refresh_view_on_entry(
-            entry,
-            RendererPageView {
-                page_id: entry.slot.page_id(),
-                vm_creation_id,
-                view_generation: Self::prepare_next_view_generation(entry),
-                page_state,
-            },
-        )
-    }
-
     fn commit_vm_state_capture_as_page_state_on_entry(
         entry: &LivePageEntry,
         state_capture: PageVmStateCapture,
     ) -> Result<()> {
         let current_page_state = entry.slot.active_page_state()?;
+        let view_generation = Self::prepare_next_view_generation(entry);
         let page_state = RendererPageState::from_vm_state_capture(
             current_page_state.requested_url.clone(),
             current_page_state.navigation_initiator_url.clone(),
@@ -2498,8 +2494,18 @@ impl RendererOwnerLocalStore {
             current_page_state.status,
             current_page_state.headers.clone(),
             state_capture,
+            current_page_state.renderer_residence(),
+            view_generation,
         );
-        Self::commit_next_page_state_on_entry(entry, entry.page_vm().creation_id, page_state)
+        Self::refresh_view_on_entry(
+            entry,
+            RendererPageView {
+                page_id: entry.slot.page_id(),
+                vm_creation_id: entry.page_vm().creation_id,
+                view_generation,
+                page_state,
+            },
+        )
     }
 
     fn commit_active_vm_page_state_on_entry(

@@ -1,11 +1,11 @@
+use moli_core::browser::{DownloadBody, WebContentsHandle};
+#[cfg(test)]
+use moli_core::page::RendererPageCreationArtifacts;
 use moli_core::page::{
-    Page, RendererMainDocumentCommit, RendererPageCreationArtifacts,
-    RendererPendingDownloadActivation, RendererRuntimeRealmInfo,
+    Page, RendererMainDocumentCommit, RendererPendingDownloadActivation, RendererRuntimeRealmInfo,
 };
-use moli_fetch::StreamingRawResponse;
 use serde::Serialize;
 use serde_json::Value;
-use std::sync::Arc;
 use url::Url;
 
 use crate::conn::{CommandOwnerScope, ResponseCommitReady};
@@ -150,37 +150,31 @@ impl RendererMainDocumentCommitSeed {
 }
 
 #[derive(Debug)]
-pub(crate) enum CompletedDownloadBody {
-    Buffered(Vec<u8>),
-    Streaming(Box<StreamingRawResponse>),
-}
-
-#[derive(Debug)]
 pub(crate) struct CompletedDownloadBodyArtifact {
-    body: CompletedDownloadBody,
+    body: DownloadBody,
     response_headers: Vec<(String, String)>,
 }
 
 impl CompletedDownloadBodyArtifact {
-    pub(crate) fn from_body(
-        body: CompletedDownloadBody,
-        response_headers: Vec<(String, String)>,
-    ) -> Self {
+    pub(crate) fn from_body(body: DownloadBody, response_headers: Vec<(String, String)>) -> Self {
         Self {
             body,
             response_headers,
         }
     }
 
-    pub(crate) fn into_parts(self) -> (CompletedDownloadBody, Vec<(String, String)>) {
+    pub(crate) fn into_parts(self) -> (DownloadBody, Vec<(String, String)>) {
         (self.body, self.response_headers)
     }
 }
 
 #[derive(Debug)]
-pub struct LoadedNavigation {
-    pub page: Page,
+pub struct LoadedNavigation<P = Page> {
+    pub page: P,
     pub pending_download: Option<RendererPendingDownloadActivation>,
+    // Already-built Page fixtures retain their creation data. In production
+    // the admitted Browser participant owns it through commit, not Protocol.
+    #[cfg(test)]
     pub page_creation_artifacts: RendererPageCreationArtifacts,
     pub requested_url: Url,
     pub final_url: Url,
@@ -191,12 +185,11 @@ pub struct LoadedNavigation {
     pub response_from_cache: bool,
     pub initial_runtime_realms: Vec<RendererRuntimeRealmInfo>,
     pub renderer_output_predecessor: Option<moli_core::RendererOutputFence>,
-    pub(crate) main_document_commit: Option<Arc<RendererMainDocumentCommit>>,
     pub(crate) document_progress_transfer: CompletedDocumentProgressTransfer,
     pub(crate) network_error_page: Option<NetworkErrorPageNavigation>,
 }
 
-impl LoadedNavigation {
+impl<P> LoadedNavigation<P> {
     #[cfg(test)]
     pub(crate) fn response_body(&self) -> String {
         self.document_progress_transfer
@@ -224,7 +217,6 @@ pub struct DownloadNavigation {
 #[derive(Debug)]
 pub enum NavigationLoadOutcome {
     ResponseCommitReady(Box<ResponseCommitReady>),
-    Loaded(Box<LoadedNavigation>),
     Download(Box<DownloadNavigation>),
     NetworkFailure(String),
 }
@@ -296,6 +288,7 @@ impl NavigationResultProjection {
 pub struct NavigationDispatchState {
     pub navigate_id: Option<u64>,
     pub(crate) owner: CommandOwnerScope,
+    pub(crate) web_contents: WebContentsHandle,
     pub(crate) result_projection: NavigationResultProjection,
     pub frame_id: String,
     pub session_id: Option<String>,
@@ -316,6 +309,14 @@ pub struct NavigationDispatchState {
 }
 
 impl NavigationDispatchState {
+    #[cfg(test)]
+    pub(crate) fn detached_web_contents_for_test() -> WebContentsHandle {
+        WebContentsHandle::new(
+            moli_core::browser::BrowserContextId::allocate(),
+            moli_core::browser::WebContentsId::allocate(),
+        )
+    }
+
     pub(crate) fn clone_request_body_bytes(&self) -> Option<Vec<u8>> {
         self.request_body_bytes
             .clone()
@@ -328,13 +329,7 @@ impl NavigationDispatchState {
     }
 }
 
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
-pub enum NavigationRequestLoadPolicy {
-    #[default]
-    DocumentInitiated,
-    BrowserInitiated,
-    Reload,
-}
+pub use moli_core::browser::NavigationRequestLoadPolicy;
 
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -359,12 +354,7 @@ impl<'a> TargetInfo<'a> {
                 .owner_state
                 .committed_document_title()
                 .map(str::to_owned)
-                .or_else(|| {
-                    bc.active_page_target()
-                        .runtime_slot
-                        .loaded_page()
-                        .map(|page| page.document_title())
-                })
+                .or_else(|| bc.target_document_title(bc.active_target_id()?))
                 .unwrap_or_default(),
             url: bc.target_url(),
             attached,

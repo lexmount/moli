@@ -6,7 +6,7 @@ edition = "2024"
 build = "build.rs"
 
 [features]
-test-support = []
+test-support = ["moli-core/test-support"]
 
 [dependencies]
 anyhow = "1.0.100"
@@ -20,6 +20,7 @@ moli-browser-profile = { path = "../moli-browser-profile" }
 moli-cookie-jar = { path = "../moli-cookie-jar" }
 moli-encoding = { path = "../moli-encoding" }
 moli-protocol-cdp = { path = "../moli-protocol-cdp" }
+moli-renderer-v8 = { path = "../moli-renderer-v8" }
 moli-fetch = { path = "../moli-fetch" }
 moli-css-parse = { path = "../moli-css-parse" }
 moli-shared-worker = { path = "../moli-shared-worker" }
@@ -45,10 +46,10 @@ chromiumoxide_cdp = "0.9.1"
 data-url = "0.3.2"
 moli-crypto = { path = "../moli-crypto" }
 http = "1"
-sanitize-filename = "=0.6.0"
 
 [dev-dependencies]
 axum = { version = "0.8.6", features = ["ws"] }
+moli-core = { path = "../moli-core", features = ["test-support"] }
 moli-cookie-jar = { path = "../moli-cookie-jar", features = ["test-support"] }
 moli-image = { path = "../moli-image" }
 moli-storage-service = { path = "../moli-storage-service" }

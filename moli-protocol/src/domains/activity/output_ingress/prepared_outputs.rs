@@ -14,8 +14,8 @@ use crate::domains::page::{PagePreparedOutputSlot, SLOT_TOP_LEVEL_LOCATION_NAVIG
 ///
 /// The batch owns typed payload exactly once and preserves the producer's
 /// explicit FIFO order. It cannot select renderer work or inspect current renderer state. Consumers
-/// must either project it, hold its remaining after-response slots behind an
-/// exact command barrier, or consume only its owner actions during stale
+/// must either project it, hold its remaining after-response slots for an
+/// exact command response permit, or consume only its owner actions during stale
 /// cleanup.
 #[derive(Debug)]
 #[must_use = "prepared protocol outputs must be projected, held, or cleaned up exactly once"]
@@ -87,18 +87,15 @@ impl PreparedProtocolOutputs {
                 )
                 .append_to_document_title_output_sink(&mut prepared);
             }
-            RendererProtocolObservation::DocumentLifecycle(event) => {
-                crate::domains::page::PagePreparedOutputs::from_renderer_document_lifecycle_event(
-                    *event,
-                )
-                .append_to_document_lifecycle_output_sink(&mut prepared);
-            }
+            RendererProtocolObservation::DocumentLifecycle(_) => unreachable!(
+                "renderer lifecycle must be admitted by the Browser before preparing projection"
+            ),
             RendererProtocolObservation::Network { .. } => unreachable!(
                 "renderer Network facts require the ingress-bound live projection constructor"
             ),
             RendererProtocolObservation::RuntimeBinding(call) => {
                 crate::domains::runtime::RuntimePreparedOutputs::
-                    from_renderer_runtime_binding_call(conn, owner, call.clone())
+                    from_renderer_runtime_binding_call(conn, owner, source_renderer_agent, call.clone())
                 .append_to_output_sink(&mut prepared);
             }
             RendererProtocolObservation::DomMutations(batch) => {
@@ -188,6 +185,15 @@ impl PreparedProtocolOutputs {
         prepared
     }
 
+    pub(in crate::domains::activity) fn from_browser_document_lifecycle_event(
+        event: crate::conn::DocumentLifecycleEvent,
+    ) -> Self {
+        let mut prepared = Self::empty();
+        crate::domains::page::PagePreparedOutputs::from_browser_document_lifecycle_event(event)
+            .append_to_document_lifecycle_output_sink(&mut prepared);
+        prepared
+    }
+
     pub(in crate::domains::activity) async fn from_protocol_local_command_boundary(
         conn: &mut CdpConnection,
         owner: &CommandOwnerScope,
@@ -212,7 +218,7 @@ impl PreparedProtocolOutputs {
             }
             RendererOwnerAction::Download(activation) => {
                 crate::domains::input::InputPreparedOutputs::from_renderer_download_activation(
-                    activation,
+                    conn, owner, activation,
                 )
                 .append_to_output_sink(&mut prepared);
             }

@@ -75,9 +75,14 @@ impl CdpConnection {
                 )
             })
             .collect();
-        if let Err(error) = self
-            .apply_background_target_surface_overrides_async(previous_target_id)
-            .await
+        let previous = self.browser_web_contents_for_target(previous_target_id);
+        if let Err(error) = async {
+            let previous = previous?;
+            self.apply_browser_page_surface_async(previous, false)
+                .await
+                .map(drop)
+        }
+        .await
         {
             tracing::warn!(
                 target_id = previous_target_id,
@@ -102,14 +107,22 @@ impl CdpConnection {
             .deactivated_target_id()
             .map(|active_target_id| self.page_screencast_session_ids_for_target(active_target_id))
             .unwrap_or_default();
-        let Some(browser_context) = self.browser_context.as_mut() else {
-            anyhow::bail!("BrowserContextNotLoaded");
+        let handle = {
+            let Some(browser_context) = self.browser_context.as_ref() else {
+                anyhow::bail!("BrowserContextNotLoaded");
+            };
+            let Some(handle) = browser_context.web_contents_handle_for_target(target_id) else {
+                return Ok(None);
+            };
+            handle
         };
-        let selected = browser_context.select_page_target_async(target_id).await?;
-        if !selected {
+        if let Err(error) = self.select_browser_web_contents_async(handle).await {
+            return Err(anyhow::anyhow!(error));
+        }
+        if self.browser_context.is_none() {
             return Ok(None);
         }
-        self.refresh_active_browser_context_loader_async().await;
+        self.refresh_active_browser_context_loader();
         self.notify_target_host_activated(target_id);
 
         let mut protocol_events = Vec::new();
@@ -148,10 +161,7 @@ impl CdpConnection {
         self.page_event_session_ids_for_owner(&owner)
             .into_iter()
             .filter(|session_id| {
-                let event_owner = session_id
-                    .as_deref()
-                    .map(CommandOwnerScope::for_session)
-                    .unwrap_or_else(|| owner.clone());
+                let event_owner = owner.for_target_event_session(self, session_id.as_deref());
                 self.target_page_session_state_for_owner(&event_owner)
                     .is_some_and(|state| state.page_screencast.is_active())
             })

@@ -473,16 +473,17 @@ async fn perform_search_selectors_cover_all_frame_documents_and_author_shadow_ro
 #[tokio::test(flavor = "multi_thread")]
 async fn dom_search_targets_loaded_background_owner_without_activation() {
     let mut ctx = TestContext::new();
-    let background = PageTargetHost::with_url(
+
+    let mut bc = ctx
+        .conn
+        .new_browser_context_fixture_for_test("BID-A".to_owned());
+    bc.set_active_target_id("TID-active".to_owned());
+    bc.attach_active_session("SID-active".to_owned());
+    bc.register_page_target_url_fixture(
         "TID-background".to_owned(),
         Some("SID-background".to_owned()),
         "about:blank".to_owned(),
     );
-
-    let mut bc = BrowserContext::new("BID-A".to_owned());
-    bc.set_active_target_id("TID-active".to_owned());
-    bc.attach_active_session("SID-active".to_owned());
-    bc.insert_page_target_host(background);
     ctx.conn.install_browser_context_fixture_for_test(bc);
     ctx.install_navigation_fixture_for_session_owner(
         "data:text/html,<!doctype html><html><body><span>one</span><span>two</span></body></html>",
@@ -556,12 +557,16 @@ async fn dom_search_targets_loaded_background_owner_without_activation() {
 #[tokio::test(flavor = "multi_thread")]
 async fn dom_search_targets_inactive_loaded_owner_without_activation() {
     let mut ctx = TestContext::new();
-    let mut active = BrowserContext::new("BID-active".to_owned());
+    let mut active = ctx
+        .conn
+        .new_browser_context_fixture_for_test("BID-active".to_owned());
     active.set_active_target_id("TID-active".to_owned());
     active.attach_active_session("SID-active".to_owned());
     ctx.conn.install_browser_context_fixture_for_test(active);
 
-    let mut inactive = BrowserContext::new("BID-inactive".to_owned());
+    let mut inactive = ctx
+        .conn
+        .new_browser_context_fixture_for_test("BID-inactive".to_owned());
     inactive.set_active_target_id("TID-inactive".to_owned());
     inactive.set_target_url("about:blank".to_owned());
     inactive.attach_active_session("SID-inactive".to_owned());

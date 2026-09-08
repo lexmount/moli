@@ -71,7 +71,7 @@ impl WorkerResourceLoader {
     ) -> Self {
         let loads = ResourceLoadRegistry::new(task_runner);
         Self {
-            request_client,
+            request_client: request_client.with_load_context(&loads),
             authority: Arc::new(WorkerResourceLoaderAuthority {
                 id: NEXT_WORKER_RESOURCE_LOADER_ID
                     .fetch_add(1, Ordering::Relaxed)

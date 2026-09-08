@@ -24,8 +24,9 @@ pub struct Cmd<'a> {
     pub session_id: Option<&'a str>,
     /// Raw JSON of the entire message, useful for inspector passthrough.
     pub json: &'a str,
-    /// Renderer scheduling facts derived from the same validated method as
-    /// every other field in this view.
+    /// Renderer execution policy derived from the same validated method as
+    /// every other field in this view. Dispatch ownership and Main/IO routing
+    /// are decided later by the domain handler.
     ///
     /// This is private so callers cannot pair one command with another
     /// command's policy. Domain dispatchers consume it through

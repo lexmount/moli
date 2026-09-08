@@ -1230,6 +1230,7 @@ async fn rejected_websocket_status(url: String) -> u16 {
 }
 
 mod bidi;
+mod browser_events;
 mod cdp_dynamic_page;
 mod classic;
 mod download;

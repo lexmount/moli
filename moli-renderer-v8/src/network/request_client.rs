@@ -1,5 +1,6 @@
 use std::{
     fmt,
+    num::NonZeroU64,
     sync::{Arc, mpsc},
     thread,
     time::Instant,
@@ -19,8 +20,9 @@ use crate::{protocol_types::OptionalResourceFetchMask, types::SubresourceResourc
 use super::{
     backend::{
         BrowserResourceRuntime, BrowserResourceRuntimeDiagnostics, BrowserResourceRuntimeOwner,
-        BrowserResourceRuntimeOwnerRoot, RawSubresourceCacheKey, ScriptTextCacheLookup,
-        SharedMemoryResourceCacheDiagnostics, raw_subresource_memory_cache_expiry,
+        BrowserResourceRuntimeOwnerRoot, RawSubresourceCacheKey, ScriptTextCacheKey,
+        ScriptTextCacheLookup, ScriptTextLoadScope, SharedMemoryResourceCacheDiagnostics,
+        SharedScriptTextLoad, raw_subresource_memory_cache_expiry,
         raw_subresource_memory_cache_key, script_text_cache_key,
         script_text_request_is_memory_cacheable,
     },
@@ -33,6 +35,7 @@ pub struct ResourceRequestClient {
     resource_runtime: BrowserResourceRuntime,
     page_network_policy: PageNetworkPolicy,
     browser_site_context: Option<Arc<BrowserCookieFacadeContext>>,
+    load_context_id: Option<NonZeroU64>,
 }
 
 /// Thread-affine lifetime root for a standalone resource request client.
@@ -104,7 +107,29 @@ impl ResourceRequestClient {
             resource_runtime,
             page_network_policy,
             browser_site_context: None,
+            load_context_id: None,
         }
+    }
+
+    pub(in crate::network) fn with_load_context(
+        mut self,
+        registry: &loads::ResourceLoadRegistry,
+    ) -> Self {
+        self.load_context_id = Some(
+            NonZeroU64::new(registry.id()).expect("resource load registry identity is nonzero"),
+        );
+        self
+    }
+
+    fn script_load_scope(&self) -> ScriptTextLoadScope {
+        self.load_context_id.map_or_else(
+            || {
+                ScriptTextLoadScope::UnboundRuntime(
+                    self.resource_runtime.runtime_id_for_diagnostics(),
+                )
+            },
+            |id| ScriptTextLoadScope::Context(id.get()),
+        )
     }
 
     pub(crate) fn with_browser_site_context(
@@ -136,12 +161,10 @@ impl ResourceRequestClient {
     }
 
     pub(crate) fn frozen_request_client(&self) -> Self {
-        let mut client = Self::from_browser_resource_runtime_with_page_network_policy(
-            self.resource_runtime.clone(),
-            self.page_network_policy.frozen_request_view(),
-        );
-        client.browser_site_context = self.browser_site_context.clone();
-        client
+        Self {
+            page_network_policy: self.page_network_policy.frozen_request_view(),
+            ..self.clone()
+        }
     }
 
     pub fn shares_page_network_policy_with(&self, other: &Self) -> bool {
@@ -203,10 +226,19 @@ impl ResourceRequestClient {
         &self,
         request: Request,
     ) -> Result<NetworkFetchResult<RawResponse>> {
+        self.fetch_raw_with_cancel_and_network_metadata(request, FetchCancelHandle::new())
+            .await
+    }
+
+    pub async fn fetch_raw_with_cancel_and_network_metadata(
+        &self,
+        request: Request,
+        cancel_handle: FetchCancelHandle,
+    ) -> Result<NetworkFetchResult<RawResponse>> {
         let request = self.apply_network_policy(request)?;
         self.resource_runtime
             .client()
-            .fetch_raw_with_network_metadata(request)
+            .fetch_raw_with_cancel_and_network_metadata(request, cancel_handle)
             .await
     }
 
@@ -280,148 +312,71 @@ impl ResourceRequestClient {
     pub(crate) async fn fetch_cacheable_script_text_stream(
         &self,
         request: Request,
+        task_runner: super::RendererResourceTaskRunner,
     ) -> Result<Response> {
         let request = self.apply_network_policy(request)?;
         if let Some(result) = local_text_response(&request.url) {
             return result;
         }
-        let timing_enabled = moli_trace::cdp_nav_timing_enabled();
-        let timing_url = timing_enabled.then(|| request.url.to_string());
         if !script_text_request_is_memory_cacheable(&request) {
-            let started = timing_enabled.then(Instant::now);
-            if let Some(url) = timing_url.as_deref() {
-                tracing::info!(
-                    target: "moli_cdp_nav_timing",
-                    url,
-                    cacheable = false,
-                    cache_role = "direct",
-                    stage = "script_text_request_start",
-                );
+            // Before response headers there is no streaming body whose Drop
+            // can cancel transport, so the pending request needs its own guard.
+            struct PendingScriptFetch(FetchCancelHandle);
+            impl Drop for PendingScriptFetch {
+                fn drop(&mut self) {
+                    self.0.cancel();
+                }
             }
-            let result = self
-                .fetch_text_stream_with_cancel_after_policy(request, FetchCancelHandle::new())
+            let pending = PendingScriptFetch(FetchCancelHandle::new());
+            return self
+                .fetch_text_stream_with_cancel_after_policy(request, pending.0.clone())
                 .await;
-            if let (Some(started), Some(url)) = (started, timing_url.as_deref()) {
-                let status = result.as_ref().ok().map(|response| response.status);
-                tracing::info!(
-                    target: "moli_cdp_nav_timing",
-                    url,
-                    cacheable = false,
-                    cache_role = "direct",
-                    status,
-                    ok = result.is_ok(),
-                    elapsed_ms = started.elapsed().as_millis(),
-                    stage = "script_text_request_done",
-                );
-            }
-            return result;
         }
-
-        let page_cache_partition_id = self.page_network_policy.memory_cache_partition_id();
-        if let Some(url) = timing_url.as_deref() {
-            tracing::info!(
-                target: "moli_cdp_nav_timing",
-                url,
-                cacheable = true,
-                page_cache_partition_id,
-                credentials_mode = request.credentials_mode.as_ref(),
-                cookie_context = ?request.cookie_context,
-                stage = "script_text_cache_lookup",
-            );
-        }
-        let key = script_text_cache_key(&request).for_page_cache_partition(page_cache_partition_id);
+        let key = script_text_cache_key(&request)
+            .for_page_cache_partition(self.page_network_policy.memory_cache_partition_id());
         let lookup = {
             let mut cache = self.resource_runtime.memory_cache().lock();
             if request.cache_mode().allows_memory_cache_lookup() {
-                cache.lookup_script_text(key.clone())
+                cache.lookup_script_text(key.clone(), self.script_load_scope(), |vary| {
+                    self.resource_runtime
+                        .client()
+                        .cache_vary_headers_match(&request, vary)
+                })
             } else {
-                cache.replace_script_text(key.clone())
+                cache.replace_script_text(key.clone(), self.script_load_scope())
             }
         };
-
-        let load = match lookup {
-            ScriptTextCacheLookup::Owner(load) => load,
-            ScriptTextCacheLookup::PendingWaiter(load) => {
-                let started = timing_enabled.then(Instant::now);
-                if let Some(url) = timing_url.as_deref() {
-                    tracing::info!(
-                        target: "moli_cdp_nav_timing",
-                        url,
-                        cacheable = true,
-                        cache_role = "waiter",
-                        stage = "script_text_cache_wait_start",
-                    );
-                }
-                let result = load.wait().await.map_err(anyhow::Error::msg);
-                if let (Some(started), Some(url)) = (started, timing_url.as_deref()) {
-                    let status = result.as_ref().ok().map(|response| response.status);
-                    tracing::info!(
-                        target: "moli_cdp_nav_timing",
-                        url,
-                        cacheable = true,
-                        cache_role = "waiter",
-                        status,
-                        ok = result.is_ok(),
-                        elapsed_ms = started.elapsed().as_millis(),
-                        stage = "script_text_cache_wait_done",
-                    );
-                }
-                return result;
-            }
+        let (load, owns_transport) = match lookup {
+            ScriptTextCacheLookup::Owner(load) => (load, true),
+            ScriptTextCacheLookup::PendingWaiter(load) => (load, false),
             ScriptTextCacheLookup::CompletedHit(result) => {
-                let result = result
+                return result
                     .map(response_with_memory_cache_hit)
                     .map_err(anyhow::Error::msg);
-                if let Some(url) = timing_url.as_deref() {
-                    let status = result.as_ref().ok().map(|response| response.status);
-                    tracing::info!(
-                        target: "moli_cdp_nav_timing",
-                        url,
-                        cacheable = true,
-                        cache_role = "hit",
-                        status,
-                        ok = result.is_ok(),
-                        stage = "script_text_cache_hit",
-                    );
-                }
-                return result;
             }
         };
-
-        let started = timing_enabled.then(Instant::now);
-        if let Some(url) = timing_url.as_deref() {
-            tracing::info!(
-                target: "moli_cdp_nav_timing",
-                url,
-                cacheable = true,
-                cache_role = "owner",
-                stage = "script_text_request_start",
-            );
+        let (send, receive) = tokio::sync::oneshot::channel();
+        // Both async and callback callers now own the same cancellable cache
+        // registration. Retiring one caller cannot strand a surviving waiter.
+        let _consumer = load.wait_callback(Box::new(move |result| {
+            let _ = send.send(result);
+        }));
+        if owns_transport {
+            let client = self.clone();
+            let cancel = FetchCancelHandle::new();
+            load.attach_transport_cancel(cancel.clone());
+            task_runner.spawn(async move {
+                let result = client
+                    .fetch_text_stream_with_cancel_after_policy(request.clone(), cancel)
+                    .await
+                    .map_err(|error| format!("{error:#}"));
+                client.complete_script_text_cache_transport(key, load, request, result);
+            });
         }
-        let cache_request = request.clone();
-        let result = self
-            .fetch_text_stream_with_cancel_after_policy(request, FetchCancelHandle::new())
+        receive
             .await
-            .map_err(|error| format!("{error:#}"));
-        if let (Some(started), Some(url)) = (started, timing_url.as_deref()) {
-            let status = result.as_ref().ok().map(|response| response.status);
-            tracing::info!(
-                target: "moli_cdp_nav_timing",
-                url,
-                cacheable = true,
-                cache_role = "owner",
-                status,
-                ok = result.is_ok(),
-                elapsed_ms = started.elapsed().as_millis(),
-                stage = "script_text_request_done",
-            );
-        }
-        self.resource_runtime
-            .memory_cache()
-            .lock()
-            .complete_script_text(&key, &load, &cache_request, &result);
-        load.finish(result.clone());
-        result.map_err(anyhow::Error::msg)
+            .context("script cache producer stopped")?
+            .map_err(anyhow::Error::msg)
     }
 
     pub(crate) fn fetch_cacheable_script_text_callback_with_load<F>(
@@ -513,9 +468,13 @@ impl ResourceRequestClient {
         let lookup = {
             let mut cache = self.resource_runtime.memory_cache().lock();
             if request.cache_mode().allows_memory_cache_lookup() {
-                cache.lookup_script_text(key.clone())
+                cache.lookup_script_text(key.clone(), self.script_load_scope(), |vary| {
+                    self.resource_runtime
+                        .client()
+                        .cache_vary_headers_match(&request, vary)
+                })
             } else {
-                cache.replace_script_text(key.clone())
+                cache.replace_script_text(key.clone(), self.script_load_scope())
             }
         };
 
@@ -584,18 +543,26 @@ impl ResourceRequestClient {
         if !owns_transport {
             return Ok(());
         }
+        self.start_script_text_cache_transport(request, key, load);
+        Ok(())
+    }
 
-        let request_client = self.clone();
-        let owner_load = Arc::clone(&load);
-        if let Some(url) = timing_url.as_deref() {
+    fn start_script_text_cache_transport(
+        &self,
+        request: Request,
+        key: ScriptTextCacheKey,
+        load: SharedScriptTextLoad,
+    ) {
+        if moli_trace::cdp_nav_timing_enabled() {
             tracing::info!(
                 target: "moli_cdp_nav_timing",
-                url,
+                url = request.url.as_str(),
                 cacheable = true,
-                cache_role = "owner-callback",
                 stage = "script_text_request_start",
             );
         }
+        let request_client = self.clone();
+        let owner_load = Arc::clone(&load);
         let cache_request = request.clone();
         let callback_cache_request = cache_request.clone();
         let callback_key = key.clone();
@@ -606,27 +573,41 @@ impl ResourceRequestClient {
             cancel_handle,
             move |result| {
                 let result = result.map_err(|error| format!("{error:#}"));
-                request_client
-                    .resource_runtime
-                    .memory_cache()
-                    .lock()
-                    .complete_script_text(
-                        &callback_key,
-                        &owner_load,
-                        &callback_cache_request,
-                        &result,
-                    );
-                owner_load.finish(result.clone());
+                request_client.complete_script_text_cache_transport(
+                    callback_key,
+                    owner_load,
+                    callback_cache_request,
+                    result,
+                );
             },
         ) {
             let result = Err(format!("{error:#}"));
-            self.resource_runtime
-                .memory_cache()
-                .lock()
-                .complete_script_text(&key, &load, &cache_request, &result);
-            load.finish(result);
+            self.complete_script_text_cache_transport(key, load, cache_request, result);
         }
-        Ok(())
+    }
+
+    fn complete_script_text_cache_transport(
+        &self,
+        key: ScriptTextCacheKey,
+        load: SharedScriptTextLoad,
+        request: Request,
+        result: std::result::Result<Response, String>,
+    ) {
+        self.resource_runtime
+            .memory_cache()
+            .lock()
+            .complete_script_text(
+                &key,
+                &load,
+                &request,
+                &result,
+                result.as_ref().ok().and_then(|response| {
+                    self.resource_runtime
+                        .client()
+                        .cache_vary_headers(&request, &response.headers)
+                }),
+            );
+        load.finish(result);
     }
 
     async fn fetch_text_stream_with_cancel_after_policy(
@@ -689,7 +670,11 @@ impl ResourceRequestClient {
                 .resource_runtime
                 .memory_cache()
                 .lock()
-                .lookup_raw_subresource(cache_key)
+                .lookup_raw_subresource(cache_key, |vary| {
+                    self.resource_runtime
+                        .client()
+                        .cache_vary_headers_match(&request, vary)
+                })
         {
             return streaming_raw_response_from_cached_subresource(cached);
         }
@@ -727,7 +712,11 @@ impl ResourceRequestClient {
                 .resource_runtime
                 .memory_cache()
                 .lock()
-                .lookup_raw_subresource(cache_key)
+                .lookup_raw_subresource(cache_key, |vary| {
+                    self.resource_runtime
+                        .client()
+                        .cache_vary_headers_match(&request, vary)
+                })
         {
             return Ok(NetworkFetchResult::without_request_observation(
                 streaming_raw_response_from_cached_subresource(cached)?,
@@ -821,11 +810,19 @@ impl ResourceRequestClient {
                 let materialized = RawResponse::from_head_and_body(response.head(), body);
                 if let Some(expires_at_unix_ms) =
                     raw_subresource_memory_cache_expiry(&request, &materialized)
+                    && let Some(vary_headers) = resource_runtime
+                        .client()
+                        .cache_vary_headers(&request, &materialized.headers)
                 {
                     resource_runtime
                         .memory_cache()
                         .lock()
-                        .insert_raw_subresource(cache_key, materialized, expires_at_unix_ms);
+                        .insert_raw_subresource(
+                            cache_key,
+                            materialized,
+                            expires_at_unix_ms,
+                            vary_headers,
+                        );
                 }
             }
 
@@ -870,7 +867,7 @@ impl ResourceRequestClient {
     ) -> Result<Response> {
         let request_client = self.clone();
         let (response_tx, response_rx) = mpsc::sync_channel(1);
-        thread::Builder::new()
+        let helper = thread::Builder::new()
             .name("lm-worker-script-fetch".to_owned())
             .spawn(move || {
                 // importScripts() and module-worker graph loading are
@@ -889,9 +886,11 @@ impl ResourceRequestClient {
                 let _ = response_tx.send(result);
             })
             .context("failed to spawn worker script fetch thread")?;
-        response_rx
+        let result = response_rx
             .recv()
-            .context("worker script fetch thread dropped response channel")?
+            .context("worker script fetch thread dropped response channel");
+        let _ = helper.join();
+        result?
     }
 
     pub(crate) fn fetch_raw_for_blocking_boundary(&self, request: Request) -> Result<RawResponse> {

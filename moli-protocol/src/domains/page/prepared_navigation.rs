@@ -1,6 +1,6 @@
 use moli_core::RendererRuntimeCommandCausalIdentity;
 use moli_core::page::{
-    RendererDocumentLifecycleIdentity, RendererDocumentSourcedSameDocumentNavigation,
+    RendererDocumentSourcedSameDocumentNavigation,
     RendererDocumentSourcedTopLevelLocationNavigation, RendererPendingSameDocumentNavigation,
 };
 
@@ -28,10 +28,6 @@ impl PagePreparedSameDocumentNavigation {
 
     pub(super) fn owner(&self) -> &TargetPageResidenceIdentity {
         &self.owner
-    }
-
-    pub(super) fn source_document(&self) -> RendererDocumentLifecycleIdentity {
-        self.navigation.source_document()
     }
 
     pub(super) fn into_navigation(self) -> RendererPendingSameDocumentNavigation {

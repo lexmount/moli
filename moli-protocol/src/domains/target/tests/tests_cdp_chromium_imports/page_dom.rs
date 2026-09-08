@@ -193,16 +193,22 @@ async fn rust_cdp_capability_page_set_download_behavior_alias_contract() {
         .expect("attached page target should have a browser context");
     let settings = ctx
         .conn
-        .download_behavior
-        .effective_for_browser_context(Some(browser_context_id.as_str()));
-    assert_eq!(settings.behavior, "allow");
+        .download_policy_for_browser_context(Some(browser_context_id.as_str()));
+    assert_eq!(
+        settings.behavior,
+        moli_core::browser::DownloadBehavior::Allow
+    );
     assert_eq!(
         settings.download_path.as_deref(),
         Some("/tmp/moli-page-downloads")
     );
-    assert!(!settings.automation_events_enabled);
     assert!(
-        !ctx.conn.download_behavior.automation_events_enabled,
+        !ctx.conn
+            .automation_download_events_enabled_for_context(Some(&browser_context_id))
+    );
+    assert!(
+        !ctx.conn
+            .automation_download_events_enabled_for_context(None),
         "Page.setDownloadBehavior must not enable Browser download events"
     );
 }

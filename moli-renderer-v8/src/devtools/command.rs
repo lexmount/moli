@@ -1,10 +1,13 @@
 //! Typed metadata and payloads crossing the renderer DevTools ingress boundary.
 
 use crate::runtime::{
-    RendererInspectorPageCommand, RendererPageCommand, RendererRuntimeInspectorResponseSender,
+    RendererInspectorPageCommand, RendererPageCommand, RendererPageToken,
+    RendererRuntimeInspectorResponseSender, RendererRuntimeInspectorSessionDetachGuard,
 };
 use crate::script_execution_control::RendererScriptExecutionControl;
-use moli_page_types::{DevToolsSessionKey, RendererAgentAttachmentId, RendererDevToolsCommandId};
+use moli_page_types::{
+    DevToolsSessionKey, RendererAgentAttachmentId, RendererCommandId, SubresourceResourceType,
+};
 use serde_json::Value;
 
 /// Chromium routes Page DevTools work through separate main-thread and IO
@@ -57,7 +60,7 @@ pub struct RendererInspectorIngressTicket {
     attachment: Option<RendererAgentAttachmentId>,
     session: DevToolsSessionKey,
     route: RendererInspectorCommandRoute,
-    command_id: RendererDevToolsCommandId,
+    command_id: RendererCommandId,
 }
 
 impl RendererInspectorIngressTicket {
@@ -74,7 +77,7 @@ impl RendererInspectorIngressTicket {
                     .filter(|session_id| !session_id.is_empty()),
             ),
             route,
-            command_id: RendererDevToolsCommandId::allocate(),
+            command_id: RendererCommandId::allocate(),
         }
     }
 
@@ -90,7 +93,7 @@ impl RendererInspectorIngressTicket {
         self.route
     }
 
-    pub fn command_id(&self) -> RendererDevToolsCommandId {
+    pub fn command_id(&self) -> RendererCommandId {
         self.command_id
     }
 
@@ -136,6 +139,13 @@ pub struct RendererDevToolsIoCommandEnvelope {
 
 pub(crate) enum RendererDevToolsIoCommandPayload {
     Inspector(RendererInspectorCommandEnvelope),
+    FinalizeSessionDetach {
+        token: RendererPageToken,
+        inspector_session_id: Option<String>,
+        fetch_subresource_interception: Option<(bool, Option<SubresourceResourceType>)>,
+        pause_guard: RendererRuntimeInspectorSessionDetachGuard,
+        reply: tokio::sync::oneshot::Sender<Result<bool, String>>,
+    },
     PerformanceGetMetrics {
         result: Value,
         response: Option<RendererRuntimeInspectorResponseSender>,
@@ -150,6 +160,7 @@ pub(crate) enum RendererDevToolsIoCommandPayload {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum RendererDevToolsIoCommandKind {
     Inspector,
+    SessionLifecycle,
     Performance,
     Emulation,
 }
@@ -173,6 +184,26 @@ impl RendererDevToolsIoCommandEnvelope {
             RendererDevToolsIoCommandPayload::PerformanceGetMetrics {
                 result: Value::Null,
                 response: None,
+            },
+        )
+    }
+
+    pub(crate) fn finalize_session_detach(
+        ticket: RendererInspectorIngressTicket,
+        token: RendererPageToken,
+        inspector_session_id: Option<String>,
+        fetch_subresource_interception: Option<(bool, Option<SubresourceResourceType>)>,
+        pause_guard: RendererRuntimeInspectorSessionDetachGuard,
+        reply: tokio::sync::oneshot::Sender<Result<bool, String>>,
+    ) -> Self {
+        Self::new_agent_command(
+            ticket,
+            RendererDevToolsIoCommandPayload::FinalizeSessionDetach {
+                token,
+                inspector_session_id,
+                fetch_subresource_interception,
+                pause_guard,
+                reply,
             },
         )
     }
@@ -243,12 +274,30 @@ impl RendererDevToolsIoCommandEnvelope {
             RendererDevToolsIoCommandPayload::Inspector(_) => {
                 RendererDevToolsIoCommandKind::Inspector
             }
+            RendererDevToolsIoCommandPayload::FinalizeSessionDetach { .. } => {
+                RendererDevToolsIoCommandKind::SessionLifecycle
+            }
             RendererDevToolsIoCommandPayload::PerformanceGetMetrics { .. } => {
                 RendererDevToolsIoCommandKind::Performance
             }
             RendererDevToolsIoCommandPayload::SetScriptExecutionDisabled { .. } => {
                 RendererDevToolsIoCommandKind::Emulation
             }
+        }
+    }
+
+    pub(crate) fn required_active_page_for_interrupt(&self) -> Option<crate::runtime::PageId> {
+        match &self.payload {
+            // Session teardown mutates PageVm-owned Inspector state. An IO
+            // interrupt may do that only while this exact Page is bound on
+            // the suspended owner stack; an idle Page is finalized by the
+            // already-scheduled owner wake instead.
+            RendererDevToolsIoCommandPayload::FinalizeSessionDetach { token, .. } => {
+                Some(token.page_id())
+            }
+            RendererDevToolsIoCommandPayload::Inspector(_)
+            | RendererDevToolsIoCommandPayload::PerformanceGetMetrics { .. }
+            | RendererDevToolsIoCommandPayload::SetScriptExecutionDisabled { .. } => None,
         }
     }
 
@@ -271,6 +320,7 @@ impl RendererDevToolsIoCommandEnvelope {
     pub(crate) fn response(&self) -> Option<&RendererRuntimeInspectorResponseSender> {
         match &self.payload {
             RendererDevToolsIoCommandPayload::Inspector(envelope) => envelope.response(),
+            RendererDevToolsIoCommandPayload::FinalizeSessionDetach { .. } => None,
             RendererDevToolsIoCommandPayload::PerformanceGetMetrics { response, .. }
             | RendererDevToolsIoCommandPayload::SetScriptExecutionDisabled { response, .. } => {
                 response.as_ref()
@@ -283,17 +333,22 @@ impl RendererDevToolsIoCommandEnvelope {
     }
 }
 
-/// One command delivered by the renderer's Main DevTools receiver.
+/// One command delivered by the renderer's Main execution pump.
 ///
 /// Unlike `RendererInspectorCommandEnvelope`, this envelope is deliberately
-/// agent-neutral: protocol commands that ultimately need the renderer Page,
-/// DOM, CSS, Accessibility, or V8 agents all enter the same Main receiver.
-/// The boxed payload keeps that admission boundary structural without adding
-/// a second allowlist of `RendererPageCommand` variants.
+/// agent-neutral: Page-native work and DOM, CSS, Accessibility, or V8 inspection
+/// reuse the same pump, but only inspection carries a frontend session ticket.
+/// Main admission does not imply pause-loop eligibility: only operations that
+/// can run without entering the suspended Page isolate may use nested dispatch.
 #[doc(hidden)]
-pub struct RendererDevToolsMainCommandEnvelope {
-    ticket: RendererInspectorIngressTicket,
+pub struct RendererMainCommandEnvelope {
+    source: RendererMainCommandSource,
     payload: Box<RendererPageCommand>,
+}
+
+enum RendererMainCommandSource {
+    Page(RendererCommandId),
+    Inspector(RendererInspectorIngressTicket),
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -303,7 +358,18 @@ pub(crate) enum RendererDevToolsMainNestedDispatch {
     OwnerOnly,
 }
 
-impl RendererDevToolsMainCommandEnvelope {
+impl RendererMainCommandEnvelope {
+    pub(crate) fn from_page_command(command: RendererPageCommand) -> Self {
+        assert!(
+            !matches!(command, RendererPageCommand::Inspector(_)),
+            "Page-owned work cannot carry an Inspector command"
+        );
+        Self {
+            source: RendererMainCommandSource::Page(RendererCommandId::allocate()),
+            payload: Box::new(command),
+        }
+    }
+
     pub(crate) fn from_protocol_command(command: RendererPageCommand) -> Self {
         Self::from_protocol_command_in_session(command, None)
     }
@@ -321,13 +387,23 @@ impl RendererDevToolsMainCommandEnvelope {
             ),
         };
         Self {
-            ticket,
+            source: RendererMainCommandSource::Inspector(ticket),
             payload: Box::new(command),
         }
     }
 
-    pub(crate) fn ticket(&self) -> &RendererInspectorIngressTicket {
-        &self.ticket
+    pub(crate) fn ticket(&self) -> Option<&RendererInspectorIngressTicket> {
+        match &self.source {
+            RendererMainCommandSource::Page(_) => None,
+            RendererMainCommandSource::Inspector(ticket) => Some(ticket),
+        }
+    }
+
+    pub(crate) fn command_id(&self) -> u64 {
+        match &self.source {
+            RendererMainCommandSource::Page(id) => id.get(),
+            RendererMainCommandSource::Inspector(ticket) => ticket.sequence(),
+        }
     }
 
     pub(crate) fn nested_dispatch(&self) -> RendererDevToolsMainNestedDispatch {
@@ -338,8 +414,41 @@ impl RendererDevToolsMainCommandEnvelope {
                 RendererDevToolsMainNestedDispatch::InspectorSession
             }
             RendererPageCommand::Inspector(_) => RendererDevToolsMainNestedDispatch::OwnerOnly,
+            command if matches!(self.source, RendererMainCommandSource::Page(_)) => {
+                match command {
+                    RendererPageCommand::CaptureScreenshot(request)
+                        if matches!(
+                            request.purpose,
+                            crate::runtime::RendererScreenshotPurpose::Screenshot
+                        ) =>
+                    {
+                        RendererDevToolsMainNestedDispatch::PageAgent
+                    }
+                    RendererPageCommand::CaptureScreencastFrame(_)
+                    | RendererPageCommand::LayoutMetrics
+                    | RendererPageCommand::SerializeHtml
+                    | RendererPageCommand::OuterHtmlForDocument { .. }
+                    | RendererPageCommand::OuterHtmlForBackendNodeId { .. }
+                    | RendererPageCommand::BlobBytesForUuid { .. } => {
+                        RendererDevToolsMainNestedDispatch::PageAgent
+                    }
+                    // A native payload is not necessarily V8-free: input can
+                    // invoke listeners, policies update JS realms, and print
+                    // changes matchMedia. These require an ordinary Page turn.
+                    _ => RendererDevToolsMainNestedDispatch::OwnerOnly,
+                }
+            }
             _ => RendererDevToolsMainNestedDispatch::PageAgent,
         }
+    }
+
+    pub(crate) fn with_attachment(mut self, attachment: RendererAgentAttachmentId) -> Self {
+        let RendererMainCommandSource::Inspector(ticket) = &mut self.source else {
+            panic!("Page-owned work cannot acquire a DevTools attachment");
+        };
+        ticket.bind_attachment(attachment);
+        self.payload.bind_inspector_attachment(attachment);
+        self
     }
 
     pub(crate) fn inspector_envelope(&self) -> Option<&RendererInspectorCommandEnvelope> {
@@ -389,6 +498,19 @@ enum RendererInspectorCommandPayload {
 }
 
 impl RendererInspectorCommandEnvelope {
+    #[doc(hidden)]
+    pub fn new_main_runtime_enable_events(ticket: RendererInspectorIngressTicket) -> Self {
+        assert_eq!(ticket.route(), RendererInspectorCommandRoute::MainThread);
+        Self {
+            ticket,
+            pause_effect: RendererInspectorPauseCommandEffect::None,
+            main_dispatch_boundary: RendererInspectorMainDispatchBoundary::PageOwner,
+            payload: RendererInspectorCommandPayload::MainThread(
+                RendererInspectorPageCommand::RuntimeEnableEvents,
+            ),
+        }
+    }
+
     pub(crate) fn new(
         inspector_session_id: Option<String>,
         command: RendererInspectorPageCommand,
@@ -412,11 +534,6 @@ impl RendererInspectorCommandEnvelope {
         raw_json: String,
         response: RendererRuntimeInspectorResponseSender,
     ) -> Self {
-        assert_eq!(
-            ticket.route(),
-            RendererInspectorCommandRoute::MainThread,
-            "a Main Inspector protocol payload must use the MainThread route"
-        );
         let message = serde_json::from_str::<Value>(&raw_json).ok();
         let main_dispatch_boundary = if main_protocol_can_dispatch_at_inspector_session_boundary(
             owner_context_resolution_action.as_deref(),
@@ -426,21 +543,49 @@ impl RendererInspectorCommandEnvelope {
         } else {
             RendererInspectorMainDispatchBoundary::PageOwner
         };
-        let command = match owner_context_resolution_action {
-            Some(action) => RendererInspectorPageCommand::DispatchRuntimeProtocolMessageWithContextResolutionAndDeferredResponse {
+        let mut envelope = Self::new_main_protocol_on_page_owner(
+            ticket,
+            owner_context_resolution_action,
+            raw_json,
+            Some(response),
+        );
+        envelope.pause_effect = RendererInspectorPauseCommandEffect::from_message(message.as_ref());
+        envelope.main_dispatch_boundary = main_dispatch_boundary;
+        envelope
+    }
+
+    /// Preserves the renderer-owner reply turn used by raw commands and
+    /// adapter-reply replay. This is still the renderer Main receiver, not a
+    /// Browser owner operation or a mutable Page capability.
+    #[doc(hidden)]
+    pub fn new_main_protocol_on_page_owner(
+        ticket: RendererInspectorIngressTicket,
+        context_resolution_action: Option<String>,
+        raw_json: String,
+        response: Option<RendererRuntimeInspectorResponseSender>,
+    ) -> Self {
+        assert_eq!(
+            ticket.route(),
+            RendererInspectorCommandRoute::MainThread,
+            "a Main Inspector protocol payload must use the MainThread route"
+        );
+        let command = match (context_resolution_action, response) {
+            (Some(action), Some(response)) => RendererInspectorPageCommand::DispatchRuntimeProtocolMessageWithContextResolutionAndDeferredResponse {
                 action,
                 raw_json,
                 deferred_response: response,
             },
-            None => RendererInspectorPageCommand::DispatchRuntimeProtocolMessageWithDeferredResponse {
+            (None, Some(response)) => RendererInspectorPageCommand::DispatchRuntimeProtocolMessageWithDeferredResponse {
                 raw_json,
                 deferred_response: response,
             },
+            (Some(action), None) => RendererInspectorPageCommand::DispatchRuntimeProtocolMessageWithContextResolution { action, raw_json },
+            (None, None) => RendererInspectorPageCommand::DispatchRuntimeProtocolMessage { raw_json },
         };
         Self {
             ticket,
-            pause_effect: RendererInspectorPauseCommandEffect::from_message(message.as_ref()),
-            main_dispatch_boundary,
+            pause_effect: RendererInspectorPauseCommandEffect::None,
+            main_dispatch_boundary: RendererInspectorMainDispatchBoundary::PageOwner,
             payload: RendererInspectorCommandPayload::MainThread(command),
         }
     }
@@ -588,9 +733,6 @@ impl RendererInspectorCommandEnvelope {
             RendererInspectorPageCommand::RuntimeEnableEvents => Some("RuntimeEnableEvents"),
             RendererInspectorPageCommand::ApplyRuntimeProtocolState { .. } => {
                 Some("ApplyRuntimeProtocolState")
-            }
-            RendererInspectorPageCommand::DetachRuntimeInspectorSession { .. } => {
-                Some("DetachRuntimeInspectorSession")
             }
             RendererInspectorPageCommand::DocumentNodeSnapshotForObjectId { .. } => {
                 Some("DocumentNodeSnapshotForObjectId")

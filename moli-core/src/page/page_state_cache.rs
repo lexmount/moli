@@ -14,8 +14,14 @@ impl PageStateCache {
         Self { state }
     }
 
-    pub(super) fn replace(&mut self, state: Arc<RendererPageState>) {
-        self.state = state;
+    pub(super) fn observe(&mut self, state: &Arc<RendererPageState>) -> bool {
+        if state.renderer_residence() != self.state.renderer_residence()
+            || state.view_generation() < self.state.view_generation()
+        {
+            return false;
+        }
+        self.state = state.clone();
+        true
     }
 
     pub(super) fn state(&self) -> &RendererPageState {

@@ -9,7 +9,7 @@ mod cdp_projection;
 pub mod conn;
 pub mod devtools_runtime;
 pub mod domains;
-#[cfg(feature = "test-support")]
+#[cfg(any(test, feature = "test-support"))]
 pub mod test_support;
 #[cfg(test)]
 pub mod testing;
@@ -18,8 +18,8 @@ pub mod version;
 pub use devtools_runtime::*;
 
 pub use conn::{
-    BackgroundCommandResponsePayload, BackgroundProtocolEvent, CdpCommandTaskStep, CdpConnection,
-    CdpInitialStoragePartition, CdpRendererCommandAccess, CdpRendererCommandReplacement,
+    AgentHostDispatchResult, BackgroundCommandResponsePayload, BackgroundProtocolEvent,
+    CdpCommandTaskStep, CdpConnection, CdpInitialStoragePartition, CdpRendererCommandReplacement,
     CdpRendererCommandReplayDispatch, CdpRendererOwnerTurnOutcome, CdpSchedulerEvent,
     CdpTargetHostLifecycleDelta, CdpTargetHostLifecycleObserver, CdpTurnOutcome,
     CommandDispatchContext, CommandResponseFlushContext, CommandResponseFlushPermit,
@@ -31,17 +31,20 @@ pub use conn::{
     DevToolsDocumentLifecycleWaitKey, DevToolsDocumentLifecycleWaitState,
     DevToolsDocumentNavigationState, DevToolsPageResidenceIdentity, ParsedCdpCommand,
     PendingCdpCommandDispatch, PendingDeferredMainDocumentLoadCompletion,
-    PendingRuntimeProtocolMessageDispatch,
+    PendingRuntimeProtocolMessageDispatch, RendererDispatch, RendererDispatchBinding,
+    RendererDispatchLane, RendererPageDispatchBinding,
 };
 pub use domains::activity::{
     ProtocolSchedulerWork, ProtocolSchedulerWorkKind, ProtocolWorkPublishSequence,
-    RuntimeCommandOutputBarrierCompletion, RuntimeCommandOutputBarrierPermit,
-    RuntimeCommandOutputBarrierTerminal, RuntimeCommandOutputBarriers,
+    RendererCommandResponseCompletion, RendererCommandResponseOrder, RendererCommandResponsePermit,
+    RendererCommandResponseTerminal,
 };
 pub use domains::page::{
-    BackgroundNavigationCompletion, CompletedPageScreencastCapture,
+    BackgroundNavigationCompletion, CompletedDevToolsNavigationCommandDispatch,
+    CompletedPageScreencastCapture, DevToolsNavigationCommandTaskStep,
     PageScreencastCaptureCompletion, PageScreencastCaptureStart, PageScreencastRegistration,
-    PageScreencastSubscriptionStatus, PendingPageScreencastCapture, build_default_raster_pdf,
+    PageScreencastSubscriptionStatus, PendingDevToolsNavigationCommandDispatch,
+    PendingPageScreencastCapture, build_default_raster_pdf,
 };
 pub use domains::runtime::{
     CompletedDevToolsRuntimeCommandDispatch, DevToolsRuntimeCommandTaskStep,

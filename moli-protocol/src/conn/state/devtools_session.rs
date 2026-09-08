@@ -13,6 +13,7 @@ use super::{
     session::{InspectorSessionState, TargetPageSessionState, TargetRuntimeSessionState},
     target_state::{PendingInspectorAwait, TargetPendingInspectorAwaitRegistry},
 };
+use moli_core::browser::web_contents::NetworkRequestPolicy;
 use moli_core::{
     network::WebStorageMutationSubscription,
     page::{
@@ -29,7 +30,7 @@ use moli_page_types::{
 ///
 /// Browser-side policy and renderer-inspector state live together here so
 /// attachment, replay, and disposal all address the same session object.
-#[derive(Clone, Debug, Default, PartialEq)]
+#[derive(Debug, Default, PartialEq)]
 pub(crate) struct DevToolsSessionState {
     pub(crate) dom_session_state: DevToolsDomSessionState,
     pub(crate) dom_debugger_event_listener_breakpoints:
@@ -39,7 +40,7 @@ pub(crate) struct DevToolsSessionState {
     pub(crate) runtime_session_state: TargetRuntimeSessionState,
     pub(crate) console_output_session_state: DevToolsConsoleOutputSessionState,
     pub(crate) dom_storage_session_state: DevToolsDomStorageSessionState,
-    pub(crate) network_session_state: DevToolsNetworkSessionState,
+    pub(in crate::conn::state) network_session_state: DevToolsNetworkSessionState,
     pub(crate) emulation_session_state: DevToolsEmulationSessionState,
     pub(crate) runtime_bindings: Vec<RuntimeBindingDefinition>,
     pub(crate) runtime_binding_replay_pending: BTreeSet<(String, Option<String>)>,
@@ -58,7 +59,7 @@ pub(crate) struct DevToolsSessionState {
 /// target sessions use `Attached(session_id)`. Keeping both in one ordered map
 /// gives attachment, disposal, replay, and effective-domain aggregation one
 /// source of truth.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Debug, PartialEq)]
 pub(crate) struct DevToolsSessionRegistry {
     primary_session_id: Option<String>,
     states: BTreeMap<DevToolsSessionKey, DevToolsSessionState>,
@@ -146,7 +147,10 @@ impl DevToolsSessionRegistry {
             .or_default()
     }
 
-    pub(crate) fn remove_attached(&mut self, session_id: &str) -> Option<DevToolsSessionState> {
+    pub(in crate::conn::state) fn remove_attached(
+        &mut self,
+        session_id: &str,
+    ) -> Option<DevToolsSessionState> {
         let key = DevToolsSessionKey::Attached(session_id.to_owned());
         let removed = self.states.remove(&key);
         if removed.is_some() {
@@ -161,7 +165,7 @@ impl DevToolsSessionRegistry {
     /// The primary handler slot remains allocated for the renderer's implicit
     /// root Inspector session, but its state is replaced atomically. Attached
     /// sessions are removed from both the state map and attachment order.
-    pub(crate) fn dispose(
+    pub(in crate::conn::state) fn dispose(
         &mut self,
         session_id: &str,
         session_key: &DevToolsSessionKey,
@@ -222,8 +226,8 @@ impl DevToolsSessionRegistry {
         )
     }
 
-    pub(crate) fn effective_network_policy(&self) -> DevToolsNetworkPolicyAggregate {
-        let mut aggregate = DevToolsNetworkPolicyAggregate::default();
+    pub(in crate::conn::state) fn effective_network_policy(&self) -> NetworkRequestPolicy {
+        let mut aggregate = NetworkRequestPolicy::default();
         for state in self.states_in_attachment_order() {
             let network = &state.network_session_state;
             if !network.network_enabled {
@@ -251,7 +255,7 @@ impl DevToolsSessionRegistry {
         aggregate
     }
 
-    pub(crate) fn effective_network_browser_identity_override(
+    pub(in crate::conn::state) fn effective_browser_identity_override(
         &self,
     ) -> Option<moli_browser_profile::BrowserIdentityProfile> {
         Self::aggregate_browser_identity_overrides(self.states_in_attachment_order().filter_map(
@@ -264,7 +268,7 @@ impl DevToolsSessionRegistry {
         ))
     }
 
-    pub(crate) fn effective_user_agent_override(&self) -> Option<&str> {
+    pub(in crate::conn::state) fn reported_user_agent_override(&self) -> Option<&str> {
         self.states_in_attachment_order()
             .filter_map(|state| {
                 state
@@ -274,17 +278,6 @@ impl DevToolsSessionRegistry {
                     .and_then(|identity| identity.user_agent.as_deref())
             })
             .last()
-    }
-
-    /// Resolves the identity exposed by the live renderer Document.
-    ///
-    /// Chromium applies the same session attachment precedence to renderer
-    /// agents and browser-side navigation handlers. Setter order does not
-    /// change the winner on either surface.
-    pub(crate) fn effective_renderer_browser_identity_override(
-        &self,
-    ) -> Option<moli_browser_profile::BrowserIdentityProfile> {
-        self.effective_network_browser_identity_override()
     }
 
     fn aggregate_browser_identity_overrides<'a>(
@@ -319,16 +312,20 @@ impl DevToolsSessionRegistry {
         })
     }
 
-    pub(crate) fn set_browser_identity_override(
+    pub(in crate::conn::state) fn set_browser_identity_override(
         &mut self,
         session_key: &DevToolsSessionKey,
         browser_identity_override: Option<DevToolsBrowserIdentityOverride>,
     ) {
         let state = self.ensure_session(session_key);
+        state
+            .emulation_session_state
+            .overrides
+            .get_or_insert_default();
         state.emulation_session_state.browser_identity_override = browser_identity_override;
     }
 
-    pub(crate) fn set_locale_override(
+    pub(in crate::conn::state) fn set_locale_override(
         &mut self,
         session_key: &DevToolsSessionKey,
         locale_override: Option<String>,
@@ -343,13 +340,13 @@ impl DevToolsSessionRegistry {
         if !current_session_owns_override && another_session_owns_override {
             return Err("Another locale override is already in effect");
         }
-        self.ensure_session(session_key)
-            .emulation_session_state
-            .locale_override = locale_override;
+        let state = &mut self.ensure_session(session_key).emulation_session_state;
+        state.overrides.get_or_insert_default();
+        state.locale_override = locale_override;
         Ok(())
     }
 
-    pub(crate) fn set_timezone_override(
+    pub(in crate::conn::state) fn set_timezone_override(
         &mut self,
         session_key: &DevToolsSessionKey,
         timezone_override: Option<String>,
@@ -367,19 +364,19 @@ impl DevToolsSessionRegistry {
         {
             return Err("Timezone override is already in effect");
         }
-        self.ensure_session(session_key)
-            .emulation_session_state
-            .timezone_override = timezone_override;
+        let state = &mut self.ensure_session(session_key).emulation_session_state;
+        state.overrides.get_or_insert_default();
+        state.timezone_override = timezone_override;
         Ok(())
     }
 
-    pub(crate) fn effective_locale_override(&self) -> Option<&str> {
+    pub(in crate::conn::state) fn effective_locale_override(&self) -> Option<&str> {
         self.states
             .values()
             .find_map(|state| state.emulation_session_state.locale_override.as_deref())
     }
 
-    pub(crate) fn effective_timezone_override(&self) -> Option<&str> {
+    pub(in crate::conn::state) fn effective_timezone_override(&self) -> Option<&str> {
         self.states
             .values()
             .find_map(|state| state.emulation_session_state.timezone_override.as_deref())
@@ -391,7 +388,10 @@ impl DevToolsSessionRegistry {
         }
     }
 
-    pub(crate) fn clear_emulation_policy_state(&mut self, session_key: &DevToolsSessionKey) {
+    pub(in crate::conn::state) fn clear_emulation_policy_state(
+        &mut self,
+        session_key: &DevToolsSessionKey,
+    ) {
         if let Some(state) = self.states.get_mut(session_key) {
             let emulation = &mut state.emulation_session_state;
             emulation.browser_identity_override = None;
@@ -424,31 +424,11 @@ impl DevToolsSessionRegistry {
         primary_session_id: Option<&str>,
         old_attachment_id: moli_page_types::RendererAgentAttachmentId,
         new_attachment_id: moli_page_types::RendererAgentAttachmentId,
-    ) -> Result<PreparedRendererCallReplacements, RendererCallIdExhausted> {
-        let terminations = self.prepare_renderer_call_terminations(
-            primary_session_id,
-            old_attachment_id,
-            new_attachment_id,
-        )?;
-        let replays = self.prepare_renderer_call_replays(
-            primary_session_id,
-            old_attachment_id,
-            new_attachment_id,
-        )?;
-        Ok(PreparedRendererCallReplacements::new(
-            new_attachment_id,
-            terminations,
-            replays,
-        ))
-    }
-
-    fn prepare_renderer_call_replays(
-        &mut self,
-        primary_session_id: Option<&str>,
-        old_attachment_id: moli_page_types::RendererAgentAttachmentId,
-        new_attachment_id: moli_page_types::RendererAgentAttachmentId,
-    ) -> Result<Vec<SessionRendererCallReplay>, RendererCallIdExhausted> {
-        let mut replays = Vec::new();
+    ) -> PreparedRendererCallReplacements {
+        let mut replacements = PreparedRendererCallReplacements {
+            new_attachment_id: Some(new_attachment_id),
+            ..Default::default()
+        };
         for (key, state) in &mut self.states {
             let (frontend_session_id, renderer_inspector_session_id) = match key {
                 DevToolsSessionKey::Primary => (primary_session_id.map(str::to_owned), None),
@@ -456,43 +436,39 @@ impl DevToolsSessionRegistry {
                     (Some(session_id.clone()), Some(session_id.clone()))
                 }
             };
-            replays.extend(
-                state
-                    .prepare_renderer_call_replays(old_attachment_id, new_attachment_id)?
-                    .into_iter()
-                    .map(|replay| SessionRendererCallReplay {
-                        frontend_session_id: frontend_session_id.clone(),
-                        renderer_inspector_session_id: renderer_inspector_session_id.clone(),
-                        replay,
-                    }),
-            );
-        }
-        Ok(replays)
-    }
-
-    fn prepare_renderer_call_terminations(
-        &mut self,
-        primary_session_id: Option<&str>,
-        old_attachment_id: moli_page_types::RendererAgentAttachmentId,
-        terminal_attachment_id: moli_page_types::RendererAgentAttachmentId,
-    ) -> Result<Vec<SessionRendererCallTermination>, RendererCallIdExhausted> {
-        let mut terminations = Vec::new();
-        for (key, state) in &mut self.states {
-            let frontend_session_id = match key {
-                DevToolsSessionKey::Primary => primary_session_id.map(str::to_owned),
-                DevToolsSessionKey::Attached(session_id) => Some(session_id.clone()),
+            // An allocation failure may follow an already rotated response lease.
+            // Settle the whole affected session; preserve every other session's work.
+            let prepared = state
+                .prepare_renderer_call_terminations(old_attachment_id, new_attachment_id)
+                .and_then(|terminations| {
+                    state
+                        .prepare_renderer_call_replays(old_attachment_id, new_attachment_id)
+                        .map(|replays| (terminations, replays))
+                });
+            let (terminations, replays) = match prepared {
+                Ok(prepared) => prepared,
+                Err(_) => {
+                    replacements.failed_session_ids.push(frontend_session_id);
+                    continue;
+                }
             };
-            terminations.extend(
-                state
-                    .prepare_renderer_call_terminations(old_attachment_id, terminal_attachment_id)?
-                    .into_iter()
-                    .map(|termination| SessionRendererCallTermination {
+            replacements
+                .terminations
+                .extend(terminations.into_iter().map(|termination| {
+                    SessionRendererCallTermination {
                         frontend_session_id: frontend_session_id.clone(),
                         termination,
-                    }),
-            );
+                    }
+                }));
+            replacements
+                .replays
+                .extend(replays.into_iter().map(|replay| SessionRendererCallReplay {
+                    frontend_session_id: frontend_session_id.clone(),
+                    renderer_inspector_session_id: renderer_inspector_session_id.clone(),
+                    replay,
+                }));
         }
-        Ok(terminations)
+        replacements
     }
 
     pub(crate) fn runtime_bindings_for_renderer(&self) -> Vec<RuntimeBindingDefinition> {
@@ -543,7 +519,7 @@ impl DevToolsSessionRegistry {
             .collect()
     }
 
-    pub(crate) fn page_bypass_csp_enabled(&self) -> bool {
+    pub(in crate::conn::state) fn page_bypass_csp_enabled(&self) -> bool {
         self.states()
             .any(|state| state.page_session_state.page_bypass_csp_enabled)
     }
@@ -591,23 +567,37 @@ pub(crate) struct PreparedRendererCallReplacements {
     new_attachment_id: Option<moli_page_types::RendererAgentAttachmentId>,
     terminations: Vec<SessionRendererCallTermination>,
     replays: Vec<SessionRendererCallReplay>,
+    failed_session_ids: Vec<Option<String>>,
 }
 
 impl PreparedRendererCallReplacements {
-    fn new(
-        new_attachment_id: moli_page_types::RendererAgentAttachmentId,
-        terminations: Vec<SessionRendererCallTermination>,
-        replays: Vec<SessionRendererCallReplay>,
-    ) -> Self {
-        Self {
-            new_attachment_id: Some(new_attachment_id),
-            terminations,
-            replays,
+    pub(crate) fn supersede_with(&mut self, mut next: Self) {
+        if next.new_attachment_id.is_some() {
+            // Session-sink termination revokes its response lease without
+            // rotating the call's original attachment. A second native commit
+            // cannot select it again, so retain its one terminal obligation.
+            next.terminations
+                .extend(self.terminations.drain(..).filter(|entry| {
+                    matches!(
+                        entry.termination,
+                        PreparedRendererCallTermination::SessionSink { .. }
+                    )
+                }));
+            for session in self.failed_session_ids.drain(..) {
+                if !next.failed_session_ids.contains(&session) {
+                    next.failed_session_ids.push(session);
+                }
+            }
         }
+        // Replays and adapter replies have already rotated to next's exact
+        // attachment. Their superseded leases must not execute a second time.
+        *self = next;
     }
 
     pub(crate) fn is_empty(&self) -> bool {
-        self.terminations.is_empty() && self.replays.is_empty()
+        self.terminations.is_empty()
+            && self.replays.is_empty()
+            && self.failed_session_ids.is_empty()
     }
 
     pub(crate) fn into_parts(
@@ -616,12 +606,14 @@ impl PreparedRendererCallReplacements {
         moli_page_types::RendererAgentAttachmentId,
         Vec<SessionRendererCallTermination>,
         Vec<SessionRendererCallReplay>,
+        Vec<Option<String>>,
     ) {
         (
             self.new_attachment_id
                 .expect("prepared renderer replacements must have an attachment"),
             self.terminations,
             self.replays,
+            self.failed_session_ids,
         )
     }
 }
@@ -664,19 +656,14 @@ pub(crate) struct DevToolsNetworkSessionState {
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) struct DevToolsEmulationSessionState {
     // UA, Accept-Language, and platform are independent handler contributions.
-    pub(crate) browser_identity_override: Option<DevToolsBrowserIdentityOverride>,
+    pub(in crate::conn::state) browser_identity_override: Option<DevToolsBrowserIdentityOverride>,
     // Locale and timezone are exclusive controller claims, unlike UA fields.
-    pub(crate) locale_override: Option<String>,
-    pub(crate) timezone_override: Option<String>,
-    pub(crate) network_conditions: Option<super::EmulatedNetworkConditions>,
-    pub(crate) geolocation_override: Option<super::EmulatedGeolocationOverrideState>,
-    pub(crate) emulated_media: super::EmulatedMediaOverrides,
-    pub(crate) emulated_device_metrics: Option<super::EmulatedDeviceMetrics>,
-    pub(crate) cpu_throttling_rate: f64,
-    pub(crate) touch_emulation_enabled: bool,
-    pub(crate) emit_touch_events_for_mouse: bool,
-    pub(crate) focus_emulation_enabled: bool,
-    pub(crate) script_execution_disabled: bool,
+    pub(in crate::conn::state) locale_override: Option<String>,
+    pub(in crate::conn::state) timezone_override: Option<String>,
+    // Consumed on handler disable. Retrying failed renderer cleanup must not
+    // reset policy subsequently installed by another session.
+    pub(crate) overrides: Option<super::EmulationPolicy>,
+    renderer_cleanup_pending: bool,
 }
 
 impl Default for DevToolsEmulationSessionState {
@@ -685,16 +672,80 @@ impl Default for DevToolsEmulationSessionState {
             browser_identity_override: None,
             locale_override: None,
             timezone_override: None,
-            network_conditions: None,
-            geolocation_override: None,
-            emulated_media: super::EmulatedMediaOverrides::default(),
-            emulated_device_metrics: None,
-            cpu_throttling_rate: 1.0,
-            touch_emulation_enabled: false,
-            emit_touch_events_for_mouse: false,
-            focus_emulation_enabled: false,
-            script_execution_disabled: false,
+            overrides: Some(super::EmulationPolicy::default()),
+            renderer_cleanup_pending: false,
         }
+    }
+}
+
+impl DevToolsEmulationSessionState {
+    pub(in crate::conn) fn disposal_is_effectively_noop(
+        &self,
+        effective: &super::EmulationPolicy,
+    ) -> bool {
+        if self.renderer_cleanup_pending {
+            return false;
+        }
+        if self.browser_identity_override.is_some()
+            || self.locale_override.is_some()
+            || self.timezone_override.is_some()
+        {
+            return false;
+        }
+        let Some(raw) = self.overrides.as_ref() else {
+            return true;
+        };
+        effective.emulated_media == super::EmulatedMediaOverrides::default()
+            && !effective.script_execution_disabled
+            && (raw.network_conditions.is_none() || effective.network_conditions.is_none())
+            && (raw.geolocation_override.is_none() || effective.geolocation_override.is_none())
+            && (raw.emulated_device_metrics.is_none()
+                || effective.emulated_device_metrics.is_none())
+            && (raw.cpu_throttling_rate == 1.0 || effective.cpu_throttling_rate == 1.0)
+            && (!raw.touch_emulation_enabled || !effective.touch_emulation_enabled)
+            && (!raw.emit_touch_events_for_mouse || !effective.emit_touch_events_for_mouse)
+            && (!raw.focus_emulation_enabled || !effective.focus_emulation_enabled)
+    }
+
+    pub(in crate::conn) fn set_renderer_cleanup_pending(&mut self, pending: bool) {
+        self.renderer_cleanup_pending = pending;
+    }
+
+    /// Handler-disable semantics belong to DevTools. Browser receives only
+    /// source-free changes, without learning which session caused a reset or
+    /// requiring a read-modify-write round trip through Browser state.
+    pub(in crate::conn) fn disable_policy_changes(&mut self) -> Vec<super::EmulationPolicyChange> {
+        use super::EmulationPolicyChange;
+        let Some(raw) = self.overrides.take() else {
+            return Vec::new();
+        };
+        // Blink clears media and script execution on every handler disable.
+        let mut changes = vec![
+            EmulationPolicyChange::Media(super::EmulatedMediaOverrides::default()),
+            EmulationPolicyChange::ScriptExecutionDisabled(false),
+        ];
+        if raw.network_conditions.is_some() {
+            changes.push(EmulationPolicyChange::NetworkConditions(None));
+        }
+        if raw.geolocation_override.is_some() {
+            changes.push(EmulationPolicyChange::Geolocation(None));
+        }
+        if raw.emulated_device_metrics.is_some() {
+            changes.push(EmulationPolicyChange::DeviceMetrics(None));
+        }
+        if raw.cpu_throttling_rate != 1.0 {
+            changes.push(EmulationPolicyChange::CpuThrottlingRate(1.0));
+        }
+        if raw.touch_emulation_enabled {
+            changes.push(EmulationPolicyChange::TouchEnabled(false));
+        }
+        if raw.emit_touch_events_for_mouse {
+            changes.push(EmulationPolicyChange::EmitTouchEventsForMouse(false));
+        }
+        if raw.focus_emulation_enabled {
+            changes.push(EmulationPolicyChange::FocusEnabled(false));
+        }
+        changes
     }
 }
 
@@ -743,14 +794,6 @@ impl DevToolsBrowserIdentityOverride {
     }
 }
 
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
-pub(crate) struct DevToolsNetworkPolicyAggregate {
-    pub(crate) cache_disabled: bool,
-    pub(crate) bypass_service_worker: bool,
-    pub(crate) blocked_url_patterns: Vec<String>,
-    pub(crate) extra_headers: Vec<(String, String)>,
-}
-
 #[derive(Clone, Debug, Default, PartialEq)]
 pub(crate) struct DevToolsConsoleOutputSessionState {
     pub(crate) console_enabled: bool,
@@ -772,6 +815,11 @@ pub(crate) struct DevToolsLogViolationThreshold {
 }
 
 impl DevToolsSessionState {
+    #[cfg(test)]
+    pub(crate) fn network_session_state(&self) -> &DevToolsNetworkSessionState {
+        &self.network_session_state
+    }
+
     pub(crate) fn upsert_runtime_binding_definition(
         &mut self,
         name: String,
@@ -933,6 +981,30 @@ impl DevToolsSessionState {
         cdp_request_id: u64,
     ) -> Option<PendingInspectorAwait> {
         self.pending_inspector_awaits.remove(cdp_request_id)
+    }
+
+    pub(crate) fn claim_pending_inspector_await(&mut self, cdp_request_id: u64) -> bool {
+        self.pending_inspector_awaits
+            .claim_scheduler_deferred_reply(cdp_request_id)
+    }
+
+    pub(crate) fn take_claimed_pending_inspector_await(
+        &mut self,
+        cdp_request_id: u64,
+    ) -> Option<PendingInspectorAwait> {
+        self.pending_inspector_awaits
+            .take_claimed_scheduler_deferred_reply(cdp_request_id)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn has_claimed_pending_inspector_awaits(&self) -> bool {
+        self.pending_inspector_awaits
+            .has_claimed_scheduler_deferred_reply()
+    }
+
+    #[cfg(test)]
+    pub(crate) fn has_unclaimed_pending_inspector_awaits(&self) -> bool {
+        self.pending_inspector_awaits.has_unclaimed_await()
     }
 
     pub(crate) fn has_pending_inspector_awaits(&self) -> bool {
@@ -1164,6 +1236,181 @@ impl DevToolsDomStorageSessionState {
 mod tests {
     use super::*;
 
+    #[test]
+    fn superseding_unpublished_document_preserves_terminal_calls_and_only_latest_replays() {
+        use moli_page_types::{RendererAgentAttachmentId, RendererInspectorResponseDelivery};
+        let [first, second, third] = std::array::from_fn(|_| RendererAgentAttachmentId::allocate());
+        let mut sessions = DevToolsSessionRegistry::default();
+        let mut calls = Vec::new();
+        for (id, method) in [(1, "Runtime.evaluate"), (2, "Runtime.enable")] {
+            let payload = serde_json::json!({"id": id, "method": method, "params": {}}).to_string();
+            let parsed = moli_protocol_cdp::ParsedCdpCommand::parse_str(&payload).unwrap();
+            calls.push(
+                sessions
+                    .primary_mut()
+                    .try_register_renderer_call(
+                        id,
+                        Some(first),
+                        RendererCommandDescriptor::from_frontend_policy(
+                            payload.clone(),
+                            parsed.renderer_policy(),
+                            RendererInspectorResponseDelivery::SessionSink,
+                        ),
+                    )
+                    .unwrap(),
+            );
+        }
+        let mut pending = sessions.prepare_renderer_call_replacements(None, first, second);
+        assert_eq!(pending.terminations.len(), 1);
+        assert_eq!(pending.replays.len(), 1);
+        let next = sessions.prepare_renderer_call_replacements(None, second, third);
+        assert!(next.terminations.is_empty());
+        assert_eq!(next.replays.len(), 1);
+        pending.supersede_with(next);
+        assert_eq!(pending.new_attachment_id, Some(third));
+        assert_eq!(pending.terminations.len(), 1);
+        assert_eq!(
+            pending.terminations[0]
+                .termination
+                .correlation()
+                .dispatched_attachment_id(),
+            Some(first)
+        );
+        assert_eq!(pending.replays.len(), 1);
+        pending.supersede_with(Default::default());
+        assert!(pending.is_empty());
+        drop(calls);
+    }
+
+    #[test]
+    fn consumed_emulation_handler_preserves_new_peer_policy_on_cleanup_retry() {
+        let mut handler = DevToolsEmulationSessionState::default();
+        let mut effective = crate::conn::EmulationPolicy::default();
+        effective.apply_changes(handler.disable_policy_changes());
+        effective.apply(super::super::EmulationPolicyChange::Media(
+            crate::conn::EmulatedMediaOverrides {
+                color_scheme: Some("dark".to_owned()),
+                ..Default::default()
+            },
+        ));
+        effective.apply(super::super::EmulationPolicyChange::ScriptExecutionDisabled(true));
+        let peer_policy = effective.clone();
+        effective.apply_changes(handler.disable_policy_changes());
+        assert_eq!(
+            effective, peer_policy,
+            "cleanup retry must not disable a peer's later policy"
+        );
+    }
+
+    #[test]
+    fn accepted_emulation_contributions_reactivate_a_consumed_handler() {
+        let mut sessions = DevToolsSessionRegistry::default();
+        let primary = DevToolsSessionKey::Primary;
+        sessions
+            .primary_mut()
+            .emulation_session_state
+            .disable_policy_changes();
+        sessions.set_browser_identity_override(&primary, identity_override("Moli/New", None, None));
+        assert!(
+            !sessions
+                .primary_mut()
+                .emulation_session_state
+                .disable_policy_changes()
+                .is_empty()
+        );
+
+        sessions
+            .set_locale_override(&primary, Some("fr-FR".to_owned()))
+            .unwrap();
+        assert!(
+            !sessions
+                .primary_mut()
+                .emulation_session_state
+                .disable_policy_changes()
+                .is_empty()
+        );
+
+        sessions
+            .set_timezone_override(&primary, Some("Europe/Paris".to_owned()))
+            .unwrap();
+        assert!(
+            !sessions
+                .primary_mut()
+                .emulation_session_state
+                .disable_policy_changes()
+                .is_empty()
+        );
+
+        let attached = DevToolsSessionKey::Attached("SID-consumed".to_owned());
+        sessions
+            .ensure_session(&attached)
+            .emulation_session_state
+            .disable_policy_changes();
+        assert!(
+            sessions
+                .set_locale_override(&attached, Some("de-DE".to_owned()))
+                .is_err()
+        );
+        assert!(
+            sessions
+                .set_timezone_override(&attached, Some("Europe/Berlin".to_owned()))
+                .is_err()
+        );
+        assert!(
+            sessions
+                .session(&attached)
+                .unwrap()
+                .emulation_session_state
+                .overrides
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn handler_disable_uses_raw_state_for_conditional_target_resets() {
+        let mut effective = crate::conn::EmulationPolicy {
+            focus_emulation_enabled: true,
+            script_execution_disabled: true,
+            emulated_media: crate::conn::EmulatedMediaOverrides {
+                color_scheme: Some("dark".to_owned()),
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        let mut raw = DevToolsEmulationSessionState::default();
+        effective.apply_changes(raw.disable_policy_changes());
+
+        assert!(
+            effective.focus_emulation_enabled,
+            "an untouched handler must not clear another session's focus setting"
+        );
+        assert!(
+            effective.emulated_media.color_scheme.is_none(),
+            "Blink clears the shared media override on every handler disable"
+        );
+        assert!(!effective.script_execution_disabled);
+        assert_eq!(
+            effective,
+            crate::conn::EmulationPolicy {
+                focus_emulation_enabled: true,
+                ..Default::default()
+            }
+        );
+    }
+
+    #[test]
+    fn prepared_handler_reset_preserves_unrelated_later_policy_updates() {
+        let mut installed = crate::conn::EmulationPolicy::default();
+        let mut handler = DevToolsEmulationSessionState::default();
+        let reset = handler.disable_policy_changes();
+        installed.apply(crate::conn::EmulationPolicyChange::FocusEnabled(true));
+        installed.apply_changes(reset);
+        assert!(
+            installed.focus_emulation_enabled,
+            "a prepared reset must not overwrite a field this handler never controlled"
+        );
+    }
+
     fn binding(name: &str) -> RuntimeBindingDefinition {
         RuntimeBindingDefinition {
             devtools_session: None,
@@ -1190,16 +1437,8 @@ mod tests {
         sessions: &DevToolsSessionRegistry,
     ) -> moli_browser_profile::BrowserIdentityProfile {
         sessions
-            .effective_network_browser_identity_override()
+            .effective_browser_identity_override()
             .expect("browser identity contribution should be effective")
-    }
-
-    fn effective_renderer_identity(
-        sessions: &DevToolsSessionRegistry,
-    ) -> moli_browser_profile::BrowserIdentityProfile {
-        sessions
-            .effective_renderer_browser_identity_override()
-            .expect("renderer browser identity contribution should be effective")
     }
 
     #[test]
@@ -1273,7 +1512,7 @@ mod tests {
     }
 
     #[test]
-    fn browser_identity_uses_attachment_order_on_network_and_renderer_surfaces() {
+    fn browser_identity_uses_attachment_order_for_the_shared_runtime_profile() {
         let mut sessions = DevToolsSessionRegistry::default();
         let primary = DevToolsSessionKey::Primary;
         let later = DevToolsSessionKey::Attached("SID-later".to_owned());
@@ -1284,9 +1523,8 @@ mod tests {
             &primary,
             identity_override("Moli/Primary-1", None, None),
         );
-        assert_eq!(effective_identity(&sessions).user_agent(), "Moli/Later-1");
         assert_eq!(
-            effective_renderer_identity(&sessions).user_agent(),
+            effective_identity(&sessions).user_agent(),
             "Moli/Later-1",
             "the later-attached session wins even when it set its override first"
         );
@@ -1298,45 +1536,27 @@ mod tests {
             "Moli/Later-2",
             "the browser-side winner remains the later-attached session"
         );
-        assert_eq!(
-            effective_renderer_identity(&sessions).user_agent(),
-            "Moli/Later-2",
-            "updating the later-attached renderer agent preserves its precedence"
-        );
 
         sessions.set_browser_identity_override(
             &primary,
             identity_override("Moli/Primary-2", None, None),
         );
         assert_eq!(effective_identity(&sessions).user_agent(), "Moli/Later-2");
-        assert_eq!(
-            effective_renderer_identity(&sessions).user_agent(),
-            "Moli/Later-2"
-        );
 
         sessions.set_browser_identity_override(&primary, None);
         assert_eq!(effective_identity(&sessions).user_agent(), "Moli/Later-2");
-        assert_eq!(
-            effective_renderer_identity(&sessions).user_agent(),
-            "Moli/Later-2"
-        );
 
         sessions.set_browser_identity_override(
             &primary,
             identity_override("Moli/Primary-3", Some("fr-FR"), Some("PrimaryPlatform")),
         );
-        assert_eq!(effective_identity(&sessions).user_agent(), "Moli/Later-2");
-        let renderer_identity = effective_renderer_identity(&sessions);
-        assert_eq!(renderer_identity.user_agent(), "Moli/Later-2");
-        assert_eq!(renderer_identity.accept_language(), "fr-FR");
-        assert_eq!(renderer_identity.navigator_platform(), "PrimaryPlatform");
+        let identity = effective_identity(&sessions);
+        assert_eq!(identity.user_agent(), "Moli/Later-2");
+        assert_eq!(identity.accept_language(), "fr-FR");
+        assert_eq!(identity.navigator_platform(), "PrimaryPlatform");
 
         sessions.remove_attached("SID-later");
         assert_eq!(effective_identity(&sessions).user_agent(), "Moli/Primary-3");
-        assert_eq!(
-            effective_renderer_identity(&sessions).user_agent(),
-            "Moli/Primary-3"
-        );
     }
 
     #[test]

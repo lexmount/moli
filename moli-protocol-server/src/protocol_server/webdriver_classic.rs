@@ -100,6 +100,7 @@ use script_refs::{
 };
 pub(super) use state::SharedClassicSessionRegistry;
 use state::{ClassicPageBoundDomReference, ClassicSessionBinding, ClassicSessionRuntimeHandle};
+pub(crate) use state::{ClassicServiceSessions, ClassicSessionAttach};
 pub(super) use window::{
     webdriver_classic_close_window, webdriver_classic_fullscreen_window,
     webdriver_classic_get_window, webdriver_classic_get_window_handles,
@@ -1654,19 +1655,34 @@ pub(super) async fn webdriver_classic_new_session(
     } else {
         None
     };
-    let initial_cookies = state.cookie_profile.snapshot();
-    let initial_cookie_snapshot = initial_cookies.clone();
-    let initial_storage_partition = state.initial_storage_partition(initial_cookies);
-    let runtime = ClassicSessionRuntimeHandle::spawn(
-        initial_cookie_snapshot,
-        initial_storage_partition,
-        moli_core::runtime::NavigationRuntimeConfig::new(
-            state.fetch_config.clone(),
-            state.optional_resource_fetch_mask,
-            state.subframe_loading_enabled,
-            state.layout_policy,
-        ),
-    );
+    let initial_cookie_snapshot = state.cookie_profile.snapshot();
+    let runtime = match state.cdp_owner_registry.shared_owner() {
+        Ok(endpoint) => {
+            ClassicSessionRuntimeHandle::attach(
+                endpoint,
+                session.session_id.clone(),
+                initial_cookie_snapshot,
+            )
+            .await
+        }
+        Err(error) => Err(DevToolsError::new(
+            DevToolsErrorKind::Internal,
+            error.to_string(),
+        )),
+    };
+    let runtime = match runtime {
+        Ok(runtime) => runtime,
+        Err(error) => {
+            state
+                .classic_session_registry
+                .lock()
+                .release_session(&session.session_id);
+            return classic_error_into_response(ClassicError::new(
+                ClassicErrorCode::SessionNotCreated,
+                error.message,
+            ));
+        }
+    };
     let create_context = ClassicDevToolsCommandContext::new(session.session_id.as_str());
     let target_id = match runtime
         .execute(create_initial_target_command(&create_context))

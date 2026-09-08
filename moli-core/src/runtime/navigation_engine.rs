@@ -2,11 +2,9 @@ use crate::{
     network::{ResourceRequestClient, SharedWebStorageStore},
     page::{
         CompletedPageCommand, DocumentStartScript, EmulatedMediaOverrides, NavigationResponse,
-        Page, PendingPageCommand, PermissionOverrideRegistration,
-        RendererInspectorSessionRestoreSnapshot, RendererMainDocumentCommit,
-        RendererPageCreationArtifacts, RendererPageCreationDiagnostics,
-        RendererPendingDownloadActivation, RuntimeBindingRegistration,
-        RuntimeIsolatedWorldDefinition, SubresourceAuthCredentials, SubresourceResourceType,
+        Page, PendingPageCommand, RendererInspectorSessionRestoreSnapshot,
+        RendererMainDocumentCommit, RendererPageCreationArtifacts, RendererPageCreationDiagnostics,
+        RendererPendingDownloadActivation, SubresourceAuthCredentials, SubresourceResourceType,
         ViewportSurface,
     },
     renderer::ExternalRawDocumentBodyStream,
@@ -181,8 +179,8 @@ impl NavigationPageStorageHandles {
     }
 }
 
-pub struct BuiltDocumentPage {
-    pub page: Page,
+pub struct BuiltDocumentPage<P = Page> {
+    pub page: P,
     pub page_creation_diagnostics: RendererPageCreationDiagnostics,
     pub page_creation_artifacts: RendererPageCreationArtifacts,
     pub pending_download: Option<RendererPendingDownloadActivation>,
@@ -194,29 +192,42 @@ pub struct PreparedDocumentPage {
     prepared: moli_renderer_v8::PreparedRendererDocument,
 }
 
-#[derive(Debug, Clone)]
-pub struct PreparedDocumentPageCommitConfiguration {
-    pub document_start_scripts: Vec<DocumentStartScript>,
-    pub runtime_bindings: Vec<RuntimeBindingRegistration>,
-    pub runtime_inspector_session_restore_snapshots: Vec<RendererInspectorSessionRestoreSnapshot>,
-    pub runtime_isolated_worlds: Vec<RuntimeIsolatedWorldDefinition>,
-    pub permission_overrides: Vec<PermissionOverrideRegistration>,
-    pub extra_http_headers: Vec<(String, String)>,
-    pub locale_override: Option<String>,
-    pub timezone_override: Option<String>,
-    pub script_execution_disabled: bool,
-    pub bypass_content_security_policy: bool,
-    pub cpu_throttling_rate: f64,
-    pub emulated_media: EmulatedMediaOverrides,
-    pub idle_override: Option<crate::page::EmulatedIdleOverride>,
-    pub viewport_surface: Option<ViewportSurface>,
-    pub browser_resource_runtime: BrowserResourceRuntime,
-    pub navigator_identity: moli_browser_profile::BrowserIdentityProfile,
-    pub network_offline: bool,
-    pub bypass_service_worker: bool,
-    pub cache_disabled: bool,
-    pub blocked_url_patterns: Vec<String>,
-    pub fetch_subresource_interception: (bool, Option<SubresourceResourceType>),
+pub use moli_renderer_v8::RendererPreparedDocumentPolicy as PreparedDocumentPagePolicy;
+
+/// A reservation admitted synchronously, with no parser/author-script work yet.
+/// Its inspection endpoint is service-owned; materialization consumes native
+/// Browser policy and the one reservation together.
+pub struct PendingPreparedDocumentPage {
+    pending: moli_renderer_v8::PendingPreparedRendererDocument,
+}
+
+impl PendingPreparedDocumentPage {
+    pub fn start_preparation(&mut self) -> Result<()> {
+        self.pending.start_preparation()
+    }
+    pub fn renderer_residence(&self) -> crate::browser::RendererPageResidenceIdentity {
+        let token = self.pending.token();
+        crate::browser::RendererPageResidenceIdentity::from_parts(
+            token.local_host_id(),
+            token.page_id(),
+        )
+    }
+
+    pub fn inspection_configuration_endpoint(
+        &self,
+    ) -> moli_renderer_v8::RendererPreparedDocumentInspectionEndpoint {
+        self.pending.inspection_configuration_endpoint()
+    }
+
+    pub async fn materialize(
+        self,
+        policy: PreparedDocumentPagePolicy,
+    ) -> Result<BuiltDocumentPage> {
+        let prepared = self.pending.await_ready().await?;
+        PreparedDocumentPage { prepared }
+            .materialize(Some(policy))
+            .await
+    }
 }
 
 impl std::fmt::Debug for PreparedDocumentPage {
@@ -229,12 +240,6 @@ impl std::fmt::Debug for PreparedDocumentPage {
             )
             .finish_non_exhaustive()
     }
-}
-
-/// Typed authority to start one exact prepared renderer document.
-#[derive(Debug)]
-pub struct PreparedDocumentPageCommitPermit {
-    permit: moli_renderer_v8::RendererDocumentCommitPermit,
 }
 
 impl PreparedDocumentPage {
@@ -250,54 +255,17 @@ impl PreparedDocumentPage {
         self.prepared.renderer_devtools_agent_token()
     }
 
-    pub async fn update_commit_configuration(
+    pub fn inspection_configuration_endpoint(
         &self,
-        configuration: PreparedDocumentPageCommitConfiguration,
-    ) -> Result<()> {
-        self.prepared
-            .update_commit_configuration(
-                moli_renderer_v8::RendererPreparedDocumentCommitConfiguration {
-                    document_start_scripts: configuration.document_start_scripts,
-                    runtime_bindings: configuration.runtime_bindings,
-                    runtime_inspector_session_restore_snapshots: configuration
-                        .runtime_inspector_session_restore_snapshots,
-                    runtime_isolated_worlds: configuration.runtime_isolated_worlds,
-                    permission_overrides: configuration.permission_overrides,
-                    extra_http_headers: configuration.extra_http_headers,
-                    locale_override: configuration.locale_override,
-                    timezone_override: configuration.timezone_override,
-                    script_execution_disabled: configuration.script_execution_disabled,
-                    bypass_content_security_policy: configuration.bypass_content_security_policy,
-                    cpu_throttling_rate: configuration.cpu_throttling_rate,
-                    emulated_media: configuration.emulated_media,
-                    idle_override: configuration.idle_override,
-                    viewport_surface: configuration.viewport_surface,
-                    browser_resource_runtime: configuration.browser_resource_runtime,
-                    navigator_identity: configuration.navigator_identity,
-                    network_offline: configuration.network_offline,
-                    bypass_service_worker: configuration.bypass_service_worker,
-                    cache_disabled: configuration.cache_disabled,
-                    blocked_url_patterns: configuration.blocked_url_patterns,
-                    fetch_subresource_interception_enabled: configuration
-                        .fetch_subresource_interception
-                        .0,
-                    fetch_subresource_interception_resource_type: configuration
-                        .fetch_subresource_interception
-                        .1,
-                },
-            )
-            .await
+    ) -> moli_renderer_v8::RendererPreparedDocumentInspectionEndpoint {
+        self.prepared.inspection_configuration_endpoint()
     }
 
-    pub fn issue_commit_permit(&self) -> PreparedDocumentPageCommitPermit {
-        PreparedDocumentPageCommitPermit {
-            permit: self.prepared.issue_commit_permit(),
-        }
-    }
-
-    pub async fn commit(
+    /// Native admission consumes the prepared residence and installs Browser
+    /// policy together. No separate update or materialization permit is exposed.
+    pub async fn materialize(
         self,
-        permit: PreparedDocumentPageCommitPermit,
+        policy: Option<PreparedDocumentPagePolicy>,
     ) -> Result<BuiltDocumentPage> {
         let (
             handle,
@@ -307,7 +275,7 @@ impl PreparedDocumentPage {
             pending_download,
         ) = self
             .prepared
-            .commit(permit.permit)
+            .materialize(policy)
             .await
             .context("failed to commit prepared streaming raw page")?;
         Ok(BuiltDocumentPage {
@@ -351,6 +319,18 @@ impl PendingBuiltDocumentPage {
             pending_download,
         })
     }
+}
+
+/// An on-demand value snapshot, not a handle to engine or renderer authority.
+pub struct NavigationEngineDiagnostics {
+    pub renderer_owner_id: u64,
+    pub document_isolate_model: &'static str,
+    pub document_isolate_accounting: crate::page::RendererDocumentIsolateAccountingDiagnostics,
+    pub image_fetch_enabled: bool,
+    pub optional_resource_fetch_mask: OptionalResourceFetchMask,
+    pub subframe_loading_enabled: bool,
+    pub resource_runtime: Option<moli_renderer_v8::network::BrowserResourceRuntimeDiagnostics>,
+    pub browser_context_runtime: serde_json::Value,
 }
 
 /// Configuration copied into each Page-owned or standalone NavigationEngine.
@@ -670,6 +650,21 @@ impl NavigationEngine {
 
     pub fn renderer_owner_id_for_diagnostics(&self) -> u64 {
         self.js_runtime.renderer_owner_id_for_diagnostics()
+    }
+
+    pub fn diagnostics(&self) -> NavigationEngineDiagnostics {
+        NavigationEngineDiagnostics {
+            renderer_owner_id: self.renderer_owner_id_for_diagnostics(),
+            document_isolate_model: self.document_isolate_model_for_diagnostics(),
+            document_isolate_accounting: self.document_isolate_accounting_for_diagnostics(),
+            image_fetch_enabled: self.image_fetch_enabled(),
+            optional_resource_fetch_mask: self.optional_resource_fetch_mask(),
+            subframe_loading_enabled: self.subframe_loading_enabled(),
+            resource_runtime: self
+                .resource_request_client()
+                .map(|client| client.resource_runtime_diagnostics()),
+            browser_context_runtime: self.browser_context_runtime().moli_memory_diagnostics(),
+        }
     }
 
     pub fn shares_renderer_owner_with(&self, other: &Self) -> bool {
@@ -1494,13 +1489,44 @@ impl NavigationEngine {
         .await
     }
 
-    /// Fire-and-defer variant of
-    /// [`Self::build_html_page_from_response_with_inspector_session_restores_async`].
-    ///
-    /// Performs the synchronous loader setup and enqueues the renderer command,
-    /// returning a [`PendingBuiltDocumentPage`] without awaiting the renderer
-    /// reply. Use this to overlap renderer-side V8/parse work with subsequent
-    /// conn-side bookkeeping.
+    /// Reserve an initial empty document without running parser/author code.
+    /// Browser policy is supplied when the owned preparation is materialized;
+    /// inspection bootstrap can be configured independently before that point.
+    pub fn reserve_initial_document(
+        &mut self,
+        storage: NavigationPageStorageHandles,
+        url: Url,
+        top_level_storage_key: Option<moli_storage_key::MoliStorageKey>,
+    ) -> Result<PendingPreparedDocumentPage> {
+        let (cookies, web_storage, indexed_db_manager, storage_bucket_store) = storage.into_parts();
+        let loader = self.ensure_resource_request_client(cookies)?;
+        let reservation = self.reserve_page_for_creation();
+        let pending = self.js_runtime.reserve_document_response(
+            reservation,
+            url.clone(),
+            url,
+            None,
+            false,
+            0,
+            200,
+            vec![("content-type".into(), "text/html; charset=utf-8".into())],
+            ExternalRawDocumentBodyStream::from_bytes(
+                b"<!doctype html><html><head></head><body></body></html>".to_vec(),
+            ),
+            &loader,
+            web_storage,
+            indexed_db_manager,
+            storage_bucket_store,
+            top_level_storage_key,
+            PageVmInitStage::Load,
+            moli_renderer_v8::RendererReplyBoundary::Stage,
+            None,
+        );
+        Ok(PendingPreparedDocumentPage { pending })
+    }
+
+    /// Fire-and-defer variant of HTML page construction. The renderer begins
+    /// parsing immediately; the caller later awaits the resulting owned Page.
     #[allow(clippy::too_many_arguments)]
     fn start_build_html_page_from_response(
         &mut self,
@@ -1782,8 +1808,7 @@ impl NavigationEngine {
                 main_document_commit,
             )
             .await?;
-        let permit = prepared.issue_commit_permit();
-        prepared.commit(permit).await
+        prepared.materialize(None).await
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -2013,7 +2038,7 @@ impl NavigationEngine {
     }
 
     #[allow(clippy::too_many_arguments)]
-    pub async fn prepare_streaming_raw_page_from_external_body_with_storage_and_inspector_session_restores_async(
+    pub async fn prepare_document_response_async(
         &mut self,
         page_reservation: moli_renderer_v8::RendererPageReservationToken,
         storage: NavigationPageStorageHandles,
@@ -2025,67 +2050,46 @@ impl NavigationEngine {
         response_status: u16,
         response_headers: Vec<(String, String)>,
         raw_body: ExternalRawDocumentBodyStream,
-        document_start_scripts: Vec<DocumentStartScript>,
-        runtime_bindings: Vec<crate::page::RuntimeBindingRegistration>,
-        runtime_inspector_session_restore_snapshots: Vec<RendererInspectorSessionRestoreSnapshot>,
-        extra_http_headers: Vec<(String, String)>,
-        locale_override: Option<String>,
-        timezone_override: Option<String>,
-        script_execution_disabled: bool,
-        bypass_content_security_policy: bool,
-        cpu_throttling_rate: f64,
-        emulated_media: EmulatedMediaOverrides,
-        viewport_surface: Option<ViewportSurface>,
-        network_offline: bool,
-        blocked_url_patterns: Vec<String>,
-        fetch_subresource_interception_enabled: bool,
-        fetch_subresource_interception_resource_type: Option<SubresourceResourceType>,
         stage: PageVmInitStage,
         reply_boundary: moli_renderer_v8::RendererReplyBoundary,
-        root_frame_id: Option<String>,
         resource_source: CommittedDocumentResourceSource,
         reserved_service_worker_client: Option<RendererReservedServiceWorkerClient>,
-        main_document_commit: Option<RendererMainDocumentCommit>,
     ) -> Result<PreparedDocumentPage> {
         let (cookie_store, web_storage, indexed_db_manager, storage_bucket_store) =
             storage.into_parts();
-        self.prepare_streaming_raw_page_from_external_body_async(
-            page_reservation,
+        let loader = self.resource_request_client_for_committed_document(
             cookie_store,
-            web_storage,
-            indexed_db_manager,
-            storage_bucket_store,
-            requested_url,
-            final_url,
-            navigation_initiator_url,
-            redirected,
-            redirect_count,
-            response_status,
-            response_headers,
-            raw_body,
-            document_start_scripts,
-            runtime_bindings,
-            runtime_inspector_session_restore_snapshots,
-            extra_http_headers,
-            locale_override,
-            timezone_override,
-            script_execution_disabled,
-            bypass_content_security_policy,
-            cpu_throttling_rate,
-            emulated_media,
-            viewport_surface,
-            network_offline,
-            blocked_url_patterns,
-            fetch_subresource_interception_enabled,
-            fetch_subresource_interception_resource_type,
-            stage,
-            reply_boundary,
-            root_frame_id,
+            &final_url,
             resource_source,
-            reserved_service_worker_client,
-            main_document_commit,
-        )
-        .await
+        )?;
+        // Preparation carries response/storage only. In particular, do not
+        // replay a Protocol snapshot into the shared resource client's policy.
+        // Browser admission supplies policy when consuming the prepared Page;
+        // DevTools bootstrap uses the separate inspection endpoint.
+        let prepared = self
+            .js_runtime
+            .reserve_document_response(
+                page_reservation,
+                requested_url,
+                final_url,
+                navigation_initiator_url,
+                redirected,
+                redirect_count,
+                response_status,
+                response_headers,
+                raw_body,
+                &loader,
+                web_storage,
+                indexed_db_manager,
+                storage_bucket_store,
+                None,
+                stage,
+                reply_boundary,
+                reserved_service_worker_client,
+            )
+            .await_ready()
+            .await?;
+        Ok(PreparedDocumentPage { prepared })
     }
 
     async fn build_html_page_from_response_options_async(
@@ -2224,81 +2228,7 @@ impl NavigationEngine {
                 PageVmInitStage::Load,
             )
             .await?;
-        let permit = prepared.issue_commit_permit();
-        prepared.commit(permit).await
-    }
-
-    #[allow(clippy::too_many_arguments)]
-    pub async fn prepare_document_page_from_response_with_storage_and_inspector_session_restores_async(
-        &mut self,
-        page_reservation: moli_renderer_v8::RendererPageReservationToken,
-        storage: NavigationPageStorageHandles,
-        requested_url: Url,
-        final_url: Url,
-        navigation_initiator_url: Option<Url>,
-        redirected: bool,
-        redirect_count: usize,
-        response_status: u16,
-        response_headers: Vec<(String, String)>,
-        response_body: String,
-        document_start_scripts: Vec<DocumentStartScript>,
-        runtime_bindings: Vec<crate::page::RuntimeBindingRegistration>,
-        runtime_inspector_session_restore_snapshots: Vec<RendererInspectorSessionRestoreSnapshot>,
-        extra_http_headers: Vec<(String, String)>,
-        locale_override: Option<String>,
-        timezone_override: Option<String>,
-        script_execution_disabled: bool,
-        bypass_content_security_policy: bool,
-        cpu_throttling_rate: f64,
-        emulated_media: EmulatedMediaOverrides,
-        viewport_surface: Option<ViewportSurface>,
-        network_offline: bool,
-        blocked_url_patterns: Vec<String>,
-        fetch_subresource_interception_enabled: bool,
-        fetch_subresource_interception_resource_type: Option<SubresourceResourceType>,
-        root_frame_id: Option<String>,
-        resource_source: CommittedDocumentResourceSource,
-        main_document_commit: Option<RendererMainDocumentCommit>,
-    ) -> Result<PreparedDocumentPage> {
-        let (cookie_store, web_storage, indexed_db_manager, storage_bucket_store) =
-            storage.into_parts();
-        self.prepare_document_page_from_response_options_best_effort_async(
-            page_reservation,
-            cookie_store,
-            web_storage,
-            indexed_db_manager,
-            storage_bucket_store,
-            DocumentPageLoadOptions {
-                resource_source,
-                root_frame_id,
-                main_document_commit,
-                requested_url,
-                final_url,
-                navigation_initiator_url,
-                redirected,
-                redirect_count,
-                response_status,
-                response_headers,
-                response_body,
-                document_start_scripts,
-                runtime_bindings,
-                runtime_inspector_session_restore_snapshots,
-                extra_http_headers,
-                locale_override,
-                timezone_override,
-                script_execution_disabled,
-                bypass_content_security_policy,
-                cpu_throttling_rate,
-                emulated_media,
-                viewport_surface,
-                network_offline,
-                blocked_url_patterns,
-                fetch_subresource_interception_enabled,
-                fetch_subresource_interception_resource_type,
-            },
-            PageVmInitStage::DomContentLoaded,
-        )
-        .await
+        prepared.materialize(None).await
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -2412,36 +2342,6 @@ impl NavigationEngine {
         self.browser_context_access.reap_retired_resource_runtimes();
     }
 
-    async fn rebuild_resource_runtime_for_page_async(
-        &mut self,
-        cookie_store: SharedBrowserCookieStore,
-        loaded_page: Option<&mut Page>,
-    ) -> Result<()> {
-        let resource_runtime = self
-            .rebuild_resource_request_client(cookie_store)?
-            .browser_resource_runtime();
-        if let Some(page) = loaded_page {
-            let replacement = page
-                .replace_browser_resource_runtime_async(&resource_runtime)
-                .await;
-            // The Page drops its old document authority at the completion
-            // boundary. Reap after either terminal outcome; a still-live old
-            // authority simply keeps its owner registered.
-            self.browser_context_access.reap_retired_resource_runtimes();
-            replacement?;
-        }
-        Ok(())
-    }
-
-    pub async fn rebuild_resource_runtime_for_page_with_storage_async(
-        &mut self,
-        storage: NavigationResourceStorageHandles,
-        loaded_page: Option<&mut Page>,
-    ) -> Result<()> {
-        self.rebuild_resource_runtime_for_page_async(storage.into_cookie_store(), loaded_page)
-            .await
-    }
-
     pub fn set_tls_verify_host(&mut self, enabled: bool) {
         self.fetch_config.set_tls_verify_host(enabled);
     }
@@ -2488,6 +2388,58 @@ mod tests {
         moli_renderer_v8::RendererBrowserContextRuntimeOwnerAccess: Send,
         Sync
     );
+
+    #[tokio::test]
+    async fn response_preparation_does_not_reconfigure_shared_request_policy() {
+        let mut engine = NavigationEngine::new();
+        let cookies = new_shared_browser_cookie_store();
+        let client = engine
+            .ensure_resource_request_client(cookies.clone())
+            .unwrap();
+        client.set_extra_http_headers(&[("x-current-policy".into(), "retained".into())]);
+        client.set_network_offline(true);
+        client.set_blocked_url_patterns(&["*blocked.example*".into()]);
+        let policy = client.page_network_policy();
+        let revision = policy.snapshot().revision();
+        let url = Url::parse("https://example.test/response").unwrap();
+        let prepared = engine
+            .prepare_document_response_async(
+                engine.reserve_page_for_creation(),
+                super::NavigationPageStorageHandles::new(
+                    cookies,
+                    Default::default(),
+                    Default::default(),
+                    None,
+                    None,
+                ),
+                url.clone(),
+                url,
+                None,
+                false,
+                0,
+                200,
+                vec![("content-type".into(), "text/html".into())],
+                super::ExternalRawDocumentBodyStream::from_bytes(b"<!doctype html>".to_vec()),
+                super::PageVmInitStage::DomContentLoaded,
+                moli_renderer_v8::RendererReplyBoundary::DocumentCommit,
+                CommittedDocumentResourceSource::Synthetic,
+                None,
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            policy.snapshot().revision(),
+            revision,
+            "response preparation must not write policy before Browser admission"
+        );
+        assert!(policy.snapshot().network_offline());
+        prepared.cancel().await.unwrap();
+        assert_eq!(
+            policy.snapshot().revision(),
+            revision,
+            "canceling an unadmitted response must not reset shared policy either"
+        );
+    }
 
     #[test]
     fn navigation_engine_can_share_browser_context_runtime() {

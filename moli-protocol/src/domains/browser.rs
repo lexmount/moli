@@ -5,7 +5,10 @@ use serde::Deserialize;
 use serde_json::{Value, json};
 use std::str::FromStr;
 
-use crate::conn::{BrowserWindowBounds, CdpConnection, Cmd};
+use crate::conn::{
+    CdpConnection, Cmd, CommandOwnerScope, CompletedContextPermissionUpdate,
+    PendingContextPermissionUpdate, WindowSurface, WindowSurfaceState,
+};
 use crate::devtools_runtime::{
     DevToolsCommand, DevToolsCommandResult, DevToolsError, DevToolsErrorKind,
     DevToolsSetDownloadBehaviorCommand, DevToolsSetPermissionCommand,
@@ -13,19 +16,12 @@ use crate::devtools_runtime::{
 use crate::domains::actions::BrowserAction;
 use crate::domains::command_output::CommandOutputPlan;
 use crate::version;
-use moli_core::page::{CompletedPageCommand, PendingPageCommand};
-
-const DEV_TOOLS_WINDOW_ID: u32 = 1_923_710_101;
-const DOWNLOAD_BEHAVIORS: &[&str] = &["default", "deny", "allow", "allowAndName"];
-
-pub(crate) fn is_valid_download_behavior(behavior: &str) -> bool {
-    DOWNLOAD_BEHAVIORS.contains(&behavior)
-}
+use moli_core::browser::DownloadPolicy;
+use moli_core::page::PermissionOverrideRegistration;
 
 /// Disables Browser-domain observation owned by one DevTools session.
 pub(in crate::domains) fn dispose_session_handler(conn: &mut CdpConnection, session_id: &str) {
-    conn.download_behavior
-        .set_browser_events_enabled_for_session(Some(session_id), false);
+    conn.set_browser_download_events_enabled_for_session(Some(session_id), false);
 }
 
 pub(crate) struct PendingBrowserCommandDispatch {
@@ -50,7 +46,7 @@ enum PendingBrowserCommandKind {
         pending: tokio::task::JoinHandle<Result<Vec<u8>, String>>,
     },
     ApplyPermissionOverrides {
-        pending: Vec<PendingBrowserPageCommand>,
+        pending: Vec<PendingContextPermissionUpdate>,
     },
 }
 
@@ -59,24 +55,8 @@ enum CompletedBrowserCommandKind {
         completed: Result<Vec<u8>, String>,
     },
     ApplyPermissionOverrides {
-        completed: Vec<CompletedBrowserPageCommand>,
+        completed: Vec<CompletedContextPermissionUpdate>,
     },
-}
-
-struct PendingBrowserPageCommand {
-    target: PendingBrowserPageTarget,
-    pending: PendingPageCommand,
-}
-
-struct CompletedBrowserPageCommand {
-    target: PendingBrowserPageTarget,
-    completed: Result<CompletedPageCommand, String>,
-}
-
-#[derive(Clone)]
-struct PendingBrowserPageTarget {
-    browser_context_id: String,
-    target_id: String,
 }
 
 impl PendingBrowserCommandDispatch {
@@ -92,15 +72,8 @@ impl PendingBrowserCommandDispatch {
             }
             PendingBrowserCommandKind::ApplyPermissionOverrides { pending } => {
                 let mut completed = Vec::with_capacity(pending.len());
-                for page_command in pending {
-                    completed.push(CompletedBrowserPageCommand {
-                        target: page_command.target,
-                        completed: page_command
-                            .pending
-                            .wait()
-                            .await
-                            .map_err(|error| error.to_string()),
-                    });
+                for update in pending {
+                    completed.push(update.wait().await);
                 }
                 CompletedBrowserCommandKind::ApplyPermissionOverrides { completed }
             }
@@ -158,7 +131,7 @@ pub(crate) fn try_start_browser_command_dispatch(
     match action {
         BrowserAction::GetVersion => BrowserCommandTaskStep::Complete(get_version(conn)),
         BrowserAction::GetWindowForTarget => {
-            BrowserCommandTaskStep::Complete(get_window_for_target(conn))
+            BrowserCommandTaskStep::Complete(get_window_for_target(conn, cmd))
         }
         BrowserAction::SetWindowBounds => {
             BrowserCommandTaskStep::Complete(set_window_bounds(conn, cmd))
@@ -186,32 +159,46 @@ fn get_version(conn: &CdpConnection) -> CommandOutputPlan {
     }))
 }
 
-fn bounds_json(bounds: &BrowserWindowBounds) -> Value {
-    let mut value = json!({
-        "windowState": bounds.window_state,
-    });
-    let object = value
-        .as_object_mut()
-        .expect("browser bounds json must be an object");
-    if let Some(left) = bounds.left {
-        object.insert("left".to_owned(), json!(left));
-    }
-    if let Some(top) = bounds.top {
-        object.insert("top".to_owned(), json!(top));
-    }
-    if let Some(width) = bounds.width {
-        object.insert("width".to_owned(), json!(width));
-    }
-    if let Some(height) = bounds.height {
-        object.insert("height".to_owned(), json!(height));
-    }
-    value
+fn bounds_json(surface: WindowSurface) -> Value {
+    json!({
+        "windowState": surface.state.label(),
+        "left": surface.x,
+        "top": surface.y,
+        "width": surface.width,
+        "height": surface.height,
+    })
 }
 
-fn get_window_for_target(conn: &CdpConnection) -> CommandOutputPlan {
+#[derive(Default, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct GetWindowForTargetParams {
+    #[serde(default)]
+    target_id: Option<String>,
+}
+
+fn get_window_for_target(conn: &CdpConnection, cmd: &Cmd<'_>) -> CommandOutputPlan {
+    let params = match cmd.get_params::<GetWindowForTargetParams>() {
+        Ok(Some(params)) => params,
+        Ok(None) => GetWindowForTargetParams::default(),
+        Err(_) => return CommandOutputPlan::error(-32602, "InvalidParams"),
+    };
+    let handle = match params.target_id {
+        Some(target_id) => conn.browser_web_contents_for_target(&target_id),
+        None => {
+            conn.browser_web_contents_for_owner(&CommandOwnerScope::capture(conn, cmd.session_id))
+        }
+    };
+    let handle = match handle {
+        Ok(handle) => handle,
+        Err(message) => return CommandOutputPlan::error(-32000, message),
+    };
+    let surface = match conn.browser_window_surface(handle) {
+        Ok(surface) => surface,
+        Err(message) => return CommandOutputPlan::error(-32000, message),
+    };
     CommandOutputPlan::result(json!({
-        "windowId": DEV_TOOLS_WINDOW_ID,
-        "bounds": bounds_json(&conn.window_bounds)
+        "windowId": handle.id().get(),
+        "bounds": bounds_json(surface)
     }))
 }
 
@@ -273,9 +260,13 @@ fn set_window_bounds(conn: &mut CdpConnection, cmd: &Cmd<'_>) -> CommandOutputPl
         }
     };
 
-    if *params.window_id.inner() != i64::from(DEV_TOOLS_WINDOW_ID) {
+    let Ok(window_id) = u64::try_from(*params.window_id.inner()) else {
         return CommandOutputPlan::error(-32602, "InvalidParams");
-    }
+    };
+    let handle = match conn.browser_web_contents_for_window_id(window_id) {
+        Ok(handle) => handle,
+        Err(_) => return CommandOutputPlan::error(-32602, "InvalidParams"),
+    };
 
     let left = match optional_i64_to_i32(params.bounds.left) {
         Ok(left) => left,
@@ -301,12 +292,17 @@ fn set_window_bounds(conn: &mut CdpConnection, cmd: &Cmd<'_>) -> CommandOutputPl
             return CommandOutputPlan::error(-32602, "InvalidParams");
         }
     };
-    conn.window_bounds.left = left;
-    conn.window_bounds.top = top;
-    conn.window_bounds.width = width;
-    conn.window_bounds.height = height;
-    if let Some(window_state) = params.bounds.window_state {
-        conn.window_bounds.window_state = window_state.as_ref().to_owned();
+    let state = match params.bounds.window_state {
+        Some(window_state) => match WindowSurfaceState::from_label(window_state.as_ref()) {
+            Some(state) => Some(state),
+            None => return CommandOutputPlan::error(-32602, "InvalidParams"),
+        },
+        None => None,
+    };
+    if let Err(message) =
+        conn.update_browser_window_surface(handle, state, width, height, left, top)
+    {
+        return CommandOutputPlan::error(-32000, message);
     }
 
     CommandOutputPlan::success()
@@ -328,22 +324,20 @@ pub(crate) fn set_download_behavior_command_output_plan(
     {
         return CommandOutputPlan::error(-31998, "UnknownBrowserContextId");
     }
-    if !is_valid_download_behavior(params.behavior.as_str()) {
+    let Some(behavior) = crate::conn::parse_download_behavior(&params.behavior) else {
         return CommandOutputPlan::error(-32602, "InvalidParams");
-    }
+    };
 
-    match params.browser_context_id {
-        Some(browser_context_id) => conn.download_behavior.set_browser_context_policy(
-            browser_context_id,
-            params.behavior,
-            params.download_path,
-        ),
-        None => conn
-            .download_behavior
-            .set_global_policy(params.behavior, params.download_path),
-    }
-    conn.download_behavior
-        .set_browser_events_enabled_for_session(cmd.session_id, params.events_enabled);
+    conn.configure_download_policy(
+        params.browser_context_id.as_deref(),
+        DownloadPolicy {
+            behavior,
+            download_path: params.download_path,
+        },
+        None,
+    )
+    .expect("validated BrowserContext remains available");
+    conn.set_browser_download_events_enabled_for_session(cmd.session_id, params.events_enabled);
 
     CommandOutputPlan::success()
 }
@@ -407,38 +401,48 @@ fn execute_devtools_set_download_behavior(
         match target_contexts {
             Some(user_contexts) => {
                 for browser_context_id in user_contexts {
-                    conn.download_behavior
-                        .reset_browser_context(browser_context_id.as_str());
+                    conn.reset_download_policy(Some(browser_context_id.as_str()))
+                        .expect("validated BrowserContext remains available");
                 }
             }
-            None => conn.download_behavior.reset_global(),
+            None => conn
+                .reset_download_policy(None)
+                .expect("global policy always exists"),
         }
         return Ok(DevToolsCommandResult::Empty);
     };
 
-    if !is_valid_download_behavior(behavior.behavior.as_str()) {
+    let Some(download_behavior) = crate::conn::parse_download_behavior(&behavior.behavior) else {
         return Err(DevToolsError::new(
             DevToolsErrorKind::InvalidArgument,
             "download behavior is invalid",
         ));
-    }
+    };
 
     match target_contexts {
         Some(user_contexts) => {
             for browser_context_id in user_contexts {
-                conn.download_behavior.set_browser_context(
-                    browser_context_id.into_string(),
-                    behavior.behavior.clone(),
-                    behavior.download_path.clone(),
-                    behavior.events_enabled,
-                );
+                conn.configure_download_policy(
+                    Some(browser_context_id.as_str()),
+                    DownloadPolicy {
+                        behavior: download_behavior,
+                        download_path: behavior.download_path.clone(),
+                    },
+                    Some(behavior.events_enabled),
+                )
+                .expect("validated BrowserContext remains available");
             }
         }
-        None => conn.download_behavior.set_global(
-            behavior.behavior,
-            behavior.download_path,
-            behavior.events_enabled,
-        ),
+        None => conn
+            .configure_download_policy(
+                None,
+                DownloadPolicy {
+                    behavior: download_behavior,
+                    download_path: behavior.download_path,
+                },
+                Some(behavior.events_enabled),
+            )
+            .expect("global policy always exists"),
     }
     Ok(DevToolsCommandResult::Empty)
 }
@@ -458,22 +462,19 @@ async fn execute_devtools_set_permission_command_async(
         .browser_context_id
         .map(|browser_context_id| browser_context_id.into_string());
 
-    conn.permission_overrides.retain(|override_entry| {
-        override_entry.permission != command.permission
-            || override_entry.origin.as_deref() != Some(command.origin.as_str())
-            || override_entry.embedded_origin != command.embedded_origin
-            || override_entry.browser_context_id != browser_context_id
-    });
-    conn.permission_overrides
-        .push(crate::conn::PermissionOverride {
+    conn.set_permission_override(
+        browser_context_id.as_deref(),
+        PermissionOverrideRegistration {
             permission: command.permission,
             setting: normalize_permission_setting(command.setting),
             origin: Some(command.origin),
             embedded_origin: command.embedded_origin,
-            browser_context_id,
-        });
+        },
+    )
+    .expect("validated BrowserContext remains available");
 
-    let pending = start_loaded_page_permission_override_commands(conn)
+    let pending = conn
+        .start_permission_updates()
         .map_err(|error| DevToolsError::new(DevToolsErrorKind::Internal, error))?;
     if pending.is_empty() {
         return Ok(DevToolsCommandResult::Empty);
@@ -495,10 +496,7 @@ async fn execute_devtools_set_permission_command_async(
         unreachable!("set permission can only wait for permission override commands")
     };
     for command in commands {
-        let completion = command
-            .completed
-            .map_err(|error| DevToolsError::new(DevToolsErrorKind::Internal, error))?;
-        finish_pending_permission_override_command(conn, command.target, completion)
+        conn.finish_permission_update(command)
             .map_err(|error| DevToolsError::new(DevToolsErrorKind::Internal, error))?;
     }
     Ok(DevToolsCommandResult::Empty)
@@ -562,20 +560,16 @@ fn start_set_permission_command(conn: &mut CdpConnection, cmd: &Cmd<'_>) -> Brow
         return browser_error_step(-31998, "UnknownBrowserContextId");
     }
 
-    conn.permission_overrides.retain(|override_entry| {
-        override_entry.permission != params.permission
-            || override_entry.origin != params.origin
-            || override_entry.embedded_origin != params.embedded_origin
-            || override_entry.browser_context_id != params.browser_context_id
-    });
-    conn.permission_overrides
-        .push(crate::conn::PermissionOverride {
+    conn.set_permission_override(
+        params.browser_context_id.as_deref(),
+        PermissionOverrideRegistration {
             permission: params.permission,
             setting: normalize_permission_setting(params.setting),
             origin: params.origin,
             embedded_origin: params.embedded_origin,
-            browser_context_id: params.browser_context_id,
-        });
+        },
+    )
+    .expect("validated BrowserContext remains available");
     start_apply_permission_overrides_command(conn, cmd)
 }
 
@@ -594,20 +588,16 @@ fn start_grant_permissions_command(
     }
 
     for permission in params.permissions {
-        conn.permission_overrides.retain(|override_entry| {
-            override_entry.permission != permission
-                || override_entry.origin != params.origin
-                || override_entry.embedded_origin.is_some()
-                || override_entry.browser_context_id != params.browser_context_id
-        });
-        conn.permission_overrides
-            .push(crate::conn::PermissionOverride {
+        conn.set_permission_override(
+            params.browser_context_id.as_deref(),
+            PermissionOverrideRegistration {
                 permission,
                 setting: PermissionSetting::Granted.label().to_owned(),
                 origin: params.origin.clone(),
                 embedded_origin: None,
-                browser_context_id: params.browser_context_id.clone(),
-            });
+            },
+        )
+        .expect("validated BrowserContext remains available");
     }
 
     start_apply_permission_overrides_command(conn, cmd)
@@ -630,13 +620,8 @@ fn start_reset_permissions_command(
         return browser_error_step(-31998, "UnknownBrowserContextId");
     }
 
-    if let Some(browser_context_id) = params.browser_context_id {
-        conn.permission_overrides.retain(|entry| {
-            entry.browser_context_id.as_deref() != Some(browser_context_id.as_str())
-        });
-    } else {
-        conn.permission_overrides.clear();
-    }
+    conn.clear_permission_overrides(params.browser_context_id.as_deref())
+        .expect("validated BrowserContext remains available");
 
     start_apply_permission_overrides_command(conn, cmd)
 }
@@ -653,7 +638,7 @@ fn start_apply_permission_overrides_command(
     conn: &mut CdpConnection,
     cmd: &Cmd<'_>,
 ) -> BrowserCommandTaskStep {
-    let pending = match start_loaded_page_permission_override_commands(conn) {
+    let pending = match conn.start_permission_updates() {
         Ok(pending) => pending,
         Err(message) => return browser_error_step(-32000, message),
     };
@@ -665,51 +650,6 @@ fn start_apply_permission_overrides_command(
         response_session_id: cmd.session_id.map(str::to_owned),
         kind: PendingBrowserCommandKind::ApplyPermissionOverrides { pending },
     })
-}
-
-fn start_loaded_page_permission_override_commands(
-    conn: &mut CdpConnection,
-) -> Result<Vec<PendingBrowserPageCommand>, String> {
-    let all_overrides = conn.permission_overrides.clone();
-    let mut pending = Vec::new();
-    for browser_context in conn
-        .browser_context
-        .iter_mut()
-        .chain(conn.inactive_browser_contexts.iter_mut())
-    {
-        let browser_context_id = browser_context.id.clone();
-        let effective_overrides = all_overrides
-            .iter()
-            .filter(|entry| {
-                entry.browser_context_id.is_none()
-                    || entry.browser_context_id.as_deref() == Some(browser_context_id.as_str())
-            })
-            .map(|entry| moli_core::page::PermissionOverrideRegistration {
-                permission: entry.permission.clone(),
-                setting: entry.setting.clone(),
-                origin: entry.origin.clone(),
-                embedded_origin: entry.embedded_origin.clone(),
-            })
-            .collect::<Vec<_>>();
-        for target in browser_context.page_targets.iter_mut() {
-            let target_id = target.target_id().to_owned();
-            let Some(page) = target.loaded_page_mut() else {
-                continue;
-            };
-            pending.push(PendingBrowserPageCommand {
-                target: PendingBrowserPageTarget {
-                    browser_context_id: browser_context_id.clone(),
-                    target_id,
-                },
-                pending: page
-                    .start_set_permission_overrides(&effective_overrides)
-                    .map_err(|error| {
-                        format!("failed to update page permission overrides: {error}")
-                    })?,
-            });
-        }
-    }
-    Ok(pending)
 }
 
 pub(crate) fn complete_pending_browser_command(
@@ -728,35 +668,13 @@ pub(crate) fn complete_pending_browser_command(
             completed: commands,
         } => {
             for command in commands {
-                let completion = match command.completed {
-                    Ok(completion) => completion,
-                    Err(error) => {
-                        return CommandOutputPlan::error(-32000, error);
-                    }
-                };
-                if let Err(error) =
-                    finish_pending_permission_override_command(conn, command.target, completion)
-                {
+                if let Err(error) = conn.finish_permission_update(command) {
                     return CommandOutputPlan::error(-32000, error);
                 }
             }
             CommandOutputPlan::success()
         }
     }
-}
-
-fn finish_pending_permission_override_command(
-    conn: &mut CdpConnection,
-    target: PendingBrowserPageTarget,
-    completion: CompletedPageCommand,
-) -> Result<(), String> {
-    let page = conn
-        .browser_context_by_id_mut(&target.browser_context_id)
-        .and_then(|browser_context| browser_context.page_target_mut(&target.target_id))
-        .and_then(|target| target.loaded_page_mut())
-        .ok_or_else(|| "NoDocumentLoaded".to_owned())?;
-    page.finish_set_permission_overrides(completion)
-        .map_err(|error| error.to_string())
 }
 
 // ────────────────────────────────────────────────────────────────────────────

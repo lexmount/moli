@@ -1,6 +1,6 @@
 #[cfg(test)]
 use crate::conn::BrowserContext;
-use crate::conn::CdpConnection;
+use crate::conn::{CdpConnection, DocumentPolicyUpdate};
 use crate::devtools_runtime::DevToolsTargetInfo;
 
 use super::{
@@ -10,8 +10,17 @@ use super::{
 };
 
 impl CdpConnection {
+    /// Freezes the exact AgentHost route and installed handler set before
+    /// asynchronous cleanup. The registry entry stays live until the caller
+    /// commits this plan's binding removal.
+    pub(crate) fn session_disposal_plan(&self, session_id: &str) -> Option<SessionDisposalPlan> {
+        let route = self.agent_hosts.attached_session_route(session_id)?;
+        let handler_set = self.agent_hosts.attached_session_handler_set(session_id)?;
+        SessionDisposalPlan::for_attached_session(session_id, route, handler_set)
+    }
+
     /// Commits target-side session declarations built by low-level test
-    /// fixtures into the same control-plane registry used by production
+    /// fixtures into the same AgentHost registry used by production
     /// attachment transactions.
     ///
     /// Older tests construct `BrowserContext` and worker targets directly,
@@ -91,22 +100,53 @@ impl CdpConnection {
 
         for (session_id, target_id, route) in declared {
             if self
-                .target_control
+                .agent_hosts
                 .attached_session_route(&session_id)
                 .is_some()
             {
                 continue;
             }
-            self.target_control
+            self.agent_hosts
                 .commit_attached_session(session_id, None, &target_id, route, false, false);
         }
     }
 
     #[cfg(test)]
+    pub(crate) fn new_browser_context_fixture_for_test(
+        &self,
+        id: impl Into<String>,
+    ) -> BrowserContext {
+        let mut context = BrowserContext::new_with_browser_for_test(&self.browser, id);
+        context.bind_page_navigation_engines(
+            self.navigation_runtime_config.clone(),
+            self.scheduler_hooks.renderer_publication_sender(),
+        );
+        context
+    }
+
+    #[cfg(test)]
+    pub(crate) fn new_page_target_fixture_for_test(
+        &self,
+        id: impl Into<String>,
+        target_id: impl Into<String>,
+    ) -> BrowserContext {
+        let mut context = self.new_browser_context_fixture_for_test(id);
+        context.set_active_target_id(target_id);
+        context
+    }
+
+    #[cfg(test)]
     pub(crate) fn install_browser_context_fixture_for_test(
         &mut self,
-        browser_context: BrowserContext,
+        mut browser_context: BrowserContext,
     ) {
+        // Mirror production Context insertion. Document admission must never
+        // fall back to a connection/another WebContents' navigation engine.
+        browser_context.apply_browser_cache_disabled(self.browser_global_overrides.cache_disabled);
+        browser_context.bind_page_navigation_engines(
+            self.navigation_runtime_config.clone(),
+            self.scheduler_hooks.renderer_publication_sender(),
+        );
         self.browser_context = Some(browser_context);
         self.commit_declared_session_fixtures_for_test();
     }
@@ -114,8 +154,13 @@ impl CdpConnection {
     #[cfg(test)]
     pub(crate) fn push_inactive_browser_context_fixture_for_test(
         &mut self,
-        browser_context: BrowserContext,
+        mut browser_context: BrowserContext,
     ) {
+        browser_context.apply_browser_cache_disabled(self.browser_global_overrides.cache_disabled);
+        browser_context.bind_page_navigation_engines(
+            self.navigation_runtime_config.clone(),
+            self.scheduler_hooks.renderer_publication_sender(),
+        );
         self.inactive_browser_contexts.push(browser_context);
         self.commit_declared_session_fixtures_for_test();
     }
@@ -132,13 +177,80 @@ impl CdpConnection {
         else {
             return Ok(());
         };
+        let global_extra_headers = self.browser_global_overrides.extra_headers.clone();
 
-        let Some(browser_context) = self.browser_context_by_id_mut(&browser_context_id) else {
+        let pending = {
+            let Some(browser_context) = self.browser_context_by_id_mut(&browser_context_id) else {
+                return Ok(());
+            };
+            let Some(target) = browser_context.page_target_mut(&target_id) else {
+                return Ok(());
+            };
+            let listener_session_id = session_key.wire_session_id().map(str::to_owned);
+            match &session_key {
+                moli_page_types::DevToolsSessionKey::Primary => {
+                    target.runtime_slot.disable_primary_network_events();
+                }
+                moli_page_types::DevToolsSessionKey::Attached(attached_session_id) => {
+                    target
+                        .runtime_slot
+                        .remove_attached_network_session(attached_session_id);
+                }
+            }
+            target
+                .runtime_slot
+                .remove_network_session_observation_cursor(listener_session_id.as_deref());
+            target
+                .runtime_slot
+                .remove_captured_response_body_visibility_for_session(
+                    listener_session_id.as_deref(),
+                );
+            if !target.runtime_slot.has_network_event_listeners() {
+                target.runtime_slot.clear_captured_response_bodies();
+                target.runtime_slot.clear_websocket_request_ids();
+            }
+            browser_context.clear_devtools_network_state_for_target(&target_id, &session_key);
+            let effective = browser_context.effective_policy_for_target(&target_id);
+            let headers = browser_context.merged_extra_headers_for_target_policy(
+                &global_extra_headers,
+                effective.extra_headers(),
+            );
+            browser_context
+                .document_handle_for_target(&target_id)
+                .map(|document| {
+                    browser_context.start_document_policy_update(
+                        document,
+                        DocumentPolicyUpdate::NetworkRequestPolicy {
+                            extra_headers: headers,
+                            bypass_service_worker: effective.bypass_service_worker(),
+                            cache_disabled: effective.cache_disabled(),
+                            blocked_url_patterns: effective.blocked_url_patterns().to_vec(),
+                        },
+                    )
+                })
+                .transpose()
+                .map_err(anyhow::Error::msg)?
+        };
+        let Some(pending) = pending else {
             return Ok(());
         };
-        browser_context
-            .clear_devtools_network_session_policy_async(&target_id, &session_key)
-            .await
+        let completed = pending.wait().await;
+        let document = completed.document();
+        match self.finish_document_policy_update(completed) {
+            Ok(()) => Ok(()),
+            Err(error)
+                if error == "Document changed"
+                    && self
+                        .browser_context_by_id(&browser_context_id)
+                        .and_then(|context| context.document_handle_for_target(&target_id))
+                        != Some(document) =>
+            {
+                Ok(())
+            }
+            Err(error) => Err(anyhow::anyhow!(
+                "failed to restore detached session network request policy: {error}"
+            )),
+        }
     }
 
     pub(crate) async fn clear_devtools_emulation_session_policy_async(
@@ -154,41 +266,123 @@ impl CdpConnection {
             return Ok(());
         };
 
-        let browser_identity_changed = match self.browser_context_by_id_mut(&browser_context_id) {
-            Some(browser_context) => {
+        let pending_policy = match self.browser_context_by_id_mut(&browser_context_id) {
+            Some(browser_context) if browser_context.page_target(&target_id).is_some() => {
                 browser_context
-                    .clear_devtools_emulation_session_policy_async(&target_id, &session_key)
-                    .await?
+                    .clear_devtools_emulation_policy_state_for_target(&target_id, &session_key);
+                let effective = browser_context.effective_policy_for_target(&target_id);
+                let locale = effective
+                    .locale_override()
+                    .map(str::to_owned)
+                    .or_else(|| browser_context.emulation_defaults().locale.clone());
+                let timezone = effective
+                    .timezone_override()
+                    .map(str::to_owned)
+                    .or_else(|| browser_context.emulation_defaults().timezone.clone());
+                browser_context
+                    .document_handle_for_target(&target_id)
+                    .map(|document| {
+                        browser_context.start_document_policy_batch(
+                            document,
+                            vec![
+                                DocumentPolicyUpdate::LocaleOverride(locale),
+                                DocumentPolicyUpdate::TimezoneOverride(timezone),
+                            ],
+                        )
+                    })
             }
-            None => false,
+            _ => None,
         };
-        if !browser_identity_changed {
-            return Ok(());
+        let policy_result = match pending_policy {
+            Some(pending) => {
+                let completed = pending.wait().await;
+                let document = completed.document();
+                match self.finish_document_policy_batch(completed) {
+                    Ok(()) => Ok(()),
+                    Err(_)
+                        if self
+                            .browser_context_by_id(&browser_context_id)
+                            .and_then(|context| context.document_handle_for_target(&target_id))
+                            != Some(document) =>
+                    {
+                        Ok(())
+                    }
+                    Err(error) => Err(anyhow::anyhow!(
+                        "failed to restore detached session document policy: {error}"
+                    )),
+                }
+            }
+            None => Ok(()),
+        };
+        if !self
+            .browser_context_by_id(&browser_context_id)
+            .is_some_and(|context| context.target_has_loaded_page(&target_id))
+        {
+            return policy_result;
         }
+        let identity_result = async {
+            let Some(pending) = self
+                .start_rebuild_resource_runtime_for_session_owner(Some(session_id))
+                .map_err(anyhow::Error::msg)?
+            else {
+                return Ok(());
+            };
+            let completed = pending.wait().await;
+            self.finish_document_resource_runtime_update(completed)
+                .map_err(anyhow::Error::msg)
+        }
+        .await;
+        policy_result.and(identity_result)
+    }
 
-        let Some(pending) = self
-            .start_rebuild_resource_runtime_for_session_owner(Some(session_id))
-            .map_err(anyhow::Error::msg)?
-        else {
-            return Ok(());
+    pub(crate) async fn reset_primary_page_session_target_state_async(
+        &mut self,
+        browser_context_id: &str,
+        target_id: &str,
+        session_id: &str,
+    ) -> anyhow::Result<bool> {
+        let browser_globals = self.browser_global_overrides.clone();
+        let (found, pending) = self
+            .browser_context_by_id_mut(browser_context_id)
+            .map(|context| {
+                context.start_reset_primary_page_session_target_state(
+                    target_id,
+                    session_id,
+                    &browser_globals,
+                )
+            })
+            .unwrap_or((false, None));
+        let Some(pending) = pending else {
+            return Ok(found);
         };
-        let completion = pending.wait().await.map_err(|error| {
-            anyhow::anyhow!("failed to restore detached session user agent: {error}")
-        })?;
-        self.finish_rebuild_resource_runtime_for_session_owner(Some(session_id), completion)
-            .map_err(anyhow::Error::msg)
+        let completed = pending.wait().await;
+        let document = completed.document();
+        match self.finish_document_policy_batch(completed) {
+            Ok(()) => Ok(found),
+            Err(_)
+                if self
+                    .browser_context_by_id(browser_context_id)
+                    .and_then(|context| context.document_handle_for_target(target_id))
+                    != Some(document) =>
+            {
+                Ok(found)
+            }
+            Err(error) => Err(anyhow::anyhow!(
+                "failed to reset primary Page session document policy: {error}"
+            )),
+        }
     }
 
     pub(crate) fn is_browser_session_id(&self, session_id: Option<&str>) -> bool {
         let Some(session_id) = session_id else {
             return false;
         };
-        self.target_control.attached_session_route(session_id) == Some(&CdpSessionRoute::Browser)
+        self.agent_hosts.attached_session_route(session_id) == Some(&CdpSessionRoute::Browser)
     }
 
     #[cfg(test)]
     pub(crate) fn register_browser_session(&mut self, session_id: String) {
-        self.target_control.commit_attached_session(
+        self.agent_hosts.commit_attached_session(
             session_id,
             None,
             "browser",
@@ -220,29 +414,28 @@ impl CdpConnection {
             "InvalidSessionId"
         );
         let owner_session_id = self
-            .target_control
+            .agent_hosts
             .attached_session_owner_session_id(plan.session_id())
             .map(str::to_owned);
         let session_id = plan.session_id().to_owned();
         let event_plan = self
-            .target_control
+            .agent_hosts
             .detach_attached_session_event_plan(
                 plan.session_id(),
                 None,
                 owner_session_id.as_deref(),
             )
             .ok_or_else(|| anyhow::anyhow!("InvalidSessionId"))?;
-        self.remove_detached_session_control_owner(&session_id);
+        self.remove_detached_session_handler_owner(&session_id);
         Ok(event_plan)
     }
 
     pub(crate) fn release_root_target_frontend_owner_without_event(&mut self) {
-        self.download_behavior
-            .set_browser_events_enabled_for_session(None, false);
+        self.set_browser_download_events_enabled_for_session(None, false);
         self.cancel_tracing_for_session_owner(None);
         self.clear_auto_attach_owner(None);
         self.clear_target_discovery_for_owner(None);
-        self.target_control.remove_owner(None);
+        self.agent_hosts.remove_owner(None);
     }
 
     pub(crate) fn release_primary_target_session_binding_without_event(
@@ -277,7 +470,7 @@ impl CdpConnection {
         let target_id = route.target_id().unwrap_or_else(|| {
             panic!("test auto-attached session route must identify a target: {route:?}")
         });
-        self.target_control.commit_auto_attached_session_for_target(
+        self.agent_hosts.commit_auto_attached_session_for_target(
             session_id,
             owner_session_id,
             target_id,
@@ -305,7 +498,7 @@ impl CdpConnection {
         route: CdpSessionRoute,
     ) {
         let target_id = route.target_id().unwrap_or("browser").to_owned();
-        self.target_control.commit_attached_session(
+        self.agent_hosts.commit_attached_session(
             session_id.to_owned(),
             None,
             &target_id,
@@ -343,10 +536,9 @@ impl CdpConnection {
             let (session_id, owner_session_id, route, auto_attached, waiting_for_debugger) =
                 session.into_parts();
             if auto_attached {
-                self.target_control
-                    .ensure_owner(owner_session_id.as_deref());
+                self.agent_hosts.ensure_owner(owner_session_id.as_deref());
             }
-            plan.extend(self.target_control.commit_attached_session_event(
+            plan.extend(self.agent_hosts.commit_attached_session_event(
                 session_id,
                 owner_session_id.as_deref(),
                 &target_id,
@@ -675,7 +867,7 @@ impl CdpConnection {
         target_id: &str,
         target_info: DevToolsTargetInfo,
     ) -> TargetEventPlan {
-        self.target_control.commit_attached_session_event(
+        self.agent_hosts.commit_attached_session_event(
             session_id,
             owner_session_id,
             target_id,
@@ -691,10 +883,10 @@ impl CdpConnection {
         session_id: &str,
     ) -> TargetEventPlan {
         let plan = self
-            .target_control
+            .agent_hosts
             .rollback_attached_session_without_event(session_id);
         for session_id in plan.rolled_back_session_ids() {
-            self.remove_detached_session_control_owner(session_id);
+            self.remove_detached_session_handler_owner(session_id);
         }
         plan
     }
@@ -725,7 +917,7 @@ impl CdpConnection {
     ) -> TargetEventPlan {
         let attached_state_delta_plan = emit_attached_state_delta
             .then(|| self.exact_target_info_changed_event_plan_for_target_delta(target_id));
-        let mut plan = self.target_control.detach_known_session_event_plan(
+        let mut plan = self.agent_hosts.detach_known_session_event_plan(
             target_id,
             session_id,
             reason,
@@ -735,7 +927,7 @@ impl CdpConnection {
             .detached_sessions()
             .iter()
             .any(|session| session.target_id() == target_id && session.was_waiting_for_debugger());
-        self.remove_detached_session_control_owner(session_id);
+        self.remove_detached_session_handler_owner(session_id);
         if let Some(attached_state_delta_plan) = attached_state_delta_plan {
             plan.extend(attached_state_delta_plan);
         }
@@ -758,18 +950,10 @@ impl CdpConnection {
             .map(str::to_owned)
             .collect::<Vec<_>>();
         for session_id in session_ids {
-            let Some(route) = self.session_route(Some(&session_id)) else {
+            let Some(disposal_plan) = self.session_disposal_plan(&session_id) else {
                 tracing::warn!(
                     session_id,
-                    "closed target session no longer has an authoritative route"
-                );
-                continue;
-            };
-            let Some(disposal_plan) = SessionDisposalPlan::for_session_route(&session_id, &route)
-            else {
-                tracing::warn!(
-                    session_id,
-                    "closed target session does not support target disposal"
+                    "closed target session no longer has an authoritative disposal binding"
                 );
                 continue;
             };
@@ -785,10 +969,10 @@ impl CdpConnection {
         parent_session_id: Option<&str>,
     ) -> TargetEventPlan {
         let plan = self
-            .target_control
+            .agent_hosts
             .detach_target_closure_cleanup_event_plan(cleanup_plan, parent_session_id);
         for session in plan.detached_sessions() {
-            self.remove_detached_session_control_owner(session.session_id());
+            self.remove_detached_session_handler_owner(session.session_id());
         }
         plan
     }
@@ -892,7 +1076,7 @@ impl CdpConnection {
                 %error,
                 "failed to clean prepared target binding during attach rollback"
             );
-            // Keep both the domain binding and its control-plane route as
+            // Keep both the domain binding and its AgentHost route as
             // retry authority. Dropping only the latter would make any
             // renderer-owned state unreachable.
             return TargetEventPlan::default();
@@ -904,10 +1088,10 @@ impl CdpConnection {
         &self,
         session_id: &str,
     ) -> TargetAutoAttachedSessionDetachPlan {
-        let route = self.session_route(Some(session_id)).unwrap_or_else(|| {
-            panic!("committed auto-attached session {session_id} must retain its route")
+        let disposal_plan = self.session_disposal_plan(session_id).unwrap_or_else(|| {
+            panic!("committed auto-attached session {session_id} must retain its disposal binding")
         });
-        TargetAutoAttachedSessionDetachPlan::from_session_route(session_id, route)
+        TargetAutoAttachedSessionDetachPlan::from_session_disposal_plan(disposal_plan)
     }
 
     pub(crate) fn rollback_auto_attached_session_detach_plan_without_event(
@@ -1019,7 +1203,7 @@ impl CdpConnection {
         let parent_session_id = cleanup_plan
             .parent_session_id()
             .or_else(|| {
-                self.target_control
+                self.agent_hosts
                     .attached_session_owner_session_id(&session_id)
             })
             .map(str::to_owned);
@@ -1041,16 +1225,16 @@ impl CdpConnection {
         }
     }
 
-    fn remove_detached_session_control_owner(&mut self, session_id: &str) {
-        self.target_control.remove_owner(Some(session_id));
+    fn remove_detached_session_handler_owner(&mut self, session_id: &str) {
+        self.agent_hosts.remove_owner(Some(session_id));
     }
 
     pub(crate) fn attached_sessions_for_target(&self, target_id: &str) -> Vec<String> {
-        self.target_control.attached_sessions_for_target(target_id)
+        self.agent_hosts.attached_sessions_for_target(target_id)
     }
 
     pub(crate) fn target_has_waiting_for_debugger_session(&self, target_id: &str) -> bool {
-        self.target_control
+        self.agent_hosts
             .target_has_waiting_for_debugger_session(target_id)
     }
 
@@ -1059,7 +1243,7 @@ impl CdpConnection {
         session_id: Option<&str>,
     ) -> bool {
         session_id.is_some_and(|session_id| {
-            self.target_control
+            self.agent_hosts
                 .release_waiting_for_debugger_session(session_id)
         })
     }
@@ -1068,7 +1252,7 @@ impl CdpConnection {
         &self,
         owner_session_id: Option<&str>,
     ) -> Vec<String> {
-        self.target_control
+        self.agent_hosts
             .auto_attached_sessions_for_owner(owner_session_id)
     }
 
@@ -1076,12 +1260,12 @@ impl CdpConnection {
         &self,
         owner_session_id: Option<&str>,
     ) -> Vec<String> {
-        self.target_control
+        self.agent_hosts
             .attached_session_cascade_for_owner(owner_session_id)
     }
 
     pub(crate) fn attached_session_cascade_for_root_frontend(&self) -> Vec<String> {
-        self.target_control
+        self.agent_hosts
             .attached_session_cascade_for_root_frontend()
     }
 
@@ -1089,7 +1273,7 @@ impl CdpConnection {
         &self,
         owner_session_id: Option<&str>,
     ) -> Vec<String> {
-        self.target_control
+        self.agent_hosts
             .auto_attached_session_cascade_for_owner(owner_session_id)
     }
 }

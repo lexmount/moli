@@ -175,7 +175,7 @@ fn resolve_devtools_opener(
         tracing::debug!(
             browser_context_id = page_owner.browser_context_id(),
             target_id = page_owner.target_id(),
-            page_attachment_id = page_owner.page_attachment_id().get(),
+            document_id = page_owner.document_id().get(),
             ?root_document,
             ?window,
             "popup action retained after its exact opener browsing context disappeared"
@@ -229,6 +229,7 @@ mod tests {
         let mut context = BrowserContext::new(browser_context_id.to_owned());
         context.set_active_target_id(target_id);
         context.attach_active_session(session_id);
+        context.bind_page_navigation_engines(Default::default(), None);
         context
     }
 
@@ -269,7 +270,7 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread")]
     async fn popup_uses_captured_context_and_opener_after_another_context_becomes_active() {
-        let mut conn = CdpConnection::default();
+        let mut conn = crate::test_support::connection();
         conn.inactive_browser_contexts
             .push(context("BID-source", "TID-source", "SID-source"));
         conn.browser_context = Some(context("BID-current", "TID-current", "SID-current"));
@@ -313,7 +314,7 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread")]
     async fn noopener_popup_retains_devtools_creator_without_dom_opener_access() {
-        let mut conn = CdpConnection::default();
+        let mut conn = crate::test_support::connection();
         conn.browser_context = Some(context("BID-1", "TID-opener", "SID-1"));
 
         emit(
@@ -345,7 +346,7 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread")]
     async fn removed_opener_downgrades_access_without_rebinding_to_current_target() {
-        let mut conn = CdpConnection::default();
+        let mut conn = crate::test_support::connection();
         conn.browser_context = Some(context("BID-1", "TID-current", "SID-1"));
 
         emit(
@@ -371,7 +372,7 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread")]
     async fn child_window_popup_preserves_its_exact_opener_frame() {
-        let mut conn = CdpConnection::default();
+        let mut conn = crate::test_support::connection();
         conn.browser_context = Some(context("BID-1", "TID-root", "SID-1"));
 
         emit(
@@ -406,7 +407,7 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread")]
     async fn fifo_popup_batch_resolves_a_lightweight_popup_as_the_next_opener() {
-        let mut conn = CdpConnection::default();
+        let mut conn = crate::test_support::connection();
         conn.browser_context = Some(context("BID-1", "TID-root", "SID-1"));
         let owner = page_owner("BID-1", "TID-root");
 
@@ -449,7 +450,7 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread")]
     async fn removed_captured_context_does_not_fall_back_to_the_active_context() {
-        let mut conn = CdpConnection::default();
+        let mut conn = crate::test_support::connection();
         conn.browser_context = Some(context("BID-current", "TID-current", "SID-current"));
 
         emit(

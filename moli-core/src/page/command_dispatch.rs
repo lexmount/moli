@@ -1,8 +1,8 @@
 use super::{
-    Page, RendererAgentAttachmentId, RendererCommandTurnOutput, RendererPageCommand,
-    RendererPageCommandPending, RendererPageReply, RendererRuntimeInspectorIoCommandClaim,
-    RendererRuntimeInspectorIoCommandRoute, RendererRuntimeInspectorMainCommandCompletion,
-    RendererRuntimeInspectorMainCommandRoute, RendererRuntimeInspectorMessage,
+    Page, RendererAgentAttachmentId, RendererCommandTurnOutput, RendererInspectorCommandRoute,
+    RendererPageCommand, RendererPageCommandPending, RendererPageReply,
+    RendererRuntimeInspectorIoCommandClaim, RendererRuntimeInspectorIoCommandRoute,
+    RendererRuntimeInspectorMainCommandCompletion, RendererRuntimeInspectorMainCommandRoute,
 };
 use crate::RendererOutputFence;
 use anyhow::{Result, bail};
@@ -13,6 +13,13 @@ pub struct PendingPageCommand {
 }
 
 impl PendingPageCommand {
+    pub fn from_inspector_main_route(route: RendererRuntimeInspectorMainCommandRoute) -> Self {
+        Self {
+            renderer_agent_attachment_id: route.ticket().attachment(),
+            pending: RendererPageCommandPending::from_inspector_main_route(route),
+        }
+    }
+
     pub fn renderer_agent_attachment_id(&self) -> Option<RendererAgentAttachmentId> {
         self.renderer_agent_attachment_id
     }
@@ -20,6 +27,42 @@ impl PendingPageCommand {
 
 pub struct PendingRuntimeInspectorCommandDispatch {
     kind: PendingRuntimeInspectorCommandDispatchKind,
+}
+
+impl PendingRuntimeInspectorCommandDispatch {
+    pub fn from_main_route(route: RendererRuntimeInspectorMainCommandRoute) -> Self {
+        Self {
+            kind: PendingRuntimeInspectorCommandDispatchKind::MainIngress(Box::new(route)),
+        }
+    }
+
+    pub fn from_io_route(route: RendererRuntimeInspectorIoCommandRoute) -> Self {
+        Self {
+            kind: PendingRuntimeInspectorCommandDispatchKind::Io(
+                PendingDevToolsIoCommandDispatch { route },
+            ),
+        }
+    }
+
+    pub fn renderer_route(&self) -> RendererInspectorCommandRoute {
+        match &self.kind {
+            PendingRuntimeInspectorCommandDispatchKind::MainIngress(_) => {
+                RendererInspectorCommandRoute::MainThread
+            }
+            PendingRuntimeInspectorCommandDispatchKind::Io(_) => RendererInspectorCommandRoute::Io,
+        }
+    }
+
+    pub fn renderer_agent_attachment_id(&self) -> Option<RendererAgentAttachmentId> {
+        match &self.kind {
+            PendingRuntimeInspectorCommandDispatchKind::MainIngress(route) => {
+                route.ticket().attachment()
+            }
+            PendingRuntimeInspectorCommandDispatchKind::Io(pending) => {
+                pending.renderer_agent_attachment_id()
+            }
+        }
+    }
 }
 
 /// One non-V8 renderer agent command admitted through the Page IO
@@ -67,6 +110,11 @@ pub struct CompletedPageCommand {
 }
 
 impl CompletedPageCommand {
+    pub fn is_from_page(&self, page: &Page) -> bool {
+        crate::browser::RendererPageResidenceIdentity::from_page(page)
+            .matches_residence(self.page_state().renderer_residence())
+    }
+
     /// Returns the exact renderer output position produced by this command.
     ///
     /// Protocol dispatch must capture this before a command-specific decoder
@@ -92,8 +140,14 @@ impl CompletedPageCommand {
         self.output
     }
 
-    pub(crate) fn output(&self) -> &RendererCommandTurnOutput {
-        &self.output
+    pub(super) fn into_reply(self) -> RendererPageReply {
+        let (completion, _) = self.output.into_completion_and_predecessor();
+        let (reply, _, _) = completion.into_parts();
+        reply
+    }
+
+    pub fn page_state(&self) -> &std::sync::Arc<crate::renderer::RendererPageState> {
+        self.output.completion().page_state()
     }
 
     /// Consumes a command that was already settled by the renderer owner.
@@ -134,39 +188,20 @@ impl CompletedPageCommand {
 impl Page {
     pub(crate) fn start_page_command(
         &self,
-        mut command: RendererPageCommand,
+        command: RendererPageCommand,
     ) -> Result<PendingPageCommand> {
-        if let Some(attachment_id) = self.renderer_agent_attachment_id {
-            command.bind_inspector_attachment(attachment_id);
-        }
-        let pending = if self.renderer_agent_attachment_id.is_some() {
-            self.handle.enqueue_protocol_command_in_inspector_session(
-                command,
-                self.renderer_devtools_command_session_id.clone(),
-            )?
-        } else {
-            // CLI, embedding and other renderer-owner callers reuse the thin
-            // protocol-turn capture policy, but they are not a
-            // DevToolsSession receiver and must not acquire a Main ingress
-            // lane that is scoped to a renderer attachment.
-            self.handle.enqueue_protocol_command(command)?
-        };
+        // Browser/embedding commands have a physical Page owner, not a
+        // DevTools attachment. Inspector calls enter their explicit binding.
         Ok(PendingPageCommand {
-            pending,
-            renderer_agent_attachment_id: self.renderer_agent_attachment_id,
+            pending: self.handle.enqueue_protocol_command(command)?,
+            renderer_agent_attachment_id: None,
         })
     }
 
-    fn start_full_page_command(
-        &self,
-        mut command: RendererPageCommand,
-    ) -> Result<PendingPageCommand> {
-        if let Some(attachment_id) = self.renderer_agent_attachment_id {
-            command.bind_inspector_attachment(attachment_id);
-        }
+    fn start_full_page_command(&self, command: RendererPageCommand) -> Result<PendingPageCommand> {
         Ok(PendingPageCommand {
             pending: self.handle.enqueue_async_command(command)?,
-            renderer_agent_attachment_id: self.renderer_agent_attachment_id,
+            renderer_agent_attachment_id: None,
         })
     }
 
@@ -174,38 +209,8 @@ impl Page {
         &mut self,
         completion: CompletedPageCommand,
     ) -> RendererCommandTurnOutput {
-        self.replace_page_state(completion.output.completion().page_state().clone());
+        self.observe_renderer_page_state(completion.page_state());
         completion.output
-    }
-
-    fn pending_runtime_inspector_command_dispatch(
-        kind: PendingRuntimeInspectorCommandDispatchKind,
-    ) -> PendingRuntimeInspectorCommandDispatch {
-        PendingRuntimeInspectorCommandDispatch { kind }
-    }
-
-    pub(crate) fn pending_io_runtime_inspector_command_dispatch(
-        route: RendererRuntimeInspectorIoCommandRoute,
-    ) -> PendingRuntimeInspectorCommandDispatch {
-        Self::pending_runtime_inspector_command_dispatch(
-            PendingRuntimeInspectorCommandDispatchKind::Io(
-                Self::pending_devtools_io_command_dispatch(route),
-            ),
-        )
-    }
-
-    pub(crate) fn pending_devtools_io_command_dispatch(
-        route: RendererRuntimeInspectorIoCommandRoute,
-    ) -> PendingDevToolsIoCommandDispatch {
-        PendingDevToolsIoCommandDispatch { route }
-    }
-
-    pub(crate) fn pending_main_ingress_runtime_inspector_command_dispatch(
-        route: RendererRuntimeInspectorMainCommandRoute,
-    ) -> PendingRuntimeInspectorCommandDispatch {
-        Self::pending_runtime_inspector_command_dispatch(
-            PendingRuntimeInspectorCommandDispatchKind::MainIngress(Box::new(route)),
-        )
     }
 
     pub(crate) fn finish_page_command(
@@ -256,20 +261,6 @@ impl Page {
         )
     }
 
-    pub(super) fn decode_runtime_inspector_protocol_messages_page_reply(
-        reply: RendererPageReply,
-        operation: &str,
-    ) -> Result<Vec<RendererRuntimeInspectorMessage>> {
-        expect_page_reply!(
-            reply,
-            operation,
-            "runtime inspector protocol messages",
-            RendererPageReply::RuntimeInspectorProtocolMessages(messages) => {
-                Ok(messages.into_messages())
-            },
-        )
-    }
-
     pub(super) fn page_reply_kind(reply: &RendererPageReply) -> &'static str {
         match reply {
             RendererPageReply::RuntimeEvaluationResult(_) => "a runtime evaluation result reply",
@@ -281,7 +272,6 @@ impl Page {
             }
             RendererPageReply::RuntimeConsoleMessageSnapshots(_) => "runtime console snapshots",
             RendererPageReply::RuntimeHeapUsage(_) => "runtime heap usage",
-            RendererPageReply::PerformanceMetricSnapshot(_) => "performance metric snapshot",
             RendererPageReply::DomDebuggerEventListeners(_) => {
                 "a DOMDebugger event listeners resolution"
             }
@@ -510,6 +500,14 @@ impl PendingRuntimeInspectorCommandDispatch {
 }
 
 impl PendingDevToolsIoCommandDispatch {
+    pub fn from_route(route: RendererRuntimeInspectorIoCommandRoute) -> Self {
+        Self { route }
+    }
+
+    pub fn renderer_agent_attachment_id(&self) -> Option<RendererAgentAttachmentId> {
+        self.route.ticket().attachment()
+    }
+
     pub async fn wait(self) -> Result<CompletedDevToolsIoCommandDispatch> {
         match self
             .route

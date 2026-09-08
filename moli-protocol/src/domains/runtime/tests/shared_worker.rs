@@ -573,23 +573,21 @@ onconnect = event => {
     .await;
 
     let background_url = "data:text/html,<!doctype html><body>background</body>";
-    let background_page = ctx
-        .conn
-        .load_page_via_runtime_async(background_url)
-        .await
-        .expect("background diagnostics page should load");
     let browser_context = ctx
         .conn
         .browser_context
         .as_mut()
         .expect("browser context should remain installed");
-    let mut background = crate::conn::PageTargetHost::with_url(
+    browser_context.register_page_target_url_fixture(
         "TID-diagnostics-document-worker-bg".to_owned(),
         Some("SID-diagnostics-document-worker-bg".to_owned()),
         background_url.to_owned(),
     );
-    background.replace_loaded_page(Some(background_page));
-    browser_context.insert_page_target_host(background);
+    ctx.install_quiet_navigation_fixture_for_session_owner(
+        background_url,
+        Some("SID-diagnostics-document-worker-bg"),
+    )
+    .await;
     ctx.sent.clear();
 
     ctx.process_async(json!({
@@ -604,8 +602,8 @@ onconnect = event => {
     assert_eq!(isolate_scope["loadedDocumentPageCount"], json!(2));
     assert_eq!(
         isolate_scope["loadedDocumentRendererOwnerCount"],
-        json!(1),
-        "this accounting fixture deliberately reuses the active engine for both document snapshots: {response:?}"
+        json!(2),
+        "each WebContents must build its Document on its own renderer owner: {response:?}"
     );
     assert_eq!(
         isolate_scope["estimatedDocumentIsolateCount"],
@@ -3180,8 +3178,8 @@ onconnect = event => {
             .browser_context
             .as_ref()
             .expect("browser context should exist")
-            .renderer_runtime()
-            .shared_worker_running_worker_isolate_count_for_diagnostics(),
+            .shared_worker_runtime_diagnostics_for_diagnostics()
+            .running_worker_isolate_count,
         1,
         "same-origin pages with the same SharedWorker key should share one running worker isolate"
     );

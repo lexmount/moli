@@ -1,11 +1,10 @@
-use crate::conn::BrowserContext;
 use crate::testing::TestContext;
 use serde_json::{Value, json};
 
 use super::tests::navigate_to_data_html_async;
 
 fn load_bc(ctx: &mut TestContext, bc_id: &str) {
-    let mut bc = BrowserContext::new(bc_id.into());
+    let mut bc = ctx.conn.new_browser_context_fixture_for_test(bc_id);
     bc.set_active_target_id("TID-1");
     ctx.conn.install_browser_context_fixture_for_test(bc);
 }

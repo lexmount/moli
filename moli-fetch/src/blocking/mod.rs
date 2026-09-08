@@ -27,7 +27,8 @@ pub(crate) use self::cache::{
     finish_streaming_cached_response, load_cached_streaming_response_lookup,
     merge_cached_not_modified_streaming_response_lookup, next_followed_redirect_url_from_parts,
     next_redirect_url_from_parts, remove_cached_response, response_headers_forbid_cache_storage,
-    validation_headers_for_cached_streaming_response_lookup,
+    validation_headers_for_cached_streaming_response_lookup, vary_headers_for_response,
+    vary_headers_match,
 };
 pub use self::cache::{
     clear_http_cache, clear_http_cache_for_origin, clear_http_cache_root,

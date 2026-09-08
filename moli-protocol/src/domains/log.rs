@@ -171,7 +171,7 @@ fn append_log_replay_snapshot(
 
 #[cfg(test)]
 mod tests {
-    use crate::conn::BrowserContext;
+
     use crate::devtools_runtime::AutomationEvent;
     use crate::domains::observable_output::{
         ObservableOutputProjectionStep, ObservablePreparedOutputSlot,
@@ -193,7 +193,7 @@ mod tests {
     }
 
     async fn load_document(ctx: &mut TestContext, html: &str) {
-        let mut bc = BrowserContext::new("BID-1".into());
+        let mut bc = ctx.conn.new_browser_context_fixture_for_test("BID-1");
         bc.set_active_target_id("TID-1".to_owned());
         bc.set_target_url("data:text/html,log-test".to_owned());
         bc.attach_active_session("SID-1".to_owned());
@@ -203,6 +203,13 @@ mod tests {
             Some("SID-1"),
         )
         .await;
+        // Only the fixture's completed navigation may precede the Log command.
+        // Keep replay-before-response and absence-of-unrelated-output assertions intact.
+        for message in ctx.take_all() {
+            assert_eq!(message["method"], "Page.frameNavigated");
+            assert_eq!(message["sessionId"], "SID-1");
+            assert_eq!(message["params"]["frame"]["id"], "TID-1");
+        }
     }
 
     fn loaded_lifecycle_error_contains(ctx: &TestContext, needle: &str) -> bool {
@@ -378,9 +385,9 @@ mod tests {
         load_document(&mut ctx, "<!doctype html><body></body>").await;
         let source_document = ctx
             .conn
-            .runtime_session_owner_slot(Some("SID-1"))
-            .expect("loaded target runtime slot")
-            .committed_renderer_document_binding()
+            .committed_renderer_document_binding_for_owner(
+                &crate::conn::CommandOwnerScope::capture(&ctx.conn, Some("SID-1")),
+            )
             .expect("loaded target Document binding")
             .renderer_document_identity();
         let response = SubresourceResponseStarted::new(
@@ -432,9 +439,9 @@ mod tests {
         load_document(&mut ctx, "<!doctype html><body>old Document</body>").await;
         let source_document = ctx
             .conn
-            .runtime_session_owner_slot(Some("SID-1"))
-            .expect("loaded target runtime slot")
-            .committed_renderer_document_binding()
+            .committed_renderer_document_binding_for_owner(
+                &crate::conn::CommandOwnerScope::capture(&ctx.conn, Some("SID-1")),
+            )
             .expect("loaded target Document binding")
             .renderer_document_identity();
         let response = SubresourceResponseStarted::new(
@@ -492,9 +499,9 @@ mod tests {
 
         let source_document = ctx
             .conn
-            .runtime_session_owner_slot(Some("SID-1"))
-            .expect("loaded target runtime slot")
-            .committed_renderer_document_binding()
+            .committed_renderer_document_binding_for_owner(
+                &crate::conn::CommandOwnerScope::capture(&ctx.conn, Some("SID-1")),
+            )
             .expect("loaded target Document binding")
             .renderer_document_identity();
         let response = SubresourceResponseStarted::new(
@@ -643,7 +650,7 @@ mod tests {
     #[tokio::test(flavor = "multi_thread")]
     async fn log_enable_stages_background_target_session_state() {
         let mut ctx = TestContext::new();
-        let mut bc = BrowserContext::new("BID-1".into());
+        let mut bc = ctx.conn.new_browser_context_fixture_for_test("BID-1");
         bc.set_active_target_id("TID-active".to_owned());
         bc.attach_active_session("SID-active".to_owned());
         bc.stage_background_target(
@@ -673,7 +680,7 @@ mod tests {
         assert!(
             active
                 .background_target("TID-background")
-                .filter(|target| target.has_non_default_session_state())
+                .filter(|target| active.has_non_default_session_state_for_target(target.target_id()))
                 .is_some_and(|state| state.devtools_sessions
                     [moli_page_types::DevToolsSessionKey::Primary]
                     .page_session_state

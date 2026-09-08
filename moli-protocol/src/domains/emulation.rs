@@ -1,8 +1,10 @@
 use crate::conn::{
-    BrowserContext, CdpConnection, CdpSessionRoute, Cmd, CommandOwnerScope, EmulatedDeviceMetrics,
-    EmulatedGeolocationOverrideState, EmulatedViewportSurface, PageTargetHost,
-    RendererCommandCorrelation, RendererCommandDescriptor, RuntimeInspectorAsyncCompletionReceiver,
-    TargetWindowSurfaceState,
+    BrowserContext, CdpConnection, CdpSessionRoute, Cmd, CommandOwnerScope,
+    CompletedDocumentPolicyUpdate, CompletedDocumentResourceRuntimeUpdate, DocumentPolicyUpdate,
+    DocumentRuntimePolicyReconciliation, EmulatedDeviceMetrics, EmulatedGeolocationOverrideState,
+    EmulatedViewportSurface, EmulationPolicyChange, PendingDocumentPolicyUpdate,
+    PendingDocumentResourceRuntimeUpdate, RendererAgentBinding, RendererCommandCorrelation,
+    RendererCommandDescriptor, RuntimeInspectorAsyncCompletionReceiver, WindowSurfaceState,
 };
 use crate::devtools_runtime::{
     DevToolsCommand, DevToolsCommandResult, DevToolsDevicePixelRatioSetting, DevToolsError,
@@ -65,15 +67,50 @@ enum CompletedEmulationRendererDispatch {
 struct PendingEmulationPageCommand {
     target: PendingEmulationPageTarget,
     operation: PendingEmulationPageOperation,
-    pending: PendingPageCommand,
+    source: EmulationPageCommandSource,
+    pending: PendingEmulationPageWork,
     runtime_response_rx: Option<RuntimeInspectorAsyncCompletionReceiver>,
 }
 
 struct CompletedEmulationPageCommand {
     target: PendingEmulationPageTarget,
     operation: PendingEmulationPageOperation,
-    dispatched_attachment_id: Option<moli_core::page::RendererAgentAttachmentId>,
-    completed: Result<CompletedPageCommand, String>,
+    source: EmulationPageCommandSource,
+    completed: CompletedEmulationPageWork,
+}
+
+enum PendingEmulationPageWork {
+    DocumentPolicy(PendingDocumentPolicyUpdate),
+    ResourceRuntime(PendingDocumentResourceRuntimeUpdate),
+    Renderer(PendingPageCommand),
+}
+
+enum CompletedEmulationPageWork {
+    DocumentPolicy(CompletedDocumentPolicyUpdate),
+    ResourceRuntime(CompletedDocumentResourceRuntimeUpdate),
+    Renderer(Result<CompletedPageCommand, String>),
+}
+
+#[derive(Clone, Copy)]
+enum EmulationPageCommandSource {
+    Browser(Option<moli_core::browser::RendererPageResidenceIdentity>),
+    Inspector(Option<moli_core::page::RendererAgentAttachmentId>),
+}
+
+impl EmulationPageCommandSource {
+    #[cfg(test)]
+    fn browser(context: &BrowserContext, target_id: &str) -> Self {
+        Self::Browser(context.target_renderer_page_residence_identity(target_id))
+    }
+
+    fn browser_for_owner(conn: &CdpConnection, owner: &CommandOwnerScope) -> Self {
+        Self::Browser(conn.resolved_page_owner_identity_for_owner(owner).and_then(
+            |(context_id, target_id)| {
+                conn.browser_context_by_id(&context_id)?
+                    .target_renderer_page_residence_identity(&target_id)
+            },
+        ))
+    }
 }
 
 #[derive(Clone)]
@@ -93,41 +130,34 @@ pub(crate) enum EmulationCommandTaskStep {
 }
 
 enum PendingEmulationPageOperation {
-    SetExtraHttpHeaders,
-    SetLocaleOverride,
-    SetNetworkConditions,
-    SetCpuThrottlingRate,
-    SetIdleOverride,
-    SetTimezoneOverride,
-    SetEmulatedMedia,
-    SetViewportSurface,
-    SetUserAgentLoader,
-    ReplaceBrowserResourceRuntime,
+    DocumentPolicy { replay_on_replacement: bool },
+    RebuildResourceRuntime,
     RuntimeProtocolMessage,
 }
 
 impl PendingEmulationPageOperation {
     fn has_authoritative_replay_state(&self) -> bool {
-        match self {
-            Self::SetExtraHttpHeaders
-            | Self::SetLocaleOverride
-            | Self::SetNetworkConditions
-            | Self::SetCpuThrottlingRate
-            | Self::SetTimezoneOverride
-            | Self::SetEmulatedMedia
-            | Self::SetViewportSurface
-            | Self::SetUserAgentLoader
-            | Self::ReplaceBrowserResourceRuntime
-            | Self::RuntimeProtocolMessage => true,
-            // Chromium owns this state on RenderFrameHostImpl::IdleManager.
-            // It can survive same-site RFH reuse, but it is not target policy
-            // that may be replayed after an arbitrary attachment replacement.
-            Self::SetIdleOverride => false,
-        }
+        // Idle state belongs to a Document; other settings have authoritative replay policy.
+        !matches!(
+            self,
+            Self::DocumentPolicy {
+                replay_on_replacement: false
+            }
+        )
     }
 }
 
 impl PendingEmulationCommandDispatch {
+    pub(crate) const fn renderer_dispatch_lane(&self) -> Option<crate::conn::RendererDispatchLane> {
+        match self.pending {
+            PendingEmulationRendererDispatch::IoAdapterReply(_)
+            | PendingEmulationRendererDispatch::IoSessionOutput { .. } => {
+                Some(crate::conn::RendererDispatchLane::Io)
+            }
+            PendingEmulationRendererDispatch::Pages(_) => None,
+        }
+    }
+
     pub(crate) async fn wait(self) -> CompletedEmulationCommandDispatch {
         let completed = match self.pending {
             PendingEmulationRendererDispatch::Pages(pending_pages) => {
@@ -136,12 +166,24 @@ impl PendingEmulationCommandDispatch {
                     let PendingEmulationPageCommand {
                         target,
                         operation,
+                        source,
                         pending,
                         runtime_response_rx,
                     } = pending;
-                    let dispatched_attachment_id = pending.renderer_agent_attachment_id();
-                    let completed_page = pending.wait().await.map_err(|error| error.to_string());
-                    if completed_page.is_ok()
+                    let completed_page = match pending {
+                        PendingEmulationPageWork::DocumentPolicy(pending) => {
+                            CompletedEmulationPageWork::DocumentPolicy(pending.wait().await)
+                        }
+                        PendingEmulationPageWork::ResourceRuntime(pending) => {
+                            CompletedEmulationPageWork::ResourceRuntime(pending.wait().await)
+                        }
+                        PendingEmulationPageWork::Renderer(pending) => {
+                            CompletedEmulationPageWork::Renderer(
+                                pending.wait().await.map_err(|error| error.to_string()),
+                            )
+                        }
+                    };
+                    if matches!(&completed_page, CompletedEmulationPageWork::Renderer(Ok(_)))
                         && let Some(response_rx) = runtime_response_rx
                     {
                         let _ = response_rx.await;
@@ -149,7 +191,7 @@ impl PendingEmulationCommandDispatch {
                     completed.push(CompletedEmulationPageCommand {
                         target,
                         operation,
-                        dispatched_attachment_id,
+                        source,
                         completed: completed_page,
                     });
                 }
@@ -256,9 +298,11 @@ fn focus_emulation_enabled_command_output_plan(
     if conn.browser_context.is_none() {
         return CommandOutputPlan::result(json!({}));
     }
-    match page_session::update_page_emulation_state(conn, cmd.session_id, |mut state| {
-        state.set_focus_emulation_enabled(params.enabled);
-    }) {
+    match page_session::update_page_emulation_state(
+        conn,
+        cmd.session_id,
+        EmulationPolicyChange::FocusEnabled(params.enabled),
+    ) {
         Ok(()) => CommandOutputPlan::result(json!({})),
         Err(message) if message == "BrowserContextNotLoaded" => {
             CommandOutputPlan::error(-31998, "BrowserContextNotLoaded")
@@ -278,9 +322,11 @@ fn touch_emulation_enabled_command_output_plan(
     if conn.browser_context.is_none() {
         return CommandOutputPlan::result(json!({}));
     }
-    match page_session::update_page_emulation_state(conn, cmd.session_id, |mut state| {
-        state.set_touch_emulation_enabled(params.enabled);
-    }) {
+    match page_session::update_page_emulation_state(
+        conn,
+        cmd.session_id,
+        EmulationPolicyChange::TouchEnabled(params.enabled),
+    ) {
         Ok(()) => CommandOutputPlan::result(json!({})),
         Err(message) if message == "BrowserContextNotLoaded" => {
             CommandOutputPlan::error(-31998, "BrowserContextNotLoaded")
@@ -306,27 +352,28 @@ fn start_cpu_throttling_rate_command(
     if conn.browser_context.is_none() {
         return EmulationCommandTaskStep::Complete(CommandOutputPlan::result(json!({})));
     }
-    if !conn.update_emulation_state_for_session_owner(cmd.session_id, |state| {
-        if let Some(mut state) = state {
-            state.set_cpu_throttling_rate(params.rate);
-        }
-    }) {
+    if !conn.apply_emulation_override_for_session_owner(
+        cmd.session_id,
+        EmulationPolicyChange::CpuThrottlingRate(params.rate),
+    ) {
         return EmulationCommandTaskStep::Complete(CommandOutputPlan::error(
             -31998,
             "BrowserContextNotLoaded",
         ));
     }
     let owner_scope = CommandOwnerScope::capture(conn, cmd.session_id);
-    let Some(page) = loaded_page_mut_for_target_configuration(conn, cmd.session_id) else {
+    let Ok(document) = conn.loaded_browser_document_for_owner(&owner_scope) else {
         return EmulationCommandTaskStep::Complete(CommandOutputPlan::result(json!({})));
     };
-    match page.start_set_cpu_throttling_rate(params.rate) {
+    match conn.start_document_policy_update(
+        document,
+        DocumentPolicyUpdate::CpuThrottlingRate(params.rate),
+    ) {
         Ok(pending) => EmulationCommandTaskStep::Pending(single_pending_emulation_dispatch(
             cmd.id,
             owner_scope,
-            PendingEmulationPageOperation::SetCpuThrottlingRate,
             pending,
-            None,
+            true,
         )),
         Err(error) => {
             EmulationCommandTaskStep::Complete(CommandOutputPlan::error(-32000, error.to_string()))
@@ -345,9 +392,11 @@ fn emit_touch_events_for_mouse_command_output_plan(
     if conn.browser_context.is_none() {
         return CommandOutputPlan::result(json!({}));
     }
-    match page_session::update_page_emulation_state(conn, cmd.session_id, |mut state| {
-        state.set_emit_touch_events_for_mouse(params.enabled);
-    }) {
+    match page_session::update_page_emulation_state(
+        conn,
+        cmd.session_id,
+        EmulationPolicyChange::EmitTouchEventsForMouse(params.enabled),
+    ) {
         Ok(()) => CommandOutputPlan::result(json!({})),
         Err(message) if message == "BrowserContextNotLoaded" => {
             CommandOutputPlan::error(-31998, "BrowserContextNotLoaded")
@@ -372,30 +421,43 @@ fn start_script_execution_disabled_command(
     if conn.browser_context.is_none() {
         return EmulationCommandTaskStep::Complete(CommandOutputPlan::result(json!({})));
     }
-    if !conn.update_emulation_state_for_session_owner(cmd.session_id, |state| {
-        if let Some(mut state) = state {
-            state.set_script_execution_disabled(params.value);
-        }
-    }) {
+    if !conn.apply_emulation_override_for_session_owner(
+        cmd.session_id,
+        EmulationPolicyChange::ScriptExecutionDisabled(params.value),
+    ) {
         return EmulationCommandTaskStep::Complete(CommandOutputPlan::error(
             -31998,
             "BrowserContextNotLoaded",
         ));
     }
-    let Some(attachment_id) = loaded_page_mut_for_target_configuration(conn, cmd.session_id)
-        .and_then(|page| page.renderer_agent_attachment_id())
+    let owner = CommandOwnerScope::capture(conn, cmd.session_id);
+    let Some(binding) = conn
+        .runtime_session_owner_slot_for_owner(&owner)
+        .ok()
+        .and_then(|slot| slot.current_renderer_inspection_binding())
     else {
         return EmulationCommandTaskStep::Complete(CommandOutputPlan::result(json!({})));
     };
+    let attachment_id = binding.attachment().id();
     let renderer_inspector_session_id =
         conn.target_renderer_runtime_inspector_session_id_for_session(cmd.session_id);
     let response_delivery = cmd.terminal_response_delivery();
     if cmd.id.is_none()
         || response_delivery == moli_page_types::RendererInspectorResponseDelivery::AdapterReply
     {
-        let page = loaded_page_mut_for_target_configuration(conn, cmd.session_id)
-            .expect("the captured Emulation Page must remain loaded synchronously");
-        let pending = page.start_set_script_execution_disabled_from_io(params.value);
+        let pending = match binding.start_set_script_execution_disabled(
+            renderer_inspector_session_id,
+            params.value,
+            None,
+        ) {
+            Ok(pending) => pending,
+            Err(error) => {
+                return EmulationCommandTaskStep::Complete(CommandOutputPlan::error(
+                    -32000,
+                    error.to_string(),
+                ));
+            }
+        };
         return EmulationCommandTaskStep::Pending(PendingEmulationCommandDispatch {
             command_id: cmd.id,
             session_id: cmd.session_id.map(str::to_owned),
@@ -427,16 +489,20 @@ fn start_script_execution_disabled_command(
         response_rx.is_none(),
         "Emulation session output must not allocate an adapter-reply receiver",
     );
-    let pending = loaded_page_mut_for_target_configuration(conn, cmd.session_id)
-        .filter(|page| page.renderer_agent_attachment_id() == Some(attachment_id))
+    let pending = conn
+        .runtime_session_owner_slot_for_owner(&owner)
+        .ok()
+        .and_then(|slot| slot.current_renderer_inspection_binding())
+        .filter(|binding| binding.attachment().id() == attachment_id)
         .ok_or_else(|| "Emulation renderer attachment changed before IO dispatch".to_owned())
-        .and_then(|page| {
-            page.start_set_script_execution_disabled_from_io_with_response(
-                renderer_inspector_session_id,
-                params.value,
-                response,
-            )
-            .map_err(|error| error.to_string())
+        .and_then(|binding| {
+            binding
+                .start_set_script_execution_disabled(
+                    renderer_inspector_session_id,
+                    params.value,
+                    Some(response),
+                )
+                .map_err(|error| error.to_string())
         });
     let pending = match pending {
         Ok(pending) => pending,
@@ -556,16 +622,17 @@ fn start_update_idle_override_command(
         return EmulationCommandTaskStep::Complete(CommandOutputPlan::result(json!({})));
     }
     let owner_scope = CommandOwnerScope::capture(conn, cmd.session_id);
-    let Some(page) = loaded_page_mut_for_target_configuration(conn, cmd.session_id) else {
+    let Ok(document) = conn.loaded_browser_document_for_owner(&owner_scope) else {
         return EmulationCommandTaskStep::Complete(CommandOutputPlan::result(json!({})));
     };
-    match page.start_set_idle_override(idle_override) {
+    match conn
+        .start_document_policy_update(document, DocumentPolicyUpdate::IdleOverride(idle_override))
+    {
         Ok(pending) => EmulationCommandTaskStep::Pending(single_pending_emulation_dispatch(
             cmd.id,
             owner_scope,
-            PendingEmulationPageOperation::SetIdleOverride,
             pending,
-            None,
+            false,
         )),
         Err(error) => {
             EmulationCommandTaskStep::Complete(CommandOutputPlan::error(-32000, error.to_string()))
@@ -601,16 +668,18 @@ fn start_timezone_override_command(
         return EmulationCommandTaskStep::Complete(CommandOutputPlan::error(code, message));
     }
     let owner_scope = CommandOwnerScope::capture(conn, cmd.session_id);
-    let Some(page) = loaded_page_mut_for_target_configuration(conn, cmd.session_id) else {
+    let Ok(document) = conn.loaded_browser_document_for_owner(&owner_scope) else {
         return EmulationCommandTaskStep::Complete(CommandOutputPlan::result(json!({})));
     };
-    match page.start_set_timezone_override(timezone_override.as_deref()) {
+    match conn.start_document_policy_update(
+        document,
+        DocumentPolicyUpdate::TimezoneOverride(timezone_override),
+    ) {
         Ok(pending) => EmulationCommandTaskStep::Pending(single_pending_emulation_dispatch(
             cmd.id,
             owner_scope,
-            PendingEmulationPageOperation::SetTimezoneOverride,
             pending,
-            None,
+            true,
         )),
         Err(error) => {
             EmulationCommandTaskStep::Complete(CommandOutputPlan::error(-32000, error.to_string()))
@@ -668,11 +737,10 @@ fn start_update_geolocation_override_command(
     if conn.browser_context.is_none() {
         return EmulationCommandTaskStep::Complete(CommandOutputPlan::result(json!({})));
     }
-    if !conn.update_emulation_state_for_session_owner(cmd.session_id, |state| {
-        if let Some(mut state) = state {
-            state.set_geolocation_override(override_state.clone());
-        }
-    }) {
+    if !conn.apply_emulation_override_for_session_owner(
+        cmd.session_id,
+        EmulationPolicyChange::Geolocation(override_state),
+    ) {
         return EmulationCommandTaskStep::Complete(CommandOutputPlan::error(
             -31998,
             "BrowserContextNotLoaded",
@@ -711,11 +779,10 @@ fn start_emulated_media_command(
         return EmulationCommandTaskStep::Complete(CommandOutputPlan::result(json!({})));
     }
     let overrides = media::emulated_media_overrides_from_params(params);
-    if !conn.update_emulation_state_for_session_owner(cmd.session_id, |state| {
-        if let Some(mut state) = state {
-            state.set_emulated_media(overrides.clone());
-        }
-    }) {
+    if !conn.apply_emulation_override_for_session_owner(
+        cmd.session_id,
+        EmulationPolicyChange::Media(overrides.clone()),
+    ) {
         return EmulationCommandTaskStep::Complete(CommandOutputPlan::error(
             -31998,
             "BrowserContextNotLoaded",
@@ -731,14 +798,25 @@ fn start_emulated_media_command(
         }
     } else {
         let owner_scope = CommandOwnerScope::capture(conn, cmd.session_id);
-        let Some(page) = loaded_page_mut_for_target_configuration(conn, cmd.session_id) else {
+        let Some((context_id, target_id)) = page_configuration_owner(conn, &owner_scope) else {
             return EmulationCommandTaskStep::Complete(CommandOutputPlan::result(json!({})));
         };
-        match page.start_set_emulated_media(&page_overrides) {
+
+        let document = conn
+            .browser_context_by_id(&context_id)
+            .and_then(|context| context.document_handle_for_target(&target_id))
+            .expect("resolved loaded document remains registered");
+        match conn.start_document_policy_update(
+            document,
+            DocumentPolicyUpdate::EmulatedMedia(page_overrides.clone()),
+        ) {
             Ok(pending) => vec![PendingEmulationPageCommand {
+                source: EmulationPageCommandSource::Browser(None),
                 target: PendingEmulationPageTarget::SessionOwner { owner_scope },
-                operation: PendingEmulationPageOperation::SetEmulatedMedia,
-                pending,
+                operation: PendingEmulationPageOperation::DocumentPolicy {
+                    replay_on_replacement: true,
+                },
+                pending: PendingEmulationPageWork::DocumentPolicy(pending),
                 runtime_response_rx: None,
             }],
             Err(error) => {
@@ -780,9 +858,10 @@ fn start_user_agent_override_command(
             command_id: cmd.id,
             session_id: cmd.session_id.map(str::to_owned),
             pending: PendingEmulationRendererDispatch::Pages(vec![PendingEmulationPageCommand {
+                source: EmulationPageCommandSource::browser_for_owner(conn, &owner_scope),
                 target: PendingEmulationPageTarget::SessionOwner { owner_scope },
-                operation: PendingEmulationPageOperation::SetUserAgentLoader,
-                pending,
+                operation: PendingEmulationPageOperation::RebuildResourceRuntime,
+                pending: PendingEmulationPageWork::ResourceRuntime(pending),
                 runtime_response_rx: None,
             }]),
         }),
@@ -876,22 +955,28 @@ fn start_clear_device_metrics_override_command(
     {
         return EmulationCommandTaskStep::Complete(CommandOutputPlan::result(json!({})));
     }
-    if !conn.update_emulation_state_for_session_owner(cmd.session_id, |state| {
-        if let Some(mut state) = state {
-            state.set_emulated_device_metrics(None);
-        }
-    }) {
+    if !conn.apply_emulation_override_for_session_owner(
+        cmd.session_id,
+        EmulationPolicyChange::DeviceMetrics(None),
+    ) {
         return EmulationCommandTaskStep::Complete(CommandOutputPlan::error(
             -31998,
             "BrowserContextNotLoaded",
         ));
     }
     let owner_scope = CommandOwnerScope::capture(conn, cmd.session_id);
-    let runtime_call_id = conn.next_internal_runtime_command_id();
-    let Some(page) = loaded_page_mut_for_target_configuration(conn, cmd.session_id) else {
+    let runtime_call_id = conn.next_internal_devtools_command_id();
+    let Some((context_id, target_id)) = page_configuration_owner(conn, &owner_scope) else {
         return EmulationCommandTaskStep::Complete(CommandOutputPlan::result(json!({})));
     };
-    let pending_viewport = match page.start_set_viewport_surface(None) {
+
+    let document = conn
+        .browser_context_by_id(&context_id)
+        .and_then(|context| context.document_handle_for_target(&target_id))
+        .expect("resolved loaded document remains registered");
+    let pending_viewport = match conn
+        .start_document_policy_update(document, DocumentPolicyUpdate::ViewportSurface(None))
+    {
         Ok(pending) => pending,
         Err(error) => {
             return EmulationCommandTaskStep::Complete(CommandOutputPlan::error(
@@ -901,7 +986,9 @@ fn start_clear_device_metrics_override_command(
         }
     };
     match start_runtime_emulation_protocol_message(
-        page,
+        conn.runtime_session_owner_slot_for_owner(&owner_scope)
+            .ok()
+            .and_then(|slot| slot.current_renderer_inspection_binding()),
         runtime_call_id,
         device::LIVE_DEVICE_METRICS_CLEAR_SCRIPT.to_owned(),
     ) {
@@ -912,17 +999,23 @@ fn start_clear_device_metrics_override_command(
                 session_id: session_id.clone(),
                 pending: PendingEmulationRendererDispatch::Pages(vec![
                     PendingEmulationPageCommand {
+                        source: EmulationPageCommandSource::Browser(None),
                         target: PendingEmulationPageTarget::SessionOwner {
                             owner_scope: owner_scope.clone(),
                         },
-                        operation: PendingEmulationPageOperation::SetViewportSurface,
-                        pending: pending_viewport,
+                        operation: PendingEmulationPageOperation::DocumentPolicy {
+                            replay_on_replacement: true,
+                        },
+                        pending: PendingEmulationPageWork::DocumentPolicy(pending_viewport),
                         runtime_response_rx: None,
                     },
                     PendingEmulationPageCommand {
+                        source: EmulationPageCommandSource::Inspector(
+                            pending_runtime.renderer_agent_attachment_id(),
+                        ),
                         target: PendingEmulationPageTarget::SessionOwner { owner_scope },
                         operation: PendingEmulationPageOperation::RuntimeProtocolMessage,
-                        pending: pending_runtime,
+                        pending: PendingEmulationPageWork::Renderer(pending_runtime),
                         runtime_response_rx,
                     },
                 ]),
@@ -947,49 +1040,64 @@ fn start_devtools_set_viewport_command(
     let had_existing_device_metrics = conn
         .target_session_owner_emulated_device_metrics_for_owner(&owner_scope)
         .is_some();
-    if !conn.update_emulation_state_for_owner(&owner_scope, |state| {
-        if let Some(mut state) = state {
-            state.set_emulated_device_metrics(Some(metrics.clone()));
-        }
-    }) {
+    if !conn.apply_emulation_override_for_owner(
+        &owner_scope,
+        EmulationPolicyChange::DeviceMetrics(Some(metrics.clone())),
+    ) {
         return Err(DevToolsError::new(
             DevToolsErrorKind::NoSuchTarget,
             "BrowserContextNotLoaded",
         ));
     }
-    let runtime_call_id = conn.next_internal_runtime_command_id();
-    let Some(page) = conn
-        .loaded_page_mut_for_target_configuration_for_owner(&owner_scope)
-        .ok()
-    else {
+    let runtime_call_id = conn.next_internal_devtools_command_id();
+    let Some((context_id, target_id)) = page_configuration_owner(conn, &owner_scope) else {
         return Ok(None);
     };
+
     let session_id = owner_scope.session_id().map(str::to_owned);
     let viewport_surface = Some(metrics.viewport_surface().to_page_viewport_surface());
-    let pending_viewport = page
-        .start_set_viewport_surface(viewport_surface)
+    let document = conn
+        .browser_context_by_id(&context_id)
+        .and_then(|context| context.document_handle_for_target(&target_id))
+        .expect("resolved loaded document remains registered");
+    let pending_viewport = conn
+        .start_document_policy_update(
+            document,
+            DocumentPolicyUpdate::ViewportSurface(viewport_surface),
+        )
         .map_err(|error| DevToolsError::new(DevToolsErrorKind::Internal, error.to_string()))?;
     let script =
         device::live_device_metrics_override_script(&metrics, !had_existing_device_metrics);
-    let (pending_runtime, runtime_response_rx) =
-        start_runtime_emulation_protocol_message(page, runtime_call_id, script)
-            .map_err(|error| DevToolsError::new(DevToolsErrorKind::Internal, error))?;
+    let (pending_runtime, runtime_response_rx) = start_runtime_emulation_protocol_message(
+        conn.runtime_session_owner_slot_for_owner(&owner_scope)
+            .ok()
+            .and_then(|slot| slot.current_renderer_inspection_binding()),
+        runtime_call_id,
+        script,
+    )
+    .map_err(|error| DevToolsError::new(DevToolsErrorKind::Internal, error))?;
     Ok(Some(PendingEmulationCommandDispatch {
         command_id,
         session_id: session_id.clone(),
         pending: PendingEmulationRendererDispatch::Pages(vec![
             PendingEmulationPageCommand {
+                source: EmulationPageCommandSource::Browser(None),
                 target: PendingEmulationPageTarget::SessionOwner {
                     owner_scope: owner_scope.clone(),
                 },
-                operation: PendingEmulationPageOperation::SetViewportSurface,
-                pending: pending_viewport,
+                operation: PendingEmulationPageOperation::DocumentPolicy {
+                    replay_on_replacement: true,
+                },
+                pending: PendingEmulationPageWork::DocumentPolicy(pending_viewport),
                 runtime_response_rx: None,
             },
             PendingEmulationPageCommand {
+                source: EmulationPageCommandSource::Inspector(
+                    pending_runtime.renderer_agent_attachment_id(),
+                ),
                 target: PendingEmulationPageTarget::SessionOwner { owner_scope },
                 operation: PendingEmulationPageOperation::RuntimeProtocolMessage,
-                pending: pending_runtime,
+                pending: PendingEmulationPageWork::Renderer(pending_runtime),
                 runtime_response_rx,
             },
         ]),
@@ -1111,7 +1219,7 @@ async fn execute_devtools_set_extra_headers_for_browser_contexts(
         let browser_context = conn
             .browser_context_by_id_mut(browser_context_id)
             .expect("resolved browser context must remain addressable");
-        browser_context.default_extra_headers = command.headers.clone();
+        browser_context.set_default_extra_headers(command.headers.clone());
     }
     let routes = top_level_target_routes_for_browser_contexts(conn, Some(&browser_context_ids));
     execute_extra_headers_updates_for_routes(
@@ -1217,9 +1325,11 @@ async fn execute_devtools_set_geolocation_override_for_browser_contexts(
         let browser_context = conn
             .browser_context_by_id_mut(browser_context_id)
             .expect("resolved browser context must remain addressable");
-        browser_context.default_geolocation_override = command
-            .override_state
-            .map(emulated_geolocation_override_state);
+        browser_context.set_default_geolocation_override(
+            command
+                .override_state
+                .map(emulated_geolocation_override_state),
+        );
     }
     let routes = top_level_target_routes_for_browser_contexts(conn, Some(&browser_context_ids));
     execute_geolocation_surface_updates_for_routes(
@@ -1252,11 +1362,10 @@ fn start_geolocation_override_for_current_route(
     override_state: Option<EmulatedGeolocationOverrideState>,
 ) -> Result<Vec<PendingEmulationPageCommand>, DevToolsError> {
     let owner = CommandOwnerScope::for_route(route.clone());
-    if !conn.update_emulation_state_for_owner(&owner, |state| {
-        if let Some(mut state) = state {
-            state.set_geolocation_override(override_state);
-        }
-    }) {
+    if !conn.apply_emulation_override_for_owner(
+        &owner,
+        EmulationPolicyChange::Geolocation(override_state),
+    ) {
         return Err(devtools_emulation_owner_error(
             "BrowserContextNotLoaded".to_owned(),
         ));
@@ -1308,8 +1417,9 @@ async fn execute_devtools_set_network_conditions_for_browser_contexts(
         let browser_context = conn
             .browser_context_by_id_mut(browser_context_id)
             .expect("resolved browser context must remain addressable");
-        browser_context.default_network_conditions =
-            command.network_conditions.map(emulated_network_conditions);
+        browser_context.set_default_network_conditions(
+            command.network_conditions.map(emulated_network_conditions),
+        );
     }
     let routes = top_level_target_routes_for_browser_contexts(conn, Some(&browser_context_ids));
     execute_network_conditions_updates_for_routes(
@@ -1339,11 +1449,12 @@ fn start_network_conditions_for_current_route(
     network_conditions: Option<DevToolsNetworkConditions>,
 ) -> Result<Vec<PendingEmulationPageCommand>, DevToolsError> {
     let owner = CommandOwnerScope::for_route(route.clone());
-    if !conn.update_emulation_state_for_owner(&owner, |state| {
-        if let Some(mut state) = state {
-            state.set_network_conditions(network_conditions.map(emulated_network_conditions));
-        }
-    }) {
+    if !conn.apply_emulation_override_for_owner(
+        &owner,
+        EmulationPolicyChange::NetworkConditions(
+            network_conditions.map(emulated_network_conditions),
+        ),
+    ) {
         return Err(devtools_emulation_owner_error(
             "BrowserContextNotLoaded".to_owned(),
         ));
@@ -1363,27 +1474,26 @@ fn start_network_conditions_update_for_current_route(
         } => conn
             .browser_context_by_id(browser_context_id)
             .is_some_and(|browser_context| {
-                browser_context.effective_network_offline_for_target(target_id)
+                browser_context.effective_network_offline_for_target(
+                    target_id,
+                    conn.browser_global_overrides.network_conditions,
+                )
             }),
         PendingEmulationPageTarget::SessionOwner { .. } => false,
     };
     let owner = CommandOwnerScope::for_route(route.clone());
     let network_update = conn
-        .start_set_emulated_network_conditions_for_owner(
-            &owner,
-            effective_offline,
-            0.0,
-            -1.0,
-            -1.0,
-            None,
-        )
+        .start_set_network_offline_for_owner(&owner, effective_offline)
         .map_err(devtools_emulation_owner_error)?;
     let mut pending = Vec::new();
     if let Some(network_update) = network_update {
         pending.push(PendingEmulationPageCommand {
+            source: EmulationPageCommandSource::Browser(None),
             target: target.clone(),
-            operation: PendingEmulationPageOperation::SetNetworkConditions,
-            pending: network_update,
+            operation: PendingEmulationPageOperation::DocumentPolicy {
+                replay_on_replacement: true,
+            },
+            pending: PendingEmulationPageWork::DocumentPolicy(network_update),
             runtime_response_rx: None,
         });
     }
@@ -1407,9 +1517,12 @@ fn start_extra_headers_for_current_route(
     Ok(pending
         .map(|pending| {
             vec![PendingEmulationPageCommand {
+                source: EmulationPageCommandSource::Browser(None),
                 target,
-                operation: PendingEmulationPageOperation::SetExtraHttpHeaders,
-                pending,
+                operation: PendingEmulationPageOperation::DocumentPolicy {
+                    replay_on_replacement: true,
+                },
+                pending: PendingEmulationPageWork::DocumentPolicy(pending),
                 runtime_response_rx: None,
             }]
         })
@@ -1439,43 +1552,54 @@ fn start_extra_headers_update_for_route(
             target_id,
         } => conn
             .browser_context_by_id(browser_context_id)
-            .map(|browser_context| browser_context.effective_extra_headers_for_target(target_id)),
+            .map(|browser_context| {
+                browser_context.effective_extra_headers_for_target(
+                    target_id,
+                    &conn.browser_global_overrides.extra_headers,
+                )
+            }),
         PendingEmulationPageTarget::SessionOwner { .. } => None,
     };
     let Some(headers) = headers else {
         return Ok(Vec::new());
     };
-    let Some(page) = loaded_page_mut_for_pending_emulation_target(conn, &target) else {
+    let Some((context_id, target_id)) = target.resolve(conn) else {
         return Ok(Vec::new());
     };
-    let pending = page
-        .start_set_extra_http_headers(&headers)
+    let Some(context) = conn
+        .browser_context_by_id(&context_id)
+        .filter(|context| context.target_has_loaded_page(&target_id))
+    else {
+        return Ok(Vec::new());
+    };
+    let document = context
+        .document_handle_for_target(&target_id)
+        .expect("loaded target must have an exact Document");
+    let pending = conn
+        .start_document_policy_update(document, DocumentPolicyUpdate::ExtraHttpHeaders(headers))
         .map_err(|error| DevToolsError::new(DevToolsErrorKind::Internal, error.to_string()))?;
     Ok(vec![PendingEmulationPageCommand {
+        source: EmulationPageCommandSource::Browser(None),
         target,
-        operation: PendingEmulationPageOperation::SetExtraHttpHeaders,
-        pending,
+        operation: PendingEmulationPageOperation::DocumentPolicy {
+            replay_on_replacement: true,
+        },
+        pending: PendingEmulationPageWork::DocumentPolicy(pending),
         runtime_response_rx: None,
     }])
 }
 
-fn loaded_page_mut_for_pending_emulation_target<'a>(
-    conn: &'a mut CdpConnection,
-    target: &PendingEmulationPageTarget,
-) -> Option<&'a moli_core::page::Page> {
-    match target {
-        PendingEmulationPageTarget::BrowserContextTarget {
-            browser_context_id,
-            target_id,
-        } => conn
-            .browser_context_by_id_mut(browser_context_id)
-            .and_then(|browser_context| browser_context.page_target_mut(target_id))
-            .and_then(|target| target.loaded_page_mut())
-            .map(|page| &*page),
-        PendingEmulationPageTarget::SessionOwner { owner_scope } => conn
-            .loaded_page_mut_for_target_configuration_for_owner(owner_scope)
-            .ok()
-            .map(|page| &*page),
+impl PendingEmulationPageTarget {
+    fn resolve(&self, conn: &CdpConnection) -> Option<(String, String)> {
+        match self {
+            Self::BrowserContextTarget {
+                browser_context_id,
+                target_id,
+            } => Some((browser_context_id.clone(), target_id.clone())),
+            Self::SessionOwner { owner_scope } => {
+                conn.resolved_page_owner_identity_for_owner(owner_scope)
+            }
+        }
     }
 }
 
@@ -1640,15 +1764,13 @@ fn start_user_agent_override_for_current_route(
     let pending = conn
         .start_set_base_user_agent_override_for_owner(&owner, user_agent)
         .map_err(devtools_emulation_owner_error)?;
-    if let Some(pending) = pending {
-        return Ok(Some(PendingEmulationPageCommand {
-            target,
-            operation: PendingEmulationPageOperation::ReplaceBrowserResourceRuntime,
-            pending,
-            runtime_response_rx: None,
-        }));
-    }
-    start_user_agent_loader_update_for_current_route(conn, route)
+    Ok(pending.map(|pending| PendingEmulationPageCommand {
+        source: EmulationPageCommandSource::browser_for_owner(conn, &owner),
+        target,
+        operation: PendingEmulationPageOperation::RebuildResourceRuntime,
+        pending: PendingEmulationPageWork::ResourceRuntime(pending),
+        runtime_response_rx: None,
+    }))
 }
 
 fn start_user_agent_loader_update_for_current_route(
@@ -1657,23 +1779,14 @@ fn start_user_agent_loader_update_for_current_route(
 ) -> Result<Option<PendingEmulationPageCommand>, DevToolsError> {
     let target = pending_emulation_target_for_route(conn, route)?;
     let owner = CommandOwnerScope::for_route(route.clone());
-    let load_inputs = conn.navigation_load_inputs_for_owner(&owner);
-    let resource_runtime = conn
-        .build_registered_browser_resource_runtime_for_navigation_load_inputs(&load_inputs)
-        .map_err(|error| DevToolsError::new(DevToolsErrorKind::Internal, error))?;
-    let Some(page) = conn
-        .loaded_page_mut_for_target_configuration_for_owner(&owner)
-        .ok()
-    else {
-        return Ok(None);
-    };
-    let pending = page
-        .start_replace_browser_resource_runtime(&resource_runtime)
-        .map_err(|error| DevToolsError::new(DevToolsErrorKind::Internal, error.to_string()))?;
-    Ok(Some(PendingEmulationPageCommand {
+    let pending = conn
+        .start_rebuild_resource_runtime_for_owner(&owner)
+        .map_err(devtools_emulation_owner_error)?;
+    Ok(pending.map(|pending| PendingEmulationPageCommand {
+        source: EmulationPageCommandSource::browser_for_owner(conn, &owner),
         target,
-        operation: PendingEmulationPageOperation::ReplaceBrowserResourceRuntime,
-        pending,
+        operation: PendingEmulationPageOperation::RebuildResourceRuntime,
+        pending: PendingEmulationPageWork::ResourceRuntime(pending),
         runtime_response_rx: None,
     }))
 }
@@ -1769,14 +1882,15 @@ fn start_locale_update_for_current_route(
     let Some(locale_override) = locale_override_for_owner(conn, &owner) else {
         return Ok(pending);
     };
-    let Some(page) = conn
-        .loaded_page_mut_for_target_configuration_for_owner(&owner)
-        .ok()
-    else {
+    let Some((context_id, target_id)) = page_configuration_owner(conn, &owner) else {
         return Ok(pending);
     };
+
+    let context = conn
+        .browser_context_by_id_mut(&context_id)
+        .expect("resolved context remains registered");
     pending.extend(
-        start_locale_override_page_command(target, page, locale_override.as_deref())
+        start_locale_override_page_command(target, context, &target_id, locale_override.as_deref())
             .map_err(|error| DevToolsError::new(DevToolsErrorKind::Internal, error))?,
     );
     Ok(pending)
@@ -1828,7 +1942,7 @@ async fn execute_devtools_set_timezone_override_for_browser_contexts(
         let browser_context = conn
             .browser_context_by_id_mut(browser_context_id)
             .expect("resolved browser context must remain addressable");
-        browser_context.default_timezone_override = command.timezone.clone();
+        browser_context.set_default_timezone_override(command.timezone.clone());
     }
     let routes = top_level_target_routes_for_browser_contexts(conn, Some(&browser_context_ids));
     execute_timezone_updates_for_routes(conn, devtools_command_session_id(&command.context), routes)
@@ -1871,19 +1985,27 @@ fn start_timezone_update_for_current_route(
     let target = pending_emulation_target_for_route(conn, route)?;
     let owner = CommandOwnerScope::for_route(route.clone());
     let load_inputs = conn.navigation_load_inputs_for_owner(&owner);
-    let Some(page) = conn
-        .loaded_page_mut_for_target_configuration_for_owner(&owner)
-        .ok()
-    else {
+    let Some((context_id, target_id)) = page_configuration_owner(conn, &owner) else {
         return Ok(None);
     };
-    let pending = page
-        .start_set_timezone_override(load_inputs.timezone_override.as_deref())
+
+    let document = conn
+        .browser_context_by_id(&context_id)
+        .and_then(|context| context.document_handle_for_target(&target_id))
+        .expect("resolved loaded document remains registered");
+    let pending = conn
+        .start_document_policy_update(
+            document,
+            DocumentPolicyUpdate::TimezoneOverride(load_inputs.timezone_override),
+        )
         .map_err(|error| DevToolsError::new(DevToolsErrorKind::Internal, error.to_string()))?;
     Ok(Some(PendingEmulationPageCommand {
+        source: EmulationPageCommandSource::Browser(None),
         target,
-        operation: PendingEmulationPageOperation::SetTimezoneOverride,
-        pending,
+        operation: PendingEmulationPageOperation::DocumentPolicy {
+            replay_on_replacement: true,
+        },
+        pending: PendingEmulationPageWork::DocumentPolicy(pending),
         runtime_response_rx: None,
     }))
 }
@@ -2088,9 +2210,7 @@ async fn execute_devtools_set_window_state_for_owner(
 ) -> Result<DevToolsCommandResult, DevToolsError> {
     let state = target_window_surface_state_from_devtools(command.state);
     if conn
-        .with_target_owner_state_for_owner_mut(&owner, |owner_state| {
-            owner_state.set_window_surface_state(state);
-        })
+        .set_window_surface_state_for_owner(&owner, state)
         .is_none()
     {
         return Err(DevToolsError::new(
@@ -2127,14 +2247,13 @@ async fn execute_devtools_set_client_window_state_command_async(
     match result {
         Ok(_) => {
             let owner = CommandOwnerScope::for_route(route);
-            let _ = conn.with_target_owner_state_for_owner_mut(&owner, |owner_state| {
-                owner_state.set_window_surface_geometry(
-                    command.width,
-                    command.height,
-                    command.x,
-                    command.y,
-                );
-            });
+            let _ = conn.set_window_surface_geometry_for_owner(
+                &owner,
+                command.width,
+                command.height,
+                command.x,
+                command.y,
+            );
             super::target::devtools_client_window_info_for_target(conn, &command.client_window)
                 .map(|client_window| {
                     DevToolsCommandResult::ClientWindow(DevToolsSetClientWindowStateResult {
@@ -2147,14 +2266,12 @@ async fn execute_devtools_set_client_window_state_command_async(
     }
 }
 
-fn target_window_surface_state_from_devtools(
-    state: DevToolsWindowState,
-) -> TargetWindowSurfaceState {
+fn target_window_surface_state_from_devtools(state: DevToolsWindowState) -> WindowSurfaceState {
     match state {
-        DevToolsWindowState::Normal => TargetWindowSurfaceState::Normal,
-        DevToolsWindowState::Maximized => TargetWindowSurfaceState::Maximized,
-        DevToolsWindowState::Minimized => TargetWindowSurfaceState::Minimized,
-        DevToolsWindowState::Fullscreen => TargetWindowSurfaceState::Fullscreen,
+        DevToolsWindowState::Normal => WindowSurfaceState::Normal,
+        DevToolsWindowState::Maximized => WindowSurfaceState::Maximized,
+        DevToolsWindowState::Minimized => WindowSurfaceState::Minimized,
+        DevToolsWindowState::Fullscreen => WindowSurfaceState::Fullscreen,
     }
 }
 
@@ -2165,23 +2282,27 @@ async fn execute_devtools_set_viewport_for_browser_contexts(
     let browser_context_ids = resolve_set_viewport_browser_context_ids(conn, &command)?;
     let mut pending = Vec::new();
     for browser_context_id in browser_context_ids {
-        let current_default = conn
+        let current_defaults = conn
             .browser_context_by_id(&browser_context_id)
-            .and_then(|context| context.default_emulated_device_metrics.as_ref());
-        let metrics = set_viewport_metrics_from_current(current_default, &command)?;
+            .map(|context| context.emulation_defaults());
+        let metrics = set_viewport_metrics_from_current(
+            current_defaults
+                .as_ref()
+                .and_then(|defaults| defaults.device_metrics.as_ref()),
+            &command,
+        )?;
         let browser_context = conn
             .browser_context_by_id(&browser_context_id)
             .expect("resolved browser context must remain addressable");
         let runtime_command_count =
             browser_context_default_device_metrics_runtime_command_count(browser_context);
         let mut runtime_call_ids = (0..runtime_command_count)
-            .map(|_| conn.next_internal_runtime_command_id())
+            .map(|_| conn.next_internal_devtools_command_id())
             .collect::<Vec<_>>();
         let browser_context = conn
             .browser_context_by_id_mut(&browser_context_id)
             .expect("resolved browser context must remain addressable");
-        let had_existing_default = browser_context.default_emulated_device_metrics.is_some();
-        browser_context.default_emulated_device_metrics = Some(metrics.clone());
+        let had_existing_default = browser_context.set_default_device_metrics(metrics.clone());
         pending.extend(start_browser_context_default_device_metrics_page_commands(
             browser_context,
             &metrics,
@@ -2253,109 +2374,69 @@ fn is_moli_internal_default_user_context(browser_context_id: &str) -> bool {
             })
 }
 
-fn browser_context_default_device_metrics_runtime_command_count(
-    browser_context: &BrowserContext,
-) -> usize {
-    browser_context
+fn browser_context_default_device_metrics_runtime_command_count(context: &BrowserContext) -> usize {
+    context
         .page_targets
         .iter()
         .filter(|target| {
-            target
-                .effective_emulation_state
-                .emulated_device_metrics
-                .is_none()
-                && target.loaded_page().is_some()
+            context
+                .target_emulation_policy(target.target_id())
+                .is_some_and(|policy| policy.emulated_device_metrics.is_none())
+                && context.target_has_loaded_page(target.target_id())
         })
         .count()
 }
 
 fn start_browser_context_default_device_metrics_page_commands(
-    browser_context: &mut BrowserContext,
+    context: &mut BrowserContext,
     metrics: &EmulatedDeviceMetrics,
     had_existing_default: bool,
     runtime_call_ids: &mut Vec<u64>,
 ) -> Result<Vec<PendingEmulationPageCommand>, DevToolsError> {
-    let browser_context_id = browser_context.id.clone();
-    let active_target_id = browser_context.active_target_id_owned();
     let mut pending = Vec::new();
     let viewport_surface = Some(metrics.viewport_surface().to_page_viewport_surface());
-    if let Some(active_target_id) = active_target_id
-        && let Some(active_target) = browser_context.page_targets.active_mut()
-        && active_target
-            .effective_emulation_state
-            .emulated_device_metrics
-            .is_none()
-        && let Some(page) = active_target.runtime_slot.loaded_page_mut()
-    {
-        pending.push(PendingEmulationPageCommand {
-            target: PendingEmulationPageTarget::BrowserContextTarget {
-                browser_context_id: browser_context_id.clone(),
-                target_id: active_target_id.clone(),
-            },
-            operation: PendingEmulationPageOperation::SetViewportSurface,
-            pending: page
-                .start_set_viewport_surface(viewport_surface)
-                .map_err(|error| {
-                    DevToolsError::new(DevToolsErrorKind::Internal, error.to_string())
-                })?,
-            runtime_response_rx: None,
-        });
-        let (pending_runtime, runtime_response_rx) = start_runtime_emulation_protocol_message(
-            page,
-            runtime_call_ids.pop().ok_or_else(|| {
-                DevToolsError::new(DevToolsErrorKind::Internal, "MissingRuntimeInspectorCallId")
-            })?,
-            device::live_device_metrics_override_script(metrics, !had_existing_default),
-        )
-        .map_err(|error| DevToolsError::new(DevToolsErrorKind::Internal, error))?;
-        pending.push(PendingEmulationPageCommand {
-            target: PendingEmulationPageTarget::BrowserContextTarget {
-                browser_context_id: browser_context_id.clone(),
-                target_id: active_target_id,
-            },
-            operation: PendingEmulationPageOperation::RuntimeProtocolMessage,
-            pending: pending_runtime,
-            runtime_response_rx,
-        });
-    }
-    for index in 0..browser_context.background_target_count() {
-        let target_id = browser_context
-            .background_target_at(index)
-            .expect("background target index must remain valid")
-            .target_id()
-            .to_owned();
-        let has_target_override = browser_context
-            .page_target(&target_id)
-            .is_some_and(|state| {
-                state
-                    .effective_emulation_state
-                    .emulated_device_metrics
-                    .is_some()
-            });
-        if has_target_override {
+    let target_ids = context
+        .page_targets
+        .active(context.selected_web_contents_id())
+        .into_iter()
+        .chain(context.background_targets())
+        .map(|target| target.target_id().to_owned())
+        .collect::<Vec<_>>();
+    for target_id in target_ids {
+        if !context.target_has_loaded_page(&target_id)
+            || context
+                .target_emulation_policy(&target_id)
+                .is_none_or(|policy| policy.emulated_device_metrics.is_some())
+        {
             continue;
         }
-        let Some(page) = browser_context
-            .background_target_at_mut(index)
-            .and_then(PageTargetHost::loaded_page_mut)
-        else {
-            continue;
-        };
+        let document = context
+            .document_handle_for_target(&target_id)
+            .expect("loaded target must have an exact Document");
         pending.push(PendingEmulationPageCommand {
+            source: EmulationPageCommandSource::Browser(None),
             target: PendingEmulationPageTarget::BrowserContextTarget {
-                browser_context_id: browser_context_id.clone(),
+                browser_context_id: context.id.clone(),
                 target_id: target_id.clone(),
             },
-            operation: PendingEmulationPageOperation::SetViewportSurface,
-            pending: page
-                .start_set_viewport_surface(viewport_surface)
-                .map_err(|error| {
-                    DevToolsError::new(DevToolsErrorKind::Internal, error.to_string())
-                })?,
+            operation: PendingEmulationPageOperation::DocumentPolicy {
+                replay_on_replacement: true,
+            },
+            pending: PendingEmulationPageWork::DocumentPolicy(
+                context
+                    .start_document_policy_update(
+                        document,
+                        DocumentPolicyUpdate::ViewportSurface(viewport_surface),
+                    )
+                    .map_err(|error| DevToolsError::new(DevToolsErrorKind::Internal, error))?,
+            ),
             runtime_response_rx: None,
         });
+        let target = context
+            .page_target(&target_id)
+            .expect("resolved target must remain registered");
         let (pending_runtime, runtime_response_rx) = start_runtime_emulation_protocol_message(
-            page,
+            target.runtime_slot.current_renderer_inspection_binding(),
             runtime_call_ids.pop().ok_or_else(|| {
                 DevToolsError::new(DevToolsErrorKind::Internal, "MissingRuntimeInspectorCallId")
             })?,
@@ -2363,12 +2444,15 @@ fn start_browser_context_default_device_metrics_page_commands(
         )
         .map_err(|error| DevToolsError::new(DevToolsErrorKind::Internal, error))?;
         pending.push(PendingEmulationPageCommand {
+            source: EmulationPageCommandSource::Inspector(
+                pending_runtime.renderer_agent_attachment_id(),
+            ),
             target: PendingEmulationPageTarget::BrowserContextTarget {
-                browser_context_id: browser_context_id.clone(),
+                browser_context_id: context.id.clone(),
                 target_id,
             },
             operation: PendingEmulationPageOperation::RuntimeProtocolMessage,
-            pending: pending_runtime,
+            pending: PendingEmulationPageWork::Renderer(pending_runtime),
             runtime_response_rx,
         });
     }
@@ -2389,33 +2473,17 @@ fn complete_pending_devtools_emulation_command(
         let CompletedEmulationPageCommand {
             target,
             operation,
-            dispatched_attachment_id,
+            source,
             completed,
         } = completed_page;
-        let completion = match completed {
-            Ok(completion) => completion,
-            Err(_)
-                if pending_emulation_page_configuration_will_be_replayed(
-                    conn,
-                    &target,
-                    &operation,
-                    dispatched_attachment_id,
-                ) =>
-            {
-                continue;
-            }
-            Err(error) => {
-                return Err(DevToolsError::new(DevToolsErrorKind::Internal, error));
-            }
-        };
-        finish_pending_emulation_page_command(conn, operation, target, completion)
+        finish_completed_emulation_page_command(conn, operation, target, source, completed)
             .map_err(|error| DevToolsError::new(DevToolsErrorKind::Internal, error))?;
     }
     Ok(DevToolsCommandResult::Empty)
 }
 
 fn start_runtime_emulation_protocol_message(
-    page: &moli_core::page::Page,
+    binding: Option<&RendererAgentBinding>,
     command_id: u64,
     expression: String,
 ) -> Result<
@@ -2425,20 +2493,29 @@ fn start_runtime_emulation_protocol_message(
     ),
     String,
 > {
+    let binding =
+        binding.ok_or_else(|| "renderer has no DevTools inspection binding".to_owned())?;
     let raw_json = runtime_evaluate_json(command_id, expression);
     let call_id = i32::try_from(command_id)
         .map_err(|_| format!("runtime inspector command id {command_id} does not fit i32"))?;
     let (tx, rx) = tokio::sync::oneshot::channel();
-    let attachment_id = page
-        .renderer_agent_attachment_id()
-        .ok_or_else(|| "renderer page has no DevTools attachment".to_owned())?;
-    page.start_runtime_protocol_message_with_deferred_response(
-        raw_json,
-        RendererRuntimeInspectorResponseSender::new(call_id, tx)
-            .with_renderer_agent_attachment(attachment_id),
-    )
-    .map(|pending| (pending, Some(rx)))
-    .map_err(|error| error.to_string())
+    binding
+        .start_main_protocol_on_page_owner(
+            None,
+            None,
+            raw_json,
+            Some(
+                RendererRuntimeInspectorResponseSender::new(call_id, tx)
+                    .with_renderer_agent_attachment(binding.attachment().id()),
+            ),
+        )
+        .map(|route| {
+            (
+                PendingPageCommand::from_inspector_main_route(route),
+                Some(rx),
+            )
+        })
+        .map_err(|error| error.to_string())
 }
 
 fn runtime_evaluate_json(command_id: u64, expression: String) -> String {
@@ -2503,24 +2580,11 @@ pub(crate) fn complete_pending_emulation_command(
         let CompletedEmulationPageCommand {
             target,
             operation,
-            dispatched_attachment_id,
+            source,
             completed,
         } = completed_page;
-        let completion = match completed {
-            Ok(completion) => completion,
-            Err(_)
-                if pending_emulation_page_configuration_will_be_replayed(
-                    conn,
-                    &target,
-                    &operation,
-                    dispatched_attachment_id,
-                ) =>
-            {
-                continue;
-            }
-            Err(error) => return CommandOutputPlan::error(-32000, error),
-        };
-        let result = finish_pending_emulation_page_command(conn, operation, target, completion);
+        let result =
+            finish_completed_emulation_page_command(conn, operation, target, source, completed);
         if let Err(error) = result {
             return CommandOutputPlan::error(-32000, error);
         }
@@ -2528,143 +2592,189 @@ pub(crate) fn complete_pending_emulation_command(
     CommandOutputPlan::result(json!({}))
 }
 
+fn finish_completed_emulation_page_command(
+    conn: &mut CdpConnection,
+    operation: PendingEmulationPageOperation,
+    target: PendingEmulationPageTarget,
+    source: EmulationPageCommandSource,
+    completed: CompletedEmulationPageWork,
+) -> Result<(), String> {
+    match completed {
+        CompletedEmulationPageWork::DocumentPolicy(completed) => {
+            let document = completed.document();
+            match conn.finish_document_policy_update(completed) {
+                Ok(()) => Ok(()),
+                Err(error)
+                    if error == "Document changed"
+                        && (!operation.has_authoritative_replay_state()
+                            || document_policy_will_be_replayed(conn, &target, document)) =>
+                {
+                    Ok(())
+                }
+                Err(error) => Err(error),
+            }
+        }
+        CompletedEmulationPageWork::ResourceRuntime(completed) => {
+            match conn.finish_document_resource_runtime_update(completed) {
+                Ok(()) => Ok(()),
+                Err(_)
+                    if pending_emulation_page_configuration_will_be_replayed(
+                        conn, &target, &operation, source,
+                    ) =>
+                {
+                    Ok(())
+                }
+                Err(error) => Err(error),
+            }
+        }
+        CompletedEmulationPageWork::Renderer(completed) => {
+            let completion = match completed {
+                Ok(completion) => completion,
+                Err(_)
+                    if pending_emulation_page_configuration_will_be_replayed(
+                        conn, &target, &operation, source,
+                    ) =>
+                {
+                    return Ok(());
+                }
+                Err(error) => return Err(error),
+            };
+            finish_pending_emulation_page_command(conn, operation, target, completion)
+        }
+    }
+}
+
+fn document_policy_will_be_replayed(
+    conn: &CdpConnection,
+    target: &PendingEmulationPageTarget,
+    document: moli_core::browser::DocumentHandle,
+) -> bool {
+    let Some((context_id, target_id)) = target.resolve(conn) else {
+        return false;
+    };
+    conn.browser_context_by_id(&context_id)
+        .is_some_and(|context| context.document_handle_for_target(&target_id) != Some(document))
+}
+
 fn pending_emulation_page_configuration_will_be_replayed(
     conn: &CdpConnection,
     target: &PendingEmulationPageTarget,
     operation: &PendingEmulationPageOperation,
-    dispatched_attachment_id: Option<moli_core::page::RendererAgentAttachmentId>,
+    source: EmulationPageCommandSource,
 ) -> bool {
     if !operation.has_authoritative_replay_state() {
         return false;
     }
-    let Some(dispatched_attachment_id) = dispatched_attachment_id else {
+    let Some((context_id, target_id)) = target.resolve(conn) else {
         return false;
     };
-    let current_attachment_id = match target {
-        PendingEmulationPageTarget::SessionOwner { owner_scope } => {
-            let Some((browser_context_id, target_id)) =
-                conn.target_owner_identity_for_owner(owner_scope)
-            else {
-                return false;
-            };
-            let Some(browser_context) = conn.browser_context_by_id(&browser_context_id) else {
-                return false;
-            };
-            let target = match target_id.as_deref() {
-                Some(target_id) => browser_context.page_target(target_id),
-                None => browser_context.page_targets.active(),
-            };
-            let Some(target) = target else {
-                return false;
-            };
-            target
-                .loaded_page()
-                .and_then(moli_core::page::Page::renderer_agent_attachment_id)
-        }
-        PendingEmulationPageTarget::BrowserContextTarget {
-            browser_context_id,
-            target_id,
-        } => {
-            let Some(target) = conn
-                .browser_context_by_id(browser_context_id)
-                .and_then(|browser_context| browser_context.page_target(target_id))
-            else {
-                return false;
-            };
-            target
-                .loaded_page()
-                .and_then(moli_core::page::Page::renderer_agent_attachment_id)
-        }
+    let Some(context) = conn.browser_context_by_id(&context_id) else {
+        return false;
     };
-
-    // Target-configuration operations store their authoritative state before
-    // dispatch. If that exact target has moved away from the dispatched Page,
-    // commit configuration either replayed it into the replacement or will do
-    // so when the in-flight navigation commits. A cancellation from that
-    // retired renderer is therefore not a protocol failure.
-    current_attachment_id != Some(dispatched_attachment_id)
+    let Some(target) = context.page_target(&target_id) else {
+        return false;
+    };
+    // Replayed policy may settle on the retired renderer, but it must not update a replacement.
+    match source {
+        EmulationPageCommandSource::Browser(Some(page)) => {
+            context.target_renderer_page_residence_identity(&target_id) != Some(page)
+        }
+        EmulationPageCommandSource::Inspector(Some(attachment)) => {
+            target
+                .runtime_slot
+                .current_renderer_attachment()
+                .map(|current| current.id())
+                != Some(attachment)
+        }
+        EmulationPageCommandSource::Browser(None) | EmulationPageCommandSource::Inspector(None) => {
+            false
+        }
+    }
 }
 
-fn loaded_page_mut_for_target_configuration<'a>(
-    conn: &'a mut CdpConnection,
-    session_id: Option<&str>,
-) -> Option<&'a mut moli_core::page::Page> {
-    conn.loaded_page_mut_for_target_configuration(session_id)
-        .ok()
+fn page_configuration_owner(
+    conn: &CdpConnection,
+    owner: &CommandOwnerScope,
+) -> Option<(String, String)> {
+    let route = conn.resolved_page_owner_identity_for_owner(owner)?;
+    conn.browser_context_by_id(&route.0)?
+        .target_has_loaded_page(&route.1)
+        .then_some(route)
 }
 
 pub(crate) async fn dispose_page_session_async(
     conn: &mut CdpConnection,
     session_id: &str,
 ) -> anyhow::Result<()> {
+    if conn.emulation_disposal_is_effectively_noop_for_session_owner(session_id)
+        && conn.disable_emulation_session_handler_for_session_owner(session_id)
+    {
+        return Ok(());
+    }
+    conn.set_emulation_renderer_cleanup_pending_for_session_owner(session_id, true);
     let mut first_error = conn
         .clear_devtools_emulation_session_policy_async(session_id)
         .await
         .err();
-
-    let Some(delta) = conn.disable_emulation_session_handler_for_session_owner(session_id) else {
+    if !conn.disable_emulation_session_handler_for_session_owner(session_id) {
         return first_error.map_or(Ok(()), Err);
-    };
+    }
     let owner = CommandOwnerScope::capture(conn, Some(session_id));
     let load_inputs = conn.navigation_load_inputs_for_owner(&owner);
-    if let Some(page) = loaded_page_mut_for_target_configuration(conn, Some(session_id)) {
-        if delta.script_execution_disabled {
-            record_emulation_disposal_result(
-                &mut first_error,
-                "script execution",
-                page.set_script_execution_disabled_async(load_inputs.script_execution_disabled)
-                    .await,
-            );
-        }
-        if delta.emulated_media {
-            record_emulation_disposal_result(
-                &mut first_error,
-                "emulated media",
-                page.set_emulated_media_async(&load_inputs.emulated_media)
-                    .await,
-            );
-        }
-        if delta.cpu_throttling_rate {
-            record_emulation_disposal_result(
-                &mut first_error,
-                "CPU throttling",
-                page.set_cpu_throttling_rate_async(load_inputs.cpu_throttling_rate)
-                    .await,
-            );
-        }
-        if delta.network_conditions {
-            record_emulation_disposal_result(
-                &mut first_error,
-                "network conditions",
-                page.set_network_offline_async(load_inputs.network_offline)
-                    .await,
-            );
-        }
-        if delta.emulated_device_metrics {
-            record_emulation_disposal_result(
-                &mut first_error,
-                "device metrics viewport",
-                page.set_viewport_surface_async(load_inputs.viewport_surface)
-                    .await,
-            );
-            record_emulation_disposal_result(
-                &mut first_error,
-                "device metrics script",
-                page.run_page_surface_override_script_async(
-                    device::LIVE_DEVICE_METRICS_CLEAR_SCRIPT,
+    // A retry must install current effective Browser policy, even after the raw contribution was removed.
+    let pending_reconciliation = page_configuration_owner(conn, &owner)
+        .and_then(|(context_id, target_id)| {
+            conn.browser_context_by_id(&context_id)
+                .and_then(|context| context.document_handle_for_target(&target_id))
+        })
+        .map(|document| {
+            conn.start_document_runtime_policy_reconciliation(
+                document,
+                DocumentRuntimePolicyReconciliation {
+                    script_execution_disabled: load_inputs.script_execution_disabled,
+                    emulated_media: load_inputs.emulated_media,
+                    cpu_throttling_rate: load_inputs.cpu_throttling_rate,
+                    network_offline: load_inputs.network_offline,
+                    viewport_surface: load_inputs.viewport_surface,
+                    clear_device_metrics_surface: true,
+                },
+            )
+        })
+        .transpose();
+    match pending_reconciliation {
+        Ok(Some(pending)) => {
+            let completed = pending.wait().await;
+            let document = completed.document();
+            if let Err(error) = conn.finish_document_policy_batch(completed)
+                && !document_policy_will_be_replayed(
+                    conn,
+                    &PendingEmulationPageTarget::SessionOwner {
+                        owner_scope: owner.clone(),
+                    },
+                    document,
                 )
-                .await,
-            );
+            {
+                first_error.get_or_insert_with(|| {
+                    anyhow::anyhow!("failed to clear detached session {error}")
+                });
+            }
+        }
+        Ok(None) => {}
+        Err(error) => {
+            first_error
+                .get_or_insert_with(|| anyhow::anyhow!("failed to clear detached session {error}"));
         }
     }
-    if delta.surface_changed() {
-        record_emulation_disposal_result(
-            &mut first_error,
-            "page surfaces",
-            apply_session_surface_state_async(conn, session_id).await,
-        );
+    record_emulation_disposal_result(
+        &mut first_error,
+        "page surfaces",
+        apply_session_surface_state_async(conn, session_id).await,
+    );
+    if let Some(error) = first_error {
+        return Err(error);
     }
-    first_error.map_or(Ok(()), Err)
+    conn.set_emulation_renderer_cleanup_pending_for_session_owner(session_id, false);
+    Ok(())
 }
 
 async fn apply_session_surface_state_async(
@@ -2679,19 +2789,17 @@ async fn apply_session_surface_state_async(
     else {
         return Ok(());
     };
-    let Some(browser_context) = conn.browser_context_by_id_mut(&browser_context_id) else {
+    let Some(browser_context) = conn.browser_context_by_id(&browser_context_id) else {
         return Ok(());
     };
-    if browser_context.is_active_target(&target_id) {
-        browser_context
-            .apply_surface_overrides_to_loaded_page_async()
-            .await
-    } else {
-        browser_context
-            .apply_background_target_surface_overrides_async(&target_id)
-            .await
-            .map(|_applied| ())
-    }
+    let foreground = browser_context.is_active_target(&target_id);
+    let Some(handle) = browser_context.web_contents_handle_for_target(&target_id) else {
+        return Ok(());
+    };
+    conn.apply_browser_page_surface_async(handle, foreground)
+        .await
+        .map(drop)
+        .map_err(anyhow::Error::msg)
 }
 
 fn record_emulation_disposal_result(
@@ -2709,19 +2817,21 @@ fn record_emulation_disposal_result(
 fn single_pending_emulation_dispatch(
     command_id: Option<u64>,
     owner_scope: CommandOwnerScope,
-    operation: PendingEmulationPageOperation,
-    pending: PendingPageCommand,
-    runtime_response_rx: Option<RuntimeInspectorAsyncCompletionReceiver>,
+    pending: PendingDocumentPolicyUpdate,
+    replay_on_replacement: bool,
 ) -> PendingEmulationCommandDispatch {
     let session_id = owner_scope.session_id().map(str::to_owned);
     PendingEmulationCommandDispatch {
         command_id,
         session_id: session_id.clone(),
         pending: PendingEmulationRendererDispatch::Pages(vec![PendingEmulationPageCommand {
+            source: EmulationPageCommandSource::Browser(None),
             target: PendingEmulationPageTarget::SessionOwner { owner_scope },
-            operation,
-            pending,
-            runtime_response_rx,
+            operation: PendingEmulationPageOperation::DocumentPolicy {
+                replay_on_replacement,
+            },
+            pending: PendingEmulationPageWork::DocumentPolicy(pending),
+            runtime_response_rx: None,
         }]),
     }
 }
@@ -2740,25 +2850,35 @@ fn start_context_emulated_media_page_commands(
     conn: &mut CdpConnection,
     overrides: &moli_core::page::EmulatedMediaOverrides,
 ) -> Result<Vec<PendingEmulationPageCommand>, String> {
-    let Some(browser_context) = conn.browser_context.as_mut() else {
+    let Some(context) = conn.browser_context.as_mut() else {
         return Ok(Vec::new());
     };
-    let browser_context_id = browser_context.id.clone();
     let mut pending = Vec::new();
-    for target in browser_context.page_targets.iter_mut() {
-        let target_id = target.target_id().to_owned();
-        let Some(page) = target.loaded_page_mut() else {
-            continue;
-        };
+    let target_ids = context
+        .page_targets
+        .iter()
+        .filter(|target| context.target_has_loaded_page(target.target_id()))
+        .map(|target| target.target_id().to_owned())
+        .collect::<Vec<_>>();
+    for target_id in target_ids {
+        let document = context
+            .document_handle_for_target(&target_id)
+            .expect("loaded target must have an exact Document");
         pending.push(PendingEmulationPageCommand {
+            source: EmulationPageCommandSource::Browser(None),
             target: PendingEmulationPageTarget::BrowserContextTarget {
-                browser_context_id: browser_context_id.clone(),
+                browser_context_id: context.id.clone(),
                 target_id,
             },
-            operation: PendingEmulationPageOperation::SetEmulatedMedia,
-            pending: page
-                .start_set_emulated_media(overrides)
-                .map_err(|error| error.to_string())?,
+            operation: PendingEmulationPageOperation::DocumentPolicy {
+                replay_on_replacement: true,
+            },
+            pending: PendingEmulationPageWork::DocumentPolicy(
+                context.start_document_policy_update(
+                    document,
+                    DocumentPolicyUpdate::EmulatedMedia(overrides.clone()),
+                )?,
+            ),
             runtime_response_rx: None,
         });
     }
@@ -2773,12 +2893,17 @@ fn start_session_locale_override_page_commands(
         return Ok(Vec::new());
     };
     let owner_scope = CommandOwnerScope::capture(conn, session_id);
-    let Some(page) = loaded_page_mut_for_target_configuration(conn, session_id) else {
+    let Some((context_id, target_id)) = page_configuration_owner(conn, &owner_scope) else {
         return Ok(Vec::new());
     };
+
+    let context = conn
+        .browser_context_by_id_mut(&context_id)
+        .expect("resolved context remains registered");
     start_locale_override_page_command(
         PendingEmulationPageTarget::SessionOwner { owner_scope },
-        page,
+        context,
+        &target_id,
         locale_override.as_deref(),
     )
 }
@@ -2788,23 +2913,25 @@ fn start_context_locale_override_page_commands(
     locale_override: Option<&str>,
 ) -> Result<Vec<PendingEmulationPageCommand>, String> {
     let mut pending = Vec::new();
-    for browser_context in conn
+    for context in conn
         .browser_context
         .iter_mut()
         .chain(conn.inactive_browser_contexts.iter_mut())
     {
-        let browser_context_id = browser_context.id.clone();
-        for target in browser_context.page_targets.iter_mut() {
-            let target_id = target.target_id().to_owned();
-            let Some(page) = target.loaded_page_mut() else {
-                continue;
-            };
+        let target_ids = context
+            .page_targets
+            .iter()
+            .filter(|target| context.target_has_loaded_page(target.target_id()))
+            .map(|target| target.target_id().to_owned())
+            .collect::<Vec<_>>();
+        for target_id in target_ids {
             pending.extend(start_locale_override_page_command(
                 PendingEmulationPageTarget::BrowserContextTarget {
-                    browser_context_id: browser_context_id.clone(),
-                    target_id,
+                    browser_context_id: context.id.clone(),
+                    target_id: target_id.clone(),
                 },
-                page,
+                context,
+                &target_id,
                 locale_override,
             )?);
         }
@@ -2819,21 +2946,20 @@ fn start_geolocation_surface_override_page_commands(
     if cmd.session_id.is_some() {
         return start_session_surface_override_page_command(conn, cmd.session_id);
     }
-    let runtime_call_id = conn.next_internal_runtime_command_id();
-    let Some(browser_context) = conn.browser_context.as_mut() else {
+    let runtime_call_id = conn.next_internal_devtools_command_id();
+    let Some(browser_context) = conn.browser_context.as_ref() else {
         return Ok(Vec::new());
     };
-    let Some(script) = browser_context.generated_surface_override_script_for_active_target() else {
-        return Ok(Vec::new());
-    };
+    let script = browser_context
+        .generated_surface_override_script_for_active_target(&conn.browser_global_overrides);
     let browser_context_id = browser_context.id.clone();
     let Some(target_id) = browser_context.active_target_id_owned() else {
         return Ok(Vec::new());
     };
-    let Some(page) = browser_context
-        .active_page_target_mut()
+    let Some(binding) = browser_context
+        .active_page_target()
         .runtime_slot
-        .loaded_page_mut()
+        .current_renderer_inspection_binding()
     else {
         return Ok(Vec::new());
     };
@@ -2842,7 +2968,7 @@ fn start_geolocation_surface_override_page_commands(
             browser_context_id,
             target_id,
         },
-        page,
+        binding,
         script,
         runtime_call_id,
     )
@@ -2873,18 +2999,26 @@ fn start_session_surface_override_page_command_for_owner(
         if let Some(target_id) = target_id.as_deref()
             && browser_context.background_target(target_id).is_some()
         {
-            browser_context.generated_surface_override_script_for_background_target(target_id)
+            browser_context.generated_surface_override_script_for_background_target(
+                target_id,
+                &conn.browser_global_overrides,
+            )
         } else {
-            browser_context.generated_surface_override_script_for_active_target()
+            Some(
+                browser_context.generated_surface_override_script_for_active_target(
+                    &conn.browser_global_overrides,
+                ),
+            )
         }
     };
     let Some(script) = script else {
         return Ok(Vec::new());
     };
-    let runtime_call_id = conn.next_internal_runtime_command_id();
-    let Some(page) = conn
-        .loaded_page_mut_for_target_configuration_for_owner(owner_scope)
+    let runtime_call_id = conn.next_internal_devtools_command_id();
+    let Some(binding) = conn
+        .runtime_session_owner_slot_for_owner(owner_scope)
         .ok()
+        .and_then(|slot| slot.current_renderer_inspection_binding())
     else {
         return Ok(Vec::new());
     };
@@ -2892,7 +3026,7 @@ fn start_session_surface_override_page_command_for_owner(
         PendingEmulationPageTarget::SessionOwner {
             owner_scope: owner_scope.clone(),
         },
-        page,
+        binding,
         script,
         runtime_call_id,
     )
@@ -2913,9 +3047,16 @@ fn start_surface_override_for_route(
                 return Err("BrowserContextNotLoaded".to_owned());
             };
             if browser_context.is_active_target(target_id) {
-                browser_context.generated_surface_override_script_for_active_target()
+                Some(
+                    browser_context.generated_surface_override_script_for_active_target(
+                        &conn.browser_global_overrides,
+                    ),
+                )
             } else {
-                browser_context.generated_surface_override_script_for_background_target(target_id)
+                browser_context.generated_surface_override_script_for_background_target(
+                    target_id,
+                    &conn.browser_global_overrides,
+                )
             }
         }
         PendingEmulationPageTarget::SessionOwner { owner_scope } => {
@@ -2925,46 +3066,58 @@ fn start_surface_override_for_route(
     let Some(script) = script else {
         return Ok(Vec::new());
     };
-    let runtime_call_id = conn.next_internal_runtime_command_id();
+    let runtime_call_id = conn.next_internal_devtools_command_id();
     let owner = CommandOwnerScope::for_route(route.clone());
-    let Some(page) = conn
-        .loaded_page_mut_for_target_configuration_for_owner(&owner)
+    let Some(binding) = conn
+        .runtime_session_owner_slot_for_owner(&owner)
         .ok()
+        .and_then(|slot| slot.current_renderer_inspection_binding())
     else {
         return Ok(Vec::new());
     };
-    start_surface_override_page_command(target, page, script, runtime_call_id)
+    start_surface_override_page_command(target, binding, script, runtime_call_id)
         .map(|pending| vec![pending])
 }
 
 fn start_surface_override_page_command(
     target: PendingEmulationPageTarget,
-    page: &moli_core::page::Page,
-    script: crate::conn::DocumentStartScript,
+    binding: &RendererAgentBinding,
+    script: String,
     runtime_call_id: u64,
 ) -> Result<PendingEmulationPageCommand, String> {
     let (pending, runtime_response_rx) =
-        start_runtime_emulation_protocol_message(page, runtime_call_id, script.source)?;
+        start_runtime_emulation_protocol_message(Some(binding), runtime_call_id, script)?;
     Ok(PendingEmulationPageCommand {
+        source: EmulationPageCommandSource::Inspector(pending.renderer_agent_attachment_id()),
         target,
         operation: PendingEmulationPageOperation::RuntimeProtocolMessage,
-        pending,
+        pending: PendingEmulationPageWork::Renderer(pending),
         runtime_response_rx,
     })
 }
 
 fn start_locale_override_page_command(
     target: PendingEmulationPageTarget,
-    page: &moli_core::page::Page,
+    context: &mut BrowserContext,
+    target_id: &str,
     locale_override: Option<&str>,
 ) -> Result<Vec<PendingEmulationPageCommand>, String> {
-    let locale_update = page
-        .start_set_locale_override(locale_override)
+    let document = context
+        .document_handle_for_target(target_id)
+        .ok_or_else(|| "NoDocumentLoaded".to_owned())?;
+    let locale_update = context
+        .start_document_policy_update(
+            document,
+            DocumentPolicyUpdate::LocaleOverride(locale_override.map(str::to_owned)),
+        )
         .map_err(|error| format!("failed to update page locale override: {error}"))?;
     Ok(vec![PendingEmulationPageCommand {
+        source: EmulationPageCommandSource::Browser(None),
         target,
-        operation: PendingEmulationPageOperation::SetLocaleOverride,
-        pending: locale_update,
+        operation: PendingEmulationPageOperation::DocumentPolicy {
+            replay_on_replacement: true,
+        },
+        pending: PendingEmulationPageWork::DocumentPolicy(locale_update),
         runtime_response_rx: None,
     }])
 }
@@ -2995,96 +3148,30 @@ fn finish_pending_emulation_page_command(
     target: PendingEmulationPageTarget,
     completion: CompletedPageCommand,
 ) -> Result<(), String> {
-    match target {
-        PendingEmulationPageTarget::SessionOwner { owner_scope } => {
-            if matches!(operation, PendingEmulationPageOperation::SetUserAgentLoader) {
-                return conn.finish_rebuild_resource_runtime_for_owner(&owner_scope, completion);
-            }
-            let page = conn
-                .loaded_page_mut_for_target_configuration_for_owner(&owner_scope)
-                .ok();
-            finish_emulation_page_operation_on_current_attachment(page, operation, completion)
-        }
-        PendingEmulationPageTarget::BrowserContextTarget {
-            browser_context_id,
-            target_id,
-        } => {
-            let page = conn
-                .browser_context_by_id_mut(&browser_context_id)
-                .and_then(|browser_context| browser_context.page_target_mut(&target_id))
-                .and_then(|target| target.loaded_page_mut());
-            finish_emulation_page_operation_on_current_attachment(page, operation, completion)
-        }
-    }
-}
-
-fn finish_emulation_page_operation_on_current_attachment(
-    page: Option<&mut moli_core::page::Page>,
-    operation: PendingEmulationPageOperation,
-    completion: CompletedPageCommand,
-) -> Result<(), String> {
-    let completion_attachment = completion.renderer_agent_attachment_id();
-    if let Some(page) = page
-        && page.renderer_agent_attachment_id() == completion_attachment
-    {
-        return finish_emulation_page_operation(page, operation, completion);
-    }
-
-    // The renderer command has already settled successfully. A cross-Document
-    // navigation may replace its Page before the protocol actor decodes that
-    // frozen completion; decode the terminal reply, but never apply the old
-    // PageState snapshot to the replacement attachment. Whether state carries
-    // across the navigation is decided separately at the commit boundary.
-    let output = match operation {
-        PendingEmulationPageOperation::RuntimeProtocolMessage => {
-            completion.into_runtime_protocol_message_command_turn()
-        }
-        _ => completion.into_unit_page_command_turn(),
-    };
-    output
-        .map(drop)
-        .map_err(|error| format!("stale Emulation command returned an unexpected reply: {error}"))
-}
-
-fn finish_emulation_page_operation(
-    page: &mut moli_core::page::Page,
-    operation: PendingEmulationPageOperation,
-    completion: CompletedPageCommand,
-) -> Result<(), String> {
     match operation {
-        PendingEmulationPageOperation::SetExtraHttpHeaders => page
-            .finish_set_extra_http_headers(completion)
-            .map_err(|error| error.to_string()),
-        PendingEmulationPageOperation::SetLocaleOverride => page
-            .finish_set_locale_override(completion)
-            .map_err(|error| error.to_string()),
-        PendingEmulationPageOperation::SetNetworkConditions => page
-            .finish_set_network_offline(completion)
-            .map_err(|error| error.to_string()),
-        PendingEmulationPageOperation::SetCpuThrottlingRate => page
-            .finish_set_cpu_throttling_rate(completion)
-            .map_err(|error| error.to_string()),
-        PendingEmulationPageOperation::SetIdleOverride => page
-            .finish_set_idle_override(completion)
-            .map_err(|error| error.to_string()),
-        PendingEmulationPageOperation::SetTimezoneOverride => page
-            .finish_set_timezone_override(completion)
-            .map_err(|error| error.to_string()),
-        PendingEmulationPageOperation::SetEmulatedMedia => page
-            .finish_set_emulated_media(completion)
-            .map_err(|error| error.to_string()),
-        PendingEmulationPageOperation::SetViewportSurface => page
-            .finish_set_viewport_surface(completion)
-            .map_err(|error| error.to_string()),
-        PendingEmulationPageOperation::ReplaceBrowserResourceRuntime => page
-            .finish_replace_browser_resource_runtime(completion)
-            .map_err(|error| error.to_string()),
-        PendingEmulationPageOperation::SetUserAgentLoader => {
-            unreachable!("user agent loader rebuild finishes through the session owner")
+        PendingEmulationPageOperation::RuntimeProtocolMessage => {
+            if let Some((context_id, target_id)) = target.resolve(conn)
+                && let Some(context) = conn.browser_context_by_id_mut(&context_id)
+                && context.page_target(&target_id).and_then(|target| {
+                    target
+                        .runtime_slot
+                        .current_renderer_attachment()
+                        .map(|attachment| attachment.id())
+                }) == completion.renderer_agent_attachment_id()
+                && context.page_target(&target_id).is_some()
+            {
+                context.observe_renderer_page_state_for_target(&target_id, completion.page_state());
+            }
+            completion
+                .into_runtime_protocol_message_command_turn()
+                .map(drop)
+                .map_err(|error| error.to_string())
         }
-        PendingEmulationPageOperation::RuntimeProtocolMessage => page
-            .finish_runtime_protocol_message(completion)
-            .map(|_| ())
-            .map_err(|error| error.to_string()),
+        PendingEmulationPageOperation::RebuildResourceRuntime => {
+            Err("resource runtime completed through a raw renderer command".to_owned())
+        }
+        PendingEmulationPageOperation::DocumentPolicy { .. } => {
+            Err("document policy completed through a raw renderer command".to_owned())
+        }
     }
 }

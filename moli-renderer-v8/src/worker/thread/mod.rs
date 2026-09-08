@@ -1371,60 +1371,59 @@ pub(crate) fn spawn_worker_with_options(options: WorkerSpawnOptions) -> WorkerHa
     let termination_requested = Arc::new(AtomicBool::new(false));
     let worker_termination_requested = Arc::clone(&termination_requested);
 
-    let join_handle = std::thread::Builder::new()
-        .name(format!("worker:{script_url}"))
-        .stack_size(WORKER_STACK_SIZE)
-        .spawn(move || {
-            let mut runtime_builder = tokio::runtime::Builder::new_current_thread();
-            runtime_builder
-                .max_blocking_threads(crate::tokio_blocking_budget::tokio_blocking_thread_budget())
-                .enable_all();
-            let runtime = runtime_builder
-                .build_local(tokio::runtime::LocalOptions::default())
-                .expect("failed to build worker runtime");
-            runtime.block_on(worker_main(
-                script_source,
-                script_url,
-                request_client,
-                script_kind,
-                module_static_import_initiator_url,
-                module_credentials_mode,
-                referrer_policy,
-                module_static_import_content_security_policies,
-                content_security_policies,
-                content_security_report_only_policies,
-                content_security_reporting_endpoints,
-                network_policy,
-                policy_context,
-                worker_context_runtime,
-                global_kind,
-                api_storage_key,
-                broadcast_channel_top_level_site,
-                creator_storage_key,
-                service_worker_runtime,
-                reserved_service_worker_client_id,
-                indexed_db_manager,
-                storage_bucket_store,
-                bootstrap_completion_tx,
-                pause_evaluation_until_debugger,
-                worker_wake_tx,
-                parent_to_worker_rx,
-                worker_to_parent_tx,
-                worker_isolate_handle,
-                worker_termination_requested,
-                worker_inspector_tasks,
-            ));
-        })
-        .expect("failed to spawn worker thread");
+    let thread = super::handle::WorkerThread::new(isolate_handle, termination_requested, devtools);
+    let registrar = worker_context_runtime.worker_threads.clone();
+    registrar.spawn(&thread, move || {
+        std::thread::Builder::new()
+            .name(format!("worker:{script_url}"))
+            .stack_size(WORKER_STACK_SIZE)
+            .spawn(move || {
+                let mut runtime_builder = tokio::runtime::Builder::new_current_thread();
+                runtime_builder
+                    .max_blocking_threads(
+                        crate::tokio_blocking_budget::tokio_blocking_thread_budget(),
+                    )
+                    .enable_all();
+                let runtime = runtime_builder
+                    .build_local(tokio::runtime::LocalOptions::default())
+                    .expect("failed to build worker runtime");
+                runtime.block_on(worker_main(
+                    script_source,
+                    script_url,
+                    request_client,
+                    script_kind,
+                    module_static_import_initiator_url,
+                    module_credentials_mode,
+                    referrer_policy,
+                    module_static_import_content_security_policies,
+                    content_security_policies,
+                    content_security_report_only_policies,
+                    content_security_reporting_endpoints,
+                    network_policy,
+                    policy_context,
+                    worker_context_runtime,
+                    global_kind,
+                    api_storage_key,
+                    broadcast_channel_top_level_site,
+                    creator_storage_key,
+                    service_worker_runtime,
+                    reserved_service_worker_client_id,
+                    indexed_db_manager,
+                    storage_bucket_store,
+                    bootstrap_completion_tx,
+                    pause_evaluation_until_debugger,
+                    worker_wake_tx,
+                    parent_to_worker_rx,
+                    worker_to_parent_tx,
+                    worker_isolate_handle,
+                    worker_termination_requested,
+                    worker_inspector_tasks,
+                ));
+            })
+            .expect("failed to spawn worker thread")
+    });
 
-    WorkerHandle::new_with_termination_requested_and_devtools(
-        parent_to_worker_tx,
-        worker_to_parent_rx,
-        join_handle,
-        isolate_handle,
-        termination_requested,
-        devtools,
-    )
+    WorkerHandle::from_thread(parent_to_worker_tx, worker_to_parent_rx, thread)
 }
 
 fn worker_broadcast_channel_storage_key(

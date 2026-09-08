@@ -1592,7 +1592,7 @@ fn cdp_upsert_updates_network_visible_cookie_header() {
             creation_index: 999,
             last_access_index: 999,
         },
-        CookieSource::Cdp,
+        CookieSource::Management,
     );
 
     assert_eq!(store.cookie_header(&url), Some("sid=cdp".to_owned()));
@@ -1622,7 +1622,7 @@ fn cdp_upsert_host_only_cookie_preserves_explicit_domain_without_request_hint() 
             creation_index: 999,
             last_access_index: 999,
         },
-        CookieSource::Cdp,
+        CookieSource::Management,
     );
 
     assert_eq!(
@@ -4072,7 +4072,7 @@ fn cdp_upsert_applies_prefix_and_same_site_guards() {
             creation_index: 999,
             last_access_index: 999,
         },
-        CookieSource::Cdp,
+        CookieSource::Management,
     );
     store.upsert(
         StoredCookie {
@@ -4092,7 +4092,7 @@ fn cdp_upsert_applies_prefix_and_same_site_guards() {
             creation_index: 999,
             last_access_index: 999,
         },
-        CookieSource::Cdp,
+        CookieSource::Management,
     );
     store.upsert(
         StoredCookie {
@@ -4112,7 +4112,7 @@ fn cdp_upsert_applies_prefix_and_same_site_guards() {
             creation_index: 999,
             last_access_index: 999,
         },
-        CookieSource::Cdp,
+        CookieSource::Management,
     );
 
     assert_eq!(
@@ -4166,7 +4166,7 @@ fn cdp_upsert_accepts_partitioned_cookie() {
             creation_index: 999,
             last_access_index: 999,
         },
-        CookieSource::Cdp,
+        CookieSource::Management,
     );
 
     assert_eq!(

@@ -1,11 +1,9 @@
 use super::*;
 #[tokio::test]
-async fn browser_context_page_attachment_id_tracks_attach_and_detach() {
-    let mut conn = CdpConnection::new();
-    conn.browser_context = Some(BrowserContext::new_with_page_for_test(
-        "BID-cookie-facade",
-        "TID-cookie-facade",
-    ));
+async fn browser_context_document_id_tracks_attach_and_detach() {
+    let mut conn = crate::test_support::connection();
+    conn.browser_context =
+        Some(conn.new_page_target_fixture_for_test("BID-cookie-facade", "TID-cookie-facade"));
 
     let before = conn
         .browser_context
@@ -13,7 +11,7 @@ async fn browser_context_page_attachment_id_tracks_attach_and_detach() {
         .unwrap()
         .document_cookie_facade_snapshot();
     assert!(!before.has_loaded_page);
-    assert_eq!(before.page_attachment_id, None);
+    assert_eq!(before.document_id, None);
     assert_eq!(before.cookie_store_generation, Some(0));
     assert_eq!(before.structured_write.default_cookie_write_url, None);
     assert_eq!(
@@ -87,7 +85,7 @@ async fn browser_context_page_attachment_id_tracks_attach_and_detach() {
     conn.browser_context
         .as_mut()
         .unwrap()
-        .set_loaded_page_async(navigation.page)
+        .commit_active_navigation_for_test(navigation.page)
         .await;
 
     let after_attach = conn
@@ -98,7 +96,7 @@ async fn browser_context_page_attachment_id_tracks_attach_and_detach() {
         .await;
     assert!(after_attach.has_loaded_page);
     let attached_page_id = after_attach
-        .page_attachment_id
+        .document_id
         .expect("attached Page must expose an attachment id");
     assert_eq!(after_attach.cookie_store_generation, Some(0));
     assert_eq!(
@@ -170,23 +168,28 @@ async fn browser_context_page_attachment_id_tracks_attach_and_detach() {
         .unwrap()
         .document_cookie_facade_snapshot();
     assert!(!after_detach.has_loaded_page);
-    assert_eq!(after_detach.page_attachment_id, None);
+    assert_eq!(after_detach.document_id, None);
     assert_ne!(attached_page_id, 0);
     assert_eq!(after_detach.cookie_store_generation, Some(0));
-    assert_eq!(after_detach.structured_write.default_cookie_write_url, None);
+    // Retiring a Document does not retire its WebContents or last committed
+    // URL. The structured-cookie fallback now names that surviving owner.
+    assert_eq!(
+        after_detach.structured_write.default_cookie_write_url,
+        Some(Url::parse("https://example.com/app").unwrap())
+    );
     assert_eq!(
         after_detach
             .structured_write
             .default_cookie_write_url_source,
-        BrowserContextDefaultCookieWriteUrlSource::Unavailable
+        BrowserContextDefaultCookieWriteUrlSource::BrowserContextUrl
     );
     assert_eq!(
         after_detach.structured_write.readiness_status,
-        BrowserContextStructuredCookieWriteReadinessStatus::MissingScopedUrl
+        BrowserContextStructuredCookieWriteReadinessStatus::ReadyUsingBrowserContextUrl
     );
     assert_eq!(
         after_detach.structured_write.default_command_verdict,
-        BrowserContextStructuredCookieCommandVerdict::MissingScopedUrl
+        BrowserContextStructuredCookieCommandVerdict::Ready
     );
     assert_eq!(
         after_detach.structured_write.backend_status,

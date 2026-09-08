@@ -94,8 +94,9 @@ async fn arm_popup_route(
         .conn
         .browser_contexts()
         .find_map(|browser_context| {
-            loaded_page_for_target(browser_context, popup_target_id)
-                .map(|page| page.final_url().to_string())
+            browser_context
+                .target_document_url(popup_target_id)
+                .map(|page| page.to_string())
         })
         .expect("popup initial document");
     assert_eq!(
@@ -916,8 +917,8 @@ async fn queued_popup_navigation_rechecks_a_late_debugger_barrier() {
     let page_url = ctx
         .conn
         .browser_context_by_id(&browser_context_id)
-        .and_then(|browser_context| loaded_page_for_target(browser_context, &popup_target_id))
-        .map(|page| page.final_url().as_str())
+        .and_then(|browser_context| browser_context.target_document_url(&popup_target_id))
+        .map(|page| page.to_string())
         .expect("popup initial Page");
     assert_eq!(page_url, "about:blank");
 }

@@ -1,6 +1,7 @@
 use super::target_session_owner::{TargetSessionOwnerMut, TargetSessionStateMut};
 use super::*;
 use crate::CdpRendererOwnerTurnOutcome;
+use crate::conn::CommandOwnerScope;
 use moli_core::page::V8InspectorSessionState;
 use serde_json::json;
 
@@ -26,6 +27,29 @@ impl TargetSessionStateMut<'_> {
 
     fn set_inspector_enabled(mut self, enabled: bool) {
         self.runtime_session_state_mut().inspector_enabled = enabled;
+    }
+}
+
+impl CdpConnection {
+    /// The primary automation listener and the exact private worker listeners
+    /// are distinct from CDP socket sessions, even when they inspect one host.
+    pub fn is_automation_protocol_session(&self, session_id: Option<&str>) -> bool {
+        let Some(session_id) = session_id else {
+            return true;
+        };
+        let Some(target_id) = self.worker_target_id_for_session(Some(session_id)) else {
+            return false;
+        };
+        let Some(route) = self.target_session_route_for_target_id(&target_id) else {
+            return false;
+        };
+        self.service_worker_runtime_listener_session_for_route(&route)
+            .as_deref()
+            == Some(session_id)
+            || self
+                .shared_worker_runtime_listener_session_for_route(&route)
+                .as_deref()
+                == Some(session_id)
     }
 }
 
@@ -58,9 +82,8 @@ impl CdpConnection {
     ) -> SessionOwnerInspectorEnableResult {
         let accepts_without_target =
             self.accepts_unmaterialized_page_command_for_session(session_id);
-        let target_crashed = self
-            .target_owner_state_for_session(session_id)
-            .is_some_and(|owner_state| owner_state.target_crash_state.is_crashed());
+        let target_crashed =
+            self.target_is_crashed_for_owner(&CommandOwnerScope::capture(self, session_id));
         let primary_session_id = self.runtime_session_owner_primary_session_id(session_id);
         if self
             .with_target_session_owner_mut(session_id, |owner| owner.set_inspector_enabled(enabled))
@@ -131,7 +154,7 @@ impl CdpConnection {
         let owns = owns
             && self
                 .runtime_session_owner_slot_for_owner(owner)
-                .is_ok_and(|slot| slot.has_loaded_page());
+                .is_ok_and(|slot| slot.current_renderer_inspection_binding().is_some());
         self.with_target_devtools_session_state_for_owner_mut(owner, |state| {
             state
                 .console_output_session_state
@@ -282,8 +305,9 @@ impl CdpConnection {
             Some(0),
             session_id.as_deref(),
         ) {
-            crate::conn::CdpCommandTaskStep::Complete(outcome) => outcome,
-            crate::conn::CdpCommandTaskStep::Pending(_) => {
+            crate::conn::AgentHostDispatchResult::Complete(outcome) => outcome,
+            crate::conn::AgentHostDispatchResult::PendingService(_)
+            | crate::conn::AgentHostDispatchResult::FallThrough(_) => {
                 unreachable!("a completed Runtime listener plan cannot become pending")
             }
         }
@@ -397,7 +421,7 @@ impl CdpConnection {
         session_id: &str,
         route: &CdpSessionRoute,
     ) -> Option<()> {
-        if self.target_control.attached_session_route(session_id) == Some(route) {
+        if self.agent_hosts.attached_session_route(session_id) == Some(route) {
             return Some(());
         }
         let target_id = match route {
@@ -406,7 +430,7 @@ impl CdpConnection {
             | CdpSessionRoute::ServiceWorkerTarget { target_id, .. } => target_id.clone(),
             _ => return None,
         };
-        self.target_control.commit_attached_session(
+        self.agent_hosts.commit_attached_session(
             session_id.to_owned(),
             None,
             &target_id,
@@ -436,7 +460,7 @@ mod tests {
     use moli_shared_worker::SharedWorkerInstanceId;
     use serde_json::json;
 
-    use crate::conn::{BrowserContext, CdpConnection, CdpSessionRoute, SharedWorkerTargetState};
+    use crate::conn::{CdpSessionRoute, SharedWorkerTargetState};
 
     #[test]
     fn runtime_listener_session_ids_are_worker_type_scoped() {
@@ -456,8 +480,9 @@ mod tests {
 
     #[tokio::test]
     async fn runtime_listener_enable_uses_shared_worker_target_session() {
-        let mut conn = CdpConnection::new();
-        let mut browser_context = BrowserContext::new("BID-shared".to_owned());
+        let mut conn = crate::test_support::connection();
+        let mut browser_context =
+            conn.new_browser_context_fixture_for_test("BID-shared".to_owned());
         browser_context.insert_shared_worker_target(SharedWorkerTargetState::new(
             RendererOwnerLocalHostId::new_for_testing(1),
             SharedWorkerInstanceId::from_u64(91),

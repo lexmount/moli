@@ -8,6 +8,142 @@ use crate::devtools_runtime::{
 };
 
 #[tokio::test(flavor = "multi_thread")]
+async fn supersession_retires_browser_auth_work_before_late_protocol_decision() {
+    use base64::{Engine as _, engine::general_purpose::STANDARD};
+    use std::sync::{
+        Arc,
+        atomic::{AtomicUsize, Ordering},
+    };
+
+    for action in ["Default", "CancelAuth", "ProvideCredentials"] {
+        let requests = Arc::new(AtomicUsize::new(0));
+        let observed = requests.clone();
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let url = format!("http://{}/auth", listener.local_addr().unwrap());
+        let server = tokio::spawn(async move {
+            axum::serve(
+                listener,
+                Router::new().route(
+                    "/auth",
+                    get(move || {
+                        observed.fetch_add(1, Ordering::SeqCst);
+                        async {
+                            (
+                                StatusCode::UNAUTHORIZED,
+                                [(WWW_AUTHENTICATE.as_str(), "Basic realm=\"test\"")],
+                                "challenge body",
+                            )
+                        }
+                    }),
+                ),
+            )
+            .await
+            .unwrap();
+        });
+        let mut ctx = TestContext::new();
+        with_loaded_http_document(
+            &mut ctx,
+            "https://navigation.example/committed",
+            "SID-1",
+            "TID-1",
+        )
+        .await;
+        ctx.process_async(json!({
+            "id": 100, "sessionId": "SID-1", "method": "Fetch.enable",
+            "params": {"handleAuthRequests": true, "patterns": [{"resourceType": "Document", "requestStage": "Request"}]}
+        })).await;
+        ctx.expect_result(100, json!({}), Some("SID-1"));
+        ctx.process_async(json!({
+            "id": 101, "sessionId": "SID-1", "method": "Page.navigate", "params": {"url": url}
+        }))
+        .await;
+        let request = ctx
+            .wait_for_scheduler_message("original navigation request", |event| {
+                event["method"] == "Fetch.requestPaused" && event["params"]["request"]["url"] == url
+            })
+            .await;
+        ctx.process_async(json!({
+            "id": 102, "sessionId": "SID-1", "method": "Fetch.continueRequest",
+            "params": {"requestId": request["params"]["requestId"]}
+        }))
+        .await;
+        ctx.expect_result(102, json!({}), Some("SID-1"));
+        let auth = ctx
+            .wait_for_scheduler_message("original navigation auth", |event| {
+                event["method"] == "Fetch.authRequired" && event["params"]["request"]["url"] == url
+            })
+            .await;
+        let auth_id = auth["params"]["requestId"].as_str().unwrap().to_owned();
+        let context = ctx.conn.browser_context.as_ref().unwrap();
+        assert!(context.has_paused_navigation_auth_for_test("TID-1"));
+        let document = context.target_document_id("TID-1");
+        let history = context.target_navigation_history_snapshot("TID-1");
+
+        ctx.process_async(json!({
+            "id": 103, "sessionId": "SID-1", "method": "Page.navigate",
+            "params": {"url": "https://navigation.example/winner"}
+        }))
+        .await;
+        let winner = ctx
+            .wait_for_scheduler_message("winning navigation request", |event| {
+                event["method"] == "Fetch.requestPaused"
+                    && event["params"]["request"]["url"] == "https://navigation.example/winner"
+            })
+            .await;
+        let context = ctx.conn.browser_context.as_ref().unwrap();
+        assert!(
+            !context.has_paused_navigation_auth_for_test("TID-1"),
+            "Browser work must retire before the stale frontend decision"
+        );
+        assert!(
+            context
+                .active_page_target()
+                .fetch_owner
+                .has_pending_fetch_auth_navigation_for_test(&auth_id),
+            "wire correlation may still await a terminal reply"
+        );
+
+        ctx.process_async(json!({
+            "id": 104, "sessionId": "SID-1", "method": "Fetch.continueWithAuth",
+            "params": {"requestId": auth_id, "authChallengeResponse": {"response": action, "username": "user", "password": "pass"}}
+        })).await;
+        ctx.expect_result(104, json!({}), Some("SID-1"));
+        let old = take_response_by_id(&mut ctx, 101);
+        assert_eq!(old["error"]["code"], -32000, "{old}");
+        let context = ctx.conn.browser_context.as_ref().unwrap();
+        assert_eq!(context.target_document_id("TID-1"), document);
+        assert_eq!(context.target_navigation_history_snapshot("TID-1"), history);
+        assert!(context.has_pending_document_navigation_for_target("TID-1"));
+        assert_eq!(
+            requests.load(Ordering::SeqCst),
+            1,
+            "stale credentials cannot start another transport"
+        );
+
+        ctx.process_async(json!({
+            "id": 105, "sessionId": "SID-1", "method": "Fetch.fulfillRequest",
+            "params": {"requestId": winner["params"]["requestId"], "responseCode": 200,
+                "responseHeaders": [{"name": "content-type", "value": "text/html"}],
+                "body": STANDARD.encode("<title>winner</title>")}
+        }))
+        .await;
+        ctx.expect_result(105, json!({}), Some("SID-1"));
+        assert!(take_response_by_id(&mut ctx, 103).get("error").is_none());
+        assert_eq!(
+            ctx.conn
+                .browser_context
+                .as_ref()
+                .unwrap()
+                .loaded_document_url_for_test()
+                .unwrap()
+                .as_str(),
+            "https://navigation.example/winner"
+        );
+        server.abort();
+    }
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn continue_with_auth_retries_navigation_with_basic_credentials() {
     async fn handler(headers: HeaderMap) -> impl IntoResponse {
         let authorization = headers
@@ -42,7 +178,7 @@ async fn continue_with_auth_retries_navigation_with_basic_credentials() {
     });
 
     let mut ctx = TestContext::new();
-    let mut bc = attached_browser_context();
+    let mut bc = attached_browser_context(&ctx.conn);
     bc.active_page_target_mut()
         .runtime_slot
         .enable_primary_network_events();
@@ -169,6 +305,76 @@ async fn continue_with_auth_retries_navigation_with_basic_credentials() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn disable_uses_default_decision_for_paused_navigation_auth() {
+    async fn handler() -> impl IntoResponse {
+        (
+            StatusCode::UNAUTHORIZED,
+            [
+                (WWW_AUTHENTICATE.as_str(), r#"Basic realm="neutral""#),
+                (CONTENT_TYPE.as_str(), "text/plain"),
+            ],
+            "auth required",
+        )
+    }
+
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let server = tokio::spawn(async move {
+        axum::serve(listener, Router::new().route("/auth", get(handler)))
+            .await
+            .unwrap();
+    });
+    let mut ctx = TestContext::new();
+    ctx.conn
+        .install_browser_context_fixture_for_test(attached_browser_context(&ctx.conn));
+    let url = format!("http://{addr}/auth");
+    ctx.process_async(json!({
+        "id": 680, "method": "Fetch.enable", "sessionId": "SID-1",
+        "params": { "handleAuthRequests": true }
+    }))
+    .await;
+    ctx.expect_result(680, json!({}), Some("SID-1"));
+    ctx.process_async(json!({
+        "id": 690, "method": "Page.navigate", "sessionId": "SID-1",
+        "params": { "url": url }
+    }))
+    .await;
+    let paused = take_main_document_request_pause(&mut ctx).await;
+    ctx.process_async(json!({
+        "id": 700, "method": "Fetch.continueRequest", "sessionId": "SID-1",
+        "params": { "requestId": paused["params"]["requestId"] }
+    }))
+    .await;
+    ctx.expect_result(700, json!({}), Some("SID-1"));
+    assert_eq!(ctx.take_one()["method"], "Fetch.authRequired");
+
+    ctx.process_async(json!({
+        "id": 710, "method": "Fetch.disable", "sessionId": "SID-1"
+    }))
+    .await;
+    ctx.expect_result(710, json!({}), Some("SID-1"));
+    let navigation = ctx.take_response_by_id(690);
+    assert_eq!(
+        navigation["error"]["message"],
+        "Fetch auth challenge aborted"
+    );
+    assert_ne!(
+        navigation["error"]["message"],
+        "Fetch interception disabled"
+    );
+    let context = ctx.conn.browser_context.as_ref().unwrap();
+    assert!(!context.has_paused_navigation_auth_for_test("TID-1"));
+    assert!(
+        !context
+            .active_page_target()
+            .fetch_owner
+            .has_pending_fetch_state_for_test()
+    );
+
+    server.abort();
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn devtools_continue_response_credentials_retries_auth_navigation() {
     async fn handler(headers: HeaderMap) -> impl IntoResponse {
         let authorization = headers
@@ -203,7 +409,7 @@ async fn devtools_continue_response_credentials_retries_auth_navigation() {
     });
 
     let mut ctx = TestContext::new();
-    let mut bc = attached_browser_context();
+    let mut bc = attached_browser_context(&ctx.conn);
     bc.active_page_target_mut()
         .runtime_slot
         .enable_primary_network_events();
@@ -349,7 +555,7 @@ async fn continue_with_auth_and_intercept_response_pauses_before_authorized_body
     });
 
     let mut ctx = TestContext::new();
-    let mut bc = attached_browser_context();
+    let mut bc = attached_browser_context(&ctx.conn);
     bc.active_page_target_mut()
         .runtime_slot
         .enable_primary_network_events();
@@ -424,8 +630,7 @@ async fn continue_with_auth_and_intercept_response_pauses_before_authorized_body
         ctx.conn
             .browser_context
             .as_ref()
-            .and_then(|bc| bc.loaded_page())
-            .is_none(),
+            .is_none_or(|bc| !bc.has_loaded_page()),
         "authorized document should not commit before Fetch.continueResponse"
     );
 
@@ -483,7 +688,7 @@ async fn continue_with_non_basic_auth_and_intercept_response_fails_explicitly_wi
     });
 
     let mut ctx = TestContext::new();
-    let mut bc = attached_browser_context();
+    let mut bc = attached_browser_context(&ctx.conn);
     bc.active_page_target_mut()
         .runtime_slot
         .enable_primary_network_events();
@@ -600,13 +805,14 @@ async fn navigation_auth_required_includes_synthesized_cookie_header() {
     });
 
     let mut ctx = TestContext::new();
-    let mut bc = attached_browser_context();
+    let mut bc = attached_browser_context(&ctx.conn);
     bc.active_page_target_mut()
         .runtime_slot
         .enable_primary_network_events();
     let url = format!("http://{addr}/auth");
     {
-        let mut jar = bc.cookie_store_for_test().lock();
+        let jar_handle = bc.cookie_store_for_test();
+        let mut jar = jar_handle.lock();
         jar.store_response_headers(
             &Url::parse(&url).unwrap(),
             &[(
@@ -697,7 +903,7 @@ async fn continue_with_auth_prefers_supported_navigation_challenge_over_unsuppor
     });
 
     let mut ctx = TestContext::new();
-    let mut bc = attached_browser_context();
+    let mut bc = attached_browser_context(&ctx.conn);
     bc.active_page_target_mut()
         .runtime_slot
         .enable_primary_network_events();
@@ -846,7 +1052,7 @@ async fn run_navigation_cdp_fetch_then_bidi_network_auth_required_terminal(
     });
 
     let mut ctx = TestContext::new();
-    let mut bc = attached_browser_context();
+    let mut bc = attached_browser_context(&ctx.conn);
     assert!(bc.assign_attached_session_to_target("TID-1", "SID-fetch".to_owned()));
     bc.active_page_target_mut()
         .runtime_slot

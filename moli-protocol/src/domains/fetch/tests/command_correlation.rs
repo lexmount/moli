@@ -1,7 +1,7 @@
 use super::*;
 use crate::conn::{
-    CapturedBody, CdpCommandTaskStep, ClaimedSubresourceContinueRequest, FetchAuthChallenge,
-    PendingSubresourceFetchAuthRequest, PendingSubresourceFetchOwnerKind,
+    CapturedBody, CdpCommandTaskStep, ClaimedSubresourceContinueRequest, DocumentFetchCommand,
+    FetchAuthChallenge, PendingSubresourceFetchAuthRequest, PendingSubresourceFetchOwnerKind,
     PendingSubresourceFetchRequest, PendingSubresourceFetchResponseRequest,
 };
 use crate::domains::fetch::{
@@ -11,18 +11,16 @@ use moli_core::page::SubresourceResourceType;
 
 async fn context_with_loaded_fetch_page() -> TestContext {
     let mut ctx = TestContext::new();
-    let page = ctx
-        .conn
-        .load_page_via_runtime_async("data:text/html,<title>fetch correlation</title>")
-        .await
-        .expect("fetch correlation page should load");
-    let mut browser_context = attached_browser_context();
-    browser_context
-        .active_page_target_mut()
-        .runtime_slot
-        .replace_loaded_page(Some(page));
+    let mut browser_context = ctx.conn.new_browser_context_fixture_for_test("BID-1");
+    browser_context.set_active_target_id("TID-1".to_owned());
+    browser_context.attach_active_session("SID-1".to_owned());
     ctx.conn
         .install_browser_context_fixture_for_test(browser_context);
+    ctx.install_navigation_fixture_for_session_owner(
+        "data:text/html,<title>fetch correlation</title>",
+        Some("SID-1"),
+    )
+    .await;
     ctx
 }
 
@@ -44,6 +42,162 @@ fn pending_request(
         websocket_socket_id: None,
         request_stage_chain: None,
     }
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn fetch_interception_update_rejects_a_replaced_page() {
+    let mut ctx = context_with_loaded_fetch_page().await;
+    let owner = crate::conn::CommandOwnerScope::capture(&ctx.conn, Some("SID-1"));
+    let (context_id, target_id) = ctx
+        .conn
+        .loaded_document_owner_identity_for_owner(&owner)
+        .unwrap();
+    let document = ctx.conn.resolve_browser_document_for_owner(&owner).unwrap();
+    let completion = ctx
+        .conn
+        .browser_context_by_id_mut(&context_id)
+        .unwrap()
+        .start_web_contents_fetch_interception_update(document.web_contents(), false, None, false)
+        .unwrap()
+        .unwrap()
+        .wait()
+        .await;
+    ctx.install_quiet_navigation_fixture_for_session_owner(
+        "data:text/html,<title>replacement</title>",
+        None,
+    )
+    .await;
+    assert!(matches!(
+        ctx.conn.finish_document_fetch_command(completion),
+        Err(error) if error == "Renderer Page changed"
+    ));
+    assert_eq!(
+        ctx.conn
+            .browser_context_by_id(&context_id)
+            .unwrap()
+            .target_document_title(&target_id)
+            .unwrap(),
+        "replacement"
+    );
+
+    let completion = ctx
+        .conn
+        .browser_context_by_id_mut(&context_id)
+        .unwrap()
+        .start_web_contents_fetch_interception_update(document.web_contents(), false, None, false)
+        .unwrap()
+        .unwrap()
+        .wait()
+        .await;
+    ctx.conn.finish_document_fetch_command(completion).unwrap();
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn subresource_continue_completion_rejects_a_replaced_document() {
+    let mut ctx = TestContext::new();
+    with_loaded_http_document(
+        &mut ctx,
+        "data:text/html,<title>fetch correlation</title>",
+        "SID-1",
+        "TID-1",
+    )
+    .await;
+    ctx.conn
+        .browser_context
+        .as_mut()
+        .unwrap()
+        .active_page_target_mut()
+        .devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
+        .runtime_session_state
+        .inspector_enabled = true;
+
+    ctx.process_async(json!({
+        "id": 80,
+        "method": "Fetch.enable",
+        "sessionId": "SID-1"
+    }))
+    .await;
+    ctx.expect_result(80, json!({}), Some("SID-1"));
+    enable_runtime_async(&mut ctx, "SID-1", 81).await;
+    ctx.sent.clear();
+
+    let request_url = "http://example.test/exact-document";
+    ctx.process_async(json!({
+        "id": 82,
+        "method": "Runtime.evaluate",
+        "sessionId": "SID-1",
+        "params": {
+            "expression": format!(
+                "fetch('{request_url}').catch(() => undefined); 'scheduled'"
+            )
+        }
+    }))
+    .await;
+    let _ = take_response_by_id(&mut ctx, 82);
+    wait_until_messages(
+        &mut ctx,
+        Some("SID-1"),
+        "exact-document subresource request pause",
+        |messages| {
+            messages.iter().any(|message| {
+                message["method"] == json!("Fetch.requestPaused")
+                    && message["params"]["request"]["url"] == json!(request_url)
+            })
+        },
+    )
+    .await;
+    let paused = ctx.take_first_matching("Fetch.requestPaused event", |message| {
+        message["method"] == json!("Fetch.requestPaused")
+            && message["params"]["request"]["url"] == json!(request_url)
+    });
+    let request_id = paused["params"]["requestId"]
+        .as_str()
+        .expect("paused request id")
+        .to_owned();
+    ctx.sent.clear();
+
+    let owner = crate::conn::CommandOwnerScope::capture(&ctx.conn, Some("SID-1"));
+    let request = ctx
+        .conn
+        .take_pending_subresource_fetch_request_for_owner(&owner, Some("SID-1"), &request_id)
+        .expect("paused request must remain owned by its document");
+    let document = ctx.conn.resolve_browser_document_for_owner(&owner).unwrap();
+    let pending = ctx
+        .conn
+        .start_document_fetch_command(
+            document,
+            DocumentFetchCommand::ContinueRequest {
+                internal_id: request.internal_id,
+                url: None,
+                method: None,
+                body: None,
+                headers: None,
+                intercept_response: false,
+                handle_auth_requests: false,
+            },
+        )
+        .unwrap();
+    let completed = pending.wait().await;
+
+    ctx.install_quiet_navigation_fixture_for_session_owner(
+        "data:text/html,<title>replacement</title>",
+        None,
+    )
+    .await;
+
+    assert!(matches!(
+        ctx.conn.finish_document_fetch_command(completed),
+        Err(error) if error == "Document changed"
+    ));
+    assert_eq!(
+        ctx.conn
+            .browser_context
+            .as_ref()
+            .unwrap()
+            .target_document_title("TID-1")
+            .as_deref(),
+        Some("replacement")
+    );
 }
 
 fn pending_auth(
@@ -160,14 +314,16 @@ async fn assert_correlation_lifetime(
 #[tokio::test(flavor = "multi_thread")]
 async fn deferred_fetch_command_keeps_its_exact_page_for_implicit_work() {
     let mut ctx = TestContext::new();
-    let mut browser_context = BrowserContext::new("BID-1".to_owned());
+    let mut browser_context = ctx
+        .conn
+        .new_browser_context_fixture_for_test("BID-1".to_owned());
     browser_context.set_active_target_id("TID-active".to_owned());
     browser_context.attach_active_session("SID-active".to_owned());
-    browser_context.insert_page_target_host(PageTargetHost::with_url(
+    browser_context.register_page_target_url_fixture(
         "TID-background".to_owned(),
         Some("SID-background".to_owned()),
         "https://example.test/background".to_owned(),
-    ));
+    );
     ctx.conn
         .install_browser_context_fixture_for_test(browser_context);
 
@@ -191,13 +347,15 @@ async fn deferred_fetch_command_keeps_its_exact_page_for_implicit_work() {
 #[tokio::test(flavor = "multi_thread")]
 async fn deferred_sessionless_fetch_command_freezes_the_active_page_at_admission() {
     let mut ctx = TestContext::new();
-    let mut browser_context = BrowserContext::new("BID-sessionless".to_owned());
+    let mut browser_context = ctx
+        .conn
+        .new_browser_context_fixture_for_test("BID-sessionless".to_owned());
     browser_context.set_active_target_id("TID-original".to_owned());
-    browser_context.insert_page_target_host(PageTargetHost::with_url(
+    browser_context.register_page_target_url_fixture(
         "TID-next".to_owned(),
         None,
         "https://example.test/next".to_owned(),
-    ));
+    );
     ctx.conn
         .install_browser_context_fixture_for_test(browser_context);
 
@@ -274,9 +432,10 @@ async fn pending_fetch_command_state_is_bound_to_page_attachment() {
     );
 
     ctx.conn
-        .runtime_session_owner_slot_mut(Some("SID-1"))
-        .expect("runtime owner should remain addressable")
-        .replace_page_attachment_id_for_test();
+        .replace_document_fixture_for_owner_test(&crate::conn::CommandOwnerScope::capture(
+            &ctx.conn,
+            Some("SID-1"),
+        ));
     assert!(
         ctx.conn
             .take_pending_subresource_fetch_request_for_owner(
@@ -368,9 +527,10 @@ async fn completed_continue_atomically_claims_a_pause_still_pending_publication(
     );
 
     ctx.conn
-        .runtime_session_owner_slot_mut(Some("SID-1"))
-        .expect("runtime owner should remain addressable")
-        .replace_page_attachment_id_for_test();
+        .replace_document_fixture_for_owner_test(&crate::conn::CommandOwnerScope::capture(
+            &ctx.conn,
+            Some("SID-1"),
+        ));
     let replacement_owner = ctx
         .conn
         .target_page_residence_identity_for_session(Some("SID-1"))
@@ -432,9 +592,10 @@ async fn continuation_claim_preserves_state_owned_by_a_different_page_residence(
     );
 
     ctx.conn
-        .runtime_session_owner_slot_mut(Some("SID-1"))
-        .expect("runtime owner should remain addressable")
-        .replace_page_attachment_id_for_test();
+        .replace_document_fixture_for_owner_test(&crate::conn::CommandOwnerScope::capture(
+            &ctx.conn,
+            Some("SID-1"),
+        ));
     let replacement_owner = ctx
         .conn
         .target_page_residence_identity_for_session(Some("SID-1"))
@@ -463,10 +624,15 @@ async fn continuation_claim_preserves_state_owned_by_a_different_page_residence(
         "a replacement completion must not claim pending state from the retired Page"
     );
 
+    let owner = crate::conn::CommandOwnerScope::capture(&ctx.conn, Some("SID-1"));
+    let (context_id, target_id) = ctx
+        .conn
+        .resolved_page_owner_identity_for_owner(&owner)
+        .unwrap();
     ctx.conn
-        .runtime_session_owner_slot_mut(Some("SID-1"))
-        .expect("runtime owner should remain addressable")
-        .install_page_attachment_id_for_test(retired_owner.page_attachment_id());
+        .browser_context_by_id_mut(&context_id)
+        .unwrap()
+        .install_document_id_for_test_for_target(&target_id, retired_owner.document_id());
     let ClaimedSubresourceContinueRequest::InFlight(in_flight) = ctx
         .conn
         .claim_subresource_continue_request_for_owner(
@@ -516,9 +682,10 @@ async fn pending_fetch_auth_state_is_bound_to_page_attachment() {
     );
 
     ctx.conn
-        .runtime_session_owner_slot_mut(Some("SID-1"))
-        .expect("runtime owner should remain addressable")
-        .replace_page_attachment_id_for_test();
+        .replace_document_fixture_for_owner_test(&crate::conn::CommandOwnerScope::capture(
+            &ctx.conn,
+            Some("SID-1"),
+        ));
     assert!(
         ctx.conn
             .take_pending_subresource_fetch_auth_request_for_owner(
@@ -574,9 +741,10 @@ async fn pending_fetch_response_state_is_bound_to_page_attachment() {
     );
 
     ctx.conn
-        .runtime_session_owner_slot_mut(Some("SID-1"))
-        .expect("runtime owner should remain addressable")
-        .replace_page_attachment_id_for_test();
+        .replace_document_fixture_for_owner_test(&crate::conn::CommandOwnerScope::capture(
+            &ctx.conn,
+            Some("SID-1"),
+        ));
     assert!(
         ctx.conn
             .take_pending_subresource_fetch_response_request_for_owner(

@@ -1,5 +1,5 @@
 use super::*;
-use crate::conn::{BrowserContext, CdpCommandTaskStep, CommandDispatchContext};
+use crate::conn::{CdpCommandTaskStep, CommandDispatchContext};
 use crate::testing::{TestContext, wait_until_frame_stopped_loading};
 use moli_core::LayoutPolicy;
 
@@ -7,7 +7,7 @@ const INPUT_HIT_X: u32 = 20;
 const INPUT_HIT_Y: u32 = 20;
 
 async fn with_loaded_document(ctx: &mut TestContext, html: &str) {
-    let mut bc = BrowserContext::new("BID-I".into());
+    let mut bc = ctx.conn.new_browser_context_fixture_for_test("BID-I");
     bc.set_active_target_id("TID-1");
     ctx.conn.install_browser_context_fixture_for_test(bc);
     let data_url = format!("data:text/html,{html}");
@@ -272,25 +272,34 @@ async fn completed_mouse_event_does_not_restore_replaced_page_state() {
         .conn
         .target_page_residence_identity_for_session(None)
         .expect("the original Page should have a residence identity");
+    let command_owner = CommandOwnerScope::capture(&ctx.conn, None);
+    let document = ctx
+        .conn
+        .resolve_browser_document_for_owner(&command_owner)
+        .expect("the original Document should resolve exactly");
     let pending = ctx
         .conn
-        .loaded_page_mut_for_protocol_access(None)
-        .expect("the original Page should be loaded")
-        .start_dispatch_mouse_event_at_point_with_outcome(
-            INPUT_HIT_X.into(),
-            INPUT_HIT_Y.into(),
-            "mousemove",
-            -1,
-            None,
-            0.0,
-            0.0,
+        .start_document_input_command(
+            document,
+            crate::conn::PageInputCommand::Mouse {
+                x: INPUT_HIT_X.into(),
+                y: INPUT_HIT_Y.into(),
+                event_name: "mousemove".to_owned(),
+                button: -1,
+                buttons: None,
+                click_count: 0,
+                delta_x: 0.0,
+                delta_y: 0.0,
+                pointer: Default::default(),
+                modifiers: 0,
+            },
         )
         .expect("the original Page should admit the mouse event");
     let completed = PendingInputCommandDispatch {
         command_id: Some(104),
         session_id: None,
         owner: original_owner.clone(),
-        page_residence_token: None,
+        document_lifetime_observer: None,
         kind: PendingInputCommandKind::DispatchMouseEvent,
         pending: PendingInputOperation::Page(pending),
     }
@@ -318,8 +327,8 @@ async fn completed_mouse_event_does_not_restore_replaced_page_state() {
         ctx.conn
             .browser_context
             .as_ref()
-            .and_then(|context| context.active_page_target().runtime_slot.loaded_page())
-            .is_some_and(|page| page.final_url().as_str() == replacement_url),
+            .and_then(|context| context.target_document_url(context.active_target_id().unwrap()))
+            .is_some_and(|url| url.as_str() == replacement_url),
         "settling the original input command must not install its Page state into the replacement"
     );
 }
@@ -334,9 +343,13 @@ async fn pending_mouse_event_acknowledges_when_page_is_replaced_before_renderer_
         .target_page_residence_identity_for_session(None)
         .expect("the original Page should have a residence identity");
     let command_owner = CommandOwnerScope::capture(&ctx.conn, None);
-    let page_residence_token = ctx
+    let document = ctx
         .conn
-        .capture_target_page_residence_token_for_owner(&command_owner)
+        .resolve_browser_document_for_owner(&command_owner)
+        .expect("the original Document should resolve exactly");
+    let document_lifetime_observer = ctx
+        .conn
+        .observe_browser_document_lifetime(document)
         .expect("the original Page should expose its attachment lifetime");
 
     let replacement_url = "data:text/html,<body>replacement-before-completion</body>";
@@ -345,14 +358,14 @@ async fn pending_mouse_event_acknowledges_when_page_is_replaced_before_renderer_
 
     let wait = wait_for_renderer_input_or_page_replacement(
         std::future::pending::<()>(),
-        Some(page_residence_token),
+        Some(document_lifetime_observer),
     );
     let outcome = tokio::time::timeout(std::time::Duration::from_secs(1), wait)
         .await
         .expect("Page replacement should settle the pending input wait");
     assert!(matches!(
         outcome,
-        RendererInputWaitOutcome::PageResidence(TargetPageResidenceObservation::Superseded)
+        RendererInputWaitOutcome::PageResidence(DocumentRetirement::Superseded)
     ));
 
     let completed = complete_pending_input_command(
@@ -377,9 +390,13 @@ async fn completed_renderer_ack_wins_when_page_replacement_is_already_observable
     with_loaded_document(&mut ctx, "<body>origin</body>").await;
 
     let command_owner = CommandOwnerScope::capture(&ctx.conn, None);
-    let page_residence_token = ctx
+    let document = ctx
         .conn
-        .capture_target_page_residence_token_for_owner(&command_owner)
+        .resolve_browser_document_for_owner(&command_owner)
+        .expect("the original Document should resolve exactly");
+    let document_lifetime_observer = ctx
+        .conn
+        .observe_browser_document_lifetime(document)
         .expect("the original Page should expose its attachment lifetime");
     ctx.install_navigation_fixture_for_session_owner(
         "data:text/html,<body>replacement-after-ack</body>",
@@ -389,7 +406,7 @@ async fn completed_renderer_ack_wins_when_page_replacement_is_already_observable
 
     let outcome = wait_for_renderer_input_or_page_replacement(
         std::future::ready("renderer-ack"),
-        Some(page_residence_token),
+        Some(document_lifetime_observer),
     )
     .await;
     assert!(matches!(
@@ -420,7 +437,7 @@ fn renderer_host_ack_cleanup_is_limited_to_mouse_and_key_callbacks() {
 #[tokio::test(flavor = "multi_thread")]
 async fn coordinate_mouse_event_without_document_still_reports_no_document_loaded() {
     let mut ctx = TestContext::new();
-    let mut bc = BrowserContext::new("BID-I".into());
+    let mut bc = ctx.conn.new_browser_context_fixture_for_test("BID-I");
     bc.set_active_target_id("TID-1");
     ctx.conn.install_browser_context_fixture_for_test(bc);
 
@@ -607,7 +624,7 @@ async fn touch_tap_and_drag_commands_hit_test_real_layout() {
 #[tokio::test(flavor = "multi_thread")]
 async fn coordinate_input_invalid_params_keep_session_id() {
     let mut ctx = TestContext::new();
-    let mut bc = BrowserContext::new("BID-I".into());
+    let mut bc = ctx.conn.new_browser_context_fixture_for_test("BID-I");
     bc.set_active_target_id("TID-1");
     bc.attach_active_session("SID-1");
     ctx.conn.install_browser_context_fixture_for_test(bc);
@@ -1687,13 +1704,20 @@ async fn coordinate_touch_commands_complete_through_pending_layout_dispatch() {
         ctx.expect_result(id, json!({}), None);
     }
 
-    ctx.conn
-        .browser_context
-        .as_mut()
-        .expect("loaded browser context")
-        .active_page_target_mut()
-        .effective_emulation_state
-        .emit_touch_events_for_mouse = true;
+    {
+        let context = &mut ctx
+            .conn
+            .browser_context
+            .as_mut()
+            .expect("loaded browser context");
+        let target_id = context
+            .active_target_id_owned()
+            .expect("active fixture target");
+        context.apply_target_emulation_policy_change(
+            &target_id,
+            crate::conn::EmulationPolicyChange::EmitTouchEventsForMouse(true),
+        )
+    };
     for (id, event_type, buttons) in [(4107, "mousePressed", 1), (4108, "mouseReleased", 0)] {
         ctx.process_async(json!({
             "id": id,

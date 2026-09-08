@@ -46,7 +46,9 @@ self.addEventListener("fetch", event => {
     });
 
     let mut ctx = TestContext::new();
-    let mut browser_context = BrowserContext::new("BID-1".to_owned());
+    let mut browser_context = ctx
+        .conn
+        .new_browser_context_fixture_for_test("BID-1".to_owned());
     browser_context.set_active_target_id("TID-1");
     browser_context.attach_active_session("SID-1");
     ctx.conn

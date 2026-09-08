@@ -177,7 +177,7 @@ impl CdpConnection {
             .as_deref()
             == Some(target_id)
             || self
-                .target_control
+                .agent_hosts
                 .auto_attached_target_ids_for_owner(Some(session_id))
                 .iter()
                 .any(|attached_target_id| attached_target_id == target_id)
@@ -185,9 +185,7 @@ impl CdpConnection {
 
     pub(crate) fn session_route(&self, session_id: Option<&str>) -> Option<CdpSessionRoute> {
         let session_id = session_id?;
-        self.target_control
-            .attached_session_route(session_id)
-            .cloned()
+        self.agent_hosts.attached_session_route(session_id).cloned()
     }
 
     pub(crate) fn target_session_route_for_target_id(
@@ -292,15 +290,20 @@ impl CdpConnection {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::conn::{BrowserContext, PageTargetHost};
+    use crate::conn::BrowserContext;
 
     #[test]
     fn committed_page_session_route_is_stable_across_foreground_selection() {
-        let mut connection = CdpConnection::new();
+        let mut connection = crate::test_support::connection();
         let mut browser_context = BrowserContext::new("BID-route".to_owned());
         browser_context.set_active_target_id("TID-a");
         browser_context.attach_active_session("SID-a");
-        assert!(browser_context.insert_page_target_host(PageTargetHost::empty("TID-b".to_owned())));
+        assert!(browser_context.register_page_target_fixture(
+            "TID-b".to_owned(),
+            None,
+            crate::conn::TargetIdentityState::about_blank(),
+            crate::conn::TargetPageSlot::default(),
+        ));
         connection.install_browser_context_fixture_for_test(browser_context);
 
         let route = CdpSessionRoute::PageTarget {
@@ -308,7 +311,7 @@ mod tests {
             target_id: "TID-a".to_owned(),
             session_key: DevToolsSessionKey::Primary,
         };
-        connection.target_control.commit_attached_session(
+        connection.agent_hosts.commit_attached_session(
             "SID-a".to_owned(),
             None,
             "TID-a",
@@ -335,7 +338,7 @@ mod tests {
 
     #[test]
     fn target_binding_is_not_globally_routable_before_session_commit() {
-        let mut connection = CdpConnection::new();
+        let mut connection = crate::test_support::connection();
         let mut browser_context = BrowserContext::new_with_page_for_test("BID-route", "TID-page");
         browser_context.attach_active_session("SID-prepared");
         connection.browser_context = Some(browser_context);

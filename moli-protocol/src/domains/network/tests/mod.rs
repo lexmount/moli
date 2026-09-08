@@ -21,12 +21,11 @@ use crate::testing::{
 };
 use crate::{
     conn::{
-        BrowserContext, CapturedBody, CdpConnection, DocumentBodySource, NETWORK_ERROR_PAGE_URL,
-        NavigationDispatchState, PageTargetHost, TargetIdentityState, TargetPageSlot,
+        BrowserContext, CapturedBody, DocumentBodySource, NETWORK_ERROR_PAGE_URL,
+        NavigationDispatchState, TargetIdentityState, TargetPageSlot,
     },
     domains::page::LOADER_ID,
 };
-use moli_core::{OptionalResourceFetchMask, runtime::NavigationEngine};
 use moli_fetch::{FetchConfig, RawResponse, ResponseHead};
 use parking_lot::Mutex;
 use serde_json::json;

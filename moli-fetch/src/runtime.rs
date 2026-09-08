@@ -541,6 +541,7 @@ impl FetchRuntimeHandle {
     pub(crate) fn submit_auth_raw(
         &self,
         request: Request,
+        cancel_handle: FetchCancelHandle,
     ) -> Result<oneshot::Receiver<Result<RawResponse>>> {
         debug_assert!(
             request.auth_requires_buffered_transport(),
@@ -550,7 +551,7 @@ impl FetchRuntimeHandle {
         self.enqueue(RuntimeJob::new(
             request,
             RuntimeResponseTx::Raw(response_tx),
-            FetchCancelHandle::new(),
+            cancel_handle,
         ))?;
         Ok(response_rx)
     }

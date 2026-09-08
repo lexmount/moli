@@ -1,6 +1,6 @@
 use super::super::tests_cdp_smoke_fixture::SmokeFixtureServer;
 use super::super::*;
-use crate::{CdpCommandTaskStep, CommandDispatchContext, ParsedCdpCommand};
+use crate::{AgentHostDispatchResult, CommandDispatchContext, ParsedCdpCommand};
 use serde_json::{Value, json};
 
 fn event<'a>(messages: &'a [Value], method: &str) -> &'a Value {
@@ -280,7 +280,7 @@ async fn create_isolated_world_restart_does_not_inherit_the_stale_renderer_strea
     }))
     .expect("createIsolatedWorld command should parse");
     let mut command_context = CommandDispatchContext::default();
-    let CdpCommandTaskStep::Pending(first_pending) = ctx
+    let AgentHostDispatchResult::PendingService(first_pending) = ctx
         .conn
         .start_parsed_command_dispatch_with_context(&command, &mut command_context)
     else {
@@ -298,7 +298,7 @@ async fn create_isolated_world_restart_does_not_inherit_the_stale_renderer_strea
     assert_eq!(navigation["result"]["frameId"], json!(target_id));
 
     let first_completed = first_pending.wait().await;
-    let CdpCommandTaskStep::Pending(restarted) = ctx
+    let AgentHostDispatchResult::PendingService(restarted) = ctx
         .conn
         .complete_pending_command_dispatch_with_context(first_completed, &mut command_context)
         .await
@@ -311,7 +311,7 @@ async fn create_isolated_world_restart_does_not_inherit_the_stale_renderer_strea
     );
 
     let replacement_completed = restarted.wait().await;
-    let CdpCommandTaskStep::Complete(outcome) = ctx
+    let AgentHostDispatchResult::Complete(outcome) = ctx
         .conn
         .complete_pending_command_dispatch_with_context(replacement_completed, &mut command_context)
         .await
@@ -549,7 +549,11 @@ async fn rust_cdp_chromium_target_second_create_target_activates_new_target_by_d
     assert_eq!(browser_context.active_target_id(), Some(target_id.as_str()));
     assert_eq!(browser_context.background_target_count(), 1);
     assert_eq!(
-        browser_context.background_target_at(0).unwrap().target_id(),
+        browser_context
+            .background_targets()
+            .next()
+            .unwrap()
+            .target_id(),
         "TID-000000000A"
     );
 
@@ -710,20 +714,18 @@ async fn rust_cdp_chromium_target_window_open_auto_attached_popup_materializes_i
             ctx.wait_until_scheduler_state("auto-attached popup navigation commit", |conn| {
                 conn.browser_context_by_id("BID-popup-auto-load")
                     .and_then(|browser_context| {
-                        loaded_page_for_target(browser_context, popup_target_id)
+                        browser_context.target_document_url(popup_target_id)
                     })
-                    .is_some_and(|page| page.final_url().as_str() == popup_url)
+                    .is_some_and(|page| page.as_str() == popup_url)
             })
             .await;
             let popup_page = ctx
                 .conn
                 .browser_context
                 .as_ref()
-                .and_then(|browser_context| {
-                    loaded_page_for_target(browser_context, popup_target_id)
-                })
+                .and_then(|browser_context| browser_context.target_document_url(popup_target_id))
                 .expect("window.open lifecycle should have loaded the popup document");
-            assert_eq!(popup_page.final_url().as_str(), popup_url);
+            assert_eq!(popup_page.as_str(), popup_url);
 
             ctx.process_async(json!({
                 "id": 260_212,
@@ -838,10 +840,8 @@ async fn run_waiting_popup_initial_document_after_resume(
         ctx.conn
             .browser_context
             .as_ref()
-            .and_then(|browser_context| {
-                loaded_page_for_target(browser_context, popup_target_id)
-            })
-            .is_some_and(|page| page.final_url().as_str() == "about:blank"),
+            .and_then(|browser_context| { browser_context.target_document_url(popup_target_id) })
+            .is_some_and(|page| page.as_str() == "about:blank"),
         "popup target lifecycle should already expose the initial about:blank document"
     );
     assert!(
@@ -1265,22 +1265,16 @@ async fn rust_cdp_chromium_target_resetting_opener_clears_popup_opener_reference
         .remove_active_page_target_async()
         .await;
 
-    assert!(
-        !ctx.conn
-            .browser_context
-            .as_ref()
-            .unwrap()
-            .target_opener_ids
-            .contains_key(&target_id)
-    );
+    let popup = ctx
+        .conn
+        .browser_context
+        .as_ref()
+        .unwrap()
+        .devtools_target_info(&target_id)
+        .unwrap();
+    assert!(popup.opener_id.is_none());
     assert_eq!(
-        ctx.conn
-            .browser_context
-            .as_ref()
-            .unwrap()
-            .target_opener_frame_ids
-            .get(&target_id)
-            .map(String::as_str),
+        popup.opener_frame_id.as_ref().map(|id| id.as_str()),
         Some("TID-reset-opener")
     );
 }

@@ -6,7 +6,7 @@ use moli_fetch::NET_ERR_ABORTED_ERROR_TEXT;
 use crate::conn::{
     BackgroundProtocolEvent, CdpConnection, CommandDispatchContext, CommandOwnerScope,
     CommittedRendererDocumentBinding, CompletedDownloadBodyArtifact,
-    DeferredMainDocumentLoadObservationId, DocumentNavigationToken, NavigationDispatchState,
+    DeferredMainDocumentLoadObservationId, NavigationDispatchState, NavigationId,
     RendererDocumentLifecycleObservation, RendererDocumentLifecycleObserver,
     RendererPageResidenceIdentity,
 };
@@ -28,7 +28,7 @@ pub(crate) struct MainDocumentNavigationActivity {
     final_url: Url,
     progress_gate: MainDocumentProgressGate,
     result_mode: LoadedNavigationResultMode,
-    document_navigation_token: Option<DocumentNavigationToken>,
+    document_navigation_token: Option<NavigationId>,
     deferred_initial_renderer_document_lifecycle_events: Vec<RendererDocumentLifecycleEvent>,
 }
 
@@ -59,6 +59,7 @@ pub(crate) struct DeferredMainDocumentLoadCompletionAdmission {
 }
 
 pub(crate) struct DeferredMainDocumentLoadCompletionActivity {
+    target_id: String,
     state: DeferredMainDocumentLoadCompletionState,
     observation_id: DeferredMainDocumentLoadObservationId,
     renderer_page_residence_identity: Option<RendererPageResidenceIdentity>,
@@ -80,7 +81,7 @@ impl MainDocumentNavigationActivity {
         state: NavigationDispatchState,
         final_url: Url,
         progress_gate: MainDocumentProgressGate,
-        document_navigation_token: Option<DocumentNavigationToken>,
+        document_navigation_token: Option<NavigationId>,
     ) -> Self {
         Self {
             state,
@@ -495,7 +496,7 @@ impl MainDocumentNavigationActivity {
         let renderer_events =
             std::mem::take(&mut self.deferred_initial_renderer_document_lifecycle_events);
         let (binding, mut accepted_events) = conn
-            .ingest_renderer_document_lifecycle_events_for_owner(
+            .project_renderer_document_lifecycle_events_for_owner(
                 &self.state.owner,
                 renderer_events,
             );
@@ -569,12 +570,13 @@ impl MainDocumentNavigationActivity {
         pending_download: Option<RendererPendingDownloadActivation>,
     ) {
         let mut command_context = CommandDispatchContext::default();
-        let error = if let Some(download) = pending_download {
+        let error = if let Some(download) = pending_download.and_then(|download| {
+            conn.prepare_download_activation(&self.state.owner, self.state.web_contents, download)
+        }) {
             let mut download_events = Vec::new();
             let error = conn
-                .handle_pending_download_activation_inline_async(
+                .handle_prepared_download_activation_inline_async(
                     &mut download_events,
-                    &self.state.owner,
                     download,
                     &mut command_context,
                 )
@@ -679,6 +681,10 @@ impl DeferredMainDocumentLoadCompletionAdmission {
             )
         };
         DeferredMainDocumentLoadCompletionActivity {
+            target_id: conn
+                .target_owner_identity_for_owner(self.owner_scope())
+                .and_then(|(_, target_id)| target_id)
+                .unwrap_or_else(|| self.state.navigation_activity.state.frame_id.clone()),
             state: self.state,
             observation_id,
             renderer_page_residence_identity,
@@ -701,14 +707,7 @@ impl DeferredMainDocumentLoadCompletionActivity {
     }
 
     pub(crate) fn target_id(&self) -> &str {
-        self.state
-            .navigation_activity
-            .document_navigation_token
-            .as_ref()
-            .map_or(
-                self.state.navigation_activity.state.frame_id.as_str(),
-                |token| token.target_id.as_str(),
-            )
+        &self.target_id
     }
 
     pub(crate) fn observation_id(&self) -> DeferredMainDocumentLoadObservationId {
@@ -782,6 +781,7 @@ impl PendingDeferredMainDocumentLoadCompletionActivity {
 
     pub(crate) async fn wait(self) -> CompletedDeferredMainDocumentLoadCompletionActivity {
         let DeferredMainDocumentLoadCompletionActivity {
+            target_id: _,
             state,
             observation_id,
             renderer_page_residence_identity: _,
@@ -935,6 +935,7 @@ mod tests {
         NavigationDispatchState {
             navigate_id: Some(77),
             owner: CommandOwnerScope::for_session("SID-nav"),
+            web_contents: NavigationDispatchState::detached_web_contents_for_test(),
             result_projection: NavigationResultProjection::Cdp(
                 json!({ "frameId": "FRAME-1", "loaderId": "LID-1" }),
             ),
@@ -959,15 +960,13 @@ mod tests {
         CommittedRendererDocumentBinding,
         RendererDocumentLifecycleEvent,
     ) {
-        let mut conn = CdpConnection::new();
-        let mut browser_context = BrowserContext::new("BID-deferred-load-observer".to_owned());
+        let mut conn = crate::test_support::connection();
+        let mut browser_context =
+            conn.new_browser_context_fixture_for_test("BID-deferred-load-observer".to_owned());
         browser_context.set_active_target_id("TID-deferred-load-observer");
         browser_context.attach_active_session("SID-nav");
         browser_context.set_target_url("https://example.test/start".to_owned());
-        browser_context
-            .active_page_target_mut()
-            .runtime_slot
-            .set_page_attachment_id_for_test(1);
+        browser_context.set_active_document_fixture_for_test(1);
         conn.install_browser_context_fixture_for_test(browser_context);
 
         let page_id = moli_core::PageId::new_for_testing(71);
@@ -1103,8 +1102,8 @@ mod tests {
 
     #[test]
     fn navigation_activity_error_drains_progress_before_error_response() {
-        let mut conn = CdpConnection::new();
-        let mut browser_context = BrowserContext::new_with_page_for_test("BID-1", "TID-page");
+        let mut conn = crate::test_support::connection();
+        let mut browser_context = conn.new_page_target_fixture_for_test("BID-1", "TID-page");
         browser_context.attach_active_session("SID-page");
         browser_context
             .active_page_target_mut()
@@ -1302,7 +1301,7 @@ mod tests {
             [moli_page_types::DevToolsSessionKey::Primary]
             .page_session_state
             .page_domain_enabled = true;
-        let mut conn = CdpConnection::new();
+        let mut conn = crate::test_support::connection();
         conn.install_browser_context_fixture_for_test(browser_context);
         let state = navigation_state();
         let activity = MainDocumentNavigationActivity::new(
@@ -1323,7 +1322,8 @@ mod tests {
             navigation: None,
             frame_id: "FRAME-1".to_owned(),
             loader_id: "LID-1".to_owned(),
-            page_attachment_id: crate::conn::TargetPageAttachmentId::from_raw_for_test(1),
+            document_id: crate::conn::DocumentId::from_raw_for_test(1),
+            browser_sequence: moli_core::browser::BrowserSequence::allocate(),
             document_open_replacement_epoch: None,
         };
         let renderer_lifecycle_events = vec![
@@ -1375,10 +1375,10 @@ mod tests {
         );
         assert_eq!(out[dcl_index]["params"]["timestamp"], json!(12.345678));
         assert!(
-            conn.runtime_session_owner_slot(Some("SID-nav"))
-                .expect("owner slot should exist")
-                .loaded_page()
-                .is_none(),
+            !conn.has_loaded_page_for_owner(&crate::conn::CommandOwnerScope::capture(
+                &conn,
+                Some("SID-nav")
+            )),
             "main-document lifecycle emission must not read back from a live page"
         );
     }
@@ -1395,7 +1395,7 @@ mod tests {
             .expect("old navigation token");
         browser_context.commit_document_navigation_if_matches(&old_token);
 
-        let mut conn = CdpConnection::new();
+        let mut conn = crate::test_support::connection();
         conn.install_browser_context_fixture_for_test(browser_context);
         let activity = MainDocumentNavigationActivity::new(
             navigation_state(),
@@ -1447,7 +1447,7 @@ mod tests {
             .expect("navigation token");
         browser_context.commit_document_navigation_if_matches(&token);
 
-        let mut conn = CdpConnection::new();
+        let mut conn = crate::test_support::connection();
         conn.install_browser_context_fixture_for_test(browser_context);
         let activity = MainDocumentNavigationActivity::new(
             navigation_state(),

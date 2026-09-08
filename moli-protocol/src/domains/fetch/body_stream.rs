@@ -112,19 +112,27 @@ pub(super) fn complete_get_response_body_from_transfer(
     };
     let plan = match *result {
         Ok((Some(bytes), transfer)) => {
-            conn.register_pending_fetch_response_transfer_for_owner(owner, request_id, transfer);
+            conn.restore_pending_fetch_response_transfer_for_body_read_for_owner(
+                owner,
+                &request_id,
+                transfer,
+            );
             response_body_command_output_plan(bytes)
         }
         Ok((None, transfer)) => {
-            conn.register_pending_fetch_response_transfer_for_owner(
+            conn.restore_pending_fetch_response_transfer_for_body_read_for_owner(
                 owner,
-                request_id.clone(),
+                &request_id,
                 transfer,
             );
             get_response_body_without_transfer_command_output_plan(conn, owner, &request_id)
         }
         Err((message, transfer)) => {
-            conn.register_pending_fetch_response_transfer_for_owner(owner, request_id, transfer);
+            conn.restore_pending_fetch_response_transfer_for_body_read_for_owner(
+                owner,
+                &request_id,
+                transfer,
+            );
             CommandOutputPlan::error(-32000, message)
         }
     };

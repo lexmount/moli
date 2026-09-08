@@ -1,11 +1,10 @@
 use serde_json::json;
 
-use crate::conn::BrowserContext;
 use crate::testing::TestContext;
 
 pub(super) async fn with_loaded_document_async(ctx: &mut TestContext, html: &str) {
     ctx.conn
-        .insert_browser_context(BrowserContext::new("BID-1".into()));
+        .insert_browser_context(ctx.conn.new_browser_context_fixture_for_test("BID-1"));
     ctx.conn
         .browser_context
         .as_mut()
@@ -23,7 +22,7 @@ pub(super) async fn with_loaded_document_for_active_target_async(
     target_id: &str,
 ) {
     ctx.conn
-        .insert_browser_context(BrowserContext::new("BID-1".into()));
+        .insert_browser_context(ctx.conn.new_browser_context_fixture_for_test("BID-1"));
     {
         let bc = ctx
             .conn
@@ -45,7 +44,7 @@ pub(super) async fn with_loaded_http_document_async(
     target_id: &str,
 ) {
     ctx.conn
-        .insert_browser_context(BrowserContext::new("BID-1".into()));
+        .insert_browser_context(ctx.conn.new_browser_context_fixture_for_test("BID-1"));
     {
         let bc = ctx
             .conn

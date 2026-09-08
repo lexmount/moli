@@ -7,8 +7,8 @@ use super::{
     RendererOutputTransportMessage, RendererOutputTransportReceiver, RendererOutputTransportSender,
     RendererOwnerAction, RendererPageCommand, RendererPageHandle, RendererPageReply,
     RendererPageTestingHandle, RendererPendingPopupActivation, RendererPointerEventProperties,
-    RendererPreparedDocumentCommitConfiguration, RendererProtocolObservation,
-    RendererRuntimeCommandOutput, RendererRuntimeInspectorMessage,
+    RendererPreparedDocumentInspectionConfiguration, RendererPreparedDocumentPolicy,
+    RendererProtocolObservation, RendererRuntimeCommandOutput, RendererRuntimeInspectorMessage,
     RendererRuntimeInspectorResponseSender,
 };
 use crate::local_executor::{is_on_script_execution_lane_for, scope_on_scaffold_js_local_executor};
@@ -1430,9 +1430,8 @@ async fn streaming_xml_document_executes_parser_blocking_xhtml_script() {
         ExternalRawDocumentBodyStream::from_bytes(source.as_bytes().to_vec()),
     )
     .await;
-    let permit = prepared.issue_commit_permit();
     let (mut page, page_state, _, _, pending_download) = prepared
-        .commit(permit)
+        .materialize(None)
         .await
         .expect("incremental XHTML document should commit");
     assert!(pending_download.is_none());
@@ -1477,8 +1476,11 @@ async fn streaming_unstyled_xml_converts_live_document_before_domcontentloaded()
         ExternalRawDocumentBodyStream::from_bytes(source.as_bytes().to_vec()),
     )
     .await;
-    prepared
-        .update_commit_configuration(RendererPreparedDocumentCommitConfiguration {
+    let inspection_ack = prepared
+        .inspection_configuration_endpoint()
+        .start_configure(RendererPreparedDocumentInspectionConfiguration {
+            root_frame_projection_id: None,
+            main_document_commit: None,
             document_start_scripts: vec![crate::DocumentStartScript {
                 registry_key: None,
                 devtools_session: None,
@@ -1501,33 +1503,15 @@ async fn streaming_unstyled_xml_converts_live_document_before_domcontentloaded()
             runtime_bindings: Vec::new(),
             runtime_inspector_session_restore_snapshots: Vec::new(),
             runtime_isolated_worlds: Vec::new(),
-            permission_overrides: Vec::new(),
-            extra_http_headers: Vec::new(),
-            locale_override: None,
-            timezone_override: None,
-            script_execution_disabled: false,
-            bypass_content_security_policy: false,
-            cpu_throttling_rate: 1.0,
-            emulated_media: Default::default(),
-            idle_override: None,
-            viewport_surface: None,
-            browser_resource_runtime: loader.browser_resource_runtime(),
-            navigator_identity: loader.browser_identity().clone(),
-            network_offline: false,
-            bypass_service_worker: false,
-            cache_disabled: false,
-            blocked_url_patterns: Vec::new(),
-            fetch_subresource_interception_enabled: false,
-            fetch_subresource_interception_resource_type: None,
-        })
-        .await
-        .expect("prepared XML should accept the lifecycle probe");
+        });
 
-    let permit = prepared.issue_commit_permit();
     let (mut page, _, _, _, pending_download) = prepared
-        .commit(permit)
+        .materialize(None)
         .await
         .expect("unstyled XML document should commit");
+    inspection_ack
+        .await
+        .expect("prepared XML should accept the lifecycle probe before materialization");
     assert!(pending_download.is_none());
     let (reply, _) = page
         .run_async_command(RendererPageCommand::EvaluateExpression {
@@ -1555,7 +1539,7 @@ async fn streaming_unstyled_xml_converts_live_document_before_domcontentloaded()
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn prepared_streaming_xml_document_waits_for_permit_and_uses_latest_configuration() {
+async fn prepared_streaming_xml_document_waits_for_materialization_and_inspection_bootstrap() {
     let runtime = JsRuntime::initialize();
     let baseline_isolates = runtime.document_isolate_accounting_for_diagnostics();
     let loader =
@@ -1597,11 +1581,14 @@ async fn prepared_streaming_xml_document_waits_for_permit_and_uses_latest_config
         tokio::time::timeout(Duration::from_millis(100), &mut side_effect_request_seen)
             .await
             .is_err(),
-        "the XML parser handoff must not execute before the commit permit"
+        "the XML parser handoff must not execute before owned materialization"
     );
 
-    prepared
-        .update_commit_configuration(RendererPreparedDocumentCommitConfiguration {
+    let inspection_ack = prepared
+        .inspection_configuration_endpoint()
+        .start_configure(RendererPreparedDocumentInspectionConfiguration {
+            root_frame_projection_id: None,
+            main_document_commit: None,
             document_start_scripts: vec![
                 crate::DocumentStartScript {
                     registry_key: None,
@@ -1638,31 +1625,33 @@ async fn prepared_streaming_xml_document_waits_for_permit_and_uses_latest_config
                 name: "native-world".to_owned(),
                 grant_universal_access: false,
             }],
-            permission_overrides: Vec::new(),
-            extra_http_headers: Vec::new(),
-            locale_override: None,
-            timezone_override: None,
-            script_execution_disabled: false,
-            bypass_content_security_policy: false,
-            cpu_throttling_rate: 1.0,
-            emulated_media: Default::default(),
-            idle_override: None,
-            viewport_surface: None,
-            browser_resource_runtime: loader.browser_resource_runtime(),
-            navigator_identity: loader.browser_identity().clone(),
-            network_offline: false,
-            bypass_service_worker: false,
-            cache_disabled: false,
-            blocked_url_patterns: Vec::new(),
-            fetch_subresource_interception_enabled: false,
-            fetch_subresource_interception_resource_type: None,
-        })
+        });
+    inspection_ack
         .await
-        .expect("prepared streaming XML should accept live commit configuration");
+        .expect("prepared streaming XML should accept inspection bootstrap");
+    assert_eq!(
+        runtime.renderer_owner_handle().len(),
+        0,
+        "inspection bootstrap alone must not install the prepared Document"
+    );
+    assert_eq!(
+        runtime
+            .document_isolate_accounting_for_diagnostics()
+            .reserved,
+        prepared_isolates.reserved
+    );
+    assert!(
+        matches!(
+            side_effect_request_seen.try_recv(),
+            Err(oneshot::error::TryRecvError::Empty)
+        ),
+        "inspection bootstrap must not start the author parser"
+    );
 
-    let permit = prepared.issue_commit_permit();
-    let (mut page, _, diagnostics, _, pending_download) =
-        prepared.commit(permit).await.expect("permit should commit");
+    let (mut page, _, diagnostics, _, pending_download) = prepared
+        .materialize(None)
+        .await
+        .expect("prepared document should materialize");
     assert!(pending_download.is_none());
     assert_eq!(
         page.devtools_agent_token(),
@@ -2332,9 +2321,8 @@ async fn external_raw_streaming_body_failure_preserves_committed_document_and_ow
             "synthetic partial main document body failure"
         )))
         .expect("main document body failure should send");
-    let permit = prepared.issue_commit_permit();
     let (mut page, _, _, creation_artifacts, pending_download) =
-        tokio::time::timeout(Duration::from_secs(5), prepared.commit(permit))
+        tokio::time::timeout(Duration::from_secs(5), prepared.materialize(None))
             .await
             .expect("partial main document should reach its response commit boundary")
             .expect("partial main document should attach before its body terminal");
@@ -2453,7 +2441,7 @@ async fn external_raw_streaming_body_failure_preserves_committed_document_and_ow
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn prepared_external_raw_document_waits_for_matching_commit_permit() {
+async fn prepared_external_raw_document_waits_for_owned_materialization() {
     let runtime = JsRuntime::initialize();
     let baseline_isolates = runtime.document_isolate_accounting_for_diagnostics();
     let loader =
@@ -2492,7 +2480,7 @@ fetch("/author-side-effect");
     assert_eq!(
         runtime.renderer_owner_handle().len(),
         0,
-        "prepare must not install a Page before the commit permit"
+        "prepare must not install a Page before owned materialization"
     );
     assert!(
         tokio::time::timeout(Duration::from_millis(100), &mut side_effect_request_seen)
@@ -2501,14 +2489,15 @@ fetch("/author-side-effect");
         "author fetch must not run while the prepared document is held"
     );
 
-    let permit = prepared.issue_commit_permit();
-    let (mut page, _, _, _, pending_download) =
-        prepared.commit(permit).await.expect("permit should commit");
+    let (mut page, _, _, _, pending_download) = prepared
+        .materialize(None)
+        .await
+        .expect("prepared document should materialize");
     assert!(pending_download.is_none());
     assert_eq!(
         page.devtools_agent_token(),
         prepared_agent,
-        "commit must attach the agent allocated before the permit"
+        "materialization must attach the agent allocated during preparation"
     );
     tokio::time::timeout(Duration::from_secs(2), &mut side_effect_request_seen)
         .await
@@ -2541,8 +2530,147 @@ localStorage.getItem("prepared-commit")
         .expect("author side-effect server should finish");
 }
 
+#[tokio::test]
+async fn prepared_response_inspection_projects_commit_before_execution_contexts() {
+    assert_prepared_response_inspection_order(false).await;
+}
+
+#[tokio::test]
+async fn prepared_response_inspection_reattaches_reset_before_commit_and_contexts() {
+    assert_prepared_response_inspection_order(true).await;
+}
+
+async fn assert_prepared_response_inspection_order(reattach: bool) {
+    let runtime = JsRuntime::initialize();
+    let loader = ResourceRequestClient::new(&Default::default()).unwrap();
+    let v8_attach = if reattach {
+        let mut previous = create_test_html_page(
+            &runtime,
+            &loader,
+            url::Url::parse("https://example.test/previous").unwrap(),
+            "<!doctype html>",
+        )
+        .await;
+        let (messages, output) = dispatch_runtime_protocol_with_output_for_test(
+            &previous,
+            serde_json::json!({"id": 1, "method": "Runtime.enable"}),
+        )
+        .await
+        .unwrap();
+        assert!(
+            runtime_protocol_response_by_id(&messages, 1)
+                .is_some_and(|message| message.get("error").is_none())
+        );
+        let state = output
+            .v8_state_update()
+            .cloned()
+            .expect("enabled V8 session state");
+        previous.close_async().await.unwrap();
+        moli_page_types::V8InspectorSessionAttach::Reattach(state)
+    } else {
+        moli_page_types::V8InspectorSessionAttach::FirstAttach
+    };
+    let (output_tx, mut output_rx) = renderer_external_activity_test_channel();
+    runtime.set_renderer_output_transport_sender(output_tx);
+    let url = url::Url::parse("https://example.test/projected-response").unwrap();
+    let prepared = runtime
+        .reserve_document_response(
+            runtime.reserve_page_for_creation(),
+            url.clone(),
+            url.clone(),
+            None,
+            false,
+            0,
+            200,
+            vec![("content-type".into(), "text/html".into())],
+            ExternalRawDocumentBodyStream::from_bytes(b"<!doctype html>".to_vec()),
+            &loader,
+            Default::default(),
+            None,
+            None,
+            None,
+            PageVmInitStage::Load,
+            RendererReplyBoundary::Stage,
+            None,
+        )
+        .await_ready()
+        .await
+        .unwrap();
+    let commit = super::RendererMainDocumentCommit {
+        frame_id: "FRAME-projected-response".into(),
+        loader_id: "LOADER-projected-response".into(),
+        url: url.as_str().into(),
+        unreachable_url: None,
+        security_origin: "https://example.test".into(),
+        secure_context_type: "Secure".into(),
+        timestamp: 1.0,
+    };
+    let configured = prepared
+        .inspection_configuration_endpoint()
+        .start_configure(RendererPreparedDocumentInspectionConfiguration {
+            root_frame_projection_id: Some(commit.frame_id.clone()),
+            main_document_commit: Some(commit.clone()),
+            runtime_inspector_session_restore_snapshots: vec![
+                RendererInspectorSessionRestoreSnapshot {
+                    v8_attach,
+                    protocol_configuration: RendererInspectorProtocolConfiguration {
+                        runtime_frontend_enabled: true,
+                        ..Default::default()
+                    },
+                    ..Default::default()
+                },
+            ],
+            ..Default::default()
+        });
+    // The Browser work is not blocked on the service's acknowledgement.
+    let (mut page, _, _, _, _) = prepared.materialize(None).await.unwrap();
+    configured.await.unwrap();
+    let mut ordered = Vec::new();
+    for record in output_rx
+        .drain()
+        .into_iter()
+        .filter(|publication| publication_is_for_page(publication, &page))
+        .flat_map(RendererOutputPublication::into_records)
+    {
+        match record.into_parts().1 {
+            RendererOutputItem::Observation(RendererProtocolObservation::MainDocumentCommit(
+                observed,
+            )) => {
+                assert_eq!(observed, commit);
+                ordered.push("commit");
+            }
+            RendererOutputItem::Observation(RendererProtocolObservation::RuntimeInspector(
+                batch,
+            )) => {
+                for message in batch.messages {
+                    let message = runtime_inspector_message_protocol_message_for_test(message);
+                    match message["method"].as_str() {
+                        Some("Runtime.executionContextsCleared") => ordered.push("reset"),
+                        Some("Runtime.executionContextCreated") => {
+                            assert_eq!(
+                                message["params"]["context"]["auxData"]["frameId"],
+                                commit.frame_id
+                            );
+                            ordered.push("context");
+                        }
+                        _ => {}
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+    let expected = if reattach {
+        vec!["reset", "commit", "context"]
+    } else {
+        vec!["commit", "context"]
+    };
+    assert_eq!(ordered, expected);
+    page.close_async().await.unwrap();
+}
+
 #[tokio::test(flavor = "multi_thread")]
-async fn prepared_document_uses_latest_commit_configuration_before_author_script() {
+async fn prepared_document_applies_policy_and_admitted_inspection_before_author_script() {
     let runtime = JsRuntime::initialize();
     let loader =
         ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).expect("default loader");
@@ -2572,8 +2700,11 @@ globalThis.__preparedCommitObserved = JSON.stringify([
     producer
         .await
         .expect("prepared body producer should finish");
-    prepared
-        .update_commit_configuration(RendererPreparedDocumentCommitConfiguration {
+    let inspection_ack = prepared
+        .inspection_configuration_endpoint()
+        .start_configure(RendererPreparedDocumentInspectionConfiguration {
+            root_frame_projection_id: None,
+            main_document_commit: None,
             document_start_scripts: vec![
                 crate::DocumentStartScript {
                     registry_key: None,
@@ -2610,36 +2741,38 @@ globalThis.__preparedCommitObserved = JSON.stringify([
                 name: "latest-world".to_owned(),
                 grant_universal_access: false,
             }],
-            permission_overrides: vec![crate::protocol_types::PermissionOverrideRegistration {
-                permission: serde_json::Value::String("notifications".to_owned()),
-                setting: "granted".to_owned(),
-                origin: None,
-                embedded_origin: None,
-            }],
-            extra_http_headers: Vec::new(),
-            locale_override: None,
-            timezone_override: None,
-            script_execution_disabled: false,
-            bypass_content_security_policy: false,
-            cpu_throttling_rate: 1.0,
-            emulated_media: Default::default(),
-            idle_override: None,
-            viewport_surface: None,
-            browser_resource_runtime: loader.browser_resource_runtime(),
-            navigator_identity: loader.browser_identity().clone(),
-            network_offline: false,
-            bypass_service_worker: false,
-            cache_disabled: false,
-            blocked_url_patterns: Vec::new(),
-            fetch_subresource_interception_enabled: false,
-            fetch_subresource_interception_resource_type: None,
-        })
-        .await
-        .expect("prepared document should accept the latest commit configuration");
+        });
+    let policy = RendererPreparedDocumentPolicy {
+        permission_overrides: vec![crate::protocol_types::PermissionOverrideRegistration {
+            permission: serde_json::Value::String("notifications".to_owned()),
+            setting: "granted".to_owned(),
+            origin: None,
+            embedded_origin: None,
+        }],
+        extra_http_headers: Vec::new(),
+        locale_override: None,
+        timezone_override: None,
+        script_execution_disabled: false,
+        bypass_content_security_policy: false,
+        cpu_throttling_rate: 1.0,
+        emulated_media: Default::default(),
+        idle_override: None,
+        viewport_surface: None,
+        browser_resource_runtime: loader.browser_resource_runtime(),
+        navigator_identity: loader.browser_identity().clone(),
+        network_offline: false,
+        bypass_service_worker: false,
+        cache_disabled: false,
+        blocked_url_patterns: Vec::new(),
+        fetch_subresource_interception_enabled: false,
+        fetch_subresource_interception_resource_type: None,
+    };
 
-    let permit = prepared.issue_commit_permit();
-    let (mut page, _, diagnostics, _, pending_download) =
-        prepared.commit(permit).await.expect("permit should commit");
+    let (mut page, _, diagnostics, _, pending_download) = prepared
+        .materialize(Some(policy))
+        .await
+        .expect("prepared document should materialize with native policy");
+    inspection_ack.await.expect("admitted inspection configuration should precede materialization without polling its acknowledgement");
     assert!(pending_download.is_none());
     assert!(
         diagnostics.renderer_output_predecessor.is_some(),
@@ -2688,7 +2821,8 @@ globalThis.__preparedCommitObserved = JSON.stringify([
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn prepared_document_rejects_a_peer_commit_permit_without_consuming_its_owner() {
+async fn prepared_document_inspection_rejects_retired_and_foreign_residences_without_affecting_peer()
+ {
     let runtime = JsRuntime::initialize();
     let loader =
         ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).expect("default loader");
@@ -2734,27 +2868,174 @@ async fn prepared_document_rejects_a_peer_commit_permit_without_consuming_its_ow
         .await
         .expect("second prepared producer should finish");
 
-    let first_permit = first.issue_commit_permit();
-    let mismatch = second.commit(first_permit).await;
+    let foreign_runtime = JsRuntime::initialize();
+    let mismatch = foreign_runtime
+        .renderer_owner_handle()
+        .dispatch_command(
+            super::RendererOwnerCommand::ConfigurePreparedDocumentInspection {
+                token: first.token(),
+                configuration: RendererPreparedDocumentInspectionConfiguration::default(),
+            },
+        )
+        .await;
     assert!(
         mismatch
             .as_ref()
-            .is_err_and(|error| error.to_string().contains("does not belong")),
-        "a peer permit must be rejected before either residence is consumed"
+            .is_err_and(|error| error.to_string().contains("belongs to renderer owner")),
+        "inspection ingress must reject a foreign renderer owner before mutating its residence"
     );
 
-    let first_permit = first.issue_commit_permit();
-    let (mut page, _snapshot, _, _, pending_download) = first
-        .commit(first_permit)
+    let retired_endpoint = second.inspection_configuration_endpoint();
+    second
+        .cancel()
         .await
-        .expect("the matching owner should remain committable");
+        .expect("second prepared document should retire");
+    let retired_result = retired_endpoint
+        .start_configure(RendererPreparedDocumentInspectionConfiguration {
+            root_frame_projection_id: None,
+            main_document_commit: None,
+            document_start_scripts: vec![crate::DocumentStartScript {
+                registry_key: None,
+                devtools_session: None,
+                source: "globalThis.__wrongDocumentBootstrap = true".to_owned(),
+                world_name: None,
+                has_bidi_channel_argument: false,
+                bidi_channel_handoffs: Vec::new(),
+            }],
+            ..Default::default()
+        })
+        .await;
+    assert!(
+        retired_result.is_err_and(|error| error
+            .to_string()
+            .contains("no longer tracks prepared document")),
+        "a retired endpoint must not fall back to a peer prepared document"
+    );
+
+    let (mut page, _snapshot, _, _, pending_download) = first
+        .materialize(None)
+        .await
+        .expect("the peer prepared document should remain materializable");
     assert!(pending_download.is_none());
     let html = serialize_html_for_renderer_page(&page).await;
     assert!(html.contains("id=\"first\""));
     assert!(!html.contains("id=\"second\""));
+    let (reply, _) = page
+        .run_async_command(RendererPageCommand::EvaluateExpression {
+            expression: "typeof globalThis.__wrongDocumentBootstrap".to_owned(),
+            await_promise: false,
+        })
+        .await
+        .expect("peer bootstrap probe should evaluate");
+    assert_eq!(
+        renderer_json_value(reply),
+        Some(serde_json::json!("undefined"))
+    );
     page.close_async()
         .await
-        .expect("matching prepared page should close");
+        .expect("peer prepared page should close");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn prepared_document_inspection_endpoint_does_not_keep_renderer_owner_alive() {
+    let runtime = JsRuntime::initialize();
+    let producer = runtime.producer_shutdown_handle();
+    let loader =
+        ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).expect("default loader");
+    let prepared = prepare_test_external_raw_document(
+        &runtime,
+        &loader,
+        url::Url::parse("https://example.test/bootstrap-owner-retirement").unwrap(),
+        ExternalRawDocumentBodyStream::from_bytes(b"<!doctype html>".to_vec()),
+    )
+    .await;
+    let endpoint = prepared.inspection_configuration_endpoint();
+    prepared
+        .cancel()
+        .await
+        .expect("prepared Document should retire");
+    assert!(producer.is_live());
+    drop(runtime);
+    assert!(
+        !producer.is_live(),
+        "a retained DevTools bootstrap endpoint must not retain the renderer producer"
+    );
+    let error = endpoint
+        .start_configure(Default::default())
+        .await
+        .expect_err("retired renderer owner must reject bootstrap admission");
+    assert_eq!(error.to_string(), "render runtime thread has shut down");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn abandoned_queued_document_materialization_retires_without_author_side_effects() {
+    use std::{
+        future::Future,
+        task::{Context, Poll, Waker},
+    };
+
+    let runtime = JsRuntime::initialize();
+    let baseline_isolates = runtime.document_isolate_accounting_for_diagnostics();
+    let loader =
+        ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).expect("default loader");
+    let url = url::Url::parse("https://example.test/abandoned-materialization").unwrap();
+    let prepared = prepare_test_external_raw_document(
+        &runtime,
+        &loader,
+        url.clone(),
+        ExternalRawDocumentBodyStream::from_bytes(
+            b"<!doctype html><script>localStorage.setItem('abandoned-materialization', 'ran')</script>".to_vec(),
+        ),
+    ).await;
+    let endpoint = prepared.inspection_configuration_endpoint();
+    let (entered_rx, release_tx) = runtime.install_owner_command_dispatch_gate_for_testing();
+    let mut materialization = Box::pin(prepared.materialize(None));
+    let mut context = Context::from_waker(Waker::noop());
+    assert!(matches!(
+        materialization.as_mut().poll(&mut context),
+        Poll::Pending
+    ));
+    entered_rx
+        .recv_timeout(Duration::from_secs(3))
+        .expect("native materialization should reach the dispatch gate");
+    drop(materialization);
+    release_tx
+        .send(())
+        .expect("release native materialization admission");
+
+    // This exact-residence acknowledgement follows the canceled native command
+    // on the same owner. No timer or renderer poll can hide incomplete cleanup.
+    assert!(
+        endpoint
+            .start_configure(Default::default())
+            .await
+            .is_err_and(|error| error
+                .to_string()
+                .contains("no longer tracks prepared document"))
+    );
+    let after_cancel = runtime.document_isolate_accounting_for_diagnostics();
+    assert_eq!(after_cancel.live, baseline_isolates.live);
+    assert_eq!(after_cancel.reserved, baseline_isolates.reserved);
+    assert_eq!(after_cancel.destroyed, baseline_isolates.destroyed + 1);
+    assert_eq!(runtime.renderer_owner_handle().len(), 0);
+
+    let mut probe = create_test_html_page(&runtime, &loader, url, "<!doctype html>").await;
+    let (reply, _) = probe
+        .run_async_command(RendererPageCommand::EvaluateExpression {
+            expression: "localStorage.getItem('abandoned-materialization')".to_owned(),
+            await_promise: false,
+        })
+        .await
+        .expect("same-origin materialization cancellation probe should evaluate");
+    assert_eq!(
+        renderer_json_value(reply),
+        Some(serde_json::Value::Null),
+        "an abandoned command must not enter the author parser before cancellation"
+    );
+    probe
+        .close_async()
+        .await
+        .expect("cancellation probe should close");
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -2900,6 +3181,105 @@ async fn canceled_prepared_document_closes_its_ordered_output_stream() {
             },
         ) if stream == opened_stream
     ));
+}
+
+#[tokio::test]
+async fn initial_document_reservation_does_not_open_stream_before_preparation() {
+    let runtime = JsRuntime::initialize();
+    let baseline = runtime.document_isolate_accounting_for_diagnostics();
+    let (output_tx, mut output_rx) = renderer_external_activity_test_channel();
+    runtime.set_renderer_output_transport_sender(output_tx);
+    let loader = ResourceRequestClient::new(&Default::default()).unwrap();
+    let token = runtime.reserve_page_for_creation();
+    let reserved = runtime.reserve_document_response(
+        token,
+        url::Url::parse("about:blank").unwrap(),
+        url::Url::parse("about:blank").unwrap(),
+        None,
+        false,
+        0,
+        200,
+        vec![("content-type".into(), "text/html".into())],
+        ExternalRawDocumentBodyStream::from_bytes(b"<!doctype html>".to_vec()),
+        &loader,
+        Default::default(),
+        None,
+        None,
+        None,
+        PageVmInitStage::Load,
+        crate::RendererReplyBoundary::Stage,
+        None,
+    );
+    assert!(matches!(
+        output_rx.0.try_recv(),
+        Err(mpsc::error::TryRecvError::Empty)
+    ));
+    drop(reserved);
+    assert!(matches!(output_rx.recv_message().await,
+        RendererOutputTransportMessage::PageReservationReleased { owner_local_host_id, page_id }
+        if owner_local_host_id == token.local_host_id() && page_id == token.page_id()));
+    assert!(matches!(
+        output_rx.0.try_recv(),
+        Err(mpsc::error::TryRecvError::Empty)
+    ));
+    assert_eq!(
+        runtime
+            .document_isolate_accounting_for_diagnostics()
+            .created,
+        baseline.created
+    );
+}
+
+#[tokio::test]
+async fn dropping_started_initial_preparation_closes_only_its_reserved_stream() {
+    let runtime = JsRuntime::initialize();
+    let (output_tx, mut output_rx) = renderer_external_activity_test_channel();
+    runtime.set_renderer_output_transport_sender(output_tx);
+    let loader = ResourceRequestClient::new(&Default::default()).unwrap();
+    let token = runtime.reserve_page_for_creation();
+    let mut reserved = runtime.reserve_document_response(
+        token,
+        url::Url::parse("about:blank").unwrap(),
+        url::Url::parse("about:blank").unwrap(),
+        None,
+        false,
+        0,
+        200,
+        vec![("content-type".into(), "text/html".into())],
+        ExternalRawDocumentBodyStream::from_bytes(b"<!doctype html>".to_vec()),
+        &loader,
+        Default::default(),
+        None,
+        None,
+        None,
+        PageVmInitStage::Load,
+        crate::RendererReplyBoundary::Stage,
+        None,
+    );
+    reserved.start_preparation().unwrap();
+    drop(reserved); // No acknowledgement has been awaited.
+    let stream = match output_rx.recv_message().await {
+        RendererOutputTransportMessage::StreamControl(
+            super::RendererOutputStreamControl::Opened { stream },
+        ) => stream,
+        other => {
+            panic!("preparation must open its stream before releasing the reservation: {other:?}")
+        }
+    };
+    assert_eq!(
+        stream.residence(),
+        RendererOutputResidenceIdentity::Page {
+            owner_local_host_id: token.local_host_id(),
+            page_id: token.page_id(),
+        }
+    );
+    assert!(matches!(output_rx.recv_message().await,
+        RendererOutputTransportMessage::PageReservationReleased { owner_local_host_id, page_id }
+        if owner_local_host_id == token.local_host_id() && page_id == token.page_id()));
+    assert!(matches!(output_rx.recv_message().await,
+        RendererOutputTransportMessage::StreamControl(super::RendererOutputStreamControl::Closed {
+            stream: closed, reason: super::RendererOutputStreamCloseReason::ResidenceRetired, ..
+        }) if closed == stream));
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -17604,7 +17984,7 @@ async fn child_default_context_ids_for_test(page: &RendererPageHandle) -> anyhow
     }
 }
 
-async fn create_test_html_page(
+pub(super) async fn create_test_html_page(
     runtime: &JsRuntime,
     loader: &ResourceRequestClient,
     url: url::Url,

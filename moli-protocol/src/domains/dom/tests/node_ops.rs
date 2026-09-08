@@ -40,47 +40,38 @@ async fn renderer_backend_node_for_live_expression(
     take_response_by_id(ctx, describe_id)["result"]["node"].clone()
 }
 
-fn loaded_page_mut_for_test(ctx: &mut TestContext) -> &mut moli_core::page::Page {
-    ctx.conn
-        .browser_context
-        .as_mut()
-        .expect("browser context")
-        .active_page_target_mut()
-        .runtime_slot
-        .loaded_page_mut()
-        .expect("loaded page")
-}
-
 async fn renderer_frontend_binding_for_test(
     ctx: &mut TestContext,
     frontend_node_id: u32,
 ) -> moli_core::page::RendererDomFrontendNodeBindingResolution {
-    let renderer_inspector_session_id = ctx
-        .conn
-        .target_renderer_runtime_inspector_session_id_for_session(None);
+    let owner = crate::conn::CommandOwnerScope::capture(&ctx.conn, None);
     let completion = {
-        let page = loaded_page_mut_for_test(ctx);
-        let pending = page
-            .start_document_frontend_node_binding(renderer_inspector_session_id, frontend_node_id)
+        let inspection = crate::domains::dom::dom_inspection_for_owner(&ctx.conn, &owner).unwrap();
+        let pending = inspection
+            .start_document_frontend_node_binding(frontend_node_id)
+            .map(moli_core::page::PendingPageCommand::from_inspector_main_route)
             .expect("renderer frontend node binding lookup should start");
         pending
             .wait()
             .await
             .expect("renderer frontend node binding lookup should complete")
     };
-    let page = loaded_page_mut_for_test(ctx);
-    page.finish_document_frontend_node_binding(completion)
+    ctx.conn
+        .observe_renderer_inspection_completion(&owner, &completion)
+        .unwrap();
+    completion
+        .finish_document_frontend_node_binding()
         .expect("renderer frontend node binding lookup should finish")
 }
 
 async fn append_live_node_without_refreshing_page_snapshot(
     ctx: &mut TestContext,
-) -> (u32, moli_core::page::CompletedPageCommand) {
+) -> (u32, crate::conn::CompletedRuntimeProtocolMessageDispatch) {
     load_bc(ctx, "BID-A");
     navigate_to_data_html_async(ctx, 1, "<!doctype html><html><body></body></html>").await;
     let backend_node_id = LOW_BACKEND_OR_FRONTEND_NODE_ID_MISS_FOR_TEST;
     let completion = {
-        let page = loaded_page_mut_for_test(ctx);
+        let owner = crate::conn::CommandOwnerScope::capture(&ctx.conn, None);
         let mutation = json!({
             "id": 2,
             "method": "Runtime.evaluate",
@@ -89,8 +80,9 @@ async fn append_live_node_without_refreshing_page_snapshot(
                 "returnByValue": true
             }
         });
-        let pending = page
-            .start_runtime_protocol_message(mutation.to_string())
+        let pending = ctx
+            .conn
+            .start_runtime_protocol_message_for_owner(&owner, mutation.to_string())
             .expect("runtime mutation should start");
         pending
             .wait()
@@ -102,12 +94,12 @@ async fn append_live_node_without_refreshing_page_snapshot(
 
 async fn append_live_file_input_without_refreshing_page_snapshot(
     ctx: &mut TestContext,
-) -> (u32, moli_core::page::CompletedPageCommand) {
+) -> (u32, crate::conn::CompletedRuntimeProtocolMessageDispatch) {
     load_bc(ctx, "BID-A");
     navigate_to_data_html_async(ctx, 1, "<!doctype html><html><body></body></html>").await;
     let backend_node_id = LOW_BACKEND_OR_FRONTEND_NODE_ID_MISS_FOR_TEST;
     let completion = {
-        let page = loaded_page_mut_for_test(ctx);
+        let owner = crate::conn::CommandOwnerScope::capture(&ctx.conn, None);
         let mutation = json!({
             "id": 2,
             "method": "Runtime.evaluate",
@@ -116,8 +108,9 @@ async fn append_live_file_input_without_refreshing_page_snapshot(
                 "returnByValue": true
             }
         });
-        let pending = page
-            .start_runtime_protocol_message(mutation.to_string())
+        let pending = ctx
+            .conn
+            .start_runtime_protocol_message_for_owner(&owner, mutation.to_string())
             .expect("runtime mutation should start");
         pending
             .wait()
@@ -2863,7 +2856,7 @@ async fn push_nodes_by_renderer_backend_ids_binds_fresh_live_dom() {
         .await;
     let _ = take_response_by_id(&mut ctx, 902);
     let mutation_completion = {
-        let page = loaded_page_mut_for_test(&mut ctx);
+        let owner = crate::conn::CommandOwnerScope::capture(&ctx.conn, None);
         let mutation = json!({
             "id": 2,
             "method": "Runtime.evaluate",
@@ -2872,8 +2865,9 @@ async fn push_nodes_by_renderer_backend_ids_binds_fresh_live_dom() {
                 "returnByValue": true
             }
         });
-        let pending = page
-            .start_runtime_protocol_message(mutation.to_string())
+        let pending = ctx
+            .conn
+            .start_runtime_protocol_message_for_owner(&owner, mutation.to_string())
             .expect("runtime mutation should start");
         pending
             .wait()
@@ -2931,10 +2925,12 @@ async fn push_nodes_by_renderer_backend_ids_binds_fresh_live_dom() {
     assert_eq!(attrs.get("id").map(String::as_str), Some("fresh-push"));
     assert_eq!(attrs.get("data-state").map(String::as_str), Some("live"));
 
-    let page = loaded_page_mut_for_test(&mut ctx);
-    let _ = page
-        .finish_runtime_protocol_message(mutation_completion)
-        .expect("runtime mutation completion should finish");
+    let _ = ctx
+        .conn
+        .complete_runtime_protocol_message_async(mutation_completion)
+        .await
+        .expect("runtime mutation completion should finish")
+        .expect("Main inspection must retain its frozen command output");
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -2964,10 +2960,12 @@ async fn get_attributes_low_node_id_misses_without_frontend_binding() {
         })]
     );
 
-    let page = loaded_page_mut_for_test(&mut ctx);
-    let _ = page
-        .finish_runtime_protocol_message(mutation_completion)
-        .expect("runtime mutation completion should finish");
+    let _ = ctx
+        .conn
+        .complete_runtime_protocol_message_async(mutation_completion)
+        .await
+        .expect("runtime mutation completion should finish")
+        .expect("Main inspection must retain its frozen command output");
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -3204,10 +3202,12 @@ async fn set_file_input_files_low_node_id_misses_without_frontend_binding() {
         })]
     );
 
-    let page = loaded_page_mut_for_test(&mut ctx);
-    let _ = page
-        .finish_runtime_protocol_message(mutation_completion)
-        .expect("runtime mutation completion should finish");
+    let _ = ctx
+        .conn
+        .complete_runtime_protocol_message_async(mutation_completion)
+        .await
+        .expect("runtime mutation completion should finish")
+        .expect("Main inspection must retain its frozen command output");
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -3244,10 +3244,12 @@ async fn set_file_input_files_low_backend_id_misses_without_backend_binding() {
         })]
     );
 
-    let page = loaded_page_mut_for_test(&mut ctx);
-    let _ = page
-        .finish_runtime_protocol_message(mutation_completion)
-        .expect("runtime mutation completion should finish");
+    let _ = ctx
+        .conn
+        .complete_runtime_protocol_message_async(mutation_completion)
+        .await
+        .expect("runtime mutation completion should finish")
+        .expect("Main inspection must retain its frozen command output");
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -3277,10 +3279,12 @@ async fn resolve_node_low_node_id_misses_without_frontend_binding() {
         })]
     );
 
-    let page = loaded_page_mut_for_test(&mut ctx);
-    let _ = page
-        .finish_runtime_protocol_message(mutation_completion)
-        .expect("runtime mutation completion should finish");
+    let _ = ctx
+        .conn
+        .complete_runtime_protocol_message_async(mutation_completion)
+        .await
+        .expect("runtime mutation completion should finish")
+        .expect("Main inspection must retain its frozen command output");
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -3310,10 +3314,12 @@ async fn resolve_node_low_backend_id_misses_without_backend_binding() {
         })]
     );
 
-    let page = loaded_page_mut_for_test(&mut ctx);
-    let _ = page
-        .finish_runtime_protocol_message(mutation_completion)
-        .expect("runtime mutation completion should finish");
+    let _ = ctx
+        .conn
+        .complete_runtime_protocol_message_async(mutation_completion)
+        .await
+        .expect("runtime mutation completion should finish")
+        .expect("Main inspection must retain its frozen command output");
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -3343,10 +3349,12 @@ async fn describe_node_low_node_id_misses_without_frontend_binding() {
         })]
     );
 
-    let page = loaded_page_mut_for_test(&mut ctx);
-    let _ = page
-        .finish_runtime_protocol_message(mutation_completion)
-        .expect("runtime mutation completion should finish");
+    let _ = ctx
+        .conn
+        .complete_runtime_protocol_message_async(mutation_completion)
+        .await
+        .expect("runtime mutation completion should finish")
+        .expect("Main inspection must retain its frozen command output");
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -3376,10 +3384,12 @@ async fn get_outer_html_low_backend_id_misses_without_backend_binding() {
         })]
     );
 
-    let page = loaded_page_mut_for_test(&mut ctx);
-    let _ = page
-        .finish_runtime_protocol_message(mutation_completion)
-        .expect("runtime mutation completion should finish");
+    let _ = ctx
+        .conn
+        .complete_runtime_protocol_message_async(mutation_completion)
+        .await
+        .expect("runtime mutation completion should finish")
+        .expect("Main inspection must retain its frozen command output");
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -3409,10 +3419,12 @@ async fn get_box_model_low_node_id_misses_without_frontend_binding() {
         })]
     );
 
-    let page = loaded_page_mut_for_test(&mut ctx);
-    let _ = page
-        .finish_runtime_protocol_message(mutation_completion)
-        .expect("runtime mutation completion should finish");
+    let _ = ctx
+        .conn
+        .complete_runtime_protocol_message_async(mutation_completion)
+        .await
+        .expect("runtime mutation completion should finish")
+        .expect("Main inspection must retain its frozen command output");
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -3442,10 +3454,12 @@ async fn get_content_quads_low_backend_id_misses_without_backend_binding() {
         })]
     );
 
-    let page = loaded_page_mut_for_test(&mut ctx);
-    let _ = page
-        .finish_runtime_protocol_message(mutation_completion)
-        .expect("runtime mutation completion should finish");
+    let _ = ctx
+        .conn
+        .complete_runtime_protocol_message_async(mutation_completion)
+        .await
+        .expect("runtime mutation completion should finish")
+        .expect("Main inspection must retain its frozen command output");
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -3475,10 +3489,12 @@ async fn scroll_into_view_low_backend_id_misses_without_backend_binding() {
         })]
     );
 
-    let page = loaded_page_mut_for_test(&mut ctx);
-    let _ = page
-        .finish_runtime_protocol_message(mutation_completion)
-        .expect("runtime mutation completion should finish");
+    let _ = ctx
+        .conn
+        .complete_runtime_protocol_message_async(mutation_completion)
+        .await
+        .expect("runtime mutation completion should finish")
+        .expect("Main inspection must retain its frozen command output");
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -3508,10 +3524,12 @@ async fn query_selector_low_root_node_id_misses_without_frontend_binding() {
         })]
     );
 
-    let page = loaded_page_mut_for_test(&mut ctx);
-    let _ = page
-        .finish_runtime_protocol_message(mutation_completion)
-        .expect("runtime mutation completion should finish");
+    let _ = ctx
+        .conn
+        .complete_runtime_protocol_message_async(mutation_completion)
+        .await
+        .expect("runtime mutation completion should finish")
+        .expect("Main inspection must retain its frozen command output");
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -3541,10 +3559,12 @@ async fn query_selector_all_low_root_node_id_misses_without_frontend_binding() {
         })]
     );
 
-    let page = loaded_page_mut_for_test(&mut ctx);
-    let _ = page
-        .finish_runtime_protocol_message(mutation_completion)
-        .expect("runtime mutation completion should finish");
+    let _ = ctx
+        .conn
+        .complete_runtime_protocol_message_async(mutation_completion)
+        .await
+        .expect("runtime mutation completion should finish")
+        .expect("Main inspection must retain its frozen command output");
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -3574,10 +3594,12 @@ async fn request_child_nodes_low_node_id_misses_without_frontend_binding() {
         })]
     );
 
-    let page = loaded_page_mut_for_test(&mut ctx);
-    let _ = page
-        .finish_runtime_protocol_message(mutation_completion)
-        .expect("runtime mutation completion should finish");
+    let _ = ctx
+        .conn
+        .complete_runtime_protocol_message_async(mutation_completion)
+        .await
+        .expect("runtime mutation completion should finish")
+        .expect("Main inspection must retain its frozen command output");
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -3607,10 +3629,12 @@ async fn remove_node_low_node_id_misses_without_frontend_binding() {
         })]
     );
 
-    let page = loaded_page_mut_for_test(&mut ctx);
-    let _ = page
-        .finish_runtime_protocol_message(mutation_completion)
-        .expect("runtime mutation completion should finish");
+    let _ = ctx
+        .conn
+        .complete_runtime_protocol_message_async(mutation_completion)
+        .await
+        .expect("runtime mutation completion should finish")
+        .expect("Main inspection must retain its frozen command output");
 }
 
 #[tokio::test(flavor = "multi_thread")]

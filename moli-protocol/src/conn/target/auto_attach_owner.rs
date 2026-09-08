@@ -45,7 +45,7 @@ impl CdpConnection {
         self.clear_service_worker_auto_attach_related_owner(session_id);
         let key = session_id.map(str::to_owned);
         if enabled {
-            self.target_control.ensure_owner(session_id);
+            self.agent_hosts.ensure_owner(session_id);
             self.auto_attach_owner_sessions.insert(
                 key,
                 AutoAttachOwnerPolicy {

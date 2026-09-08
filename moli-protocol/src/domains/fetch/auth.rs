@@ -1,6 +1,7 @@
 use crate::conn::{
-    BackgroundProtocolEvent, CdpConnection, Cmd, CommandOwnerScope, PendingFetchAuthNavigation,
-    PendingFetchNavigation, PendingSubresourceFetchAuthRequest, PendingSubresourceFetchRequest,
+    BackgroundProtocolEvent, CdpConnection, Cmd, CommandOwnerScope, CompletedDocumentFetchCommand,
+    DocumentFetchCommand, PendingFetchAuthNavigation, PendingFetchNavigation,
+    PendingSubresourceFetchAuthRequest, PendingSubresourceFetchRequest,
 };
 use crate::devtools_runtime::{
     DevToolsAuthChallengeAction, DevToolsCommand, DevToolsContinueWithAuthCommand,
@@ -8,7 +9,7 @@ use crate::devtools_runtime::{
 };
 use crate::domains::command_output::CommandOutputPlan;
 use crate::domains::{activity, network};
-use moli_core::page::{CompletedPageCommand, SubresourceAuthCredentials};
+use moli_core::page::SubresourceAuthCredentials;
 
 use super::PendingFetchCommandOperation;
 use super::helpers::{
@@ -179,21 +180,18 @@ pub(super) fn start_devtools_continue_with_auth_command_for_pending(
                     } else {
                         None
                     };
-                let pending_page = match conn.loaded_page_mut_for_protocol_access_for_owner(owner) {
-                    Ok(page) => (match command.action {
-                        DevToolsAuthChallengeAction::Default => page
-                            .start_fail_pending_subresource_auth(
-                                pending.internal_id,
-                                "Fetch auth challenge aborted".to_owned(),
-                            ),
-                        DevToolsAuthChallengeAction::Cancel => {
-                            page.start_cancel_pending_subresource_auth(pending.internal_id)
-                        }
-                        DevToolsAuthChallengeAction::ProvideCredentials => unreachable!(),
-                    })
-                    .map_err(|error| error.to_string()),
-                    Err(message) => Err(message.to_owned()),
+                let browser_command = match command.action {
+                    DevToolsAuthChallengeAction::Default => DocumentFetchCommand::FailAuth {
+                        internal_id: pending.internal_id,
+                        error_text: "Fetch auth challenge aborted".to_owned(),
+                    },
+                    DevToolsAuthChallengeAction::Cancel => DocumentFetchCommand::CancelAuth {
+                        internal_id: pending.internal_id,
+                    },
+                    DevToolsAuthChallengeAction::ProvideCredentials => unreachable!(),
                 };
+                let pending_page =
+                    super::start_document_fetch_command_for_owner(conn, owner, browser_command);
                 let pending_page = match pending_page {
                     Ok(pending_page) => pending_page,
                     Err(error) => {
@@ -230,7 +228,7 @@ pub(super) fn start_devtools_continue_with_auth_command_for_pending(
                         PendingFetchCommandKind::ContinueWithAuth {
                             state: Box::new(state),
                         },
-                        PendingFetchCommandOperation::Page(pending_page),
+                        PendingFetchCommandOperation::DocumentFetch(Ok(pending_page)),
                     ),
                 ));
             }
@@ -269,12 +267,15 @@ pub(super) fn start_devtools_continue_with_auth_command_for_pending(
                         )));
                     }
                 };
-                let pending_page = match conn.loaded_page_mut_for_protocol_access_for_owner(owner) {
-                    Ok(page) => page
-                        .start_continue_pending_subresource_auth(pending.internal_id, auth)
-                        .map_err(|error| format!("subresource auth continue failed: {error}")),
-                    Err(message) => Err(message.to_owned()),
-                };
+                let pending_page = super::start_document_fetch_command_for_owner(
+                    conn,
+                    owner,
+                    DocumentFetchCommand::ContinueAuth {
+                        internal_id: pending.internal_id,
+                        auth,
+                    },
+                )
+                .map_err(|error| format!("subresource auth continue failed: {error}"));
                 let pending_page = match pending_page {
                     Ok(pending_page) => pending_page,
                     Err(message) => {
@@ -298,7 +299,7 @@ pub(super) fn start_devtools_continue_with_auth_command_for_pending(
                                 },
                             ),
                         },
-                        PendingFetchCommandOperation::Page(pending_page),
+                        PendingFetchCommandOperation::DocumentFetch(Ok(pending_page)),
                     ),
                 ));
             }
@@ -461,6 +462,40 @@ fn next_chained_navigation_auth_required_event(
     ))
 }
 
+pub(super) async fn default_navigation_auth_as_background_events_async(
+    conn: &mut CdpConnection,
+    out: &mut FetchCommandOutput,
+    fallback_session_id: Option<&str>,
+    pending: PendingFetchAuthNavigation,
+) {
+    if pending
+        .auth_stage_pause_state()
+        .is_some_and(|chain| !chain.remaining_sessions.is_empty())
+        && let Some(event) =
+            next_chained_navigation_auth_required_event(conn, fallback_session_id, pending.clone())
+    {
+        out.extend_background_events([event]);
+        return;
+    }
+
+    drop(conn.take_navigation_auth(pending.auth_permit));
+    let token = Some(pending.auth_permit.navigation());
+    let navigation_state = pending.navigation;
+    let navigation = network::materialize_navigation_load_result(
+        conn,
+        &navigation_state,
+        Err("Fetch auth challenge aborted".to_owned()),
+    );
+    complete_tokened_materialized_navigation_as_background_events_async(
+        conn,
+        out,
+        token,
+        navigation_state,
+        navigation,
+    )
+    .await;
+}
+
 fn next_chained_subresource_auth_required_event(
     conn: &mut CdpConnection,
     command_session_id: Option<&str>,
@@ -503,7 +538,7 @@ fn next_chained_subresource_auth_required_event(
 pub(super) async fn complete_continue_with_auth_command_async(
     conn: &mut CdpConnection,
     owner: &CommandOwnerScope,
-    completed: Option<Result<CompletedPageCommand, String>>,
+    completed: Option<Result<CompletedDocumentFetchCommand, String>>,
     state: PendingContinueWithAuthState,
     out: &mut FetchCommandOutput,
 ) {
@@ -517,20 +552,17 @@ pub(super) async fn complete_continue_with_auth_command_async(
                 owner,
                 completed,
                 *pending,
-                true,
                 correlation,
                 out,
             )
             .await;
         }
         PendingContinueWithAuthState::SubresourceAuthFail { pending } => {
-            complete_subresource_auth_terminal_async(
-                conn, owner, completed, *pending, false, None, out,
-            )
-            .await;
+            complete_subresource_auth_terminal_async(conn, owner, completed, *pending, None, out)
+                .await;
         }
         PendingContinueWithAuthState::SubresourceAuthContinue { correlation } => {
-            if let Err(error) = finish_continue_subresource_auth(conn, owner, completed) {
+            if let Err(error) = finish_continue_subresource_auth(conn, completed) {
                 correlation.rollback(conn);
                 out.push_error(-32000, error);
                 return;
@@ -546,33 +578,41 @@ pub(super) async fn complete_continue_with_auth_command_async(
         }
         PendingContinueWithAuthState::NavigationFail { pending } => {
             out.push_success();
-            let token = pending.document_navigation_token;
-            let navigation_state = pending.navigation;
-            let navigation = network::materialize_navigation_load_result(
-                conn,
-                &navigation_state,
-                Err("Fetch auth challenge aborted".to_owned()),
-            );
-            complete_tokened_materialized_navigation_as_background_events_async(
+            default_navigation_auth_as_background_events_async(
                 conn,
                 out,
-                token,
-                navigation_state,
-                navigation,
+                owner.session_id(),
+                *pending,
             )
             .await;
         }
         PendingContinueWithAuthState::NavigationContinue { pending, auth } => {
             out.push_success();
-            let prior_network_observation_journal =
-                pending.auth_response.observation_journal().clone();
+            let response = conn.take_navigation_auth(pending.auth_permit);
+            let Some(response) = response else {
+                let token = Some(pending.auth_permit.navigation());
+                let navigation = network::materialize_navigation_load_result(
+                    conn,
+                    &pending.navigation,
+                    Err("stale navigation auth response".to_owned()),
+                );
+                complete_tokened_materialized_navigation_as_background_events_async(
+                    conn,
+                    out,
+                    token,
+                    pending.navigation,
+                    navigation,
+                )
+                .await;
+                return;
+            };
             load_or_pause_navigation_for_auth_as_background_events_async(
                 conn,
                 out,
                 PendingFetchNavigation {
                     fetch_request_id: pending.response_stage_request_id,
                     interception_session_id: pending.interception_session_id.clone(),
-                    document_navigation_token: pending.document_navigation_token,
+                    navigation_permit: pending.auth_permit,
                     navigation: pending.navigation,
                     request_cookie_report: None,
                     intercept_response: pending.intercept_response,
@@ -580,7 +620,7 @@ pub(super) async fn complete_continue_with_auth_command_async(
                     auth_required_blocked_intercepts: Vec::new(),
                 },
                 Some(auth),
-                Some(prior_network_observation_journal),
+                response.retry(),
             )
             .await;
         }
@@ -590,48 +630,13 @@ pub(super) async fn complete_continue_with_auth_command_async(
 async fn complete_subresource_auth_terminal_async(
     conn: &mut CdpConnection,
     owner: &CommandOwnerScope,
-    completed: Option<Result<CompletedPageCommand, String>>,
+    completed: Option<Result<CompletedDocumentFetchCommand, String>>,
     pending: crate::conn::PendingSubresourceFetchAuthRequest,
-    expose_challenged_response: bool,
     correlation: Option<PreparedSubresourceCorrelation>,
     out: &mut FetchCommandOutput,
 ) {
     let activity_session_id = pending.owner_session_id.as_deref().or(owner.session_id());
-    let activity_owner = activity_session_id
-        .map(CommandOwnerScope::for_session)
-        .unwrap_or_else(|| owner.clone());
-    let Some(completed) = completed else {
-        if let Some(correlation) = correlation {
-            correlation.rollback(conn);
-        }
-        out.push_error(-32000, "Missing renderer completion");
-        return;
-    };
-    let completion = match completed {
-        Ok(completion) => completion,
-        Err(error) => {
-            if let Some(correlation) = correlation {
-                correlation.rollback(conn);
-            }
-            out.push_error(-32000, error);
-            return;
-        }
-    };
-    let result = match conn.loaded_page_mut_for_protocol_access_for_owner(&activity_owner) {
-        Ok(page) if expose_challenged_response => page
-            .finish_cancel_pending_subresource_auth(completion)
-            .map(|_| ()),
-        Ok(page) => page
-            .finish_fail_pending_subresource_auth(completion)
-            .map(|_| ()),
-        Err(message) => {
-            if let Some(correlation) = correlation {
-                correlation.rollback(conn);
-            }
-            out.push_error(-32000, message);
-            return;
-        }
-    };
+    let result = super::finish_document_fetch_command(conn, completed);
     if let Err(error) = result {
         if let Some(correlation) = correlation {
             correlation.rollback(conn);
@@ -656,12 +661,10 @@ async fn complete_subresource_auth_terminal_async(
 
 fn finish_continue_subresource_auth(
     conn: &mut CdpConnection,
-    owner: &CommandOwnerScope,
-    completed: Option<Result<CompletedPageCommand, String>>,
+    completed: Option<Result<CompletedDocumentFetchCommand, String>>,
 ) -> Result<(), String> {
-    let completion = completed.ok_or_else(|| "Missing renderer completion".to_owned())??;
-    let page = conn.loaded_page_mut_for_protocol_access_for_owner(owner)?;
-    page.finish_continue_pending_subresource_auth(completion)
+    super::finish_document_fetch_command(conn, completed)
+        .and_then(crate::conn::DocumentFetchCommandOutcome::into_continue_outcome)
         .map(|_| ())
         .map_err(|error| format!("subresource auth continue failed: {error}"))
 }

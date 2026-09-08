@@ -3,24 +3,26 @@ use std::{
     sync::{Arc, Weak},
 };
 
-use anyhow::{Result, anyhow};
+use anyhow::{Context, Result, anyhow};
 #[cfg(test)]
 use tokio::sync::oneshot;
 use url::Url;
 
 use crate::{
-    local_executor::JsLocalExecutor, network::ResourceRequestClient,
-    render_runtime::RenderRuntimeOwner, types::ScriptExecutionReport,
+    local_executor::JsLocalExecutor,
+    network::ResourceRequestClient,
+    render_runtime::{RenderRuntimeHandle, RenderRuntimeOwner},
+    types::ScriptExecutionReport,
 };
 
 use super::{
     DocumentStartScript, ExternalRawDocumentBodyStream, PageVmInitStage,
     RendererBrowserContextRuntime, RendererBrowserContextRuntimeOwner,
-    RendererBrowserContextRuntimeOwnerAccess, RendererDocumentCommitPermit,
-    RendererDocumentIsolateAccountingDiagnostics, RendererInspectorSessionRestoreSnapshot,
-    RendererOwnerCommand, RendererOwnerHandle, RendererOwnerReply, RendererPageCreationArtifacts,
-    RendererPageCreationDiagnostics, RendererPageHandle, RendererPageReservationToken,
-    RendererPageState, RendererPendingDownloadActivation, RendererPerformanceMetricSnapshot,
+    RendererBrowserContextRuntimeOwnerAccess, RendererDocumentIsolateAccountingDiagnostics,
+    RendererInspectorSessionRestoreSnapshot, RendererOwnerCommand, RendererOwnerHandle,
+    RendererOwnerReply, RendererPageCreationArtifacts, RendererPageCreationDiagnostics,
+    RendererPageHandle, RendererPageReservationToken, RendererPageState,
+    RendererPendingDownloadActivation, RendererPerformanceMetricSnapshot,
     RendererReservedServiceWorkerClient,
 };
 
@@ -293,13 +295,13 @@ impl JsRuntime {
     }
 
     pub fn document_isolate_model_for_diagnostics(&self) -> &'static str {
-        "page-vm"
+        RendererDocumentIsolateAccountingDiagnostics::MODEL
     }
 
     pub fn document_isolate_accounting_for_diagnostics(
         &self,
     ) -> RendererDocumentIsolateAccountingDiagnostics {
-        crate::script_vm::renderer_document_isolate_accounting_diagnostics()
+        RendererDocumentIsolateAccountingDiagnostics::snapshot()
     }
 
     pub fn renderer_owner_id_for_diagnostics(&self) -> u64 {
@@ -815,8 +817,7 @@ impl JsRuntime {
                 lifecycle_decider,
             )
             .await?;
-        let permit = prepared.issue_commit_permit();
-        prepared.commit(permit).await
+        prepared.materialize(None).await
     }
 
     /// Moves a streaming response and all document bootstrap inputs onto the
@@ -928,6 +929,184 @@ impl JsRuntime {
     }
 }
 
+impl JsRuntime {
+    /// Reserve a response without starting its parser or author script.
+    /// Inspection bootstrap can then enter the same FIFO through its own weak
+    /// endpoint, before Browser materialization consumes the reservation.
+    #[allow(clippy::too_many_arguments)]
+    pub fn reserve_document_response(
+        &self,
+        token: RendererPageReservationToken,
+        requested_url: Url,
+        final_url: Url,
+        navigation_initiator_url: Option<Url>,
+        redirected: bool,
+        redirect_count: usize,
+        response_status: u16,
+        response_headers: Vec<(String, String)>,
+        body: ExternalRawDocumentBodyStream,
+        loader: &ResourceRequestClient,
+        web_storage: crate::RendererWebStorageHandles,
+        indexed_db_manager: Option<crate::context_bootstrap::WeakIndexedDbManager>,
+        storage_bucket_store: Option<crate::context_bootstrap::SharedStorageBucketStore>,
+        top_level_storage_key: Option<moli_storage_key::MoliStorageKey>,
+        stage: PageVmInitStage,
+        reply_boundary: crate::RendererReplyBoundary,
+        reserved_service_worker_client: Option<RendererReservedServiceWorkerClient>,
+    ) -> PendingPreparedRendererDocument {
+        let mut request = self
+            .inner
+            .renderer_owner
+            .build_create_streaming_raw_page_request(
+                requested_url,
+                final_url,
+                navigation_initiator_url,
+                redirected,
+                redirect_count,
+                Vec::new(),
+                response_status,
+                response_headers,
+                loader,
+                web_storage,
+                body,
+                Vec::new(),
+                Vec::new(),
+                Vec::new(),
+                Vec::new(),
+                None,
+                None,
+                false,
+                false,
+                1.0,
+                Default::default(),
+                None,
+                false,
+                Vec::new(),
+                false,
+                None,
+                stage,
+            );
+        request.indexed_db_manager = indexed_db_manager;
+        request.storage_bucket_store = storage_bucket_store;
+        request.top_level_storage_key = top_level_storage_key;
+        request.reply_boundary = reply_boundary;
+        request.reserved_service_worker_client = reserved_service_worker_client;
+        request.top_level_navigation_dispatch =
+            crate::RendererTopLevelNavigationDispatch::DelegateToBrowser;
+        request.navigation_reply_policy =
+            crate::RendererNavigationReplyPolicy::ReturnWithPendingNavigation;
+        PendingPreparedRendererDocument {
+            runtime: self.clone(),
+            token,
+            preparation: RendererDocumentPreparation::Reserved(Box::new(request)),
+        }
+    }
+}
+
+/// Owned preparation, including cancellation before the renderer acknowledges
+/// the reservation. It is not a reusable permission to materialize another Page.
+pub struct PendingPreparedRendererDocument {
+    runtime: JsRuntime,
+    token: RendererPageReservationToken,
+    preparation: RendererDocumentPreparation,
+}
+
+enum RendererDocumentPreparation {
+    Reserved(Box<super::owner::RendererCreateStreamingRawPageRequest>),
+    Preparing(tokio::sync::oneshot::Receiver<Result<RendererOwnerReply>>),
+    Transferred,
+}
+
+impl PendingPreparedRendererDocument {
+    pub fn token(&self) -> RendererPageReservationToken {
+        self.token
+    }
+
+    /// The caller may bind the reserved output residence before this opens its
+    /// stream. Non-inspector callers can simply await readiness/materialize.
+    pub fn start_preparation(&mut self) -> Result<()> {
+        if !matches!(self.preparation, RendererDocumentPreparation::Reserved(_)) {
+            return Ok(());
+        }
+        let RendererDocumentPreparation::Reserved(request) = std::mem::replace(
+            &mut self.preparation,
+            RendererDocumentPreparation::Transferred,
+        ) else {
+            unreachable!()
+        };
+        match self
+            .runtime
+            .inner
+            .renderer_owner
+            .enqueue_command_with_reply(RendererOwnerCommand::PrepareStreamingRawDocument {
+                token: self.token,
+                request: *request,
+            }) {
+            Ok(reply) => {
+                self.preparation = RendererDocumentPreparation::Preparing(reply);
+                Ok(())
+            }
+            Err(error) => {
+                self.runtime
+                    .inner
+                    .renderer_owner
+                    .release_page_output_reservation(self.token);
+                Err(error)
+            }
+        }
+    }
+
+    pub fn inspection_configuration_endpoint(&self) -> RendererPreparedDocumentInspectionEndpoint {
+        RendererPreparedDocumentInspectionEndpoint {
+            render_runtime: self.runtime.inner._render_runtime.handle(),
+            token: self.token,
+        }
+    }
+
+    pub async fn await_ready(mut self) -> Result<PreparedRendererDocument> {
+        self.start_preparation()?;
+        // Keep the receiver present while awaiting: dropping this future must
+        // enqueue exact-token cancellation even before prepare has completed.
+        let RendererDocumentPreparation::Preparing(reply_rx) = &mut self.preparation else {
+            return Err(anyhow!("document preparation was not started"));
+        };
+        let reply = reply_rx
+            .await
+            .context("document preparation acknowledgement was canceled")??;
+        let RendererOwnerReply::PreparedRendererDocumentStored {
+            renderer_devtools_agent_token,
+        } = reply
+        else {
+            return Err(anyhow!("renderer owner returned a non-prepare reply"));
+        };
+        self.preparation = RendererDocumentPreparation::Transferred;
+        Ok(PreparedRendererDocument::new(
+            self.runtime.clone(),
+            self.token,
+            renderer_devtools_agent_token,
+        ))
+    }
+}
+
+impl Drop for PendingPreparedRendererDocument {
+    fn drop(&mut self) {
+        if matches!(self.preparation, RendererDocumentPreparation::Reserved(_)) {
+            self.runtime
+                .inner
+                .renderer_owner
+                .release_page_output_reservation(self.token);
+        } else if matches!(self.preparation, RendererDocumentPreparation::Preparing(_)) {
+            let _ = self
+                .runtime
+                .inner
+                .renderer_owner
+                .enqueue_command_with_reply(RendererOwnerCommand::CancelPreparedRendererDocument {
+                    token: self.token,
+                });
+        }
+    }
+}
+
 impl JsRuntimeOwner {
     pub fn handle(&self) -> JsRuntime {
         self.runtime
@@ -963,8 +1142,8 @@ impl Drop for JsRuntimeOwner {
 /// An opaque handle to owner-local streaming document inputs held before the
 /// renderer commit barrier.
 ///
-/// Dropping this handle schedules cancellation. Only a permit issued for this
-/// exact handle can consume the owner-local residence and start bootstrap.
+/// Dropping this handle schedules cancellation. Materialization consumes the
+/// handle itself; there is no separately mintable or pairable commit permit.
 pub struct PreparedRendererDocument {
     runtime: JsRuntime,
     token: RendererPageReservationToken,
@@ -994,38 +1173,16 @@ impl PreparedRendererDocument {
         self.renderer_devtools_agent_token
     }
 
-    pub fn issue_commit_permit(&self) -> RendererDocumentCommitPermit {
-        RendererDocumentCommitPermit::new(self.token)
-    }
-
-    /// Replaces the live target configuration consumed when the first
-    /// execution contexts are created.
-    pub async fn update_commit_configuration(
-        &self,
-        configuration: super::RendererPreparedDocumentCommitConfiguration,
-    ) -> Result<()> {
-        let reply = self
-            .runtime
-            .inner
-            .renderer_owner
-            .dispatch_command(
-                RendererOwnerCommand::UpdatePreparedRendererDocumentCommitConfiguration {
-                    token: self.token,
-                    configuration,
-                },
-            )
-            .await?;
-        match reply {
-            RendererOwnerReply::PreparedRendererDocumentCommitConfigurationUpdated => Ok(()),
-            _ => Err(anyhow!(
-                "renderer owner returned non-update reply for prepared document configuration"
-            )),
+    pub fn inspection_configuration_endpoint(&self) -> RendererPreparedDocumentInspectionEndpoint {
+        RendererPreparedDocumentInspectionEndpoint {
+            render_runtime: self.runtime.inner._render_runtime.handle(),
+            token: self.token,
         }
     }
 
-    pub async fn commit(
+    pub async fn materialize(
         mut self,
-        permit: RendererDocumentCommitPermit,
+        policy: Option<super::RendererPreparedDocumentPolicy>,
     ) -> Result<(
         RendererPageHandle,
         Arc<RendererPageState>,
@@ -1033,16 +1190,15 @@ impl PreparedRendererDocument {
         RendererPageCreationArtifacts,
         Option<RendererPendingDownloadActivation>,
     )> {
-        anyhow::ensure!(
-            permit.prepared_document() == self.token,
-            "renderer document commit permit does not belong to this prepared document"
-        );
         self.cancel_on_drop = false;
         let reply = self
             .runtime
             .inner
             .renderer_owner
-            .dispatch_command(RendererOwnerCommand::CommitPreparedRendererDocument { permit })
+            .dispatch_command(RendererOwnerCommand::MaterializePreparedRendererDocument {
+                token: self.token,
+                policy: policy.map(Box::new),
+            })
             .await?;
         self.runtime
             .inner
@@ -1067,6 +1223,43 @@ impl PreparedRendererDocument {
             _ => Err(anyhow!(
                 "renderer owner returned non-cancel reply for prepared document request"
             )),
+        }
+    }
+}
+
+/// DevTools bootstrap ingress for one exact reserved renderer Document.
+/// It cannot change Browser policy, start parsing, or publish a current binding.
+/// Its weak renderer route does not keep the runtime or reservation alive.
+#[derive(Clone)]
+pub struct RendererPreparedDocumentInspectionEndpoint {
+    render_runtime: RenderRuntimeHandle,
+    token: RendererPageReservationToken,
+}
+
+impl RendererPreparedDocumentInspectionEndpoint {
+    /// Admission is synchronous so a later Browser materialization follows the
+    /// bootstrap update on the same renderer owner. The reply future is only an
+    /// acknowledgement, never authority to commit a Browser Document.
+    pub fn start_configure(
+        &self,
+        configuration: super::RendererPreparedDocumentInspectionConfiguration,
+    ) -> impl std::future::Future<Output = Result<()>> + use<> {
+        let reply = self.render_runtime.enqueue(
+            RendererOwnerCommand::ConfigurePreparedDocumentInspection {
+                token: self.token,
+                configuration,
+            },
+        );
+        async move {
+            match reply?
+                .await
+                .context("prepared document inspection acknowledgement was canceled")??
+            {
+                RendererOwnerReply::PreparedDocumentInspectionConfigured => Ok(()),
+                _ => Err(anyhow!(
+                    "renderer owner returned an invalid inspection configuration acknowledgement"
+                )),
+            }
         }
     }
 }

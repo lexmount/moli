@@ -1,5 +1,4 @@
 use std::{
-    cell::OnceCell,
     collections::{HashMap, HashSet},
     path::PathBuf,
     sync::{
@@ -10,7 +9,6 @@ use std::{
 
 use indexmap::IndexMap;
 use moli_cookie_jar::{StoredCookie, StoredCookieQueryReport};
-use moli_fetch::FetchConfig;
 use parking_lot::Mutex;
 use serde_json::json;
 
@@ -20,36 +18,44 @@ use crate::devtools_runtime::{
 use crate::domains::command_output::{BackgroundProtocolEventBuffer, CommandOutputBuffer};
 
 use moli_core::{
-    LayoutPolicy, OptionalResourceFetchMask, RendererOutputPublicationOrdering,
-    RendererOutputTransportMessage,
+    LayoutPolicy, RendererOutputPublicationOrdering, RendererOutputTransportMessage,
+    browser::BrowserHandle,
     network::{SharedWebStorageStore, new_shared_web_storage_store},
-    page::{NavigationResponse, Page, SubresourceAuthCredentials},
-    runtime::{
-        NavigationEngine, NavigationRuntimeConfig, storage_partition::StoragePartitionState,
-    },
+    runtime::{NavigationRuntimeConfig, storage_partition::StoragePartitionState},
 };
 
 pub const DEFAULT_CDP_PAGE_TARGET_ID: &str = "moli-default";
 pub const DEFAULT_CDP_TAB_TARGET_ID: &str = "moli-default-tab";
 
 mod activity_source;
+mod automation_session;
 mod bidi_channel_work;
-mod body_spool;
 mod browser_context;
+mod browser_worker_commands;
 mod command_owner_scope;
 mod command_view;
 mod cookie_manager_surface;
 mod cookie_owner;
+#[cfg(test)]
 mod cookie_policy_surface;
 #[cfg(test)]
 mod cookie_store_boundary;
 mod devtools_command;
 mod dispatch;
+mod download_policy;
 mod downloads;
+pub(crate) use download_policy::parse_download_behavior;
+pub(crate) use downloads::PreparedDownloadActivation;
+#[cfg(test)]
+mod download_policy_tests;
 mod fetch_support;
+#[cfg(test)]
+mod inspection_binding_tests;
 mod inspector_route;
 mod output;
-mod page_state;
+#[cfg(test)]
+mod permission_tests;
+mod permissions;
 mod popup_activation_work;
 mod popup_navigation_work;
 mod protocol_output;
@@ -63,6 +69,39 @@ mod settings;
 #[cfg(test)]
 mod site_data_manager_surface;
 mod state;
+pub(crate) use state::PageInputCommand;
+pub(crate) use state::{
+    BrowserAppManifestLoadPreparation, CompletedAppManifestLoadPreparation,
+    CompletedAppManifestPublication, CompletedCaptureDocumentImage,
+    CompletedCaptureDocumentScreencastFrame, CompletedCaptureDocumentSnapshot,
+    CompletedChildFrameNavigation, CompletedChildFrameTreeSnapshot,
+    CompletedDocumentAutofillTrigger, CompletedDocumentBlobRead,
+    CompletedDocumentCookieOwnerSnapshot, CompletedDocumentCspBypassUpdate,
+    CompletedDocumentDiagnosticsSnapshot, CompletedDocumentFetchCommand,
+    CompletedDocumentInputCommand, CompletedDocumentLifecycleStop, CompletedDocumentPolicyUpdate,
+    CompletedDocumentResourceRuntimeUpdate, CompletedDocumentResourceTextSearch,
+    CompletedDocumentStorageKeySnapshot, CompletedNavigationHistoryReset,
+    CompletedNetworkResourceLoadPreparation, CompletedSetDocumentContent,
+    CompletedTopLevelHistoryTraversal, CompletedTopLevelSameDocumentNavigation,
+    DocumentFetchCommand, DocumentFetchCommandOutcome, DocumentPolicyUpdate,
+    DocumentRuntimePolicyReconciliation, LIVE_DEVICE_METRICS_CLEAR_SCRIPT,
+    PendingAppManifestLoadPreparation, PendingAppManifestPublication, PendingCaptureDocumentImage,
+    PendingCaptureDocumentScreencastFrame, PendingCaptureDocumentSnapshot,
+    PendingChildFrameLifecycleWork, PendingChildFrameNavigation, PendingChildFrameTreeSnapshot,
+    PendingDocumentAutofillTrigger, PendingDocumentBlobRead, PendingDocumentCookieOwnerSnapshot,
+    PendingDocumentCspBypassUpdate, PendingDocumentDiagnosticsSnapshot,
+    PendingDocumentFetchCommand, PendingDocumentInputCommand, PendingDocumentLifecycleStop,
+    PendingDocumentPolicyBatch, PendingDocumentPolicyUpdate, PendingDocumentResourceRuntimeUpdate,
+    PendingDocumentResourceTextSearch, PendingDocumentStorageKeySnapshot,
+    PendingNavigationHistoryReset, PendingNetworkResourceLoadPreparation,
+    PendingSetDocumentContent, PendingTopLevelHistoryTraversal,
+    PendingTopLevelSameDocumentNavigation,
+};
+pub(crate) use state::{
+    ClaimedNavigationRequest, InterceptedNavigationLoad, InterceptedNavigationResponse,
+    NavigationRequestInterception,
+};
+pub(crate) use state::{CompletedContextPermissionUpdate, PendingContextPermissionUpdate};
 mod target;
 mod top_level_navigation_work;
 
@@ -73,11 +112,9 @@ pub(crate) use bidi_channel_work::{
     BidiChannelListenerResidence, BidiChannelOwnerAction, BidiChannelOwnerActionBody,
     BidiChannelPageOwner,
 };
-pub(crate) use body_spool::{CapturedBody, CapturedBodyWriter};
 pub(crate) use browser_context::{
-    PageLifecycleEventsEnableResult, SessionOwnerInspectorEnableResult,
-    SessionOwnerRuntimeFrontendEnableResult, TargetEmulationStateUpdate,
-    TargetNavigationLoadInputs,
+    PageCloseNotifications, PageLifecycleEventsEnableResult, SessionOwnerInspectorEnableResult,
+    SessionOwnerRuntimeFrontendEnableResult, TargetNavigationLoadInputs,
 };
 pub(crate) use command_owner_scope::CommandOwnerScope;
 pub use command_view::Cmd;
@@ -95,29 +132,37 @@ pub(crate) use cookie_owner::{
 };
 pub use devtools_command::DevToolsCommandDispatchOutcome;
 pub(crate) use devtools_command::DevToolsCommandExecutionOutput;
-pub use dispatch::{CdpCommandTaskStep, CompletedCdpCommandDispatch, PendingCdpCommandDispatch};
-pub(crate) use downloads::SharedDownloadRegistry;
+pub use dispatch::{
+    AgentHostDispatchResult, CdpCommandTaskStep, CompletedCdpCommandDispatch,
+    PendingCdpCommandDispatch, RendererDispatch, RendererDispatchBinding, RendererDispatchLane,
+    RendererPageDispatchBinding,
+};
 pub(crate) use fetch_support::PendingStreamingDocumentResponseNavigation;
 pub(crate) use fetch_support::{
-    ClaimedSubresourceContinueRequest, CompletedFetchResponseBodyStreamReadDispatch,
-    PendingFetchResponseBodyStreamRead, PendingFetchResponseBodyStreamReadDispatch,
-    PendingFetchResponseBodyStreamReadStart, PendingSubresourceFetchResidence,
+    ClaimedFetchNavigation, ClaimedFetchResponseNavigation, ClaimedSubresourceContinueRequest,
+    CompletedFetchResponseBodyStreamReadDispatch, PendingFetchResponseBodyStreamRead,
+    PendingFetchResponseBodyStreamReadDispatch, PendingFetchResponseBodyStreamReadStart,
+    PendingFetchResponseNavigation, PendingSubresourceFetchResidence,
 };
 pub use fetch_support::{
-    DocumentBodySource, FetchAuthChallenge, FetchInterceptionPattern, FetchRequestStage,
-    FetchResourceTypeFilter, InFlightSubresourceFetchRequest, PausedDocumentTransfer,
-    PausedDocumentTransfers, PendingFetchAuthNavigation, PendingFetchNavigation,
-    PendingFetchResponseOpenedBodyStream, PendingSubresourceFetchAuthRequest,
-    PendingSubresourceFetchAuthStage, PendingSubresourceFetchAuthStageChain,
-    PendingSubresourceFetchOwnerKind, PendingSubresourceFetchRequest,
-    PendingSubresourceFetchRequestStage, PendingSubresourceFetchRequestStageChain,
-    PendingSubresourceFetchResponseRequest, PendingSubresourceFetchResponseStage,
-    PendingSubresourceFetchResponseStageChain, ResponseStageUrlMatchPolicy,
-    fetch_subresource_interception_config, fetch_subresource_interception_config_for_patterns,
+    FetchAuthChallenge, FetchInterceptionPattern, FetchRequestStage, FetchResourceTypeFilter,
+    InFlightSubresourceFetchRequest, PendingFetchAuthNavigation, PendingFetchNavigation,
+    PendingSubresourceFetchAuthRequest, PendingSubresourceFetchAuthStage,
+    PendingSubresourceFetchAuthStageChain, PendingSubresourceFetchOwnerKind,
+    PendingSubresourceFetchRequest, PendingSubresourceFetchRequestStage,
+    PendingSubresourceFetchRequestStageChain, PendingSubresourceFetchResponseRequest,
+    PendingSubresourceFetchResponseStage, PendingSubresourceFetchResponseStageChain,
+    ResponseStageUrlMatchPolicy, fetch_subresource_interception_config,
+    fetch_subresource_interception_config_for_patterns,
 };
+pub(crate) use moli_core::browser::web_contents::OpenBodyStreamError;
+pub use moli_core::browser::web_contents::{
+    DocumentBodySource, PausedDocumentTransfer, PendingFetchResponseOpenedBodyStream,
+};
+pub(crate) use moli_core::browser::{CapturedBody, CapturedBodyWriter};
 pub use moli_protocol_cdp::{
-    CdpRendererCommandAccess, CdpRendererCommandPolicy, CdpRendererCommandReplacement,
-    CdpRendererCommandReplayDispatch, CdpRequest, ParsedCdpCommand,
+    CdpRendererCommandPolicy, CdpRendererCommandReplacement, CdpRendererCommandReplayDispatch,
+    CdpRequest, ParsedCdpCommand,
 };
 use target::DEFAULT_BROWSER_CONTEXT_ID;
 pub(crate) use target::{
@@ -241,6 +286,7 @@ pub enum DevToolsDocumentNavigationState {
 
 fn devtools_document_lifecycle_wait_state_for_slot(
     slot: &TargetRuntimeSlot,
+    binding: Option<&CommittedRendererDocumentBinding>,
     key: &DevToolsDocumentLifecycleWaitKey,
 ) -> DevToolsDocumentLifecycleWaitState {
     let page_slot = slot.page_slot();
@@ -260,20 +306,18 @@ fn devtools_document_lifecycle_wait_state_for_slot(
         moli_core::page::RendererDocumentLifecycleWaitOutcome::Interrupted(_) => {
             DevToolsDocumentLifecycleWaitState::Interrupted
         }
-        moli_core::page::RendererDocumentLifecycleWaitOutcome::Pending => {
-            match page_slot.renderer_document_lifecycle_binding() {
-                None => DevToolsDocumentLifecycleWaitState::Unavailable,
-                Some(binding)
-                    if binding.renderer_document == key.renderer_document
-                        && binding.renderer_epoch == key.renderer_epoch
-                        && binding.frame_id == key.frame_id
-                        && binding.loader_id == key.loader_id =>
-                {
-                    DevToolsDocumentLifecycleWaitState::Pending
-                }
-                Some(_) => DevToolsDocumentLifecycleWaitState::Superseded,
+        moli_core::page::RendererDocumentLifecycleWaitOutcome::Pending => match binding {
+            None => DevToolsDocumentLifecycleWaitState::Unavailable,
+            Some(binding)
+                if binding.renderer_document == key.renderer_document
+                    && binding.renderer_epoch == key.renderer_epoch
+                    && binding.frame_id == key.frame_id
+                    && binding.loader_id == key.loader_id =>
+            {
+                DevToolsDocumentLifecycleWaitState::Pending
             }
-        }
+            Some(_) => DevToolsDocumentLifecycleWaitState::Superseded,
+        },
     }
 }
 
@@ -324,10 +368,6 @@ impl CommandResponseFlushContext {
             receiver: Some(receiver),
             deferred_releases: Some(deferred_releases),
         }
-    }
-
-    pub(crate) fn is_active(&self) -> bool {
-        self.receiver.is_some()
     }
 
     pub(crate) fn receiver(&self) -> Option<tokio::sync::watch::Receiver<bool>> {
@@ -509,15 +549,13 @@ pub(crate) use output::{
     BackgroundServiceWorkerRegistration, BackgroundServiceWorkerVersion,
     build_command_success_response,
 };
-pub(crate) use page_state::{LoadedNavigationPageCommit, LoadedNavigationRendererAttachmentCommit};
 pub(crate) use popup_activation_work::PopupTargetActivationAction;
 pub(crate) use popup_navigation_work::{
     PopupTargetNavigationKind, PopupTargetNavigationOwnerAction,
 };
 pub(crate) use runtime_eval::{
-    ClaimedPendingInspectorAwait, ClaimedPendingInspectorAwaitOwner, RuntimeBindingCallEvent,
-    RuntimeEnableReplayEvent, renderer_command_turn_frontend_protocol_response,
-    runtime_remote_object_ids_in_map,
+    ClaimedPendingInspectorAwait, RuntimeBindingCallEvent, RuntimeEnableReplayEvent,
+    renderer_command_turn_frontend_protocol_response, runtime_remote_object_ids_in_map,
 };
 pub use runtime_eval::{
     CompletedMoliDiagnosticsDispatch, CompletedRuntimeBindingPageCommandDispatch,
@@ -533,8 +571,7 @@ pub(crate) use runtime_load::decode_data_url_response;
 pub(crate) use runtime_load::{
     BackgroundNavigationBodyCompletionSink, BackgroundNavigationEarlyResult,
     BackgroundNavigationLoadJob, CompletedInitialDocumentPageBuild, FailedInitialDocumentPageBuild,
-    InitialDocumentPageInstallResult, InitialDocumentPageOwner, PausedResponsePreparedDocument,
-    PendingInitialDocumentPageBuild, ResponseCommitReady,
+    PausedResponsePreparedDocument, PendingInitialDocumentPageBuild, ResponseCommitReady,
 };
 use scheduler_hooks::CdpSchedulerHooks;
 use scheduler_state::CdpConnectionSchedulerState;
@@ -543,55 +580,62 @@ pub use scheduler_state::{CdpRendererOwnerTurnOutcome, CdpSchedulerEvent, CdpTur
 pub(crate) use site_data_manager_surface::{
     BrowserContextReservedSiteDataOwnerState, BrowserContextSiteDataManagerOwnerState,
 };
+#[cfg(test)]
+pub(crate) use state::BrowserContextResourceStorageHandles;
+pub(crate) use state::JavaScriptDialogError;
 pub use state::{
-    BrowserContext, BrowserWindowBounds, DevToolsPageResidenceIdentity, DocumentStartScript,
-    DownloadNavigation, EmulatedDeviceMetrics, EmulatedGeolocationOverride,
-    EmulatedGeolocationOverrideState, EmulatedMediaOverrides, IsolatedWorldDefinition,
-    LoadedNavigation, NavigationDispatchState, NavigationLoadOutcome, NavigationRequestLoadPolicy,
-    PageNavigationHistoryEntry, PageTargetHost, PendingNavigationHistoryUpdate,
+    BrowserContext, DevToolsPageResidenceIdentity, DocumentStartScript, DownloadNavigation,
+    EmulatedDeviceMetrics, EmulatedGeolocationOverride, EmulatedGeolocationOverrideState,
+    EmulatedMediaOverrides, IsolatedWorldDefinition, LoadedNavigation, NavigationDispatchState,
+    NavigationLoadOutcome, NavigationRequestLoadPolicy, PageAgentHost, PageNavigationHistoryEntry,
     RuntimeBindingDefinition, TargetInfo, URL_BASE,
 };
 pub(crate) use state::{
-    BrowserContextPageStorageHandles, BrowserContextResourceStorageHandles,
-    BrowserContextStoragePartitionHandles, CommittedRendererAgentAttachment,
-    CommittedRendererDocumentBinding, CompletedDownloadBody, CompletedDownloadBodyArtifact,
+    BrowserContextPageStorageHandles, BrowserContextStoragePartitionHandles,
+    CommittedRendererDocumentBinding, CompletedDownloadBodyArtifact, ContextNetworkPolicy,
     DedicatedWorkerMainScriptOutcome, DedicatedWorkerMainScriptSnapshot,
     DedicatedWorkerTargetState, DevToolsBrowserIdentityOverride, DevToolsConsoleOutputSessionState,
-    DevToolsEmulationSessionState, DevToolsLogViolationThreshold, DocumentNavigationToken,
-    DuplicatePendingRendererCommand, EffectiveTargetEmulationState,
-    EffectiveTargetEmulationStateDelta, EmulatedNetworkConditions, EmulatedViewportSurface,
-    InspectorCommandDispatch, NETWORK_ERROR_PAGE_URL, NavigationResultProjection,
+    DevToolsLogViolationThreshold, DocumentId, DocumentProjectionFence,
+    DocumentProjectionOutputRelease, DuplicatePendingRendererCommand, EmulatedNetworkConditions,
+    EmulatedViewportSurface, EmulationPolicyChange, InitialDocumentCreator,
+    InspectorCommandDispatch, NETWORK_ERROR_PAGE_URL, NavigationId, NavigationResultProjection,
     NavigationSourceDocumentSecurityContext, NetworkErrorPageNavigation, PageScreencastConfig,
-    PageScreencastFormat, PendingBidiChannelListener, PendingInspectorAwait,
-    PendingRendererCommandKey, PerformanceTimeDomain, PreparedRendererCallDispatch, ProfilerAction,
-    ProfilerInspectorCommand, RendererCommandCorrelation, RendererCommandDescriptor,
-    RendererCommandReplay, RendererDocumentLifecycleObservation, RendererDocumentLifecycleObserver,
+    PageScreencastFormat, PendingBidiChannelListener, PendingInspectorAwait, PerformanceTimeDomain,
+    PreparedRendererCallDispatch, ProfilerAction, ProfilerInspectorCommand, RendererAgentBinding,
+    RendererCommandCorrelation, RendererCommandDescriptor, RendererCommandReplay,
+    RendererDocumentLifecycleObservation, RendererDocumentLifecycleObserver,
     RendererMainDocumentCommitSeed, RendererPageResidenceIdentity,
     ServiceWorkerRuntimeExceptionSnapshot, ServiceWorkerTargetState, SharedWorkerTargetState,
-    SiteDataClearOptions, TargetIdentityState, TargetInitialEmptyDocumentCreator, TargetOwnerState,
-    TargetPageAttachmentId, TargetPageProtocolAttachmentIdentity, TargetPageResidenceIdentity,
-    TargetPageResidenceObservation, TargetPageResidenceToken, TargetPageSessionState,
+    SiteDataClearOptions, TargetIdentityState, TargetOwnerState,
+    TargetPageProtocolAttachmentIdentity, TargetPageResidenceIdentity, TargetPageSessionState,
     TargetPreparedJavaScriptDialog, TargetPreparedJavaScriptDialogRoute,
     TargetRootDocumentProtocolAttachmentIdentity, TargetRuntimeSlot,
     TargetServiceWorkerProtocolAttachmentIdentity, TargetServiceWorkerProtocolAttachmentRetirement,
     TargetServiceWorkerRunIdentity, TargetServiceWorkerRunRetirement,
     TargetServiceWorkerRuntimeAttachmentIdentity, TargetServiceWorkerVersionIdentity,
     TargetServiceWorkerVersionRetirement, TargetSharedWorkerProtocolAttachmentIdentity,
-    TargetSharedWorkerProtocolAttachmentRetirement, TargetWindowSurfaceState,
+    TargetSharedWorkerProtocolAttachmentRetirement, WindowSurface, WindowSurfaceState,
     viewport_surface_install_script,
+};
+pub(crate) use state::{
+    CommittedDocumentLifecycle, DocumentLifecycleEvent, DocumentNavigationDestination,
+    LoadedNavigationPageCommit, PreparedDocumentNavigation,
 };
 #[cfg(test)]
 pub(crate) use state::{
-    DevToolsSessionState, TargetJavaScriptDialog, TargetJavaScriptDialogScopeObserver,
-    TargetPageSlot, TargetRuntimeSessionState,
+    DevToolsEmulationSessionState, DevToolsSessionState, EmulationPolicy, JavaScriptDialogKey,
+    TargetJavaScriptDialog, TargetJavaScriptDialogScopeObserver, TargetPageSlot,
+    TargetRuntimeSessionState,
+};
+pub(crate) use state::{HistoryTraversalDestination, ResolvedHistoryTraversal};
+use target::{
+    DevToolsAgentHostRegistry, TargetClosurePlan, TargetHostDelta,
+    target_destroyed_automation_events,
 };
 pub(crate) use target::{
-    PreparedTargetAttach, PreparedTargetHostClosure, PreparedTargetHostDelta, SessionDisposalPlan,
-    SessionDisposalTarget, TargetAttachSessionCommit, TargetClosureCleanupPlan, TargetEventPlan,
-    TargetSessionDetachCleanupPlan,
-};
-use target::{
-    TargetClosurePlan, TargetControlPlane, TargetHostDelta, target_destroyed_automation_events,
+    DevToolsSessionHandlerSet, PreparedTargetAttach, PreparedTargetHostClosure,
+    PreparedTargetHostDelta, SessionDisposalPlan, SessionDisposalTarget, TargetAttachSessionCommit,
+    TargetClosureCleanupPlan, TargetEventPlan, TargetSessionDetachCleanupPlan,
 };
 pub(crate) use top_level_navigation_work::TopLevelLocationNavigationOwnerAction;
 
@@ -665,25 +709,6 @@ impl ConnectionNetworkRequestIdAllocator {
     #[cfg(test)]
     pub(crate) fn next_sequence_for_test(&self) -> u64 {
         self.next_sequence
-    }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) struct IdleNavigationEngineReleaseResult {
-    pub(crate) reset: bool,
-    pub(crate) reason: &'static str,
-    pub(crate) loaded_browser_context_count: usize,
-    pub(crate) live_target_browser_context_count: usize,
-}
-
-impl IdleNavigationEngineReleaseResult {
-    pub(crate) fn to_protocol_json(self) -> serde_json::Value {
-        json!({
-            "reset": self.reset,
-            "reason": self.reason,
-            "loadedBrowserContextCount": self.loaded_browser_context_count,
-            "liveTargetBrowserContextCount": self.live_target_browser_context_count,
-        })
     }
 }
 
@@ -814,44 +839,6 @@ impl DeferredMainDocumentLoadPredecessorCandidate {
     }
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub(crate) struct RuntimeAwaitJob {
-    command_id: u64,
-    owner: CommandOwnerScope,
-    object_group: Option<String>,
-    action: &'static str,
-}
-
-impl RuntimeAwaitJob {
-    pub(crate) fn new(
-        command_id: u64,
-        owner: &CommandOwnerScope,
-        object_group: Option<&str>,
-        action: &'static str,
-    ) -> Self {
-        Self {
-            command_id,
-            owner: owner.clone(),
-            object_group: object_group.map(str::to_owned),
-            action,
-        }
-    }
-
-    pub(crate) fn trace_fields(&self) -> serde_json::Value {
-        json!({
-            "commandId": self.command_id,
-            "sessionId": self.owner.session_id(),
-            "ownerRoute": self.owner.explicit_route().map(|route| format!("{route:?}")),
-            "objectGroup": self.object_group,
-            "action": self.action,
-        })
-    }
-
-    pub(crate) fn session_id(&self) -> Option<String> {
-        self.owner.session_id().map(str::to_owned)
-    }
-}
-
 #[derive(Clone)]
 pub struct CdpInitialStoragePartition {
     handles: BrowserContextStoragePartitionHandles,
@@ -918,11 +905,13 @@ impl CdpInitialStoragePartitionOwner {
 
     fn new_default_browser_context(
         &self,
+        browser: &BrowserHandle,
         id: String,
         http_cache_root: Option<PathBuf>,
         http_cache_max_bytes: Option<u64>,
     ) -> BrowserContext {
         BrowserContext::new_with_storage_partition_handles_and_http_cache(
+            browser,
             id,
             self.handles.clone(),
             http_cache_root,
@@ -930,6 +919,7 @@ impl CdpInitialStoragePartitionOwner {
         )
     }
 
+    #[cfg(test)]
     fn resource_storage_handles(&self) -> BrowserContextResourceStorageHandles {
         self.handles
             .resource_storage_handles(self.fallback_session_storage_store.clone())
@@ -1040,111 +1030,20 @@ pub(crate) struct ServiceWorkerAutoAttachRelatedOwnerSession {
     pub(crate) wait_for_debugger_on_start: bool,
 }
 
-/// Drop-addressable fallback engine for commands without a concrete Page host.
-///
-/// `CdpConnection::drop` must release this engine before joining its extracted
-/// BrowserContext network roots. A plain field would only be dropped after the
-/// Drop implementation returned, which reverses that order.
-struct StandaloneNavigationEngineSlot {
-    engine: OnceCell<NavigationEngine>,
-    runtime_config: NavigationRuntimeConfig,
-    renderer_publication_sender: Option<moli_core::RendererOutputTransportSender>,
-}
-
-impl StandaloneNavigationEngineSlot {
-    fn materialized(engine: NavigationEngine) -> Self {
-        let runtime_config = engine.runtime_config();
-        let slot = Self {
-            engine: OnceCell::new(),
-            runtime_config,
-            renderer_publication_sender: None,
-        };
-        slot.engine
-            .set(engine)
-            .expect("fresh standalone navigation engine slot must be empty");
-        slot
-    }
-
-    fn deferred(runtime_config: NavigationRuntimeConfig) -> Self {
-        Self {
-            engine: OnceCell::new(),
-            runtime_config,
-            renderer_publication_sender: None,
-        }
-    }
-
-    #[cfg(test)]
-    fn is_materialized(&self) -> bool {
-        self.engine.get().is_some()
-    }
-
-    fn runtime_config(&self) -> NavigationRuntimeConfig {
-        self.engine
-            .get()
-            .map(NavigationEngine::runtime_config)
-            .unwrap_or_else(|| self.runtime_config.clone())
-    }
-
-    fn fetch_config(&self) -> &moli_fetch::FetchConfig {
-        self.engine
-            .get()
-            .map(NavigationEngine::fetch_config)
-            .unwrap_or_else(|| self.runtime_config.fetch_config())
-    }
-
-    fn layout_policy(&self) -> LayoutPolicy {
-        self.engine
-            .get()
-            .map(NavigationEngine::layout_policy)
-            .unwrap_or_else(|| self.runtime_config.layout_policy())
-    }
-
-    fn set_renderer_output_transport_sender(
-        &mut self,
-        sender: moli_core::RendererOutputTransportSender,
-    ) {
-        if let Some(engine) = self.engine.get() {
-            engine.set_renderer_output_transport_sender(sender.clone());
-        }
-        self.renderer_publication_sender = Some(sender);
-    }
-
-    fn replace(&mut self, engine: NavigationEngine) -> Option<NavigationEngine> {
-        self.runtime_config = engine.runtime_config();
-        if let Some(sender) = self.renderer_publication_sender.as_ref() {
-            engine.set_renderer_output_transport_sender(sender.clone());
-        }
-        let previous = self.engine.take();
-        self.engine
-            .set(engine)
-            .expect("standalone navigation engine slot must be empty after take");
-        previous
-    }
-
-    fn take(&mut self) -> Option<NavigationEngine> {
-        self.engine.take()
-    }
-
-    fn ensure(&self) -> &NavigationEngine {
-        self.engine.get_or_init(|| {
-            let engine = NavigationEngine::new_with_runtime_config(self.runtime_config.clone());
-            if let Some(sender) = self.renderer_publication_sender.as_ref() {
-                engine.set_renderer_output_transport_sender(sender.clone());
-            }
-            engine
-        })
-    }
-
-    fn ensure_mut(&mut self) -> &mut NavigationEngine {
-        self.ensure();
-        self.engine
-            .get_mut()
-            .expect("standalone navigation engine was just materialized")
-    }
+/// The single Browser-wide source for defaults inherited by every Context.
+/// Clones are short-lived operation snapshots and never Context residents.
+#[derive(Clone, Default)]
+pub(crate) struct BrowserGlobalOverrides {
+    pub(crate) extra_headers: Vec<(String, String)>,
+    pub(crate) network_conditions: Option<EmulatedNetworkConditions>,
+    pub(crate) geolocation: Option<EmulatedGeolocationOverrideState>,
+    pub(crate) cache_disabled: bool,
 }
 
 /// Persistent per-connection state.
 pub struct CdpConnection {
+    browser: BrowserHandle,
+    webdriver_sessions: HashMap<String, automation_session::WebDriverSessionScope>,
     // Browser/session routing state.
     pub browser_context: Option<BrowserContext>,
     pub inactive_browser_contexts: Vec<BrowserContext>,
@@ -1163,7 +1062,7 @@ pub struct CdpConnection {
     // additional attached sessions. A randomized HashMap iteration order made that
     // choice vary between otherwise identical processes.
     auto_attach_owner_sessions: IndexMap<Option<String>, AutoAttachOwnerPolicy>,
-    target_control: TargetControlPlane,
+    agent_hosts: DevToolsAgentHostRegistry,
     default_target_lifecycle: DefaultTargetLifecycle,
     service_worker_auto_attach_related_owners: Vec<ServiceWorkerAutoAttachRelatedOwner>,
     service_worker_pause_on_start_owner_sessions: HashSet<Option<String>>,
@@ -1176,23 +1075,15 @@ pub struct CdpConnection {
     shared_tab_target_id_allocator: Option<Arc<AtomicU64>>,
     next_session_id: u32,
     next_page_domain_subscription_generation: u64,
-    next_internal_runtime_command_id: u64,
+    next_internal_devtools_command_id: u64,
     network_request_id_allocator: ConnectionNetworkRequestIdAllocator,
-    pending_runtime_await_jobs: HashMap<PendingRendererCommandKey, RuntimeAwaitJob>,
-    claimed_pending_inspector_await_owners:
-        HashMap<PendingRendererCommandKey, ClaimedPendingInspectorAwaitOwner>,
-
-    // Browser profile, permissions, download and global IO state.
-    pub window_bounds: BrowserWindowBounds,
-    pub download_behavior: BrowserDownloadBehavior,
-    pub permission_overrides: Vec<PermissionOverride>,
+    // Browser profile, download and global IO state.
+    download_policy: moli_core::browser::DownloadPolicy,
+    download_subscriptions: download_policy::DownloadSubscriptions,
     next_global_io_stream_id: u64,
     base_browser_identity: moli_browser_profile::BrowserIdentityProfile,
-    global_extra_headers: Vec<(String, String)>,
+    pub(crate) browser_global_overrides: BrowserGlobalOverrides,
     global_browser_identity_override: Option<moli_browser_profile::BrowserIdentityProfile>,
-    global_network_conditions: Option<EmulatedNetworkConditions>,
-    global_geolocation_override: Option<EmulatedGeolocationOverrideState>,
-    global_cache_disabled: bool,
     pub(crate) network_data_collectors: crate::domains::network::NetworkDataCollectorStore,
     base_http_proxy: Option<String>,
     base_http_no_proxy: Option<String>,
@@ -1200,7 +1091,6 @@ pub struct CdpConnection {
     initial_storage_partition: CdpInitialStoragePartitionOwner,
     pub(crate) global_io_streams: HashMap<String, IoStreamState>,
     pub(crate) tracing_state: crate::domains::tracing::TracingState,
-    download_registry: SharedDownloadRegistry,
 
     // Transport/scheduler integration hooks. These are channels out of the
     // renderer/browser owner into the outer CDP scheduler; they should not grow
@@ -1212,110 +1102,16 @@ pub struct CdpConnection {
     // source-specific queue ownership is being migrated outward.
     scheduler_state: CdpConnectionSchedulerState,
 
-    // Standalone navigation state for commands that have no concrete Page
-    // owner. Every page-owned engine lives in its stable PageTargetHost.
-    standalone_navigation_engine: StandaloneNavigationEngineSlot,
-}
-
-impl Default for CdpConnection {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
-impl Drop for CdpConnection {
-    fn drop(&mut self) {
-        // Separate per-context roots from target/page state so teardown can
-        // follow the observable producer order even though NavigationEngines
-        // and detached local tasks retain only weak owner access.
-        let mut contexts = Vec::new();
-        if let Some(context) = self.browser_context.take() {
-            contexts.push(context);
-        }
-        contexts.append(&mut self.inactive_browser_contexts);
-        let roots = contexts
-            .iter_mut()
-            .filter_map(BrowserContext::take_renderer_runtime_owner_for_teardown)
-            .collect::<Vec<_>>();
-
-        let mut roots = roots;
-        for root in &mut roots {
-            root.terminate_renderer_producers_for_owner_shutdown();
-        }
-
-        // Dropping contexts releases every PageTargetHost and its Page state.
-        drop(contexts);
-
-        // RenderRuntimeOwner joins happen when the last JsRuntime-backed
-        // NavigationEngine handle is released. Do that explicitly here rather
-        // than relying on field drop after this method returns.
-        drop(self.standalone_navigation_engine.take());
-
-        // Only after every Page engine and the standalone fallback are gone
-        // may the context roots close fetch admission and join network owners.
-        for root in &mut roots {
-            root.shutdown_network_and_join();
-        }
-        drop(roots);
-    }
+    // Defaults only. Live engines belong to Core WebContents, never DevTools.
+    navigation_runtime_config: NavigationRuntimeConfig,
 }
 
 impl CdpConnection {
-    pub fn new() -> Self {
-        Self::new_with_initial_storage_partition(CdpInitialStoragePartition::memory())
-    }
-
     pub(crate) fn layout_policy(&self) -> LayoutPolicy {
         self.browser_context
             .as_ref()
-            .and_then(|context| context.page_targets.active())
-            .and_then(PageTargetHost::navigation_engine)
-            .map(NavigationEngine::layout_policy)
-            .unwrap_or_else(|| self.standalone_navigation_engine.layout_policy())
-    }
-
-    pub(crate) fn active_navigation_engine(&self) -> &NavigationEngine {
-        if let Some(engine) = self
-            .browser_context
-            .as_ref()
-            .and_then(|context| context.page_targets.active())
-            .and_then(PageTargetHost::navigation_engine)
-        {
-            return engine;
-        }
-        self.standalone_navigation_engine.ensure()
-    }
-
-    pub(crate) fn active_navigation_engine_mut(&mut self) -> &mut NavigationEngine {
-        let active_owner = self
-            .browser_context
-            .as_ref()
-            .and_then(|context| Some((context.id.clone(), context.active_target_id()?.to_owned())));
-        if let Some((browser_context_id, target_id)) = active_owner {
-            return self
-                .ensure_page_navigation_engine_for_target(&browser_context_id, &target_id)
-                .expect("active PageTargetHost navigation engine disappeared");
-        }
-        self.standalone_navigation_engine.ensure_mut()
-    }
-
-    pub(crate) fn ensure_page_navigation_engine_for_target(
-        &mut self,
-        browser_context_id: &str,
-        target_id: &str,
-    ) -> Option<&mut NavigationEngine> {
-        let needs_engine = self
-            .browser_context_by_id(browser_context_id)?
-            .page_navigation_engine(target_id)
-            .is_none();
-        if needs_engine {
-            let config = self.standalone_navigation_engine.runtime_config();
-            let sender = self.scheduler_hooks.renderer_publication_sender();
-            self.browser_context_by_id_mut(browser_context_id)?
-                .bind_page_navigation_engines(config, sender);
-        }
-        self.browser_context_by_id_mut(browser_context_id)?
-            .page_navigation_engine_mut(target_id)
+            .and_then(|context| context.page_navigation_layout_policy(context.active_target_id()?))
+            .unwrap_or_else(|| self.navigation_runtime_config.layout_policy())
     }
 
     pub fn has_pending_javascript_dialog(&self) -> bool {
@@ -1325,111 +1121,18 @@ impl CdpConnection {
             .any(BrowserContext::has_pending_javascript_dialog)
     }
 
-    pub fn set_automation_javascript_dialog_handler_enabled(&mut self, enabled: bool) -> bool {
-        let Some(browser_context) = self.browser_context.as_ref() else {
-            return false;
-        };
-        browser_context
-            .renderer_runtime()
-            .set_javascript_dialog_handler_enabled(enabled);
-        true
-    }
-
-    pub fn new_with_initial_cookies(initial_cookies: Vec<StoredCookie>) -> Self {
-        Self::new_with_initial_storage_partition(CdpInitialStoragePartition::with_cookies(
-            initial_cookies,
-        ))
-    }
-
-    pub fn new_with_fetch_config(fetch_config: FetchConfig) -> Self {
-        Self::new_with_initial_storage_partition_and_fetch_config(
-            CdpInitialStoragePartition::memory(),
-            fetch_config,
-        )
-    }
-
     pub fn enable_webdriver_bidi_download_events(&mut self) -> bool {
-        self.download_behavior.enable_webdriver_bidi_events()
+        self.download_subscriptions.enable_webdriver_bidi_events()
     }
 
     pub fn disable_webdriver_bidi_download_events(&mut self) -> bool {
-        self.download_behavior.disable_webdriver_bidi_events()
+        self.download_subscriptions.disable_webdriver_bidi_events()
     }
 
-    pub fn new_with_initial_storage_partition(
-        initial_storage_partition: CdpInitialStoragePartition,
-    ) -> Self {
-        Self::new_with_initial_storage_partition_and_fetch_config(
-            initial_storage_partition,
-            FetchConfig::default(),
-        )
-    }
-
-    pub fn new_with_initial_storage_partition_and_fetch_config(
-        initial_storage_partition: CdpInitialStoragePartition,
-        fetch_config: FetchConfig,
-    ) -> Self {
-        Self::new_with_initial_storage_partition_fetch_config_and_resource_loading(
-            initial_storage_partition,
-            fetch_config,
-            OptionalResourceFetchMask::NONE,
-            true,
-        )
-    }
-
-    pub fn new_with_initial_storage_partition_fetch_config_and_image_fetch_enabled(
-        initial_storage_partition: CdpInitialStoragePartition,
-        fetch_config: FetchConfig,
-        image_fetch_enabled: bool,
-    ) -> Self {
-        let optional_resource_fetch_mask = if image_fetch_enabled {
-            OptionalResourceFetchMask::IMAGE
-        } else {
-            OptionalResourceFetchMask::NONE
-        };
-        Self::new_with_initial_storage_partition_fetch_config_and_resource_loading(
-            initial_storage_partition,
-            fetch_config,
-            optional_resource_fetch_mask,
-            true,
-        )
-    }
-
-    pub fn new_with_initial_storage_partition_fetch_config_and_resource_loading(
-        initial_storage_partition: CdpInitialStoragePartition,
-        fetch_config: FetchConfig,
-        optional_resource_fetch_mask: OptionalResourceFetchMask,
-        subframe_loading_enabled: bool,
-    ) -> Self {
-        Self::new_with_initial_storage_partition_and_runtime_config(
-            initial_storage_partition,
-            NavigationRuntimeConfig::new(
-                fetch_config,
-                optional_resource_fetch_mask,
-                subframe_loading_enabled,
-                LayoutPolicy::default(),
-            ),
-        )
-    }
-
-    pub fn new_with_initial_storage_partition_and_runtime_config(
-        initial_storage_partition: CdpInitialStoragePartition,
-        navigation_runtime_config: NavigationRuntimeConfig,
-    ) -> Self {
-        Self::new_with_initial_storage_partition_owner_and_runtime_config(
-            CdpInitialStoragePartitionOwner::from_initial_storage_partition(
-                initial_storage_partition,
-            ),
-            navigation_runtime_config,
-        )
-    }
-
-    /// Creates protocol state without starting the renderer runtime.
-    ///
-    /// The runtime is materialized on first engine-backed operation. This is
-    /// intended for browser-level CDP owners that publish a target before any
-    /// frontend attaches to its page.
-    pub fn new_with_deferred_navigation_runtime(
+    /// Creates DevTools state attached to an externally owned Browser service.
+    /// Renderer resources are allocated when a concrete target is installed.
+    pub fn new(
+        browser: BrowserHandle,
         initial_storage_partition: CdpInitialStoragePartition,
         navigation_runtime_config: NavigationRuntimeConfig,
     ) -> Self {
@@ -1437,49 +1140,28 @@ impl CdpConnection {
             CdpInitialStoragePartitionOwner::from_initial_storage_partition(
                 initial_storage_partition,
             );
-        Self::new_with_initial_storage_partition_owner_and_engine(
-            initial_storage_partition,
-            StandaloneNavigationEngineSlot::deferred(navigation_runtime_config),
-        )
-    }
-
-    fn new_with_initial_storage_partition_owner_and_runtime_config(
-        initial_storage_partition: CdpInitialStoragePartitionOwner,
-        navigation_runtime_config: NavigationRuntimeConfig,
-    ) -> Self {
-        Self::new_with_initial_storage_partition_owner_and_engine(
-            initial_storage_partition,
-            StandaloneNavigationEngineSlot::materialized(
-                NavigationEngine::new_with_runtime_config(navigation_runtime_config),
-            ),
-        )
-    }
-
-    fn new_with_initial_storage_partition_owner_and_engine(
-        initial_storage_partition: CdpInitialStoragePartitionOwner,
-        standalone_navigation_engine: StandaloneNavigationEngineSlot,
-    ) -> Self {
-        let fetch_config = standalone_navigation_engine.fetch_config();
+        let fetch_config = navigation_runtime_config.fetch_config();
         let base_browser_identity = fetch_config.browser_identity().clone();
         let base_http_proxy = fetch_config.http_proxy().map(str::to_owned);
         let base_http_no_proxy = fetch_config.http_no_proxy().map(str::to_owned);
         let base_tls_verify_host = fetch_config.tls_verify_host();
         Self {
+            browser,
+            webdriver_sessions: HashMap::new(),
             browser_context: None,
             inactive_browser_contexts: Vec::new(),
             target_discovery_enabled: false,
             target_info_change_events_enabled: false,
             target_discovery_filter: None,
             auto_attach_owner_sessions: IndexMap::new(),
-            target_control: TargetControlPlane::default(),
+            agent_hosts: DevToolsAgentHostRegistry::default(),
             default_target_lifecycle: DefaultTargetLifecycle::default(),
             service_worker_auto_attach_related_owners: Vec::new(),
             service_worker_pause_on_start_owner_sessions: HashSet::new(),
             dedicated_worker_pause_on_start_owner_sessions: HashSet::new(),
             install_default_target_on_auto_attach: false,
-            window_bounds: BrowserWindowBounds::default(),
-            download_behavior: BrowserDownloadBehavior::default(),
-            permission_overrides: Vec::new(),
+            download_policy: moli_core::browser::DownloadPolicy::default(),
+            download_subscriptions: download_policy::DownloadSubscriptions::default(),
             next_bc_id: 0,
             next_global_io_stream_id: 0,
             next_target_id: 0,
@@ -1488,16 +1170,11 @@ impl CdpConnection {
             shared_tab_target_id_allocator: None,
             next_session_id: 0,
             next_page_domain_subscription_generation: 0,
-            next_internal_runtime_command_id: 902_000_000,
+            next_internal_devtools_command_id: 902_000_000,
             network_request_id_allocator: ConnectionNetworkRequestIdAllocator::default(),
-            pending_runtime_await_jobs: HashMap::new(),
-            claimed_pending_inspector_await_owners: HashMap::new(),
             base_browser_identity,
-            global_extra_headers: Vec::new(),
+            browser_global_overrides: BrowserGlobalOverrides::default(),
             global_browser_identity_override: None,
-            global_network_conditions: None,
-            global_geolocation_override: None,
-            global_cache_disabled: false,
             network_data_collectors: crate::domains::network::NetworkDataCollectorStore::default(),
             base_http_proxy,
             base_http_no_proxy,
@@ -1505,11 +1182,10 @@ impl CdpConnection {
             initial_storage_partition,
             global_io_streams: HashMap::new(),
             tracing_state: crate::domains::tracing::TracingState::default(),
-            download_registry: SharedDownloadRegistry::default(),
             scheduler_hooks: CdpSchedulerHooks::default(),
             target_host_lifecycle_observer: None,
             scheduler_state: CdpConnectionSchedulerState::default(),
-            standalone_navigation_engine,
+            navigation_runtime_config,
         }
     }
 
@@ -1529,12 +1205,13 @@ impl CdpConnection {
         self.target_host_lifecycle_observer = Some(observer);
     }
 
-    pub fn set_runtime_inspector_response_ready_sender(
+    /// Binds the scheduler's completion ingress once for this connection's
+    /// lifetime. Frontend attach/detach must not replace the receiver while
+    /// renderer callbacks still hold its sender.
+    pub fn bind_runtime_inspector_response_ready(
         &mut self,
-        sender: RuntimeInspectorResponseReadySender,
-    ) {
-        self.scheduler_hooks
-            .set_runtime_inspector_response_ready_sender(sender);
+    ) -> Option<tokio::sync::mpsc::UnboundedReceiver<RuntimeInspectorResponseReady>> {
+        self.scheduler_hooks.bind_runtime_inspector_response_ready()
     }
 
     pub fn set_background_navigation_completion_sender(
@@ -1553,8 +1230,6 @@ impl CdpConnection {
     ) {
         self.scheduler_hooks
             .set_renderer_publication_sender(sender.clone());
-        self.standalone_navigation_engine
-            .set_renderer_output_transport_sender(sender.clone());
         for context in self
             .browser_context
             .iter_mut()
@@ -1568,56 +1243,46 @@ impl CdpConnection {
         self.scheduler_hooks.background_event_sender()
     }
 
-    pub(crate) fn runtime_inspector_response_ready_sender(
+    pub fn runtime_inspector_response_ready_sender(
         &self,
     ) -> Option<RuntimeInspectorResponseReadySender> {
         self.scheduler_hooks
             .runtime_inspector_response_ready_sender()
     }
 
+    #[cfg(any(test, feature = "test-support"))]
     pub(crate) fn document_navigation_cancellation_handle(
         &self,
-        token: &DocumentNavigationToken,
+        token: &NavigationId,
     ) -> Option<moli_fetch::FetchCancelHandle> {
-        let browser_context_id = self.browser_context_id_for_target(&token.target_id)?;
-        self.browser_context_by_id(browser_context_id)?
-            .document_navigation_cancellation_handle(token)
+        self.browser_contexts()
+            .find_map(|context| context.document_navigation_cancellation_handle(token))
     }
 
     pub(crate) fn arm_background_navigation_completion(
         &mut self,
-        token: &DocumentNavigationToken,
+        token: &NavigationId,
         additional_cancellation: Option<moli_fetch::FetchCancelHandle>,
     ) -> bool {
-        let browser_context_id = self
-            .browser_context_id_for_target(&token.target_id)
-            .map(str::to_owned);
-        let Some(browser_context_id) = browser_context_id else {
+        let context = self
+            .browser_context
+            .iter_mut()
+            .chain(self.inactive_browser_contexts.iter_mut())
+            .find(|context| context.accepts_pending_document_navigation_event(token));
+        let Some(context) = context else {
             if let Some(cancellation) = additional_cancellation {
                 cancellation.cancel();
             }
             return false;
         };
-        self.browser_context_by_id_mut(&browser_context_id)
-            .is_some_and(|browser_context| {
-                browser_context.arm_background_navigation_completion(token, additional_cancellation)
-            })
+        context.arm_background_navigation_completion(token, additional_cancellation)
     }
 
-    pub(crate) fn settle_background_navigation_completion(
-        &mut self,
-        token: &DocumentNavigationToken,
-    ) -> bool {
-        let browser_context_id = self
-            .browser_context_id_for_target(&token.target_id)
-            .map(str::to_owned);
-        let Some(browser_context_id) = browser_context_id else {
-            return false;
-        };
-        self.browser_context_by_id_mut(&browser_context_id)
-            .is_some_and(|browser_context| {
-                browser_context.settle_background_navigation_completion(token)
-            })
+    pub(crate) fn settle_background_navigation_completion(&mut self, token: &NavigationId) -> bool {
+        self.browser_context
+            .iter_mut()
+            .chain(self.inactive_browser_contexts.iter_mut())
+            .any(|browser_context| browser_context.settle_background_navigation_completion(token))
     }
 
     pub fn has_inflight_background_navigation(&self) -> bool {
@@ -1706,7 +1371,9 @@ impl CdpConnection {
         };
         self.browser_context_by_id(&browser_context_id)
             .is_some_and(|browser_context| {
-                browser_context.has_pending_document_navigation_for_target(target_id.as_deref())
+                target_id.as_deref().is_some_and(|id| {
+                    browser_context.has_pending_document_navigation_for_target(id)
+                })
             })
     }
 
@@ -1721,7 +1388,9 @@ impl CdpConnection {
         if self
             .browser_context_by_id(&browser_context_id)
             .is_some_and(|browser_context| {
-                browser_context.has_pending_document_navigation_for_target(target_id.as_deref())
+                target_id.as_deref().is_some_and(|id| {
+                    browser_context.has_pending_document_navigation_for_target(id)
+                })
             })
         {
             return DevToolsDocumentNavigationState::PendingNavigation;
@@ -1753,29 +1422,26 @@ impl CdpConnection {
         self.document_navigation_state_for_owner(&owner_scope)
     }
 
-    pub fn renderer_document_navigation_is_suspended_for_session_owner(
+    pub fn document_projection_is_pending_for_session_owner(
         &self,
         session_id: Option<&str>,
     ) -> bool {
         self.runtime_session_owner_slot(session_id)
-            .is_ok_and(TargetRuntimeSlot::renderer_document_navigation_is_suspended)
+            .is_ok_and(TargetRuntimeSlot::document_projection_is_pending)
     }
 
     pub(crate) fn accepts_pending_document_navigation_for_owner(
         &self,
         owner: &CommandOwnerScope,
-        token: &DocumentNavigationToken,
+        token: &NavigationId,
     ) -> bool {
-        let Some((browser_context_id, target_id)) = self.target_owner_identity_for_owner(owner)
-        else {
-            return false;
-        };
-        if target_id.as_deref() != Some(token.target_id.as_str()) {
-            return false;
-        }
-        self.browser_context_by_id(&browser_context_id)
-            .is_some_and(|browser_context| {
-                browser_context.accepts_pending_document_navigation_event(token)
+        self.resolved_page_owner_identity_for_owner(owner)
+            .is_some_and(|(context_id, target_id)| {
+                self.browser_context_by_id(&context_id)
+                    .is_some_and(|context| {
+                        context
+                            .accepts_pending_document_navigation_event_for_target(&target_id, token)
+                    })
             })
     }
 
@@ -1809,9 +1475,10 @@ impl CdpConnection {
         &self,
         owner: &CommandOwnerScope,
     ) -> Option<String> {
-        self.runtime_session_owner_slot_for_owner(owner)
-            .ok()
-            .and_then(|slot| slot.current_document_loader_id().map(str::to_owned))
+        let (context_id, target_id) = self.resolved_page_owner_identity_for_owner(owner)?;
+        self.browser_context_by_id(&context_id)?
+            .current_document_loader_id_for_target(&target_id)
+            .map(str::to_owned)
     }
 
     #[cfg(test)]
@@ -1839,112 +1506,46 @@ impl CdpConnection {
     ) -> Option<crate::domains::network::TargetNetworkBacklogPreparedDelivery> {
         let primary_session_id = self.runtime_session_owner_primary_session_id_for_owner(owner);
         let mut request_id_allocator = std::mem::take(&mut self.network_request_id_allocator);
-        let delivery = self
-            .runtime_session_owner_slot_mut_for_owner(owner)
-            .ok()
-            .and_then(|slot| {
-                slot.ingest_renderer_network_output_item_and_prepare_live_delivery(
-                    source_renderer_page,
-                    source_document,
-                    item,
-                    owner.session_id(),
-                    primary_session_id.as_deref(),
-                    None,
-                    &mut request_id_allocator,
-                )
-            });
+        let delivery = self.resolved_page_owner_identity_for_owner(owner).and_then(
+            |(context_id, target_id)| {
+                self.browser_context_by_id_mut(&context_id)?
+                    .ingest_renderer_network_output_item_and_prepare_live_delivery_for_target(
+                        &target_id,
+                        source_renderer_page,
+                        source_document,
+                        item,
+                        owner.session_id(),
+                        primary_session_id.as_deref(),
+                        None,
+                        &mut request_id_allocator,
+                    )
+            },
+        );
         self.network_request_id_allocator = request_id_allocator;
         delivery
-    }
-
-    pub(crate) fn loaded_page_mut_for_protocol_access(
-        &mut self,
-        session_id: Option<&str>,
-    ) -> Result<&mut Page, String> {
-        let owner = CommandOwnerScope::capture(self, session_id);
-        self.loaded_page_mut_for_protocol_access_for_owner(&owner)
-    }
-
-    pub(crate) fn loaded_page_mut_for_protocol_access_for_owner(
-        &mut self,
-        owner: &CommandOwnerScope,
-    ) -> Result<&mut Page, String> {
-        self.ensure_document_accessible_for_owner(owner)?;
-        self.loaded_page_mut_for_interruptible_protocol_access_for_owner(owner)
-    }
-
-    /// Returns the Page that currently carries target-scoped configuration.
-    ///
-    /// A cross-Document navigation keeps its outgoing Page attached until the
-    /// replacement commits. Network and Emulation settings belong to the
-    /// stable target/session, so they must remain writable during that window:
-    /// the outgoing Page needs the update if navigation fails, while commit
-    /// configuration replays the same target state into the replacement Page.
-    /// Document-reading commands must continue to use
-    /// [`Self::loaded_page_mut_for_protocol_access`] and observe the navigation
-    /// gate instead.
-    pub(crate) fn loaded_page_mut_for_target_configuration(
-        &mut self,
-        session_id: Option<&str>,
-    ) -> Result<&mut Page, String> {
-        let owner = CommandOwnerScope::capture(self, session_id);
-        self.loaded_page_mut_for_target_configuration_for_owner(&owner)
-    }
-
-    pub(crate) fn loaded_page_mut_for_target_configuration_for_owner(
-        &mut self,
-        owner: &CommandOwnerScope,
-    ) -> Result<&mut Page, String> {
-        self.runtime_session_owner_slot_mut_for_owner(owner)?
-            .loaded_page_mut()
-            .ok_or_else(|| "NoDocumentLoaded".to_owned())
-    }
-
-    /// Returns the exact Page that remains attached while a cross-Document
-    /// navigation is suspended.
-    ///
-    /// Only commands classified as renderer-interruptible at the parsed CDP
-    /// boundary may use this access path. Ordinary protocol commands must use
-    /// [`Self::loaded_page_mut_for_protocol_access`] so they wait for the
-    /// replacement attachment instead of entering the old renderer.
-    pub(crate) fn loaded_page_mut_for_interruptible_protocol_access(
-        &mut self,
-        session_id: Option<&str>,
-    ) -> Result<&mut Page, String> {
-        let owner = CommandOwnerScope::capture(self, session_id);
-        self.loaded_page_mut_for_interruptible_protocol_access_for_owner(&owner)
-    }
-
-    pub(crate) fn loaded_page_mut_for_interruptible_protocol_access_for_owner(
-        &mut self,
-        owner: &CommandOwnerScope,
-    ) -> Result<&mut Page, String> {
-        self.runtime_session_owner_slot_mut_for_owner(owner)?
-            .loaded_page_mut()
-            .ok_or_else(|| "NoDocumentLoaded".to_owned())
     }
 
     pub(crate) fn start_document_navigation_for_owner(
         &mut self,
         owner: &CommandOwnerScope,
         loader_id: String,
-    ) -> Option<DocumentNavigationToken> {
+    ) -> Option<NavigationId> {
         let (browser_context_id, target_id) = self.target_owner_identity_for_owner(owner)?;
         let target_id = target_id?;
         self.browser_context_by_id_mut(&browser_context_id)?
             .start_document_navigation_for_target(&target_id, loader_id)
     }
 
+    #[cfg(test)]
     pub(crate) fn commit_document_navigation_for_owner_if_matches(
         &mut self,
         owner: &CommandOwnerScope,
-        token: &DocumentNavigationToken,
+        token: &NavigationId,
     ) {
-        let Some((browser_context_id, target_id)) = self.target_owner_identity_for_owner(owner)
-        else {
+        let Some((browser_context_id, _)) = self.target_owner_identity_for_owner(owner) else {
             return;
         };
-        if target_id.as_deref() != Some(token.target_id.as_str()) {
+        if !self.accepts_pending_document_navigation_for_owner(owner, token) {
             return;
         }
         if let Some(browser_context) = self.browser_context_by_id_mut(&browser_context_id) {
@@ -1952,11 +1553,11 @@ impl CdpConnection {
         }
     }
 
-    pub(crate) fn bind_renderer_document_lifecycle_for_owner(
+    pub(crate) fn project_committed_document_lifecycle_for_owner(
         &mut self,
         owner: &CommandOwnerScope,
-        artifacts: moli_core::page::RendererPageCreationArtifacts,
-        navigation: Option<DocumentNavigationToken>,
+        artifacts: CommittedDocumentLifecycle,
+        navigation: Option<NavigationId>,
         frame_id: String,
         loader_id: String,
     ) -> (
@@ -1964,19 +1565,21 @@ impl CdpConnection {
         Vec<moli_core::page::RendererDocumentLifecycleEvent>,
     ) {
         let (binding, events, document_scope_changed) = {
-            let Ok(slot) = self.runtime_session_owner_slot_mut_for_owner(owner) else {
+            let Some((context_id, target_id)) = self.resolved_page_owner_identity_for_owner(owner)
+            else {
                 return (None, Vec::new());
             };
-            let previous_document_scope = slot
-                .page_slot()
-                .renderer_document_lifecycle_binding()
+            let Some(context) = self.browser_context_by_id_mut(&context_id) else {
+                return (None, Vec::new());
+            };
+            let previous_document_scope = context
+                .renderer_document_lifecycle_binding_for_target(&target_id)
                 .map(CommittedRendererDocumentBinding::renderer_document_identity);
-            let events = slot
-                .page_slot_mut()
-                .bind_renderer_document_lifecycle(artifacts, navigation, frame_id, loader_id);
-            let binding = slot
-                .page_slot()
-                .renderer_document_lifecycle_binding()
+            let events = context.project_committed_document_lifecycle_for_target(
+                &target_id, artifacts, navigation, frame_id, loader_id,
+            );
+            let binding = context
+                .renderer_document_lifecycle_binding_for_target(&target_id)
                 .cloned();
             let current_document_scope = binding
                 .as_ref()
@@ -1993,6 +1596,92 @@ impl CdpConnection {
         (binding, events)
     }
 
+    #[cfg(test)]
+    pub(crate) fn bind_renderer_document_lifecycle_for_owner(
+        &mut self,
+        owner: &CommandOwnerScope,
+        artifacts: moli_core::page::RendererPageCreationArtifacts,
+        navigation: Option<NavigationId>,
+        frame_id: String,
+        loader_id: String,
+    ) -> (
+        Option<CommittedRendererDocumentBinding>,
+        Vec<moli_core::page::RendererDocumentLifecycleEvent>,
+    ) {
+        let Some((context_id, target_id)) = self.resolved_page_owner_identity_for_owner(owner)
+        else {
+            return (None, Vec::new());
+        };
+        let Some(context) = self.browser_context_by_id_mut(&context_id) else {
+            return (None, Vec::new());
+        };
+        let Some(document) = context.target_document_id(&target_id) else {
+            return (None, Vec::new());
+        };
+        let Some(lifecycle) =
+            moli_core::browser::DocumentLifecycle::from_creation_artifacts(&artifacts)
+        else {
+            return (None, Vec::new());
+        };
+        context.install_document_lifecycle_for_test(&target_id, lifecycle);
+        let browser_sequence = context
+            .renderer_document_lifecycle_binding_for_target(&target_id)
+            .filter(|binding| binding.document_id == document)
+            .map(|binding| binding.browser_sequence)
+            .unwrap_or_else(moli_core::browser::BrowserSequence::allocate);
+        self.project_committed_document_lifecycle_for_owner(
+            owner,
+            CommittedDocumentLifecycle {
+                document,
+                browser_sequence,
+                artifacts,
+            },
+            navigation,
+            frame_id,
+            loader_id,
+        )
+    }
+
+    pub(crate) fn project_renderer_document_lifecycle_events_for_owner(
+        &mut self,
+        owner: &CommandOwnerScope,
+        events: Vec<moli_core::page::RendererDocumentLifecycleEvent>,
+    ) -> (
+        Option<CommittedRendererDocumentBinding>,
+        Vec<moli_core::page::RendererDocumentLifecycleEvent>,
+    ) {
+        let (binding, events, document_scope_changed) = {
+            let Some((context_id, target_id)) = self.resolved_page_owner_identity_for_owner(owner)
+            else {
+                return (None, Vec::new());
+            };
+            let Some(context) = self.browser_context_by_id_mut(&context_id) else {
+                return (None, Vec::new());
+            };
+            let previous_document_scope = context
+                .renderer_document_lifecycle_binding_for_target(&target_id)
+                .map(CommittedRendererDocumentBinding::renderer_document_identity);
+            let events =
+                context.project_renderer_document_lifecycle_events_for_target(&target_id, events);
+            let binding = context
+                .renderer_document_lifecycle_binding_for_target(&target_id)
+                .cloned();
+            let current_document_scope = binding
+                .as_ref()
+                .map(CommittedRendererDocumentBinding::renderer_document_identity);
+            (
+                binding,
+                events,
+                current_document_scope != previous_document_scope,
+            )
+        };
+        if document_scope_changed {
+            self.retire_javascript_dialogs_for_owner(owner);
+        }
+        (binding, events)
+    }
+
+    #[cfg(test)]
     pub(crate) fn ingest_renderer_document_lifecycle_events_for_owner(
         &mut self,
         owner: &CommandOwnerScope,
@@ -2001,48 +1690,18 @@ impl CdpConnection {
         Option<CommittedRendererDocumentBinding>,
         Vec<moli_core::page::RendererDocumentLifecycleEvent>,
     ) {
-        let (binding, events, document_scope_changed, document_input_stream_opened) = {
-            let Ok(slot) = self.runtime_session_owner_slot_mut_for_owner(owner) else {
-                return (None, Vec::new());
-            };
-            let previous_document_scope = slot
-                .page_slot()
-                .renderer_document_lifecycle_binding()
-                .map(CommittedRendererDocumentBinding::renderer_document_identity);
-            let events = slot
-                .page_slot_mut()
-                .ingest_renderer_document_lifecycle_events(events);
-            let binding = slot
-                .page_slot()
-                .renderer_document_lifecycle_binding()
-                .cloned();
-            let current_document_scope = binding
-                .as_ref()
-                .map(CommittedRendererDocumentBinding::renderer_document_identity);
-            let document_input_stream_opened = binding.as_ref().is_some_and(|binding| {
-                binding.document_open_replacement_epoch == Some(binding.renderer_epoch)
-            });
-            (
-                binding,
-                events,
-                current_document_scope != previous_document_scope,
-                document_input_stream_opened,
-            )
+        let Some((context_id, target_id)) = self.resolved_page_owner_identity_for_owner(owner)
+        else {
+            return (None, Vec::new());
         };
-        if document_scope_changed {
-            self.retire_javascript_dialogs_for_owner(owner);
-        }
-        if document_input_stream_opened {
-            // The concrete lifecycle record is the authoritative notification
-            // that `document.open()` replaced the initial empty Document. Do
-            // not defer this state transition to a later diagnostics snapshot:
-            // that would make a later owner turn rediscover and settle output
-            // produced by this renderer turn.
-            self.with_target_owner_state_for_owner_mut(owner, |owner_state| {
-                owner_state.mark_initial_empty_document_exited()
-            });
-        }
-        (binding, events)
+        let Some(context) = self.browser_context_by_id_mut(&context_id) else {
+            return (None, Vec::new());
+        };
+        let events = events
+            .into_iter()
+            .filter(|event| context.observe_document_lifecycle_for_target(&target_id, *event))
+            .collect();
+        self.project_renderer_document_lifecycle_events_for_owner(owner, events)
     }
 
     fn retire_javascript_dialogs_for_owner(&mut self, owner: &CommandOwnerScope) {
@@ -2051,10 +1710,7 @@ impl CdpConnection {
             slot.retire_javascript_dialog_scope();
         }
         for event_session_id in event_session_ids {
-            let event_owner = event_session_id
-                .as_deref()
-                .map(CommandOwnerScope::for_session)
-                .unwrap_or_else(|| owner.clone());
+            let event_owner = owner.for_target_event_session(self, event_session_id.as_deref());
             let _ = self.with_target_devtools_session_state_for_owner_mut(&event_owner, |state| {
                 state.page_session_state.javascript_dialog_state.clear()
             });
@@ -2097,6 +1753,33 @@ impl CdpConnection {
     }
 
     #[cfg(test)]
+    pub(crate) fn set_document_fixture_for_owner_test(
+        &mut self,
+        owner: &CommandOwnerScope,
+        raw: u64,
+    ) -> state::DocumentId {
+        let (context_id, target_id) = self
+            .resolved_page_owner_identity_for_owner(owner)
+            .expect("fixture owner");
+        self.browser_context_by_id_mut(&context_id)
+            .unwrap()
+            .set_document_id_for_test_for_target(&target_id, raw)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn replace_document_fixture_for_owner_test(
+        &mut self,
+        owner: &CommandOwnerScope,
+    ) -> state::DocumentId {
+        let (context_id, target_id) = self
+            .resolved_page_owner_identity_for_owner(owner)
+            .expect("fixture owner");
+        self.browser_context_by_id_mut(&context_id)
+            .unwrap()
+            .replace_document_id_for_test_for_target(&target_id)
+    }
+
+    #[cfg(test)]
     pub(crate) fn renderer_document_lifecycle_authoritative_state_for_session_owner(
         &self,
         session_id: Option<&str>,
@@ -2104,13 +1787,18 @@ impl CdpConnection {
         CommittedRendererDocumentBinding,
         moli_core::page::RendererDocumentLifecycleSnapshot,
     )> {
-        let page_slot = self
-            .runtime_session_owner_slot(session_id)
-            .ok()?
-            .page_slot();
         Some((
-            page_slot.renderer_document_lifecycle_binding()?.clone(),
-            page_slot.renderer_document_lifecycle_authoritative_snapshot()?,
+            self.committed_renderer_document_binding_for_owner(&CommandOwnerScope::capture(
+                self, session_id,
+            ))?
+            .clone(),
+            {
+                let owner = CommandOwnerScope::capture(self, session_id);
+                let (context_id, target_id) =
+                    self.resolved_page_owner_identity_for_owner(&owner)?;
+                self.browser_context_by_id(&context_id)?
+                    .renderer_document_lifecycle_authoritative_snapshot_for_target(&target_id)?
+            },
         ))
     }
 
@@ -2120,18 +1808,26 @@ impl CdpConnection {
         expected_binding: Option<&CommittedRendererDocumentBinding>,
         milestone: moli_core::page::RendererDocumentLifecycleMilestone,
     ) -> RendererDocumentLifecycleObserver {
+        let unavailable = || {
+            RendererDocumentLifecycleObserver::resolved(
+                RendererDocumentLifecycleObservation::Unavailable,
+            )
+        };
         let Some(expected_binding) = expected_binding else {
-            return RendererDocumentLifecycleObserver::resolved(
-                RendererDocumentLifecycleObservation::Unavailable,
-            );
+            return unavailable();
         };
-        let Ok(slot) = self.runtime_session_owner_slot_mut_for_owner(owner) else {
-            return RendererDocumentLifecycleObserver::resolved(
-                RendererDocumentLifecycleObservation::Unavailable,
-            );
+        let Some((context_id, target_id)) = self.resolved_page_owner_identity_for_owner(owner)
+        else {
+            return unavailable();
         };
-        slot.page_slot_mut()
-            .register_exact_renderer_document_lifecycle_observer(expected_binding, milestone)
+        let Some(context) = self.browser_context_by_id_mut(&context_id) else {
+            return unavailable();
+        };
+        context.register_exact_renderer_document_lifecycle_observer_for_target(
+            &target_id,
+            expected_binding,
+            milestone,
+        )
     }
 
     pub(crate) fn renderer_document_lifecycle_visible_state_for_session_owner(
@@ -2146,7 +1842,10 @@ impl CdpConnection {
             .ok()?
             .page_slot();
         Some((
-            page_slot.renderer_document_lifecycle_binding()?.clone(),
+            self.committed_renderer_document_binding_for_owner(&CommandOwnerScope::capture(
+                self, session_id,
+            ))?
+            .clone(),
             page_slot.renderer_document_lifecycle_visible_snapshot()?,
         ))
     }
@@ -2156,10 +1855,13 @@ impl CdpConnection {
         owner: &CommandOwnerScope,
         loader_id: &str,
     ) -> bool {
-        self.runtime_session_owner_slot_mut_for_owner(owner)
-            .is_ok_and(|slot| {
-                slot.page_slot_mut()
-                    .arm_root_post_load_observation(loader_id)
+        let Some((context_id, target_id)) = self.resolved_page_owner_identity_for_owner(owner)
+        else {
+            return false;
+        };
+        self.browser_context_by_id_mut(&context_id)
+            .is_some_and(|context| {
+                context.arm_root_post_load_observation_for_target(&target_id, loader_id)
             })
     }
 
@@ -2229,19 +1931,18 @@ impl CdpConnection {
         {
             return false;
         }
-        let binding = self
-            .runtime_session_owner_slot_mut_for_owner(owner)
-            .ok()
-            .and_then(|slot| slot.page_slot_mut().take_root_network_idle_binding());
+        let binding = self.resolved_page_owner_identity_for_owner(owner).and_then(
+            |(context_id, target_id)| {
+                self.browser_context_by_id_mut(&context_id)?
+                    .take_root_network_idle_binding_for_target(&target_id)
+            },
+        );
         let Some(binding) = binding else {
             return false;
         };
         let timestamp = monotonic_timestamp_seconds();
         for event_session_id in self.page_event_session_ids_for_owner(owner) {
-            let event_owner = event_session_id
-                .as_deref()
-                .map(CommandOwnerScope::for_session)
-                .unwrap_or_else(|| owner.clone());
+            let event_owner = owner.for_target_event_session(self, event_session_id.as_deref());
             let lifecycle_enabled = self
                 .target_page_session_state_for_owner(&event_owner)
                 .is_some_and(|state| state.page_lifecycle_events);
@@ -2271,6 +1972,13 @@ impl CdpConnection {
         &self,
         context: &DevToolsCommandContext,
     ) -> Option<CommandOwnerScope> {
+        if context
+            .session_id
+            .as_ref()
+            .is_some_and(|id| self.webdriver_sessions.contains_key(id.as_str()))
+        {
+            return self.webdriver_command_owner_scope(context);
+        }
         if let Some(target_id) = context.target_id.as_ref() {
             let route = self
                 .target_session_route_for_target_id(target_id.as_str())
@@ -2312,11 +2020,14 @@ impl CdpConnection {
         milestone: moli_core::page::RendererDocumentLifecycleMilestone,
     ) -> Option<DevToolsDocumentLifecycleWaitKey> {
         let owner_scope = self.command_owner_scope_for_devtools_context(context)?;
+        let (context_id, target_id) = self.resolved_page_owner_identity_for_owner(&owner_scope)?;
         let registration = self
-            .runtime_session_owner_slot_mut_for_owner(&owner_scope)
-            .ok()?
-            .page_slot_mut()
-            .register_renderer_document_lifecycle_waiter(milestone, expected_loader_id);
+            .browser_context_by_id_mut(&context_id)?
+            .register_renderer_document_lifecycle_waiter_for_target(
+                &target_id,
+                milestone,
+                expected_loader_id,
+            );
         let (registration_id, binding) = registration?;
         Some(DevToolsDocumentLifecycleWaitKey {
             registration_id,
@@ -2336,11 +2047,17 @@ impl CdpConnection {
         let Some(owner_scope) = self.command_owner_scope_for_devtools_context(context) else {
             return DevToolsDocumentLifecycleWaitState::Unavailable;
         };
-        self.runtime_session_owner_slot_for_owner(&owner_scope)
-            .ok()
-            .map_or(DevToolsDocumentLifecycleWaitState::Unavailable, |slot| {
-                devtools_document_lifecycle_wait_state_for_slot(slot, key)
+        self.resolved_page_owner_identity_for_owner(&owner_scope)
+            .and_then(|(context_id, target_id)| {
+                let context = self.browser_context_by_id(&context_id)?;
+                let slot = context.page_target(&target_id)?.runtime_slot();
+                Some(devtools_document_lifecycle_wait_state_for_slot(
+                    slot,
+                    context.renderer_document_lifecycle_binding_for_target(&target_id),
+                    key,
+                ))
             })
+            .unwrap_or(DevToolsDocumentLifecycleWaitState::Unavailable)
     }
 
     pub fn release_devtools_document_lifecycle_wait_key(
@@ -2364,40 +2081,67 @@ impl CdpConnection {
             })
     }
 
+    /// Whether the exact milestone has crossed its protocol visibility gate.
+    /// Native waiter completion can precede the corresponding publication.
+    pub fn devtools_document_lifecycle_wait_is_visible(
+        &self,
+        context: &DevToolsCommandContext,
+        key: &DevToolsDocumentLifecycleWaitKey,
+    ) -> bool {
+        let Some(owner) = self.command_owner_scope_for_devtools_context(context) else {
+            return false;
+        };
+        let Ok(slot) = self.runtime_session_owner_slot_for_owner(&owner) else {
+            return false;
+        };
+        let Some(snapshot) = slot
+            .page_slot()
+            .renderer_document_lifecycle_visible_snapshot()
+        else {
+            return false;
+        };
+        snapshot.document == key.renderer_document
+            && snapshot.epoch == key.renderer_epoch
+            && match key.milestone {
+                moli_core::page::RendererDocumentLifecycleMilestone::DomContentLoaded => {
+                    snapshot.dom_content_loaded.is_some()
+                }
+                moli_core::page::RendererDocumentLifecycleMilestone::Load => {
+                    snapshot.load.is_some()
+                }
+            }
+    }
+
     pub(crate) fn accepts_document_body_completion_for_owner(
         &self,
         owner: &CommandOwnerScope,
-        token: &DocumentNavigationToken,
+        token: &NavigationId,
+    ) -> bool {
+        self.resolved_page_owner_identity_for_owner(owner)
+            .is_some_and(|(context_id, target_id)| {
+                self.browser_context_by_id(&context_id)
+                    .is_some_and(|context| {
+                        context.accepts_document_body_completion_event_for_target(&target_id, token)
+                    })
+            })
+    }
+
+    pub(crate) fn clear_pending_document_navigation_for_owner_if_matches(
+        &mut self,
+        owner: &CommandOwnerScope,
+        navigation: &NavigationId,
     ) -> bool {
         let Some((browser_context_id, target_id)) = self.target_owner_identity_for_owner(owner)
         else {
             return false;
         };
-        if target_id.as_deref() != Some(token.target_id.as_str()) {
-            return false;
-        }
-        self.browser_context_by_id(&browser_context_id)
+        self.browser_context_by_id_mut(&browser_context_id)
             .is_some_and(|browser_context| {
-                browser_context.accepts_document_body_completion_event(token)
+                browser_context.clear_pending_document_navigation_for_target_if_matches(
+                    target_id.as_deref(),
+                    navigation,
+                )
             })
-    }
-
-    pub(crate) fn clear_pending_document_navigation_for_owner_if_loader_matches(
-        &mut self,
-        owner: &CommandOwnerScope,
-        loader_id: &str,
-    ) {
-        let Some((browser_context_id, target_id)) = self.target_owner_identity_for_owner(owner)
-        else {
-            return;
-        };
-        if let Some(browser_context) = self.browser_context_by_id_mut(&browser_context_id) {
-            browser_context.clear_pending_document_navigation_for_target_if_loader_matches(
-                target_id.as_deref(),
-                loader_id,
-            );
-        }
-        self.discard_uncommitted_main_document_resource_for_owner(owner, loader_id);
     }
 
     pub fn take_scheduler_events(&mut self) -> Vec<CdpSchedulerEvent> {
@@ -2453,7 +2197,6 @@ impl CdpConnection {
             "commandId": command_id,
             "sessionId": session_id,
             "fields": fields,
-            "pendingRuntimeAwaitJobCount": self.pending_runtime_await_jobs.len(),
         }));
     }
 
@@ -2566,18 +2309,6 @@ impl CdpConnection {
         }
         self.drain_materialized_navigation_completion_background_events(completion, command_context)
             .await
-    }
-
-    pub(crate) fn replace_standalone_navigation_engine(&mut self, engine: NavigationEngine) {
-        let engine = engine;
-        self.apply_scheduler_senders_to_navigation_engine(&engine);
-        drop(self.standalone_navigation_engine.replace(engine));
-    }
-
-    pub(crate) fn apply_scheduler_senders_to_navigation_engine(&self, engine: &NavigationEngine) {
-        if let Some(sender) = self.scheduler_hooks.renderer_publication_sender() {
-            engine.set_renderer_output_transport_sender(sender);
-        }
     }
 
     pub(crate) fn enqueue_deferred_main_document_load_completion(
@@ -2709,7 +2440,7 @@ impl CdpConnection {
 
     pub(crate) fn enqueue_navigation_background_protocol_event(
         &mut self,
-        token: DocumentNavigationToken,
+        token: NavigationId,
         event: BackgroundProtocolEvent,
     ) {
         self.enqueue_navigation_background_event(NavigationBackgroundEvent::background_event(
@@ -2719,7 +2450,7 @@ impl CdpConnection {
 
     pub(crate) fn send_navigation_background_protocol_event(
         &mut self,
-        token: DocumentNavigationToken,
+        token: NavigationId,
         event: BackgroundProtocolEvent,
     ) {
         self.enqueue_navigation_background_protocol_event(token, event);
@@ -2836,7 +2567,7 @@ impl CdpConnection {
         crate::domains::page::complete_materialized_navigation_into_buffer_async(
             self,
             out,
-            token.clone(),
+            token,
             state,
             navigation,
             command_context,
@@ -2854,7 +2585,7 @@ impl CdpConnection {
     pub(crate) fn response_body_materialize_limit(&self) -> usize {
         self.fetch_config()
             .http_max_response_size()
-            .unwrap_or(body_spool::DEFAULT_BODY_MATERIALIZE_LIMIT)
+            .unwrap_or(moli_core::browser::DEFAULT_BODY_MATERIALIZE_LIMIT)
     }
 
     pub(crate) fn moli_memory_diagnostics(&self) -> serde_json::Value {
@@ -2873,7 +2604,7 @@ impl CdpConnection {
                 browser_context
                     .page_targets
                     .iter()
-                    .filter(|host| host.navigation_engine().is_some())
+                    .filter(|host| browser_context.target_has_navigation_engine(host.target_id()))
                     .map(|host| {
                         json!({
                             "browserContextId": browser_context.id,
@@ -2969,20 +2700,23 @@ impl CdpConnection {
                 shared_worker_diagnostics.pending_service_lane_event_count;
         }
         let page_navigation_engine_count = page_engine_keys.len();
-        let active_engine = self.active_navigation_engine();
-        let active_renderer_owner_id = active_engine.renderer_owner_id_for_diagnostics();
+        let active_engine = self
+            .browser_context
+            .as_ref()
+            .and_then(|context| context.page_navigation_diagnostics(context.active_target_id()?));
+        let active_renderer_owner_id = active_engine
+            .as_ref()
+            .map(|engine| engine.renderer_owner_id);
         let mut page_navigation_engine_renderer_owner_ids = HashSet::new();
         let mut estimated_renderer_owner_ids = HashSet::new();
-        estimated_renderer_owner_ids.insert(active_renderer_owner_id);
+        estimated_renderer_owner_ids.extend(active_renderer_owner_id);
         estimated_renderer_owner_ids.extend(document_renderer_owner_ids.iter().copied());
-        for engine in self.browser_contexts().flat_map(|browser_context| {
-            browser_context
-                .page_targets
-                .iter()
-                .filter_map(PageTargetHost::navigation_engine)
+        for renderer_owner_id in self.browser_contexts().flat_map(|browser_context| {
+            browser_context.page_targets.iter().filter_map(|target| {
+                browser_context.page_navigation_renderer_owner_id(target.target_id())
+            })
         }) {
-            let renderer_owner_id = engine.renderer_owner_id_for_diagnostics();
-            if renderer_owner_id != active_renderer_owner_id {
+            if Some(renderer_owner_id) != active_renderer_owner_id {
                 page_navigation_engine_renderer_owner_ids.insert(renderer_owner_id);
             }
             estimated_renderer_owner_ids.insert(renderer_owner_id);
@@ -2990,11 +2724,12 @@ impl CdpConnection {
         let page_navigation_engine_renderer_owner_count =
             page_navigation_engine_renderer_owner_ids.len();
         let estimated_renderer_owner_count = estimated_renderer_owner_ids.len();
-        let document_isolate_model = active_engine.document_isolate_model_for_diagnostics();
+        let document_isolate_model =
+            moli_core::page::RendererDocumentIsolateAccountingDiagnostics::MODEL;
         let estimated_document_isolate_count =
             loaded_document_page_count + pending_document_page_build_count;
         let document_isolate_accounting =
-            active_engine.document_isolate_accounting_for_diagnostics();
+            moli_core::page::RendererDocumentIsolateAccountingDiagnostics::snapshot();
         let document_isolate_accounting = json!({
             "scope": "renderer-process",
             "created": document_isolate_accounting.created,
@@ -3006,43 +2741,33 @@ impl CdpConnection {
             + shared_worker_running_worker_isolate_count;
         let estimated_live_v8_isolate_count =
             estimated_document_isolate_count + estimated_worker_isolate_count;
-        let active_navigation_engine_resource_runtime = active_engine
-            .resource_request_client()
-            .map(|client| client.resource_runtime_diagnostics());
-        let active_navigation_engine_resource_runtime_id =
-            active_navigation_engine_resource_runtime
-                .as_ref()
-                .map(|diagnostics| diagnostics.runtime_id);
-        let active_navigation_engine_memory_cache =
-            active_navigation_engine_resource_runtime.map(|diagnostics| diagnostics.memory_cache);
+        let active_navigation_engine = active_engine.map(|engine| json!({
+            "imageFetchEnabled": engine.image_fetch_enabled,
+            "optionalResourceFetchMask": engine.optional_resource_fetch_mask.bits(),
+            "subframeLoadingEnabled": engine.subframe_loading_enabled,
+            "resourceRuntimeId": engine.resource_runtime.as_ref().map(|runtime| runtime.runtime_id),
+            "networkMemoryCache": engine.resource_runtime.map(|runtime| runtime.memory_cache),
+            "browserContextRuntime": engine.browser_context_runtime,
+        }));
         json!({
             "connection": {
                 "hasActiveBrowserContext": self.browser_context.is_some(),
                 "inactiveBrowserContextCount": self.inactive_browser_contexts.len(),
-                "browserSessionIdCount": self.target_control.browser_session_count(),
+                "browserSessionIdCount": self.agent_hosts.browser_session_count(),
                 "globalIoStreamCount": self.global_io_streams.len(),
                 "tracing": self.tracing_state.diagnostics(),
-                "permissionOverrideCount": self.permission_overrides.len(),
+                "permissionOverrideCount": self.permission_override_count(),
                 "pageNavigationEngineCount": page_navigation_engine_count,
                 "pageNavigationEngineKeys": page_engine_keys,
                 "autoAttach": self.auto_attach_enabled(),
                 "targetDiscoveryEnabled": self.target_discovery_enabled,
                 "targetInfoChangeEventsEnabled": self.target_info_change_events_enabled,
-                "activeNavigationEngine": {
-                    "imageFetchEnabled": active_engine.image_fetch_enabled(),
-                    "optionalResourceFetchMask": active_engine.optional_resource_fetch_mask().bits(),
-                    "subframeLoadingEnabled": active_engine.subframe_loading_enabled(),
-                    "resourceRuntimeId": active_navigation_engine_resource_runtime_id,
-                    "networkMemoryCache": active_navigation_engine_memory_cache,
-                    "browserContextRuntime": active_engine
-                        .browser_context_runtime()
-                        .moli_memory_diagnostics(),
-                },
+                "activeNavigationEngine": active_navigation_engine,
             },
             "isolateScope": {
                 "documentIsolateModel": document_isolate_model,
                 "workerIsolateModel": "per-worker-thread",
-                "activeNavigationEngineRendererOwnerCount": 1,
+                "activeNavigationEngineRendererOwnerCount": usize::from(active_renderer_owner_id.is_some()),
                 "pageNavigationEngineRendererOwnerCount": page_navigation_engine_renderer_owner_count,
                 "estimatedRendererOwnerCount": estimated_renderer_owner_count,
                 "browserContextCount": browser_context_count,
@@ -3085,15 +2810,10 @@ impl CdpConnection {
         })
     }
 
-    fn idle_navigation_engine_release_counts(&self) -> (usize, usize) {
+    pub(crate) fn moli_reset_idle_navigation_engine_for_diagnostics(&self) -> serde_json::Value {
         let loaded_browser_context_count = self
             .browser_contexts()
-            .filter(|browser_context| {
-                browser_context.has_loaded_page()
-                    || browser_context
-                        .background_targets()
-                        .any(PageTargetHost::has_loaded_page)
-            })
+            .filter(|browser_context| browser_context.loaded_document_page_count() != 0)
             .count();
 
         let live_target_browser_context_count = self
@@ -3103,65 +2823,24 @@ impl CdpConnection {
             })
             .count();
 
-        (
-            loaded_browser_context_count,
-            live_target_browser_context_count,
-        )
-    }
-
-    pub(crate) fn release_idle_navigation_engine_memory_if_idle(
-        &mut self,
-    ) -> IdleNavigationEngineReleaseResult {
-        let (loaded_browser_context_count, live_target_browser_context_count) =
-            self.idle_navigation_engine_release_counts();
         let eligible = loaded_browser_context_count == 0 && live_target_browser_context_count == 0;
-        if !eligible {
-            return IdleNavigationEngineReleaseResult {
-                reset: false,
-                reason: "not-idle",
-                loaded_browser_context_count,
-                live_target_browser_context_count,
-            };
-        }
-
-        let replacement = NavigationEngine::new_with_runtime_config(
-            self.standalone_navigation_engine.runtime_config(),
-        );
-        self.replace_standalone_navigation_engine(replacement);
-        IdleNavigationEngineReleaseResult {
-            reset: true,
-            reason: "idle-engine-replaced",
-            loaded_browser_context_count,
-            live_target_browser_context_count,
-        }
-    }
-
-    pub(crate) fn release_idle_navigation_engine_memory_after_target_close(&mut self) {
-        let result = self.release_idle_navigation_engine_memory_if_idle();
-        if result.reset {
-            tracing::debug!(
-                target: "moli_cdp_memory",
-                reason = result.reason,
-                "released idle navigation engine after final target close"
-            );
-        }
-    }
-
-    pub(crate) fn moli_reset_idle_navigation_engine_for_diagnostics(
-        &mut self,
-    ) -> serde_json::Value {
-        self.release_idle_navigation_engine_memory_if_idle()
-            .to_protocol_json()
+        // Retain the diagnostic command without allocating a replacement for
+        // an engine DevTools no longer owns. Core releases target resources.
+        json!({
+            "reset": false,
+            "reason": if eligible { "no-standalone-engine" } else { "not-idle" },
+            "loadedBrowserContextCount": loaded_browser_context_count,
+            "liveTargetBrowserContextCount": live_target_browser_context_count,
+        })
     }
 
     pub(crate) fn new_browser_context(&self, id: String) -> BrowserContext {
-        let mut browser_context = self.initial_storage_partition.new_default_browser_context(
+        self.initial_storage_partition.new_default_browser_context(
+            &self.browser,
             id,
             self.fetch_config().http_cache_dir().map(PathBuf::from),
             self.fetch_config().http_cache_max_bytes(),
-        );
-        self.apply_global_browser_context_state(&mut browser_context);
-        browser_context
+        )
     }
 
     pub(crate) fn ensure_browser_context_for_implicit_target_creation(&mut self) {
@@ -3176,21 +2855,13 @@ impl CdpConnection {
         self.insert_browser_context(self.new_browser_context(browser_context_id));
     }
 
-    fn apply_global_browser_context_state(&self, browser_context: &mut BrowserContext) {
-        browser_context.global_cache_disabled = self.global_cache_disabled;
-        browser_context.global_extra_headers = self.global_extra_headers.clone();
-        browser_context.global_network_conditions = self.global_network_conditions;
-        browser_context.global_geolocation_override = self.global_geolocation_override.clone();
-    }
-
     pub(crate) fn new_ephemeral_browser_context(&self, id: String) -> BrowserContext {
-        let mut browser_context = BrowserContext::new_ephemeral_with_http_cache(
+        BrowserContext::new_ephemeral_with_http_cache(
+            &self.browser,
             id,
             self.fetch_config().http_cache_dir().map(PathBuf::from),
             self.fetch_config().http_cache_max_bytes(),
-        );
-        self.apply_global_browser_context_state(&mut browser_context);
-        browser_context
+        )
     }
 
     pub fn snapshot_cookies(&mut self) -> Vec<StoredCookie> {
@@ -3207,12 +2878,12 @@ impl CdpConnection {
             .browser_context
             .iter()
             .chain(self.inactive_browser_contexts.iter())
-            .filter(|context| {
-                let is_profile_backed = context.is_profile_backed_storage_partition();
-                saw_profile_backed_context |= is_profile_backed;
-                is_profile_backed
+            .filter_map(|context| {
+                let cookies = context.snapshot_profile_backed_cookies();
+                saw_profile_backed_context |= cookies.is_some();
+                cookies
             })
-            .flat_map(BrowserContext::snapshot_cookies)
+            .flatten()
             .collect();
         saw_profile_backed_context.then_some(cookies)
     }
@@ -3256,7 +2927,7 @@ impl CdpConnection {
         if let Some(page_target_id) = self.primary_page_target_id_for_tab_target_id(target_id) {
             let page_target_info = self.devtools_page_or_worker_target_info(page_target_id)?;
             return self
-                .target_control
+                .agent_hosts
                 .tab_target_info_for_page_target_info(page_target_info);
         }
         self.devtools_page_or_worker_target_info(target_id)
@@ -3276,7 +2947,7 @@ impl CdpConnection {
         let mut target_infos = Vec::new();
         if let Some(page_target_info) = self.default_target_lifecycle.placeholder_page_info() {
             if let Some(tab_target_info) = self
-                .target_control
+                .agent_hosts
                 .tab_target_info_for_page_target_info(page_target_info.clone())
             {
                 target_infos.push(tab_target_info);
@@ -3290,7 +2961,7 @@ impl CdpConnection {
                         browser_context.target_popup_id(target_id.as_str());
                 }
                 if let Some(tab_target_info) = self
-                    .target_control
+                    .agent_hosts
                     .tab_target_info_for_page_target_info(page_or_worker_target_info.clone())
                 {
                     target_infos.push(tab_target_info);
@@ -3369,7 +3040,7 @@ impl CdpConnection {
         } else {
             self.gen_tab_target_id()
         };
-        self.target_control
+        self.agent_hosts
             .register_tab(tab_target_id.clone(), page_target_id.to_owned());
         for target_id in [&tab_target_id, page_target_id] {
             if let Some(target_info) = self.target_info_for_host_delta(target_id) {
@@ -3383,7 +3054,7 @@ impl CdpConnection {
 
     #[doc(hidden)]
     pub fn tab_target_id_for_page_target_id(&self, page_target_id: &str) -> Option<&str> {
-        self.target_control
+        self.agent_hosts
             .tab_target_id_for_page_target_id(page_target_id)
     }
 
@@ -3391,12 +3062,12 @@ impl CdpConnection {
         &self,
         tab_target_id: &str,
     ) -> Option<&str> {
-        self.target_control
+        self.agent_hosts
             .primary_page_target_id_for_tab_target_id(tab_target_id)
     }
 
     pub(crate) fn primary_session_id_for_tab_target_id(&self, tab_target_id: &str) -> Option<&str> {
-        self.target_control
+        self.agent_hosts
             .primary_session_id_for_tab_target_id(tab_target_id)
     }
 
@@ -3406,7 +3077,7 @@ impl CdpConnection {
         session_id: String,
         is_attached_session: bool,
     ) -> bool {
-        self.target_control.assign_session_to_tab_target(
+        self.agent_hosts.assign_session_to_tab_target(
             tab_target_id,
             session_id,
             is_attached_session,
@@ -3414,7 +3085,7 @@ impl CdpConnection {
     }
 
     pub(crate) fn remove_tab_session(&mut self, session_id: &str) -> Option<String> {
-        self.target_control.remove_tab_session(session_id)
+        self.agent_hosts.remove_tab_session(session_id)
     }
 
     pub(crate) fn remove_tab_for_page_target(
@@ -3422,7 +3093,7 @@ impl CdpConnection {
         page_target_id: &str,
     ) -> Option<TargetClosurePlan> {
         let closure_plan = self
-            .target_control
+            .agent_hosts
             .remove_tab_by_page_target_id(page_target_id)?;
         for target_id in closure_plan.destroyed_target_ids() {
             self.notify_target_host_lifecycle(CdpTargetHostLifecycleDelta::Destroyed {
@@ -3467,7 +3138,7 @@ impl CdpConnection {
     }
 
     pub(crate) fn tab_target_id_for_session_id(&self, session_id: &str) -> Option<&str> {
-        self.target_control.tab_target_id_for_session_id(session_id)
+        self.agent_hosts.tab_target_id_for_session_id(session_id)
     }
 
     pub(crate) fn browser_context_id_for_tab_target_id(
@@ -3491,7 +3162,7 @@ impl CdpConnection {
         if page_target_info.kind != DevToolsTargetKind::Page {
             return None;
         }
-        self.target_control
+        self.agent_hosts
             .tab_target_info_for_page_target_info(page_target_info.clone())
     }
 
@@ -3508,7 +3179,7 @@ impl CdpConnection {
         let root_filter = owner_session_id
             .is_none()
             .then(|| filter.to_devtools_entries());
-        self.target_control
+        self.agent_hosts
             .set_discover_targets(owner_session_id, filter);
         if let Some(root_filter) = root_filter {
             self.target_discovery_enabled = true;
@@ -3533,7 +3204,7 @@ impl CdpConnection {
     }
 
     pub(crate) fn clear_target_discovery_for_owner(&mut self, owner_session_id: Option<&str>) {
-        self.target_control.clear_discover_targets(owner_session_id);
+        self.agent_hosts.clear_discover_targets(owner_session_id);
         if owner_session_id.is_none() {
             self.target_discovery_enabled = false;
             self.target_info_change_events_enabled = false;
@@ -3565,8 +3236,7 @@ impl CdpConnection {
         &self,
         owner_session_id: Option<&str>,
     ) -> Option<Vec<DevToolsTargetFilterEntry>> {
-        self.target_control
-            .discover_filter_entries(owner_session_id)
+        self.agent_hosts.discover_filter_entries(owner_session_id)
     }
 
     pub(crate) fn initial_target_created_events_for_discovery_owner(
@@ -3574,23 +3244,23 @@ impl CdpConnection {
         owner_session_id: Option<&str>,
         target_infos: Vec<DevToolsTargetInfo>,
     ) -> Vec<BackgroundProtocolEvent> {
-        self.target_control
+        self.agent_hosts
             .initial_target_created_events_for_owner(owner_session_id, target_infos)
     }
 
     pub(crate) fn has_any_target_discovery(&self) -> bool {
-        self.target_control.has_any_discovery()
+        self.agent_hosts.has_any_discovery()
     }
 
     pub(crate) fn has_any_target_info_observer(&self) -> bool {
-        self.target_control.has_any_target_info_observer()
+        self.agent_hosts.has_any_target_info_observer()
     }
 
     fn exact_target_created_events_for_all_discovery_owners(
         &mut self,
         target_info: DevToolsTargetInfo,
     ) -> Vec<BackgroundProtocolEvent> {
-        self.target_control
+        self.agent_hosts
             .target_created_events_for_all_discovery_owners(target_info)
     }
 
@@ -3599,7 +3269,7 @@ impl CdpConnection {
     }
 
     fn target_created_event_plan_for_target_delta(&mut self, target_id: &str) -> TargetEventPlan {
-        let deltas = self.target_control.target_created_deltas(target_id);
+        let deltas = self.agent_hosts.target_created_deltas(target_id);
         self.target_host_delta_events(deltas)
     }
 
@@ -3679,7 +3349,7 @@ impl CdpConnection {
             return TargetEventPlan::default();
         };
         TargetEventPlan::from_background_events(
-            self.target_control
+            self.agent_hosts
                 .target_info_changed_events_for_all_discovery_owners(target_info),
         )
     }
@@ -3704,7 +3374,7 @@ impl CdpConnection {
     pub(crate) fn prepare_target_host_closure(&self, target_id: &str) -> PreparedTargetHostClosure {
         let mut detached_info_deltas = Vec::new();
         let mut destroyed_deltas = Vec::new();
-        for delta in self.target_control.target_destroyed_deltas(target_id) {
+        for delta in self.agent_hosts.target_destroyed_deltas(target_id) {
             let target_id = delta.target_id().to_owned();
             let Some(target_info) = self.target_info_for_host_delta(&target_id) else {
                 continue;
@@ -3778,7 +3448,7 @@ impl CdpConnection {
         &self,
         target_info: DevToolsTargetInfo,
     ) -> Vec<BackgroundProtocolEvent> {
-        self.target_control
+        self.agent_hosts
             .target_info_changed_events_for_all_observer_owners(target_info)
     }
 
@@ -3786,7 +3456,7 @@ impl CdpConnection {
         &mut self,
         target_info: DevToolsTargetInfo,
     ) -> Vec<BackgroundProtocolEvent> {
-        self.target_control
+        self.agent_hosts
             .target_destroyed_events_for_all_discovery_owners(target_info)
     }
 
@@ -3796,7 +3466,7 @@ impl CdpConnection {
         status: &str,
         error_code: i32,
     ) -> Vec<BackgroundProtocolEvent> {
-        self.target_control
+        self.agent_hosts
             .target_crashed_events_for_all_discovery_owners(target_id, status, error_code)
     }
 
@@ -3813,13 +3483,13 @@ impl CdpConnection {
         &self,
         target_info: DevToolsTargetInfo,
     ) -> Vec<DevToolsTargetInfo> {
-        self.target_control
+        self.agent_hosts
             .project_page_tab_target_infos_for_destruction(target_info)
     }
 
     #[cfg(test)]
     pub(crate) fn tab_target_count(&self) -> usize {
-        self.target_control.len()
+        self.agent_hosts.len()
     }
 
     #[cfg(test)]
@@ -3829,7 +3499,7 @@ impl CdpConnection {
     }
 
     fn has_registered_target_id(&self, target_id: &str) -> bool {
-        self.target_control.contains_tab_or_page_relation(target_id)
+        self.agent_hosts.contains_tab_or_page_relation(target_id)
             || self
                 .browser_contexts()
                 .any(|context| context.devtools_target_info(target_id).is_some())
@@ -3843,6 +3513,7 @@ impl CdpConnection {
         let was_placeholder = self.default_target_lifecycle.is_placeholder();
         let default_browser_context_id = self.default_browser_context_id().to_owned();
         let default_target_id = self.default_target_id().to_owned();
+        let browser_cache_disabled = self.browser_global_overrides.cache_disabled;
         if !self.has_browser_context_id(&default_browser_context_id) {
             let mut browser_context = self.new_browser_context(default_browser_context_id.clone());
             browser_context.set_active_target_id(default_target_id.clone());
@@ -3872,10 +3543,12 @@ impl CdpConnection {
                     browser_context
                         .begin_active_target_initial_empty_document("about:blank".to_owned());
                 }
+                browser_context
+                    .set_base_cache_disabled_for_target(&default_target_id, browser_cache_disabled);
             }
         }
         if !self
-            .target_control
+            .agent_hosts
             .contains_tab_or_page_relation(&default_target_id)
         {
             self.register_top_level_page_target(&default_target_id);
@@ -3995,212 +3668,6 @@ impl CdpConnection {
             });
         }
     }
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct BrowserDownloadBehavior {
-    pub behavior: String,
-    pub download_path: Option<String>,
-    pub automation_events_enabled: bool,
-    pub webdriver_bidi_events_enabled: bool,
-    pub browser_context_id: Option<String>,
-    pub browser_context_overrides: HashMap<String, BrowserDownloadBehaviorSettings>,
-    browser_event_subscription_generations: HashMap<Option<String>, u64>,
-    next_browser_event_subscription_generation: u64,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct BrowserDownloadBehaviorSettings {
-    pub behavior: String,
-    pub download_path: Option<String>,
-    pub automation_events_enabled: bool,
-}
-
-impl Default for BrowserDownloadBehaviorSettings {
-    fn default() -> Self {
-        Self {
-            behavior: "default".to_owned(),
-            download_path: None,
-            automation_events_enabled: false,
-        }
-    }
-}
-
-impl Default for BrowserDownloadBehavior {
-    fn default() -> Self {
-        let default_settings = BrowserDownloadBehaviorSettings::default();
-        Self {
-            behavior: default_settings.behavior,
-            download_path: default_settings.download_path,
-            automation_events_enabled: default_settings.automation_events_enabled,
-            webdriver_bidi_events_enabled: false,
-            browser_context_id: None,
-            browser_context_overrides: HashMap::new(),
-            browser_event_subscription_generations: HashMap::new(),
-            next_browser_event_subscription_generation: 0,
-        }
-    }
-}
-
-impl BrowserDownloadBehavior {
-    pub(crate) fn set_global(
-        &mut self,
-        behavior: String,
-        download_path: Option<String>,
-        automation_events_enabled: bool,
-    ) {
-        self.behavior = behavior;
-        self.download_path = download_path;
-        self.automation_events_enabled = automation_events_enabled;
-        self.browser_context_id = None;
-    }
-
-    pub(crate) fn set_global_policy(&mut self, behavior: String, download_path: Option<String>) {
-        self.behavior = behavior;
-        self.download_path = download_path;
-        self.browser_context_id = None;
-    }
-
-    pub(crate) fn set_browser_context(
-        &mut self,
-        browser_context_id: String,
-        behavior: String,
-        download_path: Option<String>,
-        automation_events_enabled: bool,
-    ) {
-        self.browser_context_overrides.insert(
-            browser_context_id.clone(),
-            BrowserDownloadBehaviorSettings {
-                behavior: behavior.clone(),
-                download_path: download_path.clone(),
-                automation_events_enabled,
-            },
-        );
-        self.browser_context_id = Some(browser_context_id);
-    }
-
-    pub(crate) fn set_browser_context_policy(
-        &mut self,
-        browser_context_id: String,
-        behavior: String,
-        download_path: Option<String>,
-    ) {
-        let automation_events_enabled = self
-            .browser_context_overrides
-            .get(&browser_context_id)
-            .is_some_and(|settings| settings.automation_events_enabled);
-        self.browser_context_overrides.insert(
-            browser_context_id.clone(),
-            BrowserDownloadBehaviorSettings {
-                behavior,
-                download_path,
-                automation_events_enabled,
-            },
-        );
-        self.browser_context_id = Some(browser_context_id);
-    }
-
-    pub(crate) fn reset_global(&mut self) {
-        let default = BrowserDownloadBehaviorSettings::default();
-        self.behavior = default.behavior;
-        self.download_path = default.download_path;
-        self.automation_events_enabled = default.automation_events_enabled;
-        self.browser_context_id = None;
-    }
-
-    pub(crate) fn reset_browser_context(&mut self, browser_context_id: &str) {
-        self.browser_context_overrides.remove(browser_context_id);
-        if self.browser_context_id.as_deref() == Some(browser_context_id) {
-            self.browser_context_id = None;
-        }
-    }
-
-    pub(crate) fn enable_webdriver_bidi_events(&mut self) -> bool {
-        let changed = !self.webdriver_bidi_events_enabled;
-        self.webdriver_bidi_events_enabled = true;
-        changed
-    }
-
-    pub(crate) fn disable_webdriver_bidi_events(&mut self) -> bool {
-        let changed = self.webdriver_bidi_events_enabled;
-        self.webdriver_bidi_events_enabled = false;
-        changed
-    }
-
-    pub(crate) fn clear_browser_context(&mut self, browser_context_id: &str) {
-        self.reset_browser_context(browser_context_id);
-    }
-
-    pub(crate) fn set_browser_events_enabled_for_session(
-        &mut self,
-        session_id: Option<&str>,
-        enabled: bool,
-    ) {
-        self.next_browser_event_subscription_generation = self
-            .next_browser_event_subscription_generation
-            .wrapping_add(1);
-        let session_id = session_id.map(str::to_owned);
-        if enabled {
-            self.browser_event_subscription_generations
-                .insert(session_id, self.next_browser_event_subscription_generation);
-        } else {
-            self.browser_event_subscription_generations
-                .remove(&session_id);
-        }
-    }
-
-    pub(crate) fn browser_event_observers(&self) -> Vec<(Option<String>, u64)> {
-        let mut observers = self
-            .browser_event_subscription_generations
-            .iter()
-            .map(|(session_id, generation)| (session_id.clone(), *generation))
-            .collect::<Vec<_>>();
-        observers.sort_by(|left, right| left.0.cmp(&right.0));
-        observers
-    }
-
-    #[cfg(test)]
-    pub(crate) fn browser_event_session_ids(&self) -> Vec<Option<String>> {
-        self.browser_event_observers()
-            .into_iter()
-            .map(|(session_id, _)| session_id)
-            .collect()
-    }
-
-    pub(crate) fn browser_event_subscription_is_current(
-        &self,
-        session_id: Option<&str>,
-        generation: u64,
-    ) -> bool {
-        self.browser_event_subscription_generations
-            .get(&session_id.map(str::to_owned))
-            .is_some_and(|current| *current == generation)
-    }
-
-    pub(crate) fn effective_for_browser_context(
-        &self,
-        browser_context_id: Option<&str>,
-    ) -> BrowserDownloadBehaviorSettings {
-        if let Some(browser_context_id) = browser_context_id
-            && let Some(settings) = self.browser_context_overrides.get(browser_context_id)
-        {
-            return settings.clone();
-        }
-        BrowserDownloadBehaviorSettings {
-            behavior: self.behavior.clone(),
-            download_path: self.download_path.clone(),
-            automation_events_enabled: self.automation_events_enabled,
-        }
-    }
-}
-
-#[derive(Debug, Clone, PartialEq)]
-pub struct PermissionOverride {
-    pub permission: serde_json::Value,
-    pub setting: String,
-    pub origin: Option<String>,
-    pub embedded_origin: Option<String>,
-    pub browser_context_id: Option<String>,
 }
 
 #[cfg(test)]

@@ -564,11 +564,19 @@ async fn runtime_disable_advances_background_owner_observable_cursor_without_act
     .await;
 
     let queue_console_entries = {
+        let owner = crate::conn::CommandOwnerScope::capture(&ctx.conn, Some("SID-background"));
+        let (context_id, target_id) = ctx
+            .conn
+            .resolved_page_owner_identity_for_owner(&owner)
+            .unwrap();
+        ctx.conn
+            .browser_context_by_id_mut(&context_id)
+            .unwrap()
+            .ingest_owner_page_observable_output_updates_for_target(&target_id);
         let runtime_slot = ctx
             .conn
             .runtime_session_owner_slot_mut(Some("SID-background"))
             .expect("background runtime slot should exist");
-        runtime_slot.ingest_owner_page_observable_output_updates();
         runtime_slot
             .observable_output_queue_snapshot()
             .expect("background observable queue should exist")
@@ -621,15 +629,16 @@ async fn runtime_disable_clears_background_child_default_context_emission_cursor
  {
     let mut ctx = TestContext::new();
     let html = "<iframe srcdoc=\"<body>background child</body>\"></iframe>";
-    let background_target = crate::conn::PageTargetHost::with_url(
+    let mut browser_context = ctx
+        .conn
+        .new_browser_context_fixture_for_test("BID-1".to_owned());
+    browser_context.set_active_target_id("TID-active".to_owned());
+    browser_context.attach_active_session("SID-active".to_owned());
+    browser_context.register_page_target_url_fixture(
         "TID-background".to_owned(),
         Some("SID-background".to_owned()),
         format!("data:text/html,{html}"),
     );
-    let mut browser_context = crate::conn::BrowserContext::new("BID-1".to_owned());
-    browser_context.set_active_target_id("TID-active".to_owned());
-    browser_context.attach_active_session("SID-active".to_owned());
-    browser_context.insert_page_target_host(background_target);
     ctx.conn
         .install_browser_context_fixture_for_test(browser_context);
     ctx.install_navigation_fixture_for_session_owner(

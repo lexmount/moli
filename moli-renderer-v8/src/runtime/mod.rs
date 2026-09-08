@@ -282,14 +282,20 @@ pub use self::lifecycle_decision::{
 use self::owner::RendererOwnerState;
 pub use self::owner::{
     RendererOwnerCommand, RendererOwnerHandle, RendererOwnerReply,
-    RendererPreparedDocumentCommitConfiguration,
+    RendererPreparedDocumentInspectionConfiguration, RendererPreparedDocumentPolicy,
 };
 pub use self::owner_local::RendererPageTestingHandle;
 pub use self::owner_local::{
-    RendererPageCommandPending, RendererPageHandle, RendererRuntimeInspectorSessionDetachGuard,
+    RendererAccessibilityInspection, RendererCssInspection, RendererDomDebuggerInspection,
+    RendererDomInspection, RendererInspectionEndpoint, RendererPageCommandPending,
+    RendererPageHandle, RendererPageInspection, RendererRuntimeInspection,
+    RendererRuntimeInspectorSessionDetachGuard,
 };
 pub(crate) use self::owner_local_store::RendererPageToken;
-pub use self::page::{JsRuntime, JsRuntimeOwner, PendingHtmlPage, PreparedRendererDocument};
+pub use self::page::{
+    JsRuntime, JsRuntimeOwner, PendingHtmlPage, PendingPreparedRendererDocument,
+    PreparedRendererDocument, RendererPreparedDocumentInspectionEndpoint,
+};
 use self::page::{PageVmNavigationResponse, PageVmStateCapture};
 pub(crate) use self::page_context_cancel::{
     RendererPageContextCancelReason, RendererPageContextCancelReceiver,
@@ -414,9 +420,8 @@ pub use self::protocol_output::{
 };
 pub use self::service_worker_run::RendererServiceWorkerRunIdentity;
 pub use crate::devtools::command::{
-    RendererDevToolsIoCommandEnvelope, RendererDevToolsMainCommandEnvelope,
-    RendererInspectorCommandEnvelope, RendererInspectorCommandRoute,
-    RendererInspectorIngressTicket,
+    RendererDevToolsIoCommandEnvelope, RendererInspectorCommandEnvelope,
+    RendererInspectorCommandRoute, RendererInspectorIngressTicket, RendererMainCommandEnvelope,
 };
 pub(crate) use crate::devtools::command::{
     RendererDevToolsIoCommandKind, RendererDevToolsIoCommandPayload,
@@ -462,7 +467,9 @@ pub(crate) use crate::service_worker_runtime::{
     ServiceWorkerSyncRegistrationResult, ServiceWorkerVersionId, ServiceWorkerWorkerMessage,
     service_worker_exposed_client_id,
 };
-pub(crate) use nested_main::dispatch_nested_main_page_command;
+pub(crate) use nested_main::{
+    active_nested_main_page_id, detach_session_from_page, dispatch_nested_main_page_command,
+};
 
 static NEXT_RENDERER_OWNER_LOCAL_HOST_ID: AtomicU64 = AtomicU64::new(1);
 
@@ -555,23 +562,6 @@ impl RendererPageReservationToken {
 
     pub fn page_id(self) -> PageId {
         self.page_id
-    }
-}
-
-/// Typed authority to consume one matching prepared document and enter its
-/// renderer bootstrap.
-#[derive(Debug)]
-pub struct RendererDocumentCommitPermit {
-    prepared_document: RendererPageReservationToken,
-}
-
-impl RendererDocumentCommitPermit {
-    fn new(prepared_document: RendererPageReservationToken) -> Self {
-        Self { prepared_document }
-    }
-
-    fn prepared_document(&self) -> RendererPageReservationToken {
-        self.prepared_document
     }
 }
 

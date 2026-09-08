@@ -19,7 +19,7 @@ use super::stored_cookie::StoredCookiePartitionKey;
 pub enum CookieSource {
     #[cfg(any(test, feature = "test-support"))]
     Http,
-    Cdp,
+    Management,
 }
 
 /// SameSite request context computed at the network boundary.

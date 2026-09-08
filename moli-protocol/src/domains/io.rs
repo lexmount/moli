@@ -5,9 +5,10 @@ use serde_json::json;
 
 use crate::{
     conn::{
-        CapturedBody, CdpConnection, Cmd, CompletedFetchResponseBodyStreamReadDispatch,
-        IoStreamState, PendingFetchResponseBodyStreamRead,
-        PendingFetchResponseBodyStreamReadDispatch, PendingFetchResponseBodyStreamReadStart,
+        CapturedBody, CdpConnection, Cmd, CommandOwnerScope, CompletedDocumentBlobRead,
+        CompletedFetchResponseBodyStreamReadDispatch, IoStreamState, PendingDocumentBlobRead,
+        PendingFetchResponseBodyStreamRead, PendingFetchResponseBodyStreamReadDispatch,
+        PendingFetchResponseBodyStreamReadStart,
     },
     domains::actions::IoAction,
     domains::command_output::CommandOutputPlan,
@@ -30,9 +31,12 @@ pub(crate) struct CompletedIoCommandDispatch {
 
 enum PendingIoCommandKind {
     FetchResponseBodyRead(Box<PendingFetchResponseBodyStreamReadDispatch>),
-    ResolveBlob(PendingPageCommand),
-    ReadBlob {
+    ResolveBlob {
+        owner: CommandOwnerScope,
         pending: PendingPageCommand,
+    },
+    ReadBlob {
+        pending: PendingDocumentBlobRead,
         handle: String,
         offset: Option<usize>,
         size: Option<usize>,
@@ -41,9 +45,12 @@ enum PendingIoCommandKind {
 
 enum CompletedIoCommandKind {
     FetchResponseBodyRead(Box<CompletedFetchResponseBodyStreamReadDispatch>),
-    ResolveBlob(Result<CompletedPageCommand, String>),
-    ReadBlob {
+    ResolveBlob {
+        owner: CommandOwnerScope,
         completed: Result<CompletedPageCommand, String>,
+    },
+    ReadBlob {
+        completed: CompletedDocumentBlobRead,
         handle: String,
         offset: Option<usize>,
         size: Option<usize>,
@@ -61,16 +68,19 @@ impl PendingIoCommandDispatch {
             PendingIoCommandKind::FetchResponseBodyRead(pending) => {
                 CompletedIoCommandKind::FetchResponseBodyRead(Box::new(pending.wait().await))
             }
-            PendingIoCommandKind::ResolveBlob(pending) => CompletedIoCommandKind::ResolveBlob(
-                pending.wait().await.map_err(|error| error.to_string()),
-            ),
+            PendingIoCommandKind::ResolveBlob { owner, pending } => {
+                CompletedIoCommandKind::ResolveBlob {
+                    owner,
+                    completed: pending.wait().await.map_err(|error| error.to_string()),
+                }
+            }
             PendingIoCommandKind::ReadBlob {
                 pending,
                 handle,
                 offset,
                 size,
             } => CompletedIoCommandKind::ReadBlob {
-                completed: pending.wait().await.map_err(|error| error.to_string()),
+                completed: pending.wait().await,
                 handle,
                 offset,
                 size,
@@ -118,8 +128,8 @@ pub(crate) fn complete_pending_io_command(
             );
             read_fetch_response_body_stream_output_plan(read)
         }
-        CompletedIoCommandKind::ResolveBlob(completed) => {
-            complete_resolve_blob_command(conn, session_id, completed)
+        CompletedIoCommandKind::ResolveBlob { owner, completed } => {
+            complete_resolve_blob_command(conn, &owner, completed)
         }
         CompletedIoCommandKind::ReadBlob {
             completed,
@@ -179,22 +189,20 @@ fn start_resolve_blob_command(conn: &mut CdpConnection, cmd: &Cmd<'_>) -> IoComm
             return IoCommandTaskStep::Complete(CommandOutputPlan::error(-32602, "InvalidParams"));
         }
     };
-    let inspector_session_id =
-        conn.target_renderer_runtime_inspector_session_id_for_session(cmd.session_id);
+    let owner = CommandOwnerScope::capture(conn, cmd.session_id);
     let pending = conn
-        .loaded_page_mut_for_protocol_access(cmd.session_id)
-        .and_then(|page| {
-            page.start_resolve_blob_object_in_inspector_session(
-                inspector_session_id,
-                params.object_id.as_ref().to_owned(),
-            )
-            .map_err(|error| error.to_string())
+        .runtime_inspection_for_owner(&owner)
+        .and_then(|runtime| {
+            runtime
+                .start_resolve_blob_object(params.object_id.as_ref())
+                .map(PendingPageCommand::from_inspector_main_route)
+                .map_err(|error| error.to_string())
         });
     match pending {
         Ok(pending) => IoCommandTaskStep::Pending(Box::new(PendingIoCommandDispatch {
             command_id: cmd.id,
             session_id: cmd.session_id.map(str::to_owned),
-            kind: PendingIoCommandKind::ResolveBlob(pending),
+            kind: PendingIoCommandKind::ResolveBlob { owner, pending },
         })),
         Err(message) => IoCommandTaskStep::Complete(CommandOutputPlan::error(-32000, message)),
     }
@@ -207,12 +215,10 @@ fn start_read_blob_command(
     offset: Option<usize>,
     size: Option<usize>,
 ) -> IoCommandTaskStep {
+    let owner = CommandOwnerScope::capture(conn, cmd.session_id);
     let pending = conn
-        .loaded_page_mut_for_protocol_access(cmd.session_id)
-        .and_then(|page| {
-            page.start_blob_bytes_for_uuid(uuid.to_owned())
-                .map_err(|error| error.to_string())
-        });
+        .resolve_browser_document_for_owner(&owner)
+        .and_then(|document| conn.start_document_blob_read(document, uuid.to_owned()));
     match pending {
         Ok(pending) => IoCommandTaskStep::Pending(Box::new(PendingIoCommandDispatch {
             command_id: cmd.id,
@@ -230,15 +236,14 @@ fn start_read_blob_command(
 
 fn complete_resolve_blob_command(
     conn: &mut CdpConnection,
-    session_id: Option<&str>,
+    owner: &CommandOwnerScope,
     completed: Result<CompletedPageCommand, String>,
 ) -> CommandOutputPlan {
     let uuid = completed.and_then(|completed| {
-        conn.loaded_page_mut_for_protocol_access(session_id)
-            .and_then(|page| {
-                page.finish_resolve_blob_object(completed)
-                    .map_err(|error| error.to_string())
-            })
+        conn.observe_renderer_inspection_completion(owner, &completed)?;
+        completed
+            .finish_resolve_blob_object()
+            .map_err(|error| error.to_string())
     });
     match uuid {
         Ok(uuid) => CommandOutputPlan::result(json!({ "uuid": uuid })),
@@ -249,21 +254,12 @@ fn complete_resolve_blob_command(
 fn complete_read_blob_command(
     conn: &mut CdpConnection,
     session_id: Option<&str>,
-    completed: Result<CompletedPageCommand, String>,
+    completed: CompletedDocumentBlobRead,
     handle: String,
     offset: Option<usize>,
     size: Option<usize>,
 ) -> CommandOutputPlan {
-    let bytes = completed
-        .and_then(|completed| {
-            conn.loaded_page_mut_for_protocol_access(session_id)
-                .and_then(|page| {
-                    page.finish_blob_bytes_for_uuid(completed)
-                        .map_err(|error| error.to_string())
-                })
-        })
-        .ok()
-        .flatten();
+    let bytes = conn.finish_document_blob_read(completed).ok().flatten();
     let Some(bytes) = bytes else {
         return CommandOutputPlan::error(-32000, "Read failed");
     };
@@ -376,7 +372,7 @@ mod tests {
 
     use super::{DEFAULT_IO_READ_SIZE, read_io_stream_state};
     use crate::{
-        conn::{BrowserContext, CdpCommandTaskStep, IoStreamState, PageTargetHost},
+        conn::{CdpCommandTaskStep, IoStreamState},
         testing::TestContext,
     };
 
@@ -405,7 +401,7 @@ mod tests {
     #[tokio::test]
     async fn read_supports_offsets_and_eof() {
         let mut ctx = TestContext::new();
-        let mut bc = BrowserContext::new_with_page_for_test("BID-1", "TID-1");
+        let mut bc = ctx.conn.new_page_target_fixture_for_test("BID-1", "TID-1");
         bc.insert_io_stream("STREAM-1".into(), b"abcdef".to_vec(), 0);
         ctx.conn.install_browser_context_fixture_for_test(bc);
 
@@ -437,7 +433,7 @@ mod tests {
     #[tokio::test]
     async fn close_removes_stream_handle() {
         let mut ctx = TestContext::new();
-        let mut bc = BrowserContext::new_with_page_for_test("BID-1", "TID-1");
+        let mut bc = ctx.conn.new_page_target_fixture_for_test("BID-1", "TID-1");
         bc.insert_io_stream("STREAM-1".into(), b"abcdef".to_vec(), 0);
         ctx.conn.install_browser_context_fixture_for_test(bc);
 
@@ -482,7 +478,7 @@ mod tests {
     #[tokio::test]
     async fn read_large_stream_handle_uses_captured_body_backing() {
         let mut ctx = TestContext::new();
-        let mut bc = BrowserContext::new_with_page_for_test("BID-1", "TID-1");
+        let mut bc = ctx.conn.new_page_target_fixture_for_test("BID-1", "TID-1");
         bc.insert_io_stream("STREAM-2".into(), vec![b'x'; 1024 * 1024 + 8], 0);
         ctx.conn.install_browser_context_fixture_for_test(bc);
 
@@ -515,7 +511,7 @@ mod tests {
     #[tokio::test]
     async fn read_command_dispatch_handles_buffered_stream_without_fallback() {
         let mut ctx = TestContext::new();
-        let mut bc = BrowserContext::new_with_page_for_test("BID-1", "TID-1");
+        let mut bc = ctx.conn.new_page_target_fixture_for_test("BID-1", "TID-1");
         bc.insert_io_stream("STREAM-DISPATCH".into(), b"dispatch".to_vec(), 0);
         ctx.conn.install_browser_context_fixture_for_test(bc);
 
@@ -539,14 +535,16 @@ mod tests {
     #[tokio::test]
     async fn target_scoped_stream_handle_requires_matching_session_owner() {
         let mut ctx = TestContext::new();
-        let mut bc = BrowserContext::new("BID-io-owner".to_owned());
+        let mut bc = ctx
+            .conn
+            .new_browser_context_fixture_for_test("BID-io-owner".to_owned());
         bc.set_active_target_id("TID-active".to_owned());
         bc.attach_active_session("SID-active".to_owned());
-        bc.insert_page_target_host(PageTargetHost::with_url(
+        bc.register_page_target_url_fixture(
             "TID-background".to_owned(),
             Some("SID-background".to_owned()),
             "about:blank#background".to_owned(),
-        ));
+        );
         ctx.conn.install_browser_context_fixture_for_test(bc);
 
         let handle = ctx

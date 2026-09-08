@@ -76,24 +76,8 @@ impl TargetSessionStateMut<'_> {
             .page_file_chooser_opened_event_enabled = enabled;
     }
 
-    fn disable_page_domain(mut self) {
-        let state = self.page_session_state_mut();
-        state.disable_page_domain();
-        state.page_lifecycle_events = false;
-        state.page_bypass_csp_enabled = false;
-        state.page_font_families.clear();
-        state.page_file_chooser_opened_event_enabled = false;
-        state.page_intercept_file_chooser_dialog_enabled = false;
-        state.page_screencast.stop();
-        state.javascript_dialog_state.clear();
-    }
-
     fn set_page_lifecycle_events_enabled(mut self, enabled: bool) {
         self.page_session_state_mut().page_lifecycle_events = enabled;
-    }
-
-    fn set_page_bypass_csp_enabled(mut self, enabled: bool) {
-        self.page_session_state_mut().page_bypass_csp_enabled = enabled;
     }
 
     fn set_page_font_families(mut self, font_families: serde_json::Map<String, Value>) {
@@ -171,9 +155,11 @@ impl TargetSessionOwnerMut<'_> {
     }
 
     fn audits_output_snapshot(&mut self) -> Vec<moli_core::page::InspectorIssueSnapshot> {
-        let runtime_slot = self.runtime_slot_mut();
-        runtime_slot.ingest_owner_page_observable_output_updates();
-        runtime_slot.inspector_issues().unwrap_or_default()
+        self.browser_context
+            .ingest_owner_page_observable_output_updates_for_target(&self.target_id);
+        self.runtime_slot_mut()
+            .inspector_issues()
+            .unwrap_or_default()
     }
 
     fn enable_audits(mut self) -> SessionOwnerAuditsEnableResult {
@@ -305,9 +291,10 @@ impl TargetSessionOwnerMut<'_> {
     }
 
     fn disable_page_domain(self) -> bool {
-        self.mutate_session_state(|state| {
-            state.disable_page_domain();
-        });
+        {
+            self.browser_context
+                .disable_devtools_page_domain_for_target(&self.target_id, &self.session_key);
+        };
         true
     }
 
@@ -323,7 +310,7 @@ impl TargetSessionOwnerMut<'_> {
         } else {
             self.browser_context
                 .page_target(&self.target_id)
-                .filter(|target| target.has_loaded_page())
+                .filter(|_| self.browser_context.target_has_loaded_page(&self.target_id))
                 .and_then(|target| {
                     let replay_session_id = match &self.session_key {
                         moli_page_types::DevToolsSessionKey::Primary => {
@@ -342,9 +329,14 @@ impl TargetSessionOwnerMut<'_> {
     }
 
     fn set_page_bypass_csp_enabled(self, enabled: bool) -> bool {
-        self.mutate_session_state(|state| {
-            state.set_page_bypass_csp_enabled(enabled);
-        });
+        {
+            self.browser_context
+                .set_devtools_bypass_csp_enabled_for_target(
+                    &self.target_id,
+                    &self.session_key,
+                    enabled,
+                );
+        };
         true
     }
 
@@ -450,7 +442,9 @@ impl TargetSessionOwnerMut<'_> {
         Some((
             url,
             lifecycle_errors,
-            runtime_slot.network_log_entries()?.to_vec(),
+            self.browser_context
+                .network_log_entries_for_target(&self.target_id)?
+                .to_vec(),
         ))
     }
 }
@@ -569,9 +563,12 @@ impl CdpConnection {
         body: Option<crate::conn::CapturedBody>,
     ) -> bool {
         if self
-            .runtime_session_owner_slot_for_owner(owner)
-            .ok()
-            .and_then(TargetRuntimeSlot::committed_document_loader_id)
+            .target_session_owner_ref_for_owner(owner)
+            .and_then(|owner| {
+                owner
+                    .browser_context
+                    .committed_document_loader_id_for_target(&owner.target_id)
+            })
             != Some(loader_id.as_str())
         {
             return false;
@@ -593,10 +590,11 @@ impl CdpConnection {
         &self,
         session_id: Option<&str>,
     ) -> Option<MainDocumentResourceSnapshot> {
-        let loader_id = self
-            .runtime_session_owner_slot(session_id)
-            .ok()?
-            .committed_document_loader_id()?
+        let owner_scope = crate::conn::CommandOwnerScope::capture(self, session_id);
+        let owner = self.target_session_owner_ref_for_owner(&owner_scope)?;
+        let loader_id = owner
+            .browser_context
+            .committed_document_loader_id_for_target(&owner.target_id)?
             .to_owned();
         self.target_owner_state_for_session(session_id)?
             .page_resource_store
@@ -610,18 +608,6 @@ impl CdpConnection {
     ) -> Option<bool> {
         self.target_owner_state_for_session(session_id)
             .map(|owner_state| owner_state.has_attached_child_frame_id(frame_id))
-    }
-
-    pub(crate) fn discard_uncommitted_main_document_resource_for_owner(
-        &mut self,
-        owner: &CommandOwnerScope,
-        loader_id: &str,
-    ) {
-        let _ = self.with_target_owner_state_for_owner_mut(owner, |owner_state| {
-            owner_state
-                .page_resource_store
-                .discard_uncommitted_loader(loader_id);
-        });
     }
 
     pub(crate) fn set_page_domain_enabled_for_session_owner(
@@ -651,11 +637,9 @@ impl CdpConnection {
         let Some(browser_context) = self.browser_context_by_id(browser_context_id) else {
             return;
         };
-        browser_context
-            .renderer_runtime()
-            .set_javascript_dialog_handler_enabled(
-                browser_context_has_page_domain_enabled_session(browser_context),
-            );
+        browser_context.set_javascript_dialog_handler_enabled(
+            browser_context_has_page_domain_enabled_session(browser_context),
+        );
     }
 
     pub(crate) fn set_console_enabled_for_session_owner(
@@ -679,10 +663,8 @@ impl CdpConnection {
             })
             .unwrap_or(accepts_without_target);
         if handled {
-            let renderer_console_agent_owns_page_console_api_events = enabled
-                && self
-                    .runtime_session_owner_slot_for_owner(owner)
-                    .is_ok_and(|slot| slot.has_loaded_page());
+            let renderer_console_agent_owns_page_console_api_events =
+                enabled && self.has_loaded_page_for_owner(owner);
             let _ = self.with_target_devtools_session_state_for_owner_mut(owner, |state| {
                 state
                     .console_output_session_state
@@ -1001,24 +983,97 @@ fn runtime_observable_console_payloads(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::conn::PageTargetHost;
+    use crate::conn::PageAgentHost;
+
+    #[test]
+    fn csp_policy_preserves_peer_contributions_across_update_disable_and_detach() {
+        let mut context = BrowserContext::new_with_page_for_test("BID-csp", "TID-csp");
+        context.attach_active_session("SID-primary");
+        for session in ["SID-attached", "SID-observer"] {
+            assert!(context.assign_attached_session_to_target("TID-csp", session.to_owned()));
+        }
+        let mut conn = crate::test_support::connection();
+        conn.install_browser_context_fixture_for_test(context);
+        for (session, enabled, expected) in [
+            ("SID-primary", true, true),
+            ("SID-attached", true, true),
+            ("SID-primary", false, true),
+            ("SID-attached", false, false),
+        ] {
+            assert!(conn.set_page_bypass_csp_enabled_for_session_owner(Some(session), enabled));
+            assert_eq!(
+                conn.navigation_load_inputs_for_session_owner(Some("SID-observer"))
+                    .bypass_content_security_policy,
+                expected
+            );
+        }
+        for session in ["SID-primary", "SID-attached"] {
+            assert!(conn.set_page_bypass_csp_enabled_for_session_owner(Some(session), true));
+        }
+        for (session, expected) in [("SID-primary", true), ("SID-attached", false)] {
+            assert!(conn.disable_page_domain_for_session_owner(Some(session)));
+            assert_eq!(
+                conn.effective_page_bypass_csp_enabled_for_session_owner(Some("SID-observer")),
+                Some(expected)
+            );
+        }
+        assert!(conn.set_page_bypass_csp_enabled_for_session_owner(Some("SID-attached"), true));
+        let key = moli_page_types::DevToolsSessionKey::Attached("SID-attached".into());
+        assert!(
+            !conn
+                .browser_context
+                .as_mut()
+                .unwrap()
+                .remove_page_session_binding("TID-csp", "SID-wrong", &key)
+        );
+        assert!(
+            conn.navigation_load_inputs_for_session_owner(Some("SID-observer"))
+                .bypass_content_security_policy
+        );
+        assert!(
+            conn.browser_context
+                .as_mut()
+                .unwrap()
+                .remove_page_session_binding("TID-csp", "SID-attached", &key)
+        );
+        assert!(
+            !conn
+                .navigation_load_inputs_for_session_owner(Some("SID-observer"))
+                .bypass_content_security_policy
+        );
+        assert!(conn.set_page_bypass_csp_enabled_for_session_owner(Some("SID-primary"), true));
+        assert!(
+            conn.browser_context
+                .as_mut()
+                .unwrap()
+                .release_primary_session_binding_preserving_frontend_state("SID-primary")
+        );
+        assert!(
+            !conn
+                .navigation_load_inputs_for_session_owner(Some("SID-observer"))
+                .bypass_content_security_policy
+        );
+        assert!(
+            conn.browser_context
+                .as_ref()
+                .unwrap()
+                .page_target("TID-csp")
+                .is_some()
+        );
+    }
 
     fn active_session_state_mut(browser_context: &mut BrowserContext) -> TargetSessionStateMut<'_> {
         let state = browser_context.active_page_target_mut();
         TargetSessionStateMut {
             devtools_session_state: &mut state.devtools_sessions
                 [moli_page_types::DevToolsSessionKey::Primary],
-            network_policy: &mut state.network_policy,
-            tls_verify_host_override: &mut state.tls_verify_host_override,
         }
     }
 
-    fn background_session_state_mut(state: &mut PageTargetHost) -> TargetSessionStateMut<'_> {
+    fn background_session_state_mut(state: &mut PageAgentHost) -> TargetSessionStateMut<'_> {
         TargetSessionStateMut {
             devtools_session_state: &mut state.devtools_sessions
                 [moli_page_types::DevToolsSessionKey::Primary],
-            network_policy: &mut state.network_policy,
-            tls_verify_host_override: &mut state.tls_verify_host_override,
         }
     }
 
@@ -1031,7 +1086,17 @@ mod tests {
         active_session_state_mut(&mut active).set_console_enabled(true);
         active_session_state_mut(&mut active).set_log_enabled(true);
         active_session_state_mut(&mut active).set_page_file_chooser_opened_event_enabled(true);
-        active_session_state_mut(&mut active).set_page_bypass_csp_enabled(true);
+        {
+            let context = &mut active;
+            let target_id = context
+                .active_target_id_owned()
+                .expect("active fixture target");
+            context.set_devtools_bypass_csp_enabled_for_target(
+                &target_id,
+                &moli_page_types::DevToolsSessionKey::Primary,
+                true,
+            )
+        };
         active_session_state_mut(&mut active).set_page_font_families(font_families.clone());
         active_session_state_mut(&mut active).set_page_intercept_file_chooser_dialog_enabled(true);
         assert!(
@@ -1061,7 +1126,7 @@ mod tests {
             active.active_page_target().devtools_sessions
                 [moli_page_types::DevToolsSessionKey::Primary]
                 .page_session_state
-                .page_bypass_csp_enabled
+                .page_bypass_csp_enabled()
         );
         assert_eq!(
             active.active_page_target().devtools_sessions
@@ -1084,17 +1149,22 @@ mod tests {
                 .enabled()
         );
 
-        let mut background = PageTargetHost::empty("TID-page-owner-test".to_owned());
-        background_session_state_mut(&mut background).set_console_enabled(true);
-        background_session_state_mut(&mut background).set_log_enabled(true);
-        background_session_state_mut(&mut background)
-            .set_page_file_chooser_opened_event_enabled(true);
-        background_session_state_mut(&mut background).set_page_bypass_csp_enabled(true);
-        background_session_state_mut(&mut background).set_page_font_families(font_families.clone());
-        background_session_state_mut(&mut background)
+        let mut background_context =
+            BrowserContext::new_with_page_for_test("BID-page-owner-test", "TID-page-owner-test");
+        background_context.set_devtools_bypass_csp_enabled_for_target(
+            "TID-page-owner-test",
+            &moli_page_types::DevToolsSessionKey::Primary,
+            true,
+        );
+        let background = background_context.active_page_target_mut();
+        background_session_state_mut(background).set_console_enabled(true);
+        background_session_state_mut(background).set_log_enabled(true);
+        background_session_state_mut(background).set_page_file_chooser_opened_event_enabled(true);
+        background_session_state_mut(background).set_page_font_families(font_families.clone());
+        background_session_state_mut(background)
             .set_page_intercept_file_chooser_dialog_enabled(true);
         assert!(
-            background_session_state_mut(&mut background)
+            background_session_state_mut(background)
                 .enable_performance(PerformanceTimeDomain::TimeTicks)
         );
 
@@ -1116,7 +1186,7 @@ mod tests {
         assert!(
             background.devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
                 .page_session_state
-                .page_bypass_csp_enabled
+                .page_bypass_csp_enabled()
         );
         assert_eq!(
             background.devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
@@ -1139,13 +1209,12 @@ mod tests {
 
     #[test]
     fn page_domain_dialog_handler_tracks_the_session_owner_browser_context() {
-        let mut conn = CdpConnection::default();
+        let mut conn = crate::test_support::connection();
 
-        let mut active = BrowserContext::new_with_page_for_test("BID-active", "TID-active");
+        let mut active = conn.new_page_target_fixture_for_test("BID-active", "TID-active");
         active.set_active_target_id("TID-active".to_owned());
-        let active_runtime = active.renderer_runtime();
 
-        let mut inactive = BrowserContext::new("BID-inactive".to_owned());
+        let mut inactive = conn.new_browser_context_fixture_for_test("BID-inactive".to_owned());
         inactive.set_active_target_id("TID-inactive".to_owned());
         assert!(
             inactive
@@ -1155,33 +1224,46 @@ mod tests {
             inactive
                 .assign_attached_session_to_target("TID-inactive", "SID-inactive-b".to_owned(),)
         );
-        let inactive_runtime = inactive.renderer_runtime();
-
         conn.install_browser_context_fixture_for_test(active);
         conn.push_inactive_browser_context_fixture_for_test(inactive);
 
         assert!(conn.set_page_domain_enabled_for_session_owner(Some("SID-inactive-a"), true));
-        assert!(inactive_runtime.javascript_dialog_handler_enabled());
         assert!(
-            !active_runtime.javascript_dialog_handler_enabled(),
+            conn.browser_context_by_id("BID-inactive")
+                .unwrap()
+                .javascript_dialog_handler_enabled()
+        );
+        assert!(
+            !conn
+                .browser_context_by_id("BID-active")
+                .unwrap()
+                .javascript_dialog_handler_enabled(),
             "enabling an inactive target session must not mutate the active browser context"
         );
 
         assert!(conn.set_page_domain_enabled_for_session_owner(Some("SID-inactive-b"), true));
         assert!(conn.disable_page_domain_for_session_owner(Some("SID-inactive-a")));
         assert!(
-            inactive_runtime.javascript_dialog_handler_enabled(),
+            conn.browser_context_by_id("BID-inactive")
+                .unwrap()
+                .javascript_dialog_handler_enabled(),
             "one frontend must not disable dialog handling while a peer remains subscribed"
         );
 
         assert!(conn.disable_page_domain_for_session_owner(Some("SID-inactive-b")));
-        assert!(!inactive_runtime.javascript_dialog_handler_enabled());
+        assert!(
+            !conn
+                .browser_context_by_id("BID-inactive")
+                .unwrap()
+                .javascript_dialog_handler_enabled()
+        );
     }
 
     #[test]
     fn file_dialog_opened_target_listener_can_be_disabled_after_enable() {
-        let mut conn = CdpConnection::default();
-        conn.browser_context = Some(BrowserContext::new("BID-file-dialog".to_owned()));
+        let mut conn = crate::test_support::connection();
+        conn.browser_context =
+            Some(conn.new_browser_context_fixture_for_test("BID-file-dialog".to_owned()));
         conn.browser_context
             .as_mut()
             .expect("browser context")

@@ -78,11 +78,12 @@ fn unknown_session_output_plan() -> CommandOutputPlan {
 mod tests {
     use serde_json::json;
 
-    use crate::conn::BrowserContext;
     use crate::testing::TestContext;
 
     async fn load_document(ctx: &mut TestContext, html: &str) {
-        let mut browser_context = BrowserContext::new("BID-audits".to_owned());
+        let mut browser_context = ctx
+            .conn
+            .new_browser_context_fixture_for_test("BID-audits".to_owned());
         browser_context.set_active_target_id("TID-audits".to_owned());
         browser_context.set_target_url("data:text/html,audits-test".to_owned());
         browser_context.attach_active_session("SID-audits".to_owned());
@@ -93,6 +94,13 @@ mod tests {
             Some("SID-audits"),
         )
         .await;
+        // The fixture crossed its exact renderer output fence. Separate its
+        // navigation publication from the Audits command's replay/response order.
+        for message in ctx.take_all() {
+            assert_eq!(message["method"], "Page.frameNavigated");
+            assert_eq!(message["sessionId"], "SID-audits");
+            assert_eq!(message["params"]["frame"]["id"], "TID-audits");
+        }
     }
 
     #[tokio::test(flavor = "multi_thread")]

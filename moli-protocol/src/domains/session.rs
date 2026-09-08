@@ -1,5 +1,5 @@
 use crate::conn::{
-    BackgroundProtocolEvent, CdpConnection, SessionDisposalPlan, SessionDisposalTarget,
+    BackgroundProtocolEvent, CdpConnection, DevToolsSessionHandlerSet, SessionDisposalPlan,
 };
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -9,7 +9,6 @@ enum DevToolsSessionDomainHandler {
     Target,
     Fetch,
     Runtime,
-    Page,
     Emulation,
     Network,
     PrimaryPageTargetState,
@@ -27,7 +26,6 @@ const PAGE_HANDLERS: &[DevToolsSessionDomainHandler] = &[
     DevToolsSessionDomainHandler::Target,
     DevToolsSessionDomainHandler::Fetch,
     DevToolsSessionDomainHandler::Runtime,
-    DevToolsSessionDomainHandler::Page,
     DevToolsSessionDomainHandler::Emulation,
     DevToolsSessionDomainHandler::Network,
     DevToolsSessionDomainHandler::PrimaryPageTargetState,
@@ -43,25 +41,16 @@ const WORKER_HANDLERS: &[DevToolsSessionDomainHandler] = &[
 /// Browser-side handlers installed for one DevTools session.
 ///
 /// Target teardown iterates this collection without knowing any domain's
-/// state or disable operation. That mirrors Chromium's DevToolsSession, where
-/// handlers own Disable() and the session lifecycle only invokes them before
-/// renderer Inspector detachment.
-struct DevToolsSessionHandlers {
-    handlers: &'static [DevToolsSessionDomainHandler],
-}
-
-impl DevToolsSessionHandlers {
-    fn for_target(target: &SessionDisposalTarget) -> Self {
-        let handlers = match target {
-            SessionDisposalTarget::PageTarget { .. } => PAGE_HANDLERS,
-            SessionDisposalTarget::SharedWorkerTarget { .. }
-            | SessionDisposalTarget::DedicatedWorkerTarget { .. }
-            | SessionDisposalTarget::ServiceWorkerTarget { .. } => WORKER_HANDLERS,
-            SessionDisposalTarget::Browser | SessionDisposalTarget::TabTarget { .. } => {
-                CONNECTION_HANDLERS
-            }
-        };
-        Self { handlers }
+/// state or disable operation. Page Inspector resources have already retired
+/// through the renderer session lifecycle; these handlers revoke service
+/// contributions and reconcile Browser-owned policy without that Inspector.
+impl DevToolsSessionHandlerSet {
+    fn handlers(self) -> &'static [DevToolsSessionDomainHandler] {
+        match self {
+            Self::Connection => CONNECTION_HANDLERS,
+            Self::Page => PAGE_HANDLERS,
+            Self::Worker => WORKER_HANDLERS,
+        }
     }
 }
 
@@ -80,22 +69,29 @@ impl DevToolsSessionHandlerDisposal {
     }
 }
 
-/// Invokes every installed browser-side handler while the session route is
-/// still authoritative. One failure never prevents the remaining handlers
+/// Invokes every installed browser-side handler while the service route is
+/// still retained for cleanup. One failure never prevents the remaining handlers
 /// from receiving their disposal callback.
 pub(crate) async fn dispose_live_handlers_async(
     conn: &mut CdpConnection,
     background_events: &mut Vec<BackgroundProtocolEvent>,
     protocol_events: &mut Vec<BackgroundProtocolEvent>,
     plan: &SessionDisposalPlan,
+    renderer_policy_reconciled: bool,
 ) -> DevToolsSessionHandlerDisposal {
     let mut disposal = DevToolsSessionHandlerDisposal {
         first_error: None,
         renderer_output_predecessor: None,
     };
-    for handler in DevToolsSessionHandlers::for_target(plan.target()).handlers {
+    for handler in plan.handler_set().handlers() {
         let result = handler
-            .dispose_async(conn, background_events, protocol_events, plan)
+            .dispose_async(
+                conn,
+                background_events,
+                protocol_events,
+                plan,
+                renderer_policy_reconciled,
+            )
             .await;
         match result {
             Ok(Some(predecessor)) => {
@@ -140,7 +136,6 @@ impl DevToolsSessionDomainHandler {
             Self::Target => "Target",
             Self::Fetch => "Fetch",
             Self::Runtime => "Runtime",
-            Self::Page => "Page",
             Self::Emulation => "Emulation",
             Self::Network => "Network",
             Self::PrimaryPageTargetState => "primary Page target",
@@ -153,6 +148,7 @@ impl DevToolsSessionDomainHandler {
         background_events: &mut Vec<BackgroundProtocolEvent>,
         protocol_events: &mut Vec<BackgroundProtocolEvent>,
         plan: &SessionDisposalPlan,
+        renderer_policy_reconciled: bool,
     ) -> anyhow::Result<Option<moli_core::RendererOutputFence>> {
         let session_id = plan.session_id();
         match self {
@@ -173,6 +169,7 @@ impl DevToolsSessionDomainHandler {
                     conn,
                     background_events,
                     session_id,
+                    renderer_policy_reconciled,
                 ))
                 .await
             }
@@ -184,10 +181,6 @@ impl DevToolsSessionDomainHandler {
                     plan,
                 )
                 .await?;
-                Ok(None)
-            }
-            Self::Page => {
-                super::page::dispose_session_async(conn, session_id).await?;
                 Ok(None)
             }
             Self::Emulation => {
@@ -209,30 +202,16 @@ impl DevToolsSessionDomainHandler {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use moli_page_types::DevToolsSessionKey;
 
     #[test]
     fn handler_sets_are_owned_by_session_target_kind() {
-        let page = SessionDisposalTarget::PageTarget {
-            browser_context_id: "BID".to_owned(),
-            target_id: "TID".to_owned(),
-            session_key: DevToolsSessionKey::Attached("SID".to_owned()),
-        };
+        assert_eq!(DevToolsSessionHandlerSet::Page.handlers(), PAGE_HANDLERS);
         assert_eq!(
-            DevToolsSessionHandlers::for_target(&page).handlers,
-            PAGE_HANDLERS
-        );
-
-        let worker = SessionDisposalTarget::DedicatedWorkerTarget {
-            browser_context_id: "BID".to_owned(),
-            target_id: "WID".to_owned(),
-        };
-        assert_eq!(
-            DevToolsSessionHandlers::for_target(&worker).handlers,
+            DevToolsSessionHandlerSet::Worker.handlers(),
             WORKER_HANDLERS
         );
         assert_eq!(
-            DevToolsSessionHandlers::for_target(&SessionDisposalTarget::Browser).handlers,
+            DevToolsSessionHandlerSet::Connection.handlers(),
             CONNECTION_HANDLERS
         );
     }

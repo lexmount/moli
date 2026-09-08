@@ -129,7 +129,7 @@ async fn enable_without_browser_context_errors() {
 #[tokio::test]
 async fn enable_sets_fetch_flags_for_supported_patterns() {
     let mut ctx = TestContext::new();
-    ctx.conn.browser_context = Some(BrowserContext::new_with_page_for_test("BID-1", "TID-1"));
+    ctx.conn.browser_context = Some(ctx.conn.new_page_target_fixture_for_test("BID-1", "TID-1"));
 
     ctx.process_async(json!({
         "id": 2,
@@ -150,7 +150,9 @@ async fn enable_sets_fetch_flags_for_supported_patterns() {
 #[tokio::test]
 async fn enable_and_disable_are_session_local_for_same_target() {
     let mut ctx = TestContext::new();
-    let mut bc = BrowserContext::new("BID-session-fetch".into());
+    let mut bc = ctx
+        .conn
+        .new_browser_context_fixture_for_test("BID-session-fetch");
     bc.set_active_target_id("TID-session-fetch".to_owned());
     bc.attach_active_session("SID-primary".to_owned());
     assert!(bc.assign_attached_session_to_target("TID-session-fetch", "SID-attached".to_owned()));
@@ -237,12 +239,117 @@ async fn enable_and_disable_are_session_local_for_same_target() {
             .subresource_interception_config(),
         (true, Some(moli_core::page::SubresourceResourceType::Xhr))
     );
+    assert!(!bc.target_has_loaded_page("TID-session-fetch"));
+    let owner = crate::conn::CommandOwnerScope::for_session("SID-attached");
+    let policy = ctx
+        .conn
+        .capture_document_policy_for_owner(&owner, &Url::parse("about:blank").unwrap())
+        .unwrap()
+        .unwrap();
+    assert!(policy.fetch_subresource_interception_enabled);
+    assert_eq!(
+        policy.fetch_subresource_interception_resource_type,
+        Some(SubresourceResourceType::Xhr)
+    );
+    ctx.process_async(json!({
+        "id": 213, "method": "Fetch.disable", "sessionId": "SID-attached"
+    }))
+    .await;
+    ctx.expect_result(213, json!({}), Some("SID-attached"));
+    let policy = ctx
+        .conn
+        .capture_document_policy_for_owner(&owner, &Url::parse("about:blank").unwrap())
+        .unwrap()
+        .unwrap();
+    assert!(!policy.fetch_subresource_interception_enabled);
+    assert_eq!(policy.fetch_subresource_interception_resource_type, None);
+}
+
+#[tokio::test]
+async fn global_intercept_removal_updates_background_document_policy() {
+    for loaded in [false, true] {
+        let mut ctx = TestContext::new();
+        let mut context = ctx
+            .conn
+            .new_browser_context_fixture_for_test("BID-interception");
+        context.set_active_target_id("TID-active");
+        context.attach_active_session("SID-active");
+        context.register_page_target_url_fixture(
+            "TID-background".into(),
+            Some("SID-background".into()),
+            "about:blank".into(),
+        );
+        ctx.conn.install_browser_context_fixture_for_test(context);
+        if loaded {
+            ctx.install_navigation_fixture_for_session_owner(
+                "data:text/html,<title>background</title>",
+                Some("SID-background"),
+            )
+            .await;
+        }
+        let background = crate::conn::CommandOwnerScope::for_session("SID-background");
+        let active = crate::conn::CommandOwnerScope::for_session("SID-active");
+        let pending = ctx
+            .conn
+            .start_add_network_intercept_for_owner(
+                &background,
+                Some("SID-background".into()),
+                "intercept-background".into(),
+                false,
+                Vec::new(),
+                vec![FetchInterceptionPattern {
+                    url_pattern: "*".into(),
+                    resource_type_filter: None,
+                    request_stage: FetchRequestStage::Request,
+                }],
+            )
+            .unwrap();
+        assert_eq!(pending.is_some(), loaded);
+        if let Some(pending) = pending {
+            ctx.conn
+                .finish_document_fetch_command(pending.wait().await)
+                .unwrap();
+        }
+        assert!(
+            ctx.conn
+                .capture_document_policy_for_owner(&background, &Url::parse("about:blank").unwrap())
+                .unwrap()
+                .unwrap()
+                .fetch_subresource_interception_enabled
+        );
+        let pending = ctx
+            .conn
+            .start_remove_network_intercept_for_owner(&active, "intercept-background", true)
+            .unwrap();
+        assert_eq!(
+            pending.is_some(),
+            loaded,
+            "global removal must update a loaded background renderer too"
+        );
+        if let Some(pending) = pending {
+            ctx.conn
+                .finish_document_fetch_command(pending.wait().await)
+                .unwrap();
+        }
+        let policy = ctx
+            .conn
+            .capture_document_policy_for_owner(&background, &Url::parse("about:blank").unwrap())
+            .unwrap()
+            .unwrap();
+        assert!(!policy.fetch_subresource_interception_enabled);
+        assert_eq!(policy.fetch_subresource_interception_resource_type, None);
+        let context = ctx.conn.browser_context.as_ref().unwrap();
+        assert_eq!(context.active_target_id(), Some("TID-active"));
+        assert!(!context.active_page_target().fetch_owner.is_enabled());
+    }
 }
 
 #[tokio::test]
 async fn disable_drains_only_current_session_pending_subresource_fetches() {
     let mut ctx = TestContext::new();
-    let mut bc = BrowserContext::new("BID-session-fetch-pending".into());
+    let mut bc = ctx
+        .conn
+        .new_browser_context_fixture_for_test("BID-session-fetch-pending");
     bc.set_active_target_id("TID-session-fetch".to_owned());
     bc.attach_active_session("SID-primary".to_owned());
     assert!(bc.assign_attached_session_to_target("TID-session-fetch", "SID-attached".to_owned()));
@@ -316,7 +423,9 @@ async fn disable_drains_only_current_session_pending_subresource_fetches() {
 #[tokio::test]
 async fn disable_drains_fetch_owned_pending_when_same_session_network_intercept_remains() {
     let mut ctx = TestContext::new();
-    let mut bc = BrowserContext::new("BID-session-mixed-fetch-pending".into());
+    let mut bc = ctx
+        .conn
+        .new_browser_context_fixture_for_test("BID-session-mixed-fetch-pending");
     bc.set_active_target_id("TID-session-fetch".to_owned());
     bc.attach_active_session("SID-primary".to_owned());
     ctx.conn.install_browser_context_fixture_for_test(bc);
@@ -398,16 +507,17 @@ async fn disable_drains_fetch_owned_pending_when_same_session_network_intercept_
 #[tokio::test(flavor = "multi_thread")]
 async fn enable_targets_loaded_background_owner_without_activation() {
     let mut ctx = TestContext::new();
-    let background = PageTargetHost::with_url(
+
+    let mut bc = ctx
+        .conn
+        .new_browser_context_fixture_for_test("BID-fetch-bg".to_owned());
+    bc.set_active_target_id("TID-active".to_owned());
+    bc.attach_active_session("SID-active".to_owned());
+    bc.register_page_target_url_fixture(
         "TID-background".to_owned(),
         Some("SID-background".to_owned()),
         "about:blank".to_owned(),
     );
-
-    let mut bc = BrowserContext::new("BID-fetch-bg".to_owned());
-    bc.set_active_target_id("TID-active".to_owned());
-    bc.attach_active_session("SID-active".to_owned());
-    bc.insert_page_target_host(background);
     ctx.conn.install_browser_context_fixture_for_test(bc);
     ctx.install_navigation_fixture_for_session_owner(
         "data:text/html,<title>fetch background</title>",
@@ -434,7 +544,7 @@ async fn enable_targets_loaded_background_owner_without_activation() {
     assert!(!bc.active_page_target().fetch_owner.is_enabled());
     let staged = bc
         .background_target("TID-background")
-        .filter(|target| target.has_non_default_session_state())
+        .filter(|target| bc.has_non_default_session_state_for_target(target.target_id()))
         .expect("background owner fetch config should be staged");
     assert!(staged.fetch_owner.config_snapshot().is_enabled());
     assert_eq!(
@@ -451,15 +561,16 @@ async fn enable_targets_loaded_background_owner_without_activation() {
 #[tokio::test(flavor = "multi_thread")]
 async fn pending_fetch_enable_keeps_background_owner_route_across_completion() {
     let mut ctx = TestContext::new();
-    let background = PageTargetHost::with_url(
+
+    let mut bc = ctx
+        .conn
+        .new_browser_context_fixture_for_test("BID-fetch-owner-route".to_owned());
+    bc.set_active_target_id("TID-fetch-active".to_owned());
+    bc.register_page_target_url_fixture(
         "TID-fetch-background".to_owned(),
         Some("SID-fetch-background".to_owned()),
         "about:blank".to_owned(),
     );
-
-    let mut bc = BrowserContext::new("BID-fetch-owner-route".to_owned());
-    bc.set_active_target_id("TID-fetch-active".to_owned());
-    bc.insert_page_target_host(background);
     ctx.conn.install_browser_context_fixture_for_test(bc);
 
     ctx.install_navigation_fixture_for_session_owner(
@@ -514,7 +625,7 @@ async fn pending_fetch_enable_keeps_background_owner_route_across_completion() {
     assert!(!bc.active_page_target().fetch_owner.is_enabled());
     let staged = bc
         .background_target("TID-fetch-background")
-        .filter(|target| target.has_non_default_session_state())
+        .filter(|target| bc.has_non_default_session_state_for_target(target.target_id()))
         .expect("background fetch config should stay background");
     assert!(staged.fetch_owner.config_snapshot().is_enabled());
     assert_eq!(staged.fetch_owner.config_snapshot().patterns().len(), 1);
@@ -527,12 +638,16 @@ async fn pending_fetch_enable_keeps_background_owner_route_across_completion() {
 #[tokio::test(flavor = "multi_thread")]
 async fn enable_targets_inactive_owner_without_activation() {
     let mut ctx = TestContext::new();
-    let mut active = BrowserContext::new("BID-active".to_owned());
+    let mut active = ctx
+        .conn
+        .new_browser_context_fixture_for_test("BID-active".to_owned());
     active.set_active_target_id("TID-active".to_owned());
     active.attach_active_session("SID-active".to_owned());
     ctx.conn.install_browser_context_fixture_for_test(active);
 
-    let mut inactive = BrowserContext::new("BID-inactive".to_owned());
+    let mut inactive = ctx
+        .conn
+        .new_browser_context_fixture_for_test("BID-inactive".to_owned());
     inactive.set_active_target_id("TID-inactive".to_owned());
     inactive.attach_active_session("SID-inactive".to_owned());
     ctx.conn
@@ -591,16 +706,17 @@ async fn enable_targets_inactive_owner_without_activation() {
 #[tokio::test(flavor = "multi_thread")]
 async fn disable_targets_loaded_background_owner_without_activation() {
     let mut ctx = TestContext::new();
-    let background = PageTargetHost::with_url(
+
+    let mut bc = ctx
+        .conn
+        .new_browser_context_fixture_for_test("BID-fetch-disable-bg".to_owned());
+    bc.set_active_target_id("TID-active".to_owned());
+    bc.attach_active_session("SID-active".to_owned());
+    bc.register_page_target_url_fixture(
         "TID-background".to_owned(),
         Some("SID-background".to_owned()),
         "about:blank".to_owned(),
     );
-
-    let mut bc = BrowserContext::new("BID-fetch-disable-bg".to_owned());
-    bc.set_active_target_id("TID-active".to_owned());
-    bc.attach_active_session("SID-active".to_owned());
-    bc.insert_page_target_host(background);
     {
         let state = bc
             .background_target_mut("TID-background")
@@ -636,7 +752,7 @@ async fn disable_targets_loaded_background_owner_without_activation() {
     assert!(!bc.active_page_target().fetch_owner.is_enabled());
     assert!(
         bc.background_target("TID-background")
-            .filter(|target| target.has_non_default_session_state())
+            .filter(|target| bc.has_non_default_session_state_for_target(target.target_id()))
             .is_none(),
         "disabled background fetch config should collapse to default"
     );
@@ -645,7 +761,7 @@ async fn disable_targets_loaded_background_owner_without_activation() {
 #[tokio::test]
 async fn enable_without_params_enables_default_fetch_interception() {
     let mut ctx = TestContext::new();
-    ctx.conn.browser_context = Some(BrowserContext::new_with_page_for_test("BID-1", "TID-1"));
+    ctx.conn.browser_context = Some(ctx.conn.new_page_target_fixture_for_test("BID-1", "TID-1"));
 
     ctx.process_async(json!({
         "id": 12,
@@ -662,7 +778,7 @@ async fn enable_without_params_enables_default_fetch_interception() {
 #[tokio::test]
 async fn enable_with_invalid_request_stage_errors_and_keeps_fetch_disabled() {
     let mut ctx = TestContext::new();
-    ctx.conn.browser_context = Some(BrowserContext::new_with_page_for_test("BID-1", "TID-1"));
+    ctx.conn.browser_context = Some(ctx.conn.new_page_target_fixture_for_test("BID-1", "TID-1"));
 
     ctx.process_async(json!({
         "id": 3,
@@ -684,7 +800,7 @@ async fn enable_with_invalid_request_stage_errors_and_keeps_fetch_disabled() {
 #[tokio::test]
 async fn enable_with_specific_url_pattern_sets_pattern() {
     let mut ctx = TestContext::new();
-    ctx.conn.browser_context = Some(BrowserContext::new_with_page_for_test("BID-1", "TID-1"));
+    ctx.conn.browser_context = Some(ctx.conn.new_page_target_fixture_for_test("BID-1", "TID-1"));
 
     ctx.process_async(json!({
         "id": 18,
@@ -725,7 +841,7 @@ fn url_pattern_matches_supports_wildcards_and_escapes() {
 #[tokio::test]
 async fn enable_with_document_resource_type_filter_sets_document_filter() {
     let mut ctx = TestContext::new();
-    ctx.conn.browser_context = Some(BrowserContext::new_with_page_for_test("BID-1", "TID-1"));
+    ctx.conn.browser_context = Some(ctx.conn.new_page_target_fixture_for_test("BID-1", "TID-1"));
 
     ctx.process_async(json!({
             "id": 14,
@@ -751,7 +867,7 @@ async fn enable_with_document_resource_type_filter_sets_document_filter() {
 #[tokio::test]
 async fn enable_with_script_resource_type_filter_sets_script_filter() {
     let mut ctx = TestContext::new();
-    ctx.conn.browser_context = Some(BrowserContext::new_with_page_for_test("BID-1", "TID-1"));
+    ctx.conn.browser_context = Some(ctx.conn.new_page_target_fixture_for_test("BID-1", "TID-1"));
 
     ctx.process_async(json!({
         "id": 15,
@@ -777,7 +893,7 @@ async fn enable_with_script_resource_type_filter_sets_script_filter() {
 #[tokio::test]
 async fn enable_with_fetch_resource_type_filter_sets_fetch_filter() {
     let mut ctx = TestContext::new();
-    ctx.conn.browser_context = Some(BrowserContext::new_with_page_for_test("BID-1", "TID-1"));
+    ctx.conn.browser_context = Some(ctx.conn.new_page_target_fixture_for_test("BID-1", "TID-1"));
 
     ctx.process_async(json!({
         "id": 15,
@@ -803,7 +919,7 @@ async fn enable_with_fetch_resource_type_filter_sets_fetch_filter() {
 #[tokio::test]
 async fn enable_with_xhr_resource_type_filter_sets_xhr_filter() {
     let mut ctx = TestContext::new();
-    ctx.conn.browser_context = Some(BrowserContext::new_with_page_for_test("BID-1", "TID-1"));
+    ctx.conn.browser_context = Some(ctx.conn.new_page_target_fixture_for_test("BID-1", "TID-1"));
 
     ctx.process_async(json!({
         "id": 16,
@@ -829,7 +945,7 @@ async fn enable_with_xhr_resource_type_filter_sets_xhr_filter() {
 #[tokio::test]
 async fn enable_with_ping_resource_type_filter_sets_ping_filter() {
     let mut ctx = TestContext::new();
-    ctx.conn.browser_context = Some(BrowserContext::new_with_page_for_test("BID-1", "TID-1"));
+    ctx.conn.browser_context = Some(ctx.conn.new_page_target_fixture_for_test("BID-1", "TID-1"));
 
     ctx.process_async(json!({
         "id": 18,
@@ -855,7 +971,7 @@ async fn enable_with_ping_resource_type_filter_sets_ping_filter() {
 #[tokio::test]
 async fn enable_with_csp_violation_report_resource_type_filter_sets_csp_report_filter() {
     let mut ctx = TestContext::new();
-    ctx.conn.browser_context = Some(BrowserContext::new_with_page_for_test("BID-1", "TID-1"));
+    ctx.conn.browser_context = Some(ctx.conn.new_page_target_fixture_for_test("BID-1", "TID-1"));
 
     ctx.process_async(json!({
         "id": 19,
@@ -885,7 +1001,7 @@ async fn enable_with_csp_violation_report_resource_type_filter_sets_csp_report_f
 #[tokio::test]
 async fn enable_with_websocket_resource_type_filter_sets_websocket_filter() {
     let mut ctx = TestContext::new();
-    ctx.conn.browser_context = Some(BrowserContext::new_with_page_for_test("BID-1", "TID-1"));
+    ctx.conn.browser_context = Some(ctx.conn.new_page_target_fixture_for_test("BID-1", "TID-1"));
 
     ctx.process_async(json!({
         "id": 20,
@@ -911,7 +1027,7 @@ async fn enable_with_websocket_resource_type_filter_sets_websocket_filter() {
 #[tokio::test]
 async fn enable_with_other_resource_type_filter_sets_other_filter() {
     let mut ctx = TestContext::new();
-    ctx.conn.browser_context = Some(BrowserContext::new_with_page_for_test("BID-1", "TID-1"));
+    ctx.conn.browser_context = Some(ctx.conn.new_page_target_fixture_for_test("BID-1", "TID-1"));
 
     ctx.process_async(json!({
         "id": 21,
@@ -938,10 +1054,10 @@ async fn enable_with_other_resource_type_filter_sets_other_filter() {
 async fn enable_rejects_unimplemented_parser_discovered_resource_type_filters() {
     for resource_type in ["Stylesheet", "Media", "TextTrack"] {
         let mut ctx = TestContext::new();
-        ctx.conn.browser_context = Some(BrowserContext::new_with_page_for_test(
-            format!("BID-{resource_type}"),
-            "TID-1",
-        ));
+        ctx.conn.browser_context = Some(
+            ctx.conn
+                .new_page_target_fixture_for_test(format!("BID-{resource_type}"), "TID-1"),
+        );
 
         ctx.process_async(json!({
             "id": 20,
@@ -961,7 +1077,10 @@ async fn enable_rejects_unimplemented_parser_discovered_resource_type_filters() 
 #[tokio::test]
 async fn enable_accepts_image_resource_type_filter() {
     let mut ctx = TestContext::new();
-    ctx.conn.browser_context = Some(BrowserContext::new_with_page_for_test("BID-Image", "TID-1"));
+    ctx.conn.browser_context = Some(
+        ctx.conn
+            .new_page_target_fixture_for_test("BID-Image", "TID-1"),
+    );
 
     ctx.process_async(json!({
         "id": 22,
@@ -987,7 +1106,7 @@ async fn enable_accepts_image_resource_type_filter() {
 #[tokio::test]
 async fn enable_with_response_stage_pattern_sets_response_stage() {
     let mut ctx = TestContext::new();
-    ctx.conn.browser_context = Some(BrowserContext::new_with_page_for_test("BID-1", "TID-1"));
+    ctx.conn.browser_context = Some(ctx.conn.new_page_target_fixture_for_test("BID-1", "TID-1"));
 
     ctx.process_async(json!({
         "id": 17,
@@ -1009,7 +1128,7 @@ async fn enable_with_response_stage_pattern_sets_response_stage() {
 #[tokio::test]
 async fn enable_with_multiple_supported_patterns_enables_fetch_interception() {
     let mut ctx = TestContext::new();
-    ctx.conn.browser_context = Some(BrowserContext::new_with_page_for_test("BID-1", "TID-1"));
+    ctx.conn.browser_context = Some(ctx.conn.new_page_target_fixture_for_test("BID-1", "TID-1"));
 
     ctx.process_async(json!({
         "id": 13,
@@ -1051,7 +1170,7 @@ async fn disable_without_browser_context_errors() {
 #[tokio::test]
 async fn disable_clears_fetch_state() {
     let mut ctx = TestContext::new();
-    let mut bc = BrowserContext::new_with_page_for_test("BID-1", "TID-1");
+    let mut bc = ctx.conn.new_page_target_fixture_for_test("BID-1", "TID-1");
     bc.active_page_target_mut()
         .fetch_owner
         .configure(None, true, Vec::new());
@@ -1060,11 +1179,13 @@ async fn disable_clears_fetch_state() {
         .register_pending_fetch_navigation_request(PendingFetchNavigation {
             fetch_request_id: "INT-1".to_owned(),
             interception_session_id: Some("SID-1".to_owned()),
-            document_navigation_token: None,
+            navigation_permit: PendingFetchNavigation::test_navigation_permit(),
             navigation: crate::conn::NavigationDispatchState {
                 navigate_id: Some(1),
                 owner: crate::conn::CommandOwnerScope::for_route(
                     crate::conn::CdpSessionRoute::Browser,
+                ),
+                web_contents: crate::conn::NavigationDispatchState::detached_web_contents_for_test(
                 ),
                 result_projection: crate::conn::NavigationResultProjection::Cdp(
                     json!({"frameId": "TID-1", "loaderId": "LID-0000000001"}),
@@ -1100,12 +1221,13 @@ async fn disable_clears_fetch_state() {
                 owner_kind: crate::conn::PendingSubresourceFetchOwnerKind::Fetch,
                 fetch_request_id: "INT-1".to_owned(),
                 response_stage_request_id: "INT-1".to_owned(),
-                document_navigation_token: None,
                 navigation: crate::conn::NavigationDispatchState {
                     navigate_id: Some(1),
                     owner: crate::conn::CommandOwnerScope::for_route(
                         crate::conn::CdpSessionRoute::Browser,
                     ),
+                    web_contents:
+                        crate::conn::NavigationDispatchState::detached_web_contents_for_test(),
                     result_projection: crate::conn::NavigationResultProjection::Cdp(
                         json!({"frameId": "TID-1", "loaderId": "LID-0000000001"}),
                     ),
@@ -1131,9 +1253,7 @@ async fn disable_clears_fetch_state() {
                     realm: "test-area".to_owned(),
                 },
                 request_cookie_report: None,
-                auth_response: PendingFetchAuthNavigation::test_auth_response(
-                    Url::parse("http://example.test/auth").unwrap(),
-                ),
+                auth_permit: PendingFetchAuthNavigation::test_auth_permit(),
                 intercept_response: false,
                 response_stage_url_match_policy:
                     crate::conn::ResponseStageUrlMatchPolicy::AlreadyMatched,
@@ -1159,7 +1279,7 @@ async fn disable_clears_fetch_state() {
 #[tokio::test]
 async fn disable_after_enable_resets_pending_requests() {
     let mut ctx = TestContext::new();
-    let mut bc = BrowserContext::new_with_page_for_test("BID-1", "TID-1");
+    let mut bc = ctx.conn.new_page_target_fixture_for_test("BID-1", "TID-1");
     bc.active_page_target_mut()
         .fetch_owner
         .configure(None, false, Vec::new());
@@ -1187,7 +1307,7 @@ async fn disable_after_enable_resets_pending_requests() {
 #[tokio::test]
 async fn continue_request_validates_request_id_and_pending_state() {
     let mut ctx = TestContext::new();
-    ctx.conn.browser_context = Some(BrowserContext::new_with_page_for_test("BID-1", "TID-1"));
+    ctx.conn.browser_context = Some(ctx.conn.new_page_target_fixture_for_test("BID-1", "TID-1"));
 
     ctx.process_async(json!({
         "id": 6,
@@ -1209,7 +1329,7 @@ async fn continue_request_validates_request_id_and_pending_state() {
 #[tokio::test]
 async fn continue_request_with_intercept_response_still_validates_request_id() {
     let mut ctx = TestContext::new();
-    ctx.conn.browser_context = Some(BrowserContext::new_with_page_for_test("BID-1", "TID-1"));
+    ctx.conn.browser_context = Some(ctx.conn.new_page_target_fixture_for_test("BID-1", "TID-1"));
 
     ctx.process_async(json!({
         "id": 60,
@@ -1226,7 +1346,7 @@ async fn continue_request_with_intercept_response_still_validates_request_id() {
 #[tokio::test]
 async fn continue_response_and_take_response_body_as_stream_validate_like_fetch_actions() {
     let mut ctx = TestContext::new();
-    let mut bc = BrowserContext::new_with_page_for_test("BID-1", "TID-1");
+    let mut bc = ctx.conn.new_page_target_fixture_for_test("BID-1", "TID-1");
     bc.active_page_target_mut()
         .fetch_owner
         .register_pending_fetch_request_id_for_test("INT-42".to_owned());
@@ -1263,7 +1383,7 @@ async fn continue_response_and_take_response_body_as_stream_validate_like_fetch_
 #[tokio::test]
 async fn pending_fetch_request_can_be_consumed_once() {
     let mut ctx = TestContext::new();
-    let mut bc = BrowserContext::new_with_page_for_test("BID-1", "TID-1");
+    let mut bc = ctx.conn.new_page_target_fixture_for_test("BID-1", "TID-1");
     bc.active_page_target_mut()
         .fetch_owner
         .register_pending_fetch_request_id_for_test("INT-7".to_owned());
@@ -1289,7 +1409,7 @@ async fn pending_fetch_request_can_be_consumed_once() {
 #[tokio::test]
 async fn continue_with_auth_and_get_response_body_share_request_validation() {
     let mut ctx = TestContext::new();
-    ctx.conn.browser_context = Some(BrowserContext::new_with_page_for_test("BID-1", "TID-1"));
+    ctx.conn.browser_context = Some(ctx.conn.new_page_target_fixture_for_test("BID-1", "TID-1"));
 
     ctx.process_async(json!({
         "id": 10,
@@ -1314,7 +1434,7 @@ async fn continue_with_auth_and_get_response_body_share_request_validation() {
 #[tokio::test]
 async fn continue_with_auth_rejects_invalid_response_without_consuming_pending_auth_navigation() {
     let mut ctx = TestContext::new();
-    let mut bc = attached_browser_context();
+    let mut bc = attached_browser_context(&ctx.conn);
     bc.active_page_target_mut()
         .fetch_owner
         .register_pending_fetch_auth_navigation(
@@ -1326,10 +1446,11 @@ async fn continue_with_auth_rejects_invalid_response_without_consuming_pending_a
                 owner_kind: crate::conn::PendingSubresourceFetchOwnerKind::Fetch,
                 fetch_request_id: "INT-8".to_owned(),
                 response_stage_request_id: "INT-8".to_owned(),
-                document_navigation_token: None,
                 navigation: crate::conn::NavigationDispatchState {
                     navigate_id: Some(1),
                     owner: crate::conn::CommandOwnerScope::for_session("SID-1"),
+                    web_contents:
+                        crate::conn::NavigationDispatchState::detached_web_contents_for_test(),
                     result_projection: crate::conn::NavigationResultProjection::Cdp(
                         json!({"frameId": "TID-1", "loaderId": "LID-0000000001"}),
                     ),
@@ -1355,9 +1476,7 @@ async fn continue_with_auth_rejects_invalid_response_without_consuming_pending_a
                     realm: "test-area".to_owned(),
                 },
                 request_cookie_report: None,
-                auth_response: PendingFetchAuthNavigation::test_auth_response(
-                    Url::parse("http://example.test/auth").unwrap(),
-                ),
+                auth_permit: PendingFetchAuthNavigation::test_auth_permit(),
                 intercept_response: false,
                 response_stage_url_match_policy:
                     crate::conn::ResponseStageUrlMatchPolicy::AlreadyMatched,
@@ -1389,7 +1508,7 @@ async fn continue_with_auth_rejects_invalid_response_without_consuming_pending_a
 #[tokio::test]
 async fn continue_with_auth_unsupported_challenge_preserves_pending_auth_navigation() {
     let mut ctx = TestContext::new();
-    let mut bc = attached_browser_context();
+    let mut bc = attached_browser_context(&ctx.conn);
     bc.active_page_target_mut()
         .fetch_owner
         .register_pending_fetch_auth_navigation(
@@ -1401,10 +1520,11 @@ async fn continue_with_auth_unsupported_challenge_preserves_pending_auth_navigat
                 owner_kind: crate::conn::PendingSubresourceFetchOwnerKind::Fetch,
                 fetch_request_id: "INT-9".to_owned(),
                 response_stage_request_id: "INT-9".to_owned(),
-                document_navigation_token: None,
                 navigation: crate::conn::NavigationDispatchState {
                     navigate_id: Some(1),
                     owner: crate::conn::CommandOwnerScope::for_session("SID-1"),
+                    web_contents:
+                        crate::conn::NavigationDispatchState::detached_web_contents_for_test(),
                     result_projection: crate::conn::NavigationResultProjection::Cdp(
                         json!({"frameId": "TID-1", "loaderId": "LID-0000000001"}),
                     ),
@@ -1430,9 +1550,7 @@ async fn continue_with_auth_unsupported_challenge_preserves_pending_auth_navigat
                     realm: "token-area".to_owned(),
                 },
                 request_cookie_report: None,
-                auth_response: PendingFetchAuthNavigation::test_auth_response(
-                    Url::parse("http://example.test/auth").unwrap(),
-                ),
+                auth_permit: PendingFetchAuthNavigation::test_auth_permit(),
                 intercept_response: false,
                 response_stage_url_match_policy:
                     crate::conn::ResponseStageUrlMatchPolicy::AlreadyMatched,
@@ -1573,10 +1691,11 @@ fn emit_auth_required_preserves_request_headers_and_post_data_shape() {
     let pending = PendingFetchNavigation {
         fetch_request_id: "INT-11".to_owned(),
         interception_session_id: Some("SID-1".to_owned()),
-        document_navigation_token: None,
+        navigation_permit: PendingFetchNavigation::test_navigation_permit(),
         navigation: crate::conn::NavigationDispatchState {
             navigate_id: Some(1),
             owner: crate::conn::CommandOwnerScope::for_session("SID-1"),
+            web_contents: crate::conn::NavigationDispatchState::detached_web_contents_for_test(),
             result_projection: crate::conn::NavigationResultProjection::Cdp(
                 json!({"frameId": "TID-1", "loaderId": "LID-0000000001"}),
             ),

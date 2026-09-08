@@ -156,6 +156,9 @@ async fn close_target_inner_async(
     {
         return Ok(DevToolsCloseTargetResult { success: true });
     }
+    let web_contents = conn
+        .browser_web_contents_for_target(&target_id)
+        .map_err(|message| DevToolsError::new(DevToolsErrorKind::NoSuchTarget, message))?;
     if conn.browser_context.as_ref().is_some_and(|bc| {
         !matches!(
             bc.active_target_identity(),
@@ -191,6 +194,7 @@ async fn close_target_inner_async(
             renderer_output_predecessor,
             owner_scope,
             target_id,
+            web_contents,
         )
         .await;
         return Ok(DevToolsCloseTargetResult { success: true });
@@ -244,6 +248,7 @@ async fn close_target_inner_async(
         renderer_output_predecessor,
         owner_scope,
         target_id,
+        web_contents,
     )
     .await;
     Ok(DevToolsCloseTargetResult { success: true })
@@ -265,9 +270,13 @@ async fn settle_target_close_after_pending_fetches_async(
     renderer_output_predecessor: Option<moli_core::RendererOutputFence>,
     owner_scope: crate::conn::CommandOwnerScope,
     target_id: String,
+    web_contents: moli_core::browser::WebContentsHandle,
 ) {
-    let action =
-        crate::domains::page::PageTargetTerminationOwnerAction::new(owner_scope, target_id);
+    let action = crate::domains::page::PageTargetTerminationOwnerAction::new(
+        owner_scope,
+        target_id,
+        web_contents,
+    );
     if let Some(predecessor) = renderer_output_predecessor {
         command_context.set_renderer_output_predecessor(predecessor);
         conn.publish_page_target_termination_owner_action(action);

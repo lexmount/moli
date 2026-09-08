@@ -6,7 +6,7 @@ use crate::conn::{CdpConnection, Cmd, CommandOwnerScope};
 use crate::domains::actions::DomAction;
 use crate::domains::command_output::CommandOutputPlan;
 use chromiumoxide_cdp::cdp::browser_protocol::dom::{EnableIncludeWhitespace, EnableParams};
-use moli_core::page::{DocumentNodeRuntimeObjectResolution, Page, is_renderer_backend_node_id};
+use moli_core::page::{DocumentNodeRuntimeObjectResolution, is_renderer_backend_node_id};
 
 mod activity;
 mod child_frame;
@@ -42,6 +42,11 @@ use node_payload::{
 pub(crate) enum DomCommandDispatchStep {
     Pending(Box<PendingDomCommandDispatch>),
     Complete(CommandOutputPlan),
+}
+
+pub(crate) fn command_waits_for_document_projection(cmd: &Cmd<'_>) -> bool {
+    cmd.parse_action::<DomAction>()
+        .is_some_and(|action| action != DomAction::Enable)
 }
 
 pub(crate) fn try_start_dom_command_dispatch(
@@ -186,12 +191,17 @@ pub(crate) fn dom_agent_includes_whitespace_for_owner(
         })
 }
 
-fn loaded_page_mut_for_owner<'a>(
-    conn: &'a mut CdpConnection,
+pub(crate) fn dom_inspection_for_owner<'a>(
+    conn: &'a CdpConnection,
     owner: &CommandOwnerScope,
-) -> Option<&'a mut Page> {
-    conn.loaded_page_mut_for_protocol_access_for_owner(owner)
-        .ok()
+) -> Option<moli_renderer_v8::RendererDomInspection<'a>> {
+    let inspector_session_id = conn.target_renderer_runtime_inspector_session_id_for_owner(owner);
+    conn.renderer_inspection_binding_for_owner(
+        owner,
+        moli_core::page::RendererInspectorCommandRoute::MainThread,
+    )
+    .ok()
+    .map(|binding| binding.dom_inspection(inspector_session_id))
 }
 
 fn target_owner_exists_for_owner(conn: &CdpConnection, owner: &CommandOwnerScope) -> bool {

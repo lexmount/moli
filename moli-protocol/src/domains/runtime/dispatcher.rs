@@ -24,8 +24,8 @@ use moli_page_types::RendererInspectorResponseDelivery;
 use crate::conn::{
     BackgroundCommandResponsePayload, BackgroundCommandResponsePayloadRef, BackgroundProtocolEvent,
     BidiChannelListenerResidence, BidiChannelOwnerAction, BidiChannelPageOwner, CdpConnection,
-    CdpRendererCommandAccess, CdpRendererCommandPolicy, CdpSchedulerEvent, CdpSessionRoute,
-    ClaimedPendingInspectorAwait, Cmd, CommandOwnerScope, CompletedMoliDiagnosticsDispatch,
+    CdpRendererCommandPolicy, CdpSchedulerEvent, CdpSessionRoute, ClaimedPendingInspectorAwait,
+    Cmd, CommandOwnerScope, CompletedMoliDiagnosticsDispatch,
     CompletedRuntimeBindingPageCommandDispatch, CompletedRuntimeChildDefaultContextLookupDispatch,
     CompletedRuntimeEnableEventsDispatch, CompletedRuntimeProtocolMessageDispatch,
     CompletedServiceWorkerRuntimeProtocolMessageDispatch,
@@ -36,11 +36,11 @@ use crate::conn::{
     PendingRuntimeEnableEventsDispatch, PendingRuntimeProtocolMessageDispatch,
     PendingServiceWorkerRuntimeProtocolMessageDispatch,
     PendingSharedWorkerRuntimeProtocolMessageDispatch, ProfilerInspectorCommand,
-    RendererCommandDescriptor, RuntimeBindingDefinition, RuntimeEnableReplayEvent,
-    RuntimeInspectorAsyncCompletionReceiver, RuntimeInspectorResponseReady,
-    ServiceWorkerRuntimeExceptionSnapshot, SessionOwnerRuntimeFrontendEnableResult,
-    monotonic_timestamp_seconds, renderer_command_turn_frontend_protocol_response,
-    runtime_remote_object_ids_in_map,
+    RendererCommandDescriptor, RendererDispatchLane, RuntimeBindingDefinition,
+    RuntimeEnableReplayEvent, RuntimeInspectorAsyncCompletionReceiver,
+    RuntimeInspectorResponseReady, ServiceWorkerRuntimeExceptionSnapshot,
+    SessionOwnerRuntimeFrontendEnableResult, monotonic_timestamp_seconds,
+    renderer_command_turn_frontend_protocol_response, runtime_remote_object_ids_in_map,
 };
 use crate::domains::actions::{ConsoleAction, HeapProfilerAction, RuntimeAction};
 use crate::domains::command_output::{
@@ -521,6 +521,26 @@ impl RuntimeCommandCompletionMeta {
 }
 
 impl PendingRuntimeCommandDispatch {
+    pub(crate) fn renderer_dispatch_lane(&self) -> Option<RendererDispatchLane> {
+        match &self.pending {
+            PendingRuntimeCommandKind::Inspector { pending }
+            | PendingRuntimeCommandKind::BindingInspector { pending, .. } => {
+                Some(renderer_dispatch_lane(pending.renderer_route()))
+            }
+            PendingRuntimeCommandKind::SharedWorkerInspector { .. }
+            | PendingRuntimeCommandKind::ServiceWorkerInspector { .. } => {
+                Some(RendererDispatchLane::Io)
+            }
+            PendingRuntimeCommandKind::Enable(_)
+            | PendingRuntimeCommandKind::BindingContextLookup { .. } => {
+                Some(RendererDispatchLane::Main)
+            }
+            PendingRuntimeCommandKind::InspectorDeferredReply { .. }
+            | PendingRuntimeCommandKind::MoliDiagnostics(_)
+            | PendingRuntimeCommandKind::BindingPage { .. } => None,
+        }
+    }
+
     pub(crate) fn command_id(&self) -> Option<u64> {
         self.command_id
     }
@@ -965,6 +985,21 @@ pub(crate) fn try_start_runtime_command_dispatch(
     }
 }
 
+pub(crate) fn command_waits_for_document_projection(cmd: &Cmd<'_>) -> bool {
+    !matches!(
+        cmd.parse_action::<RuntimeAction>(),
+        None | Some(
+            RuntimeAction::AddBinding
+                | RuntimeAction::RemoveBinding
+                | RuntimeAction::TerminateExecution
+        )
+    )
+}
+
+pub(crate) fn debugger_command_waits_for_document_projection(cmd: &Cmd<'_>) -> bool {
+    debugger_renderer_dispatch_lane(cmd.action) == RendererDispatchLane::Main && can_dispatch(cmd)
+}
+
 fn start_main_runtime_inspector_command(
     conn: &mut CdpConnection,
     cmd: &Cmd<'_>,
@@ -1024,10 +1059,16 @@ fn start_main_runtime_inspector_command_for_owner(
             ));
         }
     };
+    let renderer_lane = if action == RuntimeAction::TerminateExecution {
+        RendererDispatchLane::Io
+    } else {
+        RendererDispatchLane::Main
+    };
     let pending = match start_pending_runtime_routable_inspector_dispatch(
         conn,
         cmd,
         &owner_scope,
+        renderer_lane,
         inspector_json,
         cmd.terminal_response_delivery(),
     ) {
@@ -1143,7 +1184,7 @@ pub(crate) fn start_heap_profiler_inspector_command_dispatch(
 
     if !conn
         .runtime_session_owner_slot(cmd.session_id)
-        .is_ok_and(|slot| slot.has_loaded_page())
+        .is_ok_and(|slot| slot.current_renderer_inspection_binding().is_some())
     {
         return RuntimeCommandTaskStep::Complete(match action {
             HeapProfilerAction::Enable | HeapProfilerAction::Disable => {
@@ -1225,26 +1266,20 @@ pub(crate) fn start_debugger_inspector_command_dispatch(
     }
 
     let owner_scope = CommandOwnerScope::capture(conn, cmd.session_id);
-    let pending = match cmd.renderer_policy().access() {
-        CdpRendererCommandAccess::MainThread => {
-            start_pending_runtime_inspector_dispatch_with_delivery(
-                conn,
-                cmd,
-                &owner_scope,
-                inspector_json,
-                cmd.terminal_response_delivery(),
-            )
-        }
-        CdpRendererCommandAccess::Io => start_pending_runtime_io_inspector_dispatch(
+    let pending = match debugger_renderer_dispatch_lane(cmd.action) {
+        RendererDispatchLane::Main => start_pending_runtime_inspector_dispatch_with_delivery(
             conn,
             cmd,
             &owner_scope,
             inspector_json,
             cmd.terminal_response_delivery(),
         ),
-        CdpRendererCommandAccess::OwnerIndependent => Err(
-            "an owner-independent command cannot enter the Debugger Inspector dispatcher"
-                .to_owned(),
+        RendererDispatchLane::Io => start_pending_runtime_io_inspector_dispatch(
+            conn,
+            cmd,
+            &owner_scope,
+            inspector_json,
+            cmd.terminal_response_delivery(),
         ),
     };
     let pending = match pending {
@@ -1655,8 +1690,8 @@ fn start_runtime_enable_command_for_owner(
     command_id: Option<u64>,
     owner_scope: CommandOwnerScope,
 ) -> RuntimeCommandTaskStep {
-    let has_loaded_page = match conn.runtime_session_owner_slot_for_owner(&owner_scope) {
-        Ok(slot) => slot.has_loaded_page(),
+    let has_renderer = match conn.runtime_session_owner_slot_for_owner(&owner_scope) {
+        Ok(slot) => slot.current_renderer_inspection_binding().is_some(),
         Err(_) if owner_scope.session_id().is_some() => {
             return RuntimeCommandTaskStep::Complete(CommandOutputPlan::error(
                 -32001,
@@ -1676,7 +1711,7 @@ fn start_runtime_enable_command_for_owner(
             return RuntimeCommandTaskStep::Complete(CommandOutputPlan::success());
         }
     };
-    if !has_loaded_page {
+    if !has_renderer {
         if conn.can_defer_initial_document_page_build() {
             match conn.set_runtime_frontend_enabled_for_owner(&owner_scope, true) {
                 SessionOwnerRuntimeFrontendEnableResult::Handled => {}
@@ -1801,11 +1836,11 @@ fn try_start_pending_runtime_binding_command(
     };
     let live_page_update_unavailable = conn
         .runtime_session_owner_slot_for_owner(&owner_scope)
-        .is_ok_and(|slot| !slot.has_loaded_page())
+        .is_ok_and(|slot| slot.current_renderer_inspection_binding().is_none())
         || should_persist
             && conn
                 .runtime_session_owner_slot_for_owner(&owner_scope)
-                .is_ok_and(|slot| slot.renderer_document_navigation_is_suspended());
+                .is_ok_and(|slot| slot.document_projection_is_pending());
     if live_page_update_unavailable {
         task.command_response = Some(RuntimeBindingCommandResponse::empty_success());
         let meta = RuntimeCommandCompletionMeta {
@@ -1882,29 +1917,49 @@ fn start_pending_runtime_routable_inspector_dispatch(
     conn: &mut CdpConnection,
     cmd: &Cmd<'_>,
     owner: &CommandOwnerScope,
+    lane: RendererDispatchLane,
     inspector_json: String,
     response_delivery: RendererInspectorResponseDelivery,
 ) -> Result<PendingRuntimeProtocolMessageDispatch, String> {
-    match cmd.renderer_policy().access() {
-        CdpRendererCommandAccess::MainThread => {
-            start_pending_runtime_inspector_dispatch_with_delivery(
-                conn,
-                cmd,
-                owner,
-                inspector_json,
-                response_delivery,
-            )
-        }
-        CdpRendererCommandAccess::Io => start_pending_runtime_io_inspector_dispatch(
+    match lane {
+        RendererDispatchLane::Main => start_pending_runtime_inspector_dispatch_with_delivery(
             conn,
             cmd,
             owner,
             inspector_json,
             response_delivery,
         ),
-        CdpRendererCommandAccess::OwnerIndependent => Err(
-            "an owner-independent command cannot enter the Runtime Inspector dispatcher".to_owned(),
+        RendererDispatchLane::Io => start_pending_runtime_io_inspector_dispatch(
+            conn,
+            cmd,
+            owner,
+            inspector_json,
+            response_delivery,
         ),
+    }
+}
+
+fn renderer_dispatch_lane(
+    route: moli_core::page::RendererInspectorCommandRoute,
+) -> RendererDispatchLane {
+    match route {
+        moli_core::page::RendererInspectorCommandRoute::MainThread => RendererDispatchLane::Main,
+        moli_core::page::RendererInspectorCommandRoute::Io => RendererDispatchLane::Io,
+    }
+}
+
+fn debugger_renderer_dispatch_lane(action: &str) -> RendererDispatchLane {
+    match action {
+        "getPossibleBreakpoints"
+        | "getScriptSource"
+        | "getStackTrace"
+        | "pause"
+        | "removeBreakpoint"
+        | "resume"
+        | "setBreakpoint"
+        | "setBreakpointByUrl"
+        | "setBreakpointsActive" => RendererDispatchLane::Io,
+        _ => RendererDispatchLane::Main,
     }
 }
 
@@ -2205,7 +2260,7 @@ fn pre_register_runtime_await_if_needed(
         owner,
         object_group,
     )?;
-    conn.register_runtime_await_job_for_owner(command_id, owner, object_group, action);
+    conn.trace_runtime_await_started(command_id, owner, object_group, action);
     conn.trace_runtime_await_pending_registered(command_id, owner.session_id());
     Ok(Some(command_id))
 }
@@ -2278,7 +2333,7 @@ pub(crate) async fn execute_devtools_runtime_command_async_with_protocol_events(
     if let Err(error) = validation_result {
         return DevToolsCommandExecutionOutput::new(Err(error));
     }
-    let internal_command_id = conn.next_internal_runtime_command_id();
+    let internal_command_id = conn.next_internal_devtools_command_id();
     let mut step =
         start_protocol_neutral_runtime_command(conn, target.clone(), command, internal_command_id)
             .await;
@@ -2396,6 +2451,16 @@ impl CdpConnection {
         &mut self,
         mut command: DevToolsCommand,
     ) -> DevToolsRuntimeCommandTaskStep {
+        if let Err(error) = self.prepare_webdriver_command(&mut command) {
+            return self
+                .complete_devtools_runtime_direct_result(
+                    command.context().clone(),
+                    Err(error),
+                    Vec::new(),
+                    None,
+                )
+                .await;
+        }
         let command_context = command.context().clone();
         if let DevToolsCommand::GetRealms(command) = command {
             let result = execute_devtools_get_realms_command_async(self, command).await;
@@ -2487,7 +2552,7 @@ impl CdpConnection {
                 .await;
         }
 
-        let internal_command_id = self.next_internal_runtime_command_id();
+        let internal_command_id = self.next_internal_devtools_command_id();
         let state = DevToolsRuntimeCommandDispatchState {
             internal_command_id,
             command_context,
@@ -5866,7 +5931,7 @@ async fn devtools_probe_remote_value_async(
     command: DevToolsCommand,
 ) -> Result<Option<DevToolsRemoteValue>, DevToolsError> {
     let result_ownership = devtools_runtime_result_ownership(&command);
-    let internal_command_id = conn.next_internal_runtime_command_id();
+    let internal_command_id = conn.next_internal_devtools_command_id();
     let mut step =
         start_protocol_neutral_runtime_command(conn, target, command, internal_command_id).await;
     loop {
@@ -7179,7 +7244,7 @@ async fn release_devtools_objects_for_owner_async(
             continue;
         }
         let params = json!({ "objectId": object_id });
-        let command_id = conn.next_internal_runtime_command_id();
+        let command_id = conn.next_internal_devtools_command_id();
         let raw_json = runtime_inspector_command_json(command_id, "Runtime.releaseObject", &params);
         let response = dispatch_runtime_inspector_command_response_for_owner_async(
             conn, owner, raw_json, command_id,
@@ -9094,9 +9159,7 @@ fn release_service_worker_if_waiting_for_debugger(
     else {
         return false;
     };
-    browser_context
-        .renderer_runtime()
-        .run_service_worker_if_waiting_for_debugger_for_devtools(version_id)
+    browser_context.run_service_worker_if_waiting_for_debugger(version_id)
 }
 
 fn is_bidi_runtime_listener_session(session_id: Option<&str>) -> bool {
@@ -10387,7 +10450,7 @@ fn start_runtime_disable_command_for_owner(
 ) -> RuntimeCommandTaskStep {
     if !conn
         .runtime_session_owner_slot_for_owner(&owner_scope)
-        .is_ok_and(|slot| slot.has_loaded_page())
+        .is_ok_and(|slot| slot.current_renderer_inspection_binding().is_some())
     {
         return RuntimeCommandTaskStep::Complete(disable_command_output_plan_sync_for_owner(
             conn,
@@ -10457,7 +10520,7 @@ fn start_runtime_run_if_waiting_for_debugger_command(
 ) -> RuntimeCommandTaskStep {
     if !conn
         .runtime_session_owner_slot(cmd.session_id)
-        .is_ok_and(|slot| slot.has_loaded_page())
+        .is_ok_and(|slot| slot.current_renderer_inspection_binding().is_some())
     {
         return RuntimeCommandTaskStep::Complete(CommandOutputPlan::success());
     }
@@ -10519,7 +10582,7 @@ fn start_runtime_discard_console_entries_command(
 ) -> RuntimeCommandTaskStep {
     if !conn
         .runtime_session_owner_slot(cmd.session_id)
-        .is_ok_and(|slot| slot.has_loaded_page())
+        .is_ok_and(|slot| slot.current_renderer_inspection_binding().is_some())
     {
         advance_runtime_observable_cursors_to_current_for_session_owner(conn, cmd.session_id);
         return RuntimeCommandTaskStep::Complete(CommandOutputPlan::success());
@@ -10562,10 +10625,7 @@ mod protocol_neutral_tests {
     use moli_shared_worker::SharedWorkerInstanceId;
     use serde_json::{Value, json};
 
-    use crate::conn::{
-        BrowserContext, CdpConnection, CdpSessionRoute, Cmd, CommandOwnerScope,
-        SharedWorkerTargetState,
-    };
+    use crate::conn::{CdpSessionRoute, Cmd, CommandOwnerScope, SharedWorkerTargetState};
     use crate::domains::actions::ConsoleAction;
     use crate::testing::TestContext;
 
@@ -11508,7 +11568,7 @@ mod protocol_neutral_tests {
 
     #[test]
     fn devtools_runtime_entry_routes_evaluate_command_to_inspector_error_plan() {
-        let mut conn = CdpConnection::new();
+        let mut conn = crate::test_support::connection();
         let params = json!({"expression": "1 + 1"});
         let cmd = Cmd::for_test(
             Some(15),
@@ -11538,8 +11598,9 @@ mod protocol_neutral_tests {
 
     #[test]
     fn duplicate_pending_runtime_id_returns_chromium_error_without_replacing_owner() {
-        let mut conn = CdpConnection::new();
-        let mut browser_context = BrowserContext::new("BID-duplicate".to_owned());
+        let mut conn = crate::test_support::connection();
+        let mut browser_context =
+            conn.new_browser_context_fixture_for_test("BID-duplicate".to_owned());
         browser_context.set_active_target_id("TID-duplicate".to_owned());
         browser_context.attach_active_session("SID-duplicate".to_owned());
         conn.install_browser_context_fixture_for_test(browser_context);
@@ -11596,23 +11657,18 @@ mod protocol_neutral_tests {
     #[tokio::test]
     async fn duplicate_non_await_v8_command_preserves_original_completion_owner() {
         let mut ctx = TestContext::new();
-        let mut browser_context = BrowserContext::new("BID-console-duplicate".to_owned());
+        let mut browser_context = ctx
+            .conn
+            .new_browser_context_fixture_for_test("BID-console-duplicate".to_owned());
         browser_context.set_active_target_id("TID-console-duplicate".to_owned());
         browser_context.attach_active_session("SID-console-duplicate".to_owned());
         ctx.conn
             .install_browser_context_fixture_for_test(browser_context);
-        let page = ctx
-            .conn
-            .load_page_via_runtime_async("data:text/html,<p>console duplicate</p>")
-            .await
-            .expect("page should load");
-        ctx.conn
-            .browser_context
-            .as_mut()
-            .expect("browser context")
-            .active_page_target_mut()
-            .runtime_slot
-            .set_loaded_page_for_test(page);
+        ctx.install_quiet_navigation_fixture_for_session_owner(
+            "data:text/html,<p>console duplicate</p>",
+            None,
+        )
+        .await;
 
         let params = json!({});
         let enable = Cmd::for_test(
@@ -11683,8 +11739,9 @@ mod protocol_neutral_tests {
 
     #[test]
     fn shared_worker_runtime_disable_projection_waits_for_success() {
-        let mut conn = CdpConnection::new();
-        let mut browser_context = BrowserContext::new("BID-shared".to_owned());
+        let mut conn = crate::test_support::connection();
+        let mut browser_context =
+            conn.new_browser_context_fixture_for_test("BID-shared".to_owned());
         let mut target = SharedWorkerTargetState::new(
             RendererOwnerLocalHostId::new_for_testing(1),
             SharedWorkerInstanceId::from_u64(91),

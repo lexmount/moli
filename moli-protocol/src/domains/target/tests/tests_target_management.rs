@@ -50,8 +50,13 @@ async fn close_target_success() {
     bc.active_page_target_mut()
         .runtime_slot
         .enable_primary_network_events();
-    bc.active_page_target_mut()
-        .mutate_devtools_network_session_state(
+    {
+        let context = &mut *bc;
+        let target_id = context
+            .active_target_id_owned()
+            .expect("active fixture target");
+        context.mutate_devtools_network_session_state_for_target(
+            &target_id,
             &moli_page_types::DevToolsSessionKey::Primary,
             |network| {
                 network.network_enabled = true;
@@ -59,7 +64,8 @@ async fn close_target_success() {
                 network.bypass_service_worker = true;
                 network.extra_headers = vec![("X-Test".into(), "1".into())];
             },
-        );
+        )
+    };
     bc.active_page_target_mut().css_enabled = true;
     bc.active_page_target_mut().fetch_owner.configure(
         None,
@@ -78,10 +84,13 @@ async fn close_target_success() {
     bc.active_page_target_mut()
         .runtime_slot
         .set_next_subresource_fetch_request_id_for_test(5);
-    bc.active_page_target_mut()
-        .owner_state
-        .target_crash_state
-        .mark_crashed();
+    {
+        let context = &mut *bc;
+        let target_id = context
+            .active_target_id_owned()
+            .expect("active fixture target");
+        context.set_target_crash_state(&target_id, true)
+    };
     bc.record_captured_response_body("REQ-old".into(), "body".into(), [None]);
     bc.insert_io_stream("STREAM-old".into(), b"body".to_vec(), 0);
     ctx.process_async(json!({"id": 11, "method": "Target.closeTarget",
@@ -346,7 +355,7 @@ async fn close_target_emits_detached_events() {
 #[tokio::test(flavor = "multi_thread")]
 async fn close_target_without_inspector_enabled_emits_inspector_detached_event() {
     let mut ctx = TestContext::new();
-    let mut bc = BrowserContext::new("BID-9".into());
+    let mut bc = ctx.conn.new_browser_context_fixture_for_test("BID-9");
     bc.set_active_target_id("TID-000000000A");
     bc.attach_active_session("SID-1");
     ctx.conn.install_browser_context_fixture_for_test(bc);
@@ -374,15 +383,16 @@ async fn close_target_without_inspector_enabled_emits_inspector_detached_event()
 #[tokio::test(flavor = "multi_thread")]
 async fn close_target_invalidates_runtime_context_and_object_without_active_page_fallback() {
     let mut ctx = TestContext::new();
-    let mut bc = BrowserContext::new("BID-runtime-close".into());
+    let mut bc = ctx
+        .conn
+        .new_browser_context_fixture_for_test("BID-runtime-close");
     bc.set_active_target_id("TID-active");
     bc.attach_active_session("SID-active");
-    let background_target = crate::conn::PageTargetHost::with_url(
+    bc.register_page_target_url_fixture(
         "TID-background".to_owned(),
         Some("SID-background".to_owned()),
         "about:blank".to_owned(),
     );
-    bc.insert_page_target_host(background_target);
     ctx.conn.install_browser_context_fixture_for_test(bc);
     ctx.install_navigation_fixture_for_session_owner(
         "data:text/html,<html><body><script>globalThis.__lm_closed_target_marker = 'active-clean';</script>active</body></html>",
@@ -524,14 +534,10 @@ async fn close_background_target_emits_detached_events_and_clears_attached_sessi
     assert!(bc.assign_attached_session_to_target("TID-000000000B", "SID-attached".into()));
     bc.background_target_mut("TID-000000000B")
         .expect("background target must exist")
-        .devtools_sessions[moli_page_types::DevToolsSessionKey::Primary] =
-        crate::conn::DevToolsSessionState {
-            runtime_session_state: crate::conn::TargetRuntimeSessionState {
-                inspector_enabled: true,
-                ..Default::default()
-            },
-            ..Default::default()
-        };
+        .devtools_sessions
+        .primary_mut()
+        .runtime_session_state
+        .inspector_enabled = true;
 
     ctx.process_async(json!({
         "id": 121,
@@ -565,7 +571,7 @@ async fn close_background_target_emits_detached_events_and_clears_attached_sessi
     assert!(bc.attached_target_id_for_session("SID-attached").is_none());
     assert!(
         bc.background_target("TID-000000000B")
-            .filter(|target| target.has_non_default_session_state())
+            .filter(|target| bc.has_non_default_session_state_for_target(target.target_id()))
             .is_none()
     );
 }
@@ -591,7 +597,7 @@ async fn close_target_aborts_paused_request_stage_navigation() {
     });
 
     let mut ctx = TestContext::new();
-    let mut bc = BrowserContext::new("BID-9".into());
+    let mut bc = ctx.conn.new_browser_context_fixture_for_test("BID-9");
     bc.set_active_target_id("TID-000000000A");
     bc.attach_active_session("SID-1");
     bc.active_page_target_mut().devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
@@ -686,7 +692,7 @@ async fn close_target_aborts_paused_runtime_fetch_subresource() {
     let page_url = format!("http://{addr}/page");
     let api_url = format!("http://{addr}/api");
     let mut ctx = TestContext::new();
-    let mut bc = BrowserContext::new("BID-9".into());
+    let mut bc = ctx.conn.new_browser_context_fixture_for_test("BID-9");
     bc.set_active_target_id("TID-000000000A");
     bc.attach_active_session("SID-1");
     ctx.conn.install_browser_context_fixture_for_test(bc);
@@ -815,7 +821,7 @@ async fn close_target_aborts_paused_response_stage_runtime_xhr_subresource() {
     let page_url = format!("http://{addr}/page");
     let xhr_url = format!("http://{addr}/xhr");
     let mut ctx = TestContext::new();
-    let mut bc = BrowserContext::new("BID-9".into());
+    let mut bc = ctx.conn.new_browser_context_fixture_for_test("BID-9");
     bc.set_active_target_id("TID-000000000A");
     bc.attach_active_session("SID-1");
     ctx.conn.install_browser_context_fixture_for_test(bc);
@@ -983,7 +989,7 @@ async fn close_target_aborts_paused_runtime_xhr_auth_subresource() {
     let page_url = format!("http://{addr}/page");
     let protected_url = format!("http://{addr}/protected");
     let mut ctx = TestContext::new();
-    let mut bc = BrowserContext::new("BID-9".into());
+    let mut bc = ctx.conn.new_browser_context_fixture_for_test("BID-9");
     bc.set_active_target_id("TID-000000000A");
     bc.attach_active_session("SID-1");
     ctx.conn.install_browser_context_fixture_for_test(bc);
@@ -1181,7 +1187,7 @@ async fn activate_target_selects_background_target_as_active() {
     assert_eq!(bc.active_target_id(), Some("TID-000000000B"));
     assert_eq!(bc.background_target_count(), 1);
     assert_eq!(
-        bc.background_target_at(0).unwrap().target_id(),
+        bc.background_targets().next().unwrap().target_id(),
         "TID-000000000A"
     );
 }

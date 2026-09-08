@@ -124,23 +124,46 @@ impl PendingAddScriptToEvaluateOnNewDocumentCommand {
     }
 }
 
+// Preload registration also updates an outgoing renderer while navigation is
+// pending. The service registry supplies the replacement's bootstrap state;
+// this admission does not turn the command into a Browser operation.
+fn preload_inspection_for_owner<'a>(
+    conn: &'a CdpConnection,
+    owner: &CommandOwnerScope,
+) -> Result<Option<moli_renderer_v8::RendererRuntimeInspection<'a>>, String> {
+    // A Context-scoped default preload is service state even before its first
+    // target exists. There is no renderer to update in that case.
+    if let Some(CdpSessionRoute::BrowserContext { browser_context_id }) = owner.explicit_route()
+        && conn
+            .browser_context_by_id(browser_context_id)
+            .is_some_and(|context| !context.has_active_target())
+    {
+        return Ok(None);
+    }
+    let session = conn.target_renderer_runtime_inspector_session_id_for_owner(owner);
+    Ok(conn
+        .runtime_session_owner_slot_for_owner(owner)?
+        .current_renderer_inspection_binding()
+        .map(|binding| binding.runtime_inspection(session)))
+}
+
 async fn append_loaded_page_document_start_script_for_owner_async(
     conn: &mut CdpConnection,
     owner: &CommandOwnerScope,
     script: &DocumentStartScript,
 ) -> Result<(), String> {
-    let renderer_runtime_inspector_session_id =
-        conn.target_renderer_runtime_inspector_session_id_for_owner(owner);
-    let slot = conn.runtime_session_owner_slot_mut_for_owner(owner)?;
-    if let Some(page) = slot.loaded_page_mut() {
-        page.add_document_start_script_runtime_activity_async(
-            renderer_runtime_inspector_session_id.as_deref(),
-            script,
-            false,
-        )
-        .await
+    let Some(inspection) = preload_inspection_for_owner(conn, owner)? else {
+        return Ok(());
+    };
+    let pending = inspection
+        .start_add_document_start_script_runtime_activity(script, false)
+        .map(PendingPageCommand::from_inspector_main_route)
         .map_err(|error| error.to_string())?;
-    }
+    let completion = pending.wait().await.map_err(|error| error.to_string())?;
+    conn.observe_renderer_inspection_completion(owner, &completion)?;
+    completion
+        .finish_document_start_script_result_command_turn()
+        .map_err(|error| error.to_string())?;
     Ok(())
 }
 
@@ -149,13 +172,18 @@ async fn remove_loaded_page_document_start_script_for_owner_async(
     owner: &CommandOwnerScope,
     registry_key: &str,
 ) -> Result<(), String> {
-    let slot = conn.runtime_session_owner_slot_mut_for_owner(owner)?;
-    if let Some(page) = slot.loaded_page_mut() {
-        page.remove_document_start_script_by_registry_key_async(registry_key)
-            .await
-            .map_err(|error| error.to_string())?;
-    }
-    Ok(())
+    let Some(inspection) = preload_inspection_for_owner(conn, owner)? else {
+        return Ok(());
+    };
+    let pending = inspection
+        .start_remove_document_start_script_by_registry_key(registry_key)
+        .map(PendingPageCommand::from_inspector_main_route)
+        .map_err(|error| error.to_string())?;
+    let completion = pending.wait().await.map_err(|error| error.to_string())?;
+    conn.observe_renderer_inspection_completion(owner, &completion)?;
+    completion
+        .finish_unit_runtime_page_command("remove document-start script")
+        .map_err(|error| error.to_string())
 }
 
 fn start_default_document_start_script_append(
@@ -165,23 +193,17 @@ fn start_default_document_start_script_append(
     identifier: String,
     script: &DocumentStartScript,
 ) -> PageCommandTaskStep {
-    let renderer_runtime_inspector_session_id =
-        conn.target_renderer_runtime_inspector_session_id_for_session(command_session_id);
-    let Some(page) = conn
-        .runtime_session_owner_slot_mut(command_session_id)
-        .ok()
-        .and_then(|slot| slot.loaded_page_mut())
-    else {
+    let owner = CommandOwnerScope::capture(conn, command_session_id);
+    let Some(inspection) = preload_inspection_for_owner(conn, &owner).ok().flatten() else {
         return PageCommandTaskStep::Complete(add_preload_script_result_plan(identifier));
     };
-    match page.start_add_document_start_script_runtime_activity(
-        renderer_runtime_inspector_session_id.as_deref(),
-        script,
-        false,
-    ) {
+    match inspection
+        .start_add_document_start_script_runtime_activity(script, false)
+        .map(PendingPageCommand::from_inspector_main_route)
+    {
         Ok(pending) => PageCommandTaskStep::Pending(PendingPageCommandDispatch {
             command_id,
-            owner_scope: crate::conn::CommandOwnerScope::capture(conn, command_session_id),
+            owner_scope: owner,
             kind: Box::new(PendingPageCommandKind::AppendDefaultDocumentStartScript {
                 identifier,
                 pending,
@@ -202,17 +224,17 @@ fn start_document_start_script_remove(
     let Some(registry_key) = registry_key else {
         return PageCommandTaskStep::Complete(CommandOutputPlan::success());
     };
-    let Some(page) = conn
-        .runtime_session_owner_slot_mut(command_session_id)
-        .ok()
-        .and_then(|slot| slot.loaded_page_mut())
-    else {
+    let owner = CommandOwnerScope::capture(conn, command_session_id);
+    let Some(inspection) = preload_inspection_for_owner(conn, &owner).ok().flatten() else {
         return PageCommandTaskStep::Complete(CommandOutputPlan::success());
     };
-    match page.start_remove_document_start_script_by_registry_key(&registry_key) {
+    match inspection
+        .start_remove_document_start_script_by_registry_key(&registry_key)
+        .map(PendingPageCommand::from_inspector_main_route)
+    {
         Ok(pending) => PageCommandTaskStep::Pending(PendingPageCommandDispatch {
             command_id,
-            owner_scope: crate::conn::CommandOwnerScope::capture(conn, command_session_id),
+            owner_scope: owner,
             kind: Box::new(PendingPageCommandKind::RemoveDocumentStartScript { pending }),
         }),
         Err(error) => {
@@ -546,35 +568,9 @@ async fn append_default_document_start_script_direct_async(
     identifier: String,
     script: &DocumentStartScript,
 ) -> Result<String, DevToolsError> {
-    let renderer_runtime_inspector_session_id =
-        conn.target_renderer_runtime_inspector_session_id_for_owner(owner);
-    let Some(page) = conn
-        .runtime_session_owner_slot_mut_for_owner(owner)
-        .ok()
-        .and_then(|slot| slot.loaded_page_mut())
-    else {
-        return Ok(identifier);
-    };
-    let pending = page
-        .start_add_document_start_script_runtime_activity(
-            renderer_runtime_inspector_session_id.as_deref(),
-            script,
-            false,
-        )
-        .map_err(|error| devtools_preload_internal_error(error.to_string()))?;
-    let completion = pending
-        .wait()
+    append_loaded_page_document_start_script_for_owner_async(conn, owner, script)
         .await
-        .map_err(|error| devtools_preload_internal_error(error.to_string()))?;
-    let Some(page) = conn
-        .runtime_session_owner_slot_mut_for_owner(owner)
-        .ok()
-        .and_then(|slot| slot.loaded_page_mut())
-    else {
-        return Err(devtools_preload_internal_error("NoDocumentLoaded"));
-    };
-    page.finish_document_start_script_result(completion)
-        .map_err(|error| devtools_preload_internal_error(error.to_string()))?;
+        .map_err(devtools_preload_internal_error)?;
     Ok(identifier)
 }
 
@@ -627,29 +623,9 @@ async fn remove_document_start_script_direct_async(
     let Some(registry_key) = registry_key else {
         return Ok(());
     };
-    let Some(page) = conn
-        .runtime_session_owner_slot_mut_for_owner(owner)
-        .ok()
-        .and_then(|slot| slot.loaded_page_mut())
-    else {
-        return Ok(());
-    };
-    let pending = page
-        .start_remove_document_start_script_by_registry_key(&registry_key)
-        .map_err(|error| devtools_preload_internal_error(error.to_string()))?;
-    let completion = pending
-        .wait()
+    remove_loaded_page_document_start_script_for_owner_async(conn, owner, &registry_key)
         .await
-        .map_err(|error| devtools_preload_internal_error(error.to_string()))?;
-    let Some(page) = conn
-        .runtime_session_owner_slot_mut_for_owner(owner)
-        .ok()
-        .and_then(|slot| slot.loaded_page_mut())
-    else {
-        return Err(devtools_preload_internal_error("NoDocumentLoaded"));
-    };
-    page.finish_unit_runtime_page_command(completion, "remove document-start script")
-        .map_err(|error| devtools_preload_internal_error(error.to_string()))
+        .map_err(devtools_preload_internal_error)
 }
 
 async fn execute_devtools_bidi_browser_context_remove_preload_script_command(
@@ -1222,7 +1198,7 @@ pub(super) fn try_start_create_isolated_world_command(
 
     if conn
         .runtime_session_owner_slot(cmd.session_id)
-        .is_ok_and(|slot| !slot.has_loaded_page())
+        .is_ok_and(|slot| slot.current_renderer_inspection_binding().is_none())
     {
         return PageCommandTaskStep::Complete(CommandOutputPlan::error(-32000, "NoDocumentLoaded"));
     }
@@ -1349,19 +1325,19 @@ fn start_create_isolated_world_frame_or_world_phase(
     let frame_id = (task.params.frame_id != task.target_id).then(|| task.params.frame_id.clone());
     let world_name = task.params.world_name.clone();
     let grant_universal_access = task.params.grant_universal_access;
-    let renderer_runtime_inspector_session_id =
-        conn.target_renderer_runtime_inspector_session_id_for_owner(&owner);
-    let page =
-        match loaded_page_mut_for_create_isolated_world_renderer_command(conn, &owner, &mut task) {
-            Ok(page) => page,
+    let inspection =
+        match inspection_for_create_isolated_world_renderer_command(conn, &owner, &mut task) {
+            Ok(inspection) => inspection,
             Err(plan) => return PageCommandTaskStep::Complete(plan),
         };
-    match page.start_create_isolated_world_runtime_activity_capturing_runtime_inspector_messages(
-        renderer_runtime_inspector_session_id.as_deref(),
-        frame_id.as_deref(),
-        &world_name,
-        grant_universal_access,
-    ) {
+    match inspection
+        .start_create_isolated_world_runtime_activity(
+            frame_id.as_deref(),
+            &world_name,
+            grant_universal_access,
+        )
+        .map(PendingPageCommand::from_inspector_main_route)
+    {
         Ok(pending) => pending_create_isolated_world_command_for_session(
             command_id,
             owner,
@@ -1374,21 +1350,20 @@ fn start_create_isolated_world_frame_or_world_phase(
     }
 }
 
-fn loaded_page_mut_for_create_isolated_world_renderer_command<'a>(
-    conn: &'a mut CdpConnection,
+fn inspection_for_create_isolated_world_renderer_command<'a>(
+    conn: &'a CdpConnection,
     owner: &CommandOwnerScope,
     task: &mut CreateIsolatedWorldCommandTask,
-) -> Result<&'a mut moli_core::page::Page, CommandOutputPlan> {
+) -> Result<moli_renderer_v8::RendererRuntimeInspection<'a>, CommandOutputPlan> {
+    let session = conn.target_renderer_runtime_inspector_session_id_for_owner(owner);
     let slot = conn
-        .runtime_session_owner_slot_mut_for_owner(owner)
+        .runtime_session_owner_slot_for_owner(owner)
         .map_err(|error| CommandOutputPlan::error(-32000, error))?;
-    task.pending_renderer_agent_attachment_id = Some(
-        slot.current_renderer_attachment()
-            .ok_or_else(|| CommandOutputPlan::error(-32000, "NoDocumentLoaded"))?
-            .id(),
-    );
-    slot.loaded_page_mut()
-        .ok_or_else(|| CommandOutputPlan::error(-32000, "NoDocumentLoaded"))
+    let binding = slot
+        .current_renderer_inspection_binding()
+        .ok_or_else(|| CommandOutputPlan::error(-32000, "NoDocumentLoaded"))?;
+    task.pending_renderer_agent_attachment_id = Some(binding.attachment().id());
+    Ok(binding.runtime_inspection(session))
 }
 
 fn create_isolated_world_renderer_completion_is_stale(
@@ -1401,10 +1376,9 @@ fn create_isolated_world_renderer_completion_is_stale(
     };
     conn.runtime_session_owner_slot_for_owner(owner)
         .map(|slot| {
-            slot.current_renderer_attachment()
-                .map(|attachment| attachment.id())
+            slot.current_renderer_inspection_binding()
+                .map(|binding| binding.attachment().id())
                 != Some(expected_attachment_id)
-                || !slot.has_loaded_page()
         })
         .unwrap_or(true)
 }
@@ -1603,19 +1577,10 @@ pub(super) async fn complete_pending_create_isolated_world_command(
                     ));
                 }
             };
-            let completed_world = {
-                let Some(page) = conn
-                    .runtime_session_owner_slot_mut_for_owner(owner)
-                    .ok()
-                    .and_then(|slot| slot.loaded_page_mut())
-                else {
-                    return PageCommandTaskStep::Complete(CommandOutputPlan::error(
-                        -32000,
-                        "NoDocumentLoaded",
-                    ));
-                };
-                page.finish_create_isolated_world_command_turn(completion)
-            };
+            if let Err(message) = conn.observe_renderer_inspection_completion(owner, &completion) {
+                return PageCommandTaskStep::Complete(CommandOutputPlan::error(-32000, message));
+            }
+            let completed_world = completion.finish_create_isolated_world_command_turn();
             let (execution_context_id, output) = match completed_world {
                 Ok(completed_world) => completed_world,
                 Err(error) => {
@@ -1740,44 +1705,26 @@ async fn add_script_to_evaluate_on_new_document_direct_async(
     if !recorded.inserted {
         return Ok(identifier);
     }
-    let pending_run_immediately = {
-        let renderer_runtime_inspector_session_id = renderer_inspector_session_id;
-        let slot = match conn.runtime_session_owner_slot_mut_for_owner(owner) {
-            Ok(slot) => slot,
-            Err(error) => return Err(devtools_preload_internal_error(error)),
-        };
-        if let Some(page) = slot.loaded_page_mut() {
-            Some(
-                page.start_add_document_start_script_runtime_activity(
-                    renderer_runtime_inspector_session_id.as_deref(),
-                    &script,
-                    command.run_immediately,
-                )
-                .map_err(|error| devtools_preload_internal_error(error.to_string()))?,
-            )
-        } else {
-            None
-        }
-    };
+    let pending_run_immediately = preload_inspection_for_owner(conn, owner)
+        .map_err(devtools_preload_internal_error)?
+        .map(|inspection| {
+            inspection
+                .start_add_document_start_script_runtime_activity(&script, command.run_immediately)
+                .map(PendingPageCommand::from_inspector_main_route)
+        })
+        .transpose()
+        .map_err(|error| devtools_preload_internal_error(error.to_string()))?;
     let run_immediately_result = match pending_run_immediately {
         Some(pending) => {
-            // The pending command owns the renderer turn. Reacquire the
-            // session-owned Page after the wait so no mutable protocol owner
-            // is retained across this asynchronous boundary.
             let completion = pending
                 .wait()
                 .await
                 .map_err(|error| devtools_preload_internal_error(error.to_string()))?;
-            let (result, output) = {
-                let slot = conn
-                    .runtime_session_owner_slot_mut_for_owner(owner)
-                    .map_err(devtools_preload_internal_error)?;
-                let page = slot.loaded_page_mut().ok_or_else(|| {
-                    devtools_preload_internal_error("NoDocumentLoaded".to_owned())
-                })?;
-                page.finish_document_start_script_result_command_turn(completion)
-                    .map_err(|error| devtools_preload_internal_error(error.to_string()))?
-            };
+            conn.observe_renderer_inspection_completion(owner, &completion)
+                .map_err(devtools_preload_internal_error)?;
+            let (result, output) = completion
+                .finish_document_start_script_result_command_turn()
+                .map_err(|error| devtools_preload_internal_error(error.to_string()))?;
             command_context.consume_renderer_command_turn_output(output);
             result
         }
@@ -1809,7 +1756,7 @@ mod protocol_neutral_tests {
     };
     use serde_json::json;
 
-    use crate::conn::{CdpConnection, Cmd, DocumentStartScript, TargetOwnerState};
+    use crate::conn::{Cmd, DocumentStartScript, TargetOwnerState};
 
     use super::{
         PageCommandTaskStep, build_cdp_add_preload_script_command,
@@ -2109,7 +2056,7 @@ mod protocol_neutral_tests {
 
     #[test]
     fn devtools_preload_entry_routes_add_command_to_owner_error() {
-        let mut conn = CdpConnection::new();
+        let mut conn = crate::test_support::connection();
         let params = json!({"source": "globalThis.ready = true;"});
         let cmd = Cmd::for_test(
             Some(43),

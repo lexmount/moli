@@ -1,6 +1,7 @@
 use crate::conn::{
     BackgroundProtocolEvent, CdpConnection, Cmd, CommandDispatchContext, CommandOwnerScope,
-    TargetPageResidenceIdentity, TargetPageResidenceObservation, TargetPageResidenceToken,
+    CompletedDocumentInputCommand, PageInputCommand, PendingDocumentInputCommand,
+    PreparedDownloadActivation, TargetPageResidenceIdentity,
 };
 use crate::devtools_runtime::{
     DevToolsCommand, DevToolsCommandContext, DevToolsCommandResult,
@@ -11,12 +12,12 @@ use crate::devtools_runtime::{
     DevToolsTouchEventType, DevToolsTouchPoint,
 };
 use crate::domains::command_output::CommandOutputPlan;
+use moli_core::browser::{DocumentLifetimeObserver, DocumentRetirement};
 use moli_core::page::{
-    CompletedPageCommand, Page, PageInputExt, PendingPageCommand, RendererCommandTurnCompletion,
-    RendererDragData, RendererDragDataItem, RendererDraggedFile, RendererInputDispatchOutcome,
-    RendererPendingDownloadActivation, RendererPendingFileChooserActivation,
-    RendererPointerEventProperties, RendererTouchPoint, decode_input_dispatch_outcome_completion,
-    decode_insert_text_completion,
+    RendererCommandTurnCompletion, RendererDragData, RendererDragDataItem, RendererDraggedFile,
+    RendererInputDispatchOutcome, RendererPendingDownloadActivation,
+    RendererPendingFileChooserActivation, RendererPointerEventProperties, RendererTouchPoint,
+    decode_input_dispatch_outcome_completion, decode_insert_text_completion,
 };
 use serde::Deserialize;
 #[cfg(test)]
@@ -61,7 +62,7 @@ pub(crate) struct PendingInputCommandDispatch {
     command_id: Option<u64>,
     session_id: Option<String>,
     owner: TargetPageResidenceIdentity,
-    page_residence_token: Option<TargetPageResidenceToken>,
+    document_lifetime_observer: Option<DocumentLifetimeObserver>,
     kind: PendingInputCommandKind,
     pending: PendingInputOperation,
 }
@@ -131,34 +132,34 @@ enum PendingInputCommandKind {
 }
 
 enum PendingInputOperation {
-    Page(PendingPageCommand),
+    Page(PendingDocumentInputCommand),
     #[cfg(test)]
     RendererAckHeldForTest,
 }
 
 enum CompletedInputOperation {
-    Page(Box<Result<CompletedPageCommand, String>>),
+    Page(Box<CompletedDocumentInputCommand>),
     PageResidenceSuperseded,
     PageResidenceUnavailable,
 }
 
 enum RendererInputWaitOutcome<T> {
     Completed(T),
-    PageResidence(TargetPageResidenceObservation),
+    PageResidence(DocumentRetirement),
 }
 
 async fn wait_for_renderer_input_or_page_replacement<T>(
     completion: impl std::future::Future<Output = T>,
-    page_residence_token: Option<TargetPageResidenceToken>,
+    document_lifetime_observer: Option<DocumentLifetimeObserver>,
 ) -> RendererInputWaitOutcome<T> {
-    let Some(page_residence_token) = page_residence_token else {
+    let Some(document_lifetime_observer) = document_lifetime_observer else {
         return RendererInputWaitOutcome::Completed(completion.await);
     };
     tokio::pin!(completion);
     tokio::select! {
         biased;
         result = &mut completion => RendererInputWaitOutcome::Completed(result),
-        observation = page_residence_token.wait() => {
+        observation = document_lifetime_observer.wait() => {
             RendererInputWaitOutcome::PageResidence(observation)
         }
     }
@@ -170,36 +171,36 @@ impl PendingInputCommandDispatch {
             PendingInputOperation::Page(pending) => {
                 match wait_for_renderer_input_or_page_replacement(
                     pending.wait(),
-                    self.page_residence_token,
+                    self.document_lifetime_observer,
                 )
                 .await
                 {
-                    RendererInputWaitOutcome::Completed(result) => CompletedInputOperation::Page(
-                        Box::new(result.map_err(|error| error.to_string())),
-                    ),
-                    RendererInputWaitOutcome::PageResidence(
-                        TargetPageResidenceObservation::Superseded,
-                    ) => CompletedInputOperation::PageResidenceSuperseded,
-                    RendererInputWaitOutcome::PageResidence(
-                        TargetPageResidenceObservation::Unavailable,
-                    ) => CompletedInputOperation::PageResidenceUnavailable,
+                    RendererInputWaitOutcome::Completed(result) => {
+                        CompletedInputOperation::Page(Box::new(result))
+                    }
+                    RendererInputWaitOutcome::PageResidence(DocumentRetirement::Superseded) => {
+                        CompletedInputOperation::PageResidenceSuperseded
+                    }
+                    RendererInputWaitOutcome::PageResidence(DocumentRetirement::Unavailable) => {
+                        CompletedInputOperation::PageResidenceUnavailable
+                    }
                 }
             }
             #[cfg(test)]
             PendingInputOperation::RendererAckHeldForTest => {
                 match wait_for_renderer_input_or_page_replacement(
                     std::future::pending::<std::convert::Infallible>(),
-                    self.page_residence_token,
+                    self.document_lifetime_observer,
                 )
                 .await
                 {
                     RendererInputWaitOutcome::Completed(never) => match never {},
-                    RendererInputWaitOutcome::PageResidence(
-                        TargetPageResidenceObservation::Superseded,
-                    ) => CompletedInputOperation::PageResidenceSuperseded,
-                    RendererInputWaitOutcome::PageResidence(
-                        TargetPageResidenceObservation::Unavailable,
-                    ) => CompletedInputOperation::PageResidenceUnavailable,
+                    RendererInputWaitOutcome::PageResidence(DocumentRetirement::Superseded) => {
+                        CompletedInputOperation::PageResidenceSuperseded
+                    }
+                    RendererInputWaitOutcome::PageResidence(DocumentRetirement::Unavailable) => {
+                        CompletedInputOperation::PageResidenceUnavailable
+                    }
                 }
             }
         };
@@ -219,7 +220,8 @@ impl PendingInputCommandDispatch {
         // gives lifecycle smoke tests a deterministic outstanding callback;
         // public CDP intentionally cannot pause that callback while also
         // scheduling a replacement of the same Page owner.
-        if !self.kind.uses_renderer_host_ack_cleanup() || self.page_residence_token.is_none() {
+        if !self.kind.uses_renderer_host_ack_cleanup() || self.document_lifetime_observer.is_none()
+        {
             return false;
         }
         self.pending = PendingInputOperation::RendererAckHeldForTest;
@@ -619,7 +621,7 @@ fn start_pending_input_command(
                 cmd.id,
                 &owner,
                 PendingInputCommandKind::InsertText,
-                |page| page.start_insert_text_into_active_control(&text),
+                PageInputCommand::InsertText(text),
             )
         }
         InputAction::CancelDragging
@@ -982,16 +984,14 @@ fn start_devtools_dispatch_key_event_command(
         command_id,
         owner,
         PendingInputCommandKind::DispatchKeyEvent,
-        |page| {
-            page.start_dispatch_key_event_with_outcome(
-                key::devtools_key_event_dom_event_name(command.event_type),
-                &command.key,
-                &command.code,
-                &command.text,
-                command.modifiers,
-                command.auto_repeat,
-                command.should_insert_text,
-            )
+        PageInputCommand::Key {
+            event_name: key::devtools_key_event_dom_event_name(command.event_type).to_owned(),
+            key: command.key,
+            code: command.code,
+            text: command.text,
+            modifiers: command.modifiers,
+            auto_repeat: command.auto_repeat,
+            should_insert_text: command.should_insert_text,
         },
     )
 }
@@ -1001,29 +1001,30 @@ fn start_page_input_command(
     command_id: Option<u64>,
     command_owner: &CommandOwnerScope,
     kind: PendingInputCommandKind,
-    start: impl FnOnce(&Page) -> anyhow::Result<PendingPageCommand>,
+    command: PageInputCommand,
 ) -> Result<Option<PendingInputCommandDispatch>, PendingInputCommandStartError> {
     let page_owner = conn
         .target_page_residence_identity_for_owner(command_owner)
         .ok_or_else(PendingInputCommandStartError::no_document_loaded)?;
-    let page_residence_token = if kind.uses_renderer_host_ack_cleanup() {
+    let document = conn
+        .resolve_browser_document_for_owner(command_owner)
+        .map_err(|_| PendingInputCommandStartError::no_document_loaded())?;
+    let document_lifetime_observer = if kind.uses_renderer_host_ack_cleanup() {
         Some(
-            conn.capture_target_page_residence_token_for_owner(command_owner)
-                .ok_or_else(PendingInputCommandStartError::no_document_loaded)?,
+            conn.observe_browser_document_lifetime(document)
+                .map_err(|_| PendingInputCommandStartError::no_document_loaded())?,
         )
     } else {
         None
     };
-    let page = conn
-        .loaded_page_mut_for_protocol_access_for_owner(command_owner)
-        .ok()
-        .ok_or_else(PendingInputCommandStartError::no_document_loaded)?;
-    let pending = start(page).map_err(PendingInputCommandStartError::renderer_error)?;
+    let pending = conn
+        .start_document_input_command(document, command)
+        .map_err(PendingInputCommandStartError::renderer_error)?;
     Ok(Some(PendingInputCommandDispatch {
         command_id,
         session_id: command_owner.session_id().map(str::to_owned),
         owner: page_owner,
-        page_residence_token,
+        document_lifetime_observer,
         kind,
         pending: PendingInputOperation::Page(pending),
     }))
@@ -1081,19 +1082,17 @@ fn start_devtools_dispatch_mouse_event_command(
         command_id,
         owner,
         PendingInputCommandKind::DispatchMouseEvent,
-        |page| {
-            page.start_dispatch_mouse_event_at_point_with_pointer_outcome(
-                command.x,
-                command.y,
-                event_name,
-                command.button,
-                command.buttons,
-                command.click_count,
-                command.delta_x,
-                command.delta_y,
-                pointer,
-                command.modifiers,
-            )
+        PageInputCommand::Mouse {
+            x: command.x,
+            y: command.y,
+            event_name: event_name.to_owned(),
+            button: command.button,
+            buttons: command.buttons,
+            click_count: command.click_count,
+            delta_x: command.delta_x,
+            delta_y: command.delta_y,
+            pointer,
+            modifiers: command.modifiers,
         },
     )
 }
@@ -1119,7 +1118,11 @@ fn start_devtools_dispatch_touch_event_command(
         command_id,
         owner,
         PendingInputCommandKind::DispatchTouchEvent,
-        |page| page.start_dispatch_touch_event_at_points_with_outcome(points, event_name, false),
+        PageInputCommand::Touch {
+            points,
+            event_name: event_name.to_owned(),
+            activate: false,
+        },
     )
 }
 
@@ -1199,14 +1202,12 @@ fn start_devtools_dispatch_drag_event_command(
         command_id,
         owner,
         PendingInputCommandKind::DispatchDragEvent,
-        |page| {
-            page.start_dispatch_drag_event_at_point_with_outcome(
-                command.x,
-                command.y,
-                event_name,
-                data,
-                command.modifiers,
-            )
+        PageInputCommand::Drag {
+            x: command.x,
+            y: command.y,
+            event_name: event_name.to_owned(),
+            data,
+            modifiers: command.modifiers,
         },
     )
 }
@@ -1222,10 +1223,14 @@ fn start_devtools_synthesize_tap_gesture_command(
         command_id,
         owner,
         PendingInputCommandKind::SynthesizeTapGesture,
-        |page| {
-            page.start_dispatch_touch_event_at_point_with_outcome(
-                command.x, command.y, "touchend", true,
-            )
+        PageInputCommand::Touch {
+            points: vec![RendererTouchPoint {
+                id: 0,
+                x: command.x,
+                y: command.y,
+            }],
+            event_name: "touchend".to_owned(),
+            activate: true,
         },
     )
 }
@@ -1285,7 +1290,7 @@ async fn complete_pending_input_command(
     let session_id = completed.session_id.as_deref();
     let owner = completed.owner;
     let completed_operation = match completed.completed {
-        CompletedInputOperation::Page(completed) => completed,
+        CompletedInputOperation::Page(completed) => *completed,
         CompletedInputOperation::PageResidenceSuperseded => {
             // Match InputInjector::Cleanup(): replacement of the widget/Page
             // retires an outstanding mouse/key ACK as protocol success even
@@ -1312,8 +1317,12 @@ async fn complete_pending_input_command(
         | PendingInputCommandKind::DispatchTouchEvent
         | PendingInputCommandKind::DispatchDragEvent
         | PendingInputCommandKind::SynthesizeTapGesture) => {
-            let result = match completed_page_command_result(completed_operation) {
-                Ok(result) => result,
+            let completion = match settle_completed_input_page_command(
+                conn,
+                completed_operation,
+                command_context,
+            ) {
+                Ok(completion) => completion,
                 Err(error) => {
                     let protocol_events = side_effects.into_events();
                     return CompletedInputCommandResult {
@@ -1322,13 +1331,6 @@ async fn complete_pending_input_command(
                     };
                 }
             };
-            let completion = settle_completed_input_page_command(
-                conn,
-                session_id,
-                &owner,
-                result,
-                command_context,
-            );
             let operation = match kind {
                 PendingInputCommandKind::DispatchMouseEvent => "mouse event page command",
                 PendingInputCommandKind::DispatchTouchEvent
@@ -1366,8 +1368,12 @@ async fn complete_pending_input_command(
             }
         }
         PendingInputCommandKind::DispatchKeyEvent => {
-            let result = match completed_page_command_result(completed_operation) {
-                Ok(result) => result,
+            let completion = match settle_completed_input_page_command(
+                conn,
+                completed_operation,
+                command_context,
+            ) {
+                Ok(completion) => completion,
                 Err(error) => {
                     let protocol_events = side_effects.into_events();
                     return CompletedInputCommandResult {
@@ -1376,13 +1382,6 @@ async fn complete_pending_input_command(
                     };
                 }
             };
-            let completion = settle_completed_input_page_command(
-                conn,
-                session_id,
-                &owner,
-                result,
-                command_context,
-            );
             let outcome =
                 decode_input_dispatch_outcome_completion(completion, "key event page command");
             match outcome {
@@ -1412,8 +1411,12 @@ async fn complete_pending_input_command(
             }
         }
         PendingInputCommandKind::InsertText => {
-            let result = match completed_page_command_result(completed_operation) {
-                Ok(result) => result,
+            let completion = match settle_completed_input_page_command(
+                conn,
+                completed_operation,
+                command_context,
+            ) {
+                Ok(completion) => completion,
                 Err(error) => {
                     let protocol_events = side_effects.into_events();
                     return CompletedInputCommandResult {
@@ -1422,13 +1425,6 @@ async fn complete_pending_input_command(
                     };
                 }
             };
-            let completion = settle_completed_input_page_command(
-                conn,
-                session_id,
-                &owner,
-                result,
-                command_context,
-            );
             let result = decode_insert_text_completion(completion);
             match result {
                 Ok(_) => Ok(DevToolsCommandResult::Empty),
@@ -1449,13 +1445,13 @@ async fn complete_pending_input_command(
 
 fn settle_completed_input_page_command(
     conn: &mut CdpConnection,
-    session_id: Option<&str>,
-    owner: &TargetPageResidenceIdentity,
-    completion: CompletedPageCommand,
+    completed: CompletedDocumentInputCommand,
     command_context: &mut CommandDispatchContext,
-) -> RendererCommandTurnCompletion {
-    let output = conn.settle_page_command_turn_for_owner(session_id, owner, completion);
-    command_context.consume_renderer_command_turn_output(output)
+) -> Result<RendererCommandTurnCompletion, DevToolsError> {
+    let output = conn
+        .finish_document_input_command(completed)
+        .map_err(|error| DevToolsError::new(DevToolsErrorKind::Internal, error))?;
+    Ok(command_context.consume_renderer_command_turn_output(output))
 }
 
 pub(crate) async fn complete_pending_input_command_output_plan(
@@ -1474,18 +1470,9 @@ pub(crate) async fn complete_pending_input_command_output_plan(
     (InputCommandTaskStep::Complete, plan)
 }
 
-fn completed_page_command_result(
-    completed: Box<Result<CompletedPageCommand, String>>,
-) -> Result<CompletedPageCommand, DevToolsError> {
-    match *completed {
-        Ok(completion) => Ok(completion),
-        Err(error) => Err(DevToolsError::new(DevToolsErrorKind::Internal, error)),
-    }
-}
-
 #[derive(Debug, Default, Eq, PartialEq)]
 pub(crate) struct InputPreparedOutputs {
-    download_activations: Vec<RendererPendingDownloadActivation>,
+    download_activations: Vec<PreparedDownloadActivation>,
     file_chooser_activations: Vec<file_chooser::PreparedFileChooserActivation>,
 }
 
@@ -1496,8 +1483,13 @@ pub(crate) struct InputPreparedOutputSlot {
 
 impl InputPreparedOutputs {
     pub(crate) fn from_renderer_download_activation(
+        conn: &CdpConnection,
+        owner: &CommandOwnerScope,
         activation: RendererPendingDownloadActivation,
     ) -> Self {
+        let Some(activation) = conn.prepare_download_activation_for_owner(owner, activation) else {
+            return Self::default();
+        };
         Self {
             download_activations: vec![activation],
             file_chooser_activations: Vec::new(),
@@ -1548,10 +1540,17 @@ impl InputPreparedOutputs {
 
     #[cfg(test)]
     pub(crate) fn from_download_activations_for_test(
+        conn: &CdpConnection,
+        owner: &CommandOwnerScope,
         activations: Vec<RendererPendingDownloadActivation>,
     ) -> Self {
         Self {
-            download_activations: activations,
+            download_activations: activations
+                .into_iter()
+                .filter_map(|activation| {
+                    conn.prepare_download_activation_for_owner(owner, activation)
+                })
+                .collect(),
             file_chooser_activations: Vec::new(),
         }
     }
@@ -1587,9 +1586,7 @@ impl InputPreparedOutputSlot {
         self.outputs.extend(other.outputs);
     }
 
-    pub(crate) fn take_download_activations(
-        &mut self,
-    ) -> Option<Vec<RendererPendingDownloadActivation>> {
+    pub(crate) fn take_download_activations(&mut self) -> Option<Vec<PreparedDownloadActivation>> {
         (!self.outputs.download_activations.is_empty())
             .then(|| std::mem::take(&mut self.outputs.download_activations))
     }
@@ -1614,15 +1611,19 @@ async fn handle_input_dispatch_outcome_async(
         .map(CommandOwnerScope::for_session)
         .unwrap_or_else(|| CommandOwnerScope::for_page_residence(owner));
     if let Some(download) = outcome.pending_download {
-        let mut events = Vec::new();
-        conn.handle_pending_download_activation_background_events_async(
-            &mut events,
-            &action_owner,
-            download,
-            command_context,
-        )
-        .await?;
-        out.extend_protocol_events(command_context, events);
+        let web_contents = conn.browser_web_contents_for_page_residence(owner).ok();
+        if let Some(download) = web_contents.and_then(|web_contents| {
+            conn.prepare_download_activation(&action_owner, web_contents, download)
+        }) {
+            let mut events = Vec::new();
+            conn.handle_prepared_download_activation_background_events_async(
+                &mut events,
+                download,
+                command_context,
+            )
+            .await?;
+            out.extend_protocol_events(command_context, events);
+        }
     }
     if let Some(file_chooser) = outcome.pending_file_chooser
         && let Some(file_chooser) = file_chooser::PreparedFileChooserActivation::capture(
@@ -1650,7 +1651,6 @@ async fn handle_input_dispatch_outcome_async(
 pub(in crate::domains) async fn emit_download_activity_background_events_async(
     conn: &mut CdpConnection,
     out: &mut Vec<BackgroundProtocolEvent>,
-    owner: &CommandOwnerScope,
     prepared_outputs: Option<&mut ProtocolOutputPayloads>,
     command_context: &mut CommandDispatchContext,
 ) {
@@ -1658,22 +1658,20 @@ pub(in crate::domains) async fn emit_download_activity_background_events_async(
         .and_then(ProtocolOutputPayloads::input_mut)
         .and_then(InputPreparedOutputSlot::take_download_activations)
     {
-        emit_download_activations(conn, out, owner, activations, command_context).await;
+        emit_download_activations(conn, out, activations, command_context).await;
     }
 }
 
 async fn emit_download_activations(
     conn: &mut CdpConnection,
     out: &mut Vec<BackgroundProtocolEvent>,
-    owner: &CommandOwnerScope,
-    activations: Vec<RendererPendingDownloadActivation>,
+    activations: Vec<PreparedDownloadActivation>,
     command_context: &mut CommandDispatchContext,
 ) {
     for activation in activations {
         if let Err(error) = conn
-            .handle_pending_download_activation_background_events_async(
+            .handle_prepared_download_activation_background_events_async(
                 out,
-                owner,
                 activation,
                 command_context,
             )
@@ -1815,7 +1813,7 @@ mod protocol_neutral_tests {
 
     #[test]
     fn cdp_dispatch_key_event_builds_protocol_neutral_key_command() {
-        let conn = CdpConnection::new();
+        let conn = crate::test_support::connection();
         let params = Value::Null;
         let cmd = Cmd::for_test(
             Some(43),
@@ -1854,7 +1852,7 @@ mod protocol_neutral_tests {
 
     #[test]
     fn devtools_input_entry_routes_key_command_to_input_owner() {
-        let mut conn = CdpConnection::new();
+        let mut conn = crate::test_support::connection();
         let params = Value::Null;
         let cmd = Cmd::for_test(
             Some(44),
@@ -1956,8 +1954,8 @@ mod producer_tests {
     use serde_json::json;
 
     use crate::conn::{
-        BackgroundProtocolEvent, BrowserContext, CdpConnection, CommandDispatchContext,
-        CommandOwnerScope, TargetPageResidenceIdentity, build_event,
+        BackgroundProtocolEvent, CdpConnection, CommandDispatchContext, CommandOwnerScope,
+        TargetPageResidenceIdentity, build_event,
     };
     use crate::devtools_runtime::{
         AutomationEvent, BrowserDownloadProgressEvent, BrowserDownloadWillBeginEvent,
@@ -1983,11 +1981,9 @@ mod producer_tests {
         frame_id: &str,
         identity: RendererDocumentLifecycleIdentity,
     ) {
-        let runtime_slot = conn
-            .runtime_session_owner_slot_mut(Some(session_id))
-            .expect("test target should expose a runtime owner slot");
-        if runtime_slot.page_attachment_id().is_none() {
-            runtime_slot.set_page_attachment_id_for_test(identity.document.page_id.as_u64());
+        let owner = crate::conn::CommandOwnerScope::capture(conn, Some(session_id));
+        if conn.current_document_id_for_owner(&owner).is_none() {
+            conn.set_document_fixture_for_owner_test(&owner, identity.document.page_id.as_u64());
         }
         let lifecycle_snapshot = RendererDocumentLifecycleSnapshot {
             frame: identity.frame,
@@ -2041,6 +2037,12 @@ mod producer_tests {
 
     #[test]
     fn input_prepared_slot_keeps_download_and_file_chooser_payloads_separate() {
+        let mut conn = crate::test_support::connection();
+        let mut context = conn.new_browser_context_fixture_for_test("BID-slot".to_owned());
+        context.set_active_target_id("TID-slot");
+        context.attach_active_session("SID-slot");
+        conn.install_browser_context_fixture_for_test(context);
+        let command_owner = CommandOwnerScope::for_session("SID-slot");
         let source_document = renderer_document_identity_for_test(1, 1);
         let owner = TargetPageResidenceIdentity::new_for_test(
             "BID-slot".to_owned(),
@@ -2048,11 +2050,17 @@ mod producer_tests {
             1,
         );
         let mut slot = super::InputPreparedOutputSlot::from_outputs(super::InputPreparedOutputs {
-            download_activations: vec![RendererPendingDownloadActivation {
-                url: "https://example.test/download".to_owned(),
-                suggested_filename: Some("download.txt".to_owned()),
-                response: None,
-            }],
+            download_activations: vec![
+                conn.prepare_download_activation_for_owner(
+                    &command_owner,
+                    RendererPendingDownloadActivation {
+                        url: "https://example.test/download".to_owned(),
+                        suggested_filename: Some("download.txt".to_owned()),
+                        response: None,
+                    },
+                )
+                .unwrap(),
+            ],
             file_chooser_activations: vec![
                 super::file_chooser::PreparedFileChooserActivation::from_renderer_for_test(
                     owner,
@@ -2164,8 +2172,8 @@ mod producer_tests {
 
     #[tokio::test(flavor = "multi_thread")]
     async fn file_chooser_opened_preserves_typed_automation_sidecar() {
-        let mut conn = CdpConnection::default();
-        let mut bc = BrowserContext::new_with_page_for_test("BID-typed", "TID-typed");
+        let mut conn = crate::test_support::connection();
+        let mut bc = conn.new_page_target_fixture_for_test("BID-typed", "TID-typed");
         bc.attach_active_session("SID-typed");
         bc.active_page_target_mut().devtools_sessions
             [moli_page_types::DevToolsSessionKey::Primary]
@@ -2219,8 +2227,8 @@ mod producer_tests {
 
     #[test]
     fn file_chooser_capture_resolves_root_frame_once() {
-        let mut conn = CdpConnection::default();
-        let mut bc = BrowserContext::new("BID-root-capture".into());
+        let mut conn = crate::test_support::connection();
+        let mut bc = conn.new_browser_context_fixture_for_test("BID-root-capture");
         bc.set_active_target_id("TID-root-capture");
         bc.attach_active_session("SID-root-capture");
         conn.install_browser_context_fixture_for_test(bc);
@@ -2247,8 +2255,8 @@ mod producer_tests {
 
     #[tokio::test(flavor = "multi_thread")]
     async fn document_open_replacement_preserves_causal_file_chooser_activation() {
-        let mut conn = CdpConnection::default();
-        let mut bc = BrowserContext::new("BID-document-collision".into());
+        let mut conn = crate::test_support::connection();
+        let mut bc = conn.new_browser_context_fixture_for_test("BID-document-collision");
         bc.set_active_target_id("TID-document-collision");
         bc.attach_active_session("SID-document-collision");
         bc.active_page_target_mut().devtools_sessions
@@ -2318,8 +2326,8 @@ mod producer_tests {
 
     #[tokio::test(flavor = "multi_thread")]
     async fn replaced_page_residence_discards_only_stale_backend_node_collision() {
-        let mut conn = CdpConnection::default();
-        let mut bc = BrowserContext::new("BID-page-replacement".into());
+        let mut conn = crate::test_support::connection();
+        let mut bc = conn.new_browser_context_fixture_for_test("BID-page-replacement");
         bc.set_active_target_id("TID-page-replacement");
         bc.attach_active_session("SID-page-replacement");
         bc.active_page_target_mut().devtools_sessions
@@ -2342,9 +2350,10 @@ mod producer_tests {
             renderer_file_chooser_for_test(source_document, None, 43, false),
         )
         .expect("source file chooser should prepare");
-        conn.runtime_session_owner_slot_mut(Some("SID-page-replacement"))
-            .expect("test runtime slot should exist")
-            .replace_page_attachment_id_for_test();
+        conn.replace_document_fixture_for_owner_test(&crate::conn::CommandOwnerScope::capture(
+            &conn,
+            Some("SID-page-replacement"),
+        ));
         let replacement_document = renderer_document_identity_for_test(2, 2);
         bind_renderer_document_for_test(
             &mut conn,
@@ -2385,30 +2394,39 @@ mod producer_tests {
 
     #[tokio::test(flavor = "multi_thread")]
     async fn download_activity_without_protocol_observers_keeps_typed_automation_events() {
-        let mut conn = CdpConnection::default();
-        let mut bc = BrowserContext::new("BID-download".into());
+        let mut conn = crate::test_support::connection();
+        let mut bc = conn.new_browser_context_fixture_for_test("BID-download");
         bc.set_active_target_id("FRAME-download");
         bc.attach_active_session("SID-download");
         conn.install_browser_context_fixture_for_test(bc);
-        conn.download_behavior
-            .set_global("deny".to_owned(), None, true);
+        conn.configure_download_policy(
+            None,
+            moli_core::browser::DownloadPolicy {
+                behavior: moli_core::browser::DownloadBehavior::Deny,
+                download_path: None,
+            },
+            Some(true),
+        )
+        .unwrap();
         let mut out: Vec<BackgroundProtocolEvent> = Vec::new();
         let mut command_context = CommandDispatchContext::default();
+        let owner = CommandOwnerScope::for_session("SID-download");
         let mut prepared =
             ProtocolOutputPayloads::from_slot(super::InputPreparedOutputSlot::from_outputs(
-                super::InputPreparedOutputs::from_download_activations_for_test(vec![
-                    RendererPendingDownloadActivation {
+                super::InputPreparedOutputs::from_download_activations_for_test(
+                    &conn,
+                    &owner,
+                    vec![RendererPendingDownloadActivation {
                         url: "https://example.test/report.txt".to_owned(),
                         suggested_filename: Some("report.txt".to_owned()),
                         response: None,
-                    },
-                ]),
+                    }],
+                ),
             ));
 
         super::emit_download_activity_background_events_async(
             &mut conn,
             &mut out,
-            &CommandOwnerScope::for_session("SID-download"),
             Some(&mut prepared),
             &mut command_context,
         )
@@ -2434,8 +2452,8 @@ mod producer_tests {
 
     #[tokio::test(flavor = "multi_thread")]
     async fn file_chooser_drain_consumes_prepared_activations_without_page_readback() {
-        let mut conn = CdpConnection::default();
-        let mut bc = BrowserContext::new_with_page_for_test("BID-1", "TID-1");
+        let mut conn = crate::test_support::connection();
+        let mut bc = conn.new_page_target_fixture_for_test("BID-1", "TID-1");
         bc.attach_active_session("SID-1");
         bc.active_page_target_mut().devtools_sessions
             [moli_page_types::DevToolsSessionKey::Primary]
@@ -2482,8 +2500,8 @@ mod producer_tests {
 
     #[tokio::test(flavor = "multi_thread")]
     async fn file_chooser_activity_background_events_keep_typed_sidecar() {
-        let mut conn = CdpConnection::default();
-        let mut bc = BrowserContext::new_with_page_for_test("BID-context", "TID-context");
+        let mut conn = crate::test_support::connection();
+        let mut bc = conn.new_page_target_fixture_for_test("BID-context", "TID-context");
         bc.attach_active_session("SID-context");
         bc.active_page_target_mut().devtools_sessions
             [moli_page_types::DevToolsSessionKey::Primary]

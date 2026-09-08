@@ -1,24 +1,27 @@
 use chromiumoxide_cdp::cdp::browser_protocol::autofill::TriggerParams;
 use moli_core::page::{
-    CompletedPageCommand, PendingPageCommand, RendererAutofillAddressField,
-    RendererAutofillCreditCard, RendererAutofillTriggerOutcome, RendererAutofillTriggerRequest,
+    RendererAutofillAddressField, RendererAutofillCreditCard, RendererAutofillTriggerOutcome,
+    RendererAutofillTriggerRequest,
 };
 
 use crate::{
-    conn::{CdpConnection, Cmd, CommandOwnerScope},
+    conn::{
+        CdpConnection, Cmd, CommandOwnerScope, CompletedDocumentAutofillTrigger,
+        PendingDocumentAutofillTrigger,
+    },
     domains::{actions::AutofillAction, command_output::CommandOutputPlan},
 };
 
 pub(crate) struct PendingAutofillCommandDispatch {
     command_id: Option<u64>,
     owner_scope: CommandOwnerScope,
-    pending: PendingPageCommand,
+    pending: PendingDocumentAutofillTrigger,
 }
 
 pub(crate) struct CompletedAutofillCommandDispatch {
     command_id: Option<u64>,
     owner_scope: CommandOwnerScope,
-    completed: Result<CompletedPageCommand, String>,
+    completed: CompletedDocumentAutofillTrigger,
 }
 
 pub(crate) enum AutofillCommandTaskStep {
@@ -31,7 +34,7 @@ impl PendingAutofillCommandDispatch {
         CompletedAutofillCommandDispatch {
             command_id: self.command_id,
             owner_scope: self.owner_scope,
-            completed: self.pending.wait().await.map_err(|error| error.to_string()),
+            completed: self.pending.wait().await,
         }
     }
 }
@@ -109,11 +112,8 @@ pub(crate) fn try_start_autofill_command_dispatch(
     };
     let owner_scope = CommandOwnerScope::capture(conn, cmd.session_id);
     let pending = conn
-        .loaded_page_mut_for_protocol_access(cmd.session_id)
-        .and_then(|page| {
-            page.start_autofill_trigger(request)
-                .map_err(|error| error.to_string())
-        });
+        .resolve_browser_document_for_owner(&owner_scope)
+        .and_then(|document| conn.start_document_autofill_trigger(document, request));
     match pending {
         Ok(pending) => AutofillCommandTaskStep::Pending(PendingAutofillCommandDispatch {
             command_id: cmd.id,
@@ -130,13 +130,7 @@ pub(crate) fn complete_pending_autofill_command(
     conn: &mut CdpConnection,
     completed: CompletedAutofillCommandDispatch,
 ) -> CommandOutputPlan {
-    let outcome = completed.completed.and_then(|completion| {
-        conn.loaded_page_mut_for_protocol_access_for_owner(&completed.owner_scope)
-            .and_then(|page| {
-                page.finish_autofill_trigger(completion)
-                    .map_err(|error| error.to_string())
-            })
-    });
+    let outcome = conn.finish_document_autofill_trigger(completed.completed);
     match outcome {
         Ok(RendererAutofillTriggerOutcome::Applied { .. }) => CommandOutputPlan::success(),
         Ok(RendererAutofillTriggerOutcome::FieldNotFound) => {
@@ -160,11 +154,11 @@ pub(crate) fn complete_pending_autofill_command(
 
 #[cfg(test)]
 mod tests {
-    use crate::{conn::BrowserContext, testing::TestContext};
+    use crate::testing::TestContext;
     use serde_json::{Value, json};
 
     async fn load_document(ctx: &mut TestContext, html: &str) {
-        let mut browser_context = BrowserContext::new("BID-1".into());
+        let mut browser_context = ctx.conn.new_browser_context_fixture_for_test("BID-1");
         browser_context.set_active_target_id("TID-1".to_owned());
         browser_context.set_target_url("data:text/html,autofill-test".to_owned());
         browser_context.attach_active_session("SID-1".to_owned());

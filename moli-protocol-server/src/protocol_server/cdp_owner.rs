@@ -4,7 +4,10 @@ use std::{
 };
 
 use anyhow::{Context, Result, bail};
-use moli_core::runtime::{NavigationRuntimeConfig, storage_partition::StoragePartitionState};
+use moli_core::{
+    browser::BrowserHandle,
+    runtime::{NavigationRuntimeConfig, storage_partition::StoragePartitionState},
+};
 use moli_protocol::CdpInitialStoragePartition;
 use parking_lot::Mutex;
 use tokio::sync::{Notify, mpsc, oneshot};
@@ -51,6 +54,7 @@ struct CdpOwnerRecord {
 
 #[derive(Clone)]
 struct CdpOwnerRuntimeConfig {
+    browser: BrowserHandle,
     directory: SharedCdpAgentHostDirectory,
     target_id_allocator: Arc<AtomicU64>,
     tab_target_id_allocator: Arc<AtomicU64>,
@@ -61,6 +65,7 @@ struct CdpOwnerRuntimeConfig {
 
 impl SharedCdpOwnerRegistry {
     pub(super) fn new(
+        browser: BrowserHandle,
         directory: SharedCdpAgentHostDirectory,
         target_id_allocator: Arc<AtomicU64>,
         tab_target_id_allocator: Arc<AtomicU64>,
@@ -71,6 +76,7 @@ impl SharedCdpOwnerRegistry {
         Self {
             inner: Arc::new(CdpOwnerRegistryInner {
                 config: CdpOwnerRuntimeConfig {
+                    browser,
                     directory,
                     target_id_allocator,
                     tab_target_id_allocator,
@@ -130,6 +136,7 @@ impl SharedCdpOwnerRegistry {
             checkpoint_rx,
         );
         let owner_finished_rx = spawn_owner_task(
+            self.inner.config.browser.clone(),
             receivers,
             initial_storage_partition,
             self.inner.config.navigation_runtime_config.clone(),
@@ -197,6 +204,7 @@ impl Drop for CdpOwnerRegistryInner {
 
 #[allow(clippy::too_many_arguments)]
 fn spawn_owner_task(
+    browser: BrowserHandle,
     receivers: CdpFrontendReceivers,
     initial_storage_partition: CdpInitialStoragePartition,
     navigation_runtime_config: NavigationRuntimeConfig,
@@ -207,6 +215,7 @@ fn spawn_owner_task(
     spawn_protocol_local_task("cdp-owner", move || async move {
         let (scheduler, scheduler_receivers) =
             CdpScheduler::new_with_deferred_default_target_runtime(
+                browser,
                 initial_storage_partition,
                 navigation_runtime_config,
                 target_host_integration,

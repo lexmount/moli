@@ -1,8 +1,8 @@
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64_STANDARD};
+use moli_core::browser::DocumentHandle;
 use moli_core::page::{
-    CompletedPageCommand, Page, PendingPageCommand, RendererResourceTextSearchOutcome,
-    RendererTextSearchMatch, SubresourceNetworkOutcome, SubresourceNetworkRecord,
-    SubresourceResourceType,
+    RendererResourceTextSearchOutcome, RendererTextSearchMatch, SubresourceNetworkOutcome,
+    SubresourceNetworkRecord, SubresourceResourceType,
 };
 use moli_encoding::{
     decode_classic_script_source, decode_html_document_with_fallback, decode_text_for_legacy_web,
@@ -17,7 +17,10 @@ use serde_json::json;
 use url::Url;
 
 use super::{PageCommandTaskStep, PendingPageCommandDispatch, PendingPageCommandKind};
-use crate::conn::{CdpConnection, Cmd, CommandOwnerScope};
+use crate::conn::{
+    CdpConnection, Cmd, CommandOwnerScope, CompletedDocumentResourceTextSearch,
+    PendingDocumentResourceTextSearch,
+};
 use crate::domains::command_output::CommandOutputPlan;
 
 const AGENT_NOT_ENABLED: &str = "Agent is not enabled.";
@@ -46,21 +49,18 @@ enum ResourceSearchSource {
 pub(super) struct PendingSearchInResourceCommand {
     params: SearchInResourceParams,
     source: ResourceSearchSource,
-    pending: PendingPageCommand,
+    pending: PendingDocumentResourceTextSearch,
 }
 
 pub(super) struct CompletedSearchInResourceCommand {
     params: SearchInResourceParams,
     source: ResourceSearchSource,
-    completed: Result<CompletedPageCommand, String>,
+    completed: CompletedDocumentResourceTextSearch,
 }
 
 impl CompletedSearchInResourceCommand {
     pub(super) fn renderer_output_predecessor(&self) -> Option<moli_core::RendererOutputFence> {
-        self.completed
-            .as_ref()
-            .ok()
-            .and_then(CompletedPageCommand::renderer_output_predecessor)
+        self.completed.renderer_output_predecessor()
     }
 }
 
@@ -69,7 +69,7 @@ impl PendingSearchInResourceCommand {
         CompletedSearchInResourceCommand {
             params: self.params,
             source: self.source,
-            completed: self.pending.wait().await.map_err(|error| error.to_string()),
+            completed: self.pending.wait().await,
         }
     }
 }
@@ -126,6 +126,9 @@ pub(super) fn try_start_search_in_resource_command(
     }
     let materialize_limit = conn.response_body_materialize_limit();
     let owner = CommandOwnerScope::capture(conn, cmd.session_id);
+    let Ok(document) = conn.resolve_browser_document_for_owner(&owner) else {
+        return complete_error(CONTENT_UNAVAILABLE);
+    };
 
     if is_root_frame {
         let main_document = conn.current_main_document_resource_for_session_owner(cmd.session_id);
@@ -154,18 +157,22 @@ pub(super) fn try_start_search_in_resource_command(
                 None => SelectedResource::Unavailable,
             }
         } else {
-            let Some(page) = loaded_page(conn, &owner) else {
+            let Ok(records) = conn.document_subresource_network_records(document) else {
                 return complete_error(CONTENT_UNAVAILABLE);
             };
-            select_subresource(page, &root_frame_id, true, &params.url, materialize_limit)
+            select_subresource(
+                &records,
+                &root_frame_id,
+                true,
+                &params.url,
+                materialize_limit,
+            )
         };
-        return start_selected_resource_search(conn, cmd.id, owner, params, selected);
+        return start_selected_resource_search(conn, cmd.id, owner, document, params, selected);
     }
 
-    let Some(page) = loaded_page(conn, &owner) else {
-        return complete_error(CONTENT_UNAVAILABLE);
-    };
-    match page.start_child_frame_resource_search_by_lines(
+    match conn.start_child_frame_document_resource_text_search(
+        document,
         params.frame_id.clone(),
         params.url.clone(),
         params.query.clone(),
@@ -192,14 +199,8 @@ pub(super) fn complete_search_in_resource_command(
     completed: CompletedSearchInResourceCommand,
 ) -> PageCommandTaskStep {
     let materialize_limit = conn.response_body_materialize_limit();
-    let Some(page) = loaded_page(conn, owner) else {
-        return complete_error(CONTENT_UNAVAILABLE);
-    };
-    let completion = match completed.completed {
-        Ok(completion) => completion,
-        Err(message) => return complete_error(format!("Failed to search resource: {message}")),
-    };
-    let outcome = match page.finish_resource_search_by_lines(completion) {
+    let document = completed.completed.document();
+    let outcome = match conn.finish_document_resource_text_search(completed.completed) {
         Ok(outcome) => outcome,
         Err(error) => return complete_error(format!("Failed to search resource: {error}")),
     };
@@ -218,8 +219,11 @@ pub(super) fn complete_search_in_resource_command(
             ResourceSearchSource::ChildDocument,
             RendererResourceTextSearchOutcome::ResourceNotFound,
         ) => {
+            let Ok(records) = conn.document_subresource_network_records(document) else {
+                return complete_error(CONTENT_UNAVAILABLE);
+            };
             let selected = select_subresource(
-                page,
+                &records,
                 &completed.params.frame_id,
                 false,
                 &completed.params.url,
@@ -229,6 +233,7 @@ pub(super) fn complete_search_in_resource_command(
                 conn,
                 command_id,
                 owner.clone(),
+                document,
                 completed.params,
                 selected,
             )
@@ -240,6 +245,7 @@ fn start_selected_resource_search(
     conn: &mut CdpConnection,
     command_id: Option<u64>,
     owner: CommandOwnerScope,
+    document: DocumentHandle,
     params: SearchInResourceParams,
     selected: SelectedResource,
 ) -> PageCommandTaskStep {
@@ -248,10 +254,8 @@ fn start_selected_resource_search(
         SelectedResource::Unavailable => return complete_error(CONTENT_UNAVAILABLE),
         SelectedResource::Missing => return complete_error(RESOURCE_NOT_FOUND),
     };
-    let Some(page) = loaded_page(conn, &owner) else {
-        return complete_error(CONTENT_UNAVAILABLE);
-    };
-    match page.start_text_search_by_lines(
+    match conn.start_document_text_search(
+        document,
         text,
         params.query.clone(),
         params.case_sensitive,
@@ -298,27 +302,17 @@ fn complete_error(message: impl Into<String>) -> PageCommandTaskStep {
     PageCommandTaskStep::Complete(CommandOutputPlan::error(-32000, message))
 }
 
-fn loaded_page<'a>(conn: &'a mut CdpConnection, owner: &CommandOwnerScope) -> Option<&'a mut Page> {
-    conn.runtime_session_owner_slot_mut_for_owner(owner)
-        .ok()?
-        .loaded_page_mut()
-}
-
 fn select_subresource(
-    page: &Page,
+    records: &[SubresourceNetworkRecord],
     frame_id: &str,
     root_frame: bool,
     requested_url: &str,
     materialize_limit: usize,
 ) -> SelectedResource {
-    let record = page
-        .subresource_network_records()
-        .iter()
-        .rev()
-        .find(|record| {
-            resource_belongs_to_frame(record, frame_id, root_frame)
-                && subresource_url_matches(record, requested_url)
-        });
+    let record = records.iter().rev().find(|record| {
+        resource_belongs_to_frame(record, frame_id, root_frame)
+            && subresource_url_matches(record, requested_url)
+    });
     let Some(record) = record else {
         return SelectedResource::Missing;
     };

@@ -1926,20 +1926,21 @@ async fn dom_get_document_rejects_while_main_document_navigation_is_pending() {
 #[tokio::test]
 async fn document_navigation_gate_is_scoped_to_background_target_owner() {
     let mut ctx = TestContext::new();
-    let background_target = crate::conn::PageTargetHost::with_url(
-        "TID-background".to_owned(),
-        Some("SID-background".to_owned()),
-        "about:blank".to_owned(),
-    );
 
-    let mut browser_context = BrowserContext::new("BID-1".to_owned());
+    let mut browser_context = ctx
+        .conn
+        .new_browser_context_fixture_for_test("BID-1".to_owned());
     browser_context.set_active_target_id("TID-active");
     browser_context.attach_active_session("SID-active");
     browser_context.active_page_target_mut().devtools_sessions
         [moli_page_types::DevToolsSessionKey::Primary]
         .runtime_session_state
         .runtime_frontend_enabled = true;
-    browser_context.insert_page_target_host(background_target);
+    browser_context.register_page_target_url_fixture(
+        "TID-background".to_owned(),
+        Some("SID-background".to_owned()),
+        "about:blank".to_owned(),
+    );
     ctx.conn
         .install_browser_context_fixture_for_test(browser_context);
     ctx.install_navigation_fixture_for_session_owner(
@@ -2434,13 +2435,13 @@ async fn page_navigate_network_failure_commits_error_document() {
             .target_url(),
         failing_url
     );
-    let page = ctx
+    let page_url = ctx
         .conn
         .browser_context
         .as_ref()
-        .and_then(BrowserContext::loaded_page)
+        .and_then(BrowserContext::loaded_document_url_for_test)
         .expect("network error Document should remain loaded");
-    assert_eq!(page.final_url().as_str(), NETWORK_ERROR_PAGE_URL);
+    assert_eq!(page_url.as_str(), NETWORK_ERROR_PAGE_URL);
     assert!(
         !ctx.conn
             .browser_context
@@ -2457,15 +2458,16 @@ async fn page_navigate_network_failure_commits_error_document() {
         .expect("error Document loader id");
     let stale_request_id = "REQ-before-network-error";
     let stale_body_completion = BackgroundNavigationCompletion::main_document_body(
-        old_document_token.clone(),
+        old_document_token,
         crate::conn::NavigationDispatchState {
             navigate_id: None,
             owner: crate::conn::CommandOwnerScope::for_session("SID-1"),
+            web_contents: crate::conn::NavigationDispatchState::detached_web_contents_for_test(),
             result_projection: crate::conn::NavigationResultProjection::Cdp(json!({})),
             frame_id: "TID-1".to_owned(),
             session_id: Some("SID-1".to_owned()),
             request_id: Some(stale_request_id.to_owned()),
-            loader_id: old_document_token.loader_id.clone(),
+            loader_id: "LOADER-before-network-error".to_owned(),
             request_announced: true,
             requested_url: url::Url::parse("https://stale.example.test/old-body").unwrap(),
             request_method: "GET".to_owned(),
@@ -2508,9 +2510,8 @@ async fn page_navigate_network_failure_commits_error_document() {
         ctx.conn
             .browser_context
             .as_ref()
-            .and_then(BrowserContext::loaded_page)
+            .and_then(BrowserContext::loaded_document_url_for_test)
             .expect("error Document should survive stale body completion")
-            .final_url()
             .as_str(),
         NETWORK_ERROR_PAGE_URL
     );
@@ -6743,7 +6744,7 @@ async fn registered_named_world_object_handles_remain_callable_after_navigation(
         }
     }))
     .await;
-    let mut other_context = crate::conn::BrowserContext::new("BID-2".into());
+    let mut other_context = ctx.conn.new_browser_context_fixture_for_test("BID-2");
     other_context.set_active_target_id("TID-2");
     other_context.attach_active_session("SID-2");
     ctx.conn
@@ -6796,7 +6797,7 @@ async fn call_function_on_rejects_object_id_known_to_different_target_owner() {
         .unwrap_or_else(|| panic!("Runtime.evaluate should return an object handle: {response:?}"))
         .to_owned();
 
-    let mut other_context = crate::conn::BrowserContext::new("BID-2".into());
+    let mut other_context = ctx.conn.new_browser_context_fixture_for_test("BID-2");
     other_context.set_active_target_id("TID-2");
     other_context.attach_active_session("SID-2");
     ctx.conn
@@ -6983,7 +6984,7 @@ async fn call_function_on_rejects_dom_resolve_node_object_id_from_different_targ
         .unwrap_or_else(|| panic!("DOM.resolveNode should return an object handle: {resolved:?}"))
         .to_owned();
 
-    let mut other_context = crate::conn::BrowserContext::new("BID-2".into());
+    let mut other_context = ctx.conn.new_browser_context_fixture_for_test("BID-2");
     other_context.set_active_target_id("TID-2");
     other_context.attach_active_session("SID-2");
     ctx.conn

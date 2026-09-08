@@ -15,12 +15,18 @@ wpt-extensions = ["moli-renderer-v8/wpt-extensions"]
 
 [dependencies]
 anyhow = "1.0.100"
+http = "1"
+indexmap = "2.6"
+moli-crypto = { path = "../moli-crypto" }
+moli-header-field = { path = "../moli-header-field" }
 moli-browser-profile = { path = "../moli-browser-profile" }
 moli-dom = { path = "../moli-dom" }
 moli-parser = { path = "../moli-parser" }
 moli-page-types = { path = "../moli-page-types" }
 moli-renderer-v8 = { path = "../moli-renderer-v8" }
 moli-selector = { path = "../moli-selector" }
+moli-shared-worker = { path = "../moli-shared-worker" }
+moli-site = { path = "../moli-site" }
 moli-storage-key = { path = "../moli-storage-key" }
 moli-storage-service = { path = "../moli-storage-service" }
 moli-url = { path = "../moli-url" }
@@ -28,9 +34,11 @@ moli-web-mime = { path = "../moli-web-mime" }
 moli-cookie-jar = { path = "../moli-cookie-jar" }
 moli-fetch = { path = "../moli-fetch" }
 parking_lot = "0.12"
+percent-encoding = "2.3"
+sanitize-filename = "=0.6.0"
 serde = { version = "1.0.228", features = ["derive"] }
 serde_json = "1.0.145"
-tokio = { version = "1.51.0", features = ["macros", "net", "rt-multi-thread", "signal", "sync", "time"] }
+tokio = { version = "1.51.0", features = ["fs", "io-util", "macros", "net", "rt-multi-thread", "signal", "sync", "time"] }
 tracing = "0.1.41"
 url = "2.5.7"
 

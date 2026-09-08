@@ -75,6 +75,7 @@ pub struct RendererBrowserContextRuntime {
 pub struct RendererBrowserContextRuntimeOwner {
     runtime: Option<RendererBrowserContextRuntime>,
     producer_registry: RendererProducerRegistry,
+    worker_threads: crate::worker::WorkerThreadOwner,
     resource_runtime_owner_root: Option<crate::network::BrowserResourceRuntimeOwnerRoot>,
 }
 
@@ -158,6 +159,7 @@ pub(crate) struct RendererWorkerContextRuntime {
     message_port_registry: crate::message_port_runtime::SharedMessagePortRegistry,
     broadcast_channel_registry: crate::broadcast_channel_runtime::SharedBroadcastChannelRegistry,
     storage_partition_identity: RendererStoragePartitionIdentity,
+    pub(crate) worker_threads: crate::worker::WorkerThreadRegistrar,
 }
 
 /// Process-local storage partition identity shared by pages and workers in one
@@ -177,6 +179,7 @@ struct RendererBrowserContextRuntimeInner {
     shared_worker_runtime: shared_workers::LazySharedWorkerRuntime,
     service_worker_runtime: service_worker_runtime::LazyServiceWorkerRuntime,
     storage_partition_identity: RendererStoragePartitionIdentity,
+    worker_threads: crate::worker::WorkerThreadRegistrar,
     next_web_storage_opaque_context_nonce: AtomicU64,
     next_child_document_loader_id: AtomicU64,
     next_detached_parser_script_fetch_id: AtomicU64,
@@ -300,6 +303,7 @@ impl DetachedParserScriptFetchContinuation {
                 &inner.request_client,
                 inner.document_character_set.as_deref(),
                 Some(moli_fetch::RequestResourceType::ParserBlockingScript),
+                inner.task_runner.clone(),
             )
             .await;
             inner.completer.finish(outcome);
@@ -363,7 +367,7 @@ impl RendererBrowserContextRuntime {
     ) -> RendererBrowserContextRuntimeOwner {
         let (resource_runtime_owner_root, browser_resource_runtime_binding) =
             crate::network::BrowserResourceRuntimeOwnerRoot::new(browser_resource_runtime_owner);
-        let runtime =
+        let (runtime, worker_threads) =
             Self::new_with_service_worker_resource_store_and_browser_resource_runtime_binding(
                 service_worker_resource_store,
                 browser_resource_runtime_binding,
@@ -371,6 +375,7 @@ impl RendererBrowserContextRuntime {
         RendererBrowserContextRuntimeOwner {
             runtime: Some(runtime),
             producer_registry: RendererProducerRegistry::new(),
+            worker_threads,
             resource_runtime_owner_root: Some(resource_runtime_owner_root),
         }
     }
@@ -378,7 +383,7 @@ impl RendererBrowserContextRuntime {
     fn new_with_service_worker_resource_store_and_browser_resource_runtime_binding(
         service_worker_resource_store: crate::SharedServiceWorkerResourceStore,
         browser_resource_runtime: crate::network::BrowserResourceRuntimeBinding,
-    ) -> Self {
+    ) -> (Self, crate::worker::WorkerThreadOwner) {
         let message_port_registry = crate::message_port_runtime::new_message_port_registry();
         let broadcast_channel_registry =
             crate::broadcast_channel_runtime::new_broadcast_channel_registry();
@@ -402,7 +407,7 @@ impl RendererBrowserContextRuntime {
         );
         let (resource_runtime_owner_root, browser_resource_runtime) =
             crate::network::BrowserResourceRuntimeOwnerRoot::new(browser_resource_runtime_owner);
-        let runtime = Self::from_parts(
+        let (runtime, worker_threads) = Self::from_parts(
             message_port_registry,
             broadcast_channel_registry,
             None,
@@ -412,6 +417,7 @@ impl RendererBrowserContextRuntime {
         RendererBrowserContextRuntimeOwner {
             runtime: Some(runtime),
             producer_registry: RendererProducerRegistry::new(),
+            worker_threads,
             resource_runtime_owner_root: Some(resource_runtime_owner_root),
         }
     }
@@ -428,7 +434,7 @@ impl RendererBrowserContextRuntime {
         );
         let (resource_runtime_owner_root, browser_resource_runtime) =
             crate::network::BrowserResourceRuntimeOwnerRoot::new(browser_resource_runtime_owner);
-        let runtime = Self::from_parts(
+        let (runtime, worker_threads) = Self::from_parts(
             message_port_registry,
             broadcast_channel_registry,
             Some(shared_worker_runtime),
@@ -438,6 +444,7 @@ impl RendererBrowserContextRuntime {
         RendererBrowserContextRuntimeOwner {
             runtime: Some(runtime),
             producer_registry: RendererProducerRegistry::new(),
+            worker_threads,
             resource_runtime_owner_root: Some(resource_runtime_owner_root),
         }
     }
@@ -453,7 +460,7 @@ impl RendererBrowserContextRuntime {
         );
         let (resource_runtime_owner_root, browser_resource_runtime) =
             crate::network::BrowserResourceRuntimeOwnerRoot::new(browser_resource_runtime_owner);
-        let runtime = Self::from_parts_with_worker_context_runtime(
+        let (runtime, worker_threads) = Self::from_parts_with_worker_context_runtime(
             restored_worker_context_runtime,
             None,
             service_worker_resource_store,
@@ -462,6 +469,7 @@ impl RendererBrowserContextRuntime {
         RendererBrowserContextRuntimeOwner {
             runtime: Some(runtime),
             producer_registry: RendererProducerRegistry::new(),
+            worker_threads,
             resource_runtime_owner_root: Some(resource_runtime_owner_root),
         }
     }
@@ -472,7 +480,7 @@ impl RendererBrowserContextRuntime {
         shared_worker_runtime: Option<crate::shared_worker_runtime::SharedWorkerRuntimeService>,
         service_worker_resource_store: crate::SharedServiceWorkerResourceStore,
         browser_resource_runtime: crate::network::BrowserResourceRuntimeBinding,
-    ) -> Self {
+    ) -> (Self, crate::worker::WorkerThreadOwner) {
         let storage_partition_identity = RendererStoragePartitionIdentity::new_process_local();
         let service_worker_context_runtime = RendererWorkerContextRuntime::with_identity(
             message_port_registry.clone(),
@@ -488,11 +496,13 @@ impl RendererBrowserContextRuntime {
     }
 
     fn from_parts_with_worker_context_runtime(
-        service_worker_context_runtime: RendererWorkerContextRuntime,
+        mut service_worker_context_runtime: RendererWorkerContextRuntime,
         shared_worker_runtime: Option<crate::shared_worker_runtime::SharedWorkerRuntimeService>,
         service_worker_resource_store: crate::SharedServiceWorkerResourceStore,
         browser_resource_runtime: crate::network::BrowserResourceRuntimeBinding,
-    ) -> Self {
+    ) -> (Self, crate::worker::WorkerThreadOwner) {
+        let worker_threads = crate::worker::WorkerThreadOwner::default();
+        service_worker_context_runtime.worker_threads = worker_threads.registrar();
         let message_port_registry = service_worker_context_runtime.message_port_registry();
         let broadcast_channel_registry =
             service_worker_context_runtime.broadcast_channel_registry();
@@ -520,7 +530,7 @@ impl RendererBrowserContextRuntime {
             id,
             renderer_output_transport_tx.clone(),
         );
-        Self {
+        let runtime = Self {
             inner: Arc::new(RendererBrowserContextRuntimeInner {
                 id,
                 message_port_registry,
@@ -529,6 +539,7 @@ impl RendererBrowserContextRuntime {
                 shared_worker_runtime,
                 service_worker_runtime,
                 storage_partition_identity,
+                worker_threads: worker_threads.registrar(),
                 next_web_storage_opaque_context_nonce: AtomicU64::default(),
                 next_child_document_loader_id: AtomicU64::default(),
                 next_detached_parser_script_fetch_id: AtomicU64::default(),
@@ -538,7 +549,8 @@ impl RendererBrowserContextRuntime {
                 javascript_dialog_handler_enabled: AtomicBool::new(false),
                 renderer_output_transport_tx,
             }),
-        }
+        };
+        (runtime, worker_threads)
     }
 
     pub fn browser_resource_runtime(&self) -> crate::network::BrowserResourceRuntime {
@@ -672,6 +684,7 @@ impl RendererBrowserContextRuntime {
             message_port_registry: self.message_port_registry(),
             broadcast_channel_registry: self.broadcast_channel_registry(),
             storage_partition_identity: self.storage_partition_identity(),
+            worker_threads: self.inner.worker_threads.clone(),
         }
     }
 
@@ -790,6 +803,7 @@ impl RendererBrowserContextRuntimeOwner {
     /// leaving network owner roots available for an outer lifetime boundary to
     /// join after all of its `JsRuntime` handles have been dropped.
     pub fn terminate_renderer_producers_for_owner_shutdown(&mut self) {
+        self.worker_threads.terminate_all();
         self.producer_registry.cancel_all();
         if let Some(runtime) = self.runtime.take() {
             runtime.terminate_resource_producers_for_owner_shutdown();
@@ -797,21 +811,20 @@ impl RendererBrowserContextRuntimeOwner {
         }
     }
 
-    /// Broadcast shutdown and join every active or retired network owner.
+    /// Join every active or retired Worker and network owner.
     /// Callers with separate renderer handles first use
     /// [`Self::terminate_renderer_producers_for_owner_shutdown`] and drop those
-    /// handles before entering this terminal network boundary.
-    pub fn shutdown_network_and_join(&mut self) {
+    /// handles before entering this terminal runtime boundary.
+    pub fn shutdown_and_join(&mut self) {
         self.terminate_renderer_producers_for_owner_shutdown();
         if let Some(owner_root) = self.resource_runtime_owner_root.take() {
             owner_root.shutdown_and_join();
             drop(owner_root);
         }
-    }
-
-    pub fn shutdown_and_join(&mut self) {
-        self.terminate_renderer_producers_for_owner_shutdown();
-        self.shutdown_network_and_join();
+        // importScripts and synchronous XHR can be waiting in native Rust,
+        // outside V8's interruptible execution. Close their transport before
+        // waiting for those Worker threads to leave the blocking boundary.
+        self.worker_threads.shutdown_and_join();
     }
 
     #[cfg(test)]
@@ -921,6 +934,7 @@ impl RendererWorkerContextRuntime {
             message_port_registry,
             broadcast_channel_registry,
             storage_partition_identity,
+            worker_threads: crate::worker::WorkerThreadRegistrar::default(),
         }
     }
 

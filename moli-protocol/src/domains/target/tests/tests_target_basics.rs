@@ -1,5 +1,4 @@
 use super::*;
-use crate::conn::PageTargetHost;
 
 #[tokio::test(flavor = "multi_thread")]
 async fn get_browser_contexts_returns_active_and_inactive_ids() {
@@ -7,7 +6,7 @@ async fn get_browser_contexts_returns_active_and_inactive_ids() {
     load_bc(&mut ctx, "BID-A");
     ctx.conn
         .inactive_browser_contexts
-        .push(BrowserContext::new("BID-B".into()));
+        .push(ctx.conn.new_browser_context_fixture_for_test("BID-B"));
 
     ctx.process_async(json!({"id": 5, "method": "Target.getBrowserContexts"}))
         .await;
@@ -37,20 +36,120 @@ async fn create_browser_context_adds_inactive_context() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn cross_document_navigation_keeps_target_session_and_replaces_page_residence() {
+    let mut ctx = TestContext::new();
+    let target_id = "TID-stable-across-navigation";
+    load_bc_with_titled_page_async(
+        &mut ctx,
+        "BID-stable-across-navigation",
+        target_id,
+        "<title>before navigation</title>",
+    )
+    .await;
+    let session_id = "SID-stable-across-navigation";
+    ctx.conn
+        .browser_context
+        .as_mut()
+        .expect("browser context")
+        .attach_active_session(session_id);
+    register_page_session_route(
+        &mut ctx,
+        "BID-stable-across-navigation",
+        target_id,
+        session_id,
+        moli_page_types::DevToolsSessionKey::Primary,
+    );
+    let (browser_context_id, web_contents_id, main_frame_slot_id) = {
+        let browser_context = ctx.conn.browser_context.as_ref().expect("browser context");
+        let target = browser_context.active_page_target();
+        (
+            browser_context.browser_context_id(),
+            target.web_contents_id(),
+            target.main_frame_slot_id(),
+        )
+    };
+    let before = ctx
+        .conn
+        .target_page_residence_identity_for_session(Some(session_id))
+        .expect("initial Page residence");
+    ctx.sent.clear();
+
+    ctx.process_async(json!({
+        "id": 1041001,
+        "method": "Page.navigate",
+        "sessionId": session_id,
+        "params": {
+            "url": "data:text/html,<title>after navigation</title>"
+        }
+    }))
+    .await;
+    consume_main_document_navigation_start(&mut ctx);
+    let navigation = take_response_by_id(&mut ctx, 1041001);
+    assert_eq!(navigation["result"]["frameId"], json!(target_id));
+    assert!(
+        navigation["result"]["loaderId"].is_string(),
+        "cross-document navigation must create a new loader"
+    );
+    let navigation_output = ctx.take_all();
+    assert!(
+        navigation_output.iter().all(|message| {
+            !matches!(
+                message["method"].as_str(),
+                Some("Target.targetCreated" | "Target.targetDestroyed")
+            )
+        }),
+        "replacing a Document must not replace its stable DevTools target: {navigation_output:?}"
+    );
+
+    let after = ctx
+        .conn
+        .target_page_residence_identity_for_session(Some(session_id))
+        .expect("replacement Page residence");
+    let browser_context = ctx.conn.browser_context.as_ref().expect("browser context");
+    let target = browser_context.active_page_target();
+    assert_eq!(browser_context.browser_context_id(), browser_context_id);
+    assert_eq!(target.web_contents_id(), web_contents_id);
+    assert_eq!(target.main_frame_slot_id(), main_frame_slot_id);
+    assert_eq!(
+        browser_context.target_document_id(target.target_id()),
+        Some(after.document_id())
+    );
+    assert_eq!(after.browser_context_id(), before.browser_context_id());
+    assert_eq!(after.target_id(), before.target_id());
+    assert_ne!(
+        after.document_id(),
+        before.document_id(),
+        "cross-document navigation must replace the concrete Document"
+    );
+    assert!(browser_context.target_page_residence_is_current(&after));
+    assert!(
+        !browser_context.target_page_residence_is_current(&before),
+        "the previous Document identity must be stale after replacement"
+    );
+    assert_eq!(
+        ctx.conn.non_browser_target_id_for_session(Some(session_id)),
+        Some(target_id.to_owned()),
+        "the attached DevTools session must remain on the stable target"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn close_active_target_fails_only_active_owner_pending_awaits() {
     let mut ctx = TestContext::new();
-    let mut bc = BrowserContext::new("BID-await-owner".into());
+    let mut bc = ctx
+        .conn
+        .new_browser_context_fixture_for_test("BID-await-owner");
     bc.set_active_target_id("TID-active-await".to_owned());
     bc.attach_active_session("SID-active-await".to_owned());
     assert!(bc.assign_attached_session_to_target(
         "TID-active-await",
         "SID-active-attached-await".to_owned(),
     ));
-    bc.insert_page_target_host(PageTargetHost::with_url(
+    bc.register_page_target_url_fixture(
         "TID-bg-await".to_owned(),
         Some("SID-bg-await".to_owned()),
         "about:blank#bg-await".to_owned(),
-    ));
+    );
     ctx.conn.install_browser_context_fixture_for_test(bc);
     ctx.conn
         .register_pending_inspector_await(1041201, Some("SID-active-await"));
@@ -112,8 +211,8 @@ async fn create_browser_context_records_proxy_server_override() {
             .expect("active browser context");
         (
             active.id.clone(),
-            active.default_http_proxy_override.clone(),
-            active.default_http_no_proxy_override.clone(),
+            active.network_policy().http_proxy.clone(),
+            active.network_policy().http_no_proxy.clone(),
         )
     };
     ctx.expect_result(41, json!({ "browserContextId": active_id }), None);
@@ -145,7 +244,7 @@ async fn create_browser_context_preserves_non_loopback_proxy_bypass_entries() {
             .expect("active browser context");
         (
             active.id.clone(),
-            active.default_http_no_proxy_override.clone(),
+            active.network_policy().http_no_proxy.clone(),
         )
     };
     ctx.expect_result(42, json!({ "browserContextId": active_id }), None);
@@ -156,7 +255,7 @@ async fn create_browser_context_preserves_non_loopback_proxy_bypass_entries() {
 async fn attach_to_target_selects_inactive_browser_context() {
     let mut ctx = TestContext::new();
     load_bc_with_target(&mut ctx, "BID-A", "TID-A");
-    let mut inactive = BrowserContext::new("BID-B".into());
+    let mut inactive = ctx.conn.new_browser_context_fixture_for_test("BID-B");
     inactive.set_active_target_id("TID-B");
     ctx.conn
         .push_inactive_browser_context_fixture_for_test(inactive);
@@ -198,7 +297,7 @@ async fn attach_to_target_selects_inactive_browser_context() {
 async fn attach_to_target_creates_attached_session_and_keeps_target_context_active() {
     let mut ctx = TestContext::new();
     load_bc_with_target(&mut ctx, "BID-A", "TID-A");
-    let mut inactive = BrowserContext::new("BID-B".into());
+    let mut inactive = ctx.conn.new_browser_context_fixture_for_test("BID-B");
     inactive.set_active_target_id("TID-B");
     inactive.attach_active_session("SID-B");
     ctx.conn
@@ -264,7 +363,7 @@ async fn dispose_browser_context_aborts_paused_request_stage_navigation() {
     });
 
     let mut ctx = TestContext::new();
-    let mut bc = BrowserContext::new("BID-9".into());
+    let mut bc = ctx.conn.new_browser_context_fixture_for_test("BID-9");
     bc.set_active_target_id("TID-000000000A");
     bc.attach_active_session("SID-1");
     bc.active_page_target_mut().devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
@@ -355,7 +454,7 @@ async fn dispose_browser_context_aborts_paused_runtime_fetch_subresource() {
     let page_url = format!("http://{addr}/page");
     let data_url = format!("http://{addr}/data");
     let mut ctx = TestContext::new();
-    let mut bc = BrowserContext::new("BID-9".into());
+    let mut bc = ctx.conn.new_browser_context_fixture_for_test("BID-9");
     bc.set_active_target_id("TID-000000000A");
     bc.attach_active_session("SID-1");
     ctx.conn.install_browser_context_fixture_for_test(bc);
@@ -446,9 +545,9 @@ async fn dispose_browser_context_aborts_paused_runtime_fetch_subresource() {
 async fn create_target_for_inactive_browser_context_keeps_previously_active_context() {
     let mut ctx = TestContext::new();
     load_bc(&mut ctx, "BID-A");
-    ctx.conn
-        .inactive_browser_contexts
-        .push(BrowserContext::new("BID-B".into()));
+    ctx.conn.push_inactive_browser_context_fixture_for_test(
+        ctx.conn.new_browser_context_fixture_for_test("BID-B"),
+    );
 
     ctx.process_async(json!({
         "id": 1010,
@@ -594,8 +693,7 @@ async fn page_command_on_auto_attached_background_target_session_routes_without_
         Some(session_id.as_str())
     );
     assert!(
-        bc.background_target(&second_target_id)
-            .is_some_and(|target| target.has_loaded_page()),
+        bc.target_has_loaded_page(&second_target_id),
         "background Page.navigate should load the background target without activating it"
     );
 
@@ -687,7 +785,7 @@ async fn page_bring_to_front_on_inactive_context_restores_previous_context() {
         .unwrap()
         .attach_active_session("SID-active-a");
 
-    let mut inactive = BrowserContext::new("BID-B".into());
+    let mut inactive = ctx.conn.new_browser_context_fixture_for_test("BID-B");
     inactive.set_active_target_id("TID-active-b".to_owned());
     inactive.attach_active_session("SID-active-b".to_owned());
     ctx.conn
@@ -780,8 +878,7 @@ async fn page_navigate_on_auto_attached_background_target_session_routes_without
         Some(session_id.as_str())
     );
     assert!(
-        bc.background_target(&second_target_id)
-            .is_some_and(|target| target.has_loaded_page()),
+        bc.target_has_loaded_page(&second_target_id),
         "background Page.navigate should load the background target without activating it"
     );
 
@@ -833,19 +930,15 @@ async fn page_stop_loading_aborts_background_pending_fetch_without_activation() 
             "background": true, "browserContextId": "BID-9", "url": "about:blank#second"}
     }))
     .await;
-    let created = ctx.take_one();
-    assert_eq!(created["method"], "Target.targetCreated");
-    let second_target_id = created["params"]["targetInfo"]["targetId"]
-        .as_str()
-        .expect("second target id")
-        .to_owned();
-    let attached = ctx.take_one();
-    assert_eq!(attached["method"], "Target.attachedToTarget");
+    let second_target_id = take_created_target_id(&mut ctx, 1034);
+    let attached = ctx.take_first_matching("background target attachment", |message| {
+        message["method"] == json!("Target.attachedToTarget")
+            && message["params"]["targetInfo"]["targetId"] == json!(second_target_id)
+    });
     let session_id = attached["params"]["sessionId"]
         .as_str()
         .expect("background session id")
         .to_owned();
-    ctx.expect_result(1034, json!({ "targetId": second_target_id }), None);
 
     ctx.process_async(json!({
         "id": 1035,
@@ -900,8 +993,11 @@ async fn page_stop_loading_aborts_background_pending_fetch_without_activation() 
     let navigation = take_response_by_id(&mut ctx, 1037);
     assert_eq!(navigation["sessionId"], json!(session_id));
     assert_eq!(navigation["error"]["message"], json!("Navigation stopped"));
-    let failed = ctx.take_one();
-    assert_eq!(failed["method"], json!("Network.loadingFailed"));
+    let failed = ctx.take_first_matching("stopped background navigation failure", |message| {
+        message["method"] == json!("Network.loadingFailed")
+            && message["sessionId"] == json!(session_id)
+            && message["params"]["requestId"] == network_id
+    });
     assert_eq!(failed["sessionId"], json!(session_id));
     assert_eq!(failed["params"]["requestId"], network_id);
     assert_eq!(failed["params"]["errorText"], json!("Navigation stopped"));
@@ -1692,10 +1788,7 @@ async fn same_context_targets_do_not_replay_bare_isolated_worlds_after_switching
         .expect("first target page should initialize");
     {
         let bc = ctx.conn.browser_context.as_mut().expect("browser context");
-        let _ = bc
-            .active_page_target_mut()
-            .runtime_slot
-            .replace_loaded_page(Some(first_page));
+        let _ = bc.commit_active_navigation_for_test(first_page).await;
         bc.active_page_target_mut().devtools_sessions
             [moli_page_types::DevToolsSessionKey::Primary]
             .runtime_session_state
@@ -1819,22 +1912,26 @@ async fn same_context_targets_do_not_replay_bare_isolated_worlds_after_switching
         .runtime_frontend_enabled = true;
     let target_a_replay_url =
         "data:text/html,<title>target-a-replay</title><div id='ok'>target a replay</div>";
-    let target_a_commit = ctx
-        .conn
-        .prepare_loaded_navigation_commit_for_owner(&crate::conn::CommandOwnerScope::for_session(
-            "SID-active",
-        ))
-        .expect("target A commit state should be available before navigation");
+    let target_a_inspection = ctx.conn.prepared_document_inspection_for_owner(
+        &crate::conn::CommandOwnerScope::for_session("SID-active"),
+    );
+    let target_a_primary = target_a_inspection
+        .runtime_inspector_session_restore_snapshots
+        .iter()
+        .find(|session| session.inspector_session_id.is_none())
+        .expect(
+            "target A primary session should use the target default renderer inspector session",
+        );
     assert!(
-        target_a_commit.runtime_frontend_enabled,
-        "target A commit state should keep Runtime enabled"
+        target_a_primary
+            .protocol_configuration
+            .runtime_frontend_enabled,
+        "target A prepared inspection should keep Runtime enabled"
     );
     assert_eq!(
-        target_a_commit
-            .renderer_runtime_inspector_session_id
-            .as_deref(),
-        None,
-        "target A primary session should use the target default renderer inspector session"
+        target_a_inspection.root_frame_projection_id.as_deref(),
+        Some("TID-000000000A"),
+        "prepared inspection must not inherit the other target's frame identity"
     );
 
     ctx.process_async(json!({

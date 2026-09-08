@@ -19,12 +19,13 @@ use axum::{
 use moli_cookie_jar::StoredCookie;
 use moli_core::{
     LayoutPolicy, OptionalResourceFetchMask,
+    browser::BrowserService,
     runtime::{NavigationRuntimeConfig, storage_partition::StoragePartitionState},
 };
 use moli_fetch::FetchConfig;
+use moli_protocol::DEFAULT_CDP_PAGE_TARGET_ID;
 #[cfg(test)]
 use moli_protocol::DEFAULT_CDP_TAB_TARGET_ID;
-use moli_protocol::{CdpInitialStoragePartition, DEFAULT_CDP_PAGE_TARGET_ID};
 #[cfg(test)]
 use parking_lot::Mutex;
 use tokio::net::TcpListener;
@@ -41,8 +42,8 @@ mod cdp_owner;
 mod cdp_socket;
 mod protocol_local_executor;
 mod tcp_options;
-mod webdriver_bidi;
-mod webdriver_classic;
+pub(crate) mod webdriver_bidi;
+pub(crate) mod webdriver_classic;
 mod webdriver_files;
 
 use cdp_agent_host::SharedCdpAgentHostDirectory;
@@ -158,6 +159,7 @@ impl ProtocolServer {
         )?;
 
         let cdp_owner_registry = app_state.cdp_owner_registry.clone();
+        let browser_service = app_state.browser_service.clone();
         let app = build_router(app_state);
 
         let listener = listener.tap_io(|tcp_stream| {
@@ -165,6 +167,7 @@ impl ProtocolServer {
         });
         let result = axum::serve(listener, app).await;
         cdp_owner_registry.shutdown().await;
+        browser_service.shutdown();
         result.context("protocol server failed")
     }
 }
@@ -736,6 +739,7 @@ fn is_websocket_upgrade_request(request: &Request<Body>) -> bool {
 
 #[derive(Clone)]
 struct AppState {
+    browser_service: BrowserService,
     browser_ws_url: String,
     page_ws_url: String,
     bidi_ws_url: String,
@@ -745,11 +749,7 @@ struct AppState {
     cdp_owner_registry: SharedCdpOwnerRegistry,
     devtools_frontend_url: String,
     cookie_profile: SharedCookieProfile,
-    storage_partition: Arc<StoragePartitionState>,
     fetch_config: FetchConfig,
-    optional_resource_fetch_mask: OptionalResourceFetchMask,
-    subframe_loading_enabled: bool,
-    layout_policy: LayoutPolicy,
 }
 
 impl AppState {
@@ -778,12 +778,12 @@ impl AppState {
         storage_partition: Arc<StoragePartitionState>,
         navigation_runtime_config: NavigationRuntimeConfig,
     ) -> anyhow::Result<Self> {
-        Ok(Self::from_parts(
+        Self::from_parts(
             addr,
             SharedCookieProfile::from_storage_partition(storage_partition.clone()),
             storage_partition,
             navigation_runtime_config,
-        ))
+        )
     }
 
     fn from_parts(
@@ -791,11 +791,13 @@ impl AppState {
         cookie_profile: SharedCookieProfile,
         storage_partition: Arc<StoragePartitionState>,
         navigation_runtime_config: NavigationRuntimeConfig,
-    ) -> Self {
+    ) -> anyhow::Result<Self> {
+        let browser_service = BrowserService::start().map_err(anyhow::Error::msg)?;
         let cdp_agent_host_directory = SharedCdpAgentHostDirectory::default();
         let cdp_target_id_allocator = Arc::new(AtomicU64::new(0));
         let cdp_tab_target_id_allocator = Arc::new(AtomicU64::new(0));
         let cdp_owner_registry = SharedCdpOwnerRegistry::new(
+            browser_service.handle(),
             cdp_agent_host_directory.clone(),
             cdp_target_id_allocator,
             cdp_tab_target_id_allocator,
@@ -803,7 +805,8 @@ impl AppState {
             storage_partition.clone(),
             navigation_runtime_config.clone(),
         );
-        Self {
+        Ok(Self {
+            browser_service,
             browser_ws_url: format!("ws://{addr}/devtools/browser/{DEFAULT_BROWSER_ID}"),
             page_ws_url: format!("ws://{addr}/devtools/page/{DEFAULT_TARGET_ID}"),
             bidi_ws_url: format!("ws://{addr}/session"),
@@ -815,22 +818,8 @@ impl AppState {
                 "/devtools/inspector.html?ws={addr}/devtools/page/{DEFAULT_TARGET_ID}"
             ),
             cookie_profile,
-            storage_partition,
             fetch_config: navigation_runtime_config.fetch_config().clone(),
-            optional_resource_fetch_mask: navigation_runtime_config.optional_resource_fetch_mask(),
-            subframe_loading_enabled: navigation_runtime_config.subframe_loading_enabled(),
-            layout_policy: navigation_runtime_config.layout_policy(),
-        }
-    }
-
-    fn initial_storage_partition(
-        &self,
-        initial_cookies: Vec<StoredCookie>,
-    ) -> CdpInitialStoragePartition {
-        CdpInitialStoragePartition::from_storage_partition(
-            initial_cookies,
-            self.storage_partition.as_ref(),
-        )
+        })
     }
 }
 

@@ -192,15 +192,21 @@ pub(crate) async fn create_popup_target_from_renderer_output_background_events_a
             session_storage_store,
             initial_empty_document_storage_key,
         );
+        let popup_handle = browser_context
+            .web_contents_handle_for_target(&target_id)
+            .expect("staged popup must own WebContents");
         if let Some(opener) = opener {
-            browser_context.remember_target_opener(
-                &target_id,
-                opener.target_id,
-                opener.frame_id,
-                can_access_opener,
-            );
+            let opener_handle = browser_context.web_contents_handle_for_target(&opener.target_id);
+            browser_context
+                .set_web_contents_opener(popup_handle, opener_handle, can_access_opener)
+                .expect("staged popup and resolved opener must remain live");
+            browser_context.set_target_opener_frame_attribution(&target_id, opener.frame_id);
         }
-        browser_context.remember_target_window_name(&target_name, &target_id);
+        let window_name =
+            BrowserContext::reusable_window_open_target_name(&target_name).map(str::to_owned);
+        browser_context
+            .set_web_contents_window_name(popup_handle, window_name)
+            .expect("staged popup must remain live");
         browser_context.remember_target_popup_id(popup_id, &target_id);
     }
 
@@ -502,12 +508,7 @@ fn popup_target_has_loaded_page(
     let Some(browser_context) = conn.browser_context_by_id(browser_context_id) else {
         return false;
     };
-    if browser_context.is_active_target(target_id) {
-        return browser_context.has_loaded_page();
-    }
-    browser_context
-        .background_target(target_id)
-        .is_some_and(|target| target.has_loaded_page())
+    browser_context.target_has_loaded_page(target_id)
 }
 
 pub(crate) async fn complete_popup_target_navigation_owner_action_async(

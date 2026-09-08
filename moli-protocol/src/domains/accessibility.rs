@@ -1,4 +1,4 @@
-use crate::conn::{CdpConnection, Cmd, CommandOwnerScope};
+use crate::conn::{CdpConnection, Cmd, CommandOwnerScope, RendererDispatchLane};
 use crate::domains::actions::AccessibilityAction;
 use crate::domains::command_output::CommandOutputPlan;
 use moli_core::page::{
@@ -14,19 +14,24 @@ pub(crate) struct PendingAccessibilityCommandDispatch {
     command_id: Option<u64>,
     owner_scope: CommandOwnerScope,
     kind: PendingAccessibilityCommandKind,
-    pending: PendingAccessibilityCommandWork,
+    pending: PendingPageCommand,
 }
 
 pub(crate) struct CompletedAccessibilityCommandDispatch {
     command_id: Option<u64>,
     owner_scope: CommandOwnerScope,
     kind: PendingAccessibilityCommandKind,
-    completed: CompletedAccessibilityCommandWork,
+    completed: Result<Box<CompletedPageCommand>, String>,
 }
 
 pub(crate) enum AccessibilityCommandDispatchStep {
     Pending(PendingAccessibilityCommandDispatch),
     Complete(CommandOutputPlan),
+}
+
+pub(crate) fn command_waits_for_document_projection(cmd: &Cmd<'_>) -> bool {
+    cmd.parse_action::<AccessibilityAction>()
+        .is_some_and(AccessibilityAction::queries_tree)
 }
 
 enum PendingAccessibilityCommandKind {
@@ -55,14 +60,6 @@ enum PendingAccessibilityCommandKind {
     },
 }
 
-enum PendingAccessibilityCommandWork {
-    Page(PendingPageCommand),
-}
-
-enum CompletedAccessibilityCommandWork {
-    Page(Box<Result<CompletedPageCommand, String>>),
-}
-
 #[derive(Clone)]
 enum AccessibilityNodeOperation {
     Children,
@@ -82,11 +79,17 @@ struct PendingAccessibilityCommandStartError {
 }
 
 impl PendingAccessibilityCommandDispatch {
+    pub(crate) fn renderer_dispatch_lane(&self) -> Option<RendererDispatchLane> {
+        self.pending
+            .renderer_agent_attachment_id()
+            .map(|_| RendererDispatchLane::Main)
+    }
+
     fn from_command(
         conn: &CdpConnection,
         cmd: &Cmd<'_>,
         kind: PendingAccessibilityCommandKind,
-        pending: PendingAccessibilityCommandWork,
+        pending: PendingPageCommand,
     ) -> Self {
         Self {
             command_id: cmd.id,
@@ -97,13 +100,10 @@ impl PendingAccessibilityCommandDispatch {
     }
 
     pub async fn wait(self) -> CompletedAccessibilityCommandDispatch {
-        let completed = match self.pending {
-            PendingAccessibilityCommandWork::Page(pending) => {
-                CompletedAccessibilityCommandWork::Page(Box::new(
-                    pending.wait().await.map_err(|error| error.to_string()),
-                ))
-            }
-        };
+        let completed = Box::pin(self.pending.wait())
+            .await
+            .map(Box::new)
+            .map_err(|error| error.to_string());
         CompletedAccessibilityCommandDispatch {
             command_id: self.command_id,
             owner_scope: self.owner_scope,
@@ -411,6 +411,19 @@ fn start_pending_child_frame_partial_command(
     )
 }
 
+fn accessibility_inspection_for_owner<'a>(
+    conn: &'a CdpConnection,
+    owner: &CommandOwnerScope,
+) -> Option<moli_renderer_v8::RendererAccessibilityInspection<'a>> {
+    let session = conn.target_renderer_runtime_inspector_session_id_for_owner(owner);
+    conn.renderer_inspection_binding_for_owner(
+        owner,
+        moli_core::page::RendererInspectorCommandRoute::MainThread,
+    )
+    .ok()
+    .map(|binding| binding.accessibility_inspection(session))
+}
+
 fn start_pending_object_reference_command(
     conn: &mut CdpConnection,
     cmd: &Cmd<'_>,
@@ -437,16 +450,13 @@ fn start_pending_object_reference_command(
             message: "Could not find node with given id".to_owned(),
         });
     };
-    let Some(page) = helpers::loaded_page_mut_for_session(conn, cmd.session_id) else {
+    let Some(inspection) =
+        accessibility_inspection_for_owner(conn, &CommandOwnerScope::capture(conn, cmd.session_id))
+    else {
         return Err(PendingAccessibilityCommandStartError::no_document_loaded());
     };
-    let pending = start_accessibility_object_page_command(
-        page,
-        cmd.session_id.map(str::to_owned),
-        object_id,
-        &operation,
-    )
-    .map_err(PendingAccessibilityCommandStartError::renderer_error)?;
+    let pending = start_accessibility_object_inspection(&inspection, object_id, &operation)
+        .map_err(PendingAccessibilityCommandStartError::renderer_error)?;
     Ok(Some(PendingAccessibilityCommandDispatch::from_command(
         conn,
         cmd,
@@ -455,7 +465,7 @@ fn start_pending_object_reference_command(
             top_frame_id,
             operation,
         },
-        PendingAccessibilityCommandWork::Page(pending),
+        pending,
     )))
 }
 
@@ -483,13 +493,13 @@ fn start_pending_dom_node_reference_command(
         return Err(PendingAccessibilityCommandStartError::no_document_loaded());
     };
     let resolved_frame_id = frame_id.unwrap_or(top_frame_id.as_str()).to_owned();
-    let renderer_inspector_session_id =
-        conn.target_renderer_runtime_inspector_session_id_for_session(cmd.session_id);
-    let Some(page) = helpers::loaded_page_mut_for_session(conn, cmd.session_id) else {
+    let owner = CommandOwnerScope::capture(conn, cmd.session_id);
+    let Some(inspection) = crate::domains::dom::dom_inspection_for_owner(conn, &owner) else {
         return Err(PendingAccessibilityCommandStartError::no_document_loaded());
     };
-    let pending = page
-        .start_document_frontend_node_binding(renderer_inspector_session_id, frontend_node_id)
+    let pending = inspection
+        .start_document_frontend_node_binding(frontend_node_id)
+        .map(PendingPageCommand::from_inspector_main_route)
         .map_err(PendingAccessibilityCommandStartError::renderer_error)?;
     Ok(Some(PendingAccessibilityCommandDispatch::from_command(
         conn,
@@ -499,13 +509,12 @@ fn start_pending_dom_node_reference_command(
             top_frame_id,
             operation,
         },
-        PendingAccessibilityCommandWork::Page(pending),
+        pending,
     )))
 }
 
-fn start_accessibility_object_page_command(
-    page: &mut moli_core::page::Page,
-    inspector_session_id: Option<String>,
+fn start_accessibility_object_inspection(
+    inspection: &moli_renderer_v8::RendererAccessibilityInspection<'_>,
     object_id: &str,
     operation: &AccessibilityNodeOperation,
 ) -> anyhow::Result<PendingPageCommand> {
@@ -513,21 +522,16 @@ fn start_accessibility_object_page_command(
         AccessibilityNodeOperation::Children => Err(anyhow::anyhow!(
             "children accessibility operation requires an AXNodeId"
         )),
-        AccessibilityNodeOperation::Ancestors => page
-            .start_accessibility_node_and_ancestor_payloads_for_object_id(
-                inspector_session_id,
-                object_id,
-            ),
-        AccessibilityNodeOperation::Query { .. } => {
-            page.start_accessibility_tree_payloads_for_object_id(inspector_session_id, object_id)
+        AccessibilityNodeOperation::Ancestors => {
+            inspection.start_accessibility_node_and_ancestor_payloads_for_object_id(object_id)
         }
-        AccessibilityNodeOperation::Partial { fetch_relatives } => page
-            .start_accessibility_partial_tree_payloads_for_object_id(
-                inspector_session_id,
-                object_id,
-                *fetch_relatives,
-            ),
+        AccessibilityNodeOperation::Query { .. } => {
+            inspection.start_accessibility_tree_payloads_for_object_id(object_id)
+        }
+        AccessibilityNodeOperation::Partial { fetch_relatives } => inspection
+            .start_accessibility_partial_tree_payloads_for_object_id(object_id, *fetch_relatives),
     }
+    .map(PendingPageCommand::from_inspector_main_route)
 }
 
 fn start_pending_backend_reference_command(
@@ -550,10 +554,12 @@ fn start_pending_backend_reference_command(
         return Err(PendingAccessibilityCommandStartError::no_document_loaded());
     };
     let resolved_frame_id = frame_id.unwrap_or(top_frame_id.as_str()).to_owned();
-    let Some(page) = helpers::loaded_page_mut_for_session(conn, cmd.session_id) else {
+    let Some(inspection) =
+        accessibility_inspection_for_owner(conn, &CommandOwnerScope::capture(conn, cmd.session_id))
+    else {
         return Err(PendingAccessibilityCommandStartError::no_document_loaded());
     };
-    let pending = start_accessibility_backend_page_command(page, backend_node_id, &operation)
+    let pending = start_accessibility_backend_inspection(&inspection, backend_node_id, &operation)
         .map_err(PendingAccessibilityCommandStartError::renderer_error)?;
     Ok(Some(PendingAccessibilityCommandDispatch::from_command(
         conn,
@@ -563,46 +569,47 @@ fn start_pending_backend_reference_command(
             top_frame_id,
             operation,
         },
-        PendingAccessibilityCommandWork::Page(pending),
+        pending,
     )))
 }
 
-fn start_accessibility_backend_page_command(
-    page: &mut moli_core::page::Page,
+fn start_accessibility_backend_inspection(
+    inspection: &moli_renderer_v8::RendererAccessibilityInspection<'_>,
     backend_node_id: u32,
     operation: &AccessibilityNodeOperation,
 ) -> anyhow::Result<PendingPageCommand> {
     match operation {
         AccessibilityNodeOperation::Children => {
-            page.start_accessibility_child_node_payloads_for_backend_node_id(backend_node_id)
+            inspection.start_accessibility_child_node_payloads_for_backend_node_id(backend_node_id)
         }
-        AccessibilityNodeOperation::Ancestors => {
-            page.start_accessibility_node_and_ancestor_payloads_for_backend_node_id(backend_node_id)
-        }
+        AccessibilityNodeOperation::Ancestors => inspection
+            .start_accessibility_node_and_ancestor_payloads_for_backend_node_id(backend_node_id),
         AccessibilityNodeOperation::Query { .. } => {
-            page.start_accessibility_tree_payloads_for_backend_node_id(backend_node_id, None)
+            inspection.start_accessibility_tree_payloads_for_backend_node_id(backend_node_id, None)
         }
-        AccessibilityNodeOperation::Partial { fetch_relatives } => page
+        AccessibilityNodeOperation::Partial { fetch_relatives } => inspection
             .start_accessibility_partial_tree_payloads_for_backend_node_id(
                 backend_node_id,
                 *fetch_relatives,
             ),
     }
+    .map(PendingPageCommand::from_inspector_main_route)
 }
 
-fn start_top_frame_accessibility_page_command(
-    page: &mut moli_core::page::Page,
+fn start_top_frame_accessibility_inspection(
+    inspection: &moli_renderer_v8::RendererAccessibilityInspection<'_>,
     kind: &PendingAccessibilityCommandKind,
 ) -> anyhow::Result<PendingPageCommand> {
     match kind {
         PendingAccessibilityCommandKind::TopFrameFullTree { max_depth } => {
-            page.start_accessibility_tree_payloads_for_document(*max_depth)
+            inspection.start_accessibility_tree_payloads_for_document(*max_depth)
         }
         PendingAccessibilityCommandKind::TopFrameRoot => {
-            page.start_accessibility_node_payload_for_document()
+            inspection.start_accessibility_node_payload_for_document()
         }
         _ => unreachable!("top-frame accessibility kind must use a top-frame variant"),
     }
+    .map(PendingPageCommand::from_inspector_main_route)
 }
 
 fn start_pending_frame_scoped_accessibility_command(
@@ -625,16 +632,18 @@ fn start_pending_frame_scoped_accessibility_command(
         return Err(PendingAccessibilityCommandStartError::no_document_loaded());
     };
     let resolved_frame_id = frame_id.unwrap_or(top_frame_id.as_str());
-    let Some(page) = helpers::loaded_page_mut_for_session(conn, cmd.session_id) else {
+    let Some(inspection) =
+        accessibility_inspection_for_owner(conn, &CommandOwnerScope::capture(conn, cmd.session_id))
+    else {
         return Err(PendingAccessibilityCommandStartError::no_document_loaded());
     };
     let (kind, pending) = if resolved_frame_id == top_frame_id {
-        let pending = start_top_frame_accessibility_page_command(page, &top_frame_kind)
+        let pending = start_top_frame_accessibility_inspection(&inspection, &top_frame_kind)
             .map_err(PendingAccessibilityCommandStartError::renderer_error)?;
         (top_frame_kind, pending)
     } else {
-        let pending = start_child_frame_accessibility_page_command(
-            page,
+        let pending = start_child_frame_accessibility_inspection(
+            &inspection,
             resolved_frame_id,
             &child_frame_kind,
         )
@@ -642,27 +651,25 @@ fn start_pending_frame_scoped_accessibility_command(
         (child_frame_kind, pending)
     };
     Ok(Some(PendingAccessibilityCommandDispatch::from_command(
-        conn,
-        cmd,
-        kind,
-        PendingAccessibilityCommandWork::Page(pending),
+        conn, cmd, kind, pending,
     )))
 }
 
-fn start_child_frame_accessibility_page_command(
-    page: &mut moli_core::page::Page,
+fn start_child_frame_accessibility_inspection(
+    inspection: &moli_renderer_v8::RendererAccessibilityInspection<'_>,
     frame_id: &str,
     kind: &PendingAccessibilityCommandKind,
 ) -> anyhow::Result<PendingPageCommand> {
     match kind {
         PendingAccessibilityCommandKind::ChildFrameFullTree { max_depth } => {
-            page.start_child_frame_accessibility_tree_payloads(frame_id, *max_depth)
+            inspection.start_child_frame_accessibility_tree_payloads(frame_id, *max_depth)
         }
         PendingAccessibilityCommandKind::ChildFrameRoot => {
-            page.start_child_frame_accessibility_node_payload(frame_id)
+            inspection.start_child_frame_accessibility_node_payload(frame_id)
         }
         _ => unreachable!("child-frame accessibility dispatch only accepts child-frame commands"),
     }
+    .map(PendingPageCommand::from_inspector_main_route)
 }
 
 pub(crate) async fn complete_pending_accessibility_command(
@@ -675,25 +682,19 @@ pub(crate) async fn complete_pending_accessibility_command(
         kind,
         completed,
     } = completed;
-    let CompletedAccessibilityCommandWork::Page(completed) = completed;
-    let completed = *completed;
+    if let Ok(completion) = &completed
+        && let Err(error) = conn.observe_renderer_inspection_completion(&owner_scope, completion)
+    {
+        return AccessibilityCommandDispatchStep::Complete(CommandOutputPlan::error(-32000, error));
+    }
 
     if let Err(message) = conn.ensure_document_accessible_for_owner(&owner_scope) {
         return AccessibilityCommandDispatchStep::Complete(CommandOutputPlan::error(
             -32000, message,
         ));
     }
-    let Some(page) = conn
-        .loaded_page_mut_for_protocol_access_for_owner(&owner_scope)
-        .ok()
-    else {
-        return AccessibilityCommandDispatchStep::Complete(CommandOutputPlan::error(
-            -32000,
-            "NoDocumentLoaded",
-        ));
-    };
     let completion = match completed {
-        Ok(completion) => completion,
+        Ok(completion) => *completion,
         Err(error) => {
             return AccessibilityCommandDispatchStep::Complete(CommandOutputPlan::error(
                 -32000, error,
@@ -702,7 +703,7 @@ pub(crate) async fn complete_pending_accessibility_command(
     };
     let plan = match kind {
         PendingAccessibilityCommandKind::TopFrameFullTree { .. } => {
-            match page.finish_accessibility_tree_payloads_optional(completion) {
+            match completion.finish_accessibility_tree_payloads_optional() {
                 Ok(Some(nodes)) => CommandOutputPlan::result(json!({ "nodes": nodes })),
                 Ok(None) => CommandOutputPlan::error(-32000, "NoDocumentLoaded"),
                 Err(error) => CommandOutputPlan::error(
@@ -712,7 +713,7 @@ pub(crate) async fn complete_pending_accessibility_command(
             }
         }
         PendingAccessibilityCommandKind::TopFrameRoot => {
-            match page.finish_accessibility_node_payload(completion) {
+            match completion.finish_accessibility_node_payload() {
                 Ok(Some(node)) => CommandOutputPlan::result(json!({ "node": node })),
                 Ok(None) => CommandOutputPlan::error(-32000, "NoDocumentLoaded"),
                 Err(error) => CommandOutputPlan::error(
@@ -721,10 +722,8 @@ pub(crate) async fn complete_pending_accessibility_command(
                 ),
             }
         }
-        PendingAccessibilityCommandKind::ChildFrameFullTree { max_depth } => {
-            let _ = max_depth;
+        PendingAccessibilityCommandKind::ChildFrameFullTree { .. } => {
             match finish_child_frame_accessibility_nodes_for_protocol(
-                page,
                 completion,
                 "Could not build accessibility tree for frame",
             ) {
@@ -734,7 +733,6 @@ pub(crate) async fn complete_pending_accessibility_command(
         }
         PendingAccessibilityCommandKind::ChildFrameRoot => {
             match finish_child_frame_accessibility_nodes_for_protocol(
-                page,
                 completion,
                 "Could not build root accessibility node for frame",
             ) {
@@ -751,9 +749,8 @@ pub(crate) async fn complete_pending_accessibility_command(
             operation,
         } => {
             return AccessibilityCommandDispatchStep::Complete(
-                complete_object_accessibility_payloads_command(
-                    page,
-                    completion,
+                complete_accessibility_payloads_command(
+                    completion.finish_accessibility_payloads_for_object_id(),
                     frame_id,
                     top_frame_id,
                     operation,
@@ -765,7 +762,7 @@ pub(crate) async fn complete_pending_accessibility_command(
             top_frame_id,
             operation,
         } => {
-            let backend_node_id = match page.finish_document_frontend_node_binding(completion) {
+            let backend_node_id = match completion.finish_document_frontend_node_binding() {
                 Ok(RendererDomFrontendNodeBindingResolution::BackendNodeId(backend_node_id)) => {
                     backend_node_id
                 }
@@ -782,18 +779,25 @@ pub(crate) async fn complete_pending_accessibility_command(
                     ));
                 }
             };
-            let pending =
-                match start_accessibility_backend_page_command(page, backend_node_id, &operation) {
-                    Ok(pending) => pending,
-                    Err(error) => {
-                        return AccessibilityCommandDispatchStep::Complete(
-                            CommandOutputPlan::error(
-                                -32000,
-                                format!("Could not build accessibility payload for node: {error}"),
-                            ),
-                        );
-                    }
-                };
+            let Some(inspection) = accessibility_inspection_for_owner(conn, &owner_scope) else {
+                return AccessibilityCommandDispatchStep::Complete(CommandOutputPlan::error(
+                    -32000,
+                    "NoDocumentLoaded",
+                ));
+            };
+            let pending = match start_accessibility_backend_inspection(
+                &inspection,
+                backend_node_id,
+                &operation,
+            ) {
+                Ok(pending) => pending,
+                Err(error) => {
+                    return AccessibilityCommandDispatchStep::Complete(CommandOutputPlan::error(
+                        -32000,
+                        format!("Could not build accessibility payload for node: {error}"),
+                    ));
+                }
+            };
             return AccessibilityCommandDispatchStep::Pending(
                 PendingAccessibilityCommandDispatch {
                     command_id,
@@ -803,7 +807,7 @@ pub(crate) async fn complete_pending_accessibility_command(
                         top_frame_id,
                         operation,
                     },
-                    pending: PendingAccessibilityCommandWork::Page(pending),
+                    pending,
                 },
             );
         }
@@ -813,9 +817,8 @@ pub(crate) async fn complete_pending_accessibility_command(
             operation,
         } => {
             return AccessibilityCommandDispatchStep::Complete(
-                complete_backend_accessibility_payloads_command(
-                    page,
-                    completion,
+                complete_accessibility_payloads_command(
+                    completion.finish_accessibility_payloads_for_backend_node_id(),
                     frame_id,
                     top_frame_id,
                     operation,
@@ -826,14 +829,13 @@ pub(crate) async fn complete_pending_accessibility_command(
     AccessibilityCommandDispatchStep::Complete(plan)
 }
 
-fn complete_object_accessibility_payloads_command(
-    page: &mut moli_core::page::Page,
-    completion: CompletedPageCommand,
+fn complete_accessibility_payloads_command(
+    payloads: anyhow::Result<Option<moli_renderer_v8::RendererAccessibilityPayloadsForObjectId>>,
     frame_id: String,
     top_frame_id: String,
     operation: AccessibilityNodeOperation,
 ) -> CommandOutputPlan {
-    let payloads = match page.finish_accessibility_payloads_for_object_id(completion) {
+    let payloads = match payloads {
         Ok(Some(payloads)) => payloads,
         Ok(None) => {
             return CommandOutputPlan::error(-32000, "Could not find node with given id");
@@ -870,11 +872,10 @@ fn complete_object_accessibility_payloads_command(
 }
 
 fn finish_child_frame_accessibility_nodes_for_protocol(
-    page: &mut moli_core::page::Page,
     completion: CompletedPageCommand,
     error_prefix: &str,
 ) -> Result<Vec<Value>, CommandOutputPlan> {
-    let payloads = match page.finish_child_frame_accessibility_payloads(completion) {
+    let payloads = match completion.finish_child_frame_accessibility_payloads() {
         Ok(Some(payloads)) => payloads,
         Ok(None) => {
             return Err(CommandOutputPlan::error(
@@ -892,49 +893,6 @@ fn finish_child_frame_accessibility_nodes_for_protocol(
     payloads
         .payloads
         .ok_or_else(|| CommandOutputPlan::error(-32000, "Could not find node with given id"))
-}
-
-fn complete_backend_accessibility_payloads_command(
-    page: &mut moli_core::page::Page,
-    completion: CompletedPageCommand,
-    frame_id: String,
-    top_frame_id: String,
-    operation: AccessibilityNodeOperation,
-) -> CommandOutputPlan {
-    let payloads = match page.finish_accessibility_payloads_for_backend_node_id(completion) {
-        Ok(Some(payloads)) => payloads,
-        Ok(None) => {
-            return CommandOutputPlan::error(-32000, "Could not find node with given id");
-        }
-        Err(error) => {
-            return CommandOutputPlan::error(
-                -32000,
-                format!("Could not build accessibility payload for node: {error}"),
-            );
-        }
-    };
-    let object_frame_id = payloads
-        .frame_id
-        .as_deref()
-        .unwrap_or(top_frame_id.as_str());
-    if object_frame_id != frame_id {
-        return CommandOutputPlan::error(-32000, "Could not find node with given id");
-    }
-    let Some(mut nodes) = payloads.payloads else {
-        return CommandOutputPlan::error(-32000, "Could not find node with given id");
-    };
-    if let AccessibilityNodeOperation::Query {
-        accessible_name,
-        role,
-    } = operation
-    {
-        retain_matching_accessibility_nodes(
-            &mut nodes,
-            accessible_name.as_deref(),
-            role.as_deref(),
-        );
-    }
-    CommandOutputPlan::result(json!({ "nodes": nodes }))
 }
 
 fn retain_matching_accessibility_nodes(

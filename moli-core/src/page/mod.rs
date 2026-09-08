@@ -166,9 +166,7 @@ pub use protocol_support::{
     subresource_auth_credentials_for_challenge,
 };
 pub use renderer_command_support::DocumentNodeClientRectResolution;
-pub use renderer_command_support::{
-    DocumentNodeRuntimeObjectResolution, PageObservableOutputUpdate, TestingOutcome,
-};
+pub use renderer_command_support::{DocumentNodeRuntimeObjectResolution, TestingOutcome};
 
 #[cfg(test)]
 use crate::renderer::RendererPageTestingHandle;
@@ -194,8 +192,6 @@ pub struct Page {
     // most recently.
     idle_override: Option<EmulatedIdleOverride>,
     handle: RendererPageHandle,
-    renderer_agent_attachment_id: Option<RendererAgentAttachmentId>,
-    renderer_devtools_command_session_id: Option<String>,
     page_creation_artifacts: Option<Box<RendererPageCreationArtifacts>>,
 }
 
@@ -221,8 +217,6 @@ impl Page {
             page_state: PageStateCache::new(page_state),
             idle_override,
             handle,
-            renderer_agent_attachment_id: None,
-            renderer_devtools_command_session_id: None,
             page_creation_artifacts: None,
         }
     }
@@ -237,8 +231,6 @@ impl Page {
             page_state: PageStateCache::new(page_state),
             idle_override,
             handle,
-            renderer_agent_attachment_id: None,
-            renderer_devtools_command_session_id: None,
             page_creation_artifacts: Some(Box::new(page_creation_artifacts)),
         }
     }
@@ -258,6 +250,10 @@ impl Page {
         self.handle.devtools_agent_token()
     }
 
+    pub fn renderer_inspection_endpoint(&self) -> moli_renderer_v8::RendererInspectionEndpoint {
+        self.handle.inspection_endpoint()
+    }
+
     /// Seals this target's Main/IO DevTools ingress and interrupts active V8.
     ///
     /// `Page.crash` is a terminal renderer IO control in Chromium, not an
@@ -266,21 +262,6 @@ impl Page {
     #[doc(hidden)]
     pub fn crash_devtools_target_from_io(&self) {
         self.handle.crash_devtools_target_from_io();
-    }
-
-    #[doc(hidden)]
-    pub fn set_renderer_devtools_command_session_id(&mut self, session_id: Option<String>) {
-        self.renderer_devtools_command_session_id = session_id;
-    }
-
-    #[doc(hidden)]
-    pub fn renderer_agent_attachment_id(&self) -> Option<RendererAgentAttachmentId> {
-        self.renderer_agent_attachment_id
-    }
-
-    #[doc(hidden)]
-    pub fn bind_renderer_agent_attachment(&mut self, id: RendererAgentAttachmentId) {
-        self.renderer_agent_attachment_id = Some(id);
     }
 
     #[doc(hidden)]
@@ -542,26 +523,5 @@ impl Page {
             "an input dispatch outcome reply",
             RendererPageReply::InputDispatchOutcome(value) => Ok(value),
         )
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn page_observable_output_update_exposes_valid_producer_items() {
-        let items = vec![
-            ScriptObservableOutputItem::ConsoleMessage("console-a".to_owned()),
-            ScriptObservableOutputItem::LifecycleError("error-a".to_owned()),
-            ScriptObservableOutputItem::ConsoleMessage("console-b".to_owned()),
-        ];
-        let update = PageObservableOutputUpdate::append(&items);
-
-        assert_eq!(
-            update.observable_output_items(),
-            items.as_slice(),
-            "observable update should carry the report-level producer item sequence as its only output view"
-        );
     }
 }

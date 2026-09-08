@@ -1,11 +1,12 @@
 use chromiumoxide_cdp::cdp::browser_protocol::dom::{
     DiscardSearchResultsParams, GetSearchResultsParams, PerformSearchParams,
 };
+use moli_core::page::PendingPageCommand;
 use serde_json::json;
 
 use super::resolve::{
     DomCommandOutput, DomCommandTaskStep, PendingDomCommandDispatch, PendingDomCommandKind,
-    PendingDomCommandStartError, PendingDomCommandWork,
+    PendingDomCommandStartError,
 };
 use super::*;
 use crate::devtools_runtime::{
@@ -83,26 +84,24 @@ pub(super) fn start_devtools_perform_search_command(
     owner: &CommandOwnerScope,
     command: DevToolsPerformSearchCommand,
 ) -> Result<Option<PendingDomCommandDispatch>, PendingDomCommandStartError> {
-    let renderer_inspector_session_id =
-        conn.target_renderer_runtime_inspector_session_id_for_owner(owner);
     let include_whitespace = super::dom_agent_includes_whitespace_for_owner(conn, owner);
-    let Some(page) = super::loaded_page_mut_for_owner(conn, owner) else {
+    let Some(inspection) = super::dom_inspection_for_owner(conn, owner) else {
         return Ok(None);
     };
-    let pending = page
+    let pending = inspection
         .start_document_perform_search(
-            renderer_inspector_session_id,
             command.query,
             command.include_user_agent_shadow_dom,
             include_whitespace,
         )
+        .map(PendingPageCommand::from_inspector_main_route)
         .map_err(PendingDomCommandStartError::renderer_error)?;
 
     Ok(Some(PendingDomCommandDispatch {
         command_id,
         owner_scope: owner.clone(),
         kind: PendingDomCommandKind::PerformSearchLive,
-        pending: PendingDomCommandWork::Page(pending),
+        pending,
     }))
 }
 
@@ -112,24 +111,18 @@ pub(super) fn start_devtools_get_search_results_command(
     owner: &CommandOwnerScope,
     command: DevToolsGetSearchResultsCommand,
 ) -> Result<Option<PendingDomCommandDispatch>, PendingDomCommandStartError> {
-    let renderer_inspector_session_id =
-        conn.target_renderer_runtime_inspector_session_id_for_owner(owner);
-    let Some(page) = super::loaded_page_mut_for_owner(conn, owner) else {
+    let Some(inspection) = super::dom_inspection_for_owner(conn, owner) else {
         return Ok(None);
     };
-    let pending = page
-        .start_document_search_results(
-            renderer_inspector_session_id,
-            command.search_id,
-            command.from_index,
-            command.to_index,
-        )
+    let pending = inspection
+        .start_document_search_results(command.search_id, command.from_index, command.to_index)
+        .map(PendingPageCommand::from_inspector_main_route)
         .map_err(PendingDomCommandStartError::renderer_error)?;
     Ok(Some(PendingDomCommandDispatch {
         command_id,
         owner_scope: owner.clone(),
         kind: PendingDomCommandKind::GetSearchResultsLive,
-        pending: PendingDomCommandWork::Page(pending),
+        pending,
     }))
 }
 
@@ -139,19 +132,18 @@ pub(super) fn start_devtools_discard_search_results_command(
     owner: &CommandOwnerScope,
     command: DevToolsDiscardSearchResultsCommand,
 ) -> Result<Option<PendingDomCommandDispatch>, PendingDomCommandStartError> {
-    let renderer_inspector_session_id =
-        conn.target_renderer_runtime_inspector_session_id_for_owner(owner);
-    let Some(page) = super::loaded_page_mut_for_owner(conn, owner) else {
+    let Some(inspection) = super::dom_inspection_for_owner(conn, owner) else {
         return Ok(None);
     };
-    let pending = page
-        .start_discard_document_search_results(renderer_inspector_session_id, command.search_id)
+    let pending = inspection
+        .start_discard_document_search_results(command.search_id)
+        .map(PendingPageCommand::from_inspector_main_route)
         .map_err(PendingDomCommandStartError::renderer_error)?;
     Ok(Some(PendingDomCommandDispatch {
         command_id,
         owner_scope: owner.clone(),
         kind: PendingDomCommandKind::DiscardSearchResultsLive,
-        pending: PendingDomCommandWork::Page(pending),
+        pending,
     }))
 }
 
@@ -169,7 +161,7 @@ pub(super) fn complete_non_pending_perform_search_command(
     };
     let session_id = command.context.session_id.as_ref().map(|id| id.as_str());
     let owner = CommandOwnerScope::capture(conn, session_id);
-    if super::loaded_page_mut_for_owner(conn, &owner).is_some() {
+    if super::dom_inspection_for_owner(conn, &owner).is_some() {
         out.push_error(-32000, "MissingDomCommand");
         return true;
     }
@@ -185,17 +177,11 @@ pub(super) fn complete_non_pending_discard_search_results_command(
 }
 
 pub(super) fn complete_perform_search_live(
-    conn: &mut CdpConnection,
-    owner: &CommandOwnerScope,
     completion: CompletedPageCommand,
     out: &mut DomCommandOutput,
 ) -> DomCommandTaskStep {
     let search = {
-        let Some(page) = super::loaded_page_mut_for_owner(conn, owner) else {
-            out.push_error(-32000, "NoDocumentLoaded");
-            return DomCommandTaskStep::Complete;
-        };
-        match page.finish_document_perform_search(completion) {
+        match completion.finish_document_perform_search() {
             Ok(search) => search,
             Err(error) => {
                 out.push_error(-32000, format!("Could not perform DOM search: {error}"));
@@ -211,17 +197,11 @@ pub(super) fn complete_perform_search_live(
 }
 
 pub(super) fn complete_get_search_results_live(
-    conn: &mut CdpConnection,
-    owner: &CommandOwnerScope,
     completion: CompletedPageCommand,
     out: &mut DomCommandOutput,
 ) -> DomCommandTaskStep {
     let resolution = {
-        let Some(page) = super::loaded_page_mut_for_owner(conn, owner) else {
-            out.push_error(-32000, "NoDocumentLoaded");
-            return DomCommandTaskStep::Complete;
-        };
-        match page.finish_document_search_results(completion) {
+        match completion.finish_document_search_results() {
             Ok(resolution) => resolution,
             Err(error) => {
                 out.push_error(-32000, format!("Could not get DOM search results: {error}"));
@@ -250,16 +230,10 @@ pub(super) fn complete_get_search_results_live(
 }
 
 pub(super) fn complete_discard_search_results_live(
-    conn: &mut CdpConnection,
-    owner: &CommandOwnerScope,
     completion: CompletedPageCommand,
     out: &mut DomCommandOutput,
 ) -> DomCommandTaskStep {
-    let Some(page) = super::loaded_page_mut_for_owner(conn, owner) else {
-        out.push_success();
-        return DomCommandTaskStep::Complete;
-    };
-    if let Err(error) = page.finish_discard_document_search_results(completion) {
+    if let Err(error) = completion.finish_discard_document_search_results() {
         out.push_error(
             -32000,
             format!("Could not discard DOM search results: {error}"),
@@ -275,11 +249,11 @@ mod protocol_neutral_tests {
     use crate::devtools_runtime::DevToolsProtocol;
     use serde_json::{Value, json};
 
-    use crate::conn::{CdpConnection, Cmd, CommandOwnerScope};
+    use crate::conn::{Cmd, CommandOwnerScope};
 
     #[test]
     fn cdp_perform_search_builds_protocol_neutral_command() {
-        let conn = CdpConnection::new();
+        let conn = crate::test_support::connection();
         let params = json!({
             "query": "article.result",
             "includeUserAgentShadowDOM": true
@@ -304,7 +278,7 @@ mod protocol_neutral_tests {
 
     #[test]
     fn devtools_dom_entry_keeps_perform_search_without_loaded_page_on_sync_empty_path() {
-        let mut conn = CdpConnection::new();
+        let mut conn = crate::test_support::connection();
         let params = json!({
             "query": ".hit"
         });
@@ -331,7 +305,7 @@ mod protocol_neutral_tests {
 
     #[test]
     fn cdp_get_search_results_builds_protocol_neutral_command() {
-        let conn = CdpConnection::new();
+        let conn = crate::test_support::connection();
         let params = json!({
             "searchId": "search-1",
             "fromIndex": 2,
@@ -362,7 +336,7 @@ mod protocol_neutral_tests {
 
     #[test]
     fn cdp_discard_search_results_builds_protocol_neutral_command() {
-        let conn = CdpConnection::new();
+        let conn = crate::test_support::connection();
         let params = json!({
             "searchId": "search-2"
         });
@@ -389,7 +363,7 @@ mod protocol_neutral_tests {
 
     #[test]
     fn cdp_discard_search_results_keeps_invalid_params_as_noop_success_path() {
-        let conn = CdpConnection::new();
+        let conn = crate::test_support::connection();
         let params = Value::Null;
         let cmd = Cmd::for_test(
             Some(112),

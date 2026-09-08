@@ -83,14 +83,11 @@ impl CdpConnection {
                 let browser_context = self.browser_context_by_id(&browser_context_id)?;
                 let target = browser_context.dedicated_worker_target(&target_id)?;
                 let owner_target_id = target.owner_page.target_id()?;
-                let owner_target = browser_context.page_target(owner_target_id)?;
-                if !owner_target
-                    .runtime_slot()
-                    .routes_current_renderer_page_owner(
-                        renderer_page,
-                        target.owner_page.page_attachment_id(),
-                    )
-                {
+                if !browser_context.routes_current_renderer_page_owner_for_target(
+                    owner_target_id,
+                    renderer_page,
+                    target.owner_page.document_id(),
+                ) {
                     return None;
                 }
                 target

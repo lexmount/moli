@@ -53,16 +53,17 @@ async fn runtime_discard_console_entries_suppresses_buffered_runtime_events() {
 #[tokio::test(flavor = "multi_thread")]
 async fn runtime_discard_console_entries_is_page_target_local() {
     let mut ctx = TestContext::new();
-    let background_target = crate::conn::PageTargetHost::with_url(
+
+    let mut browser_context = ctx
+        .conn
+        .new_browser_context_fixture_for_test("BID-1".to_owned());
+    browser_context.set_active_target_id("TID-active");
+    browser_context.attach_active_session("SID-active");
+    browser_context.register_page_target_url_fixture(
         "TID-background".to_owned(),
         Some("SID-background".to_owned()),
         "about:blank".to_owned(),
     );
-
-    let mut browser_context = BrowserContext::new("BID-1".to_owned());
-    browser_context.set_active_target_id("TID-active");
-    browser_context.attach_active_session("SID-active");
-    browser_context.insert_page_target_host(background_target);
     ctx.conn
         .install_browser_context_fixture_for_test(browser_context);
     ctx.install_navigation_fixture_for_session_owner(
@@ -817,7 +818,7 @@ async fn heap_profiler_moli_diagnostics_reports_dedicated_worker_isolates() {
 }
 
 #[tokio::test]
-async fn heap_profiler_moli_reset_idle_engine_only_resets_without_loaded_page() {
+async fn heap_profiler_moli_reset_idle_engine_does_not_create_an_unowned_engine() {
     let mut ctx = TestContext::new();
     with_loaded_document_async(&mut ctx, "<!doctype html><p>loaded</p>").await;
 
@@ -844,8 +845,16 @@ async fn heap_profiler_moli_reset_idle_engine_only_resets_without_loaded_page() 
     let idle_response = take_response_by_id(&mut ctx, 206_819);
     assert_eq!(
         idle_response["result"]["reset"],
-        json!(true),
-        "closed target should leave the engine eligible for idle reset: {idle_response:?}"
+        json!(false),
+        "closing the WebContents leaves no standalone engine to replace: {idle_response:?}"
+    );
+    assert_eq!(
+        idle_response["result"]["reason"],
+        json!("no-standalone-engine")
+    );
+    assert_eq!(
+        ctx.conn.moli_memory_diagnostics()["isolateScope"]["estimatedRendererOwnerCount"],
+        json!(0)
     );
 }
 #[tokio::test(flavor = "multi_thread")]
@@ -1502,11 +1511,19 @@ async fn runtime_discard_console_entries_advances_background_owner_without_activ
     .await;
 
     let queue_console_entries = {
+        let owner = crate::conn::CommandOwnerScope::capture(&ctx.conn, Some("SID-background"));
+        let (context_id, target_id) = ctx
+            .conn
+            .resolved_page_owner_identity_for_owner(&owner)
+            .unwrap();
+        ctx.conn
+            .browser_context_by_id_mut(&context_id)
+            .unwrap()
+            .ingest_owner_page_observable_output_updates_for_target(&target_id);
         let runtime_slot = ctx
             .conn
             .runtime_session_owner_slot_mut(Some("SID-background"))
             .expect("background runtime slot should exist");
-        runtime_slot.ingest_owner_page_observable_output_updates();
         runtime_slot
             .observable_output_queue_snapshot()
             .expect("background observable queue should exist")

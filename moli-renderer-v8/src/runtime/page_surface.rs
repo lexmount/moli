@@ -1690,6 +1690,15 @@ pub struct RendererDocumentIsolateAccountingDiagnostics {
     pub reserved: u64,
 }
 
+impl RendererDocumentIsolateAccountingDiagnostics {
+    pub const MODEL: &str = "page-vm";
+
+    /// Process-wide accounting; observing it does not create a renderer owner.
+    pub fn snapshot() -> Self {
+        crate::script_vm::renderer_document_isolate_accounting_diagnostics()
+    }
+}
+
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct RendererActivityDiagnostics {
     pub document_context_count: usize,
@@ -4744,9 +4753,6 @@ pub(crate) enum RendererInspectorPageCommand {
         stored_runtime_bindings: Vec<crate::protocol_types::RuntimeBindingRegistration>,
         session_runtime_bindings: Vec<crate::protocol_types::RuntimeBindingRegistration>,
     },
-    DetachRuntimeInspectorSession {
-        pause_guard: RendererRuntimeInspectorSessionDetachGuard,
-    },
     AddRuntimeBinding {
         name: String,
         execution_context_name: Option<String>,
@@ -4970,7 +4976,6 @@ pub enum RendererPageCommand {
     ChildDefaultExecutionContextIdForFrameId(String),
     RuntimeConsoleMessagesWithContext,
     RuntimeHeapUsage,
-    PerformanceMetricSnapshot,
     RuntimeCollectGarbage,
     #[cfg(test)]
     TakeDocumentLifecycleEvents,
@@ -5436,16 +5441,6 @@ impl RendererPageCommand {
                 stored_runtime_bindings,
                 session_runtime_bindings,
             },
-        )
-    }
-
-    pub fn detach_runtime_inspector_session(
-        inspector_session_id: Option<String>,
-        pause_guard: RendererRuntimeInspectorSessionDetachGuard,
-    ) -> Self {
-        Self::inspector_command(
-            inspector_session_id,
-            RendererInspectorPageCommand::DetachRuntimeInspectorSession { pause_guard },
         )
     }
 
@@ -6103,7 +6098,6 @@ pub enum RendererPageReply {
     RuntimeInspectorProtocolMessages(RendererRuntimeCommandOutput),
     RuntimeConsoleMessageSnapshots(Vec<RuntimeConsoleMessageSnapshot>),
     RuntimeHeapUsage(Box<RendererRuntimeHeapUsage>),
-    PerformanceMetricSnapshot(Box<RendererPerformanceMetricSnapshot>),
     RuntimeRealmInventory(Vec<RendererRuntimeRealmInfo>),
     ExecutionContextId(i64),
     ExecutionContextIds(Vec<i64>),
@@ -6225,43 +6219,14 @@ impl RendererPageTable {
         Ok(slot)
     }
 
-    pub(crate) fn refresh(
-        &self,
-        page_id: PageId,
-        vm_creation_id: u64,
-        view_generation: u64,
-        requested_url: Url,
-        final_url: Url,
-        document_title: String,
-        status: u16,
-    ) -> Result<()> {
-        let Some(slot) = self.slot(page_id) else {
-            bail!(
+    pub(crate) fn refresh_view_for_testing(&self, view: RendererPageView) -> Result<()> {
+        let slot = self.slot(view.page_id).ok_or_else(|| {
+            anyhow!(
                 "renderer owner has never tracked page {} for refresh",
-                page_id.as_u64()
-            );
-        };
-        slot.refresh(RendererPageView {
-            page_id,
-            vm_creation_id,
-            view_generation,
-            page_state: Arc::new(RendererPageState {
-                requested_url,
-                navigation_initiator_url: None,
-                navigation_redirected: false,
-                navigation_redirect_count: 0,
-                navigation_redirect_chain: Vec::new(),
-                final_url,
-                document_title,
-                status,
-                headers: Vec::new(),
-                script_execution: Arc::new(ScriptExecutionReport::default()),
-                idle_override: None,
-                service_worker_client_id: 0,
-                dedicated_worker_running_worker_isolate_count: 0,
-                performance_metric_snapshot: RendererPerformanceMetricSnapshot::default(),
-            }),
-        })
+                view.page_id.as_u64()
+            )
+        })?;
+        slot.refresh(view)
     }
 
     pub(crate) fn remove(&self, page_id: PageId) {

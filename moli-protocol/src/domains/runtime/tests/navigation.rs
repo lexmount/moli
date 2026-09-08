@@ -3,7 +3,7 @@ use super::*;
 #[tokio::test]
 async fn enable_with_background_event_sender_defers_initial_document_page_build() {
     let mut ctx = TestContext::new();
-    let mut bc = BrowserContext::new("BID-1".into());
+    let mut bc = ctx.conn.new_browser_context_fixture_for_test("BID-1");
     bc.set_active_target_id("TID-1");
     bc.attach_active_session("SID-1");
     bc.set_target_url("about:blank".into());
@@ -77,13 +77,14 @@ async fn enable_uses_fresh_initial_document_without_adapter() {
         "Runtime.enable should replay the existing about:blank default context: {messages:?}"
     );
     assert!(
-        ctx.conn
-            .browser_context
-            .as_ref()
-            .expect("browser context should exist")
-            .active_page_target()
-            .runtime_slot
-            .has_loaded_page(),
+        {
+            let context = &ctx
+                .conn
+                .browser_context
+                .as_ref()
+                .expect("browser context should exist");
+            context.target_has_loaded_page(context.active_target_id().unwrap())
+        },
         "Runtime.enable should observe the already-installed about:blank page"
     );
 }
@@ -91,7 +92,7 @@ async fn enable_uses_fresh_initial_document_without_adapter() {
 #[tokio::test]
 async fn enable_reports_no_document_without_legacy_materialization_adapter() {
     let mut ctx = TestContext::new();
-    let mut bc = BrowserContext::new("BID-1".into());
+    let mut bc = ctx.conn.new_browser_context_fixture_for_test("BID-1");
     bc.set_active_target_id("TID-1");
     bc.attach_active_session("SID-1");
     bc.set_target_url("about:blank".into());

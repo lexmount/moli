@@ -665,9 +665,7 @@ async fn attach_to_target_ensures_pending_background_initial_document_before_att
             "attachToTarget must complete initial document before emitting attachedToTarget"
         );
         assert!(
-            bc.background_target("TID-background-pending")
-                .expect("background target")
-                .has_loaded_page(),
+            bc.target_has_loaded_page("TID-background-pending"),
             "attached background target should expose a current Page immediately"
         );
     }
@@ -773,11 +771,11 @@ async fn attach_to_target_keeps_background_target_background() {
     assert_eq!(bc.active_target_id(), Some("TID-000000000A"));
     assert_eq!(bc.background_target_count(), 1);
     assert_eq!(
-        bc.background_target_at(0).unwrap().target_id(),
+        bc.background_targets().next().unwrap().target_id(),
         "TID-000000000B"
     );
     assert_eq!(
-        bc.background_target_at(0).unwrap().session_id(),
+        bc.background_targets().next().unwrap().session_id(),
         Some("SID-1")
     );
 }
@@ -1291,15 +1289,17 @@ async fn session_route_finds_committed_browser_page_and_worker_sessions() {
         Some("SID-shared-active"),
     );
 
-    let mut inactive = BrowserContext::new("BID-B".to_owned());
+    let mut inactive = ctx
+        .conn
+        .new_browser_context_fixture_for_test("BID-B".to_owned());
     inactive.set_active_target_id("TID-000000000C".to_owned());
     inactive.attach_active_session("SID-inactive");
-    inactive.insert_page_target_host(crate::conn::PageTargetHost::new(
+    inactive.register_page_target_fixture(
         "TID-000000000D".to_owned(),
         Some("SID-inactive-background".to_owned()),
         crate::conn::TargetIdentityState::about_blank(),
         crate::conn::TargetPageSlot::empty_for_test_fixture(),
-    ));
+    );
     assert!(inactive.assign_attached_session_to_target(
         "TID-000000000D",
         "SID-inactive-attached-background".to_owned()
@@ -1598,8 +1598,13 @@ async fn detach_from_target() {
     bc.active_page_target_mut()
         .runtime_slot
         .enable_primary_network_events();
-    bc.active_page_target_mut()
-        .mutate_devtools_network_session_state(
+    {
+        let context = &mut *bc;
+        let target_id = context
+            .active_target_id_owned()
+            .expect("active fixture target");
+        context.mutate_devtools_network_session_state_for_target(
+            &target_id,
             &moli_page_types::DevToolsSessionKey::Primary,
             |network| {
                 network.network_enabled = true;
@@ -1607,7 +1612,8 @@ async fn detach_from_target() {
                 network.bypass_service_worker = true;
                 network.extra_headers = vec![("X-Test".into(), "1".into())];
             },
-        );
+        )
+    };
     bc.active_page_target_mut().css_enabled = true;
     bc.active_page_target_mut().input_intercept_drags_enabled = true;
     bc.active_page_target_mut().input_drag_intercepted = true;
@@ -1647,10 +1653,12 @@ async fn detach_from_target() {
             .runtime_slot
             .primary_network_events_enabled()
     );
-    assert!(!bc.active_page_target().effective_policy().cache_disabled());
     assert!(
-        !bc.active_page_target()
-            .effective_policy()
+        !bc.effective_policy_for_target(bc.active_target_id().unwrap())
+            .cache_disabled()
+    );
+    assert!(
+        !bc.effective_policy_for_target(bc.active_target_id().unwrap())
             .bypass_service_worker()
     );
     assert!(!bc.active_page_target().css_enabled);
@@ -1666,8 +1674,7 @@ async fn detach_from_target() {
             .is_empty()
     );
     assert!(
-        bc.active_page_target()
-            .effective_policy()
+        bc.effective_policy_for_target(bc.active_target_id().unwrap())
             .extra_headers()
             .is_empty()
     );
@@ -1721,7 +1728,7 @@ async fn detach_from_target_drops_only_selected_page_renderer_inspector_session(
     ctx.sent.clear();
 
     let baseline_session_count =
-        page_renderer_inspector_session_count(&mut ctx, None, "before Runtime.enable").await;
+        page_renderer_inspector_session_count(&mut ctx, "before Runtime.enable").await;
     ctx.process_async(json!({
         "id": 120_001,
         "sessionId": "SID-detach-primary",
@@ -1739,7 +1746,7 @@ async fn detach_from_target_drops_only_selected_page_renderer_inspector_session(
     ctx.sent.clear();
 
     assert_eq!(
-        page_renderer_inspector_session_count(&mut ctx, None, "after both sessions enabled").await,
+        page_renderer_inspector_session_count(&mut ctx, "after both sessions enabled").await,
         baseline_session_count + 1,
         "primary Runtime.enable must reuse the target default Inspector session while attached Runtime.enable adds one session"
     );
@@ -1768,7 +1775,7 @@ async fn detach_from_target_drops_only_selected_page_renderer_inspector_session(
         "attached detach must publish exactly one target detach event"
     );
     assert_eq!(
-        page_renderer_inspector_session_count(&mut ctx, None, "after attached detach").await,
+        page_renderer_inspector_session_count(&mut ctx, "after attached detach").await,
         baseline_session_count,
         "attached detach should drop only that renderer V8 inspector session"
     );
@@ -1808,8 +1815,7 @@ async fn detach_from_target_drops_only_selected_page_renderer_inspector_session(
     ctx.expect_result(120_006, json!({}), Some("SID-detach-attached-replacement"));
     ctx.sent.clear();
     assert_eq!(
-        page_renderer_inspector_session_count(&mut ctx, None, "after replacement attached enable",)
-            .await,
+        page_renderer_inspector_session_count(&mut ctx, "after replacement attached enable",).await,
         baseline_session_count + 1
     );
     ctx.process_async(json!({
@@ -1852,12 +1858,7 @@ async fn detach_from_target_drops_only_selected_page_renderer_inspector_session(
         "primary detach must publish exactly one target detach event"
     );
     assert_eq!(
-        page_renderer_inspector_session_count(
-            &mut ctx,
-            Some("SID-detach-attached-replacement"),
-            "after primary detach",
-        )
-        .await,
+        page_renderer_inspector_session_count(&mut ctx, "after primary detach",).await,
         baseline_session_count,
         "primary detach must release the default Inspector session while preserving the attached replacement session"
     );
@@ -1880,7 +1881,8 @@ async fn detach_from_target_drops_only_selected_page_renderer_inspector_session(
         "detaching primary must preserve the attached session binding"
     );
     assert!(
-        bc.active_page_target().effective_policy().cache_disabled(),
+        bc.effective_policy_for_target(bc.active_target_id().unwrap())
+            .cache_disabled(),
         "detaching primary must preserve the attached Network handler state"
     );
 
@@ -1946,7 +1948,7 @@ async fn detach_from_target_drops_only_selected_page_renderer_inspector_session(
     .await;
     ctx.expect_result(120_014, json!({}), Some("SID-detach-diagnostic"));
     assert_eq!(
-        page_renderer_inspector_session_count(&mut ctx, None, "after fresh primary attach").await,
+        page_renderer_inspector_session_count(&mut ctx, "after fresh primary attach").await,
         baseline_session_count,
         "a fresh primary session must not observe a leaked attached renderer session"
     );
@@ -2033,13 +2035,11 @@ async fn detach_attached_page_session_removes_its_network_policy_contribution() 
     .await;
     ctx.expect_result(120_055, json!({}), Some("SID-detach-network-attached"));
     assert_eq!(
-        ctx.conn
-            .browser_context
-            .as_ref()
-            .unwrap()
-            .active_page_target()
-            .effective_policy()
-            .extra_headers(),
+        {
+            let context = &ctx.conn.browser_context.as_ref().unwrap();
+            context.effective_policy_for_target(context.active_target_id().unwrap())
+        }
+        .extra_headers(),
         &[
             ("X-Primary".to_owned(), "primary".to_owned()),
             ("X-Attached".to_owned(), "attached".to_owned()),
@@ -2105,13 +2105,11 @@ async fn detach_attached_page_session_removes_its_network_policy_contribution() 
     );
 
     assert_eq!(
-        ctx.conn
-            .browser_context
-            .as_ref()
-            .unwrap()
-            .active_page_target()
-            .effective_policy()
-            .extra_headers(),
+        {
+            let context = &ctx.conn.browser_context.as_ref().unwrap();
+            context.effective_policy_for_target(context.active_target_id().unwrap())
+        }
+        .extra_headers(),
         &[("X-Primary".to_owned(), "primary".to_owned())]
     );
     assert_eq!(
@@ -2333,246 +2331,336 @@ async fn detach_from_target_removes_only_selected_session_document_start_scripts
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn detach_fail_closes_page_before_retiring_unremovable_session_scripts() {
-    let mut ctx = TestContext::new();
-    load_bc_with_titled_page_async(
-        &mut ctx,
-        "BID-detach-cleanup-failure",
-        "TID-detach-cleanup-failure",
-        "<!doctype html><body>detach cleanup failure</body>",
-    )
-    .await;
-    {
-        let browser_context = ctx.conn.browser_context.as_mut().unwrap();
-        browser_context.attach_active_session("SID-cleanup-primary");
-        assert!(browser_context.assign_attached_session_to_target(
-            "TID-detach-cleanup-failure",
-            "SID-cleanup-attached".to_owned(),
-        ));
-    }
-    register_page_session_route(
-        &mut ctx,
-        "BID-detach-cleanup-failure",
-        "TID-detach-cleanup-failure",
-        "SID-cleanup-primary",
-        moli_page_types::DevToolsSessionKey::Primary,
-    );
-    register_page_session_route(
-        &mut ctx,
-        "BID-detach-cleanup-failure",
-        "TID-detach-cleanup-failure",
-        "SID-cleanup-attached",
-        moli_page_types::DevToolsSessionKey::Attached("SID-cleanup-attached".to_owned()),
-    );
-    ctx.sent.clear();
-
-    ctx.process_async(json!({
-        "id": 120_110,
-        "sessionId": "SID-cleanup-attached",
-        "method": "Page.addScriptToEvaluateOnNewDocument",
-        "params": { "source": "globalThis.__mustNotOutliveSession = true;" }
-    }))
-    .await;
-    ctx.expect_result(
-        120_110,
-        json!({ "identifier": "1" }),
-        Some("SID-cleanup-attached"),
-    );
-
-    ctx.conn
-        .browser_context
-        .as_ref()
-        .and_then(|browser_context| browser_context.active_page_target().loaded_page())
-        .expect("fixture should retain a loaded Page")
-        .crash_devtools_target_from_io();
-    let cleanup_error = ctx
-        .conn
-        .remove_document_start_scripts_for_detached_session_async("SID-cleanup-attached")
-        .await
-        .expect_err("a closed renderer ingress must reject script cleanup");
-    assert!(
-        cleanup_error
-            .to_string()
-            .contains("document-start script cleanup"),
-        "unexpected cleanup failure: {cleanup_error:#}"
-    );
-    assert!(
-        ctx.conn
-            .browser_context
-            .as_ref()
-            .unwrap()
-            .active_page_target()
-            .owner_state
-            .document_start_scripts
-            .iter()
-            .any(|(_, script)| {
-                script.devtools_session
-                    == Some(moli_page_types::DevToolsSessionKey::Attached(
-                        "SID-cleanup-attached".to_owned(),
-                    ))
-            }),
-        "failed renderer cleanup must retain protocol-side retry authority"
-    );
-
-    ctx.process_async(json!({
-        "id": 120_111,
-        "method": "Target.detachFromTarget",
-        "params": {
-            "targetId": "TID-detach-cleanup-failure",
-            "sessionId": "SID-cleanup-attached"
-        }
-    }))
-    .await;
-    ctx.expect_result(120_111, json!({}), None);
-
-    let target = ctx
-        .conn
-        .browser_context
-        .as_ref()
-        .unwrap()
-        .active_page_target();
-    assert!(target.owner_state.target_crash_state.is_crashed());
-    assert!(target.loaded_page().is_none());
-    assert!(
-        target
-            .owner_state
-            .document_start_scripts
-            .iter()
-            .all(|(_, script)| {
-                script.devtools_session
-                    != Some(moli_page_types::DevToolsSessionKey::Attached(
-                        "SID-cleanup-attached".to_owned(),
-                    ))
-            }),
-        "session records may retire after the failed renderer has been closed"
-    );
-    assert_eq!(
-        ctx.conn.session_route(Some("SID-cleanup-attached")),
-        None,
-        "the binding should commit only after renderer ownership is gone"
-    );
-    assert!(
-        ctx.sent
-            .iter()
-            .any(|message| message["method"] == json!("Inspector.targetCrashed")),
-        "cleanup fail-close should be observable to attached Inspector clients: {:?}",
-        ctx.sent
-    );
+async fn session_cleanup_exception_keeps_the_page_and_peer_session_alive() {
+    session_cleanup_exception_keeps_peer_alive(false).await;
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn detach_fail_closes_page_when_fetch_disable_cannot_reach_renderer() {
+async fn primary_session_cleanup_exception_keeps_the_page_and_peer_session_alive() {
+    session_cleanup_exception_keeps_peer_alive(true).await;
+}
+
+async fn session_cleanup_exception_keeps_peer_alive(primary: bool) {
     let mut ctx = TestContext::new();
     load_bc_with_titled_page_async(
         &mut ctx,
-        "BID-detach-fetch-cleanup-failure",
-        "TID-detach-fetch-cleanup-failure",
-        "<!doctype html><body>detach fetch cleanup failure</body>",
+        "BID-cleanup-exception",
+        "TID-cleanup-exception",
+        "<!doctype html><body>still alive</body>",
     )
     .await;
     {
-        let browser_context = ctx.conn.browser_context.as_mut().unwrap();
-        browser_context.attach_active_session("SID-fetch-cleanup-primary");
-        assert!(browser_context.assign_attached_session_to_target(
-            "TID-detach-fetch-cleanup-failure",
-            "SID-fetch-cleanup-attached".to_owned(),
+        let context = ctx.conn.browser_context.as_mut().unwrap();
+        context.attach_active_session(if primary {
+            "SID-cleanup-exception"
+        } else {
+            "SID-cleanup-peer"
+        });
+        assert!(
+            context.assign_attached_session_to_target(
+                "TID-cleanup-exception",
+                if primary {
+                    "SID-cleanup-peer"
+                } else {
+                    "SID-cleanup-exception"
+                }
+                .to_owned(),
+            )
+        );
+    }
+    ctx.conn.commit_declared_session_fixtures_for_test();
+    for (id, method, params) in [
+        (
+            1,
+            "Page.addScriptToEvaluateOnNewDocument",
+            json!({
+                "source": "globalThis.cleanedSessionScript = true;",
+                "worldName": "cleanup-script",
+            }),
+        ),
+        (2, "Fetch.enable", json!({})),
+        (3, "Network.enable", json!({})),
+        (
+            4,
+            "Network.setExtraHTTPHeaders",
+            json!({"headers": {"X-Cleanup": "gone"}}),
+        ),
+        (
+            5,
+            "Emulation.setDeviceMetricsOverride",
+            json!({
+                "width": 400, "height": 300, "deviceScaleFactor": 2, "mobile": false,
+            }),
+        ),
+        (
+            6,
+            "Runtime.evaluate",
+            json!({"expression": r#"
+            Object.defineProperty(globalThis, '__moliDeviceMetricsOriginalDescriptors', {
+                configurable: true,
+                get() { throw new Error('session-cleanup-only'); }
+            });
+        "#}),
+        ),
+    ] {
+        ctx.process_async(json!({
+            "id": id, "sessionId": "SID-cleanup-exception", "method": method, "params": params,
+        }))
+        .await;
+        let response = take_response_by_id(&mut ctx, id);
+        assert!(response.get("error").is_none(), "{method}: {response}");
+        assert!(
+            response["result"].get("exceptionDetails").is_none(),
+            "{response}"
+        );
+    }
+    ctx.take_all();
+
+    let before = page_renderer_inspector_session_count(&mut ctx, "before failed cleanup").await;
+    ctx.process_async(
+        json!({"id": 7, "method": "Target.detachFromTarget", "params": {
+            "targetId": "TID-cleanup-exception", "sessionId": "SID-cleanup-exception",
+        }}),
+    )
+    .await;
+    let response = take_response_by_id(&mut ctx, 7);
+    let context = ctx.conn.browser_context.as_ref().unwrap();
+    let target = context.active_page_target();
+    assert!(
+        !context.target_is_crashed(target.target_id()),
+        "a cleanup exception is not a renderer crash: {response}"
+    );
+    assert!(context.target_has_loaded_page(target.target_id()));
+    assert!(
+        response["error"]["message"]
+            .as_str()
+            .is_some_and(|message| { message.contains("session-cleanup-only") }),
+        "the incomplete detach must report its cleanup error: {response}"
+    );
+    assert!(
+        ctx.conn
+            .session_route(Some("SID-cleanup-exception"))
+            .is_some()
+    );
+    assert!(!target.fetch_owner.is_enabled());
+    assert!(target.owner_state.document_start_scripts.is_empty());
+    assert!(
+        context
+            .effective_policy_for_target(target.target_id())
+            .extra_headers()
+            .is_empty(),
+        "Network cleanup must still run after Emulation failed"
+    );
+    assert!(
+        !ctx.sent.iter().any(|event| matches!(
+            event["method"].as_str(),
+            Some("Inspector.targetCrashed" | "Target.targetCrashed" | "Target.detachedFromTarget")
+        )),
+        "failed session cleanup must not publish successful detach or crash: {:?}",
+        ctx.sent
+    );
+
+    assert_eq!(
+        page_renderer_inspector_session_count(&mut ctx, "after failed cleanup").await,
+        before - 1
+    );
+    ctx.process_async(json!({"id": 71, "sessionId": "SID-cleanup-peer", "method": "Emulation.setEmulatedMedia", "params": {
+        "features": [{"name": "prefers-color-scheme", "value": "dark"}],
+    }})).await;
+    ctx.expect_result(71, json!({}), Some("SID-cleanup-peer"));
+    ctx.process_async(
+        json!({"id": 70, "method": "Target.detachFromTarget", "params": {
+            "targetId": "TID-cleanup-exception", "sessionId": "SID-cleanup-exception",
+        }}),
+    )
+    .await;
+    assert!(
+        take_response_by_id(&mut ctx, 70)["error"]["message"]
+            .as_str()
+            .is_some_and(|message| message.contains("session-cleanup-only")),
+        "cleared raw policy must not turn a failed cleanup into a false success"
+    );
+    ctx.process_async(
+        json!({"id": 72, "sessionId": "SID-cleanup-peer", "method": "Runtime.evaluate", "params": {
+            "expression": "matchMedia('(prefers-color-scheme: dark)').matches",
+        }}),
+    )
+    .await;
+    assert_eq!(
+        take_response_by_id(&mut ctx, 72)["result"]["result"]["value"],
+        json!(true),
+        "failed cleanup retry must preserve later peer policy"
+    );
+    ctx.process_async(json!({"id": 8, "sessionId": "SID-cleanup-peer", "method": "Runtime.evaluate", "params": {
+        "expression": "delete globalThis.__moliDeviceMetricsOriginalDescriptors; document.body.textContent",
+    }})).await;
+    assert_eq!(
+        take_response_by_id(&mut ctx, 8)["result"]["result"]["value"],
+        json!("still alive")
+    );
+    if primary {
+        // Exercise the remaining primary policy tail independently. Disabled
+        // scripting suppresses the throwing surface script used above, so it
+        // cannot also serve as that cleanup-error fixture.
+        ctx.process_async(json!({"id": 73, "sessionId": "SID-cleanup-peer", "method": "Emulation.setScriptExecutionDisabled", "params": {
+            "value": true,
+        }})).await;
+        ctx.expect_result(73, json!({}), Some("SID-cleanup-peer"));
+        ctx.conn
+            .reset_primary_page_session_target_state_async(
+                "BID-cleanup-exception",
+                "TID-cleanup-exception",
+                "SID-cleanup-exception",
+            )
+            .await
+            .unwrap();
+        ctx.process_async(json!({"id": 74, "sessionId": "SID-cleanup-peer", "method": "Runtime.evaluate", "params": {
+            "expression": "globalThis.cleanupRetryScriptRan = false; const s = document.createElement('script'); s.textContent = 'globalThis.cleanupRetryScriptRan = true'; document.body.append(s); s.remove(); globalThis.cleanupRetryScriptRan",
+        }})).await;
+        assert_eq!(
+            take_response_by_id(&mut ctx, 74)["result"]["result"]["value"],
+            json!(false),
+            "primary cleanup must install current script policy, including later peer changes"
+        );
+        ctx.process_async(json!({"id": 75, "sessionId": "SID-cleanup-peer", "method": "Emulation.setScriptExecutionDisabled", "params": {
+            "value": false,
+        }})).await;
+        ctx.expect_result(75, json!({}), Some("SID-cleanup-peer"));
+    }
+    ctx.process_async(
+        json!({"id": 9, "method": "Target.detachFromTarget", "params": {
+            "targetId": "TID-cleanup-exception", "sessionId": "SID-cleanup-exception",
+        }}),
+    )
+    .await;
+    ctx.expect_result(9, json!({}), None);
+    assert!(
+        ctx.conn
+            .session_route(Some("SID-cleanup-exception"))
+            .is_none()
+    );
+    assert!(ctx.conn.session_route(Some("SID-cleanup-peer")).is_some());
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn script_session_cleanup_does_not_infer_browser_crash_from_closed_ingress() {
+    closed_renderer_session_cleanup(
+        "Page.addScriptToEvaluateOnNewDocument",
+        json!({
+            "source": "globalThis.mustNotOutliveSession = true;",
+        }),
+    )
+    .await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn fetch_session_cleanup_does_not_infer_browser_crash_from_closed_ingress() {
+    closed_renderer_session_cleanup("Fetch.enable", json!({})).await;
+}
+
+async fn closed_renderer_session_cleanup(method: &str, params: Value) {
+    let mut ctx = TestContext::new();
+    load_bc_with_titled_page_async(
+        &mut ctx,
+        "BID-closed-cleanup",
+        "TID-closed-cleanup",
+        "<!doctype html><body>renderer termination</body>",
+    )
+    .await;
+    {
+        let context = ctx.conn.browser_context.as_mut().unwrap();
+        context.attach_active_session("SID-closed-peer");
+        assert!(context.assign_attached_session_to_target(
+            "TID-closed-cleanup",
+            "SID-closed-cleanup".to_owned(),
         ));
     }
-    register_page_session_route(
-        &mut ctx,
-        "BID-detach-fetch-cleanup-failure",
-        "TID-detach-fetch-cleanup-failure",
-        "SID-fetch-cleanup-primary",
-        moli_page_types::DevToolsSessionKey::Primary,
-    );
-    register_page_session_route(
-        &mut ctx,
-        "BID-detach-fetch-cleanup-failure",
-        "TID-detach-fetch-cleanup-failure",
-        "SID-fetch-cleanup-attached",
-        moli_page_types::DevToolsSessionKey::Attached("SID-fetch-cleanup-attached".to_owned()),
-    );
-    ctx.sent.clear();
-
+    ctx.conn.commit_declared_session_fixtures_for_test();
     ctx.process_async(json!({
-        "id": 120_112,
-        "sessionId": "SID-fetch-cleanup-attached",
-        "method": "Fetch.enable"
+        "id": 1, "sessionId": "SID-closed-cleanup", "method": method, "params": params,
     }))
     .await;
-    ctx.expect_result(120_112, json!({}), Some("SID-fetch-cleanup-attached"));
+    let response = take_response_by_id(&mut ctx, 1);
+    assert!(response.get("error").is_none(), "{response}");
+    ctx.take_all();
+
+    // Close the actual receiver before disposal, as the old fail-close tests
+    // did. A cleanup error still is not authority to retire the Browser Page.
+    let web_contents = ctx
+        .conn
+        .browser_context
+        .as_ref()
+        .unwrap()
+        .web_contents_handle_for_target("TID-closed-cleanup")
+        .expect("target should own WebContents");
+    ctx.conn
+        .crash_browser_web_contents_renderer_from_io(web_contents)
+        .expect("target WebContents should remain live");
+    ctx.process_async(
+        json!({"id": 2, "method": "Target.detachFromTarget", "params": {
+            "targetId": "TID-closed-cleanup", "sessionId": "SID-closed-cleanup",
+        }}),
+    )
+    .await;
+    let response = take_response_by_id(&mut ctx, 2);
+    assert!(response.get("error").is_some(), "{response}");
+    let context = ctx.conn.browser_context.as_ref().unwrap();
+    let target = context.active_page_target();
+    assert!(!context.target_is_crashed(target.target_id()));
+    assert!(context.target_has_loaded_page(target.target_id()));
+    assert!(!target.fetch_owner.is_enabled());
+    assert!(ctx.conn.session_route(Some("SID-closed-cleanup")).is_some());
+    assert!(
+        !ctx.sent.iter().any(|event| matches!(
+            event["method"].as_str(),
+            Some("Inspector.targetCrashed" | "Target.targetCrashed")
+        )),
+        "{:?}",
+        ctx.sent
+    );
+
+    // Browser termination is an independent explicit operation. Only it
+    // retires the document and publishes the crash to all page sessions.
+    ctx.process_async(json!({"id": 3, "sessionId": "SID-closed-peer", "method": "Page.crash"}))
+        .await;
+    ctx.expect_result(3, json!({}), Some("SID-closed-peer"));
+    let context = ctx.conn.browser_context.as_ref().unwrap();
+    let target = context.active_page_target();
+    assert!(context.target_is_crashed(target.target_id()));
+    assert!(!context.target_has_loaded_page(target.target_id()));
+    assert!(
+        ctx.sent
+            .iter()
+            .any(|event| event["method"] == json!("Inspector.targetCrashed"))
+    );
+    ctx.process_async(
+        json!({"id": 4, "method": "Target.detachFromTarget", "params": {
+            "targetId": "TID-closed-cleanup", "sessionId": "SID-closed-cleanup",
+        }}),
+    )
+    .await;
+    ctx.expect_result(4, json!({}), None);
+    assert!(ctx.conn.session_route(Some("SID-closed-cleanup")).is_none());
+    assert!(ctx.conn.session_route(Some("SID-closed-peer")).is_some());
     assert!(
         ctx.conn
             .browser_context
             .as_ref()
             .unwrap()
             .active_page_target()
-            .fetch_owner
-            .is_enabled(),
-        "the attached session must own renderer Fetch interception before detach"
-    );
-
-    ctx.conn
-        .browser_context
-        .as_ref()
-        .and_then(|browser_context| browser_context.active_page_target().loaded_page())
-        .expect("fixture should retain a loaded Page")
-        .crash_devtools_target_from_io();
-
-    ctx.process_async(json!({
-        "id": 120_113,
-        "method": "Target.detachFromTarget",
-        "params": {
-            "targetId": "TID-detach-fetch-cleanup-failure",
-            "sessionId": "SID-fetch-cleanup-attached"
-        }
-    }))
-    .await;
-    ctx.expect_result(120_113, json!({}), None);
-
-    let target = ctx
-        .conn
-        .browser_context
-        .as_ref()
-        .unwrap()
-        .active_page_target();
-    assert!(
-        target.owner_state.target_crash_state.is_crashed(),
-        "a failed renderer Fetch cleanup must fail the Page closed"
-    );
-    assert!(target.loaded_page().is_none());
-    assert!(!target.fetch_owner.is_enabled());
-    assert_eq!(
-        ctx.conn.session_route(Some("SID-fetch-cleanup-attached")),
-        None,
-        "the binding should commit only after renderer ownership is gone"
-    );
-    assert!(
-        ctx.sent
-            .iter()
-            .any(|message| message["method"] == json!("Inspector.targetCrashed")),
-        "Fetch cleanup fail-close should be observable to Inspector clients: {:?}",
-        ctx.sent
+            .owner_state
+            .document_start_scripts
+            .is_empty()
     );
 }
 
-async fn page_renderer_inspector_session_count(
-    ctx: &mut TestContext,
-    inspector_session_id: Option<&str>,
-    stage: &str,
-) -> u64 {
-    let page = ctx
-        .conn
-        .browser_context
-        .as_mut()
-        .and_then(|bc| bc.active_page_target_mut().runtime_slot.loaded_page_mut())
-        .expect("active target should still have a loaded page");
-    // This diagnostic bypasses CdpConnection's session-aware Page accessor, so
-    // bind the exact surviving Inspector route instead of inheriting whichever
-    // session the prior command happened to stamp on the Page facade.
-    page.set_renderer_devtools_command_session_id(inspector_session_id.map(str::to_owned));
-    let response = page
-        .runtime_heap_usage_async()
+async fn page_renderer_inspector_session_count(ctx: &mut TestContext, stage: &str) -> u64 {
+    let context = ctx.conn.browser_context.as_mut().unwrap();
+    let target_id = context.active_target_id_owned().unwrap();
+    // Browser diagnostics have no frontend session and must not re-create a
+    // detached Inspector session merely by observing renderer accounting.
+    let response = context
+        .target_runtime_heap_usage_for_test(&target_id)
         .await
         .unwrap_or_else(|error| {
             panic!("runtime heap usage diagnostics should be available {stage}: {error}")
@@ -2765,7 +2853,7 @@ async fn detach_from_target_invalid_session_errors() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn detach_from_target_aborts_paused_request_stage_navigation() {
+async fn detach_from_target_neutrally_resumes_paused_request_stage_navigation() {
     async fn page() -> impl axum::response::IntoResponse {
         (
             [(axum::http::header::CONTENT_TYPE.as_str(), "text/html")],
@@ -2785,7 +2873,7 @@ async fn detach_from_target_aborts_paused_request_stage_navigation() {
     });
 
     let mut ctx = TestContext::new();
-    let mut bc = BrowserContext::new("BID-9".into());
+    let mut bc = ctx.conn.new_browser_context_fixture_for_test("BID-9");
     bc.set_active_target_id("TID-000000000A");
     bc.attach_active_session("SID-1");
     bc.active_page_target_mut()
@@ -2808,11 +2896,12 @@ async fn detach_from_target_aborts_paused_request_stage_navigation() {
     .await;
     ctx.expect_result(40, json!({}), Some("SID-1"));
 
+    let url = format!("http://{addr}/page");
     ctx.process_async(json!({
         "id": 41,
         "method": "Page.navigate",
         "sessionId": "SID-1",
-        "params": { "url": format!("http://{addr}/page") }
+        "params": { "url": url }
     }))
     .await;
 
@@ -2828,18 +2917,21 @@ async fn detach_from_target_aborts_paused_request_stage_navigation() {
     .await;
     ctx.expect_result(42, json!({}), None);
 
-    let failed = ctx.take_one();
-    assert_eq!(failed["method"], "Network.loadingFailed");
-    assert_eq!(failed["sessionId"], "SID-1");
-    assert_eq!(failed["params"]["requestId"], network_id);
-    assert_eq!(failed["params"]["errorText"], "Target detached");
+    assert!(ctx.take_response_by_id(41)["result"].is_object());
+    assert!(
+        !ctx.sent.iter().any(|message| {
+            message["method"] == json!("Network.loadingFailed")
+                && message["params"]["requestId"] == network_id
+        }),
+        "session detach must not fail the Browser navigation"
+    );
 
-    let error = ctx.take_one();
-    assert_eq!(error["id"], 41);
-    assert_eq!(error["error"]["code"], -32000);
-    assert_eq!(error["error"]["message"], "Target detached");
-
-    let detached = ctx.take_one();
+    let detached = ctx
+        .sent
+        .iter()
+        .find(|message| message["method"] == json!("Target.detachedFromTarget"))
+        .cloned()
+        .expect("target detached event");
     assert_eq!(detached["method"], "Target.detachedFromTarget");
     assert_eq!(detached["params"]["targetId"], "TID-000000000A");
     assert_eq!(detached["params"]["sessionId"], "SID-1");
@@ -2847,6 +2939,12 @@ async fn detach_from_target_aborts_paused_request_stage_navigation() {
     let bc = ctx.conn.browser_context.as_ref().unwrap();
     assert!(!bc.has_active_session());
     assert_eq!(bc.active_target_id(), Some("TID-000000000A"));
+    assert_eq!(
+        bc.target_document_url("TID-000000000A")
+            .as_ref()
+            .map(url::Url::as_str),
+        Some(url.as_str())
+    );
     assert!(
         !bc.active_page_target()
             .fetch_owner
@@ -2880,8 +2978,13 @@ async fn set_auto_attach_false_detaches_existing_target() {
     bc.active_page_target_mut()
         .runtime_slot
         .enable_primary_network_events();
-    bc.active_page_target_mut()
-        .mutate_devtools_network_session_state(
+    {
+        let context = &mut *bc;
+        let target_id = context
+            .active_target_id_owned()
+            .expect("active fixture target");
+        context.mutate_devtools_network_session_state_for_target(
+            &target_id,
             &moli_page_types::DevToolsSessionKey::Primary,
             |network| {
                 network.network_enabled = true;
@@ -2889,7 +2992,8 @@ async fn set_auto_attach_false_detaches_existing_target() {
                 network.bypass_service_worker = true;
                 network.extra_headers = vec![("X-Test".into(), "1".into())];
             },
-        );
+        )
+    };
     bc.active_page_target_mut().css_enabled = true;
     bc.active_page_target_mut().fetch_owner.configure(
         Some("SID-1".to_owned()),
@@ -2967,10 +3071,12 @@ async fn set_auto_attach_false_detaches_existing_target() {
             .runtime_slot
             .primary_network_events_enabled()
     );
-    assert!(!bc.active_page_target().effective_policy().cache_disabled());
     assert!(
-        !bc.active_page_target()
-            .effective_policy()
+        !bc.effective_policy_for_target(bc.active_target_id().unwrap())
+            .cache_disabled()
+    );
+    assert!(
+        !bc.effective_policy_for_target(bc.active_target_id().unwrap())
             .bypass_service_worker()
     );
     assert!(!bc.active_page_target().css_enabled);
@@ -2984,8 +3090,7 @@ async fn set_auto_attach_false_detaches_existing_target() {
             .is_empty()
     );
     assert!(
-        bc.active_page_target()
-            .effective_policy()
+        bc.effective_policy_for_target(bc.active_target_id().unwrap())
             .extra_headers()
             .is_empty()
     );
@@ -3653,10 +3758,10 @@ async fn non_browser_auto_attach_owners_do_not_replay_existing_shared_worker_tar
         .expect("page session binding");
     ctx.conn
         .register_session_route_for_test("SID-page", page_route);
-    ctx.conn
-        .runtime_session_owner_slot_mut(Some("SID-page"))
-        .expect("page owner runtime slot")
-        .set_page_attachment_id_for_test(1);
+    ctx.conn.set_document_fixture_for_owner_test(
+        &crate::conn::CommandOwnerScope::capture(&ctx.conn, Some("SID-page")),
+        1,
+    );
     let owner_page = ctx
         .conn
         .target_page_residence_identity_for_session(Some("SID-page"))

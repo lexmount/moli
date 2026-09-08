@@ -1,11 +1,64 @@
 use super::{CdpConnection, CdpTurnOutcome};
 use crate::domains::activity::{
-    ReadyProtocolSchedulerWork, RuntimeCommandOutputBarrierCompletion,
-    RuntimeCommandOutputBarrierPermit, RuntimeCommandOutputBarriers,
+    ReadyProtocolSchedulerWork, RendererCommandResponseCompletion, RendererCommandResponseOrder,
+    RendererCommandResponsePermit,
 };
 use moli_core::RendererOutputTransportMessage;
 
 impl CdpConnection {
+    pub(crate) fn native_renderer_page_output_owner(
+        &self,
+        renderer: super::RendererPageResidenceIdentity,
+    ) -> Option<crate::domains::activity::RendererPublicationOwner> {
+        let document = self.browser.document_for_renderer(renderer)?;
+        let context = self.browser_context_by_browser_id(document.web_contents().context())?;
+        let target = context
+            .page_targets
+            .get_for_web_contents(document.web_contents().id())?;
+        Some(
+            crate::domains::activity::RendererPublicationOwner::PageTarget {
+                browser_context_id: context.id.clone(),
+                target_id: Some(target.target_id().to_owned()),
+                renderer_page: renderer,
+                page_owner: super::TargetPageResidenceIdentity::new(
+                    context.id.clone(),
+                    Some(target.target_id().to_owned()),
+                    document.id(),
+                ),
+            },
+        )
+    }
+
+    /// Native admission uses physical renderer residence, never a frontend
+    /// route or a lifecycle visibility barrier.
+    pub(crate) fn apply_renderer_document_lifecycle(
+        &mut self,
+        renderer_page: super::RendererPageResidenceIdentity,
+        event: moli_core::page::RendererDocumentLifecycleEvent,
+    ) -> Option<super::DocumentLifecycleEvent> {
+        self.browser_context
+            .iter_mut()
+            .chain(self.inactive_browser_contexts.iter_mut())
+            .find_map(|context| context.apply_renderer_document_lifecycle(renderer_page, event))
+    }
+
+    pub(crate) fn project_document_lifecycle_events_for_owner(
+        &mut self,
+        owner: &super::CommandOwnerScope,
+        events: Vec<super::DocumentLifecycleEvent>,
+    ) -> (
+        Option<super::CommittedRendererDocumentBinding>,
+        Vec<moli_core::page::RendererDocumentLifecycleEvent>,
+    ) {
+        let current = self.current_document_id_for_owner(owner);
+        let events = events
+            .into_iter()
+            .filter(|event| Some(event.document()) == current)
+            .map(|event| event.event())
+            .collect();
+        self.project_renderer_document_lifecycle_events_for_owner(owner, events)
+    }
+
     pub(crate) fn apply_renderer_output_stream_control(
         &mut self,
         control: moli_core::RendererOutputStreamControl,
@@ -13,7 +66,15 @@ impl CdpConnection {
         match control {
             moli_core::RendererOutputStreamControl::Opened { stream } => {
                 let residence = stream.residence();
-                let owners = crate::domains::activity::renderer_publication_owners(self, residence);
+                let owners = if self
+                    .scheduler_state
+                    .renderer_output_ingress
+                    .has_owner_reservation(residence)
+                {
+                    Vec::new()
+                } else {
+                    crate::domains::activity::renderer_publication_owners(self, residence)
+                };
                 let owner = match owners.as_slice() {
                     [] => None,
                     [owner] => Some(owner.clone()),
@@ -224,13 +285,13 @@ impl CdpConnection {
     pub async fn ingest_renderer_output_turn_async(
         &mut self,
         publication: RendererOutputTransportMessage,
-        barriers: &mut RuntimeCommandOutputBarriers,
+        order: &mut RendererCommandResponseOrder,
     ) -> CdpTurnOutcome {
         let mut command_context = super::CommandDispatchContext::default();
         let protocol_events = crate::domains::activity::ingest_renderer_output_transport_async(
             self,
             publication,
-            barriers,
+            order,
             &mut command_context,
         )
         .await;
@@ -260,14 +321,14 @@ impl CdpConnection {
         )
     }
 
-    pub async fn release_runtime_command_output_barrier_turn_async(
+    pub async fn release_renderer_command_response_permit_turn_async(
         &mut self,
-        barriers: &mut RuntimeCommandOutputBarriers,
-        permit: RuntimeCommandOutputBarrierPermit,
-    ) -> RuntimeCommandOutputBarrierCompletion {
+        order: &mut RendererCommandResponseOrder,
+        permit: RendererCommandResponsePermit,
+    ) -> RendererCommandResponseCompletion {
         let mut command_context = super::CommandDispatchContext::default();
-        let terminal = barriers.release(self, permit, &mut command_context).await;
-        RuntimeCommandOutputBarrierCompletion::new(
+        let terminal = order.release(self, permit, &mut command_context).await;
+        RendererCommandResponseCompletion::new(
             terminal,
             CdpTurnOutcome::new_with_protocol_and_post_response_events(
                 command_context.take_protocol_events(),
@@ -277,14 +338,14 @@ impl CdpConnection {
         )
     }
 
-    pub async fn cancel_runtime_command_output_barrier_turn_async(
+    pub async fn cancel_renderer_command_response_permit_turn_async(
         &mut self,
-        barriers: &mut RuntimeCommandOutputBarriers,
-        permit: RuntimeCommandOutputBarrierPermit,
-    ) -> RuntimeCommandOutputBarrierCompletion {
+        order: &mut RendererCommandResponseOrder,
+        permit: RendererCommandResponsePermit,
+    ) -> RendererCommandResponseCompletion {
         let mut command_context = super::CommandDispatchContext::default();
-        let terminal = barriers.cancel(self, permit, &mut command_context).await;
-        RuntimeCommandOutputBarrierCompletion::new(
+        let terminal = order.cancel(self, permit, &mut command_context).await;
+        RendererCommandResponseCompletion::new(
             terminal,
             CdpTurnOutcome::new_with_protocol_and_post_response_events(
                 command_context.take_protocol_events(),

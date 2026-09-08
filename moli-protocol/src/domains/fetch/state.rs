@@ -1,5 +1,5 @@
 use crate::conn::{
-    CdpConnection, CommandOwnerScope, PendingFetchAuthNavigation, PendingFetchNavigation,
+    CdpConnection, CommandOwnerScope, PendingFetchAuthNavigation,
     PendingSubresourceFetchAuthRequest, PendingSubresourceFetchRequest,
     PendingSubresourceFetchResponseRequest,
 };
@@ -134,7 +134,7 @@ pub(crate) fn take_pending_navigation(
     owner: &CommandOwnerScope,
     action_session_id: Option<&str>,
     request_id: &str,
-) -> Option<PendingFetchNavigation> {
+) -> Option<crate::conn::ClaimedFetchNavigation> {
     conn.take_pending_fetch_navigation_for_owner(owner, action_session_id, request_id)
 }
 

@@ -66,7 +66,7 @@ impl SharedWorkerRemovedHost {
             Self::Running { host, clients } => {
                 host.publish_destroyed_target_event();
                 host.close_worker_ports_and_send_closed(clients);
-                host.terminate_and_join();
+                host.terminate();
             }
             Self::Loading { host, clients } => {
                 host.cancel_loading();

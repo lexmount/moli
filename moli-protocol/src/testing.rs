@@ -9,14 +9,13 @@ use std::time::Duration;
 
 use super::conn::{
     BackgroundProtocolEvent, CdpCommandTaskStep, CdpConnection, CdpInitialStoragePartition,
-    CdpSchedulerEvent, CommandDispatchContext, CommandResponseFlushPermit,
-    LoadedNavigationRendererAttachmentCommit, ParsedCdpCommand, PendingCdpCommandDispatch,
-    RuntimeInspectorResponseReady,
+    CdpSchedulerEvent, CommandDispatchContext, CommandResponseFlushPermit, ParsedCdpCommand,
+    PendingCdpCommandDispatch, RuntimeInspectorResponseReady,
 };
 use crate::devtools_runtime::{DevToolsCommand, DevToolsCommandResult, DevToolsError};
 use crate::domains::activity::{
-    ProtocolSchedulerWork, ProtocolSchedulerWorkKind, RuntimeCommandOutputBarrierCompletion,
-    RuntimeCommandOutputBarrierPermit, RuntimeCommandOutputBarriers,
+    ProtocolSchedulerWork, ProtocolSchedulerWorkKind, RendererCommandResponseCompletion,
+    RendererCommandResponseOrder, RendererCommandResponsePermit,
 };
 use moli_core::{
     LayoutPolicy, OptionalResourceFetchMask, RendererOutputFence, RendererOutputStreamControl,
@@ -43,7 +42,7 @@ pub struct TestContext {
     pub sent: Vec<Value>,
     pending_runtime_deferred_replies: VecDeque<PendingTestRuntimeDeferredReply>,
     pending_protocol_scheduler_work: VecDeque<ProtocolSchedulerWork>,
-    runtime_command_output_barriers: RuntimeCommandOutputBarriers,
+    renderer_command_response_order: RendererCommandResponseOrder,
     runtime_inspector_response_ready_rx:
         tokio::sync::mpsc::UnboundedReceiver<RuntimeInspectorResponseReady>,
     renderer_publication_rx: moli_core::RendererOutputTransportReceiver,
@@ -59,19 +58,102 @@ pub struct TestContext {
 struct PendingTestRuntimeDeferredReply {
     pending: PendingCdpCommandDispatch,
     command_context: CommandDispatchContext,
-    runtime_output_barrier: Option<RuntimeCommandOutputBarrierPermit>,
+    renderer_response_permit: Option<RendererCommandResponsePermit>,
+}
+
+impl CdpConnection {
+    /// Builds and commits a test document through the exact Browser owner
+    /// selected by `session_id`. The returned fence is the last renderer
+    /// publication that must cross protocol ingress before a later command.
+    pub(crate) async fn install_navigation_fixture_for_session_owner_for_test(
+        &mut self,
+        raw_url: &str,
+        session_id: Option<&str>,
+    ) -> Option<RendererOutputFence> {
+        self.commit_declared_session_fixtures_for_test();
+        let owner = crate::conn::CommandOwnerScope::capture(self, session_id);
+        self.install_navigation_fixture_for_owner_for_test(raw_url, &owner)
+            .await
+    }
+
+    pub(crate) async fn install_navigation_fixture_for_owner_for_test(
+        &mut self,
+        raw_url: &str,
+        owner: &crate::conn::CommandOwnerScope,
+    ) -> Option<RendererOutputFence> {
+        let token = self
+            .start_document_navigation_for_owner(owner, crate::domains::page::LOADER_ID.to_owned())
+            .expect("navigation fixture requires a live Browser owner");
+        let navigation = self
+            .load_navigation_via_runtime_for_owner_async(owner, raw_url)
+            .await
+            .expect("navigation fixture should load");
+        self.install_loaded_navigation_fixture_for_owner_for_test(navigation, owner, token)
+            .await
+    }
+
+    async fn install_loaded_navigation_fixture_for_owner_for_test(
+        &mut self,
+        navigation: crate::conn::LoadedNavigation<crate::conn::PreparedDocumentNavigation>,
+        owner: &crate::conn::CommandOwnerScope,
+        token: crate::conn::NavigationId,
+    ) -> Option<RendererOutputFence> {
+        let (_, target_id) = self
+            .target_owner_identity_for_owner(owner)
+            .expect("navigation fixture requires an installed browser context");
+        let target_id = target_id.expect("navigation fixture requires an exact target");
+        let renderer_output_predecessor = navigation.renderer_output_predecessor;
+        let page_commit = self
+            .commit_loaded_navigation(navigation.page)
+            .expect("navigation fixture Page commit must succeed");
+        let projection_fence = page_commit
+            .inspection_projection
+            .expect("navigation fixture must rebind its renderer inspection endpoint");
+        assert!(
+            page_commit
+                .committed_document_post_response_continuation
+                .is_none(),
+            "lifecycle-target fixture must not retain a DocumentCommit response gate"
+        );
+        page_commit.previous_document_retirement.close().await;
+        let (binding, _) = self.project_committed_document_lifecycle_for_owner(
+            owner,
+            page_commit.lifecycle,
+            Some(token),
+            target_id,
+            crate::domains::page::LOADER_ID.to_owned(),
+        );
+        let binding =
+            binding.expect("navigation fixture must install its exact renderer Document binding");
+        let finished =
+            self.publish_document_projection_fence_for_owner(owner, &binding, projection_fence);
+        assert!(
+            finished.released_output.is_empty(),
+            "fixture output is ingested after the Document binding"
+        );
+        assert!(
+            finished.renderer_call_replacements.is_none(),
+            "fixture must not replace in-flight renderer calls"
+        );
+        assert_eq!(
+            self.target_root_document_lifecycle_identity_for_owner(owner),
+            Some(binding.renderer_document_identity()),
+            "navigation fixture must retain its exact renderer Document binding"
+        );
+        renderer_output_predecessor
+    }
 }
 
 impl PendingTestRuntimeDeferredReply {
     fn new(
         pending: PendingCdpCommandDispatch,
         command_context: CommandDispatchContext,
-        runtime_output_barrier: Option<RuntimeCommandOutputBarrierPermit>,
+        renderer_response_permit: Option<RendererCommandResponsePermit>,
     ) -> Self {
         Self {
             pending,
             command_context,
-            runtime_output_barrier,
+            renderer_response_permit,
         }
     }
 
@@ -87,14 +169,14 @@ enum TestSchedulerWork {
     BackgroundNavigationCompletion(crate::domains::page::BackgroundNavigationCompletion),
     RuntimeDeferredReplyReady(RuntimeInspectorResponseReady),
     RendererPublication(RendererOutputTransportMessage),
-    ReleaseRuntimeOutputBarrier(RuntimeCommandOutputBarrierPermit),
-    CancelRuntimeOutputBarrier(RuntimeCommandOutputBarrierPermit),
+    ReleaseRendererResponsePermit(RendererCommandResponsePermit),
+    CancelRendererResponsePermit(RendererCommandResponsePermit),
 }
 
 #[must_use = "the held test command response must be released exactly once"]
 pub(crate) struct TestCommandResponseFlushPermit {
     response_flush: CommandResponseFlushPermit,
-    runtime_output_barrier: Option<RuntimeCommandOutputBarrierPermit>,
+    renderer_response_permit: Option<RendererCommandResponsePermit>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -133,7 +215,7 @@ fn real_layout_test_runtime_config(
 }
 
 pub(crate) fn real_layout_test_connection() -> CdpConnection {
-    CdpConnection::new_with_initial_storage_partition_and_runtime_config(
+    crate::test_support::connection_with_config(
         CdpInitialStoragePartition::memory(),
         real_layout_test_runtime_config(OptionalResourceFetchMask::NONE),
     )
@@ -145,7 +227,7 @@ impl TestContext {
     /// Historically those tests treated `Target.targetCreated` as a baseline
     /// event after `Target.createTarget`. Real CDP clients only receive target
     /// discovery events after enabling discovery, so keep that convenience in
-    /// `TestContext` instead of changing `CdpConnection::new()`.
+    /// `TestContext` instead of changing `crate::test_support::connection()`.
     pub fn new() -> Self {
         Self::new_with_target_discovery(true)
     }
@@ -163,7 +245,7 @@ impl TestContext {
     }
 
     pub fn new_with_layout_policy(layout_policy: LayoutPolicy) -> Self {
-        let conn = CdpConnection::new_with_initial_storage_partition_and_runtime_config(
+        let conn = crate::test_support::connection_with_config(
             CdpInitialStoragePartition::memory(),
             NavigationRuntimeConfig::new(
                 FetchConfig::default(),
@@ -193,7 +275,7 @@ impl TestContext {
         target_discovery_enabled: bool,
         optional_resource_fetch_mask: OptionalResourceFetchMask,
     ) -> Self {
-        let mut conn = CdpConnection::new_with_initial_storage_partition_and_runtime_config(
+        let mut conn = crate::test_support::connection_with_config(
             CdpInitialStoragePartition::memory(),
             real_layout_test_runtime_config(optional_resource_fetch_mask),
         );
@@ -204,19 +286,19 @@ impl TestContext {
     pub fn from_conn(mut conn: CdpConnection) -> Self {
         let (renderer_publication_tx, renderer_publication_rx) =
             moli_core::renderer_output_transport_channel();
-        let (runtime_inspector_response_ready_tx, runtime_inspector_response_ready_rx) =
-            tokio::sync::mpsc::unbounded_channel();
+        let runtime_inspector_response_ready_rx = conn
+            .bind_runtime_inspector_response_ready()
+            .expect("test scheduler must own the connection's completion ingress");
         let (background_event_tx, background_event_rx) = tokio::sync::mpsc::unbounded_channel();
         let (background_navigation_completion_tx, background_navigation_completion_rx) =
             tokio::sync::mpsc::unbounded_channel();
         conn.set_renderer_publication_sender(renderer_publication_tx);
-        conn.set_runtime_inspector_response_ready_sender(runtime_inspector_response_ready_tx);
         Self {
             conn,
             sent: Vec::new(),
             pending_runtime_deferred_replies: VecDeque::new(),
             pending_protocol_scheduler_work: VecDeque::new(),
-            runtime_command_output_barriers: RuntimeCommandOutputBarriers::default(),
+            renderer_command_response_order: RendererCommandResponseOrder::default(),
             runtime_inspector_response_ready_rx,
             renderer_publication_rx,
             background_event_tx,
@@ -261,13 +343,27 @@ impl TestContext {
         raw_url: &str,
         session_id: Option<&str>,
     ) {
-        self.conn.commit_declared_session_fixtures_for_test();
-        let navigation = self
+        let predecessor = self
             .conn
-            .load_navigation_via_runtime_for_session_owner_async(session_id, raw_url)
-            .await
-            .expect("navigation fixture should load");
-        self.install_loaded_navigation_fixture_for_session_owner(navigation, session_id)
+            .install_navigation_fixture_for_session_owner_for_test(raw_url, session_id)
+            .await;
+        if let Some(predecessor) = predecessor {
+            self.route_renderer_output_predecessor_before_command_response(predecessor)
+                .await;
+        }
+    }
+
+    /// Installs a fully routed Document as test setup without exposing that
+    /// fixture's lifecycle as output of the next command under test.
+    pub(crate) async fn install_quiet_navigation_fixture_for_session_owner(
+        &mut self,
+        raw_url: &str,
+        session_id: Option<&str>,
+    ) {
+        let sent_start = self.sent.len();
+        self.install_navigation_fixture_for_session_owner(raw_url, session_id)
+            .await;
+        self.fence_and_discard_navigation_fixture_output(sent_start, session_id)
             .await;
     }
 
@@ -286,6 +382,11 @@ impl TestContext {
         session_id: Option<&str>,
     ) {
         self.conn.commit_declared_session_fixtures_for_test();
+        let owner = crate::conn::CommandOwnerScope::capture(&self.conn, session_id);
+        let token = self
+            .conn
+            .start_document_navigation_for_owner(&owner, crate::domains::page::LOADER_ID.to_owned())
+            .expect("navigation fixture requires a live Browser owner");
         let navigation = self
             .conn
             .build_loaded_navigation_from_buffered_response_for_session_owner_async(
@@ -299,67 +400,12 @@ impl TestContext {
             )
             .await
             .expect("buffered navigation fixture should build");
-        self.install_loaded_navigation_fixture_for_session_owner(navigation, session_id)
-            .await;
-    }
-
-    async fn install_loaded_navigation_fixture_for_session_owner(
-        &mut self,
-        navigation: crate::conn::LoadedNavigation,
-        session_id: Option<&str>,
-    ) {
         let owner = crate::conn::CommandOwnerScope::capture(&self.conn, session_id);
-        let (_, target_id) = self
+        let predecessor = self
             .conn
-            .target_owner_identity_for_owner(&owner)
-            .expect("navigation fixture requires an installed browser context");
-        let target_id = target_id.expect("navigation fixture requires an exact target");
-        let renderer_output_predecessor = navigation.renderer_output_predecessor;
-        let page_creation_artifacts = navigation.page_creation_artifacts;
-        let final_url = navigation.final_url;
-        let main_document_commit = navigation
-            .main_document_commit
-            .expect("navigation fixture must retain its frozen Document commit identity");
-        let page_commit = self
-            .conn
-            .commit_loaded_navigation_page_for_owner_async(
-                &owner,
-                navigation.page,
-                LoadedNavigationRendererAttachmentCommit::Prepare(None),
-                &final_url,
-            )
-            .await
-            .expect("navigation fixture target must remain installed")
-            .expect("navigation fixture Page commit must succeed");
-        assert!(
-            page_commit
-                .committed_document_post_response_continuation
-                .is_none(),
-            "lifecycle-target fixture must not retain a DocumentCommit response gate"
-        );
-        let _ = self
-            .conn
-            .commit_loaded_navigation_target_identity_for_owner(
-                &owner,
-                &main_document_commit,
-                &final_url,
-            );
-        let (binding, _) = self.conn.bind_renderer_document_lifecycle_for_owner(
-            &owner,
-            page_creation_artifacts,
-            None,
-            target_id,
-            crate::domains::page::LOADER_ID.to_owned(),
-        );
-        let binding =
-            binding.expect("navigation fixture must install its exact renderer Document binding");
-        assert_eq!(
-            self.conn
-                .target_root_document_lifecycle_identity_for_owner(&owner,),
-            Some(binding.renderer_document_identity()),
-            "navigation fixture must retain its exact renderer Document binding"
-        );
-        if let Some(predecessor) = renderer_output_predecessor {
+            .install_loaded_navigation_fixture_for_owner_for_test(navigation, &owner, token)
+            .await;
+        if let Some(predecessor) = predecessor {
             // Production does not expose a completed navigation response until
             // the Page-creation cursor has crossed ordered protocol ingress.
             // Mirror that boundary here so a later enable command observes
@@ -368,6 +414,45 @@ impl TestContext {
             self.route_renderer_output_predecessor_before_command_response(predecessor)
                 .await;
         }
+    }
+
+    async fn fence_and_discard_navigation_fixture_output(
+        &mut self,
+        sent_start: usize,
+        session_id: Option<&str>,
+    ) {
+        // The build reply may precede the renderer's load continuation. First
+        // observe load on this exact Document, then fence its published tail;
+        // a diagnostics reply alone can overtake the load continuation.
+        let owner = crate::conn::CommandOwnerScope::capture(&self.conn, session_id);
+        let document = self
+            .conn
+            .resolve_browser_document_for_owner(&owner)
+            .expect("navigation fixture must retain its committed Document");
+        self.wait_until_scheduler_state("navigation fixture Document load", |conn| {
+            assert_eq!(
+                conn.resolve_browser_document_for_owner(&owner),
+                Ok(document)
+            );
+            conn.renderer_document_lifecycle_authoritative_state_for_session_owner(session_id)
+                .is_some_and(|(_, snapshot)| snapshot.load.is_some())
+        })
+        .await;
+        let completed = self
+            .conn
+            .start_document_diagnostics_snapshot(document)
+            .expect("navigation fixture Document must accept a diagnostics barrier")
+            .wait()
+            .await;
+        let predecessor = completed.renderer_output_predecessor();
+        self.conn
+            .finish_document_diagnostics_snapshot(completed)
+            .expect("navigation fixture diagnostics barrier must finish on the same Document");
+        if let Some(predecessor) = predecessor {
+            self.route_renderer_output_predecessor_before_command_response(predecessor)
+                .await;
+        }
+        self.sent.truncate(sent_start);
     }
 
     /// Feed a JSON-serialisable message through the async CDP entrypoint and
@@ -547,8 +632,9 @@ impl TestContext {
         let mut command_context = CommandDispatchContext::new(response_flush_context);
         let step = self
             .conn
-            .start_parsed_command_dispatch_with_context(&command, &mut command_context);
-        let mut runtime_output_barrier = self.admit_runtime_output_barrier(&command);
+            .start_parsed_command_dispatch_with_context(&command, &mut command_context)
+            .into();
+        let mut renderer_response_permit = self.admit_renderer_response_permit(&command);
         let mut protocol_events = Vec::new();
         let mut scheduler_events = Vec::new();
         let completed = Box::pin(self.complete_command_step_like_scheduler(
@@ -556,7 +642,7 @@ impl TestContext {
             &mut command_context,
             &mut protocol_events,
             &mut scheduler_events,
-            &mut runtime_output_barrier,
+            &mut renderer_response_permit,
         ))
         .await;
         assert!(
@@ -570,7 +656,7 @@ impl TestContext {
         Box::pin(self.route_ready_test_command_response(command_id, response_start)).await;
         TestCommandResponseFlushPermit {
             response_flush: response_flush_permit,
-            runtime_output_barrier,
+            renderer_response_permit,
         }
     }
 
@@ -585,9 +671,12 @@ impl TestContext {
         permit: TestCommandResponseFlushPermit,
     ) {
         permit.response_flush.finish();
-        if let Some(runtime_output_barrier) = permit.runtime_output_barrier {
+        if let Some(renderer_response_permit) = permit.renderer_response_permit {
             Box::pin(
-                self.release_runtime_output_barrier_like_scheduler(runtime_output_barrier, true),
+                self.release_renderer_response_permit_like_scheduler(
+                    renderer_response_permit,
+                    true,
+                ),
             )
             .await;
         }
@@ -605,13 +694,13 @@ impl TestContext {
         };
         let mut protocol_events = Vec::new();
         let mut scheduler_events = Vec::new();
-        let mut runtime_output_barrier = None;
+        let mut renderer_response_permit = None;
         let completed = Box::pin(self.complete_command_step_like_scheduler(
             step,
             &mut crate::conn::CommandDispatchContext::default(),
             &mut protocol_events,
             &mut scheduler_events,
-            &mut runtime_output_barrier,
+            &mut renderer_response_permit,
         ))
         .await;
         if completed {
@@ -715,14 +804,15 @@ impl TestContext {
         let mut command_context = crate::conn::CommandDispatchContext::default();
         let step = self
             .conn
-            .start_parsed_command_dispatch_with_context(command, &mut command_context);
-        let mut runtime_output_barrier = self.admit_runtime_output_barrier(command);
+            .start_parsed_command_dispatch_with_context(command, &mut command_context)
+            .into();
+        let mut renderer_response_permit = self.admit_renderer_response_permit(command);
         let completed = Box::pin(self.complete_command_step_like_scheduler(
             step,
             &mut command_context,
             &mut protocol_events,
             &mut scheduler_events,
-            &mut runtime_output_barrier,
+            &mut renderer_response_permit,
         ))
         .await;
 
@@ -742,17 +832,17 @@ impl TestContext {
             Box::pin(self.route_test_scheduler_causal_batch(protocol_events, scheduler_events))
                 .await;
             if completed {
-                if let Some(runtime_output_barrier) = runtime_output_barrier {
-                    Box::pin(self.release_runtime_output_barrier_like_scheduler(
-                        runtime_output_barrier,
+                if let Some(renderer_response_permit) = renderer_response_permit {
+                    Box::pin(self.release_renderer_response_permit_like_scheduler(
+                        renderer_response_permit,
                         true,
                     ))
                     .await;
                 }
             } else {
                 assert!(
-                    runtime_output_barrier.is_none(),
-                    "a pending Runtime command must transfer its output barrier to the pending reply"
+                    renderer_response_permit.is_none(),
+                    "a pending renderer command must transfer its response permit to the pending reply"
                 );
             }
             if !completed && !self.pending_runtime_deferred_replies.is_empty() {
@@ -762,10 +852,10 @@ impl TestContext {
         } else {
             Box::pin(self.route_test_scheduler_causal_batch(protocol_events, Vec::new())).await;
             if completed {
-                if let Some(runtime_output_barrier) = runtime_output_barrier {
+                if let Some(renderer_response_permit) = renderer_response_permit {
                     let mut release_scheduler_events =
-                        Box::pin(self.release_runtime_output_barrier_like_scheduler(
-                            runtime_output_barrier,
+                        Box::pin(self.release_renderer_response_permit_like_scheduler(
+                            renderer_response_permit,
                             false,
                         ))
                         .await;
@@ -773,8 +863,8 @@ impl TestContext {
                 }
             } else {
                 assert!(
-                    runtime_output_barrier.is_none(),
-                    "a pending Runtime command must transfer its output barrier to the pending reply"
+                    renderer_response_permit.is_none(),
+                    "a pending renderer command must transfer its response permit to the pending reply"
                 );
             }
             if !completed && !self.pending_runtime_deferred_replies.is_empty() {
@@ -784,14 +874,14 @@ impl TestContext {
         }
     }
 
-    fn admit_runtime_output_barrier(
+    fn admit_renderer_response_permit(
         &mut self,
         command: &ParsedCdpCommand,
-    ) -> Option<RuntimeCommandOutputBarrierPermit> {
+    ) -> Option<RendererCommandResponsePermit> {
         command
             .runtime_command_executes_page_javascript()
             .then(|| {
-                self.runtime_command_output_barriers.admit(
+                self.renderer_command_response_order.admit(
                     &self.conn,
                     command.request().id(),
                     command.command_output_session_id(),
@@ -806,7 +896,7 @@ impl TestContext {
         command_context: &mut CommandDispatchContext,
         protocol_events: &mut Vec<BackgroundProtocolEvent>,
         scheduler_events: &mut Vec<CdpSchedulerEvent>,
-        runtime_output_barrier: &mut Option<RuntimeCommandOutputBarrierPermit>,
+        renderer_response_permit: &mut Option<RendererCommandResponsePermit>,
     ) -> bool {
         loop {
             match step {
@@ -879,7 +969,7 @@ impl TestContext {
                     self.enqueue_pending_runtime_deferred_reply(
                         *pending,
                         std::mem::take(command_context),
-                        runtime_output_barrier.take(),
+                        renderer_response_permit.take(),
                     );
                     return false;
                 }
@@ -894,7 +984,8 @@ impl TestContext {
                         completed,
                         command_context,
                     ))
-                    .await;
+                    .await
+                    .into();
                 }
             }
         }
@@ -1012,15 +1103,15 @@ impl TestContext {
         (self.sent.drain(sent_start..).collect(), scheduler_events)
     }
 
-    async fn release_runtime_output_barrier_like_scheduler(
+    async fn release_renderer_response_permit_like_scheduler(
         &mut self,
-        permit: RuntimeCommandOutputBarrierPermit,
+        permit: RendererCommandResponsePermit,
         route_scheduler_events: bool,
     ) -> Vec<CdpSchedulerEvent> {
         let completion = self
             .conn
-            .release_runtime_command_output_barrier_turn_async(
-                &mut self.runtime_command_output_barriers,
+            .release_renderer_command_response_permit_turn_async(
+                &mut self.renderer_command_response_order,
                 permit,
             )
             .await;
@@ -1036,9 +1127,9 @@ impl TestContext {
         }
     }
 
-    fn enqueue_runtime_output_barrier_completion(
+    fn enqueue_renderer_response_permit_completion(
         &mut self,
-        completion: RuntimeCommandOutputBarrierCompletion,
+        completion: RendererCommandResponseCompletion,
         work: &mut VecDeque<TestSchedulerWork>,
     ) {
         let (protocol_events, scheduler_events) =
@@ -1088,7 +1179,7 @@ impl TestContext {
         &mut self,
         mut pending: PendingCdpCommandDispatch,
         command_context: CommandDispatchContext,
-        runtime_output_barrier: Option<RuntimeCommandOutputBarrierPermit>,
+        renderer_response_permit: Option<RendererCommandResponsePermit>,
     ) {
         if let Some(command_id) = pending.command_id()
             && let Some(response_rx) = pending.take_scheduler_deferred_inspector_reply_receiver()
@@ -1113,7 +1204,7 @@ impl TestContext {
             .push_back(PendingTestRuntimeDeferredReply::new(
                 pending,
                 command_context,
-                runtime_output_barrier,
+                renderer_response_permit,
             ));
     }
 
@@ -1152,25 +1243,25 @@ impl TestContext {
                     Box::pin(self.ingest_renderer_publication_like_scheduler(publication, work))
                         .await;
                 }
-                TestSchedulerWork::ReleaseRuntimeOutputBarrier(permit) => {
+                TestSchedulerWork::ReleaseRendererResponsePermit(permit) => {
                     let completion = self
                         .conn
-                        .release_runtime_command_output_barrier_turn_async(
-                            &mut self.runtime_command_output_barriers,
+                        .release_renderer_command_response_permit_turn_async(
+                            &mut self.renderer_command_response_order,
                             permit,
                         )
                         .await;
-                    self.enqueue_runtime_output_barrier_completion(completion, work);
+                    self.enqueue_renderer_response_permit_completion(completion, work);
                 }
-                TestSchedulerWork::CancelRuntimeOutputBarrier(permit) => {
+                TestSchedulerWork::CancelRendererResponsePermit(permit) => {
                     let completion = self
                         .conn
-                        .cancel_runtime_command_output_barrier_turn_async(
-                            &mut self.runtime_command_output_barriers,
+                        .cancel_renderer_command_response_permit_turn_async(
+                            &mut self.renderer_command_response_order,
                             permit,
                         )
                         .await;
-                    self.enqueue_runtime_output_barrier_completion(completion, work);
+                    self.enqueue_renderer_response_permit_completion(completion, work);
                 }
             }
             self.route_ready_protocol_scheduler_work_for_test_context(work)
@@ -1493,9 +1584,9 @@ impl TestContext {
                     "message": "RuntimeDeferredReplyLooseProtocolResponse",
                 },
             }));
-            if let Some(runtime_output_barrier) = pending.runtime_output_barrier.take() {
-                work.push_front(TestSchedulerWork::CancelRuntimeOutputBarrier(
-                    runtime_output_barrier,
+            if let Some(renderer_response_permit) = pending.renderer_response_permit.take() {
+                work.push_front(TestSchedulerWork::CancelRendererResponsePermit(
+                    renderer_response_permit,
                 ));
             }
             if !events.is_empty() {
@@ -1606,7 +1697,7 @@ impl TestContext {
             .conn
             .ingest_renderer_output_turn_async(
                 publication,
-                &mut self.runtime_command_output_barriers,
+                &mut self.renderer_command_response_order,
             )
             .await;
         let (protocol_events, scheduler_events) = outcome.into_protocol_event_parts();
@@ -1712,7 +1803,8 @@ impl TestContext {
         let step = self
             .conn
             .complete_pending_command_dispatch_with_context(completed, &mut pending.command_context)
-            .await;
+            .await
+            .into();
         let mut protocol_events = Vec::new();
         let mut scheduler_events = Vec::new();
         let completed = Box::pin(self.complete_command_step_like_scheduler(
@@ -1720,22 +1812,22 @@ impl TestContext {
             &mut pending.command_context,
             &mut protocol_events,
             &mut scheduler_events,
-            &mut pending.runtime_output_barrier,
+            &mut pending.renderer_response_permit,
         ))
         .await;
         if !suffix_events.is_empty() {
             work.push_front(TestSchedulerWork::ProtocolEvents(suffix_events));
         }
         if completed {
-            if let Some(runtime_output_barrier) = pending.runtime_output_barrier {
-                work.push_front(TestSchedulerWork::ReleaseRuntimeOutputBarrier(
-                    runtime_output_barrier,
+            if let Some(renderer_response_permit) = pending.renderer_response_permit {
+                work.push_front(TestSchedulerWork::ReleaseRendererResponsePermit(
+                    renderer_response_permit,
                 ));
             }
         } else {
             assert!(
-                pending.runtime_output_barrier.is_none(),
-                "a still-pending Runtime command must transfer its output barrier"
+                pending.renderer_response_permit.is_none(),
+                "a still-pending renderer command must transfer its response permit"
             );
         }
         if !scheduler_events.is_empty() {
@@ -2170,20 +2262,21 @@ mod tests {
 
     #[tokio::test]
     async fn test_context_consumes_selected_task_output_publications_one_per_turn() {
-        let mut conn = CdpConnection::new();
+        let mut conn = crate::test_support::connection();
         let (publication_tx, publication_rx) = moli_core::renderer_output_transport_channel();
-        let (runtime_response_tx, runtime_response_rx) = tokio::sync::mpsc::unbounded_channel();
+        let runtime_response_rx = conn
+            .bind_runtime_inspector_response_ready()
+            .expect("test scheduler must own the connection's completion ingress");
         let (background_event_tx, background_event_rx) = tokio::sync::mpsc::unbounded_channel();
         let (background_navigation_completion_tx, background_navigation_completion_rx) =
             tokio::sync::mpsc::unbounded_channel();
         conn.set_renderer_publication_sender(publication_tx.clone());
-        conn.set_runtime_inspector_response_ready_sender(runtime_response_tx);
         let mut ctx = TestContext {
             conn,
             sent: Vec::new(),
             pending_runtime_deferred_replies: VecDeque::new(),
             pending_protocol_scheduler_work: VecDeque::new(),
-            runtime_command_output_barriers: RuntimeCommandOutputBarriers::default(),
+            renderer_command_response_order: RendererCommandResponseOrder::default(),
             runtime_inspector_response_ready_rx: runtime_response_rx,
             renderer_publication_rx: publication_rx,
             background_event_tx,
