@@ -658,6 +658,7 @@ mod main_world;
 use main_world::MainWorld;
 #[cfg(feature = "devtools")]
 mod native_drag_data;
+mod script_preparation_error;
 pub(crate) use inspector::dispatch_inspector_io_owner_wake;
 #[cfg(feature = "devtools")]
 pub(crate) use inspector::dispatch_inspector_main_owner_wake;
