@@ -164,6 +164,8 @@ async fn worker_websocket_csp_block_precedes_mixed_content_rejection() {
                     effectiveDirective: event.effectiveDirective,
                     disposition: event.disposition
                 });
+                postMessage({ outcome, events });
+                close();
             });
             let outcome;
             try {
@@ -172,8 +174,7 @@ async fn worker_websocket_csp_block_precedes_mixed_content_rejection() {
             } catch (error) {
                 outcome = `throw:${error.name}`;
             }
-            postMessage({ outcome, events });
-            close();
+            postMessage({ outcome, events: events.length });
             "#
             .to_owned(),
             "http://localhost:8000/worker/main.js".to_owned(),
@@ -181,6 +182,10 @@ async fn worker_websocket_csp_block_precedes_mixed_content_rejection() {
         .with_content_security_policies(vec!["connect-src 'none'".into()]),
     );
 
+    assert_eq!(
+        recv_post_json(&mut handle).await,
+        r#"{"outcome":"socket:0:ws://common/blank.html","events":0}"#
+    );
     assert_eq!(
         recv_post_json(&mut handle).await,
         r#"{"outcome":"socket:0:ws://common/blank.html","events":[{"blockedURI":"ws://common/blank.html","effectiveDirective":"connect-src","disposition":"enforce"}]}"#
