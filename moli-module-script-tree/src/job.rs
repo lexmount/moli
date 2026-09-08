@@ -303,7 +303,12 @@ impl ModuleScriptTreeJob {
     ) -> ModuleScriptTreePoll {
         let snapshot = match host.module_dependencies(entry) {
             Ok(snapshot) => snapshot,
-            Err(error) => return self.fail(error),
+            Err(error) => {
+                if let Some(key) = error.key.as_deref().cloned() {
+                    return self.finish_module_load_error(host, key, error);
+                }
+                return self.fail(error);
+            }
         };
         let snapshot = self.dependency_snapshot_with_tree_context(snapshot);
         if snapshot.requested_modules.is_empty() {
@@ -318,7 +323,11 @@ impl ModuleScriptTreeJob {
         };
         let candidates = match self.collect_dependency_candidates(host, &snapshot) {
             Ok(candidates) => candidates,
-            Err(error) => return self.fail(error),
+            Err(error) => {
+                let error = host.cache_module_request_error(snapshot.key.clone(), error);
+                self.record_parse_error(snapshot.key, error);
+                return self.finish_after_parse_error(host);
+            }
         };
 
         for candidate in candidates {
@@ -689,5 +698,6 @@ struct DependencyCandidate {
 }
 
 fn is_parse_error(error: &ModuleLoadError) -> bool {
-    error.error_constructor == Some(ModuleErrorConstructorKind::SyntaxError)
+    error.exception_id.is_some()
+        || error.error_constructor == Some(ModuleErrorConstructorKind::SyntaxError)
 }
