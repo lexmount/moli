@@ -47,13 +47,7 @@ pub fn set_pathname(url: &mut Url, value: &str) {
         return;
     }
     let value = strip_tabs_and_newlines(value);
-    // rust-url represents an empty host like a missing host. An authority
-    // distinguishes them: non-special URLs with an empty host can have no path.
-    if value.is_empty() && url.has_authority() {
-        url.set_path(&value);
-    } else {
-        url::quirks::set_pathname(url, &value);
-    }
+    url::quirks::set_pathname(url, &value);
 }
 
 fn strip_tabs_and_newlines(value: &str) -> Cow<'_, str> {
