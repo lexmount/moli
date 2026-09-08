@@ -129,7 +129,7 @@ pub fn content_security_policy_report_to_endpoints(
 pub fn content_security_policy_violation_report_body(
     fields: &ContentSecurityPolicyViolationEventFields<'_>,
 ) -> String {
-    json!({
+    let mut report = json!({
         "csp-report": {
             "document-uri": fields.document_uri,
             "referrer": fields.referrer,
@@ -142,8 +142,14 @@ pub fn content_security_policy_violation_report_body(
             "status-code": fields.status_code,
             "script-sample": fields.sample,
         }
-    })
-    .to_string()
+    });
+    if fields.line_number != 0 {
+        report["csp-report"]["line-number"] = json!(fields.line_number);
+    }
+    if fields.column_number != 0 {
+        report["csp-report"]["column-number"] = json!(fields.column_number);
+    }
+    report.to_string()
 }
 
 pub fn content_security_policy_reporting_api_report_body(
