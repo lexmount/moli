@@ -50,6 +50,7 @@ fn browser_client_rejects_http_requests_even_with_an_initiator() -> Result<()> {
     owner.handle().apply_network_policy(browser)?;
     Ok(())
 }
+mod script_cors;
 
 #[test]
 fn loader_clones_share_one_browser_resource_runtime() {
