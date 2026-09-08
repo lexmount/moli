@@ -12,6 +12,102 @@ fn compile_parse_error(vm: &mut ScriptVm, path: &str) -> ModuleLoadError {
     .expect_err("the module must have a syntax error")
 }
 
+#[test]
+fn module_parse_error_reporting_uses_retained_location_without_author_getters() {
+    let mut vm = new_test_vm("https://module-errors.test/page.html");
+    let url = Url::parse("https://module-errors.test/dependency.mjs").unwrap();
+    let error = vm
+        .compile_native_module_record(
+            ModuleMapKey::java_script(url.clone()),
+            &ModuleSource::text("\n\nexport const value = ;".to_owned()),
+            &url,
+            &ModuleFetchMetadata::default(),
+        )
+        .expect_err("the dependency must have a syntax error");
+    vm.with_default_context_scope(|scope, _| {
+        let exception = module_load_error_value(scope, &error)?;
+        let global = scope.get_current_context().global(scope);
+        assert_eq!(
+            global.set(scope, v8str(scope, "__original").into(), exception),
+            Some(true)
+        );
+        Ok(())
+    })
+    .unwrap();
+    vm.eval(
+        r#"
+        globalThis.__locationReads = 0;
+        for (const name of ['fileName', 'lineNumber', 'columnNumber', 'stack']) {
+            Object.defineProperty(__original, name, { get() {
+                ++__locationReads;
+                throw new Error('must not read author location');
+            }});
+        }
+        Object.freeze(__original);
+        addEventListener('error', event => {
+            globalThis.__location = [event.filename, event.lineno, event.colno,
+                event.error === __original, __locationReads];
+            event.preventDefault();
+        });
+    "#,
+    )
+    .unwrap();
+    vm.report_window_error_body(
+        error.message(),
+        Some("https://module-errors.test/root.mjs"),
+        error.error_value(),
+    )
+    .unwrap();
+    assert_eq!(
+        vm.eval("JSON.stringify(__location)").unwrap(),
+        r#"["https://module-errors.test/dependency.mjs",3,22,true,0]"#
+    );
+}
+
+#[test]
+fn module_parse_error_compile_origin_preserves_line_and_first_line_column_offsets() {
+    for (source, line, column) in [
+        ("export const value = ;", 21, 33),
+        ("\n\nexport const value = ;", 23, 22),
+    ] {
+        let mut vm = new_test_vm("https://module-errors.test/page.html");
+        let base = Url::parse("https://module-errors.test/import-base/").unwrap();
+        let source = ModuleSource::text_with_origin(
+            source.to_owned(),
+            crate::document_module_graph::ModuleSourceOrigin {
+                url: Url::parse("https://module-errors.test/source-document.html").unwrap(),
+                line_offset: 20,
+                column_offset: 11,
+            },
+        );
+        let error = vm
+            .compile_native_module_record(
+                ModuleMapKey::java_script(base.clone()),
+                &source,
+                &base,
+                &ModuleFetchMetadata::default(),
+            )
+            .expect_err("inline source must have a syntax error");
+        vm.with_default_context_scope(|scope, _| {
+            let exception = module_load_error_value(scope, &error)?;
+            let message = v8::Exception::create_message(scope, exception);
+            assert_eq!(
+                message
+                    .get_script_resource_name(scope)
+                    .unwrap()
+                    .to_string(scope)
+                    .unwrap()
+                    .to_rust_string_lossy(scope),
+                "https://module-errors.test/source-document.html"
+            );
+            assert_eq!(message.get_line_number(scope), Some(line));
+            assert_eq!(message.get_start_column() + 1, column);
+            Ok(())
+        })
+        .unwrap();
+    }
+}
+
 fn install_module(vm: &mut ScriptVm, path: &str, source: &str) {
     let url = Url::parse(path).unwrap();
     let key = ModuleMapKey::java_script(url.clone());
