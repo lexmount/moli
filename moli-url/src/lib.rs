@@ -1,3 +1,4 @@
+pub mod components;
 pub mod origin;
 pub mod search_params;
 
