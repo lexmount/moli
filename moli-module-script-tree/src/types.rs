@@ -520,12 +520,18 @@ pub enum ModuleSource {
     Binary(Vec<u8>),
 }
 
+/// Identifies a JavaScript exception retained by the host in its owning realm.
+/// The tree transports this token without owning or reconstructing the value.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct ModuleExceptionId(pub u64);
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ModuleLoadError {
     pub stage: ModuleLoadStage,
     pub key: Option<Box<ModuleMapKey>>,
     pub message: String,
     pub error_constructor: Option<ModuleErrorConstructorKind>,
+    pub exception_id: Option<ModuleExceptionId>,
 }
 
 impl ModuleLoadError {
@@ -535,6 +541,7 @@ impl ModuleLoadError {
             key: None,
             message: message.into(),
             error_constructor: None,
+            exception_id: None,
         }
     }
 
@@ -545,6 +552,11 @@ impl ModuleLoadError {
 
     pub fn with_error_constructor(mut self, constructor: ModuleErrorConstructorKind) -> Self {
         self.error_constructor = Some(constructor);
+        self
+    }
+
+    pub fn with_exception_id(mut self, exception_id: ModuleExceptionId) -> Self {
+        self.exception_id = Some(exception_id);
         self
     }
 }

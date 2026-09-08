@@ -90,8 +90,6 @@ impl ScriptVm {
         request: PendingDynamicModuleImport,
         error: &ModuleLoadError,
     ) -> std::result::Result<(), ModuleLoadError> {
-        let message = error.message();
-        let error_constructor = error.error_constructor();
         self.renderer_document_isolate
             .with_entered_renderer_document_isolate(|isolate| {
                 let scope = pin!(v8::HandleScope::new(isolate));
@@ -99,14 +97,7 @@ impl ScriptVm {
                 let context = v8::Local::new(scope, request.context());
                 let scope = &mut v8::ContextScope::new(scope, context);
                 let resolver = v8::Local::new(scope, request.resolver());
-                let message = v8_string(scope, message);
-                let exception = message
-                    .and_then(|message| {
-                        error_constructor
-                            .and_then(|kind| script_error_value(scope, kind, message))
-                            .or_else(|| Some(v8::Exception::type_error(scope, message)))
-                    })
-                    .unwrap_or_else(|| v8::undefined(scope).into());
+                let exception = module_load_error_value(scope, error)?;
                 let _ = resolver.reject(scope, exception);
                 Ok(())
             })
