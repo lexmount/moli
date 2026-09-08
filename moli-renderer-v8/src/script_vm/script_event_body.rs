@@ -118,6 +118,26 @@ fn dispatch_script_failure_error_body(
         }
         None => window_script_failure_error_value(scope, global, None, message_value),
     };
+    // Retained V8 exceptions already carry engine-owned source information.
+    // Read that metadata, not author-visible stack or location properties, and
+    // do not replace a dependency's URL with the root script's fallback URL.
+    let location = retained.then(|| {
+        let exception_message = v8::Exception::create_message(scope, error_value);
+        let filename = exception_message
+            .get_script_resource_name(scope)
+            .and_then(|value| v8::Local::<v8::String>::try_from(value).ok())
+            .map(|value| value.to_rust_string_lossy(scope));
+        let line = exception_message
+            .get_line_number(scope)
+            .and_then(|line| u32::try_from(line).ok())
+            .unwrap_or(0);
+        let column = exception_message
+            .get_start_column()
+            .checked_add(1)
+            .and_then(|column| u32::try_from(column).ok())
+            .unwrap_or(0);
+        (filename, line, column)
+    });
     // Location metadata belongs to the ErrorEvent. Never mutate
     // the original exception (or invoke an author's setter).
     if !retained
@@ -137,9 +157,13 @@ fn dispatch_script_failure_error_body(
         scope,
         host_ptr,
         message,
-        filename.unwrap_or(""),
-        0,
-        0,
+        location
+            .as_ref()
+            .and_then(|(filename, _, _)| filename.as_deref())
+            .or(filename)
+            .unwrap_or(""),
+        location.as_ref().map_or(0, |(_, line, _)| *line),
+        location.as_ref().map_or(0, |(_, _, column)| *column),
         Some(error_value),
     )
     .map_err(anyhow::Error::msg)

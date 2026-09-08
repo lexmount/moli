@@ -57,6 +57,7 @@ fn install_child_error_observers(
     page_vm.vm_mut().eval(&format!(
         r#"
         globalThis.__childErrors = [];
+        globalThis.__childErrorLocations = [];
         globalThis.__childOnerrors = [];
         globalThis.__childErrorOrder = [];
         globalThis.__parentErrors = 0;
@@ -70,6 +71,7 @@ fn install_child_error_observers(
         const expectedReason = child.__reason;
         child.addEventListener('unhandledrejection', event => {{ ++__unhandled; event.preventDefault(); }});
         child.addEventListener('error', event => {{
+            __childErrorLocations.push([event.filename, event.lineno, event.colno]);
             __childErrors.push([
                 event.error, event instanceof child.ErrorEvent,
                 event.target === child, event.isTrusted,
@@ -89,6 +91,42 @@ fn install_child_error_observers(
     "#
     ))?;
     Ok(())
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn child_module_error_reporting_preserves_inline_source_location() {
+    run_page_vm_async_test(async {
+        let loader = crate::network::ResourceRequestClient::new(&FetchConfig::default()).unwrap();
+        let (mut page_vm, _resource, _wake) = page_vm_with_bound_task_sources_and_owner_wake(
+            &loader,
+            Url::parse("https://example.com/child-module-location.html").unwrap(),
+        );
+        queue_inline_child_error(&mut page_vm, &loader, "\n\nmissingModuleReference", "null")
+            .await?;
+        assert!(
+            page_vm
+                .run_exact_selected_page_task_for_test(
+                    PageSelectedTaskTestSelector::ChildDocumentScriptReady,
+                    &loader,
+                )
+                .await?
+        );
+        assert_eq!(
+            page_vm
+                .vm_mut()
+                .eval_without_microtask_checkpoint_for_test(
+                    r#"
+            JSON.stringify([__childErrorLocations.length,
+                __childErrorLocations[0]?.[0] === child.document.URL,
+                __childErrorLocations[0]?.slice(1), __parentErrors, __scriptErrors, __scriptLoads])
+        "#
+                )?,
+            "[1,true,[3,1],0,0,0]"
+        );
+        Ok::<_, anyhow::Error>(())
+    })
+    .await
+    .unwrap();
 }
 
 #[tokio::test(flavor = "current_thread")]

@@ -515,8 +515,21 @@ impl FetchedModuleSource {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ModuleSourceOrigin {
+    /// Diagnostic source identity, independent of the module resolution base.
+    pub url: Url,
+    /// Zero-based offsets into the containing source document.
+    pub line_offset: u32,
+    pub column_offset: u32,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ModuleSource {
     Text(String),
+    TextWithOrigin {
+        source: String,
+        origin: Box<ModuleSourceOrigin>,
+    },
     Binary(Vec<u8>),
 }
 

@@ -1608,20 +1608,17 @@ impl JsContextHost {
         document_handle: DomHandle,
         owner_local_window_id: LocalWindowId,
         owner_document_id: DocumentId,
-        document_base_url: Url,
+        document_url: Url,
         markup: &str,
         is_xml_document: bool,
     ) -> ChildLiveDocumentParserStartResult {
         let owner = FrameDocumentOwner::new(owner_local_window_id, owner_document_id);
         self.child_document_parsers.clear(owner);
         let mut parser = if is_xml_document {
-            DocumentParserSession::start_finite_live_xml_document(
-                document_base_url,
-                document_handle,
-            )
+            DocumentParserSession::start_finite_live_xml_document(document_url, document_handle)
         } else {
             DocumentParserSession::start_finite_live_document(
-                document_base_url,
+                document_url,
                 document_handle,
                 self.child_browsing_context_scripting_enabled(child_handle),
             )

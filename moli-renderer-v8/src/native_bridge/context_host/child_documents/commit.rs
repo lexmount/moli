@@ -202,7 +202,7 @@ impl JsContextHost {
         };
         let document_url = self.document_url_for_handle(document_handle);
         let document_base_url = self.document_base_url_for_handle(document_handle);
-        let parser_base_url = document_base_url.clone();
+        let parser_document_url = document_url.clone();
         let referrer_policy = self
             .child_browsing_context_referrer_policy_for_document_handle(document_handle)
             .map(str::to_owned);
@@ -236,7 +236,7 @@ impl JsContextHost {
             document_handle,
             owner_local_window_id,
             owner_document_id,
-            parser_base_url,
+            parser_document_url,
             source.as_ref(),
             is_xml_document,
         );

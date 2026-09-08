@@ -17,6 +17,75 @@ fn bound_parser_module(page_vm: &mut PageVm, position: u32, url: Url) -> Prepare
     script
 }
 
+#[tokio::test(flavor = "current_thread")]
+async fn parser_module_error_reporting_preserves_inline_source_origin() {
+    run_page_vm_async_test(async {
+        for (source, expected_line, expected_column) in [
+            ("missingModuleReference", 17, 23),
+            ("\nmissingModuleReference", 18, 1),
+        ] {
+            let loader = crate::network::ResourceRequestClient::new(&FetchConfig::default()).unwrap();
+            let document_url = Url::parse("https://example.com/inline-module-location.html").unwrap();
+            let mut page_vm = test_page_vm_with_loader_and_document_url(&loader, Vec::new(), document_url.clone());
+            page_vm.vm_mut().eval(r#"
+                globalThis.__locations = [];
+                globalThis.__onerrorLocations = [];
+                addEventListener('error', event => {
+                    __locations.push([event.filename, event.lineno, event.colno, event.error instanceof ReferenceError]);
+                    event.preventDefault();
+                });
+                onerror = (message, filename, line, column, error) => {
+                    __onerrorLocations.push([filename, line, column, error instanceof ReferenceError]);
+                    return true;
+                };
+            "#).unwrap();
+            let mut script = bound_parser_module(&mut page_vm, 9201, document_url.clone());
+            script.source_kind = ScriptSourceKind::Inline;
+            script.source = crate::planning::ScriptSource::Inline(source.to_owned());
+            script.base_url = Url::parse("https://example.com/import-base/").unwrap();
+            page_vm.vm_mut().document_runtime.note_parser_script_start_position(script.node_id, 17, 23);
+            let work = install_parser_module_defer_work(&mut page_vm, script);
+            page_vm.execute_post_parse_page_owned_task_on_named_owner_lane(&loader, work).await.unwrap();
+            run_parser_module_completion_turns_for_test(&mut page_vm, &loader, 0, "inline module location").await;
+            let expected = format!(r#"[["{document_url}",{expected_line},{expected_column},true]]"#);
+            assert_eq!(page_vm.vm_mut().eval("JSON.stringify(__locations)").unwrap(), expected);
+            assert_eq!(page_vm.vm_mut().eval("JSON.stringify(__onerrorLocations)").unwrap(), expected);
+        }
+    }).await;
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn parser_module_error_reporting_preserves_deferred_source_location() {
+    run_page_vm_async_test(async {
+        let loader = crate::network::ResourceRequestClient::new(&FetchConfig::default()).unwrap();
+        let mut page_vm = test_page_vm_with_loader_and_document_url(
+            &loader, Vec::new(), Url::parse("https://example.com/tla-location.html").unwrap(),
+        );
+        page_vm.vm_mut().eval(r#"
+            globalThis.__locations = [];
+            addEventListener('error', event => {
+                __locations.push([event.filename, event.lineno, event.colno,
+                    event.error === __locatedOriginal]);
+                event.preventDefault();
+            });
+        "#).unwrap();
+        let url = Url::parse("https://example.com/located-tla.mjs").unwrap();
+        let script = bound_parser_module(&mut page_vm, 9202, url.clone());
+        let work = install_parser_module_defer_work(&mut page_vm, script);
+        page_vm.execute_post_parse_page_owned_task_on_named_owner_lane(&loader, work).await.unwrap();
+        let source = "\nglobalThis.__locatedOriginal = Object.freeze(new TypeError('original'));\nawait new Promise((_, reject) => { globalThis.__rejectLocatedModule = () => reject(__locatedOriginal); });";
+        enqueue_parser_owned_module_script_fetch_completion_for_test(&mut page_vm, 0, &url, source);
+        assert!(run_next_main_module_fetch_terminal_for_test(&mut page_vm).unwrap().is_some());
+        run_ready_parser_deferred_body_for_test(&mut page_vm, &loader, "located TLA module").await;
+        assert_eq!(page_vm.vm_mut().eval("__locations.length").unwrap(), "0");
+        page_vm.vm_mut().eval("__rejectLocatedModule(); 'rejected'").unwrap();
+        run_parser_module_completion_turns_for_test(&mut page_vm, &loader, 1, "located TLA module").await;
+        let column = source.lines().nth(1).unwrap().find("new TypeError").unwrap() + 1;
+        assert_eq!(page_vm.vm_mut().eval("JSON.stringify(__locations)").unwrap(),
+            format!(r#"[["{url}",2,{column},true]]"#));
+    }).await;
+}
+
 async fn assert_parser_module_reports_original_value(value: &str, reject_later: bool) {
     let loader =
         crate::network::ResourceRequestClient::new(&FetchConfig::default()).expect("loader");

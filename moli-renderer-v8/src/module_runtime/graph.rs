@@ -1715,6 +1715,9 @@ fn local_entry_id(entry: module_tree::ModuleEntryId) -> ModuleEntryId {
 fn chromium_source(source: ModuleSource) -> module_tree::ModuleSource {
     match source {
         ModuleSource::Text(source) => module_tree::ModuleSource::Text(source),
+        ModuleSource::TextWithOrigin { source, origin } => {
+            module_tree::ModuleSource::TextWithOrigin { source, origin }
+        }
         ModuleSource::Binary(bytes) => module_tree::ModuleSource::Binary(bytes),
     }
 }
@@ -1793,6 +1796,9 @@ fn chromium_fetched_source_for_request(
 fn local_source(source: module_tree::ModuleSource) -> ModuleSource {
     match source {
         module_tree::ModuleSource::Text(source) => ModuleSource::Text(source),
+        module_tree::ModuleSource::TextWithOrigin { source, origin } => {
+            ModuleSource::TextWithOrigin { source, origin }
+        }
         module_tree::ModuleSource::Binary(bytes) => ModuleSource::Binary(bytes),
     }
 }
@@ -2648,6 +2654,23 @@ mod tests {
         Url::parse(raw).expect("test url should parse")
     }
 
+    #[test]
+    fn module_source_origin_survives_the_tree_adapter() {
+        let source = ModuleSource::text_with_origin(
+            "export const value = 1;".to_owned(),
+            crate::document_module_graph::ModuleSourceOrigin {
+                url: url("https://example.test/source.html"),
+                line_offset: 17,
+                column_offset: 23,
+            },
+        );
+        let roundtrip = local_source(chromium_source(source.clone()));
+        assert_eq!(roundtrip, source);
+        assert_eq!(roundtrip.text_source(), Some("export const value = 1;"));
+        assert_eq!(roundtrip.origin().unwrap().line_offset, 17);
+        assert!(roundtrip.binary_source().is_none());
+    }
+
     fn new_test_vm(url: &str) -> StandaloneScriptVmHarness {
         let _js_runtime = crate::JsRuntime::initialize();
         let page_task_queue = crate::page_task_queue::PageTaskQueueTestHarness::new();
@@ -2662,6 +2685,52 @@ mod tests {
         .expect("script vm bootstrap should succeed")
         .finish()
         .expect("script vm finish should succeed")
+    }
+
+    #[test]
+    fn module_source_origin_keeps_each_import_meta_base_when_first_accessed_later() {
+        let document_url = url("https://example.test/source.html");
+        let mut vm = new_test_vm(document_url.as_str());
+        vm.eval("globalThis.__moduleMetaReaders = [];").unwrap();
+        for directory in ["first", "second"] {
+            let base_url = url(&format!("https://example.test/{directory}/"));
+            let source = ModuleSource::text_with_origin(
+                "__moduleMetaReaders.push(() => import.meta);".to_owned(),
+                crate::document_module_graph::ModuleSourceOrigin {
+                    url: document_url.clone(),
+                    line_offset: 7,
+                    column_offset: 0,
+                },
+            );
+            let mut job = parser_owned_loaded_module_script_graph_job(
+                &mut vm,
+                source,
+                &base_url,
+                &document_url,
+                &ScriptFetchMetadata::default(),
+                false,
+            )
+            .unwrap();
+            let NativeModuleGraphJobAdvance::Complete(graph) =
+                job.advance_module_script_owner_lane(&mut vm).unwrap()
+            else {
+                panic!("an import-free inline module must compile without fetching");
+            };
+            vm.instantiate_native_module_graph(&graph).unwrap();
+            vm.evaluate_native_module_graph(graph.root_entry).unwrap();
+        }
+        assert_eq!(
+            vm.eval(
+                r#"JSON.stringify([1, 0].map(index => {
+                    const meta = __moduleMetaReaders[index]();
+                    const originalURL = meta.url;
+                    meta.url = 'https://author-replacement.test/';
+                    return [originalURL, meta.resolve('./dependency.mjs')];
+                }))"#,
+            )
+            .unwrap(),
+            r#"[["https://example.test/second/","https://example.test/second/dependency.mjs"],["https://example.test/first/","https://example.test/first/dependency.mjs"]]"#
+        );
     }
 
     #[test]
