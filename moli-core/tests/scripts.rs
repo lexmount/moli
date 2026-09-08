@@ -3152,6 +3152,10 @@ async fn dynamic_module_tla_exotic_rejection_reports_window_error_payload_withou
         Some(&JsValueSnapshot::Bool(true))
     );
     assert_eq!(
+        diagnostic_global(&page, "dynamicModuleTlaPayloadErrorIdentityMatches"),
+        Some(&JsValueSnapshot::Bool(true))
+    );
+    assert_eq!(
         diagnostic_global(&page, "dynamicModuleTlaPayloadFilenameMatches"),
         Some(&JsValueSnapshot::Bool(true))
     );
@@ -3837,6 +3841,10 @@ async fn parser_owned_module_tla_exotic_rejection_reports_window_error_payload_w
     );
     assert_eq!(
         diagnostic_global(&page, "parserOwnedModuleTlaPayloadErrorMessageMatches"),
+        Some(&JsValueSnapshot::Bool(true))
+    );
+    assert_eq!(
+        diagnostic_global(&page, "parserOwnedModuleTlaPayloadErrorIdentityMatches"),
         Some(&JsValueSnapshot::Bool(true))
     );
     assert_eq!(
@@ -5377,7 +5385,7 @@ async fn module_wasm_js_cycle_reports_guard_without_crashing() -> Result<()> {
         .await?;
     assert_eq!(
         diagnostic_global(&page, "moduleWasmJsCycleConstructor"),
-        Some(&JsValueSnapshot::String("Error".to_owned())),
+        Some(&JsValueSnapshot::String("TypeError".to_owned())),
         "message: {:?}",
         diagnostic_global(&page, "moduleWasmJsCycleMessage")
     );
