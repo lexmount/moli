@@ -41,7 +41,7 @@ impl CdpConnection {
             {
                 tracing::warn!(%error, "native Document inspection restore admission failed");
             }
-            let loader_id = context.project_committed_document_loader_for_target(
+            let loader_id = context.project_document_navigation_loader_for_target(
                 &target_id,
                 metadata.navigation,
                 &mut allocator,
@@ -155,6 +155,14 @@ impl CdpConnection {
             );
         }
         out.extend_background_events_after_messages(command_context.take_protocol_events());
+        // A later native attempt may have started before this committed
+        // Document's event was consumed. Re-establish that exact pending hold
+        // after publishing this Document's fence; do not confuse it with a
+        // superseded attempt belonging to the outgoing Document.
+        out.extend_background_events_after_messages(
+            self.project_browser_navigation(document.web_contents())
+                .await,
+        );
         out.into_plan().into_background_events(None, None)
     }
 }
@@ -182,6 +190,15 @@ mod tests {
         url: &str,
     ) -> DocumentHandle {
         let navigation = context.start_document_navigation(contents).unwrap();
+        complete_native_navigation(context, contents, navigation, url).await
+    }
+
+    async fn complete_native_navigation(
+        context: &BrowserContextHandle,
+        contents: WebContentsHandle,
+        navigation: moli_core::browser::NavigationId,
+        url: &str,
+    ) -> DocumentHandle {
         let inherited = context.inherited_document_policy(Default::default(), &[], None, None);
         let mut load = context
             .start_navigation_load(
@@ -278,6 +295,173 @@ mod tests {
             .unwrap();
         ctx.take_all();
         (ctx, context, document, owner)
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn native_navigation_observation_recovers_pending_and_failed_attempts_without_rebinding()
+    {
+        for recover_started in [false, true] {
+            let (mut ctx, context, document, owner) = fixture().await;
+            let contents = document.web_contents();
+            let attachment = ctx
+                .conn
+                .current_renderer_agent_attachment_for_owner(&owner)
+                .unwrap();
+            let first = context.start_document_navigation(contents).unwrap();
+            if recover_started {
+                let snapshot = ctx.conn.subscribe_browser_events().unwrap().0;
+                ctx.conn.project_browser_snapshot(snapshot).await;
+            } else {
+                ctx.conn.project_browser_navigation(contents).await;
+            }
+            let slot = ctx
+                .conn
+                .runtime_session_owner_slot_for_owner(&owner)
+                .unwrap();
+            assert!(slot.has_renderer_navigation(&first));
+            assert_eq!(slot.observed_document_navigations(), [first]);
+            ctx.conn.project_browser_navigation(contents).await;
+            assert_eq!(
+                ctx.conn
+                    .runtime_session_owner_slot_for_owner(&owner)
+                    .unwrap()
+                    .observed_document_navigations(),
+                [first]
+            );
+            let second = context.start_document_navigation(contents).unwrap();
+            ctx.conn.project_browser_navigation(contents).await;
+            let slot = ctx
+                .conn
+                .runtime_session_owner_slot_for_owner(&owner)
+                .unwrap();
+            assert!(!slot.has_renderer_navigation(&first));
+            assert_eq!(slot.observed_document_navigations(), [second]);
+            let stale = ctx.conn.subscribe_browser_events().unwrap().0;
+            assert!(
+                !context
+                    .cancel_document_navigation(contents, &first)
+                    .unwrap()
+            );
+            assert!(
+                context
+                    .cancel_document_navigation(contents, &second)
+                    .unwrap()
+            );
+            ctx.conn.project_browser_snapshot(stale).await;
+            let slot = ctx
+                .conn
+                .runtime_session_owner_slot_for_owner(&owner)
+                .unwrap();
+            assert!(
+                !slot.document_projection_is_pending(),
+                "old snapshot must not resurrect a canceled attempt"
+            );
+            assert_eq!(
+                ctx.conn.current_renderer_agent_attachment_for_owner(&owner),
+                Some(attachment)
+            );
+            assert_eq!(context.document_handle(contents).unwrap(), Some(document));
+            assert!(
+                matches!(context.navigation_snapshot(contents).unwrap().attempt, Some(moli_core::browser::NavigationAttempt::Failed { request, .. }) if request.navigation == second)
+            );
+        }
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn native_navigation_commit_keeps_its_hold_until_document_projection() {
+        for later_attempt in [false, true] {
+            let (mut ctx, context, document, owner) = fixture().await;
+            let (context_id, target_id) = ctx
+                .conn
+                .resolved_page_owner_identity_for_owner(&owner)
+                .unwrap();
+            let contents = document.web_contents();
+            let navigation = context.start_document_navigation(contents).unwrap();
+            ctx.conn.project_browser_navigation(contents).await;
+            let new = complete_native_navigation(
+                &context,
+                contents,
+                navigation,
+                "data:text/html,<title>native commit fence</title>",
+            )
+            .await;
+            assert_ne!(new, document);
+            let next = later_attempt.then(|| context.start_document_navigation(contents).unwrap());
+            // An older Browser event can be consumed after the native commit but
+            // before its DocumentCommitted record reaches the DevTools owner.
+            ctx.conn.project_browser_navigation(contents).await;
+            let target = ctx
+                .conn
+                .browser_context_by_id(&context_id)
+                .unwrap()
+                .page_targets
+                .get(&target_id)
+                .unwrap();
+            assert!(
+                target.runtime_slot.has_renderer_navigation(&navigation),
+                "native commit is not a failed attempt: retain its unpublished projection hold"
+            );
+            ctx.conn.project_browser_document_commit(new).await;
+            let target = ctx
+                .conn
+                .browser_context_by_id(&context_id)
+                .unwrap()
+                .page_targets
+                .get(&target_id)
+                .unwrap();
+            assert!(!target.runtime_slot.has_renderer_navigation(&navigation));
+            assert_eq!(
+                target.runtime_slot.document_projection_is_pending(),
+                later_attempt
+            );
+            if let Some(next) = next {
+                assert!(target.runtime_slot.has_renderer_navigation(&next));
+                assert!(context.cancel_document_navigation(contents, &next).unwrap());
+                ctx.conn.project_browser_navigation(contents).await;
+            }
+        }
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn native_navigation_cancellation_cannot_release_a_command_response_fence() {
+        let (mut ctx, context, document, owner) = fixture().await;
+        let (context_id, target_id) = ctx
+            .conn
+            .resolved_page_owner_identity_for_owner(&owner)
+            .unwrap();
+        let navigation = ctx
+            .conn
+            .browser_context_by_id_mut(&context_id)
+            .unwrap()
+            .begin_target_document_navigation(&target_id, "LOADER-command-response".into());
+        ctx.conn
+            .project_browser_navigation(document.web_contents())
+            .await;
+        assert!(
+            context
+                .cancel_document_navigation(document.web_contents(), &navigation)
+                .unwrap()
+        );
+        ctx.conn
+            .project_browser_navigation(document.web_contents())
+            .await;
+        let slot = ctx
+            .conn
+            .runtime_session_owner_slot_for_owner(&owner)
+            .unwrap();
+        assert!(slot.has_renderer_navigation(&navigation));
+        assert!(slot.observed_document_navigations().is_empty());
+        assert!(
+            ctx.conn
+                .finish_navigation_without_document_projection_for_owner(&owner, &navigation)
+                .is_some()
+        );
+        assert!(
+            !ctx.conn
+                .runtime_session_owner_slot_for_owner(&owner)
+                .unwrap()
+                .document_projection_is_pending()
+        );
     }
 
     #[tokio::test(flavor = "multi_thread")]

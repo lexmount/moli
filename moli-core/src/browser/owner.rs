@@ -18,6 +18,7 @@ mod downloads;
 mod javascript_dialog;
 pub use activation::PendingWebContentsActivation;
 mod navigation;
+mod navigation_events;
 pub use navigation::{
     BrowserBuiltInitialDocument, BrowserCommittedInitialDocument, BrowserDocumentMaterialization,
     BrowserDocumentNavigationCommit, BrowserInitialDocumentAdmission, BrowserInitialDocumentBuild,
@@ -130,10 +131,15 @@ impl Browser {
             return false;
         };
         self.navigation_work.remove_context(id);
+        let navigations = context.navigation_snapshots().collect::<Vec<_>>();
         let dialogs = context.javascript_dialog_snapshots();
         self.events
             .publish(super::BrowserEvent::ContextDisposed(id));
         context.shutdown();
+        self.publish_failed_navigations(
+            navigations,
+            super::NavigationFailureReason::ContextDisposed,
+        );
         self.publish_closed_javascript_dialogs(dialogs);
         true
     }
@@ -146,8 +152,13 @@ impl Browser {
                 .publish(super::BrowserEvent::ContextDisposed(id));
         }
         for (_, context) in contexts {
+            let navigations = context.navigation_snapshots().collect::<Vec<_>>();
             let dialogs = context.javascript_dialog_snapshots();
             context.shutdown();
+            self.publish_failed_navigations(
+                navigations,
+                super::NavigationFailureReason::ContextDisposed,
+            );
             self.publish_closed_javascript_dialogs(dialogs);
         }
     }
@@ -477,6 +488,10 @@ impl BrowserHandle {
                     .contexts
                     .values()
                     .flat_map(BrowserContext::javascript_dialog_snapshots),
+                browser
+                    .contexts
+                    .values()
+                    .flat_map(BrowserContext::navigation_snapshots),
             )
         })
     }
@@ -492,6 +507,7 @@ impl BrowserHandle {
         self.execute(move |browser| {
             let context = browser.context_mut(handle.context())?;
             let was_selected = context.selected_web_contents_handle() == Some(handle);
+            let navigation = context.navigation_snapshot(handle)?;
             let dialogs = context.web_contents_javascript_dialog_snapshots(handle);
             let closing = context.close_web_contents(handle)?;
             let activated = was_selected
@@ -504,6 +520,7 @@ impl BrowserHandle {
                 })
             });
             browser.navigation_work.remove_web_contents(handle);
+            browser.publish_failed_navigations([navigation], super::NavigationFailureReason::WebContentsClosed);
             let event = browser
                 .events
                 .publish(super::BrowserEvent::WebContentsClosed {
@@ -766,7 +783,15 @@ impl BrowserContextHandle {
                     .web_contents_handles()
                     .collect::<Vec<_>>();
                 let dialogs = browser.context(context)?.javascript_dialog_snapshots();
+                let navigations = browser
+                    .context(context)?
+                    .navigation_snapshots()
+                    .collect::<Vec<_>>();
                 let closing = browser.context_mut(context)?.close_all_web_contents();
+                browser.publish_failed_navigations(
+                    navigations,
+                    super::NavigationFailureReason::WebContentsClosed,
+                );
                 browser.publish_closed_javascript_dialogs(dialogs);
                 browser.navigation_work.remove_context(context);
                 Ok::<_, String>(
@@ -801,10 +826,20 @@ impl BrowserContextHandle {
     ) -> Result<super::NavigationId, String> {
         let context = self.id;
         self.browser.execute(move |browser| {
+            // Validate the exact Context before superseding any previous request.
+            let previous = browser.context(context)?.navigation_snapshot(handle)?;
             let navigation = browser
                 .context_mut(context)?
                 .start_document_navigation(handle)?;
             browser.navigation_work.remove_web_contents(handle);
+            browser
+                .publish_failed_navigations([previous], super::NavigationFailureReason::Superseded);
+            let request = browser
+                .pending_navigation(handle)?
+                .expect("admitted navigation owns its reserved Document");
+            browser
+                .events
+                .publish(super::BrowserEvent::NavigationStarted(request));
             Ok(navigation)
         })?
     }
@@ -812,10 +847,13 @@ impl BrowserContextHandle {
     pub fn clear_document_navigation_state(&self, handle: WebContentsHandle) -> Result<(), String> {
         let context = self.id;
         self.browser.execute(move |browser| {
+            let previous = browser.context(context)?.navigation_snapshot(handle)?;
             browser
                 .context_mut(context)?
                 .clear_document_navigation_state(handle)?;
             browser.navigation_work.remove_web_contents(handle);
+            browser
+                .publish_failed_navigations([previous], super::NavigationFailureReason::Canceled);
             Ok(())
         })?
     }
@@ -1072,6 +1110,7 @@ impl BrowserContextHandle {
         fn is_on_initial_document(handle: WebContentsHandle) -> Option<bool>;
         fn initial_document_has_pending_navigation(handle: WebContentsHandle) -> bool;
         fn navigation_history_snapshot(handle: WebContentsHandle) -> (usize, Vec<super::web_contents::PageNavigationHistoryEntry>);
+        fn navigation_snapshot(handle: WebContentsHandle) -> super::NavigationSnapshot;
         fn navigation_history_entry_url(handle: WebContentsHandle, entry_id: i32) -> Option<String>;
         fn has_pending_document_navigation(handle: WebContentsHandle) -> bool;
         fn navigation_is_default(handle: WebContentsHandle) -> bool;
@@ -1188,21 +1227,17 @@ impl BrowserContextHandle {
         self.try_read(move |context| context.accepts_document_body_completion(handle, &navigation))
     }
 
-    pub fn clear_pending_navigation_if_matches(
+    pub fn cancel_document_navigation(
         &self,
         handle: WebContentsHandle,
         navigation: &super::NavigationId,
     ) -> Result<bool, String> {
         let navigation = *navigation;
-        let context = self.id;
+        if handle.context() != self.id {
+            return Err("WebContents belongs to another BrowserContext".into());
+        }
         self.browser.execute(move |browser| {
-            let cleared = browser
-                .context_mut(context)?
-                .clear_pending_navigation_if_matches(handle, &navigation)?;
-            if cleared {
-                browser.navigation_work.remove_web_contents(handle);
-            }
-            Ok(cleared)
+            browser.cancel_navigation(handle, navigation, super::NavigationFailureReason::Canceled)
         })?
     }
 

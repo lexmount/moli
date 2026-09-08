@@ -1,6 +1,7 @@
 use super::*;
 use crate::browser::{
-    BrowserContextStoragePartitionHandles, BrowserService, DocumentHandle, DocumentRetirement,
+    BrowserContextStoragePartitionHandles, BrowserEvent, BrowserService, DocumentHandle,
+    DocumentRetirement, NavigationAttempt, NavigationFailureReason, NavigationSnapshot,
     StoragePartitionKind, WebContentsCreation,
 };
 use moli_test_support::FixtureServer;
@@ -40,6 +41,155 @@ fn start_load(
             context.inherited_document_policy(Default::default(), &[], None, None),
         )
         .unwrap()
+}
+
+#[test]
+fn native_navigation_start_and_cancellation_publish_owner_occurrences() {
+    let service = BrowserService::start().unwrap();
+    let browser = service.handle();
+    let (context, contents) = context_with_contents(&service);
+    let (before, mut events) = browser.subscribe().unwrap();
+    let navigation = context.start_document_navigation(contents).unwrap();
+    assert!(
+        context
+            .accepts_pending_navigation(contents, &navigation)
+            .unwrap()
+    );
+    let started = events
+        .try_recv()
+        .expect("native navigation admission must publish a Browser occurrence without DevTools");
+    assert!(started.sequence > before.sequence);
+    let BrowserEvent::NavigationStarted(request) = started.event else {
+        panic!("{started:?}");
+    };
+    assert_eq!(request.web_contents, contents);
+    assert_eq!(request.navigation, navigation);
+    assert_eq!(
+        browser.subscribe().unwrap().0.navigations,
+        [NavigationSnapshot {
+            web_contents: contents,
+            committed: None,
+            attempt: Some(NavigationAttempt::Started(request))
+        }]
+    );
+    assert!(
+        context
+            .cancel_document_navigation(contents, &navigation)
+            .unwrap()
+    );
+    let canceled = events
+        .try_recv()
+        .expect("native cancellation must publish its exact terminal occurrence");
+    assert!(canceled.sequence > started.sequence);
+    assert_eq!(
+        canceled.event,
+        BrowserEvent::NavigationFailed {
+            request,
+            reason: NavigationFailureReason::Canceled
+        }
+    );
+    let failed = NavigationSnapshot {
+        web_contents: contents,
+        committed: None,
+        attempt: Some(NavigationAttempt::Failed {
+            request,
+            reason: NavigationFailureReason::Canceled,
+        }),
+    };
+    assert_eq!(context.navigation_snapshot(contents).unwrap(), failed);
+    assert!(
+        !context
+            .cancel_document_navigation(contents, &navigation)
+            .unwrap()
+    );
+    assert!(events.try_recv().is_err());
+    for _ in 0..130 {
+        let transient = browser
+            .create_context(
+                BrowserContextStoragePartitionHandles::memory(),
+                StoragePartitionKind::Ephemeral,
+                None,
+                None,
+            )
+            .unwrap();
+        transient.remove().unwrap();
+    }
+    assert!(matches!(
+        events.try_recv(),
+        Err(tokio::sync::broadcast::error::TryRecvError::Lagged(_))
+    ));
+    let (recovered, mut events) = browser.subscribe().unwrap();
+    assert_eq!(recovered.navigations, [failed]);
+    let replacement = context.start_document_navigation(contents).unwrap();
+    assert_ne!(replacement, navigation);
+    assert!(
+        matches!(events.try_recv().unwrap().event, BrowserEvent::NavigationStarted(next) if next.navigation == replacement && next.document != request.document)
+    );
+    assert!(
+        !context
+            .cancel_document_navigation(contents, &navigation)
+            .unwrap()
+    );
+    assert!(events.try_recv().is_err());
+    service.shutdown();
+}
+
+#[tokio::test]
+async fn committed_native_navigation_is_not_reported_as_failed_on_close() {
+    let service = BrowserService::start().unwrap();
+    let browser = service.handle();
+    let (context, contents) = context_with_contents(&service);
+    let (_, mut events) = browser.subscribe().unwrap();
+    let document = navigate(
+        &context,
+        contents,
+        "data:text/html,<title>committed</title>",
+    )
+    .await;
+    let mut started = None;
+    let mut committed = false;
+    while let Ok(event) = events.try_recv() {
+        match event.event {
+            BrowserEvent::NavigationStarted(request) => {
+                assert!(started.replace(request).is_none());
+            }
+            BrowserEvent::DocumentCommitted(actual) => {
+                assert_eq!(actual, document);
+                committed = true;
+            }
+            BrowserEvent::NavigationFailed { .. } => {
+                panic!("committed attempt was reported as failed")
+            }
+            _ => {}
+        }
+    }
+    assert!(committed);
+    let request = started.unwrap();
+    assert_eq!(request.document, document.id());
+    let committed = NavigationSnapshot {
+        web_contents: contents,
+        committed: Some(request),
+        attempt: None,
+    };
+    assert_eq!(context.navigation_snapshot(contents).unwrap(), committed);
+    assert_eq!(browser.subscribe().unwrap().0.navigations, [committed]);
+    assert!(
+        !context
+            .cancel_document_navigation(contents, &request.navigation)
+            .unwrap()
+    );
+    context
+        .close_web_contents(contents)
+        .unwrap()
+        .close_async()
+        .await;
+    while let Ok(event) = events.try_recv() {
+        assert!(!matches!(
+            event.event,
+            BrowserEvent::NavigationFailed { .. }
+        ));
+    }
+    service.shutdown();
 }
 
 // Uses only public Browser capabilities: no Page access, DevTools connection,
@@ -170,17 +320,28 @@ fn next_document_commit(
     events: &mut crate::browser::BrowserEventReceiver,
     document: DocumentHandle,
 ) -> crate::browser::BrowserEventRecord {
+    let mut started = false;
     loop {
         let event = events
             .try_recv()
             .expect("commit publishes before returning");
         if event.event == crate::browser::BrowserEvent::DocumentCommitted(document) {
+            assert!(
+                started,
+                "native admission must precede its exact Document commit"
+            );
             return event;
         }
-        assert!(matches!(
-            event.event,
-            crate::browser::BrowserEvent::DocumentLifecycleChanged(_)
-        ));
+        match event.event {
+            BrowserEvent::NavigationStarted(request) => {
+                assert!(!started, "duplicate navigation admission");
+                assert_eq!(request.web_contents, document.web_contents());
+                assert_eq!(request.document, document.id());
+                started = true;
+            }
+            BrowserEvent::DocumentLifecycleChanged(_) => {}
+            _ => panic!("unexpected event before exact Document commit: {event:?}"),
+        }
     }
 }
 
@@ -1048,6 +1209,7 @@ async fn assert_in_flight_navigation_retirement(retirement: NavigationRetirement
     let stale_navigation = context.start_document_navigation(contents).unwrap();
     let mut load = start_load(&context, contents);
     let navigation = load.navigation_id();
+    let (_, mut navigation_events) = service.handle().subscribe().unwrap();
     let fetching = tokio::spawn(async move {
         let result = load.fetch_navigation("GET", &url, None, Vec::new()).await;
         (load, result)
@@ -1082,13 +1244,13 @@ async fn assert_in_flight_navigation_retirement(retirement: NavigationRetirement
         NavigationRetirement::CancelMatching => {
             assert!(
                 !context
-                    .clear_pending_navigation_if_matches(contents, &stale_navigation)
+                    .cancel_document_navigation(contents, &stale_navigation)
                     .unwrap()
             );
             assert!(context.navigation_retains(contents, navigation).unwrap());
             assert!(
                 context
-                    .clear_pending_navigation_if_matches(contents, &navigation)
+                    .cancel_document_navigation(contents, &navigation)
                     .unwrap()
             );
             None
@@ -1124,6 +1286,33 @@ async fn assert_in_flight_navigation_retirement(retirement: NavigationRetirement
         "a late fetch completion must not retain retired navigation work"
     );
     drop(load);
+    let failures = std::iter::from_fn(|| navigation_events.try_recv().ok())
+        .filter_map(|record| match record.event {
+            BrowserEvent::NavigationFailed { request, reason }
+                if request.navigation == navigation =>
+            {
+                Some((request, reason))
+            }
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(
+        failures.len(),
+        1,
+        "every retired native request has exactly one terminal occurrence"
+    );
+    assert_eq!(failures[0].0.web_contents, contents);
+    assert_eq!(
+        failures[0].1,
+        match retirement {
+            NavigationRetirement::Context => NavigationFailureReason::ContextDisposed,
+            NavigationRetirement::WebContents | NavigationRetirement::AllWebContents =>
+                NavigationFailureReason::WebContentsClosed,
+            NavigationRetirement::Supersession => NavigationFailureReason::Superseded,
+            NavigationRetirement::ClearState | NavigationRetirement::CancelMatching =>
+                NavigationFailureReason::Canceled,
+        }
+    );
     service.shutdown();
 }
 

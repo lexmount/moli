@@ -909,11 +909,6 @@ impl BrowserContext {
         target_id: &str,
         loader_id: String,
     ) -> NavigationId {
-        self.page_slot_for_target_mut(target_id)
-            .expect("registered Target projection")
-            .finish_renderer_document_lifecycle_observers(
-                RendererDocumentLifecycleObservation::Superseded,
-            );
         let token = self
             .browser_context
             .start_document_navigation(
@@ -921,10 +916,7 @@ impl BrowserContext {
                     .expect("registered Target must reference live WebContents"),
             )
             .expect("registered Target must reference live WebContents");
-        self.page_slot_for_target_mut(target_id)
-            .expect("registered Target projection")
-            .pending_renderer_page = None;
-        self.retain_navigation_projections_for_target(target_id);
+        self.prepare_target_navigation_projection(target_id);
         self.page_slot_for_target_mut(target_id)
             .expect("registered Target projection")
             .cdp_navigation_loaders
@@ -935,6 +927,56 @@ impl BrowserContext {
             .runtime_slot
             .begin_document_projection(token);
         token
+    }
+
+    fn prepare_target_navigation_projection(&mut self, target_id: &str) {
+        let slot = self
+            .page_slot_for_target_mut(target_id)
+            .expect("registered Target projection");
+        slot.finish_renderer_document_lifecycle_observers(
+            RendererDocumentLifecycleObservation::Superseded,
+        );
+        slot.pending_renderer_page = None;
+        self.retain_navigation_projections_for_target(target_id);
+    }
+
+    pub(in crate::conn) fn observe_target_navigation_started(
+        &mut self,
+        target_id: &str,
+        request: moli_core::browser::NavigationRequest,
+    ) -> bool {
+        if self.web_contents_handle_for_target(target_id) != Some(request.web_contents)
+            || self
+                .browser_context
+                .navigation_snapshot(request.web_contents)
+                .ok()
+                .and_then(|snapshot| snapshot.attempt)
+                != Some(moli_core::browser::NavigationAttempt::Started(request))
+            || !self.page_targets.get_mut(target_id).is_some_and(|target| {
+                target
+                    .runtime_slot
+                    .observe_document_navigation(request.navigation)
+            })
+        {
+            return false;
+        }
+        self.prepare_target_navigation_projection(target_id);
+        true
+    }
+
+    pub(in crate::conn) fn discard_target_navigation_projection(
+        &mut self,
+        target_id: &str,
+        navigation: &NavigationId,
+    ) {
+        let slot = self
+            .page_slot_for_target_mut(target_id)
+            .expect("registered Target projection");
+        if matches!(slot.pending_renderer_page.as_ref(), Some(PendingRendererPageBinding::DocumentNavigation { navigation: pending, .. }) if pending == navigation)
+        {
+            slot.pending_renderer_page = None;
+        }
+        self.retain_navigation_projections_for_target(target_id);
     }
 
     #[cfg(test)]
@@ -1154,8 +1196,8 @@ impl BrowserContext {
             )
     }
 
-    /// Allocate only a DevTools projection ID; the Browser already committed.
-    pub(crate) fn project_committed_document_loader_for_target(
+    /// Allocate only a DevTools projection ID for a native navigation or commit.
+    pub(crate) fn project_document_navigation_loader_for_target(
         &mut self,
         target_id: &str,
         navigation: Option<NavigationId>,
@@ -1230,21 +1272,10 @@ impl BrowserContext {
             .expect("registered Target must reference live WebContents");
         if self
             .browser_context
-            .clear_pending_navigation_if_matches(handle, navigation)
+            .cancel_document_navigation(handle, navigation)
             .unwrap_or(false)
         {
-            if matches!(
-                self.page_slot_for_target_mut(target_id).expect("registered Target projection").pending_renderer_page.as_ref(),
-                Some(PendingRendererPageBinding::DocumentNavigation {
-                    navigation: pending_navigation,
-                    ..
-                }) if pending_navigation == navigation
-            ) {
-                self.page_slot_for_target_mut(target_id)
-                    .expect("registered Target projection")
-                    .pending_renderer_page = None;
-            }
-            self.retain_navigation_projections_for_target(target_id);
+            self.discard_target_navigation_projection(target_id, navigation);
             return true;
         }
         false

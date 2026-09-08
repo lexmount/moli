@@ -118,10 +118,10 @@ async fn same_document_history_rejects_replacement_foreign_and_pending_navigatio
     );
     assert_eq!(browser.contents.navigation_history_snapshot(), before);
     assert!(
-        browser
-            .contents
-            .navigation
-            .clear_pending_document_navigation_if_matches(&pending)
+        browser.contents.navigation.cancel_document_navigation(
+            &pending,
+            crate::browser::NavigationFailureReason::Canceled
+        )
     );
     push(&mut browser, "accepted").await;
     let after = browser.contents.navigation_history_snapshot();
@@ -255,11 +255,10 @@ async fn history_reset_rejects_pending_traversal_before_touching_renderer() {
             .await,
         json!([2, 2])
     );
-    assert!(
-        browser
-            .contents
-            .clear_pending_document_navigation_if_matches(&traversal)
-    );
+    assert!(browser.contents.cancel_document_navigation(
+        &traversal,
+        crate::browser::NavigationFailureReason::Canceled
+    ));
     let completion = browser
         .contents
         .start_reset_navigation_history()

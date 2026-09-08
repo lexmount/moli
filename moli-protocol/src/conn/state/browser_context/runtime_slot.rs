@@ -171,6 +171,18 @@ impl TargetRuntimeSlot {
             .expect("an open target runtime slot must accept a new document navigation");
     }
 
+    pub(super) fn observe_document_navigation(&mut self, navigation: NavigationId) -> bool {
+        self.devtools_renderer_channel.reopen_after_target_crash();
+        self.devtools_renderer_channel
+            .observe_document_navigation(navigation)
+            .unwrap_or(false)
+    }
+
+    pub(crate) fn observed_document_navigations(&self) -> Vec<NavigationId> {
+        self.devtools_renderer_channel
+            .observed_document_navigations()
+    }
+
     pub(in crate::conn::state) fn project_committed_document_inspection(
         &mut self,
         navigation: NavigationId,

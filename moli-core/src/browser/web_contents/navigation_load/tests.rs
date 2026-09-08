@@ -41,16 +41,14 @@ async fn precommit_retirement_preserves_document_and_retires_request_history() {
             None
         };
 
-        assert!(
-            browser
-                .contents
-                .clear_pending_document_navigation_if_matches(&navigation)
-        );
-        assert!(
-            !browser
-                .contents
-                .clear_pending_document_navigation_if_matches(&navigation)
-        );
+        assert!(browser.contents.cancel_document_navigation(
+            &navigation,
+            crate::browser::NavigationFailureReason::Canceled
+        ));
+        assert!(!browser.contents.cancel_document_navigation(
+            &navigation,
+            crate::browser::NavigationFailureReason::Canceled
+        ));
         assert!(load.request_cancellation.is_cancelled());
         assert!(cancellation.is_cancelled());
         assert!(preparation_cancellation.is_cancelled());
@@ -117,11 +115,10 @@ async fn superseded_request_cannot_clear_or_transfer_history_intent() {
                 .mark_next_navigation_history_traverse_to_entry(before.1[0].id);
         }
         let winner = browser.contents.navigation.start_document_navigation();
-        assert!(
-            !browser
-                .contents
-                .clear_pending_document_navigation_if_matches(&superseded)
-        );
+        assert!(!browser.contents.cancel_document_navigation(
+            &superseded,
+            crate::browser::NavigationFailureReason::Canceled
+        ));
         assert_eq!(browser.contents.navigation_history_snapshot(), before);
         assert_eq!(
             browser.contents.navigation.can_reset_navigation_history(),
@@ -133,11 +130,10 @@ async fn superseded_request_cannot_clear_or_transfer_history_intent() {
         assert_eq!(entries.len(), if traverse { 2 } else { 3 });
         assert_eq!(entries[index].title, "winner");
         assert_eq!(entries[index].transition_type, "typed");
-        assert!(
-            !browser
-                .contents
-                .clear_pending_document_navigation_if_matches(&winner)
-        );
+        assert!(!browser.contents.cancel_document_navigation(
+            &winner,
+            crate::browser::NavigationFailureReason::Canceled
+        ));
         assert_eq!(
             browser.contents.navigation_history_snapshot(),
             (index, entries)

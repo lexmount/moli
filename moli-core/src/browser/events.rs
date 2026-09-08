@@ -15,6 +15,11 @@ pub enum BrowserEvent {
         previous: Option<WebContentsHandle>,
     },
     DocumentCommitted(DocumentHandle),
+    NavigationStarted(NavigationRequest),
+    NavigationFailed {
+        request: NavigationRequest,
+        reason: NavigationFailureReason,
+    },
     DocumentLifecycleChanged(DocumentLifecycleSnapshot),
     DialogOpened(JavaScriptDialogOpened),
     DialogClosed {
@@ -53,6 +58,7 @@ pub struct BrowserSnapshot {
     pub documents: Vec<DocumentHandle>,
     pub document_lifecycles: Vec<DocumentLifecycleSnapshot>,
     pub javascript_dialogs: Vec<JavaScriptDialogOpened>,
+    pub navigations: Vec<NavigationSnapshot>,
     pub downloads: Vec<super::DownloadRecordSnapshot>,
 }
 
@@ -67,6 +73,43 @@ pub struct JavaScriptDialogOpened {
     pub document: DocumentHandle,
     pub key: super::web_contents::JavaScriptDialogKey,
     pub opening: std::sync::Arc<crate::page::RendererJavaScriptDialogOpening>,
+}
+
+/// One admitted cross-document attempt, including its reserved Document identity.
+/// Committed documents continue to be observed through DocumentCommitted.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct NavigationRequest {
+    pub web_contents: WebContentsHandle,
+    pub navigation: super::NavigationId,
+    pub document: super::DocumentId,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum NavigationFailureReason {
+    Canceled,
+    Superseded,
+    WebContentsClosed,
+    ContextDisposed,
+}
+
+/// The latest uncommitted attempt in a live WebContents. At most one terminal
+/// record is retained; a new attempt replaces it, and a commit clears it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum NavigationAttempt {
+    Started(NavigationRequest),
+    Failed {
+        request: NavigationRequest,
+        reason: NavigationFailureReason,
+    },
+}
+
+/// Current committed Document and a later attempt are independent: a pending
+/// or failed replacement must not erase an unpublished Document commit fence.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct NavigationSnapshot {
+    pub web_contents: WebContentsHandle,
+    pub committed: Option<NavigationRequest>,
+    pub attempt: Option<NavigationAttempt>,
 }
 
 /// Current physical Page identity and URL read in one Browser owner turn.
@@ -127,6 +170,7 @@ impl BrowserEventStream {
         document_lifecycles: impl Iterator<Item = DocumentLifecycleSnapshot>,
         downloads: impl Iterator<Item = super::DownloadRecordSnapshot>,
         javascript_dialogs: impl Iterator<Item = JavaScriptDialogOpened>,
+        navigations: impl Iterator<Item = NavigationSnapshot>,
     ) -> (BrowserSnapshot, BrowserEventReceiver) {
         (
             BrowserSnapshot {
@@ -138,6 +182,7 @@ impl BrowserEventStream {
                 document_lifecycles: document_lifecycles.collect(),
                 downloads: downloads.collect(),
                 javascript_dialogs: javascript_dialogs.collect(),
+                navigations: navigations.collect(),
             },
             self.sender.subscribe(),
         )
@@ -338,6 +383,7 @@ mod tests {
             std::iter::empty(),
             std::iter::empty(),
             std::iter::empty(),
+            std::iter::empty(),
         );
         for _ in 0..257 {
             stream.publish(BrowserEvent::ContextCreated(context));
@@ -345,6 +391,7 @@ mod tests {
         assert_eq!(slow.try_recv(), Err(TryRecvError::Lagged(1)));
         let (snapshot, mut recovered) = stream.subscribe(
             std::iter::once(context),
+            std::iter::empty(),
             std::iter::empty(),
             std::iter::empty(),
             std::iter::empty(),

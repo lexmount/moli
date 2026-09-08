@@ -107,6 +107,12 @@ impl CdpConnection {
         for document in snapshot.documents {
             events.extend(self.project_browser_document_commit(document).await);
         }
+        // Missing attempts matter too: after stream loss they release native
+        // holds whose terminal occurrence was evicted. Committed Document
+        // fences above and command-response holds remain independently owned.
+        for contents in self.projected_web_contents() {
+            events.extend(self.project_browser_navigation(contents).await);
+        }
         for selected in snapshot.selected_web_contents {
             events.extend(self.project_browser_selection(selected, None, snapshot.sequence));
         }

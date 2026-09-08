@@ -655,14 +655,44 @@ impl BrowserContext {
             .committed_document_navigation())
     }
 
-    pub fn clear_pending_navigation_if_matches(
+    pub(in crate::browser) fn cancel_document_navigation(
         &mut self,
         handle: WebContentsHandle,
         navigation: &NavigationId,
+        reason: crate::browser::NavigationFailureReason,
     ) -> Result<bool, String> {
         Ok(self
             .web_contents_mut(handle)?
-            .clear_pending_document_navigation_if_matches(navigation))
+            .cancel_document_navigation(navigation, reason))
+    }
+
+    pub fn navigation_snapshot(
+        &self,
+        handle: WebContentsHandle,
+    ) -> Result<crate::browser::NavigationSnapshot, String> {
+        let contents = self.web_contents(handle)?;
+        Ok(crate::browser::NavigationSnapshot {
+            web_contents: handle,
+            committed: contents
+                .main_frame
+                .current_document
+                .as_ref()
+                .and_then(|document| {
+                    Some(crate::browser::NavigationRequest {
+                        web_contents: handle,
+                        navigation: document.commit.as_ref()?.navigation?,
+                        document: document.id,
+                    })
+                }),
+            attempt: contents.navigation().attempt_snapshot(handle),
+        })
+    }
+
+    pub(in crate::browser) fn navigation_snapshots(
+        &self,
+    ) -> impl Iterator<Item = crate::browser::NavigationSnapshot> + '_ {
+        self.web_contents_handles()
+            .filter_map(|handle| self.navigation_snapshot(handle).ok())
     }
 
     pub fn clear_document_navigation_state(

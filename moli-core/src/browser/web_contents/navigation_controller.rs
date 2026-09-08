@@ -230,12 +230,55 @@ impl Drop for PendingNavigationRequest {
 #[derive(Debug, Default)]
 pub struct NavigationController {
     pending_navigation_request: Option<PendingNavigationRequest>,
+    failed_navigation: Option<(
+        NavigationId,
+        DocumentId,
+        crate::browser::NavigationFailureReason,
+    )>,
     committed_document_navigation: Option<NavigationId>,
     history: NavigationHistoryState,
     initial_empty_document: Option<InitialDocument>,
 }
 
 impl NavigationController {
+    pub(in crate::browser) fn attempt_snapshot(
+        &self,
+        web_contents: crate::browser::WebContentsHandle,
+    ) -> Option<crate::browser::NavigationAttempt> {
+        use crate::browser::{NavigationAttempt, NavigationRequest};
+        if let Some((navigation, document)) = self.pending_document() {
+            return Some(NavigationAttempt::Started(NavigationRequest {
+                web_contents,
+                navigation,
+                document,
+            }));
+        }
+        self.failed_navigation
+            .map(|(navigation, document, reason)| NavigationAttempt::Failed {
+                request: NavigationRequest {
+                    web_contents,
+                    navigation,
+                    document,
+                },
+                reason,
+            })
+    }
+
+    pub(in crate::browser) fn cancel_document_navigation(
+        &mut self,
+        navigation: &NavigationId,
+        reason: crate::browser::NavigationFailureReason,
+    ) -> bool {
+        let Some((pending, document)) = self
+            .pending_document()
+            .filter(|(pending, _)| pending == navigation)
+        else {
+            return false;
+        };
+        self.failed_navigation = Some((pending, document, reason));
+        self.pending_navigation_request = None;
+        true
+    }
     #[cfg(any(test, feature = "test-support"))]
     pub fn has_paused_request_for_test(&self) -> bool {
         self.pending_navigation_request
@@ -584,6 +627,7 @@ impl NavigationController {
 
     pub(super) fn start_document_navigation(&mut self) -> NavigationId {
         self.cancel_initial_document_build();
+        self.failed_navigation = None;
         let navigation = NavigationId::allocate();
         // The preflight intent moves into this request at Start. Supersession
         // and cancellation drop only that request's intent; a late completion
@@ -607,6 +651,7 @@ impl NavigationController {
             return false;
         };
         self.committed_document_navigation = Some(*navigation);
+        self.failed_navigation = None;
         request.committed = true;
         if !request.background_completion_pending {
             request.retire_without_cancellation();
@@ -616,19 +661,15 @@ impl NavigationController {
         true
     }
 
-    pub(super) fn clear_pending_document_navigation_if_matches(
-        &mut self,
-        navigation: &NavigationId,
-    ) -> bool {
-        if !self.accepts_pending_document_navigation_event(navigation) {
-            return false;
-        }
-        self.pending_navigation_request = None;
-        true
-    }
-
     pub(super) fn clear_document_navigation_state(&mut self) {
         self.cancel_initial_document_build();
+        if let Some((navigation, document)) = self.pending_document() {
+            self.failed_navigation = Some((
+                navigation,
+                document,
+                crate::browser::NavigationFailureReason::Canceled,
+            ));
+        }
         self.pending_navigation_request = None;
         self.committed_document_navigation = None;
         self.history.clear_pending_update();
@@ -965,9 +1006,13 @@ impl super::WebContents {
             .commit_pending_document_navigation_if_matches(token)
     }
 
-    pub fn clear_pending_document_navigation_if_matches(&mut self, token: &NavigationId) -> bool {
+    pub(in crate::browser) fn cancel_document_navigation(
+        &mut self,
+        navigation: &NavigationId,
+        reason: crate::browser::NavigationFailureReason,
+    ) -> bool {
         self.navigation
-            .clear_pending_document_navigation_if_matches(token)
+            .cancel_document_navigation(navigation, reason)
     }
 
     pub fn clear_document_navigation_state(&mut self) {
@@ -1213,7 +1258,10 @@ mod tests {
             if commit {
                 assert!(controller.commit_pending_document_navigation_if_matches(&navigation));
             } else {
-                assert!(controller.clear_pending_document_navigation_if_matches(&navigation));
+                assert!(controller.cancel_document_navigation(
+                    &navigation,
+                    crate::browser::NavigationFailureReason::Canceled
+                ));
             }
             assert_eq!(admitted.is_cancelled(), !commit);
             assert_eq!(cancellation.is_cancelled(), !commit);

@@ -73,6 +73,12 @@ impl CdpScheduler {
                 BrowserEvent::DocumentCommitted(document) => {
                     self.conn.project_browser_document_commit(document).await
                 }
+                BrowserEvent::NavigationStarted(request)
+                | BrowserEvent::NavigationFailed { request, .. } => {
+                    self.conn
+                        .project_browser_navigation(request.web_contents)
+                        .await
+                }
                 BrowserEvent::DocumentLifecycleChanged(_)
                 | BrowserEvent::DialogOpened(_)
                 | BrowserEvent::DialogClosed { .. } => {
@@ -133,6 +139,116 @@ mod tests {
     use super::*;
     use moli_core::browser::BrowserService;
     use moli_protocol::CdpInitialStoragePartition;
+
+    #[tokio::test]
+    async fn native_navigation_events_recover_projection_holds_after_real_stream_lag() {
+        use moli_core::browser::{BrowserContextStoragePartitionHandles, StoragePartitionKind};
+        use moli_protocol::devtools_runtime::{
+            DevToolsCommand, DevToolsCommandContext, DevToolsCommandResult,
+            DevToolsNavigateCommand, DevToolsNavigationWait, DevToolsProtocol,
+        };
+        use serde_json::json;
+        tokio::task::LocalSet::new()
+            .run_until(async {
+                for lagged in [false, true] {
+                    let service = BrowserService::start().unwrap();
+                    let browser = service.handle();
+                    let (mut scheduler, mut receivers) =
+                        CdpScheduler::new_with_initial_state_runtime_config(
+                            browser.clone(),
+                            CdpInitialStoragePartition::memory(),
+                            Default::default(),
+                        );
+                    let initial = Box::pin(
+                        scheduler.execute_devtools_command_with_external_load_wait_and_protocol_messages(
+                            &mut receivers,
+                            DevToolsCommand::Navigate(DevToolsNavigateCommand {
+                                context: DevToolsCommandContext {
+                                    protocol: DevToolsProtocol::Cdp,
+                                    session_id: None,
+                                    target_id: Some(scheduler.conn.default_target_id().into()),
+                                    browser_context_id: None,
+                                },
+                                url: "data:text/html,<title>native navigation observer</title>".to_owned(),
+                                referrer: None,
+                                wait: DevToolsNavigationWait::DocumentInstalled,
+                            }),
+                        ),
+                    )
+                    .await;
+                    let DevToolsCommandResult::Navigate(initial) = initial.result.unwrap() else {
+                        panic!("expected the initial document navigation result");
+                    };
+                    assert!(initial.error_text.is_none(), "{initial:?}");
+                    scheduler.drain_browser_events().await;
+                    let contents = scheduler.conn.projected_web_contents()[0];
+                    let context = browser.context_handle(contents.context()).unwrap();
+                    let document = context.document_handle(contents).unwrap().unwrap();
+                    let (_, mut native_events) = browser.subscribe().unwrap();
+                    let navigation = context.start_document_navigation(contents).unwrap();
+                    let started = std::iter::from_fn(|| native_events.try_recv().ok())
+                        .find(|record| matches!(record.event, BrowserEvent::NavigationStarted(request) if request.navigation == navigation))
+                        .expect("exact native start occurrence");
+                    for (id, expected) in [(2, 1), (3, 0)] {
+                        if expected == 0 {
+                            assert!(
+                                context
+                                    .cancel_document_navigation(contents, &navigation)
+                                    .unwrap()
+                            );
+                        }
+                        if lagged {
+                            for _ in 0..130 {
+                                let transient = browser
+                                    .create_context(
+                                        BrowserContextStoragePartitionHandles::memory(),
+                                        StoragePartitionKind::Ephemeral,
+                                        None,
+                                        None,
+                                    )
+                                    .unwrap();
+                                transient.remove().unwrap();
+                            }
+                            assert!(matches!(
+                                native_events.try_recv(),
+                                Err(TryRecvError::Lagged(_))
+                            ));
+                            native_events = browser.subscribe().unwrap().1;
+                        }
+                        scheduler.drain_browser_events().await;
+                        let output = scheduler
+                            .execute_internal_protocol_message(
+                                &mut receivers,
+                                json!({
+                                    "id": id, "method": "HeapProfiler.moliDiagnostics",
+                                }),
+                            )
+                            .await
+                            .unwrap_or_else(|failure| panic!("{:?}", failure.into_parts().1))
+                            .into_messages();
+                        let response = output.iter().find(|message| message["id"] == id).unwrap();
+                        assert_eq!(
+                            response["result"]["activeBrowserContext"]["activeRuntimeSlot"]["pendingDocumentProjectionCount"],
+                            expected,
+                            "lagged={lagged}: {response:?}"
+                        );
+                        assert_eq!(context.document_handle(contents).unwrap(), Some(document));
+                    }
+                    assert!(
+                        scheduler
+                            .handle_browser_event(Ok(started))
+                            .await
+                            .into_messages()
+                            .is_empty()
+                    );
+                    assert!(
+                        matches!(context.navigation_snapshot(contents).unwrap().attempt, Some(moli_core::browser::NavigationAttempt::Failed { request, .. }) if request.navigation == navigation)
+                    );
+                    service.shutdown();
+                }
+            })
+            .await;
+    }
 
     #[tokio::test]
     async fn native_download_events_recover_after_lag_and_outlive_the_source_page() {
