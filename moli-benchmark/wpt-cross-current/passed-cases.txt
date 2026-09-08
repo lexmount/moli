@@ -8346,6 +8346,8 @@ trusted-types/script-enforcement-004.html
 trusted-types/script-enforcement-005.html
 trusted-types/script-enforcement-006.html
 trusted-types/script-enforcement-007.html
+trusted-types/script-enforcement-008.https.html
+trusted-types/script-enforcement-009.https.html
 trusted-types/script-enforcement-010.html
 trusted-types/script-enforcement-011.html
 trusted-types/script-enforcement-012.html

@@ -2297,12 +2297,13 @@ fn module_script_inline_tree_job(
     vm: &mut ScriptVm,
     root: ModuleRootInput,
 ) -> std::result::Result<NativeModuleGraphJob, ModuleLoadError> {
-    module_script_inline_tree_job_for_owner(vm, root, ModuleScriptCompletionOwner::Parser)
+    module_script_inline_tree_job_for_owner(vm, root, true, ModuleScriptCompletionOwner::Parser)
 }
 
 fn module_script_inline_tree_job_for_owner(
     vm: &mut ScriptVm,
     root: ModuleRootInput,
+    source_is_external: bool,
     completion_owner: ModuleScriptCompletionOwner,
 ) -> std::result::Result<NativeModuleGraphJob, ModuleLoadError> {
     let trace_label = match completion_owner {
@@ -2311,11 +2312,18 @@ fn module_script_inline_tree_job_for_owner(
     };
     trace_module_graph_job_created(trace_label, &root);
     let key = module_key_for_root(&root)?;
-    vm.dispatch_module_fetch_csp_report_only_violation_for_owner(&key, &root.fetch_metadata);
-    if let Some(error) = vm.csp_blocked_module_fetch_error_for_owner(&key, &root.fetch_metadata) {
-        vm.document_runtime
-            .mark_native_module_failed(key.clone(), error.clone());
-        return Err(error);
+    // This adapter also accepts externally sourced roots whose bytes are already
+    // loaded. Only those roots have a fetch URL to check. Actual inline roots
+    // passed source-text CSP before graph creation; their synthetic identity URL
+    // is not a request. Dependency fetches keep their own URL policy checks.
+    if source_is_external {
+        vm.dispatch_module_fetch_csp_report_only_violation_for_owner(&key, &root.fetch_metadata);
+        if let Some(error) = vm.csp_blocked_module_fetch_error_for_owner(&key, &root.fetch_metadata)
+        {
+            vm.document_runtime
+                .mark_native_module_failed(key.clone(), error.clone());
+            return Err(error);
+        }
     }
     if let Some(entry) = reusable_inline_module_entry(vm, &key)? {
         return Ok(native_module_graph_job_for_inline_entry(
@@ -2463,7 +2471,7 @@ fn module_script_graph_job_for_owner(
         source_is_external,
         completion_owner,
     );
-    module_script_inline_tree_job_for_owner(vm, root, completion_owner)
+    module_script_inline_tree_job_for_owner(vm, root, source_is_external, completion_owner)
 }
 
 pub(crate) fn parser_owned_loaded_module_script_graph_job(
@@ -2975,6 +2983,71 @@ mod tests {
             vm.document_runtime.native_module_entry_state(entry),
             ModuleMapEntryState::Compiled
         );
+    }
+
+    #[test]
+    fn loaded_external_module_roots_still_enforce_url_csp() {
+        for owner in [
+            ModuleScriptCompletionOwner::Parser,
+            ModuleScriptCompletionOwner::Runtime,
+        ] {
+            let mut vm = new_test_vm("https://app.example.test/page");
+            vm.set_response_content_security_policies(&["script-src 'unsafe-inline'".to_owned()]);
+            let root_url = url("https://app.example.test/root.mjs");
+            let Err(error) = module_script_graph_job_for_owner(
+                &mut vm,
+                ModuleSource::text("globalThis.__externalModuleRan = true;".to_owned()),
+                &root_url,
+                &url("https://app.example.test/page"),
+                &ScriptFetchMetadata::default(),
+                true,
+                owner,
+            ) else {
+                panic!("having loaded source must not bypass external module URL policy");
+            };
+            assert_eq!(error.stage(), ModuleLoadStage::Fetch);
+            assert!(error.message().contains(root_url.as_str()));
+            assert_eq!(vm.eval("typeof __externalModuleRan").unwrap(), "undefined");
+        }
+    }
+
+    #[test]
+    fn inline_module_roots_preserve_dependency_url_csp() {
+        let dependency_url = url("https://dependencies.example.test/child.mjs");
+        for owner in [
+            ModuleScriptCompletionOwner::Parser,
+            ModuleScriptCompletionOwner::Runtime,
+        ] {
+            for allow_dependency in [false, true] {
+                let mut vm = new_test_vm("https://app.example.test/page");
+                vm.set_response_content_security_policies(&[if allow_dependency {
+                    "script-src 'unsafe-inline' https://dependencies.example.test".to_owned()
+                } else {
+                    "script-src 'unsafe-inline'".to_owned()
+                }]);
+                let job = module_script_graph_job_for_owner(
+                    &mut vm,
+                    ModuleSource::text(format!("import '{}';", dependency_url)),
+                    &url("https://app.example.test/page"),
+                    &url("https://app.example.test/page"),
+                    &ScriptFetchMetadata::default(),
+                    false,
+                    owner,
+                )
+                .expect("an admitted inline root must not undergo external URL CSP checks");
+                let advance = advance_module_script_graph(&mut vm, job);
+                if allow_dependency {
+                    let fetch = expect_single_fetch(advance.unwrap(), "allowed inline dependency");
+                    assert_eq!(fetch.pending_fetch_key().unwrap().url(), &dependency_url);
+                } else {
+                    let Err(error) = advance else {
+                        panic!("inline roots must not exempt their imports from CSP");
+                    };
+                    assert_eq!(error.stage(), ModuleLoadStage::Fetch);
+                    assert!(error.message().contains(dependency_url.as_str()));
+                }
+            }
+        }
     }
 
     #[test]
