@@ -124,7 +124,7 @@ mod element_toggle_event;
 mod fetch_xhr;
 mod file_entry_file_callback;
 mod file_system_directory_reader;
-mod flex_static_position;
+mod flex_geometry;
 mod grid_item_box_generation;
 mod grid_item_paint_order;
 mod grid_resolved_track_values;

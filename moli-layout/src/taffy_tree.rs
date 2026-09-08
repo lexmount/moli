@@ -1501,6 +1501,26 @@ where
         }
     }
 
+    fn get_baseline_type(&self, node_id: NodeId) -> taffy::BaselineType {
+        if self.is_viewport_taffy_node(node_id) {
+            return taffy::BaselineType::Alphabetic;
+        }
+        let style = &self.boxes[LayoutBoxId::from_taffy(node_id).index()].style;
+        style.stylo_computed_values().map_or_else(
+            || taffy::BaselineType::for_writing_mode(style.writing_mode()),
+            |computed| {
+                // Stylo's writing direction includes text-orientation as well
+                // as writing-mode. Sideways text uses an alphabetic baseline;
+                // upright vertical text uses a central baseline, like Blink.
+                if computed.writing_mode.is_text_vertical() {
+                    taffy::BaselineType::Central
+                } else {
+                    taffy::BaselineType::Alphabetic
+                }
+            },
+        )
+    }
+
     fn get_scrollbar_insets(&self, node_id: NodeId) -> taffy::Rect<f32> {
         if self.is_viewport_taffy_node(node_id) {
             // The synthetic viewport expresses its gutters as non-painted

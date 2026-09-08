@@ -1,0 +1,134 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>Flex baseline synthesis across logical flows</title>
+<link rel="help" href="https://drafts.csswg.org/css-align-3/#generate-baselines">
+<style>
+html,body { margin:0; padding:0; font:0/0 sans-serif; }
+html { overflow:hidden; }
+.slot { position:absolute; width:160px; height:180px; }
+.flex { position:absolute; left:25px; top:30px; display:flex; width:100px; height:100px; align-items:baseline; }
+.item { flex-shrink:0; }
+</style>
+<body>
+<script>
+// Literal Chromium 145 rectangle expectations; no expected coordinate depends
+// on measured Moli geometry. Slots do not overlap, including overflow.
+const cases = [
+  {"id":"horizontal-tb/ltr/row/wrap","children":[[0,0,50,50],[50,0,30,50],[0,50,40,70],[40,100,50,20]]},
+  {"id":"horizontal-tb/ltr/row/wrap-reverse","children":[[0,50,50,50],[50,50,30,50],[0,-20,40,70],[40,30,50,20]]},
+  {"id":"horizontal-tb/ltr/column/wrap","children":[[0,0,50,50],[0,50,30,50],[50,0,40,70],[50,70,50,20]]},
+  {"id":"horizontal-tb/ltr/column/wrap-reverse","children":[[50,0,50,50],[50,50,30,50],[0,0,40,70],[0,70,50,20]]},
+  {"id":"horizontal-tb/ltr/row-reverse/wrap","children":[[50,0,50,50],[20,0,30,50],[60,50,40,70],[10,100,50,20]]},
+  {"id":"horizontal-tb/ltr/row-reverse/wrap-reverse","children":[[50,50,50,50],[20,50,30,50],[60,-20,40,70],[10,30,50,20]]},
+  {"id":"horizontal-tb/ltr/column-reverse/wrap","children":[[0,50,50,50],[0,0,30,50],[50,30,40,70],[50,10,50,20]]},
+  {"id":"horizontal-tb/ltr/column-reverse/wrap-reverse","children":[[50,50,50,50],[50,0,30,50],[0,30,40,70],[0,10,50,20]]},
+  {"id":"horizontal-tb/rtl/row/wrap","children":[[50,0,50,50],[20,0,30,50],[60,50,40,70],[10,100,50,20]]},
+  {"id":"horizontal-tb/rtl/row/wrap-reverse","children":[[50,50,50,50],[20,50,30,50],[60,-20,40,70],[10,30,50,20]]},
+  {"id":"horizontal-tb/rtl/column/wrap","children":[[50,0,50,50],[50,50,30,50],[0,0,40,70],[0,70,50,20]]},
+  {"id":"horizontal-tb/rtl/column/wrap-reverse","children":[[0,0,50,50],[0,50,30,50],[50,0,40,70],[50,70,50,20]]},
+  {"id":"horizontal-tb/rtl/row-reverse/wrap","children":[[0,0,50,50],[50,0,30,50],[0,50,40,70],[40,100,50,20]]},
+  {"id":"horizontal-tb/rtl/row-reverse/wrap-reverse","children":[[0,50,50,50],[50,50,30,50],[0,-20,40,70],[40,30,50,20]]},
+  {"id":"horizontal-tb/rtl/column-reverse/wrap","children":[[50,50,50,50],[50,0,30,50],[0,30,40,70],[0,10,50,20]]},
+  {"id":"horizontal-tb/rtl/column-reverse/wrap-reverse","children":[[0,50,50,50],[0,0,30,50],[50,30,40,70],[50,10,50,20]]},
+  {"id":"vertical-rl/ltr/row/wrap","children":[[50,0,50,50],[60,50,30,50],[5,0,40,70],[0,70,50,20]]},
+  {"id":"vertical-rl/ltr/row/wrap-reverse","children":[[0,0,50,50],[10,50,30,50],[55,0,40,70],[50,70,50,20]]},
+  {"id":"vertical-rl/ltr/column/wrap","children":[[50,0,50,50],[20,0,30,50],[60,50,40,70],[10,75,50,20]]},
+  {"id":"vertical-rl/ltr/column/wrap-reverse","children":[[50,50,50,50],[20,50,30,50],[60,-20,40,70],[10,5,50,20]]},
+  {"id":"vertical-rl/ltr/row-reverse/wrap","children":[[50,50,50,50],[60,0,30,50],[5,30,40,70],[0,10,50,20]]},
+  {"id":"vertical-rl/ltr/row-reverse/wrap-reverse","children":[[0,50,50,50],[10,0,30,50],[55,30,40,70],[50,10,50,20]]},
+  {"id":"vertical-rl/ltr/column-reverse/wrap","children":[[0,0,50,50],[50,0,30,50],[0,50,40,70],[40,75,50,20]]},
+  {"id":"vertical-rl/ltr/column-reverse/wrap-reverse","children":[[0,50,50,50],[50,50,30,50],[0,-20,40,70],[40,5,50,20]]},
+  {"id":"vertical-rl/rtl/row/wrap","children":[[50,50,50,50],[60,0,30,50],[5,30,40,70],[0,10,50,20]]},
+  {"id":"vertical-rl/rtl/row/wrap-reverse","children":[[0,50,50,50],[10,0,30,50],[55,30,40,70],[50,10,50,20]]},
+  {"id":"vertical-rl/rtl/column/wrap","children":[[50,50,50,50],[20,50,30,50],[60,-20,40,70],[10,5,50,20]]},
+  {"id":"vertical-rl/rtl/column/wrap-reverse","children":[[50,0,50,50],[20,0,30,50],[60,50,40,70],[10,75,50,20]]},
+  {"id":"vertical-rl/rtl/row-reverse/wrap","children":[[50,0,50,50],[60,50,30,50],[5,0,40,70],[0,70,50,20]]},
+  {"id":"vertical-rl/rtl/row-reverse/wrap-reverse","children":[[0,0,50,50],[10,50,30,50],[55,0,40,70],[50,70,50,20]]},
+  {"id":"vertical-rl/rtl/column-reverse/wrap","children":[[0,50,50,50],[50,50,30,50],[0,-20,40,70],[40,5,50,20]]},
+  {"id":"vertical-rl/rtl/column-reverse/wrap-reverse","children":[[0,0,50,50],[50,0,30,50],[0,50,40,70],[40,75,50,20]]},
+  {"id":"vertical-lr/ltr/row/wrap","children":[[0,0,50,50],[10,50,30,50],[55,0,40,70],[50,70,50,20]]},
+  {"id":"vertical-lr/ltr/row/wrap-reverse","children":[[50,0,50,50],[60,50,30,50],[5,0,40,70],[0,70,50,20]]},
+  {"id":"vertical-lr/ltr/column/wrap","children":[[0,0,50,50],[50,0,30,50],[0,50,40,70],[40,75,50,20]]},
+  {"id":"vertical-lr/ltr/column/wrap-reverse","children":[[0,50,50,50],[50,50,30,50],[0,-20,40,70],[40,5,50,20]]},
+  {"id":"vertical-lr/ltr/row-reverse/wrap","children":[[0,50,50,50],[10,0,30,50],[55,30,40,70],[50,10,50,20]]},
+  {"id":"vertical-lr/ltr/row-reverse/wrap-reverse","children":[[50,50,50,50],[60,0,30,50],[5,30,40,70],[0,10,50,20]]},
+  {"id":"vertical-lr/ltr/column-reverse/wrap","children":[[50,0,50,50],[20,0,30,50],[60,50,40,70],[10,75,50,20]]},
+  {"id":"vertical-lr/ltr/column-reverse/wrap-reverse","children":[[50,50,50,50],[20,50,30,50],[60,-20,40,70],[10,5,50,20]]},
+  {"id":"vertical-lr/rtl/row/wrap","children":[[0,50,50,50],[10,0,30,50],[55,30,40,70],[50,10,50,20]]},
+  {"id":"vertical-lr/rtl/row/wrap-reverse","children":[[50,50,50,50],[60,0,30,50],[5,30,40,70],[0,10,50,20]]},
+  {"id":"vertical-lr/rtl/column/wrap","children":[[0,50,50,50],[50,50,30,50],[0,-20,40,70],[40,5,50,20]]},
+  {"id":"vertical-lr/rtl/column/wrap-reverse","children":[[0,0,50,50],[50,0,30,50],[0,50,40,70],[40,75,50,20]]},
+  {"id":"vertical-lr/rtl/row-reverse/wrap","children":[[0,0,50,50],[10,50,30,50],[55,0,40,70],[50,70,50,20]]},
+  {"id":"vertical-lr/rtl/row-reverse/wrap-reverse","children":[[50,0,50,50],[60,50,30,50],[5,0,40,70],[0,70,50,20]]},
+  {"id":"vertical-lr/rtl/column-reverse/wrap","children":[[50,50,50,50],[20,50,30,50],[60,-20,40,70],[10,5,50,20]]},
+  {"id":"vertical-lr/rtl/column-reverse/wrap-reverse","children":[[50,0,50,50],[20,0,30,50],[60,50,40,70],[10,75,50,20]]},
+  {"id":"sideways-rl/ltr/row/wrap","children":[[50,0,50,50],[50,50,30,50],[0,0,40,70],[0,70,50,20]]},
+  {"id":"sideways-rl/ltr/row/wrap-reverse","children":[[0,0,50,50],[0,50,30,50],[50,0,40,70],[50,70,50,20]]},
+  {"id":"sideways-rl/ltr/column/wrap","children":[[50,0,50,50],[20,0,30,50],[60,50,40,70],[10,100,50,20]]},
+  {"id":"sideways-rl/ltr/column/wrap-reverse","children":[[50,50,50,50],[20,50,30,50],[60,-20,40,70],[10,30,50,20]]},
+  {"id":"sideways-rl/ltr/row-reverse/wrap","children":[[50,50,50,50],[50,0,30,50],[0,30,40,70],[0,10,50,20]]},
+  {"id":"sideways-rl/ltr/row-reverse/wrap-reverse","children":[[0,50,50,50],[0,0,30,50],[50,30,40,70],[50,10,50,20]]},
+  {"id":"sideways-rl/ltr/column-reverse/wrap","children":[[0,0,50,50],[50,0,30,50],[0,50,40,70],[40,100,50,20]]},
+  {"id":"sideways-rl/ltr/column-reverse/wrap-reverse","children":[[0,50,50,50],[50,50,30,50],[0,-20,40,70],[40,30,50,20]]},
+  {"id":"sideways-rl/rtl/row/wrap","children":[[50,50,50,50],[50,0,30,50],[0,30,40,70],[0,10,50,20]]},
+  {"id":"sideways-rl/rtl/row/wrap-reverse","children":[[0,50,50,50],[0,0,30,50],[50,30,40,70],[50,10,50,20]]},
+  {"id":"sideways-rl/rtl/column/wrap","children":[[50,50,50,50],[20,50,30,50],[60,-20,40,70],[10,30,50,20]]},
+  {"id":"sideways-rl/rtl/column/wrap-reverse","children":[[50,0,50,50],[20,0,30,50],[60,50,40,70],[10,100,50,20]]},
+  {"id":"sideways-rl/rtl/row-reverse/wrap","children":[[50,0,50,50],[50,50,30,50],[0,0,40,70],[0,70,50,20]]},
+  {"id":"sideways-rl/rtl/row-reverse/wrap-reverse","children":[[0,0,50,50],[0,50,30,50],[50,0,40,70],[50,70,50,20]]},
+  {"id":"sideways-rl/rtl/column-reverse/wrap","children":[[0,50,50,50],[50,50,30,50],[0,-20,40,70],[40,30,50,20]]},
+  {"id":"sideways-rl/rtl/column-reverse/wrap-reverse","children":[[0,0,50,50],[50,0,30,50],[0,50,40,70],[40,100,50,20]]},
+  {"id":"sideways-lr/ltr/row/wrap","children":[[0,50,50,50],[20,0,30,50],[60,30,40,70],[50,10,50,20]]},
+  {"id":"sideways-lr/ltr/row/wrap-reverse","children":[[50,50,50,50],[70,0,30,50],[10,30,40,70],[0,10,50,20]]},
+  {"id":"sideways-lr/ltr/column/wrap","children":[[0,50,50,50],[50,50,30,50],[0,-20,40,70],[40,-20,50,20]]},
+  {"id":"sideways-lr/ltr/column/wrap-reverse","children":[[0,0,50,50],[50,0,30,50],[0,50,40,70],[40,50,50,20]]},
+  {"id":"sideways-lr/ltr/row-reverse/wrap","children":[[0,0,50,50],[20,50,30,50],[60,0,40,70],[50,70,50,20]]},
+  {"id":"sideways-lr/ltr/row-reverse/wrap-reverse","children":[[50,0,50,50],[70,50,30,50],[10,0,40,70],[0,70,50,20]]},
+  {"id":"sideways-lr/ltr/column-reverse/wrap","children":[[50,50,50,50],[20,50,30,50],[60,-20,40,70],[10,-20,50,20]]},
+  {"id":"sideways-lr/ltr/column-reverse/wrap-reverse","children":[[50,0,50,50],[20,0,30,50],[60,50,40,70],[10,50,50,20]]},
+  {"id":"sideways-lr/rtl/row/wrap","children":[[0,0,50,50],[20,50,30,50],[60,0,40,70],[50,70,50,20]]},
+  {"id":"sideways-lr/rtl/row/wrap-reverse","children":[[50,0,50,50],[70,50,30,50],[10,0,40,70],[0,70,50,20]]},
+  {"id":"sideways-lr/rtl/column/wrap","children":[[0,0,50,50],[50,0,30,50],[0,50,40,70],[40,50,50,20]]},
+  {"id":"sideways-lr/rtl/column/wrap-reverse","children":[[0,50,50,50],[50,50,30,50],[0,-20,40,70],[40,-20,50,20]]},
+  {"id":"sideways-lr/rtl/row-reverse/wrap","children":[[0,50,50,50],[20,0,30,50],[60,30,40,70],[50,10,50,20]]},
+  {"id":"sideways-lr/rtl/row-reverse/wrap-reverse","children":[[50,50,50,50],[70,0,30,50],[10,30,40,70],[0,10,50,20]]},
+  {"id":"sideways-lr/rtl/column-reverse/wrap","children":[[50,0,50,50],[20,0,30,50],[60,50,40,70],[10,50,50,20]]},
+  {"id":"sideways-lr/rtl/column-reverse/wrap-reverse","children":[[50,50,50,50],[20,50,30,50],[60,-20,40,70],[10,-20,50,20]]}
+];
+cases.push(
+  {id:'vertical-rl/ltr/row/wrap/sideways-text', textOrientation:'sideways', sizes:[[40,30],[20,30]], children:[[60,0,40,30],[60,30,20,30]]},
+  {id:'vertical-rl/ltr/row/wrap/upright-text', textOrientation:'upright', sizes:[[40,30],[20,30]], children:[[60,0,40,30],[70,30,20,30]]}
+);
+const colors = [[31,127,63,255],[191,47,31,255],[47,79,191,255],[159,63,159,255]];
+for (const [index,test] of cases.entries()) {
+  const [mode,direction,flexDirection,wrap] = test.id.split('/');
+  const slot = document.createElement('div');
+  slot.className = 'slot';
+  slot.style.left = (index % 8) * 160 + 'px';
+  slot.style.top = Math.floor(index / 8) * 180 + 'px';
+  const flex = document.createElement('div');
+  flex.className = 'flex';
+  flex.style.cssText = 'writing-mode:'+mode+';direction:'+direction+';flex-direction:'+flexDirection+';flex-wrap:'+wrap;
+  if (test.textOrientation) flex.style.textOrientation = test.textOrientation;
+  for (const [i,[width,height]] of (test.sizes || [[50,50],[30,50],[40,70],[50,20]]).entries()) {
+    const child = document.createElement('div');
+    child.className = 'item';
+    child.style.cssText = 'width:'+width+'px;height:'+height+'px;background:rgb('+colors[i].slice(0,3).join(',')+')';
+    flex.append(child);
+  }
+  slot.append(flex);
+  document.body.append(slot);
+}
+function collectFlexBaselineChecks() {
+  return cases.flatMap((test,index) => {
+    const flex = document.querySelectorAll('.flex')[index];
+    const origin = flex.getBoundingClientRect();
+    return Array.from(flex.children,(child,i) => {
+      const rect=child.getBoundingClientRect(), expected=test.children[i];
+      return {id:test.id+'/'+i,
+        actual:[rect.x-origin.x,rect.y-origin.y,rect.width,rect.height], expected,
+        pixel:[origin.x+expected[0]+2,origin.y+expected[1]+2], color:colors[i]};
+    });
+  });
+}
+</script>

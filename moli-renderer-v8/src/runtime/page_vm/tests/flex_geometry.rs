@@ -1,6 +1,17 @@
 use super::*;
 
 #[tokio::test(flavor = "current_thread")]
+async fn screenshot_resolves_flex_baselines_across_logical_flows() {
+    assert_flex_geometry_fixture(
+        include_str!("../../../../tests/fixtures/flex-baseline-flows.html"),
+        "collectFlexBaselineChecks()",
+        324,
+        1980,
+    )
+    .await;
+}
+
+#[tokio::test(flavor = "current_thread")]
 async fn screenshot_resolves_flex_static_margin_boxes_across_containing_blocks() {
     assert_flex_geometry_fixture(
         include_str!("../../../../tests/fixtures/flex-static-position-margins.html"),
@@ -74,9 +85,12 @@ async fn assert_flex_geometry_fixture(
             let x = check["pixel"][0].as_f64().expect("pixel x") as usize;
             let y = check["pixel"][1].as_f64().expect("pixel y") as usize;
             let offset = (y * image.width as usize + x) * 4;
+            let color: [u8; 4] = check.get("color").map_or([31, 127, 63, 255], |color| {
+                std::array::from_fn(|index| color[index].as_u64().expect("color channel") as u8)
+            });
             assert_eq!(
                 &image.rgba[offset..offset + 4],
-                &[31, 127, 63, 255],
+                &color,
                 "{} paint",
                 check["id"]
             );

@@ -137,6 +137,8 @@ pub(crate) enum LayoutWritingMode {
     HorizontalTb,
     VerticalRl,
     VerticalLr,
+    SidewaysRl,
+    SidewaysLr,
 }
 
 impl LayoutWritingMode {
@@ -145,6 +147,8 @@ impl LayoutWritingMode {
             StyloWritingMode::HorizontalTb => Self::HorizontalTb,
             StyloWritingMode::VerticalRl => Self::VerticalRl,
             StyloWritingMode::VerticalLr => Self::VerticalLr,
+            StyloWritingMode::SidewaysRl => Self::SidewaysRl,
+            StyloWritingMode::SidewaysLr => Self::SidewaysLr,
         }
     }
 
@@ -158,6 +162,8 @@ impl LayoutWritingMode {
             Self::HorizontalTb => taffy::WritingMode::HorizontalTb,
             Self::VerticalRl => taffy::WritingMode::VerticalRl,
             Self::VerticalLr => taffy::WritingMode::VerticalLr,
+            Self::SidewaysRl => taffy::WritingMode::SidewaysRl,
+            Self::SidewaysLr => taffy::WritingMode::SidewaysLr,
         }
     }
 }
