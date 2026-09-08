@@ -1797,6 +1797,9 @@ impl Url {
     }
 
     fn restore_after_path(&mut self, old_after_path_position: u32, after_path: &str) {
+        let scheme_end = self.scheme_end;
+        let path_start = self.path_start;
+        self.path_start = self.mutate(|parser| parser.adjust_path_prefix(scheme_end, path_start));
         let new_after_path_position = to_u32(self.serialization.len()).unwrap();
         let adjust = |index: &mut u32| {
             *index -= old_after_path_position;
@@ -2044,11 +2047,17 @@ impl Url {
             } else {
                 self.set_host_internal(Host::parse_opaque_cow(host_substr.into())?, None);
             }
-        } else if self.has_host() {
+        } else if self.has_authority() {
             if scheme_type.is_special() && !scheme_type.is_file() {
                 return Err(ParseError::EmptyHost);
-            } else if self.serialization.len() == self.path_start as usize {
-                self.serialization.push('/');
+            } else if self.path().is_empty() {
+                self.serialization.insert(self.path_start as usize, '/');
+                if let Some(ref mut index) = self.query_start {
+                    *index += 1;
+                }
+                if let Some(ref mut index) = self.fragment_start {
+                    *index += 1;
+                }
             }
             debug_assert!(self.byte_at(self.scheme_end) == b':');
             debug_assert!(self.byte_at(self.path_start) == b'/');
@@ -2061,12 +2070,17 @@ impl Url {
 
             self.serialization
                 .drain(new_path_start as usize..self.path_start as usize);
-            let offset = self.path_start - new_path_start;
+            let old_path_start = self.path_start;
             self.path_start = new_path_start;
             self.username_end = new_path_start;
             self.host_start = new_path_start;
             self.host_end = new_path_start;
+            self.host = HostInternal::None;
             self.port = None;
+            let scheme_end = self.scheme_end;
+            self.path_start =
+                self.mutate(|parser| parser.adjust_path_prefix(scheme_end, new_path_start));
+            let offset = old_path_start - self.path_start;
             if let Some(ref mut index) = self.query_start {
                 *index -= offset
             }
@@ -2079,7 +2093,9 @@ impl Url {
 
     /// opt_new_port: None means leave unchanged, Some(None) means remove any port number.
     fn set_host_internal(&mut self, host: Host<Cow<'_, str>>, opt_new_port: Option<Option<u16>>) {
-        let old_suffix_pos = if opt_new_port.is_some() {
+        // When creating an authority, discard any serialization-only "/."
+        // prefix and retain the logical path, query, and fragment.
+        let old_suffix_pos = if opt_new_port.is_some() || !self.has_authority() {
             self.path_start
         } else {
             self.host_end

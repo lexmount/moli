@@ -6,6 +6,8 @@ pub mod search_params;
 mod file_url;
 
 pub use origin::is_about_srcdoc;
+#[cfg(test)]
+mod hierarchical_path;
 
 pub use origin::{
     WebOrigin, is_about_blank, is_opaque_origin, is_potentially_trustworthy_url,
