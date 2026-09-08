@@ -2226,6 +2226,7 @@ mod script_terminal_completion;
 mod streams;
 mod svg_filter_interfaces;
 mod svg_switch_mpath_interfaces;
+mod string_timers;
 mod url_components;
 mod webgl_interfaces;
 mod webidl_collections;
