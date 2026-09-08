@@ -1269,6 +1269,7 @@ fn run_window_timer_source(
     let mut scope = try_catch.init();
     let Some(source_value) = v8_string(&scope, &source.source) else {
         return Err(Box::new(V8ExceptionReport {
+            muted_errors: false,
             summary: "failed to allocate timer source string".to_owned(),
             source: Some(source.provenance.source_url().to_string()),
             line: None,
