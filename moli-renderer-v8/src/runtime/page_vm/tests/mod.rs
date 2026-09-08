@@ -77,6 +77,7 @@ use moli_websocket::test_support::{
 use serde_json::json;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpListener;
+use tokio::sync::oneshot;
 use tokio::task::JoinHandle;
 use tokio::time::sleep;
 use url::Url;
@@ -1571,6 +1572,53 @@ async fn spawn_path_response_http_server(
         }
     });
     (format!("http://{addr}"), server)
+}
+
+async fn spawn_moved_child_defer_http_server() -> (String, oneshot::Sender<()>, JoinHandle<()>) {
+    let listener = TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("bind defer fixture");
+    let base_url = format!("http://{}", listener.local_addr().unwrap());
+    let (release_classic, classic_released) = oneshot::channel();
+    let task = tokio::spawn(async move {
+        let mut classic_released = Some(classic_released);
+        let mut responses = Vec::new();
+        for _ in 0..2 {
+            let (mut stream, _) = listener.accept().await.expect("accept script request");
+            let request = read_http_request_head(&mut stream).await.unwrap();
+            let path = request
+                .lines()
+                .next()
+                .unwrap()
+                .split_whitespace()
+                .nth(1)
+                .unwrap();
+            let (body, gate) = match path {
+                "/moved-child-defer.js" => (
+                    "parent.__movedChildDeferEvents.push('classic-ran');",
+                    Some(classic_released.take().expect("one classic request")),
+                ),
+                "/later-moved-module.js" => {
+                    ("parent.__movedChildDeferEvents.push('module-ran');", None)
+                }
+                _ => panic!("unexpected script path: {path}"),
+            };
+            responses.push(tokio::spawn(async move {
+                if let Some(gate) = gate {
+                    gate.await.expect("test should release classic response");
+                }
+                let response = format!(
+                    "HTTP/1.1 200 OK\r\nContent-Type: text/javascript\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                    body.len()
+                );
+                stream.write_all(response.as_bytes()).await.unwrap();
+            }));
+        }
+        for response in responses {
+            response.await.expect("script response task");
+        }
+    });
+    (base_url, release_classic, task)
 }
 
 async fn spawn_concurrent_path_response_http_server(
