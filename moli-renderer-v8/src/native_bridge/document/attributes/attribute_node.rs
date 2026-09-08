@@ -823,10 +823,11 @@ pub(in crate::native_bridge) fn set_attribute_node<'s>(
     if detached_native_handle_for_runtime(scope, runtime_ptr, backing).is_none() {
         return live_set_attribute_node(scope, element, attr);
     }
-    let result = custom_elements::with_custom_element_reaction_scope(scope, runtime_ptr, |scope| {
+    // Native conversion can throw after invoking the default policy. Do not
+    // retry the mutation through the live path after that exception.
+    custom_elements::with_custom_element_reaction_scope(scope, runtime_ptr, |scope| {
         detached_native_set_attribute_node(scope, element, attr)
-    });
-    result.or_else(|| live_set_attribute_node(scope, element, attr))
+    })
 }
 
 pub(in crate::native_bridge) fn remove_attribute_node<'s>(

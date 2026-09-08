@@ -5,6 +5,7 @@ use crate::util::{get_private_value, set_private_value};
 use crate::web_api_interfaces;
 use crate::webidl;
 use moli_webapi::trusted_values::*;
+pub(crate) use moli_webapi::trusted_values::{TrustedTypeKind, trusted_type_string};
 use moli_webapi_declare::{WebApiFunctionTemplate, WebApiObject};
 
 mod policy_callbacks;
@@ -217,7 +218,7 @@ pub(crate) fn trusted_script_url_string_or_throw<'s>(
         requirements,
         sink,
         api_name,
-        TrustedTypeErrorKind::Type,
+        None,
     )
 }
 
@@ -235,7 +236,7 @@ pub(crate) fn trusted_html_string_or_throw<'s>(
         requirements,
         sink,
         api_name,
-        TrustedTypeErrorKind::Type,
+        None,
     )
 }
 
@@ -260,7 +261,7 @@ pub(crate) fn trusted_script_string_or_type_error<'s>(
         requirements,
         sink,
         api_name,
-        TrustedTypeErrorKind::Type,
+        None,
     )
 }
 
@@ -503,14 +504,16 @@ enum DefaultTrustedTypePolicyOutcome {
     Exception,
 }
 
-fn trusted_type_string_or_throw<'s>(
+/// An explicit global selects the sink's policy and report destination, without
+/// changing the realm in which argument conversion and TypeError creation run.
+pub(crate) fn trusted_type_string_or_throw<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     value: v8::Local<'s, v8::Value>,
     kind: TrustedTypeKind,
     requirements: TrustedTypesForScriptRequirements,
     sink: &str,
     api_name: &'static str,
-    error_kind: TrustedTypeErrorKind,
+    policy_global: Option<v8::Local<'s, v8::Object>>,
 ) -> Option<String> {
     if let Some(value) = trusted_type_string(scope, value, kind) {
         return Some(value);
@@ -519,7 +522,9 @@ fn trusted_type_string_or_throw<'s>(
         return js_value_to_string(scope, value);
     }
     let original = js_value_to_string(scope, value)?;
-    let default_policy = apply_default_trusted_type_policy_outcome(scope, &original, kind, sink);
+    let global = policy_global.unwrap_or_else(|| scope.get_current_context().global(scope));
+    let default_policy =
+        apply_default_trusted_type_policy_outcome_for_global(scope, global, &original, kind, sink);
     let default_policy_rejected = match default_policy {
         DefaultTrustedTypePolicyOutcome::Value(value) => {
             return Some(value.as_str_lossy().to_owned());
@@ -528,12 +533,21 @@ fn trusted_type_string_or_throw<'s>(
         DefaultTrustedTypePolicyOutcome::Unavailable => false,
         DefaultTrustedTypePolicyOutcome::Rejected => true,
     };
-    dispatch_trusted_types_sink_violation_event(scope, sink, &original);
+    if let Some(global) = policy_global {
+        if let Some(host_ptr) = context_host_ptr_from_global_bridge(scope) {
+            unsafe { &mut *host_ptr }
+                .dispatch_trusted_types_sink_csp_violation_event_for_global_best_effort(
+                    scope, host_ptr, global, sink, &original,
+                );
+        }
+    } else {
+        dispatch_trusted_types_sink_violation_event(scope, sink, &original);
+    }
     if requirements.is_enforced() {
         if default_policy_rejected {
-            throw_trusted_type_policy_result_error(scope, error_kind, kind);
+            throw_trusted_type_policy_result_error(scope, TrustedTypeErrorKind::Type, kind);
         } else {
-            throw_trusted_type_error(scope, error_kind, api_name, kind, sink);
+            throw_trusted_type_error(scope, TrustedTypeErrorKind::Type, api_name, kind, sink);
         }
         None
     } else {
@@ -566,6 +580,16 @@ fn apply_default_trusted_type_policy_outcome<'s>(
     sink: &str,
 ) -> DefaultTrustedTypePolicyOutcome {
     let global = scope.get_current_context().global(scope);
+    apply_default_trusted_type_policy_outcome_for_global(scope, global, input, kind, sink)
+}
+
+fn apply_default_trusted_type_policy_outcome_for_global<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    global: v8::Local<'s, v8::Object>,
+    input: &str,
+    kind: TrustedTypeKind,
+    sink: &str,
+) -> DefaultTrustedTypePolicyOutcome {
     let Some(policy) = get_private_value(scope, global, TRUSTED_TYPES_DEFAULT_POLICY_SLOT)
         .and_then(|policy| v8::Local::<v8::Object>::try_from(policy).ok())
     else {
@@ -589,6 +613,16 @@ fn apply_default_trusted_type_policy_outcome<'s>(
         }
         TrustedTypePolicyCallbackOutcome::Abrupt => DefaultTrustedTypePolicyOutcome::Exception,
     }
+}
+
+pub(crate) fn trusted_type_kind<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    value: v8::Local<'s, v8::Value>,
+) -> Option<TrustedTypeKind> {
+    let object = v8::Local::<v8::Object>::try_from(value).ok()?;
+    TRUSTED_TYPE_KINDS
+        .into_iter()
+        .find(|kind| kind.interface().is_instance(scope, object))
 }
 
 fn js_value_to_string<'s>(
