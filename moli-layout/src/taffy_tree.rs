@@ -1,20 +1,20 @@
 use std::{fmt::Debug, hash::Hash};
 
 mod inline_containing_block;
+mod inline_floats;
 use inline_containing_block::InlineContainingBlocks;
 
-use parley::{AlignmentOptions, PositionedLayoutItem, YieldData};
+use parley::{AlignmentOptions, PositionedLayoutItem};
 use style::Atom;
 use taffy::{
     AbsoluteAxis, AlignContent, AlignContentKeyword, AlignmentSafety, AutoSizeBehavior,
-    AvailableSpace, BlockContext, BlockFormattingContext, BoxSizing, CacheTree, Clear,
-    DetailedGridInfo, Dimension, Display, FlexDirection, FloatDirection, Layout,
-    LayoutBlockContainer, LayoutFlexboxContainer, LayoutGridContainer, LayoutInput, LayoutOutput,
-    LayoutPartialTree, LeafLayoutContext, Line, MaybeMath, MaybeResolve, NodeId, Point,
-    ResolveOrZero, RoundTree, RunMode, Size, SizingMode, SizingPurpose, Style, TraversePartialTree,
-    TraverseTree, compute_block_layout, compute_cached_layout, compute_flexbox_layout,
-    compute_grid_layout, compute_hidden_layout, compute_leaf_layout_with_context,
-    compute_root_layout, round_layout,
+    AvailableSpace, BlockContext, BlockFormattingContext, BoxSizing, CacheTree, DetailedGridInfo,
+    Dimension, Display, FlexDirection, Layout, LayoutBlockContainer, LayoutFlexboxContainer,
+    LayoutGridContainer, LayoutInput, LayoutOutput, LayoutPartialTree, LeafLayoutContext, Line,
+    MaybeMath, MaybeResolve, NodeId, Point, ResolveOrZero, RoundTree, RunMode, Size, SizingMode,
+    SizingPurpose, Style, TraversePartialTree, TraverseTree, compute_block_layout,
+    compute_cached_layout, compute_flexbox_layout, compute_grid_layout, compute_hidden_layout,
+    compute_leaf_layout_with_context, compute_root_layout, round_layout,
 };
 
 use crate::{
@@ -2522,6 +2522,8 @@ where
                         y: padding_border.top,
                     },
                     &mut floats,
+                    &atomic_baseline_ascents,
+                    &structural_edge_contributions,
                 );
                 alignment_float_height = content_context.floated_content_height_contribution();
                 if contains_floats {
@@ -2546,6 +2548,8 @@ where
                         y: padding_border.top,
                     },
                     &mut floats,
+                    &atomic_baseline_ascents,
+                    &structural_edge_contributions,
                 );
                 alignment_float_height = content_context.floated_content_height_contribution();
                 float_height = Some(alignment_float_height);
@@ -2622,111 +2626,6 @@ where
             // baseline at the appropriate box edge in the caller.
             _ => None,
         }
-    }
-
-    fn break_inline_lines_with_floats(
-        &mut self,
-        context: &InlineFormattingContext,
-        layout: &mut parley::Layout<crate::stylo_to_parley::TextBrush>,
-        width: f32,
-        child_inputs: LayoutInput,
-        block_context: &mut BlockContext<'_>,
-        content_offset: Point<f32>,
-        floats: &mut Vec<InlineFloatPlacement>,
-    ) {
-        let mut breaker = layout.break_lines();
-        let initial_slot = block_context.find_content_slot(0.0, Clear::None, None);
-        let mut has_active_floats = initial_slot.segment_id.is_some();
-        {
-            let state = breaker.state_mut();
-            state.set_layout_max_advance(width);
-            state.set_line_max_advance(initial_slot.width.max(0.0));
-            state.set_line_x(initial_slot.x);
-            state.set_line_y(f64::from(initial_slot.y));
-        }
-
-        while let Some(yield_data) = breaker.break_next() {
-            match yield_data {
-                YieldData::LineBreak(_) => {
-                    let state = breaker.state_mut();
-                    if has_active_floats {
-                        let next_slot = block_context.find_content_slot(
-                            state.line_y() as f32,
-                            Clear::None,
-                            None,
-                        );
-                        has_active_floats = next_slot.segment_id.is_some();
-                        state.set_line_max_advance(next_slot.width.max(0.0));
-                        state.set_line_x(next_slot.x);
-                        state.set_line_y(f64::from(next_slot.y));
-                    } else {
-                        state.set_line_x(0.0);
-                        state.set_line_max_advance(width);
-                    }
-                }
-                YieldData::MaxHeightExceeded(_) => {}
-                YieldData::InlineBoxBreak(data) => {
-                    let Some(object) = context.object(data.inline_box_id) else {
-                        continue;
-                    };
-                    if object.role != InlineObjectRole::Float {
-                        continue;
-                    }
-                    let child = object.box_id;
-                    let style = self.boxes[child.index()].style.taffy.clone();
-                    let direction = match style.float {
-                        taffy::Float::Left => FloatDirection::Left,
-                        taffy::Float::Right => FloatDirection::Right,
-                        taffy::Float::None => continue,
-                    };
-                    let margin = style
-                        .margin
-                        .resolve_or_zero(child_inputs.parent_size.width, resolve_stylo_calc_value);
-                    // A non-replaced float's formatting-context algorithm
-                    // owns its content size; pass it the slot remaining after
-                    // margins just like Taffy's block-float parent does. A
-                    // replaced leaf retains Taffy's intrinsic-size adapter,
-                    // which consumes the full slot and subtracts its margin.
-                    let layout_inputs = if self.boxes[child.index()].is_replaced() {
-                        child_inputs
-                    } else {
-                        LayoutInput {
-                            available_space: child_inputs
-                                .available_space
-                                .map_width(|width| width.maybe_sub(margin.left + margin.right)),
-                            ..child_inputs
-                        }
-                    };
-                    let output = self.compute_child_layout(child.to_taffy(), layout_inputs);
-                    let state = breaker.state_mut();
-                    let position = block_context.place_floated_box(
-                        output.size + margin.sum_axes(),
-                        state.line_y() as f32,
-                        direction,
-                        style.clear,
-                        false,
-                    );
-                    floats.push(InlineFloatPlacement {
-                        child,
-                        location: Point {
-                            x: content_offset.x + position.x + margin.left,
-                            y: content_offset.y + position.y + margin.top,
-                        },
-                        output,
-                        order: usize::try_from(data.inline_box_id).unwrap_or(usize::MAX),
-                        parent_width: child_inputs.parent_size.width,
-                    });
-                    let next_slot =
-                        block_context.find_content_slot(state.line_y() as f32, Clear::None, None);
-                    has_active_floats = next_slot.segment_id.is_some();
-                    state.set_line_max_advance(next_slot.width.max(0.0));
-                    state.set_line_x(next_slot.x);
-                    state.set_line_y(f64::from(next_slot.y));
-                    state.append_inline_box_to_line(data.advance, 0.0);
-                }
-            }
-        }
-        breaker.finish();
     }
 
     fn position_inline_objects(

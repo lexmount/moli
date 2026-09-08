@@ -875,7 +875,7 @@ pub(crate) fn measure_inline_lines(
 ) -> InlineLineMetrics {
     resolve_inline_lines(
         context,
-        layout,
+        layout.lines(),
         atomic_baseline_ascents,
         structural_edge_contributions,
         None,
@@ -891,7 +891,7 @@ pub(crate) fn build_inline_line_placements(
     let mut placements = Vec::with_capacity(layout.lines().len());
     let metrics = resolve_inline_lines(
         context,
-        layout,
+        layout.lines(),
         atomic_baseline_ascents,
         structural_edge_contributions,
         Some(&mut placements),
@@ -899,395 +899,443 @@ pub(crate) fn build_inline_line_placements(
     (placements, metrics)
 }
 
-fn resolve_inline_lines(
+/// Resolve the completed line before its block-end is used to place floats
+/// or select the next exclusion slot. Uses the same CSS vertical-alignment
+/// algorithm as final fragment placement, not Parley's font-only line height.
+pub(crate) fn measure_inline_line_height(
     context: &InlineFormattingContext,
-    layout: &Layout<TextBrush>,
+    line: parley::Line<'_, TextBrush>,
+    atomic_baseline_ascents: &[Option<f32>],
+    structural_edge_contributions: &[bool],
+) -> f32 {
+    let line_top = line.block_offset();
+    resolve_inline_line(
+        context,
+        line,
+        atomic_baseline_ascents,
+        structural_edge_contributions,
+        0,
+        line_top,
+        None,
+    )
+    .height
+}
+
+fn resolve_inline_lines<'a>(
+    context: &InlineFormattingContext,
+    lines: impl Iterator<Item = parley::Line<'a, TextBrush>>,
     atomic_baseline_ascents: &[Option<f32>],
     structural_edge_contributions: &[bool],
     mut placements: Option<&mut Vec<InlineLinePlacement>>,
 ) -> InlineLineMetrics {
     let mut result = InlineLineMetrics::default();
     let mut preceding_adjustment = 0.0;
-    let mut unadjusted_line_top = 0.0;
-
-    for (line_index, line) in layout.lines().enumerate() {
-        let metrics = line.metrics();
-        let raw_top = unadjusted_line_top;
-        let raw_bottom = raw_top + metrics.line_height.max(0.0);
-        let mut geometries = line
-            .items()
-            .map(|item| match item {
-                PositionedLayoutItem::GlyphRun(glyph_run) => {
-                    let run = glyph_run.run();
-                    let run_metrics = run.metrics();
-                    let paint = glyph_run.style().brush.paint;
-                    let style_index = glyph_run.glyphs().next().map(|glyph| glyph.style_index());
-                    let structural_parent =
-                        style_index.map_or(context.root_style, |index| context.style_parent(index));
-                    let primary_strut = style_index
-                        .and_then(|index| context.font_metrics.get(index).copied().flatten())
-                        .map(|metrics| inline_strut_metrics(metrics, true));
-                    let bounds = glyph_line_bounds(
-                        primary_strut,
-                        run_metrics,
-                        context.box_includes_used_font_metrics(structural_parent),
-                    );
-                    InlineItemVerticalGeometry {
-                        bounds,
-                        initial_top: glyph_run.baseline() + bounds.top,
-                        structural_parent,
-                        edge_box: None,
-                        vertical_align: InlineVerticalAlign::default(),
-                        // Parley may expose an empty root-style run next to
-                        // float/out-of-flow placeholders. It carries the font
-                        // style but no glyph geometry and is not in-flow line
-                        // content by itself.
-                        contributes_to_line: paint && style_index.is_some(),
-                        creates_line: paint && style_index.is_some(),
-                        glyph_key: if paint {
-                            style_index.map(|index| (run.index(), index))
-                        } else {
-                            None
-                        },
-                        anchor: LineVerticalAnchor::Root,
-                        relative_offset: 0.0,
-                    }
-                }
-                PositionedLayoutItem::InlineBox(positioned) => {
-                    let object = context.object(positioned.id);
-                    let object_index = usize::try_from(positioned.id).ok();
-                    let internal_baseline_ascent = object
-                        .filter(|object| object.role == InlineObjectRole::Atomic)
-                        .and(object_index)
-                        .and_then(|index| atomic_baseline_ascents.get(index).copied().flatten());
-                    let is_atomic =
-                        object.is_some_and(|object| object.role == InlineObjectRole::Atomic);
-                    let baseline_ascent = internal_baseline_ascent
-                        .or_else(|| is_atomic.then_some(positioned.height))
-                        .unwrap_or_default();
-                    InlineItemVerticalGeometry {
-                        bounds: if is_atomic {
-                            InlineVerticalBounds {
-                                top: -baseline_ascent,
-                                bottom: positioned.height - baseline_ascent,
-                            }
-                        } else {
-                            InlineVerticalBounds::ZERO
-                        },
-                        initial_top: positioned.y,
-                        structural_parent: object
-                            .and_then(|object| object.ancestors.last().copied())
-                            .unwrap_or(context.root_style),
-                        edge_box: object.and_then(|object| {
-                            matches!(
-                                object.role,
-                                InlineObjectRole::StartEdge | InlineObjectRole::EndEdge
-                            )
-                            .then_some(object.box_id)
-                        }),
-                        vertical_align: if is_atomic {
-                            object
-                                .map(|object| object.vertical_align)
-                                .unwrap_or_default()
-                        } else {
-                            InlineVerticalAlign::default()
-                        },
-                        contributes_to_line: is_atomic,
-                        creates_line: object.is_some_and(|object| match object.role {
-                            InlineObjectRole::Atomic => true,
-                            InlineObjectRole::StartEdge | InlineObjectRole::EndEdge => object_index
-                                .and_then(|index| structural_edge_contributions.get(index))
-                                .copied()
-                                .unwrap_or(false),
-                            InlineObjectRole::Float
-                            | InlineObjectRole::CollapsedText
-                            | InlineObjectRole::OutOfFlow(_) => false,
-                        }),
-                        glyph_key: None,
-                        anchor: LineVerticalAnchor::Root,
-                        relative_offset: 0.0,
-                    }
-                }
-            })
-            .collect::<Vec<_>>();
-        let phantom = css_line_is_phantom(
-            line.break_reason(),
-            geometries.iter().any(|geometry| geometry.creates_line),
+    for (line_index, line) in lines.enumerate() {
+        let line_top = line.block_offset() + preceding_adjustment;
+        let advance = line.block_advance();
+        let metrics = resolve_inline_line(
+            context,
+            line,
+            atomic_baseline_ascents,
+            structural_edge_contributions,
+            line_index,
+            line_top,
+            placements.as_deref_mut(),
         );
-        let mut states = build_line_inline_box_states(context, line.text_range(), &geometries);
-        let mut state_indices = BTreeMap::new();
-        for (index, state) in states.iter().enumerate() {
-            state_indices.insert(state.box_id.index(), index);
+        if !metrics.phantom {
+            result.has_non_phantom_line = true;
+            result.first_baseline.get_or_insert(metrics.baseline);
+            result.last_baseline = Some(metrics.baseline);
         }
-        for state in &mut states {
-            state.parent = state_indices.get(&state.parent_box.index()).copied();
-            state.anchor = state
-                .parent
-                .map_or(LineVerticalAnchor::Root, LineVerticalAnchor::State);
-        }
-        for geometry in &mut geometries {
-            geometry.anchor = geometry.edge_box.map_or_else(
-                || {
-                    state_indices
-                        .get(&geometry.structural_parent.index())
-                        .copied()
-                        .map_or(LineVerticalAnchor::Root, LineVerticalAnchor::State)
-                },
-                |box_id| {
-                    state_indices
-                        .get(&box_id.index())
-                        .copied()
-                        .map_or(LineVerticalAnchor::Root, LineVerticalAnchor::State)
-                },
-            );
-        }
+        preceding_adjustment += metrics.height - advance;
+    }
+    result.line_expansion = preceding_adjustment;
+    result
+}
 
-        let fallback_root_bounds = InlineVerticalBounds {
-            top: -metrics.ascent - metrics.leading * 0.5,
-            bottom: metrics.descent + metrics.leading * 0.5,
+struct ResolvedInlineLineMetrics {
+    height: f32,
+    baseline: f32,
+    phantom: bool,
+}
+
+fn resolve_inline_line(
+    context: &InlineFormattingContext,
+    line: parley::Line<'_, TextBrush>,
+    atomic_baseline_ascents: &[Option<f32>],
+    structural_edge_contributions: &[bool],
+    line_index: usize,
+    line_top: f32,
+    mut placements: Option<&mut Vec<InlineLinePlacement>>,
+) -> ResolvedInlineLineMetrics {
+    let metrics = line.metrics();
+    let mut geometries = line
+        .items()
+        .map(|item| match item {
+            PositionedLayoutItem::GlyphRun(glyph_run) => {
+                let run = glyph_run.run();
+                let run_metrics = run.metrics();
+                let paint = glyph_run.style().brush.paint;
+                let style_index = glyph_run.glyphs().next().map(|glyph| glyph.style_index());
+                let structural_parent =
+                    style_index.map_or(context.root_style, |index| context.style_parent(index));
+                let primary_strut = style_index
+                    .and_then(|index| context.font_metrics.get(index).copied().flatten())
+                    .map(|metrics| inline_strut_metrics(metrics, true));
+                let bounds = glyph_line_bounds(
+                    primary_strut,
+                    run_metrics,
+                    context.box_includes_used_font_metrics(structural_parent),
+                );
+                InlineItemVerticalGeometry {
+                    bounds,
+                    initial_top: glyph_run.baseline() + bounds.top,
+                    structural_parent,
+                    edge_box: None,
+                    vertical_align: InlineVerticalAlign::default(),
+                    // Parley may expose an empty root-style run next to
+                    // float/out-of-flow placeholders. It carries the font
+                    // style but no glyph geometry and is not in-flow line
+                    // content by itself.
+                    contributes_to_line: paint && style_index.is_some(),
+                    creates_line: paint && style_index.is_some(),
+                    glyph_key: if paint {
+                        style_index.map(|index| (run.index(), index))
+                    } else {
+                        None
+                    },
+                    anchor: LineVerticalAnchor::Root,
+                    relative_offset: 0.0,
+                }
+            }
+            PositionedLayoutItem::InlineBox(positioned) => {
+                let object = context.object(positioned.id);
+                let object_index = usize::try_from(positioned.id).ok();
+                let internal_baseline_ascent = object
+                    .filter(|object| object.role == InlineObjectRole::Atomic)
+                    .and(object_index)
+                    .and_then(|index| atomic_baseline_ascents.get(index).copied().flatten());
+                let is_atomic =
+                    object.is_some_and(|object| object.role == InlineObjectRole::Atomic);
+                let baseline_ascent = internal_baseline_ascent
+                    .or_else(|| is_atomic.then_some(positioned.height))
+                    .unwrap_or_default();
+                InlineItemVerticalGeometry {
+                    bounds: if is_atomic {
+                        InlineVerticalBounds {
+                            top: -baseline_ascent,
+                            bottom: positioned.height - baseline_ascent,
+                        }
+                    } else {
+                        InlineVerticalBounds::ZERO
+                    },
+                    initial_top: positioned.y,
+                    structural_parent: object
+                        .and_then(|object| object.ancestors.last().copied())
+                        .unwrap_or(context.root_style),
+                    edge_box: object.and_then(|object| {
+                        matches!(
+                            object.role,
+                            InlineObjectRole::StartEdge | InlineObjectRole::EndEdge
+                        )
+                        .then_some(object.box_id)
+                    }),
+                    vertical_align: if is_atomic {
+                        object
+                            .map(|object| object.vertical_align)
+                            .unwrap_or_default()
+                    } else {
+                        InlineVerticalAlign::default()
+                    },
+                    contributes_to_line: is_atomic,
+                    creates_line: object.is_some_and(|object| match object.role {
+                        InlineObjectRole::Atomic => true,
+                        InlineObjectRole::StartEdge | InlineObjectRole::EndEdge => object_index
+                            .and_then(|index| structural_edge_contributions.get(index))
+                            .copied()
+                            .unwrap_or(false),
+                        InlineObjectRole::Float
+                        | InlineObjectRole::CollapsedText
+                        | InlineObjectRole::OutOfFlow(_) => false,
+                    }),
+                    glyph_key: None,
+                    anchor: LineVerticalAnchor::Root,
+                    relative_offset: 0.0,
+                }
+            }
+        })
+        .collect::<Vec<_>>();
+    let phantom = css_line_is_phantom(
+        line.break_reason(),
+        geometries.iter().any(|geometry| geometry.creates_line),
+    );
+    let mut states = build_line_inline_box_states(context, line.text_range(), &geometries);
+    let mut state_indices = BTreeMap::new();
+    for (index, state) in states.iter().enumerate() {
+        state_indices.insert(state.box_id.index(), index);
+    }
+    for state in &mut states {
+        state.parent = state_indices.get(&state.parent_box.index()).copied();
+        state.anchor = state
+            .parent
+            .map_or(LineVerticalAnchor::Root, LineVerticalAnchor::State);
+    }
+    for geometry in &mut geometries {
+        geometry.anchor = geometry.edge_box.map_or_else(
+            || {
+                state_indices
+                    .get(&geometry.structural_parent.index())
+                    .copied()
+                    .map_or(LineVerticalAnchor::Root, LineVerticalAnchor::State)
+            },
+            |box_id| {
+                state_indices
+                    .get(&box_id.index())
+                    .copied()
+                    .map_or(LineVerticalAnchor::Root, LineVerticalAnchor::State)
+            },
+        );
+    }
+
+    let fallback_root_bounds = InlineVerticalBounds {
+        top: -metrics.ascent - metrics.leading * 0.5,
+        bottom: metrics.descent + metrics.leading * 0.5,
+    };
+    let mut root_bounds = (!phantom).then(|| {
+        context
+            .parent_strut
+            .map_or(fallback_root_bounds, InlineVerticalBounds::from_strut)
+    });
+    for state in &mut states {
+        state.metrics = if phantom {
+            // Empty inline fragments still participate in vertical-align,
+            // but their font struts must not create block-axis geometry.
+            Some(InlineVerticalBounds::ZERO)
+        } else {
+            state.strut.map(InlineVerticalBounds::from_strut)
         };
-        let mut root_bounds = (!phantom).then(|| {
-            context
-                .parent_strut
-                .map_or(fallback_root_bounds, InlineVerticalBounds::from_strut)
-        });
-        for state in &mut states {
-            state.metrics = if phantom {
-                // Empty inline fragments still participate in vertical-align,
-                // but their font struts must not create block-axis geometry.
-                Some(InlineVerticalBounds::ZERO)
-            } else {
-                state.strut.map(InlineVerticalBounds::from_strut)
-            };
+    }
+
+    // One pending list per structural target plus one for the root line
+    // box. Top/bottom descendants are resolved only after the target's
+    // other aligned descendants have established its subtree metrics.
+    let root_pending_index = states.len();
+    let mut pending = vec![Vec::<PendingLineAlignment>::new(); states.len() + 1];
+
+    for (item_index, geometry) in geometries.iter_mut().enumerate() {
+        if !geometry.contributes_to_line {
+            continue;
         }
-
-        // One pending list per structural target plus one for the root line
-        // box. Top/bottom descendants are resolved only after the target's
-        // other aligned descendants have established its subtree metrics.
-        let root_pending_index = states.len();
-        let mut pending = vec![Vec::<PendingLineAlignment>::new(); states.len() + 1];
-
-        for (item_index, geometry) in geometries.iter_mut().enumerate() {
-            if !geometry.contributes_to_line {
-                continue;
-            }
-            let parent = match geometry.anchor {
-                LineVerticalAnchor::State(index) => Some(index),
-                LineVerticalAnchor::Root => None,
-            };
-            if matches!(
-                geometry.vertical_align.kind,
-                LayoutInlineAlignment::Top | LayoutInlineAlignment::Bottom
-            ) {
-                let target =
-                    nearest_top_or_bottom_target(&states, parent).unwrap_or(root_pending_index);
-                pending[target].push(PendingLineAlignment {
-                    member: PendingLineMember::Item(item_index),
-                    bounds: geometry.bounds,
-                    vertical_align: geometry.vertical_align,
-                });
-                continue;
-            }
-            let offset = non_edge_vertical_offset(
-                geometry.vertical_align,
-                alignment_reference(context, &states, parent),
-                geometry.bounds,
-            );
-            geometry.relative_offset = offset;
-            include_in_parent(
-                geometry.bounds.shifted(offset),
-                parent,
-                &mut states,
-                &mut root_bounds,
-            );
+        let parent = match geometry.anchor {
+            LineVerticalAnchor::State(index) => Some(index),
+            LineVerticalAnchor::Root => None,
+        };
+        if matches!(
+            geometry.vertical_align.kind,
+            LayoutInlineAlignment::Top | LayoutInlineAlignment::Bottom
+        ) {
+            let target =
+                nearest_top_or_bottom_target(&states, parent).unwrap_or(root_pending_index);
+            pending[target].push(PendingLineAlignment {
+                member: PendingLineMember::Item(item_index),
+                bounds: geometry.bounds,
+                vertical_align: geometry.vertical_align,
+            });
+            continue;
         }
-
-        let mut state_order = (0..states.len()).collect::<Vec<_>>();
-        state_order.sort_by_key(|index| std::cmp::Reverse(states[*index].depth));
-        for state_index in state_order.iter().copied() {
-            let target_pending = std::mem::take(&mut pending[state_index]);
-            let mut target_metrics = states[state_index].metrics.take();
-            resolve_pending_alignments(
-                target_pending,
-                LineVerticalAnchor::State(state_index),
-                &mut target_metrics,
-                &mut states,
-                &mut geometries,
-            );
-            states[state_index].metrics = target_metrics;
-
-            let Some(state_bounds) = states[state_index].metrics else {
-                continue;
-            };
-            let parent = states[state_index].parent;
-            let vertical_align = states[state_index].vertical_align;
-            if matches!(
-                vertical_align.kind,
-                LayoutInlineAlignment::Top | LayoutInlineAlignment::Bottom
-            ) {
-                let target =
-                    nearest_top_or_bottom_target(&states, parent).unwrap_or(root_pending_index);
-                pending[target].push(PendingLineAlignment {
-                    member: PendingLineMember::State(state_index),
-                    bounds: state_bounds,
-                    vertical_align,
-                });
-                continue;
-            }
-            let offset = non_edge_vertical_offset(
-                vertical_align,
-                alignment_reference(context, &states, parent),
-                state_bounds,
-            );
-            states[state_index].relative_offset = offset;
-            include_in_parent(
-                state_bounds.shifted(offset),
-                parent,
-                &mut states,
-                &mut root_bounds,
-            );
-        }
-
-        resolve_pending_alignments(
-            std::mem::take(&mut pending[root_pending_index]),
-            LineVerticalAnchor::Root,
+        let offset = non_edge_vertical_offset(
+            geometry.vertical_align,
+            alignment_reference(context, &states, parent),
+            geometry.bounds,
+        );
+        geometry.relative_offset = offset;
+        include_in_parent(
+            geometry.bounds.shifted(offset),
+            parent,
+            &mut states,
             &mut root_bounds,
+        );
+    }
+
+    let mut state_order = (0..states.len()).collect::<Vec<_>>();
+    state_order.sort_by_key(|index| std::cmp::Reverse(states[*index].depth));
+    for state_index in state_order.iter().copied() {
+        let target_pending = std::mem::take(&mut pending[state_index]);
+        let mut target_metrics = states[state_index].metrics.take();
+        resolve_pending_alignments(
+            target_pending,
+            LineVerticalAnchor::State(state_index),
+            &mut target_metrics,
             &mut states,
             &mut geometries,
         );
+        states[state_index].metrics = target_metrics;
 
-        let bounds = if phantom {
-            InlineVerticalBounds::ZERO
-        } else {
-            root_bounds.unwrap_or(fallback_root_bounds)
+        let Some(state_bounds) = states[state_index].metrics else {
+            continue;
         };
-        let line_height = bounds.height();
-        let root_baseline = raw_top + preceding_adjustment - bounds.top;
-
-        if !phantom {
-            result.has_non_phantom_line = true;
-            result.first_baseline.get_or_insert(root_baseline);
-            result.last_baseline = Some(root_baseline);
-        }
-
-        // Intrinsic and flex/grid probes need only the resolved line height
-        // and baselines. The following state walk and vectors exist solely to
-        // place final glyphs, atomic objects, and structural fragments.
-        if let Some(placements) = placements.as_mut() {
-            let mut ascending_states = (0..states.len()).collect::<Vec<_>>();
-            ascending_states.sort_by_key(|index| states[*index].depth);
-            for state_index in ascending_states {
-                states[state_index].global_offset = states[state_index].relative_offset
-                    + anchor_global_offset(states[state_index].anchor, &states);
-            }
-            // Static positions belong to the CSS line box, not an inline
-            // baseline or an ancestor's vertical-align state. Like Blink's
-            // PlaceOutOfFlowObjects, block-level placeholders move to the
-            // next line only when in-flow content logically precedes them.
-            // Parley exposes items in visual order, so RTL searches backwards.
-            let first_in_flow = if layout.is_rtl() {
-                geometries
-                    .iter()
-                    .rposition(|geometry| geometry.creates_line)
-            } else {
-                geometries.iter().position(|geometry| geometry.creates_line)
-            };
-            let line_top = raw_top + preceding_adjustment;
-            let item_offsets = geometries
-                .iter()
-                .zip(line.items())
-                .enumerate()
-                .map(|(index, (geometry, item))| {
-                    let static_display = match item {
-                        PositionedLayoutItem::InlineBox(positioned) => context
-                            .object(positioned.id)
-                            .and_then(|object| match object.role {
-                                InlineObjectRole::OutOfFlow(display) => Some(display),
-                                _ => None,
-                            }),
-                        PositionedLayoutItem::GlyphRun(_) => None,
-                    };
-                    let desired_top = match static_display {
-                        Some(OutOfFlowDisplay::Inline) => line_top,
-                        Some(OutOfFlowDisplay::Block) => {
-                            let has_preceding_content = first_in_flow.is_some_and(|first| {
-                                if layout.is_rtl() {
-                                    index < first
-                                } else {
-                                    index > first
-                                }
-                            });
-                            line_top
-                                + if has_preceding_content {
-                                    line_height
-                                } else {
-                                    0.0
-                                }
-                        }
-                        None => {
-                            root_baseline
-                                + anchor_global_offset(geometry.anchor, &states)
-                                + geometry.relative_offset
-                                + geometry.bounds.top
-                        }
-                    };
-                    desired_top - geometry.initial_top
-                })
-                .collect::<Vec<_>>();
-            let glyph_offsets = geometries
-                .iter()
-                .zip(&item_offsets)
-                .filter_map(|(geometry, offset)| {
-                    let (run_index, style_index) = geometry.glyph_key?;
-                    Some(InlineGlyphOffset {
-                        run_index,
-                        style_index,
-                        offset: *offset,
-                    })
-                })
-                .collect();
-            let box_block_placements = states
-                .iter()
-                .filter_map(|state| {
-                    let baseline = root_baseline + state.global_offset;
-                    let (top, height) = if phantom {
-                        (baseline, 0.0)
-                    } else {
-                        let strut = state.strut?;
-                        (
-                            baseline - strut.text_ascent,
-                            (strut.text_ascent + strut.text_descent).max(0.0),
-                        )
-                    };
-                    Some(InlineBoxBlockPlacement {
-                        box_id: state.box_id,
-                        top,
-                        height,
-                    })
-                })
-                .collect();
-            placements.push(InlineLinePlacement {
-                line_index,
-                rect: PaintRect::new(
-                    metrics.inline_min_coord + metrics.offset,
-                    raw_top + preceding_adjustment,
-                    metrics.advance,
-                    line_height,
-                ),
-                baseline: root_baseline,
-                phantom,
-                content_offset: root_baseline - metrics.baseline,
-                item_offsets,
-                glyph_offsets,
-                box_block_placements,
+        let parent = states[state_index].parent;
+        let vertical_align = states[state_index].vertical_align;
+        if matches!(
+            vertical_align.kind,
+            LayoutInlineAlignment::Top | LayoutInlineAlignment::Bottom
+        ) {
+            let target =
+                nearest_top_or_bottom_target(&states, parent).unwrap_or(root_pending_index);
+            pending[target].push(PendingLineAlignment {
+                member: PendingLineMember::State(state_index),
+                bounds: state_bounds,
+                vertical_align,
             });
+            continue;
         }
-        preceding_adjustment += line_height - (raw_bottom - raw_top);
-        unadjusted_line_top += metrics.line_height.max(0.0);
+        let offset = non_edge_vertical_offset(
+            vertical_align,
+            alignment_reference(context, &states, parent),
+            state_bounds,
+        );
+        states[state_index].relative_offset = offset;
+        include_in_parent(
+            state_bounds.shifted(offset),
+            parent,
+            &mut states,
+            &mut root_bounds,
+        );
     }
 
-    result.line_expansion = preceding_adjustment;
-    result
+    resolve_pending_alignments(
+        std::mem::take(&mut pending[root_pending_index]),
+        LineVerticalAnchor::Root,
+        &mut root_bounds,
+        &mut states,
+        &mut geometries,
+    );
+
+    let bounds = if phantom {
+        InlineVerticalBounds::ZERO
+    } else {
+        root_bounds.unwrap_or(fallback_root_bounds)
+    };
+    let line_height = bounds.height();
+    let root_baseline = line_top - bounds.top;
+
+    // Intrinsic and flex/grid probes need only the resolved line height
+    // and baselines. The following state walk and vectors exist solely to
+    // place final glyphs, atomic objects, and structural fragments.
+    if let Some(placements) = placements.as_mut() {
+        let mut ascending_states = (0..states.len()).collect::<Vec<_>>();
+        ascending_states.sort_by_key(|index| states[*index].depth);
+        for state_index in ascending_states {
+            states[state_index].global_offset = states[state_index].relative_offset
+                + anchor_global_offset(states[state_index].anchor, &states);
+        }
+        // Static positions belong to the CSS line box, not an inline
+        // baseline or an ancestor's vertical-align state. Like Blink's
+        // PlaceOutOfFlowObjects, block-level placeholders move to the
+        // next line only when in-flow content logically precedes them.
+        // Parley exposes items in visual order, so RTL searches backwards.
+        let first_in_flow = if line.is_rtl() {
+            geometries
+                .iter()
+                .rposition(|geometry| geometry.creates_line)
+        } else {
+            geometries.iter().position(|geometry| geometry.creates_line)
+        };
+        let item_offsets = geometries
+            .iter()
+            .zip(line.items())
+            .enumerate()
+            .map(|(index, (geometry, item))| {
+                let static_display = match item {
+                    PositionedLayoutItem::InlineBox(positioned) => context
+                        .object(positioned.id)
+                        .and_then(|object| match object.role {
+                            InlineObjectRole::OutOfFlow(display) => Some(display),
+                            _ => None,
+                        }),
+                    PositionedLayoutItem::GlyphRun(_) => None,
+                };
+                let desired_top = match static_display {
+                    Some(OutOfFlowDisplay::Inline) => line_top,
+                    Some(OutOfFlowDisplay::Block) => {
+                        let has_preceding_content = first_in_flow.is_some_and(|first| {
+                            if line.is_rtl() {
+                                index < first
+                            } else {
+                                index > first
+                            }
+                        });
+                        line_top
+                            + if has_preceding_content {
+                                line_height
+                            } else {
+                                0.0
+                            }
+                    }
+                    None => {
+                        root_baseline
+                            + anchor_global_offset(geometry.anchor, &states)
+                            + geometry.relative_offset
+                            + geometry.bounds.top
+                    }
+                };
+                desired_top - geometry.initial_top
+            })
+            .collect::<Vec<_>>();
+        let glyph_offsets = geometries
+            .iter()
+            .zip(&item_offsets)
+            .filter_map(|(geometry, offset)| {
+                let (run_index, style_index) = geometry.glyph_key?;
+                Some(InlineGlyphOffset {
+                    run_index,
+                    style_index,
+                    offset: *offset,
+                })
+            })
+            .collect();
+        let box_block_placements = states
+            .iter()
+            .filter_map(|state| {
+                let baseline = root_baseline + state.global_offset;
+                let (top, height) = if phantom {
+                    (baseline, 0.0)
+                } else {
+                    let strut = state.strut?;
+                    (
+                        baseline - strut.text_ascent,
+                        (strut.text_ascent + strut.text_descent).max(0.0),
+                    )
+                };
+                Some(InlineBoxBlockPlacement {
+                    box_id: state.box_id,
+                    top,
+                    height,
+                })
+            })
+            .collect();
+        placements.push(InlineLinePlacement {
+            line_index,
+            rect: PaintRect::new(
+                metrics.inline_min_coord + metrics.offset,
+                line_top,
+                metrics.advance,
+                line_height,
+            ),
+            baseline: root_baseline,
+            phantom,
+            content_offset: root_baseline - metrics.baseline,
+            item_offsets,
+            glyph_offsets,
+            box_block_placements,
+        });
+    }
+
+    ResolvedInlineLineMetrics {
+        height: line_height,
+        baseline: root_baseline,
+        phantom,
+    }
 }
 
 #[derive(Clone, Copy, Debug)]

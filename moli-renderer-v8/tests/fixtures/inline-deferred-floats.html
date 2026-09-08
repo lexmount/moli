@@ -1,0 +1,116 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>Floats are positioned relative to their originating line</title>
+<style>
+  body { margin:0; font:20px/1.5 monospace }
+  .line { display:flow-root; position:relative }
+  .float { float:left; width:2em; height:1.5em; background:lime }
+  .empty { width:0; height:0 }
+  .wide { width:3em }
+  .small { width:1em }
+  .half { width:1.5em }
+  .tall { height:2em }
+  .short { height:0.5em }
+  .clear { clear:both }
+  .padded { padding-inline-end:1em }
+  .negative { margin-inline-end:-1em }
+  .atomic { display:inline-block; width:2em; height:1.5em }
+  .raised { vertical-align:1em }
+  .lowered { vertical-align:-1em }
+</style>
+<body>
+<script>
+  const box = (name, extra='') => `<i class="float ${extra}" data-mark="${name}"></i>`;
+  const patterns = [
+    ['overflowing-word', '0', 'W'+box('empty','empty')+'W'+box('float')+'WW',
+      'WWWW<br>'+box('empty','empty')+box('float')],
+    ['deferred-after-text', '2em', 'W'+box('float')+'WW', 'WWW<br>'+box('float')],
+    ['fits-with-prefix', '4em', 'W'+box('float')+'WW', box('float')+'WWW'],
+    ['fits-before-overflowing-word', '3em', 'W'+box('float')+'WW',
+      box('float')+'<div class="reference-text">WWW</div>'],
+    ['collapsed-space-fit', '3em', 'WW '+box('float','half')+'WW', box('float','half')+'WW<br>WW'],
+    ['pending-source-order', '3em', 'W'+box('first','wide')+'WW'+box('second','small')+'W',
+      'WWWW<br>'+box('first','wide')+box('second','small')],
+    ['clear-after-line', '8em', box('first','small tall')+'W'+box('second','clear')+'WWW',
+      box('first','small tall')+'WWWW<br>'+box('second','clear')],
+    ['clear-within-line', '8em', box('first','small short')+'W'+box('second','clear')+'WWW',
+      box('first','small short')+'WWWW<br>'+box('second','clear')],
+    ['nowrap-deferred', '3em', 'WW '+box('float')+'WW', 'WW WW<br>'+box('float')],
+    ['closing-edge-deferred', '3em', '<span class="padded">W'+box('float')+'</span>WW',
+      '<span class="padded">W</span>WW<br>'+box('float')],
+    ['opening-stops-closing-edge', '3em', '<span class="padded">W'+box('float')+'<span></span></span>WW',
+      box('float')+'<div class="reference-text"><span class="padded">W<span></span></span>WW</div>'],
+    ['negative-closing-edge-fit', '2em', '<span class="negative">W'+box('float')+'</span>WW',
+      box('float')+'<div class="reference-text"><span class="negative">W</span>WW</div>'],
+    ['indented-prefix-deferred', '4em', 'W'+box('float')+'WW', 'WWW<br>'+box('float')],
+    ['atomic-prefix-deferred', '3em', '<b class="atomic">W</b>'+box('float'),
+      '<b class="atomic">W</b><br>'+box('float')],
+    ['raised-line-deferred', '2em', '<span class="raised">W'+box('float')+'WW</span>',
+      '<div><span class="raised">WWW</span></div>'+box('float')],
+    ['lowered-line-deferred', '2em', '<span class="lowered">W'+box('float')+'WW</span>',
+      '<div><span class="lowered">WWW</span></div>'+box('float')],
+    ['raised-line-clear', '8em', box('first','small short')+'<span class="raised">W'+box('second','clear')+'WWW</span>',
+      box('first','small short')+'<div><span class="raised">WWWW</span></div>'+box('second','clear')],
+  ];
+  const pairs = patterns.flatMap(([name,width,actual,expected]) => ['left','right'].flatMap(side =>
+    ['ltr','rtl'].map(direction => {
+      const lines = [actual,expected].map(markup => {
+        const line = document.createElement('div');
+        line.className = 'line';
+        line.style.width = width;
+        if (name === 'nowrap-deferred') line.style.whiteSpace = 'nowrap';
+        if (name === 'indented-prefix-deferred') line.style.textIndent = '2em';
+        line.dir = direction;
+        line.innerHTML = markup;
+        for (const element of line.querySelectorAll('.float')) element.style.cssFloat = side;
+        const referenceText = line.querySelector('.reference-text');
+        if (referenceText) {
+          // A float encountered after an existing prefix can fit there even
+          // when the completed unbreakable word overflows the remaining space.
+          // Reproduce that slot without the leading-float avoidance algorithm.
+          const element = line.querySelector('.float');
+          element.style.position = 'absolute';
+          element.style.top = '0';
+          element.style[side] = '0';
+          referenceText.style[side === 'left' ? 'marginLeft' : 'marginRight'] = '2em';
+        }
+        document.body.appendChild(line);
+        return line;
+      });
+      return {id:name+'-'+side+'-'+direction,lines};
+    })));
+  function collectInlineFragmentChecks() {
+    const geometry = line => {
+      const origin = line.getBoundingClientRect();
+      const rect = r => [r.x-origin.x,r.y-origin.y,r.width,r.height];
+      const glyphs = [];
+      function walk(node) {
+        if (node.nodeType === Node.TEXT_NODE) {
+          for (let index=0;index<node.length;index++) {
+            if (node.data[index] !== 'W') continue;
+            const range = document.createRange();
+            range.setStart(node,index);range.setEnd(node,index+1);
+            glyphs.push(rect(range.getBoundingClientRect()));
+          }
+        } else for (const child of node.childNodes) walk(child);
+      }
+      walk(line);
+      return [origin.width,origin.height,glyphs,
+        Array.from(line.querySelectorAll('[data-mark]'), element => rect(element.getBoundingClientRect()))];
+    };
+    return pairs.map(({id,lines}) => {
+      const actual = geometry(lines[0]), expected = geometry(lines[1]);
+      // Chromium rounds Range endpoints independently when a float splits a
+      // text run. The two float boundaries in these cases can accumulate two
+      // layout units of x/width rounding. Keep line y/height, container size
+      // and every float box exact; allow only that text-run rounding.
+      const textMatches = actual[2].length === expected[2].length && actual[2].every((rect,index) =>
+        rect.every((value,axis) => axis === 0 || axis === 2
+          ? Math.abs(value-expected[2][index][axis]) <= 2/64
+          : value === expected[2][index][axis]));
+      const boxes = result => [result[0],result[1],result[3]];
+      return {id, actual:textMatches && JSON.stringify(boxes(actual)) === JSON.stringify(boxes(expected)),
+        expected:true, actualGeometry:actual, expectedGeometry:expected};
+    });
+  }
+</script>
