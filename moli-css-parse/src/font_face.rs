@@ -46,7 +46,13 @@ pub fn parse_font_face_sources(source: &str) -> Option<Vec<CssFontSource>> {
                         && values.iter().all(|v| {
                             matches!(
                                 v.as_str(),
-                                "woff" | "woff2" | "truetype" | "opentype" | "collection"
+                                "woff"
+                                    | "woff2"
+                                    | "truetype"
+                                    | "ttf"
+                                    | "opentype"
+                                    | "otf"
+                                    | "collection"
                             )
                         });
                     Ok::<_, cssparser::ParseError<'_, ()>>(())

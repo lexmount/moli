@@ -586,6 +586,13 @@ impl JsContextHost {
         self.document_layout_state.borrow_mut().complete(terminal)
     }
 
+    pub(crate) fn observe_document_font_face(
+        &self,
+        font: &crate::css_resource_urls::StylesheetWebFont,
+    ) -> crate::font_loading::FontFaceLoad {
+        self.document_layout_state.borrow_mut().observe_font(font)
+    }
+
     #[cfg(test)]
     pub(crate) fn document_web_font_counts_for_test(&self) -> (usize, usize, usize) {
         self.document_layout_state.borrow().web_font_counts()

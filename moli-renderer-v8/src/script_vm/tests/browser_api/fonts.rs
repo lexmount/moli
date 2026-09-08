@@ -181,3 +181,222 @@ face.load().catch(error => fontResult.push(error.name, face.status));
     );
     assert_eq!(vm.document_web_font_counts_for_test().2, 0);
 }
+
+async fn assert_css_and_js_share_font_loading(css_starts: bool, remove_rule: bool) {
+    let (url, request_rx, release_tx, server) = spawn_gated_font_resource_server().await;
+    let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).unwrap();
+    loader.set_optional_resource_fetch_mask(crate::protocol_types::OptionalResourceFetchMask::FONT);
+    let document_url = url.replace("/print-only.woff2", "/page");
+    let (mut vm, mut completions) =
+        new_storage_test_vm_with_loader_and_resource_completion_queue(&document_url, &loader);
+    vm.eval(&format!(
+        r#"
+const html = document.createElement('html');
+html.innerHTML = '<head></head><body>AAAA</body>';
+document.append(html);
+const style = document.createElement('style');
+style.textContent = '@font-face {{ font-family: SharedFace; src: url("{url}"); }}';
+(document.head || document.documentElement).append(style);
+globalThis.face = [...document.fonts][0];
+globalThis.fontResult = [];
+globalThis.fontPromise = face.loaded;
+fontPromise.then(value => fontResult.push(value === face, face.status));
+"#
+    ))
+    .unwrap();
+    assert_eq!(vm.eval("face.status").unwrap(), "unloaded");
+    if !css_starts {
+        assert_eq!(vm.eval("face.load() === fontPromise").unwrap(), "true");
+    }
+    vm.refresh_layout_snapshot_for_test(moli_layout::LayoutViewport::new(800, 600, 1.0))
+        .unwrap();
+    assert_eq!(
+        vm.eval("[face.status, face.load() === fontPromise, document.fonts.status, fontResult.length].join('|')").unwrap(),
+        "loading|true|loading|0"
+    );
+    assert_eq!(
+        vm._context_host
+            .borrow()
+            .pending_subresource_request_count(),
+        1,
+        "CSS and JS must reuse the same in-flight font, whichever starts first"
+    );
+    tokio::time::timeout(Duration::from_secs(2), request_rx)
+        .await
+        .unwrap()
+        .unwrap();
+    if remove_rule {
+        vm.eval("style.remove()").unwrap();
+        vm.refresh_layout_snapshot_for_test(moli_layout::LayoutViewport::new(800, 600, 1.0))
+            .unwrap();
+        assert_eq!(vm.document_web_font_counts_for_test(), (0, 0, 0));
+    }
+    release_tx.send(()).unwrap();
+    server.await.unwrap();
+    assert!(
+        tokio::time::timeout(
+            Duration::from_secs(2),
+            completions.wait_for_arrival_without_timeout()
+        )
+        .await
+        .unwrap()
+    );
+    let completion = completions.pop_next_async_subresource_event().unwrap();
+    let activity = vm
+        .complete_async_subresource_fetch_event_body(completion)
+        .unwrap();
+    vm.finish_async_subresource_body_checkpoint_for_test(activity)
+        .unwrap();
+    assert_eq!(
+        vm.eval("JSON.stringify(fontResult)").unwrap(),
+        r#"[true,"loaded"]"#
+    );
+    assert_eq!(vm.eval("document.fonts.status").unwrap(), "loaded");
+    assert_eq!(
+        vm.document_web_font_counts_for_test(),
+        if remove_rule { (0, 0, 0) } else { (1, 1, 1) }
+    );
+    assert_eq!(
+        vm.eval("document.fonts.check('12px SharedFace')").unwrap(),
+        "true"
+    );
+    assert_eq!(
+        vm._context_host
+            .borrow()
+            .pending_subresource_request_count(),
+        0
+    );
+}
+
+#[tokio::test]
+async fn font_face_observes_the_stylesheet_request_without_starting_another() {
+    assert_css_and_js_share_font_loading(true, false).await;
+}
+
+#[tokio::test]
+async fn stylesheet_reuses_the_css_connected_font_face_started_by_javascript() {
+    assert_css_and_js_share_font_loading(false, false).await;
+}
+
+#[tokio::test]
+async fn removed_stylesheet_font_settles_javascript_without_restoring_registration() {
+    assert_css_and_js_share_font_loading(true, true).await;
+}
+
+#[tokio::test]
+async fn failed_stylesheet_font_rejects_the_connected_font_face_promise() {
+    let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).unwrap();
+    loader.set_optional_resource_fetch_mask(crate::protocol_types::OptionalResourceFetchMask::FONT);
+    let (mut vm, _) = new_storage_test_vm_with_loader_and_resource_completion_queue(
+        "https://font-sources.test/",
+        &loader,
+    );
+    vm.eval(r#"
+const html = document.createElement('html');
+html.innerHTML = '<head></head><body>AAAA</body>';
+document.append(html);
+const style = document.createElement('style');
+style.textContent = '@font-face { font-family: FailedFace; src: url("data:font/woff2;base64,YmFk"); }';
+(document.head || document.documentElement).append(style);
+globalThis.face = [...document.fonts][0];
+globalThis.fontResult = [];
+face.loaded.catch(error => fontResult.push(error.name, face.status));
+"#).unwrap();
+    vm.refresh_layout_snapshot_for_test(moli_layout::LayoutViewport::new(800, 600, 1.0))
+        .unwrap();
+    // Layout demand is body-only. This evaluation observes the native terminal
+    // and runs the normal input-independent microtask checkpoint for its promise.
+    assert_eq!(vm.eval("face.status").unwrap(), "error");
+    assert_eq!(
+        vm.eval("JSON.stringify(fontResult)").unwrap(),
+        r#"["NetworkError","error"]"#
+    );
+    assert_eq!(vm.document_web_font_counts_for_test(), (1, 0, 0));
+    assert_eq!(
+        vm.eval("document.fonts.check('12px FailedFace')").unwrap(),
+        "false"
+    );
+}
+
+#[tokio::test]
+async fn stylesheet_font_source_fallback_settles_the_connected_font_face() {
+    let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).unwrap();
+    loader.set_optional_resource_fetch_mask(crate::protocol_types::OptionalResourceFetchMask::FONT);
+    let (mut vm, _) = new_storage_test_vm_with_loader_and_resource_completion_queue(
+        "https://font-sources.test/",
+        &loader,
+    );
+    vm.eval(&format!(
+        r#"
+const html = document.createElement('html');
+html.innerHTML = '<head></head><body>AAAA</body>';
+document.append(html);
+const style = document.createElement('style');
+style.textContent = `@font-face {{
+    font-family: FallbackFace;
+    src: local("MoliDefinitelyNotAFont-0001345"),
+         url("data:font/woff2;base64,YmFk"), url("{}");
+}}`;
+(document.head || document.documentElement).append(style);
+globalThis.face = [...document.fonts][0];
+globalThis.fontResult = [];
+face.loaded.then(value => fontResult.push(value === face, face.status));
+"#,
+        fixture_font_url()
+    ))
+    .unwrap();
+    vm.refresh_layout_snapshot_for_test(moli_layout::LayoutViewport::new(800, 600, 1.0))
+        .unwrap();
+    assert_eq!(vm.eval("face.status").unwrap(), "loaded");
+    assert_eq!(
+        vm.eval("JSON.stringify(fontResult)").unwrap(),
+        r#"[true,"loaded"]"#
+    );
+    assert_eq!(vm.document_web_font_counts_for_test(), (1, 1, 1));
+    vm.eval("style.remove()").unwrap();
+    vm.refresh_layout_snapshot_for_test(moli_layout::LayoutViewport::new(800, 600, 1.0))
+        .unwrap();
+    assert_eq!(vm.document_web_font_counts_for_test(), (0, 0, 0));
+    assert_eq!(
+        vm.eval("face.status").unwrap(),
+        "loaded",
+        "removing CSS membership does not unload the held FontFace"
+    );
+}
+
+#[tokio::test]
+async fn loaded_stylesheet_font_is_reused_by_a_late_native_wrapper() {
+    let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).unwrap();
+    loader.set_optional_resource_fetch_mask(crate::protocol_types::OptionalResourceFetchMask::FONT);
+    let (mut vm, _) = new_storage_test_vm_with_loader_and_resource_completion_queue(
+        "https://font-sources.test/",
+        &loader,
+    );
+    vm.eval(&format!(r#"
+const html = document.createElement('html');
+html.innerHTML = '<head></head><body>AAAA</body>';
+document.append(html);
+const style = document.createElement('style');
+style.textContent = '@font-face {{ font-family: LateFace; src: url("{}"); font-weight: 700; font-style: italic; }}';
+document.head.append(style);
+globalThis.NativeFontFace = FontFace;
+globalThis.FontFace = function() {{ throw new Error('CSS must not call the page constructor'); }};
+"#, fixture_font_url())).unwrap();
+    vm.refresh_layout_snapshot_for_test(moli_layout::LayoutViewport::new(800, 600, 1.0))
+        .unwrap();
+    assert_eq!(vm.document_web_font_counts_for_test(), (1, 1, 1));
+    assert_eq!(
+        vm.eval(
+            r#"
+globalThis.face = [...document.fonts][0];
+globalThis.fontResult = [];
+face.load().then(value => fontResult.push(value === face));
+[face instanceof NativeFontFace, face.status, face.weight, face.style].join('|')
+"#
+        )
+        .unwrap(),
+        "true|loaded|700|italic"
+    );
+    assert_eq!(vm.eval("JSON.stringify(fontResult)").unwrap(), "[true]");
+    assert_eq!(vm.document_web_font_counts_for_test(), (1, 1, 1));
+}

@@ -229,7 +229,9 @@ fn sync_font_face_set_owners<'s>(
             add_font_face_set_owner(scope, face, owner);
             if let Ok(face) = v8::Local::<v8::Object>::try_from(face) {
                 super::loading::sync_registration(scope, owner, face, true);
-                if super::loading::string_slot(scope, face, FONT_FACE_STATUS_SLOT) == "loading" {
+                if super::loading::status(scope, face)
+                    == crate::font_loading::FontFaceStatus::Loading
+                {
                     super::events::font_face_loading_started(scope, face);
                 }
             }
@@ -317,7 +319,7 @@ pub(super) fn is_font_face_value<'s>(
     let Ok(object) = v8::Local::<v8::Object>::try_from(value) else {
         return false;
     };
-    get_private_value(scope, object, FONT_FACE_STATUS_SLOT).is_some()
+    super::state::get(scope, object).is_some()
 }
 
 pub(super) fn array_contains_value(

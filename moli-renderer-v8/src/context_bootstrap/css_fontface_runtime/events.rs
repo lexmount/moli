@@ -353,7 +353,8 @@ pub(super) fn finish_font_set_if_idle<'s>(
                 .get_index(scope, index)
                 .and_then(|v| v8::Local::<v8::Object>::try_from(v).ok())
                 .is_some_and(|face| {
-                    super::loading::string_slot(scope, face, FONT_FACE_STATUS_SLOT) == "loading"
+                    super::loading::status(scope, face)
+                        == crate::font_loading::FontFaceStatus::Loading
                 })
         })
     });
@@ -381,7 +382,5 @@ fn font_face_load_failed<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     face: v8::Local<'s, v8::Object>,
 ) -> bool {
-    get_private_value(scope, face, FONT_FACE_STATUS_SLOT)
-        .and_then(|value| v8::Local::<v8::String>::try_from(value).ok())
-        .is_some_and(|status| status.to_rust_string_lossy(scope) == "error")
+    super::loading::status(scope, face) == crate::font_loading::FontFaceStatus::Error
 }

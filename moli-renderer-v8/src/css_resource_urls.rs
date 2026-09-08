@@ -1,10 +1,10 @@
-use cssparser::{Parser, ParserInput, Token, UnicodeRange};
+use cssparser::{Parser, ParserInput, UnicodeRange};
 use moli_crypto::sha256_hex;
 use moli_css_parse::{
     DeclarationParseOptions, parse_declaration_list, parse_font_face_rule_view_with_stylo,
     parse_font_faces, parse_stylesheet_rule_snapshots_with_stylo,
 };
-use moli_layout::{WebFontFace, WebFontRegistration, WebFontStyle, WebFontUnicodeRange};
+use moli_layout::{WebFontFace, WebFontStyle, WebFontUnicodeRange};
 use url::Url;
 
 use crate::protocol_types::OptionalResourceFetchMask;
@@ -35,7 +35,7 @@ impl StylesheetLoadBlockingResource {
         Self::new(request_url, StylesheetLoadBlockingResourceKind::Image)
     }
 
-    fn font(request_url: Url, web_font: StylesheetWebFont) -> Self {
+    pub(crate) fn font(request_url: Url, web_font: StylesheetWebFont) -> Self {
         Self {
             request_url,
             kind: StylesheetLoadBlockingResourceKind::Font,
@@ -45,6 +45,11 @@ impl StylesheetLoadBlockingResource {
 
     pub(crate) fn request_url(&self) -> &Url {
         &self.request_url
+    }
+
+    pub(crate) fn with_request_url(mut self, url: Url) -> Self {
+        self.request_url = url;
+        self
     }
 
     pub(crate) fn into_parts(self) -> (Url, Option<StylesheetWebFont>) {
@@ -74,6 +79,7 @@ impl StylesheetLoadBlockingResource {
 pub(crate) struct StylesheetWebFont {
     slot: String,
     face: WebFontFace,
+    sources: Vec<moli_css_parse::CssFontSource>,
     request_id: Option<u64>,
 }
 
@@ -87,8 +93,8 @@ impl StylesheetWebFont {
         self.request_id
     }
 
-    pub(crate) fn registration(&self, bytes: Vec<u8>) -> WebFontRegistration {
-        WebFontRegistration::new(self.slot.clone(), self.face.clone(), bytes)
+    pub(crate) fn sources(&self) -> &[moli_css_parse::CssFontSource] {
+        &self.sources
     }
 
     pub(crate) fn slot(&self) -> &str {
@@ -163,12 +169,17 @@ pub(crate) fn stylesheet_web_font_resource(
     base_url: &Url,
 ) -> Option<StylesheetLoadBlockingResource> {
     let descriptor = parsed_web_font_face(css_text)?;
-    let request_url = preferred_font_source_url(descriptor.source(), base_url)?;
-    Some(stylesheet_web_font_resource_with_descriptor(
-        css_text,
-        request_url,
-        descriptor,
-    ))
+    let sources = moli_css_parse::parse_font_face_sources(descriptor.source())?
+        .into_iter()
+        .filter_map(|source| match source {
+            moli_css_parse::CssFontSource::Local(name) => {
+                Some(moli_css_parse::CssFontSource::Local(name))
+            }
+            moli_css_parse::CssFontSource::Url(url) => resolve_font_source_url(&url, base_url)
+                .map(|url| moli_css_parse::CssFontSource::Url(url.to_string())),
+        })
+        .collect();
+    stylesheet_web_font_resource_with_resolved_sources(css_text, sources)
 }
 
 /// Projects a native Stylo `@font-face` rule using the URL already resolved
@@ -177,18 +188,20 @@ pub(crate) fn stylesheet_web_font_resource(
 /// Imported rules retain their imported stylesheet's URL context inside
 /// `SpecifiedUrl`. Callers must use this entry point instead of resolving the
 /// serialized, relative `src` value against the root stylesheet again.
-pub(crate) fn stylesheet_web_font_resource_with_resolved_url(
+pub(crate) fn stylesheet_web_font_resource_with_resolved_sources(
     css_text: &str,
-    request_url: Url,
+    sources: Vec<moli_css_parse::CssFontSource>,
 ) -> Option<StylesheetLoadBlockingResource> {
-    if !matches!(request_url.scheme(), "http" | "https" | "data" | "blob") {
-        return None;
-    }
+    let request_url = sources.iter().find_map(|source| match source {
+        moli_css_parse::CssFontSource::Url(url) => Url::parse(url).ok(),
+        moli_css_parse::CssFontSource::Local(_) => None,
+    })?;
     let descriptor = parsed_web_font_face(css_text)?;
     Some(stylesheet_web_font_resource_with_descriptor(
         css_text,
         request_url,
         descriptor,
+        sources,
     ))
 }
 
@@ -196,6 +209,7 @@ fn stylesheet_web_font_resource_with_descriptor(
     css_text: &str,
     request_url: Url,
     descriptor: ParsedWebFontFace,
+    sources: Vec<moli_css_parse::CssFontSource>,
 ) -> StylesheetLoadBlockingResource {
     // The slot describes a declaration, not a layout generation. Two
     // projections of the same parsed rule (the import response and the later
@@ -212,6 +226,7 @@ fn stylesheet_web_font_resource_with_descriptor(
         StylesheetWebFont {
             slot,
             face: descriptor.into_face(),
+            sources,
             request_id: None,
         },
     )
@@ -297,7 +312,7 @@ fn parse_font_unicode_ranges(value: &str) -> Option<Vec<WebFontUnicodeRange>> {
         .ok()
 }
 
-fn parse_font_weight_lower_bound(value: &str) -> Option<f32> {
+pub(crate) fn parse_font_weight_lower_bound(value: &str) -> Option<f32> {
     match value
         .split_ascii_whitespace()
         .next()?
@@ -313,7 +328,7 @@ fn parse_font_weight_lower_bound(value: &str) -> Option<f32> {
     }
 }
 
-fn parse_font_stretch_lower_bound(value: &str) -> Option<f32> {
+pub(crate) fn parse_font_stretch_lower_bound(value: &str) -> Option<f32> {
     let value = value.split_ascii_whitespace().next()?.to_ascii_lowercase();
     let percentage = match value.as_str() {
         "ultra-condensed" => 50.0,
@@ -330,7 +345,7 @@ fn parse_font_stretch_lower_bound(value: &str) -> Option<f32> {
     (percentage > 0.0 && percentage.is_finite()).then_some(percentage)
 }
 
-fn parse_font_style_lower_bound(value: &str) -> Option<WebFontStyle> {
+pub(crate) fn parse_font_style_lower_bound(value: &str) -> Option<WebFontStyle> {
     let mut values = value.split_ascii_whitespace();
     match values.next()?.to_ascii_lowercase().as_str() {
         "normal" => Some(WebFontStyle::Normal),
@@ -352,79 +367,6 @@ fn parse_css_angle_degrees(value: &str) -> Option<f32> {
         .filter(|value| value.is_finite())
 }
 
-fn preferred_font_source_url(source: &str, base_url: &Url) -> Option<Url> {
-    let mut input = ParserInput::new(source);
-    let mut input = Parser::new(&mut input);
-    let mut candidate_url: Option<String> = None;
-    let mut candidate_format_is_supported = true;
-    while let Ok(token) = input.next_including_whitespace_and_comments().cloned() {
-        match token {
-            Token::Comma => {
-                if candidate_format_is_supported && let Some(url) = candidate_url.take() {
-                    return resolve_font_source_url(&url, base_url);
-                }
-                candidate_url = None;
-                candidate_format_is_supported = true;
-            }
-            Token::UnquotedUrl(raw_url) => candidate_url = Some(raw_url.to_string()),
-            Token::Function(name) if name.eq_ignore_ascii_case("url") => {
-                let _ = input.parse_nested_block(|input| {
-                    candidate_url = css_url_function_value(input);
-                    Ok::<(), cssparser::ParseError<'_, ()>>(())
-                });
-            }
-            Token::Function(name) if name.eq_ignore_ascii_case("format") => {
-                let _ = input.parse_nested_block(|input| {
-                    candidate_format_is_supported = font_format_function_is_supported(input);
-                    Ok::<(), cssparser::ParseError<'_, ()>>(())
-                });
-            }
-            Token::Function(_) | Token::ParenthesisBlock | Token::SquareBracketBlock => {
-                let _ = input.parse_nested_block(|input| {
-                    skip_css_block(input);
-                    Ok::<(), cssparser::ParseError<'_, ()>>(())
-                });
-            }
-            _ => {}
-        }
-    }
-    candidate_url
-        .filter(|_| candidate_format_is_supported)
-        .and_then(|url| resolve_font_source_url(&url, base_url))
-}
-
-fn css_url_function_value<'i, 't>(input: &mut Parser<'i, 't>) -> Option<String> {
-    while let Ok(token) = input.next_including_whitespace_and_comments().cloned() {
-        match token {
-            Token::WhiteSpace(_) | Token::Comment(_) => {}
-            Token::QuotedString(value) | Token::UnquotedUrl(value) => {
-                return Some(value.to_string());
-            }
-            _ => return None,
-        }
-    }
-    None
-}
-
-fn font_format_function_is_supported<'i, 't>(input: &mut Parser<'i, 't>) -> bool {
-    let mut saw_format = false;
-    while let Ok(token) = input.next_including_whitespace_and_comments().cloned() {
-        let value = match token {
-            Token::WhiteSpace(_) | Token::Comment(_) | Token::Comma => continue,
-            Token::Ident(value) | Token::QuotedString(value) => value.to_ascii_lowercase(),
-            _ => return false,
-        };
-        saw_format = true;
-        if !matches!(
-            value.as_ref(),
-            "woff" | "woff2" | "truetype" | "opentype" | "ttf" | "otf" | "collection"
-        ) {
-            return false;
-        }
-    }
-    saw_format
-}
-
 fn resolve_font_source_url(raw_url: &str, base_url: &Url) -> Option<Url> {
     let raw_url = raw_url.trim();
     let url = base_url
@@ -432,23 +374,6 @@ fn resolve_font_source_url(raw_url: &str, base_url: &Url) -> Option<Url> {
         .or_else(|_| Url::parse(raw_url))
         .ok()?;
     matches!(url.scheme(), "http" | "https" | "data" | "blob").then_some(url)
-}
-
-fn skip_css_block<'i, 't>(input: &mut Parser<'i, 't>) {
-    while let Ok(token) = input.next_including_whitespace_and_comments().cloned() {
-        match token {
-            Token::Function(_)
-            | Token::ParenthesisBlock
-            | Token::SquareBracketBlock
-            | Token::CurlyBracketBlock => {
-                let _ = input.parse_nested_block(|input| {
-                    skip_css_block(input);
-                    Ok::<(), cssparser::ParseError<'_, ()>>(())
-                });
-            }
-            _ => {}
-        }
-    }
 }
 
 #[cfg(test)]
@@ -570,9 +495,14 @@ mod tests {
 
         let response_projection = stylesheet_web_font_resource(css_text, &imported_base)
             .expect("the import response should project its font");
-        let native_projection =
-            stylesheet_web_font_resource_with_resolved_url(css_text, resolved.clone())
-                .expect("the retained native rule should project its resolved font");
+        let native_projection = stylesheet_web_font_resource_with_resolved_sources(
+            css_text,
+            vec![
+                moli_css_parse::CssFontSource::Local("Imported".to_owned()),
+                moli_css_parse::CssFontSource::Url(resolved.to_string()),
+            ],
+        )
+        .expect("the retained native rule should project its resolved font");
 
         assert_eq!(response_projection.request_url(), &resolved);
         assert_eq!(native_projection.request_url(), &resolved);
@@ -598,10 +528,16 @@ mod tests {
         let css_text = "@font-face { font-family: Shared; src: url(./fonts/shared.woff2); }";
         let first_url = Url::parse("https://example.test/first/fonts/shared.woff2").unwrap();
         let second_url = Url::parse("https://example.test/second/fonts/shared.woff2").unwrap();
-        let first = stylesheet_web_font_resource_with_resolved_url(css_text, first_url)
-            .expect("first native resource");
-        let second = stylesheet_web_font_resource_with_resolved_url(css_text, second_url)
-            .expect("second native resource");
+        let first = stylesheet_web_font_resource_with_resolved_sources(
+            css_text,
+            vec![moli_css_parse::CssFontSource::Url(first_url.to_string())],
+        )
+        .expect("first native resource");
+        let second = stylesheet_web_font_resource_with_resolved_sources(
+            css_text,
+            vec![moli_css_parse::CssFontSource::Url(second_url.to_string())],
+        )
+        .expect("second native resource");
 
         assert_ne!(
             first.web_font().expect("first font").slot(),

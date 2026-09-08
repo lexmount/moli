@@ -42,7 +42,8 @@ pub(in crate::context_bootstrap) fn font_face_set_check_callback<'s>(
             .get_index(scope, index)
             .and_then(|value| v8::Local::<v8::Object>::try_from(value).ok())
             .is_some_and(|face| {
-                super::super::loading::string_slot(scope, face, FONT_FACE_STATUS_SLOT) == "loaded"
+                super::super::loading::status(scope, face)
+                    == crate::font_loading::FontFaceStatus::Loaded
             })
     });
     rv.set(v8::Boolean::new(scope, loaded).into());

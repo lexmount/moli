@@ -18,7 +18,6 @@ pub(super) const FONT_FACE_VARIANT_SLOT: &str = "__moliFontFaceVariant";
 pub(super) const FONT_FACE_FEATURE_SETTINGS_SLOT: &str = "__moliFontFaceFeatureSettings";
 pub(super) const FONT_FACE_VARIATION_SETTINGS_SLOT: &str = "__moliFontFaceVariationSettings";
 pub(super) const FONT_FACE_DISPLAY_SLOT: &str = "__moliFontFaceDisplay";
-pub(super) const FONT_FACE_STATUS_SLOT: &str = "__moliFontFaceStatus";
 pub(super) const FONT_FACE_LOADED_SLOT: &str = "__moliFontFaceLoaded";
 pub(super) const FONT_FACE_SET_OWNERS_SLOT: &str = "__moliFontFaceSetOwners";
 pub(super) const FONT_FACE_LOAD_NOTIFICATION_SENT_SLOT: &str = "__moliFontFaceLoadNotificationSent";
@@ -34,6 +33,7 @@ mod font_face;
 mod font_face_set;
 mod loading;
 mod query;
+mod state;
 mod storage;
 
 pub(in crate::context_bootstrap) use events::{
@@ -52,6 +52,8 @@ pub(super) use font_face_set::{
     font_face_set_keys_callback, font_face_set_load_callback,
     font_face_set_remove_event_listener_callback, font_face_set_values_callback,
 };
-pub(crate) use loading::finish_font_face_url_load;
+pub(crate) use loading::{
+    bind_stylesheet_font_face, finish_font_face_url_load, publish_font_face_load_changes,
+};
 pub(super) use storage::install_font_face_set_template_accessors;
 pub(crate) use storage::rebuild_font_face_set_faces;
