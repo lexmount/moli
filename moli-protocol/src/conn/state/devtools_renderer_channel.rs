@@ -608,6 +608,21 @@ impl DevToolsRendererChannel {
         !self.pending_document_navigations.is_empty()
     }
 
+    /// Browser may keep its initial Document usable while deciding the first
+    /// request. This grants command admission, never publication of a candidate
+    /// Document or release of an independent command-response hold.
+    pub(crate) fn allows_initial_document_access(&self, navigation: NavigationId) -> bool {
+        self.current.is_some()
+            && self.pending_document_projection.is_none()
+            && self
+                .pending_document_navigations
+                .iter()
+                .all(|(pending, owner)| {
+                    *pending == navigation
+                        && *owner == NavigationProjectionOwner::BrowserObservation
+                })
+    }
+
     pub(crate) fn has_navigation(&self, navigation: &NavigationId) -> bool {
         self.pending_document_navigations.contains_key(navigation)
     }
@@ -951,6 +966,45 @@ mod tests {
         assert_eq!(replaced, first);
         assert_eq!(second.agent_token(), agent);
         assert_ne!(second.id(), first.id());
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn initial_document_access_preserves_exact_navigation_and_publication_fences() {
+        let (_browser, page) = inspection_page().await;
+        let mut channel = DevToolsRendererChannel::default();
+        let native = NavigationId::allocate();
+        assert!(!channel.allows_initial_document_access(native));
+        channel
+            .attach_current(
+                DocumentId::allocate(),
+                BrowserSequence::allocate(),
+                page.renderer_inspection_endpoint(),
+            )
+            .unwrap();
+        assert!(channel.allows_initial_document_access(native));
+        channel.observe_document_navigation(native).unwrap();
+        assert!(channel.allows_initial_document_access(native));
+        assert!(!channel.allows_initial_document_access(NavigationId::allocate()));
+        let command = NavigationId::allocate();
+        channel.begin_document_projection(command).unwrap();
+        assert!(!channel.allows_initial_document_access(native));
+        channel
+            .finish_navigation_without_document_projection(&command)
+            .unwrap();
+        assert!(channel.allows_initial_document_access(native));
+        let (_, fence) = channel
+            .document_committed(
+                native,
+                DocumentId::allocate(),
+                BrowserSequence::allocate(),
+                page.renderer_inspection_endpoint(),
+            )
+            .unwrap();
+        assert!(!channel.allows_initial_document_access(native));
+        channel.publish_document_projection(fence).unwrap();
+        channel.begin_document_projection(native).unwrap();
+        assert!(!channel.allows_initial_document_access(native));
+        assert!(channel.document_projection_is_pending());
     }
 
     #[tokio::test(flavor = "multi_thread")]

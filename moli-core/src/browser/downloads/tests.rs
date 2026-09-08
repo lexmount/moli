@@ -348,6 +348,31 @@ async fn dropping_observation_does_not_cancel_a_download() {
 }
 
 #[tokio::test]
+async fn captured_download_streams_a_spooled_body_into_its_artifact() {
+    let directory = TestDirectory::new();
+    let bytes = vec![b'x'; 2 * 1024 * 1024 + 17];
+    let mut writer = crate::browser::CapturedBodyWriter::default();
+    writer.append(&bytes).unwrap();
+    let captured = writer.finish().unwrap();
+    let mut manager = DownloadManager::default();
+    let mut observation = start(&mut manager, &directory, DownloadBody::Captured(captured));
+    let snapshot = terminal(&mut observation).await;
+    assert_eq!(snapshot.received_bytes, bytes.len() as u64);
+    assert!(matches!(snapshot.state, DownloadState::Completed { .. }));
+    assert_eq!(
+        manager
+            .read_artifact(observation.guid())
+            .unwrap()
+            .unwrap()
+            .await
+            .unwrap()
+            .unwrap(),
+        bytes
+    );
+    assert_eq!(directory.files(), [directory.0.join("report.txt")]);
+}
+
+#[tokio::test]
 async fn context_retirement_cancels_a_stalled_body_and_removes_its_partial_before_terminal() {
     let directory = TestDirectory::new();
     let mut manager = DownloadManager::default();

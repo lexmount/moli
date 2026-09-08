@@ -1,6 +1,6 @@
 use crate::conn::{
-    CdpSessionRoute, CommandOwnerScope, PopupTargetNavigationKind,
-    PopupTargetNavigationOwnerAction, PreparedTargetAttach, TargetAttachSessionCommit,
+    CdpSessionRoute, CommandOwnerScope, PreparedTargetAttach, TargetAttachSessionCommit,
+    TargetStartupOwnerAction,
 };
 
 use super::creation::{
@@ -56,6 +56,16 @@ pub(crate) async fn project_browser_popup_target(
             }
         }
     }
+    match conn
+        .ensure_native_popup_initial_document(snapshot.handle)
+        .await
+    {
+        Ok(events) => out.extend(events),
+        Err(error) => {
+            tracing::debug!(%error, "native popup initial document did not commit");
+            return out;
+        }
+    }
     if !ensure_popup_initial_document_page_async(conn, target_id).await {
         return out;
     }
@@ -89,58 +99,7 @@ pub(crate) async fn project_browser_popup_target(
         target_id,
         target_info,
     );
-    if snapshot.document.is_none()
-        && !conn.target_has_waiting_for_debugger_session(target_id)
-        && let Some(navigation) = PopupTargetNavigationOwnerAction::capture(
-            conn,
-            &browser_context_id,
-            target_id,
-            snapshot
-                .popup
-                .as_ref()
-                .expect("popup creation")
-                .requested_url
-                .clone(),
-            PopupTargetNavigationKind::InitialDocument,
-        )
-    {
-        conn.publish_popup_target_navigation_owner_action(navigation);
-    }
     out
-}
-
-pub(crate) fn observe_reused_popup_navigation(
-    conn: &mut CdpConnection,
-    out: &mut Vec<BackgroundProtocolEvent>,
-    browser_context_id: &str,
-    target_id: &str,
-    url: &str,
-) {
-    let navigation = popup_target_has_loaded_page(conn, browser_context_id, target_id)
-        .then(|| {
-            PopupTargetNavigationOwnerAction::capture(
-                conn,
-                browser_context_id,
-                target_id,
-                url.to_owned(),
-                PopupTargetNavigationKind::NamedTargetReuse,
-            )
-        })
-        .flatten();
-    if conn
-        .browser_context_by_id_mut(browser_context_id)
-        .is_some_and(|context| context.update_target_url(target_id, url.to_owned()))
-    {
-        emit_target_info_changed_for_target_background_event(
-            conn,
-            out,
-            browser_context_id,
-            target_id,
-        );
-        if let Some(navigation) = navigation {
-            conn.publish_popup_target_navigation_owner_action(navigation);
-        }
-    }
 }
 
 async fn ensure_popup_initial_document_page_async(
@@ -276,6 +235,24 @@ pub(crate) fn schedule_initial_document_target_url_navigation_after_debugger_bar
     if conn.target_has_waiting_for_debugger_session(target_id) {
         return false;
     }
+    if let Some((_, paused)) = conn.native_navigation_decision_for_target(target_id)
+        && matches!(
+            paused.stage,
+            moli_core::browser::NavigationDecisionStage::Request { .. }
+        )
+    {
+        let Some(context_id) = conn
+            .browser_context_id_for_target(target_id)
+            .map(str::to_owned)
+        else {
+            return false;
+        };
+        let Some(action) = TargetStartupOwnerAction::capture(conn, &context_id, target_id) else {
+            return false;
+        };
+        conn.publish_target_startup_owner_action(action);
+        return true;
+    }
     let Some(route) = conn.target_session_route_for_target_id(target_id) else {
         return false;
     };
@@ -291,22 +268,11 @@ pub(crate) fn schedule_initial_document_target_url_navigation_after_debugger_bar
     if !browser_context.target_needs_initial_document_navigation(target_id) {
         return false;
     }
-    let Some(target_url) = browser_context
-        .devtools_target_info(target_id)
-        .map(|target_info| target_info.url)
+    let Some(action) = TargetStartupOwnerAction::capture(conn, &browser_context_id, target_id)
     else {
         return false;
     };
-    let Some(action) = PopupTargetNavigationOwnerAction::capture(
-        conn,
-        &browser_context_id,
-        target_id,
-        target_url,
-        PopupTargetNavigationKind::InitialDocumentAfterDebuggerResume,
-    ) else {
-        return false;
-    };
-    conn.publish_popup_target_navigation_owner_action(action);
+    conn.publish_target_startup_owner_action(action);
     true
 }
 
@@ -321,11 +287,27 @@ fn popup_target_has_loaded_page(
     browser_context.target_has_loaded_page(target_id)
 }
 
-pub(crate) async fn complete_popup_target_navigation_owner_action_async(
+pub(crate) async fn complete_target_startup_owner_action_async(
     conn: &mut CdpConnection,
-    action: PopupTargetNavigationOwnerAction,
+    action: TargetStartupOwnerAction,
 ) -> crate::conn::CdpTurnOutcome {
-    let (owner_scope, browser_context_id, target_id, url, kind) = action.into_parts();
+    if let Some((contents, permit)) = action.native_decision() {
+        let events = if conn
+            .native_navigation_decision_for_target(action.target_id())
+            .is_some_and(|(current, paused)| current == contents && paused.permit == permit)
+        {
+            conn.project_browser_navigation_decision(contents).await
+        } else {
+            Vec::new()
+        };
+        return crate::conn::CdpTurnOutcome::new_with_protocol_events(
+            events,
+            conn.take_scheduler_events(),
+        );
+    }
+    let (owner_scope, browser_context_id, target_id, url) = action
+        .into_initial_navigation()
+        .expect("native decision handled above");
     let target_is_current = conn
         .target_owner_identity_for_owner(&owner_scope)
         .is_some_and(|(current_browser_context_id, current_target_id)| {
@@ -337,8 +319,7 @@ pub(crate) async fn complete_popup_target_navigation_owner_action_async(
             browser_context_id,
             target_id,
             url,
-            ?kind,
-            "dropping popup navigation after its exact target owner retired"
+            "dropping initial Target navigation after its exact owner retired"
         );
         return crate::conn::CdpTurnOutcome::new_with_protocol_events(
             Vec::new(),
@@ -347,27 +328,15 @@ pub(crate) async fn complete_popup_target_navigation_owner_action_async(
     }
 
     let mut protocol_events = Vec::new();
-    match kind {
-        PopupTargetNavigationKind::InitialDocument
-        | PopupTargetNavigationKind::InitialDocumentAfterDebuggerResume => {
-            // Revalidate the barrier when the queued owner action actually
-            // runs. Another inspector session can attach after this action is
-            // scheduled; that new session must be able to pause the initial
-            // document before any target-URL request starts.
-            if conn.target_has_waiting_for_debugger_session(&target_id)
-                || !conn
-                    .browser_context_by_id(&browser_context_id)
-                    .is_some_and(|browser_context| {
-                        browser_context.target_needs_initial_document_navigation(&target_id)
-                    })
-            {
-                return crate::conn::CdpTurnOutcome::new_with_protocol_events(
-                    Vec::new(),
-                    conn.take_scheduler_events(),
-                );
-            }
-        }
-        PopupTargetNavigationKind::NamedTargetReuse => {}
+    if conn.target_has_waiting_for_debugger_session(&target_id)
+        || !conn
+            .browser_context_by_id(&browser_context_id)
+            .is_some_and(|context| context.target_needs_initial_document_navigation(&target_id))
+    {
+        return crate::conn::CdpTurnOutcome::new_with_protocol_events(
+            Vec::new(),
+            conn.take_scheduler_events(),
+        );
     }
     crate::domains::page::navigate_command_owner_from_renderer_background_events_async(
         conn,
@@ -376,18 +345,12 @@ pub(crate) async fn complete_popup_target_navigation_owner_action_async(
         &url,
     )
     .await;
-    if matches!(
-        kind,
-        PopupTargetNavigationKind::InitialDocument
-            | PopupTargetNavigationKind::InitialDocumentAfterDebuggerResume
-    ) {
-        emit_target_info_changed_for_target_background_event(
-            conn,
-            &mut protocol_events,
-            &browser_context_id,
-            &target_id,
-        );
-    }
+    emit_target_info_changed_for_target_background_event(
+        conn,
+        &mut protocol_events,
+        &browser_context_id,
+        &target_id,
+    );
     crate::conn::CdpTurnOutcome::new_with_protocol_events(
         protocol_events,
         conn.take_scheduler_events(),

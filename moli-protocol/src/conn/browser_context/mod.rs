@@ -9,6 +9,7 @@ mod emulation_owner;
 mod fetch_owner;
 mod lifecycle;
 mod lookup;
+mod navigation_decisions;
 mod navigation_events;
 mod network_owner;
 mod page_owner;

@@ -185,6 +185,18 @@ impl AdmittedNavigationLoad {
         body: Option<Vec<u8>>,
         request_headers: Vec<(String, String)>,
     ) -> anyhow::Result<NavigationStreamingRawResponse> {
+        self.fetch_navigation_with_auth(method, raw_url, body, request_headers, None)
+            .await
+    }
+
+    pub(in crate::browser) async fn fetch_navigation_with_auth(
+        &mut self,
+        method: &str,
+        raw_url: &str,
+        body: Option<Vec<u8>>,
+        request_headers: Vec<(String, String)>,
+        auth: Option<SubresourceAuthCredentials>,
+    ) -> anyhow::Result<NavigationStreamingRawResponse> {
         self.validate_request(raw_url)?;
         self.engine
             .fetch_navigation_streaming_raw_response_bytes_with_storage_async(
@@ -196,7 +208,7 @@ impl AdmittedNavigationLoad {
                 raw_url,
                 body,
                 request_headers,
-                None,
+                auth,
                 self.request_cancellation.clone(),
             )
             .await

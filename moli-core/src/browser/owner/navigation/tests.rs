@@ -406,6 +406,390 @@ async fn native_popup_admission_creates_a_web_contents_without_devtools_ingress(
 }
 
 #[tokio::test]
+async fn native_popup_navigates_its_requested_url_without_devtools_ingress() {
+    let server = FixtureServer::spawn().await.unwrap();
+    let service = BrowserService::start().unwrap();
+    let browser = service.handle();
+    let (context, contents) = context_with_contents(&service);
+    let (_, mut events) = browser.subscribe().unwrap();
+    let url = server.url("/static?popup=native-navigation");
+    let source = navigate(
+        &context,
+        contents,
+        &format!("data:text/html,<script>window.open('{url}','native-popup-navigation')</script>"),
+    )
+    .await;
+    let popup_document = tokio::time::timeout(std::time::Duration::from_secs(5), async {
+        let mut popup = None;
+        loop {
+            match events.recv().await.unwrap().event {
+                BrowserEvent::WebContentsCreated(handle)
+                    if handle.context() == context.id()
+                        && handle != contents
+                        && context.web_contents_window_name(handle).unwrap().as_deref()
+                            == Some("native-popup-navigation") =>
+                {
+                    assert!(
+                        popup.replace(handle).is_none(),
+                        "one accepted popup creates once"
+                    );
+                }
+                BrowserEvent::DocumentCommitted(document)
+                    if Some(document.web_contents()) == popup
+                        && context.document_url(document).unwrap().as_str() == url =>
+                {
+                    break document;
+                }
+                _ => {}
+            }
+        }
+    })
+    .await
+    .expect("the Browser must drive the accepted popup URL without a DevTools consumer");
+    let captured = context
+        .start_capture_document_snapshot(popup_document)
+        .unwrap()
+        .wait()
+        .await;
+    let captured = context.finish_capture_document_snapshot(captured).unwrap();
+    assert_eq!(captured.url, url);
+    assert!(captured.html.contains("fixture static"));
+    assert_eq!(context.document_handle(contents).unwrap(), Some(source));
+    assert_eq!(
+        context
+            .web_contents_opener(popup_document.web_contents())
+            .unwrap(),
+        Some((contents.id(), true))
+    );
+    context
+        .close_web_contents(popup_document.web_contents())
+        .unwrap()
+        .close_async()
+        .await;
+    assert_eq!(context.document_handle(contents).unwrap(), Some(source));
+    service.shutdown();
+    server.shutdown().await;
+}
+
+#[tokio::test]
+async fn native_popup_decision_provider_drop_resumes_the_exact_request() {
+    assert_native_popup_request_release(false).await;
+}
+
+#[tokio::test]
+async fn native_popup_download_outlives_its_navigation_without_devtools() {
+    assert_native_popup_download(true).await;
+}
+
+#[tokio::test]
+async fn native_popup_download_inherits_browser_policy_without_devtools() {
+    assert_native_popup_download(false).await;
+}
+
+async fn assert_native_popup_download(context_override: bool) {
+    use crate::browser::{DownloadBehavior, DownloadPolicy, DownloadState};
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let url = format!(
+        "http://{}/native-popup-download",
+        listener.local_addr().unwrap()
+    );
+    let (release, body_released) = tokio::sync::watch::channel(false);
+    let server = tokio::spawn(async move {
+        while let Ok((mut stream, _)) = listener.accept().await {
+            let mut body_released = body_released.clone();
+            tokio::spawn(async move {
+                let mut request = [0; 2048];
+                if stream.read(&mut request).await.unwrap_or(0) == 0 {
+                    return;
+                }
+                let body = b"native popup download body";
+                let head = format!(
+                    "HTTP/1.1 200 OK\r\nContent-Type: application/octet-stream\r\nContent-Disposition: attachment; filename=\"native-popup.txt\"\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                    body.len()
+                );
+                if stream.write_all(head.as_bytes()).await.is_err() {
+                    return;
+                }
+                let _ = body_released.wait_for(|released| *released).await;
+                let _ = stream.write_all(body).await;
+            });
+        }
+    });
+    struct DownloadDirectory(std::path::PathBuf);
+    impl Drop for DownloadDirectory {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+    let directory = DownloadDirectory(std::env::temp_dir().join(format!(
+        "moli-native-popup-download-{}-{}",
+        std::process::id(),
+        NavigationId::allocate().get()
+    )));
+    std::fs::create_dir(&directory.0).unwrap();
+    let service = BrowserService::start().unwrap();
+    let browser = service.handle();
+    let (context, source) = context_with_contents(&service);
+    let policy = DownloadPolicy {
+        behavior: DownloadBehavior::AllowAndName,
+        download_path: Some(directory.0.to_string_lossy().into_owned()),
+    };
+    if context_override {
+        browser.set_download_policy(DownloadPolicy {
+            behavior: DownloadBehavior::Deny,
+            download_path: None,
+        });
+        context.set_download_policy(Some(policy));
+    } else {
+        browser.set_download_policy(policy);
+    }
+    let (_, mut events) = browser.subscribe().unwrap();
+    navigate(
+        &context,
+        source,
+        &format!("data:text/html,<script>window.open('{url}','native-download')</script>"),
+    )
+    .await;
+    let download = tokio::time::timeout(std::time::Duration::from_secs(5), async {
+        loop {
+            if let BrowserEvent::DownloadCreated(download) = events.recv().await.unwrap().event
+                && download.event.web_contents != source
+                && download
+                    .event
+                    .snapshot
+                    .metadata
+                    .as_ref()
+                    .is_some_and(|metadata| metadata.url == url)
+            {
+                break download;
+            }
+        }
+    })
+    .await;
+    if download.is_err() {
+        // Release the server and retire pages asynchronously before reporting
+        // the assertion. Synchronous Browser Drop must not wait for a body
+        // whose producer can only run on this test's current-thread runtime.
+        release.send(true).unwrap();
+        for closing in context.close_all_web_contents() {
+            closing.close_async().await;
+        }
+        service.shutdown();
+        server.abort();
+    }
+    let download = download
+        .expect("Browser must turn the popup attachment response into a download before EOF");
+    assert_eq!(download.event.snapshot.state, DownloadState::Active);
+    let popup = download.event.web_contents;
+    let initial_document = context.document_handle(popup).unwrap().unwrap();
+    let before = context.navigation_snapshot(popup).unwrap();
+    let Some(NavigationAttempt::Failed { request, reason }) = before.attempt else {
+        panic!("download must retire its exact navigation before admission becomes observable");
+    };
+    assert_eq!(reason, NavigationFailureReason::Download);
+    assert_eq!(request.web_contents, popup);
+    let responses = context.navigation_responses(popup).unwrap();
+    assert_eq!(responses.len(), 1);
+    assert_eq!(responses[0].request, request);
+    assert_eq!(responses[0].response.final_url.as_str(), url);
+    assert!(matches!(&responses[0].body, Some(Err(error)) if error == "net::ERR_ABORTED"));
+    let replacement = context.start_document_navigation(popup).unwrap();
+    assert!(context.navigation_responses(popup).unwrap().is_empty());
+    release.send(true).unwrap();
+    tokio::time::timeout(std::time::Duration::from_secs(5), async {
+        loop {
+            if let BrowserEvent::DownloadUpdated(event) = events.recv().await.unwrap().event
+                && event.guid == download.event.guid
+                && event.snapshot.state != DownloadState::Active
+            {
+                assert!(matches!(
+                    event.snapshot.state,
+                    DownloadState::Completed { .. }
+                ));
+                break;
+            }
+        }
+    })
+    .await
+    .expect("superseding navigation must not cancel its transferred download body");
+    let body = context
+        .read_download_artifact(&download.event.guid)
+        .unwrap()
+        .unwrap()
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(body, b"native popup download body");
+    let document = context.document_handle(popup).unwrap().unwrap();
+    assert_eq!(document, initial_document);
+    assert!(
+        matches!(context.navigation_snapshot(popup).unwrap().attempt,
+        Some(NavigationAttempt::Started(request)) if request.navigation == replacement)
+    );
+    assert_eq!(
+        context.document_url(document).unwrap().as_str(),
+        "about:blank"
+    );
+    assert!(
+        context
+            .cancel_document_navigation(popup, &replacement)
+            .unwrap()
+    );
+    service.shutdown();
+    server.abort();
+}
+
+#[tokio::test]
+async fn native_popup_claim_drop_resumes_with_its_decision_provider_still_alive() {
+    assert_native_popup_request_release(true).await;
+}
+
+async fn assert_native_popup_request_release(drop_claim: bool) {
+    use crate::browser::{NavigationDecision, NavigationDecisionStage};
+    let server = FixtureServer::spawn().await.unwrap();
+    let service = BrowserService::start().unwrap();
+    let browser = service.handle();
+    let mut provider = Some(browser.register_navigation_decision_provider().unwrap());
+    let (context, source) = context_with_contents(&service);
+    let (_, mut events) = browser.subscribe().unwrap();
+    let url = server.url("/static?popup=provider-drop");
+    navigate(
+        &context,
+        source,
+        &format!("data:text/html,<script>window.open('{url}','provider-drop')</script>"),
+    )
+    .await;
+    let (popup, permit) = tokio::time::timeout(std::time::Duration::from_secs(5), async {
+        loop {
+            if let BrowserEvent::NavigationAwaitingDecision(request) =
+                events.recv().await.unwrap().event
+                && request.web_contents != source
+                && let Some(paused) = context.navigation_decision(request.web_contents).unwrap()
+            {
+                if matches!(paused.stage, NavigationDecisionStage::Request { .. }) {
+                    break (request.web_contents, paused.permit);
+                }
+                assert!(
+                    context
+                        .resolve_navigation_decision(
+                            request.web_contents,
+                            paused.permit,
+                            NavigationDecision::Continue
+                        )
+                        .unwrap()
+                );
+            }
+        }
+    })
+    .await
+    .expect("exact request-stage decision");
+    assert_eq!(
+        context.navigation_decision(popup).unwrap().unwrap().permit,
+        permit
+    );
+    if drop_claim {
+        let claimed = context.take_navigation_request(permit).unwrap();
+        assert!(context.take_navigation_request(permit).is_none());
+        drop(claimed);
+    } else {
+        provider.take();
+    }
+    let committed = tokio::time::timeout(std::time::Duration::from_secs(5), async {
+        loop {
+            match events.recv().await.unwrap().event {
+                BrowserEvent::DocumentCommitted(document)
+                    if document.web_contents() == popup
+                        && context.document_url(document).unwrap().as_str() == url =>
+                {
+                    break document;
+                }
+                BrowserEvent::NavigationAwaitingDecision(request)
+                    if request.web_contents == popup =>
+                {
+                    if let Some(paused) = context.navigation_decision(popup).unwrap() {
+                        assert!(!matches!(
+                            paused.stage,
+                            NavigationDecisionStage::Request { .. }
+                        ));
+                        assert!(
+                            context
+                                .resolve_navigation_decision(
+                                    popup,
+                                    paused.permit,
+                                    NavigationDecision::Continue
+                                )
+                                .unwrap()
+                        );
+                    }
+                }
+                _ => {}
+            }
+        }
+    })
+    .await
+    .expect("abandoned decision must release native work without protocol ingress");
+    assert_eq!(
+        context
+            .navigation_snapshot(popup)
+            .unwrap()
+            .committed
+            .unwrap()
+            .navigation,
+        permit.navigation()
+    );
+    assert_eq!(context.document_handle(popup).unwrap(), Some(committed));
+    assert!(
+        !context
+            .resolve_navigation_decision(popup, permit, NavigationDecision::Cancel)
+            .unwrap(),
+        "a consumed permit cannot cancel the committed document"
+    );
+    service.shutdown();
+    server.shutdown().await;
+}
+
+#[tokio::test]
+async fn native_popup_decision_cannot_resume_a_replacement_navigation() {
+    use crate::browser::NavigationDecision;
+    let service = BrowserService::start().unwrap();
+    let browser = service.handle();
+    let _provider = browser.register_navigation_decision_provider().unwrap();
+    let (context, source) = context_with_contents(&service);
+    let (_, mut events) = browser.subscribe().unwrap();
+    navigate(&context, source, "data:text/html,<script>window.open('data:text/html,obsolete','superseded-native')</script>").await;
+    let (popup, permit) = tokio::time::timeout(std::time::Duration::from_secs(5), async {
+        loop {
+            if let BrowserEvent::NavigationAwaitingDecision(request) =
+                events.recv().await.unwrap().event
+                && request.web_contents != source
+                && let Some(paused) = context.navigation_decision(request.web_contents).unwrap()
+            {
+                break (request.web_contents, paused.permit);
+            }
+        }
+    })
+    .await
+    .expect("native popup admission pause");
+    let replacement = navigate(&context, popup, "data:text/html,<main>winner</main>").await;
+    assert!(
+        !context
+            .resolve_navigation_decision(popup, permit, NavigationDecision::Continue)
+            .unwrap()
+    );
+    assert_eq!(context.document_handle(popup).unwrap(), Some(replacement));
+    assert_ne!(
+        context
+            .navigation_snapshot(popup)
+            .unwrap()
+            .committed
+            .unwrap()
+            .navigation,
+        permit.navigation()
+    );
+    service.shutdown();
+}
+
+#[tokio::test]
 async fn native_javascript_dialog_is_admitted_without_devtools_ingress() {
     use crate::page::RendererJavaScriptDialogSource;
     for (kind, script) in [

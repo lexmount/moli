@@ -1,6 +1,193 @@
 use super::*;
 use std::path::Path;
 
+#[tokio::test]
+async fn websocket_cdp_native_popup_commit_releases_queued_startup_commands() {
+    assert_native_popup_startup_during_fetch_pause("Response").await;
+}
+
+#[tokio::test]
+async fn websocket_cdp_native_popup_request_pause_keeps_initial_document_accessible() {
+    assert_native_popup_startup_during_fetch_pause("Request").await;
+}
+
+async fn assert_native_popup_startup_during_fetch_pause(stage: &str) {
+    let fixture = Router::new().route(
+        "/",
+        get(|| async { axum::response::Html("<main>native popup startup</main>") }),
+    );
+    let (fixture_addr, _fixture_server) =
+        spawn_dedicated_fixture_server(fixture, "native-popup-startup");
+    let url = format!("http://{fixture_addr}/");
+    let (cdp_addr, server) = spawn_test_protocol_server().await;
+    let (mut socket, _) = connect_async(format!(
+        "ws://{cdp_addr}/devtools/browser/{DEFAULT_BROWSER_ID}"
+    ))
+    .await
+    .unwrap();
+    let opener = cdp_create_session_and_navigate(&mut socket, &url).await;
+    socket
+        .send(WsMessage::Text(
+            json!({"id": 10, "method": "Target.setAutoAttach", "params": {
+                "autoAttach": true, "waitForDebuggerOnStart": true, "flatten": true
+            }})
+            .to_string()
+            .into(),
+        ))
+        .await
+        .unwrap();
+    recv_until_id(&mut socket, 10).await;
+    let popup_url = format!("{url}?popup=startup");
+    socket.send(WsMessage::Text(json!({"id": 11, "method": "Runtime.evaluate", "sessionId": opener,
+        "params": {"expression": format!("window.open('{popup_url}', '_blank') !== null"), "returnByValue": true}
+    }).to_string().into())).await.unwrap();
+    let opened = recv_until_id(&mut socket, 11).await;
+    let attached = opened
+        .iter()
+        .find(|message| {
+            message["method"] == "Target.attachedToTarget"
+                && message["params"]["targetInfo"]["openerId"].is_string()
+        })
+        .expect("exact popup attachment");
+    let session = attached["params"]["sessionId"].as_str().unwrap();
+    let target = attached["params"]["targetInfo"]["targetId"]
+        .as_str()
+        .unwrap();
+    assert_eq!(attached["params"]["waitingForDebugger"], true);
+    for (id, method, params) in [
+        (
+            12,
+            "Fetch.enable",
+            json!({"patterns": [{"urlPattern": "*", "requestStage": stage}]}),
+        ),
+        (13, "Runtime.runIfWaitingForDebugger", json!({})),
+    ] {
+        socket
+            .send(WsMessage::Text(
+                json!({"id": id, "method": method, "sessionId": session,
+            "params": params})
+                .to_string()
+                .into(),
+            ))
+            .await
+            .unwrap();
+    }
+    let paused = recv_until_match(&mut socket, |message| {
+        message["method"] == "Fetch.requestPaused"
+            && message["sessionId"] == session
+            && message["params"]["request"]["url"] == popup_url
+    })
+    .await;
+    let request = paused.last().unwrap()["params"]["requestId"]
+        .as_str()
+        .unwrap();
+    let release_method = if stage == "Request" {
+        "Fetch.continueRequest"
+    } else {
+        "Fetch.continueResponse"
+    };
+    let release = json!({"id": 24, "method": release_method, "sessionId": session,
+        "params": {"requestId": request}});
+    // Request-stage decisions leave the real initial Document accessible;
+    // response-stage decisions must still hold startup until the native commit.
+    for (id, method) in [
+        (20, "Page.enable"),
+        (21, "Page.getFrameTree"),
+        (22, "Runtime.enable"),
+        (23, "Page.getNavigationHistory"),
+    ] {
+        socket
+            .send(WsMessage::Text(
+                json!({"id": id, "method": method, "sessionId": session})
+                    .to_string()
+                    .into(),
+            ))
+            .await
+            .unwrap();
+    }
+    let mut replies = std::collections::HashSet::new();
+    let mut context_created = false;
+    let completed = timeout(Duration::from_secs(5), async {
+        let mut messages = recv_until_id(&mut socket, 23).await;
+        if stage == "Response" {
+            assert!(
+                !messages
+                    .iter()
+                    .any(|message| message["id"] == 21 || message["id"] == 22),
+                "response-stage startup crossed its Document projection hold: {messages:?}"
+            );
+            socket
+                .send(WsMessage::Text(release.to_string().into()))
+                .await
+                .unwrap();
+        }
+        let mut observe = |message: &serde_json::Value| {
+            if let Some(id) = message["id"].as_u64().filter(|id| (20..=23).contains(id)) {
+                assert!(replies.insert(id), "duplicate startup response: {message}");
+            }
+            context_created |= message["method"] == "Runtime.executionContextCreated"
+                && message["sessionId"] == session
+                && message["params"]["context"]["auxData"]["frameId"] == target;
+            replies.len() == 4 && context_created
+        };
+        let mut ready = false;
+        for message in &messages {
+            ready |= observe(message);
+        }
+        if !ready {
+            messages.extend(recv_until_match(&mut socket, observe).await);
+        }
+        if stage == "Request" {
+            let tree = messages.iter().find(|message| message["id"] == 21).unwrap();
+            assert_eq!(
+                tree["result"]["frameTree"]["frame"]["loaderId"],
+                format!("LID-INITIAL-{target}")
+            );
+            assert!(messages.iter().any(|message| message["method"]
+                == "Runtime.executionContextCreated"
+                && message["sessionId"] == session
+                && message["params"]["context"]["auxData"]["frameId"] == target
+                && message["params"]["context"]["name"] == "about:blank"));
+            socket
+                .send(WsMessage::Text(release.to_string().into()))
+                .await
+                .unwrap();
+            messages.extend(
+                recv_until_match(&mut socket, |message| {
+                    message["method"] == "Page.frameNavigated"
+                        && message["sessionId"] == session
+                        && message["params"]["frame"]["id"] == target
+                        && message["params"]["frame"]["url"] == popup_url
+                })
+                .await,
+            );
+        }
+        messages
+    })
+    .await;
+    let _ = socket.close(None).await;
+    abort_test_cdp_server(server).await;
+    let messages =
+        completed.expect("native Document commit must release every queued startup command");
+    for id in 20..=23 {
+        let reply = messages.iter().find(|message| message["id"] == id).unwrap();
+        assert!(
+            reply.get("error").is_none(),
+            "startup command {id}: {reply}"
+        );
+        assert_eq!(reply["sessionId"], session);
+    }
+    let tree = messages.iter().find(|message| message["id"] == 21).unwrap();
+    assert_eq!(tree["result"]["frameTree"]["frame"]["id"], target);
+    // Target identity advertises the requested URL even before its first commit.
+    assert_eq!(tree["result"]["frameTree"]["frame"]["url"], popup_url);
+    assert!(messages.iter().any(
+        |message| message["method"] == "Runtime.executionContextCreated"
+            && message["sessionId"] == session
+            && message["params"]["context"]["auxData"]["frameId"] == target
+    ));
+}
+
 fn assert_cdp_event_precedes_response(
     messages: &[serde_json::Value],
     method: &str,

@@ -73,6 +73,16 @@ impl CdpScheduler {
                 BrowserEvent::DocumentCommitted(document) => {
                     self.conn.project_browser_document_commit(document).await
                 }
+                BrowserEvent::NavigationAwaitingDecision(request) => {
+                    self.conn
+                        .project_browser_navigation_decision(request.web_contents)
+                        .await
+                }
+                BrowserEvent::NavigationResponseChanged(request) => {
+                    self.conn
+                        .project_browser_navigation_responses(request.web_contents)
+                        .await
+                }
                 BrowserEvent::NavigationStarted(request)
                 | BrowserEvent::NavigationFailed { request, .. } => {
                     self.conn

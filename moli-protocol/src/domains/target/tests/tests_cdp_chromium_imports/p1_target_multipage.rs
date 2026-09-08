@@ -874,6 +874,20 @@ async fn run_waiting_popup_initial_document_after_resume(
     // Runtime.runIfWaitingForDebugger.  It must operate on the materialized
     // initial document without independently starting the target URL: only
     // the debugger-resume response owns that transition.
+    ctx.wait_until_scheduler_state("native request ready behind debugger barrier", |conn| {
+        conn.native_navigation_decision_for_target(popup_target_id)
+            .is_some_and(|(_, paused)| {
+                matches!(
+                    paused.stage,
+                    moli_core::browser::NavigationDecisionStage::Request { .. }
+                )
+            })
+    })
+    .await;
+    let (paused_contents, paused_navigation) = ctx
+        .conn
+        .native_navigation_decision_for_target(popup_target_id)
+        .expect("native popup request must remain debugger gated");
     ctx.process_async(json!({
         "id": 260_219,
         "method": "Page.createIsolatedWorld",
@@ -892,11 +906,16 @@ async fn run_waiting_popup_initial_document_after_resume(
             .is_some(),
         "createIsolatedWorld should resolve against the paused initial document: {initial_world:?}"
     );
-    assert!(
-        !ctx.conn
-            .has_pending_document_navigation_for_session_owner(Some(popup_session_id)),
-        "createIsolatedWorld must not claim the debugger-gated initial navigation"
-    );
+    let (still_paused_contents, still_paused) = ctx
+        .conn
+        .native_navigation_decision_for_target(popup_target_id)
+        .expect("createIsolatedWorld must not claim the debugger-gated request");
+    assert_eq!(still_paused_contents, paused_contents);
+    assert_eq!(still_paused.permit, paused_navigation.permit);
+    assert!(matches!(
+        still_paused.stage,
+        moli_core::browser::NavigationDecisionStage::Request { .. }
+    ));
     assert!(
         !ctx.sent.iter().any(|message| {
             message["method"] == json!("Fetch.requestPaused")
@@ -1173,7 +1192,7 @@ async fn rust_cdp_chromium_target_window_open_named_target_reuses_existing_targe
     let first = open_popup_from_runtime(
         &mut ctx,
         260_026,
-        "window.open('https://example.com/one', 'named') !== null",
+        "window.open('about:blank', 'named') !== null",
     )
     .await;
     let target_id = event(&first, "Target.targetCreated")["params"]["targetInfo"]["targetId"]
@@ -1181,12 +1200,19 @@ async fn rust_cdp_chromium_target_window_open_named_target_reuses_existing_targe
         .expect("named target id")
         .to_owned();
 
-    let second = open_popup_from_runtime(
+    let mut second = open_popup_from_runtime(
         &mut ctx,
         260_027,
-        "window.open('https://example.com/two', 'named') !== null",
+        "window.open('data:text/html,two', 'named') !== null",
     )
     .await;
+    crate::testing::wait_until_scheduler_message(&mut ctx, "named popup URL commit", |message| {
+        message["method"] == "Target.targetInfoChanged"
+            && message["params"]["targetInfo"]["targetId"] == target_id
+            && message["params"]["targetInfo"]["url"] == "data:text/html,two"
+    })
+    .await;
+    second.extend(ctx.take_all());
 
     assert!(
         !second
@@ -1196,10 +1222,7 @@ async fn rust_cdp_chromium_target_window_open_named_target_reuses_existing_targe
     );
     let changed = event(&second, "Target.targetInfoChanged");
     assert_eq!(changed["params"]["targetInfo"]["targetId"], target_id);
-    assert_eq!(
-        changed["params"]["targetInfo"]["url"],
-        "https://example.com/two"
-    );
+    assert_eq!(changed["params"]["targetInfo"]["url"], "data:text/html,two");
 }
 
 // Chromium source:
@@ -1218,19 +1241,25 @@ async fn rust_cdp_chromium_target_info_changed_is_emitted_for_named_popup_reuse(
     let _first = open_popup_from_runtime(
         &mut ctx,
         260_028,
-        "window.open('https://example.com/first', 'reuse') !== null",
+        "window.open('about:blank', 'reuse') !== null",
     )
     .await;
-    let second = open_popup_from_runtime(
+    let mut second = open_popup_from_runtime(
         &mut ctx,
         260_029,
-        "window.open('https://example.com/second', 'reuse') !== null",
+        "window.open('data:text/html,second', 'reuse') !== null",
     )
     .await;
+    crate::testing::wait_until_scheduler_message(&mut ctx, "named popup URL commit", |message| {
+        message["method"] == "Target.targetInfoChanged"
+            && message["params"]["targetInfo"]["url"] == "data:text/html,second"
+    })
+    .await;
+    second.extend(ctx.take_all());
 
     assert_eq!(
         event(&second, "Target.targetInfoChanged")["params"]["targetInfo"]["url"],
-        "https://example.com/second"
+        "data:text/html,second"
     );
 }
 

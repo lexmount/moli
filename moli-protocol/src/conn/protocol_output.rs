@@ -311,11 +311,9 @@ impl CdpConnection {
                     self.take_scheduler_events(),
                 )
             }
-            ReadyProtocolSchedulerWork::PopupTargetNavigationOwnerAction(action) => {
-                crate::domains::target::complete_popup_target_navigation_owner_action_async(
-                    self, action,
-                )
-                .await
+            ReadyProtocolSchedulerWork::TargetStartupOwnerAction(action) => {
+                crate::domains::target::complete_target_startup_owner_action_async(self, action)
+                    .await
             }
             ReadyProtocolSchedulerWork::PageTargetTerminationOwnerAction(action) => {
                 crate::domains::page::complete_page_target_termination_owner_action_async(

@@ -12,12 +12,15 @@ impl CdpConnection {
         &mut self,
         contents: WebContentsHandle,
     ) -> Vec<BackgroundProtocolEvent> {
+        // A terminal attempt can retire its projection before a queued response
+        // event is consumed. Recover the exact retained response first.
+        let mut events = Box::pin(self.project_browser_navigation_responses(contents)).await;
         let Ok(snapshot) = self
             .browser
             .context_handle(contents.context())
             .and_then(|context| context.navigation_snapshot(contents))
         else {
-            return Vec::new();
+            return events;
         };
         let mut allocator = std::mem::take(&mut self.network_request_id_allocator);
         let prepared = (|| {
@@ -59,7 +62,13 @@ impl CdpConnection {
                 ))
             });
             let mut releases = Vec::new();
+            let mut native_failures = Vec::new();
             for navigation in retired {
+                if let Some((pending, _, _)) =
+                    context.observe_native_navigation_response(&target_id, navigation, true)
+                {
+                    native_failures.push(pending.navigation);
+                }
                 context.discard_target_navigation_projection(&target_id, &navigation);
                 if let Ok(release) = context
                     .page_targets
@@ -70,14 +79,19 @@ impl CdpConnection {
                     releases.push(release);
                 }
             }
-            Some((owner, releases))
+            Some((owner, releases, native_failures))
         })();
         self.network_request_id_allocator = allocator;
-        let Some((Some(owner), releases)) = prepared else {
-            return Vec::new();
+        let Some((Some(owner), releases, native_failures)) = prepared else {
+            return events;
         };
         let mut out = CommandOutputBuffer::default();
         let mut command_context = CommandDispatchContext::default();
+        for state in native_failures {
+            out.extend_background_events_after_messages(
+                crate::domains::network::native_navigation_failure_events(self, &state),
+            );
+        }
         for release in releases {
             page::release_document_projection_output_async(
                 self,
@@ -89,6 +103,7 @@ impl CdpConnection {
             .await;
         }
         out.extend_background_events_after_messages(command_context.take_protocol_events());
-        out.into_plan().into_background_events(None, None)
+        events.extend(out.into_plan().into_background_events(None, None));
+        events
     }
 }

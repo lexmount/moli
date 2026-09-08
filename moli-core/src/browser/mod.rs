@@ -11,6 +11,7 @@ mod document_lifetime;
 mod downloads;
 mod emulation;
 mod events;
+mod navigation_decision;
 mod owner;
 mod permissions;
 mod popup;
@@ -37,7 +38,12 @@ pub use emulation::{
 pub use events::{
     BrowserEvent, BrowserEventReceiver, BrowserEventRecord, BrowserSnapshot,
     DocumentLifecycleSnapshot, JavaScriptDialogOpened, NavigationAttempt, NavigationFailureReason,
-    NavigationRequest, NavigationSnapshot, WebContentsSelection, WebContentsSnapshot,
+    NavigationRequest, NavigationResponseSnapshot, NavigationSnapshot, WebContentsSelection,
+    WebContentsSnapshot,
+};
+pub use navigation_decision::{
+    NavigationDecision, NavigationDecisionProvider, NavigationDecisionSnapshot,
+    NavigationDecisionStage,
 };
 pub use owner::{
     BrowserBuiltInitialDocument, BrowserCommittedInitialDocument, BrowserContextHandle,

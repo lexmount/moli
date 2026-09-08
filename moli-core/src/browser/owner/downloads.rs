@@ -1,7 +1,70 @@
 use super::*;
-use crate::browser::{BrowserEvent, BrowserSequence, DownloadEvent, DownloadObservation};
+use crate::browser::{
+    BrowserEvent, BrowserSequence, DownloadBody, DownloadEvent, DownloadObservation,
+    DownloadPolicy, NavigationFailureReason, NavigationRequest, RendererPageResidenceIdentity,
+};
+
+impl BrowserHandle {
+    pub fn set_download_policy(&self, policy: DownloadPolicy) {
+        self.execute(move |browser| browser.download_policy = policy)
+            .expect("live Browser owner must accept download policy");
+    }
+
+    pub fn download_policy(&self) -> DownloadPolicy {
+        self.execute(|browser| browser.download_policy.clone())
+            .expect("live Browser owner must snapshot download policy")
+    }
+}
 
 impl Browser {
+    pub(super) fn download_navigation_response(
+        &mut self,
+        request: NavigationRequest,
+        renderer: RendererPageResidenceIdentity,
+        response: moli_fetch::ResponseHead,
+        body: DownloadBody,
+    ) -> Result<(), String> {
+        let context = self.context(request.web_contents.context())?;
+        let page = context.web_contents(request.web_contents)?;
+        if page.navigation().pending_document() != Some((request.navigation, request.document))
+            || !page
+                .navigation()
+                .accepts_document_preparation(request.navigation, renderer)
+        {
+            return Err("stale navigation download response".into());
+        }
+        let policy = context
+            .download_policy()
+            .unwrap_or(&self.download_policy)
+            .clone();
+        let context = self.context_mut(request.web_contents.context())?;
+        let admitted = context.start_download_response(
+            request.web_contents,
+            &policy,
+            response.final_url,
+            response.headers,
+            body,
+        )?;
+        // The response is now owned by the download manager. Retire this exact
+        // candidate without revoking its transferred transport or current Document.
+        context
+            .web_contents_mut(request.web_contents)?
+            .navigation_mut()
+            .finish_navigation_as_download(request.navigation);
+        self.navigation_work
+            .remove_web_contents(request.web_contents);
+        if let Some(admitted) = admitted {
+            self.admit_download(admitted);
+        }
+        self.events
+            .publish(BrowserEvent::NavigationResponseChanged(request));
+        self.events.publish(BrowserEvent::NavigationFailed {
+            request,
+            reason: NavigationFailureReason::Download,
+        });
+        Ok(())
+    }
+
     pub(super) fn admit_download(
         &mut self,
         admitted: crate::browser::downloads::AdmittedDownload,

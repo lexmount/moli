@@ -319,6 +319,24 @@ async fn run_cdp_scheduler_actor(
         {
             break;
         }
+        // Native Browser commits/cancellations can release a Document fence
+        // without any legacy completion or later frontend command. Recheck
+        // the existing waiters after publishing all ready projection output.
+        if !drain_blocked_commands_after_navigation_gate(
+            &frontend_router,
+            &mut scheduler,
+            &mut scheduler_input_rx,
+            &mut pending_runtime_deferred_replies,
+            &mut adapter_scheduler,
+            &pending_command_completion_tx,
+            &mut in_flight_commands,
+            &mut blocked_commands,
+            &mut next_in_flight_command_token,
+        )
+        .await
+        {
+            break;
+        }
         let page_javascript_blocked =
             page_javascript_owner_is_blocked(&scheduler, &in_flight_commands);
         adapter_scheduler.schedule_turn_if_needed(&scheduler, page_javascript_blocked);
@@ -365,21 +383,6 @@ async fn run_cdp_scheduler_actor(
                     &pending_command_completion_tx,
                     &mut in_flight_commands,
                     completion,
-                )
-                .await
-                {
-                    break;
-                }
-                if !drain_blocked_commands_after_navigation_gate(
-                    &frontend_router,
-                    &mut scheduler,
-                    &mut scheduler_input_rx,
-                    &mut pending_runtime_deferred_replies,
-                    &mut adapter_scheduler,
-                    &pending_command_completion_tx,
-                    &mut in_flight_commands,
-                    &mut blocked_commands,
-                    &mut next_in_flight_command_token,
                 )
                 .await
                 {

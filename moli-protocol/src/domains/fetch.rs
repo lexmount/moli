@@ -36,11 +36,14 @@ pub(crate) use crate::conn::PendingFetchAuthNavigation;
 pub(crate) use crate::conn::PendingFetchNavigation;
 #[cfg(test)]
 pub(crate) use helpers::encode_basic_auth;
-pub(crate) use helpers::request_paused_background_event;
+pub(crate) use helpers::extract_auth_challenge;
 #[cfg(test)]
 use helpers::response_headers_from_params;
 #[cfg(test)]
-pub(crate) use helpers::{emit_auth_required, extract_auth_challenge, request_auth_for_challenge};
+pub(crate) use helpers::{emit_auth_required, request_auth_for_challenge};
+pub(crate) use helpers::{
+    navigation_response_stage_request_paused_event, request_paused_background_event,
+};
 pub(crate) use helpers::{
     pending_subresource_auth_required_event,
     pending_subresource_response_stage_request_paused_event, populate_auth_challenge_origin,
@@ -48,6 +51,8 @@ pub(crate) use helpers::{
 #[cfg(test)]
 pub(crate) use moli_fetch::url_pattern_matches;
 pub(crate) use navigation::continue_navigation_without_request_pause_into_buffer_async;
+pub(crate) use navigation::prepare_navigation_response_stage;
+pub(crate) use navigation::register_navigation_auth_required_event_for_permit;
 use params::EnableParams;
 use patterns::supported_pattern_config;
 pub(crate) use subresource::{

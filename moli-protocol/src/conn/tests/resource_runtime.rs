@@ -17,6 +17,19 @@ use tokio::sync::Notify;
 async fn session_end_removes_only_its_contexts_but_connection_drop_does_not() {
     let service = moli_core::browser::BrowserService::start().unwrap();
     let browser = service.handle();
+    // A Browser has one live DevTools owner. Dropping that owner must still
+    // leave its physical contexts intact for a later owner/session.
+    let mut peer = CdpConnection::new(
+        browser.clone(),
+        CdpInitialStoragePartition::memory(),
+        Default::default(),
+    );
+    let context = peer.new_browser_context("BID-surviving-peer".to_owned());
+    let peer_context = context.browser_context_id();
+    peer.insert_browser_context(context);
+    drop(peer);
+    assert!(browser.contains_context(peer_context));
+
     let mut conn = CdpConnection::new(
         browser.clone(),
         CdpInitialStoragePartition::memory(),
@@ -51,15 +64,6 @@ async fn session_end_removes_only_its_contexts_but_connection_drop_does_not() {
         .map(|context| context.browser_context_id())
         .collect::<Vec<_>>();
     assert_eq!(ending_contexts.len(), 2);
-    let mut peer = CdpConnection::new(
-        browser.clone(),
-        CdpInitialStoragePartition::memory(),
-        Default::default(),
-    );
-    let context = peer.new_browser_context("BID-surviving-peer".to_owned());
-    let peer_context = context.browser_context_id();
-    peer.insert_browser_context(context);
-    drop(peer);
     assert!(browser.contains_context(peer_context));
     assert!(
         ending_contexts

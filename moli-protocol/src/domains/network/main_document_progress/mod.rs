@@ -2288,3 +2288,88 @@ pub(crate) fn record_completed_main_document_response_body(
 fn main_document_network_observed(conn: &CdpConnection, session_id: Option<&str>) -> bool {
     conn.has_network_event_listeners_for_session_owner(session_id)
 }
+
+pub(crate) fn native_navigation_response_events(
+    conn: &mut CdpConnection,
+    state: &NavigationDispatchState,
+    response: &moli_core::browser::NavigationResponseSnapshot,
+    emit_response: bool,
+    metadata_emitted: bool,
+) -> Vec<BackgroundProtocolEvent> {
+    let mut out = Vec::new();
+    if !main_document_network_observed(conn, state.session_id.as_deref()) {
+        return out;
+    }
+    let head = &response.response;
+    let mut events = CompletedMainDocumentNetworkEvents::new(
+        state.request_method.clone(),
+        state.request_headers.clone(),
+        head.request_cookie_report.clone(),
+        head.status,
+        head.headers.clone(),
+        head.cookie_set_reports.clone(),
+        head.redirect_chain
+            .iter()
+            .cloned()
+            .map(Into::into)
+            .collect(),
+        !response.observations.is_empty(),
+        head.from_cache,
+    )
+    .with_negotiated_http_version(head.negotiated_http_version)
+    .with_network_observation_journal(response.observations.clone());
+    events.response_stage_metadata_already_emitted = metadata_emitted;
+    let context = CompletedMainDocumentProgressContext::new(
+        main_document_network_event_session_ids(conn, state.session_id.as_deref()),
+        state.request_id.clone(),
+        state.request_announced,
+        state.requested_url.clone(),
+        state.request_method.clone(),
+        state.request_body.clone(),
+        state.request_headers.clone(),
+        state.loader_id.clone(),
+        state.frame_id.clone(),
+        state.timestamp,
+    );
+    let mut output = MainDocumentProgressOutputTarget::background_events(&mut out);
+    if emit_response {
+        record_pending_main_document_response_body(conn, state, &context.session_ids);
+        for event in context
+            .request_and_redirect_progress_events(&events)
+            .into_iter()
+            .chain(context.response_received_progress_events(&events, &head.final_url, 0))
+        {
+            event.emit_into(&mut output);
+        }
+    }
+    match &response.body {
+        Some(Ok(body)) => {
+            record_completed_main_document_response_body(conn, state, false, body);
+            for event in context.loading_finished_progress_events(body.len()) {
+                event.emit_into(&mut output);
+            }
+        }
+        Some(Err(error)) => {
+            record_failed_main_document_response_body(conn, state, error.clone());
+            if let Some(event) = observed_navigation_failure_event(conn, state, error) {
+                event.emit_into(&mut output);
+            }
+        }
+        None => {}
+    }
+    out
+}
+
+pub(crate) fn native_navigation_failure_events(
+    conn: &mut CdpConnection,
+    state: &NavigationDispatchState,
+) -> Vec<BackgroundProtocolEvent> {
+    let mut out = Vec::new();
+    record_failed_main_document_response_body(conn, state, "net::ERR_ABORTED".into());
+    if let Some(event) = observed_navigation_failure_event(conn, state, "net::ERR_ABORTED") {
+        event.emit_into(&mut MainDocumentProgressOutputTarget::background_events(
+            &mut out,
+        ));
+    }
+    out
+}

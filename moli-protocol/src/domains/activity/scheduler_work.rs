@@ -6,7 +6,7 @@ use crate::{
     conn::{
         BidiChannelOwnerAction, CdpConnection, DeferredMainDocumentLoadCompletionOutputAction,
         DeferredMainDocumentLoadCompletionOutputInterest,
-        PendingDeferredMainDocumentLoadCompletion, PopupTargetNavigationOwnerAction,
+        PendingDeferredMainDocumentLoadCompletion, TargetStartupOwnerAction,
         TopLevelLocationNavigationOwnerAction,
     },
     devtools_runtime::DevToolsCommandContext,
@@ -48,7 +48,7 @@ pub enum ProtocolSchedulerWorkKind {
     MainDocumentLoadOwnerAction,
     BidiChannelOwnerAction,
     TopLevelLocationNavigationOwnerAction,
-    PopupTargetNavigationOwnerAction,
+    TargetStartupOwnerAction,
     PageTargetTerminationOwnerAction,
 }
 
@@ -70,7 +70,7 @@ enum ProtocolSchedulerWorkPayload {
     MainDocumentLoadOwnerAction(Box<DeferredMainDocumentLoadCompletionActivity>),
     BidiChannelOwnerAction(BidiChannelOwnerAction),
     TopLevelLocationNavigationOwnerAction(TopLevelLocationNavigationOwnerAction),
-    PopupTargetNavigationOwnerAction(PopupTargetNavigationOwnerAction),
+    TargetStartupOwnerAction(TargetStartupOwnerAction),
     PageTargetTerminationOwnerAction(crate::domains::page::PageTargetTerminationOwnerAction),
 }
 
@@ -109,7 +109,7 @@ impl fmt::Debug for ProtocolSchedulerWork {
                     .field("source_document", &action.source_document())
                     .field("url", &action.url());
             }
-            ProtocolSchedulerWorkPayload::PopupTargetNavigationOwnerAction(action) => {
+            ProtocolSchedulerWorkPayload::TargetStartupOwnerAction(action) => {
                 debug
                     .field("browser_context_id", &action.browser_context_id())
                     .field("target_id", &action.target_id())
@@ -169,13 +169,13 @@ impl ProtocolSchedulerWork {
         }
     }
 
-    pub(crate) fn popup_target_navigation_owner_action(
+    pub(crate) fn target_startup_owner_action(
         publish_sequence: ProtocolWorkPublishSequence,
-        action: PopupTargetNavigationOwnerAction,
+        action: TargetStartupOwnerAction,
     ) -> Self {
         Self {
             publish_sequence,
-            payload: ProtocolSchedulerWorkPayload::PopupTargetNavigationOwnerAction(action),
+            payload: ProtocolSchedulerWorkPayload::TargetStartupOwnerAction(action),
         }
     }
 
@@ -207,8 +207,8 @@ impl ProtocolSchedulerWork {
             ProtocolSchedulerWorkPayload::TopLevelLocationNavigationOwnerAction(_) => {
                 ProtocolSchedulerWorkKind::TopLevelLocationNavigationOwnerAction
             }
-            ProtocolSchedulerWorkPayload::PopupTargetNavigationOwnerAction(_) => {
-                ProtocolSchedulerWorkKind::PopupTargetNavigationOwnerAction
+            ProtocolSchedulerWorkPayload::TargetStartupOwnerAction(_) => {
+                ProtocolSchedulerWorkKind::TargetStartupOwnerAction
             }
             ProtocolSchedulerWorkPayload::PageTargetTerminationOwnerAction(_) => {
                 ProtocolSchedulerWorkKind::PageTargetTerminationOwnerAction
@@ -230,7 +230,7 @@ impl ProtocolSchedulerWork {
             }
             ProtocolSchedulerWorkPayload::BidiChannelOwnerAction(_) => true,
             ProtocolSchedulerWorkPayload::TopLevelLocationNavigationOwnerAction(_) => true,
-            ProtocolSchedulerWorkPayload::PopupTargetNavigationOwnerAction(_) => true,
+            ProtocolSchedulerWorkPayload::TargetStartupOwnerAction(_) => true,
             ProtocolSchedulerWorkPayload::PageTargetTerminationOwnerAction(_) => true,
         }
     }
@@ -238,19 +238,15 @@ impl ProtocolSchedulerWork {
     /// Reports owner work that must complete inside the producing command's
     /// turn.
     ///
-    /// Popup navigation produced by the opener is safe to start while
-    /// completing that command because it targets a different renderer. The
-    /// initial navigation released by `Runtime.runIfWaitingForDebugger` is an
-    /// exception: it replaces the command's own initial empty Document, so it
-    /// crosses the ordinary client-turn predecessor just like activation.
+    /// A target startup decision can replace the command's own initial empty
+    /// Document. Its release therefore crosses the ordinary client-turn
+    /// predecessor, including `Runtime.runIfWaitingForDebugger` replies.
     pub fn is_command_followup(&self) -> bool {
         match &self.payload {
             ProtocolSchedulerWorkPayload::BidiChannelOwnerAction(_)
             | ProtocolSchedulerWorkPayload::TopLevelLocationNavigationOwnerAction(_)
             | ProtocolSchedulerWorkPayload::PageTargetTerminationOwnerAction(_) => true,
-            ProtocolSchedulerWorkPayload::PopupTargetNavigationOwnerAction(action) => {
-                action.is_command_followup()
-            }
+            ProtocolSchedulerWorkPayload::TargetStartupOwnerAction(_) => false,
             ProtocolSchedulerWorkPayload::ProtocolObservation(_)
             | ProtocolSchedulerWorkPayload::MainDocumentLoadOwnerAction(_) => false,
         }
@@ -270,7 +266,7 @@ impl ProtocolSchedulerWork {
             ProtocolSchedulerWorkPayload::TopLevelLocationNavigationOwnerAction(action) => {
                 action.target_id()
             }
-            ProtocolSchedulerWorkPayload::PopupTargetNavigationOwnerAction(action) => {
+            ProtocolSchedulerWorkPayload::TargetStartupOwnerAction(action) => {
                 Some(action.target_id())
             }
             ProtocolSchedulerWorkPayload::PageTargetTerminationOwnerAction(action) => {
@@ -295,10 +291,12 @@ impl ProtocolSchedulerWork {
     /// accidentally turning it into a blocking navigation wait.
     #[cfg(test)]
     pub(crate) fn requires_background_navigation_scheduler(&self) -> bool {
-        matches!(
-            &self.payload,
-            ProtocolSchedulerWorkPayload::PopupTargetNavigationOwnerAction(_)
-        )
+        match &self.payload {
+            ProtocolSchedulerWorkPayload::TargetStartupOwnerAction(action) => {
+                action.requires_background_navigation_scheduler()
+            }
+            _ => false,
+        }
     }
 
     #[cfg(test)]
@@ -380,7 +378,7 @@ impl ProtocolSchedulerWork {
             ProtocolSchedulerWorkPayload::ProtocolObservation(_)
             | ProtocolSchedulerWorkPayload::BidiChannelOwnerAction(_)
             | ProtocolSchedulerWorkPayload::TopLevelLocationNavigationOwnerAction(_)
-            | ProtocolSchedulerWorkPayload::PopupTargetNavigationOwnerAction(_)
+            | ProtocolSchedulerWorkPayload::TargetStartupOwnerAction(_)
             | ProtocolSchedulerWorkPayload::PageTargetTerminationOwnerAction(_) => {
                 panic!("only main-document load owner work can start a lifecycle wait")
             }
@@ -433,7 +431,7 @@ pub(crate) enum ReadyProtocolSchedulerWork {
     ),
     BidiChannelOwnerAction(BidiChannelOwnerAction),
     TopLevelLocationNavigationOwnerAction(TopLevelLocationNavigationOwnerAction),
-    PopupTargetNavigationOwnerAction(PopupTargetNavigationOwnerAction),
+    TargetStartupOwnerAction(TargetStartupOwnerAction),
     PageTargetTerminationOwnerAction(crate::domains::page::PageTargetTerminationOwnerAction),
 }
 
@@ -457,8 +455,8 @@ impl ProtocolSchedulerWork {
             ProtocolSchedulerWorkPayload::TopLevelLocationNavigationOwnerAction(action) => {
                 ReadyProtocolSchedulerWork::TopLevelLocationNavigationOwnerAction(action)
             }
-            ProtocolSchedulerWorkPayload::PopupTargetNavigationOwnerAction(action) => {
-                ReadyProtocolSchedulerWork::PopupTargetNavigationOwnerAction(action)
+            ProtocolSchedulerWorkPayload::TargetStartupOwnerAction(action) => {
+                ReadyProtocolSchedulerWork::TargetStartupOwnerAction(action)
             }
             ProtocolSchedulerWorkPayload::PageTargetTerminationOwnerAction(action) => {
                 ReadyProtocolSchedulerWork::PageTargetTerminationOwnerAction(action)

@@ -58,6 +58,7 @@ pub(super) async fn emit_prepared(
             continue;
         };
         out.extend(conn.project_observed_popup(admission.web_contents).await);
+        out.extend(conn.observe_popup_navigation(admission).await);
         let Some(context) = conn.browser_context_by_browser_id(admission.web_contents.context())
         else {
             continue;
@@ -66,17 +67,6 @@ pub(super) async fn emit_prepared(
         let target_id = context
             .target_id_for_web_contents(admission.web_contents.id())
             .map(str::to_owned);
-        if !admission.created
-            && let Some(target_id) = target_id.as_deref()
-        {
-            crate::domains::target::observe_reused_popup_navigation(
-                conn,
-                out,
-                &browser_context_id,
-                target_id,
-                opening.url(),
-            );
-        }
         super::javascript_dialog::settle_pending_popup_dialogs(
             conn,
             out,

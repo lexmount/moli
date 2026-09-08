@@ -992,6 +992,7 @@ pub(crate) fn command_waits_for_document_projection(cmd: &Cmd<'_>) -> bool {
             RuntimeAction::AddBinding
                 | RuntimeAction::RemoveBinding
                 | RuntimeAction::TerminateExecution
+                | RuntimeAction::RunIfWaitingForDebugger
         )
     )
 }

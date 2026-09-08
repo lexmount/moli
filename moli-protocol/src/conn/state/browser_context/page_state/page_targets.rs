@@ -183,18 +183,6 @@ impl BrowserContext {
         }
     }
 
-    pub(crate) fn update_target_url(&mut self, target_id: &str, url: String) -> bool {
-        let is_active = self.is_active_target(target_id);
-        let Some(target) = self.page_target_mut(target_id) else {
-            return false;
-        };
-        target.set_target_url(url);
-        if is_active {
-            self.set_target_crash_state(target_id, false);
-        }
-        true
-    }
-
     pub(crate) fn assign_session_to_target(&mut self, target_id: &str, session_id: String) -> bool {
         let Some(target) = self.page_target_mut(target_id) else {
             return false;

@@ -268,6 +268,11 @@ impl TargetRuntimeSlot {
             .document_projection_is_pending()
     }
 
+    pub(crate) fn allows_initial_document_access(&self, navigation: NavigationId) -> bool {
+        self.devtools_renderer_channel
+            .allows_initial_document_access(navigation)
+    }
+
     pub(crate) fn current_renderer_attachment(&self) -> Option<RendererAgentAttachment> {
         self.devtools_renderer_channel.current()
     }

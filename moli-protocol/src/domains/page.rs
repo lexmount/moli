@@ -133,12 +133,12 @@ pub(crate) use child_frame_activity::{
     PagePreparedChildFrameActivity, PagePreparedChildFrameTreeEvent,
 };
 pub(crate) use lifecycle::{
-    emit_bound_renderer_document_lifecycle_background_events,
+    NavigationStartInitiator, emit_bound_renderer_document_lifecycle_background_events,
     emit_navigation_frame_commit_background_events,
     emit_navigation_frame_stop_after_download_background_events,
     emit_navigation_frame_stopped_loading_background_events,
     emit_navigation_lifecycle_init_background_events,
-    emit_navigation_network_idle_background_events,
+    emit_navigation_network_idle_background_events, emit_navigation_started_background_events,
 };
 pub(in crate::domains) use main_document_commit::{
     MainDocumentCommitPreparedOutput, append_renderer_main_document_commit_to_output_sink,
@@ -4732,7 +4732,7 @@ mod producer_tests {
     }
 
     #[tokio::test(flavor = "multi_thread")]
-    async fn popup_activation_creates_target_and_schedules_navigation_without_page_readback() {
+    async fn popup_activation_projects_native_navigation_without_page_readback() {
         let mut conn = crate::test_support::connection();
         conn.set_root_target_discovery_enabled(true);
         let mut bc = conn.new_browser_context_fixture_for_test("BID-1");
@@ -4806,13 +4806,21 @@ mod producer_tests {
             },
             "target creation should install only the initial empty Document"
         );
-        let scheduler_events = conn.take_scheduler_events();
-        assert!(matches!(
-            scheduler_events.as_slice(),
-            [crate::conn::CdpSchedulerEvent::ProtocolWorkPublished { work }]
-                if work.kind()
-                    == crate::domains::activity::ProtocolSchedulerWorkKind::PopupTargetNavigationOwnerAction
-        ));
+        let target_id = target_created["params"]["targetInfo"]["targetId"]
+            .as_str()
+            .unwrap();
+        let context = conn.browser_context.as_ref().unwrap();
+        let contents = context.web_contents_handle_for_target(target_id).unwrap();
+        let (snapshot, _) = conn.subscribe_browser_events().unwrap();
+        let snapshot = snapshot
+            .navigations
+            .iter()
+            .find(|snapshot| snapshot.web_contents == contents)
+            .unwrap();
+        assert!(
+            matches!(snapshot.attempt, Some(moli_core::browser::NavigationAttempt::Started(request)) if request.web_contents == contents),
+            "the exact native attempt must already exist; projection does not create it"
+        );
     }
 
     #[tokio::test(flavor = "multi_thread")]

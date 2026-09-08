@@ -166,6 +166,7 @@ struct PendingNavigationRequest {
     cancellation_handles: Vec<moli_fetch::FetchCancelHandle>,
     background_completion_pending: bool,
     committed: bool,
+    native_initial_document: bool,
 }
 
 impl PendingNavigationRequest {
@@ -182,6 +183,7 @@ impl PendingNavigationRequest {
             cancellation_handles: vec![moli_fetch::FetchCancelHandle::new()],
             background_completion_pending: false,
             committed: false,
+            native_initial_document: false,
         }
     }
 
@@ -236,6 +238,7 @@ pub struct NavigationController {
         crate::browser::NavigationFailureReason,
     )>,
     committed_document_navigation: Option<NavigationId>,
+    native_responses: Vec<crate::browser::NavigationResponseSnapshot>,
     history: NavigationHistoryState,
     initial_empty_document: Option<InitialDocument>,
 }
@@ -277,7 +280,35 @@ impl NavigationController {
         };
         self.failed_navigation = Some((pending, document, reason));
         self.pending_navigation_request = None;
+        self.retain_native_responses();
         true
+    }
+
+    pub(in crate::browser) fn finish_navigation_as_download(&mut self, navigation: NavigationId) {
+        let mut pending = self
+            .pending_navigation_request
+            .take()
+            .expect("admitted download navigation");
+        assert_eq!(pending.navigation_id, navigation);
+        assert!(!pending.committed);
+        // Cancel the document candidate, not the response stream moved to the
+        // download manager. Dropping that stream now owns transport cancellation.
+        pending.cancellation_handle().cancel();
+        if let Some((_, cancellation)) = &pending.document_preparation {
+            cancellation.cancel();
+        }
+        pending.retire_without_cancellation();
+        self.failed_navigation = Some((
+            navigation,
+            pending.document_id,
+            crate::browser::NavigationFailureReason::Download,
+        ));
+        for response in &mut self.native_responses {
+            if response.request.navigation == navigation {
+                response.body = Some(Err(moli_fetch::NET_ERR_ABORTED_ERROR_TEXT.into()));
+            }
+        }
+        self.retain_native_responses();
     }
     #[cfg(any(test, feature = "test-support"))]
     pub fn has_paused_request_for_test(&self) -> bool {
@@ -317,7 +348,8 @@ impl NavigationController {
                 Some(&paused.transfer)
             }
             super::navigation_interception::PausedNavigationInterception::Request(_)
-            | super::navigation_interception::PausedNavigationInterception::Auth(_) => None,
+            | super::navigation_interception::PausedNavigationInterception::Auth(_)
+            | super::navigation_interception::PausedNavigationInterception::Driver(_) => None,
         }
     }
 
@@ -367,6 +399,11 @@ impl NavigationController {
                 && !pending.committed
                 && !pending.cancellation_handle().is_cancelled()
         })?;
+        if let Some(super::navigation_interception::PausedNavigationInterception::Driver(paused)) =
+            pending.paused_interception.as_mut()
+        {
+            return paused.take_request(permit);
+        }
         let super::navigation_interception::PausedNavigationInterception::Request(paused) =
             pending.paused_interception.as_ref()?
         else {
@@ -387,7 +424,8 @@ impl NavigationController {
                 ),
             ),
             super::navigation_interception::PausedNavigationInterception::Auth(_)
-            | super::navigation_interception::PausedNavigationInterception::Response(_) => {
+            | super::navigation_interception::PausedNavigationInterception::Response(_)
+            | super::navigation_interception::PausedNavigationInterception::Driver(_) => {
                 unreachable!("validated request interception")
             }
         }
@@ -454,7 +492,8 @@ impl NavigationController {
                     paused.response
                 }
                 super::navigation_interception::PausedNavigationInterception::Request(_)
-                | super::navigation_interception::PausedNavigationInterception::Response(_) => {
+                | super::navigation_interception::PausedNavigationInterception::Response(_)
+                | super::navigation_interception::PausedNavigationInterception::Driver(_) => {
                     unreachable!("validated auth interception")
                 }
             },
@@ -504,6 +543,11 @@ impl NavigationController {
                 && !pending.committed
                 && !pending.cancellation_handle().is_cancelled()
         })?;
+        if let Some(super::navigation_interception::PausedNavigationInterception::Driver(paused)) =
+            pending.paused_interception.as_mut()
+        {
+            return paused.take_response(permit);
+        }
         let super::navigation_interception::PausedNavigationInterception::Response(paused) =
             pending.paused_interception.as_ref()?
         else {
@@ -522,7 +566,8 @@ impl NavigationController {
                     paused.transfer
                 }
                 super::navigation_interception::PausedNavigationInterception::Request(_)
-                | super::navigation_interception::PausedNavigationInterception::Auth(_) => {
+                | super::navigation_interception::PausedNavigationInterception::Auth(_)
+                | super::navigation_interception::PausedNavigationInterception::Driver(_) => {
                     unreachable!("validated response interception")
                 }
             },
@@ -539,10 +584,17 @@ impl NavigationController {
                 && pending.document_id == permit.document
                 && !pending.committed
                 && !pending.cancellation_handle().is_cancelled()
-                && pending.paused_interception.is_none()
         }) else {
             return Err(Box::new(transfer));
         };
+        if let Some(super::navigation_interception::PausedNavigationInterception::Driver(paused)) =
+            pending.paused_interception.as_mut()
+        {
+            return paused.restore_response(permit, transfer);
+        }
+        if pending.paused_interception.is_some() {
+            return Err(Box::new(transfer));
+        }
         pending.paused_interception = Some(
             super::navigation_interception::PausedNavigationInterception::Response(Box::new(
                 super::navigation_interception::PausedNavigationResponse {
@@ -625,6 +677,64 @@ impl NavigationController {
             || self.committed_document_navigation == Some(navigation)
     }
 
+    fn retain_native_responses(&mut self) {
+        // A download's terminal response remains observable with its latest
+        // attempt. Starting another navigation replaces it: still at most two
+        // records, with no download body duplicated in the Document cache.
+        let pending = self
+            .pending_document()
+            .map(|(navigation, _)| navigation)
+            .or_else(|| {
+                self.failed_navigation.and_then(|(navigation, _, reason)| {
+                    (reason == crate::browser::NavigationFailureReason::Download)
+                        .then_some(navigation)
+                })
+            });
+        let committed = self.committed_document_navigation;
+        self.native_responses.retain(|response| {
+            Some(response.request.navigation) == pending
+                || Some(response.request.navigation) == committed
+        });
+    }
+
+    pub(in crate::browser) fn response_snapshots(
+        &self,
+    ) -> Vec<crate::browser::NavigationResponseSnapshot> {
+        self.native_responses.clone()
+    }
+
+    pub(in crate::browser) fn record_native_response(
+        &mut self,
+        response: crate::browser::NavigationResponseSnapshot,
+    ) -> bool {
+        if self.pending_document() != Some((response.request.navigation, response.request.document))
+            || self
+                .native_responses
+                .iter()
+                .any(|current| current.request == response.request)
+        {
+            return false;
+        }
+        self.native_responses.push(response);
+        true
+    }
+
+    pub(in crate::browser) fn complete_native_response(
+        &mut self,
+        request: crate::browser::NavigationRequest,
+        body: Result<crate::browser::CapturedBody, String>,
+    ) -> bool {
+        let Some(response) = self
+            .native_responses
+            .iter_mut()
+            .find(|response| response.request == request && response.body.is_none())
+        else {
+            return false;
+        };
+        response.body = Some(body);
+        true
+    }
+
     pub(super) fn start_document_navigation(&mut self) -> NavigationId {
         self.cancel_initial_document_build();
         self.failed_navigation = None;
@@ -636,6 +746,7 @@ impl NavigationController {
             navigation,
             self.history.take_pending_update(),
         ));
+        self.retain_native_responses();
         navigation
     }
 
@@ -658,6 +769,7 @@ impl NavigationController {
             self.pending_navigation_request = None;
         }
         self.mark_initial_empty_document_exited();
+        self.retain_native_responses();
         true
     }
 
@@ -672,6 +784,7 @@ impl NavigationController {
         }
         self.pending_navigation_request = None;
         self.committed_document_navigation = None;
+        self.native_responses.clear();
         self.history.clear_pending_update();
     }
 
@@ -883,10 +996,158 @@ impl NavigationController {
     }
 
     pub fn can_install_current_initial_empty_document_page(&self) -> bool {
-        !self.has_pending_document_navigation()
+        (!self.has_pending_document_navigation() || self.has_native_initial_document())
             && self
                 .initial_empty_document_state()
                 .is_none_or(InitialDocument::is_on_initial_empty_document)
+    }
+
+    pub(in crate::browser) fn has_native_initial_document(&self) -> bool {
+        self.pending_navigation_request
+            .as_ref()
+            .is_some_and(|request| request.native_initial_document)
+    }
+
+    pub(in crate::browser) fn set_native_initial_document(
+        &mut self,
+        navigation: NavigationId,
+        initial: bool,
+    ) -> Result<(), String> {
+        let request = self
+            .pending_navigation_request
+            .as_mut()
+            .filter(|request| request.matches(&navigation) && !request.committed)
+            .ok_or("native navigation is no longer pending")?;
+        request.native_initial_document = initial;
+        Ok(())
+    }
+
+    pub(in crate::browser) fn pause_driver(
+        &mut self,
+        web_contents: WebContentsId,
+        navigation: NavigationId,
+        stage: crate::browser::NavigationDecisionStage,
+    ) -> Result<tokio::sync::oneshot::Receiver<crate::browser::NavigationDecision>, String> {
+        self.install_driver_decision(web_contents, navigation, move |permit, sender| {
+            crate::browser::navigation_decision::PendingNavigationDecision::new(
+                permit, stage, sender,
+            )
+        })
+    }
+
+    pub(in crate::browser) fn pause_driver_response(
+        &mut self,
+        web_contents: WebContentsId,
+        navigation: NavigationId,
+        stage: crate::browser::NavigationDecisionStage,
+        transfer: super::PausedDocumentTransfer,
+    ) -> Result<tokio::sync::oneshot::Receiver<crate::browser::NavigationDecision>, String> {
+        self.install_driver_decision(web_contents, navigation, move |permit, sender| {
+            crate::browser::navigation_decision::PendingNavigationDecision::with_response(
+                permit, stage, sender, transfer,
+            )
+        })
+    }
+
+    fn install_driver_decision(
+        &mut self,
+        web_contents: WebContentsId,
+        navigation: NavigationId,
+        build: impl FnOnce(
+            super::NavigationInterceptionPermit,
+            tokio::sync::oneshot::Sender<crate::browser::NavigationDecision>,
+        ) -> Result<
+            crate::browser::navigation_decision::PendingNavigationDecision,
+            String,
+        >,
+    ) -> Result<tokio::sync::oneshot::Receiver<crate::browser::NavigationDecision>, String> {
+        let pending = self
+            .pending_navigation_request
+            .as_mut()
+            .filter(|pending| pending.matches(&navigation) && !pending.committed)
+            .ok_or("native navigation is no longer pending")?;
+        if pending.paused_interception.is_some() {
+            return Err("navigation already has a paused decision".into());
+        }
+        let permit = super::NavigationInterceptionPermit {
+            web_contents,
+            navigation,
+            document: pending.document_id,
+            request: crate::browser::BrowserRequestId::allocate(),
+        };
+        let (completion, result) = tokio::sync::oneshot::channel();
+        pending.paused_interception = Some(
+            super::navigation_interception::PausedNavigationInterception::Driver(Box::new(build(
+                permit, completion,
+            )?)),
+        );
+        Ok(result)
+    }
+
+    pub(in crate::browser) fn driver_decision(
+        &self,
+    ) -> Option<crate::browser::NavigationDecisionSnapshot> {
+        let paused = self
+            .pending_navigation_request
+            .as_ref()?
+            .paused_interception
+            .as_ref()?;
+        let super::navigation_interception::PausedNavigationInterception::Driver(paused) = paused
+        else {
+            return None;
+        };
+        paused.snapshot()
+    }
+
+    pub(in crate::browser) fn resolve_driver_decision(
+        &mut self,
+        permit: super::NavigationInterceptionPermit,
+        decision: crate::browser::NavigationDecision,
+    ) -> bool {
+        let Some(super::navigation_interception::PausedNavigationInterception::Driver(paused)) =
+            self.pending_navigation_request
+                .as_ref()
+                .and_then(|request| request.paused_interception.as_ref())
+        else {
+            return false;
+        };
+        if !paused.accepts(permit, &decision) {
+            return false;
+        }
+        let Some(super::navigation_interception::PausedNavigationInterception::Driver(paused)) =
+            self.pending_navigation_request
+                .as_mut()
+                .unwrap()
+                .paused_interception
+                .take()
+        else {
+            unreachable!("validated native decision")
+        };
+        paused.resolve(decision)
+    }
+
+    pub(in crate::browser) fn finish_driver_decision(
+        &mut self,
+        permit: super::NavigationInterceptionPermit,
+    ) -> bool {
+        let Some(pending) = self.pending_navigation_request.as_mut().filter(|pending| {
+            pending.navigation_id == permit.navigation
+                && pending.document_id == permit.document
+                && !pending.committed
+                && !pending.cancellation_handle().is_cancelled()
+        }) else {
+            return false;
+        };
+        match pending.paused_interception.as_ref() {
+            None => true,
+            Some(super::navigation_interception::PausedNavigationInterception::Driver(paused))
+                if paused.permit() == permit =>
+            {
+                pending.paused_interception.take();
+                true
+            }
+            _ => false,
+        }
     }
 
     #[cfg(any(test, feature = "test-support"))]
@@ -992,6 +1253,10 @@ impl NavigationController {
 }
 
 impl super::WebContents {
+    pub(in crate::browser) fn navigation_mut(&mut self) -> &mut NavigationController {
+        &mut self.navigation
+    }
+
     pub fn navigation(&self) -> &NavigationController {
         &self.navigation
     }
@@ -1079,7 +1344,134 @@ fn is_initial_empty_document_url(raw_url: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn native_response_snapshots_retire_with_exact_pending_and_committed_navigations() {
+        use crate::browser::{
+            BrowserContextId, CapturedBody, NavigationRequest, NavigationResponseSnapshot,
+            WebContentsHandle,
+        };
+        let contents =
+            WebContentsHandle::new(BrowserContextId::allocate(), WebContentsId::allocate());
+        let mut controller = NavigationController::default();
+        let response = |controller: &NavigationController| {
+            let (navigation, document) = controller.pending_document().unwrap();
+            NavigationResponseSnapshot {
+                request: NavigationRequest {
+                    web_contents: contents,
+                    navigation,
+                    document,
+                },
+                response: moli_fetch::ResponseHead {
+                    final_url: url::Url::parse("https://native.example/").unwrap(),
+                    status: 200,
+                    headers: Vec::new(),
+                    request_cookie_report: None,
+                    cookie_set_reports: Vec::new(),
+                    redirected: false,
+                    redirect_chain: Vec::new(),
+                    from_cache: false,
+                    negotiated_http_version: None,
+                },
+                observations: Default::default(),
+                body: None,
+            }
+        };
+        let first = controller.start_document_navigation();
+        let first_response = response(&controller);
+        assert!(controller.record_native_response(first_response.clone()));
+        assert!(controller.commit_pending_document_navigation_if_matches(&first));
+        controller.start_document_navigation();
+        let superseded = response(&controller);
+        assert!(controller.record_native_response(superseded.clone()));
+        assert_eq!(controller.response_snapshots().len(), 2);
+        let replacement = controller.start_document_navigation();
+        assert_eq!(controller.response_snapshots().len(), 1);
+        assert!(!controller.complete_native_response(
+            superseded.request,
+            Ok(CapturedBody::from_string("stale".into()))
+        ));
+        assert!(controller.complete_native_response(
+            first_response.request,
+            Ok(CapturedBody::from_string("current".into()))
+        ));
+        assert!(
+            !controller.complete_native_response(first_response.request, Err("duplicate".into()))
+        );
+        assert!(controller.record_native_response(response(&controller)));
+        assert!(controller.commit_pending_document_navigation_if_matches(&replacement));
+        assert_eq!(controller.response_snapshots().len(), 1);
+        assert!(!controller.complete_native_response(first_response.request, Err("late".into())));
+        controller.clear_document_navigation_state();
+        assert!(controller.response_snapshots().is_empty());
+    }
     use crate::page::SameDocumentHistoryUpdate;
+
+    #[test]
+    fn dropping_claimed_native_request_releases_its_exact_decision() {
+        use crate::browser::{NavigationDecision, NavigationDecisionStage};
+        let mut owner = NavigationController::default();
+        let navigation = owner.start_document_navigation();
+        let mut result = owner
+            .pause_driver(
+                WebContentsId::allocate(),
+                navigation,
+                NavigationDecisionStage::Request {
+                    url: url::Url::parse("data:text/html,claim-drop").unwrap(),
+                    method: "GET".into(),
+                    headers: Vec::new(),
+                    opening: std::sync::Weak::new(),
+                },
+            )
+            .unwrap();
+        let permit = owner.driver_decision().unwrap().permit;
+        let claimed = owner.take_request(permit).unwrap();
+        assert!(owner.take_request(permit).is_none());
+        assert!(owner.driver_decision().is_none());
+        drop(claimed);
+        assert!(matches!(
+            result.try_recv(),
+            Ok(NavigationDecision::Continue)
+        ));
+        assert!(owner.finish_driver_decision(permit));
+        assert!(!owner.resolve_driver_decision(permit, NavigationDecision::Cancel));
+    }
+
+    #[test]
+    fn superseding_a_claimed_native_request_cancels_it_without_waiting_for_the_claim() {
+        use crate::browser::NavigationDecisionStage;
+        let mut owner = NavigationController::default();
+        let navigation = owner.start_document_navigation();
+        let mut result = owner
+            .pause_driver(
+                WebContentsId::allocate(),
+                navigation,
+                NavigationDecisionStage::Request {
+                    url: url::Url::parse("data:text/html,obsolete-claim").unwrap(),
+                    method: "GET".into(),
+                    headers: Vec::new(),
+                    opening: std::sync::Weak::new(),
+                },
+            )
+            .unwrap();
+        let permit = owner.driver_decision().unwrap().permit;
+        let claimed = owner.take_request(permit).unwrap();
+        let replacement = owner.start_document_navigation();
+        assert!(matches!(
+            result.try_recv(),
+            Err(tokio::sync::oneshot::error::TryRecvError::Closed)
+        ));
+        drop(claimed);
+        assert!(!owner.finish_driver_decision(permit));
+        assert_eq!(
+            owner
+                .pending_navigation_request
+                .as_ref()
+                .unwrap()
+                .navigation_id,
+            replacement
+        );
+    }
 
     #[test]
     fn navigation_history_seed_entry_preserves_pending_update() {
@@ -1286,5 +1678,39 @@ mod tests {
         assert!(!controller.has_inflight_background_navigation());
         drop(controller);
         assert!(!cancellation.is_cancelled());
+    }
+
+    #[test]
+    fn download_retirement_cancels_only_its_document_candidate() {
+        let mut controller = NavigationController::default();
+        let navigation = controller.start_document_navigation();
+        let cancellation = controller
+            .document_navigation_cancellation_handle(&navigation)
+            .unwrap();
+        let transport = moli_fetch::FetchCancelHandle::new();
+        controller
+            .pending_navigation_request
+            .as_mut()
+            .unwrap()
+            .cancellation_handles
+            .push(transport.clone());
+        assert!(controller.arm_background_navigation_completion(&navigation, None));
+        controller.finish_navigation_as_download(navigation);
+        assert!(cancellation.is_cancelled());
+        assert!(!transport.is_cancelled());
+        assert!(controller.pending_document().is_none());
+        assert!(!controller.has_inflight_background_navigation());
+        let replacement = controller.start_document_navigation();
+        let replacement_cancellation = controller
+            .document_navigation_cancellation_handle(&replacement)
+            .unwrap();
+        assert!(!controller.cancel_document_navigation(
+            &navigation,
+            crate::browser::NavigationFailureReason::Canceled
+        ));
+        assert!(!replacement_cancellation.is_cancelled());
+        drop(controller);
+        assert!(replacement_cancellation.is_cancelled());
+        assert!(!transport.is_cancelled());
     }
 }

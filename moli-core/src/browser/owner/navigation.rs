@@ -33,7 +33,9 @@ use moli_fetch::{
     NetworkFetchResult, NetworkObservationJournal, RawResponse, StreamingRawResponse,
 };
 
-use super::{BrowserContextHandle, BrowserHandle, BrowserOwnerMessage, PendingDocumentRetirement};
+use super::{
+    Browser, BrowserContextHandle, BrowserHandle, BrowserOwnerMessage, PendingDocumentRetirement,
+};
 
 #[cfg(test)]
 mod tests;
@@ -992,31 +994,8 @@ impl BrowserContextHandle {
                 Err(_) => Err(value),
             };
             match committed {
-                Ok(PhysicalCommittedInitialDocument {
-                    key,
-                    lifecycle,
-                    diagnostics,
-                    inspection_endpoint: _,
-                }) => {
-                    let document =
-                        crate::browser::DocumentHandle::new(stored.contents, key.document());
-                    let snapshot = browser
-                        .context(context_handle.id)
-                        .expect("committed Context")
-                        .document_commit_snapshot(document)
-                        .expect("committed Document occurrence");
-                    browser.events.publish_committed(
-                        lifecycle.browser_sequence,
-                        crate::browser::BrowserEvent::DocumentCommitted(document),
-                    );
-                    browser.observe_document_lifecycle(document);
-                    browser.observe_javascript_dialogs(document);
-                    browser.observe_popup_inputs(document);
-                    Ok(BrowserCommittedInitialDocument {
-                        key,
-                        snapshot,
-                        diagnostics,
-                    })
+                Ok(committed) => {
+                    Ok(browser.publish_initial_document_commit(stored.contents, committed))
                 }
                 Err(stale) => {
                     browser.navigation_work.work.insert(
@@ -1219,37 +1198,77 @@ impl BrowserContextHandle {
             let NavigationWork::PreparedDocument(prepared) = prepared.value else {
                 return Err(unavailable());
             };
-            let dialogs = browser
-                .context(context)?
-                .web_contents_javascript_dialog_snapshots(contents);
-            let commit = browser
-                .context_mut(context)?
-                .commit_document_navigation(*prepared)?;
-            let document = crate::browser::DocumentHandle::new(
-                WebContentsHandle::new(context, commit.web_contents),
-                commit.document,
-            );
-            let snapshot = browser
-                .context(context)?
-                .document_commit_snapshot(document)?;
-            browser.events.publish_committed(
-                commit.lifecycle.browser_sequence,
-                crate::browser::BrowserEvent::DocumentCommitted(document),
-            );
-            browser.observe_document_lifecycle(document);
-            browser.publish_closed_javascript_dialogs(dialogs);
-            browser.observe_javascript_dialogs(document);
-            browser.observe_popup_inputs(document);
-            let (completion_tx, completion) = oneshot::channel();
-            tokio::task::spawn_local(async move {
-                commit.retirement.close().await;
-                let _ = completion_tx.send(());
-            });
-            Ok(BrowserDocumentNavigationCommit {
-                snapshot,
-                retirement: PendingDocumentRetirement { completion },
-                post_response_continuation: commit.post_response_continuation,
-            })
+            browser.commit_navigation(contents, *prepared)
         })?
+    }
+}
+
+impl Browser {
+    pub(super) fn publish_initial_document_commit(
+        &mut self,
+        contents: WebContentsHandle,
+        committed: PhysicalCommittedInitialDocument,
+    ) -> BrowserCommittedInitialDocument {
+        let PhysicalCommittedInitialDocument {
+            key,
+            lifecycle,
+            diagnostics,
+            inspection_endpoint: _,
+        } = committed;
+        let document = crate::browser::DocumentHandle::new(contents, key.document());
+        let snapshot = self
+            .context(contents.context())
+            .expect("committed Context")
+            .document_commit_snapshot(document)
+            .expect("committed Document occurrence");
+        self.events.publish_committed(
+            lifecycle.browser_sequence,
+            crate::browser::BrowserEvent::DocumentCommitted(document),
+        );
+        self.observe_document_lifecycle(document);
+        self.observe_javascript_dialogs(document);
+        self.observe_popup_inputs(document);
+        BrowserCommittedInitialDocument {
+            key,
+            snapshot,
+            diagnostics,
+        }
+    }
+
+    pub(super) fn commit_navigation(
+        &mut self,
+        contents: WebContentsHandle,
+        prepared: PhysicalPreparedDocumentNavigation,
+    ) -> Result<BrowserDocumentNavigationCommit, String> {
+        if contents.id() != prepared.web_contents_id() {
+            return Err("navigation document belongs to another WebContents".to_owned());
+        }
+        let context = contents.context();
+        let dialogs = self
+            .context(context)?
+            .web_contents_javascript_dialog_snapshots(contents);
+        let commit = self
+            .context_mut(context)?
+            .commit_document_navigation(prepared)?;
+        let document = crate::browser::DocumentHandle::new(contents, commit.document);
+        let snapshot = self.context(context)?.document_commit_snapshot(document)?;
+        self.events.publish_committed(
+            commit.lifecycle.browser_sequence,
+            crate::browser::BrowserEvent::DocumentCommitted(document),
+        );
+        self.observe_document_lifecycle(document);
+        self.publish_closed_javascript_dialogs(dialogs);
+        self.observe_javascript_dialogs(document);
+        self.observe_popup_inputs(document);
+        let (completion_tx, completion) = oneshot::channel();
+        tokio::task::spawn_local(async move {
+            commit.retirement.close().await;
+            let _ = completion_tx.send(());
+        });
+        Ok(BrowserDocumentNavigationCommit {
+            snapshot,
+            retirement: PendingDocumentRetirement { completion },
+            post_response_continuation: commit.post_response_continuation,
+        })
     }
 }

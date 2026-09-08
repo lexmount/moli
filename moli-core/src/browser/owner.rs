@@ -91,8 +91,10 @@ macro_rules! forward_context_try_update {
 struct Browser {
     contexts: IndexMap<BrowserContextId, BrowserContext>,
     permission_defaults: super::PermissionDefaults,
+    download_policy: super::DownloadPolicy,
     navigation_work: navigation::NavigationWorkRegistry,
     popup_admissions: popup::PopupAdmissions,
+    navigation_decision_provider: Option<tokio::sync::watch::Receiver<()>>,
     local_sender: BrowserLocalSender,
     events: super::events::BrowserEventStream,
 }
@@ -102,8 +104,10 @@ impl Browser {
         Self {
             contexts: IndexMap::new(),
             permission_defaults: super::PermissionDefaults::default(),
+            download_policy: super::DownloadPolicy::default(),
             navigation_work: navigation::NavigationWorkRegistry::default(),
             popup_admissions: popup::PopupAdmissions::default(),
+            navigation_decision_provider: None,
             local_sender,
             events: super::events::BrowserEventStream::default(),
         }
@@ -831,20 +835,8 @@ impl BrowserContextHandle {
         let context = self.id;
         self.browser.execute(move |browser| {
             // Validate the exact Context before superseding any previous request.
-            let previous = browser.context(context)?.navigation_snapshot(handle)?;
-            let navigation = browser
-                .context_mut(context)?
-                .start_document_navigation(handle)?;
-            browser.navigation_work.remove_web_contents(handle);
-            browser
-                .publish_failed_navigations([previous], super::NavigationFailureReason::Superseded);
-            let request = browser
-                .pending_navigation(handle)?
-                .expect("admitted navigation owns its reserved Document");
-            browser
-                .events
-                .publish(super::BrowserEvent::NavigationStarted(request));
-            Ok(navigation)
+            browser.context(context)?.web_contents(handle)?;
+            browser.start_navigation(handle)
         })?
     }
 

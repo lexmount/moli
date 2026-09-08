@@ -9365,6 +9365,7 @@ async fn document_projection_gate_uses_handler_disposition_not_wire_method_lane(
         (20_212, "Accessibility.enable", json!({})),
         (20_213, "DOM.enable", json!({})),
         (20_214, "DOMSnapshot.enable", json!({})),
+        (20_215, "Runtime.runIfWaitingForDebugger", json!({})),
     ] {
         let command = parsed_agent_host_command(id, method, params);
         assert!(

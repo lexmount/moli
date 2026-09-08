@@ -25,6 +25,7 @@ pub struct DownloadPolicy {
 pub enum DownloadBody {
     Buffered(Vec<u8>),
     Streaming(Box<StreamingRawResponse>),
+    Captured(super::CapturedBody),
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]

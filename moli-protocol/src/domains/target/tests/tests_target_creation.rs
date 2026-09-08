@@ -1292,7 +1292,7 @@ async fn window_open_hands_off_session_storage_snapshot_and_initial_storage_key(
     .await;
     let request_started = tokio::time::timeout(
         std::time::Duration::from_secs(5),
-        cross_origin_request_started.acquire(),
+        ctx.wait_for_external_input_with_scheduler(cross_origin_request_started.acquire()),
     )
     .await
     .expect("cross-origin popup request should start")
@@ -1912,15 +1912,33 @@ async fn window_open_named_target_reused_in_same_command_emits_one_page_event() 
         "method": "Runtime.evaluate",
         "params": {
             "expression": "
-                window.open('https://example.com/first-popup', 'sameCommandWindow');
-                window.open('https://example.com/second-popup', 'sameCommandWindow');
+                window.open('data:text/html,first-popup', 'sameCommandWindow');
+                window.open('data:text/html,second-popup', 'sameCommandWindow');
                 true
             "
         }
     }))
     .await;
 
-    let sent = ctx.take_all();
+    let mut sent = ctx.take_all();
+    let popup_id = sent
+        .iter()
+        .find(|message| message["method"] == "Target.targetCreated")
+        .unwrap()["params"]["targetInfo"]["targetId"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    crate::testing::wait_until_scheduler_message(
+        &mut ctx,
+        "same-command named popup URL commit",
+        |message| {
+            message["method"] == "Target.targetInfoChanged"
+                && message["params"]["targetInfo"]["targetId"] == popup_id
+                && message["params"]["targetInfo"]["url"] == "data:text/html,second-popup"
+        },
+    )
+    .await;
+    sent.extend(ctx.take_all());
     let window_open_events = sent
         .iter()
         .filter(|message| message["method"] == json!("Page.windowOpen"))
@@ -1932,7 +1950,7 @@ async fn window_open_named_target_reused_in_same_command_emits_one_page_event() 
     );
     assert_eq!(
         window_open_events[0]["params"]["url"],
-        json!("https://example.com/first-popup")
+        json!("data:text/html,first-popup")
     );
     assert_eq!(
         sent.iter()
@@ -1943,17 +1961,11 @@ async fn window_open_named_target_reused_in_same_command_emits_one_page_event() 
     );
     let browser_context = ctx.conn.browser_context.as_ref().unwrap();
     assert_eq!(browser_context.background_target_count(), 1);
-    let popup_id = sent
-        .iter()
-        .find(|message| message["method"] == "Target.targetCreated")
-        .unwrap()["params"]["targetInfo"]["targetId"]
-        .as_str()
-        .unwrap();
     assert_eq!(
-        browser_context.page_target(popup_id).unwrap().target_url(),
-        "https://example.com/second-popup"
+        browser_context.page_target(&popup_id).unwrap().target_url(),
+        "data:text/html,second-popup"
     );
-    assert_eq!(browser_context.active_target_id(), Some(popup_id));
+    assert_eq!(browser_context.active_target_id(), Some(popup_id.as_str()));
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -1984,7 +1996,7 @@ async fn named_popup_reuse_with_catchall_discovery_only_changes_the_page_target_
         "id": 152,
         "method": "Runtime.evaluate",
         "params": {
-            "expression": "window.open('https://example.com/first-popup', 'reportWindow') !== null"
+            "expression": "window.open('about:blank', 'reportWindow') !== null"
         }
     }))
     .await;
@@ -1994,8 +2006,7 @@ async fn named_popup_reuse_with_catchall_discovery_only_changes_the_page_target_
         .find(|message| {
             message["method"] == json!("Target.targetCreated")
                 && message["params"]["targetInfo"]["type"] == json!("page")
-                && message["params"]["targetInfo"]["url"]
-                    == json!("https://example.com/first-popup")
+                && message["params"]["targetInfo"]["url"] == json!("about:blank")
         })
         .unwrap_or_else(|| panic!("missing first popup page targetCreated: {first_sent:?}"));
     let page_target_id = page_created["params"]["targetInfo"]["targetId"]
@@ -2016,11 +2027,21 @@ async fn named_popup_reuse_with_catchall_discovery_only_changes_the_page_target_
         "id": 153,
         "method": "Runtime.evaluate",
         "params": {
-            "expression": "window.open('https://example.com/second-popup', 'reportWindow') !== null"
+            "expression": "window.open('data:text/html,second-popup', 'reportWindow') !== null"
         }
     }))
     .await;
 
+    crate::testing::wait_until_scheduler_message(
+        &mut ctx,
+        "reused popup page target commit",
+        |message| {
+            message["method"] == "Target.targetInfoChanged"
+                && message["params"]["targetInfo"]["targetId"] == page_target_id
+                && message["params"]["targetInfo"]["url"] == "data:text/html,second-popup"
+        },
+    )
+    .await;
     let second_sent = ctx.take_all();
     assert!(
         second_sent.iter().all(|message| {
@@ -2034,8 +2055,7 @@ async fn named_popup_reuse_with_catchall_discovery_only_changes_the_page_target_
             message["method"] == json!("Target.targetInfoChanged")
                 && message["params"]["targetInfo"]["targetId"] == json!(page_target_id)
                 && message["params"]["targetInfo"]["type"] == json!("page")
-                && message["params"]["targetInfo"]["url"]
-                    == json!("https://example.com/second-popup")
+                && message["params"]["targetInfo"]["url"] == json!("data:text/html,second-popup")
         }),
         "catch-all discovery should report page targetInfoChanged: {second_sent:?}"
     );

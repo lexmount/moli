@@ -5,6 +5,8 @@ use std::{
 
 use tokio::sync::watch;
 
+mod navigation;
+
 use super::{Browser, BrowserHandle, WebContentsCreation};
 use crate::browser::{
     BrowserEvent, BrowserPopupAdmission, BrowserPopupCreation, DocumentHandle,
@@ -113,7 +115,7 @@ impl Browser {
 
     fn admit_popup(&mut self, source: &PopupSource, request: RendererPendingPopupActivation) {
         let (opening, storage, storage_key) = request.into_parts();
-        let result = (|| {
+        let mut result = (|| {
             let context = self.context_mut(source.document.web_contents().context())?;
             let reusable_name = (!opening.target_name().is_empty()
                 && !opening.target_name().eq_ignore_ascii_case("_blank"))
@@ -202,9 +204,10 @@ impl Browser {
                 source_document: source.document,
                 web_contents: contents,
                 created,
+                navigation: None,
             })
         })();
-        match &result {
+        match &mut result {
             Ok(admission) => {
                 if admission.created {
                     self.events
@@ -212,6 +215,16 @@ impl Browser {
                 }
                 if opening.disposition() == RendererPopupDisposition::Foreground {
                     let _ = self.activate_web_contents(admission.web_contents);
+                }
+                match self.start_popup_navigation(
+                    admission.web_contents,
+                    &opening,
+                    admission.created,
+                ) {
+                    Ok(navigation) => admission.navigation = navigation,
+                    Err(error) => {
+                        tracing::debug!(%error, "could not start accepted popup navigation")
+                    }
                 }
             }
             Err(error) => {

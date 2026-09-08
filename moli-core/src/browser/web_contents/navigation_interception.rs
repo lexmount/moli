@@ -57,6 +57,17 @@ pub struct NavigationRequestInterception {
 }
 
 impl NavigationRequestInterception {
+    pub(in crate::browser) fn decision_stage(
+        &self,
+        opening: std::sync::Weak<crate::page::RendererPopupOpening>,
+    ) -> crate::browser::NavigationDecisionStage {
+        crate::browser::NavigationDecisionStage::Request {
+            url: self.requested_url.clone(),
+            method: self.method.clone(),
+            headers: self.headers.clone(),
+            opening,
+        }
+    }
     pub fn new(
         requested_url: Url,
         method: String,
@@ -104,6 +115,7 @@ impl NavigationRequestInterception {
 pub struct ClaimedNavigationRequest {
     permit: NavigationInterceptionPermit,
     request: NavigationRequestInterception,
+    native_decision: Option<crate::browser::navigation_decision::NavigationDecisionClaim>,
 }
 
 impl ClaimedNavigationRequest {
@@ -111,7 +123,37 @@ impl ClaimedNavigationRequest {
         permit: NavigationInterceptionPermit,
         request: NavigationRequestInterception,
     ) -> Self {
-        Self { permit, request }
+        Self {
+            permit,
+            request,
+            native_decision: None,
+        }
+    }
+
+    pub(in crate::browser) fn new_native(
+        permit: NavigationInterceptionPermit,
+        request: NavigationRequestInterception,
+        decision: crate::browser::navigation_decision::NavigationDecisionClaim,
+    ) -> Self {
+        Self {
+            permit,
+            request,
+            native_decision: Some(decision),
+        }
+    }
+
+    pub fn is_native_driver(&self) -> bool {
+        self.native_decision.is_some()
+    }
+
+    pub fn into_native_decision(mut self) -> Option<crate::browser::NavigationDecision> {
+        self.native_decision.take()?.disarm();
+        Some(crate::browser::NavigationDecision::Request {
+            url: self.request.requested_url,
+            method: self.request.method,
+            body: self.request.body,
+            headers: self.request.headers,
+        })
     }
 
     pub fn permit(&self) -> NavigationInterceptionPermit {
@@ -329,6 +371,7 @@ pub(super) enum PausedNavigationInterception {
     Request(Box<PausedNavigationRequest>),
     Auth(Box<PausedNavigationAuth>),
     Response(Box<PausedNavigationResponse>),
+    Driver(Box<crate::browser::navigation_decision::PendingNavigationDecision>),
 }
 
 impl WebContents {
@@ -358,7 +401,14 @@ impl WebContents {
         if request.permit.web_contents != self.id {
             return Err("navigation request belongs to another WebContents".to_owned());
         }
-        let ClaimedNavigationRequest { permit, request } = request;
+        if request.is_native_driver() {
+            return Err("native navigation requests resume through a Browser decision".into());
+        }
+        let ClaimedNavigationRequest {
+            permit,
+            request,
+            native_decision: _,
+        } = request;
         let load = self.start_navigation_load(permit.navigation, request.policy, inherited)?;
         Ok(InterceptedNavigationLoad::new(
             load,
@@ -519,6 +569,87 @@ mod tests {
                 network_observation_journal: NetworkObservationJournal::default(),
             },
         )
+    }
+
+    #[tokio::test]
+    async fn native_response_body_read_claim_is_restorable_and_abandonment_cancels() {
+        use crate::browser::{NavigationDecision, NavigationDecisionStage};
+        for restore in [true, false] {
+            let mut browser = BrowserFixture::new();
+            let contents = browser.contents.id();
+            let navigation = browser.contents.navigation.start_document_navigation();
+            let (policy, body) =
+                paused_response(Url::parse("https://native-response.example/").unwrap())
+                    .into_pending()
+                    .unwrap();
+            let DocumentBodySource::BufferedRaw { response, .. } = &body else {
+                unreachable!()
+            };
+            let mut result = browser
+                .contents
+                .navigation
+                .pause_driver_response(
+                    contents,
+                    navigation,
+                    NavigationDecisionStage::Response {
+                        response: Box::new(response.head()),
+                        observations: Default::default(),
+                    },
+                    PausedDocumentTransfer::pending(policy, body),
+                )
+                .unwrap();
+            let permit = browser
+                .contents
+                .navigation
+                .driver_decision()
+                .unwrap()
+                .permit;
+            let transfer = browser.contents.take_navigation_response(permit).unwrap();
+            assert!(browser.contents.take_navigation_response(permit).is_none());
+            let (bytes, transfer) = transfer.materialize_body_limited_async(1024).await.unwrap();
+            assert_eq!(bytes.as_deref(), Some(b"response body".as_slice()));
+            assert!(matches!(
+                result.try_recv(),
+                Err(oneshot::error::TryRecvError::Empty)
+            ));
+            if restore {
+                browser
+                    .contents
+                    .restore_navigation_response(permit, transfer)
+                    .unwrap();
+                assert_eq!(
+                    browser
+                        .contents
+                        .navigation
+                        .driver_decision()
+                        .unwrap()
+                        .permit,
+                    permit
+                );
+                assert!(
+                    browser
+                        .contents
+                        .navigation
+                        .resolve_driver_decision(permit, NavigationDecision::Continue)
+                );
+                let NavigationDecision::Response { transfer, .. } = result.try_recv().unwrap()
+                else {
+                    panic!("original response must return to Browser driver");
+                };
+                let (bytes, _) = transfer.materialize_body_limited_async(1024).await.unwrap();
+                assert_eq!(bytes.as_deref(), Some(b"response body".as_slice()));
+            } else {
+                drop(transfer);
+                assert!(matches!(result.try_recv(), Ok(NavigationDecision::Cancel)));
+                assert!(browser.contents.navigation.finish_driver_decision(permit));
+            }
+            assert!(
+                !browser
+                    .contents
+                    .navigation
+                    .resolve_driver_decision(permit, NavigationDecision::Cancel)
+            );
+        }
     }
 
     #[test]

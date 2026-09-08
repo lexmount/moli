@@ -196,12 +196,45 @@ pub(crate) struct TargetPageSlot {
     document_fixture: Option<DocumentFixture>,
     // Frontend correlation only. Selection comes from the navigation state;
     // retain at most the pending and committed navigation's loader mappings.
-    cdp_navigation_loaders: Vec<(NavigationId, String)>,
+    cdp_navigation_loaders: Vec<(NavigationId, NavigationProtocolProjection)>,
     renderer_document_lifecycle: RendererDocumentLifecycleProtocolState,
     next_renderer_document_lifecycle_waiter_id: RendererDocumentLifecycleWaiterId,
     renderer_document_lifecycle_waiters: Vec<RegisteredRendererDocumentLifecycleWaiter>,
     root_post_load_observation: Option<RootPostLoadObservation>,
     pending_renderer_page: Option<PendingRendererPageBinding>,
+}
+
+#[derive(Debug)]
+struct NavigationProtocolProjection {
+    loader_id: String,
+    native_dispatch: Option<Box<NativeNavigationProjection>>,
+    popup_opening_observed: bool,
+}
+
+#[derive(Debug)]
+struct NativeNavigationProjection {
+    request: crate::conn::PendingFetchNavigation,
+    auth_decision: Option<moli_core::browser::web_contents::NavigationInterceptionPermit>,
+    response_phase: NativeResponsePhase,
+}
+
+#[derive(Clone, Copy, Default, Debug, PartialEq, Eq, PartialOrd, Ord)]
+enum NativeResponsePhase {
+    #[default]
+    Pending,
+    Paused,
+    Response,
+    Complete,
+}
+
+impl From<String> for NavigationProtocolProjection {
+    fn from(loader_id: String) -> Self {
+        Self {
+            loader_id,
+            native_dispatch: None,
+            popup_opening_observed: false,
+        }
+    }
 }
 
 // Legacy routing tests can describe a remote Document without constructing a
@@ -250,7 +283,7 @@ impl TargetPageSlot {
         self.cdp_navigation_loaders
             .iter()
             .find(|(id, _)| *id == navigation)
-            .map(|(_, loader)| loader.as_str())
+            .map(|(_, projection)| projection.loader_id.as_str())
     }
 
     pub(crate) fn begin_renderer_document_load_visibility_barrier(
@@ -920,7 +953,7 @@ impl BrowserContext {
         self.page_slot_for_target_mut(target_id)
             .expect("registered Target projection")
             .cdp_navigation_loaders
-            .push((token, loader_id));
+            .push((token, loader_id.into()));
         self.page_targets
             .get_mut(target_id)
             .expect("registered Target projection")
@@ -1134,7 +1167,7 @@ impl BrowserContext {
             .cdp_navigation_loaders
             .iter()
             .find_map(|(navigation, loader)| {
-                (loader == loader_id
+                (loader.loader_id == loader_id
                     && self
                         .browser_context
                         .accepts_pending_navigation(handle, navigation)
@@ -1151,21 +1184,46 @@ impl BrowserContext {
         let handle = self
             .web_contents_handle_for_target(target_id)
             .ok_or("navigation WebContents unavailable")?;
-        if handle.id() != load.web_contents_id()
+        if handle.id() != load.web_contents_id() {
+            return Err("stale navigation WebContents".to_owned());
+        }
+        self.project_navigation_preparation_for_target(
+            target_id,
+            moli_core::browser::NavigationRequest {
+                web_contents: handle,
+                navigation: load.navigation_id(),
+                document: load.document_id(),
+            },
+            load.renderer_page(),
+        )
+    }
+
+    pub(in crate::conn) fn project_navigation_preparation_for_target(
+        &mut self,
+        target_id: &str,
+        request: moli_core::browser::NavigationRequest,
+        renderer_page: RendererPageResidenceIdentity,
+    ) -> Result<(), String> {
+        if self.web_contents_handle_for_target(target_id) != Some(request.web_contents)
             || !self.browser_context.accepts_document_preparation(
-                handle,
-                load.navigation_id(),
-                load.renderer_page(),
+                request.web_contents,
+                request.navigation,
+                renderer_page,
             )?
+            || self
+                .browser_context
+                .navigation_snapshot(request.web_contents)?
+                .attempt
+                != Some(moli_core::browser::NavigationAttempt::Started(request))
         {
             return Err("stale navigation document candidate".to_owned());
         }
         self.page_slot_for_target_mut(target_id)
             .expect("resolved projection")
             .pending_renderer_page = Some(PendingRendererPageBinding::DocumentNavigation {
-            navigation: load.navigation_id(),
-            renderer_page: load.renderer_page(),
-            document_id: load.document_id(),
+            navigation: request.navigation,
+            renderer_page,
+            document_id: request.document,
         });
         Ok(())
     }
@@ -1219,7 +1277,7 @@ impl BrowserContext {
             .runtime_slot
             .page_slot_mut()
             .cdp_navigation_loaders
-            .push((navigation, loader.clone()));
+            .push((navigation, loader.clone().into()));
         Some(loader)
     }
 
@@ -1241,6 +1299,160 @@ impl BrowserContext {
                     .navigation_retains(handle, *id)
                     .unwrap_or(false)
             });
+    }
+
+    pub(in crate::conn) fn record_native_navigation_dispatch(
+        &mut self,
+        target_id: &str,
+        navigation: NavigationId,
+        state: crate::conn::PendingFetchNavigation,
+    ) {
+        let Some(slot) = self.page_slot_for_target_mut(target_id) else {
+            return;
+        };
+        if let Some((_, projection)) = slot
+            .cdp_navigation_loaders
+            .iter_mut()
+            .find(|(id, _)| *id == navigation)
+        {
+            projection.loader_id = state.navigation.loader_id.clone();
+            if let Some(native) = projection.native_dispatch.as_deref_mut() {
+                native.request = state;
+            } else {
+                projection.native_dispatch = Some(Box::new(NativeNavigationProjection {
+                    request: state,
+                    auth_decision: None,
+                    response_phase: NativeResponsePhase::Pending,
+                }));
+            }
+        } else {
+            slot.cdp_navigation_loaders.push((
+                navigation,
+                NavigationProtocolProjection {
+                    loader_id: state.navigation.loader_id.clone(),
+                    native_dispatch: Some(Box::new(NativeNavigationProjection {
+                        request: state,
+                        auth_decision: None,
+                        response_phase: NativeResponsePhase::Pending,
+                    })),
+                    popup_opening_observed: false,
+                },
+            ));
+        }
+        self.retain_navigation_projections_for_target(target_id);
+    }
+
+    pub(in crate::conn) fn native_navigation_dispatch(
+        &self,
+        target_id: &str,
+        navigation: NavigationId,
+    ) -> Option<&crate::conn::PendingFetchNavigation> {
+        self.page_slot_for_target(target_id)?
+            .cdp_navigation_loaders
+            .iter()
+            .find(|(id, _)| *id == navigation)?
+            .1
+            .native_dispatch
+            .as_deref()
+            .map(|native| &native.request)
+    }
+
+    pub(in crate::conn) fn observe_native_auth_decision(
+        &mut self,
+        target_id: &str,
+        permit: moli_core::browser::web_contents::NavigationInterceptionPermit,
+    ) -> bool {
+        let Some(native) = self
+            .page_slot_for_target_mut(target_id)
+            .and_then(|slot| {
+                slot.cdp_navigation_loaders
+                    .iter_mut()
+                    .find(|(id, _)| *id == permit.navigation())
+            })
+            .and_then(|(_, projection)| projection.native_dispatch.as_deref_mut())
+        else {
+            return false;
+        };
+        if native.auth_decision == Some(permit) {
+            return false;
+        }
+        native.auth_decision = Some(permit);
+        true
+    }
+
+    pub(in crate::conn) fn observe_native_navigation_response(
+        &mut self,
+        target_id: &str,
+        navigation: NavigationId,
+        completed: bool,
+    ) -> Option<(crate::conn::PendingFetchNavigation, bool, bool)> {
+        let native = self
+            .page_slot_for_target_mut(target_id)?
+            .cdp_navigation_loaders
+            .iter_mut()
+            .find(|(id, _)| *id == navigation)?
+            .1
+            .native_dispatch
+            .as_deref_mut()?;
+        let phase = if completed {
+            NativeResponsePhase::Complete
+        } else {
+            NativeResponsePhase::Response
+        };
+        if phase <= native.response_phase {
+            return None;
+        }
+        let emit_response = native.response_phase < NativeResponsePhase::Response;
+        let metadata_emitted = native.response_phase == NativeResponsePhase::Paused;
+        native.response_phase = phase;
+        Some((native.request.clone(), emit_response, metadata_emitted))
+    }
+
+    pub(in crate::conn) fn observe_native_navigation_response_pause(
+        &mut self,
+        target_id: &str,
+        navigation: NavigationId,
+    ) {
+        if let Some(native) = self
+            .page_slot_for_target_mut(target_id)
+            .and_then(|slot| {
+                slot.cdp_navigation_loaders
+                    .iter_mut()
+                    .find(|(id, _)| *id == navigation)
+            })
+            .and_then(|(_, projection)| projection.native_dispatch.as_deref_mut())
+            && native.response_phase == NativeResponsePhase::Pending
+        {
+            native.response_phase = NativeResponsePhase::Paused;
+        }
+    }
+
+    pub(in crate::conn) fn observe_popup_navigation(
+        &mut self,
+        target_id: &str,
+        navigation: NavigationId,
+    ) {
+        if let Some((_, projection)) = self.page_slot_for_target_mut(target_id).and_then(|slot| {
+            slot.cdp_navigation_loaders
+                .iter_mut()
+                .find(|(id, _)| *id == navigation)
+        }) {
+            projection.popup_opening_observed = true;
+        }
+    }
+
+    pub(in crate::conn) fn popup_navigation_observed(
+        &self,
+        target_id: &str,
+        navigation: NavigationId,
+    ) -> bool {
+        self.page_slot_for_target(target_id)
+            .and_then(|slot| {
+                slot.cdp_navigation_loaders
+                    .iter()
+                    .find(|(id, _)| *id == navigation)
+            })
+            .is_some_and(|(_, projection)| projection.popup_opening_observed)
     }
 
     #[cfg(test)]
@@ -1954,6 +2166,138 @@ fn context_with_page_slot_for_test(page_slot: TargetPageSlot) -> BrowserContext 
     ));
     context.set_active_target_id(PAGE_SLOT_TEST_TARGET);
     context
+}
+
+#[cfg(test)]
+mod native_navigation_projection_tests {
+    use super::*;
+    use crate::conn::{
+        CommandOwnerScope, NavigationDispatchState, NavigationResultProjection,
+        PendingFetchNavigation, ResponseStageUrlMatchPolicy,
+    };
+    use moli_core::browser::web_contents::NavigationRequestInterception;
+
+    #[test]
+    fn updating_native_request_metadata_preserves_publication_progress() {
+        for phase in [
+            NativeResponsePhase::Paused,
+            NativeResponsePhase::Response,
+            NativeResponsePhase::Complete,
+        ] {
+            let mut context = context_with_page_slot_for_test(TargetPageSlot::default());
+            let navigation = context
+                .begin_target_document_navigation(PAGE_SLOT_TEST_TARGET, "LOADER-native".into());
+            let contents = context
+                .web_contents_handle_for_target(PAGE_SLOT_TEST_TARGET)
+                .unwrap();
+            let url = url::Url::parse("https://native.example/original").unwrap();
+            let permit = context
+                .browser_context
+                .pause_navigation_request(
+                    contents,
+                    navigation,
+                    NavigationRequestInterception::new(
+                        url.clone(),
+                        "GET".into(),
+                        None,
+                        Vec::new(),
+                        crate::conn::NavigationRequestLoadPolicy::DocumentInitiated,
+                    ),
+                )
+                .unwrap();
+            let mut pending = PendingFetchNavigation {
+                fetch_request_id: "FETCH-native".into(),
+                interception_session_id: None,
+                navigation_permit: permit,
+                navigation: NavigationDispatchState {
+                    navigate_id: None,
+                    owner: CommandOwnerScope::for_session("SID-native"),
+                    web_contents: contents,
+                    result_projection: NavigationResultProjection::Cdp(serde_json::json!({})),
+                    frame_id: PAGE_SLOT_TEST_TARGET.into(),
+                    session_id: None,
+                    request_id: Some("NETWORK-native".into()),
+                    loader_id: "LOADER-native".into(),
+                    request_announced: true,
+                    requested_url: url,
+                    request_method: "GET".into(),
+                    request_body: None,
+                    request_body_bytes: None,
+                    request_headers: Vec::new(),
+                    request_load_policy:
+                        crate::conn::NavigationRequestLoadPolicy::DocumentInitiated,
+                    timestamp: 0.0,
+                    source_document_security: Default::default(),
+                },
+                request_cookie_report: None,
+                intercept_response: true,
+                response_stage_url_match_policy: ResponseStageUrlMatchPolicy::AlreadyMatched,
+                auth_required_blocked_intercepts: Vec::new(),
+            };
+            context.record_native_navigation_dispatch(
+                PAGE_SLOT_TEST_TARGET,
+                navigation,
+                pending.clone(),
+            );
+            assert!(context.observe_native_auth_decision(PAGE_SLOT_TEST_TARGET, permit));
+            context.observe_popup_navigation(PAGE_SLOT_TEST_TARGET, navigation);
+            context.observe_native_navigation_response_pause(PAGE_SLOT_TEST_TARGET, navigation);
+            if phase >= NativeResponsePhase::Response {
+                assert!(
+                    context
+                        .observe_native_navigation_response(
+                            PAGE_SLOT_TEST_TARGET,
+                            navigation,
+                            phase == NativeResponsePhase::Complete,
+                        )
+                        .is_some()
+                );
+            }
+
+            pending.navigation.requested_url =
+                url::Url::parse("https://native.example/updated").unwrap();
+            pending.navigation.request_headers = vec![("x-updated".into(), "yes".into())];
+            context.record_native_navigation_dispatch(
+                PAGE_SLOT_TEST_TARGET,
+                navigation,
+                pending.clone(),
+            );
+            let updated = context
+                .native_navigation_dispatch(PAGE_SLOT_TEST_TARGET, navigation)
+                .unwrap();
+            assert_eq!(
+                updated.navigation.requested_url,
+                pending.navigation.requested_url
+            );
+            assert_eq!(
+                updated.navigation.request_headers,
+                pending.navigation.request_headers
+            );
+            assert!(!context.observe_native_auth_decision(PAGE_SLOT_TEST_TARGET, permit));
+            assert!(context.popup_navigation_observed(PAGE_SLOT_TEST_TARGET, navigation));
+            let completed =
+                context.observe_native_navigation_response(PAGE_SLOT_TEST_TARGET, navigation, true);
+            if phase == NativeResponsePhase::Complete {
+                assert!(
+                    completed.is_none(),
+                    "completed responses must not be republished"
+                );
+            } else {
+                let (request, emit_response, metadata_emitted) = completed.unwrap();
+                assert_eq!(
+                    request.navigation.requested_url,
+                    pending.navigation.requested_url
+                );
+                assert_eq!(emit_response, phase == NativeResponsePhase::Paused);
+                assert_eq!(metadata_emitted, phase == NativeResponsePhase::Paused);
+            }
+            assert!(
+                context
+                    .observe_native_navigation_response(PAGE_SLOT_TEST_TARGET, navigation, true)
+                    .is_none()
+            );
+        }
+    }
 }
 
 #[cfg(test)]

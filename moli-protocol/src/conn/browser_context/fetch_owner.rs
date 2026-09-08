@@ -632,6 +632,41 @@ impl CdpConnection {
         ))
     }
 
+    pub(crate) fn register_native_fetch_response_for_owner(
+        &mut self,
+        pending: PendingFetchNavigation,
+        permit: crate::conn::state::NavigationInterceptionPermit,
+    ) -> bool {
+        let Some((context_id, target_id)) =
+            self.resolved_page_owner_identity_for_owner(&pending.navigation.owner)
+        else {
+            return false;
+        };
+        let Some(target) = self
+            .browser_context_by_id_mut(&context_id)
+            .and_then(|context| context.page_target_mut(&target_id))
+        else {
+            return false;
+        };
+        if target
+            .fetch_owner
+            .pending_fetch_response_navigation(&pending.fetch_request_id)
+            .is_some()
+        {
+            return false;
+        }
+        target
+            .fetch_owner
+            .register_pending_fetch_response_navigation(
+                pending.fetch_request_id,
+                PendingFetchResponseNavigation::new_native(pending.navigation, permit),
+            );
+        self.browser_context_by_id_mut(&context_id)
+            .expect("resolved Context")
+            .observe_native_navigation_response_pause(&target_id, permit.navigation());
+        true
+    }
+
     pub(crate) fn take_pending_fetch_response_transfer_for_body_read_for_owner(
         &mut self,
         owner: &CommandOwnerScope,

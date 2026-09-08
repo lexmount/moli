@@ -14620,6 +14620,7 @@ async fn websocket_bidi_set_viewport_user_context_inherits_through_window_open()
         json!({
             "events": [
                 "browsingContext.contextCreated",
+                "browsingContext.navigationStarted",
                 "browsingContext.load"
             ]
         }),
@@ -14734,7 +14735,35 @@ async fn websocket_bidi_set_viewport_user_context_inherits_through_window_open()
             }),
             "expected popup load event: {load_messages:#?}"
         );
+        messages.extend(load_messages);
     }
+
+    let starts = messages
+        .iter()
+        .filter(|message| {
+            message["method"] == json!("browsingContext.navigationStarted")
+                && message["params"]["context"] == json!(popup_context_id)
+                && message["params"]["url"] == json!(POPUP_URL)
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(
+        starts.len(),
+        1,
+        "one real popup navigation starts once: {messages:#?}"
+    );
+    let loaded = messages
+        .iter()
+        .find(|message| {
+            message["method"] == json!("browsingContext.load")
+                && message["params"]["context"] == json!(popup_context_id)
+                && message["params"]["url"] == json!(POPUP_URL)
+        })
+        .expect("the requested popup document must load");
+    assert!(starts[0]["params"]["navigation"].is_string());
+    assert_eq!(
+        loaded["params"]["navigation"],
+        starts[0]["params"]["navigation"]
+    );
 
     assert_eq!(
         bidi_viewport_surface(&mut socket, 9, &popup_context_id).await,

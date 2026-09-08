@@ -158,6 +158,26 @@ async fn write(
                 }
                 response.finish().await.map_err(io::Error::other)?;
             }
+            DownloadBody::Captured(body) => {
+                let mut reader = body.chunk_reader(64 * 1024).map_err(io::Error::other)?;
+                loop {
+                    let (next, chunk) = tokio::task::spawn_blocking(move || {
+                        let chunk = reader.next_chunk();
+                        (reader, chunk)
+                    })
+                    .await
+                    .map_err(io::Error::other)?;
+                    reader = next;
+                    let Some(chunk) = chunk.map_err(io::Error::other)? else {
+                        break;
+                    };
+                    file.write_all(&chunk).await?;
+                    state.send_modify(|snapshot| {
+                        snapshot.received_bytes =
+                            snapshot.received_bytes.saturating_add(chunk.len() as u64);
+                    });
+                }
+            }
         }
         file.flush().await
     };

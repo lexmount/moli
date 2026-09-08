@@ -56,7 +56,6 @@ mod output;
 #[cfg(test)]
 mod permission_tests;
 mod permissions;
-mod popup_navigation_work;
 mod protocol_output;
 mod renderer_command_turn;
 mod resource_runtime_support;
@@ -68,6 +67,7 @@ mod settings;
 #[cfg(test)]
 mod site_data_manager_surface;
 mod state;
+mod target_startup_work;
 pub(crate) use state::PageInputCommand;
 pub(crate) use state::{
     BrowserAppManifestLoadPreparation, CompletedAppManifestLoadPreparation,
@@ -548,9 +548,6 @@ pub(crate) use output::{
     BackgroundServiceWorkerRegistration, BackgroundServiceWorkerVersion,
     build_command_success_response,
 };
-pub(crate) use popup_navigation_work::{
-    PopupTargetNavigationKind, PopupTargetNavigationOwnerAction,
-};
 pub(crate) use runtime_eval::{
     ClaimedPendingInspectorAwait, RuntimeBindingCallEvent, RuntimeEnableReplayEvent,
     renderer_command_turn_frontend_protocol_response, runtime_remote_object_ids_in_map,
@@ -635,6 +632,7 @@ pub(crate) use target::{
     PreparedTargetHostDelta, SessionDisposalPlan, SessionDisposalTarget, TargetAttachSessionCommit,
     TargetClosureCleanupPlan, TargetEventPlan, TargetSessionDetachCleanupPlan,
 };
+pub(crate) use target_startup_work::TargetStartupOwnerAction;
 pub(crate) use top_level_navigation_work::TopLevelLocationNavigationOwnerAction;
 
 pub struct PendingDeferredMainDocumentLoadCompletion {
@@ -1041,6 +1039,7 @@ pub(crate) struct BrowserGlobalOverrides {
 /// Persistent per-connection state.
 pub struct CdpConnection {
     browser: BrowserHandle,
+    _navigation_decision_provider: moli_core::browser::NavigationDecisionProvider,
     /// Native creations whose still-live renderer observation owns FIFO emission.
     pending_popup_projections: HashSet<moli_core::browser::WebContentsHandle>,
     webdriver_sessions: HashMap<String, automation_session::WebDriverSessionScope>,
@@ -1078,7 +1077,6 @@ pub struct CdpConnection {
     next_internal_devtools_command_id: u64,
     network_request_id_allocator: ConnectionNetworkRequestIdAllocator,
     // Browser profile, download and global IO state.
-    download_policy: moli_core::browser::DownloadPolicy,
     download_subscriptions: download_policy::DownloadSubscriptions,
     download_projections: HashMap<String, Arc<Mutex<downloads::DownloadProjection>>>,
     next_global_io_stream_id: u64,
@@ -1146,8 +1144,12 @@ impl CdpConnection {
         let base_http_proxy = fetch_config.http_proxy().map(str::to_owned);
         let base_http_no_proxy = fetch_config.http_no_proxy().map(str::to_owned);
         let base_tls_verify_host = fetch_config.tls_verify_host();
+        let navigation_decision_provider = browser
+            .register_navigation_decision_provider()
+            .expect("one shared DevTools navigation decision provider per Browser");
         Self {
             browser,
+            _navigation_decision_provider: navigation_decision_provider,
             webdriver_sessions: HashMap::new(),
             browser_context: None,
             inactive_browser_contexts: Vec::new(),
@@ -1161,7 +1163,6 @@ impl CdpConnection {
             service_worker_pause_on_start_owner_sessions: HashSet::new(),
             dedicated_worker_pause_on_start_owner_sessions: HashSet::new(),
             install_default_target_on_auto_attach: false,
-            download_policy: moli_core::browser::DownloadPolicy::default(),
             download_subscriptions: download_policy::DownloadSubscriptions::default(),
             download_projections: HashMap::new(),
             next_bc_id: 0,
@@ -1460,7 +1461,9 @@ impl CdpConnection {
         &self,
         owner: &CommandOwnerScope,
     ) -> Result<(), String> {
-        if self.has_pending_document_navigation_for_owner(owner) {
+        if self.has_pending_document_navigation_for_owner(owner)
+            && !self.native_startup_allows_document_access(owner)
+        {
             return Err("Navigation is changing the document".to_owned());
         }
         Ok(())
@@ -2377,18 +2380,14 @@ impl CdpConnection {
             .push_scheduler_event(CdpSchedulerEvent::ProtocolWorkPublished { work });
     }
 
-    pub(crate) fn publish_popup_target_navigation_owner_action(
-        &mut self,
-        action: PopupTargetNavigationOwnerAction,
-    ) {
+    pub(crate) fn publish_target_startup_owner_action(&mut self, action: TargetStartupOwnerAction) {
         let publish_sequence = self
             .scheduler_state
             .allocate_protocol_work_publish_sequence();
-        let work =
-            crate::domains::activity::ProtocolSchedulerWork::popup_target_navigation_owner_action(
-                publish_sequence,
-                action,
-            );
+        let work = crate::domains::activity::ProtocolSchedulerWork::target_startup_owner_action(
+            publish_sequence,
+            action,
+        );
         self.scheduler_state
             .push_scheduler_event(CdpSchedulerEvent::ProtocolWorkPublished { work });
     }

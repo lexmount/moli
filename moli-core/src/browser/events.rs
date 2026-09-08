@@ -16,6 +16,8 @@ pub enum BrowserEvent {
     },
     DocumentCommitted(DocumentHandle),
     NavigationStarted(NavigationRequest),
+    NavigationAwaitingDecision(NavigationRequest),
+    NavigationResponseChanged(NavigationRequest),
     NavigationFailed {
         request: NavigationRequest,
         reason: NavigationFailureReason,
@@ -84,9 +86,21 @@ pub struct NavigationRequest {
     pub document: super::DocumentId,
 }
 
+/// Response observations belong to the exact current Document or latest attempt.
+/// Large bodies use the existing bounded memory/file-backed capture, and are
+/// released with their navigation instead of an observer's Target mapping.
+#[derive(Clone, Debug)]
+pub struct NavigationResponseSnapshot {
+    pub request: NavigationRequest,
+    pub response: moli_fetch::ResponseHead,
+    pub observations: moli_fetch::NetworkObservationJournal,
+    pub body: Option<Result<super::CapturedBody, String>>,
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum NavigationFailureReason {
     Canceled,
+    Download,
     Superseded,
     WebContentsClosed,
     ContextDisposed,

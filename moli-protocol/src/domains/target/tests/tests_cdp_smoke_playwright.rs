@@ -265,6 +265,20 @@ async fn fulfill_popup_document_and_evaluate(
     .await;
     ctx.expect_result(base, json!({}), Some(popup_session_id));
 
+    // Fulfillment resolves the exact Browser pause; the native driver then
+    // commits independently. Observe that commit before inspecting its DOM.
+    crate::testing::wait_until_scheduler_message(
+        ctx,
+        "fulfilled popup document commit",
+        |message| {
+            message["method"] == "Page.frameNavigated"
+                && message["sessionId"] == popup_session_id
+                && message["params"]["frame"]["id"] == popup_target_id
+                && message["params"]["frame"]["url"] == popup_url
+        },
+    )
+    .await;
+
     ctx.process_async(json!({
         "id": base + 1,
         "method": "Runtime.evaluate",
@@ -276,7 +290,23 @@ async fn fulfill_popup_document_and_evaluate(
     }))
     .await;
     let evaluated = take_response_by_id(ctx, base + 1);
-    assert_eq!(evaluated["result"]["result"]["value"], expected_text);
+    assert_eq!(
+        evaluated["result"]["result"]["value"], expected_text,
+        "{evaluated:?}"
+    );
+    assert_eq!(
+        ctx.sent
+            .iter()
+            .filter(|message| {
+                message["method"] == "Page.frameNavigated"
+                    && message["sessionId"] == popup_session_id
+                    && message["params"]["frame"]["id"] == popup_target_id
+                    && message["params"]["frame"]["url"] == popup_url
+            })
+            .count(),
+        1,
+        "one native commit must publish exactly one popup frame commit"
+    );
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -590,6 +620,704 @@ async fn rust_cdp_playwright_attached_session_network_event_contract() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn native_popup_response_pause_precedes_body_eof_and_preserves_response_body() {
+    assert_native_popup_response(NativePopupResponseResolution::ReadBody).await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn native_popup_response_body_stream_replays_after_eof() {
+    assert_native_popup_response(NativePopupResponseResolution::ReadStream).await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn native_popup_response_fulfillment_does_not_wait_for_the_original_body() {
+    assert_native_popup_response(NativePopupResponseResolution::Fulfill).await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn native_popup_response_fetch_disable_resumes_the_browser_driver() {
+    assert_native_popup_response(NativePopupResponseResolution::Disable).await;
+}
+
+#[derive(Clone, Copy)]
+enum NativePopupResponseResolution {
+    ReadBody,
+    ReadStream,
+    Fulfill,
+    Disable,
+}
+
+async fn assert_native_popup_response(resolution: NativePopupResponseResolution) {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let url = format!(
+        "http://{}/native-popup-stream",
+        listener.local_addr().unwrap()
+    );
+    let (release_body, body_released) = tokio::sync::watch::channel(false);
+    let (stop_server, mut stopped) = tokio::sync::oneshot::channel();
+    let server = tokio::spawn(async move {
+        // The existing renderer Window proxy can fetch independently of the
+        // Browser Document. A stalled first connection must not starve the
+        // exact Browser navigation whose Fetch decision this test observes.
+        let mut responses = tokio::task::JoinSet::new();
+        loop {
+            let (mut stream, _) = tokio::select! {
+                _ = &mut stopped => break,
+                accepted = listener.accept() => accepted.unwrap(),
+            };
+            let mut body_released = body_released.clone();
+            responses.spawn(async move {
+                let mut request = [0; 2048];
+                if stream.read(&mut request).await.unwrap_or(0) == 0 { return; }
+                if stream.write_all(b"HTTP/1.1 200 OK\r\nContent-Type: text/html\r\nTransfer-Encoding: chunked\r\nConnection: close\r\n\r\n").await.is_err() { return; }
+                let _ = body_released.wait_for(|released| *released).await;
+                let body = "<main id=content>native response body</main>";
+                let _ = stream.write_all(format!("{:X}\r\n{body}\r\n0\r\n\r\n", body.len()).as_bytes()).await;
+            });
+        }
+        while let Some(response) = responses.join_next().await {
+            response.unwrap();
+        }
+    });
+    let mut ctx = TestContext::new();
+    ctx.enable_background_navigation_scheduler_for_test();
+    let opener = attached_smoke_session(&mut ctx, 93_000).await;
+    set_auto_attach_waiting_for_debugger(&mut ctx, 93_010).await;
+    ctx.take_all();
+    let (target, session, _) =
+        open_popup_from_session(&mut ctx, 93_011, &opener.session_id, &url).await;
+    arm_popup_route(&mut ctx, 93_020, &target, &session, &url).await;
+    crate::testing::wait_until_scheduler_message(
+        &mut ctx,
+        "native popup request pause",
+        |message| {
+            message["method"] == "Fetch.requestPaused"
+                && message["sessionId"] == session
+                && message["params"]["request"]["url"] == url
+        },
+    )
+    .await;
+    let request_id = paused_request_id(&mut ctx, "Document");
+    ctx.process_async(json!({
+        "id": 93_030, "method": "Fetch.continueRequest", "sessionId": session,
+        "params": {"requestId": request_id, "interceptResponse": true}
+    }))
+    .await;
+    ctx.expect_result(93_030, json!({}), Some(&session));
+    crate::testing::wait_until_scheduler_message(
+        &mut ctx,
+        "native popup response head pause before body release",
+        |message| {
+            message["method"] == "Fetch.requestPaused"
+                && message["sessionId"] == session
+                && message["params"]["responseStatusCode"] == 200
+                && message["params"]["request"]["url"] == url
+        },
+    )
+    .await;
+    let paused = ctx.take_first_matching("native response decision", |message| {
+        message["method"] == "Fetch.requestPaused"
+            && message["sessionId"] == session
+            && message["params"]["responseStatusCode"] == 200
+    });
+    let response_id = paused["params"]["requestId"].as_str().unwrap();
+    let (contents, _) = ctx
+        .conn
+        .native_navigation_decision_for_target(&target)
+        .unwrap();
+    assert!(
+        ctx.sent.iter().any(|message| {
+            message["method"] == "Network.responseReceivedExtraInfo"
+                && message["sessionId"] == session
+                && message["params"]["requestId"] == paused["params"]["networkId"]
+        }),
+        "real response extra-info precedes the response-stage Fetch pause"
+    );
+    assert!(
+        ctx.sent
+            .iter()
+            .all(|message| message["method"] != "Page.frameNavigated"
+                || message["sessionId"] != session
+                || message["params"]["frame"]["url"] != url)
+    );
+    let expected = match resolution {
+        NativePopupResponseResolution::ReadBody | NativePopupResponseResolution::ReadStream => {
+            let (read_command, body_key) = if matches!(
+                resolution,
+                NativePopupResponseResolution::ReadStream
+            ) {
+                ctx.process_async(json!({
+                    "id": 93_040, "method": "Fetch.takeResponseBodyAsStream", "sessionId": session,
+                    "params": {"requestId": response_id}
+                }))
+                .await;
+                let opened = take_response_by_id(&mut ctx, 93_040);
+                let stream = opened["result"]["stream"]
+                    .as_str()
+                    .expect("native body stream");
+                ctx.process_async(json!({
+                    "id": 93_041, "method": "Fetch.continueResponse", "sessionId": session,
+                    "params": {"requestId": response_id}
+                }))
+                .await;
+                ctx.expect_error(93_041, -32000, "ResponseBodyStreamActive");
+                (
+                    json!({"id": 93_031, "method": "IO.read", "sessionId": session,
+                    "params": {"handle": stream}}),
+                    "data",
+                )
+            } else {
+                (
+                    json!({"id": 93_031, "method": "Fetch.getResponseBody", "sessionId": session,
+                    "params": {"requestId": response_id}}),
+                    "body",
+                )
+            };
+            release_body.send(true).unwrap();
+            ctx.process_async(read_command).await;
+            let body = take_response_by_id(&mut ctx, 93_031);
+            let actual = body["result"][body_key].as_str().unwrap();
+            let actual = if body["result"]["base64Encoded"] == true {
+                String::from_utf8(BASE64_STANDARD.decode(actual).unwrap()).unwrap()
+            } else {
+                actual.to_owned()
+            };
+            assert_eq!(actual, "<main id=content>native response body</main>");
+            if matches!(resolution, NativePopupResponseResolution::ReadStream) {
+                assert_eq!(body["result"]["eof"], true);
+            }
+            ctx.process_async(json!({
+                "id": 93_032, "method": "Fetch.continueResponse", "sessionId": session,
+                "params": {"requestId": response_id}
+            }))
+            .await;
+            "native response body"
+        }
+        NativePopupResponseResolution::Fulfill => {
+            ctx.process_async(json!({
+                "id": 93_032, "method": "Fetch.fulfillRequest", "sessionId": session,
+                "params": {"requestId": response_id, "responseCode": 200,
+                    "responseHeaders": [{"name": "Content-Type", "value": "text/html"}],
+                    "body": BASE64_STANDARD.encode("<main id=content>native fulfilled body</main>")}
+            }))
+            .await;
+            "native fulfilled body"
+        }
+        NativePopupResponseResolution::Disable => {
+            ctx.process_async(
+                json!({"id": 93_032, "method": "Fetch.disable", "sessionId": session}),
+            )
+            .await;
+            release_body.send(true).unwrap();
+            "native response body"
+        }
+    };
+    ctx.expect_result(93_032, json!({}), Some(&session));
+    crate::testing::wait_until_scheduler_message(
+        &mut ctx,
+        "native response document commit",
+        |message| {
+            message["method"] == "Page.frameNavigated"
+                && message["sessionId"] == session
+                && message["params"]["frame"]["id"] == target
+                && message["params"]["frame"]["url"] == url
+        },
+    )
+    .await;
+    ctx.process_async(json!({
+        "id": 93_033, "method": "Runtime.evaluate", "sessionId": session,
+        "params": {"expression": "document.getElementById('content').textContent", "returnByValue": true}
+    })).await;
+    let evaluated = take_response_by_id(&mut ctx, 93_033);
+    assert_eq!(evaluated["result"]["result"]["value"], expected);
+    let network_id = paused["params"]["networkId"]
+        .as_str()
+        .expect("navigation network identity");
+    crate::testing::wait_until_scheduler_message(
+        &mut ctx,
+        "native response Network completion",
+        |message| {
+            message["method"] == "Network.loadingFinished"
+                && message["sessionId"] == session
+                && message["params"]["requestId"] == network_id
+        },
+    )
+    .await;
+    assert_eq!(
+        ctx.sent
+            .iter()
+            .filter(|message| {
+                message["method"] == "Network.responseReceived"
+                    && message["sessionId"] == session
+                    && message["params"]["requestId"] == network_id
+                    && message["params"]["response"]["url"] == url
+            })
+            .count(),
+        1
+    );
+    ctx.process_async(
+        json!({"id": 93_034, "method": "Network.getResponseBody", "sessionId": session,
+        "params": {"requestId": network_id}}),
+    )
+    .await;
+    let body = take_response_by_id(&mut ctx, 93_034);
+    let actual = body["result"]["body"]
+        .as_str()
+        .expect("native response capture");
+    let actual = if body["result"]["base64Encoded"] == true {
+        String::from_utf8(BASE64_STANDARD.decode(actual).unwrap()).unwrap()
+    } else {
+        actual.to_owned()
+    };
+    assert_eq!(actual, format!("<main id=content>{expected}</main>"));
+    let resource = ctx
+        .conn
+        .current_main_document_resource_for_session_owner(Some(&session))
+        .expect("committed native document resource");
+    assert_eq!(resource.frame_id, target);
+    assert_eq!(resource.url.as_str(), url);
+    assert_eq!(
+        resource
+            .body
+            .expect("native document resource body")
+            .materialize_bytes()
+            .unwrap(),
+        actual.as_bytes()
+    );
+    assert!(
+        ctx.conn
+            .project_browser_navigation_responses(contents)
+            .await
+            .is_empty(),
+        "reconciliation must not repeat response or completion events"
+    );
+    release_body.send(true).unwrap();
+    stop_server.send(()).unwrap();
+    server.await.unwrap();
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn native_popup_authentication_retries_the_exact_browser_navigation() {
+    assert_native_popup_authentication("ProvideCredentials", "basic").await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn native_popup_download_transfers_the_response_and_finishes_network_once() {
+    assert_native_popup_download(NativePopupDownloadResponse::Streaming).await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn native_popup_download_preserves_a_captured_fetch_response() {
+    assert_native_popup_download(NativePopupDownloadResponse::Captured).await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn native_popup_download_accepts_a_fulfilled_attachment_response() {
+    assert_native_popup_download(NativePopupDownloadResponse::Fulfilled).await;
+}
+
+enum NativePopupDownloadResponse {
+    Streaming,
+    Captured,
+    Fulfilled,
+}
+
+async fn assert_native_popup_download(resolution: NativePopupDownloadResponse) {
+    struct Directory(std::path::PathBuf);
+    impl Drop for Directory {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+    let directory = Directory(std::env::temp_dir().join(format!(
+        "moli-native-popup-download-projection-{}-{}",
+        std::process::id(),
+        moli_core::browser::NavigationId::allocate().get()
+    )));
+    std::fs::create_dir(&directory.0).unwrap();
+    let fixture = SmokeFixtureServer::start().await;
+    let url = fixture.url("/download");
+    let mut ctx = TestContext::new();
+    ctx.enable_background_navigation_scheduler_for_test();
+    let opener = attached_smoke_session(&mut ctx, 95_000).await;
+    set_auto_attach_waiting_for_debugger(&mut ctx, 95_010).await;
+    ctx.process_async(json!({"id": 95_011, "method": "Browser.setDownloadBehavior", "params": {
+        "behavior": "allowAndName", "downloadPath": directory.0.to_str().unwrap(), "eventsEnabled": true
+    }})).await;
+    ctx.expect_result(95_011, json!({}), None);
+    ctx.take_all();
+    let (target, session, _) =
+        open_popup_from_session(&mut ctx, 95_012, &opener.session_id, &url).await;
+    arm_popup_route(&mut ctx, 95_020, &target, &session, &url).await;
+    crate::testing::wait_until_scheduler_message(&mut ctx, "download request pause", |message| {
+        message["method"] == "Fetch.requestPaused"
+            && message["sessionId"] == session
+            && message["params"]["request"]["url"] == url
+    })
+    .await;
+    let request_id = paused_request_id(&mut ctx, "Document");
+    ctx.process_async(
+        json!({"id": 95_030, "method": "Fetch.continueRequest", "sessionId": session,
+        "params": {"requestId": request_id, "interceptResponse": true}}),
+    )
+    .await;
+    ctx.expect_result(95_030, json!({}), Some(&session));
+    crate::testing::wait_until_scheduler_message(&mut ctx, "download response pause", |message| {
+        message["method"] == "Fetch.requestPaused"
+            && message["sessionId"] == session
+            && message["params"]["responseStatusCode"] == 200
+    })
+    .await;
+    let paused = ctx.take_first_matching("download response permit", |message| {
+        message["method"] == "Fetch.requestPaused"
+            && message["sessionId"] == session
+            && message["params"]["responseStatusCode"] == 200
+    });
+    let response_id = paused["params"]["requestId"].as_str().unwrap();
+    let network_id = paused["params"]["networkId"].as_str().unwrap();
+    let (contents, _) = ctx
+        .conn
+        .native_navigation_decision_for_target(&target)
+        .unwrap();
+    if matches!(resolution, NativePopupDownloadResponse::Captured) {
+        ctx.process_async(
+            json!({"id": 95_031, "method": "Fetch.getResponseBody", "sessionId": session,
+            "params": {"requestId": response_id}}),
+        )
+        .await;
+        let body = take_response_by_id(&mut ctx, 95_031);
+        let value = body["result"]["body"].as_str().unwrap();
+        let bytes = if body["result"]["base64Encoded"] == true {
+            BASE64_STANDARD.decode(value).unwrap()
+        } else {
+            value.as_bytes().to_vec()
+        };
+        assert_eq!(bytes, b"download contents");
+    }
+    let expected = if matches!(resolution, NativePopupDownloadResponse::Fulfilled) {
+        ctx.process_async(json!({"id": 95_032, "method": "Fetch.fulfillRequest", "sessionId": session,
+            "params": {"requestId": response_id, "responseCode": 200,
+                "responseHeaders": [{"name": "Content-Disposition", "value": "attachment; filename=override.txt"}],
+                "body": BASE64_STANDARD.encode("fulfilled download")}})).await;
+        b"fulfilled download".as_slice()
+    } else {
+        ctx.process_async(
+            json!({"id": 95_032, "method": "Fetch.continueResponse", "sessionId": session,
+            "params": {"requestId": response_id}}),
+        )
+        .await;
+        b"download contents".as_slice()
+    };
+    ctx.expect_result(95_032, json!({}), Some(&session));
+    crate::testing::wait_until_scheduler_message(
+        &mut ctx,
+        "native download admission",
+        |message| {
+            message["method"] == "Browser.downloadWillBegin"
+                && message["params"]["url"] == url
+                && message["params"]["frameId"] == target
+        },
+    )
+    .await;
+    let created = ctx
+        .sent
+        .iter()
+        .find(|message| {
+            message["method"] == "Browser.downloadWillBegin" && message["params"]["url"] == url
+        })
+        .unwrap()
+        .clone();
+    let guid = created["params"]["guid"].as_str().unwrap();
+    crate::testing::wait_until_scheduler_message(
+        &mut ctx,
+        "native download completion",
+        |message| {
+            message["method"] == "Browser.downloadProgress"
+                && message["params"]["guid"] == guid
+                && message["params"]["state"] == "completed"
+        },
+    )
+    .await;
+    crate::testing::wait_until_scheduler_message(
+        &mut ctx,
+        "download navigation failure",
+        |message| {
+            message["method"] == "Network.loadingFailed"
+                && message["sessionId"] == session
+                && message["params"]["requestId"] == network_id
+        },
+    )
+    .await;
+    assert_eq!(std::fs::read(directory.0.join(guid)).unwrap(), expected);
+    let position = |method| {
+        ctx.sent
+            .iter()
+            .enumerate()
+            .filter_map(|(index, message)| {
+                (message["method"] == method
+                    && message["sessionId"] == session
+                    && message["params"]["requestId"] == network_id)
+                    .then_some(index)
+            })
+            .collect::<Vec<_>>()
+    };
+    let responses = position("Network.responseReceived");
+    let failures = position("Network.loadingFailed");
+    assert_eq!(responses.len(), 1);
+    assert_eq!(failures.len(), 1);
+    assert!(responses[0] < failures[0]);
+    assert_eq!(
+        ctx.sent[failures[0]]["params"]["errorText"],
+        "net::ERR_ABORTED"
+    );
+    assert!(position("Network.loadingFinished").is_empty());
+    assert_eq!(
+        ctx.sent
+            .iter()
+            .filter(|message| message["method"] == "Page.frameStoppedLoading"
+                && message["sessionId"] == session
+                && message["params"]["frameId"] == target)
+            .count(),
+        1
+    );
+    assert!(
+        !ctx.sent
+            .iter()
+            .any(|message| message["method"] == "Page.frameNavigated"
+                && message["sessionId"] == session
+                && message["params"]["frame"]["url"] == url)
+    );
+    ctx.process_async(
+        json!({"id": 95_033, "method": "Runtime.evaluate", "sessionId": session,
+        "params": {"expression": "location.href", "returnByValue": true}}),
+    )
+    .await;
+    assert_eq!(
+        take_response_by_id(&mut ctx, 95_033)["result"]["result"]["value"],
+        "about:blank"
+    );
+    assert!(
+        ctx.conn
+            .project_browser_navigation(contents)
+            .await
+            .is_empty()
+    );
+    assert!(
+        ctx.conn
+            .project_browser_navigation_responses(contents)
+            .await
+            .is_empty()
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn native_popup_authentication_cancel_preserves_the_challenge_response() {
+    assert_native_popup_authentication("CancelAuth", "basic").await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn native_popup_authentication_digest_retries_the_exact_browser_navigation() {
+    assert_native_popup_authentication("ProvideCredentials", "digest").await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn native_popup_authentication_default_cancels_the_exact_browser_navigation() {
+    assert_native_popup_authentication("Default", "basic").await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn native_popup_authentication_fetch_disable_cancels_the_exact_browser_navigation() {
+    assert_native_popup_authentication("Disable", "basic").await;
+}
+
+async fn assert_native_popup_authentication(action: &str, scheme: &str) {
+    let provide_credentials = action == "ProvideCredentials";
+    let fixture = SmokeFixtureServer::start().await;
+    let url = fixture.url(&format!("/api-auth?realm=native-popup&scheme={scheme}"));
+    let mut ctx = TestContext::new();
+    ctx.enable_background_navigation_scheduler_for_test();
+    let opener = attached_smoke_session(&mut ctx, 94_000).await;
+    set_auto_attach_waiting_for_debugger(&mut ctx, 94_010).await;
+    ctx.take_all();
+    let (target, session, _) =
+        open_popup_from_session(&mut ctx, 94_011, &opener.session_id, &url).await;
+    for (offset, method, params) in [
+        (0, "Page.enable", json!({})),
+        (1, "Network.enable", json!({})),
+        (
+            2,
+            "Fetch.enable",
+            json!({"handleAuthRequests": true, "patterns": [{"urlPattern": "*", "resourceType": "Document", "requestStage": "Request"}]}),
+        ),
+        (3, "Runtime.runIfWaitingForDebugger", json!({})),
+    ] {
+        ctx.process_async(json!({"id": 94_020 + offset, "method": method, "sessionId": session, "params": params})).await;
+        ctx.expect_result(94_020 + offset, json!({}), Some(&session));
+    }
+    crate::testing::wait_until_scheduler_message(
+        &mut ctx,
+        "native authentication request",
+        |message| {
+            message["method"] == "Fetch.requestPaused"
+                && message["sessionId"] == session
+                && message["params"]["request"]["url"] == url
+        },
+    )
+    .await;
+    let request_id = paused_request_id(&mut ctx, "Document");
+    ctx.process_async(
+        json!({"id": 94_030, "method": "Fetch.continueRequest", "sessionId": session,
+        "params": {"requestId": request_id, "interceptResponse": true}}),
+    )
+    .await;
+    ctx.expect_result(94_030, json!({}), Some(&session));
+    crate::testing::wait_until_scheduler_message(
+        &mut ctx,
+        "native authentication challenge",
+        |message| {
+            message["method"] == "Fetch.authRequired"
+                && message["sessionId"] == session
+                && message["params"]["request"]["url"] == url
+        },
+    )
+    .await;
+    let challenge = ctx.take_first_matching("native auth challenge", |message| {
+        message["method"] == "Fetch.authRequired" && message["sessionId"] == session
+    });
+    assert_eq!(
+        challenge["params"]["authChallenge"]["realm"],
+        "native-popup"
+    );
+    assert_eq!(challenge["params"]["authChallenge"]["scheme"], scheme);
+    let (contents, pause) = ctx
+        .conn
+        .native_navigation_decision_for_target(&target)
+        .unwrap();
+    assert!(matches!(
+        pause.stage,
+        moli_core::browser::NavigationDecisionStage::Auth { .. }
+    ));
+    assert!(
+        ctx.conn
+            .project_browser_navigation_decision(contents)
+            .await
+            .is_empty(),
+        "snapshot reconciliation must not duplicate this authentication decision"
+    );
+    let network_id = ctx
+        .sent
+        .iter()
+        .find(|message| {
+            message["method"] == "Network.requestWillBeSent"
+                && message["sessionId"] == session
+                && message["params"]["request"]["url"] == url
+        })
+        .expect("exact native network request")["params"]["requestId"]
+        .clone();
+    let command = if action == "Disable" {
+        json!({"id": 94_031, "method": "Fetch.disable", "sessionId": session})
+    } else {
+        json!({"id": 94_031, "method": "Fetch.continueWithAuth", "sessionId": session,
+        "params": {"requestId": challenge["params"]["requestId"], "authChallengeResponse": {
+            "response": action, "username": "user", "password": "pass"
+        }}})
+    };
+    ctx.process_async(command).await;
+    ctx.expect_result(94_031, json!({}), Some(&session));
+    if matches!(action, "Default" | "Disable") {
+        crate::testing::wait_until_scheduler_message(
+            &mut ctx,
+            "native auth cancellation Network result",
+            |message| {
+                message["method"] == "Network.loadingFailed"
+                    && message["sessionId"] == session
+                    && message["params"]["requestId"] == network_id
+            },
+        )
+        .await;
+        assert!(
+            ctx.conn
+                .native_navigation_decision_for_target(&target)
+                .is_none()
+        );
+        assert!(
+            ctx.sent
+                .iter()
+                .all(|message| message["method"] != "Page.frameNavigated"
+                    || message["sessionId"] != session
+                    || message["params"]["frame"]["url"] != url)
+        );
+        assert!(!ctx.conn.resolve_native_navigation_decision(
+            contents,
+            pause.permit,
+            moli_core::browser::NavigationDecision::Continue
+        ));
+        return;
+    }
+    let expected_status = if provide_credentials { 200 } else { 401 };
+    let expected_body = if provide_credentials {
+        "authenticated fetch"
+    } else {
+        "auth required"
+    };
+    crate::testing::wait_until_scheduler_message(
+        &mut ctx,
+        "native post-auth response pause",
+        |message| {
+            message["method"] == "Fetch.requestPaused"
+                && message["sessionId"] == session
+                && message["params"]["responseStatusCode"] == expected_status
+                && message["params"]["request"]["url"] == url
+        },
+    )
+    .await;
+    let response = ctx.take_first_matching("post-auth response", |message| {
+        message["method"] == "Fetch.requestPaused"
+            && message["sessionId"] == session
+            && message["params"]["responseStatusCode"] == expected_status
+    });
+    let (_, response_pause) = ctx
+        .conn
+        .native_navigation_decision_for_target(&target)
+        .unwrap();
+    assert_eq!(
+        response_pause.permit.navigation(),
+        pause.permit.navigation()
+    );
+    assert_ne!(response_pause.permit, pause.permit);
+    assert!(!ctx.conn.resolve_native_navigation_decision(
+        contents,
+        pause.permit,
+        moli_core::browser::NavigationDecision::Cancel
+    ));
+    ctx.process_async(
+        json!({"id": 94_032, "method": "Fetch.continueResponse", "sessionId": session,
+        "params": {"requestId": response["params"]["requestId"]}}),
+    )
+    .await;
+    ctx.expect_result(94_032, json!({}), Some(&session));
+    crate::testing::wait_until_scheduler_message(
+        &mut ctx,
+        "native authenticated document commit",
+        |message| {
+            message["method"] == "Page.frameNavigated"
+                && message["sessionId"] == session
+                && message["params"]["frame"]["id"] == target
+                && message["params"]["frame"]["url"] == url
+        },
+    )
+    .await;
+    ctx.process_async(
+        json!({"id": 94_033, "method": "Runtime.evaluate", "sessionId": session,
+        "params": {"expression": "document.body.textContent.trim()", "returnByValue": true}}),
+    )
+    .await;
+    let evaluated = take_response_by_id(&mut ctx, 94_033);
+    assert_eq!(evaluated["result"]["result"]["value"], expected_body);
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn rust_cdp_playwright_multi_context_popup_route_and_evaluate_contract() {
     let fixture = SmokeFixtureServer::start().await;
     let mut ctx = TestContext::new();
@@ -860,14 +1588,28 @@ async fn queued_popup_navigation_rechecks_a_late_debugger_barrier() {
     let popup_url = fixture.url("/plain?popup=late-debugger-barrier");
     let (popup_target_id, popup_session_id, browser_context_id) =
         open_popup_from_session(&mut ctx, 90_101, &opener.session_id, &popup_url).await;
-    let action = crate::conn::PopupTargetNavigationOwnerAction::capture(
+    ctx.wait_until_scheduler_state(
+        "native popup request admitted behind debugger barrier",
+        |conn| {
+            conn.native_navigation_decision_for_target(&popup_target_id)
+                .is_some_and(|(_, paused)| {
+                    matches!(
+                        paused.stage,
+                        moli_core::browser::NavigationDecisionStage::Request { .. }
+                    )
+                })
+        },
+    )
+    .await;
+    let action = crate::conn::TargetStartupOwnerAction::capture(
         &ctx.conn,
         &browser_context_id,
         &popup_target_id,
-        popup_url,
-        crate::conn::PopupTargetNavigationKind::InitialDocumentAfterDebuggerResume,
     )
     .expect("the paused popup should have an exact navigation owner action");
+    let (contents, permit) = action
+        .native_decision()
+        .expect("native popup request decision");
 
     assert!(
         ctx.conn
@@ -907,13 +1649,21 @@ async fn queued_popup_navigation_rechecks_a_late_debugger_barrier() {
         "the late session must install a new target barrier before queued work runs",
     );
 
-    let outcome = complete_popup_target_navigation_owner_action_async(&mut ctx.conn, action).await;
+    let outcome = complete_target_startup_owner_action_async(&mut ctx.conn, action).await;
     assert!(outcome.into_parts().0.is_empty());
-    assert!(
-        !ctx.conn
-            .has_pending_document_navigation_for_session_owner(Some(&popup_session_id)),
-        "queued work must not start the target URL through a newly paused target",
+    let (still_paused_contents, still_paused) = ctx
+        .conn
+        .native_navigation_decision_for_target(&popup_target_id)
+        .expect("late debugger barrier must preserve the unclaimed request decision");
+    assert_eq!(still_paused_contents, contents);
+    assert_eq!(
+        still_paused.permit, permit,
+        "queued work must not consume the request permit through a newly paused target"
     );
+    assert!(matches!(
+        still_paused.stage,
+        moli_core::browser::NavigationDecisionStage::Request { .. }
+    ));
     let page_url = ctx
         .conn
         .browser_context_by_id(&browser_context_id)

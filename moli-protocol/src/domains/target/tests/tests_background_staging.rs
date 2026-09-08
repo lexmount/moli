@@ -5410,6 +5410,11 @@ async fn same_context_named_popup_reuse_navigates_and_activates_loaded_owner() {
         },
     )
     .await;
+    crate::testing::wait_until_scheduler_message(&mut ctx, "named popup commit projection", |message| {
+        message["method"] == "Target.targetInfoChanged"
+            && message["params"]["targetInfo"]["targetId"] == owner.target_id
+            && message["params"]["targetInfo"]["url"] == "data:text/html,<title>named</title><main>named target</main>"
+    }).await;
     let emitted = ctx.take_all();
     assert!(
         !emitted

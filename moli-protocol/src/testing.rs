@@ -195,19 +195,29 @@ enum TestSchedulerInputKind {
     NativeDownload,
 }
 
-// Fixture handlers still install other native projections explicitly. Downloads
-// use the production Browser stream, never a separate transfer observer task.
-async fn recv_native_download_input(
+fn is_native_browser_input(event: &moli_core::browser::BrowserEvent) -> bool {
+    use moli_core::browser::BrowserEvent;
+    matches!(
+        event,
+        BrowserEvent::DownloadCreated(_)
+            | BrowserEvent::DownloadUpdated(_)
+            | BrowserEvent::NavigationAwaitingDecision(_)
+            | BrowserEvent::NavigationResponseChanged(_)
+            | BrowserEvent::DocumentCommitted(_)
+            | BrowserEvent::NavigationStarted(_)
+            | BrowserEvent::NavigationFailed { .. }
+    )
+}
+
+async fn recv_native_browser_input(
     receiver: &mut Option<moli_core::browser::BrowserEventReceiver>,
 ) -> Result<moli_core::browser::BrowserEvent, tokio::sync::broadcast::error::RecvError> {
-    use moli_core::browser::BrowserEvent;
     let Some(receiver) = receiver.as_mut() else {
         return std::future::pending().await;
     };
     loop {
-        if let event @ (BrowserEvent::DownloadCreated(_) | BrowserEvent::DownloadUpdated(_)) =
-            receiver.recv().await?.event
-        {
+        let event = receiver.recv().await?.event;
+        if is_native_browser_input(&event) {
             return Ok(event);
         }
     }
@@ -313,6 +323,7 @@ impl TestContext {
         let (background_navigation_completion_tx, background_navigation_completion_rx) =
             tokio::sync::mpsc::unbounded_channel();
         conn.set_renderer_publication_sender(renderer_publication_tx);
+        let browser_event_rx = Some(conn.subscribe_browser_events().unwrap().1);
         Self {
             conn,
             sent: Vec::new(),
@@ -326,7 +337,7 @@ impl TestContext {
             background_navigation_completion_tx,
             background_navigation_completion_rx,
             background_navigation_scheduler_enabled: false,
-            browser_event_rx: None,
+            browser_event_rx,
         }
     }
 
@@ -347,7 +358,6 @@ impl TestContext {
         self.conn.set_background_navigation_completion_sender(
             self.background_navigation_completion_tx.clone(),
         );
-        self.browser_event_rx = Some(self.conn.subscribe_browser_events().unwrap().1);
         self.background_navigation_scheduler_enabled = true;
     }
 
@@ -1352,7 +1362,7 @@ impl TestContext {
         }
     }
 
-    fn project_native_download_input(
+    async fn project_native_browser_input(
         &mut self,
         event: Result<moli_core::browser::BrowserEvent, tokio::sync::broadcast::error::RecvError>,
     ) -> Vec<BackgroundProtocolEvent> {
@@ -1363,17 +1373,30 @@ impl TestContext {
             Ok(moli_core::browser::BrowserEvent::DownloadUpdated(event)) => {
                 self.conn.project_browser_download(event)
             }
-            Ok(_) => unreachable!("test download ingress filters other native events"),
+            Ok(moli_core::browser::BrowserEvent::NavigationAwaitingDecision(request)) => {
+                self.conn
+                    .project_browser_navigation_decision(request.web_contents)
+                    .await
+            }
+            Ok(moli_core::browser::BrowserEvent::NavigationResponseChanged(request)) => {
+                self.conn
+                    .project_browser_navigation_responses(request.web_contents)
+                    .await
+            }
+            Ok(moli_core::browser::BrowserEvent::DocumentCommitted(document)) => {
+                self.conn.project_browser_document_commit(document).await
+            }
+            Ok(moli_core::browser::BrowserEvent::NavigationStarted(request))
+            | Ok(moli_core::browser::BrowserEvent::NavigationFailed { request, .. }) => {
+                self.conn
+                    .project_browser_navigation(request.web_contents)
+                    .await
+            }
+            Ok(_) => unreachable!("test Browser ingress filters renderer-FIFO observations"),
             Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {
                 let (snapshot, receiver) = self.conn.subscribe_browser_events().unwrap();
                 self.browser_event_rx = Some(receiver);
-                let mut events = snapshot
-                    .downloads
-                    .into_iter()
-                    .flat_map(|event| self.conn.project_created_browser_download(event))
-                    .collect::<Vec<_>>();
-                events.extend(self.conn.project_retired_context_downloads());
-                events
+                self.conn.project_browser_snapshot(snapshot).await
             }
             Err(tokio::sync::broadcast::error::RecvError::Closed) => {
                 self.browser_event_rx = None;
@@ -1382,19 +1405,16 @@ impl TestContext {
         }
     }
 
-    fn try_native_download_input(
+    fn try_native_browser_input(
         &mut self,
     ) -> Option<Result<moli_core::browser::BrowserEvent, tokio::sync::broadcast::error::RecvError>>
     {
-        use moli_core::browser::BrowserEvent;
         use tokio::sync::broadcast::error::{RecvError, TryRecvError};
         loop {
             match self.browser_event_rx.as_mut()?.try_recv() {
                 Ok(record) => {
-                    if let event @ (BrowserEvent::DownloadCreated(_)
-                    | BrowserEvent::DownloadUpdated(_)) = record.event
-                    {
-                        return Some(Ok(event));
+                    if is_native_browser_input(&record.event) {
+                        return Some(Ok(record.event));
                     }
                 }
                 Err(TryRecvError::Empty) => return None,
@@ -1418,9 +1438,9 @@ impl TestContext {
         {
             work.push_back(TestSchedulerWork::BackgroundEvent(event));
             TestSchedulerInputKind::BackgroundEvent
-        } else if let Some(event) = self.try_native_download_input() {
+        } else if let Some(event) = self.try_native_browser_input() {
             work.push_back(TestSchedulerWork::ProtocolEvents(
-                self.project_native_download_input(event),
+                self.project_native_browser_input(event).await,
             ));
             TestSchedulerInputKind::NativeDownload
         } else if !self.pending_runtime_deferred_replies.is_empty() {
@@ -1503,10 +1523,47 @@ impl TestContext {
         {}
     }
 
+    /// Wait for a real external acknowledgement while continuing to route
+    /// scheduler input. An acknowledgement can interrupt only an input wait,
+    /// never processing of an already received Browser/renderer publication.
+    #[cfg(test)]
+    pub(crate) async fn wait_for_external_input_with_scheduler<T>(
+        &mut self,
+        input: impl std::future::Future<Output = T>,
+    ) -> T {
+        tokio::pin!(input);
+        loop {
+            match self
+                .wait_for_one_test_scheduler_turn_or(input.as_mut())
+                .await
+            {
+                std::ops::ControlFlow::Break(result) => return result,
+                std::ops::ControlFlow::Continue(TestSchedulerTurnOutcome::Processed(_)) => {}
+                std::ops::ControlFlow::Continue(TestSchedulerTurnOutcome::Idle) => {
+                    panic!("test scheduler lost all input before the external acknowledgement");
+                }
+            }
+        }
+    }
+
     async fn wait_for_one_test_scheduler_turn(&mut self) -> TestSchedulerTurnOutcome {
+        let mut never = std::future::pending::<std::convert::Infallible>();
+        match self
+            .wait_for_one_test_scheduler_turn_or(std::pin::Pin::new(&mut never))
+            .await
+        {
+            std::ops::ControlFlow::Continue(outcome) => outcome,
+            std::ops::ControlFlow::Break(never) => match never {},
+        }
+    }
+
+    async fn wait_for_one_test_scheduler_turn_or<T>(
+        &mut self,
+        input: std::pin::Pin<&mut impl std::future::Future<Output = T>>,
+    ) -> std::ops::ControlFlow<T, TestSchedulerTurnOutcome> {
         let ready = Box::pin(self.run_one_ready_test_scheduler_turn()).await;
         if matches!(ready, TestSchedulerTurnOutcome::Processed(_)) {
-            return ready;
+            return std::ops::ControlFlow::Continue(ready);
         }
 
         let mut work = VecDeque::new();
@@ -1514,34 +1571,35 @@ impl TestContext {
         let input_kind = if !self.pending_runtime_deferred_replies.is_empty() {
             tokio::select! {
                 biased;
+                result = input => return std::ops::ControlFlow::Break(result),
                 maybe_response = self.runtime_inspector_response_ready_rx.recv() => {
                     let Some(response) = maybe_response else {
-                        return TestSchedulerTurnOutcome::Idle;
+                        return std::ops::ControlFlow::Continue(TestSchedulerTurnOutcome::Idle);
                     };
                     work.push_back(TestSchedulerWork::RuntimeDeferredReplyReady(response));
                     TestSchedulerInputKind::RuntimeDeferredReply
                 }
                 maybe_completion = self.background_navigation_completion_rx.recv(), if background_navigation_scheduler_enabled => {
                     let Some(completion) = maybe_completion else {
-                        return TestSchedulerTurnOutcome::Idle;
+                        return std::ops::ControlFlow::Continue(TestSchedulerTurnOutcome::Idle);
                     };
                     work.push_back(TestSchedulerWork::BackgroundNavigationCompletion(completion));
                     TestSchedulerInputKind::BackgroundNavigationCompletion
                 }
                 maybe_event = self.background_event_rx.recv(), if background_navigation_scheduler_enabled => {
                     let Some(event) = maybe_event else {
-                        return TestSchedulerTurnOutcome::Idle;
+                        return std::ops::ControlFlow::Continue(TestSchedulerTurnOutcome::Idle);
                     };
                     work.push_back(TestSchedulerWork::BackgroundEvent(event));
                     TestSchedulerInputKind::BackgroundEvent
                 }
-                event = recv_native_download_input(&mut self.browser_event_rx) => {
-                    work.push_back(TestSchedulerWork::ProtocolEvents(self.project_native_download_input(event)));
+                event = recv_native_browser_input(&mut self.browser_event_rx) => {
+                    work.push_back(TestSchedulerWork::ProtocolEvents(self.project_native_browser_input(event).await));
                     TestSchedulerInputKind::NativeDownload
                 }
                 maybe_publication = self.renderer_publication_rx.recv() => {
                     let Some(publication) = maybe_publication else {
-                        return TestSchedulerTurnOutcome::Idle;
+                        return std::ops::ControlFlow::Continue(TestSchedulerTurnOutcome::Idle);
                     };
                     work.push_back(TestSchedulerWork::RendererPublication(publication));
                     TestSchedulerInputKind::RendererPublication
@@ -1550,34 +1608,35 @@ impl TestContext {
         } else {
             tokio::select! {
                 biased;
+                result = input => return std::ops::ControlFlow::Break(result),
                 maybe_completion = self.background_navigation_completion_rx.recv(), if background_navigation_scheduler_enabled => {
                     let Some(completion) = maybe_completion else {
-                        return TestSchedulerTurnOutcome::Idle;
+                        return std::ops::ControlFlow::Continue(TestSchedulerTurnOutcome::Idle);
                     };
                     work.push_back(TestSchedulerWork::BackgroundNavigationCompletion(completion));
                     TestSchedulerInputKind::BackgroundNavigationCompletion
                 }
                 maybe_event = self.background_event_rx.recv(), if background_navigation_scheduler_enabled => {
                     let Some(event) = maybe_event else {
-                        return TestSchedulerTurnOutcome::Idle;
+                        return std::ops::ControlFlow::Continue(TestSchedulerTurnOutcome::Idle);
                     };
                     work.push_back(TestSchedulerWork::BackgroundEvent(event));
                     TestSchedulerInputKind::BackgroundEvent
                 }
-                event = recv_native_download_input(&mut self.browser_event_rx) => {
-                    work.push_back(TestSchedulerWork::ProtocolEvents(self.project_native_download_input(event)));
+                event = recv_native_browser_input(&mut self.browser_event_rx) => {
+                    work.push_back(TestSchedulerWork::ProtocolEvents(self.project_native_browser_input(event).await));
                     TestSchedulerInputKind::NativeDownload
                 }
                 maybe_publication = self.renderer_publication_rx.recv() => {
                     let Some(publication) = maybe_publication else {
-                        return TestSchedulerTurnOutcome::Idle;
+                        return std::ops::ControlFlow::Continue(TestSchedulerTurnOutcome::Idle);
                     };
                     work.push_back(TestSchedulerWork::RendererPublication(publication));
                     TestSchedulerInputKind::RendererPublication
                 }
                 maybe_response = self.runtime_inspector_response_ready_rx.recv() => {
                     let Some(response) = maybe_response else {
-                        return TestSchedulerTurnOutcome::Idle;
+                        return std::ops::ControlFlow::Continue(TestSchedulerTurnOutcome::Idle);
                     };
                     work.push_back(TestSchedulerWork::RuntimeDeferredReplyReady(response));
                     TestSchedulerInputKind::RuntimeDeferredReply
@@ -1585,7 +1644,7 @@ impl TestContext {
             }
         };
         Box::pin(self.route_test_scheduler_work_queue(&mut work)).await;
-        TestSchedulerTurnOutcome::Processed(input_kind)
+        std::ops::ControlFlow::Continue(TestSchedulerTurnOutcome::Processed(input_kind))
     }
 
     async fn route_protocol_events_like_scheduler(

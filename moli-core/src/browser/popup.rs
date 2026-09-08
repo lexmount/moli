@@ -37,4 +37,5 @@ pub struct BrowserPopupAdmission {
     pub source_document: DocumentHandle,
     pub web_contents: WebContentsHandle,
     pub created: bool,
+    pub navigation: Option<super::NavigationId>,
 }

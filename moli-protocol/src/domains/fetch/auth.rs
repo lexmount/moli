@@ -312,6 +312,48 @@ pub(super) fn start_devtools_continue_with_auth_command_for_pending(
         &request_id,
     )?;
 
+    let chained_default = matches!(command.action, DevToolsAuthChallengeAction::Default)
+        && pending
+            .auth_stage_pause_state()
+            .is_some_and(|chain| !chain.remaining_sessions.is_empty());
+    if !chained_default && conn.is_native_navigation_auth(&pending) {
+        let decision = match command.action {
+            DevToolsAuthChallengeAction::Default => moli_core::browser::NavigationDecision::Cancel,
+            DevToolsAuthChallengeAction::Cancel => moli_core::browser::NavigationDecision::Continue,
+            DevToolsAuthChallengeAction::ProvideCredentials => {
+                let Some(credentials) = request_auth_for_challenge(
+                    &pending.challenge,
+                    command.username.as_deref().unwrap_or_default(),
+                    command.password.as_deref().unwrap_or_default(),
+                ) else {
+                    conn.register_pending_fetch_auth_navigation_for_owner(
+                        owner, request_id, pending,
+                    );
+                    return Some(FetchCommandTaskStep::Complete(CommandOutputPlan::error(
+                        -32000,
+                        "NotImplemented",
+                    )));
+                };
+                let Some(response) = conn.take_navigation_response(pending.auth_permit) else {
+                    return Some(FetchCommandTaskStep::Complete(CommandOutputPlan::error(
+                        -32000,
+                        "RequestNotFound",
+                    )));
+                };
+                moli_core::browser::NavigationDecision::Authenticate {
+                    credentials,
+                    response: Box::new(response),
+                }
+            }
+        };
+        conn.resolve_native_navigation_decision(
+            pending.navigation.web_contents,
+            pending.auth_permit,
+            decision,
+        );
+        return Some(FetchCommandTaskStep::Complete(CommandOutputPlan::success()));
+    }
+
     Some(match command.action {
         DevToolsAuthChallengeAction::Default
             if pending
@@ -478,6 +520,14 @@ pub(super) async fn default_navigation_auth_as_background_events_async(
         return;
     }
 
+    if conn.is_native_navigation_auth(&pending) {
+        conn.resolve_native_navigation_decision(
+            pending.navigation.web_contents,
+            pending.auth_permit,
+            moli_core::browser::NavigationDecision::Cancel,
+        );
+        return;
+    }
     drop(conn.take_navigation_auth(pending.auth_permit));
     let token = Some(pending.auth_permit.navigation());
     let navigation_state = pending.navigation;

@@ -58,6 +58,63 @@ async fn project(
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn reused_popup_native_request_waits_for_its_source_fifo_observation() {
+    let (mut conn, owner) = source().await;
+    let (_, mut events) = conn.subscribe_browser_events().unwrap();
+    // Capture both real inputs on one immutable renderer transport, then
+    // project only the creation prefix while holding the reuse observation.
+    let mut openings = capture_popup_script_for_test(
+        &mut conn,
+        &owner,
+        "window.open('about:blank','native-fifo');window.open('data:text/html,native-fifo','native-fifo')",
+        2,
+    )
+    .await;
+    let target = project(&mut conn, vec![openings.remove(0)]).await.remove(0);
+    let opening = openings.remove(0);
+    let admission = conn.wait_for_renderer_popup(opening.clone()).await.unwrap();
+    assert!(!admission.created);
+    let (contents, paused) = tokio::time::timeout(std::time::Duration::from_secs(5), async {
+        loop {
+            if let Some((contents, paused)) = conn.native_navigation_decision_for_target(&target)
+                && matches!(
+                    paused.stage,
+                    moli_core::browser::NavigationDecisionStage::Request { .. }
+                )
+            {
+                break (contents, paused);
+            }
+            events.recv().await.unwrap();
+        }
+    })
+    .await
+    .expect("native named reuse request boundary");
+    assert_eq!(contents, admission.web_contents);
+    assert_eq!(Some(paused.permit.navigation()), admission.navigation);
+    assert!(
+        conn.project_browser_navigation_decision(contents)
+            .await
+            .is_empty(),
+        "unobserved input cannot publish request events ahead of its source FIFO"
+    );
+    let (_, still_paused) = conn.native_navigation_decision_for_target(&target).unwrap();
+    assert_eq!(
+        still_paused.permit, paused.permit,
+        "source FIFO must retain the exact unclaimed decision"
+    );
+    assert_eq!(
+        project(&mut conn, vec![opening]).await,
+        std::slice::from_ref(&target)
+    );
+    conn.project_browser_navigation_decision(contents).await;
+    assert!(
+        conn.native_navigation_decision_for_target(&target)
+            .is_none_or(|(_, next)| next.permit != paused.permit),
+        "the observed source must release its own request, not wait for another popup"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn popup_uses_captured_context_and_opener_after_another_context_becomes_active() {
     let (mut conn, owner) = source().await;
     let openings = capture_openings_for_test(

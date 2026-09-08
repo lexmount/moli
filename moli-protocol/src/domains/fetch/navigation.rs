@@ -20,7 +20,7 @@ use super::{
     },
 };
 
-fn prepare_navigation_response_stage(
+pub(crate) fn prepare_navigation_response_stage(
     conn: &CdpConnection,
     pending: &mut PendingFetchNavigation,
     final_url: &Url,
@@ -671,6 +671,18 @@ pub(crate) async fn continue_navigation_without_request_pause_into_buffer_async(
         .await;
         return;
     };
+    if request.is_native_driver() {
+        let decision = request
+            .into_native_decision()
+            .expect("native request decision");
+        conn.update_native_navigation_dispatch(&pending);
+        conn.resolve_native_navigation_decision(
+            pending.navigation.web_contents,
+            pending.navigation_permit,
+            decision,
+        );
+        return;
+    }
     let work = match conn.start_claimed_intercepted_navigation_load(request) {
         Ok(work) => work,
         Err(message) => {
@@ -717,6 +729,20 @@ pub(super) async fn continue_navigation_response_neutrally_as_background_events_
     pending: crate::conn::PendingFetchResponseNavigation,
     transfer: Option<crate::conn::PausedDocumentTransfer>,
 ) {
+    if pending.is_native_driver() {
+        if let Some(transfer) = transfer {
+            conn.resolve_native_navigation_decision(
+                pending.navigation.web_contents,
+                pending.permit,
+                moli_core::browser::NavigationDecision::Response {
+                    transfer: Box::new(transfer),
+                    status: None,
+                    headers: Vec::new(),
+                },
+            );
+        }
+        return;
+    }
     let (token, navigation_state, navigation) =
         crate::conn::ClaimedFetchResponseNavigation::new(String::new(), pending, transfer)
             .continue_response_neutrally_async(conn)
@@ -833,8 +859,24 @@ fn register_navigation_auth_required_event(
     request_cookie_report: Option<StoredCookieQueryReport>,
     response: crate::conn::InterceptedNavigationResponse<RawResponse>,
 ) -> Result<crate::conn::BackgroundProtocolEvent, String> {
-    let blocked_intercepts = navigation_auth_required_blocked_intercepts(conn, pending);
     let auth_permit = conn.pause_navigation_auth(response)?;
+    register_navigation_auth_required_event_for_permit(
+        conn,
+        pending,
+        challenge,
+        request_cookie_report,
+        auth_permit,
+    )
+}
+
+pub(crate) fn register_navigation_auth_required_event_for_permit(
+    conn: &mut CdpConnection,
+    pending: &PendingFetchNavigation,
+    challenge: FetchAuthChallenge,
+    request_cookie_report: Option<StoredCookieQueryReport>,
+    auth_permit: moli_core::browser::web_contents::NavigationInterceptionPermit,
+) -> Result<crate::conn::BackgroundProtocolEvent, String> {
+    let blocked_intercepts = navigation_auth_required_blocked_intercepts(conn, pending);
     let mut pending_auth = crate::conn::PendingFetchAuthNavigation {
         owner_session_id: pending.navigation.owner.session_id().map(str::to_owned),
         action_session_id: pending.interception_session_id.clone(),

@@ -93,6 +93,7 @@ pub enum DocumentBodySource {
 pub struct PausedDocumentTransfer {
     request_load_policy: NavigationRequestLoadPolicy,
     state: PausedDocumentTransferState,
+    native_claim: Option<crate::browser::navigation_decision::NavigationDecisionClaim>,
 }
 
 #[derive(Debug)]
@@ -161,6 +162,20 @@ impl PausedDocumentTransfer {
         Self {
             request_load_policy,
             state: PausedDocumentTransferState::Pending { body },
+            native_claim: None,
+        }
+    }
+
+    pub(in crate::browser) fn claim_native(
+        &mut self,
+        claim: crate::browser::navigation_decision::NavigationDecisionClaim,
+    ) {
+        self.native_claim = Some(claim);
+    }
+
+    pub(in crate::browser) fn release_native_claim(&mut self) {
+        if let Some(claim) = self.native_claim.take() {
+            claim.disarm();
         }
     }
 
@@ -183,12 +198,14 @@ impl PausedDocumentTransfer {
         let Self {
             request_load_policy,
             state,
+            native_claim,
         } = self;
         match state {
             PausedDocumentTransferState::Pending { body } => Ok((request_load_policy, body)),
             state => Err(Box::new(Self {
                 request_load_policy,
                 state,
+                native_claim,
             })),
         }
     }
@@ -217,6 +234,21 @@ impl PausedDocumentTransfer {
     }
 
     pub fn open_body_stream(
+        mut self,
+        handle: String,
+    ) -> Result<PendingFetchResponseOpenedBodyStream, OpenBodyStreamError> {
+        let native_claim = self.native_claim.take();
+        let mut result = self.open_body_stream_inner(handle);
+        let transfer = match &mut result {
+            Ok(opened) => &mut opened.transfer,
+            Err(OpenBodyStreamError::NotOpenable(transfer))
+            | Err(OpenBodyStreamError::Failed { transfer, .. }) => transfer.as_mut(),
+        };
+        transfer.native_claim = native_claim;
+        result
+    }
+
+    fn open_body_stream_inner(
         self,
         handle: String,
     ) -> Result<PendingFetchResponseOpenedBodyStream, OpenBodyStreamError> {
@@ -236,6 +268,7 @@ impl PausedDocumentTransfer {
                 buffered_bytes: None,
                 transfer: Self {
                     request_load_policy,
+                    native_claim: None,
                     state: PausedDocumentTransferState::ActiveBodyStream {
                         stream: ActiveDocumentBodyStreamState::new(
                             requested_url,
@@ -332,12 +365,14 @@ impl PausedDocumentTransfer {
         let Self {
             request_load_policy,
             state,
+            native_claim,
         } = self;
         let PausedDocumentTransferState::ActiveBodyStream { mut stream } = state else {
             return Err((
                 Self {
                     request_load_policy,
                     state,
+                    native_claim,
                 },
                 "StreamHandleNotFound".to_owned(),
             ));
@@ -351,6 +386,7 @@ impl PausedDocumentTransfer {
                             return Err((
                                 Self {
                                     request_load_policy,
+                                    native_claim,
                                     state: PausedDocumentTransferState::ActiveBodyStream { stream },
                                 },
                                 message,
@@ -366,12 +402,14 @@ impl PausedDocumentTransfer {
                     Self {
                         request_load_policy,
                         state,
+                        native_claim,
                     },
                 ))
             }
             Err(message) => Err((
                 Self {
                     request_load_policy,
+                    native_claim,
                     state: PausedDocumentTransferState::ActiveBodyStream { stream },
                 },
                 message,
@@ -385,6 +423,7 @@ impl PausedDocumentTransfer {
         let Self {
             request_load_policy,
             state,
+            native_claim,
         } = self;
         match state {
             PausedDocumentTransferState::Pending { body } => Ok((request_load_policy, body)),
@@ -393,6 +432,7 @@ impl PausedDocumentTransfer {
                     return Err((
                         Self {
                             request_load_policy,
+                            native_claim,
                             state: PausedDocumentTransferState::ActiveBodyStream { stream },
                         },
                         message,
@@ -403,6 +443,7 @@ impl PausedDocumentTransfer {
                     Err(message) => Err((
                         Self {
                             request_load_policy,
+                            native_claim,
                             state: PausedDocumentTransferState::ActiveBodyStream { stream },
                         },
                         message,
@@ -414,6 +455,7 @@ impl PausedDocumentTransfer {
 
     pub fn into_synthetic_response_context(self) -> SyntheticDocumentResponseContext {
         let Self {
+            native_claim: _,
             request_load_policy,
             state,
         } = self;
@@ -479,6 +521,19 @@ impl PausedDocumentTransfer {
     }
 
     pub async fn materialize_body_limited_async(
+        mut self,
+        limit: usize,
+    ) -> Result<(Option<Vec<u8>>, Self), (String, Self)> {
+        let native_claim = self.native_claim.take();
+        let mut result = self.materialize_body_limited_inner_async(limit).await;
+        let transfer = match &mut result {
+            Ok((_, transfer)) | Err((_, transfer)) => transfer,
+        };
+        transfer.native_claim = native_claim;
+        result
+    }
+
+    async fn materialize_body_limited_inner_async(
         self,
         limit: usize,
     ) -> Result<(Option<Vec<u8>>, Self), (String, Self)> {

@@ -447,7 +447,7 @@ impl PendingSubresourceFetchOwnerKind {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct PendingFetchNavigation {
     pub fetch_request_id: String,
     pub interception_session_id: Option<String>,
@@ -575,6 +575,7 @@ pub struct PendingFetchResponseNavigation {
     active_body_stream_handle: Option<String>,
     body_progress_source: MainDocumentBodyProgressSource,
     prepared_document: Option<Box<PausedResponsePreparedDocument>>,
+    native_driver: bool,
 }
 
 impl PendingFetchResponseNavigation {
@@ -589,6 +590,7 @@ impl PendingFetchResponseNavigation {
             active_body_stream_handle: None,
             body_progress_source: MainDocumentBodyProgressSource::default(),
             prepared_document: None,
+            native_driver: false,
         }
     }
 
@@ -604,11 +606,30 @@ impl PendingFetchResponseNavigation {
             active_body_stream_handle: None,
             body_progress_source,
             prepared_document,
+            native_driver: false,
         }
     }
 
     pub(crate) fn owner_session_id(&self) -> Option<&str> {
         self.navigation.session_id.as_deref()
+    }
+
+    pub(crate) fn new_native(
+        navigation: NavigationDispatchState,
+        permit: super::state::NavigationInterceptionPermit,
+    ) -> Self {
+        Self {
+            navigation,
+            permit,
+            active_body_stream_handle: None,
+            body_progress_source: MainDocumentBodyProgressSource::default(),
+            prepared_document: None,
+            native_driver: true,
+        }
+    }
+
+    pub(crate) fn is_native_driver(&self) -> bool {
+        self.native_driver
     }
 
     pub(crate) fn active_body_stream_handle(&self) -> Option<&str> {
@@ -633,6 +654,24 @@ pub(crate) struct ClaimedFetchResponseNavigation {
 }
 
 impl ClaimedFetchResponseNavigation {
+    pub(crate) fn is_native_driver(&self) -> bool {
+        self.pending.is_native_driver()
+    }
+
+    pub(crate) fn has_active_body_stream(&self) -> bool {
+        self.transfer
+            .as_ref()
+            .is_some_and(|transfer| transfer.body_stream_offset().is_some())
+    }
+
+    pub(crate) fn into_parts(
+        self,
+    ) -> (
+        PendingFetchResponseNavigation,
+        Option<PausedDocumentTransfer>,
+    ) {
+        (self.pending, self.transfer)
+    }
     pub(crate) fn new(
         request_id: String,
         pending: PendingFetchResponseNavigation,

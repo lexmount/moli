@@ -37,9 +37,8 @@ mod worker_target;
 
 pub(in crate::domains) use browser_context::devtools_client_window_info_for_target;
 pub(crate) use popup::{
-    complete_popup_target_navigation_owner_action_async,
-    emit_target_info_changed_for_owner_background_event, observe_reused_popup_navigation,
-    project_browser_popup_target,
+    complete_target_startup_owner_action_async,
+    emit_target_info_changed_for_owner_background_event, project_browser_popup_target,
     schedule_initial_document_target_url_navigation_after_debugger_barrier_release_for_target,
     schedule_initial_document_target_url_navigation_after_debugger_resume,
 };
