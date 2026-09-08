@@ -566,6 +566,15 @@ unsafe extern "C" fn worker_promise_reject_callback(message: v8::PromiseRejectMe
 
     match message.get_event() {
         v8::PromiseRejectEvent::PromiseRejectWithNoHandler => {
+            if scope
+                .get_current_host_defined_options()
+                .is_some_and(|options| {
+                    crate::util::script_muted_errors_from_host_defined_options(scope, options)
+                        == Some(true)
+                })
+            {
+                return;
+            }
             let promise = message.get_promise();
             let mut pending = pending_unhandled_rejections.borrow_mut();
             if pending.iter().any(|rejection| {
@@ -4341,7 +4350,20 @@ pub(super) fn dispatch_worker_exception_with_phase_and_source<'s>(
     parent_tx: &mpsc::UnboundedSender<WorkerToParentMessage>,
     script_url: &str,
 ) -> bool {
-    apply_worker_exception_location_overrides(scope, &mut report, exception);
+    let exception = if report.muted_errors {
+        report.summary = "Script error.".to_owned();
+        report.source = Some(String::new());
+        report.line = Some(0);
+        report.column = Some(0);
+        report.source_line = None;
+        report.stack = None;
+        report.callback_context = None;
+        report.exception = None;
+        Some(v8::null(scope).into())
+    } else {
+        apply_worker_exception_location_overrides(scope, &mut report, exception);
+        exception
+    };
     let handled =
         dispatch_worker_error_event(scope, global, &report, exception, parent_tx, script_url);
     if !handled {
