@@ -8408,6 +8408,7 @@ url/a-element-origin.html
 url/a-element.html?include=javascript
 url/a-element.html?include=mailto
 url/data-uri-fragment.html
+url/failure.html
 user-timing/clearMarks.html
 user-timing/clearMeasures.html
 user-timing/invoke_with_timing_attributes.html

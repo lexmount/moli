@@ -8531,6 +8531,118 @@ fn url_and_search_params_declared_slots_ignore_prototype_spoofing() {
 }
 
 #[test]
+fn url_parsing_apis_reject_invalid_bases_for_absolute_inputs() {
+    let mut vm = new_storage_test_vm("https://url-invalid-base.test/");
+    let result = vm
+        .eval(
+            r#"
+(() => {
+  const assert = (condition, message) => { if (!condition) throw new Error(message); };
+  const invalidBases = [
+    '', '/relative', 'relative', 'http://', 'https://example.test:bogus/',
+    'http://[::1', 'file://example:1/', null, false,
+  ];
+  for (const input of ['about:blank', 'https://example.test/', 'data:text/plain,x', 'child']) {
+    for (const base of invalidBases) {
+      let error;
+      try { new URL(input, base); } catch (caught) { error = caught; }
+      assert(error instanceof TypeError, `constructor rejects invalid base ${base} for ${input}`);
+      assert(URL.parse(input, base) === null, `parse rejects invalid base ${base} for ${input}`);
+      assert(URL.canParse(input, base) === false, `canParse rejects invalid base ${base} for ${input}`);
+    }
+  }
+  return 'ok';
+})()
+"#,
+        )
+        .expect("all URL parsing APIs must validate a supplied base");
+    assert_eq!(result, "ok");
+}
+
+#[test]
+fn url_parsing_apis_resolve_same_scheme_inputs_against_the_base() {
+    let mut vm = new_storage_test_vm("https://url-same-scheme-base.test/");
+    let result = vm
+        .eval(
+            r#"
+(() => {
+  const assert = (condition, message) => { if (!condition) throw new Error(message); };
+  const cases = [
+    ['https:child', 'https://u:p@example.test:8443/dir/base?old#old', 'https://u:p@example.test:8443/dir/child'],
+    ['HTTPS:../next', 'https://example.test/dir/base', 'https://example.test/next'],
+    ['https:?next', 'https://example.test/dir/base?old#old', 'https://example.test/dir/base?next'],
+    ['https:#next', 'https://example.test/dir/base?old#old', 'https://example.test/dir/base?old#next'],
+    ['ftp:child', 'ftp://example.test/dir/base', 'ftp://example.test/dir/child'],
+    ['file:child', 'file:///dir/base', 'file:///dir/child'],
+    ['https:child', 'http://example.test/dir/base', 'https://child/'],
+    ['https:child', undefined, 'https://child/'],
+    ['about:blank', 'https://example.test/', 'about:blank'],
+    ['data:text/plain,x', 'about:blank', 'data:text/plain,x'],
+    ['#new', 'about:blank?old#old', 'about:blank?old#new'],
+    ['https://other.test/x', 'https://example.test/dir/base', 'https://other.test/x'],
+  ];
+  for (const [input, base, expected] of cases) {
+    assert(new URL(input, base).href === expected, `constructor resolves ${input} against ${base}`);
+    const parsed = URL.parse(input, base);
+    assert(parsed instanceof URL && parsed.href === expected, `parse resolves ${input} against ${base}`);
+    assert(URL.canParse(input, base), `canParse accepts ${input} against ${base}`);
+    assert(parsed.searchParams.toString() === new URL(expected).searchParams.toString(), 'resolved query initializes URLSearchParams');
+  }
+  return 'ok';
+})()
+"#,
+        )
+        .expect("URL parsing must use the base even when the input includes a scheme");
+    assert_eq!(result, "ok");
+}
+
+#[test]
+fn url_parsing_apis_convert_arguments_before_parsing() {
+    let mut vm = new_storage_test_vm("https://url-base-conversion-order.test/");
+    let result = vm
+        .eval(
+            r#"
+(() => {
+  const assert = (condition, message) => { if (!condition) throw new Error(message); };
+  for (const parse of [(...args) => new URL(...args), URL.parse, URL.canParse]) {
+    const order = [];
+    const value = (name, text) => ({
+      [Symbol.toPrimitive](hint) {
+        assert(hint === 'string', 'URL arguments use string conversion');
+        order.push(name);
+        return text;
+      },
+    });
+    parse(value('input', 'https://example.test/'), value('base', 'https://base.test/'));
+    assert(order.join(',') === 'input,base', 'input then base are each converted once');
+    order.length = 0;
+    const marker = new RangeError('conversion marker');
+    let error;
+    try {
+      parse(value('input', 'http://['), {
+        toString() { order.push('base'); throw marker; },
+      });
+    } catch (caught) { error = caught; }
+    assert(error === marker && order.join(',') === 'input,base', 'base conversion errors precede URL parsing');
+    order.length = 0;
+    error = undefined;
+    try {
+      parse({ toString() { throw marker; } }, value('base', 'https://base.test/'));
+    } catch (caught) { error = caught; }
+    assert(error === marker && order.length === 0, 'failed input conversion does not touch the base');
+    const withoutBase = parse('https://example.test/');
+    const undefinedBase = parse('https://example.test/', undefined);
+    assert(String(withoutBase) === String(undefinedBase), 'undefined base is equivalent to omission');
+  }
+  return 'ok';
+})()
+"#,
+        )
+        .expect("URL argument conversion order must be preserved");
+    assert_eq!(result, "ok");
+}
+
+#[test]
 fn url_static_parse_and_can_parse_stringify_undefined_input() {
     let mut vm = new_storage_test_vm("https://url-static-stringification.test/");
 

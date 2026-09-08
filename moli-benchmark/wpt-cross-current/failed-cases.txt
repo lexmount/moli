@@ -3294,7 +3294,6 @@ trusted-types/trusted-types-secondary-document.html
 uievents/order-of-events/focus-events/focus-automated-blink-webkit.html
 url/a-element.html?exclude=(file|javascript|mailto)
 url/a-element.html?include=file
-url/failure.html
 viewport/viewport-segments.html
 wasm/core/memory64/table64.wast.js.html
 wasm/jsapi/proto-from-ctor-realm.html
