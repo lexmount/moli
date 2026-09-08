@@ -7,6 +7,28 @@ use moli_fetch::{
 
 const MAX_MANUAL_CORS_REDIRECTS: usize = 20;
 
+/// Script fetches need CORS authorization before following every redirect,
+/// even though their browser-generated GET requests do not require preflight.
+pub(crate) async fn fetch_cors_script_text(
+    loader: &ResourceRequestClient,
+    request: Request,
+    cancel_handle: FetchCancelHandle,
+) -> Result<Response, String> {
+    let observed = fetch_browser_subresource_raw_stream_with_manual_preflight_redirects(
+        loader,
+        request,
+        Some(cancel_handle),
+        Vec::new(),
+        None,
+    )
+    .await?;
+    observed
+        .into_response()
+        .into_lossy_materialized_text_response()
+        .await
+        .map_err(format_network_error)
+}
+
 #[cfg(test)]
 pub(crate) async fn fetch_browser_subresource_with_preflight(
     loader: ResourceRequestClient,
@@ -200,7 +222,46 @@ impl ManualCorsRedirectState {
                 unreachable!("redirect modes were handled before the follow transition")
             }
         }
+        if !matches!(next_url.scheme(), "http" | "https") {
+            return Err(format!("CORS redirect requires an HTTP(S) URL: {next_url}"));
+        }
+        if self.request.request_mode == RequestMode::Cors
+            && (!next_url.username().is_empty() || next_url.password().is_some())
+            && self.request.request_origin().is_some_and(|origin| {
+                !origin.same_origin_url(&head.final_url) || !origin.same_origin_url(&next_url)
+            })
+        {
+            return Err("CORS redirect URL must not include credentials".to_owned());
+        }
+        if !moli_url::same_origin(&head.final_url, &next_url) {
+            self.request
+                .request_headers
+                .retain(|(name, _)| !name.eq_ignore_ascii_case("authorization"));
+            if self
+                .request
+                .auth()
+                .is_some_and(|auth| auth.target == moli_fetch::RequestAuthTarget::Server)
+            {
+                self.request.set_auth(None);
+            }
+        }
+        if let Some(policy) =
+            crate::referrer_policy::response_referrer_policy_from_headers(&head.headers)
+        {
+            let mut metadata = self
+                .request
+                .subresource_request_metadata()
+                .cloned()
+                .unwrap_or_default();
+            metadata.referrer_policy = Some(policy);
+            self.request = self
+                .request
+                .clone()
+                .with_subresource_request_metadata(metadata);
+        }
         let redirect_status = head.status;
+        // Keep the original client origin for Fetch Metadata. Recording the hop
+        // makes Request origin serialization and CORS validation apply redirect taint.
         self.request.record_redirect(RedirectInfo {
             source: moli_fetch::RedirectSource::Network,
             from_url: head.final_url,
@@ -218,7 +279,14 @@ impl ManualCorsRedirectState {
         });
         self.request.apply_redirect_status(redirect_status);
         self.request.url = next_url;
-        self.preflight_request_headers = self.request.request_headers.to_byte_strings();
+        // Only author headers participate in preflight. In particular, a
+        // redirected script must not acquire embedder/browser-added headers here.
+        self.preflight_request_headers.retain(|(name, _)| {
+            self.request
+                .request_headers
+                .iter()
+                .any(|(remaining, _)| name.eq_ignore_ascii_case(remaining))
+        });
         Ok(ManualCorsRedirectTransition::FollowedRedirect)
     }
 
@@ -340,7 +408,12 @@ fn next_redirect_url(
     final_url
         .join(&location)
         .or_else(|_| url::Url::parse(&location))
-        .map(Some)
+        .map(|mut url| {
+            if !location.contains('#') {
+                url.set_fragment(final_url.fragment());
+            }
+            Some(url)
+        })
         .map_err(|error| {
             format!("failed to resolve redirect location `{location}` from {final_url}: {error}")
         })

@@ -32,7 +32,7 @@ pub(crate) use self::async_fetch::{
     fetch_browser_subresource_raw_stream_with_preflight_headers_and_network_metadata,
     fetch_browser_subresource_with_preflight_and_network_metadata,
     fetch_browser_subresource_with_preflight_headers,
-    fetch_browser_subresource_with_preflight_headers_and_network_metadata,
+    fetch_browser_subresource_with_preflight_headers_and_network_metadata, fetch_cors_script_text,
     spawn_async_subresource_fetch,
 };
 pub(crate) use self::beacon::{navigator_send_beacon_callback, send_link_audit_ping};
