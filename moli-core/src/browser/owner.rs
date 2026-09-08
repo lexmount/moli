@@ -13,14 +13,17 @@ use parking_lot::Mutex;
 use tokio::sync::{mpsc, oneshot};
 
 mod activation;
+mod document_lifecycle;
+mod downloads;
+mod javascript_dialog;
 pub use activation::PendingWebContentsActivation;
+mod initial_document;
 mod navigation;
-pub use navigation::{
-    BrowserBuiltInitialDocument, BrowserCommittedInitialDocument, BrowserDocumentMaterialization,
-    BrowserDocumentNavigationCommit, BrowserInitialDocumentAdmission, BrowserInitialDocumentBuild,
-    BrowserInterceptedNavigationLoad, BrowserInterceptedNavigationResponse, BrowserNavigationLoad,
-    BrowserPreparedDocumentNavigation, BrowserPreparedNavigationResponse,
-};
+pub use initial_document::{BrowserCommittedInitialDocument, BrowserInitialDocumentWaiter};
+mod navigation_driver;
+pub use navigation_driver::{BrowserNavigationOutcome, BrowserNavigationWaiter};
+mod navigation_events;
+mod popup;
 
 use super::{
     BrowserContext, BrowserContextId, BrowserContextStoragePartitionHandles, MainFrameSlotId,
@@ -86,7 +89,9 @@ macro_rules! forward_context_try_update {
 struct Browser {
     contexts: IndexMap<BrowserContextId, BrowserContext>,
     permission_defaults: super::PermissionDefaults,
-    navigation_work: navigation::NavigationWorkRegistry,
+    download_policy: super::DownloadPolicy,
+    popup_admissions: popup::PopupAdmissions,
+    document_decision_provider: Option<tokio::sync::watch::Receiver<()>>,
     local_sender: BrowserLocalSender,
     events: super::events::BrowserEventStream,
 }
@@ -96,7 +101,9 @@ impl Browser {
         Self {
             contexts: IndexMap::new(),
             permission_defaults: super::PermissionDefaults::default(),
-            navigation_work: navigation::NavigationWorkRegistry::default(),
+            download_policy: super::DownloadPolicy::default(),
+            popup_admissions: popup::PopupAdmissions::default(),
+            document_decision_provider: None,
             local_sender,
             events: super::events::BrowserEventStream::default(),
         }
@@ -126,22 +133,34 @@ impl Browser {
         let Some(context) = self.contexts.shift_remove(&id) else {
             return false;
         };
-        self.navigation_work.remove_context(id);
+        let navigations = context.navigation_snapshots().collect::<Vec<_>>();
+        let dialogs = context.javascript_dialog_snapshots();
         self.events
             .publish(super::BrowserEvent::ContextDisposed(id));
         context.shutdown();
+        self.publish_failed_navigations(
+            navigations,
+            super::NavigationFailureReason::ContextDisposed,
+        );
+        self.publish_closed_javascript_dialogs(dialogs);
         true
     }
 
     fn shutdown(&mut self) {
-        self.navigation_work.clear();
         let contexts = std::mem::take(&mut self.contexts);
         for id in contexts.keys().copied() {
             self.events
                 .publish(super::BrowserEvent::ContextDisposed(id));
         }
         for (_, context) in contexts {
+            let navigations = context.navigation_snapshots().collect::<Vec<_>>();
+            let dialogs = context.javascript_dialog_snapshots();
             context.shutdown();
+            self.publish_failed_navigations(
+                navigations,
+                super::NavigationFailureReason::ContextDisposed,
+            );
+            self.publish_closed_javascript_dialogs(dialogs);
         }
     }
 
@@ -163,11 +182,32 @@ impl Browser {
         tokio::task::spawn_local(async move {
             let (context, result) = operation(context).await;
             let _ = local_sender.send(Box::new(move |browser| {
+                // Test-only async Context borrowing temporarily removes its
+                // registry entry. Catch up the original journals before the
+                // fixture reply; native callbacks during that borrow could
+                // not resolve the Context. Production never removes it here.
+                let progress = context
+                    .web_contents_handles()
+                    .filter_map(|contents| {
+                        let document =
+                            context.document_handle_for_web_contents(contents).ok()??;
+                        let mut renderer = context
+                            .document(document)
+                            .ok()?
+                            .page
+                            .observe_document_lifecycle()?;
+                        Some((document, renderer.snapshot()))
+                    })
+                    .collect::<Vec<_>>();
                 let previous = browser.contexts.insert(id, context);
                 debug_assert!(
                     previous.is_none(),
                     "BrowserContext identity must remain unique during local work"
                 );
+                for (document, snapshot) in progress {
+                    browser.commit_document_lifecycle(document, snapshot);
+                    browser.commit_javascript_dialogs(document);
+                }
                 let _ = completion_tx.send(result);
             }));
         });
@@ -341,6 +381,7 @@ impl BrowserHandle {
                 main_frame,
                 document,
                 url,
+                popup: context.web_contents(handle)?.window.popup_creation.clone(),
             })
         })?
     }
@@ -370,6 +411,43 @@ impl BrowserHandle {
         .flatten()
     }
 
+    /// Waits for already-produced renderer progress to cross the native owner
+    /// boundary. This is observation only: frontend ingress cannot apply an
+    /// event, reset lifecycle state, or select a replacement Document.
+    pub async fn wait_for_renderer_document_lifecycle(
+        &self,
+        renderer: super::RendererPageResidenceIdentity,
+        event: crate::page::RendererDocumentLifecycleEvent,
+    ) -> Option<super::web_contents::DocumentLifecycleEvent> {
+        let (document, mut progress) = self
+            .execute(move |browser| {
+                let document = browser
+                    .contexts
+                    .values()
+                    .find_map(|context| context.document_for_renderer(renderer))?;
+                let host = browser
+                    .context_mut(document.web_contents().context())
+                    .ok()?
+                    .document_mut(document)
+                    .ok()?;
+                Some((document, host.lifecycle.observe_committed()?))
+            })
+            .ok()??;
+        loop {
+            let snapshot = *progress.borrow_and_update();
+            if snapshot.frame != event.frame || snapshot.document != event.document {
+                return None;
+            }
+            if snapshot.sequence() >= event.sequence {
+                return Some(super::web_contents::DocumentLifecycleEvent::new(
+                    document.id(),
+                    event,
+                ));
+            }
+            progress.changed().await.ok()?;
+        }
+    }
+
     /// Subscribe and snapshot in the same owner turn, without a gap between
     /// observing existing Contexts and receiving their subsequent lifecycle.
     pub fn subscribe(
@@ -394,6 +472,28 @@ impl BrowserHandle {
                             .flatten()
                     })
                 }),
+                browser.contexts.values().flat_map(|context| {
+                    context.web_contents_handles().filter_map(|contents| {
+                        let document =
+                            context.document_handle_for_web_contents(contents).ok()??;
+                        Some(super::DocumentLifecycleSnapshot {
+                            document,
+                            lifecycle: context.document_lifecycle_snapshot(document).ok()??,
+                        })
+                    })
+                }),
+                browser
+                    .contexts
+                    .values()
+                    .flat_map(|context| context.downloads.snapshots()),
+                browser
+                    .contexts
+                    .values()
+                    .flat_map(BrowserContext::javascript_dialog_snapshots),
+                browser
+                    .contexts
+                    .values()
+                    .flat_map(BrowserContext::navigation_snapshots),
             )
         })
     }
@@ -409,6 +509,8 @@ impl BrowserHandle {
         self.execute(move |browser| {
             let context = browser.context_mut(handle.context())?;
             let was_selected = context.selected_web_contents_handle() == Some(handle);
+            let navigation = context.navigation_snapshot(handle)?;
+            let dialogs = context.web_contents_javascript_dialog_snapshots(handle);
             let closing = context.close_web_contents(handle)?;
             let activated = was_selected
                 .then(|| context.selected_web_contents_handle())
@@ -419,13 +521,14 @@ impl BrowserHandle {
                     None
                 })
             });
-            browser.navigation_work.remove_web_contents(handle);
+            browser.publish_failed_navigations([navigation], super::NavigationFailureReason::WebContentsClosed);
             let event = browser
                 .events
                 .publish(super::BrowserEvent::WebContentsClosed {
                     web_contents: handle,
                     activated,
                 });
+            browser.publish_closed_javascript_dialogs(dialogs);
             let (completion_tx, completion) = oneshot::channel();
             let local_sender = browser.local_sender.clone();
             tokio::task::spawn_local(async move {
@@ -726,8 +829,17 @@ impl BrowserContextHandle {
                     .context_mut(context)?
                     .web_contents_handles()
                     .collect::<Vec<_>>();
+                let dialogs = browser.context(context)?.javascript_dialog_snapshots();
+                let navigations = browser
+                    .context(context)?
+                    .navigation_snapshots()
+                    .collect::<Vec<_>>();
                 let closing = browser.context_mut(context)?.close_all_web_contents();
-                browser.navigation_work.remove_context(context);
+                browser.publish_failed_navigations(
+                    navigations,
+                    super::NavigationFailureReason::WebContentsClosed,
+                );
+                browser.publish_closed_javascript_dialogs(dialogs);
                 Ok::<_, String>(
                     handles
                         .into_iter()
@@ -760,21 +872,21 @@ impl BrowserContextHandle {
     ) -> Result<super::NavigationId, String> {
         let context = self.id;
         self.browser.execute(move |browser| {
-            let navigation = browser
-                .context_mut(context)?
-                .start_document_navigation(handle)?;
-            browser.navigation_work.remove_web_contents(handle);
-            Ok(navigation)
+            // Validate the exact Context before superseding any previous request.
+            browser.context(context)?.web_contents(handle)?;
+            browser.start_navigation(handle)
         })?
     }
 
     pub fn clear_document_navigation_state(&self, handle: WebContentsHandle) -> Result<(), String> {
         let context = self.id;
         self.browser.execute(move |browser| {
+            let previous = browser.context(context)?.navigation_snapshot(handle)?;
             browser
                 .context_mut(context)?
                 .clear_document_navigation_state(handle)?;
-            browser.navigation_work.remove_web_contents(handle);
+            browser
+                .publish_failed_navigations([previous], super::NavigationFailureReason::Canceled);
             Ok(())
         })?
     }
@@ -861,6 +973,16 @@ impl BrowserContextHandle {
     pub fn web_contents_handle_for_window_name(&self, name: &str) -> Option<WebContentsHandle> {
         let name = name.to_owned();
         self.read_live(move |context| context.web_contents_handle_for_window_name(&name))
+    }
+
+    pub fn web_contents_for_renderer_popup(
+        &self,
+        renderer: super::RendererPageResidenceIdentity,
+        popup_id: u64,
+    ) -> Option<WebContentsHandle> {
+        self.read(move |context| context.web_contents_for_renderer_popup(renderer, popup_id))
+            .ok()
+            .flatten()
     }
 
     pub fn clone_session_storage_namespace(
@@ -1023,6 +1145,7 @@ impl BrowserContextHandle {
         fn resolve_history_traversal(handle: WebContentsHandle, destination: super::web_contents::HistoryTraversalDestination) -> super::web_contents::ResolvedHistoryTraversal;
         fn document_service_worker_client_id(handle: super::DocumentHandle) -> u64;
         fn document_renderer_residence(handle: super::DocumentHandle) -> super::RendererPageResidenceIdentity;
+        fn web_contents_renderer_popup_sources(handle: WebContentsHandle) -> Vec<(super::RendererPageResidenceIdentity, u64)>;
         fn document_url(handle: super::DocumentHandle) -> url::Url;
         fn document_title(handle: super::DocumentHandle) -> String;
         fn document_lifecycle_snapshot(handle: super::DocumentHandle) -> Option<crate::page::RendererDocumentLifecycleSnapshot>;
@@ -1031,6 +1154,7 @@ impl BrowserContextHandle {
         fn is_on_initial_document(handle: WebContentsHandle) -> Option<bool>;
         fn initial_document_has_pending_navigation(handle: WebContentsHandle) -> bool;
         fn navigation_history_snapshot(handle: WebContentsHandle) -> (usize, Vec<super::web_contents::PageNavigationHistoryEntry>);
+        fn navigation_snapshot(handle: WebContentsHandle) -> super::NavigationSnapshot;
         fn navigation_history_entry_url(handle: WebContentsHandle, entry_id: i32) -> Option<String>;
         fn has_pending_document_navigation(handle: WebContentsHandle) -> bool;
         fn navigation_is_default(handle: WebContentsHandle) -> bool;
@@ -1049,10 +1173,7 @@ impl BrowserContextHandle {
         fn commit_same_document_navigation(handle: WebContentsHandle, document: super::DocumentId, url: url::Url, history_update: crate::page::SameDocumentHistoryUpdate) -> Option<super::web_contents::SameDocumentNavigationCommitted>;
         fn mark_renderer_crashed(handle: WebContentsHandle) -> ();
         fn begin_initial_empty_document(handle: WebContentsHandle, initial_url: String, creator: Option<super::web_contents::InitialDocumentCreator>, storage_key: Option<moli_storage_key::MoliStorageKey>) -> ();
-        fn mark_initial_url_replaces_empty_document(handle: WebContentsHandle) -> ();
         fn crash_web_contents_renderer_from_io(handle: WebContentsHandle) -> ();
-        fn pause_navigation_request(handle: WebContentsHandle, navigation: super::NavigationId, request: super::web_contents::NavigationRequestInterception) -> super::web_contents::NavigationInterceptionPermit;
-        fn pause_navigation_response(handle: WebContentsHandle, navigation: super::NavigationId, transfer: super::web_contents::PausedDocumentTransfer) -> super::web_contents::NavigationInterceptionPermit;
     }
 
     pub fn take_navigation_request(
@@ -1075,15 +1196,6 @@ impl BrowserContextHandle {
         transfer: super::web_contents::PausedDocumentTransfer,
     ) -> Result<(), Box<super::web_contents::PausedDocumentTransfer>> {
         self.update_live(move |context| context.restore_navigation_response(permit, transfer))
-    }
-
-    pub fn commit_document_title(
-        &self,
-        handle: WebContentsHandle,
-        change: &crate::RendererDocumentTitleChanged,
-    ) -> Result<Option<bool>, String> {
-        let change = change.clone();
-        self.try_update(move |context| context.commit_document_title(handle, &change))
     }
 
     pub fn arm_background_navigation_completion(
@@ -1149,35 +1261,18 @@ impl BrowserContextHandle {
         self.try_read(move |context| context.accepts_document_body_completion(handle, &navigation))
     }
 
-    pub fn clear_pending_navigation_if_matches(
+    pub fn cancel_document_navigation(
         &self,
         handle: WebContentsHandle,
         navigation: &super::NavigationId,
     ) -> Result<bool, String> {
         let navigation = *navigation;
-        let context = self.id;
+        if handle.context() != self.id {
+            return Err("WebContents belongs to another BrowserContext".into());
+        }
         self.browser.execute(move |browser| {
-            let cleared = browser
-                .context_mut(context)?
-                .clear_pending_navigation_if_matches(handle, &navigation)?;
-            if cleared {
-                browser.navigation_work.remove_web_contents(handle);
-            }
-            Ok(cleared)
+            browser.cancel_navigation(handle, navigation, super::NavigationFailureReason::Canceled)
         })?
-    }
-
-    pub fn apply_renderer_document_lifecycle(
-        &self,
-        renderer_page: super::RendererPageResidenceIdentity,
-        event: crate::page::RendererDocumentLifecycleEvent,
-    ) -> Option<super::web_contents::DocumentLifecycleEvent> {
-        // Renderer and Browser events use independent channels. A publication
-        // selected before Context disposal may reach this boundary afterwards;
-        // absence must reject the occurrence, not revive or panic on its owner.
-        self.update(move |context| context.apply_renderer_document_lifecycle(renderer_page, event))
-            .ok()
-            .flatten()
     }
 
     forward_context_read! {
@@ -1347,15 +1442,47 @@ impl BrowserContextHandle {
 
     pub fn start_download_request(
         &self,
+        web_contents: WebContentsHandle,
         policy: &super::DownloadPolicy,
         client: crate::network::ResourceRequestClient,
         request: moli_fetch::Request,
         suggested_filename: Option<String>,
     ) -> Result<Option<super::DownloadObservation>, String> {
         let policy = policy.clone();
-        self.try_update(move |context| {
-            context.start_download_request(&policy, client, request, suggested_filename)
-        })
+        let context = self.id;
+        self.browser.execute(move |browser| {
+            let admitted = browser.context_mut(context)?.start_download_request(
+                web_contents,
+                &policy,
+                client,
+                request,
+                suggested_filename,
+            )?;
+            Ok(admitted.map(|admitted| browser.admit_download(admitted)))
+        })?
+    }
+
+    pub fn deny_download(
+        &self,
+        web_contents: WebContentsHandle,
+        url: String,
+        headers: Vec<(String, String)>,
+        suggested_filename: Option<String>,
+    ) -> Result<super::DownloadObservation, String> {
+        let context = self.id;
+        self.browser.execute(move |browser| {
+            let context = browser.context_mut(context)?;
+            if !context.contains_web_contents(web_contents) {
+                return Err("WebContents unavailable".into());
+            }
+            let admitted = context.downloads.deny(
+                web_contents,
+                &url,
+                &headers,
+                suggested_filename.as_deref(),
+            )?;
+            Ok(browser.admit_download(admitted))
+        })?
     }
 
     pub fn start_download_response(
@@ -1367,9 +1494,17 @@ impl BrowserContextHandle {
         body: super::DownloadBody,
     ) -> Result<Option<super::DownloadObservation>, String> {
         let policy = policy.clone();
-        self.try_update(move |context| {
-            context.start_download_response(web_contents, &policy, url, headers, body)
-        })
+        let context = self.id;
+        self.browser.execute(move |browser| {
+            let admitted = browser.context_mut(context)?.start_download_response(
+                web_contents,
+                &policy,
+                url,
+                headers,
+                body,
+            )?;
+            Ok(admitted.map(|admitted| browser.admit_download(admitted)))
+        })?
     }
 
     pub fn cancel_download(&self, guid: &str) -> Option<Result<(), super::DownloadAccessError>> {
@@ -1391,8 +1526,16 @@ impl BrowserContextHandle {
         fn ensure_document_current(document: super::DocumentHandle) -> ();
     }
 
-    forward_context_try_update! {
-        fn install_document_javascript_dialog(document: super::DocumentHandle, dialog: crate::page::RendererPendingJavaScriptDialog) -> super::web_contents::JavaScriptDialogKey;
+    #[cfg(any(test, feature = "test-support"))]
+    #[doc(hidden)]
+    pub fn install_document_javascript_dialog_for_test(
+        &self,
+        document: super::DocumentHandle,
+        dialog: crate::page::RendererPendingJavaScriptDialog,
+    ) -> Result<Option<super::web_contents::JavaScriptDialogKey>, String> {
+        self.try_update(move |context| {
+            context.install_document_javascript_dialog_for_test(document, dialog)
+        })
     }
 
     pub fn document_javascript_dialog_snapshot(
@@ -1422,9 +1565,20 @@ impl BrowserContextHandle {
         accepted: bool,
         prompt_text: Option<String>,
     ) -> Option<super::web_contents::JavaScriptDialogClosed> {
-        self.update_live(move |context| {
-            context.finish_document_javascript_dialog(document, key, accepted, prompt_text)
-        })
+        let context = self.id;
+        self.browser
+            .execute(move |browser| {
+                let context = browser.context_mut(context).ok()?;
+                context.document_javascript_dialog_snapshot(document, key)?;
+                let result =
+                    context.finish_document_javascript_dialog(document, key, accepted, prompt_text);
+                browser
+                    .events
+                    .publish(super::BrowserEvent::DialogClosed { document, key });
+                result
+            })
+            .ok()
+            .flatten()
     }
 
     pub fn dismiss_document_javascript_dialog(
@@ -1432,7 +1586,7 @@ impl BrowserContextHandle {
         document: super::DocumentHandle,
         key: super::web_contents::JavaScriptDialogKey,
     ) {
-        self.update_live(move |context| context.dismiss_document_javascript_dialog(document, key));
+        let _ = self.finish_document_javascript_dialog(document, key, false, Some(String::new()));
     }
 
     forward_context_try_read! {
@@ -1878,21 +2032,6 @@ impl BrowserContextHandle {
     #[doc(hidden)]
     pub fn has_paused_navigation_auth_for_test(&self, handle: WebContentsHandle) -> bool {
         self.read_live(move |context| context.has_paused_navigation_auth_for_test(handle))
-    }
-
-    #[cfg(any(test, feature = "test-support"))]
-    #[doc(hidden)]
-    pub fn paused_navigation_response_renderer_agent_for_test(
-        &self,
-        handle: WebContentsHandle,
-    ) -> Option<crate::page::RendererDevToolsAgentToken> {
-        self.read_live(move |context| {
-            context
-                .paused_navigation_response_for_test(handle)
-                .and_then(
-                    super::web_contents::PausedDocumentTransfer::prepared_renderer_agent_token,
-                )
-        })
     }
 
     #[cfg(any(test, feature = "test-support"))]

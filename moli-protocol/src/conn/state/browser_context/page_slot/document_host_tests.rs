@@ -1,6 +1,9 @@
 use super::*;
 use crate::conn::{CdpConnection, CommandOwnerScope};
-use moli_core::browser::{DocumentHandle, WebContentsHandle};
+use moli_core::browser::{
+    BrowserNavigationWaiter, DocumentHandle, NavigationDecision, NavigationDecisionStage,
+    WebContentsHandle,
+};
 use std::{
     future::Future,
     ops::{Deref, DerefMut},
@@ -30,21 +33,101 @@ impl DerefMut for DocumentOwnerFixture {
 
 async fn prepare_navigation(
     owner: &mut DocumentOwnerFixture,
-    navigation: NavigationId,
     loader_id: &str,
     url: &str,
-) -> crate::conn::LoadedNavigation<crate::conn::PreparedDocumentNavigation> {
+) -> BrowserNavigationWaiter {
     let command_owner = CommandOwnerScope::capture(&owner.conn, None);
+    let waiter = owner
+        .conn
+        .start_native_navigation_fixture_for_test(
+            &command_owner,
+            loader_id,
+            moli_core::browser::web_contents::NavigationRequestInterception::new(
+                url::Url::parse(url).unwrap(),
+                "GET".into(),
+                None,
+                Vec::new().into(),
+                crate::conn::NavigationRequestLoadPolicy::DocumentInitiated,
+            ),
+            NavigationDecision::Continue,
+        )
+        .unwrap();
+    let request = waiter.request();
+    let (_, mut events) = owner.conn.subscribe_browser_events().unwrap();
+    loop {
+        if let Some(paused) = owner
+            .browser_context
+            .navigation_decision(request.web_contents)
+            .unwrap()
+        {
+            assert_eq!(paused.permit.navigation(), request.navigation);
+            if matches!(
+                paused.stage,
+                NavigationDecisionStage::PreparedDocument { .. }
+            ) {
+                return waiter;
+            }
+            assert!(
+                owner
+                    .browser_context
+                    .resolve_navigation_decision(
+                        request.web_contents,
+                        paused.permit,
+                        NavigationDecision::Continue,
+                    )
+                    .unwrap()
+            );
+        }
+        let event = events.recv().await.unwrap();
+        if let moli_core::browser::BrowserEvent::NavigationFailed {
+            request: failed,
+            reason,
+        } = event.event
+            && failed == request
+        {
+            panic!("native fixture failed before PreparedDocument: {reason:?}");
+        }
+    }
+}
+
+fn prepared_renderer(
+    owner: &DocumentOwnerFixture,
+    waiter: &BrowserNavigationWaiter,
+) -> moli_core::browser::RendererPageResidenceIdentity {
+    let request = waiter.request();
+    let paused = owner
+        .browser_context
+        .navigation_decision(request.web_contents)
+        .unwrap()
+        .unwrap();
+    assert_eq!(paused.permit.navigation(), request.navigation);
+    let NavigationDecisionStage::PreparedDocument { renderer, .. } = paused.stage else {
+        panic!("fixture must observe the exact prepared native Document");
+    };
+    renderer
+}
+
+async fn observe_navigation_commit(
+    owner: &mut DocumentOwnerFixture,
+    waiter: BrowserNavigationWaiter,
+) -> Result<
+    (
+        std::sync::Arc<moli_core::browser::web_contents::DocumentCommitMetadata>,
+        Option<crate::conn::state::browser_context::page_state::DocumentInspectionProjection>,
+    ),
+    String,
+> {
+    let committed = owner
+        .conn
+        .wait_for_native_navigation_commit_for_test(waiter, false)
+        .await?;
     owner
         .conn
-        .prepare_navigation_fixture_for_owner_and_token_async(
-            &command_owner,
-            navigation,
-            loader_id,
-            url,
-        )
-        .await
-        .unwrap()
+        .wait_for_native_document_load_for_test(committed.document)
+        .await?;
+    let metadata = committed.metadata.clone();
+    let projection = owner.project_document_commit_snapshot(TARGET, *committed);
+    Ok((metadata, projection))
 }
 
 fn empty_document_context_with_runtime_config(
@@ -70,13 +153,14 @@ async fn context_with_document_and_runtime_config(
     runtime_config: moli_core::runtime::NavigationRuntimeConfig,
 ) -> DocumentOwnerFixture {
     let mut owner = empty_document_context_with_runtime_config(runtime_config);
-    let navigation = owner.begin_target_document_navigation(TARGET, "LOADER-fixture".into());
-    let loaded = prepare_navigation(&mut owner, navigation, "LOADER-fixture", url).await;
-    owner.initial_artifacts = Some(loaded.page_creation_artifacts.clone());
-    let committed = owner.commit_loaded_navigation(loaded.page).unwrap();
-    let projection_fence = committed
-        .inspection_projection
-        .expect("initial fixture must attach its exact renderer Document");
+    let waiter = prepare_navigation(&mut owner, "LOADER-fixture", url).await;
+    let (metadata, projection) = observe_navigation_commit(&mut owner, waiter).await.unwrap();
+    owner.initial_artifacts = Some(metadata.lifecycle.artifacts.clone());
+    let projection_fence = projection
+        .unwrap()
+        .fence
+        .expect("initial fixture must attach its exact renderer Document")
+        .unwrap();
     owner
         .page_targets
         .get_mut(TARGET)
@@ -84,7 +168,6 @@ async fn context_with_document_and_runtime_config(
         .runtime_slot
         .publish_document_projection_fence(projection_fence)
         .expect("initial fixture inspection projection must finish");
-    committed.previous_document_retirement.close().await;
     owner
 }
 
@@ -96,18 +179,16 @@ async fn context_with_document(url: &str) -> DocumentOwnerFixture {
 async fn loaded_navigation_commit_settles_document_history_and_navigation_together() {
     let mut owner = context_with_document("data:text/html,<title>first</title>").await;
     let old_document = owner.target_document_id(TARGET).unwrap();
-    let token = owner.begin_target_document_navigation(TARGET, "LOADER-atomic".into());
-    let expected_document = owner.target_pending_document_id(TARGET).unwrap();
     let loaded = prepare_navigation(
         &mut owner,
-        token,
         "LOADER-atomic",
         "data:text/html,<title>second</title>",
     )
     .await;
-    let url = loaded.final_url.clone();
-    let committed = owner.commit_loaded_navigation(loaded.page).unwrap();
-    assert!(committed.inspection_projection.is_ok());
+    let expected_document = loaded.request().document;
+    let (committed, projection) = observe_navigation_commit(&mut owner, loaded).await.unwrap();
+    let url = &committed.info.as_ref().unwrap().url;
+    assert!(projection.unwrap().fence.is_ok());
     assert_eq!(
         owner.target_document_id(TARGET),
         Some(expected_document),
@@ -134,42 +215,76 @@ async fn loaded_navigation_commit_settles_document_history_and_navigation_togeth
             .document_lifecycle_snapshot_for_target(TARGET)
             .is_some()
     );
-    committed.previous_document_retirement.close().await;
+}
+
+#[tokio::test]
+async fn late_title_projection_does_not_rewind_native_history_or_cross_documents() {
+    let mut owner = context_with_document("data:text/html,<title>native current</title>").await;
+    let earlier = moli_core::RendererDocumentTitleChanged {
+        source_document: owner
+            .document_lifecycle_snapshot_for_target(TARGET)
+            .unwrap()
+            .into(),
+        title: "earlier FIFO title".into(),
+    };
+    assert_eq!(
+        owner.commit_target_document_title(TARGET, &earlier),
+        Some(true)
+    );
+    assert_eq!(
+        owner.commit_target_document_title(TARGET, &earlier),
+        Some(false)
+    );
+    let (_, history) = owner.target_navigation_history_snapshot(TARGET).unwrap();
+    assert_eq!(history.last().unwrap().title, "native current");
+
+    let next = prepare_navigation(
+        &mut owner,
+        "LOADER-title-replacement",
+        "data:text/html,<title>replacement</title>",
+    )
+    .await;
+    observe_navigation_commit(&mut owner, next).await.unwrap();
+    assert_eq!(owner.commit_target_document_title(TARGET, &earlier), None);
+    let (_, history) = owner.target_navigation_history_snapshot(TARGET).unwrap();
+    assert_eq!(history[history.len() - 2].title, "native current");
+    assert_eq!(history.last().unwrap().title, "replacement");
 }
 
 #[tokio::test]
 async fn disappearing_agent_host_cannot_cancel_an_admitted_browser_commit() {
     let mut owner = empty_document_context();
-    let navigation = owner.begin_target_document_navigation(TARGET, "LOADER-native".into());
-    let contents_id = owner.page_targets.get(TARGET).unwrap().web_contents_id();
-    let contents = WebContentsHandle::new(owner.browser_context_id(), contents_id);
-    let expected_document = owner
-        .browser_context
-        .pending_document_for_test(contents)
-        .unwrap()
-        .unwrap()
-        .1;
     let loaded = prepare_navigation(
         &mut owner,
-        navigation,
         "LOADER-native",
         "data:text/html,<title>native</title>",
     )
     .await;
-    let artifacts = loaded.page_creation_artifacts.clone();
-    let url = loaded.final_url.clone();
+    let request = loaded.request();
+    let navigation = request.navigation;
+    let contents = request.web_contents;
+    let expected_document = request.document;
 
     drop(owner.page_targets.remove(TARGET).unwrap());
-    let committed = owner.commit_loaded_navigation(loaded.page).unwrap();
-    assert!(committed.inspection_projection.is_err());
+    let (committed, projection) = observe_navigation_commit(&mut owner, loaded).await.unwrap();
+    assert!(projection.is_none());
+    let artifacts = &committed.lifecycle.artifacts;
+    let url = &committed.info.as_ref().unwrap().url;
     let document = DocumentHandle::new(contents, expected_document);
+    let native = owner
+        .browser_context
+        .document_lifecycle_snapshot(document)
+        .unwrap()
+        .unwrap();
     assert_eq!(
-        owner
-            .browser_context
-            .document_lifecycle_snapshot(document)
-            .unwrap(),
-        Some(artifacts.lifecycle_snapshot)
+        (native.frame, native.document, native.epoch),
+        (
+            artifacts.lifecycle_snapshot.frame,
+            artifacts.active_document,
+            artifacts.active_epoch
+        )
     );
+    assert!(native.sequence() >= artifacts.lifecycle_snapshot.sequence());
     assert!(
         owner
             .browser_context
@@ -217,38 +332,75 @@ async fn disappearing_agent_host_cannot_cancel_an_admitted_browser_commit() {
             .unwrap()["value"],
         42
     );
-    let snapshot = artifacts.lifecycle_snapshot;
+    let (_, mut events) = owner.conn.subscribe_browser_events().unwrap();
+    let stopped = owner
+        .browser_context
+        .start_document_lifecycle_stop(document)
+        .unwrap()
+        .wait()
+        .await;
+    owner
+        .browser_context
+        .finish_document_lifecycle_stop(stopped)
+        .unwrap();
+    let snapshot = tokio::time::timeout(std::time::Duration::from_secs(5), async {
+        loop {
+            if let moli_core::browser::BrowserEvent::DocumentLifecycleChanged(snapshot) =
+                events.recv().await.unwrap().event
+                && snapshot.document == document
+                && snapshot.lifecycle.terminated.is_some()
+            {
+                break snapshot.lifecycle;
+            }
+        }
+    })
+    .await
+    .expect("a native lifecycle must progress after its AgentHost disappears");
+    let terminated = snapshot.terminated.unwrap();
     let event = RendererDocumentLifecycleEvent {
         frame: snapshot.frame,
         document: snapshot.document,
         epoch: snapshot.epoch,
-        sequence: u64::MAX,
-        timestamp_micros: 100,
+        sequence: terminated.sequence,
+        timestamp_micros: terminated.timestamp_micros,
         kind: RendererDocumentLifecycleEventKind::Terminated {
             last_reached: Some(RendererDocumentLifecycleMilestone::Load),
-            reason: moli_core::page::RendererDocumentTerminationReason::RestartedByDocumentOpen,
+            reason: terminated.reason,
         },
     };
     assert!(
         owner
-            .apply_renderer_document_lifecycle(
+            .conn
+            .browser
+            .wait_for_renderer_document_lifecycle(
                 renderer_page,
                 RendererDocumentLifecycleEvent {
                     document: event.document.successor_for_testing(),
                     ..event
                 }
             )
+            .await
             .is_none()
     );
     let occurrence = owner
-        .apply_renderer_document_lifecycle(renderer_page, event)
+        .conn
+        .browser
+        .wait_for_renderer_document_lifecycle(renderer_page, event)
+        .await
         .unwrap();
     assert_eq!(occurrence.document(), expected_document);
     assert_eq!(occurrence.event(), event);
-    assert!(
+    assert_eq!(
         owner
-            .apply_renderer_document_lifecycle(renderer_page, event)
-            .is_none()
+            .conn
+            .browser
+            .wait_for_renderer_document_lifecycle(renderer_page, event)
+            .await,
+        Some(occurrence)
+    );
+    assert_eq!(
+        events.try_recv(),
+        Err(tokio::sync::broadcast::error::TryRecvError::Empty)
     );
     assert_eq!(
         owner
@@ -261,26 +413,27 @@ async fn disappearing_agent_host_cannot_cancel_an_admitted_browser_commit() {
             .sequence,
         event.sequence
     );
-    committed.previous_document_retirement.close().await;
 }
 
 #[tokio::test]
 async fn creation_projection_cannot_rewind_native_progress_or_retarget_a_replacement() {
     use crate::conn::CommittedDocumentLifecycle;
     let mut owner = empty_document_context();
-    let navigation = owner.begin_target_document_navigation(TARGET, "LOADER-native".into());
     let loaded = prepare_navigation(
         &mut owner,
-        navigation,
         "LOADER-native",
         "data:text/html,<title>native</title>",
     )
     .await;
-    let renderer_page = loaded.page.renderer_residence();
-    let artifacts = loaded.page_creation_artifacts.clone();
+    let navigation = loaded.request().navigation;
+    let renderer_page = prepared_renderer(&owner, &loaded);
+    let (commit, _) = observe_navigation_commit(&mut owner, loaded).await.unwrap();
+    let artifacts = commit.lifecycle.artifacts.clone();
     let snapshot = artifacts.lifecycle_snapshot;
-    assert!(snapshot.load.is_some());
-    let commit = owner.commit_loaded_navigation(loaded.page).unwrap();
+    let loaded_snapshot = owner
+        .renderer_document_lifecycle_authoritative_snapshot_for_target(TARGET)
+        .unwrap();
+    assert!(loaded_snapshot.load.is_some());
     let document = commit.lifecycle.document;
     assert!(
         owner
@@ -300,12 +453,12 @@ async fn creation_projection_cannot_rewind_native_progress_or_retarget_a_replace
         },
     };
     let occurrence = owner
-        .apply_renderer_document_lifecycle(renderer_page, terminated)
+        .apply_renderer_document_lifecycle_for_test(renderer_page, terminated)
         .unwrap();
     let native = owner.renderer_document_lifecycle_authoritative_snapshot_for_target(TARGET);
     // Projection is delayed until after the Browser has accepted more progress.
     // Replaying/rebinding the creation occurrence may only affect visibility.
-    let browser_sequence = moli_core::browser::BrowserSequence::allocate();
+    let browser_sequence = commit.lifecycle.browser_sequence;
     for _ in 0..2 {
         let projected = owner.project_committed_document_lifecycle_for_target(
             TARGET,
@@ -331,6 +484,34 @@ async fn creation_projection_cannot_rewind_native_progress_or_retarget_a_replace
             Some(snapshot)
         );
     }
+    // Replay the real native milestones after the older creation inventory.
+    // These sequence/timestamp pairs came from the committed renderer, not a
+    // manufactured fully-loaded creation artifact.
+    let progress = [
+        (
+            loaded_snapshot.dom_content_loaded.unwrap(),
+            RendererDocumentLifecycleMilestone::DomContentLoaded,
+        ),
+        (
+            loaded_snapshot.load.unwrap(),
+            RendererDocumentLifecycleMilestone::Load,
+        ),
+    ]
+    .into_iter()
+    .filter(|(stamp, _)| stamp.sequence > snapshot.sequence())
+    .map(|(stamp, milestone)| RendererDocumentLifecycleEvent {
+        frame: snapshot.frame,
+        document: snapshot.document,
+        epoch: snapshot.epoch,
+        sequence: stamp.sequence,
+        timestamp_micros: stamp.timestamp_micros,
+        kind: RendererDocumentLifecycleEventKind::Milestone(milestone),
+    })
+    .collect::<Vec<_>>();
+    assert_eq!(
+        owner.project_renderer_document_lifecycle_events_for_target(TARGET, progress.clone()),
+        progress
+    );
     assert_eq!(
         owner.project_renderer_document_lifecycle_events_for_target(
             TARGET,
@@ -346,24 +527,25 @@ async fn creation_projection_cannot_rewind_native_progress_or_retarget_a_replace
         native
     );
 
-    let next = owner.begin_target_document_navigation(TARGET, "LOADER-next".into());
-    let loaded = prepare_navigation(&mut owner, next, "LOADER-next", "data:text/html,next").await;
-    let next_artifacts = loaded.page_creation_artifacts.clone();
-    let replacement = owner.commit_loaded_navigation(loaded.page).unwrap();
+    let loaded = prepare_navigation(&mut owner, "LOADER-next", "data:text/html,next").await;
+    observe_navigation_commit(&mut owner, loaded).await.unwrap();
+    let next_snapshot = owner
+        .renderer_document_lifecycle_authoritative_snapshot_for_target(TARGET)
+        .unwrap();
     assert_ne!(
         owner.target_document_id(TARGET),
         Some(occurrence.document())
     );
     assert!(
         owner
-            .apply_renderer_document_lifecycle(renderer_page, terminated)
+            .apply_renderer_document_lifecycle_for_test(renderer_page, terminated)
             .is_none()
     );
     assert!(
         owner
             .project_committed_document_lifecycle_for_target(
                 TARGET,
-                commit.lifecycle,
+                commit.lifecycle.clone(),
                 Some(navigation),
                 TARGET.into(),
                 "LOADER-native".into(),
@@ -377,18 +559,20 @@ async fn creation_projection_cannot_rewind_native_progress_or_retarget_a_replace
     );
     assert_eq!(
         owner.renderer_document_lifecycle_authoritative_snapshot_for_target(TARGET),
-        Some(next_artifacts.lifecycle_snapshot)
+        Some(next_snapshot)
     );
-    commit.previous_document_retirement.close().await;
-    replacement.previous_document_retirement.close().await;
 }
 
 #[tokio::test]
 async fn failed_inspection_projection_cannot_veto_browser_document_commit() {
     let mut owner = context_with_document("data:text/html,<title>first</title>").await;
     let previous_document = owner.target_document_id(TARGET).unwrap();
-    let navigation = owner.begin_target_document_navigation(TARGET, "LOADER-projection".into());
-    let expected_document = owner.target_pending_document_id(TARGET).unwrap();
+    let loaded = prepare_navigation(
+        &mut owner,
+        "LOADER-projection",
+        "data:text/html,<title>committed</title>",
+    )
+    .await;
     // Fail only the DevTools projection. The Browser WebContents and its pending
     // navigation remain live and must not require that projection's approval.
     owner
@@ -397,15 +581,11 @@ async fn failed_inspection_projection_cannot_veto_browser_document_commit() {
         .unwrap()
         .runtime_slot
         .retire_for_target_close();
-    let loaded = prepare_navigation(
-        &mut owner,
-        navigation,
-        "LOADER-projection",
-        "data:text/html,<title>committed</title>",
-    )
-    .await;
-    let url = loaded.final_url.clone();
-    let result = owner.commit_loaded_navigation(loaded.page);
+    let expected_document = loaded.request().document;
+    let (committed, projection) = observe_navigation_commit(&mut owner, loaded)
+        .await
+        .expect("Browser commit is independent of its projection");
+    let url = &committed.info.as_ref().unwrap().url;
 
     assert_eq!(
         owner.target_document_id(TARGET),
@@ -424,9 +604,7 @@ async fn failed_inspection_projection_cannot_veto_browser_document_commit() {
             .unwrap()["value"],
         42
     );
-    let commit = result.expect("Browser commit is independent of its projection");
-    assert!(commit.inspection_projection.is_err());
-    commit.previous_document_retirement.close().await;
+    assert!(projection.unwrap().fence.is_err());
 }
 
 #[tokio::test]
@@ -449,16 +627,14 @@ async fn committed_occurrence_retains_the_previous_document_output_projection() 
             .renderer_document_lifecycle_binding_for_target(TARGET)
             .is_some()
     );
-    let navigation = owner.begin_target_document_navigation(TARGET, "LOADER-current".into());
     let loaded = prepare_navigation(
         &mut owner,
-        navigation,
         "LOADER-current",
         "data:text/html,<title>current</title>",
     )
     .await;
-    let current_renderer = loaded.page.renderer_residence();
-    let committed = owner.commit_loaded_navigation(loaded.page).unwrap();
+    let current_renderer = prepared_renderer(&owner, &loaded);
+    observe_navigation_commit(&mut owner, loaded).await.unwrap();
     let current_document = owner.target_document_id(TARGET).unwrap();
     assert_ne!(current_document, previous_document);
     let projection = &owner.page_targets.get(TARGET).unwrap().runtime_slot;
@@ -467,23 +643,167 @@ async fn committed_occurrence_retains_the_previous_document_output_projection() 
         "post-commit retirement must match the occurrence's old Document, not the new current identity"
     );
     assert!(!projection.routes_retiring_renderer_page_owner(current_renderer, current_document));
-    committed.previous_document_retirement.close().await;
+}
+
+#[tokio::test]
+async fn old_network_ingress_survives_native_commit_before_projection() {
+    use moli_core::page::{
+        ScriptNetworkOutputItem, SubresourceNetworkRecord, SubresourceNetworkRequestHandle,
+        SubresourceRequestInitiatorType, SubresourceRequestStarted, SubresourceResourceType,
+    };
+    let mut owner = context_with_document("data:text/html,<title>first</title>").await;
+    let artifacts = owner.initial_artifacts.take().unwrap();
+    let renderer = owner
+        .target_renderer_page_residence_identity(TARGET)
+        .unwrap();
+    let document = owner.target_document_id(TARGET).unwrap();
+    owner.bind_renderer_document_lifecycle_for_target(
+        TARGET,
+        artifacts,
+        None,
+        TARGET.into(),
+        "LOADER-first".into(),
+    );
+    let binding = owner
+        .renderer_document_lifecycle_binding_for_target(TARGET)
+        .unwrap()
+        .clone();
+    let handle = SubresourceNetworkRequestHandle::new(7);
+    let url = url::Url::parse("https://old.example/held-xhr").unwrap();
+    let started = ScriptNetworkOutputItem::SubresourceRequestStarted(Box::new(
+        SubresourceRequestStarted::new(
+            handle,
+            None,
+            url.clone(),
+            url.clone(),
+            "GET".into(),
+            Vec::new().into(),
+            None,
+            SubresourceResourceType::Xhr,
+            SubresourceRequestInitiatorType::Script,
+            None,
+        ),
+    ));
+    let mut allocator = crate::conn::ConnectionNetworkRequestIdAllocator::default();
+    assert!(
+        owner
+            .ingest_renderer_network_output_item_and_prepare_live_delivery_for_target(
+                TARGET,
+                Some(renderer),
+                binding.renderer_document_identity(),
+                &started,
+                None,
+                None,
+                None,
+                &mut allocator,
+            )
+            .is_some()
+    );
+
+    let waiter = prepare_navigation(
+        &mut owner,
+        "LOADER-successor",
+        "data:text/html,<title>successor</title>",
+    )
+    .await;
+    // Deliberately finish the Browser transaction without projecting its commit.
+    // The old renderer has closed; its final FIFO facts still belong to the
+    // observer's old request correlations, not to the successor Document.
+    let committed = owner
+        .conn
+        .wait_for_native_navigation_commit_for_test(waiter, false)
+        .await
+        .unwrap();
+    assert_ne!(owner.target_document_id(TARGET), Some(document));
+    assert!(
+        owner
+            .renderer_document_lifecycle_binding_for_target(TARGET)
+            .is_none()
+    );
+    let terminal = ScriptNetworkOutputItem::SubresourceNetworkRecord(Box::new(
+        SubresourceNetworkRecord::failure(
+            None,
+            url.clone(),
+            url,
+            "GET".into(),
+            Vec::new().into(),
+            None,
+            SubresourceResourceType::Xhr,
+            "net::ERR_ABORTED".into(),
+        )
+        .with_request_handle(handle),
+    ));
+    let foreign_renderer = RendererPageResidenceIdentity::from_parts(
+        moli_core::RendererOwnerLocalHostId::new_for_testing(
+            renderer.owner_local_host_id().as_u64() + 1,
+        ),
+        renderer.page_id(),
+    );
+    assert!(
+        owner
+            .ingest_renderer_network_output_item_and_prepare_live_delivery_for_target(
+                TARGET,
+                Some(foreign_renderer),
+                binding.renderer_document_identity(),
+                &terminal,
+                None,
+                None,
+                None,
+                &mut allocator,
+            )
+            .is_none(),
+        "a colliding renderer-local Page id must not claim the old request"
+    );
+    assert!(
+        owner
+            .ingest_renderer_network_output_item_and_prepare_live_delivery_for_target(
+                TARGET,
+                Some(renderer),
+                binding.renderer_document_identity(),
+                &terminal,
+                None,
+                None,
+                None,
+                &mut allocator,
+            )
+            .is_some(),
+        "native retirement must not discard an unprojected predecessor's terminal"
+    );
+    assert!(
+        owner
+            .page_targets
+            .get(TARGET)
+            .unwrap()
+            .runtime_slot
+            .routes_retiring_renderer_page_owner(renderer, document)
+    );
+    assert!(
+        owner
+            .project_document_commit_snapshot(TARGET, *committed)
+            .is_some()
+    );
+    assert!(
+        owner
+            .page_targets
+            .get(TARGET)
+            .unwrap()
+            .runtime_slot
+            .routes_retiring_renderer_page_owner(renderer, document)
+    );
 }
 
 #[tokio::test]
 async fn inspection_configuration_failure_cannot_roll_back_a_committed_browser_document() {
     let mut owner = context_with_document("data:text/html,<title>first</title>").await;
-    let navigation = owner.begin_target_document_navigation(TARGET, "LOADER-restore".into());
     let loaded = prepare_navigation(
         &mut owner,
-        navigation,
         "LOADER-restore",
         "data:text/html,<title>committed</title><script>Object.defineProperty(globalThis,'protectedBinding',{value:1,configurable:false})</script>",
     )
     .await;
-    let url = loaded.final_url.clone();
-    let committed = owner.commit_loaded_navigation(loaded.page).unwrap();
-    assert!(committed.inspection_projection.is_ok());
+    let (committed, projection) = observe_navigation_commit(&mut owner, loaded).await.unwrap();
+    let url = &committed.info.as_ref().unwrap().url;
+    assert!(projection.unwrap().fence.is_ok());
     let document = owner.target_document_id(TARGET);
     let registration = moli_core::page::RuntimeBindingRegistration {
         devtools_session: None,
@@ -524,7 +844,6 @@ async fn inspection_configuration_failure_cannot_roll_back_a_committed_browser_d
             .unwrap()["value"],
         42
     );
-    committed.previous_document_retirement.close().await;
 }
 
 #[tokio::test]
@@ -537,15 +856,22 @@ async fn rejected_browser_candidate_cannot_rotate_inspection_or_document_project
         .unwrap()
         .runtime_slot
         .current_renderer_attachment();
-    let stale = owner.begin_target_document_navigation(TARGET, "LOADER-stale".into());
     let loaded = prepare_navigation(
         &mut owner,
-        stale,
         "LOADER-stale",
         "data:text/html,<title>stale</title>",
     )
     .await;
-    let current = owner.begin_target_document_navigation(TARGET, "LOADER-current".into());
+    let request = loaded.request();
+    let stale_permit = owner
+        .browser_context
+        .navigation_decision(request.web_contents)
+        .unwrap()
+        .unwrap()
+        .permit;
+    let replacement =
+        prepare_navigation(&mut owner, "LOADER-current", "data:text/html,current").await;
+    let current = replacement.request().navigation;
     let history = owner.target_navigation_history_snapshot(TARGET).unwrap();
     let target_url = owner
         .page_targets
@@ -553,7 +879,17 @@ async fn rejected_browser_candidate_cannot_rotate_inspection_or_document_project
         .unwrap()
         .target_url()
         .to_owned();
-    assert!(owner.commit_loaded_navigation(loaded.page).is_err());
+    assert!(
+        !owner
+            .browser_context
+            .resolve_navigation_decision(
+                request.web_contents,
+                stale_permit,
+                NavigationDecision::Continue
+            )
+            .unwrap()
+    );
+    assert!(observe_navigation_commit(&mut owner, loaded).await.is_err());
     assert_eq!(owner.target_document_id(TARGET), document);
     assert_eq!(
         owner
@@ -585,15 +921,13 @@ async fn document_replacement_updates_inspection_binding_with_physical_page() {
         .runtime_slot
         .current_renderer_attachment()
         .unwrap();
-    let navigation = owner.begin_target_document_navigation(TARGET, "LOADER-second".into());
     let loaded = prepare_navigation(
         &mut owner,
-        navigation,
         "LOADER-second",
         "data:text/html,<title>second</title>",
     )
     .await;
-    let committed = owner.commit_loaded_navigation(loaded.page).unwrap();
+    observe_navigation_commit(&mut owner, loaded).await.unwrap();
     let attachment = owner
         .active_page_target()
         .runtime_slot
@@ -613,7 +947,6 @@ async fn document_replacement_updates_inspection_binding_with_physical_page() {
             .current_renderer_inspection_binding()
             .is_some()
     );
-    committed.previous_document_retirement.close().await;
 }
 
 async fn page_with_installed_dialog_for_test() -> (
@@ -639,7 +972,7 @@ async fn page_with_installed_dialog_for_test() -> (
     let completion = RendererJavaScriptDialogCompletion::pending();
     let document = owner.document_handle_for_target(TARGET).unwrap();
     let key = owner
-        .install_document_javascript_dialog(
+        .install_document_javascript_dialog_for_test(
             document,
             RendererPendingJavaScriptDialog::new(
                 RendererJavaScriptDialogId::new(1),
@@ -657,6 +990,7 @@ async fn page_with_installed_dialog_for_test() -> (
             ),
         )
         .unwrap();
+    let key = key.unwrap();
     let wrong_document = moli_core::browser::DocumentHandle::new(
         moli_core::browser::WebContentsHandle::new(
             document.web_contents().context(),
@@ -684,22 +1018,19 @@ async fn page_with_installed_dialog_for_test() -> (
 #[tokio::test]
 async fn document_replacement_dismisses_dialog_without_protocol_session_cleanup() {
     let (mut owner, completion) = page_with_installed_dialog_for_test().await;
-    let navigation = owner.begin_target_document_navigation(TARGET, "LOADER-replacement".into());
     let loaded = prepare_navigation(
         &mut owner,
-        navigation,
         "LOADER-replacement",
         "data:text/html,<p>replacement</p>",
     )
     .await;
-    let committed = owner.commit_loaded_navigation(loaded.page).unwrap();
+    observe_navigation_commit(&mut owner, loaded).await.unwrap();
 
     assert!(
         !completion.finish(true, "late reply".into()),
         "Browser Document replacement must dismiss its dialog before Protocol cleanup"
     );
     assert!(!completion.wait().accepted);
-    committed.previous_document_retirement.close().await;
 }
 
 #[tokio::test]
@@ -806,10 +1137,6 @@ async fn browser_dialog_retirement_follows_admitted_document_lifecycle_without_p
             .web_contents_has_pending_javascript_dialog(handle)
             .unwrap()
     );
-    let renderer = owner
-        .browser_context
-        .document_renderer_residence(document)
-        .unwrap();
     let terminated = RendererDocumentLifecycleEvent {
         frame: snapshot.frame,
         document: snapshot.document,
@@ -822,16 +1149,16 @@ async fn browser_dialog_retirement_follows_admitted_document_lifecycle_without_p
         },
     };
     assert!(
-        owner
+        !owner
             .browser_context
-            .apply_renderer_document_lifecycle(
-                renderer,
+            .apply_document_lifecycle_for_test(
+                document,
                 RendererDocumentLifecycleEvent {
                     document: snapshot.document.successor_for_testing(),
                     ..terminated
                 }
             )
-            .is_none()
+            .unwrap()
     );
     assert!(
         owner
@@ -843,8 +1170,8 @@ async fn browser_dialog_retirement_follows_admitted_document_lifecycle_without_p
     assert!(
         owner
             .browser_context
-            .apply_renderer_document_lifecycle(renderer, terminated)
-            .is_some()
+            .apply_document_lifecycle_for_test(document, terminated)
+            .unwrap()
     );
     assert!(
         !owner
@@ -857,8 +1184,8 @@ async fn browser_dialog_retirement_follows_admitted_document_lifecycle_without_p
     assert!(
         owner
             .browser_context
-            .apply_renderer_document_lifecycle(
-                renderer,
+            .apply_document_lifecycle_for_test(
+                document,
                 RendererDocumentLifecycleEvent {
                     epoch: RendererLifecycleEpoch(snapshot.epoch.0 + 1),
                     sequence: u64::MAX - 1,
@@ -868,7 +1195,7 @@ async fn browser_dialog_retirement_follows_admitted_document_lifecycle_without_p
                     ..terminated
                 }
             )
-            .is_some()
+            .unwrap()
     );
     assert_eq!(
         owner
@@ -901,7 +1228,7 @@ async fn dialog_disable_and_exact_detach_dismiss_only_their_browser_dialogs() {
         .unwrap();
     let document_handle = owner.document_handle_for_target(TARGET).unwrap();
     let key = owner
-        .install_document_javascript_dialog(
+        .install_document_javascript_dialog_for_test(
             document_handle,
             RendererPendingJavaScriptDialog::new(
                 RendererJavaScriptDialogId::new(2),
@@ -924,7 +1251,7 @@ async fn dialog_disable_and_exact_detach_dismiss_only_their_browser_dialogs() {
         &peer,
         "FRAME-dialog-owner".into(),
         document_handle,
-        key,
+        key.unwrap(),
     ));
     owner.disable_devtools_page_domain_for_target(TARGET, &DevToolsSessionKey::Primary);
     assert!(!primary_completion.finish(true, "late primary".into()));
@@ -1001,15 +1328,13 @@ async fn document_policy_completion_rejects_replacement_document() {
         .wait()
         .await;
 
-    let navigation = owner.begin_target_document_navigation(TARGET, "LOADER-replacement".into());
     let loaded = prepare_navigation(
         &mut owner,
-        navigation,
         "LOADER-replacement",
         "data:text/html,<p>replacement policy owner</p>",
     )
     .await;
-    let retired = owner.commit_loaded_navigation(loaded.page).unwrap();
+    observe_navigation_commit(&mut owner, loaded).await.unwrap();
     let replacement = owner.document_handle_for_target(TARGET).unwrap();
     assert_ne!(replacement, document);
     for completed in [completed, navigator_completed] {
@@ -1028,7 +1353,6 @@ async fn document_policy_completion_rejects_replacement_document() {
     );
     assert_eq!(owner.document_handle_for_target(TARGET), Some(replacement));
 
-    retired.previous_document_retirement.close().await;
     let observed = owner
         .browser_context
         .evaluate_document_expression_for_test(
@@ -1069,15 +1393,13 @@ async fn document_native_command_completions_reject_replacement_document() {
         .wait()
         .await;
 
-    let navigation = owner.begin_target_document_navigation(TARGET, "LOADER-replacement".into());
     let loaded = prepare_navigation(
         &mut owner,
-        navigation,
         "LOADER-replacement",
         "data:text/html,<p>replacement native command owner</p>",
     )
     .await;
-    let retired = owner.commit_loaded_navigation(loaded.page).unwrap();
+    observe_navigation_commit(&mut owner, loaded).await.unwrap();
     let replacement = owner.document_handle_for_target(TARGET).unwrap();
     assert_ne!(replacement, document);
     assert_eq!(
@@ -1090,7 +1412,6 @@ async fn document_native_command_completions_reject_replacement_document() {
     ));
     assert_eq!(owner.document_handle_for_target(TARGET), Some(replacement));
 
-    retired.previous_document_retirement.close().await;
     owner
         .clear_target_page_for_test(TARGET)
         .unwrap()
@@ -1190,16 +1511,14 @@ async fn document_replacement_preserves_stable_page_engine_history_and_storage()
     );
     let observer = owner.document_lifetime_observer_for_target(TARGET).unwrap();
 
-    let navigation = owner.begin_target_document_navigation(TARGET, "second-loader".into());
-    let reserved = owner.target_pending_document_id(TARGET).unwrap();
     let loaded = prepare_navigation(
         &mut owner,
-        navigation,
         "second-loader",
         "data:text/html,<title>second</title><p>second</p>",
     )
     .await;
-    let first = owner.commit_loaded_navigation(loaded.page).unwrap();
+    let reserved = loaded.request().document;
+    observe_navigation_commit(&mut owner, loaded).await.unwrap();
 
     assert_eq!(
         (
@@ -1251,7 +1570,6 @@ async fn document_replacement_preserves_stable_page_engine_history_and_storage()
         observer.wait().await,
         moli_core::browser::DocumentRetirement::Superseded
     );
-    first.previous_document_retirement.close().await;
 }
 
 #[tokio::test]
@@ -1272,7 +1590,8 @@ async fn web_contents_owns_live_document_and_navigation_after_protocol_residence
     let observer = owner.document_lifetime_observer_for_target(TARGET).unwrap();
     let handle = owner.web_contents_handle_for_target(TARGET).unwrap();
     let (stable_id, frame_id) = owner.browser_context.web_contents_identity(handle).unwrap();
-    let navigation = owner.begin_target_document_navigation(TARGET, "pending-loader".into());
+    let pending = prepare_navigation(&mut owner, "pending-loader", "data:text/html,pending").await;
+    let navigation = pending.request().navigation;
     let cancellation = owner
         .document_navigation_cancellation_handle_for_target(TARGET, &navigation)
         .unwrap();
@@ -1317,6 +1636,7 @@ async fn web_contents_owns_live_document_and_navigation_after_protocol_residence
     );
 
     drop(owner);
+    assert!(pending.wait().await.is_err());
     assert!(cancellation.is_cancelled());
     assert_eq!(
         wait.await,
@@ -1351,7 +1671,8 @@ async fn replacement_retires_document_identity_lifecycle_and_lifetime_together()
     // Moving the whole Context or failing a pending navigation must not retire
     // the current Document. Its Page/lifecycle/identity move as one object.
     let mut moved = owner;
-    let failed_navigation = moved.begin_target_document_navigation(TARGET, "failed-loader".into());
+    let failed = prepare_navigation(&mut moved, "failed-loader", "data:text/html,canceled").await;
+    let failed_navigation = failed.request().navigation;
     let before = moved.renderer_document_lifecycle_authoritative_snapshot_for_target(TARGET);
     assert!(
         moved.clear_pending_document_navigation_if_matches_for_target(TARGET, &failed_navigation)
@@ -1360,21 +1681,16 @@ async fn replacement_retires_document_identity_lifecycle_and_lifetime_together()
         moved.renderer_document_lifecycle_authoritative_snapshot_for_target(TARGET),
         before
     );
+    assert!(failed.wait().await.is_err());
     let mut first_wait = Box::pin(first_observer.wait());
     let mut context = Context::from_waker(Waker::noop());
     assert_eq!(first_wait.as_mut().poll(&mut context), Poll::Pending);
 
-    let navigation = moved.begin_target_document_navigation(TARGET, "second-loader".into());
-    let reserved_id = moved.target_pending_document_id(TARGET).unwrap();
-    let loaded = prepare_navigation(
-        &mut moved,
-        navigation,
-        "second-loader",
-        "data:text/html,<p>second</p>",
-    )
-    .await;
-    let second_renderer = loaded.page.renderer_residence();
-    let second_artifacts = loaded.page_creation_artifacts.clone();
+    let loaded =
+        prepare_navigation(&mut moved, "second-loader", "data:text/html,<p>second</p>").await;
+    let navigation = loaded.request().navigation;
+    let reserved_id = loaded.request().document;
+    let second_renderer = prepared_renderer(&moved, &loaded);
     assert!(
         moved.bind_pending_document_navigation_renderer_page_for_target(
             TARGET,
@@ -1382,7 +1698,11 @@ async fn replacement_retires_document_identity_lifecycle_and_lifetime_together()
             second_renderer
         )
     );
-    let replacement = moved.commit_loaded_navigation(loaded.page).unwrap();
+    let (replacement, _) = observe_navigation_commit(&mut moved, loaded).await.unwrap();
+    let second_artifacts = replacement.lifecycle.artifacts.clone();
+    let loaded_snapshot = moved
+        .renderer_document_lifecycle_authoritative_snapshot_for_target(TARGET)
+        .unwrap();
     assert_eq!(moved.target_document_id(TARGET), Some(reserved_id));
     assert_ne!(first_id, reserved_id);
     assert!(!moved.routes_renderer_page_for_target(TARGET, first_renderer));
@@ -1397,7 +1717,7 @@ async fn replacement_retires_document_identity_lifecycle_and_lifetime_together()
     );
     assert_eq!(
         moved.renderer_document_lifecycle_authoritative_snapshot_for_target(TARGET),
-        Some(second_artifacts.lifecycle_snapshot),
+        Some(loaded_snapshot),
         "the replacement must expose its own lifecycle, not the previous Document's"
     );
     assert!(
@@ -1458,7 +1778,6 @@ async fn replacement_retires_document_identity_lifecycle_and_lifetime_together()
         second_observer.wait().await,
         moli_core::browser::DocumentRetirement::Superseded
     );
-    replacement.previous_document_retirement.close().await;
     second_page.close().await;
 }
 
@@ -1470,19 +1789,14 @@ async fn discarded_prepared_candidate_preserves_current_document_until_owner_los
         .unwrap();
     let first_id = owner.target_document_id(TARGET);
     let observer = owner.document_lifetime_observer_for_target(TARGET).unwrap();
-    let navigation = owner.begin_target_document_navigation(TARGET, "candidate-loader".into());
-    let command_owner = CommandOwnerScope::capture(&owner.conn, None);
-    let candidate = owner
-        .conn
-        .prepare_navigation_fixture_for_owner_and_token_async(
-            &command_owner,
-            navigation,
-            "candidate-loader",
-            "data:text/html,<p>candidate</p>",
-        )
-        .await
-        .unwrap();
-    assert_ne!(candidate.page.renderer_residence(), first_renderer);
+    let candidate = prepare_navigation(
+        &mut owner,
+        "candidate-loader",
+        "data:text/html,<p>candidate</p>",
+    )
+    .await;
+    let navigation = candidate.request().navigation;
+    assert_ne!(prepared_renderer(&owner, &candidate), first_renderer);
     drop(candidate);
     assert_eq!(owner.target_document_id(TARGET), first_id);
     assert_eq!(

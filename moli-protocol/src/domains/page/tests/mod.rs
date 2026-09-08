@@ -11,7 +11,8 @@ use crate::devtools_runtime::{
 };
 use crate::testing::{
     TestContext, wait_until_frame_stopped_loading, wait_until_message, wait_until_messages,
-    wait_until_renderer_document_load, wait_until_scheduler_message,
+    wait_until_navigation_document_load, wait_until_renderer_document_load,
+    wait_until_scheduler_message,
 };
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64_STANDARD};
 use moli_core::page::{
@@ -84,9 +85,12 @@ fn dialog_projection_for_test(
     crate::conn::TargetJavaScriptDialog::new(
         frame_id.to_owned(),
         document,
+        document,
         crate::conn::JavaScriptDialogKey::new(
             page_owner.document_id(),
-            &renderer_dialog_for_test(Some(frame_id), "alert", "pending", "", None),
+            renderer_dialog_for_test(Some(frame_id), "alert", "pending", "", None)
+                .source_document(),
+            renderer_dialog_for_test(Some(frame_id), "alert", "pending", "", None).id(),
         ),
     )
 }
@@ -221,18 +225,14 @@ async fn ensure_initial_document_for_session(ctx: &mut TestContext, session_id: 
     };
     let pending = ctx
         .conn
-        .start_initial_document_page_ensure_for_owner(&owner)
+        .start_initial_document_ensure_for_owner(&owner)
         .expect("target lifecycle initial document ensure should start")
         .expect("metadata-only initial target should need an initial document page build");
     let completed = pending
         .wait()
         .await
         .expect("initial document page build should complete");
-    let diagnostics = ctx
-        .conn
-        .complete_initial_document_page_build_for_owner_with_creation_diagnostics(completed)
-        .await
-        .expect("initial document should install on captured owner");
+    let diagnostics = ctx.conn.project_initial_document_completion(*completed);
     if let Some(predecessor) = diagnostics.renderer_output_predecessor {
         ctx.route_direct_command_renderer_predecessor_for_test(predecessor)
             .await;

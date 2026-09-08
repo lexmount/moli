@@ -1106,10 +1106,8 @@ mod tests {
                 .and_then(|summary| summary.1),
             Some("XHR")
         );
-        assert!(
-            terminal.should_wait_for_background_navigation_completion(),
-            "a successful XHR terminal must stay behind the same navigation gate as its start and response"
-        );
+        assert!(terminal.is_non_document_network_event());
+        assert!(terminal.is_network_protocol_observation());
         let (message, automation_event) = terminal.into_parts();
         assert_eq!(message["method"], "Network.loadingFinished");
         assert!(message["params"].get("type").is_none());

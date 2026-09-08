@@ -240,6 +240,8 @@ async fn same_context_background_session_can_stage_its_own_pre_document_state_be
         }
     }))
     .await;
+    crate::testing::wait_until_navigation_document_load(&mut ctx, 104192, Some(&second_session_id))
+        .await;
     consume_main_document_navigation_start(&mut ctx);
     let navigation = take_response_by_id(&mut ctx, 104192);
     assert_eq!(navigation["result"]["frameId"], json!(second_target_id));
@@ -5416,13 +5418,13 @@ async fn same_context_named_popup_reuse_navigates_and_activates_loaded_owner() {
         1041949440,
     )
     .await;
-    ctx.enable_background_navigation_scheduler_for_test();
+    ctx.enable_background_event_ingress_for_test();
     let browser_context = ctx.conn.browser_context.as_mut().expect("browser context");
     let handle = browser_context
         .web_contents_handle_for_target(&owner.target_id)
         .unwrap();
     browser_context
-        .set_web_contents_window_name(handle, Some("reportWindow".into()))
+        .set_web_contents_window_name_for_test(handle, Some("reportWindow".into()))
         .unwrap();
 
     ctx.process_async(json!({
@@ -5452,6 +5454,11 @@ async fn same_context_named_popup_reuse_navigates_and_activates_loaded_owner() {
         },
     )
     .await;
+    crate::testing::wait_until_scheduler_message(&mut ctx, "named popup commit projection", |message| {
+        message["method"] == "Target.targetInfoChanged"
+            && message["params"]["targetInfo"]["targetId"] == owner.target_id
+            && message["params"]["targetInfo"]["url"] == "data:text/html,<title>named</title><main>named target</main>"
+    }).await;
     let emitted = ctx.take_all();
     assert!(
         !emitted
@@ -6549,6 +6556,8 @@ async fn same_context_background_session_can_stage_its_own_fetch_enable_before_a
         "params": { "url": format!("http://{addr}/page") }
     }))
     .await;
+    crate::testing::wait_until_navigation_document_load(&mut ctx, 104194943, Some("SID-active"))
+        .await;
     let _ = take_response_by_id(&mut ctx, 104194943);
     assert!(
         ctx.sent
@@ -6599,6 +6608,12 @@ async fn same_context_background_session_can_stage_its_own_fetch_enable_before_a
     .await;
     ctx.expect_result(104194946, json!({}), Some(&second_session_id));
 
+    crate::testing::wait_until_navigation_document_load(
+        &mut ctx,
+        104194945,
+        Some(&second_session_id),
+    )
+    .await;
     let _ = take_response_by_id(&mut ctx, 104194945);
     assert!(
         ctx.sent
@@ -6735,6 +6750,12 @@ async fn same_context_background_fetch_continue_request_keeps_target_background(
     .await;
     ctx.expect_result(104194966, json!({}), Some(&second_session_id));
 
+    crate::testing::wait_until_navigation_document_load(
+        &mut ctx,
+        104194965,
+        Some(&second_session_id),
+    )
+    .await;
     let navigation = take_response_by_id(&mut ctx, 104194965);
     assert_eq!(navigation["result"]["frameId"], json!(second_target_id));
     {
@@ -6873,6 +6894,8 @@ async fn same_context_background_session_can_stage_its_own_fetch_auth_handling_b
         "params": { "url": format!("http://{addr}/page") }
     }))
     .await;
+    crate::testing::wait_until_navigation_document_load(&mut ctx, 104194957, Some("SID-active"))
+        .await;
     let _ = take_response_by_id(&mut ctx, 104194957);
     assert!(
         !ctx.sent.iter().any(|message| {
@@ -6921,6 +6944,16 @@ async fn same_context_background_session_can_stage_its_own_fetch_auth_handling_b
     .await;
     ctx.expect_result(104194960, json!({}), Some(&second_session_id));
 
+    crate::testing::wait_until_scheduler_message(
+        &mut ctx,
+        "exact background authentication pause",
+        |message| {
+            message["method"] == json!("Fetch.authRequired")
+                && message["sessionId"] == json!(second_session_id)
+                && message["params"]["requestId"] == json!(request_id)
+        },
+    )
+    .await;
     let auth_required = ctx.take_one();
     assert_eq!(auth_required["method"], "Fetch.authRequired");
     assert_eq!(auth_required["sessionId"], json!(second_session_id));
@@ -6947,6 +6980,12 @@ async fn same_context_background_session_can_stage_its_own_fetch_auth_handling_b
     .await;
     ctx.expect_result(104194961, json!({}), Some(&second_session_id));
 
+    crate::testing::wait_until_navigation_document_load(
+        &mut ctx,
+        104194959,
+        Some(&second_session_id),
+    )
+    .await;
     let navigation = take_response_by_id(&mut ctx, 104194959);
     assert_eq!(navigation["result"]["frameId"], json!(second_target_id));
     assert!(

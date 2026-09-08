@@ -59,7 +59,7 @@ impl CdpScheduler {
     ) -> ProtocolOutputSequence {
         let mut output = self.project_initial_browser_snapshot().await;
         let events = match event {
-            Ok(record @ BrowserEventRecord { event, sequence }) => match event {
+            Ok(record) => match record.event.clone() {
                 BrowserEvent::ContextCreated(context) => {
                     self.conn.project_created_browser_context(context);
                     Vec::new()
@@ -73,6 +73,44 @@ impl CdpScheduler {
                 BrowserEvent::DocumentCommitted(document) => {
                     self.conn.project_browser_document_commit(document).await
                 }
+                BrowserEvent::NavigationAwaitingDecision(request) => {
+                    self.conn
+                        .project_browser_navigation_decision(request.web_contents, None)
+                        .await
+                }
+                BrowserEvent::InitialDocumentAwaitingInspection { web_contents, key }
+                | BrowserEvent::InitialDocumentConstructionFailed { web_contents, key } => {
+                    self.conn
+                        .project_browser_initial_document_inspection(web_contents, Some(key))
+                        .await
+                }
+                BrowserEvent::NavigationResponseChanged(request) => {
+                    self.conn
+                        .project_browser_navigation_responses(request.web_contents)
+                        .await
+                }
+                BrowserEvent::NavigationStarted(request)
+                | BrowserEvent::NavigationFailed { request, .. } => {
+                    self.conn
+                        .project_browser_navigation(request.web_contents)
+                        .await
+                }
+                BrowserEvent::DocumentLifecycleChanged(_)
+                | BrowserEvent::DocumentTitleChanged(_)
+                | BrowserEvent::DialogOpened(_)
+                | BrowserEvent::DialogClosed { .. } => {
+                    // Native state/waiters have already advanced. Frontend
+                    // visibility still consumes the exact renderer FIFO so a
+                    // lifecycle event cannot overtake an earlier dialog or
+                    // command response fence.
+                    Vec::new()
+                }
+                BrowserEvent::DownloadCreated(download) => {
+                    self.conn.project_created_browser_download(download)
+                }
+                BrowserEvent::DownloadUpdated(download) => {
+                    self.conn.project_browser_download(download)
+                }
                 BrowserEvent::ContextDisposed(context) => {
                     self.conn.project_disposed_browser_context(context).await
                 }
@@ -81,7 +119,7 @@ impl CdpScheduler {
                     activated,
                 } => {
                     self.conn
-                        .project_closed_web_contents(web_contents, activated, sequence)
+                        .project_closed_web_contents(web_contents, activated, record.sequence)
                         .await
                 }
             },
@@ -119,6 +157,299 @@ mod tests {
     use crate::config::DEFAULT_SCREENCAST_INTERVAL_MS;
     use moli_core::browser::BrowserService;
     use moli_protocol::CdpInitialStoragePartition;
+
+    #[tokio::test]
+    async fn native_navigation_events_recover_projection_holds_after_real_stream_lag() {
+        use moli_core::browser::{BrowserContextStoragePartitionHandles, StoragePartitionKind};
+        use moli_protocol::devtools_runtime::{
+            DevToolsCommand, DevToolsCommandContext, DevToolsCommandResult,
+            DevToolsNavigateCommand, DevToolsNavigationWait, DevToolsProtocol,
+        };
+        use serde_json::json;
+        tokio::task::LocalSet::new()
+            .run_until(async {
+                for lagged in [false, true] {
+                    let service = BrowserService::start().unwrap();
+                    let browser = service.handle();
+                    let (mut scheduler, mut receivers) =
+                        CdpScheduler::new_with_initial_state_runtime_config(
+                            browser.clone(),
+                            CdpInitialStoragePartition::memory(),
+                            Default::default(),
+                        );
+                    let initial = Box::pin(
+                        scheduler.execute_devtools_command_with_external_load_wait_and_protocol_messages(
+                            &mut receivers,
+                            DevToolsCommand::Navigate(DevToolsNavigateCommand {
+                                context: DevToolsCommandContext {
+                                    protocol: DevToolsProtocol::Cdp,
+                                    session_id: None,
+                                    target_id: Some(scheduler.conn.default_target_id().into()),
+                                    browser_context_id: None,
+                                },
+                                url: "data:text/html,<title>native navigation observer</title>".to_owned(),
+                                referrer: None,
+                                wait: DevToolsNavigationWait::DocumentInstalled,
+                            }),
+                        ),
+                    )
+                    .await;
+                    let DevToolsCommandResult::Navigate(initial) = initial.result.unwrap() else {
+                        panic!("expected the initial document navigation result");
+                    };
+                    assert!(initial.error_text.is_none(), "{initial:?}");
+                    scheduler.drain_browser_events().await;
+                    let contents = scheduler.conn.projected_web_contents()[0];
+                    let context = browser.context_handle(contents.context()).unwrap();
+                    let document = context.document_handle(contents).unwrap().unwrap();
+                    let (_, mut native_events) = browser.subscribe().unwrap();
+                    let navigation = context.start_document_navigation(contents).unwrap();
+                    let started = std::iter::from_fn(|| native_events.try_recv().ok())
+                        .find(|record| matches!(record.event, BrowserEvent::NavigationStarted(request) if request.navigation == navigation))
+                        .expect("exact native start occurrence");
+                    for (id, expected) in [(2, 1), (3, 0)] {
+                        if expected == 0 {
+                            assert!(
+                                context
+                                    .cancel_document_navigation(contents, &navigation)
+                                    .unwrap()
+                            );
+                        }
+                        if lagged {
+                            for _ in 0..130 {
+                                let transient = browser
+                                    .create_context(
+                                        BrowserContextStoragePartitionHandles::memory(),
+                                        StoragePartitionKind::Ephemeral,
+                                        None,
+                                        None,
+                                    )
+                                    .unwrap();
+                                transient.remove().unwrap();
+                            }
+                            assert!(matches!(
+                                native_events.try_recv(),
+                                Err(TryRecvError::Lagged(_))
+                            ));
+                            native_events = browser.subscribe().unwrap().1;
+                        }
+                        scheduler.drain_browser_events().await;
+                        let output = scheduler
+                            .execute_internal_protocol_message(
+                                &mut receivers,
+                                json!({
+                                    "id": id, "method": "HeapProfiler.moliDiagnostics",
+                                }),
+                            )
+                            .await
+                            .unwrap_or_else(|failure| panic!("{:?}", failure.into_parts().1))
+                            .into_messages();
+                        let response = output.iter().find(|message| message["id"] == id).unwrap();
+                        assert_eq!(
+                            response["result"]["activeBrowserContext"]["activeRuntimeSlot"]["pendingDocumentProjectionCount"],
+                            expected,
+                            "lagged={lagged}: {response:?}"
+                        );
+                        assert_eq!(context.document_handle(contents).unwrap(), Some(document));
+                    }
+                    assert!(
+                        scheduler
+                            .handle_browser_event(Ok(started))
+                            .await
+                            .into_messages()
+                            .is_empty()
+                    );
+                    assert!(
+                        matches!(context.navigation_snapshot(contents).unwrap().attempt, Some(moli_core::browser::NavigationAttempt::Failed { request, .. }) if request.navigation == navigation)
+                    );
+                    service.shutdown();
+                }
+            })
+            .await;
+    }
+
+    #[tokio::test]
+    async fn native_download_events_recover_after_lag_and_outlive_the_source_page() {
+        use moli_core::browser::{
+            BrowserContextStoragePartitionHandles, DownloadBehavior, DownloadBody, DownloadPolicy,
+            DownloadState, StoragePartitionKind, WebContentsCreation,
+        };
+        use serde_json::json;
+        struct Directory(std::path::PathBuf);
+        impl Drop for Directory {
+            fn drop(&mut self) {
+                let _ = std::fs::remove_dir_all(&self.0);
+            }
+        }
+        for (lagged, retire_context) in [(false, false), (true, false), (false, true), (true, true)]
+        {
+            let service = BrowserService::start().unwrap();
+            let browser = service.handle();
+            let context = browser
+                .create_context(
+                    BrowserContextStoragePartitionHandles::memory(),
+                    StoragePartitionKind::Ephemeral,
+                    None,
+                    None,
+                )
+                .unwrap();
+            let directory = Directory(std::env::temp_dir().join(format!(
+                "moli-native-download-{}-{}",
+                std::process::id(),
+                context.id().get()
+            )));
+            std::fs::create_dir(&directory.0).unwrap();
+            let (contents, _) = context
+                .create_web_contents(WebContentsCreation::with_initial_document(
+                    "about:blank".into(),
+                    None,
+                    None,
+                ))
+                .unwrap();
+            let (mut scheduler, mut receivers) =
+                CdpScheduler::new_with_initial_state_runtime_config(
+                    browser.clone(),
+                    CdpInitialStoragePartition::memory(),
+                    Default::default(),
+                );
+            scheduler.drain_browser_events().await;
+            scheduler
+                .execute_internal_protocol_message(
+                    &mut receivers,
+                    json!({
+                        "id": 1, "method": "Browser.setDownloadBehavior", "params": {
+                            "behavior": "allow", "downloadPath": directory.0, "eventsEnabled": true
+                        }
+                    }),
+                )
+                .await
+                .unwrap_or_else(|failure| {
+                    panic!("download subscription failed: {:?}", failure.into_parts().1)
+                });
+            let (chunks, body) = tokio::sync::mpsc::unbounded_channel();
+            let (finish, finished) = tokio::sync::oneshot::channel();
+            let url = url::Url::parse("https://native-download.test/report.txt").unwrap();
+            let response = moli_fetch::StreamingRawResponse::new(
+                url.clone(),
+                200,
+                Vec::new(),
+                None,
+                Vec::new(),
+                false,
+                Vec::new(),
+                body,
+                moli_fetch::FetchCancelHandle::new(),
+                finished,
+            );
+            let mut observation = context
+                .start_download_response(
+                    contents,
+                    &DownloadPolicy {
+                        behavior: DownloadBehavior::Allow,
+                        download_path: Some(directory.0.to_string_lossy().into_owned()),
+                    },
+                    url,
+                    Vec::new(),
+                    DownloadBody::Streaming(Box::new(response)),
+                )
+                .unwrap()
+                .unwrap();
+            let mut messages = scheduler.drain_browser_events().await.into_messages();
+            let begin = messages
+                .iter()
+                .find(|message| message["method"] == "Browser.downloadWillBegin")
+                .unwrap();
+            assert_eq!(begin["params"]["guid"], observation.guid());
+            let frame = begin["params"]["frameId"].clone();
+            if !retire_context {
+                browser
+                    .close_web_contents(contents)
+                    .unwrap()
+                    .close_async()
+                    .await;
+            }
+            chunks.send(b"native download".to_vec()).unwrap();
+            drop(chunks);
+            if retire_context {
+                while observation.snapshot().received_bytes != 15 {
+                    observation.next_update().await.unwrap();
+                }
+                assert!(context.remove().unwrap());
+                drop(finish);
+            } else {
+                finish.send(Ok(())).unwrap();
+            }
+            while observation.snapshot().state == DownloadState::Active {
+                observation.next_update().await.unwrap();
+            }
+            let terminal_state = if retire_context {
+                "canceled"
+            } else {
+                "completed"
+            };
+            assert_eq!(
+                observation.snapshot().state == DownloadState::Canceled,
+                retire_context
+            );
+            if lagged {
+                for _ in 0..130 {
+                    let transient = browser
+                        .create_context(
+                            BrowserContextStoragePartitionHandles::memory(),
+                            StoragePartitionKind::Ephemeral,
+                            None,
+                            None,
+                        )
+                        .unwrap();
+                    assert!(transient.remove().unwrap());
+                }
+            }
+            let native = browser.subscribe().unwrap().0;
+            messages.extend(scheduler.drain_browser_events().await.into_messages());
+            assert_eq!(
+                messages
+                    .iter()
+                    .filter(|message| message["method"] == "Browser.downloadWillBegin")
+                    .count(),
+                1,
+                "{messages:?}"
+            );
+            let completed = messages
+                .iter()
+                .filter(|message| {
+                    message["method"] == "Browser.downloadProgress"
+                        && message["params"]["state"] == terminal_state
+                })
+                .collect::<Vec<_>>();
+            assert_eq!(completed.len(), 1, "{messages:?}");
+            assert_eq!(completed[0]["params"]["guid"], observation.guid());
+            assert_eq!(completed[0]["params"]["receivedBytes"], 15);
+            assert!(!frame.is_null());
+            if retire_context {
+                assert!(std::fs::read_dir(&directory.0).unwrap().next().is_none());
+            } else {
+                assert_eq!(
+                    std::fs::read(directory.0.join("report.txt")).unwrap(),
+                    b"native download"
+                );
+            }
+            let replay = scheduler
+                .conn
+                .project_browser_snapshot(native.clone())
+                .await;
+            assert!(replay.into_iter().all(|event| {
+                !event.into_protocol_message()["method"]
+                    .as_str()
+                    .is_some_and(|method| method.starts_with("Browser.download"))
+            }));
+            assert_eq!(
+                browser.subscribe().unwrap().0,
+                native,
+                "projection cannot mutate Browser downloads"
+            );
+            service.shutdown();
+        }
+    }
 
     #[tokio::test]
     async fn native_activation_projects_once_and_recovers_current_selection_after_real_lag() {

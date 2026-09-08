@@ -464,7 +464,16 @@ async fn fixture_handler(
             &[("x-smoke-binary", "ok")],
         ),
         "/api-auth" => {
-            if header_string(&headers, "authorization").as_deref() == Some("Basic dXNlcjpwYXNz") {
+            let digest = query.get("scheme").is_some_and(|scheme| scheme == "digest");
+            let authorization = header_string(&headers, "authorization");
+            let authenticated = if digest {
+                authorization
+                    .as_deref()
+                    .is_some_and(|value| value.starts_with("Digest "))
+            } else {
+                authorization.as_deref() == Some("Basic dXNlcjpwYXNz")
+            };
+            if authenticated {
                 text(
                     "authenticated fetch",
                     StatusCode::OK,
@@ -476,10 +485,17 @@ async fn fixture_handler(
                     .map(String::as_str)
                     .unwrap_or("smoke-auth");
                 let escaped = realm.replace('\\', "\\\\").replace('"', "\\\"");
+                let challenge = if digest {
+                    format!(
+                        "Digest realm=\"{escaped}\", nonce=\"deadbeef\", qop=\"auth\", algorithm=MD5"
+                    )
+                } else {
+                    format!("Basic realm=\"{escaped}\"")
+                };
                 text(
                     "auth required",
                     StatusCode::UNAUTHORIZED,
-                    &[("www-authenticate", &format!("Basic realm=\"{escaped}\""))],
+                    &[("www-authenticate", &challenge)],
                 )
             }
         }

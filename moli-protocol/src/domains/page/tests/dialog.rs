@@ -47,7 +47,10 @@ fn push_dialog_for_session(
             .or_else(|| page_owner.target_id().map(str::to_owned))
             .expect("test target should expose a root frame"),
     };
-    assert!(ctx.conn.install_javascript_dialog_for_session(
+    let (_, dialog) = ctx
+        .conn
+        .admit_javascript_dialog_for_test(&page_owner, dialog);
+    assert!(ctx.conn.project_javascript_dialog_for_session(
         session_id,
         page_owner,
         source_frame_id,

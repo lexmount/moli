@@ -563,7 +563,7 @@ async fn rust_cdp_chromium_target_popup_target_keeps_opener_browser_context_id()
     // loading. Use the production scheduler boundary here: leaving this test
     // on TestContext's legacy inline-navigation mode makes an unrelated
     // example.com response part of the renderer-output cursor fence.
-    ctx.enable_background_navigation_scheduler_for_test();
+    ctx.enable_background_event_ingress_for_test();
     tokio::task::LocalSet::new()
         .run_until(async {
             load_bc_with_titled_page_async(
@@ -615,7 +615,7 @@ async fn rust_cdp_chromium_target_named_popup_reuse_keeps_browser_context_id() {
         "id": 261_054,
         "method": "Runtime.evaluate",
         "params": {
-            "expression": "window.open('https://example.com/first', 'report') !== null",
+            "expression": "window.open('about:blank', 'report') !== null",
             "returnByValue": true
         }
     }))
@@ -625,10 +625,19 @@ async fn rust_cdp_chromium_target_named_popup_reuse_keeps_browser_context_id() {
         "id": 261_055,
         "method": "Runtime.evaluate",
         "params": {
-            "expression": "window.open('https://example.com/second', 'report') !== null",
+            "expression": "window.open('data:text/html,second', 'report') !== null",
             "returnByValue": true
         }
     }))
+    .await;
+    crate::testing::wait_until_scheduler_message(
+        &mut ctx,
+        "named popup context URL commit",
+        |message| {
+            message["method"] == "Target.targetInfoChanged"
+                && message["params"]["targetInfo"]["url"] == "data:text/html,second"
+        },
+    )
     .await;
     let messages = ctx.take_all();
 
@@ -639,6 +648,6 @@ async fn rust_cdp_chromium_target_named_popup_reuse_keeps_browser_context_id() {
     );
     assert_eq!(
         changed["params"]["targetInfo"]["url"],
-        "https://example.com/second"
+        "data:text/html,second"
     );
 }

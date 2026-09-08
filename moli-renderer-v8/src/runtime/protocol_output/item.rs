@@ -7,11 +7,11 @@ use crate::runtime::{
     RendererDocumentLifecycleEvent, RendererDocumentLifecycleIdentity,
     RendererDocumentSourcedSameDocumentNavigation,
     RendererDocumentSourcedTopLevelLocationNavigation, RendererDomMutationEventBatch,
-    RendererMainDocumentCommit, RendererPendingDownloadActivation,
-    RendererPendingFileChooserActivation, RendererPendingJavaScriptDialog,
-    RendererPendingPopupActivation, RendererPendingTopLevelHistoryTraversal,
-    RendererRuntimeCommandCausalIdentity, RendererRuntimeInspectorMessageBatch,
-    RendererServiceWorkerTargetEvent, RendererSharedWorkerTargetEvent,
+    RendererJavaScriptDialogOpening, RendererMainDocumentCommit, RendererPendingDownloadActivation,
+    RendererPendingFileChooserActivation, RendererPendingTopLevelHistoryTraversal,
+    RendererPopupOpening, RendererRuntimeCommandCausalIdentity,
+    RendererRuntimeInspectorMessageBatch, RendererServiceWorkerTargetEvent,
+    RendererSharedWorkerTargetEvent,
 };
 use moli_page_types::{
     PendingRuntimeBindingCall, PendingSubresourceContinueEvent, PendingSubresourceFetchInfo,
@@ -33,8 +33,6 @@ pub struct RendererDocumentTitleChanged {
 pub enum RendererOwnerAction {
     FileChooser(RendererPendingFileChooserActivation),
     Download(RendererPendingDownloadActivation),
-    JavaScriptDialog(RendererPendingJavaScriptDialog),
-    Popup(RendererPendingPopupActivation),
     ChildFrameTree {
         source_document: RendererDocumentLifecycleIdentity,
         event: ChildFrameTreeEventSnapshot,
@@ -83,6 +81,8 @@ pub enum RendererOwnerAction {
 /// protocol-boundary responsibility.
 #[derive(Clone, Debug, PartialEq)]
 pub enum RendererProtocolObservation {
+    Popup(std::sync::Arc<RendererPopupOpening>),
+    JavaScriptDialog(std::sync::Arc<RendererJavaScriptDialogOpening>),
     MainDocumentCommit(RendererMainDocumentCommit),
     DocumentTitleChanged(RendererDocumentTitleChanged),
     DocumentLifecycle(RendererDocumentLifecycleEvent),

@@ -122,15 +122,20 @@ impl RendererInspectionEndpoint {
         self.devtools_agent_token
     }
 
+    /// Immutable provenance for already-published output, even after Page
+    /// retirement. This does not admit Inspector commands or keep a Page alive.
+    pub fn output_residence(&self) -> RendererOutputResidenceIdentity {
+        RendererOutputResidenceIdentity::Page {
+            owner_local_host_id: self.token.local_host_id,
+            page_id: self.token.page_id,
+        }
+    }
+
     pub fn routes_output_stream(&self, stream: RendererOutputStreamIdentity) -> bool {
         self.page_context_cancel_tx
             .with_inspector_admission(|| {
                 stream.renderer_agent() == self.devtools_agent_token
-                    && stream.residence()
-                        == RendererOutputResidenceIdentity::Page {
-                            owner_local_host_id: self.token.local_host_id,
-                            page_id: self.token.page_id,
-                        }
+                    && stream.residence() == self.output_residence()
             })
             .unwrap_or(false)
     }
@@ -626,6 +631,8 @@ mod tests {
         );
         assert_retired(&old);
         assert!(!old.routes_output_stream(old_stream));
+        assert_eq!(old.output_residence(), old_stream.residence());
+        assert_ne!(old.output_residence(), replacement_stream.residence());
         assert!(replacement.routes_output_stream(replacement_stream));
         assert_main_canceled(old_main);
         assert_io_canceled(old_io);

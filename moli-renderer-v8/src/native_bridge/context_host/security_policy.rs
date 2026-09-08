@@ -13,7 +13,7 @@ use crate::{
     },
     native_bridge::{
         active_child_window_handle, active_lightweight_popup_id,
-        child_window_handle_from_marker_data, entered_child_window_handle,
+        child_window_handle_from_marker_data,
     },
     util::get_private_value,
 };
@@ -466,13 +466,12 @@ impl JsContextHost {
         &self,
         scope: &mut v8::PinScope<'_, '_>,
     ) -> OwnerDispatchScope {
-        if let Some(handle) = entered_child_window_handle(scope) {
-            return OwnerDispatchScope::Child(handle);
-        }
-        if let Some(popup_id) = active_lightweight_popup_id(scope) {
-            return OwnerDispatchScope::LightweightPopup(popup_id);
-        }
-        OwnerDispatchScope::Top
+        // A cross-realm call changes the executing context, not the entry
+        // Window. Resolve real child/popup markers in V8's entry (or current
+        // microtask) context; no separately maintained "entered child" slot.
+        let context = v8::Local::new(scope, scope.get_entered_or_microtask_context());
+        let entered_scope = &mut v8::ContextScope::new(scope, context);
+        policy_owner_dispatch_scope(entered_scope)
     }
 
     pub(crate) fn check_document_connect_csp_for_owner<'s>(

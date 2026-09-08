@@ -101,18 +101,12 @@ pub use events::{fetch_auth_required_params, fetch_request_paused_params};
 #[cfg(test)]
 pub(crate) use main_document_progress::empty_main_document_progress_gate_for_test;
 pub(crate) use main_document_progress::{
-    CompletedDocumentProgressTransfer, CompletedDownloadProgressTransfer,
-    CompletedMainDocumentNetworkEvents, FailedNavigationResponseMode,
-    MainDocumentBodyNetworkProgress, MainDocumentBodyProgressSource,
-    MainDocumentProgressBackgroundEventBarrier, MainDocumentProgressGate,
-    MaterializedDownloadDocumentProgress, MaterializedFailedDocumentProgress,
-    MaterializedLoadedDocumentProgress, MaterializedNavigationLoadOutcome,
-    emit_child_document_navigation_network_background_events,
+    FailedNavigationResponseMode, MainDocumentProgressBackgroundEventBarrier,
+    MainDocumentProgressGate, emit_child_document_navigation_network_background_events,
     emit_fetch_navigation_initial_request_for_pause_background_events,
-    materialize_loaded_navigation_progress, materialize_navigation_load_result,
-    record_completed_main_document_response_body, record_failed_main_document_response_body,
+    failed_navigation_progress_gate, native_error_document_finished_events,
+    native_navigation_failure_events, native_navigation_response_events,
     record_main_document_request_body, response_stage_main_document_navigation_network_progress,
-    start_observed_main_document_navigation_progress_background_events,
 };
 pub(crate) use output::{
     TargetSubresourceFetchPauseNetworkOutput, TargetSubresourceFetchPauseOutput,

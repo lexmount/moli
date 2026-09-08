@@ -3653,7 +3653,7 @@ async fn cdp_utf8_headers_coexist_with_fetch_and_xhr_byte_strings() {
         .unwrap();
     });
     let mut ctx = TestContext::new();
-    let mut bc = BrowserContext::new("BID-1".into());
+    let mut bc = ctx.conn.new_browser_context_fixture_for_test("BID-1");
     bc.set_active_target_id("TID-1");
     bc.attach_active_session("SID-1");
     ctx.conn.install_browser_context_fixture_for_test(bc);

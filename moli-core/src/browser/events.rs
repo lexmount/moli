@@ -5,7 +5,7 @@ use super::{
 };
 
 /// A committed Browser lifetime change, with no protocol or session identity.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub enum BrowserEvent {
     ContextCreated(BrowserContextId),
     ContextDisposed(BrowserContextId),
@@ -15,13 +15,37 @@ pub enum BrowserEvent {
         previous: Option<WebContentsHandle>,
     },
     DocumentCommitted(DocumentHandle),
+    InitialDocumentAwaitingInspection {
+        web_contents: WebContentsHandle,
+        key: super::web_contents::InitialDocumentBuildKey,
+    },
+    InitialDocumentConstructionFailed {
+        web_contents: WebContentsHandle,
+        key: super::web_contents::InitialDocumentBuildKey,
+    },
+    NavigationStarted(NavigationRequest),
+    NavigationAwaitingDecision(NavigationRequest),
+    NavigationResponseChanged(NavigationRequest),
+    NavigationFailed {
+        request: NavigationRequest,
+        reason: NavigationFailureReason,
+    },
+    DocumentLifecycleChanged(DocumentLifecycleSnapshot),
+    DocumentTitleChanged(DocumentHandle),
+    DialogOpened(JavaScriptDialogOpened),
+    DialogClosed {
+        document: DocumentHandle,
+        key: super::web_contents::JavaScriptDialogKey,
+    },
+    DownloadCreated(super::DownloadRecordSnapshot),
+    DownloadUpdated(std::sync::Arc<super::DownloadEvent>),
     WebContentsClosed {
         web_contents: WebContentsHandle,
         activated: Option<WebContentsHandle>,
     },
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct BrowserEventRecord {
     pub sequence: BrowserSequence,
     pub event: BrowserEvent,
@@ -43,6 +67,86 @@ pub struct BrowserSnapshot {
     pub web_contents: Vec<WebContentsHandle>,
     pub selected_web_contents: Vec<WebContentsHandle>,
     pub documents: Vec<DocumentHandle>,
+    pub document_lifecycles: Vec<DocumentLifecycleSnapshot>,
+    pub javascript_dialogs: Vec<JavaScriptDialogOpened>,
+    pub navigations: Vec<NavigationSnapshot>,
+    pub downloads: Vec<super::DownloadRecordSnapshot>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct DocumentLifecycleSnapshot {
+    pub document: DocumentHandle,
+    pub lifecycle: crate::page::RendererDocumentLifecycleSnapshot,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct JavaScriptDialogOpened {
+    pub document: DocumentHandle,
+    pub key: super::web_contents::JavaScriptDialogKey,
+    pub opening: std::sync::Arc<crate::page::RendererJavaScriptDialogOpening>,
+}
+
+/// One admitted cross-document attempt, including its reserved Document identity.
+/// Committed documents continue to be observed through DocumentCommitted.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct NavigationRequest {
+    pub web_contents: WebContentsHandle,
+    pub navigation: super::NavigationId,
+    pub document: super::DocumentId,
+}
+
+/// Response observations belong to the exact current Document or latest attempt.
+/// Large bodies use the existing bounded memory/file-backed capture, and are
+/// released with their navigation instead of an observer's Target mapping.
+#[derive(Clone, Debug)]
+pub struct NavigationResponseSnapshot {
+    pub request: NavigationRequest,
+    pub response: Result<moli_fetch::ResponseHead, NavigationFetchFailure>,
+    pub observations: moli_fetch::NetworkObservationJournal,
+    pub body: Option<Result<super::CapturedBody, String>>,
+}
+
+/// The failed URL remains the history/Target URL while the renderer displays
+/// the Browser-owned error document. Shared by the response and commit facts.
+#[derive(Clone, Debug)]
+pub struct NavigationError {
+    pub unreachable_url: url::Url,
+    pub error_text: String,
+}
+
+#[derive(Clone, Debug)]
+pub struct NavigationFetchFailure {
+    pub error: std::sync::Arc<NavigationError>,
+    pub request: Option<moli_fetch::NetworkFetchFailureRequestContext>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum NavigationFailureReason {
+    Canceled,
+    Download,
+    Superseded,
+    WebContentsClosed,
+    ContextDisposed,
+}
+
+/// The latest uncommitted attempt in a live WebContents. At most one terminal
+/// record is retained; a new attempt replaces it, and a commit clears it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum NavigationAttempt {
+    Started(NavigationRequest),
+    Failed {
+        request: NavigationRequest,
+        reason: NavigationFailureReason,
+    },
+}
+
+/// Current committed Document and a later attempt are independent: a pending
+/// or failed replacement must not erase an unpublished Document commit fence.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct NavigationSnapshot {
+    pub web_contents: WebContentsHandle,
+    pub committed: Option<NavigationRequest>,
+    pub attempt: Option<NavigationAttempt>,
 }
 
 /// Current physical Page identity and URL read in one Browser owner turn.
@@ -52,6 +156,7 @@ pub struct WebContentsSnapshot {
     pub main_frame: MainFrameSlotId,
     pub document: Option<DocumentHandle>,
     pub url: String,
+    pub popup: Option<std::sync::Arc<super::BrowserPopupCreation>>,
 }
 
 pub type BrowserEventReceiver = broadcast::Receiver<BrowserEventRecord>;
@@ -90,7 +195,7 @@ impl BrowserEventStream {
             sequence: self.sequence,
             event,
         };
-        let _ = self.sender.send(record);
+        let _ = self.sender.send(record.clone());
         record
     }
 
@@ -100,6 +205,10 @@ impl BrowserEventStream {
         web_contents: impl Iterator<Item = WebContentsHandle>,
         selected_web_contents: impl Iterator<Item = WebContentsHandle>,
         documents: impl Iterator<Item = DocumentHandle>,
+        document_lifecycles: impl Iterator<Item = DocumentLifecycleSnapshot>,
+        downloads: impl Iterator<Item = super::DownloadRecordSnapshot>,
+        javascript_dialogs: impl Iterator<Item = JavaScriptDialogOpened>,
+        navigations: impl Iterator<Item = NavigationSnapshot>,
     ) -> (BrowserSnapshot, BrowserEventReceiver) {
         (
             BrowserSnapshot {
@@ -108,6 +217,10 @@ impl BrowserEventStream {
                 web_contents: web_contents.collect(),
                 selected_web_contents: selected_web_contents.collect(),
                 documents: documents.collect(),
+                document_lifecycles: document_lifecycles.collect(),
+                downloads: downloads.collect(),
+                javascript_dialogs: javascript_dialogs.collect(),
+                navigations: navigations.collect(),
             },
             self.sender.subscribe(),
         )
@@ -305,6 +418,10 @@ mod tests {
             std::iter::empty(),
             std::iter::empty(),
             std::iter::empty(),
+            std::iter::empty(),
+            std::iter::empty(),
+            std::iter::empty(),
+            std::iter::empty(),
         );
         for _ in 0..257 {
             stream.publish(BrowserEvent::ContextCreated(context));
@@ -312,6 +429,10 @@ mod tests {
         assert_eq!(slow.try_recv(), Err(TryRecvError::Lagged(1)));
         let (snapshot, mut recovered) = stream.subscribe(
             std::iter::once(context),
+            std::iter::empty(),
+            std::iter::empty(),
+            std::iter::empty(),
+            std::iter::empty(),
             std::iter::empty(),
             std::iter::empty(),
             std::iter::empty(),

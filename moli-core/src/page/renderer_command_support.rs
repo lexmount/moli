@@ -223,8 +223,20 @@ impl Page {
         self.page_state.observe(page_state)
     }
 
+    pub(crate) fn observe_document_lifecycle(
+        &self,
+    ) -> Option<moli_renderer_v8::RendererDocumentLifecycleObservation> {
+        self.page_state.state().observe_document_lifecycle()
+    }
+
     pub fn document_title(&self) -> String {
         self.page_state.document_title().to_owned()
+    }
+
+    pub(crate) fn observe_document_title(
+        &self,
+    ) -> Option<tokio::sync::watch::Receiver<crate::RendererDocumentTitleChanged>> {
+        self.page_state.state().observe_document_title()
     }
 
     pub fn start_client_rect_for_backend_node_id(

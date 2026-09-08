@@ -3277,6 +3277,7 @@ async fn continue_with_auth_default_aborts_pending_navigation() {
     }))
     .await;
     ctx.expect_result(75, json!({}), Some("SID-1"));
+    wait_for_navigation_auth(&mut ctx, "SID-1", "INT-1").await;
     assert_eq!(ctx.take_one()["method"], "Fetch.authRequired");
 
     ctx.process_async(json!({
@@ -3290,6 +3291,7 @@ async fn continue_with_auth_default_aborts_pending_navigation() {
     }))
     .await;
     ctx.expect_result(76, json!({}), Some("SID-1"));
+    wait_for_navigation_reply(&mut ctx, 74).await;
     ctx.expect_error(74, -32000, "Fetch auth challenge aborted");
     let bc = ctx.conn.browser_context.as_ref().expect("browser context");
     assert!(
@@ -3374,6 +3376,7 @@ async fn continue_with_auth_success_clears_pending_auth_navigation() {
     }))
     .await;
     ctx.expect_result(83, json!({}), Some("SID-1"));
+    wait_for_navigation_auth(&mut ctx, "SID-1", "INT-1").await;
     assert_eq!(ctx.take_one()["method"], "Fetch.authRequired");
 
     let bc = ctx.conn.browser_context.as_ref().expect("browser context");
@@ -3483,6 +3486,7 @@ async fn continue_with_auth_retries_navigation_with_basic_proxy_credentials() {
     .await;
     ctx.expect_result(86, json!({}), Some("SID-1"));
 
+    wait_for_navigation_auth(&mut ctx, "SID-1", "INT-1").await;
     let auth_required = ctx.take_one();
     assert_eq!(auth_required["method"], "Fetch.authRequired");
     assert_eq!(auth_required["params"]["authChallenge"]["source"], "Proxy");
@@ -3511,6 +3515,7 @@ async fn continue_with_auth_retries_navigation_with_basic_proxy_credentials() {
     .await;
     ctx.expect_result(87, json!({}), Some("SID-1"));
 
+    wait_for_navigation_reply(&mut ctx, 85).await;
     ctx.expect_result(
         85,
         json!({ "frameId": "TID-1", "loaderId": LOADER_ID }),
@@ -3581,6 +3586,7 @@ async fn continue_with_auth_retries_navigation_with_digest_proxy_credentials() {
     .await;
     ctx.expect_result(872, json!({}), Some("SID-1"));
 
+    wait_for_navigation_auth(&mut ctx, "SID-1", "INT-1").await;
     let auth_required = ctx
         .sent
         .iter()
@@ -3611,6 +3617,7 @@ async fn continue_with_auth_retries_navigation_with_digest_proxy_credentials() {
     .await;
     ctx.expect_result(873, json!({}), Some("SID-1"));
 
+    wait_for_navigation_reply(&mut ctx, 871).await;
     ctx.expect_result(
         871,
         json!({ "frameId": "TID-1", "loaderId": LOADER_ID }),
@@ -3723,6 +3730,7 @@ async fn cancel_https_proxy_connect_auth_emits_407_without_extra_info_and_fails_
     .await;
     ctx.expect_result(882, json!({}), Some("SID-1"));
 
+    wait_for_navigation_auth(&mut ctx, "SID-1", "INT-1").await;
     let auth_required = ctx.take_one();
     assert_eq!(auth_required["method"], "Fetch.authRequired");
     assert_eq!(auth_required["params"]["authChallenge"]["source"], "Proxy");
@@ -3747,6 +3755,12 @@ async fn cancel_https_proxy_connect_auth_emits_407_without_extra_info_and_fails_
     .await;
     ctx.expect_result(883, json!({}), Some("SID-1"));
 
+    wait_until_scheduler_message(&mut ctx, "proxy CONNECT navigation failure", |event| {
+        event["method"] == "Network.loadingFailed"
+            && event["sessionId"] == "SID-1"
+            && event["params"]["requestId"] == LOADER_ID
+    })
+    .await;
     let response = ctx
         .sent
         .iter()
@@ -3870,6 +3884,7 @@ async fn continue_with_auth_handles_multi_round_basic_navigation_challenge() {
     .await;
     ctx.expect_result(692, json!({}), Some("SID-1"));
 
+    wait_for_navigation_auth(&mut ctx, "SID-1", "INT-1").await;
     let auth_required = ctx.take_one();
     assert_eq!(auth_required["method"], "Fetch.authRequired");
     assert_eq!(auth_required["params"]["requestId"], "INT-1");
@@ -3892,6 +3907,7 @@ async fn continue_with_auth_handles_multi_round_basic_navigation_challenge() {
     .await;
     ctx.expect_result(693, json!({}), Some("SID-1"));
 
+    wait_for_navigation_auth(&mut ctx, "SID-1", "INT-1").await;
     let second_auth_required = ctx.take_one();
     assert_eq!(second_auth_required["method"], "Fetch.authRequired");
     assert_eq!(second_auth_required["params"]["requestId"], "INT-1");
@@ -3917,6 +3933,7 @@ async fn continue_with_auth_handles_multi_round_basic_navigation_challenge() {
     .await;
     ctx.expect_result(694, json!({}), Some("SID-1"));
 
+    wait_for_navigation_reply(&mut ctx, 691).await;
     ctx.expect_result(
         691,
         json!({ "frameId": "TID-1", "loaderId": LOADER_ID }),
@@ -4002,6 +4019,7 @@ async fn continue_with_auth_handles_digest_navigation_challenge() {
     .await;
     ctx.expect_result(705, json!({}), Some("SID-1"));
 
+    wait_for_navigation_auth(&mut ctx, "SID-1", "INT-1").await;
     let auth_required = ctx.take_one();
     assert_eq!(auth_required["method"], "Fetch.authRequired");
     assert_eq!(auth_required["params"]["requestId"], "INT-1");
@@ -4028,6 +4046,7 @@ async fn continue_with_auth_handles_digest_navigation_challenge() {
     .await;
     ctx.expect_result(706, json!({}), Some("SID-1"));
 
+    wait_for_navigation_reply(&mut ctx, 704).await;
     ctx.expect_result(
         704,
         json!({ "frameId": "TID-1", "loaderId": LOADER_ID }),
@@ -4133,6 +4152,7 @@ async fn continue_with_auth_handles_multi_round_digest_navigation_challenge() {
     .await;
     ctx.expect_result(709, json!({}), Some("SID-1"));
 
+    wait_for_navigation_auth(&mut ctx, "SID-1", "INT-1").await;
     let auth_required = ctx.take_one();
     assert_eq!(auth_required["method"], "Fetch.authRequired");
     assert_eq!(auth_required["params"]["requestId"], "INT-1");
@@ -4159,6 +4179,7 @@ async fn continue_with_auth_handles_multi_round_digest_navigation_challenge() {
     .await;
     ctx.expect_result(710, json!({}), Some("SID-1"));
 
+    wait_for_navigation_auth(&mut ctx, "SID-1", "INT-1").await;
     let second_auth_required = ctx.take_one();
     assert_eq!(second_auth_required["method"], "Fetch.authRequired");
     assert_eq!(second_auth_required["params"]["requestId"], "INT-1");
@@ -4184,6 +4205,7 @@ async fn continue_with_auth_handles_multi_round_digest_navigation_challenge() {
     .await;
     ctx.expect_result(711, json!({}), Some("SID-1"));
 
+    wait_for_navigation_reply(&mut ctx, 708).await;
     ctx.expect_result(
         708,
         json!({ "frameId": "TID-1", "loaderId": LOADER_ID }),

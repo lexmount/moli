@@ -373,16 +373,6 @@ impl CdpConnection {
         })
     }
 
-    pub(crate) fn network_data_collector_ids_for_session_owner_body(
-        &self,
-        session_id: Option<&str>,
-        data_type: DevToolsNetworkDataType,
-        encoded_data_size: usize,
-    ) -> Vec<String> {
-        let owner = crate::conn::CommandOwnerScope::capture(self, session_id);
-        self.network_data_collector_ids_for_owner_body(&owner, data_type, encoded_data_size)
-    }
-
     pub(crate) fn network_data_collector_ids_for_owner_body(
         &self,
         owner: &crate::conn::CommandOwnerScope,
@@ -442,24 +432,6 @@ impl CdpConnection {
                 artifact.collection_was_gated,
             );
         }
-    }
-
-    pub(crate) fn has_network_event_listeners_for_session_owner(
-        &self,
-        session_id: Option<&str>,
-    ) -> bool {
-        if let Some(session_id) = session_id
-            && let Some(target) = self.service_worker_target_for_session(Some(session_id))
-        {
-            return target.network_enabled(session_id);
-        }
-        if let Some(session_id) = session_id
-            && let Some(target) = self.dedicated_worker_target_for_session(Some(session_id))
-        {
-            return target.network_enabled(session_id);
-        }
-        self.runtime_session_owner_slot(session_id)
-            .is_ok_and(|runtime_slot| runtime_slot.has_network_event_listeners())
     }
 
     pub(crate) fn network_backlog_prepared_delivery_for_owner(
@@ -528,14 +500,6 @@ impl CdpConnection {
             });
         self.network_request_id_allocator = network_request_id_allocator;
         result
-    }
-
-    pub(crate) fn network_event_session_ids_for_session_owner(
-        &self,
-        session_id: Option<&str>,
-    ) -> Vec<Option<String>> {
-        let owner = crate::conn::CommandOwnerScope::capture(self, session_id);
-        self.network_event_session_ids_for_owner(&owner)
     }
 
     pub(crate) fn network_event_session_ids_for_owner(

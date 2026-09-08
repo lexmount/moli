@@ -133,12 +133,12 @@ pub(crate) use child_frame_activity::{
     PagePreparedChildFrameActivity, PagePreparedChildFrameTreeEvent,
 };
 pub(crate) use lifecycle::{
-    emit_bound_renderer_document_lifecycle_background_events,
+    NavigationStartInitiator, emit_bound_renderer_document_lifecycle_background_events,
     emit_navigation_frame_commit_background_events,
     emit_navigation_frame_stop_after_download_background_events,
     emit_navigation_frame_stopped_loading_background_events,
     emit_navigation_lifecycle_init_background_events,
-    emit_navigation_network_idle_background_events,
+    emit_navigation_network_idle_background_events, emit_navigation_started_background_events,
 };
 pub(in crate::domains) use main_document_commit::{
     MainDocumentCommitPreparedOutput, append_renderer_main_document_commit_to_output_sink,
@@ -148,11 +148,10 @@ pub(in crate::domains) use main_document_commit::{
 pub(crate) use navigation::emit_prepared_child_frame_tree_background_events;
 pub(crate) use navigation::navigation_cookie_access_report;
 pub use navigation::{
-    BackgroundNavigationCompletion, CompletedDevToolsNavigationCommandDispatch,
-    DevToolsNavigationCommandTaskStep, PendingDevToolsNavigationCommandDispatch,
+    CompletedDevToolsNavigationCommandDispatch, DevToolsNavigationCommandTaskStep,
+    PendingDevToolsNavigationCommandDispatch,
 };
 pub(crate) use navigation::{
-    MaterializedNavigationCompletion, complete_materialized_navigation_into_buffer_async,
     emit_prepared_child_frame_activity, push_superseded_navigation_result,
 };
 pub(crate) use navigation_commit::{
@@ -253,9 +252,6 @@ enum PendingPageCommandKind {
     Navigate(Box<navigation::PendingNavigateLoadCommand>),
     TraverseSameDocumentHistory(Box<navigation::PendingSameDocumentHistoryTraversalCommand>),
     ChildFrameNavigate(Box<navigation::PendingChildFrameNavigateCommand>),
-    ContinueNavigationWithoutRequestPause(
-        Box<navigation::PendingContinueNavigationWithoutRequestPauseCommand>,
-    ),
     StopLoading {
         pending: Option<PendingDocumentLifecycleStop>,
     },
@@ -328,9 +324,6 @@ enum CompletedPageCommandKind {
     Navigate(Box<navigation::CompletedNavigateLoadCommand>),
     TraverseSameDocumentHistory(Box<navigation::CompletedSameDocumentHistoryTraversalCommand>),
     ChildFrameNavigate(Box<navigation::CompletedChildFrameNavigateCommand>),
-    ContinueNavigationWithoutRequestPause(
-        Box<navigation::CompletedContinueNavigationWithoutRequestPauseCommand>,
-    ),
     StopLoading {
         completed: Option<CompletedDocumentLifecycleStop>,
     },
@@ -381,7 +374,6 @@ impl CompletedPageCommandKind {
             Self::BringToFront { .. }
             | Self::AddScriptToEvaluateOnNewDocument(_)
             | Self::Navigate(_)
-            | Self::ContinueNavigationWithoutRequestPause(_)
             | Self::Crash { .. }
             | Self::Close { .. }
             // createIsolatedWorld may restart on a replacement renderer attachment. Its
@@ -427,7 +419,6 @@ impl PendingPageCommandDispatch {
             | PendingPageCommandKind::Navigate(_)
             | PendingPageCommandKind::TraverseSameDocumentHistory(_)
             | PendingPageCommandKind::ChildFrameNavigate(_)
-            | PendingPageCommandKind::ContinueNavigationWithoutRequestPause(_)
             | PendingPageCommandKind::StopLoading { .. }
             | PendingPageCommandKind::Crash { .. }
             | PendingPageCommandKind::Close { .. }
@@ -541,11 +532,6 @@ impl PendingPageCommandDispatch {
             PendingPageCommandKind::ChildFrameNavigate(pending) => {
                 CompletedPageCommandKind::ChildFrameNavigate(Box::new(pending.wait().await))
             }
-            PendingPageCommandKind::ContinueNavigationWithoutRequestPause(pending) => {
-                CompletedPageCommandKind::ContinueNavigationWithoutRequestPause(Box::new(
-                    pending.wait().await,
-                ))
-            }
             PendingPageCommandKind::StopLoading { pending } => {
                 CompletedPageCommandKind::StopLoading {
                     completed: match pending {
@@ -618,7 +604,7 @@ enum PageOutputProjectionStep {
 pub(crate) struct PagePreparedOutputs {
     javascript_dialogs: Vec<javascript_dialog::PreparedJavaScriptDialog>,
     window_open_events: Vec<popup::PagePreparedWindowOpenEvent>,
-    popup_activations: Vec<popup::PagePreparedPopupActivation>,
+    popup_openings: Vec<popup::PagePreparedPopupOpening>,
     document_title_changes: Vec<RendererDocumentTitleChanged>,
     document_lifecycle_events: Vec<crate::conn::DocumentLifecycleEvent>,
     child_frame_activities: Vec<PagePreparedChildFrameActivity>,
@@ -638,50 +624,20 @@ pub(crate) struct PagePreparedOutputSlot {
 }
 
 impl PagePreparedOutputs {
-    pub(crate) fn from_renderer_javascript_dialog(
-        conn: &CdpConnection,
-        owner: &CommandOwnerScope,
-        dialog: moli_core::page::RendererPendingJavaScriptDialog,
+    pub(crate) fn from_browser_javascript_dialog(
+        dialog: crate::conn::TargetPreparedJavaScriptDialog,
     ) -> Self {
-        let Some(source_attachment) =
-            conn.target_page_protocol_attachment_identity_for_owner(owner)
-        else {
-            let _ = dialog.finish(false, String::new());
-            return Self::default();
-        };
-        let Some((root_frame_id, _, _, _)) =
-            conn.target_session_owner_frame_tree_identity_for_owner(owner)
-        else {
-            let _ = dialog.finish(false, String::new());
-            return Self::default();
-        };
-        let Ok(runtime_slot) = conn.runtime_session_owner_slot_for_owner(owner) else {
-            let _ = dialog.finish(false, String::new());
-            return Self::default();
-        };
         Self {
-            javascript_dialogs: vec![crate::conn::TargetPreparedJavaScriptDialog::capture(
-                source_attachment,
-                runtime_slot.javascript_dialog_scope_observer(),
-                &root_frame_id,
-                dialog,
-            )],
+            javascript_dialogs: vec![dialog],
             ..Self::default()
         }
     }
 
-    pub(crate) fn from_renderer_popup_activation(
-        conn: &CdpConnection,
-        owner: &CommandOwnerScope,
-        activation: moli_core::page::RendererPendingPopupActivation,
+    pub(crate) fn from_renderer_popup_opening(
+        opening: std::sync::Arc<moli_core::page::RendererPopupOpening>,
     ) -> Self {
-        let Some(page_owner) = conn.target_page_residence_identity_for_owner(owner) else {
-            return Self::default();
-        };
         Self {
-            popup_activations: vec![popup::PagePreparedPopupActivation::new(
-                page_owner, activation,
-            )],
+            popup_openings: vec![popup::PagePreparedPopupOpening::new(opening)],
             ..Self::default()
         }
     }
@@ -946,7 +902,7 @@ impl PagePreparedOutputs {
     pub(crate) fn extend(&mut self, other: Self) {
         self.javascript_dialogs.extend(other.javascript_dialogs);
         self.window_open_events.extend(other.window_open_events);
-        self.popup_activations.extend(other.popup_activations);
+        self.popup_openings.extend(other.popup_openings);
         self.document_title_changes
             .extend(other.document_title_changes);
         self.document_lifecycle_events
@@ -978,7 +934,7 @@ impl PagePreparedOutputs {
         self,
         sink: &mut (impl ProtocolOutputSink + ?Sized),
     ) {
-        if !self.popup_activations.is_empty() {
+        if !self.popup_openings.is_empty() {
             sink.push_produced_slot(SLOT_POPUP);
             sink.push_prepared_payload(PagePreparedOutputSlot::from_outputs(self).into());
         }
@@ -1056,6 +1012,7 @@ impl PagePreparedOutputs {
 
     #[cfg(test)]
     pub(crate) fn from_javascript_dialogs_for_test(
+        conn: &CdpConnection,
         page_owner: crate::conn::TargetPageResidenceIdentity,
         source_session_id: Option<&str>,
         dialog_scope: crate::conn::TargetJavaScriptDialogScopeObserver,
@@ -1067,6 +1024,7 @@ impl PagePreparedOutputs {
                 .into_iter()
                 .map(|dialog| {
                     javascript_dialog::capture_for_test(
+                        conn,
                         page_owner.clone(),
                         source_session_id,
                         dialog_scope.clone(),
@@ -1076,34 +1034,7 @@ impl PagePreparedOutputs {
                 })
                 .collect(),
             window_open_events: Vec::new(),
-            popup_activations: Vec::new(),
-            document_title_changes: Vec::new(),
-            document_lifecycle_events: Vec::new(),
-            child_frame_activities: Vec::new(),
-            same_document_navigations: Vec::new(),
-            session_history_updates: Vec::new(),
-            top_level_location_navigation: None,
-            top_level_history_traversal: None,
-        }
-    }
-
-    #[cfg(test)]
-    pub(crate) fn from_popup_activations_for_test(
-        page_owner: crate::conn::TargetPageResidenceIdentity,
-        activations: Vec<moli_core::page::RendererPendingPopupActivation>,
-    ) -> Self {
-        Self {
-            javascript_dialogs: Vec::new(),
-            window_open_events: Vec::new(),
-            popup_activations: activations
-                .into_iter()
-                .map(|activation| {
-                    popup::PagePreparedPopupActivation::from_renderer_for_test(
-                        page_owner.clone(),
-                        activation,
-                    )
-                })
-                .collect(),
+            popup_openings: Vec::new(),
             document_title_changes: Vec::new(),
             document_lifecycle_events: Vec::new(),
             child_frame_activities: Vec::new(),
@@ -1151,7 +1082,7 @@ impl PagePreparedOutputs {
         Self {
             javascript_dialogs: Vec::new(),
             window_open_events: Vec::new(),
-            popup_activations: Vec::new(),
+            popup_openings: Vec::new(),
             document_title_changes: Vec::new(),
             document_lifecycle_events: Vec::new(),
             child_frame_activities: vec![activity],
@@ -1170,7 +1101,7 @@ impl PagePreparedOutputs {
         Self {
             javascript_dialogs: Vec::new(),
             window_open_events: Vec::new(),
-            popup_activations: Vec::new(),
+            popup_openings: Vec::new(),
             document_title_changes: Vec::new(),
             document_lifecycle_events: Vec::new(),
             child_frame_activities: Vec::new(),
@@ -1194,7 +1125,7 @@ impl PagePreparedOutputs {
         Self {
             javascript_dialogs: Vec::new(),
             window_open_events: Vec::new(),
-            popup_activations: Vec::new(),
+            popup_openings: Vec::new(),
             document_title_changes: Vec::new(),
             document_lifecycle_events: Vec::new(),
             child_frame_activities: Vec::new(),
@@ -1223,11 +1154,9 @@ impl PagePreparedOutputSlot {
             .then(|| std::mem::take(&mut self.outputs.javascript_dialogs))
     }
 
-    pub(crate) fn take_popup_activations(
-        &mut self,
-    ) -> Option<Vec<popup::PagePreparedPopupActivation>> {
-        (!self.outputs.popup_activations.is_empty())
-            .then(|| std::mem::take(&mut self.outputs.popup_activations))
+    pub(crate) fn take_popup_openings(&mut self) -> Option<Vec<popup::PagePreparedPopupOpening>> {
+        (!self.outputs.popup_openings.is_empty())
+            .then(|| std::mem::take(&mut self.outputs.popup_openings))
     }
 
     pub(crate) fn take_window_open_events(
@@ -2297,7 +2226,7 @@ pub(in crate::domains) async fn emit_popup_activity_background_events_async(
 ) {
     if let Some(popups) = prepared_outputs
         .and_then(ProtocolOutputPayloads::page_mut)
-        .and_then(PagePreparedOutputSlot::take_popup_activations)
+        .and_then(PagePreparedOutputSlot::take_popup_openings)
     {
         popup::emit_prepared(conn, out, popups).await;
     }
@@ -2380,25 +2309,6 @@ pub(crate) async fn navigate_page_owned_top_level_location_background_events_asy
     .await;
 }
 
-pub(crate) async fn navigate_command_owner_from_renderer_background_events_async(
-    conn: &mut CdpConnection,
-    out: &mut Vec<BackgroundProtocolEvent>,
-    owner: &CommandOwnerScope,
-    url: &str,
-) {
-    navigate_command_owner_from_renderer_request_background_events_async(
-        conn,
-        out,
-        owner.clone(),
-        url,
-        "GET",
-        None,
-        &[],
-        moli_fetch::BrowserNavigationRequestKind::Navigate,
-    )
-    .await;
-}
-
 async fn navigate_command_owner_from_renderer_request_background_events_async(
     conn: &mut CdpConnection,
     out: &mut Vec<BackgroundProtocolEvent>,
@@ -2451,36 +2361,6 @@ async fn complete_renderer_navigation_step_background_events_async(
                     complete_pending_page_command(conn, pending.wait().await, &mut command_context)
                         .await;
             }
-        }
-    }
-}
-
-pub(crate) fn emit_page_window_open_background_events_for_owner(
-    conn: &CdpConnection,
-    out: &mut Vec<BackgroundProtocolEvent>,
-    owner: &CommandOwnerScope,
-    url: &str,
-    window_name: &str,
-    window_features: &[String],
-    user_gesture: bool,
-) {
-    if !crate::domains::target::popup_activation_creates_new_target_for_owner(
-        conn,
-        owner,
-        window_name,
-    ) {
-        return;
-    }
-    for event_session_id in conn.page_event_session_ids_for_owner(owner) {
-        let event_owner = owner.for_target_event_session(conn, event_session_id.as_deref());
-        if conn.page_domain_enabled_for_owner(&event_owner) == Some(true) {
-            out.push(BackgroundProtocolEvent::page_window_open(
-                event_session_id.as_deref(),
-                url,
-                window_name,
-                window_features,
-                user_gesture,
-            ));
         }
     }
 }
@@ -2805,6 +2685,35 @@ mod producer_tests {
     }
 
     #[tokio::test(flavor = "multi_thread")]
+    async fn dropping_unprojected_dialog_dismisses_its_native_request() {
+        let mut conn = crate::test_support::connection();
+        let mut context = conn.new_browser_context_fixture_for_test("BID-dialog-drop");
+        context.set_active_target_id("TID-dialog-drop");
+        context.attach_active_session("SID-dialog-drop");
+        conn.install_browser_context_fixture_for_test(context);
+        let page_owner = page_residence_identity_for_test(&mut conn, "SID-dialog-drop").await;
+        let completion = RendererJavaScriptDialogCompletion::pending();
+        let prepared = super::PagePreparedOutputs::from_javascript_dialogs_for_test(
+            &conn,
+            page_owner,
+            Some("SID-dialog-drop"),
+            javascript_dialog_scope_for_test(&conn, "SID-dialog-drop"),
+            "TID-dialog-drop",
+            vec![renderer_popup_javascript_dialog_for_test(
+                1,
+                renderer_document_identity_for_test(1, 1),
+                3,
+                4,
+                "dismiss on drop",
+                Some(completion.clone()),
+            )],
+        );
+        drop(prepared);
+        assert!(!completion.finish(true, String::new()));
+        assert!(!completion.wait().accepted);
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
     async fn javascript_dialog_drain_consumes_prepared_dialogs_without_page_readback() {
         let mut conn = crate::test_support::connection();
         let mut bc = conn.new_browser_context_fixture_for_test("BID-1");
@@ -2817,6 +2726,7 @@ mod producer_tests {
         let mut prepared =
             ProtocolOutputPayloads::from_slot(super::PagePreparedOutputSlot::from_outputs(
                 super::PagePreparedOutputs::from_javascript_dialogs_for_test(
+                    &conn,
                     page_owner.clone(),
                     Some("SID-1"),
                     javascript_dialog_scope_for_test(&conn, "SID-1"),
@@ -2888,6 +2798,7 @@ mod producer_tests {
         let mut prepared =
             ProtocolOutputPayloads::from_slot(super::PagePreparedOutputSlot::from_outputs(
                 super::PagePreparedOutputs::from_javascript_dialogs_for_test(
+                    &conn,
                     page_owner,
                     Some("SID-attached"),
                     javascript_dialog_scope_for_test(&conn, "SID-attached"),
@@ -2943,11 +2854,13 @@ mod producer_tests {
             )
         );
         conn.install_browser_context_fixture_for_test(browser_context);
+        let page_owner = page_residence_identity_for_test(&mut conn, "SID-detached").await;
         let completion = RendererJavaScriptDialogCompletion::pending();
         let mut prepared =
             ProtocolOutputPayloads::from_slot(super::PagePreparedOutputSlot::from_outputs(
                 super::PagePreparedOutputs::from_javascript_dialogs_for_test(
-                    page_residence_identity_for_test(&mut conn, "SID-detached").await,
+                    &conn,
+                    page_owner,
                     Some("SID-detached"),
                     javascript_dialog_scope_for_test(&conn, "SID-detached"),
                     "TID-dialog-detached",
@@ -2986,7 +2899,7 @@ mod producer_tests {
 
     #[tokio::test(flavor = "multi_thread")]
     async fn pending_popup_dialog_rejects_a_retired_source_attachment() {
-        const POPUP_ID: u64 = 76;
+        const POPUP_ID: u64 = 1;
 
         let mut conn = crate::test_support::connection();
         let mut browser_context =
@@ -3002,11 +2915,22 @@ mod producer_tests {
         conn.install_browser_context_fixture_for_test(browser_context);
         conn.set_auto_attach_owner(None, true, false, CdpTargetFilter::default_auto_attach());
         let page_owner = page_residence_identity_for_test(&mut conn, "SID-source").await;
+        let popup_opening = super::popup::capture_openings_for_test(
+            &mut conn,
+            &page_owner,
+            &format!(
+                "window.open({}, '_blank')",
+                serde_json::to_string("about:blank").unwrap()
+            ),
+        )
+        .await
+        .remove(0);
         let source_document = renderer_document_identity_for_test(1, 1);
         let completion = RendererJavaScriptDialogCompletion::pending();
         let mut dialog_output =
             ProtocolOutputPayloads::from_slot(super::PagePreparedOutputSlot::from_outputs(
                 super::PagePreparedOutputs::from_javascript_dialogs_for_test(
+                    &conn,
                     page_owner.clone(),
                     Some("SID-source"),
                     javascript_dialog_scope_for_test(&conn, "SID-source"),
@@ -3046,18 +2970,7 @@ mod producer_tests {
         conn.rollback_attached_session_without_event("SID-source");
         let mut popup_output =
             ProtocolOutputPayloads::from_slot(super::PagePreparedOutputSlot::from_outputs(
-                super::PagePreparedOutputs::from_popup_activations_for_test(
-                    page_owner,
-                    vec![RendererPendingPopupActivation::window(
-                        source_document,
-                        RendererWindowDocumentSource::RootFrame,
-                        true,
-                        Some(POPUP_ID),
-                        "about:blank".to_owned(),
-                        "_blank".to_owned(),
-                        RendererPopupDisposition::Background,
-                    )],
-                ),
+                super::PagePreparedOutputs::from_renderer_popup_opening(popup_opening),
             ));
         super::emit_popup_activity_background_events_async(
             &mut conn,
@@ -3084,7 +2997,7 @@ mod producer_tests {
 
     #[tokio::test(flavor = "multi_thread")]
     async fn lightweight_popup_dialog_waits_for_and_uses_popup_attachment() {
-        const POPUP_ID: u64 = 77;
+        const POPUP_ID: u64 = 1;
 
         let mut conn = crate::test_support::connection();
         let mut browser_context = conn.new_browser_context_fixture_for_test("BID-popup-dialog");
@@ -3093,12 +3006,23 @@ mod producer_tests {
         conn.install_browser_context_fixture_for_test(browser_context);
         conn.set_auto_attach_owner(None, true, false, CdpTargetFilter::default_auto_attach());
         let page_owner = page_residence_identity_for_test(&mut conn, "SID-opener").await;
+        let popup_opening = super::popup::capture_openings_for_test(
+            &mut conn,
+            &page_owner,
+            &format!(
+                "window.open({}, '_blank')",
+                serde_json::to_string("about:blank").unwrap()
+            ),
+        )
+        .await
+        .remove(0);
         let source_dialog_scope = javascript_dialog_scope_for_test(&conn, "SID-opener");
         let source_document = renderer_document_identity_for_test(1, 1);
         let completion = RendererJavaScriptDialogCompletion::pending();
         let mut prepared =
             ProtocolOutputPayloads::from_slot(super::PagePreparedOutputSlot::from_outputs(
                 super::PagePreparedOutputs::from_javascript_dialogs_for_test(
+                    &conn,
                     page_owner.clone(),
                     Some("SID-opener"),
                     source_dialog_scope.clone(),
@@ -3115,18 +3039,7 @@ mod producer_tests {
             ));
         prepared.extend_payload(
             super::PagePreparedOutputSlot::from_outputs(
-                super::PagePreparedOutputs::from_popup_activations_for_test(
-                    page_owner.clone(),
-                    vec![RendererPendingPopupActivation::window(
-                        source_document,
-                        RendererWindowDocumentSource::RootFrame,
-                        true,
-                        Some(POPUP_ID),
-                        "about:blank".to_owned(),
-                        "_blank".to_owned(),
-                        RendererPopupDisposition::Background,
-                    )],
-                ),
+                super::PagePreparedOutputs::from_renderer_popup_opening(popup_opening),
             )
             .into(),
         );
@@ -3154,7 +3067,14 @@ mod producer_tests {
             .browser_context_by_id("BID-popup-dialog")
             .expect("popup browser context");
         let popup_target_id = browser_context
-            .target_id_for_popup_id(POPUP_ID)
+            .target_id_for_popup_document(
+                conn.resolve_browser_document_for_owner(&CommandOwnerScope::capture(
+                    &conn,
+                    Some("SID-opener"),
+                ))
+                .unwrap(),
+                POPUP_ID,
+            )
             .expect("popup id should resolve to its created target")
             .to_owned();
         let popup_session_id = browser_context
@@ -3193,9 +3113,20 @@ mod producer_tests {
             1
         );
 
+        assert_eq!(
+            conn.target_page_session_state_for_session(Some(&popup_session_id))
+                .unwrap()
+                .javascript_dialog_state
+                .pending_dialogs()[0]
+                .document_id(),
+            page_owner.document_id(),
+            "popup routing must not transfer the request out of its original physical Document"
+        );
+
         let mut later_dialog =
             ProtocolOutputPayloads::from_slot(super::PagePreparedOutputSlot::from_outputs(
                 super::PagePreparedOutputs::from_javascript_dialogs_for_test(
+                    &conn,
                     page_owner,
                     Some("SID-opener"),
                     source_dialog_scope,
@@ -3238,7 +3169,7 @@ mod producer_tests {
 
     #[tokio::test(flavor = "multi_thread")]
     async fn unattached_popup_dialog_is_dismissed_without_opener_fallback() {
-        const POPUP_ID: u64 = 78;
+        const POPUP_ID: u64 = 1;
 
         let mut conn = crate::test_support::connection();
         let mut browser_context = conn.new_browser_context_fixture_for_test("BID-popup-no-session");
@@ -3246,11 +3177,22 @@ mod producer_tests {
         browser_context.attach_active_session("SID-opener-no-session");
         conn.install_browser_context_fixture_for_test(browser_context);
         let page_owner = page_residence_identity_for_test(&mut conn, "SID-opener-no-session").await;
+        let popup_opening = super::popup::capture_openings_for_test(
+            &mut conn,
+            &page_owner,
+            &format!(
+                "window.open({}, '_blank')",
+                serde_json::to_string("about:blank").unwrap()
+            ),
+        )
+        .await
+        .remove(0);
         let source_document = renderer_document_identity_for_test(1, 1);
         let completion = RendererJavaScriptDialogCompletion::pending();
         let mut prepared =
             ProtocolOutputPayloads::from_slot(super::PagePreparedOutputSlot::from_outputs(
                 super::PagePreparedOutputs::from_javascript_dialogs_for_test(
+                    &conn,
                     page_owner.clone(),
                     Some("SID-opener-no-session"),
                     javascript_dialog_scope_for_test(&conn, "SID-opener-no-session"),
@@ -3267,18 +3209,7 @@ mod producer_tests {
             ));
         prepared.extend_payload(
             super::PagePreparedOutputSlot::from_outputs(
-                super::PagePreparedOutputs::from_popup_activations_for_test(
-                    page_owner,
-                    vec![RendererPendingPopupActivation::window(
-                        source_document,
-                        RendererWindowDocumentSource::RootFrame,
-                        true,
-                        Some(POPUP_ID),
-                        "about:blank".to_owned(),
-                        "_blank".to_owned(),
-                        RendererPopupDisposition::Background,
-                    )],
-                ),
+                super::PagePreparedOutputs::from_renderer_popup_opening(popup_opening),
             )
             .into(),
         );
@@ -3378,6 +3309,7 @@ mod producer_tests {
         let mut prepared =
             ProtocolOutputPayloads::from_slot(super::PagePreparedOutputSlot::from_outputs(
                 super::PagePreparedOutputs::from_javascript_dialogs_for_test(
+                    &conn,
                     page_owner.clone(),
                     Some("SID-dialog-stale-page"),
                     javascript_dialog_scope_for_test(&conn, "SID-dialog-stale-page"),
@@ -3432,6 +3364,7 @@ mod producer_tests {
         let mut prepared =
             ProtocolOutputPayloads::from_slot(super::PagePreparedOutputSlot::from_outputs(
                 super::PagePreparedOutputs::from_javascript_dialogs_for_test(
+                    &conn,
                     page_owner,
                     Some("SID-dialog-generation"),
                     javascript_dialog_scope_for_test(&conn, "SID-dialog-generation"),
@@ -3487,6 +3420,7 @@ mod producer_tests {
         let mut prepared =
             ProtocolOutputPayloads::from_slot(super::PagePreparedOutputSlot::from_outputs(
                 super::PagePreparedOutputs::from_javascript_dialogs_for_test(
+                    &conn,
                     page_owner,
                     Some("SID-dialog-source"),
                     javascript_dialog_scope_for_test(&conn, "SID-dialog-source"),
@@ -3546,6 +3480,16 @@ mod producer_tests {
             source_document,
         );
         let page_owner = page_residence_identity_for_test(&mut conn, "SID-activity-order").await;
+        let popup_opening = super::popup::capture_openings_for_test(
+            &mut conn,
+            &page_owner,
+            &format!(
+                "window.open({}, '_blank')",
+                serde_json::to_string("data:text/html,%3Cmain%3Eordered-popup%3C/main%3E").unwrap()
+            ),
+        )
+        .await
+        .remove(0);
         let download_owner = CommandOwnerScope::for_session("SID-activity-order");
 
         let mut prepared =
@@ -3578,6 +3522,7 @@ mod producer_tests {
         prepared.extend_payload(
             super::PagePreparedOutputSlot::from_outputs(
                 super::PagePreparedOutputs::from_javascript_dialogs_for_test(
+                    &conn,
                     page_owner.clone(),
                     Some("SID-activity-order"),
                     javascript_dialog_scope_for_test(&conn, "SID-activity-order"),
@@ -3594,18 +3539,7 @@ mod producer_tests {
         );
         prepared.extend_payload(
             super::PagePreparedOutputSlot::from_outputs(
-                super::PagePreparedOutputs::from_popup_activations_for_test(
-                    page_owner.clone(),
-                    vec![RendererPendingPopupActivation::window(
-                        source_document,
-                        RendererWindowDocumentSource::RootFrame,
-                        true,
-                        None,
-                        "data:text/html,%3Cmain%3Eordered-popup%3C/main%3E".to_owned(),
-                        "_blank".to_owned(),
-                        RendererPopupDisposition::Background,
-                    )],
-                ),
+                super::PagePreparedOutputs::from_renderer_popup_opening(popup_opening),
             )
             .into(),
         );
@@ -4493,7 +4427,7 @@ mod producer_tests {
         let outputs = super::PagePreparedOutputs {
             javascript_dialogs: Vec::new(),
             window_open_events: Vec::new(),
-            popup_activations: Vec::new(),
+            popup_openings: Vec::new(),
             document_title_changes: Vec::new(),
             document_lifecycle_events: Vec::new(),
             child_frame_activities: vec![super::PagePreparedChildFrameActivity::from_document(
@@ -4809,7 +4743,7 @@ mod producer_tests {
     }
 
     #[tokio::test(flavor = "multi_thread")]
-    async fn popup_activation_creates_target_and_schedules_navigation_without_page_readback() {
+    async fn popup_activation_projects_native_navigation_without_page_readback() {
         let mut conn = crate::test_support::connection();
         conn.set_root_target_discovery_enabled(true);
         let mut bc = conn.new_browser_context_fixture_for_test("BID-1");
@@ -4817,22 +4751,21 @@ mod producer_tests {
         bc.attach_active_session("SID-1");
         conn.install_browser_context_fixture_for_test(bc);
         let page_owner = page_residence_identity_for_test(&mut conn, "SID-1").await;
-        let source_document = renderer_document_identity_for_test(1, 1);
+        let popup_opening = super::popup::capture_openings_for_test(
+            &mut conn,
+            &page_owner,
+            &format!(
+                "window.open({}, '_blank')",
+                serde_json::to_string("data:text/html,%3Cmain%3Eprepared-popup%3C/main%3E")
+                    .unwrap()
+            ),
+        )
+        .await
+        .remove(0);
         let mut out = Vec::new();
         let mut prepared =
             ProtocolOutputPayloads::from_slot(super::PagePreparedOutputSlot::from_outputs(
-                super::PagePreparedOutputs::from_popup_activations_for_test(
-                    page_owner,
-                    vec![RendererPendingPopupActivation::window(
-                        source_document,
-                        RendererWindowDocumentSource::RootFrame,
-                        true,
-                        None,
-                        "data:text/html,%3Cmain%3Eprepared-popup%3C/main%3E".to_owned(),
-                        "_blank".to_owned(),
-                        RendererPopupDisposition::Background,
-                    )],
-                ),
+                super::PagePreparedOutputs::from_renderer_popup_opening(popup_opening),
             ));
 
         super::emit_popup_activity_background_events_async(
@@ -4884,13 +4817,21 @@ mod producer_tests {
             },
             "target creation should install only the initial empty Document"
         );
-        let scheduler_events = conn.take_scheduler_events();
-        assert!(matches!(
-            scheduler_events.as_slice(),
-            [crate::conn::CdpSchedulerEvent::ProtocolWorkPublished { work }]
-                if work.kind()
-                    == crate::domains::activity::ProtocolSchedulerWorkKind::PopupTargetNavigationOwnerAction
-        ));
+        let target_id = target_created["params"]["targetInfo"]["targetId"]
+            .as_str()
+            .unwrap();
+        let context = conn.browser_context.as_ref().unwrap();
+        let contents = context.web_contents_handle_for_target(target_id).unwrap();
+        let (snapshot, _) = conn.subscribe_browser_events().unwrap();
+        let snapshot = snapshot
+            .navigations
+            .iter()
+            .find(|snapshot| snapshot.web_contents == contents)
+            .unwrap();
+        assert!(
+            matches!(snapshot.attempt, Some(moli_core::browser::NavigationAttempt::Started(request)) if request.web_contents == contents),
+            "the exact native attempt must already exist; projection does not create it"
+        );
     }
 
     #[tokio::test(flavor = "multi_thread")]
@@ -4901,21 +4842,20 @@ mod producer_tests {
         bc.attach_active_session("SID-opener");
         conn.install_browser_context_fixture_for_test(bc);
         let page_owner = page_residence_identity_for_test(&mut conn, "SID-opener").await;
-        let source_document = renderer_document_identity_for_test(1, 1);
+        let popup_opening = super::popup::capture_openings_for_test(
+            &mut conn,
+            &page_owner,
+            &format!(
+                "window.open({}, '_blank')",
+                serde_json::to_string("data:text/html,%3Cmain%3Eautomation-popup%3C/main%3E")
+                    .unwrap()
+            ),
+        )
+        .await
+        .remove(0);
         let mut prepared =
             ProtocolOutputPayloads::from_slot(super::PagePreparedOutputSlot::from_outputs(
-                super::PagePreparedOutputs::from_popup_activations_for_test(
-                    page_owner,
-                    vec![RendererPendingPopupActivation::window(
-                        source_document,
-                        RendererWindowDocumentSource::RootFrame,
-                        true,
-                        None,
-                        "data:text/html,%3Cmain%3Eautomation-popup%3C/main%3E".to_owned(),
-                        "_blank".to_owned(),
-                        RendererPopupDisposition::Background,
-                    )],
-                ),
+                super::PagePreparedOutputs::from_renderer_popup_opening(popup_opening),
             ));
         let mut out = Vec::new();
 
@@ -8060,23 +8000,12 @@ pub(crate) async fn complete_pending_page_command(
             .await;
         }
         CompletedPageCommandKind::Navigate(completed) => {
-            return navigation::complete_pending_navigate_load_command(
-                conn,
-                *completed,
-                command_context,
-            )
-            .await;
+            return navigation::complete_pending_navigate_load_command(conn, *completed).await;
         }
         CompletedPageCommandKind::TraverseSameDocumentHistory(completed) => {
             return navigation::complete_pending_same_document_history_traversal_command(
                 conn, command_id, *completed,
             );
-        }
-        CompletedPageCommandKind::ContinueNavigationWithoutRequestPause(completed) => {
-            return navigation::complete_pending_continue_navigation_without_request_pause_command(
-                conn, *completed,
-            )
-            .await;
         }
         CompletedPageCommandKind::StopLoading { completed } => {
             return termination::complete_stop_loading_command_dispatch(

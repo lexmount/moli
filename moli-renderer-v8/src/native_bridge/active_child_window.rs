@@ -1,4 +1,4 @@
-use super::{ACTIVE_CHILD_WINDOW_HANDLE_SLOT, ENTERED_CHILD_WINDOW_HANDLE_SLOT, JsContextHost};
+use super::{ACTIVE_CHILD_WINDOW_HANDLE_SLOT, JsContextHost};
 use crate::{
     document_runtime::DomHandle,
     util::{context_host_ptr_from_global_bridge, get_private_value, set_private_value},
@@ -6,10 +6,6 @@ use crate::{
 
 pub(crate) fn active_child_window_handle(scope: &mut v8::PinScope<'_, '_>) -> Option<DomHandle> {
     child_window_handle_from_slot(scope, ACTIVE_CHILD_WINDOW_HANDLE_SLOT)
-}
-
-pub(crate) fn entered_child_window_handle(scope: &mut v8::PinScope<'_, '_>) -> Option<DomHandle> {
-    child_window_handle_from_slot(scope, ENTERED_CHILD_WINDOW_HANDLE_SLOT)
 }
 
 pub(crate) fn enter_active_child_window_scope<'s>(

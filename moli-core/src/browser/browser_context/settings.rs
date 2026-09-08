@@ -14,10 +14,9 @@ use crate::{
     RendererBrowserContextRuntimeId, RendererOwnerLocalHostId,
     browser::{
         BrowserContextPageStorageHandles, ContextEmulationDefaults, ContextNetworkPolicy,
-        DownloadAccessError, DownloadBody, DownloadObservation, DownloadPolicy,
-        EmulatedDeviceMetrics, EmulatedGeolocationOverrideState, EmulatedNetworkConditions,
-        OriginStorageUsage, PermissionDefaults, SiteDataClearOptions, StoragePartitionKind,
-        WebContentsHandle,
+        DownloadAccessError, DownloadBody, DownloadPolicy, EmulatedDeviceMetrics,
+        EmulatedGeolocationOverrideState, EmulatedNetworkConditions, OriginStorageUsage,
+        PermissionDefaults, SiteDataClearOptions, StoragePartitionKind, WebContentsHandle,
     },
     network::{ResourceRequestClient, new_shared_web_storage_store},
     page::PermissionOverrideRegistration,
@@ -43,27 +42,30 @@ impl BrowserContext {
         self.download_policy = policy;
     }
 
-    pub fn start_download_request(
+    pub(in crate::browser) fn start_download_request(
         &mut self,
+        web_contents: WebContentsHandle,
         policy: &DownloadPolicy,
         client: ResourceRequestClient,
         request: Request,
         suggested_filename: Option<String>,
-    ) -> Result<Option<DownloadObservation>, String> {
+    ) -> Result<Option<crate::browser::downloads::AdmittedDownload>, String> {
+        self.web_contents(web_contents)?;
         self.downloads
-            .start_request(policy, client, request, suggested_filename)
+            .start_request(web_contents, policy, client, request, suggested_filename)
     }
 
-    pub fn start_download_response(
+    pub(in crate::browser) fn start_download_response(
         &mut self,
         web_contents: WebContentsHandle,
         policy: &DownloadPolicy,
         url: Url,
         headers: Vec<(String, String)>,
         body: DownloadBody,
-    ) -> Result<Option<DownloadObservation>, String> {
+    ) -> Result<Option<crate::browser::downloads::AdmittedDownload>, String> {
         self.web_contents(web_contents)?;
-        self.downloads.start_response(policy, url, headers, body)
+        self.downloads
+            .start_response(web_contents, policy, url, headers, body)
     }
 
     pub fn cancel_download(&self, guid: &str) -> Option<Result<(), DownloadAccessError>> {

@@ -801,6 +801,8 @@ async fn rust_cdp_p0_document_response_stage_get_body_then_continue() {
     );
 
     continue_paused_response(&mut ctx, &page, 155_008, &paused).await;
+    crate::testing::wait_until_navigation_document_load(&mut ctx, 155_006, Some(&page.session_id))
+        .await;
     let navigation = take_response_by_id(&mut ctx, 155_006);
     assert_eq!(navigation["result"]["frameId"], page.target_id);
     assert!(
@@ -861,6 +863,8 @@ async fn rust_cdp_p0_document_response_stage_fulfill_overrides_body() {
     )
     .await;
 
+    crate::testing::wait_until_navigation_document_load(&mut ctx, 156_006, Some(&page.session_id))
+        .await;
     let navigation = take_response_by_id(&mut ctx, 156_006);
     assert_eq!(navigation["result"]["frameId"], page.target_id);
     let text = page
@@ -908,6 +912,14 @@ async fn rust_cdp_p0_document_response_stage_fail_aborts_navigation() {
     .await;
     fail_paused_response(&mut ctx, &page, 157_007, &paused).await;
 
+    crate::testing::wait_until_scheduler_message(
+        &mut ctx,
+        "original navigation reply",
+        |message| {
+            message["id"] == json!(157_006) && message["sessionId"] == json!(&page.session_id)
+        },
+    )
+    .await;
     ctx.expect_error(157_006, -32000, "Aborted");
     let network_id = paused["params"]["networkId"]
         .as_str()
@@ -961,6 +973,8 @@ async fn rust_cdp_p0_document_redirect_response_stage_get_body_then_continue() {
     );
 
     continue_paused_response(&mut ctx, &page, 160_008, &paused).await;
+    crate::testing::wait_until_navigation_document_load(&mut ctx, 160_006, Some(&page.session_id))
+        .await;
     let navigation = take_response_by_id(&mut ctx, 160_006);
     assert_eq!(navigation["result"]["frameId"], page.target_id);
     assert!(

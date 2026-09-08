@@ -1,19 +1,14 @@
-use crate::{
-    browser::{
-        BrowserRequestId, DocumentId, NavigationId, NavigationRequestLoadPolicy, WebContentsId,
-    },
-    page::SubresourceAuthCredentials,
+use crate::browser::{
+    BrowserRequestId, DocumentId, NavigationDecision, NavigationDecisionSnapshot,
+    NavigationDecisionStage, NavigationId, NavigationRequestLoadPolicy, WebContentsId,
+    navigation_decision::{NavigationDecisionCompletion, ResponseInterceptionStage},
 };
-use anyhow::Context;
-use moli_fetch::{
-    NetworkFetchResult, NetworkObservationJournal, RawResponse, StreamingRawResponse,
-};
+use moli_renderer_v8::RendererPreparedDocumentInspectionEndpoint;
+use std::sync::{Arc, Weak};
+use tokio::sync::oneshot;
 use url::Url;
 
-use super::{
-    AdmittedNavigationLoad, InheritedDocumentPolicy, WebContents,
-    navigation_commit::DocumentNavigationIdentity,
-};
+use super::{PausedDocumentTransfer, WebContents};
 
 /// A single Browser decision. Copying a protocol correlation cannot duplicate
 /// its authority: the owning pending navigation consumes this request once.
@@ -48,17 +43,26 @@ impl NavigationInterceptionPermit {
 /// Browser-owned main-document request data while Fetch is deciding whether
 /// and how to resume it. It deliberately contains no Target, session, loader,
 /// protocol request id, or frontend result state.
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub struct NavigationRequestInterception {
-    requested_url: Url,
-    method: String,
-    body: Option<Vec<u8>>,
-    headers: moli_fetch::RequestHeaders,
-    policy: NavigationRequestLoadPolicy,
-    redirect_headers: Option<moli_fetch::RequestHeaders>,
+    pub requested_url: Url,
+    pub method: String,
+    pub body: Option<Vec<u8>>,
+    pub headers: moli_fetch::RequestHeaders,
+    pub policy: NavigationRequestLoadPolicy,
+    pub redirect_headers: Option<moli_fetch::RequestHeaders>,
 }
 
 impl NavigationRequestInterception {
+    pub(in crate::browser) fn decision_stage(
+        &self,
+        opening: std::sync::Weak<crate::page::RendererPopupOpening>,
+    ) -> crate::browser::NavigationDecisionStage {
+        crate::browser::NavigationDecisionStage::Request {
+            request: self.clone(),
+            opening,
+        }
+    }
     pub fn new(
         requested_url: Url,
         method: String,
@@ -120,14 +124,31 @@ impl NavigationRequestInterception {
 pub struct ClaimedNavigationRequest {
     permit: NavigationInterceptionPermit,
     request: NavigationRequestInterception,
+    decision_claim: crate::browser::navigation_decision::NavigationDecisionClaim,
 }
 
 impl ClaimedNavigationRequest {
-    pub(super) fn new(
+    pub(in crate::browser) fn new(
         permit: NavigationInterceptionPermit,
         request: NavigationRequestInterception,
+        decision: crate::browser::navigation_decision::NavigationDecisionClaim,
     ) -> Self {
-        Self { permit, request }
+        Self {
+            permit,
+            request,
+            decision_claim: decision,
+        }
+    }
+
+    pub fn into_navigation_decision(self) -> crate::browser::NavigationDecision {
+        self.decision_claim.disarm();
+        crate::browser::NavigationDecision::Request {
+            url: self.request.requested_url,
+            method: self.request.method,
+            body: self.request.body,
+            headers: self.request.headers,
+            redirect_headers: self.request.redirect_headers,
+        }
     }
 
     pub fn permit(&self) -> NavigationInterceptionPermit {
@@ -146,211 +167,268 @@ impl ClaimedNavigationRequest {
     }
 }
 
-/// The admitted Browser operation retains the actual request across auth
-/// pauses and retries. No Target, session, loader ID or frontend configuration
-/// is needed to resume it, and no Browser borrow is held while fetching.
-pub struct InterceptedNavigationLoad {
-    pub load: AdmittedNavigationLoad,
-    pub requested_url: Url,
-    pub method: String,
-    body: Option<Vec<u8>>,
-    pub headers: moli_fetch::RequestHeaders,
-    prior_observations: NetworkObservationJournal,
+/// Stored in the exact pending navigation's mutually exclusive pause slot.
+/// Cancellation/supersession drops the sender and wakes the Browser driver.
+pub(super) struct PausedNavigationInterception {
+    permit: NavigationInterceptionPermit,
+    completion: Arc<NavigationDecisionCompletion>,
+    state: InterceptionState,
 }
 
-impl std::fmt::Debug for InterceptedNavigationLoad {
+#[derive(Debug)]
+enum InterceptionResource<T> {
+    Available(T),
+    Claimed,
+}
+
+impl<T> InterceptionResource<T> {
+    fn take(&mut self) -> Option<T> {
+        match std::mem::replace(self, Self::Claimed) {
+            Self::Available(value) => Some(value),
+            Self::Claimed => None,
+        }
+    }
+}
+
+enum InterceptionState {
+    Request {
+        request: InterceptionResource<Box<super::NavigationRequestInterception>>,
+        opening: Weak<crate::page::RendererPopupOpening>,
+    },
+    Auth(InterceptionResource<Box<PausedDocumentTransfer>>),
+    Response(InterceptionResource<Box<PausedDocumentTransfer>>),
+    PreparedDocument {
+        renderer: crate::browser::RendererPageResidenceIdentity,
+        inspection: RendererPreparedDocumentInspectionEndpoint,
+    },
+}
+
+impl std::fmt::Debug for PausedNavigationInterception {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("InterceptedNavigationLoad")
-            .field("renderer", &self.load.renderer_page())
-            .field("requested_url", &self.requested_url)
-            .finish_non_exhaustive()
+        f.debug_struct("PausedNavigationInterception")
+            .field("permit", &self.permit)
+            .field("snapshot", &self.snapshot())
+            .finish()
     }
 }
 
-impl InterceptedNavigationLoad {
-    pub fn new(
-        load: AdmittedNavigationLoad,
-        requested_url: Url,
-        method: String,
-        body: Option<Vec<u8>>,
-        headers: moli_fetch::RequestHeaders,
-    ) -> Self {
-        Self {
-            load,
-            requested_url,
-            method,
-            body,
-            headers,
-            prior_observations: NetworkObservationJournal::default(),
-        }
-    }
-
-    pub async fn fetch_streaming(
-        self,
-        auth: Option<SubresourceAuthCredentials>,
-    ) -> anyhow::Result<InterceptedNavigationResponse<StreamingRawResponse>> {
-        let response = self
-            .load
-            .fetch_intercepted_response(
-                &self.method,
-                self.requested_url.as_str(),
-                self.body.clone(),
-                self.headers.clone(),
-                auth,
-            )
-            .await
-            .with_context(|| format!("failed to fetch page `{}`", self.requested_url))?;
-        Ok(self.with_response(response))
-    }
-
-    pub async fn fetch_auth(
-        self,
-        auth: SubresourceAuthCredentials,
-    ) -> anyhow::Result<InterceptedNavigationResponse<RawResponse>> {
-        let response = self
-            .load
-            .fetch_intercepted_auth_response(
-                &self.method,
-                self.requested_url.as_str(),
-                self.body.clone(),
-                self.headers.clone(),
-                auth,
-            )
-            .await
-            .with_context(|| format!("failed to fetch page `{}`", self.requested_url))?;
-        Ok(self.with_response(response))
-    }
-
-    pub fn with_response<R>(
-        mut self,
-        response: NetworkFetchResult<R>,
-    ) -> InterceptedNavigationResponse<R> {
-        let (response, observations) = response.into_parts_with_observation_journal();
-        let mut prior = std::mem::take(&mut self.prior_observations);
-        prior.append(observations);
-        InterceptedNavigationResponse {
-            work: self,
-            response: NetworkFetchResult::with_observation_journal(response, prior),
-        }
-    }
-
-    pub fn into_request_parts(
-        self,
-    ) -> (
-        AdmittedNavigationLoad,
-        Url,
-        String,
-        Option<Vec<u8>>,
-        moli_fetch::RequestHeaders,
-    ) {
-        (
-            self.load,
-            self.requested_url,
-            self.method,
-            self.body,
-            self.headers,
+impl PausedNavigationInterception {
+    #[cfg(any(test, feature = "test-support"))]
+    pub fn has_request(&self) -> bool {
+        matches!(
+            self.state,
+            InterceptionState::Request {
+                request: InterceptionResource::Available(_),
+                ..
+            }
         )
     }
 
-    pub(crate) fn into_owner_parts(
-        self,
-    ) -> (
-        AdmittedNavigationLoad,
-        Url,
-        String,
-        Option<Vec<u8>>,
-        moli_fetch::RequestHeaders,
-    ) {
-        self.into_request_parts()
-    }
-}
-
-#[derive(Debug)]
-pub struct InterceptedNavigationResponse<R> {
-    work: InterceptedNavigationLoad,
-    response: NetworkFetchResult<R>,
-}
-
-impl<R> InterceptedNavigationResponse<R> {
-    pub fn web_contents(&self) -> WebContentsId {
-        self.identity().web_contents
+    #[cfg(any(test, feature = "test-support"))]
+    pub fn has_auth(&self) -> bool {
+        matches!(
+            self.state,
+            InterceptionState::Auth(InterceptionResource::Available(_))
+        )
     }
 
-    pub fn response(&self) -> &R {
-        self.response.response()
+    #[cfg(any(test, feature = "test-support"))]
+    pub fn response_for_test(&self) -> Option<&PausedDocumentTransfer> {
+        match &self.state {
+            InterceptionState::Response(InterceptionResource::Available(transfer)) => {
+                Some(transfer)
+            }
+            _ => None,
+        }
     }
 
-    pub fn observation_journal(&self) -> &NetworkObservationJournal {
-        self.response.observation_journal()
+    pub fn new(
+        permit: NavigationInterceptionPermit,
+        stage: NavigationDecisionStage,
+        sender: oneshot::Sender<NavigationDecision>,
+    ) -> Result<Self, String> {
+        let state = match stage {
+            NavigationDecisionStage::PreparedDocument {
+                renderer,
+                inspection,
+            } => InterceptionState::PreparedDocument {
+                renderer,
+                inspection,
+            },
+            NavigationDecisionStage::Request { request, opening } => InterceptionState::Request {
+                request: InterceptionResource::Available(Box::new(request)),
+                opening,
+            },
+            NavigationDecisionStage::Auth { .. } | NavigationDecisionStage::Response { .. } => {
+                return Err("response decision requires its transfer at admission".into());
+            }
+        };
+        Ok(Self {
+            permit,
+            completion: NavigationDecisionCompletion::new(sender),
+            state,
+        })
     }
 
-    pub fn into_parts(self) -> (InterceptedNavigationLoad, NetworkFetchResult<R>) {
-        (self.work, self.response)
+    pub fn with_response(
+        permit: NavigationInterceptionPermit,
+        stage: ResponseInterceptionStage,
+        sender: oneshot::Sender<NavigationDecision>,
+        transfer: super::PausedDocumentTransfer,
+    ) -> Self {
+        let transfer = InterceptionResource::Available(Box::new(transfer));
+        let state = match stage {
+            ResponseInterceptionStage::Auth => InterceptionState::Auth(transfer),
+            ResponseInterceptionStage::Response => InterceptionState::Response(transfer),
+        };
+        Self {
+            permit,
+            completion: NavigationDecisionCompletion::new(sender),
+            state,
+        }
     }
 
-    pub(super) fn identity(&self) -> &DocumentNavigationIdentity {
-        self.work.load.identity()
+    pub fn permit(&self) -> NavigationInterceptionPermit {
+        self.permit
     }
-}
 
-impl InterceptedNavigationResponse<RawResponse> {
-    pub fn retry(self) -> InterceptedNavigationLoad {
-        let (mut work, response) = self.into_parts();
-        let (response, observations) = response.into_parts_with_observation_journal();
-        let mut request = moli_fetch::Request::get_with_url(work.requested_url);
-        request.method = work.method;
-        request.body = work.body;
-        request.request_headers = work.headers;
-        let request = work.load.redirected_request(response, request);
-        work.requested_url = request.url;
-        work.method = request.method;
-        work.body = request.body;
-        work.headers = request.request_headers;
-        work.prior_observations = observations;
-        work
+    pub fn snapshot(&self) -> Option<NavigationDecisionSnapshot> {
+        let stage = match &self.state {
+            InterceptionState::PreparedDocument {
+                renderer,
+                inspection,
+            } => NavigationDecisionStage::PreparedDocument {
+                renderer: *renderer,
+                inspection: inspection.clone(),
+            },
+            InterceptionState::Request {
+                request: InterceptionResource::Available(request),
+                opening,
+            } => request.decision_stage(opening.clone()),
+            InterceptionState::Auth(InterceptionResource::Available(transfer))
+            | InterceptionState::Response(InterceptionResource::Available(transfer)) => {
+                let (head, observations) = transfer.response_snapshot();
+                if matches!(self.state, InterceptionState::Auth(_)) {
+                    NavigationDecisionStage::Auth {
+                        response: Box::new(head),
+                        observations,
+                    }
+                } else {
+                    NavigationDecisionStage::Response {
+                        response: Box::new(head),
+                        observations,
+                    }
+                }
+            }
+            _ => return None,
+        };
+        Some(NavigationDecisionSnapshot {
+            permit: self.permit,
+            stage,
+        })
     }
-}
 
-#[derive(Debug)]
-pub(super) struct PausedNavigationAuth {
-    pub(super) request: BrowserRequestId,
-    pub(super) response: InterceptedNavigationResponse<RawResponse>,
-}
+    pub fn take_request(
+        &mut self,
+        permit: NavigationInterceptionPermit,
+    ) -> Option<super::ClaimedNavigationRequest> {
+        if self.permit != permit {
+            return None;
+        }
+        let InterceptionState::Request { request, .. } = &mut self.state else {
+            return None;
+        };
+        Some(ClaimedNavigationRequest::new(
+            permit,
+            *request.take()?,
+            self.completion.claim(),
+        ))
+    }
 
-#[derive(Debug)]
-pub(super) struct PausedNavigationRequest {
-    pub(super) request: BrowserRequestId,
-    pub(super) navigation_request: NavigationRequestInterception,
-}
+    pub fn take_response(
+        &mut self,
+        permit: NavigationInterceptionPermit,
+    ) -> Option<super::PausedDocumentTransfer> {
+        if self.permit != permit {
+            return None;
+        }
+        let response = match &mut self.state {
+            InterceptionState::Auth(response) | InterceptionState::Response(response) => response,
+            _ => return None,
+        };
+        let mut transfer = response.take()?;
+        transfer.claim_decision(self.completion.claim_response());
+        Some(*transfer)
+    }
 
-/// Browser-owned response-stage work for the exact pending navigation.
-///
-/// The DevTools projection keeps only the public request correlation and a
-/// [`NavigationInterceptionPermit`]. Dropping or superseding the navigation
-/// therefore drops the response stream and prepared renderer even if that
-/// projection is never drained.
-#[derive(Debug)]
-pub(super) struct PausedNavigationResponse {
-    pub(super) request: BrowserRequestId,
-    pub(super) transfer: super::PausedDocumentTransfer,
-}
+    pub fn restore_response(
+        &mut self,
+        permit: NavigationInterceptionPermit,
+        mut transfer: super::PausedDocumentTransfer,
+    ) -> Result<(), Box<super::PausedDocumentTransfer>> {
+        if permit == self.permit
+            && let InterceptionState::Auth(response) | InterceptionState::Response(response) =
+                &mut self.state
+            && matches!(response, InterceptionResource::Claimed)
+        {
+            transfer.release_decision_claim();
+            *response = InterceptionResource::Available(Box::new(transfer));
+            return Ok(());
+        }
+        Err(Box::new(transfer))
+    }
 
-#[derive(Debug)]
-pub(super) enum PausedNavigationInterception {
-    Request(Box<PausedNavigationRequest>),
-    Auth(Box<PausedNavigationAuth>),
-    Response(Box<PausedNavigationResponse>),
+    pub fn accepts(
+        &self,
+        permit: NavigationInterceptionPermit,
+        decision: &NavigationDecision,
+    ) -> bool {
+        permit == self.permit
+            && match decision {
+                NavigationDecision::Authenticate { .. } => {
+                    matches!(self.state, InterceptionState::Auth(_))
+                }
+                NavigationDecision::Request { .. } => {
+                    matches!(self.state, InterceptionState::Request { .. })
+                }
+                NavigationDecision::Response { .. } => matches!(
+                    self.state,
+                    InterceptionState::Auth(_) | InterceptionState::Response(_)
+                ),
+                NavigationDecision::Fulfill { .. } => matches!(
+                    self.state,
+                    InterceptionState::Request { .. } | InterceptionState::Response(_)
+                ),
+                NavigationDecision::Continue
+                | NavigationDecision::Cancel
+                | NavigationDecision::Fail { .. } => true,
+            }
+    }
+
+    pub fn resolve(mut self, mut decision: NavigationDecision) -> bool {
+        if matches!(decision, NavigationDecision::Continue)
+            && let InterceptionState::Auth(response) | InterceptionState::Response(response) =
+                &mut self.state
+        {
+            decision = match response.take() {
+                Some(transfer) => NavigationDecision::Response {
+                    transfer,
+                    status: None,
+                    headers: Vec::new(),
+                },
+                None => NavigationDecision::Cancel,
+            };
+        }
+        match &mut decision {
+            NavigationDecision::Response { transfer, .. } => transfer.release_decision_claim(),
+            NavigationDecision::Authenticate { response, .. } => response.release_decision_claim(),
+            _ => {}
+        }
+        self.completion.send(decision)
+    }
 }
 
 impl WebContents {
-    pub fn pause_navigation_request(
-        &mut self,
-        navigation: NavigationId,
-        request: NavigationRequestInterception,
-    ) -> Result<NavigationInterceptionPermit, String> {
-        self.navigation.pause_request(self.id, navigation, request)
-    }
-
     pub fn take_navigation_request(
         &mut self,
         permit: NavigationInterceptionPermit,
@@ -359,67 +437,6 @@ impl WebContents {
             return None;
         }
         self.navigation.take_request(permit)
-    }
-
-    pub fn start_claimed_navigation_request(
-        &mut self,
-        request: ClaimedNavigationRequest,
-        inherited: InheritedDocumentPolicy,
-    ) -> Result<InterceptedNavigationLoad, String> {
-        if request.permit.web_contents != self.id {
-            return Err("navigation request belongs to another WebContents".to_owned());
-        }
-        let ClaimedNavigationRequest { permit, request } = request;
-        let mut load = self.start_navigation_load(permit.navigation, request.policy, inherited)?;
-        load.redirect_headers = request.redirect_headers;
-        Ok(InterceptedNavigationLoad::new(
-            load,
-            request.requested_url,
-            request.method,
-            request.body,
-            request.headers,
-        ))
-    }
-
-    pub fn start_navigation_load_for_interception(
-        &mut self,
-        permit: NavigationInterceptionPermit,
-        policy: NavigationRequestLoadPolicy,
-        inherited: InheritedDocumentPolicy,
-    ) -> Result<AdmittedNavigationLoad, String> {
-        if permit.web_contents != self.id || !self.navigation.accepts_interception_permit(permit) {
-            return Err("stale navigation document candidate".to_owned());
-        }
-        self.start_navigation_load(permit.navigation, policy, inherited)
-    }
-
-    pub fn pause_navigation_auth(
-        &mut self,
-        response: InterceptedNavigationResponse<RawResponse>,
-    ) -> Result<NavigationInterceptionPermit, String> {
-        if response.identity().web_contents != self.id {
-            return Err("navigation auth belongs to another WebContents".to_owned());
-        }
-        self.navigation.pause_auth_response(response)
-    }
-
-    pub fn take_navigation_auth(
-        &mut self,
-        permit: NavigationInterceptionPermit,
-    ) -> Option<InterceptedNavigationResponse<RawResponse>> {
-        if permit.web_contents != self.id {
-            return None;
-        }
-        self.navigation.take_auth_response(permit)
-    }
-
-    pub fn pause_navigation_response(
-        &mut self,
-        navigation: NavigationId,
-        transfer: super::PausedDocumentTransfer,
-    ) -> Result<NavigationInterceptionPermit, String> {
-        self.navigation
-            .pause_response(self.id, navigation, transfer)
     }
 
     pub fn take_navigation_response(
@@ -450,38 +467,20 @@ mod tests {
     use crate::browser::web_contents::{
         DocumentBodySource, PausedDocumentTransfer, tests::BrowserFixture,
     };
-    use crate::page::SubresourceAuthScheme;
-    use moli_fetch::ResponseHead;
+    use crate::page::{SubresourceAuthCredentials, SubresourceAuthScheme};
+    use moli_fetch::{NetworkObservationJournal, RawResponse, ResponseHead};
     use tokio::{
         io::{AsyncReadExt, AsyncWriteExt},
         net::TcpListener,
         sync::oneshot,
     };
 
-    fn request(browser: &mut BrowserFixture, url: Url) -> InterceptedNavigationLoad {
-        let navigation = browser.contents.navigation.start_document_navigation();
-        InterceptedNavigationLoad::new(
-            browser.start(navigation).unwrap(),
-            url,
-            "POST".to_owned(),
-            Some(vec![0, 255, 1]),
-            vec![(
-                "content-type".to_owned(),
-                "application/octet-stream".to_owned(),
-            )]
-            .into(),
-        )
-    }
-
-    fn challenge(work: InterceptedNavigationLoad) -> InterceptedNavigationResponse<RawResponse> {
+    fn challenge(url: Url) -> PausedDocumentTransfer {
         let response = RawResponse::from_head_and_body(
             ResponseHead {
-                final_url: work.requested_url.clone(),
+                final_url: url.clone(),
                 status: 401,
-                headers: vec![(
-                    "WWW-Authenticate".to_owned(),
-                    "Basic realm=\"test\"".to_owned(),
-                )],
+                headers: vec![("WWW-Authenticate".into(), "Basic realm=\"test\"".into())],
                 request_cookie_report: None,
                 cookie_set_reports: Vec::new(),
                 redirected: false,
@@ -491,7 +490,17 @@ mod tests {
             },
             b"challenge body".to_vec(),
         );
-        work.with_response(NetworkFetchResult::without_request_observation(response))
+        PausedDocumentTransfer::pending(
+            NavigationRequestLoadPolicy::DocumentInitiated,
+            DocumentBodySource::BufferedRaw {
+                requested_url: url,
+                request_method: "POST".into(),
+                request_headers: vec![("content-type".into(), "application/octet-stream".into())]
+                    .into(),
+                response,
+                network_observation_journal: Default::default(),
+            },
+        )
     }
 
     fn paused_request(url: Url) -> NavigationRequestInterception {
@@ -536,16 +545,191 @@ mod tests {
     }
 
     #[test]
+    fn decided_body_claim_cannot_recreate_an_auth_or_response_pause() {
+        for stage in [
+            ResponseInterceptionStage::Auth,
+            ResponseInterceptionStage::Response,
+        ] {
+            let mut browser = BrowserFixture::new();
+            let contents = browser.contents.id();
+            let navigation = browser.contents.navigation.start_document_navigation();
+            let document = browser.contents.navigation.pending_document().unwrap();
+            let url = Url::parse("https://decided-body.example/").unwrap();
+            let auth = matches!(stage, ResponseInterceptionStage::Auth);
+            let mut result = browser
+                .contents
+                .navigation
+                .pause_response_decision(contents, navigation, stage, paused_response(url.clone()))
+                .unwrap();
+            let paused = browser.contents.navigation.navigation_decision().unwrap();
+            let response = match paused.stage {
+                NavigationDecisionStage::Auth { response, .. } if auth => response,
+                NavigationDecisionStage::Response { response, .. } if !auth => response,
+                _ => panic!("one response resource owns its actual stage"),
+            };
+            assert_eq!(response.final_url, url);
+            assert_eq!(response.status, 200);
+            let permit = paused.permit;
+            let transfer = browser.contents.take_navigation_response(permit).unwrap();
+            assert!(transfer.has_pending_decision());
+            assert!(
+                browser
+                    .contents
+                    .navigation
+                    .interception_awaits_decision(permit)
+            );
+            assert!(!browser.contents.navigation.interception_awaits_decision(
+                NavigationInterceptionPermit {
+                    request: BrowserRequestId::allocate(),
+                    ..permit
+                }
+            ));
+            assert!(
+                browser.contents.navigation.navigation_decision().is_none(),
+                "a borrowed body is not actionable a second time"
+            );
+            assert!(
+                browser
+                    .contents
+                    .navigation
+                    .resolve_navigation_decision(permit, NavigationDecision::Cancel)
+            );
+            assert!(matches!(result.try_recv(), Ok(NavigationDecision::Cancel)));
+            assert_eq!(
+                browser.contents.navigation.pending_document(),
+                Some(document),
+                "test the window before the driver observes the decision"
+            );
+            assert!(
+                !browser
+                    .contents
+                    .navigation
+                    .interception_awaits_decision(permit)
+            );
+            assert!(
+                browser
+                    .contents
+                    .restore_navigation_response(permit, transfer)
+                    .is_err(),
+                "a consumed decision must not be resurrected as a caller-owned pause"
+            );
+            assert!(
+                browser
+                    .contents
+                    .navigation
+                    .paused_response_for_test()
+                    .is_none()
+            );
+            assert!(!browser.contents.navigation.has_paused_auth_for_test());
+            assert!(matches!(
+                result.try_recv(),
+                Err(oneshot::error::TryRecvError::Closed)
+            ));
+        }
+    }
+
+    #[tokio::test]
+    async fn native_response_body_read_claim_is_restorable_and_abandonment_cancels() {
+        use crate::browser::{NavigationDecision, navigation_decision::ResponseInterceptionStage};
+        for restore in [true, false] {
+            let mut browser = BrowserFixture::new();
+            let contents = browser.contents.id();
+            let navigation = browser.contents.navigation.start_document_navigation();
+            let (policy, body) =
+                paused_response(Url::parse("https://native-response.example/").unwrap())
+                    .into_pending()
+                    .unwrap();
+            let mut result = browser
+                .contents
+                .navigation
+                .pause_response_decision(
+                    contents,
+                    navigation,
+                    ResponseInterceptionStage::Response,
+                    PausedDocumentTransfer::pending(policy, body),
+                )
+                .unwrap();
+            let permit = browser
+                .contents
+                .navigation
+                .navigation_decision()
+                .unwrap()
+                .permit;
+            let transfer = browser.contents.take_navigation_response(permit).unwrap();
+            assert!(browser.contents.take_navigation_response(permit).is_none());
+            let (bytes, transfer) = transfer.materialize_body_limited_async(1024).await.unwrap();
+            assert_eq!(bytes.as_deref(), Some(b"response body".as_slice()));
+            assert!(matches!(
+                result.try_recv(),
+                Err(oneshot::error::TryRecvError::Empty)
+            ));
+            if restore {
+                browser
+                    .contents
+                    .restore_navigation_response(permit, transfer)
+                    .unwrap();
+                assert_eq!(
+                    browser
+                        .contents
+                        .navigation
+                        .navigation_decision()
+                        .unwrap()
+                        .permit,
+                    permit
+                );
+                assert!(
+                    browser
+                        .contents
+                        .navigation
+                        .resolve_navigation_decision(permit, NavigationDecision::Continue)
+                );
+                let NavigationDecision::Response { transfer, .. } = result.try_recv().unwrap()
+                else {
+                    panic!("original response must return to Browser driver");
+                };
+                let (bytes, _) = transfer.materialize_body_limited_async(1024).await.unwrap();
+                assert_eq!(bytes.as_deref(), Some(b"response body".as_slice()));
+            } else {
+                drop(transfer);
+                assert!(matches!(result.try_recv(), Ok(NavigationDecision::Cancel)));
+                assert!(
+                    browser
+                        .contents
+                        .navigation
+                        .finish_navigation_decision(permit)
+                );
+            }
+            assert!(
+                !browser
+                    .contents
+                    .navigation
+                    .resolve_navigation_decision(permit, NavigationDecision::Cancel)
+            );
+        }
+    }
+
+    #[test]
     fn request_permit_is_exact_single_use_and_excludes_other_pause_stages() {
         let mut browser = BrowserFixture::new();
+        let contents = browser.contents.id();
         let navigation = browser.contents.navigation.start_document_navigation();
         let url = Url::parse("https://request.example/").unwrap();
+        let mut result = browser
+            .contents
+            .navigation
+            .pause_navigation_decision(
+                contents,
+                navigation,
+                paused_request(url.clone()).decision_stage(Weak::new()),
+            )
+            .unwrap();
         let permit = browser
             .contents
-            .pause_navigation_request(navigation, paused_request(url.clone()))
-            .unwrap();
+            .navigation
+            .navigation_decision()
+            .unwrap()
+            .permit;
         assert!(browser.contents.navigation.has_paused_request_for_test());
-
         let mut peer = BrowserFixture::new();
         assert!(peer.contents.take_navigation_request(permit).is_none());
         for bad in [
@@ -564,39 +748,79 @@ mod tests {
         ] {
             assert!(browser.contents.take_navigation_request(bad).is_none());
         }
-
-        let admitted = browser.start(navigation).unwrap();
         assert!(
             browser
                 .contents
-                .pause_navigation_auth(challenge(InterceptedNavigationLoad::new(
-                    admitted,
-                    url.clone(),
-                    "GET".to_owned(),
-                    None,
-                    Default::default(),
-                )))
+                .navigation
+                .pause_response_decision(
+                    contents,
+                    navigation,
+                    ResponseInterceptionStage::Auth,
+                    challenge(url.clone()),
+                )
                 .is_err()
         );
-
         let claimed = browser.contents.take_navigation_request(permit).unwrap();
         assert!(browser.contents.take_navigation_request(permit).is_none());
         assert!(!browser.contents.navigation.has_paused_request_for_test());
         assert_eq!(claimed.request.requested_url, url);
+        assert!(
+            browser
+                .contents
+                .navigation
+                .resolve_navigation_decision(permit, claimed.into_navigation_decision(),)
+        );
+        let NavigationDecision::Request {
+            url: actual,
+            method,
+            body,
+            headers,
+            redirect_headers: _,
+        } = result.try_recv().unwrap()
+        else {
+            panic!("the exact request must return to its Browser driver");
+        };
+        assert_eq!(actual, url);
+        assert_eq!(method, "POST");
+        assert_eq!(body, Some(vec![0, 255, 1]));
+        assert_eq!(
+            headers,
+            vec![("content-type".into(), "application/octet-stream".into())].into()
+        );
+        assert!(
+            !browser
+                .contents
+                .navigation
+                .resolve_navigation_decision(permit, NavigationDecision::Continue)
+        );
     }
 
-    #[test]
-    fn auth_permit_is_exact_and_single_use_across_chained_pauses() {
+    #[tokio::test]
+    async fn auth_permit_is_exact_and_single_use_across_chained_pauses() {
         let mut browser = BrowserFixture::new();
+        let contents = browser.contents.id();
+        let navigation = browser.contents.navigation.start_document_navigation();
+        let load = browser.start(navigation).unwrap();
+        let renderer = load.renderer_page();
         let url = Url::parse("https://auth.example/").unwrap();
-        let work = request(&mut browser, url.clone());
-        let renderer = work.load.renderer_page();
+        let mut result = browser
+            .contents
+            .navigation
+            .pause_response_decision(
+                contents,
+                navigation,
+                ResponseInterceptionStage::Auth,
+                challenge(url.clone()),
+            )
+            .unwrap();
         let permit = browser
             .contents
-            .pause_navigation_auth(challenge(work))
-            .unwrap();
+            .navigation
+            .navigation_decision()
+            .unwrap()
+            .permit;
         let mut peer = BrowserFixture::new();
-        assert!(peer.contents.take_navigation_auth(permit).is_none());
+        assert!(peer.contents.take_navigation_response(permit).is_none());
         for bad in [
             NavigationInterceptionPermit {
                 navigation: NavigationId::allocate(),
@@ -611,37 +835,94 @@ mod tests {
                 ..permit
             },
         ] {
-            assert!(browser.contents.take_navigation_auth(bad).is_none());
+            assert!(browser.contents.take_navigation_response(bad).is_none());
         }
-        let response = browser.contents.take_navigation_auth(permit).unwrap();
-        assert_eq!(response.response().body_bytes(), b"challenge body");
-        assert!(browser.contents.take_navigation_auth(permit).is_none());
-        let work = response.retry();
-        assert_eq!(work.requested_url, url);
-        assert_eq!(work.body, Some(vec![0, 255, 1]));
+        let response = browser.contents.take_navigation_response(permit).unwrap();
+        assert!(browser.contents.take_navigation_response(permit).is_none());
+        let (bytes, response) = response.materialize_body_limited_async(1024).await.unwrap();
+        assert_eq!(bytes.as_deref(), Some(b"challenge body".as_slice()));
+        assert!(browser.contents.navigation.resolve_navigation_decision(
+            permit,
+            NavigationDecision::Authenticate {
+                credentials: SubresourceAuthCredentials {
+                    target: crate::page::SubresourceAuthTarget::Server,
+                    username: "user".into(),
+                    password: "pass".into(),
+                    scheme: SubresourceAuthScheme::Basic,
+                },
+                response: Box::new(response),
+            },
+        ));
+        let NavigationDecision::Authenticate { response, .. } = result.try_recv().unwrap() else {
+            panic!("authentication must return its original response to the Browser");
+        };
+        let (_, body) = response.into_pending().unwrap();
+        let DocumentBodySource::BufferedRaw {
+            requested_url,
+            request_method,
+            request_headers,
+            response,
+            ..
+        } = body
+        else {
+            panic!("the buffered challenge must retain its request identity");
+        };
+        assert_eq!(requested_url, url);
+        assert_eq!(request_method, "POST");
         assert_eq!(
-            work.load.renderer_page(),
-            renderer,
-            "auth must not re-admit a new renderer"
+            request_headers,
+            vec![("content-type".into(), "application/octet-stream".into())].into()
         );
+        assert_eq!(response.body_bytes(), b"challenge body");
+        assert_eq!(
+            load.renderer_page(),
+            renderer,
+            "auth must not re-admit a renderer"
+        );
+        let _next_result = browser
+            .contents
+            .navigation
+            .pause_response_decision(
+                contents,
+                navigation,
+                ResponseInterceptionStage::Auth,
+                challenge(url),
+            )
+            .unwrap();
         let next = browser
             .contents
-            .pause_navigation_auth(challenge(work))
-            .unwrap();
+            .navigation
+            .navigation_decision()
+            .unwrap()
+            .permit;
         assert_ne!(next.request, permit.request);
-        assert!(browser.contents.take_navigation_auth(permit).is_none());
-        assert!(browser.contents.take_navigation_auth(next).is_some());
+        assert!(browser.contents.take_navigation_response(permit).is_none());
+        assert!(browser.contents.take_navigation_response(next).is_some());
+        assert_eq!(load.renderer_page(), renderer);
     }
 
     #[test]
     fn response_permit_is_exact_single_use_and_excludes_other_pause_stages() {
         let mut browser = BrowserFixture::new();
+        let contents = browser.contents.id();
         let navigation = browser.contents.navigation.start_document_navigation();
         let url = Url::parse("https://response.example/").unwrap();
+        let _result = browser
+            .contents
+            .navigation
+            .pause_response_decision(
+                contents,
+                navigation,
+                ResponseInterceptionStage::Response,
+                paused_response(url.clone()),
+            )
+            .unwrap();
         let permit = browser
             .contents
-            .pause_navigation_response(navigation, paused_response(url.clone()))
-            .unwrap();
+            .navigation
+            .navigation_decision()
+            .unwrap()
+            .permit;
         assert!(
             browser
                 .contents
@@ -652,24 +933,26 @@ mod tests {
         assert!(
             browser
                 .contents
-                .pause_navigation_request(navigation, paused_request(url.clone()))
+                .navigation
+                .pause_navigation_decision(
+                    contents,
+                    navigation,
+                    paused_request(url.clone()).decision_stage(Weak::new()),
+                )
                 .is_err()
         );
-
-        let admitted = browser.start(navigation).unwrap();
         assert!(
             browser
                 .contents
-                .pause_navigation_auth(challenge(InterceptedNavigationLoad::new(
-                    admitted,
-                    url,
-                    "GET".to_owned(),
-                    None,
-                    Default::default(),
-                )))
+                .navigation
+                .pause_response_decision(
+                    contents,
+                    navigation,
+                    ResponseInterceptionStage::Auth,
+                    challenge(url),
+                )
                 .is_err()
         );
-
         let mut peer = BrowserFixture::new();
         assert!(peer.contents.take_navigation_response(permit).is_none());
         for bad in [
@@ -714,15 +997,27 @@ mod tests {
     fn browser_retirement_releases_auth_before_protocol_correlation_cleanup() {
         for close in [false, true] {
             let mut browser = BrowserFixture::new();
-            let work = request(&mut browser, Url::parse("https://auth.example/").unwrap());
-            // The only extra strong engine lease is the actual paused Browser
-            // participant. A protocol permit cannot retain it.
-            let cancellation = work.load.identity().cancellation.clone();
-            let preparation = work.load.identity().preparation_cancellation.clone();
+            let contents = browser.contents.id();
+            let navigation = browser.contents.navigation.start_document_navigation();
+            let load = browser.start(navigation).unwrap();
+            let cancellation = load.identity().cancellation.clone();
+            let preparation = load.identity().preparation_cancellation.clone();
+            let mut result = browser
+                .contents
+                .navigation
+                .pause_response_decision(
+                    contents,
+                    navigation,
+                    ResponseInterceptionStage::Auth,
+                    challenge(Url::parse("https://auth.example/").unwrap()),
+                )
+                .unwrap();
             let permit = browser
                 .contents
-                .pause_navigation_auth(challenge(work))
-                .unwrap();
+                .navigation
+                .navigation_decision()
+                .unwrap()
+                .permit;
             if close {
                 browser
                     .contents
@@ -733,22 +1028,35 @@ mod tests {
             }
             assert!(cancellation.is_cancelled());
             assert!(preparation.is_cancelled());
-            assert!(browser.contents.take_navigation_auth(permit).is_none());
+            assert!(browser.contents.take_navigation_response(permit).is_none());
             assert!(!browser.contents.navigation.has_paused_auth_for_test());
+            assert!(matches!(
+                result.try_recv(),
+                Err(oneshot::error::TryRecvError::Closed)
+            ));
         }
     }
 
     #[test]
     fn late_auth_response_cannot_install_itself_in_a_winning_navigation() {
         let mut browser = BrowserFixture::new();
-        let work = request(&mut browser, Url::parse("https://auth.example/").unwrap());
+        let contents = browser.contents.id();
+        let old = browser.contents.navigation.start_document_navigation();
+        let load = browser.start(old).unwrap();
         let winner = browser.contents.navigation.start_document_navigation();
         assert!(
             browser
                 .contents
-                .pause_navigation_auth(challenge(work))
+                .navigation
+                .pause_response_decision(
+                    contents,
+                    old,
+                    ResponseInterceptionStage::Auth,
+                    challenge(Url::parse("https://auth.example/").unwrap()),
+                )
                 .is_err()
         );
+        assert!(load.identity().is_cancelled());
         assert_eq!(
             browser.contents.navigation.pending_document().unwrap().0,
             winner
@@ -776,7 +1084,8 @@ mod tests {
             let _ = socket.shutdown().await;
         });
         let mut browser = BrowserFixture::new();
-        let work = request(&mut browser, url);
+        let navigation = browser.contents.navigation.start_document_navigation();
+        let work = browser.start(navigation).unwrap();
         let auth = SubresourceAuthCredentials {
             target: crate::page::SubresourceAuthTarget::Server,
             username: "user".to_owned(),
@@ -784,10 +1093,19 @@ mod tests {
             scheme: SubresourceAuthScheme::Digest,
         };
         tokio::time::timeout(std::time::Duration::from_secs(3), async {
-            let (result, ()) = tokio::join!(work.fetch_auth(auth), async {
-                seen_rx.await.unwrap();
-                browser.contents.navigation.start_document_navigation();
-            });
+            let (result, ()) = tokio::join!(
+                work.fetch_intercepted_auth_response(
+                    "POST",
+                    url.as_str(),
+                    Some(vec![0, 255, 1]),
+                    vec![("content-type".into(), "application/octet-stream".into())].into(),
+                    auth,
+                ),
+                async {
+                    seen_rx.await.unwrap();
+                    browser.contents.navigation.start_document_navigation();
+                }
+            );
             assert!(
                 result.is_err(),
                 "retired auth must not complete successfully"

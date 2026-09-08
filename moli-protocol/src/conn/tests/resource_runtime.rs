@@ -1,8 +1,7 @@
 use super::*;
 use crate::DevToolsDocumentLifecycleWaitState;
 use crate::conn::{
-    CdpInitialStoragePartition, CommandOwnerScope, LoadedNavigation, NavigationLoadOutcome,
-    TargetIdentityState, TargetPageSlot,
+    CdpInitialStoragePartition, CommandOwnerScope, TargetIdentityState, TargetPageSlot,
 };
 use moli_core::runtime::storage_partition::StoragePartitionState;
 use std::sync::{
@@ -17,6 +16,19 @@ use tokio::sync::Notify;
 async fn session_end_removes_only_its_contexts_but_connection_drop_does_not() {
     let service = moli_core::browser::BrowserService::start().unwrap();
     let browser = service.handle();
+    // A Browser has one live DevTools owner. Dropping that owner must still
+    // leave its physical contexts intact for a later owner/session.
+    let mut peer = CdpConnection::new(
+        browser.clone(),
+        CdpInitialStoragePartition::memory(),
+        Default::default(),
+    );
+    let context = peer.new_browser_context("BID-surviving-peer".to_owned());
+    let peer_context = context.browser_context_id();
+    peer.insert_browser_context(context);
+    drop(peer);
+    assert!(browser.contains_context(peer_context));
+
     let mut conn = CdpConnection::new(
         browser.clone(),
         CdpInitialStoragePartition::memory(),
@@ -51,15 +63,6 @@ async fn session_end_removes_only_its_contexts_but_connection_drop_does_not() {
         .map(|context| context.browser_context_id())
         .collect::<Vec<_>>();
     assert_eq!(ending_contexts.len(), 2);
-    let mut peer = CdpConnection::new(
-        browser.clone(),
-        CdpInitialStoragePartition::memory(),
-        Default::default(),
-    );
-    let context = peer.new_browser_context("BID-surviving-peer".to_owned());
-    let peer_context = context.browser_context_id();
-    peer.insert_browser_context(context);
-    drop(peer);
     assert!(browser.contains_context(peer_context));
     assert!(
         ending_contexts
@@ -227,38 +230,37 @@ fn stored_cookie(name: &str, value: &str) -> moli_cookie_jar::StoredCookie {
     }
 }
 
-async fn commit_navigation_outcome_for_test(
+async fn load_native_navigation_for_test(
     conn: &mut CdpConnection,
-    outcome: NavigationLoadOutcome,
-) -> LoadedNavigation<crate::conn::PreparedDocumentNavigation> {
-    commit_navigation_outcome_for_session_test(conn, outcome, None).await
-}
-
-async fn commit_navigation_outcome_for_session_test(
-    conn: &mut CdpConnection,
-    outcome: NavigationLoadOutcome,
-    session_id: Option<&str>,
-) -> LoadedNavigation<crate::conn::PreparedDocumentNavigation> {
-    match outcome {
-        NavigationLoadOutcome::ResponseCommitReady(navigation) => {
-            let owner = match session_id {
-                Some(session_id) => CommandOwnerScope::for_session(session_id),
-                None => CommandOwnerScope::capture(conn, None),
-            };
-            conn.commit_navigation_load_outcome_for_owner_async(
-                &owner,
-                NavigationLoadOutcome::ResponseCommitReady(navigation),
-            )
-            .await
-            .expect("test navigation should commit")
-        }
-        NavigationLoadOutcome::Download(_) => {
-            panic!("test navigation should not resolve to a download")
-        }
-        NavigationLoadOutcome::NetworkFailure(error_text) => {
-            panic!("test navigation should not fail: {error_text}")
-        }
-    }
+    url: &str,
+    headers: Vec<(String, String)>,
+) -> moli_core::browser::NavigationResponseSnapshot {
+    let owner = CommandOwnerScope::capture(conn, None);
+    let waiter = conn
+        .start_native_navigation_fixture_for_test(
+            &owner,
+            crate::domains::page::LOADER_ID,
+            moli_core::browser::web_contents::NavigationRequestInterception::new(
+                Url::parse(url).unwrap(),
+                "GET".into(),
+                None,
+                headers.into(),
+                crate::conn::NavigationRequestLoadPolicy::DocumentInitiated,
+            ),
+            moli_core::browser::NavigationDecision::Continue,
+        )
+        .unwrap();
+    let request = waiter.request();
+    let (document, _) = conn
+        .finish_native_navigation_fixture_for_test(waiter)
+        .await
+        .unwrap();
+    let response = conn
+        .wait_for_native_navigation_response_for_test(document.document)
+        .await
+        .unwrap();
+    assert_eq!(response.request, request);
+    response
 }
 
 #[tokio::test]
@@ -277,6 +279,10 @@ async fn canceled_document_materialization_does_not_mutate_engine_policy() {
 }
 
 async fn buffered_navigation_policy_checkpoint(reject_canceled: Option<bool>) {
+    use moli_core::browser::web_contents::NavigationRequestInterception;
+    use moli_core::browser::{
+        BrowserNavigationOutcome, NavigationDecision, NavigationDecisionStage,
+    };
     let mut conn = crate::test_support::connection();
     let mut ambient_context = conn.new_browser_context("BID-ambient".to_owned());
     ambient_context.set_active_target_id("TID-ambient");
@@ -284,66 +290,79 @@ async fn buffered_navigation_policy_checkpoint(reject_canceled: Option<bool>) {
     let ambient_renderer_owner = conn
         .browser_context
         .as_ref()
-        .and_then(|context| context.page_navigation_renderer_owner_id("TID-ambient"))
-        .expect("ambient target renderer owner");
+        .unwrap()
+        .page_navigation_renderer_owner_id("TID-ambient")
+        .unwrap();
 
     let mut target_context = conn.new_browser_context("BID-target".to_owned());
     target_context.set_active_target_id("TID-target");
     target_context.attach_active_session("SID-target");
     target_context.begin_active_target_initial_empty_document("about:blank".to_owned());
-    let token = target_context
-        .start_document_navigation_for_active_target("LOADER-target".to_owned())
-        .expect("target should accept its synthetic navigation");
+    let contents = target_context
+        .web_contents_handle_for_target("TID-target")
+        .unwrap();
     conn.push_inactive_browser_context_fixture_for_test(target_context);
-    let owner = crate::conn::CommandOwnerScope::for_session("SID-target");
+    conn.commit_declared_session_fixtures_for_test();
+    let owner = crate::conn::CommandOwnerScope::capture(&conn, Some("SID-target"));
     let load_inputs = conn.navigation_load_inputs_for_owner(&owner);
     let resident_client = conn
         .ensure_resource_request_client_for_navigation_load_inputs(&load_inputs)
         .expect("inactive target must initialize its resident navigation engine");
-
+    let native = conn.browser.context_handle(contents.context()).unwrap();
+    let (_, mut events) = conn.browser.subscribe().unwrap();
     let requested_url = Url::parse("https://target.example/fulfilled").unwrap();
-    let navigation = NavigationDispatchState {
-        redirect_chain: Vec::new(),
-        redirect_headers: None,
-        navigate_id: Some(1),
-        owner,
-        web_contents: NavigationDispatchState::detached_web_contents_for_test(),
-        result_projection: NavigationResultProjection::Cdp(json!({
-            "frameId": "TID-target",
-            "loaderId": "LOADER-target",
-        })),
-        frame_id: "TID-target".to_owned(),
-        session_id: Some("SID-target".to_owned()),
-        request_id: Some("LOADER-target".to_owned()),
-        loader_id: "LOADER-target".to_owned(),
-        request_announced: true,
-        requested_url: requested_url.clone(),
-        request_method: "GET".to_owned(),
-        request_body: None,
-        request_body_bytes: None,
-        request_headers: Vec::new().into(),
-        request_load_policy: crate::conn::NavigationRequestLoadPolicy::DocumentInitiated,
-        timestamp: 0.0,
-        source_document_security: Default::default(),
-    };
-
-    let outcome = conn
-        .build_navigation_from_buffered_body_source_for_navigation_async(
-            &navigation,
-            requested_url,
-            200,
-            vec![("content-type".to_owned(), b"text/html".to_vec())],
-            crate::conn::CapturedBody::from_string(
-                "<script>document.title = String(navigator.maxTouchPoints)</script>".to_owned(),
+    let waiter = native
+        .navigate_document(
+            contents,
+            NavigationRequestInterception::new(
+                requested_url.clone(),
+                "GET".into(),
+                None,
+                Vec::new().into(),
+                crate::conn::NavigationRequestLoadPolicy::DocumentInitiated,
             ),
-            None,
-            moli_fetch::NetworkObservationJournal::default(),
-            crate::domains::network::MainDocumentBodyProgressSource::default(),
         )
-        .await
-        .expect("buffered target navigation should prepare");
-    let NavigationLoadOutcome::ResponseCommitReady(response) = outcome else {
-        panic!("buffered HTML must retain an unmaterialized renderer candidate");
+        .unwrap();
+    let request = waiter.request();
+    let paused = native.navigation_decision(contents).unwrap().unwrap();
+    assert_eq!(paused.permit.navigation(), request.navigation);
+    assert!(matches!(
+        paused.stage,
+        NavigationDecisionStage::Request { .. }
+    ));
+    assert!(
+        native
+            .resolve_navigation_decision(
+                contents,
+                paused.permit,
+                NavigationDecision::Fulfill {
+                    status: 200,
+                    headers: vec![("content-type".into(), "text/html".into())],
+                    body: b"<script>document.title = navigator.maxTouchPoints</script>".to_vec(),
+                }
+            )
+            .unwrap()
+    );
+    let prepared = loop {
+        if let Some(paused) = native.navigation_decision(contents).unwrap() {
+            assert_eq!(paused.permit.navigation(), request.navigation);
+            match paused.stage {
+                NavigationDecisionStage::PreparedDocument { .. } => break paused.permit,
+                NavigationDecisionStage::Response { .. } => {
+                    assert!(
+                        native
+                            .resolve_navigation_decision(
+                                contents,
+                                paused.permit,
+                                NavigationDecision::Continue,
+                            )
+                            .unwrap()
+                    );
+                }
+                _ => panic!("fulfilled native navigation must prepare its exact response"),
+            }
+        }
+        events.recv().await.unwrap();
     };
     let context = conn.browser_context_by_id_mut("BID-target").unwrap();
     context.apply_target_emulation_policy_change(
@@ -358,23 +377,36 @@ async fn buffered_navigation_policy_checkpoint(reject_canceled: Option<bool>) {
                 .tls_verify_host()
         );
         context.set_tls_verify_host_override_for_target("TID-target", Some(false));
-        let admission = if canceled {
-            context
-                .document_navigation_cancellation_handle_for_target("TID-target", &token)
-                .unwrap()
-                .cancel();
-            token
+        let winner = if canceled {
+            assert!(
+                native
+                    .cancel_document_navigation(contents, &request.navigation)
+                    .unwrap()
+            );
+            None
         } else {
-            moli_core::browser::NavigationId::allocate()
+            Some(
+                native
+                    .navigate_document(
+                        contents,
+                        NavigationRequestInterception::new(
+                            Url::parse("data:text/html,winner").unwrap(),
+                            "GET".into(),
+                            None,
+                            Vec::new().into(),
+                            crate::conn::NavigationRequestLoadPolicy::DocumentInitiated,
+                        ),
+                    )
+                    .unwrap(),
+            )
         };
-        let result = conn.start_response_document_materialization_for_owner(
-            &navigation.owner,
-            admission,
-            *response,
-        );
         assert!(
-            matches!(result, Err(ref message) if message == "renderer channel navigation was superseded by a newer navigation")
+            !native
+                .resolve_navigation_decision(contents, prepared, NavigationDecision::Continue)
+                .unwrap(),
+            "a late prepared-document decision must never resume a retired navigation"
         );
+        assert!(waiter.wait().await.is_err());
         assert!(
             conn.browser_context_by_id("BID-target")
                 .unwrap()
@@ -383,68 +415,99 @@ async fn buffered_navigation_policy_checkpoint(reject_canceled: Option<bool>) {
                 .tls_verify_host(),
             "rejected admission must not install the new native TLS policy on the engine"
         );
+        if let Some(winner) = winner {
+            assert!(
+                native
+                    .cancel_document_navigation(contents, &winner.request().navigation)
+                    .unwrap()
+            );
+            assert!(winner.wait().await.is_err());
+        }
         return;
     }
-    let materialization = conn
-        .start_response_document_materialization_for_owner(&navigation.owner, token, *response)
-        .unwrap();
+
     let context = conn.browser_context_by_id_mut("BID-target").unwrap();
-    context.apply_target_emulation_policy_change(
-        "TID-target",
-        crate::conn::state::EmulationPolicyChange::MaxTouchPoints(8),
-    );
     assert!(context.dispose_devtools_session_for_target(
         "TID-target",
         "SID-target",
         &moli_page_types::DevToolsSessionKey::Primary,
     ));
     context.set_active_target_id("TID-peer");
-    // Complete both halves of DevTools disposal: domain state and the service
-    // route. Resetting the primary domain slot alone does not detach its wire id.
     conn.detach_known_session_event_plan("TID-target", "SID-target", None, None);
     assert!(conn.session_route(Some("SID-target")).is_none());
     assert!(
-        conn.target_runtime_session_state_for_owner(&navigation.owner)
+        conn.target_runtime_session_state_for_owner(&owner)
             .is_none()
     );
-    let loaded = materialization.await.unwrap();
-    let commit = conn.commit_loaded_navigation(loaded.page).unwrap();
-    assert!(commit.inspection_projection.is_ok());
-    if let Some(continuation) = commit.committed_document_post_response_continuation {
-        continuation.release();
-    }
-    commit.previous_document_retirement.close().await;
+    // The original session is gone while the Browser still holds the exact
+    // prepared-document decision. Projection must not reselect the active peer.
+    assert_eq!(
+        native
+            .navigation_decision(contents)
+            .unwrap()
+            .unwrap()
+            .permit,
+        prepared
+    );
+    let mut ctx = TestContext::from_conn(conn);
+    ctx.conn
+        .project_browser_navigation_decision(contents, Some(prepared))
+        .await;
+    let BrowserNavigationOutcome::Document(snapshot) = waiter.wait().await.unwrap() else {
+        panic!("the Browser must commit the fulfilled HTML after the session detached");
+    };
+    let document = snapshot.document;
+    // Change the default only after the real Browser materialization boundary.
+    ctx.conn
+        .browser_context_by_id_mut("BID-target")
+        .unwrap()
+        .apply_target_emulation_policy_change(
+            "TID-target",
+            crate::conn::state::EmulationPolicyChange::MaxTouchPoints(8),
+        );
+    ctx.conn.project_browser_document_commit(document).await;
+    ctx.wait_until_scheduler_state("original detached document DOMContentLoaded", |_| {
+        native
+            .document_lifecycle_snapshot(document)
+            .unwrap()
+            .is_some_and(|snapshot| snapshot.dom_content_loaded.is_some())
+    })
+    .await;
+    let title = native
+        .evaluate_document_expression_for_test(document, "document.title", false)
+        .await
+        .unwrap();
+    assert_eq!(
+        title["value"], "4",
+        "creation must use the policy captured at actual Browser admission"
+    );
+    let conn = &mut ctx.conn;
     let defaults = conn.document_fetch_defaults();
     let browser_globals = conn.browser_global_overrides.clone();
-    let context = conn
-        .browser_context_by_id_mut("BID-target")
-        .expect("inactive target context");
+    let context = conn.browser_context_by_id_mut("BID-target").unwrap();
     let retained_client = context
         .resource_request_client_for_test("TID-target", defaults, &browser_globals)
-        .expect("resident target engine must keep a resource request client");
+        .unwrap();
     let target_renderer_owner = context
         .page_navigation_renderer_owner_id("TID-target")
-        .expect("inactive target must keep its navigation engine after completion");
-
+        .unwrap();
     assert!(
         resident_client.shares_page_network_policy_with(&retained_client),
-        "navigation completion must not replace the target's resident engine policy"
+        "completion must not replace the target's resident engine policy"
     );
     assert_eq!(
-        conn.browser_context_by_id("BID-target")
-            .unwrap()
+        context
             .target_renderer_page_residence_identity("TID-target")
             .unwrap()
             .owner_local_host_id()
             .as_u64(),
         target_renderer_owner,
-        "the loaded Page and the engine handed to its target must share one renderer owner"
+        "the Document and resident engine must keep one renderer owner"
     );
     assert_ne!(
         target_renderer_owner, ambient_renderer_owner,
-        "a browser-level Fetch action must not build an inactive target on the ambient context engine"
+        "inactive target work must not use the ambient engine"
     );
-    let context = conn.browser_context_by_id_mut("BID-target").unwrap();
     assert_eq!(context.active_target_id(), Some("TID-peer"));
     assert!(!context.target_has_loaded_page("TID-peer"));
     assert!(!context.has_pending_document_navigation_for_target("TID-target"));
@@ -461,26 +524,32 @@ async fn buffered_navigation_policy_checkpoint(reject_canceled: Option<bool>) {
             .last()
             .unwrap()
             .url,
-        "https://target.example/fulfilled"
+        requested_url.as_str()
     );
 }
 
 #[test]
 fn current_navigation_initiator_url_uses_loaded_browser_context_url_when_available() {
     let mut conn = crate::test_support::connection();
-    assert!(conn.current_navigation_initiator_url().is_none());
+    assert!(
+        conn.navigation_initiator_url_for_owner(&CommandOwnerScope::capture(&conn, None))
+            .is_none()
+    );
 
     let mut bc = conn.new_page_target_fixture_for_test("BID-1", "TID-1");
     bc.set_target_url("about:blank".into());
     conn.install_browser_context_fixture_for_test(bc);
-    assert!(conn.current_navigation_initiator_url().is_none());
+    assert!(
+        conn.navigation_initiator_url_for_owner(&CommandOwnerScope::capture(&conn, None))
+            .is_none()
+    );
 
     conn.browser_context
         .as_mut()
         .unwrap()
         .set_target_url("https://example.com/app".into());
     assert_eq!(
-        conn.current_navigation_initiator_url(),
+        conn.navigation_initiator_url_for_owner(&CommandOwnerScope::capture(&conn, None)),
         Some(Url::parse("https://example.com/app").unwrap())
     );
 }
@@ -925,126 +994,214 @@ fn connection_profile_backed_cookie_snapshot_is_none_without_profile_backed_cont
     assert!(conn.snapshot_profile_backed_cookies().is_none());
 }
 
-#[tokio::test]
-async fn build_loaded_navigation_from_buffered_response_updates_request_cookie_access_time() {
-    let mut conn = crate::test_support::connection();
-    let requested_url = Url::parse("https://example.com/app/index.html").unwrap();
-    let mut bc = conn.new_page_target_fixture_for_test("BID-1", "TID-1");
-    bc.set_target_url("https://example.com/origin".into());
-    bc.store_response_cookie_headers_for_test(
-        &requested_url,
-        &[(
-            "set-cookie".to_owned(),
-            b"sid=1; Path=/app; Secure".to_vec(),
-        )],
+async fn start_cookie_navigation_pause(
+    requested_url: &Url,
+) -> (TestContext, serde_json::Value, u64) {
+    let mut ctx = TestContext::new();
+    let mut context = ctx
+        .conn
+        .new_page_target_fixture_for_test("BID-cookie", "TID-cookie");
+    context.attach_active_session("SID-cookie");
+    context.set_target_url(requested_url.join("/origin").unwrap().to_string());
+    context.store_response_cookie_headers_for_test(
+        requested_url,
+        &[("set-cookie".into(), b"sid=1; Path=/document".to_vec())],
     );
-    let before = bc
-        .test_last_cookie_access_index("example.com", "/app", "sid")
-        .expect("cookie should exist before synthetic navigation");
-    conn.install_browser_context_fixture_for_test(bc);
-
-    let navigation = conn
-        .build_loaded_navigation_from_buffered_response_async(
-            requested_url,
-            "GET".into(),
-            vec![].into(),
-            200,
-            vec![],
-            "<!doctype html><html><body>ok</body></html>".into(),
-        )
-        .await
-        .expect("navigation should build");
-
-    let after = conn
+    ctx.conn.install_browser_context_fixture_for_test(context);
+    for (id, method) in [(1, "Network.enable"), (2, "Fetch.enable")] {
+        ctx.process_async(json!({
+            "id": id, "method": method, "sessionId": "SID-cookie",
+        }))
+        .await;
+        ctx.expect_result(id, json!({}), Some("SID-cookie"));
+    }
+    let before = ctx
+        .conn
         .browser_context
         .as_ref()
         .unwrap()
-        .test_last_cookie_access_index("example.com", "/app", "sid")
-        .expect("cookie should still exist after synthetic navigation");
-    assert!(
-        after > before,
-        "synthetic/request-stage navigations should touch request cookie access time"
+        .test_last_cookie_access_index(requested_url.host_str().unwrap(), "/document", "sid")
+        .unwrap();
+    ctx.process_async(json!({
+        "id": 3, "method": "Page.navigate", "sessionId": "SID-cookie",
+        "params": { "url": requested_url.as_str() },
+    }))
+    .await;
+    let paused = ctx
+        .wait_for_scheduler_message("exact cookie navigation request pause", |message| {
+            message["method"] == "Fetch.requestPaused"
+                && message["sessionId"] == "SID-cookie"
+                && message["params"]["request"]["url"] == requested_url.as_str()
+                && message["params"]["responseStatusCode"].is_null()
+        })
+        .await;
+    (ctx, paused, before)
+}
+
+#[tokio::test]
+async fn request_stage_fulfill_preserves_read_only_request_cookie_report() {
+    let requested_url = Url::parse("https://example.com/document").unwrap();
+    let (mut ctx, paused, before) = start_cookie_navigation_pause(&requested_url).await;
+    let context = ctx.conn.browser_context.as_ref().unwrap();
+    let after = context
+        .test_last_cookie_access_index("example.com", "/document", "sid")
+        .unwrap();
+    assert_eq!(
+        after, before,
+        "a paused request only observes cookies before transport"
+    );
+    let contents = context
+        .web_contents_handle_for_target("TID-cookie")
+        .unwrap();
+    let navigation = ctx
+        .conn
+        .browser
+        .context_handle(contents.context())
+        .unwrap()
+        .navigation_decision(contents)
+        .unwrap()
+        .unwrap()
+        .permit
+        .navigation();
+    let report = context
+        .native_navigation_dispatch("TID-cookie", navigation)
+        .unwrap()
+        .request_cookie_report
+        .clone()
+        .expect("admission must capture its request cookie report");
+    assert_eq!(report.included_cookies[0].cookie.name, "sid");
+    let Some(moli_core::browser::NavigationAttempt::Started(request)) = ctx
+        .conn
+        .browser
+        .context_handle(contents.context())
+        .unwrap()
+        .navigation_snapshot(contents)
+        .unwrap()
+        .attempt
+    else {
+        panic!("request pause must retain its exact navigation");
+    };
+    assert_eq!(request.navigation, navigation);
+    let document = moli_core::browser::DocumentHandle::new(contents, request.document);
+    ctx.process_async(json!({
+        "id": 4, "method": "Fetch.fulfillRequest", "sessionId": "SID-cookie",
+        "params": { "requestId": paused["params"]["requestId"], "responseCode": 200, "body": "b2s=" },
+    })).await;
+    ctx.expect_result(4, json!({}), Some("SID-cookie"));
+    let completed = ctx
+        .wait_for_scheduler_message("fulfilled cookie navigation", |message| message["id"] == 3)
+        .await;
+    assert!(completed["error"].is_null(), "{completed}");
+    wait_for_cookie_fixture_document(&mut ctx, document).await;
+    let context = ctx.conn.browser_context.as_ref().unwrap();
+    assert_eq!(
+        context.test_last_cookie_access_index("example.com", "/document", "sid"),
+        Some(after)
     );
     assert_eq!(
-        navigation
-            .completed_body_network_events()
-            .final_request_cookie_report
-            .as_ref()
-            .expect("navigation should capture request cookie report")
-            .included_cookies[0]
-            .cookie
-            .name,
-        "sid"
+        context
+            .native_navigation_dispatch("TID-cookie", navigation)
+            .unwrap()
+            .request_cookie_report
+            .as_ref(),
+        Some(&report),
     );
 }
 
 #[tokio::test]
-async fn rebuild_buffered_response_preserving_request_report_avoids_second_access_touch() {
-    let mut conn = crate::test_support::connection();
-    let requested_url = Url::parse("https://example.com/app/index.html").unwrap();
-    let mut bc = conn.new_page_target_fixture_for_test("BID-1", "TID-1");
-    bc.set_target_url("https://example.com/origin".into());
-    bc.store_response_cookie_headers_for_test(
-        &requested_url,
-        &[(
-            "set-cookie".to_owned(),
-            b"sid=1; Path=/app; Secure".to_vec(),
-        )],
-    );
-    conn.install_browser_context_fixture_for_test(bc);
-
-    let navigation = conn
-        .build_loaded_navigation_from_buffered_response_async(
-            requested_url.clone(),
-            "GET".into(),
-            vec![].into(),
-            200,
-            vec![],
-            "<!doctype html><html><body>ok</body></html>".into(),
-        )
-        .await
-        .expect("initial navigation should build");
-    let after_first_touch = conn
-        .browser_context
-        .as_ref()
-        .unwrap()
-        .test_last_cookie_access_index("example.com", "/app", "sid")
-        .expect("cookie should exist after initial navigation");
-
-    let rebuilt = conn
-        .build_loaded_navigation_from_buffered_response_preserving_request_cookie_report_async(
-            requested_url,
-            "GET".into(),
-            vec![].into(),
-            204,
-            vec![],
-            String::new(),
-            navigation
-                .completed_body_network_events()
-                .final_request_cookie_report
-                .clone(),
-        )
-        .await
-        .expect("response-stage rebuild should succeed");
-
-    let after_rebuild = conn
-        .browser_context
-        .as_ref()
-        .unwrap()
-        .test_last_cookie_access_index("example.com", "/app", "sid")
-        .expect("cookie should exist after response-stage rebuild");
+async fn response_stage_fulfill_preserves_request_report_without_second_access_touch() {
+    let (addr, server) = crate::testing::spawn_html_response_server("<main>original</main>").await;
+    let requested_url = Url::parse(&format!("http://{addr}/document")).unwrap();
+    let (mut ctx, paused, before) = start_cookie_navigation_pause(&requested_url).await;
+    let request_id = paused["params"]["requestId"].as_str().unwrap().to_owned();
+    ctx.process_async(json!({
+        "id": 4, "method": "Fetch.continueRequest", "sessionId": "SID-cookie",
+        "params": { "requestId": request_id, "interceptResponse": true },
+    }))
+    .await;
+    ctx.expect_result(4, json!({}), Some("SID-cookie"));
+    ctx.wait_for_scheduler_message("same cookie navigation response pause", |message| {
+        message["method"] == "Fetch.requestPaused"
+            && message["sessionId"] == "SID-cookie"
+            && message["params"]["requestId"] == request_id
+            && message["params"]["responseStatusCode"] == 200
+    })
+    .await;
+    let context = ctx.conn.browser_context.as_ref().unwrap();
+    let contents = context
+        .web_contents_handle_for_target("TID-cookie")
+        .unwrap();
+    let native = ctx.conn.browser.context_handle(contents.context()).unwrap();
+    let decision = native.navigation_decision(contents).unwrap().unwrap();
+    let Some(moli_core::browser::NavigationAttempt::Started(request)) =
+        native.navigation_snapshot(contents).unwrap().attempt
+    else {
+        panic!("response pause must retain its exact navigation");
+    };
+    assert_eq!(request.navigation, decision.permit.navigation());
+    let document = moli_core::browser::DocumentHandle::new(contents, request.document);
+    let moli_core::browser::NavigationDecisionStage::Response { response, .. } = decision.stage
+    else {
+        panic!("the exact native request must be paused at its response");
+    };
+    let report = response
+        .request_cookie_report
+        .expect("HTTP request must capture its cookie report");
+    assert_eq!(report.included_cookies[0].cookie.name, "sid");
+    let after_request = context
+        .test_last_cookie_access_index("127.0.0.1", "/document", "sid")
+        .unwrap();
+    assert!(after_request > before);
+    ctx.process_async(json!({
+        "id": 5, "method": "Fetch.fulfillRequest", "sessionId": "SID-cookie",
+        "params": { "requestId": request_id, "responseCode": 204, "body": "" },
+    }))
+    .await;
+    ctx.expect_result(5, json!({}), Some("SID-cookie"));
+    let completed = ctx
+        .wait_for_scheduler_message("response-fulfilled cookie navigation", |message| {
+            message["id"] == 3
+        })
+        .await;
+    assert!(completed["error"].is_null(), "{completed}");
+    wait_for_cookie_fixture_document(&mut ctx, document).await;
     assert_eq!(
-        after_rebuild, after_first_touch,
-        "response-stage rebuilds should reuse the existing request cookie report without a second access-time touch"
+        ctx.conn
+            .browser_context
+            .as_ref()
+            .unwrap()
+            .test_last_cookie_access_index("127.0.0.1", "/document", "sid"),
+        Some(after_request),
+        "response-stage fulfillment must not touch request cookie access a second time",
     );
-    assert_eq!(
-        rebuilt
-            .completed_body_network_events()
-            .final_request_cookie_report,
-        navigation
-            .completed_body_network_events()
-            .final_request_cookie_report
-    );
+    let response = ctx
+        .conn
+        .wait_for_native_navigation_response_for_test(document)
+        .await
+        .unwrap()
+        .response
+        .unwrap();
+    assert_eq!(response.status, 204);
+    assert_eq!(response.request_cookie_report, Some(report));
+    server.abort();
+}
+
+async fn wait_for_cookie_fixture_document(
+    ctx: &mut TestContext,
+    document: moli_core::browser::DocumentHandle,
+) {
+    ctx.wait_until_scheduler_state("exact fulfilled cookie Document load", |conn| {
+        conn.browser_context
+            .as_ref()
+            .and_then(|context| context.document_handle_for_target("TID-cookie"))
+            == Some(document)
+            && conn
+                .renderer_document_lifecycle_authoritative_state_for_session_owner(Some(
+                    "SID-cookie",
+                ))
+                .is_some_and(|(_, lifecycle)| lifecycle.load.is_some())
+    })
+    .await;
 }
 
 #[tokio::test]
@@ -1053,22 +1210,16 @@ async fn reset_resource_runtime_clears_loaded_page_cookie_backend() {
     conn.browser_context = Some(conn.new_page_target_fixture_for_test("BID-1", "TID-1"));
     let url = Url::parse("https://example.com/app").unwrap();
 
-    let navigation = conn
-        .build_loaded_navigation_from_buffered_response_async(
-            url.clone(),
-            "GET".into(),
-            vec![].into(),
-            200,
-            vec![("set-cookie".into(), "theme=dark; Path=/".into())],
-            "<!doctype html><html><body>ok</body></html>".into(),
-        )
-        .await
-        .expect("navigation should build");
-    conn.browser_context
-        .as_mut()
-        .unwrap()
-        .commit_active_navigation_for_test(navigation.page)
-        .await;
+    conn.install_buffered_navigation_fixture_for_test(
+        url.clone(),
+        "GET".into(),
+        vec![],
+        200,
+        vec![("set-cookie".into(), "theme=dark; Path=/".into())],
+        "<!doctype html><html><body>ok</body></html>".into(),
+    )
+    .await
+    .expect("navigation should build");
 
     let context = conn.browser_context.as_mut().unwrap();
     let target_id = context.active_target_id_owned().unwrap();
@@ -1122,22 +1273,16 @@ async fn same_target_navigations_reuse_local_and_session_storage() {
     let first_url = Url::parse("https://storage.example/app/one").unwrap();
     let second_url = Url::parse("https://storage.example/app/two").unwrap();
 
-    let first = conn
-        .build_loaded_navigation_from_buffered_response_async(
-            first_url,
-            "GET".into(),
-            vec![].into(),
-            200,
-            vec![],
-            "<!doctype html><html><body>one</body></html>".into(),
-        )
-        .await
-        .expect("first synthetic navigation should build");
-    conn.browser_context
-        .as_mut()
-        .unwrap()
-        .commit_active_navigation_for_test(first.page)
-        .await;
+    conn.install_buffered_navigation_fixture_for_test(
+        first_url,
+        "GET".into(),
+        vec![],
+        200,
+        vec![],
+        "<!doctype html><html><body>one</body></html>".into(),
+    )
+    .await
+    .expect("first synthetic navigation should build");
     let write = conn
         .browser_context
         .as_mut()
@@ -1151,22 +1296,16 @@ async fn same_target_navigations_reuse_local_and_session_storage() {
         .expect("storage write should evaluate");
     assert_eq!(write["value"], json!("ok"));
 
-    let second = conn
-        .build_loaded_navigation_from_buffered_response_async(
-            second_url,
-            "GET".into(),
-            vec![].into(),
-            200,
-            vec![],
-            "<!doctype html><html><body>two</body></html>".into(),
-        )
-        .await
-        .expect("second synthetic navigation should build");
-    conn.browser_context
-        .as_mut()
-        .unwrap()
-        .commit_active_navigation_for_test(second.page)
-        .await;
+    conn.install_buffered_navigation_fixture_for_test(
+        second_url,
+        "GET".into(),
+        vec![],
+        200,
+        vec![],
+        "<!doctype html><html><body>two</body></html>".into(),
+    )
+    .await
+    .expect("second synthetic navigation should build");
     let read = conn
         .browser_context
         .as_mut()
@@ -1190,22 +1329,16 @@ async fn browser_context_storage_does_not_cross_context_switches() {
         .push(conn.new_page_target_fixture_for_test("BID-2", "TID-2"));
     let url = Url::parse("https://context-storage.example/app").unwrap();
 
-    let first = conn
-        .build_loaded_navigation_from_buffered_response_async(
-            url.clone(),
-            "GET".into(),
-            vec![].into(),
-            200,
-            vec![],
-            "<!doctype html><html><body>first</body></html>".into(),
-        )
-        .await
-        .expect("first context navigation should build");
-    conn.browser_context
-        .as_mut()
-        .unwrap()
-        .commit_active_navigation_for_test(first.page)
-        .await;
+    conn.install_buffered_navigation_fixture_for_test(
+        url.clone(),
+        "GET".into(),
+        vec![],
+        200,
+        vec![],
+        "<!doctype html><html><body>first</body></html>".into(),
+    )
+    .await
+    .expect("first context navigation should build");
     conn.browser_context
         .as_mut()
         .unwrap()
@@ -1218,22 +1351,16 @@ async fn browser_context_storage_does_not_cross_context_switches() {
         .expect("first context storage write should evaluate");
 
     assert!(conn.activate_browser_context_by_id_async("BID-2").await);
-    let second = conn
-        .build_loaded_navigation_from_buffered_response_async(
-            url,
-            "GET".into(),
-            vec![].into(),
-            200,
-            vec![],
-            "<!doctype html><html><body>second</body></html>".into(),
-        )
-        .await
-        .expect("second context navigation should build");
-    conn.browser_context
-        .as_mut()
-        .unwrap()
-        .commit_active_navigation_for_test(second.page)
-        .await;
+    conn.install_buffered_navigation_fixture_for_test(
+        url,
+        "GET".into(),
+        vec![],
+        200,
+        vec![],
+        "<!doctype html><html><body>second</body></html>".into(),
+    )
+    .await
+    .expect("second context navigation should build");
     let read = conn
         .browser_context
         .as_mut()
@@ -1261,22 +1388,16 @@ async fn browser_context_storage_buckets_reuse_within_context_and_isolate_betwee
     let first_url = Url::parse("https://context-storage-buckets.example/app/one").unwrap();
     let second_url = Url::parse("https://context-storage-buckets.example/app/two").unwrap();
 
-    let first = conn
-        .build_loaded_navigation_from_buffered_response_async(
-            first_url.clone(),
-            "GET".into(),
-            vec![].into(),
-            200,
-            vec![],
-            "<!doctype html><html><body>first</body></html>".into(),
-        )
-        .await
-        .expect("first context navigation should build");
-    conn.browser_context
-        .as_mut()
-        .unwrap()
-        .commit_active_navigation_for_test(first.page)
-        .await;
+    conn.install_buffered_navigation_fixture_for_test(
+        first_url.clone(),
+        "GET".into(),
+        vec![],
+        200,
+        vec![],
+        "<!doctype html><html><body>first</body></html>".into(),
+    )
+    .await
+    .expect("first context navigation should build");
     let write = conn
         .browser_context
         .as_mut()
@@ -1296,22 +1417,16 @@ async fn browser_context_storage_buckets_reuse_within_context_and_isolate_betwee
         .expect("first context storage bucket write should evaluate");
     assert_eq!(write["value"], json!("bucket-a|bucket-b"));
 
-    let same_context = conn
-        .build_loaded_navigation_from_buffered_response_async(
-            second_url.clone(),
-            "GET".into(),
-            vec![].into(),
-            200,
-            vec![],
-            "<!doctype html><html><body>same context</body></html>".into(),
-        )
-        .await
-        .expect("same context navigation should build");
-    conn.browser_context
-        .as_mut()
-        .unwrap()
-        .commit_active_navigation_for_test(same_context.page)
-        .await;
+    conn.install_buffered_navigation_fixture_for_test(
+        second_url.clone(),
+        "GET".into(),
+        vec![],
+        200,
+        vec![],
+        "<!doctype html><html><body>same context</body></html>".into(),
+    )
+    .await
+    .expect("same context navigation should build");
     let same_context_keys = conn
         .browser_context
         .as_mut()
@@ -1328,22 +1443,16 @@ async fn browser_context_storage_buckets_reuse_within_context_and_isolate_betwee
     assert_eq!(same_context_keys["value"], json!("bucket-a|bucket-b"));
 
     assert!(conn.activate_browser_context_by_id_async("BID-2").await);
-    let other_context = conn
-        .build_loaded_navigation_from_buffered_response_async(
-            second_url,
-            "GET".into(),
-            vec![].into(),
-            200,
-            vec![],
-            "<!doctype html><html><body>other context</body></html>".into(),
-        )
-        .await
-        .expect("other context navigation should build");
-    conn.browser_context
-        .as_mut()
-        .unwrap()
-        .commit_active_navigation_for_test(other_context.page)
-        .await;
+    conn.install_buffered_navigation_fixture_for_test(
+        second_url,
+        "GET".into(),
+        vec![],
+        200,
+        vec![],
+        "<!doctype html><html><body>other context</body></html>".into(),
+    )
+    .await
+    .expect("other context navigation should build");
     let other_context_keys = conn
         .browser_context
         .as_mut()
@@ -1366,22 +1475,16 @@ async fn user_agent_override_rebinds_live_document_after_engine_runtime_invalida
     conn.browser_context = Some(conn.new_page_target_fixture_for_test("BID-1", "TID-1"));
     let url = Url::parse("https://example.com/app").unwrap();
 
-    let navigation = conn
-        .build_loaded_navigation_from_buffered_response_async(
-            url.clone(),
-            "GET".into(),
-            vec![].into(),
-            200,
-            vec![("set-cookie".into(), "theme=dark; Path=/".into())],
-            "<!doctype html><html><body>ok</body></html>".into(),
-        )
-        .await
-        .expect("navigation should build");
-    conn.browser_context
-        .as_mut()
-        .unwrap()
-        .commit_active_navigation_for_test(navigation.page)
-        .await;
+    conn.install_buffered_navigation_fixture_for_test(
+        url.clone(),
+        "GET".into(),
+        vec![],
+        200,
+        vec![("set-cookie".into(), "theme=dark; Path=/".into())],
+        "<!doctype html><html><body>ok</body></html>".into(),
+    )
+    .await
+    .expect("navigation should build");
 
     // Invalidate only the NavigationEngine's cached browser runtime. The
     // committed Document keeps its exact lifecycle authority so the setting
@@ -1404,22 +1507,16 @@ async fn tls_and_proxy_overrides_rebind_live_document_after_engine_runtime_inval
     conn.browser_context = Some(conn.new_page_target_fixture_for_test("BID-1", "TID-1"));
     let url = Url::parse("https://example.com/app").unwrap();
 
-    let navigation = conn
-        .build_loaded_navigation_from_buffered_response_async(
-            url.clone(),
-            "GET".into(),
-            vec![].into(),
-            200,
-            vec![("set-cookie".into(), "theme=dark; Path=/".into())],
-            "<!doctype html><html><body>ok</body></html>".into(),
-        )
-        .await
-        .expect("navigation should build");
-    conn.browser_context
-        .as_mut()
-        .unwrap()
-        .commit_active_navigation_for_test(navigation.page)
-        .await;
+    conn.install_buffered_navigation_fixture_for_test(
+        url.clone(),
+        "GET".into(),
+        vec![],
+        200,
+        vec![("set-cookie".into(), "theme=dark; Path=/".into())],
+        "<!doctype html><html><body>ok</body></html>".into(),
+    )
+    .await
+    .expect("navigation should build");
 
     // Network settings rebuild the transport behind the live Document
     // authority; they must not retire that authority first.
@@ -1446,7 +1543,7 @@ async fn tls_and_proxy_overrides_rebind_live_document_after_engine_runtime_inval
 }
 
 #[test]
-fn build_loaded_navigation_from_buffered_response_works_inside_current_thread_runtime() {
+fn native_buffered_navigation_works_inside_current_thread_runtime() {
     let runtime = tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()
@@ -1458,10 +1555,10 @@ fn build_loaded_navigation_from_buffered_response_works_inside_current_thread_ru
         let url = Url::parse("https://example.com/app").unwrap();
 
         let navigation = conn
-            .build_loaded_navigation_from_buffered_response_async(
+            .install_buffered_navigation_fixture_for_test(
                 url.clone(),
                 "GET".into(),
-                vec![].into(),
+                vec![],
                 200,
                 vec![("content-type".into(), "text/html".into())],
                 "<!doctype html><html><body><main id='ok'>ok</main></body></html>".into(),
@@ -1469,13 +1566,12 @@ fn build_loaded_navigation_from_buffered_response_works_inside_current_thread_ru
             .await
             .expect("navigation should build inside current-thread runtime");
 
-        assert_eq!(navigation.final_url, url);
-        assert_eq!(navigation.response_status, 200);
-        conn.browser_context
-            .as_mut()
-            .unwrap()
-            .commit_active_navigation_for_test(navigation.page)
-            .await;
+        assert_eq!(navigation.metadata.info.as_ref().unwrap().url, url);
+        let response = conn
+            .wait_for_native_navigation_response_for_test(navigation.document)
+            .await
+            .unwrap();
+        assert_eq!(response.response.unwrap().status, 200);
         assert_eq!(
             conn.browser_context
                 .as_mut()
@@ -1870,7 +1966,7 @@ async fn direct_network_enable_routes_to_inactive_active_owner_without_activatin
 async fn direct_runtime_evaluate_routes_to_inactive_active_owner_without_activating_slot() {
     let mut ctx = crate::testing::TestContext::new();
 
-    let mut inactive = BrowserContext::new("BID-B".into());
+    let mut inactive = ctx.conn.new_browser_context_fixture_for_test("BID-B");
     inactive.set_active_target_id("TID-B".to_owned());
     inactive.attach_active_session("SID-B");
     inactive.active_page_target_mut().devtools_sessions
@@ -1914,7 +2010,9 @@ async fn direct_runtime_evaluate_routes_to_inactive_active_owner_without_activat
 #[tokio::test]
 async fn direct_runtime_evaluate_document_replacement_lifecycle_uses_inactive_owner() {
     let mut ctx = crate::testing::TestContext::new();
-    let mut inactive = BrowserContext::new("BID-document-replacement".into());
+    let mut inactive = ctx
+        .conn
+        .new_browser_context_fixture_for_test("BID-document-replacement");
     inactive.set_active_target_id("TID-document-replacement".to_owned());
     inactive.attach_active_session("SID-document-replacement");
     inactive.active_page_target_mut().devtools_sessions
@@ -2198,7 +2296,9 @@ fn devtools_target_context_resolves_background_page_without_ambient_route() {
 async fn direct_runtime_evaluate_same_document_navigation_updates_inactive_owner() {
     let mut ctx = crate::testing::TestContext::new();
     let initial_url = "data:text/html,<!doctype html><title>same-doc</title>".to_owned();
-    let mut inactive = BrowserContext::new("BID-same-document".into());
+    let mut inactive = ctx
+        .conn
+        .new_browser_context_fixture_for_test("BID-same-document");
     inactive.set_active_target_id("TID-same-document".to_owned());
     inactive.attach_active_session("SID-same-document");
     inactive.active_page_target_mut().devtools_sessions
@@ -2271,7 +2371,9 @@ async fn direct_runtime_evaluate_same_document_navigation_updates_inactive_owner
 async fn direct_runtime_evaluate_javascript_dialog_uses_inactive_background_owner() {
     let mut ctx = crate::testing::TestContext::new();
     let page_url = "data:text/html,<!doctype html><title>dialog-owner</title>".to_owned();
-    let mut inactive = BrowserContext::new("BID-dialog-background".into());
+    let mut inactive = ctx
+        .conn
+        .new_browser_context_fixture_for_test("BID-dialog-background");
     inactive.register_page_target_url_fixture(
         "TID-dialog-background".to_owned(),
         Some("SID-dialog-background".to_owned()),
@@ -2376,7 +2478,9 @@ async fn direct_runtime_evaluate_javascript_dialog_uses_inactive_background_owne
 async fn direct_runtime_evaluate_popup_creates_target_in_inactive_background_owner() {
     let mut ctx = crate::testing::TestContext::new();
     let page_url = "data:text/html,<!doctype html><title>popup-owner</title>";
-    let mut inactive = BrowserContext::new("BID-popup-background".into());
+    let mut inactive = ctx
+        .conn
+        .new_browser_context_fixture_for_test("BID-popup-background");
     inactive.register_page_target_url_fixture(
         "TID-popup-background".to_owned(),
         Some("SID-popup-background".to_owned()),
@@ -2448,7 +2552,7 @@ async fn direct_runtime_evaluate_popup_creates_target_in_inactive_background_own
         .expect("inactive owner should remain background");
     assert!(
         inactive
-            .background_target(&popup_target_id)
+            .page_target(&popup_target_id)
             .is_some_and(|target| target.target_url() == "https://example.com/owner-popup"),
         "popup target should be staged in the inactive owner browser context"
     );
@@ -2458,7 +2562,7 @@ async fn direct_runtime_evaluate_popup_creates_target_in_inactive_background_own
 async fn direct_runtime_evaluate_self_popup_does_not_navigate_active_target_for_inactive_owner() {
     let mut ctx = crate::testing::TestContext::new();
 
-    let mut active = BrowserContext::new("BID-active".into());
+    let mut active = ctx.conn.new_browser_context_fixture_for_test("BID-active");
     active.set_active_target_id("TID-active".to_owned());
     active.attach_active_session("SID-active");
     active.set_target_url("https://active.example/current".to_owned());
@@ -2521,7 +2625,9 @@ async fn direct_runtime_evaluate_self_popup_does_not_navigate_active_target_for_
 async fn direct_runtime_evaluate_file_chooser_uses_inactive_background_owner() {
     let mut ctx = crate::testing::TestContext::new();
     let page_url = "data:text/html,<!doctype html><input id='picker' type='file' multiple>";
-    let mut inactive = BrowserContext::new("BID-file-background".into());
+    let mut inactive = ctx
+        .conn
+        .new_browser_context_fixture_for_test("BID-file-background");
     inactive.register_page_target_url_fixture(
         "TID-file-background".to_owned(),
         Some("SID-file-background".to_owned()),
@@ -2596,7 +2702,7 @@ async fn direct_runtime_evaluate_file_chooser_uses_inactive_background_owner() {
 async fn direct_runtime_evaluate_routes_to_inactive_attached_owner_without_activating_slot() {
     let mut ctx = crate::testing::TestContext::new();
 
-    let mut inactive = BrowserContext::new("BID-B".into());
+    let mut inactive = ctx.conn.new_browser_context_fixture_for_test("BID-B");
     inactive.set_active_target_id("TID-B".to_owned());
     inactive.attach_active_session("SID-primary");
     assert!(inactive.assign_attached_session_to_target("TID-B", "SID-attached".to_owned()));
@@ -3005,7 +3111,7 @@ async fn direct_network_enable_for_loaded_background_owner_starts_at_network_tai
     let mut ctx = crate::testing::TestContext::new();
     let page_url = format!("http://{addr}/page");
 
-    let mut inactive = BrowserContext::new("BID-B".into());
+    let mut inactive = ctx.conn.new_browser_context_fixture_for_test("BID-B");
     inactive.register_page_target_url_fixture(
         "TID-background".to_owned(),
         Some("SID-background".to_owned()),
@@ -3101,7 +3207,7 @@ async fn direct_background_command_does_not_emit_active_observable_output_under_
 async fn direct_console_routes_to_inactive_active_owner_without_activating_slot() {
     let mut ctx = crate::testing::TestContext::new();
     let page_url = "data:text/html,<!doctype html><script>console.warn('boot warning')</script>";
-    let mut inactive = BrowserContext::new("BID-B".into());
+    let mut inactive = ctx.conn.new_browser_context_fixture_for_test("BID-B");
     inactive.set_active_target_id("TID-B".to_owned());
     inactive.attach_active_session("SID-B");
     ctx.conn
@@ -3322,7 +3428,7 @@ async fn direct_console_routes_to_loaded_background_owner_and_advances_backgroun
     let page_url =
         "data:text/html,<!doctype html><script>console.warn('background warning')</script>";
 
-    let mut inactive = BrowserContext::new("BID-B".into());
+    let mut inactive = ctx.conn.new_browser_context_fixture_for_test("BID-B");
     inactive.register_page_target_url_fixture(
         "TID-background".to_owned(),
         Some("SID-background".to_owned()),
@@ -3570,7 +3676,7 @@ async fn direct_log_enable_routes_to_loaded_background_owner_without_replaying_c
 async fn direct_log_disable_routes_to_inactive_active_owner_without_activating_slot() {
     let mut ctx = crate::testing::TestContext::new();
     let page_url = "data:text/html,<!doctype html><script>console.warn('boot warning')</script>";
-    let mut inactive = BrowserContext::new("BID-B".into());
+    let mut inactive = ctx.conn.new_browser_context_fixture_for_test("BID-B");
     inactive.set_active_target_id("TID-B".to_owned());
     inactive.attach_active_session("SID-B");
     inactive.active_page_target_mut().devtools_sessions
@@ -3927,28 +4033,29 @@ async fn streaming_navigation_collect_transition_preserves_redirect_cookie_and_b
     let start_url = format!("http://{addr}/start");
     let mut conn = crate::test_support::connection();
     conn.browser_context = Some(conn.new_page_target_fixture_for_test("BID-1", "TID-1"));
-    let outcome = conn
-        .load_navigation_request_via_runtime_async("GET", &start_url, None, Vec::new().into())
-        .await
-        .expect("streaming navigation should load");
-    let navigation = commit_navigation_outcome_for_test(&mut conn, outcome).await;
+    let navigation = load_native_navigation_for_test(&mut conn, &start_url, Vec::new()).await;
+    let response = navigation.response.unwrap();
 
-    assert_eq!(
-        navigation.final_url.as_str(),
-        format!("http://{addr}/final")
+    assert_eq!(response.final_url.as_str(), format!("http://{addr}/final"));
+    assert_eq!(response.status, 200);
+    assert!(
+        navigation
+            .body
+            .unwrap()
+            .unwrap()
+            .materialize_lossy_string()
+            .unwrap()
+            .contains("from-stream")
     );
-    assert_eq!(navigation.response_status, 200);
-    assert!(navigation.response_body().contains("from-stream"));
-    let network_events = navigation.completed_body_network_events();
-    assert_eq!(network_events.redirect_chain.len(), 1);
-    assert_eq!(network_events.redirect_chain[0].status, 302);
+    assert_eq!(response.redirect_chain.len(), 1);
+    assert_eq!(response.redirect_chain[0].status, 302);
     assert_eq!(
-        network_events.redirect_chain[0].to_url.as_str(),
+        response.redirect_chain[0].to_url.as_str(),
         format!("http://{addr}/final")
     );
     assert!(
-        network_events
-            .response_cookie_reports
+        response
+            .cookie_set_reports
             .iter()
             .any(|report| report.is_accepted())
     );
@@ -3961,11 +4068,6 @@ async fn streaming_navigation_collect_transition_preserves_redirect_cookie_and_b
         .map(|cookie| cookie.name)
         .collect::<Vec<_>>();
     assert!(cookie_names.iter().any(|name| name == "final"));
-    conn.browser_context
-        .as_mut()
-        .unwrap()
-        .commit_active_navigation_for_test(navigation.page)
-        .await;
     assert_eq!(
         conn.browser_context
             .as_mut()
@@ -3992,42 +4094,85 @@ async fn data_image_navigation_loads_from_synthetic_response_without_curl() {
         conn.new_page_target_fixture_for_test("BID-image", "TID-image"),
     );
 
-    let outcome = conn
-        .load_navigation_request_via_runtime_async(
-            "GET",
-            data_url,
-            None,
-            request_headers.clone().into(),
-        )
-        .await
-        .expect("data:image navigation should load without a network fetch");
-    let navigation = commit_navigation_outcome_for_test(&mut conn, outcome).await;
-
-    assert_eq!(navigation.requested_url.as_str(), data_url);
-    assert_eq!(navigation.final_url.as_str(), data_url);
-    assert_eq!(navigation.request_method, "GET");
+    // The shared native fixture checks the observed request-stage URL, method
+    // and headers before continuing its exact permit. Its waiter requires a
+    // Document outcome rather than a download.
+    let navigation = load_native_navigation_for_test(&mut conn, data_url, request_headers).await;
+    let response = navigation.response.unwrap();
+    assert_eq!(response.final_url.as_str(), data_url);
+    assert_eq!(response.status, 200);
     assert_eq!(
-        navigation.request_headers.to_byte_strings(),
-        request_headers
-    );
-    assert_eq!(navigation.response_status, 200);
-    assert_eq!(
-        navigation.response_headers,
+        response.headers,
         vec![("Content-Type".to_owned(), b"image/png".to_vec())]
     );
-    assert!(navigation.pending_download.is_none());
-
-    let network_events = navigation.completed_body_network_events();
-    assert_eq!(network_events.request_method, "GET");
-    assert_eq!(network_events.request_headers, request_headers);
-    assert!(network_events.final_request_cookie_report.is_none());
-    assert_eq!(network_events.response_status, 200);
+    assert!(response.request_cookie_report.is_none());
+    assert!(response.cookie_set_reports.is_empty());
+    assert!(response.redirect_chain.is_empty());
     assert_eq!(
-        network_events.response_headers,
-        vec![("Content-Type".to_owned(), b"image/png".to_vec())]
+        navigation
+            .body
+            .unwrap()
+            .unwrap()
+            .materialize_bytes()
+            .unwrap(),
+        [0, 255, 97]
     );
-    assert!(network_events.response_cookie_reports.is_empty());
-    assert!(network_events.redirect_chain.is_empty());
+}
+
+#[tokio::test]
+async fn native_data_url_responses_preserve_decoding_mime_and_fragment_rules() {
+    for (url, content_type, body) in [
+        (
+            "data:text/html,%3Cmain%3Edecoded%3C/main%3E",
+            "text/html",
+            b"<main>decoded</main>".as_slice(),
+        ),
+        (
+            "data:text/html;charset=utf-8;base64,PHRpdGxlPmI2NDwvdGl0bGU+",
+            "text/html;charset=utf-8",
+            b"<title>b64</title>".as_slice(),
+        ),
+        (
+            "data:text/html,<style>#x{display:flex}</style>",
+            "text/html",
+            b"<style>#x{display:flex}</style>".as_slice(),
+        ),
+        (
+            "data:text/html,<main>hello</main>",
+            "text/html",
+            b"<main>hello</main>".as_slice(),
+        ),
+        (
+            "data:,hello%20world#fragment",
+            "text/plain;charset=US-ASCII",
+            b"hello world".as_slice(),
+        ),
+        (
+            "data:application/octet-stream;base64,AP9h",
+            "application/octet-stream",
+            &[0, 255, b'a'],
+        ),
+    ] {
+        let mut conn = crate::test_support::connection();
+        conn.browser_context = Some(conn.new_page_target_fixture_for_test("BID-data", "TID-data"));
+        let response = load_native_navigation_for_test(&mut conn, url, Vec::new()).await;
+        let head = response.response.unwrap();
+        assert_eq!(head.status, 200, "{url}");
+        assert_eq!(
+            head.headers,
+            vec![("Content-Type".into(), content_type.into())],
+            "{url}"
+        );
+        assert!(!head.redirected);
+        assert!(head.redirect_chain.is_empty());
+        assert!(head.request_cookie_report.is_none());
+        assert!(head.cookie_set_reports.is_empty());
+        assert_eq!(
+            response.body.unwrap().unwrap().materialize_bytes().unwrap(),
+            body,
+            "{url}"
+        );
+    }
 }
 
 #[tokio::test]
@@ -4112,11 +4257,7 @@ async fn streaming_navigation_feeds_parser_before_body_eof() {
     let mut conn = crate::test_support::connection();
     conn.browser_context = Some(conn.new_page_target_fixture_for_test("BID-1", "TID-1"));
     let navigation = tokio::time::timeout(std::time::Duration::from_secs(4), async {
-        let outcome = conn
-            .load_navigation_request_via_runtime_async("GET", &page_url, None, Vec::new().into())
-            .await
-            .expect("streaming navigation should prepare");
-        commit_navigation_outcome_for_test(&mut conn, outcome).await
+        load_native_navigation_for_test(&mut conn, &page_url, Vec::new()).await
     })
     .await
     .expect("streaming navigation should not wait for EOF before parser resource fetch");
@@ -4125,12 +4266,15 @@ async fn streaming_navigation_feeds_parser_before_body_eof() {
         script_requested.load(Ordering::SeqCst),
         "parser should request the external script before the main body EOF"
     );
-    assert!(navigation.response_body().contains("id=\"tail\""));
-    conn.browser_context
-        .as_mut()
-        .unwrap()
-        .commit_active_navigation_for_test(navigation.page)
-        .await;
+    assert!(
+        navigation
+            .body
+            .unwrap()
+            .unwrap()
+            .materialize_lossy_string()
+            .unwrap()
+            .contains("id=\"tail\"")
+    );
     assert_eq!(
         conn.browser_context
             .as_mut()

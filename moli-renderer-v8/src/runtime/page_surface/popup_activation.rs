@@ -1,4 +1,7 @@
-use std::sync::Arc;
+use std::sync::{
+    Arc,
+    atomic::{AtomicU64, Ordering},
+};
 
 use super::{RendererDocumentLifecycleIdentity, RendererWindowDocumentSource};
 use crate::SharedWebStorageStore;
@@ -35,20 +38,39 @@ pub enum RendererPopupDisposition {
     Background,
 }
 
-/// A renderer-accepted request to create or reuse an auxiliary browsing
-/// context.
-///
-/// Special targets (`_self`, `_parent`, `_top`) are not valid values here:
-/// they navigate an existing browsing context and use the corresponding
-/// navigation authority instead. Keeping this carrier auxiliary-only prevents
-/// protocol code from deciding the target from a later current session.
-#[derive(Debug, Clone)]
-pub struct RendererPendingPopupActivation {
+/// Correlation identity of one accepted auxiliary-context input. This is not
+/// a Window identity or a replaceable Document generation.
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+pub struct RendererPopupOpeningId(u64);
+
+impl RendererPopupOpeningId {
+    fn allocate() -> Self {
+        static NEXT: AtomicU64 = AtomicU64::new(1);
+        Self(
+            NEXT.fetch_update(Ordering::Relaxed, Ordering::Relaxed, |next| {
+                next.checked_add(1)
+            })
+            .expect("renderer popup opening identity exhausted"),
+        )
+    }
+}
+
+/// Immutable observation of one accepted input. This does not carry the
+/// popup's mutable session-storage namespace or permission to create a page.
+#[derive(Debug, Eq, PartialEq)]
+pub struct RendererPopupOpening {
+    id: RendererPopupOpeningId,
     source: RendererPopupActivationSource,
     disposition: RendererPopupDisposition,
     popup_id: Option<u64>,
     url: String,
     target_name: String,
+}
+
+/// The creation-time state moves once from the renderer into its native owner.
+#[derive(Debug)]
+pub struct RendererPendingPopupActivation {
+    opening: Arc<RendererPopupOpening>,
     session_storage_store: Option<SharedWebStorageStore>,
     initial_empty_document_storage_key: Option<moli_storage_key::MoliStorageKey>,
 }
@@ -68,15 +90,18 @@ impl RendererPendingPopupActivation {
             "popup activation must not carry an existing-context special target"
         );
         Self {
-            source: RendererPopupActivationSource::Window {
-                root_document,
-                window,
-                exposes_opener,
-            },
-            disposition,
-            popup_id,
-            url,
-            target_name,
+            opening: Arc::new(RendererPopupOpening {
+                id: RendererPopupOpeningId::allocate(),
+                source: RendererPopupActivationSource::Window {
+                    root_document,
+                    window,
+                    exposes_opener,
+                },
+                disposition,
+                popup_id,
+                url,
+                target_name,
+            }),
             session_storage_store: None,
             initial_empty_document_storage_key: None,
         }
@@ -93,11 +118,14 @@ impl RendererPendingPopupActivation {
             "browser-context popup activation must not carry a special target"
         );
         Self {
-            source: RendererPopupActivationSource::BrowserContext,
-            disposition,
-            popup_id,
-            url,
-            target_name,
+            opening: Arc::new(RendererPopupOpening {
+                id: RendererPopupOpeningId::allocate(),
+                source: RendererPopupActivationSource::BrowserContext,
+                disposition,
+                popup_id,
+                url,
+                target_name,
+            }),
             session_storage_store: None,
             initial_empty_document_storage_key: None,
         }
@@ -122,6 +150,38 @@ impl RendererPendingPopupActivation {
         self
     }
 
+    pub fn opening(&self) -> Arc<RendererPopupOpening> {
+        self.opening.clone()
+    }
+
+    pub fn into_parts(
+        self,
+    ) -> (
+        Arc<RendererPopupOpening>,
+        Option<SharedWebStorageStore>,
+        Option<moli_storage_key::MoliStorageKey>,
+    ) {
+        (
+            self.opening,
+            self.session_storage_store,
+            self.initial_empty_document_storage_key,
+        )
+    }
+}
+
+impl std::ops::Deref for RendererPendingPopupActivation {
+    type Target = RendererPopupOpening;
+
+    fn deref(&self) -> &Self::Target {
+        &self.opening
+    }
+}
+
+impl RendererPopupOpening {
+    pub fn id(&self) -> RendererPopupOpeningId {
+        self.id
+    }
+
     pub fn source(&self) -> &RendererPopupActivationSource {
         &self.source
     }
@@ -141,38 +201,11 @@ impl RendererPendingPopupActivation {
     pub fn target_name(&self) -> &str {
         &self.target_name
     }
-
-    #[allow(clippy::type_complexity)]
-    pub fn into_parts(
-        self,
-    ) -> (
-        RendererPopupActivationSource,
-        RendererPopupDisposition,
-        Option<u64>,
-        String,
-        String,
-        Option<SharedWebStorageStore>,
-        Option<moli_storage_key::MoliStorageKey>,
-    ) {
-        (
-            self.source,
-            self.disposition,
-            self.popup_id,
-            self.url,
-            self.target_name,
-            self.session_storage_store,
-            self.initial_empty_document_storage_key,
-        )
-    }
 }
 
 impl PartialEq for RendererPendingPopupActivation {
     fn eq(&self, other: &Self) -> bool {
-        self.source == other.source
-            && self.disposition == other.disposition
-            && self.popup_id == other.popup_id
-            && self.url == other.url
-            && self.target_name == other.target_name
+        self.opening == other.opening
             && match (&self.session_storage_store, &other.session_storage_store) {
                 (None, None) => true,
                 (Some(left), Some(right)) => Arc::ptr_eq(left, right),

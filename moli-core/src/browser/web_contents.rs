@@ -1,6 +1,8 @@
+#[cfg(any(test, feature = "test-support"))]
+use crate::page::{RendererDocumentLifecycleEvent, RendererDocumentLifecycleEventKind};
 use crate::{
     browser::{MainFrameSlotId, WebContentsId},
-    page::{Page, RendererDocumentLifecycleEvent, RendererDocumentLifecycleEventKind},
+    page::Page,
     runtime::NavigationEngine,
 };
 
@@ -20,17 +22,18 @@ mod initial_document;
 mod javascript_dialog;
 pub use initial_document::InitialDocumentAdmission;
 pub use initial_document::InitialDocumentBuildState;
+pub(in crate::browser) use initial_document::InitialDocumentInspectionPhase;
 pub use initial_document::{
     AdmittedInitialDocumentBuild, BuiltInitialDocument, CommittedInitialDocument,
-    InitialDocumentBuildKey, InitialDocumentPageBuildWaiter,
+    InitialDocumentBuildKey, InitialDocumentInspectionClaim, InitialDocumentInspectionStage,
+    InitialDocumentPageBuildWaiter,
 };
 mod navigation_commit;
 pub use navigation_commit::AdmittedDocumentMaterialization;
 mod navigation_history;
 mod navigation_interception;
 pub use navigation_interception::{
-    ClaimedNavigationRequest, InterceptedNavigationLoad, InterceptedNavigationResponse,
-    NavigationInterceptionPermit, NavigationRequestInterception,
+    ClaimedNavigationRequest, NavigationInterceptionPermit, NavigationRequestInterception,
 };
 mod navigation_load;
 pub use navigation_history::SameDocumentNavigationCommitted;
@@ -59,8 +62,7 @@ pub use network_request_policy::merge_extra_header_layers;
 pub use page_surface::PageSurface;
 pub use paused_document_transfer::{
     DocumentBodySource, OpenBodyStreamError, PausedDocumentTransfer,
-    PausedResponsePreparedDocument, PausedStreamingDocumentResponse,
-    PendingFetchResponseOpenedBodyStream, SyntheticDocumentResponseContext,
+    PendingFetchResponseOpenedBodyStream,
 };
 pub use session_storage::SessionStorageNamespace;
 pub use window::{Window, WindowOpener};
@@ -192,6 +194,7 @@ impl WebContents {
             .is_some_and(|document| document.page.observe_renderer_page_state(snapshot))
     }
 
+    #[cfg(any(test, feature = "test-support"))]
     pub fn apply_document_lifecycle(
         &mut self,
         event: RendererDocumentLifecycleEvent,
@@ -224,9 +227,32 @@ impl WebContents {
         Some(DocumentLifecycleEvent::new(document.id, event))
     }
 
+    pub(in crate::browser) fn observe_native_document_lifecycle(
+        &mut self,
+        snapshot: crate::page::RendererDocumentLifecycleSnapshot,
+    ) -> bool {
+        let Some(document) = self.main_frame.current_document.as_mut() else {
+            return false;
+        };
+        let restarted = document
+            .lifecycle
+            .snapshot()
+            .is_some_and(|previous| previous.epoch != snapshot.epoch);
+        if !document.lifecycle.observe_native_snapshot(snapshot) {
+            return false;
+        }
+        if restarted || snapshot.terminated.is_some() {
+            self.javascript_dialogs.clear();
+        }
+        if restarted {
+            self.navigation.mark_initial_empty_document_exited();
+        }
+        true
+    }
+
     pub fn replace_document(&mut self, next: Option<DocumentHost>) -> Option<Page> {
         self.navigation.cancel_initial_document_build();
-        self.javascript_dialogs.clear();
+        self.javascript_dialogs = Default::default();
         if let Some(document) = &next {
             self.navigation.seed_document_history((
                 document.page.final_url().to_string(),

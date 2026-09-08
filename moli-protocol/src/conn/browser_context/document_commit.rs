@@ -6,6 +6,73 @@ use crate::domains::{command_output::CommandOutputBuffer, page};
 use moli_core::browser::DocumentHandle;
 
 impl CdpConnection {
+    pub(crate) async fn project_native_commit_before_renderer_output(
+        &mut self,
+        source: &TargetPageResidenceIdentity,
+    ) -> Vec<BackgroundProtocolEvent> {
+        let Some(context) = self.browser_context_by_id(source.browser_context_id()) else {
+            return Vec::new();
+        };
+        let Some(target) = source.target_id() else {
+            return Vec::new();
+        };
+        let Some(contents) = context.web_contents_handle_for_target(target) else {
+            return Vec::new();
+        };
+        if context
+            .renderer_document_lifecycle_binding_for_target(target)
+            .is_some_and(|binding| binding.document_id == source.document_id())
+        {
+            return Vec::new();
+        }
+        let Ok(native_context) = self.browser.context_handle(contents.context()) else {
+            return Vec::new();
+        };
+        let Ok(navigation) = native_context.navigation_snapshot(contents) else {
+            return Vec::new();
+        };
+        let request = match navigation.attempt {
+            Some(moli_core::browser::NavigationAttempt::Started(request))
+                if request.document == source.document_id() =>
+            {
+                Some(request)
+            }
+            _ => navigation
+                .committed
+                .filter(|request| request.document == source.document_id()),
+        };
+        let Some(request) = request.filter(|request| {
+            context
+                .native_navigation_dispatch(target, request.navigation)
+                .is_some()
+        }) else {
+            return Vec::new();
+        };
+        let document = DocumentHandle::new(contents, request.document);
+        let Ok((_, mut events)) = self.browser.subscribe() else {
+            return Vec::new();
+        };
+        loop {
+            if self.browser.document_commit_snapshot(document).is_ok() {
+                return Box::pin(self.project_browser_document_commit(document)).await;
+            }
+            let Ok(current) = native_context.navigation_snapshot(contents) else {
+                return Vec::new();
+            };
+            if current.committed == Some(request) {
+                continue;
+            }
+            if !matches!(current.attempt, Some(moli_core::browser::NavigationAttempt::Started(pending)) if pending == request)
+            {
+                return Vec::new();
+            }
+            match events.recv().await {
+                Ok(_) | Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {}
+                Err(tokio::sync::broadcast::error::RecvError::Closed) => return Vec::new(),
+            }
+        }
+    }
+
     /// Observe an exact Browser commit. This never starts or completes a
     /// navigation, and never substitutes the Target's current Document for a
     /// stale event. Command completions and snapshot recovery share the rebind.
@@ -32,16 +99,24 @@ impl CdpConnection {
                 .get_for_web_contents(document.web_contents().id())?
                 .target_id()
                 .to_owned();
+            let preconfigured = metadata.navigation.is_some_and(|navigation| {
+                context.prepared_navigation_projection_matches(
+                    &target_id,
+                    navigation,
+                    document.id(),
+                )
+            });
             let projection = context.project_document_commit_snapshot(&target_id, snapshot)?;
             let target = context.page_targets.get_mut(&target_id)?;
             if projection.fence.is_ok()
+                && !preconfigured
                 && let Err(error) = target
                     .runtime_slot
                     .restore_native_document_sessions(&target.devtools_sessions)
             {
                 tracing::warn!(%error, "native Document inspection restore admission failed");
             }
-            let loader_id = context.project_committed_document_loader_for_target(
+            let loader_id = context.project_document_navigation_loader_for_target(
                 &target_id,
                 metadata.navigation,
                 &mut allocator,
@@ -51,15 +126,29 @@ impl CdpConnection {
                 Some(target_id.clone()),
                 document.id(),
             ));
-            Some((owner, target_id, loader_id, projection))
+            Some((owner, target_id, loader_id, projection, preconfigured))
         })();
         self.network_request_id_allocator = allocator;
-        let Some((owner, frame_id, loader_id, projection)) = projected else {
+        let Some((owner, frame_id, loader_id, projection, preconfigured)) = projected else {
             return Vec::new();
         };
+        let mut lifecycle = metadata.lifecycle.clone();
+        if preconfigured {
+            // The native source FIFO contains the creation prefix too. Bind
+            // its starting identity without advancing frontend visibility past
+            // reset/frame/context-created records waiting in that same stream.
+            if let Some(prefix) = moli_core::browser::DocumentLifecycle::creation_prefix_snapshot(
+                &lifecycle.artifacts,
+            ) {
+                lifecycle.artifacts.active_document = prefix.document;
+                lifecycle.artifacts.active_epoch = prefix.epoch;
+                lifecycle.artifacts.lifecycle_snapshot = prefix;
+                lifecycle.artifacts.initial_lifecycle_events.clear();
+            }
+        }
         let (binding, lifecycle_events) = self.project_committed_document_lifecycle_for_owner(
             &owner,
-            metadata.lifecycle.clone(),
+            lifecycle,
             metadata.navigation,
             frame_id.clone(),
             loader_id.clone(),
@@ -84,27 +173,14 @@ impl CdpConnection {
             let _ = self
                 .set_renderer_runtime_agent_owns_page_console_api_events_for_owner(&owner, true);
         }
-        let mut events = Vec::new();
+        let mut events = self.project_native_document_network(document, false);
         crate::domains::target::emit_target_info_changed_for_owner_background_event(
             self,
             &mut events,
             &owner,
         );
-        if let Some(info) = metadata.info.as_ref() {
-            for session_id in self.page_event_session_ids_for_owner(&owner) {
-                let event_owner = owner.for_target_event_session(self, session_id.as_deref());
-                page::emit_navigation_frame_commit_background_events(
-                    &mut events,
-                    session_id.as_deref(),
-                    crate::domains::dom::dom_agent_enabled_for_owner(self, &event_owner),
-                    &frame_id,
-                    &loader_id,
-                    info.url.as_str(),
-                    None,
-                    &info.security_origin,
-                    &info.secure_context_type,
-                );
-            }
+        if !preconfigured {
+            events.extend(self.project_native_document_frame_commit(document));
         }
         page::emit_bound_renderer_document_lifecycle_background_events(
             self,
@@ -154,8 +230,123 @@ impl CdpConnection {
                 .await,
             );
         }
+        if self.target_owner_has_bidi_channel_preload_script_for_owner(&owner)
+            && let Ok(realms) = self.runtime_realm_inventory_for_owner_async(&owner).await
+        {
+            // Runtime may be disabled, so no executionContextCreated ingress
+            // will start these listeners. Query only this committed Document.
+            for execution_context_id in realms.into_iter().filter_map(|realm| realm.context_id) {
+                Box::pin(crate::domains::runtime::start_bidi_preload_channel_listeners_for_execution_context_background_events_async(
+                    self, &owner, execution_context_id, command_context.protocol_events_mut(),
+                )).await;
+            }
+        }
         out.extend_background_events_after_messages(command_context.take_protocol_events());
+        // A later native attempt may have started before this committed
+        // Document's event was consumed. Re-establish that exact pending hold
+        // after publishing this Document's fence; do not confuse it with a
+        // superseded attempt belonging to the outgoing Document.
+        out.extend_background_events_after_messages(
+            self.project_browser_navigation(document.web_contents())
+                .await,
+        );
         out.into_plan().into_background_events(None, None)
+    }
+
+    pub(crate) fn project_native_renderer_document_frame_commit(
+        &mut self,
+        renderer: moli_core::browser::RendererPageResidenceIdentity,
+    ) -> Vec<BackgroundProtocolEvent> {
+        let Some(document) = self.browser.document_for_renderer(renderer) else {
+            return Vec::new();
+        };
+        self.project_native_document_frame_commit(document)
+    }
+
+    fn project_native_document_frame_commit(
+        &mut self,
+        document: DocumentHandle,
+    ) -> Vec<BackgroundProtocolEvent> {
+        let contents = document.web_contents();
+        let Some(context) = self.browser_context_by_browser_id(contents.context()) else {
+            return Vec::new();
+        };
+        let Some(target) = context.target_id_for_web_contents(contents.id()) else {
+            return Vec::new();
+        };
+        let owner = CommandOwnerScope::for_page_residence(&TargetPageResidenceIdentity::new(
+            context.id.clone(),
+            Some(target.to_owned()),
+            document.id(),
+        ));
+        let Some(binding) = self
+            .committed_renderer_document_binding_for_owner(&owner)
+            .filter(|binding| binding.document_id == document.id())
+            .cloned()
+        else {
+            return Vec::new();
+        };
+        let Ok(snapshot) = self.browser.document_commit_snapshot(document) else {
+            return Vec::new();
+        };
+        let metadata = snapshot.metadata;
+        let Some(info) = metadata.info.as_ref() else {
+            return Vec::new();
+        };
+        let mut events = self.project_native_document_network(document, false);
+        for session_id in self.page_event_session_ids_for_owner(&owner) {
+            let event_owner = owner.for_target_event_session(self, session_id.as_deref());
+            let lifecycle_enabled = self
+                .target_page_session_state_for_owner(&event_owner)
+                .is_some_and(|state| state.page_lifecycle_events);
+            page::emit_navigation_lifecycle_init_background_events(
+                &mut events,
+                session_id.as_deref(),
+                lifecycle_enabled,
+                &binding.frame_id,
+                &binding.loader_id,
+                metadata
+                    .lifecycle
+                    .artifacts
+                    .lifecycle_snapshot
+                    .started
+                    .timestamp_micros as f64
+                    / 1_000_000.0,
+            );
+            page::emit_navigation_frame_commit_background_events(
+                &mut events,
+                session_id.as_deref(),
+                crate::domains::dom::dom_agent_enabled_for_owner(self, &event_owner),
+                &binding.frame_id,
+                &binding.loader_id,
+                if info.error_page.is_some() {
+                    "chrome-error://chromewebdata/"
+                } else {
+                    info.url.as_str()
+                },
+                info.error_page
+                    .as_ref()
+                    .map(|error| error.unreachable_url.as_str()),
+                &info.security_origin,
+                &info.secure_context_type,
+            );
+        }
+        if info.error_page.is_some() {
+            events.extend(self.project_native_document_network(document, true));
+            if let Some(pending) = metadata.navigation.and_then(|navigation| {
+                self.browser_context_by_browser_id(contents.context())?
+                    .native_navigation_dispatch(&binding.frame_id, navigation)
+                    .cloned()
+            }) {
+                events.extend(
+                    crate::domains::network::native_error_document_finished_events(
+                        self,
+                        &pending.navigation,
+                    ),
+                );
+            }
+        }
+        events
     }
 }
 
@@ -163,90 +354,54 @@ impl CdpConnection {
 mod tests {
     use super::*;
     use crate::testing::TestContext;
-    use moli_core::browser::web_contents::DocumentNavigationDestination;
     use moli_core::browser::{
         BrowserContextHandle, NavigationRequestLoadPolicy, WebContentsHandle,
-    };
-    use moli_core::runtime::{
-        CommittedDocumentResourceSource, ExternalRawDocumentBodyStream, PageVmInitStage,
-        RendererReplyBoundary,
     };
     use serde_json::json;
     use url::Url;
 
     // Deliberately no DevTools navigation admission, commit, loader, or frame
     // projection: the native Browser completes while its observer is idle.
+    fn admit_native(
+        context: &BrowserContextHandle,
+        contents: WebContentsHandle,
+        url: &str,
+    ) -> moli_core::browser::BrowserNavigationWaiter {
+        context
+            .navigate_document(
+                contents,
+                moli_core::browser::web_contents::NavigationRequestInterception::new(
+                    Url::parse(url).unwrap(),
+                    "GET".into(),
+                    None,
+                    Vec::new().into(),
+                    NavigationRequestLoadPolicy::BrowserInitiated,
+                ),
+            )
+            .unwrap()
+    }
+
     async fn navigate_native(
+        conn: &mut CdpConnection,
         context: &BrowserContextHandle,
         contents: WebContentsHandle,
         url: &str,
     ) -> DocumentHandle {
-        let navigation = context.start_document_navigation(contents).unwrap();
-        let inherited =
-            context.inherited_document_policy(Default::default(), &Default::default(), None, None);
-        let mut load = context
-            .start_navigation_load(
-                contents,
-                navigation,
-                NavigationRequestLoadPolicy::BrowserInitiated,
-                inherited,
-            )
-            .unwrap();
-        let fetched = load
-            .fetch_navigation("GET", url, None, Default::default())
+        complete_native_navigation(conn, admit_native(context, contents, url)).await
+    }
+
+    async fn complete_native_navigation(
+        conn: &mut CdpConnection,
+        waiter: moli_core::browser::BrowserNavigationWaiter,
+    ) -> DocumentHandle {
+        let committed = conn
+            .wait_for_native_navigation_commit_for_test(waiter, false)
             .await
             .unwrap();
-        let response = fetched
-            .fetch_result
-            .into_parts_with_observation_journal()
-            .0
-            .into_materialized_raw_response()
+        conn.wait_for_native_document_load_for_test(committed.document)
             .await
             .unwrap();
-        let destination = DocumentNavigationDestination {
-            url: response.final_url.clone(),
-            security_origin: response.final_url.origin().ascii_serialization(),
-            secure_context_type: "SecureLocalhost".to_owned(),
-        };
-        let prepared = load
-            .prepare_document_response_async(
-                Url::parse(url).unwrap(),
-                response.final_url.clone(),
-                response.redirected,
-                response.redirect_chain.len(),
-                response.status,
-                response.headers.clone(),
-                ExternalRawDocumentBodyStream::from_bytes(response.clone_body_bytes()),
-                PageVmInitStage::DomContentLoaded,
-                RendererReplyBoundary::DocumentCommit,
-                CommittedDocumentResourceSource::Navigation(Box::new(
-                    fetched.document_fetch_context_seed,
-                )),
-                fetched.reserved_service_worker_client,
-            )
-            .await
-            .unwrap();
-        let built = context
-            .start_document_materialization(
-                contents,
-                navigation,
-                prepared,
-                destination,
-                context.inherited_document_policy(
-                    Default::default(),
-                    &Default::default(),
-                    None,
-                    None,
-                ),
-            )
-            .unwrap()
-            .materialize()
-            .await
-            .unwrap();
-        let commit = context.commit_document_navigation(built.page).unwrap();
-        commit.post_response_continuation.unwrap().release();
-        commit.retirement.close().await;
-        commit.snapshot.document
+        committed.document
     }
 
     async fn fixture() -> (
@@ -284,6 +439,173 @@ mod tests {
             .unwrap();
         ctx.take_all();
         (ctx, context, document, owner)
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn native_navigation_observation_recovers_pending_and_failed_attempts_without_rebinding()
+    {
+        for recover_started in [false, true] {
+            let (mut ctx, context, document, owner) = fixture().await;
+            let contents = document.web_contents();
+            let attachment = ctx
+                .conn
+                .current_renderer_agent_attachment_for_owner(&owner)
+                .unwrap();
+            let first = context.start_document_navigation(contents).unwrap();
+            if recover_started {
+                let snapshot = ctx.conn.subscribe_browser_events().unwrap().0;
+                ctx.conn.project_browser_snapshot(snapshot).await;
+            } else {
+                ctx.conn.project_browser_navigation(contents).await;
+            }
+            let slot = ctx
+                .conn
+                .runtime_session_owner_slot_for_owner(&owner)
+                .unwrap();
+            assert!(slot.has_renderer_navigation(&first));
+            assert_eq!(slot.observed_document_navigations(), [first]);
+            ctx.conn.project_browser_navigation(contents).await;
+            assert_eq!(
+                ctx.conn
+                    .runtime_session_owner_slot_for_owner(&owner)
+                    .unwrap()
+                    .observed_document_navigations(),
+                [first]
+            );
+            let second = context.start_document_navigation(contents).unwrap();
+            ctx.conn.project_browser_navigation(contents).await;
+            let slot = ctx
+                .conn
+                .runtime_session_owner_slot_for_owner(&owner)
+                .unwrap();
+            assert!(!slot.has_renderer_navigation(&first));
+            assert_eq!(slot.observed_document_navigations(), [second]);
+            let stale = ctx.conn.subscribe_browser_events().unwrap().0;
+            assert!(
+                !context
+                    .cancel_document_navigation(contents, &first)
+                    .unwrap()
+            );
+            assert!(
+                context
+                    .cancel_document_navigation(contents, &second)
+                    .unwrap()
+            );
+            ctx.conn.project_browser_snapshot(stale).await;
+            let slot = ctx
+                .conn
+                .runtime_session_owner_slot_for_owner(&owner)
+                .unwrap();
+            assert!(
+                !slot.document_projection_is_pending(),
+                "old snapshot must not resurrect a canceled attempt"
+            );
+            assert_eq!(
+                ctx.conn.current_renderer_agent_attachment_for_owner(&owner),
+                Some(attachment)
+            );
+            assert_eq!(context.document_handle(contents).unwrap(), Some(document));
+            assert!(
+                matches!(context.navigation_snapshot(contents).unwrap().attempt, Some(moli_core::browser::NavigationAttempt::Failed { request, .. }) if request.navigation == second)
+            );
+        }
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn native_navigation_commit_keeps_its_hold_until_document_projection() {
+        for later_attempt in [false, true] {
+            let (mut ctx, context, document, owner) = fixture().await;
+            let (context_id, target_id) = ctx
+                .conn
+                .resolved_page_owner_identity_for_owner(&owner)
+                .unwrap();
+            let contents = document.web_contents();
+            let waiter = admit_native(
+                &context,
+                contents,
+                "data:text/html,<title>native commit fence</title>",
+            );
+            let navigation = waiter.request().navigation;
+            ctx.conn.project_browser_navigation(contents).await;
+            let new = complete_native_navigation(&mut ctx.conn, waiter).await;
+            assert_ne!(new, document);
+            let next = later_attempt.then(|| context.start_document_navigation(contents).unwrap());
+            // Native commit alone cannot release the unpublished hold.
+            // Reconciliation below can recover DocumentCommitted from the real
+            // response snapshot even before that event is consumed.
+            let target = ctx
+                .conn
+                .browser_context_by_id(&context_id)
+                .unwrap()
+                .page_targets
+                .get(&target_id)
+                .unwrap();
+            assert!(
+                target.runtime_slot.has_renderer_navigation(&navigation),
+                "native commit is not a failed attempt: retain its unpublished projection hold"
+            );
+            ctx.conn.project_browser_navigation(contents).await;
+            ctx.conn.project_browser_document_commit(new).await;
+            let target = ctx
+                .conn
+                .browser_context_by_id(&context_id)
+                .unwrap()
+                .page_targets
+                .get(&target_id)
+                .unwrap();
+            assert!(!target.runtime_slot.has_renderer_navigation(&navigation));
+            assert_eq!(
+                target.runtime_slot.document_projection_is_pending(),
+                later_attempt
+            );
+            if let Some(next) = next {
+                assert!(target.runtime_slot.has_renderer_navigation(&next));
+                assert!(context.cancel_document_navigation(contents, &next).unwrap());
+                ctx.conn.project_browser_navigation(contents).await;
+            }
+        }
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn native_navigation_cancellation_cannot_release_a_command_response_fence() {
+        let (mut ctx, context, document, owner) = fixture().await;
+        let (context_id, target_id) = ctx
+            .conn
+            .resolved_page_owner_identity_for_owner(&owner)
+            .unwrap();
+        let navigation = ctx
+            .conn
+            .browser_context_by_id_mut(&context_id)
+            .unwrap()
+            .begin_target_document_navigation(&target_id, "LOADER-command-response".into());
+        ctx.conn
+            .project_browser_navigation(document.web_contents())
+            .await;
+        assert!(
+            context
+                .cancel_document_navigation(document.web_contents(), &navigation)
+                .unwrap()
+        );
+        ctx.conn
+            .project_browser_navigation(document.web_contents())
+            .await;
+        let slot = ctx
+            .conn
+            .runtime_session_owner_slot_for_owner(&owner)
+            .unwrap();
+        assert!(slot.has_renderer_navigation(&navigation));
+        assert!(slot.observed_document_navigations().is_empty());
+        assert!(
+            ctx.conn
+                .finish_navigation_without_document_projection_for_owner(&owner, &navigation)
+                .is_some()
+        );
+        assert!(
+            !ctx.conn
+                .runtime_session_owner_slot_for_owner(&owner)
+                .unwrap()
+                .document_projection_is_pending()
+        );
     }
 
     #[tokio::test(flavor = "multi_thread")]
@@ -328,6 +650,7 @@ mod tests {
             .to_owned();
         ctx.take_all();
         let new = navigate_native(
+            &mut ctx.conn,
             &context,
             old.web_contents(),
             "data:text/html,<title>native</title><p>new</p>",
@@ -433,12 +756,14 @@ mod tests {
     async fn native_document_recovery_projects_only_latest_and_rejects_closed_document() {
         let (mut ctx, context, old, owner) = fixture().await;
         let skipped = navigate_native(
+            &mut ctx.conn,
             &context,
             old.web_contents(),
             "data:text/html,<title>skipped</title>",
         )
         .await;
         let current = navigate_native(
+            &mut ctx.conn,
             &context,
             old.web_contents(),
             "data:text/html,<title>current</title>",

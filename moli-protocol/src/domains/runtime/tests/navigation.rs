@@ -1,7 +1,7 @@
 use super::*;
 
 #[tokio::test]
-async fn enable_with_background_event_sender_defers_initial_document_page_build() {
+async fn enable_without_document_rejects_even_with_background_event_sender() {
     let mut ctx = TestContext::new();
     let mut bc = ctx.conn.new_browser_context_fixture_for_test("BID-1");
     bc.set_active_target_id("TID-1");
@@ -10,11 +10,7 @@ async fn enable_with_background_event_sender_defers_initial_document_page_build(
     ctx.conn.install_browser_context_fixture_for_test(bc);
 
     let (background_tx, _) = tokio::sync::mpsc::unbounded_channel();
-    let (completion_tx, _) =
-        tokio::sync::mpsc::unbounded_channel::<BackgroundNavigationCompletion>();
     ctx.conn.set_background_event_sender(background_tx);
-    ctx.conn
-        .set_background_navigation_completion_sender(completion_tx);
 
     ctx.process_async(json!({
         "id": 21,
@@ -22,7 +18,13 @@ async fn enable_with_background_event_sender_defers_initial_document_page_build(
         "sessionId": "SID-1"
     }))
     .await;
-    ctx.expect_result(21, json!({}), Some("SID-1"));
+    ctx.expect_error(21, -32000, "NoDocumentLoaded");
+    assert!(
+        !ctx.conn
+            .target_runtime_session_state_for_session(Some("SID-1"))
+            .expect("target runtime session state")
+            .runtime_frontend_enabled
+    );
     assert!(ctx.sent.is_empty());
 }
 #[tokio::test]

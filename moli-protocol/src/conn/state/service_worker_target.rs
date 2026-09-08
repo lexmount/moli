@@ -743,6 +743,7 @@ impl ServiceWorkerTargetState {
         true
     }
 
+    #[cfg(test)]
     pub(crate) fn network_enabled(&self, session_id: &str) -> bool {
         self.session_state(session_id)
             .is_some_and(|state| state.network_session_state.network_enabled)

@@ -227,7 +227,7 @@ fn do_attach(conn: &mut CdpConnection, cmd: &Cmd<'_>, target_id: &str) -> Target
     );
     let owner = crate::conn::CommandOwnerScope::for_route(prepared_session.route().clone());
 
-    let initial_document = match conn.start_initial_document_page_ensure_for_owner(&owner) {
+    let initial_document = match conn.start_initial_document_ensure_for_owner(&owner) {
         Ok(pending) => pending.map(Box::new),
         Err(message) => {
             if let Some(restore_browser_context_id) = restore_browser_context_id.as_ref() {
@@ -286,26 +286,18 @@ pub(super) async fn complete_attach_to_target_command_async(
     target_info: DevToolsTargetInfo,
     initial_document: Option<
         Result<
-            Box<crate::conn::CompletedInitialDocumentPageBuild>,
-            crate::conn::FailedInitialDocumentPageBuild,
+            Box<moli_core::browser::BrowserCommittedInitialDocument>,
+            crate::conn::FailedInitialDocumentProjection,
         >,
     >,
 ) -> CommandOutputPlan {
     let attached_session_id = prepared_session.session_id().to_owned();
     match initial_document {
         Some(Ok(completed_initial_document)) => {
-            let completed_initial_document = *completed_initial_document;
-            if let Err(message) = conn
-                .complete_initial_document_page_build_for_owner(completed_initial_document)
-                .await
-            {
-                conn.rollback_prepared_attach_session_without_event_async(&prepared_session)
-                    .await;
-                return CommandOutputPlan::error_without_session(-32000, message);
-            }
+            conn.project_initial_document_completion(*completed_initial_document);
         }
         Some(Err(failed)) => {
-            let message = conn.reset_failed_initial_document_page_build_for_owner(failed);
+            let message = conn.retire_failed_initial_document_projection(failed);
             conn.rollback_prepared_attach_session_without_event_async(&prepared_session)
                 .await;
             return CommandOutputPlan::error_without_session(-32000, message);

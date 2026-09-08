@@ -192,6 +192,12 @@ async fn rust_cdp_chromium_import_fetch_fulfill_navigation_without_body() {
     }))
     .await;
     ctx.expect_result(122_008, json!({}), Some(&attached.session_id));
+    crate::testing::wait_until_navigation_document_load(
+        &mut ctx,
+        122_007,
+        Some(&attached.session_id),
+    )
+    .await;
     let navigation = take_response_by_id(&mut ctx, 122_007);
     assert_eq!(navigation["result"]["frameId"], attached.target_id);
     assert!(ctx.sent.iter().any(|message| {

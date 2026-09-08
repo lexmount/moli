@@ -377,17 +377,40 @@ async fn lifecycle_events_enable_without_renderer_binding_does_not_synthesize_re
         "SID-PAGE-LIFECYCLE-COMPLETE",
         "about:blank",
     );
-    let page = ctx
+    let owner =
+        crate::conn::CommandOwnerScope::capture(&ctx.conn, Some("SID-PAGE-LIFECYCLE-COMPLETE"));
+    let waiter = ctx
         .conn
-        .load_page_via_runtime_async("data:text/html,<body>lifecycle</body>")
+        .start_native_navigation_fixture_for_test(
+            &owner,
+            LOADER_ID,
+            moli_core::browser::web_contents::NavigationRequestInterception::new(
+                url::Url::parse("data:text/html,<body>lifecycle</body>").unwrap(),
+                "GET".into(),
+                None,
+                Vec::new().into(),
+                crate::conn::NavigationRequestLoadPolicy::DocumentInitiated,
+            ),
+            moli_core::browser::NavigationDecision::Continue,
+        )
+        .unwrap();
+    let committed = ctx
+        .conn
+        .wait_for_native_navigation_commit_for_test(waiter, false)
         .await
-        .expect("page should load");
+        .unwrap();
     ctx.conn
-        .browser_context
-        .as_mut()
-        .expect("browser context")
-        .commit_active_navigation_for_test(page)
-        .await;
+        .wait_for_native_document_load_for_test(committed.document)
+        .await
+        .unwrap();
+    assert!(
+        ctx.conn
+            .browser_context
+            .as_ref()
+            .unwrap()
+            .renderer_document_lifecycle_binding_for_target("TID-PAGE-LIFECYCLE-COMPLETE")
+            .is_none()
+    );
 
     let raw = json!({
         "id": 1213,
@@ -594,10 +617,10 @@ async fn enable_non_blank_initial_url_loads_through_pending_navigation_path() {
         .conn
         .try_start_pending_command_dispatch(&raw)
         .expect("non-about:blank Page.enable should start initial URL navigation");
-    let (messages, scheduler_events) =
+    let (mut messages, scheduler_events) =
         complete_pending_command_task_for_test(&mut ctx, pending).await;
     assert!(
-        scheduler_events.iter().any(|event| matches!(
+        !scheduler_events.iter().any(|event| matches!(
             event,
             CdpSchedulerEvent::ProtocolWorkPublished { work }
                 if work.kind()
@@ -605,8 +628,23 @@ async fn enable_non_blank_initial_url_loads_through_pending_navigation_path() {
                     && work.main_document_load_session_id()
                         == Some("SID-PAGE-ENABLE-DATA")
         )),
-        "Page.enable initial navigation should schedule load completion activity: {scheduler_events:?}"
+        "Browser-owned initial navigation must not schedule the retired Protocol load executor: {scheduler_events:?}"
     );
+    let prefix = ctx.sent.len();
+    let is_initial_commit = |event: &serde_json::Value| {
+        event["method"] == "Page.frameNavigated"
+            && event["sessionId"] == "SID-PAGE-ENABLE-DATA"
+            && event["params"]["frame"]["url"] == page_url
+    };
+    if !messages.iter().any(is_initial_commit) {
+        wait_until_scheduler_message(
+            &mut ctx,
+            "initial URL native frame commit",
+            is_initial_commit,
+        )
+        .await;
+    }
+    messages.extend(ctx.sent.drain(prefix..));
     let response = messages
         .iter()
         .find(|message| message["id"] == json!(122))
@@ -808,33 +846,20 @@ async fn set_lifecycle_events_enabled_sets_flag() {
 async fn set_lifecycle_events_enabled_replays_loaded_page_events() {
     let mut ctx = TestContext::new();
     load_bc_with_session(&mut ctx, "BID-1", "TID-1", "SID-1", "about:blank");
-    let navigation = ctx
+    ctx.install_navigation_fixture_for_session_owner(
+        "data:text/html,<body>hello</body>",
+        Some("SID-1"),
+    )
+    .await;
+    let (_, lifecycle) = ctx
         .conn
-        .load_navigation_via_runtime_async("data:text/html,<body>hello</body>")
-        .await
-        .expect("page should load");
-    let dom_timestamp = navigation
-        .page_creation_artifacts
-        .lifecycle_snapshot
+        .renderer_document_lifecycle_visible_state_for_session_owner(Some("SID-1"))
+        .unwrap();
+    let dom_timestamp = lifecycle
         .dom_content_loaded
         .expect("loaded page should have renderer DCL")
         .timestamp_micros as f64
         / 1_000_000.0;
-    ctx.conn
-        .browser_context
-        .as_mut()
-        .unwrap()
-        .commit_active_navigation_for_test(navigation.page)
-        .await;
-    let (binding, initial_events) = ctx.conn.bind_renderer_document_lifecycle_for_owner(
-        &crate::conn::CommandOwnerScope::for_session("SID-1"),
-        navigation.page_creation_artifacts,
-        None,
-        "TID-1".to_owned(),
-        LOADER_ID.to_owned(),
-    );
-    assert!(binding.is_some());
-    assert_eq!(initial_events.len(), 2);
     let load_timestamp = wait_for_visible_renderer_load(&mut ctx, "SID-1")
         .await
         .timestamp_micros as f64
@@ -882,27 +907,21 @@ async fn set_lifecycle_events_enabled_replays_only_protocol_visible_load_state()
         "SID-visible",
         "about:blank",
     );
-    let navigation = ctx
-        .conn
-        .load_navigation_via_runtime_async("data:text/html,<body>visible lifecycle</body>")
-        .await
-        .expect("page should load");
-    let artifacts = navigation.page_creation_artifacts;
+    // Observe native load without draining the source FIFO into Protocol.
     ctx.conn
-        .browser_context
-        .as_mut()
-        .unwrap()
-        .commit_active_navigation_for_test(navigation.page)
+        .install_navigation_fixture_for_session_owner_for_test(
+            "data:text/html,<body>visible lifecycle</body>",
+            Some("SID-visible"),
+        )
         .await;
-    let (binding, initial_events) = ctx.conn.bind_renderer_document_lifecycle_for_owner(
-        &crate::conn::CommandOwnerScope::for_session("SID-visible"),
-        artifacts,
-        None,
-        "TID-visible".to_owned(),
-        LOADER_ID.to_owned(),
+    assert!(
+        ctx.conn
+            .browser_context
+            .as_ref()
+            .unwrap()
+            .renderer_document_lifecycle_binding_for_target("TID-visible")
+            .is_some()
     );
-    assert!(binding.is_some());
-    assert_eq!(initial_events.len(), 2);
     assert!(
         ctx.conn
             .begin_renderer_document_load_visibility_barrier_for_owner(
@@ -911,6 +930,15 @@ async fn set_lifecycle_events_enabled_replays_only_protocol_visible_load_state()
             )
     );
     let load_stamp = wait_for_authoritative_renderer_load(&mut ctx, "SID-visible").await;
+    ctx.wait_until_scheduler_state("exact renderer load reached the hidden tail", |conn| {
+        conn.browser_context
+            .as_ref()
+            .and_then(|context| {
+                context.renderer_document_lifecycle_projected_sequence_for_target("TID-visible")
+            })
+            .is_some_and(|sequence| sequence >= load_stamp.sequence)
+    })
+    .await;
     assert!(
         ctx.conn
             .renderer_document_lifecycle_authoritative_state_for_session_owner(Some("SID-visible"))
@@ -977,29 +1005,18 @@ async fn set_lifecycle_events_enabled_is_session_local_for_active_attached_sessi
         "SID-primary",
         "about:blank",
     );
-    let navigation = ctx
-        .conn
-        .load_navigation_via_runtime_async("data:text/html,<body>active attached lifecycle</body>")
-        .await
-        .expect("page should load");
-    let artifacts = navigation.page_creation_artifacts;
-    let browser_context = ctx.conn.browser_context.as_mut().unwrap();
-    browser_context
-        .commit_active_navigation_for_test(navigation.page)
-        .await;
     assert!(
-        browser_context.assign_attached_session_to_target("TID-active", "SID-attached".to_owned())
+        ctx.conn
+            .browser_context
+            .as_mut()
+            .unwrap()
+            .assign_attached_session_to_target("TID-active", "SID-attached".to_owned())
     );
-    ctx.conn.commit_declared_session_fixtures_for_test();
-    let (binding, initial_events) = ctx.conn.bind_renderer_document_lifecycle_for_owner(
-        &crate::conn::CommandOwnerScope::for_session("SID-attached"),
-        artifacts,
-        None,
-        "TID-active".to_owned(),
-        LOADER_ID.to_owned(),
-    );
-    assert!(binding.is_some());
-    assert_eq!(initial_events.len(), 2);
+    ctx.install_navigation_fixture_for_session_owner(
+        "data:text/html,<body>active attached lifecycle</body>",
+        Some("SID-attached"),
+    )
+    .await;
     let _ = wait_for_visible_renderer_load(&mut ctx, "SID-attached").await;
     ctx.sent.clear();
 
@@ -1637,7 +1654,7 @@ async fn runtime_document_close_releases_lifecycle_at_response_flush() {
     )
     .await;
     ctx.wait_until_scheduler_state("initial document load before held response flush", |conn| {
-        conn.renderer_document_lifecycle_authoritative_state_for_session_owner(Some("SID-1"))
+        conn.renderer_document_lifecycle_visible_state_for_session_owner(Some("SID-1"))
             .is_some_and(|(_, snapshot)| snapshot.load.is_some())
     })
     .await;
@@ -2357,6 +2374,7 @@ async fn bare_isolated_worlds_do_not_persist_across_navigation() {
         "params": { "url": "data:text/html,<body>next</body>" }
     }))
     .await;
+    wait_until_navigation_document_load(&mut ctx, 52, Some("SID-1")).await;
 
     let sent = ctx.take_all();
     assert!(
@@ -2418,6 +2436,7 @@ async fn network_navigations_use_unique_document_loader_ids() {
         "params": { "url": first_url }
     }))
     .await;
+    wait_until_navigation_document_load(&mut ctx, 30, Some("SID-1")).await;
     let first_messages = ctx.take_all();
 
     ctx.process_async(json!({
@@ -2427,6 +2446,7 @@ async fn network_navigations_use_unique_document_loader_ids() {
         "params": { "url": second_url }
     }))
     .await;
+    wait_until_navigation_document_load(&mut ctx, 31, Some("SID-1")).await;
     let second_messages = ctx.take_all();
 
     fn document_loader_for(messages: &[serde_json::Value], id: u64) -> String {
@@ -2494,6 +2514,7 @@ async fn navigations_without_network_domain_still_use_unique_loader_ids() {
         "params": { "url": first_url }
     }))
     .await;
+    wait_until_navigation_document_load(&mut ctx, 30, Some("SID-1")).await;
     let first_messages = ctx.take_all();
 
     ctx.process_async(json!({
@@ -2503,6 +2524,7 @@ async fn navigations_without_network_domain_still_use_unique_loader_ids() {
         "params": { "url": second_url }
     }))
     .await;
+    wait_until_navigation_document_load(&mut ctx, 31, Some("SID-1")).await;
     let second_messages = ctx.take_all();
 
     fn document_loader_for(messages: &[serde_json::Value], id: u64) -> String {
@@ -2985,7 +3007,7 @@ async fn close_clears_loaded_page_state_and_emits_detached_events() {
         .set_next_subresource_fetch_request_id_for_test(5);
     assert!(bc.assign_attached_session_to_target("TID-1", "SID-attached".into()));
     let handle = bc.web_contents_handle_for_target("TID-1").unwrap();
-    bc.set_web_contents_window_name(handle, Some("close-me".into()))
+    bc.set_web_contents_window_name_for_test(handle, Some("close-me".into()))
         .unwrap();
     // An unknown popup has no WebContents capability on which opener state
     // could be installed.
@@ -3309,6 +3331,12 @@ async fn close_aborts_paused_auth_navigation_and_clears_state() {
     .await;
     ctx.expect_result(261, json!({}), Some("SID-1"));
 
+    wait_until_scheduler_message(&mut ctx, "navigation auth before close", |event| {
+        event["method"] == "Fetch.authRequired"
+            && event["sessionId"] == "SID-1"
+            && event["params"]["requestId"] == request_id
+    })
+    .await;
     let auth_required = ctx.take_one();
     assert_eq!(auth_required["method"], "Fetch.authRequired");
     assert_eq!(auth_required["params"]["requestId"], json!(request_id));

@@ -11,6 +11,7 @@ use crate::page::{
 pub struct DocumentLifecycle {
     snapshot: Option<RendererDocumentLifecycleSnapshot>,
     last_sequence: Option<u64>,
+    observers: Option<tokio::sync::watch::Sender<RendererDocumentLifecycleSnapshot>>,
 }
 
 impl DocumentLifecycle {
@@ -30,15 +31,7 @@ impl DocumentLifecycle {
         // An inventory-only handoff still establishes the sequence floor.
         // A later live record cannot replay progress already in the snapshot.
         if lifecycle.last_sequence.is_none() {
-            lifecycle.last_sequence = [
-                Some(snapshot.started.sequence),
-                snapshot.dom_content_loaded.map(|stamp| stamp.sequence),
-                snapshot.load.map(|stamp| stamp.sequence),
-                snapshot.terminated.map(|stamp| stamp.sequence),
-            ]
-            .into_iter()
-            .flatten()
-            .max();
+            lifecycle.last_sequence = Some(snapshot.sequence());
         }
         Some(lifecycle)
     }
@@ -86,11 +79,51 @@ impl DocumentLifecycle {
         Self {
             snapshot: Some(snapshot),
             last_sequence: None,
+            observers: None,
         }
     }
 
     pub fn snapshot(&self) -> Option<RendererDocumentLifecycleSnapshot> {
         self.snapshot
+    }
+
+    pub(super) fn observe_committed(
+        &mut self,
+    ) -> Option<tokio::sync::watch::Receiver<RendererDocumentLifecycleSnapshot>> {
+        let snapshot = self.snapshot?;
+        Some(
+            self.observers
+                .get_or_insert_with(|| tokio::sync::watch::channel(snapshot).0)
+                .subscribe(),
+        )
+    }
+
+    /// Accept a coalesced snapshot from this Document's native renderer source.
+    /// A fast document.open may cross several epochs before the Browser owner
+    /// runs; the original renderer journal, not a frontend event, proves that
+    /// progress. A different physical renderer Document is never adopted.
+    pub(super) fn observe_native_snapshot(
+        &mut self,
+        next: RendererDocumentLifecycleSnapshot,
+    ) -> bool {
+        let Some(current) = self.snapshot else {
+            return false;
+        };
+        if current.frame != next.frame
+            || current.document != next.document
+            || next.epoch.0 < current.epoch.0
+            || self
+                .last_sequence
+                .is_some_and(|sequence| next.sequence() <= sequence)
+        {
+            return false;
+        }
+        self.snapshot = Some(next);
+        self.last_sequence = Some(next.sequence());
+        if let Some(observers) = &self.observers {
+            observers.send_replace(next);
+        }
+        true
     }
 
     /// Accepts an exact, ordered event without consulting any frontend binding.
@@ -129,6 +162,37 @@ mod tests {
         RendererDocumentToken, RendererFrameToken, RendererLifecycleEpoch,
         RendererLifecycleEventStamp, RendererLifecycleStartReason,
     };
+
+    #[tokio::test]
+    async fn native_snapshot_coalescing_keeps_exact_identity_monotonicity_and_waiter_lifetime() {
+        let mut lifecycle = started_lifecycle();
+        let original = lifecycle.snapshot().unwrap();
+        let mut observer = lifecycle.observe_committed().unwrap();
+        let mut latest = original;
+        latest.epoch.0 += 200;
+        latest.started.sequence += 400;
+        latest.dom_content_loaded = Some(RendererLifecycleEventStamp {
+            sequence: 402,
+            timestamp_micros: 402,
+        });
+        latest.load = Some(RendererLifecycleEventStamp {
+            sequence: 403,
+            timestamp_micros: 403,
+        });
+        assert!(lifecycle.observe_native_snapshot(latest));
+        observer.changed().await.unwrap();
+        assert_eq!(*observer.borrow_and_update(), latest);
+        assert!(!lifecycle.observe_native_snapshot(original));
+        assert!(!lifecycle.observe_native_snapshot(latest));
+        let mut foreign = latest;
+        foreign.document = foreign.document.successor_for_testing();
+        foreign.started.sequence = 500;
+        assert!(!lifecycle.observe_native_snapshot(foreign));
+        assert!(!observer.has_changed().unwrap());
+        assert_eq!(lifecycle.snapshot(), Some(latest));
+        drop(lifecycle);
+        assert!(observer.changed().await.is_err());
+    }
 
     fn event(
         sequence: u64,

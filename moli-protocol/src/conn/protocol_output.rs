@@ -6,6 +6,40 @@ use crate::domains::activity::{
 use moli_core::RendererOutputTransportMessage;
 
 impl CdpConnection {
+    pub(crate) async fn prepare_renderer_javascript_dialog(
+        &self,
+        owner: &super::CommandOwnerScope,
+        renderer: super::RendererPageResidenceIdentity,
+        opening: std::sync::Arc<moli_core::page::RendererJavaScriptDialogOpening>,
+    ) -> Option<super::TargetPreparedJavaScriptDialog> {
+        // Freeze the frontend attachment before awaiting native admission.
+        let route = self
+            .target_page_protocol_attachment_identity_for_owner(owner)
+            .zip(self.target_session_owner_frame_tree_identity_for_owner(owner))
+            .zip(
+                self.runtime_session_owner_slot_for_owner(owner)
+                    .ok()
+                    .map(|slot| slot.javascript_dialog_scope_observer()),
+            );
+        let dialog = self
+            .browser
+            .wait_for_renderer_javascript_dialog(renderer, opening)
+            .await?;
+        let context = self
+            .browser
+            .context_handle(dialog.document.web_contents().context())
+            .ok()?;
+        let Some(((attachment, (frame, _, _, _)), scope)) = route.filter(|((attachment, _), _)| {
+            attachment.page_owner().document_id() == dialog.document.id()
+        }) else {
+            context.dismiss_document_javascript_dialog(dialog.document, dialog.key);
+            return None;
+        };
+        Some(super::TargetPreparedJavaScriptDialog::capture(
+            attachment, scope, &frame, context, dialog,
+        ))
+    }
+
     pub(crate) fn native_renderer_page_output_owner(
         &self,
         renderer: super::RendererPageResidenceIdentity,
@@ -29,17 +63,36 @@ impl CdpConnection {
         )
     }
 
-    /// Native admission uses physical renderer residence, never a frontend
-    /// route or a lifecycle visibility barrier.
-    pub(crate) fn apply_renderer_document_lifecycle(
-        &mut self,
+    pub(crate) async fn wait_for_renderer_document_lifecycle(
+        &self,
         renderer_page: super::RendererPageResidenceIdentity,
         event: moli_core::page::RendererDocumentLifecycleEvent,
     ) -> Option<super::DocumentLifecycleEvent> {
-        self.browser_context
-            .iter_mut()
-            .chain(self.inactive_browser_contexts.iter_mut())
-            .find_map(|context| context.apply_renderer_document_lifecycle(renderer_page, event))
+        #[cfg(test)]
+        for context in self.browser_contexts() {
+            for target in context.page_targets.iter() {
+                if !context.target_has_loaded_page(target.target_id())
+                    && context.routes_renderer_page_for_target(target.target_id(), renderer_page)
+                {
+                    let snapshot = context
+                        .renderer_document_lifecycle_authoritative_snapshot_for_target(
+                            target.target_id(),
+                        )?;
+                    return (snapshot.frame == event.frame
+                        && snapshot.document == event.document
+                        && snapshot.sequence() >= event.sequence)
+                        .then(|| {
+                            super::DocumentLifecycleEvent::new(
+                                context.target_document_id(target.target_id()).unwrap(),
+                                event,
+                            )
+                        });
+                }
+            }
+        }
+        self.browser
+            .wait_for_renderer_document_lifecycle(renderer_page, event)
+            .await
     }
 
     pub(crate) fn project_document_lifecycle_events_for_owner(
@@ -224,6 +277,7 @@ impl CdpConnection {
                     Vec::new(),
                 )
             }
+            #[cfg(test)]
             ReadyProtocolSchedulerWork::MainDocumentLoadOwnerAction(completion) => {
                 self.complete_deferred_main_document_load_completion_for_scheduler(
                     super::CompletedDeferredMainDocumentLoadCompletion::new(*completion),
@@ -258,14 +312,8 @@ impl CdpConnection {
                     self.take_scheduler_events(),
                 )
             }
-            ReadyProtocolSchedulerWork::PopupTargetNavigationOwnerAction(action) => {
-                crate::domains::target::complete_popup_target_navigation_owner_action_async(
-                    self, action,
-                )
-                .await
-            }
-            ReadyProtocolSchedulerWork::PopupTargetActivationAction(action) => {
-                crate::domains::target::complete_popup_target_activation_action_async(self, action)
+            ReadyProtocolSchedulerWork::TargetStartupOwnerAction(action) => {
+                crate::domains::target::complete_target_startup_owner_action_async(self, action)
                     .await
             }
             ReadyProtocolSchedulerWork::PageTargetTerminationOwnerAction(action) => {

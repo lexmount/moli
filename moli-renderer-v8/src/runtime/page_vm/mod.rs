@@ -1138,6 +1138,7 @@ pub(crate) struct PageVmRuntimeHooks {
     owner_wake: Option<RendererOwnerWakeSender>,
     page_creation_progress: Option<super::RendererPageCreationProgress>,
     javascript_dialog_runtime: RendererJavaScriptDialogRuntime,
+    popup_broker: super::RendererPopupBroker,
     resource_task_runner: Option<crate::network::RendererResourceTaskRunner>,
     pub(crate) browser_context_runtime: super::RendererBrowserContextRuntime,
     document_lifecycle: Option<RendererDocumentLifecycleJournalHandle>,
@@ -1200,6 +1201,7 @@ impl PageVmRuntimeHooks {
             owner_wake: None,
             page_creation_progress: None,
             javascript_dialog_runtime: RendererJavaScriptDialogRuntime::default(),
+            popup_broker: super::RendererPopupBroker::default(),
             resource_task_runner: None,
             browser_context_runtime,
             document_lifecycle: None,
@@ -1269,6 +1271,7 @@ impl PageVmRuntimeHooks {
             crate::page_task_queue::RendererPageTaskTestResidence::new(Some(owner_wake.clone()));
         Self {
             javascript_dialog_runtime: RendererJavaScriptDialogRuntime::default(),
+            popup_broker: super::RendererPopupBroker::default(),
             owner_wake: Some(owner_wake),
             page_creation_progress: None,
             resource_task_runner: Some(residence.resource_task_runner()),
@@ -1308,6 +1311,7 @@ impl PageVmRuntimeHooks {
     ) -> Self {
         Self {
             javascript_dialog_runtime: RendererJavaScriptDialogRuntime::default(),
+            popup_broker: super::RendererPopupBroker::default(),
             owner_wake: Some(owner_wake),
             page_creation_progress: None,
             resource_task_runner: Some(
@@ -1576,6 +1580,7 @@ pub(crate) struct PageVm {
     dom_agent_state: RendererDomAgentState,
     pending_dom_mutation_event_batches: Vec<RendererDomMutationEventBatch>,
     last_published_document_title: String,
+    native_document_title: tokio::sync::watch::Sender<RendererDocumentTitleChanged>,
     css_agent_sessions: HashMap<Option<String>, RendererCssAgentSessionState>,
     // Page-owned task queue lives on the page VM itself so parse-time turns and later lifecycle
     // turns share one owner-lane carrier. The runtime still uses it in narrow slices today, but
@@ -1787,6 +1792,18 @@ impl PageVm {
     }
 
     fn record_document_title_change_if_needed(&mut self) {
+        let title = self.vm().document_runtime.dom_host().dom().document_title();
+        let change = RendererDocumentTitleChanged {
+            source_document: self.document_lifecycle.identity(),
+            title,
+        };
+        self.native_document_title.send_if_modified(|current| {
+            if *current == change {
+                return false;
+            }
+            current.clone_from(&change);
+            true
+        });
         // A PageVm can exist without a DevTools-facing Page residence in
         // standalone embeddings and owner-boundary unit tests. Lifecycle
         // progress must not depend on an observer being installed. Keep the
@@ -1795,7 +1812,7 @@ impl PageVm {
         if !self.vm().has_renderer_output_journal() {
             return;
         }
-        let title = self.vm().document_runtime.dom_host().dom().document_title();
+        let title = change.title;
         if title == self.last_published_document_title {
             return;
         }
@@ -2053,6 +2070,10 @@ impl PageVm {
 
     pub(super) fn javascript_dialog_broker(&self) -> RendererJavaScriptDialogBroker {
         self.runtime_hooks.javascript_dialog_runtime.broker()
+    }
+
+    pub(super) fn popup_broker(&self) -> super::RendererPopupBroker {
+        self.runtime_hooks.popup_broker.clone()
     }
 
     pub(super) fn has_live_script_vm(&self) -> bool {
@@ -3969,6 +3990,8 @@ impl PageVm {
         }
 
         Ok(PageVmStateCapture {
+            document_lifecycle: self.document_lifecycle.observe(),
+            native_document_title: self.native_document_title.subscribe(),
             final_url,
             document_title,
             report,
@@ -4203,7 +4226,13 @@ impl PageVm {
         // prepared replacements and leave newly created Pages on the legacy
         // in-memory lifecycle queue.
         if let Some(environment) = runtime_hooks.renderer_page_script_environment.as_ref() {
-            document_lifecycle.bind_output_journal(environment.output_journal());
+            document_lifecycle.bind_output_journal(
+                environment.output_journal(),
+                matches!(
+                    env.main_document_commit,
+                    Some(super::RendererMainDocumentCommit::Browser)
+                ),
+            );
         }
         // Initial Page creation binds the stable owner-local producer routes
         // while reserving the document isolate above. Resolve every typed
@@ -4270,6 +4299,7 @@ impl PageVm {
             env.reserved_service_worker_client_id,
         )?;
         let mut vm = vm_bootstrap.finish()?;
+        vm.bind_popup_broker(runtime_hooks.popup_broker.clone());
         vm.set_document_navigator_identity(&env.navigator_identity);
         vm.set_layout_policy(env.layout_policy);
         vm.install_page_task_capabilities(page_task_capabilities);
@@ -4280,6 +4310,11 @@ impl PageVm {
         let document_loader = vm
             .current_main_document_resource_loader()
             .expect("PageVm bootstrap must publish the committed Document resource authority");
+        let native_document_title = tokio::sync::watch::channel(RendererDocumentTitleChanged {
+            source_document: document_lifecycle.identity(),
+            title: vm.document_runtime.dom_host().dom().document_title(),
+        })
+        .0;
         let mut page_vm = Self {
             page_id,
             creation_id,
@@ -4293,6 +4328,7 @@ impl PageVm {
             dom_agent_state,
             pending_dom_mutation_event_batches: Vec::new(),
             last_published_document_title: String::new(),
+            native_document_title,
             css_agent_sessions: HashMap::new(),
             page_task_queue,
             page_action_window: page_action_window::RendererPageActionWindow::default(),

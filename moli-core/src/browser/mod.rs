@@ -11,12 +11,14 @@ mod document_lifetime;
 mod downloads;
 mod emulation;
 mod events;
+mod navigation_decision;
 mod navigation_error;
 mod owner;
 pub use navigation_error::{
     NavigationNetworkError, NavigationNetworkErrorKind, NavigationRequestBlocked,
 };
 mod permissions;
+mod popup;
 mod renderer_residence;
 mod service_workers;
 pub mod web_contents;
@@ -29,26 +31,31 @@ pub use captured_body::{
 pub use document_lifecycle::DocumentLifecycle;
 pub use document_lifetime::{DocumentLifetime, DocumentLifetimeObserver, DocumentRetirement};
 pub use downloads::{
-    DownloadAccessError, DownloadBehavior, DownloadBody, DownloadManager, DownloadMetadata,
-    DownloadObservation, DownloadPolicy, DownloadSnapshot, DownloadState,
+    DownloadAccessError, DownloadBehavior, DownloadBody, DownloadEvent, DownloadMetadata,
+    DownloadObservation, DownloadPolicy, DownloadRecordSnapshot, DownloadSnapshot, DownloadState,
 };
 pub use emulation::{
     EmulatedDeviceMetrics, EmulatedGeolocationOverride, EmulatedGeolocationOverrideState,
     EmulatedMediaOverrides, EmulatedNetworkConditions, EmulatedViewportSurface,
 };
 pub use events::{
-    BrowserEvent, BrowserEventReceiver, BrowserEventRecord, BrowserSnapshot, WebContentsSelection,
-    WebContentsSnapshot,
+    BrowserEvent, BrowserEventReceiver, BrowserEventRecord, BrowserSnapshot,
+    DocumentLifecycleSnapshot, JavaScriptDialogOpened, NavigationAttempt, NavigationError,
+    NavigationFailureReason, NavigationFetchFailure, NavigationRequest, NavigationResponseSnapshot,
+    NavigationSnapshot, WebContentsSelection, WebContentsSnapshot,
+};
+pub use navigation_decision::{
+    DocumentDecisionProvider, NavigationDecision, NavigationDecisionSnapshot,
+    NavigationDecisionStage,
 };
 pub use owner::{
-    BrowserBuiltInitialDocument, BrowserCommittedInitialDocument, BrowserContextHandle,
-    BrowserDocumentMaterialization, BrowserDocumentNavigationCommit, BrowserHandle,
-    BrowserInitialDocumentAdmission, BrowserInitialDocumentBuild, BrowserInterceptedNavigationLoad,
-    BrowserInterceptedNavigationResponse, BrowserNavigationLoad, BrowserPreparedDocumentNavigation,
-    BrowserPreparedNavigationResponse, BrowserService, PendingDocumentRetirement,
-    PendingWebContentsActivation, PendingWebContentsClose, WebContentsCreation,
+    BrowserCommittedInitialDocument, BrowserContextHandle, BrowserHandle,
+    BrowserInitialDocumentWaiter, BrowserNavigationOutcome, BrowserNavigationWaiter,
+    BrowserService, PendingDocumentRetirement, PendingWebContentsActivation,
+    PendingWebContentsClose, WebContentsCreation,
 };
 pub use permissions::{PermissionDefaults, PermissionOverrides};
+pub use popup::{BrowserPopupAdmission, BrowserPopupCreation};
 pub use renderer_residence::RendererPageResidenceIdentity;
 pub use service_workers::ServiceWorkerCommand;
 

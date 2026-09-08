@@ -1,34 +1,32 @@
 use super::*;
 #[cfg(test)]
+use crate::conn::BrowserContextPageStorageHandles;
+#[cfg(test)]
 use crate::conn::DocumentStartScript;
 #[cfg(test)]
 use crate::conn::state::BrowserContextResourceStorageHandles;
 use crate::conn::state::{
-    BrowserContextPageStorageHandles, DevToolsSessionState, PageAgentHost,
-    PageNavigationHistoryEntry, RendererMainDocumentCommitSeed, TargetFetchConfig,
+    DevToolsSessionState, PageAgentHost, PageNavigationHistoryEntry, TargetFetchConfig,
     TargetOwnerState, TargetPageResidenceIdentity, TargetRuntimeSessionState, TargetRuntimeSlot,
     WindowSurfaceState,
 };
 use crate::conn::{
     BackgroundProtocolEvent, CommandOwnerScope, ConnectionNetworkRequestIdAllocator,
-    EmulatedDeviceMetrics, FetchInterceptionPattern, FetchRequestStage, LoadedNavigationPageCommit,
-    NETWORK_ERROR_PAGE_URL, NetworkErrorPageNavigation, PendingFetchAuthNavigation,
-    PendingFetchNavigation, PendingFetchResponseNavigation, PendingSubresourceFetchAuthRequest,
-    PendingSubresourceFetchRequest, PendingSubresourceFetchResponseRequest,
-    RuntimeBindingDefinition,
+    EmulatedDeviceMetrics, FetchInterceptionPattern, FetchRequestStage, NETWORK_ERROR_PAGE_URL,
+    PendingFetchAuthNavigation, PendingFetchNavigation, PendingFetchResponseNavigation,
+    PendingSubresourceFetchAuthRequest, PendingSubresourceFetchRequest,
+    PendingSubresourceFetchResponseRequest, RuntimeBindingDefinition,
 };
 use crate::devtools_runtime::{DevToolsNetworkInterceptId, DevToolsNetworkResourceType};
 #[cfg(test)]
 use moli_cookie_jar::StoredCookieQueryReport;
+#[cfg(test)]
 use moli_cookie_jar::StoredCookieSetReport;
-use moli_core::page::{
-    BidiPreloadChannelHandoff, RendererMainDocumentCommit, SubresourceResourceType,
-};
+use moli_core::page::{BidiPreloadChannelHandoff, SubresourceResourceType};
 #[cfg(test)]
 use moli_core::page::{
     RendererInspectorSessionRestoreSnapshot, RendererServiceWorkerVersionStatus,
 };
-use moli_fetch::BrowserNavigationRequestKind;
 use moli_page_types::DevToolsSessionKey;
 use url::Url;
 
@@ -74,23 +72,22 @@ pub(crate) struct TargetNavigationRequestPreflight {
     pub(crate) frame_id: String,
     pub(crate) session_id: Option<String>,
     pub(crate) document_fetch_event_session_id: Option<String>,
-    pub(crate) inherited_security_origin: String,
-    pub(crate) inherited_secure_context_type: String,
     pub(crate) request_headers: moli_fetch::RequestHeaders,
     pub(crate) document_fetch_request_stage: Option<FetchRequestStage>,
     pub(crate) document_fetch_response_stage_candidate: bool,
-    pub(crate) document_auth_required: bool,
     pub(crate) document_auth_required_blocked_intercepts: Vec<DevToolsNetworkInterceptId>,
     pub(crate) document_loader_id: String,
     pub(crate) document_request_id: Option<String>,
     pub(crate) fetch_navigation_request_id: Option<String>,
 }
 
+#[cfg(test)]
 #[derive(Clone)]
 pub(crate) struct TargetNavigationStorageHandles {
     page_handles: BrowserContextPageStorageHandles,
 }
 
+#[cfg(test)]
 impl TargetNavigationStorageHandles {
     fn from_page_handles(page_handles: BrowserContextPageStorageHandles) -> Self {
         Self { page_handles }
@@ -113,9 +110,8 @@ impl TargetNavigationStorageHandles {
 
 #[derive(Clone)]
 pub(crate) struct TargetNavigationLoadInputs {
-    pub(crate) redirect_chain: Vec<moli_fetch::RedirectInfo>,
-    pub(crate) redirect_headers: Option<moli_fetch::RequestHeaders>,
     pub(crate) browser_context_id: Option<String>,
+    #[cfg(test)]
     storage_handles: TargetNavigationStorageHandles,
     #[cfg(test)]
     pub(crate) root_frame_id: Option<String>,
@@ -126,8 +122,6 @@ pub(crate) struct TargetNavigationLoadInputs {
     pub(crate) tls_verify_host_override: Option<bool>,
     #[cfg(test)]
     pub(crate) navigation_initiator_url: Option<Url>,
-    pub(crate) browser_navigation_kind: BrowserNavigationRequestKind,
-    pub(crate) infer_navigation_referrer: bool,
     #[cfg(test)]
     pub(crate) document_start_scripts: Vec<DocumentStartScript>,
     #[cfg(test)]
@@ -153,8 +147,6 @@ pub(crate) struct TargetNavigationLoadInputs {
         (bool, Option<moli_core::page::SubresourceResourceType>),
     #[cfg(test)]
     pub(crate) permission_overrides: Vec<moli_core::page::PermissionOverrideRegistration>,
-    main_document_commit_seed: Option<RendererMainDocumentCommitSeed>,
-    session_history_position: Option<moli_session_history::SessionHistoryPosition>,
 }
 
 fn prepared_document_inspection(
@@ -176,6 +168,7 @@ fn prepared_document_inspection(
         },
     ));
     moli_renderer_v8::RendererPreparedDocumentInspectionConfiguration {
+        navigator_queries: Some(target.devtools_sessions.navigator_emulation.effective()),
         root_frame_projection_id: Some(target_id.to_owned()),
         main_document_commit: None,
         document_start_scripts,
@@ -190,26 +183,6 @@ fn prepared_document_inspection(
 }
 
 impl TargetNavigationLoadInputs {
-    pub(crate) fn with_main_document_commit_seed(
-        mut self,
-        seed: RendererMainDocumentCommitSeed,
-    ) -> Self {
-        self.main_document_commit_seed = Some(seed);
-        self
-    }
-
-    pub(crate) fn main_document_commit_for_final_url(
-        &self,
-        final_url: &Url,
-        network_error_page: Option<&NetworkErrorPageNavigation>,
-    ) -> Option<RendererMainDocumentCommit> {
-        self.main_document_commit_seed.as_ref().map(|seed| {
-            let mut commit = seed.resolve(final_url, network_error_page);
-            commit.session_history_position = self.session_history_position;
-            commit
-        })
-    }
-
     #[cfg(test)]
     pub(crate) fn page_storage_handles(&self) -> BrowserContextPageStorageHandles {
         self.storage_handles.page_storage_handles()
@@ -220,6 +193,7 @@ impl TargetNavigationLoadInputs {
         self.storage_handles.resource_storage_handles()
     }
 
+    #[cfg(test)]
     pub(crate) fn store_response_cookie_reports(
         &self,
         response_url: &Url,
@@ -278,9 +252,8 @@ impl TargetNavigationLoadInputs {
             .expect("resolved Page target retains document activity");
 
         Self {
-            redirect_chain: Vec::new(),
-            redirect_headers: None,
             browser_context_id: Some(browser_context.id.clone()),
+            #[cfg(test)]
             storage_handles: TargetNavigationStorageHandles::from_page_handles(
                 browser_context
                     .page_storage_handles_for_target(target_id)
@@ -299,8 +272,6 @@ impl TargetNavigationLoadInputs {
                 .or(browser_context.network_policy().tls_verify_host),
             #[cfg(test)]
             navigation_initiator_url: browser_context.target_navigation_initiator_url(target_id),
-            browser_navigation_kind: BrowserNavigationRequestKind::Navigate,
-            infer_navigation_referrer: true,
             #[cfg(test)]
             document_start_scripts: inspection.document_start_scripts,
             #[cfg(test)]
@@ -344,13 +315,6 @@ impl TargetNavigationLoadInputs {
                 .expect("live WebContents"),
             #[cfg(test)]
             permission_overrides: Vec::new(),
-            main_document_commit_seed: None,
-            session_history_position: Some(
-                target
-                    .owner_state
-                    .navigation_history_state
-                    .position_after_navigation(),
-            ),
         }
     }
 
@@ -359,6 +323,7 @@ impl TargetNavigationLoadInputs {
         browser_globals: &crate::conn::BrowserGlobalOverrides,
     ) -> Self {
         let mut inputs = TargetNavigationLoadInputs::no_loaded_browser_context(
+            #[cfg(test)]
             browser_context.page_storage_handles(),
         );
         inputs.browser_context_id = Some(browser_context.id.clone());
@@ -386,11 +351,12 @@ impl TargetNavigationLoadInputs {
         inputs
     }
 
-    fn no_loaded_browser_context(page_handles: BrowserContextPageStorageHandles) -> Self {
+    fn no_loaded_browser_context(
+        #[cfg(test)] page_handles: BrowserContextPageStorageHandles,
+    ) -> Self {
         Self {
-            redirect_chain: Vec::new(),
-            redirect_headers: None,
             browser_context_id: None,
+            #[cfg(test)]
             storage_handles: TargetNavigationStorageHandles::from_page_handles(page_handles),
             #[cfg(test)]
             root_frame_id: None,
@@ -400,8 +366,6 @@ impl TargetNavigationLoadInputs {
             tls_verify_host_override: None,
             #[cfg(test)]
             navigation_initiator_url: None,
-            browser_navigation_kind: BrowserNavigationRequestKind::Navigate,
-            infer_navigation_referrer: true,
             #[cfg(test)]
             document_start_scripts: Vec::new(),
             #[cfg(test)]
@@ -425,22 +389,7 @@ impl TargetNavigationLoadInputs {
             fetch_subresource_interception: (false, None),
             #[cfg(test)]
             permission_overrides: Vec::new(),
-            main_document_commit_seed: None,
-            session_history_position: None,
         }
-    }
-
-    pub(crate) fn without_inferred_referrer(mut self) -> Self {
-        self.infer_navigation_referrer = false;
-        self
-    }
-
-    pub(crate) fn with_browser_navigation_kind(
-        mut self,
-        kind: BrowserNavigationRequestKind,
-    ) -> Self {
-        self.browser_navigation_kind = kind;
-        self
     }
 }
 
@@ -822,9 +771,6 @@ impl<'a> TargetSessionOwnerMut<'a> {
             let target = self.target();
             let frame_id = self.target_id.clone();
             let target_session_id = target.session_id().map(str::to_owned);
-            let inherited_security_origin = target.target_identity().security_origin().to_owned();
-            let inherited_secure_context_type =
-                target.target_identity().secure_context_type().to_owned();
             let target_has_network_event_listeners =
                 target.runtime_slot().has_network_event_listeners();
             let effective_policy = self
@@ -914,12 +860,9 @@ impl<'a> TargetSessionOwnerMut<'a> {
                 frame_id,
                 session_id: target_session_id,
                 document_fetch_event_session_id,
-                inherited_security_origin,
-                inherited_secure_context_type,
                 request_headers,
                 document_fetch_request_stage,
                 document_fetch_response_stage_candidate,
-                document_auth_required,
                 document_auth_required_blocked_intercepts,
                 document_loader_id,
                 document_request_id,
@@ -962,6 +905,7 @@ impl CdpConnection {
                 })
                 .unwrap_or_else(|| {
                     TargetNavigationLoadInputs::no_loaded_browser_context(
+                        #[cfg(test)]
                         self.initial_storage_partition.page_storage_handles(),
                     )
                 }),
@@ -1047,19 +991,6 @@ impl CdpConnection {
             .register_pending_fetch_navigation_request(pending)
     }
 
-    pub(crate) fn commit_loaded_navigation(
-        &mut self,
-        prepared: crate::conn::PreparedDocumentNavigation,
-    ) -> anyhow::Result<LoadedNavigationPageCommit> {
-        let context = self
-            .browser_context
-            .iter_mut()
-            .chain(self.inactive_browser_contexts.iter_mut())
-            .find(|context| context.owns_web_contents(prepared.web_contents_id()))
-            .ok_or_else(|| anyhow::anyhow!("navigation WebContents unavailable"))?;
-        context.commit_loaded_navigation(prepared)
-    }
-
     pub(crate) async fn mark_target_crashed_for_owner_async(
         &mut self,
         owner: &CommandOwnerScope,
@@ -1077,7 +1008,7 @@ impl CdpConnection {
         let Ok(closing) = self.browser.close_web_contents(handle) else {
             return Vec::new();
         };
-        let record = closing.event;
+        let record = closing.event.clone();
         let moli_core::browser::BrowserEvent::WebContentsClosed { activated, .. } = record.event
         else {
             unreachable!("Browser close must return its committed close occurrence");
@@ -1087,53 +1018,6 @@ impl CdpConnection {
         // only an independently observed Browser close must synthesize it.
         self.retire_closed_web_contents(handle, activated, record.sequence, notifications)
             .await
-    }
-
-    pub(crate) async fn rollback_incomplete_popup_target_without_event_async(
-        &mut self,
-        browser_context_id: Option<&str>,
-        target_id: &str,
-    ) {
-        self.rollback_top_level_target_tab_sessions_without_event(target_id);
-
-        let browser_context_id = browser_context_id.map(str::to_owned).or_else(|| {
-            self.browser_contexts()
-                .find(|browser_context| {
-                    browser_context.is_active_target(target_id)
-                        || browser_context.background_target(target_id).is_some()
-                })
-                .map(|browser_context| browser_context.id.clone())
-        });
-
-        let mut page_session_ids = Vec::new();
-        if let Some(browser_context_id) = browser_context_id {
-            let browser = self.browser.clone();
-            let target = self
-                .browser_context_by_id_mut(&browser_context_id)
-                .and_then(|browser_context| {
-                    let handle = browser_context.web_contents_handle_for_target(target_id)?;
-                    let closing = browser.close_web_contents(handle).ok()?;
-                    let mut target = browser_context.take_closed_web_contents_projection(handle)?;
-                    target.runtime_slot.retire_for_target_close();
-                    Some((target, closing))
-                });
-            if let Some((target, closing)) = target {
-                page_session_ids.extend(
-                    target
-                        .devtools_sessions
-                        .attached_session_ids()
-                        .map(str::to_owned),
-                );
-                if let Some(session_id) = target.session_id() {
-                    page_session_ids.push(session_id.to_owned());
-                }
-                closing.close_async().await;
-            }
-        }
-
-        for session_id in page_session_ids {
-            self.rollback_attached_session_without_event(&session_id);
-        }
     }
 
     pub(crate) fn target_session_owner_aggregate_fetch_config_for_owner(
@@ -2668,7 +2552,6 @@ mod tests {
             Some("LID-0000000001")
         );
         assert_eq!(preflight.fetch_navigation_request_id, None);
-        assert!(!preflight.document_auth_required);
         assert!(
             preflight
                 .document_auth_required_blocked_intercepts
@@ -2846,7 +2729,6 @@ mod tests {
             Some("LID-0000000001")
         );
         assert_eq!(preflight.fetch_navigation_request_id, None);
-        assert!(!preflight.document_auth_required);
         assert!(
             preflight
                 .document_auth_required_blocked_intercepts

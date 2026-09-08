@@ -16,9 +16,10 @@ use moli_core::{
     },
 };
 
+#[cfg(test)]
+use crate::conn::state::document_lifecycle_observer::RendererDocumentLifecycleObserver;
 use crate::conn::state::document_lifecycle_observer::{
     RendererDocumentLifecycleObservation, RendererDocumentLifecycleObservationPublisher,
-    RendererDocumentLifecycleObserver,
 };
 
 #[cfg(test)]
@@ -77,6 +78,7 @@ impl CommittedRendererDocumentBinding {
 struct RendererDocumentLifecycleProtocolState {
     binding: Option<CommittedRendererDocumentBinding>,
     visible: Option<RendererDocumentLifecycleSnapshot>,
+    last_sequence: Option<u64>,
     load_visibility: RendererDocumentLoadVisibility,
 }
 
@@ -157,8 +159,7 @@ enum PendingRendererPageBinding {
         document_id: DocumentId,
     },
     InitialDocumentBuild {
-        renderer_page: RendererPageResidenceIdentity,
-        document_id: DocumentId,
+        key: moli_core::browser::web_contents::InitialDocumentBuildKey,
     },
     DocumentNavigation {
         navigation: NavigationId,
@@ -172,8 +173,8 @@ impl PendingRendererPageBinding {
         match self {
             #[cfg(test)]
             Self::PageBuild { renderer_page, .. } => *renderer_page,
-            Self::InitialDocumentBuild { renderer_page, .. }
-            | Self::DocumentNavigation { renderer_page, .. } => *renderer_page,
+            Self::InitialDocumentBuild { key } => key.renderer(),
+            Self::DocumentNavigation { renderer_page, .. } => *renderer_page,
         }
     }
 
@@ -182,8 +183,8 @@ impl PendingRendererPageBinding {
         match self {
             #[cfg(test)]
             Self::PageBuild { document_id, .. } => *document_id,
-            Self::InitialDocumentBuild { document_id, .. }
-            | Self::DocumentNavigation { document_id, .. } => *document_id,
+            Self::InitialDocumentBuild { key } => key.document(),
+            Self::DocumentNavigation { document_id, .. } => *document_id,
         }
     }
 }
@@ -195,12 +196,45 @@ pub(crate) struct TargetPageSlot {
     document_fixture: Option<DocumentFixture>,
     // Frontend correlation only. Selection comes from the navigation state;
     // retain at most the pending and committed navigation's loader mappings.
-    cdp_navigation_loaders: Vec<(NavigationId, String)>,
+    cdp_navigation_loaders: Vec<(NavigationId, NavigationProtocolProjection)>,
     renderer_document_lifecycle: RendererDocumentLifecycleProtocolState,
     next_renderer_document_lifecycle_waiter_id: RendererDocumentLifecycleWaiterId,
     renderer_document_lifecycle_waiters: Vec<RegisteredRendererDocumentLifecycleWaiter>,
     root_post_load_observation: Option<RootPostLoadObservation>,
     pending_renderer_page: Option<PendingRendererPageBinding>,
+}
+
+#[derive(Debug)]
+struct NavigationProtocolProjection {
+    loader_id: String,
+    native_dispatch: Option<Box<NativeNavigationProjection>>,
+    popup_opening_observed: bool,
+}
+
+#[derive(Debug)]
+struct NativeNavigationProjection {
+    request: crate::conn::PendingFetchNavigation,
+    auth_decision: Option<moli_core::browser::web_contents::NavigationInterceptionPermit>,
+    response_phase: NativeResponsePhase,
+}
+
+#[derive(Clone, Copy, Default, Debug, PartialEq, Eq, PartialOrd, Ord)]
+enum NativeResponsePhase {
+    #[default]
+    Pending,
+    Paused,
+    Response,
+    Complete,
+}
+
+impl From<String> for NavigationProtocolProjection {
+    fn from(loader_id: String) -> Self {
+        Self {
+            loader_id,
+            native_dispatch: None,
+            popup_opening_observed: false,
+        }
+    }
 }
 
 // Legacy routing tests can describe a remote Document without constructing a
@@ -249,9 +283,10 @@ impl TargetPageSlot {
         self.cdp_navigation_loaders
             .iter()
             .find(|(id, _)| *id == navigation)
-            .map(|(_, loader)| loader.as_str())
+            .map(|(_, projection)| projection.loader_id.as_str())
     }
 
+    #[cfg(test)]
     pub(crate) fn begin_renderer_document_load_visibility_barrier(
         &mut self,
         loader_id: &str,
@@ -505,10 +540,7 @@ impl BrowserContext {
         );
         self.page_slot_for_target_mut(target_id)
             .expect("resolved projection")
-            .pending_renderer_page = Some(PendingRendererPageBinding::InitialDocumentBuild {
-            renderer_page: key.renderer(),
-            document_id: key.document(),
-        });
+            .pending_renderer_page = Some(PendingRendererPageBinding::InitialDocumentBuild { key });
     }
 
     pub(in crate::conn) fn retire_initial_document_projection(
@@ -529,8 +561,26 @@ impl BrowserContext {
             .runtime_slot
             .page_slot_mut();
         if matches!(slot.pending_renderer_page.as_ref(), Some(PendingRendererPageBinding::InitialDocumentBuild {
-            renderer_page, document_id,
-        }) if *renderer_page == key.renderer() && *document_id == key.document())
+            key: pending,
+        }) if *pending == key)
+        {
+            slot.pending_renderer_page = None;
+        }
+    }
+
+    pub(in crate::conn) fn reconcile_initial_document_projection(
+        &mut self,
+        contents: moli_core::browser::WebContentsHandle,
+        current: Option<moli_core::browser::web_contents::InitialDocumentBuildKey>,
+    ) {
+        let Some(target) = self.page_targets.get_for_web_contents(contents.id()) else {
+            return;
+        };
+        let target_id = target.target_id().to_owned();
+        let slot = self
+            .page_slot_for_target_mut(&target_id)
+            .expect("resolved projection");
+        if matches!(slot.pending_renderer_page.as_ref(), Some(PendingRendererPageBinding::InitialDocumentBuild { key }) if Some(*key) != current)
         {
             slot.pending_renderer_page = None;
         }
@@ -632,9 +682,7 @@ impl BrowserContext {
         lifecycle: DocumentLifecycle,
     ) {
         let snapshot = lifecycle.snapshot().expect("fixture lifecycle");
-        let previous = self
-            .document_lifecycle_snapshot_for_target(target_id)
-            .map(|snapshot| (snapshot.frame, snapshot.document, snapshot.epoch));
+        let previous = self.document_lifecycle_snapshot_for_target(target_id);
         let web_contents = self
             .web_contents_handle_for_target(target_id)
             .expect("registered Target must reference live WebContents");
@@ -643,6 +691,15 @@ impl BrowserContext {
             .document_handle(web_contents)
             .expect("registered Target must reference live WebContents");
         if let Some(document) = physical_document {
+            // Binding a frontend fixture cannot roll a live native journal
+            // back to the earlier Page-creation handoff.
+            if previous.is_some_and(|current| {
+                current.frame == snapshot.frame
+                    && current.document == snapshot.document
+                    && current.sequence() >= snapshot.sequence()
+            }) {
+                return;
+            }
             self.browser_context
                 .install_document_lifecycle_for_test(document, lifecycle)
                 .expect("current fixture Document");
@@ -654,7 +711,8 @@ impl BrowserContext {
                 .expect("current fixture Document")
                 .lifecycle = lifecycle;
         }
-        if previous != Some((snapshot.frame, snapshot.document, snapshot.epoch))
+        if previous.map(|snapshot| (snapshot.frame, snapshot.document, snapshot.epoch))
+            != Some((snapshot.frame, snapshot.document, snapshot.epoch))
             || snapshot.terminated.is_some()
         {
             let handle = self.web_contents_handle_for_target(target_id).unwrap();
@@ -895,16 +953,26 @@ impl BrowserContext {
             .root_post_load_observation = None;
     }
 
+    #[cfg(test)]
+    pub(crate) fn observe_navigation_fixture_for_test(
+        &mut self,
+        target_id: &str,
+        request: moli_core::browser::NavigationRequest,
+        loader_id: &str,
+    ) {
+        assert!(self.observe_target_navigation_started(target_id, request));
+        self.page_slot_for_target_mut(target_id)
+            .expect("registered fixture target")
+            .cdp_navigation_loaders
+            .push((request.navigation, loader_id.to_owned().into()));
+    }
+
+    #[cfg(any(test, feature = "test-support"))]
     pub(crate) fn begin_target_document_navigation(
         &mut self,
         target_id: &str,
         loader_id: String,
     ) -> NavigationId {
-        self.page_slot_for_target_mut(target_id)
-            .expect("registered Target projection")
-            .finish_renderer_document_lifecycle_observers(
-                RendererDocumentLifecycleObservation::Superseded,
-            );
         let token = self
             .browser_context
             .start_document_navigation(
@@ -912,20 +980,67 @@ impl BrowserContext {
                     .expect("registered Target must reference live WebContents"),
             )
             .expect("registered Target must reference live WebContents");
-        self.page_slot_for_target_mut(target_id)
-            .expect("registered Target projection")
-            .pending_renderer_page = None;
-        self.retain_navigation_projections_for_target(target_id);
+        self.prepare_target_navigation_projection(target_id);
         self.page_slot_for_target_mut(target_id)
             .expect("registered Target projection")
             .cdp_navigation_loaders
-            .push((token, loader_id));
+            .push((token, loader_id.into()));
         self.page_targets
             .get_mut(target_id)
             .expect("registered Target projection")
             .runtime_slot
             .begin_document_projection(token);
         token
+    }
+
+    fn prepare_target_navigation_projection(&mut self, target_id: &str) {
+        let slot = self
+            .page_slot_for_target_mut(target_id)
+            .expect("registered Target projection");
+        slot.finish_renderer_document_lifecycle_observers(
+            RendererDocumentLifecycleObservation::Superseded,
+        );
+        slot.pending_renderer_page = None;
+        self.retain_navigation_projections_for_target(target_id);
+    }
+
+    pub(in crate::conn) fn observe_target_navigation_started(
+        &mut self,
+        target_id: &str,
+        request: moli_core::browser::NavigationRequest,
+    ) -> bool {
+        if self.web_contents_handle_for_target(target_id) != Some(request.web_contents)
+            || self
+                .browser_context
+                .navigation_snapshot(request.web_contents)
+                .ok()
+                .and_then(|snapshot| snapshot.attempt)
+                != Some(moli_core::browser::NavigationAttempt::Started(request))
+            || !self.page_targets.get_mut(target_id).is_some_and(|target| {
+                target
+                    .runtime_slot
+                    .observe_document_navigation(request.navigation)
+            })
+        {
+            return false;
+        }
+        self.prepare_target_navigation_projection(target_id);
+        true
+    }
+
+    pub(in crate::conn) fn discard_target_navigation_projection(
+        &mut self,
+        target_id: &str,
+        navigation: &NavigationId,
+    ) {
+        let slot = self
+            .page_slot_for_target_mut(target_id)
+            .expect("registered Target projection");
+        if matches!(slot.pending_renderer_page.as_ref(), Some(PendingRendererPageBinding::DocumentNavigation { navigation: pending, .. }) if pending == navigation)
+        {
+            slot.pending_renderer_page = None;
+        }
+        self.retain_navigation_projections_for_target(target_id);
     }
 
     #[cfg(test)]
@@ -1038,6 +1153,17 @@ impl BrowserContext {
                 .is_some_and(|binding| binding.renderer_page() == renderer_page)
     }
 
+    pub(in crate::conn) fn prepared_navigation_projection_matches(
+        &self,
+        target: &str,
+        navigation: NavigationId,
+        document: DocumentId,
+    ) -> bool {
+        matches!(self.page_slot_for_target(target).and_then(|slot| slot.pending_renderer_page.as_ref()),
+            Some(PendingRendererPageBinding::DocumentNavigation { navigation: prepared, document_id, .. })
+            if *prepared == navigation && *document_id == document)
+    }
+
     pub(crate) fn accepts_pending_document_navigation_event_for_target(
         &self,
         target_id: &str,
@@ -1073,6 +1199,7 @@ impl BrowserContext {
             })
     }
 
+    #[cfg(test)]
     pub(in crate::conn) fn pending_navigation_id_for_loader(
         &self,
         target_id: &str,
@@ -1083,7 +1210,7 @@ impl BrowserContext {
             .cdp_navigation_loaders
             .iter()
             .find_map(|(navigation, loader)| {
-                (loader == loader_id
+                (loader.loader_id == loader_id
                     && self
                         .browser_context
                         .accepts_pending_navigation(handle, navigation)
@@ -1092,29 +1219,32 @@ impl BrowserContext {
             })
     }
 
-    pub(in crate::conn) fn project_navigation_load_for_target(
+    pub(in crate::conn) fn project_navigation_preparation_for_target(
         &mut self,
         target_id: &str,
-        load: &moli_core::browser::BrowserNavigationLoad,
+        request: moli_core::browser::NavigationRequest,
+        renderer_page: RendererPageResidenceIdentity,
     ) -> Result<(), String> {
-        let handle = self
-            .web_contents_handle_for_target(target_id)
-            .ok_or("navigation WebContents unavailable")?;
-        if handle.id() != load.web_contents_id()
+        if self.web_contents_handle_for_target(target_id) != Some(request.web_contents)
             || !self.browser_context.accepts_document_preparation(
-                handle,
-                load.navigation_id(),
-                load.renderer_page(),
+                request.web_contents,
+                request.navigation,
+                renderer_page,
             )?
+            || self
+                .browser_context
+                .navigation_snapshot(request.web_contents)?
+                .attempt
+                != Some(moli_core::browser::NavigationAttempt::Started(request))
         {
             return Err("stale navigation document candidate".to_owned());
         }
         self.page_slot_for_target_mut(target_id)
             .expect("resolved projection")
             .pending_renderer_page = Some(PendingRendererPageBinding::DocumentNavigation {
-            navigation: load.navigation_id(),
-            renderer_page: load.renderer_page(),
-            document_id: load.document_id(),
+            navigation: request.navigation,
+            renderer_page,
+            document_id: request.document,
         });
         Ok(())
     }
@@ -1145,8 +1275,8 @@ impl BrowserContext {
             )
     }
 
-    /// Allocate only a DevTools projection ID; the Browser already committed.
-    pub(crate) fn project_committed_document_loader_for_target(
+    /// Allocate only a DevTools projection ID for a native navigation or commit.
+    pub(crate) fn project_document_navigation_loader_for_target(
         &mut self,
         target_id: &str,
         navigation: Option<NavigationId>,
@@ -1168,7 +1298,7 @@ impl BrowserContext {
             .runtime_slot
             .page_slot_mut()
             .cdp_navigation_loaders
-            .push((navigation, loader.clone()));
+            .push((navigation, loader.clone().into()));
         Some(loader)
     }
 
@@ -1190,6 +1320,213 @@ impl BrowserContext {
                     .navigation_retains(handle, *id)
                     .unwrap_or(false)
             });
+    }
+
+    pub(in crate::conn) fn record_native_navigation_dispatch(
+        &mut self,
+        target_id: &str,
+        navigation: NavigationId,
+        state: crate::conn::PendingFetchNavigation,
+    ) {
+        let Some(slot) = self.page_slot_for_target_mut(target_id) else {
+            return;
+        };
+        if let Some((_, projection)) = slot
+            .cdp_navigation_loaders
+            .iter_mut()
+            .find(|(id, _)| *id == navigation)
+        {
+            projection.loader_id = state.navigation.loader_id.clone();
+            if let Some(native) = projection.native_dispatch.as_deref_mut() {
+                let navigate_id = native.request.navigation.navigate_id;
+                native.request = state;
+                native.request.navigation.navigate_id = navigate_id;
+            } else {
+                projection.native_dispatch = Some(Box::new(NativeNavigationProjection {
+                    request: state,
+                    auth_decision: None,
+                    response_phase: NativeResponsePhase::Pending,
+                }));
+            }
+        } else {
+            slot.cdp_navigation_loaders.push((
+                navigation,
+                NavigationProtocolProjection {
+                    loader_id: state.navigation.loader_id.clone(),
+                    native_dispatch: Some(Box::new(NativeNavigationProjection {
+                        request: state,
+                        auth_decision: None,
+                        response_phase: NativeResponsePhase::Pending,
+                    })),
+                    popup_opening_observed: false,
+                },
+            ));
+        }
+        self.retain_navigation_projections_for_target(target_id);
+    }
+
+    pub(in crate::conn) fn native_navigation_dispatch(
+        &self,
+        target_id: &str,
+        navigation: NavigationId,
+    ) -> Option<&crate::conn::PendingFetchNavigation> {
+        self.page_slot_for_target(target_id)?
+            .cdp_navigation_loaders
+            .iter()
+            .find(|(id, _)| *id == navigation)?
+            .1
+            .native_dispatch
+            .as_deref()
+            .map(|native| &native.request)
+    }
+
+    pub(in crate::conn) fn observe_native_auth_decision(
+        &mut self,
+        target_id: &str,
+        permit: moli_core::browser::web_contents::NavigationInterceptionPermit,
+    ) -> bool {
+        let Some(native) = self
+            .page_slot_for_target_mut(target_id)
+            .and_then(|slot| {
+                slot.cdp_navigation_loaders
+                    .iter_mut()
+                    .find(|(id, _)| *id == permit.navigation())
+            })
+            .and_then(|(_, projection)| projection.native_dispatch.as_deref_mut())
+        else {
+            return false;
+        };
+        if native.auth_decision == Some(permit) {
+            return false;
+        }
+        native.auth_decision = Some(permit);
+        true
+    }
+
+    /// Command reply progress is consumed once independently of response/body
+    /// publication. Updating request metadata must not re-arm an emitted reply.
+    pub(in crate::conn) fn take_native_navigation_command(
+        &mut self,
+        target_id: &str,
+        navigation: NavigationId,
+    ) -> Option<crate::conn::NavigationDispatchState> {
+        let native = self
+            .page_slot_for_target_mut(target_id)?
+            .cdp_navigation_loaders
+            .iter_mut()
+            .find(|(id, _)| *id == navigation)?
+            .1
+            .native_dispatch
+            .as_deref_mut()?;
+        let id = native.request.navigation.navigate_id.take()?;
+        let mut state = native.request.navigation.clone();
+        state.navigate_id = Some(id);
+        Some(state)
+    }
+
+    pub(in crate::conn) fn observe_native_navigation_response(
+        &mut self,
+        target_id: &str,
+        navigation: NavigationId,
+        completed: bool,
+    ) -> Option<(crate::conn::PendingFetchNavigation, bool, bool)> {
+        let native = self
+            .page_slot_for_target_mut(target_id)?
+            .cdp_navigation_loaders
+            .iter_mut()
+            .find(|(id, _)| *id == navigation)?
+            .1
+            .native_dispatch
+            .as_deref_mut()?;
+        let phase = if completed {
+            NativeResponsePhase::Complete
+        } else {
+            NativeResponsePhase::Response
+        };
+        if phase <= native.response_phase {
+            return None;
+        }
+        let emit_response = native.response_phase < NativeResponsePhase::Response;
+        let metadata_emitted = native.response_phase == NativeResponsePhase::Paused;
+        native.response_phase = phase;
+        Some((native.request.clone(), emit_response, metadata_emitted))
+    }
+
+    pub(in crate::conn) fn observe_native_navigation_response_pause(
+        &mut self,
+        target_id: &str,
+        navigation: NavigationId,
+    ) {
+        if let Some(native) = self
+            .page_slot_for_target_mut(target_id)
+            .and_then(|slot| {
+                slot.cdp_navigation_loaders
+                    .iter_mut()
+                    .find(|(id, _)| *id == navigation)
+            })
+            .and_then(|(_, projection)| projection.native_dispatch.as_deref_mut())
+            && native.response_phase == NativeResponsePhase::Pending
+        {
+            native.response_phase = NativeResponsePhase::Paused;
+        }
+    }
+
+    pub(in crate::conn) fn take_failed_native_navigation(
+        &mut self,
+        target: &str,
+        navigation: NavigationId,
+    ) -> Option<(crate::conn::PendingFetchNavigation, bool)> {
+        let mut pending = self.native_navigation_dispatch(target, navigation)?.clone();
+        let command = self.take_native_navigation_command(target, navigation);
+        let emit_network = self
+            .observe_native_navigation_response(target, navigation, true)
+            .is_some();
+        pending.navigation.navigate_id = command.and_then(|state| state.navigate_id);
+        (emit_network || pending.navigation.navigate_id.is_some())
+            .then_some((pending, emit_network))
+    }
+
+    pub(in crate::conn) fn native_navigation_response_completed(
+        &self,
+        target_id: &str,
+        navigation: NavigationId,
+    ) -> bool {
+        self.page_slot_for_target(target_id)
+            .and_then(|slot| {
+                slot.cdp_navigation_loaders
+                    .iter()
+                    .find(|(id, _)| *id == navigation)
+            })
+            .and_then(|(_, projection)| projection.native_dispatch.as_deref())
+            .is_some_and(|native| native.response_phase == NativeResponsePhase::Complete)
+    }
+
+    pub(in crate::conn) fn observe_popup_navigation(
+        &mut self,
+        target_id: &str,
+        navigation: NavigationId,
+    ) {
+        if let Some((_, projection)) = self.page_slot_for_target_mut(target_id).and_then(|slot| {
+            slot.cdp_navigation_loaders
+                .iter_mut()
+                .find(|(id, _)| *id == navigation)
+        }) {
+            projection.popup_opening_observed = true;
+        }
+    }
+
+    pub(in crate::conn) fn popup_navigation_observed(
+        &self,
+        target_id: &str,
+        navigation: NavigationId,
+    ) -> bool {
+        self.page_slot_for_target(target_id)
+            .and_then(|slot| {
+                slot.cdp_navigation_loaders
+                    .iter()
+                    .find(|(id, _)| *id == navigation)
+            })
+            .is_some_and(|(_, projection)| projection.popup_opening_observed)
     }
 
     #[cfg(test)]
@@ -1221,21 +1558,10 @@ impl BrowserContext {
             .expect("registered Target must reference live WebContents");
         if self
             .browser_context
-            .clear_pending_navigation_if_matches(handle, navigation)
+            .cancel_document_navigation(handle, navigation)
             .unwrap_or(false)
         {
-            if matches!(
-                self.page_slot_for_target_mut(target_id).expect("registered Target projection").pending_renderer_page.as_ref(),
-                Some(PendingRendererPageBinding::DocumentNavigation {
-                    navigation: pending_navigation,
-                    ..
-                }) if pending_navigation == navigation
-            ) {
-                self.page_slot_for_target_mut(target_id)
-                    .expect("registered Target projection")
-                    .pending_renderer_page = None;
-            }
-            self.retain_navigation_projections_for_target(target_id);
+            self.discard_target_navigation_projection(target_id, navigation);
             return true;
         }
         false
@@ -1386,6 +1712,7 @@ impl BrowserContext {
             .renderer_document_lifecycle = RendererDocumentLifecycleProtocolState {
             binding: Some(binding),
             visible: Some(initial_snapshot),
+            last_sequence: None,
             load_visibility: RendererDocumentLoadVisibility::default(),
         };
         self.page_slot_for_target_mut(target_id)
@@ -1494,6 +1821,19 @@ impl BrowserContext {
                 );
                 continue;
             }
+            // Native progress may already be ahead of this FIFO. Deduplication
+            // belongs to the projection, including its not-yet-visible tail.
+            let protocol = &mut self
+                .page_slot_for_target_mut(target_id)
+                .expect("registered Target projection")
+                .renderer_document_lifecycle;
+            if protocol
+                .last_sequence
+                .is_some_and(|sequence| event.sequence <= sequence)
+            {
+                continue;
+            }
+            protocol.last_sequence = Some(event.sequence);
             if restarts_same_document {
                 self.page_slot_for_target_mut(target_id)
                     .expect("registered Target projection")
@@ -1574,6 +1914,16 @@ impl BrowserContext {
         accepted
     }
 
+    #[cfg(test)]
+    pub(crate) fn renderer_document_lifecycle_projected_sequence_for_target(
+        &self,
+        target_id: &str,
+    ) -> Option<u64> {
+        self.page_slot_for_target(target_id)?
+            .renderer_document_lifecycle
+            .last_sequence
+    }
+
     pub(crate) fn renderer_document_lifecycle_binding_for_target(
         &self,
         target_id: &str,
@@ -1599,34 +1949,46 @@ impl BrowserContext {
             })
     }
 
+    #[cfg(test)]
     pub(crate) fn renderer_document_lifecycle_authoritative_snapshot_for_target(
         &self,
         target_id: &str,
     ) -> Option<RendererDocumentLifecycleSnapshot> {
-        #[cfg(test)]
-        {
-            self.document_lifecycle_snapshot_for_target(target_id)
-        }
-
-        #[cfg(not(test))]
-        {
-            let document = self.document_handle_for_target(target_id)?;
-            self.browser_context
-                .document_lifecycle_snapshot(document)
-                .ok()?
-        }
+        self.document_lifecycle_snapshot_for_target(target_id)
     }
 
-    pub(crate) fn apply_renderer_document_lifecycle(
+    fn renderer_document_lifecycle_projected_snapshot_for_target(
+        &self,
+        target_id: &str,
+    ) -> Option<RendererDocumentLifecycleSnapshot> {
+        let protocol = &self
+            .page_slot_for_target(target_id)?
+            .renderer_document_lifecycle;
+        let mut snapshot = protocol.visible?;
+        // A DevTools waiter observes FIFO receipt, including output held by a
+        // visibility barrier. Native progress alone cannot release that gate.
+        for &event in &protocol.load_visibility.deferred_tail {
+            snapshot.apply_event(event);
+        }
+        Some(snapshot)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn apply_renderer_document_lifecycle_for_test(
         &mut self,
         renderer_page: RendererPageResidenceIdentity,
         event: RendererDocumentLifecycleEvent,
     ) -> Option<crate::conn::DocumentLifecycleEvent> {
-        if let Some(occurrence) = self
-            .browser_context
-            .apply_renderer_document_lifecycle(renderer_page, event)
-        {
-            return Some(occurrence);
+        if let Some(document) = self.page_targets.iter().find_map(|target| {
+            self.routes_renderer_page_for_target(target.target_id(), renderer_page)
+                .then(|| self.document_handle_for_target(target.target_id()))
+                .flatten()
+        }) {
+            return self
+                .browser_context
+                .apply_document_lifecycle_for_test(document, event)
+                .ok()?
+                .then(|| crate::conn::DocumentLifecycleEvent::new(document.id(), event));
         }
         #[cfg(test)]
         {
@@ -1669,8 +2031,7 @@ impl BrowserContext {
         if binding.loader_id != expected_loader_id {
             return None;
         }
-        let snapshot =
-            self.renderer_document_lifecycle_authoritative_snapshot_for_target(target_id)?;
+        let snapshot = self.renderer_document_lifecycle_projected_snapshot_for_target(target_id)?;
         let id = self
             .page_slot_for_target_mut(target_id)
             .expect("registered Target projection")
@@ -1691,6 +2052,7 @@ impl BrowserContext {
         Some((id, binding))
     }
 
+    #[cfg(test)]
     pub(crate) fn register_exact_renderer_document_lifecycle_observer_for_target(
         &mut self,
         target_id: &str,
@@ -1714,7 +2076,7 @@ impl BrowserContext {
             );
         }
         let Some(snapshot) =
-            self.renderer_document_lifecycle_authoritative_snapshot_for_target(target_id)
+            self.renderer_document_lifecycle_projected_snapshot_for_target(target_id)
         else {
             return RendererDocumentLifecycleObserver::resolved(
                 RendererDocumentLifecycleObservation::Unavailable,
@@ -1774,7 +2136,7 @@ impl BrowserContext {
             return false;
         };
         let snapshot_reached_load = self
-            .renderer_document_lifecycle_authoritative_snapshot_for_target(target_id)
+            .renderer_document_lifecycle_projected_snapshot_for_target(target_id)
             .is_some_and(|snapshot| {
                 snapshot.document == binding.renderer_document
                     && snapshot.epoch == binding.renderer_epoch
@@ -1855,7 +2217,7 @@ impl BrowserContext {
         else {
             return false;
         };
-        self.renderer_document_lifecycle_authoritative_snapshot_for_target(target_id)
+        self.renderer_document_lifecycle_projected_snapshot_for_target(target_id)
             .is_some_and(|snapshot| {
                 snapshot.document == observation.binding.renderer_document
                     && snapshot.epoch == observation.binding.renderer_epoch
@@ -1879,6 +2241,168 @@ fn context_with_page_slot_for_test(page_slot: TargetPageSlot) -> BrowserContext 
     ));
     context.set_active_target_id(PAGE_SLOT_TEST_TARGET);
     context
+}
+
+#[cfg(test)]
+mod native_navigation_projection_tests {
+    use super::*;
+    use crate::conn::{
+        CommandOwnerScope, NavigationDispatchState, NavigationResultProjection,
+        PendingFetchNavigation, ResponseStageUrlMatchPolicy,
+    };
+    use moli_core::browser::web_contents::NavigationRequestInterception;
+
+    #[test]
+    fn updating_native_request_metadata_preserves_publication_progress() {
+        for phase in [
+            NativeResponsePhase::Paused,
+            NativeResponsePhase::Response,
+            NativeResponsePhase::Complete,
+        ] {
+            let service = moli_core::browser::BrowserService::start().unwrap();
+            let browser = service.handle();
+            let _provider = browser.register_document_decision_provider().unwrap();
+            let mut context = BrowserContext::new_with_browser_for_test(&browser, "BID-page-slot");
+            context.bind_page_navigation_engines(Default::default(), None);
+            assert!(context.register_page_target_fixture(
+                PAGE_SLOT_TEST_TARGET.into(),
+                None,
+                crate::conn::TargetIdentityState::about_blank(),
+                TargetPageSlot::default(),
+            ));
+            context.set_active_target_id(PAGE_SLOT_TEST_TARGET);
+            let contents = context
+                .web_contents_handle_for_target(PAGE_SLOT_TEST_TARGET)
+                .unwrap();
+            let url = url::Url::parse("https://native.example/original").unwrap();
+            let waiter = context
+                .browser_context
+                .navigate_document(
+                    contents,
+                    NavigationRequestInterception::new(
+                        url.clone(),
+                        "GET".into(),
+                        None,
+                        Vec::new().into(),
+                        crate::conn::NavigationRequestLoadPolicy::DocumentInitiated,
+                    ),
+                )
+                .unwrap();
+            let navigation = waiter.request().navigation;
+            let permit = context
+                .browser_context
+                .navigation_decision(contents)
+                .unwrap()
+                .unwrap()
+                .permit;
+            let mut pending = PendingFetchNavigation {
+                fetch_request_id: "FETCH-native".into(),
+                interception_session_id: None,
+                navigation_permit: permit,
+                navigation: NavigationDispatchState {
+                    redirect_headers: None,
+                    redirect_chain: Vec::new(),
+                    navigate_id: Some(41),
+                    owner: CommandOwnerScope::for_session("SID-native"),
+                    web_contents: contents,
+                    result_projection: NavigationResultProjection::Cdp(serde_json::json!({})),
+                    frame_id: PAGE_SLOT_TEST_TARGET.into(),
+                    session_id: None,
+                    request_id: Some("NETWORK-native".into()),
+                    loader_id: "LOADER-native".into(),
+                    request_announced: true,
+                    requested_url: url,
+                    request_method: "GET".into(),
+                    request_body: None,
+                    request_body_bytes: None,
+                    request_headers: Default::default(),
+                    request_load_policy:
+                        crate::conn::NavigationRequestLoadPolicy::DocumentInitiated,
+                    timestamp: 0.0,
+                },
+                request_cookie_report: None,
+                intercept_response: true,
+                response_stage_url_match_policy: ResponseStageUrlMatchPolicy::AlreadyMatched,
+                auth_required_blocked_intercepts: Vec::new(),
+            };
+            context.record_native_navigation_dispatch(
+                PAGE_SLOT_TEST_TARGET,
+                navigation,
+                pending.clone(),
+            );
+            assert_eq!(
+                context
+                    .take_native_navigation_command(PAGE_SLOT_TEST_TARGET, navigation)
+                    .unwrap()
+                    .navigate_id,
+                Some(41)
+            );
+            assert!(context.observe_native_auth_decision(PAGE_SLOT_TEST_TARGET, permit));
+            context.observe_popup_navigation(PAGE_SLOT_TEST_TARGET, navigation);
+            context.observe_native_navigation_response_pause(PAGE_SLOT_TEST_TARGET, navigation);
+            if phase >= NativeResponsePhase::Response {
+                assert!(
+                    context
+                        .observe_native_navigation_response(
+                            PAGE_SLOT_TEST_TARGET,
+                            navigation,
+                            phase == NativeResponsePhase::Complete,
+                        )
+                        .is_some()
+                );
+            }
+
+            pending.navigation.requested_url =
+                url::Url::parse("https://native.example/updated").unwrap();
+            pending.navigation.request_headers = vec![("x-updated".into(), "yes".into())].into();
+            context.record_native_navigation_dispatch(
+                PAGE_SLOT_TEST_TARGET,
+                navigation,
+                pending.clone(),
+            );
+            let updated = context
+                .native_navigation_dispatch(PAGE_SLOT_TEST_TARGET, navigation)
+                .unwrap();
+            assert_eq!(
+                updated.navigation.requested_url,
+                pending.navigation.requested_url
+            );
+            assert_eq!(
+                updated.navigation.request_headers,
+                pending.navigation.request_headers
+            );
+            assert!(!context.observe_native_auth_decision(PAGE_SLOT_TEST_TARGET, permit));
+            assert!(
+                context
+                    .take_native_navigation_command(PAGE_SLOT_TEST_TARGET, navigation)
+                    .is_none(),
+                "metadata updates must not re-arm a published command reply"
+            );
+            assert!(context.popup_navigation_observed(PAGE_SLOT_TEST_TARGET, navigation));
+            let completed =
+                context.observe_native_navigation_response(PAGE_SLOT_TEST_TARGET, navigation, true);
+            if phase == NativeResponsePhase::Complete {
+                assert!(
+                    completed.is_none(),
+                    "completed responses must not be republished"
+                );
+            } else {
+                let (request, emit_response, metadata_emitted) = completed.unwrap();
+                assert_eq!(
+                    request.navigation.requested_url,
+                    pending.navigation.requested_url
+                );
+                assert_eq!(emit_response, phase == NativeResponsePhase::Paused);
+                assert_eq!(metadata_emitted, phase == NativeResponsePhase::Paused);
+            }
+            assert!(
+                context
+                    .observe_native_navigation_response(PAGE_SLOT_TEST_TARGET, navigation, true)
+                    .is_none()
+            );
+            service.shutdown();
+        }
+    }
 }
 
 #[cfg(test)]
@@ -2124,37 +2648,37 @@ mod pending_renderer_page_tests {
 
     #[tokio::test]
     async fn initial_build_binding_is_exact_and_late_retirement_preserves_retry() {
-        use crate::conn::state::InitialDocumentAdmission;
-        let mut context = context_with_page_slot_for_test(
-            TargetPageSlot::empty_for_initial_document_page_build(),
-        );
+        let browser = moli_core::browser::BrowserService::start()
+            .unwrap()
+            .handle();
+        let _provider = browser.register_document_decision_provider().unwrap();
+        let mut context =
+            BrowserContext::new_with_browser_for_test(&browser, "BID-initial-binding");
+        context.set_active_target_id(PAGE_SLOT_TEST_TARGET);
         context.bind_page_navigation_engines(Default::default(), None);
-        let InitialDocumentAdmission::Build(first) = context
+        let first = context
             .start_initial_document_for_target(
                 PAGE_SLOT_TEST_TARGET,
                 Default::default(),
                 &Default::default(),
             )
             .unwrap()
-        else {
-            panic!("expected build");
-        };
+            .expect("pending construction");
         let first_key = first.key();
         context.project_initial_document_build(PAGE_SLOT_TEST_TARGET, first_key);
         assert!(
             context.routes_renderer_page_for_target(PAGE_SLOT_TEST_TARGET, first_key.renderer())
         );
-        drop(first);
-        let InitialDocumentAdmission::Build(second) = context
+        context.clear_document_navigation_state_for_active_target();
+        assert!(first.wait().await.is_err());
+        let second = context
             .start_initial_document_for_target(
                 PAGE_SLOT_TEST_TARGET,
                 Default::default(),
                 &Default::default(),
             )
             .unwrap()
-        else {
-            panic!("expected retry");
-        };
+            .expect("pending retry");
         let second_key = second.key();
         assert_ne!(first_key.document(), second_key.document());
         assert_ne!(first_key.renderer(), second_key.renderer());

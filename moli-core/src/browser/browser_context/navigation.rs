@@ -1,5 +1,7 @@
 use url::Url;
 
+#[cfg(any(test, feature = "test-support"))]
+use crate::page::RendererDocumentLifecycleEvent;
 use crate::{
     browser::{
         DocumentHandle, DocumentId, NavigationId, NavigationRequestLoadPolicy,
@@ -8,13 +10,12 @@ use crate::{
             AdmittedDocumentMaterialization, AdmittedNavigationLoad, BuiltInitialDocument,
             ClaimedNavigationRequest, CommittedDocumentNavigation, CommittedInitialDocument,
             DocumentNavigationDestination, HistoryTraversalDestination, InitialDocumentAdmission,
-            InterceptedNavigationLoad, InterceptedNavigationResponse, NavigationInterceptionPermit,
-            NavigationRequestInterception, PageNavigationHistoryEntry, PausedDocumentTransfer,
+            NavigationInterceptionPermit, PageNavigationHistoryEntry, PausedDocumentTransfer,
             PreparedDocumentNavigation, PreparedNavigationResponse, ResolvedHistoryTraversal,
             RetiringDocument, SameDocumentNavigationCommitted,
         },
     },
-    page::{RendererDocumentLifecycleEvent, SameDocumentHistoryUpdate},
+    page::SameDocumentHistoryUpdate,
 };
 
 use super::BrowserContext;
@@ -225,16 +226,6 @@ impl BrowserContext {
         Ok((contents.id(), contents.main_frame.id()))
     }
 
-    pub fn pause_navigation_request(
-        &mut self,
-        handle: WebContentsHandle,
-        navigation: NavigationId,
-        request: NavigationRequestInterception,
-    ) -> Result<NavigationInterceptionPermit, String> {
-        self.web_contents_mut(handle)?
-            .pause_navigation_request(navigation, request)
-    }
-
     pub fn take_navigation_request(
         &mut self,
         permit: NavigationInterceptionPermit,
@@ -242,58 +233,6 @@ impl BrowserContext {
         self.web_contents
             .get_mut(&permit.web_contents())?
             .take_navigation_request(permit)
-    }
-
-    pub fn start_claimed_navigation_request(
-        &mut self,
-        request: ClaimedNavigationRequest,
-        inherited: crate::browser::web_contents::InheritedDocumentPolicy,
-    ) -> Result<InterceptedNavigationLoad, String> {
-        self.web_contents
-            .get_mut(&request.permit().web_contents())
-            .ok_or("navigation WebContents unavailable")?
-            .start_claimed_navigation_request(request, inherited)
-    }
-
-    pub fn start_navigation_load_for_interception(
-        &mut self,
-        permit: NavigationInterceptionPermit,
-        policy: NavigationRequestLoadPolicy,
-        inherited: crate::browser::web_contents::InheritedDocumentPolicy,
-    ) -> Result<AdmittedNavigationLoad, String> {
-        self.web_contents
-            .get_mut(&permit.web_contents())
-            .ok_or("navigation WebContents unavailable")?
-            .start_navigation_load_for_interception(permit, policy, inherited)
-    }
-
-    pub fn pause_navigation_auth(
-        &mut self,
-        response: InterceptedNavigationResponse<moli_fetch::RawResponse>,
-    ) -> Result<NavigationInterceptionPermit, String> {
-        self.web_contents
-            .get_mut(&response.web_contents())
-            .ok_or("navigation WebContents unavailable")?
-            .pause_navigation_auth(response)
-    }
-
-    pub fn take_navigation_auth(
-        &mut self,
-        permit: NavigationInterceptionPermit,
-    ) -> Option<InterceptedNavigationResponse<moli_fetch::RawResponse>> {
-        self.web_contents
-            .get_mut(&permit.web_contents())?
-            .take_navigation_auth(permit)
-    }
-
-    pub fn pause_navigation_response(
-        &mut self,
-        handle: WebContentsHandle,
-        navigation: NavigationId,
-        transfer: PausedDocumentTransfer,
-    ) -> Result<NavigationInterceptionPermit, String> {
-        self.web_contents_mut(handle)?
-            .pause_navigation_response(navigation, transfer)
     }
 
     pub fn take_navigation_response(
@@ -461,15 +400,6 @@ impl BrowserContext {
             creator,
             storage_key,
         );
-        Ok(())
-    }
-
-    pub fn mark_initial_url_replaces_empty_document(
-        &mut self,
-        handle: WebContentsHandle,
-    ) -> Result<(), String> {
-        self.web_contents_mut(handle)?
-            .mark_next_navigation_history_replace_initial_empty_document();
         Ok(())
     }
 
@@ -653,14 +583,44 @@ impl BrowserContext {
             .committed_document_navigation())
     }
 
-    pub fn clear_pending_navigation_if_matches(
+    pub(in crate::browser) fn cancel_document_navigation(
         &mut self,
         handle: WebContentsHandle,
         navigation: &NavigationId,
+        reason: crate::browser::NavigationFailureReason,
     ) -> Result<bool, String> {
         Ok(self
             .web_contents_mut(handle)?
-            .clear_pending_document_navigation_if_matches(navigation))
+            .cancel_document_navigation(navigation, reason))
+    }
+
+    pub fn navigation_snapshot(
+        &self,
+        handle: WebContentsHandle,
+    ) -> Result<crate::browser::NavigationSnapshot, String> {
+        let contents = self.web_contents(handle)?;
+        Ok(crate::browser::NavigationSnapshot {
+            web_contents: handle,
+            committed: contents
+                .main_frame
+                .current_document
+                .as_ref()
+                .and_then(|document| {
+                    Some(crate::browser::NavigationRequest {
+                        web_contents: handle,
+                        navigation: document.commit.as_ref()?.navigation?,
+                        document: document.id,
+                    })
+                }),
+            attempt: contents.navigation().attempt_snapshot(handle),
+        })
+    }
+
+    pub(in crate::browser) fn navigation_snapshots(
+        &self,
+    ) -> impl Iterator<Item = crate::browser::NavigationSnapshot> + '_ {
+        self.web_contents_handles()
+            .filter_map(|handle| self.navigation_snapshot(handle).ok())
     }
 
     pub fn clear_document_navigation_state(
@@ -801,42 +761,11 @@ impl BrowserContext {
             .any(|contents| contents.navigation().has_inflight_background_navigation())
     }
 
-    pub fn apply_renderer_document_lifecycle(
-        &mut self,
-        renderer_page: RendererPageResidenceIdentity,
-        event: RendererDocumentLifecycleEvent,
-    ) -> Option<crate::browser::web_contents::DocumentLifecycleEvent> {
-        self.web_contents
-            .values_mut()
-            .find(|contents| {
-                contents
-                    .main_frame
-                    .current_document
-                    .as_ref()
-                    .is_some_and(|document| {
-                        RendererPageResidenceIdentity::from_page(&document.page) == renderer_page
-                    })
-            })?
-            .apply_document_lifecycle(event)
-    }
-
     #[cfg(any(test, feature = "test-support"))]
     #[doc(hidden)]
     pub fn has_paused_navigation_auth_for_test(&self, handle: WebContentsHandle) -> bool {
         self.web_contents(handle)
             .is_ok_and(|contents| contents.navigation().has_paused_auth_for_test())
-    }
-
-    #[cfg(any(test, feature = "test-support"))]
-    #[doc(hidden)]
-    pub fn paused_navigation_response_for_test(
-        &self,
-        handle: WebContentsHandle,
-    ) -> Option<&PausedDocumentTransfer> {
-        self.web_contents(handle)
-            .ok()?
-            .navigation()
-            .paused_response_for_test()
     }
 
     #[cfg(any(test, feature = "test-support"))]

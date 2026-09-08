@@ -512,6 +512,10 @@ impl CdpConnection {
         if !self.document_projection_is_pending_for_session_owner(command.session_id()) {
             return false;
         }
+        let owner = CommandOwnerScope::capture(self, command.session_id());
+        if self.native_startup_allows_document_access(&owner) {
+            return false;
+        }
         let Some(cmd) = Cmd::from_parsed(command) else {
             return false;
         };

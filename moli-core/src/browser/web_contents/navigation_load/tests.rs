@@ -41,16 +41,14 @@ async fn precommit_retirement_preserves_document_and_retires_request_history() {
             None
         };
 
-        assert!(
-            browser
-                .contents
-                .clear_pending_document_navigation_if_matches(&navigation)
-        );
-        assert!(
-            !browser
-                .contents
-                .clear_pending_document_navigation_if_matches(&navigation)
-        );
+        assert!(browser.contents.cancel_document_navigation(
+            &navigation,
+            crate::browser::NavigationFailureReason::Canceled
+        ));
+        assert!(!browser.contents.cancel_document_navigation(
+            &navigation,
+            crate::browser::NavigationFailureReason::Canceled
+        ));
         assert!(load.request_cancellation.is_cancelled());
         assert!(cancellation.is_cancelled());
         assert!(preparation_cancellation.is_cancelled());
@@ -117,11 +115,10 @@ async fn superseded_request_cannot_clear_or_transfer_history_intent() {
                 .mark_next_navigation_history_traverse_to_entry(before.1[0].id);
         }
         let winner = browser.contents.navigation.start_document_navigation();
-        assert!(
-            !browser
-                .contents
-                .clear_pending_document_navigation_if_matches(&superseded)
-        );
+        assert!(!browser.contents.cancel_document_navigation(
+            &superseded,
+            crate::browser::NavigationFailureReason::Canceled
+        ));
         assert_eq!(browser.contents.navigation_history_snapshot(), before);
         assert_eq!(
             browser.contents.navigation.can_reset_navigation_history(),
@@ -133,11 +130,10 @@ async fn superseded_request_cannot_clear_or_transfer_history_intent() {
         assert_eq!(entries.len(), if traverse { 2 } else { 3 });
         assert_eq!(entries[index].title, "winner");
         assert_eq!(entries[index].transition_type, "typed");
-        assert!(
-            !browser
-                .contents
-                .clear_pending_document_navigation_if_matches(&winner)
-        );
+        assert!(!browser.contents.cancel_document_navigation(
+            &winner,
+            crate::browser::NavigationFailureReason::Canceled
+        ));
         assert_eq!(
             browser.contents.navigation_history_snapshot(),
             (index, entries)
@@ -425,4 +421,64 @@ async fn closing_web_contents_revokes_an_admitted_load_without_a_devtools_sessio
     assert!(
         matches!(prepare(&mut load, "closed").await, Err(error) if error.to_string().contains("canceled navigation"))
     );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn offline_navigation_loaders_preserve_typed_error_causes_through_context() {
+    use crate::browser::{NavigationNetworkError, NavigationNetworkErrorKind};
+    use crate::page::{SubresourceAuthCredentials, SubresourceAuthScheme, SubresourceAuthTarget};
+    let mut browser = BrowserFixture::new();
+    let navigation = browser.contents.navigation.start_document_navigation();
+    let mut load = browser.start(navigation).unwrap();
+    load.network_offline = true;
+    let requested_url = Url::parse("https://original.example/document").unwrap();
+    let url = requested_url.as_str();
+    let method = &"POST".to_owned();
+    let headers =
+        &moli_fetch::RequestHeaders::from_bytes(vec![("x-request".into(), vec![0xe9, 0xff])]);
+    let credentials = SubresourceAuthCredentials {
+        target: SubresourceAuthTarget::Server,
+        scheme: SubresourceAuthScheme::Basic,
+        username: "test-user".into(),
+        password: "test-password".into(),
+    };
+    let errors = [
+        load.fetch_navigation(method, url, None, headers.clone())
+            .await
+            .err()
+            .expect("offline document load must fail"),
+        load.fetch_navigation_with_auth(
+            method,
+            url,
+            None,
+            headers.clone(),
+            Some(credentials.clone()),
+        )
+        .await
+        .err()
+        .expect("offline streaming response fetch must fail"),
+        load.fetch_intercepted_auth_response(method, url, None, headers.clone(), credentials)
+            .await
+            .expect_err("offline authenticated response fetch must fail"),
+    ];
+    for error in errors {
+        let error = error
+            .context("failed to load document")
+            .context("failed to continue intercepted navigation");
+        let network_error = error
+            .downcast_ref::<NavigationNetworkError>()
+            .expect("navigation request identity must survive diagnostic context");
+        assert_eq!(
+            network_error.kind,
+            NavigationNetworkErrorKind::InternetDisconnected
+        );
+        assert_eq!(network_error.to_string(), "net::ERR_INTERNET_DISCONNECTED");
+        assert_eq!(network_error.unreachable_url, requested_url);
+        assert_eq!(network_error.request_method, *method);
+        assert_eq!(network_error.request_headers, *headers);
+        assert!(
+            error.root_cause().is::<NavigationNetworkError>(),
+            "network failure must be the error cause, not a context wrapper: {error:#}"
+        );
+    }
 }

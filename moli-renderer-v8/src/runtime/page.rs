@@ -19,10 +19,10 @@ use super::{
     DocumentStartScript, ExternalRawDocumentBodyStream, PageVmInitStage,
     RendererBrowserContextRuntime, RendererBrowserContextRuntimeOwner,
     RendererBrowserContextRuntimeOwnerAccess, RendererDocumentIsolateAccountingDiagnostics,
-    RendererInspectorSessionRestoreSnapshot, RendererOwnerCommand, RendererOwnerHandle,
-    RendererOwnerReply, RendererPageCreationArtifacts, RendererPageCreationDiagnostics,
-    RendererPageHandle, RendererPageReservationToken, RendererPageState,
-    RendererPendingDownloadActivation, RendererPerformanceMetricSnapshot,
+    RendererDocumentLifecycleObservation, RendererInspectorSessionRestoreSnapshot,
+    RendererOwnerCommand, RendererOwnerHandle, RendererOwnerReply, RendererPageCreationArtifacts,
+    RendererPageCreationDiagnostics, RendererPageHandle, RendererPageReservationToken,
+    RendererPageState, RendererPendingDownloadActivation, RendererPerformanceMetricSnapshot,
     RendererReservedServiceWorkerClient,
 };
 
@@ -50,6 +50,8 @@ pub struct RendererDocumentOptions {
 }
 
 pub(crate) struct PageVmStateCapture {
+    pub native_document_title: tokio::sync::watch::Receiver<super::RendererDocumentTitleChanged>,
+    pub(crate) document_lifecycle: RendererDocumentLifecycleObservation,
     pub(crate) final_url: Url,
     pub(crate) document_title: String,
     pub(crate) report: Arc<ScriptExecutionReport>,

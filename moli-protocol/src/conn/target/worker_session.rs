@@ -172,22 +172,6 @@ impl CdpConnection {
         }
     }
 
-    pub(crate) fn dedicated_worker_target_for_session(
-        &self,
-        session_id: Option<&str>,
-    ) -> Option<&DedicatedWorkerTargetState> {
-        let session_id = session_id?;
-        let CdpSessionRoute::DedicatedWorkerTarget {
-            browser_context_id,
-            target_id,
-        } = self.session_route(Some(session_id))?
-        else {
-            return None;
-        };
-        self.browser_context_by_id(&browser_context_id)?
-            .dedicated_worker_target(&target_id)
-    }
-
     pub(crate) fn dedicated_worker_target_for_session_mut(
         &mut self,
         session_id: Option<&str>,

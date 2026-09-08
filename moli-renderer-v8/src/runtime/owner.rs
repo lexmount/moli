@@ -100,6 +100,7 @@ use self::lifecycle_decision::PendingLifecycleNavigation;
 
 #[derive(Debug, Clone, Default)]
 pub struct RendererPreparedDocumentInspectionConfiguration {
+    pub navigator_queries: Option<moli_page_types::NavigatorQueryOverrides>,
     /// AgentHost's root-frame wire label; never a Browser object identity.
     pub root_frame_projection_id: Option<String>,
     /// Frozen wire occurrence appended between session reset and default-world
@@ -6957,6 +6958,7 @@ impl RendererOwnerHandle {
                 let (isolate_bootstrap, isolate_reservation) = isolate_allocator
                     .reserve_renderer_document_isolate(page_runtime_task_source)?;
                 Ok(RendererPreparedDocumentResidence {
+                    navigator_queries: None,
                     request,
                     isolate_allocator,
                     isolate_bootstrap,
@@ -6987,6 +6989,7 @@ impl RendererOwnerHandle {
         owner_local_store: &mut RendererOwnerLocalStore,
     ) -> RenderRuntimeDispatchOutcome {
         let RendererPreparedDocumentResidence {
+            navigator_queries: _,
             request,
             isolate_allocator,
             isolate_bootstrap,

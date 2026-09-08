@@ -10,6 +10,8 @@ pub struct RendererPageRecord {
 #[derive(Debug, Clone)]
 pub struct RendererPageState {
     residence: RendererOutputResidenceIdentity,
+    document_lifecycle: Option<RendererDocumentLifecycleObservation>,
+    native_document_title: Option<tokio::sync::watch::Receiver<RendererDocumentTitleChanged>>,
     view_generation: u64,
     pub requested_url: Url,
     pub navigation_initiator_url: Option<Url>,
@@ -51,6 +53,8 @@ impl RendererPageState {
 
         Arc::new(Self {
             residence,
+            document_lifecycle: Some(state_capture.document_lifecycle),
+            native_document_title: Some(state_capture.native_document_title),
             view_generation,
             requested_url,
             navigation_initiator_url,
@@ -75,6 +79,16 @@ impl RendererPageState {
         self.residence
     }
 
+    pub fn observe_document_lifecycle(&self) -> Option<RendererDocumentLifecycleObservation> {
+        self.document_lifecycle.clone()
+    }
+
+    pub fn observe_document_title(
+        &self,
+    ) -> Option<tokio::sync::watch::Receiver<RendererDocumentTitleChanged>> {
+        self.native_document_title.clone()
+    }
+
     /// Existing renderer Page-view revision at publication, not an output fence.
     pub fn view_generation(&self) -> u64 {
         self.view_generation
@@ -83,6 +97,8 @@ impl RendererPageState {
     #[cfg(any(test, feature = "test-support"))]
     pub fn new_for_test(page_id: PageId, requested_url: Url, final_url: Url) -> Self {
         Self {
+            document_lifecycle: None,
+            native_document_title: None,
             residence: RendererOutputResidenceIdentity::Page {
                 owner_local_host_id: RendererOwnerLocalHostId::new_for_testing(0),
                 page_id,

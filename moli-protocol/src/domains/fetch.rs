@@ -36,18 +36,22 @@ pub(crate) use crate::conn::PendingFetchAuthNavigation;
 pub(crate) use crate::conn::PendingFetchNavigation;
 #[cfg(test)]
 pub(crate) use helpers::encode_basic_auth;
-pub(crate) use helpers::request_paused_background_event;
+pub(crate) use helpers::extract_auth_challenge;
 #[cfg(test)]
 use helpers::response_headers_from_params;
 #[cfg(test)]
-pub(crate) use helpers::{emit_auth_required, extract_auth_challenge, request_auth_for_challenge};
+pub(crate) use helpers::{emit_auth_required, request_auth_for_challenge};
+pub(crate) use helpers::{
+    navigation_response_stage_request_paused_event, request_paused_background_event,
+};
 pub(crate) use helpers::{
     pending_subresource_auth_required_event,
     pending_subresource_response_stage_request_paused_event, populate_auth_challenge_origin,
 };
 #[cfg(test)]
 pub(crate) use moli_fetch::url_pattern_matches;
-pub(crate) use navigation::continue_navigation_without_request_pause_into_buffer_async;
+pub(crate) use navigation::prepare_navigation_response_stage;
+pub(crate) use navigation::register_navigation_auth_required_event_for_permit;
 use params::EnableParams;
 use patterns::supported_pattern_config;
 pub(crate) use subresource::{
@@ -268,16 +272,6 @@ impl FetchCommandOutput {
             self.record_command_status(status);
         }
         self.plan.extend(plan);
-    }
-
-    fn extend_plan_as_background_events(
-        &mut self,
-        plan: CommandOutputPlan,
-        command_id: Option<u64>,
-        session_id: Option<&str>,
-    ) {
-        self.plan
-            .extend(plan.into_background_event_plan(command_id, session_id));
     }
 
     fn set_renderer_output_predecessor(&mut self, predecessor: moli_core::RendererOutputFence) {
@@ -1067,12 +1061,10 @@ async fn release_main_document_interceptions_neutrally_async(
 ) {
     for pending in pending_navigations {
         let request = conn.take_navigation_request(pending.navigation_permit);
-        navigation::continue_navigation_request_as_background_events_async(
+        navigation::continue_navigation_request(
             conn,
-            out,
             crate::conn::ClaimedFetchNavigation::new(pending, request),
-        )
-        .await;
+        );
     }
     for pending in pending_auth_navigations {
         auth::default_navigation_auth_as_background_events_async(
@@ -1085,10 +1077,7 @@ async fn release_main_document_interceptions_neutrally_async(
     }
     for pending in pending_response_navigations {
         let transfer = conn.take_navigation_response(pending.permit);
-        navigation::continue_navigation_response_neutrally_as_background_events_async(
-            conn, out, pending, transfer,
-        )
-        .await;
+        navigation::continue_navigation_response_neutrally(conn, pending, transfer);
     }
 }
 

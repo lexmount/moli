@@ -89,18 +89,11 @@ mod tests {
         browser_context.attach_active_session("SID-audits".to_owned());
         ctx.conn
             .install_browser_context_fixture_for_test(browser_context);
-        ctx.install_navigation_fixture_for_session_owner(
+        ctx.install_quiet_navigation_fixture_for_session_owner(
             &format!("data:text/html,{html}"),
             Some("SID-audits"),
         )
         .await;
-        // The fixture crossed its exact renderer output fence. Separate its
-        // navigation publication from the Audits command's replay/response order.
-        for message in ctx.take_all() {
-            assert_eq!(message["method"], "Page.frameNavigated");
-            assert_eq!(message["sessionId"], "SID-audits");
-            assert_eq!(message["params"]["frame"]["id"], "TID-audits");
-        }
     }
 
     #[tokio::test(flavor = "multi_thread")]

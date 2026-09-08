@@ -2,21 +2,8 @@ use crate::conn::TargetPageResidenceIdentity;
 use crate::conn::state::TargetPageAbsenceReason;
 use crate::conn::state::{DevToolsRendererChannelError, DocumentId, DocumentProjectionFence};
 use crate::conn::{BrowserContext, PageAgentHost, TargetRuntimeSlot};
-use moli_core::browser::web_contents::DocumentNavigationDestination;
-use moli_core::browser::{
-    BrowserDocumentMaterialization, BrowserNavigationLoad, BrowserPreparedDocumentNavigation,
-    BrowserPreparedNavigationResponse, PendingDocumentRetirement,
-};
-use moli_core::page::RendererPageCommandPostResponseContinuation;
-
-pub(crate) struct LoadedNavigationPageCommit {
-    pub(crate) lifecycle: moli_core::browser::web_contents::CommittedDocumentLifecycle,
-    pub(crate) inspection_projection: Result<DocumentProjectionFence, DevToolsRendererChannelError>,
-    pub(crate) replaced_page_owner: Option<TargetPageResidenceIdentity>,
-    pub(crate) previous_document_retirement: PendingDocumentRetirement,
-    pub(crate) committed_document_post_response_continuation:
-        Option<RendererPageCommandPostResponseContinuation>,
-}
+#[cfg(test)]
+use moli_core::browser::PendingDocumentRetirement;
 
 pub(crate) struct DocumentInspectionProjection {
     pub(crate) fence: Result<Option<DocumentProjectionFence>, DevToolsRendererChannelError>,
@@ -47,7 +34,7 @@ impl BrowserContext {
         target_id: &str,
         fetch_defaults: moli_fetch::FetchConfig,
         browser_globals: &crate::conn::BrowserGlobalOverrides,
-    ) -> Result<moli_core::browser::BrowserInitialDocumentAdmission, String> {
+    ) -> Result<Option<moli_core::browser::BrowserInitialDocumentWaiter>, String> {
         let inherited =
             self.inherited_document_policy_for_target(target_id, fetch_defaults, browser_globals);
         let handle = self
@@ -57,14 +44,10 @@ impl BrowserContext {
             .start_initial_document(handle, inherited)
     }
 
-    pub(in crate::conn) fn commit_initial_document(
+    pub(in crate::conn) fn project_initial_document_commit(
         &mut self,
-        built: moli_core::browser::BrowserBuiltInitialDocument,
-    ) -> Result<
-        moli_core::page::RendererPageCreationDiagnostics,
-        Box<moli_core::browser::BrowserBuiltInitialDocument>,
-    > {
-        let commit = self.browser_context.commit_initial_document(built)?;
+        commit: moli_core::browser::BrowserCommittedInitialDocument,
+    ) -> moli_core::page::RendererPageCreationDiagnostics {
         // Native completion is final. A missing or retired AgentHost cannot
         // veto the Browser document or fail other Browser waiters.
         let Some(target_id) = self
@@ -72,14 +55,14 @@ impl BrowserContext {
             .get_for_web_contents(commit.key.web_contents())
             .map(|target| target.target_id().to_owned())
         else {
-            return Ok(commit.diagnostics);
+            return commit.diagnostics;
         };
         let target_id = target_id.as_str();
         let loader_id = self.target_initial_empty_document_loader_id_if_current(target_id);
         let lifecycle = commit.snapshot.metadata.lifecycle.clone();
         let Some(projection) = self.project_document_commit_snapshot(target_id, commit.snapshot)
         else {
-            return Ok(commit.diagnostics);
+            return commit.diagnostics;
         };
         if let Err(error) = projection.fence {
             tracing::warn!(%error, "initial document inspection projection failed");
@@ -93,7 +76,7 @@ impl BrowserContext {
                 loader_id,
             );
         }
-        Ok(commit.diagnostics)
+        commit.diagnostics
     }
 
     #[cfg(test)]
@@ -194,56 +177,6 @@ impl BrowserContext {
     }
 
     #[cfg(test)]
-    pub(crate) fn commit_target_navigation_for_test(
-        &mut self,
-        target_id: &str,
-        prepared: BrowserPreparedDocumentNavigation,
-    ) -> LoadedNavigationPageCommit {
-        let expected = self
-            .web_contents_handle_for_target(target_id)
-            .expect("navigation fixture target must own WebContents");
-        assert_eq!(
-            prepared.web_contents_id(),
-            expected.id(),
-            "navigation fixture must commit to its exact target"
-        );
-        self.commit_loaded_navigation(prepared)
-            .expect("navigation fixture commit must succeed")
-    }
-
-    #[cfg(test)]
-    pub(crate) async fn commit_active_navigation_for_test(
-        &mut self,
-        prepared: BrowserPreparedDocumentNavigation,
-    ) -> LoadedNavigationPageCommit {
-        let target_id = self
-            .active_target_id_owned()
-            .expect("active fixture target");
-        let committed = self.commit_target_navigation_for_test(&target_id, prepared);
-        // These unit fixtures retain test-only cookie policy across document
-        // replacement. Apply it to the exact newly committed Document before
-        // returning control to the test, without exposing a mutable Page.
-        let overrides = self
-            .page_targets
-            .get(&target_id)
-            .expect("committed fixture target")
-            .document_cookie_manager_surface
-            .snapshot()
-            .policy
-            .overrides;
-        if overrides != Default::default() {
-            let document = self
-                .document_handle_for_target(&target_id)
-                .expect("committed fixture Document");
-            self.browser_context
-                .apply_document_cookie_facade_overrides_for_test(document, Some(overrides))
-                .await
-                .expect("fixture cookie policy must apply to its exact Document");
-        }
-        committed
-    }
-
-    #[cfg(test)]
     pub(crate) fn clear_loaded_page_with_reason(
         &mut self,
         reason: TargetPageAbsenceReason,
@@ -300,7 +233,6 @@ impl BrowserContext {
         for target in projections.iter_mut() {
             target.runtime_slot.retire_for_target_close();
         }
-        self.target_popup_ids.clear();
         self.pending_popup_javascript_dialogs.clear();
         drop(projections);
     }
@@ -313,46 +245,6 @@ impl BrowserContext {
                 self.browser_context.id(),
                 id,
             ))
-    }
-
-    pub(in crate::conn) fn start_document_materialization_for_target(
-        &mut self,
-        target_id: &str,
-        navigation: moli_core::browser::NavigationId,
-        page: BrowserPreparedNavigationResponse,
-        destination: DocumentNavigationDestination,
-        fetch_defaults: moli_fetch::FetchConfig,
-        browser_globals: &crate::conn::BrowserGlobalOverrides,
-    ) -> Result<BrowserDocumentMaterialization, String> {
-        let inherited =
-            self.inherited_document_policy_for_target(target_id, fetch_defaults, browser_globals);
-        let handle = self
-            .web_contents_handle_for_target(target_id)
-            .ok_or("navigation WebContents unavailable")?;
-        self.browser_context.start_document_materialization(
-            handle,
-            navigation,
-            page,
-            destination,
-            inherited,
-        )
-    }
-
-    pub(in crate::conn) fn start_navigation_load_for_target(
-        &mut self,
-        target_id: &str,
-        navigation: moli_core::browser::NavigationId,
-        policy: moli_core::browser::NavigationRequestLoadPolicy,
-        fetch_defaults: moli_fetch::FetchConfig,
-        browser_globals: &crate::conn::BrowserGlobalOverrides,
-    ) -> Result<BrowserNavigationLoad, String> {
-        let inherited =
-            self.inherited_document_policy_for_target(target_id, fetch_defaults, browser_globals);
-        let handle = self
-            .web_contents_handle_for_target(target_id)
-            .ok_or("navigation WebContents unavailable")?;
-        self.browser_context
-            .start_navigation_load(handle, navigation, policy, inherited)
     }
 
     #[cfg(test)]
@@ -370,52 +262,6 @@ impl BrowserContext {
             .ok_or("navigation WebContents unavailable")?;
         self.browser_context
             .capture_document_policy_for_test(handle, inherited, final_url)
-    }
-
-    pub(crate) fn commit_loaded_navigation(
-        &mut self,
-        prepared: BrowserPreparedDocumentNavigation,
-    ) -> anyhow::Result<LoadedNavigationPageCommit> {
-        let navigation = prepared.navigation();
-        let commit = self
-            .browser_context
-            .commit_document_navigation(prepared)
-            .map_err(anyhow::Error::msg)?;
-        debug_assert_eq!(commit.snapshot.metadata.navigation, Some(navigation));
-        let lifecycle = commit.snapshot.metadata.lifecycle.clone();
-        let Some(target_id) = self
-            .page_targets
-            .get_for_web_contents(commit.snapshot.document.web_contents().id())
-            .map(|target| target.target_id().to_owned())
-        else {
-            return Ok(LoadedNavigationPageCommit {
-                lifecycle,
-                inspection_projection: Err(DevToolsRendererChannelError::Closed),
-                replaced_page_owner: None,
-                previous_document_retirement: commit.retirement,
-                committed_document_post_response_continuation: commit.post_response_continuation,
-            });
-        };
-        let target_id = target_id.as_str();
-        let projection = self.project_document_commit_snapshot(target_id, commit.snapshot);
-        let (inspection_projection, replaced_page_owner) = projection.map_or(
-            (Err(DevToolsRendererChannelError::Closed), None),
-            |projection| {
-                (
-                    projection
-                        .fence
-                        .and_then(|fence| fence.ok_or(DevToolsRendererChannelError::Closed)),
-                    projection.replaced_page_owner,
-                )
-            },
-        );
-        Ok(LoadedNavigationPageCommit {
-            lifecycle,
-            inspection_projection,
-            replaced_page_owner,
-            previous_document_retirement: commit.retirement,
-            committed_document_post_response_continuation: commit.post_response_continuation,
-        })
     }
 
     /// Both command completion and the Browser event stream consume the same

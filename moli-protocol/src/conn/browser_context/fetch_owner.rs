@@ -1,10 +1,7 @@
 use super::target_session_owner::TargetSessionOwnerMut;
 use super::*;
 use crate::conn::OpenBodyStreamError;
-use crate::conn::state::{
-    ClaimedNavigationRequest, InterceptedNavigationResponse, NavigationInterceptionPermit,
-    NavigationRequestInterception,
-};
+use crate::conn::state::{ClaimedNavigationRequest, NavigationInterceptionPermit};
 use crate::conn::state::{
     TargetFetchConfig, TargetFetchOwner, TargetFetchSubresourceInterceptionSnapshot,
 };
@@ -21,20 +18,6 @@ use crate::devtools_runtime::{DevToolsNetworkInterceptId, DevToolsNetworkResourc
 use crate::domains::network::TargetIoStreamRead;
 
 impl CdpConnection {
-    pub(crate) fn pause_navigation_request_for_owner(
-        &mut self,
-        owner: &CommandOwnerScope,
-        navigation: crate::conn::NavigationId,
-        request: NavigationRequestInterception,
-    ) -> Result<NavigationInterceptionPermit, String> {
-        let (browser_context_id, target_id) = self
-            .resolved_page_owner_identity_for_owner(owner)
-            .ok_or("navigation WebContents unavailable")?;
-        self.browser_context_by_id_mut(&browser_context_id)
-            .ok_or("navigation BrowserContext unavailable")?
-            .pause_navigation_request_for_target(&target_id, navigation, request)
-    }
-
     pub(crate) fn take_navigation_request(
         &mut self,
         permit: NavigationInterceptionPermit,
@@ -43,30 +26,6 @@ impl CdpConnection {
             .iter_mut()
             .chain(self.inactive_browser_contexts.iter_mut())
             .find_map(|context| context.take_navigation_request(permit))
-    }
-
-    pub(crate) fn pause_navigation_auth(
-        &mut self,
-        response: InterceptedNavigationResponse<moli_fetch::RawResponse>,
-    ) -> Result<NavigationInterceptionPermit, String> {
-        // Browser identity was frozen at load admission, before the fetch.
-        // Session routing and the current Target/loader are not authority here.
-        self.browser_context
-            .iter_mut()
-            .chain(self.inactive_browser_contexts.iter_mut())
-            .find(|context| context.owns_web_contents(response.web_contents()))
-            .ok_or("navigation BrowserContext unavailable")?
-            .pause_navigation_auth(response)
-    }
-
-    pub(crate) fn take_navigation_auth(
-        &mut self,
-        permit: NavigationInterceptionPermit,
-    ) -> Option<InterceptedNavigationResponse<moli_fetch::RawResponse>> {
-        self.browser_context
-            .iter_mut()
-            .chain(self.inactive_browser_contexts.iter_mut())
-            .find_map(|context| context.take_navigation_auth(permit))
     }
 
     pub(crate) fn take_navigation_response(
@@ -566,53 +525,6 @@ impl CdpConnection {
             })
     }
 
-    pub(crate) fn register_pending_fetch_response_navigation_for_owner(
-        &mut self,
-        owner: &CommandOwnerScope,
-        request_id: String,
-        document_navigation_token: Option<crate::conn::NavigationId>,
-        navigation: crate::conn::NavigationDispatchState,
-        body: crate::conn::DocumentBodySource,
-        body_progress_source: crate::domains::network::MainDocumentBodyProgressSource,
-        prepared_document: Option<Box<crate::conn::PausedResponsePreparedDocument>>,
-    ) -> bool {
-        let Some((browser_context_id, target_id)) =
-            self.resolved_page_owner_identity_for_owner(owner)
-        else {
-            return false;
-        };
-        let Some(document_navigation_token) = document_navigation_token else {
-            return false;
-        };
-        let transfer = PausedDocumentTransfer::pending(navigation.request_load_policy, body);
-        let Some(context) = self.browser_context_by_id_mut(&browser_context_id) else {
-            return false;
-        };
-        let Ok(permit) = context.pause_navigation_response_for_target(
-            &target_id,
-            document_navigation_token,
-            transfer,
-        ) else {
-            return false;
-        };
-        let Some(target) = context.page_target_mut(&target_id) else {
-            drop(context.take_navigation_response(permit));
-            return false;
-        };
-        target
-            .fetch_owner
-            .register_pending_fetch_response_navigation(
-                request_id,
-                PendingFetchResponseNavigation::new_with_response_projection(
-                    navigation,
-                    permit,
-                    body_progress_source,
-                    prepared_document,
-                ),
-            );
-        true
-    }
-
     pub(crate) fn take_pending_fetch_response_transfer_for_terminal_action_for_owner(
         &mut self,
         owner: &CommandOwnerScope,
@@ -630,6 +542,41 @@ impl CdpConnection {
             pending,
             transfer,
         ))
+    }
+
+    pub(crate) fn register_native_fetch_response_for_owner(
+        &mut self,
+        pending: PendingFetchNavigation,
+        permit: crate::conn::state::NavigationInterceptionPermit,
+    ) -> bool {
+        let Some((context_id, target_id)) =
+            self.resolved_page_owner_identity_for_owner(&pending.navigation.owner)
+        else {
+            return false;
+        };
+        let Some(target) = self
+            .browser_context_by_id_mut(&context_id)
+            .and_then(|context| context.page_target_mut(&target_id))
+        else {
+            return false;
+        };
+        if target
+            .fetch_owner
+            .pending_fetch_response_navigation(&pending.fetch_request_id)
+            .is_some()
+        {
+            return false;
+        }
+        target
+            .fetch_owner
+            .register_pending_fetch_response_navigation(
+                pending.fetch_request_id,
+                PendingFetchResponseNavigation::new(pending.navigation, permit),
+            );
+        self.browser_context_by_id_mut(&context_id)
+            .expect("resolved Context")
+            .observe_native_navigation_response_pause(&target_id, permit.navigation());
+        true
     }
 
     pub(crate) fn take_pending_fetch_response_transfer_for_body_read_for_owner(

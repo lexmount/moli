@@ -832,7 +832,23 @@ async fn detach_from_target_neutrally_resumes_paused_request_stage_navigation() 
     .await;
     ctx.expect_result(42, json!({}), None);
 
-    assert!(ctx.take_response_by_id(41)["result"].is_object());
+    crate::testing::wait_until_scheduler_message(
+        &mut ctx,
+        "detached navigation reply",
+        |message| message["id"] == json!(41) && message["sessionId"] == json!(session_id),
+    )
+    .await;
+    let navigation = ctx.take_response_by_id(41);
+    assert!(navigation["result"].is_object());
+    crate::testing::wait_until_renderer_document_load(
+        &mut ctx,
+        None,
+        &target_id,
+        navigation["result"]["loaderId"]
+            .as_str()
+            .expect("navigation loader"),
+    )
+    .await;
     assert!(
         !ctx.sent.iter().any(|message| {
             message["method"] == json!("Network.loadingFailed")
@@ -992,6 +1008,8 @@ async fn same_context_targets_keep_paused_fetch_state_target_local_after_switchi
     .await;
     ctx.expect_result(104203, json!({}), Some(&first_session_id));
 
+    crate::testing::wait_until_navigation_document_load(&mut ctx, 104198, Some(&first_session_id))
+        .await;
     let navigation = take_response_by_id(&mut ctx, 104198);
     assert_eq!(navigation["result"]["frameId"], json!(first_target_id));
 

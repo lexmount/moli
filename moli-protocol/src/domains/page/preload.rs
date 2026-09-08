@@ -61,17 +61,11 @@ struct RecordedDocumentStartScript {
 
 enum PendingCreateIsolatedWorldPhase {
     InitialDocumentNavigation(Box<super::navigation::PendingNavigateLoadCommand>),
-    InitialDocumentNavigationContinue(
-        Box<super::navigation::PendingContinueNavigationWithoutRequestPauseCommand>,
-    ),
     RendererPageCommand(PendingPageCommand),
 }
 
 enum CompletedCreateIsolatedWorldPhase {
     InitialDocumentNavigation(Box<super::navigation::CompletedNavigateLoadCommand>),
-    InitialDocumentNavigationContinue(
-        Box<super::navigation::CompletedContinueNavigationWithoutRequestPauseCommand>,
-    ),
     RendererPageCommand(Box<Result<CompletedPageCommand, String>>),
 }
 
@@ -95,11 +89,6 @@ impl PendingCreateIsolatedWorldCommand {
         let completed = match self.pending {
             PendingCreateIsolatedWorldPhase::InitialDocumentNavigation(pending) => {
                 CompletedCreateIsolatedWorldPhase::InitialDocumentNavigation(Box::new(
-                    pending.wait().await,
-                ))
-            }
-            PendingCreateIsolatedWorldPhase::InitialDocumentNavigationContinue(pending) => {
-                CompletedCreateIsolatedWorldPhase::InitialDocumentNavigationContinue(Box::new(
                     pending.wait().await,
                 ))
             }
@@ -1303,15 +1292,6 @@ fn start_create_isolated_world_initial_navigation_or_renderer_phase(
                 "UnexpectedSameDocumentNavigation",
             ))
         }
-        super::navigation::NavigateCommandStart::PendingContinueWithoutRequestPause(pending) => {
-            task.phase = CreateIsolatedWorldPhase::InitialDocumentNavigation;
-            pending_create_isolated_world_command_for_session(
-                command_id,
-                owner,
-                task,
-                PendingCreateIsolatedWorldPhase::InitialDocumentNavigationContinue(pending),
-            )
-        }
     }
 }
 
@@ -1509,19 +1489,8 @@ pub(super) async fn complete_pending_create_isolated_world_command(
         CreateIsolatedWorldPhase::InitialDocumentNavigation => {
             let navigation_step = match completed.completed {
                 CompletedCreateIsolatedWorldPhase::InitialDocumentNavigation(completed) => {
-                    super::navigation::complete_pending_navigate_load_command(
-                        conn,
-                        *completed,
-                        command_context,
-                    )
-                    .await
-                }
-                CompletedCreateIsolatedWorldPhase::InitialDocumentNavigationContinue(completed) => {
-                    super::navigation::complete_pending_continue_navigation_without_request_pause_command(
-                        conn,
-                        *completed,
-                    )
-                    .await
+                    super::navigation::complete_pending_navigate_load_command(conn, *completed)
+                        .await
                 }
                 CompletedCreateIsolatedWorldPhase::RendererPageCommand(_) => {
                     return PageCommandTaskStep::Complete(CommandOutputPlan::error(
@@ -1530,6 +1499,20 @@ pub(super) async fn complete_pending_create_isolated_world_command(
                     ));
                 }
             };
+            if let PageCommandTaskStep::Pending(pending) = navigation_step {
+                let super::PendingPageCommandKind::Navigate(navigation) = *pending.kind else {
+                    return PageCommandTaskStep::Complete(CommandOutputPlan::error(
+                        -32000,
+                        "Invalid createIsolatedWorld initial navigation continuation",
+                    ));
+                };
+                return pending_create_isolated_world_command_for_session(
+                    command_id,
+                    owner.clone(),
+                    completed.task,
+                    PendingCreateIsolatedWorldPhase::InitialDocumentNavigation(navigation),
+                );
+            }
             if let Err(plan) =
                 append_page_command_step_output(&mut completed.task.prefix_output, navigation_step)
             {
@@ -1569,8 +1552,7 @@ pub(super) async fn complete_pending_create_isolated_world_command(
                         }
                     }
                 }
-                CompletedCreateIsolatedWorldPhase::InitialDocumentNavigation(_)
-                | CompletedCreateIsolatedWorldPhase::InitialDocumentNavigationContinue(_) => {
+                CompletedCreateIsolatedWorldPhase::InitialDocumentNavigation(_) => {
                     return PageCommandTaskStep::Complete(CommandOutputPlan::error(
                         -32000,
                         "Invalid createIsolatedWorld runtime-activity completion",

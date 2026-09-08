@@ -25,6 +25,10 @@ fn download_policy_scopes_preserve_observer_shadowing_and_reset_fallback() {
         Some(true),
     )
     .unwrap();
+    assert_eq!(
+        conn.browser.download_policy().download_path.as_deref(),
+        Some("/global")
+    );
     command(
         &mut conn,
         "Browser.setDownloadBehavior",
@@ -77,6 +81,7 @@ fn download_policy_scopes_preserve_observer_shadowing_and_reset_fallback() {
     )
     .unwrap();
     conn.reset_download_policy(None).unwrap();
+    assert_eq!(conn.browser.download_policy(), DownloadPolicy::default());
     assert_eq!(
         conn.download_policy_for_browser_context(Some("first")),
         DownloadPolicy::default()

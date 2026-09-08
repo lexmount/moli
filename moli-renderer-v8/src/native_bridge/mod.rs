@@ -45,8 +45,7 @@ pub(crate) use identity::{
 pub(crate) use active_child_window::{
     active_child_window_handle, child_window_handle_from_marker_data,
     defer_active_child_window_restore, enter_active_child_window_scope,
-    entered_child_window_handle, restore_active_child_window_scope,
-    restore_deferred_active_child_window_scope_if_present,
+    restore_active_child_window_scope, restore_deferred_active_child_window_scope_if_present,
 };
 pub(crate) use child_window_surface::CALLBACK_ERROR_WINDOW_HANDLE_SLOT;
 pub(crate) use collections::install_collection_template_bindings;
@@ -63,7 +62,6 @@ pub(crate) use context_host::{
 };
 
 pub(crate) const ACTIVE_CHILD_WINDOW_HANDLE_SLOT: &str = "__moliActiveChildWindowHandle";
-pub(crate) const ENTERED_CHILD_WINDOW_HANDLE_SLOT: &str = "__moliEnteredChildWindowHandle";
 
 pub(crate) use bridge::wrapped_handle_value;
 pub(super) use bridge::*;

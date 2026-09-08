@@ -59,12 +59,38 @@ fn json_charge(value: &serde_json::Value) -> usize {
 
 fn observation_transport_charge_bytes(observation: &RendererProtocolObservation) -> usize {
     match observation {
-        RendererProtocolObservation::MainDocumentCommit(commit) => [
-            commit.frame_id.as_str(),
-            commit.loader_id.as_str(),
-            commit.url.as_str(),
-            commit.security_origin.as_str(),
-            commit.secure_context_type.as_str(),
+        RendererProtocolObservation::Popup(event) => {
+            string_charge(event.url()).saturating_add(string_charge(event.target_name()))
+        }
+        RendererProtocolObservation::JavaScriptDialog(event) => [
+            event.source_url.as_str(),
+            event.dialog_type.as_str(),
+            event.message.as_str(),
+            event.default_prompt.as_str(),
+        ]
+        .into_iter()
+        .map(string_charge)
+        .sum(),
+        RendererProtocolObservation::MainDocumentCommit(
+            crate::runtime::RendererMainDocumentCommit::Browser,
+        ) => 0,
+        RendererProtocolObservation::MainDocumentCommit(
+            crate::runtime::RendererMainDocumentCommit::Frame {
+                frame_id,
+                loader_id,
+                url,
+                unreachable_url,
+                security_origin,
+                secure_context_type,
+                ..
+            },
+        ) => [
+            frame_id.as_str(),
+            loader_id.as_str(),
+            url.as_str(),
+            unreachable_url.as_deref().unwrap_or_default(),
+            security_origin.as_str(),
+            secure_context_type.as_str(),
         ]
         .into_iter()
         .map(string_charge)
@@ -124,18 +150,6 @@ fn owner_action_transport_charge_bytes(action: &RendererOwnerAction) -> usize {
                     .saturating_add(response.body.capacity());
             }
             total
-        }
-        RendererOwnerAction::JavaScriptDialog(event) => [
-            event.source_url(),
-            event.dialog_type(),
-            event.message(),
-            event.default_prompt(),
-        ]
-        .into_iter()
-        .map(string_charge)
-        .sum(),
-        RendererOwnerAction::Popup(event) => {
-            string_charge(event.url()).saturating_add(string_charge(event.target_name()))
         }
         RendererOwnerAction::ChildFrameTree { event, .. } => match event {
             crate::protocol_types::ChildFrameTreeEventSnapshot::Attached(event) => {

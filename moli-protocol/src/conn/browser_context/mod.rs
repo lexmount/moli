@@ -9,6 +9,8 @@ mod emulation_owner;
 mod fetch_owner;
 mod lifecycle;
 mod lookup;
+mod navigation_decisions;
+mod navigation_events;
 mod network_owner;
 mod page_owner;
 mod runtime_owner;
@@ -20,4 +22,5 @@ pub(crate) use page_owner::PageLifecycleEventsEnableResult;
 pub(crate) use runtime_owner::{
     SessionOwnerInspectorEnableResult, SessionOwnerRuntimeFrontendEnableResult,
 };
+#[cfg(test)]
 pub(crate) use target_session_owner::TargetNavigationLoadInputs;

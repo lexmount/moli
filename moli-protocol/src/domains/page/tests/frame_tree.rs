@@ -245,14 +245,10 @@ async fn get_frame_tree_projects_sandboxed_about_blank_from_document_url() {
     let page_url =
         "data:text/html,<iframe name='sandboxed-blank' sandbox src='about:blank'></iframe>";
     load_bc_with_target(&mut ctx, "BID-SANDBOX-BLANK", "TID-SANDBOX-BLANK", page_url);
-    let page = ctx
-        .conn
-        .load_page_via_runtime_async(page_url)
-        .await
-        .expect("page should load");
+    ctx.install_navigation_fixture_for_session_owner(page_url, None)
+        .await;
     {
         let bc = ctx.conn.browser_context.as_mut().expect("browser context");
-        let _ = bc.commit_active_navigation_for_test(page).await;
         bc.set_target_security_origin("https://top.example".into());
         bc.set_target_secure_context_type("Secure".into());
     }
@@ -273,14 +269,10 @@ async fn get_frame_tree_recurses_into_nested_child_frames() {
     let mut ctx = TestContext::new();
     let page_url = r#"data:text/html,<iframe name="outer" srcdoc="<iframe name='inner' srcdoc='<p>nested</p>'></iframe>"></iframe>"#;
     load_bc_with_target(&mut ctx, "BID-11", "FID-000000000Z", page_url);
-    let page = ctx
-        .conn
-        .load_page_via_runtime_async(page_url)
-        .await
-        .expect("page should load");
+    ctx.install_navigation_fixture_for_session_owner(page_url, None)
+        .await;
     {
         let bc = ctx.conn.browser_context.as_mut().expect("browser context");
-        let _ = bc.commit_active_navigation_for_test(page).await;
         bc.set_target_security_origin("https://top.example".into());
         bc.set_target_secure_context_type("Secure".into());
     }
@@ -331,14 +323,10 @@ async fn get_frame_tree_projects_nested_sandboxed_srcdoc_from_document_urls() {
     let mut ctx = TestContext::new();
     let page_url = r#"data:text/html,<iframe sandbox srcdoc="<iframe srcdoc='<p>nested</p>'></iframe>"></iframe>"#;
     load_bc_with_target(&mut ctx, "BID-NESTED-ORIGIN", "FID-NESTED-ORIGIN", page_url);
-    let page = ctx
-        .conn
-        .load_page_via_runtime_async(page_url)
-        .await
-        .expect("page should load");
+    ctx.install_navigation_fixture_for_session_owner(page_url, None)
+        .await;
     {
         let bc = ctx.conn.browser_context.as_mut().expect("browser context");
-        let _ = bc.commit_active_navigation_for_test(page).await;
         bc.set_target_security_origin("https://top.example".into());
         bc.set_target_secure_context_type("Secure".into());
     }

@@ -1048,6 +1048,7 @@ pub(crate) fn command_waits_for_document_projection(cmd: &Cmd<'_>) -> bool {
             RuntimeAction::AddBinding
                 | RuntimeAction::RemoveBinding
                 | RuntimeAction::TerminateExecution
+                | RuntimeAction::RunIfWaitingForDebugger
         )
     )
 }
@@ -1768,18 +1769,6 @@ fn start_runtime_enable_command_for_owner(
         }
     };
     if !has_renderer {
-        if conn.can_defer_initial_document_page_build() {
-            match conn.set_runtime_frontend_enabled_for_owner(&owner_scope, true) {
-                SessionOwnerRuntimeFrontendEnableResult::Handled => {}
-                SessionOwnerRuntimeFrontendEnableResult::UnknownSession => {
-                    return RuntimeCommandTaskStep::Complete(CommandOutputPlan::error(
-                        -32001,
-                        "Unknown sessionId",
-                    ));
-                }
-            }
-            return RuntimeCommandTaskStep::Complete(CommandOutputPlan::success());
-        }
         return RuntimeCommandTaskStep::Complete(CommandOutputPlan::error(
             -32000,
             "NoDocumentLoaded",
@@ -8543,7 +8532,7 @@ async fn complete_pending_runtime_inspector_command(
         if completed.action == "runIfWaitingForDebugger"
             && conn.release_waiting_for_debugger_session(completed.session_id())
         {
-            crate::domains::target::schedule_initial_document_target_url_navigation_after_debugger_resume(
+            crate::domains::target::schedule_navigation_decision_after_debugger_resume(
                 conn,
                 completed.session_id(),
             );

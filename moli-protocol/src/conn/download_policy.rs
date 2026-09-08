@@ -92,7 +92,7 @@ impl CdpConnection {
                 *subscription = enabled;
             }
         } else {
-            self.download_policy = policy;
+            self.browser.set_download_policy(policy);
             if let Some(enabled) = automation_events {
                 self.download_subscriptions.automation_events_enabled = enabled;
             }
@@ -108,7 +108,7 @@ impl CdpConnection {
             context.set_download_policy(None);
             context.automation_download_events_enabled = None;
         } else {
-            self.download_policy = DownloadPolicy::default();
+            self.browser.set_download_policy(DownloadPolicy::default());
             self.download_subscriptions.automation_events_enabled = false;
         }
         Ok(())
@@ -122,10 +122,9 @@ impl CdpConnection {
         context_id
             .and_then(|id| self.browser_context_by_id(id))
             .and_then(|context| context.download_policy())
-            .unwrap_or_else(|| self.download_policy.clone())
+            .unwrap_or_else(|| self.browser.download_policy())
     }
 
-    #[cfg(test)]
     pub(crate) fn automation_download_events_enabled_for_context(
         &self,
         context_id: Option<&str>,
@@ -144,7 +143,7 @@ impl CdpConnection {
         Some((
             context
                 .download_policy()
-                .unwrap_or_else(|| self.download_policy.clone()),
+                .unwrap_or_else(|| self.browser.download_policy()),
             context
                 .automation_download_events_enabled
                 .unwrap_or(self.download_subscriptions.automation_events_enabled),

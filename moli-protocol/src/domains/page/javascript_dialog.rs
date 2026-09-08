@@ -46,7 +46,9 @@ fn emit_one(
                 .to_owned();
             let target_id = conn
                 .browser_context_by_id(&browser_context_id)
-                .and_then(|context| context.target_id_for_popup_id(popup_id))
+                .and_then(|context| {
+                    context.target_id_for_popup_document(dialog.browser_document(), popup_id)
+                })
                 .map(str::to_owned);
             if let Some(target_id) = target_id {
                 emit_popup_dialogs_for_target(
@@ -111,11 +113,11 @@ fn emit_to_attachment(
     let message = dialog.message().to_owned();
     let dialog_type = dialog.dialog_type().to_owned();
     let default_prompt = dialog.default_prompt().to_owned();
-    if !conn.install_javascript_dialog_for_session(
+    if !conn.project_javascript_dialog_for_session(
         event_session_id.as_deref(),
         destination_page_owner,
         source_frame_id.clone(),
-        dialog.into_renderer_dialog(),
+        dialog.into_native_dialog(),
     ) {
         return;
     }
@@ -140,6 +142,7 @@ pub(super) fn settle_pending_popup_dialogs(
     conn: &mut CdpConnection,
     out: &mut Vec<BackgroundProtocolEvent>,
     browser_context_id: &str,
+    source_document: moli_core::browser::DocumentHandle,
     popup_id: Option<u64>,
     target_id: Option<&str>,
 ) {
@@ -148,7 +151,7 @@ pub(super) fn settle_pending_popup_dialogs(
     };
     let dialogs = conn
         .browser_context_by_id_mut(browser_context_id)
-        .map(|context| context.take_pending_popup_javascript_dialogs(popup_id))
+        .map(|context| context.take_pending_popup_javascript_dialogs(source_document, popup_id))
         .unwrap_or_default();
     let Some(target_id) = target_id else {
         drop(dialogs);
@@ -199,12 +202,15 @@ fn emit_popup_dialogs_for_target(
 
 #[cfg(test)]
 pub(super) fn capture_for_test(
+    conn: &CdpConnection,
     source_page_owner: TargetPageResidenceIdentity,
     source_session_id: Option<&str>,
     dialog_scope: TargetJavaScriptDialogScopeObserver,
     root_frame_id: &str,
     renderer_dialog: RendererPendingJavaScriptDialog,
 ) -> PreparedJavaScriptDialog {
+    let (context, dialog) =
+        conn.admit_javascript_dialog_for_test(&source_page_owner, renderer_dialog);
     TargetPreparedJavaScriptDialog::capture(
         TargetPageProtocolAttachmentIdentity::new(
             source_page_owner,
@@ -212,6 +218,7 @@ pub(super) fn capture_for_test(
         ),
         dialog_scope,
         root_frame_id,
-        renderer_dialog,
+        context,
+        dialog,
     )
 }

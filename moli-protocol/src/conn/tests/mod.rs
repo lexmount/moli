@@ -7,19 +7,10 @@ use super::{
     BrowserContextFirstCookieRequest, BrowserContextReservedSiteDataOwnerState,
     BrowserContextSiteDataManagerOwnerState, BrowserContextStructuredCookieCommandVerdict,
     BrowserContextStructuredCookieWriteBackendStatus,
-    BrowserContextStructuredCookieWriteReadinessStatus, CdpConnection, CommandDispatchContext,
-    CommandResponseFlushContext, NavigationBackgroundEvent, NavigationDispatchState,
-    NavigationResultProjection, ServiceWorkerTargetState, SharedWorkerTargetState, build_event,
+    BrowserContextStructuredCookieWriteReadinessStatus, CdpConnection, CommandResponseFlushContext,
+    ServiceWorkerTargetState, SharedWorkerTargetState,
 };
-use crate::devtools_runtime::{
-    AutomationEvent, DevToolsFrameId, DevToolsLoaderId, DevToolsTargetFilterEntry,
-    DevToolsTargetId, NavigationFrameEvent, NavigationFrameEventKind,
-};
-use crate::domains::network::{
-    FailedNavigationResponseMode, MaterializedFailedDocumentProgress,
-    MaterializedNavigationLoadOutcome, empty_main_document_progress_gate_for_test,
-};
-use crate::domains::page::MaterializedNavigationCompletion;
+use crate::devtools_runtime::DevToolsTargetFilterEntry;
 use crate::testing::TestContext;
 use moli_cookie_jar::{
     BrowserCookieFacadeContextOverrides, BrowserCookieFacadeOverrides, CookieSiteDataClearScope,
@@ -40,7 +31,6 @@ use url::Url;
 
 mod cookie_surfaces;
 mod message;
-mod navigation_error;
 mod resource_runtime;
 mod site_data;
 
@@ -427,38 +417,6 @@ fn missing_command_response_flush_context_releases_immediately() {
 }
 
 #[test]
-fn background_navigation_completion_sender_routes_explicit_session_owners() {
-    let mut conn = crate::test_support::connection();
-    let mut active = conn.new_browser_context_fixture_for_test("BID-active".to_owned());
-    active.set_active_target_id("TID-active");
-    active.attach_active_session("SID-active");
-    conn.install_browser_context_fixture_for_test(active);
-
-    let mut inactive = conn.new_browser_context_fixture_for_test("BID-inactive".to_owned());
-    inactive.set_active_target_id("TID-inactive");
-    inactive.attach_active_session("SID-inactive");
-    conn.push_inactive_browser_context_fixture_for_test(inactive);
-
-    let (sender, _receiver) = tokio::sync::mpsc::unbounded_channel();
-    conn.set_background_navigation_completion_sender(sender);
-
-    assert!(
-        conn.background_navigation_completion_sender_for_owner(
-            &crate::conn::CommandOwnerScope::for_session("SID-active")
-        )
-        .is_some(),
-        "a command scoped to a concrete target owner can continue navigation work in the background"
-    );
-    assert!(
-        conn.background_navigation_completion_sender_for_owner(
-            &crate::conn::CommandOwnerScope::for_session("SID-inactive")
-        )
-        .is_some(),
-        "inactive-context target owners should also be routable by explicit session id"
-    );
-}
-
-#[test]
 fn navigation_gate_resolves_websocket_events_to_their_session_target() {
     let mut conn = crate::test_support::connection();
     let mut target_a = conn.new_browser_context_fixture_for_test("BID-A".to_owned());
@@ -484,7 +442,7 @@ fn navigation_gate_resolves_websocket_events_to_their_session_target() {
         }
     }));
 
-    assert!(target_b_websocket.should_wait_for_background_navigation_completion());
+    assert!(target_b_websocket.is_non_document_network_event());
     assert!(conn.has_inflight_background_navigation());
     assert_eq!(
         conn.background_navigation_target_id_for_event(&target_b_websocket)
@@ -495,30 +453,6 @@ fn navigation_gate_resolves_websocket_events_to_their_session_target() {
         !conn.has_inflight_background_navigation_for_target("TID-B"),
         "target A's navigation must not gate target B's WebSocket events"
     );
-}
-
-#[test]
-fn navigation_background_event_queue_drains_current_token() {
-    let mut conn = crate::test_support::connection();
-    let mut browser_context = conn.new_browser_context_fixture_for_test("CTX-nav".to_owned());
-    browser_context.set_active_target_id("TID-nav");
-    let token = browser_context
-        .start_document_navigation_for_active_target("LOADER-1".to_owned())
-        .expect("active target should produce navigation token");
-    conn.install_browser_context_fixture_for_test(browser_context);
-    let message = build_event(
-        "Page.frameStartedLoading",
-        json!({ "frameId": "TID-nav" }),
-        None,
-    );
-
-    conn.enqueue_navigation_background_event(NavigationBackgroundEvent::protocol_message(
-        token,
-        message.clone(),
-    ));
-
-    assert_eq!(conn.drain_navigation_background_events(), vec![message]);
-    assert!(conn.drain_navigation_background_events().is_empty());
 }
 
 #[test]
@@ -748,21 +682,20 @@ async fn memory_diagnostics_reports_page_vm_document_isolate_model() {
         None,
     );
     conn.insert_browser_context(browser_context);
-    let first_page = conn
-        .load_page_via_runtime_async("data:text/html,<!doctype html><body>first</body>")
-        .await
-        .expect("first shared diagnostics page should load");
+    conn.install_navigation_fixture_for_session_owner_for_test(
+        "data:text/html,<!doctype html><body>first</body>",
+        None,
+    )
+    .await;
     conn.browser_context
         .as_mut()
         .expect("browser context")
         .set_active_target_id("TID-shared-diagnostics-bg");
-    let second_page = conn
-        .load_page_via_runtime_async("data:text/html,<!doctype html><body>second</body>")
-        .await
-        .expect("second shared diagnostics page should load");
-    let browser_context = conn.browser_context.as_mut().expect("browser context");
-    browser_context.commit_target_navigation_for_test("TID-shared-diagnostics-active", first_page);
-    browser_context.commit_target_navigation_for_test("TID-shared-diagnostics-bg", second_page);
+    conn.install_navigation_fixture_for_session_owner_for_test(
+        "data:text/html,<!doctype html><body>second</body>",
+        None,
+    )
+    .await;
 
     let pending_diagnostics = conn
         .start_moli_diagnostics()
@@ -969,22 +902,20 @@ async fn memory_diagnostics_excludes_empty_page_hosts_from_document_isolates() {
         None,
     );
     conn.insert_browser_context(browser_context);
-    let first_page = conn
-        .load_page_via_runtime_async("data:text/html,<!doctype html><body>first</body>")
-        .await
-        .expect("first shared diagnostics page should load");
+    conn.install_navigation_fixture_for_session_owner_for_test(
+        "data:text/html,<!doctype html><body>first</body>",
+        None,
+    )
+    .await;
     conn.browser_context
         .as_mut()
         .expect("browser context")
         .set_active_target_id("TID-doc-owner-diagnostics-bg");
-    let second_page = conn
-        .load_page_via_runtime_async("data:text/html,<!doctype html><body>second</body>")
-        .await
-        .expect("second shared diagnostics page should load");
-    let browser_context = conn.browser_context.as_mut().expect("browser context");
-    browser_context
-        .commit_target_navigation_for_test("TID-doc-owner-diagnostics-active", first_page);
-    browser_context.commit_target_navigation_for_test("TID-doc-owner-diagnostics-bg", second_page);
+    conn.install_navigation_fixture_for_session_owner_for_test(
+        "data:text/html,<!doctype html><body>second</body>",
+        None,
+    )
+    .await;
 
     let mut empty_context = conn.new_browser_context_fixture_for_test("BID-empty-page".to_owned());
     empty_context.set_active_target_id("TID-empty-page");
@@ -1439,294 +1370,6 @@ async fn memory_diagnostics_splits_pending_inspector_await_counts_by_target_owne
         diagnostics["activeBrowserContext"]["targetHosts"]["pendingInspectorAwaitCount"],
         json!(3)
     );
-}
-
-#[test]
-fn navigation_background_event_queue_drops_stale_token() {
-    let mut conn = crate::test_support::connection();
-    let mut browser_context = conn.new_browser_context_fixture_for_test("CTX-nav".to_owned());
-    browser_context.set_active_target_id("TID-nav");
-    let stale = browser_context
-        .start_document_navigation_for_active_target("LOADER-1".to_owned())
-        .expect("active target should produce stale token");
-    let current = browser_context
-        .start_document_navigation_for_active_target("LOADER-2".to_owned())
-        .expect("active target should produce current token");
-    conn.install_browser_context_fixture_for_test(browser_context);
-    let stale_message = build_event(
-        "Page.frameStartedLoading",
-        json!({ "frameId": "TID-nav", "loaderId": "LOADER-1" }),
-        None,
-    );
-    let current_message = build_event(
-        "Page.frameStartedLoading",
-        json!({ "frameId": "TID-nav", "loaderId": "LOADER-2" }),
-        None,
-    );
-
-    conn.enqueue_navigation_background_event(NavigationBackgroundEvent::protocol_message(
-        stale,
-        stale_message,
-    ));
-    conn.enqueue_navigation_background_event(NavigationBackgroundEvent::protocol_message(
-        current,
-        current_message.clone(),
-    ));
-
-    assert_eq!(
-        conn.drain_navigation_background_events(),
-        vec![current_message]
-    );
-}
-
-#[test]
-fn navigation_background_event_queue_preserves_order_for_current_token() {
-    let mut conn = crate::test_support::connection();
-    let mut browser_context = conn.new_browser_context_fixture_for_test("CTX-nav-order".to_owned());
-    browser_context.set_active_target_id("TID-nav-order");
-    let stale = browser_context
-        .start_document_navigation_for_active_target("LOADER-1".to_owned())
-        .expect("active target should produce stale navigation token");
-    let current = browser_context
-        .start_document_navigation_for_active_target("LOADER-2".to_owned())
-        .expect("active target should produce current navigation token");
-    conn.install_browser_context_fixture_for_test(browser_context);
-
-    let stale_message = build_event(
-        "Page.frameStartedLoading",
-        json!({ "frameId": "TID-nav-order", "loaderId": "LOADER-1" }),
-        None,
-    );
-    let current_first_message = build_event(
-        "Page.frameStartedLoading",
-        json!({ "frameId": "TID-nav-order", "loaderId": "LOADER-2", "step": 1 }),
-        None,
-    );
-    let current_second_message = build_event(
-        "Page.frameStoppedLoading",
-        json!({ "frameId": "TID-nav-order", "loaderId": "LOADER-2", "step": 2 }),
-        None,
-    );
-
-    conn.enqueue_navigation_background_event(NavigationBackgroundEvent::protocol_message(
-        stale,
-        stale_message,
-    ));
-    conn.enqueue_navigation_background_event(NavigationBackgroundEvent::protocol_message(
-        current,
-        current_first_message.clone(),
-    ));
-    conn.enqueue_navigation_background_event(NavigationBackgroundEvent::protocol_message(
-        current,
-        current_second_message.clone(),
-    ));
-
-    assert_eq!(
-        conn.drain_navigation_background_events(),
-        vec![current_first_message, current_second_message]
-    );
-}
-
-#[test]
-fn navigation_background_event_sender_preserves_typed_sidecar_for_current_token() {
-    let mut conn = crate::test_support::connection();
-    let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
-    conn.set_background_event_sender(tx);
-    let mut browser_context = conn.new_browser_context_fixture_for_test("CTX-nav-typed".to_owned());
-    browser_context.set_active_target_id("TID-nav-typed");
-    let current = browser_context
-        .start_document_navigation_for_active_target("LOADER-typed".to_owned())
-        .expect("active target should produce current navigation token");
-    conn.install_browser_context_fixture_for_test(browser_context);
-    let message = build_event(
-        "Page.frameStartedNavigating",
-        json!({
-            "frameId": "TID-nav-typed",
-            "loaderId": "LOADER-typed",
-            "url": "https://example.test/",
-            "navigationType": "differentDocument"
-        }),
-        None,
-    );
-    let automation_event = AutomationEvent::NavigationFrame(NavigationFrameEvent {
-        target_id: DevToolsTargetId::from("TID-nav-typed"),
-        frame_id: DevToolsFrameId::from("TID-nav-typed"),
-        parent_frame_id: None,
-        loader_id: Some(DevToolsLoaderId::from("LOADER-typed")),
-        url: "https://example.test/".to_owned(),
-        kind: NavigationFrameEventKind::StartedNavigating,
-        frame_name: None,
-        security_origin: None,
-        secure_context_type: None,
-    });
-
-    conn.send_navigation_background_protocol_event(
-        current,
-        BackgroundProtocolEvent::immediate_automation_event(
-            message.clone(),
-            automation_event.clone(),
-        ),
-    );
-
-    let background_event = rx
-        .try_recv()
-        .expect("current navigation event should flush to background sender");
-    let (actual_message, actual_automation_event) = background_event.into_parts();
-    assert_eq!(actual_message, message);
-    assert_eq!(actual_automation_event, Some(automation_event));
-}
-
-#[tokio::test]
-async fn materialized_navigation_completion_drops_stale_token() {
-    let mut conn = crate::test_support::connection();
-    let mut browser_context = conn.new_browser_context_fixture_for_test("CTX-nav".to_owned());
-    browser_context.set_active_target_id("TID-nav");
-    let stale = browser_context
-        .start_document_navigation_for_active_target("LOADER-1".to_owned())
-        .expect("active target should produce stale token");
-    let _current = browser_context
-        .start_document_navigation_for_active_target("LOADER-2".to_owned())
-        .expect("active target should produce current token");
-    conn.install_browser_context_fixture_for_test(browser_context);
-    let state =
-        materialized_navigation_test_state(Some(7), "LOADER-1", "https://example.test/stale");
-    let navigation =
-        MaterializedNavigationLoadOutcome::Failed(MaterializedFailedDocumentProgress {
-            error_text: "stale navigation should not emit".to_owned(),
-            response_mode: FailedNavigationResponseMode::ProtocolError,
-            progress_gate: empty_main_document_progress_gate_for_test(),
-        });
-
-    let mut out = Vec::new();
-    let mut command_context = CommandDispatchContext::default();
-    conn.drain_materialized_navigation_completion_into(
-        &mut out,
-        MaterializedNavigationCompletion::new(stale, state, navigation),
-        &mut command_context,
-    )
-    .await;
-
-    assert_eq!(out.len(), 1, "stale completion must emit terminal reply");
-    let reply = &out[0];
-    assert_eq!(reply["id"], serde_json::json!(7));
-    assert!(
-        reply.get("error").is_none(),
-        "CDP reports a superseded Page.navigate as a successful command: {reply:#?}"
-    );
-    assert_eq!(
-        reply["result"],
-        serde_json::json!({
-            "frameId": "TID-nav",
-            "errorText": "net::ERR_ABORTED",
-            "isDownload": false
-        })
-    );
-    assert!(
-        reply.get("method").is_none(),
-        "stale completion must emit a command reply, not an event"
-    );
-}
-
-#[tokio::test]
-async fn materialized_navigation_completion_drops_stale_token_without_navigate_id() {
-    let mut conn = crate::test_support::connection();
-    let mut browser_context = conn.new_browser_context_fixture_for_test("CTX-nav-none".to_owned());
-    browser_context.set_active_target_id("TID-nav-none");
-    let stale = browser_context
-        .start_document_navigation_for_active_target("LOADER-1".to_owned())
-        .expect("active target should produce stale navigation token");
-    let _ = browser_context
-        .start_document_navigation_for_active_target("LOADER-2".to_owned())
-        .expect("active target should produce current navigation token");
-    conn.install_browser_context_fixture_for_test(browser_context);
-    let state =
-        materialized_navigation_test_state(None, "LOADER-1", "https://example.test/stale-no-id");
-    let navigation =
-        MaterializedNavigationLoadOutcome::Failed(MaterializedFailedDocumentProgress {
-            error_text: "stale navigation should not emit without a navigate id".to_owned(),
-            response_mode: FailedNavigationResponseMode::ProtocolError,
-            progress_gate: empty_main_document_progress_gate_for_test(),
-        });
-
-    let mut out = Vec::new();
-    let mut command_context = CommandDispatchContext::default();
-    conn.drain_materialized_navigation_completion_into(
-        &mut out,
-        MaterializedNavigationCompletion::new(stale, state, navigation),
-        &mut command_context,
-    )
-    .await;
-
-    assert!(
-        out.is_empty(),
-        "stale completion without navigate id must not emit protocol output"
-    );
-}
-
-#[tokio::test]
-async fn materialized_navigation_completion_drains_current_token() {
-    let mut conn = crate::test_support::connection();
-    let mut browser_context = conn.new_browser_context_fixture_for_test("CTX-nav".to_owned());
-    browser_context.set_active_target_id("TID-nav");
-    let current = browser_context
-        .start_document_navigation_for_active_target("LOADER-1".to_owned())
-        .expect("active target should produce current token");
-    conn.install_browser_context_fixture_for_test(browser_context);
-    let state =
-        materialized_navigation_test_state(Some(8), "LOADER-1", "https://example.test/current");
-    let navigation =
-        MaterializedNavigationLoadOutcome::Failed(MaterializedFailedDocumentProgress {
-            error_text: "current navigation should emit".to_owned(),
-            response_mode: FailedNavigationResponseMode::ProtocolError,
-            progress_gate: empty_main_document_progress_gate_for_test(),
-        });
-
-    let mut out = Vec::new();
-    let mut command_context = CommandDispatchContext::default();
-    conn.drain_materialized_navigation_completion_into(
-        &mut out,
-        MaterializedNavigationCompletion::new(current, state, navigation),
-        &mut command_context,
-    )
-    .await;
-
-    assert_eq!(out.len(), 1);
-    assert_eq!(out[0]["id"], json!(8));
-    assert_eq!(out[0]["error"]["code"], json!(-32000));
-    assert_eq!(
-        out[0]["error"]["message"],
-        json!("current navigation should emit")
-    );
-}
-
-fn materialized_navigation_test_state(
-    navigate_id: Option<u64>,
-    loader_id: &str,
-    requested_url: &str,
-) -> NavigationDispatchState {
-    NavigationDispatchState {
-        redirect_chain: Vec::new(),
-        redirect_headers: None,
-        navigate_id,
-        owner: crate::conn::CommandOwnerScope::for_route(crate::conn::CdpSessionRoute::Browser),
-        web_contents: NavigationDispatchState::detached_web_contents_for_test(),
-        result_projection: NavigationResultProjection::Cdp(
-            json!({ "frameId": "TID-nav", "loaderId": loader_id }),
-        ),
-        frame_id: "TID-nav".to_owned(),
-        session_id: None,
-        request_id: Some(loader_id.to_owned()),
-        loader_id: loader_id.to_owned(),
-        request_announced: true,
-        requested_url: Url::parse(requested_url).unwrap(),
-        request_method: "GET".to_owned(),
-        request_body: None,
-        request_body_bytes: None,
-        request_headers: Vec::new().into(),
-        request_load_policy: crate::conn::NavigationRequestLoadPolicy::DocumentInitiated,
-        timestamp: 0.0,
-        source_document_security: Default::default(),
-    }
 }
 
 fn site_summary(

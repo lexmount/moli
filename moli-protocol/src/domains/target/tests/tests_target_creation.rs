@@ -1,5 +1,26 @@
 use super::*;
 
+async fn load_native_popup_creator(ctx: &mut TestContext) -> (String, tokio::task::JoinHandle<()>) {
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let origin = format!("http://{}", listener.local_addr().unwrap());
+    let server = tokio::spawn(async move {
+        axum::serve(
+            listener,
+            axum::Router::new().route(
+                "/",
+                axum::routing::get(|| async {
+                    axum::response::Html("<main>native popup creator</main>")
+                }),
+            ),
+        )
+        .await
+        .unwrap();
+    });
+    ctx.install_quiet_navigation_fixture_for_session_owner(&format!("{origin}/"), None)
+        .await;
+    (origin, server)
+}
+
 fn stored_cookie(name: &str, value: &str) -> moli_cookie_jar::StoredCookie {
     moli_cookie_jar::StoredCookie {
         name: name.to_owned(),
@@ -1097,7 +1118,7 @@ async fn window_open_hands_off_session_storage_snapshot_and_initial_storage_key(
     let opener_url = format!("http://{addr}/opener");
     ctx.install_navigation_fixture_for_session_owner(&opener_url, None)
         .await;
-    ctx.enable_background_navigation_scheduler_for_test();
+    ctx.enable_background_event_ingress_for_test();
 
     tokio::task::LocalSet::new().run_until(async {
     ctx.process_async(json!({
@@ -1271,7 +1292,7 @@ async fn window_open_hands_off_session_storage_snapshot_and_initial_storage_key(
     .await;
     let request_started = tokio::time::timeout(
         std::time::Duration::from_secs(5),
-        cross_origin_request_started.acquire(),
+        ctx.wait_for_external_input_with_scheduler(cross_origin_request_started.acquire()),
     )
     .await
     .expect("cross-origin popup request should start")
@@ -1465,11 +1486,15 @@ async fn resetting_opener_target_clears_live_opener_but_keeps_frame_attribution(
         json!("TID-opener-reset")
     );
 
-    ctx.conn
+    let opener = ctx
+        .conn
         .browser_context
-        .as_mut()
+        .as_ref()
         .unwrap()
-        .remove_active_page_target_async()
+        .web_contents_handle_for_target("TID-opener-reset")
+        .unwrap();
+    ctx.conn
+        .close_browser_web_contents_async(opener, crate::conn::PageCloseNotifications::BrowserEvent)
         .await;
 
     let browser_context = ctx.conn.browser_context.as_ref().unwrap();
@@ -1498,6 +1523,8 @@ async fn popup_initial_empty_document_record_captures_creator_identity() {
         "<main>popup opener</main>",
     )
     .await;
+    let (origin, server) = load_native_popup_creator(&mut ctx).await;
+    // DevTools projection cannot forge the native creation-time origin.
     {
         let browser_context = ctx.conn.browser_context.as_mut().unwrap();
         browser_context.set_target_security_origin("https://opener.example".to_owned());
@@ -1536,8 +1563,9 @@ async fn popup_initial_empty_document_record_captures_creator_identity() {
             .unwrap()
             .web_contents_id()
     );
-    assert_eq!(creator.security_origin(), "https://opener.example");
+    assert_eq!(creator.security_origin(), origin);
     assert_eq!(creator.secure_context_type(), "Secure");
+    server.abort();
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -1550,6 +1578,8 @@ async fn popup_initial_empty_document_frame_tree_inherits_opener_origin() {
         "<main>popup opener</main>",
     )
     .await;
+    let (origin, server) = load_native_popup_creator(&mut ctx).await;
+    // DevTools projection cannot forge the native creation-time origin.
     {
         let browser_context = ctx.conn.browser_context.as_mut().unwrap();
         browser_context.set_target_security_origin("https://opener.example".to_owned());
@@ -1608,7 +1638,7 @@ async fn popup_initial_empty_document_frame_tree_inherits_opener_origin() {
     let frame = &frame_tree_response["result"]["frameTree"]["frame"];
     assert_eq!(frame["id"], json!(popup_target_id));
     assert_eq!(frame["url"], json!("about:blank"));
-    assert_eq!(frame["securityOrigin"], json!("https://opener.example"));
+    assert_eq!(frame["securityOrigin"], json!(origin));
     assert_eq!(frame["secureContextType"], json!("Secure"));
 
     let browser_context = ctx.conn.browser_context.as_ref().unwrap();
@@ -1616,6 +1646,7 @@ async fn popup_initial_empty_document_frame_tree_inherits_opener_origin() {
         .target_initial_empty_document_state(&popup_target_id)
         .expect("popup target should still record initial empty document");
     assert!(initial.is_on_initial_empty_document());
+    server.abort();
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -1730,7 +1761,7 @@ async fn window_open_named_target_reuses_existing_popup_target() {
     // `window.open()`, but fetching the selected target's URL is not. Mirror
     // the socket scheduler so this ownership test never joins the Runtime
     // response to external network completion.
-    ctx.enable_background_navigation_scheduler_for_test();
+    ctx.enable_background_event_ingress_for_test();
     tokio::task::LocalSet::new()
         .run_until(async {
             load_bc_with_titled_page_async(
@@ -1881,15 +1912,33 @@ async fn window_open_named_target_reused_in_same_command_emits_one_page_event() 
         "method": "Runtime.evaluate",
         "params": {
             "expression": "
-                window.open('https://example.com/first-popup', 'sameCommandWindow');
-                window.open('https://example.com/second-popup', 'sameCommandWindow');
+                window.open('data:text/html,first-popup', 'sameCommandWindow');
+                window.open('data:text/html,second-popup', 'sameCommandWindow');
                 true
             "
         }
     }))
     .await;
 
-    let sent = ctx.take_all();
+    let mut sent = ctx.take_all();
+    let popup_id = sent
+        .iter()
+        .find(|message| message["method"] == "Target.targetCreated")
+        .unwrap()["params"]["targetInfo"]["targetId"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    crate::testing::wait_until_scheduler_message(
+        &mut ctx,
+        "same-command named popup URL commit",
+        |message| {
+            message["method"] == "Target.targetInfoChanged"
+                && message["params"]["targetInfo"]["targetId"] == popup_id
+                && message["params"]["targetInfo"]["url"] == "data:text/html,second-popup"
+        },
+    )
+    .await;
+    sent.extend(ctx.take_all());
     let window_open_events = sent
         .iter()
         .filter(|message| message["method"] == json!("Page.windowOpen"))
@@ -1901,7 +1950,7 @@ async fn window_open_named_target_reused_in_same_command_emits_one_page_event() 
     );
     assert_eq!(
         window_open_events[0]["params"]["url"],
-        json!("https://example.com/first-popup")
+        json!("data:text/html,first-popup")
     );
     assert_eq!(
         sent.iter()
@@ -1913,13 +1962,10 @@ async fn window_open_named_target_reused_in_same_command_emits_one_page_event() 
     let browser_context = ctx.conn.browser_context.as_ref().unwrap();
     assert_eq!(browser_context.background_target_count(), 1);
     assert_eq!(
-        browser_context
-            .background_targets()
-            .next()
-            .unwrap()
-            .target_url(),
-        "https://example.com/second-popup"
+        browser_context.page_target(&popup_id).unwrap().target_url(),
+        "data:text/html,second-popup"
     );
+    assert_eq!(browser_context.active_target_id(), Some(popup_id.as_str()));
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -1950,7 +1996,7 @@ async fn named_popup_reuse_with_catchall_discovery_only_changes_the_page_target_
         "id": 152,
         "method": "Runtime.evaluate",
         "params": {
-            "expression": "window.open('https://example.com/first-popup', 'reportWindow') !== null"
+            "expression": "window.open('about:blank', 'reportWindow') !== null"
         }
     }))
     .await;
@@ -1960,8 +2006,7 @@ async fn named_popup_reuse_with_catchall_discovery_only_changes_the_page_target_
         .find(|message| {
             message["method"] == json!("Target.targetCreated")
                 && message["params"]["targetInfo"]["type"] == json!("page")
-                && message["params"]["targetInfo"]["url"]
-                    == json!("https://example.com/first-popup")
+                && message["params"]["targetInfo"]["url"] == json!("about:blank")
         })
         .unwrap_or_else(|| panic!("missing first popup page targetCreated: {first_sent:?}"));
     let page_target_id = page_created["params"]["targetInfo"]["targetId"]
@@ -1982,11 +2027,21 @@ async fn named_popup_reuse_with_catchall_discovery_only_changes_the_page_target_
         "id": 153,
         "method": "Runtime.evaluate",
         "params": {
-            "expression": "window.open('https://example.com/second-popup', 'reportWindow') !== null"
+            "expression": "window.open('data:text/html,second-popup', 'reportWindow') !== null"
         }
     }))
     .await;
 
+    crate::testing::wait_until_scheduler_message(
+        &mut ctx,
+        "reused popup page target commit",
+        |message| {
+            message["method"] == "Target.targetInfoChanged"
+                && message["params"]["targetInfo"]["targetId"] == page_target_id
+                && message["params"]["targetInfo"]["url"] == "data:text/html,second-popup"
+        },
+    )
+    .await;
     let second_sent = ctx.take_all();
     assert!(
         second_sent.iter().all(|message| {
@@ -2000,8 +2055,7 @@ async fn named_popup_reuse_with_catchall_discovery_only_changes_the_page_target_
             message["method"] == json!("Target.targetInfoChanged")
                 && message["params"]["targetInfo"]["targetId"] == json!(page_target_id)
                 && message["params"]["targetInfo"]["type"] == json!("page")
-                && message["params"]["targetInfo"]["url"]
-                    == json!("https://example.com/second-popup")
+                && message["params"]["targetInfo"]["url"] == json!("data:text/html,second-popup")
         }),
         "catch-all discovery should report page targetInfoChanged: {second_sent:?}"
     );
@@ -2085,7 +2139,7 @@ async fn anchor_left_click_activates_blank_target_to_foreground() {
     const POPUP_HREF: &str = "data:text/html,%3Cmain%3Eforeground-popup%3C/main%3E";
     const POPUP_URL: &str = "data:text/html,<main>foreground-popup</main>";
     let mut ctx = TestContext::new();
-    ctx.enable_background_navigation_scheduler_for_test();
+    ctx.enable_background_event_ingress_for_test();
     tokio::task::LocalSet::new()
         .run_until(async {
             load_bc_with_titled_page_async(
@@ -2127,7 +2181,7 @@ async fn anchor_left_click_activates_popup_while_initial_navigation_waits_for_de
         "data:text/html,%3Cmain%3Edebugger-waiting-foreground-popup%3C/main%3E";
     const POPUP_URL: &str = "data:text/html,<main>debugger-waiting-foreground-popup</main>";
     let mut ctx = TestContext::new();
-    ctx.enable_background_navigation_scheduler_for_test();
+    ctx.enable_background_event_ingress_for_test();
     tokio::task::LocalSet::new()
         .run_until(async {
             load_bc_with_titled_page_async(
@@ -2208,7 +2262,7 @@ async fn anchor_platform_new_tab_click_keeps_blank_target_in_background() {
     const POPUP_HREF: &str = "data:text/html,%3Cmain%3Ebackground-popup%3C/main%3E";
     const POPUP_URL: &str = "data:text/html,<main>background-popup</main>";
     let mut ctx = TestContext::new();
-    ctx.enable_background_navigation_scheduler_for_test();
+    ctx.enable_background_event_ingress_for_test();
     tokio::task::LocalSet::new()
         .run_until(async {
             load_bc_with_titled_page_async(
@@ -3031,7 +3085,7 @@ async fn tab_session_auto_attach_only_attaches_its_own_child_page() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn incomplete_popup_rollback_clears_tab_page_sessions_and_target_graph() {
+async fn native_popup_close_clears_tab_page_sessions_and_target_graph() {
     let mut ctx = TestContext::new_with_target_discovery(false);
     load_bc_with_target(&mut ctx, "BID-popup-rollback", "TID-popup-opener");
 
@@ -3054,9 +3108,8 @@ async fn incomplete_popup_rollback_clears_tab_page_sessions_and_target_graph() {
             .web_contents_handle_for_target(page_target_id)
             .unwrap();
         browser_context
-            .set_web_contents_window_name(handle, Some("popupName".into()))
+            .set_web_contents_window_name_for_test(handle, Some("popupName".into()))
             .unwrap();
-        browser_context.remember_target_popup_id(Some(42), page_target_id);
     }
     ctx.conn
         .attach_tab_target_session_event_plan(
@@ -3087,12 +3140,15 @@ async fn incomplete_popup_rollback_clears_tab_page_sessions_and_target_graph() {
     );
     assert_eq!(ctx.conn.tab_target_count(), 1);
 
-    popup::rollback_incomplete_popup_target_async(
-        &mut ctx.conn,
-        Some("BID-popup-rollback"),
-        page_target_id,
-    )
-    .await;
+    let handle = ctx
+        .conn
+        .browser_context_by_id("BID-popup-rollback")
+        .unwrap()
+        .web_contents_handle_for_target(page_target_id)
+        .unwrap();
+    ctx.conn
+        .close_browser_web_contents_async(handle, crate::conn::PageCloseNotifications::BrowserEvent)
+        .await;
 
     assert_eq!(ctx.conn.session_route(Some("SID-popup-tab")), None);
     assert_eq!(ctx.conn.session_route(Some("SID-popup-page-primary")), None);
@@ -3118,7 +3174,7 @@ async fn incomplete_popup_rollback_clears_tab_page_sessions_and_target_graph() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn incomplete_active_popup_rollback_clears_active_slot_sessions_and_target_graph() {
+async fn native_active_popup_close_clears_active_slot_sessions_and_target_graph() {
     let mut ctx = TestContext::new_with_target_discovery(false);
     load_bc(&mut ctx, "BID-active-popup-rollback");
 
@@ -3168,12 +3224,15 @@ async fn incomplete_active_popup_rollback_clears_active_slot_sessions_and_target
     );
     assert_eq!(ctx.conn.tab_target_count(), 1);
 
-    popup::rollback_incomplete_popup_target_async(
-        &mut ctx.conn,
-        Some("BID-active-popup-rollback"),
-        page_target_id,
-    )
-    .await;
+    let handle = ctx
+        .conn
+        .browser_context_by_id("BID-active-popup-rollback")
+        .unwrap()
+        .web_contents_handle_for_target(page_target_id)
+        .unwrap();
+    ctx.conn
+        .close_browser_web_contents_async(handle, crate::conn::PageCloseNotifications::BrowserEvent)
+        .await;
 
     assert_eq!(ctx.conn.session_route(Some("SID-active-popup-tab")), None);
     assert_eq!(
@@ -3297,6 +3356,16 @@ async fn create_target_without_debugger_wait_starts_requested_url_navigation() {
         "Target.createTarget response should retain the created target id: {messages:?}"
     );
 
+    // The protocol-only fixture dispatches handlers directly, without the
+    // production command admission queue. Creation ACK is not a load barrier;
+    // observe the same native commit before inspecting its URL/title/history.
+    ctx.wait_for_scheduler_message("created target title metadata", |message| {
+        message["method"] == json!("Target.targetInfoChanged")
+            && message["params"]["targetInfo"]["targetId"] == json!(target_id)
+            && message["params"]["targetInfo"]["title"] == json!("created-target-ready")
+    })
+    .await;
+
     ctx.process_async(json!({
         "id": 9010,
         "sessionId": session_id,
@@ -3314,13 +3383,6 @@ async fn create_target_without_debugger_wait_starts_requested_url_navigation() {
             "{\"url\":\"data:text/html,<title>created-target-ready</title>\",\"title\":\"created-target-ready\"}"
         )
     );
-
-    ctx.wait_for_scheduler_message("created target title metadata", |message| {
-        message["method"] == json!("Target.targetInfoChanged")
-            && message["params"]["targetInfo"]["targetId"] == json!(target_id)
-            && message["params"]["targetInfo"]["title"] == json!("created-target-ready")
-    })
-    .await;
 
     ctx.process_async(json!({
         "id": 9011,

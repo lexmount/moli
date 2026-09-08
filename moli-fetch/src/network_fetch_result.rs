@@ -390,7 +390,7 @@ pub struct NetworkFetchFailureRequestContext {
 }
 
 impl NetworkFetchFailureRequestContext {
-    pub(crate) fn new(
+    pub fn new(
         current_url: Url,
         request_method: String,
         request_body: Option<Vec<u8>>,

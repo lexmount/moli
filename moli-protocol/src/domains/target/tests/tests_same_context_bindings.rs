@@ -1408,6 +1408,8 @@ async fn same_context_targets_replay_only_their_own_pre_document_binding_and_pre
         }
     }))
     .await;
+    crate::testing::wait_until_navigation_document_load(&mut ctx, 10422, Some(&second_session_id))
+        .await;
     consume_main_document_navigation_start(&mut ctx);
     let first_b_navigation = take_response_by_id(&mut ctx, 10422);
     assert_eq!(
@@ -1450,6 +1452,7 @@ async fn same_context_targets_replay_only_their_own_pre_document_binding_and_pre
         }
     }))
     .await;
+    crate::testing::wait_until_navigation_document_load(&mut ctx, 10424, Some("SID-active")).await;
     consume_main_document_navigation_start(&mut ctx);
     let first_a_navigation = take_response_by_id(&mut ctx, 10424);
     assert_eq!(
@@ -1504,6 +1507,8 @@ async fn same_context_targets_replay_only_their_own_pre_document_binding_and_pre
             "url": "data:text/html,<title>target-b-activated</title><div id='ok'>B activated page</div>"
         }
     })).await;
+    crate::testing::wait_until_navigation_document_load(&mut ctx, 10426, Some(&second_session_id))
+        .await;
     consume_main_document_navigation_start(&mut ctx);
     let activated_navigation = take_response_by_id(&mut ctx, 10426);
     assert_eq!(
@@ -1645,6 +1650,8 @@ async fn same_context_targets_replay_only_their_own_pre_document_binding_and_pre
         }
     }))
     .await;
+    crate::testing::wait_until_navigation_document_load(&mut ctx, 10476, Some(&second_session_id))
+        .await;
     consume_main_document_navigation_start(&mut ctx);
     take_response_by_id(&mut ctx, 10476);
     assert!(
@@ -1683,6 +1690,7 @@ async fn same_context_targets_replay_only_their_own_pre_document_binding_and_pre
         }
     }))
     .await;
+    crate::testing::wait_until_navigation_document_load(&mut ctx, 10478, Some("SID-active")).await;
     consume_main_document_navigation_start(&mut ctx);
     take_response_by_id(&mut ctx, 10478);
     assert!(
@@ -1728,6 +1736,8 @@ async fn same_context_targets_replay_only_their_own_pre_document_binding_and_pre
             "url": "data:text/html,<title>target-b-activated</title><div id='ok'>B activated close page</div>"
         }
     })).await;
+    crate::testing::wait_until_navigation_document_load(&mut ctx, 10480, Some(&second_session_id))
+        .await;
     consume_main_document_navigation_start(&mut ctx);
     let activated_navigation = take_response_by_id(&mut ctx, 10480);
     assert_eq!(

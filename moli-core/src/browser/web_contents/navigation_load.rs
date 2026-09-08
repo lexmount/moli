@@ -13,7 +13,6 @@ use crate::{
 };
 use moli_fetch::{
     BrowserNavigationRequestKind, FetchCancelHandle, NetworkFetchResult, RawResponse, Request,
-    StreamingRawResponse,
 };
 use url::Url;
 
@@ -157,7 +156,7 @@ impl AdmittedNavigationLoad {
 
     pub(crate) fn redirected_request(
         &mut self,
-        response: moli_fetch::RawResponse,
+        response: moli_fetch::ResponseHead,
         mut request: moli_fetch::Request,
     ) -> moli_fetch::Request {
         if response.redirect_chain.len() > self.redirect_chain.len() {
@@ -231,7 +230,19 @@ impl AdmittedNavigationLoad {
         body: Option<Vec<u8>>,
         request_headers: moli_fetch::RequestHeaders,
     ) -> anyhow::Result<NavigationStreamingRawResponse> {
-        let request = self.intercepted_request(method, raw_url, body, request_headers, None)?;
+        self.fetch_navigation_with_auth(method, raw_url, body, request_headers, None)
+            .await
+    }
+
+    pub(in crate::browser) async fn fetch_navigation_with_auth(
+        &mut self,
+        method: &str,
+        raw_url: &str,
+        body: Option<Vec<u8>>,
+        request_headers: moli_fetch::RequestHeaders,
+        auth: Option<SubresourceAuthCredentials>,
+    ) -> anyhow::Result<NavigationStreamingRawResponse> {
+        let request = self.intercepted_request(method, raw_url, body, request_headers, auth)?;
         self.engine
             .fetch_navigation_request_with_storage_async(
                 self.resource_storage.clone(),
@@ -272,25 +283,6 @@ impl AdmittedNavigationLoad {
         }
         request.set_auth(auth.map(Into::into));
         Ok(request)
-    }
-
-    pub async fn fetch_intercepted_response(
-        &self,
-        method: &str,
-        raw_url: &str,
-        body: Option<Vec<u8>>,
-        headers: moli_fetch::RequestHeaders,
-        auth: Option<SubresourceAuthCredentials>,
-    ) -> anyhow::Result<NetworkFetchResult<StreamingRawResponse>> {
-        let request = self.intercepted_request(method, raw_url, body, headers, auth)?;
-        self.engine
-            .resource_request_client()
-            .expect("admitted resource runtime")
-            .fetch_raw_stream_with_cancel_and_network_metadata(
-                request,
-                self.request_cancellation.clone(),
-            )
-            .await
     }
 
     pub async fn fetch_intercepted_auth_response(

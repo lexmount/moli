@@ -51,10 +51,7 @@ use crate::{
 };
 #[cfg(test)]
 use crate::{
-    runtime::{
-        RendererPendingDownloadActivation, RendererPendingFileChooserActivation,
-        RendererPendingPopupActivation,
-    },
+    runtime::{RendererPendingDownloadActivation, RendererPendingFileChooserActivation},
     types::{PendingSubresourceContinueEvent, PendingSubresourceFetchInfo},
 };
 use indexmap::IndexMap;
@@ -1022,8 +1019,7 @@ pub(crate) struct JsContextHost {
     pending_file_chooser_activations: Vec<RendererPendingFileChooserActivation>,
     #[cfg(test)]
     pending_download_activations: Vec<RendererPendingDownloadActivation>,
-    #[cfg(test)]
-    pending_popup_activations: Vec<RendererPendingPopupActivation>,
+    pub(crate) popup_broker: crate::runtime::RendererPopupBroker,
     next_lightweight_popup_id: u64,
     next_lightweight_popup_local_window_id: u64,
     next_lightweight_popup_document_id: u64,

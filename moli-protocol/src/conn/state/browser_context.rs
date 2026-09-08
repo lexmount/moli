@@ -88,7 +88,6 @@ pub(in crate::conn) mod session;
 mod tests;
 mod workers;
 pub(crate) use moli_core::browser::{OriginStorageUsage, SiteDataClearOptions};
-pub(crate) use page_state::LoadedNavigationPageCommit;
 
 /// DevTools projection for one Browser-owned Context.
 pub struct BrowserContext {
@@ -102,9 +101,9 @@ pub struct BrowserContext {
     /// Test-only cookie overrides, inherited by the first page fixture.
     #[cfg(test)]
     pub(crate) default_document_cookie_manager_surface: BrowserContextCookieManagerSurface,
-    pub target_popup_ids: HashMap<String, u64>,
     pub(in crate::conn) automation_download_events_enabled: Option<bool>,
-    pending_popup_javascript_dialogs: HashMap<u64, Vec<TargetPreparedJavaScriptDialog>>,
+    pending_popup_javascript_dialogs:
+        HashMap<(moli_core::browser::DocumentHandle, u64), Vec<TargetPreparedJavaScriptDialog>>,
     pub(crate) shared_worker_targets: BTreeMap<SharedWorkerInstanceId, SharedWorkerTargetState>,
     pub(crate) dedicated_worker_targets: BTreeMap<u64, DedicatedWorkerTargetState>,
     pub(crate) service_worker_targets: BTreeMap<u64, ServiceWorkerTargetState>,
@@ -196,22 +195,19 @@ impl BrowserContext {
             .popup_id()
             .expect("only lightweight-popup dialogs may enter popup attachment residence");
         self.pending_popup_javascript_dialogs
-            .entry(popup_id)
+            .entry((dialog.browser_document(), popup_id))
             .or_default()
             .push(dialog);
     }
 
     pub(crate) fn take_pending_popup_javascript_dialogs(
         &mut self,
+        document: moli_core::browser::DocumentHandle,
         popup_id: u64,
     ) -> Vec<TargetPreparedJavaScriptDialog> {
         self.pending_popup_javascript_dialogs
-            .remove(&popup_id)
+            .remove(&(document, popup_id))
             .unwrap_or_default()
-    }
-
-    pub(crate) fn dismiss_pending_popup_javascript_dialogs(&mut self, popup_id: u64) {
-        drop(self.take_pending_popup_javascript_dialogs(popup_id));
     }
 
     /// Isolated projection-unit fixture. Connection integration tests use its
@@ -331,7 +327,6 @@ impl BrowserContext {
             projected_selection: None,
             #[cfg(test)]
             default_document_cookie_manager_surface: BrowserContextCookieManagerSurface::default(),
-            target_popup_ids: HashMap::new(),
             automation_download_events_enabled: None,
             pending_popup_javascript_dialogs: HashMap::new(),
             shared_worker_targets: BTreeMap::new(),
@@ -398,6 +393,7 @@ impl BrowserContext {
         self.browser_context.resource_storage_handles_for_test()
     }
 
+    #[cfg(test)]
     pub(crate) fn page_storage_handles(&self) -> BrowserContextPageStorageHandles {
         self.browser_context
             .page_storage_handles(None)
@@ -750,34 +746,6 @@ impl BrowserContext {
                 .unwrap_or(true)
     }
 
-    /// Reports whether one exact Page target is still on its materialized
-    /// initial empty Document and has a non-empty target URL left to load.
-    ///
-    /// This target-addressed query is used when the last debugger barrier is
-    /// released by detaching its session, after that session can no longer be
-    /// used as a routing key.
-    pub(crate) fn target_needs_initial_document_navigation(&self, target_id: &str) -> bool {
-        let Some(target) = self.page_target(target_id) else {
-            return false;
-        };
-        let handle = self
-            .web_contents_handle_for_target(target.target_id())
-            .expect("live WebContents");
-        let Some(initial_url) = self
-            .browser_context
-            .initial_document_url(handle)
-            .ok()
-            .flatten()
-        else {
-            return false;
-        };
-        target.target_url() != initial_url
-            && !self
-                .browser_context
-                .initial_document_has_pending_navigation(handle)
-                .unwrap_or(false)
-    }
-
     pub(crate) fn loaded_document_renderer_owner_ids_for_diagnostics(&self) -> HashSet<u64> {
         self.browser_context.loaded_document_renderer_owner_ids()
     }
@@ -866,6 +834,7 @@ impl BrowserContext {
         self.start_document_navigation_for_target(&target_id, loader_id)
     }
 
+    #[cfg(any(test, feature = "test-support"))]
     pub(crate) fn start_document_navigation_for_target(
         &mut self,
         target_id: &str,
@@ -886,6 +855,7 @@ impl BrowserContext {
         Some(self.begin_target_document_navigation(target_id, loader_id))
     }
 
+    #[cfg(any(test, feature = "test-support"))]
     pub(crate) fn accepts_pending_document_navigation_event(&self, token: &NavigationId) -> bool {
         self.browser_context
             .accepts_any_pending_navigation_event(token)
@@ -900,6 +870,7 @@ impl BrowserContext {
             .document_navigation_cancellation_handle_for_test(token)
     }
 
+    #[cfg(any(test, feature = "test-support"))]
     pub(crate) fn arm_background_navigation_completion(
         &mut self,
         token: &NavigationId,
@@ -909,6 +880,7 @@ impl BrowserContext {
             .arm_background_navigation_completion(token, additional_cancellation)
     }
 
+    #[cfg(any(test, feature = "test-support"))]
     pub(crate) fn settle_background_navigation_completion(&mut self, token: &NavigationId) -> bool {
         self.browser_context
             .settle_background_navigation_completion(token)
