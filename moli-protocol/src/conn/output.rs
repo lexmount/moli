@@ -903,6 +903,25 @@ pub struct BackgroundTargetReceivedMessageFromTargetEvent {
 }
 
 impl ProtocolDeliveryEnvelope {
+    pub fn is_target_session_control(&self) -> bool {
+        matches!(
+            self.payload,
+            BackgroundProtocolEventPayload::TargetReceivedMessageFromTarget(_)
+                | BackgroundProtocolEventPayload::TargetAttached(_)
+                | BackgroundProtocolEventPayload::TargetDetached(_)
+        )
+    }
+
+    /// Notifications may be observed by multiple automation frontends. Replies
+    /// and renderer completion capabilities belong to exactly one command.
+    pub fn is_notification(&self) -> bool {
+        !matches!(
+            self.payload,
+            BackgroundProtocolEventPayload::CommandResponse(_)
+                | BackgroundProtocolEventPayload::RuntimeInspectorResponseReady(_)
+        ) && self.protocol_message_id().is_none()
+    }
+
     fn from_payload(payload: BackgroundProtocolEventPayload) -> Self {
         let route = ProtocolDeliveryRoute::for_wire_session(payload.protocol_session_id());
         Self { payload, route }
@@ -2599,10 +2618,7 @@ impl ProtocolDeliveryEnvelope {
         }
     }
 
-    #[cfg(test)]
-    pub(crate) fn as_runtime_inspector_response_ready(
-        &self,
-    ) -> Option<&RuntimeInspectorResponseReady> {
+    pub fn as_runtime_inspector_response_ready(&self) -> Option<&RuntimeInspectorResponseReady> {
         match &self.payload {
             BackgroundProtocolEventPayload::RuntimeInspectorResponseReady(response) => {
                 Some(response)

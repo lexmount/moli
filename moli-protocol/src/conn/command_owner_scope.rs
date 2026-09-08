@@ -57,6 +57,25 @@ impl CommandOwnerScope {
         Self::for_page_residence(attachment.page_owner())
     }
 
+    /// An absent event session denotes this target's primary attachment, not
+    /// the attached session that happened to produce the event.
+    pub(crate) fn for_target_event_session(
+        &self,
+        conn: &CdpConnection,
+        session_id: Option<&str>,
+    ) -> Self {
+        if let Some(session_id) = session_id {
+            return Self::for_session(session_id);
+        }
+        let Some(mut route) = self.resolve_route(conn) else {
+            return self.clone();
+        };
+        if let CdpSessionRoute::PageTarget { session_key, .. } = &mut route {
+            *session_key = moli_page_types::DevToolsSessionKey::Primary;
+        }
+        Self::for_route(route)
+    }
+
     pub(crate) fn for_page_residence(page: &TargetPageResidenceIdentity) -> Self {
         let route = match page.target_id() {
             Some(target_id) => CdpSessionRoute::PageTarget {

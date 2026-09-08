@@ -2427,10 +2427,7 @@ pub(crate) fn emit_page_window_open_background_events_for_owner(
         return;
     }
     for event_session_id in conn.page_event_session_ids_for_owner(owner) {
-        let event_owner = event_session_id
-            .as_deref()
-            .map(CommandOwnerScope::for_session)
-            .unwrap_or_else(|| owner.clone());
+        let event_owner = owner.for_target_event_session(conn, event_session_id.as_deref());
         if conn.page_domain_enabled_for_owner(&event_owner) == Some(true) {
             out.push(BackgroundProtocolEvent::page_window_open(
                 event_session_id.as_deref(),

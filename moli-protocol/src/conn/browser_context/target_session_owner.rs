@@ -1898,11 +1898,9 @@ impl CdpConnection {
                 .background_target(&target_id)
                 .and_then(|target| target.session_id().map(str::to_owned))
         };
-        let primary_event_session_id =
-            primary_session_id.or_else(|| owner.session_id().map(str::to_owned));
-        session_ids.push(primary_event_session_id.clone());
+        session_ids.push(primary_session_id.clone());
         for attached_session_id in browser_context.attached_session_ids_for_target(&target_id) {
-            if primary_event_session_id.as_deref() != Some(attached_session_id.as_str()) {
+            if primary_session_id.as_deref() != Some(attached_session_id.as_str()) {
                 session_ids.push(Some(attached_session_id));
             }
         }
@@ -1924,10 +1922,7 @@ impl CdpConnection {
         self.page_event_session_ids_for_owner(owner)
             .into_iter()
             .filter(|event_session_id| {
-                let event_owner = event_session_id
-                    .as_deref()
-                    .map(CommandOwnerScope::for_session)
-                    .unwrap_or_else(|| owner.clone());
+                let event_owner = owner.for_target_event_session(self, event_session_id.as_deref());
                 self.target_page_session_state_for_owner(&event_owner)
                     .is_some_and(|state| state.page_domain_enabled)
             })
@@ -1951,10 +1946,7 @@ impl CdpConnection {
             .subscribed_page_event_session_ids_for_owner(owner)
             .into_iter()
             .map(|event_session_id| {
-                let event_owner = event_session_id
-                    .as_deref()
-                    .map(CommandOwnerScope::for_session)
-                    .unwrap_or_else(|| owner.clone());
+                let event_owner = owner.for_target_event_session(self, event_session_id.as_deref());
                 self.target_page_protocol_attachment_identity_for_owner(&event_owner)
             })
             .collect::<Option<Vec<_>>>()?;
@@ -1981,18 +1973,12 @@ impl CdpConnection {
             .page_event_session_ids_for_owner(owner)
             .into_iter()
             .filter(|event_session_id| {
-                let event_owner = event_session_id
-                    .as_deref()
-                    .map(CommandOwnerScope::for_session)
-                    .unwrap_or_else(|| owner.clone());
+                let event_owner = owner.for_target_event_session(self, event_session_id.as_deref());
                 self.target_runtime_session_state_for_owner(&event_owner)
                     .is_some_and(|state| state.runtime_frontend_enabled)
             })
             .map(|event_session_id| {
-                let event_owner = event_session_id
-                    .as_deref()
-                    .map(CommandOwnerScope::for_session)
-                    .unwrap_or_else(|| owner.clone());
+                let event_owner = owner.for_target_event_session(self, event_session_id.as_deref());
                 self.target_page_protocol_attachment_identity_for_owner(&event_owner)
             })
             .collect::<Option<Vec<_>>>()?;
@@ -3485,6 +3471,51 @@ mod tests {
             ],
             "one target-owned Runtime fact must freeze every enabled attachment"
         );
+    }
+
+    #[test]
+    fn attached_event_source_preserves_unbound_primary_audience_and_flags() {
+        let mut conn = crate::test_support::connection();
+        let mut context = conn.new_page_target_fixture_for_test("BID-audience", "TID-audience");
+        assert!(
+            context.assign_attached_session_to_target("TID-audience", "SID-emitter".to_owned())
+        );
+        context.set_active_document_fixture_for_test(41);
+        conn.install_browser_context_fixture_for_test(context);
+        let emitter = CommandOwnerScope::for_session("SID-emitter");
+        assert_eq!(
+            conn.page_event_session_ids_for_owner(&emitter),
+            vec![None, Some("SID-emitter".to_owned())]
+        );
+        conn.with_target_devtools_session_state_for_owner_mut(&emitter, |state| {
+            state.page_session_state.page_domain_enabled = true;
+            state.runtime_session_state.runtime_frontend_enabled = true;
+        })
+        .unwrap();
+        assert_eq!(
+            conn.subscribed_page_event_session_ids_for_owner(&emitter),
+            vec![Some("SID-emitter".to_owned())]
+        );
+        let primary = emitter.for_target_event_session(&conn, None);
+        conn.with_target_devtools_session_state_for_owner_mut(&primary, |state| {
+            state.page_session_state.page_domain_enabled = true;
+            state.runtime_session_state.runtime_frontend_enabled = true;
+        })
+        .unwrap();
+        for audience in [
+            conn.page_event_protocol_attachments_for_owner(&emitter),
+            conn.runtime_event_protocol_attachments_for_owner(&emitter),
+        ] {
+            let audience = audience.unwrap();
+            assert_eq!(
+                audience
+                    .iter()
+                    .map(|attachment| attachment.session_id())
+                    .collect::<Vec<_>>(),
+                vec![None, Some("SID-emitter")]
+            );
+            assert_eq!(audience[0].page_owner(), audience[1].page_owner());
+        }
     }
 
     #[test]

@@ -18,15 +18,17 @@ use tokio::time::Instant as TokioInstant;
 use crate::{
     cdp_frontend::{CdpFrontendCommand, CdpFrontendReceivers},
     cdp_frontend_router::{CdpFrontendRouter, CdpPreparedFrontendCommand},
+    protocol_server::webdriver_bidi::{BidiServiceFrontends, BidiSocketActorInput},
 };
 
-use super::frontend_control::CdpFrontendControlState;
+use super::CdpBackgroundEventReceiver;
+use super::DevToolsFrontendOutput;
+use super::frontend_control::{CdpFrontendControlState, send_cookie_checkpoint};
 use super::{
-    CdpBackgroundEventReceiver, CdpBackgroundNavigationCompletionReceiver, CdpCookieSnapshot,
-    CdpOwnerActorLifecycle, CdpRendererPublicationReceiver, CdpScheduler,
-    CdpSchedulerEventReceivers, CommandDispatchState, CommandOutputReleasePermit,
-    CommandStartAction, CommandTaskStep, CommandTurnOutput, ProtocolAdapterScheduler,
-    ProtocolAdapterSchedulerAdvance, ProtocolAdapterSchedulerInput, ProtocolOutputSequence,
+    CdpCookieSnapshot, CdpOwnerActorLifecycle, CdpScheduler, CdpSchedulerEventReceivers,
+    CommandDispatchState, CommandOutputReleasePermit, CommandStartAction, CommandTaskStep,
+    CommandTurnOutput, ProtocolAdapterScheduler, ProtocolAdapterSchedulerAdvance,
+    ProtocolAdapterSchedulerInput, ProtocolOutputSequence,
 };
 
 struct PendingRuntimeDeferredReplyState {
@@ -87,22 +89,14 @@ enum SchedulerInput {
 }
 
 struct SchedulerInputReceivers {
-    background_event_rx: CdpBackgroundEventReceiver,
-    background_navigation_completion_rx: CdpBackgroundNavigationCompletionReceiver,
-    renderer_publication_rx: CdpRendererPublicationReceiver,
-    runtime_inspector_response_ready_rx: mpsc::UnboundedReceiver<RuntimeInspectorResponseReady>,
-    buffered_renderer_publications: VecDeque<RendererOutputTransportMessage>,
+    events: CdpSchedulerEventReceivers,
     ready_background_inputs_before_runtime_response: VecDeque<SchedulerInput>,
 }
 
 impl SchedulerInputReceivers {
     fn new(receivers: CdpSchedulerEventReceivers) -> Self {
         Self {
-            background_event_rx: receivers.background_event_rx,
-            background_navigation_completion_rx: receivers.background_navigation_completion_rx,
-            renderer_publication_rx: receivers.renderer_publication_rx,
-            runtime_inspector_response_ready_rx: receivers.runtime_inspector_response_ready_rx,
-            buffered_renderer_publications: VecDeque::new(),
+            events: receivers,
             ready_background_inputs_before_runtime_response: VecDeque::new(),
         }
     }
@@ -120,11 +114,11 @@ impl SchedulerInputReceivers {
         // A correlated response carries an exact concrete output cursor; the
         // cursor fence below consumes only concrete stream traffic until that
         // position is admitted.
-        while let Ok(completion) = self.background_navigation_completion_rx.try_recv() {
+        while let Ok(completion) = self.events.background_navigation_completion_rx.try_recv() {
             self.ready_background_inputs_before_runtime_response
                 .push_back(SchedulerInput::BackgroundNavigationCompletion(completion));
         }
-        while let Ok(event) = self.background_event_rx.try_recv() {
+        while let Ok(event) = self.events.background_event_rx.try_recv() {
             self.ready_background_inputs_before_runtime_response
                 .push_back(SchedulerInput::BackgroundEvent(event));
         }
@@ -142,18 +136,11 @@ impl SchedulerInputReceivers {
     /// stack is blocked because protocol never re-enters renderer state to
     /// discover its payload.
     async fn recv_concrete_renderer_transport(&mut self) -> Option<RendererOutputTransportMessage> {
-        if let Some(publication) = self.buffered_renderer_publications.pop_front() {
-            return Some(publication);
-        }
-        self.renderer_publication_rx.recv().await
+        self.events.renderer_publication_rx.recv().await
     }
 }
 
 impl SchedulerInputReceivers {
-    fn take_buffered_renderer_publication(&mut self) -> Option<RendererOutputTransportMessage> {
-        self.buffered_renderer_publications.pop_front()
-    }
-
     async fn recv(
         &mut self,
         has_pending_runtime_deferred_reply: bool,
@@ -166,24 +153,21 @@ impl SchedulerInputReceivers {
         {
             return Some(input);
         }
-        if let Some(publication) = self.take_buffered_renderer_publication() {
-            return Some(SchedulerInput::RendererPublication(publication));
-        }
         if has_pending_runtime_deferred_reply {
             tokio::select! {
                 biased;
-                maybe_response = self.runtime_inspector_response_ready_rx.recv() => {
+                maybe_response = self.events.runtime_inspector_response_ready_rx.recv() => {
                     let response = maybe_response?;
                     self.queue_ready_background_inputs_before_runtime_response(response);
                     self.ready_background_inputs_before_runtime_response.pop_front()
                 }
-                maybe_completion = self.background_navigation_completion_rx.recv() => {
+                maybe_completion = self.events.background_navigation_completion_rx.recv() => {
                     maybe_completion.map(SchedulerInput::BackgroundNavigationCompletion)
                 }
-                maybe_event = self.background_event_rx.recv() => {
+                maybe_event = self.events.background_event_rx.recv() => {
                     maybe_event.map(SchedulerInput::BackgroundEvent)
                 }
-                maybe_publication = self.renderer_publication_rx.recv() => {
+                maybe_publication = self.events.renderer_publication_rx.recv() => {
                     maybe_publication.map(SchedulerInput::RendererPublication)
                 }
                 input = adapter_scheduler.recv_input(), if !page_javascript_blocked => {
@@ -193,16 +177,16 @@ impl SchedulerInputReceivers {
         } else {
             tokio::select! {
                 biased;
-                maybe_completion = self.background_navigation_completion_rx.recv() => {
+                maybe_completion = self.events.background_navigation_completion_rx.recv() => {
                     maybe_completion.map(SchedulerInput::BackgroundNavigationCompletion)
                 }
-                maybe_event = self.background_event_rx.recv() => {
+                maybe_event = self.events.background_event_rx.recv() => {
                     maybe_event.map(SchedulerInput::BackgroundEvent)
                 }
-                maybe_publication = self.renderer_publication_rx.recv() => {
+                maybe_publication = self.events.renderer_publication_rx.recv() => {
                     maybe_publication.map(SchedulerInput::RendererPublication)
                 }
-                maybe_response = self.runtime_inspector_response_ready_rx.recv() => {
+                maybe_response = self.events.runtime_inspector_response_ready_rx.recv() => {
                     maybe_response.map(|response| SchedulerInput::DeferredRuntimeInspectorResponse(Box::new(response)))
                 }
                 input = adapter_scheduler.recv_input(), if !page_javascript_blocked => {
@@ -248,8 +232,43 @@ async fn run_cdp_scheduler_actor(
     let mut blocked_commands = VecDeque::new();
     let mut next_in_flight_command_token = 0_u64;
     let mut frontend_control = CdpFrontendControlState::default();
+    let mut bidi_frontends = BidiServiceFrontends::default();
+    let mut frontend_output_rx = scheduler.bind_frontend_output();
+    let mut pending_frontend_output = None;
 
-    loop {
+    'owner: loop {
+        // Projection can satisfy a navigation's visibility fence before its
+        // notifications reach the socket. Deliver the entire ready batch before
+        // polling frontend continuations, including the no-output close path.
+        let mut bidi_outputs = Vec::new();
+        while let Some(output) = pending_frontend_output
+            .take()
+            .or_else(|| frontend_output_rx.try_recv().ok())
+        {
+            match output {
+                DevToolsFrontendOutput::Cdp(output) => {
+                    if !flush_protocol_output_with_runtime_deferred_reply_routing(
+                        &frontend_router,
+                        &mut scheduler,
+                        &mut pending_runtime_deferred_replies,
+                        output,
+                    )
+                    .await
+                    {
+                        break 'owner;
+                    }
+                }
+                DevToolsFrontendOutput::Bidi { origin, output } => {
+                    bidi_outputs.push((origin, output))
+                }
+            }
+        }
+        if bidi_frontends
+            .send_outputs(&mut scheduler, &mut scheduler_input_rx.events, bidi_outputs)
+            .await
+        {
+            send_cookie_checkpoint(&mut scheduler, owner_lifecycle.as_ref());
+        }
         let browser_output = scheduler.drain_browser_events().await;
         if !flush_protocol_output_with_runtime_deferred_reply_routing(
             &frontend_router,
@@ -262,7 +281,11 @@ async fn run_cdp_scheduler_actor(
         {
             break;
         }
-        if scheduler_input_rx.renderer_publication_rx.is_closed() {
+        if scheduler_input_rx
+            .events
+            .renderer_publication_rx
+            .is_closed()
+        {
             break;
         }
         let page_javascript_blocked =
@@ -271,12 +294,24 @@ async fn run_cdp_scheduler_actor(
         let page_screencast_deadline = scheduler.next_page_screencast_deadline();
         tokio::select! {
             biased;
-            event = scheduler.recv_browser_event() => {
-                let output = scheduler.handle_browser_event(event).await;
+            event = scheduler.recv_adapter_owner_input() => {
+                let output = scheduler.complete_adapter_owner_input(&mut scheduler_input_rx.events, event).await;
                 if !flush_protocol_output_with_runtime_deferred_reply_routing(
                     &frontend_router, &mut scheduler, &mut pending_runtime_deferred_replies, output,
                 ).await {
                     break;
+                }
+            }
+            Some(output) = frontend_output_rx.recv() => {
+                pending_frontend_output = Some(output);
+            }
+            Some(attach) = frontend_receivers.bidi_rx.recv() => {
+                scheduler.conn.install_default_browser_target();
+                bidi_frontends.attach(attach);
+            }
+            (id, input) = bidi_frontends.recv(), if scheduler_input_rx.ready_background_inputs_before_runtime_response.is_empty() => {
+                if bidi_frontends.handle_input(&mut scheduler, &mut scheduler_input_rx.events, id, input).await {
+                    send_cookie_checkpoint(&mut scheduler, owner_lifecycle.as_ref());
                 }
             }
             maybe_completion = pending_command_completion_rx.recv(), if !in_flight_commands.is_empty() => {
@@ -400,6 +435,16 @@ async fn run_cdp_scheduler_actor(
                 let Some(input) = maybe_input else {
                     break;
                 };
+                if let SchedulerInput::DeferredRuntimeInspectorResponse(ref response) = input
+                    && let Some(id) = bidi_frontends.runtime_response_owner(response)
+                {
+                    let SchedulerInput::DeferredRuntimeInspectorResponse(response) = input else { unreachable!() };
+                    if bidi_frontends.handle_input(&mut scheduler, &mut scheduler_input_rx.events, id,
+                        BidiSocketActorInput::RuntimeResponseReady(Some(response))).await {
+                        send_cookie_checkpoint(&mut scheduler, owner_lifecycle.as_ref());
+                    }
+                    continue;
+                }
                 trace_scheduler_input(&input, "scheduler_input_received");
                 if !handle_scheduler_input(
                     &frontend_router,
@@ -420,6 +465,9 @@ async fn run_cdp_scheduler_actor(
             }
         }
     }
+    bidi_frontends
+        .shutdown(&mut scheduler, &mut scheduler_input_rx.events)
+        .await;
     CdpCookieSnapshot::from_profile_backed_cookies(scheduler.snapshot_profile_backed_cookies())
 }
 
@@ -608,7 +656,7 @@ async fn flush_background_completion_input(
             materialize_background_navigation_completion_output(
                 scheduler,
                 completion,
-                &mut scheduler_input_rx.background_event_rx,
+                &mut scheduler_input_rx.events.background_event_rx,
             )
             .await
         }
@@ -817,17 +865,17 @@ async fn flush_protocol_output_with_runtime_deferred_reply_routing(
                 let command_ids =
                     pending_runtime_deferred_reply_command_ids(pending_runtime_deferred_replies);
                 if command_ids.is_empty() {
-                    frontend_router.enqueue_protocol_output_sequence(output);
+                    scheduler.enqueue_frontend_output(frontend_router, output);
                     break;
                 }
                 let Some((prefix, command_id, event)) =
                     output.split_next_protocol_message_with_any_id(&command_ids)
                 else {
-                    frontend_router.enqueue_protocol_output_sequence(output);
+                    scheduler.enqueue_frontend_output(frontend_router, output);
                     break;
                 };
                 if !prefix.is_empty() {
-                    frontend_router.enqueue_protocol_output_sequence(prefix);
+                    scheduler.enqueue_frontend_output(frontend_router, prefix);
                 }
                 let advance = match fail_runtime_deferred_reply_for_loose_protocol_response(
                     scheduler,
@@ -1025,7 +1073,7 @@ async fn flush_runtime_deferred_reply_advance(
                 .settle_exact_outputs_before_response(scheduler)
                 .await;
             let (completion_output, post_response_events, completed) = completion.into_parts();
-            frontend_router.enqueue_protocol_output_sequence(completion_output);
+            scheduler.enqueue_frontend_output(frontend_router, completion_output);
             if !post_response_events.is_empty()
                 && !flush_protocol_output_with_runtime_deferred_reply_routing(
                     frontend_router,

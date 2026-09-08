@@ -965,7 +965,7 @@ fn start_clear_device_metrics_override_command(
         ));
     }
     let owner_scope = CommandOwnerScope::capture(conn, cmd.session_id);
-    let runtime_call_id = conn.next_internal_runtime_command_id();
+    let runtime_call_id = conn.next_internal_devtools_command_id();
     let Some((context_id, target_id)) = page_configuration_owner(conn, &owner_scope) else {
         return EmulationCommandTaskStep::Complete(CommandOutputPlan::result(json!({})));
     };
@@ -1049,7 +1049,7 @@ fn start_devtools_set_viewport_command(
             "BrowserContextNotLoaded",
         ));
     }
-    let runtime_call_id = conn.next_internal_runtime_command_id();
+    let runtime_call_id = conn.next_internal_devtools_command_id();
     let Some((context_id, target_id)) = page_configuration_owner(conn, &owner_scope) else {
         return Ok(None);
     };
@@ -2297,7 +2297,7 @@ async fn execute_devtools_set_viewport_for_browser_contexts(
         let runtime_command_count =
             browser_context_default_device_metrics_runtime_command_count(browser_context);
         let mut runtime_call_ids = (0..runtime_command_count)
-            .map(|_| conn.next_internal_runtime_command_id())
+            .map(|_| conn.next_internal_devtools_command_id())
             .collect::<Vec<_>>();
         let browser_context = conn
             .browser_context_by_id_mut(&browser_context_id)
@@ -2946,7 +2946,7 @@ fn start_geolocation_surface_override_page_commands(
     if cmd.session_id.is_some() {
         return start_session_surface_override_page_command(conn, cmd.session_id);
     }
-    let runtime_call_id = conn.next_internal_runtime_command_id();
+    let runtime_call_id = conn.next_internal_devtools_command_id();
     let Some(browser_context) = conn.browser_context.as_ref() else {
         return Ok(Vec::new());
     };
@@ -3014,7 +3014,7 @@ fn start_session_surface_override_page_command_for_owner(
     let Some(script) = script else {
         return Ok(Vec::new());
     };
-    let runtime_call_id = conn.next_internal_runtime_command_id();
+    let runtime_call_id = conn.next_internal_devtools_command_id();
     let Some(binding) = conn
         .runtime_session_owner_slot_for_owner(owner_scope)
         .ok()
@@ -3066,7 +3066,7 @@ fn start_surface_override_for_route(
     let Some(script) = script else {
         return Ok(Vec::new());
     };
-    let runtime_call_id = conn.next_internal_runtime_command_id();
+    let runtime_call_id = conn.next_internal_devtools_command_id();
     let owner = CommandOwnerScope::for_route(route.clone());
     let Some(binding) = conn
         .runtime_session_owner_slot_for_owner(&owner)

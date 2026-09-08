@@ -2,18 +2,21 @@ use anyhow::{Context, Result, bail};
 use tokio::sync::{mpsc, oneshot};
 
 use crate::cdp_writer::CdpSocketSink;
+use crate::protocol_server::webdriver_bidi::BidiFrontendAttach;
 
 const FRONTEND_COMMAND_QUEUE_CAPACITY: usize = 256;
 
 pub(crate) struct CdpFrontendReceivers {
     pub(crate) control_rx: mpsc::UnboundedReceiver<CdpFrontendControlRequest>,
     pub(crate) command_rx: mpsc::Receiver<CdpFrontendCommand>,
+    pub(crate) bidi_rx: mpsc::UnboundedReceiver<BidiFrontendAttach>,
 }
 
 #[derive(Clone)]
 pub(crate) struct CdpFrontendEndpoint {
     control_tx: mpsc::UnboundedSender<CdpFrontendControlRequest>,
     command_tx: mpsc::Sender<CdpFrontendCommand>,
+    bidi_tx: mpsc::UnboundedSender<BidiFrontendAttach>,
     shutdown_tx: tokio::sync::watch::Sender<bool>,
 }
 
@@ -68,21 +71,33 @@ pub(crate) struct CdpCreatedTarget {
 pub(crate) fn cdp_frontend_channel() -> (CdpFrontendEndpoint, CdpFrontendReceivers) {
     let (control_tx, control_rx) = mpsc::unbounded_channel();
     let (command_tx, command_rx) = mpsc::channel(FRONTEND_COMMAND_QUEUE_CAPACITY);
+    let (bidi_tx, bidi_rx) = mpsc::unbounded_channel();
     let (shutdown_tx, _) = tokio::sync::watch::channel(false);
     (
         CdpFrontendEndpoint {
             control_tx,
             command_tx,
+            bidi_tx,
             shutdown_tx,
         },
         CdpFrontendReceivers {
             control_rx,
             command_rx,
+            bidi_rx,
         },
     )
 }
 
 impl CdpFrontendEndpoint {
+    pub(crate) fn attach_bidi(&self, frontend: BidiFrontendAttach) -> Result<()> {
+        if self.is_shutting_down() {
+            bail!("DevTools owner is shutting down");
+        }
+        self.bidi_tx
+            .send(frontend)
+            .map_err(|_| anyhow::anyhow!("DevTools owner is no longer available"))
+    }
+
     pub(crate) async fn attach_browser(&self, sink: CdpSocketSink) -> Result<u64> {
         if self.is_shutting_down() {
             bail!("CDP owner is shutting down");

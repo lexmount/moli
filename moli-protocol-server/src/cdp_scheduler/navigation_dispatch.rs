@@ -253,10 +253,6 @@ impl CdpScheduler {
         self.detached_navigations.push(wait);
     }
 
-    pub(crate) fn has_detached_navigations(&self) -> bool {
-        !self.detached_navigations.is_empty()
-    }
-
     pub(crate) async fn recv_adapter_owner_input(&mut self) -> AdapterOwnerInput {
         tokio::select! {
             biased;

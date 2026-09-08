@@ -70,10 +70,7 @@ impl CdpConnection {
             .page_event_session_ids_for_owner(&owner)
             .iter()
             .any(|session| {
-                let session_owner = session
-                    .as_deref()
-                    .map(CommandOwnerScope::for_session)
-                    .unwrap_or_else(|| owner.clone());
+                let session_owner = owner.for_target_event_session(self, session.as_deref());
                 self.target_runtime_session_state_for_owner(&session_owner)
                     .is_some_and(|state| state.runtime_frontend_enabled)
             })
@@ -89,10 +86,7 @@ impl CdpConnection {
         );
         if let Some(info) = metadata.info.as_ref() {
             for session_id in self.page_event_session_ids_for_owner(&owner) {
-                let event_owner = session_id
-                    .as_deref()
-                    .map(CommandOwnerScope::for_session)
-                    .unwrap_or_else(|| owner.clone());
+                let event_owner = owner.for_target_event_session(self, session_id.as_deref());
                 page::emit_navigation_frame_commit_background_events(
                     &mut events,
                     session_id.as_deref(),

@@ -21,10 +21,6 @@ impl CdpScheduler {
         self.browser_event_rx.is_none()
     }
 
-    pub(crate) async fn recv_browser_event(&mut self) -> BrowserEventInput {
-        recv_browser_event(&mut self.browser_event_rx).await
-    }
-
     pub(crate) async fn recv_interleaved_input(
         &mut self,
         receivers: &mut CdpSchedulerEventReceivers,

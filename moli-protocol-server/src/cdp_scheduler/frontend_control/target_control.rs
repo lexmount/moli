@@ -246,7 +246,8 @@ impl CdpFrontendTargetControl {
                 .register_private_session(session_id.to_owned())
                 .context("failed to register CDP internal control session")?;
         }
-        frontend_router.enqueue_protocol_output_sequence(
+        scheduler.enqueue_frontend_output(
+            frontend_router,
             ProtocolOutputSequence::from_background_events(passthrough_events),
         );
         control_command_result(response, method)

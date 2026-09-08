@@ -161,10 +161,7 @@ impl CdpConnection {
         self.page_event_session_ids_for_owner(&owner)
             .into_iter()
             .filter(|session_id| {
-                let event_owner = session_id
-                    .as_deref()
-                    .map(CommandOwnerScope::for_session)
-                    .unwrap_or_else(|| owner.clone());
+                let event_owner = owner.for_target_event_session(self, session_id.as_deref());
                 self.target_page_session_state_for_owner(&event_owner)
                     .is_some_and(|state| state.page_screencast.is_active())
             })
