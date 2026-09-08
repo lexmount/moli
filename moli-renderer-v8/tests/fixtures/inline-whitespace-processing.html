@@ -1,0 +1,92 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>CSS text processing ignores out-of-flow boxes</title>
+<style>
+  body { margin:0; font:20px/1.5 monospace }
+  .case { position:relative; height:100px }
+  .line { display:flow-root; width:300px }
+  .object { width:7px; height:7px; font-size:0 }
+  .absolute { position:absolute }
+  .fixed { position:fixed }
+  .float-left { float:left }
+  .float-right { float:right }
+  .containing { position:relative }
+  .fill { position:absolute; inset:0 }
+</style>
+<body>
+<script>
+  // Each pair differs only in source whitespace. Compare to its explicitly
+  // normalized equivalent, so the test is independent of installed fonts.
+  const patterns = [
+    ['leading', ' \n{o} \t{b}', '{o}{b}', 'normal'],
+    ['trailing', '{a} \n{o} \t', '{a}{o}', 'normal'],
+    ['between', '{a} \t{o} \n{b}', '{a} {o}{b}', 'normal'],
+    ['empty', ' \t{o}\n ', '{o}', 'normal'],
+    ['multiple', '{a} \t{o} \n{o} \t{b}', '{a} {o}{o}{b}', 'normal'],
+    ['zwsp-before', '{a}\u200b \n{o} \t{b}', '{a}\u200b{o}{b}', 'normal'],
+    ['zwsp-after', '{a} \n{o} \t\u200b{b}', '{a}{o}\u200b{b}', 'normal'],
+    ['zwsp-without-break', '{a}\u200b {o} {b}', '{a}\u200b {o}{b}', 'normal'],
+    ['preserved-break', '{a} \n{o} \t{b}', '{a}\n{o}{b}', 'pre-line'],
+    ['preserved-spaces', ' {a} {o} {b} ', ' {a} {o} {b} ', 'pre'],
+    ['break-spaces', ' {a} {o} {b} ', ' {a} {o} {b} ', 'break-spaces'],
+  ];
+  const pairs = [];
+  for (const role of ['absolute', 'fixed', 'float-left', 'float-right']) {
+    for (const [name, test, reference, whiteSpace] of patterns) {
+      const lines = [test, reference].map(markup => {
+        const container = document.createElement('div');
+        container.className = 'case';
+        const line = document.createElement('div');
+        line.className = 'line';
+        line.style.whiteSpace = whiteSpace;
+        line.innerHTML = markup
+          .replaceAll('{a}', '<span data-mark="a">A</span>')
+          .replaceAll('{b}', '<span data-mark="b">B</span>')
+          .replaceAll('{o}', `<i class="object ${role}" data-mark="object"></i>`);
+        container.appendChild(line);
+        document.body.appendChild(container);
+        return line;
+      });
+      pairs.push({id:role + '.' + name, lines});
+    }
+  }
+  // Collapsing the whitespace after an out-of-flow placeholder changes the
+  // final shaped advance. Its enclosing inline and absolute child must still
+  // publish exactly the same layout-unit edges, including inside a fractional
+  // padding box. This is the contract of position-absolute-in-inline-002.
+  const containingBlocks = [];
+  for (const direction of ['ltr', 'rtl']) {
+    for (const padding of [0, 0.1]) {
+      const container = document.createElement('div');
+      container.className = 'case';
+      container.style.direction = direction;
+      container.style.padding = padding + 'px';
+      container.innerHTML = '<span>outer span <span class="containing">container span start' +
+        '<div style="width:10px;height:10px"></div><i class="fill"></i> container span end' +
+        '</span> outer span end</span>';
+      document.body.appendChild(container);
+      containingBlocks.push({id:'containing.' + direction + '.' + padding, container});
+    }
+  }
+  function collectInlineFragmentChecks() {
+    const geometry = line => {
+      const origin = line.getBoundingClientRect();
+      const rect = r => [r.x-origin.x, r.y-origin.y, r.width, r.height];
+      return [rect(origin), ...Array.from(line.querySelectorAll('[data-mark]'), element =>
+        Array.from(element.getClientRects(), rect))];
+    };
+    const checks = pairs.map(({id, lines}) => ({
+      id, actual:geometry(lines[0]), expected:geometry(lines[1]),
+    }));
+    for (const {id, container} of containingBlocks) {
+      const fragments = Array.from(container.querySelector('.containing').getClientRects());
+      const first = fragments[0], last = fragments[fragments.length-1];
+      const target = container.querySelector('.fill').getBoundingClientRect();
+      const rtl = container.style.direction === 'rtl';
+      checks.push({id:id + '.count', actual:fragments.length, expected:3});
+      checks.push({id, actual:[target.left, target.top, target.right, target.bottom],
+        expected:[rtl ? last.left : first.left, first.top, rtl ? first.right : last.right, last.bottom]});
+    }
+    return checks;
+  }
+</script>

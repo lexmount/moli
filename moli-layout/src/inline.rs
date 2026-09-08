@@ -1660,16 +1660,16 @@ impl FragmentAccumulator {
             if has_left_edge { padding.left } else { 0.0 },
         );
         Some(LayoutFragmentBoxModel {
-            content: content_box,
-            padding: padding_box,
-            border: border_box,
-            margin: outset_rect(
+            content: inline_box_layout_rect(content_box),
+            padding: inline_box_layout_rect(padding_box),
+            border: inline_box_layout_rect(border_box),
+            margin: inline_box_layout_rect(outset_rect(
                 border_box,
                 margin.top,
                 right_margin,
                 margin.bottom,
                 left_margin,
-            ),
+            )),
         })
     }
 
@@ -1704,6 +1704,26 @@ impl FragmentAccumulator {
             (max_y - min_y).max(0.0),
         ))
     }
+}
+
+/// Inline boxes are CSS layout geometry, even though Parley's shaped glyph
+/// advances retain finer precision. Materialize their edges on the shared
+/// layout grid once, before paint, CSSOM, and positioned layout consume them.
+/// Rounding the edges (not an independent origin and width) preserves shared
+/// boundaries and does not enlarge an empty fragment.
+fn inline_box_layout_rect(rect: PaintRect) -> PaintRect {
+    let round = |value: f32| {
+        (value * crate::LAYOUT_SUBPIXELS_PER_CSS_PIXEL).round()
+            / crate::LAYOUT_SUBPIXELS_PER_CSS_PIXEL
+    };
+    let left = round(rect.x);
+    let top = round(rect.y);
+    PaintRect::new(
+        left,
+        top,
+        (round(rect.right()) - left).max(0.0),
+        (round(rect.bottom()) - top).max(0.0),
+    )
 }
 
 fn ranges_overlap(left: &Range<usize>, right: &Range<usize>) -> bool {
@@ -2247,6 +2267,10 @@ struct InlineNormalizer {
     pending: Option<PendingWhitespace>,
     pending_carriage_return: Option<PendingCarriageReturn>,
     line_has_content: bool,
+    /// The preceding character in the CSS text-processing stream. Atomic
+    /// inlines interrupt that stream; structural edges, injected bidi
+    /// controls, floats, and positioned boxes do not.
+    previous_character: Option<char>,
     capitalize_word_start: bool,
 }
 
@@ -2260,6 +2284,7 @@ impl InlineNormalizer {
             pending: None,
             pending_carriage_return: None,
             line_has_content: false,
+            previous_character: None,
             capitalize_word_start: true,
         }
     }
@@ -2393,7 +2418,7 @@ impl InlineNormalizer {
                 self.queue_whitespace(style_box, ancestors, sources, false);
             }
             InlineWhiteSpaceCollapse::Preserve | InlineWhiteSpaceCollapse::BreakSpaces => {
-                self.flush_pending();
+                self.flush_pending(Some(character));
                 let character = if matches!(character, '\r' | '\u{000C}') {
                     '\n'
                 } else {
@@ -2412,7 +2437,7 @@ impl InlineNormalizer {
                 self.line_has_content = character != '\n';
             }
             InlineWhiteSpaceCollapse::Collapse | InlineWhiteSpaceCollapse::PreserveBreaks => {
-                self.flush_pending();
+                self.flush_pending(Some(character));
                 self.append_unit(style_box, character, ancestors, sources, false);
                 self.line_has_content = true;
             }
@@ -2439,11 +2464,19 @@ impl InlineNormalizer {
         pending.contains_segment_break |= segment_break;
     }
 
-    fn flush_pending(&mut self) {
+    fn flush_pending(&mut self, next_character: Option<char>) {
         let Some(pending) = self.pending.take() else {
             return;
         };
         if !self.line_has_content {
+            return;
+        }
+        // CSS Text segment-break transformation removes a collapsed sequence
+        // containing a segment break next to U+200B. Look at the logical text
+        // neighbors, not the most recently appended inline/bidi item.
+        if pending.contains_segment_break
+            && (self.previous_character == Some('\u{200b}') || next_character == Some('\u{200b}'))
+        {
             return;
         }
 
@@ -2453,6 +2486,7 @@ impl InlineNormalizer {
         // point where the collapsible sequence began instead of appending it
         // after the deferred boundaries.
         self.text.insert(pending.output_index, ' ');
+        self.previous_character = Some(' ');
         for unit in &mut self.units[pending.unit_index..] {
             unit.output_range.start += 1;
             unit.output_range.end += 1;
@@ -2533,12 +2567,13 @@ impl InlineNormalizer {
         vertical_align: InlineVerticalAlign,
     ) {
         self.flush_pending_carriage_return();
-        if matches!(
-            role,
-            InlineObjectRole::Atomic | InlineObjectRole::Float | InlineObjectRole::OutOfFlow(_)
-        ) {
-            self.flush_pending();
+        // CSS text processing ignores out-of-flow elements, including floats.
+        // Only an atomic inline separates collapsible whitespace sequences and
+        // supplies in-flow content at the beginning/end of the paragraph.
+        if role == InlineObjectRole::Atomic {
+            self.flush_pending(None);
             self.line_has_content = true;
+            self.previous_character = None;
         }
         self.objects.push((
             self.text.len(),
@@ -2562,6 +2597,9 @@ impl InlineNormalizer {
     ) {
         let start = self.text.len();
         self.text.push(character);
+        if !control {
+            self.previous_character = Some(character);
+        }
         self.units.push(InlineTextUnit {
             output_range: start..self.text.len(),
             style_box,
@@ -3135,6 +3173,214 @@ mod tests {
         assert!(input.units[1].ancestors.is_empty());
         assert_eq!(input.units[4].output_range, 6..7);
         assert_eq!(input.units[4].ancestors, vec![second_inline]);
+    }
+
+    #[test]
+    fn inline_box_layout_edges_share_the_css_subpixel_grid() {
+        let first = inline_box_layout_rect(PaintRect::new(0.006, -0.006, 0.006, 0.006));
+        let second = inline_box_layout_rect(PaintRect::new(0.012, 0.0, 0.012, 0.0));
+        assert_eq!(first, PaintRect::new(0.0, 0.0, 1.0 / 64.0, 0.0));
+        assert_eq!(first.right(), second.x);
+        assert_eq!(second.width, 1.0 / 64.0);
+        assert_eq!(second.height, 0.0);
+        let empty = inline_box_layout_rect(PaintRect::new(-0.01, 0.01, 0.0, 0.0));
+        assert_eq!(empty, PaintRect::new(-1.0 / 64.0, 1.0 / 64.0, 0.0, 0.0));
+    }
+
+    fn normalize_around_object(
+        before: &str,
+        after: &str,
+        role: InlineObjectRole,
+        mode: InlineWhiteSpaceCollapse,
+    ) -> InlineBuildInput {
+        let root = LayoutBoxId::from_index(0);
+        let mut normalizer = InlineNormalizer::new(root);
+        normalizer.push_text(
+            LayoutBoxId::from_index(1),
+            before,
+            mode,
+            InlineTextTransform::None,
+            &[root],
+        );
+        let kind = match role {
+            InlineObjectRole::Atomic => InlineBoxKind::InFlow,
+            InlineObjectRole::Float => InlineBoxKind::CustomOutOfFlow,
+            InlineObjectRole::OutOfFlow(_) => InlineBoxKind::OutOfFlow,
+            InlineObjectRole::StartEdge | InlineObjectRole::EndEdge => {
+                panic!("use open_inline/close_inline for structural boundaries")
+            }
+        };
+        normalizer.push_object(
+            LayoutBoxId::from_index(2),
+            role,
+            kind,
+            &[root],
+            InlineVerticalAlign::default(),
+        );
+        normalizer.push_text(
+            LayoutBoxId::from_index(3),
+            after,
+            mode,
+            InlineTextTransform::None,
+            &[root],
+        );
+        normalizer.finish()
+    }
+
+    const OUT_OF_FLOW_ROLES: [InlineObjectRole; 3] = [
+        InlineObjectRole::Float,
+        InlineObjectRole::OutOfFlow(OutOfFlowDisplay::Inline),
+        InlineObjectRole::OutOfFlow(OutOfFlowDisplay::Block),
+    ];
+
+    #[test]
+    fn out_of_flow_objects_do_not_interrupt_collapsible_whitespace() {
+        for role in OUT_OF_FLOW_ROLES {
+            for (before, after, expected, object_index) in [
+                ("A \t", " \nB", "A B", 2),
+                (" \n", " \tB", "B", 0),
+                ("A \n", " \t", "A", 1),
+                (" \t", "\n ", "", 0),
+            ] {
+                let input = normalize_around_object(
+                    before,
+                    after,
+                    role,
+                    InlineWhiteSpaceCollapse::Collapse,
+                );
+                assert_eq!(input.text, expected, "{role:?}: {before:?}, {after:?}");
+                assert_eq!(input.objects.len(), 1);
+                assert_eq!(input.objects[0].0, object_index, "{role:?}");
+                assert_eq!(input.objects[0].1.role, role);
+            }
+        }
+    }
+
+    #[test]
+    fn collapsed_space_across_out_of_flow_keeps_source_and_style_ownership() {
+        let input = normalize_around_object(
+            "A \t",
+            " \nB",
+            InlineObjectRole::OutOfFlow(OutOfFlowDisplay::Inline),
+            InlineWhiteSpaceCollapse::Collapse,
+        );
+        assert_eq!(input.text, "A B");
+        let space = &input.units[1];
+        assert_eq!(space.output_range, 1..2);
+        assert_eq!(space.style_box, LayoutBoxId::from_index(1));
+        assert_eq!(space.ancestors, vec![LayoutBoxId::from_index(0)]);
+        assert_eq!(
+            space
+                .sources
+                .iter()
+                .map(|source| (source.box_id, source.byte_range.clone()))
+                .collect::<Vec<_>>(),
+            vec![
+                (LayoutBoxId::from_index(1), 1..2),
+                (LayoutBoxId::from_index(1), 2..3),
+                (LayoutBoxId::from_index(3), 0..1),
+                (LayoutBoxId::from_index(3), 1..2),
+            ]
+        );
+        assert_eq!(input.objects[0].0, 2);
+    }
+
+    #[test]
+    fn atomic_inlines_interrupt_whitespace_and_segment_break_neighbors() {
+        for (before, after, expected, object_index) in [
+            ("A ", " B", "A  B", 2),
+            (" ", " B", " B", 0),
+            ("A ", " ", "A ", 2),
+            ("A\u{200b}", "\n B", "A\u{200b} B", 4),
+            ("A \n", "\u{200b}B", "A \u{200b}B", 2),
+        ] {
+            let input = normalize_around_object(
+                before,
+                after,
+                InlineObjectRole::Atomic,
+                InlineWhiteSpaceCollapse::Collapse,
+            );
+            assert_eq!(input.text, expected, "{before:?}, {after:?}");
+            assert_eq!(input.objects[0].0, object_index);
+        }
+    }
+
+    #[test]
+    fn out_of_flow_objects_do_not_collapse_preserved_spaces() {
+        for role in OUT_OF_FLOW_ROLES {
+            for mode in [
+                InlineWhiteSpaceCollapse::Preserve,
+                InlineWhiteSpaceCollapse::BreakSpaces,
+            ] {
+                let input = normalize_around_object(" A ", " B ", role, mode);
+                let text = input
+                    .units
+                    .iter()
+                    .filter(|unit| !unit.control)
+                    .map(|unit| &input.text[unit.output_range.clone()])
+                    .collect::<String>();
+                assert_eq!(text, " A  B ", "{role:?}, {mode:?}");
+            }
+        }
+    }
+
+    #[test]
+    fn zero_width_space_segment_break_neighbors_ignore_out_of_flow_objects() {
+        for role in OUT_OF_FLOW_ROLES {
+            for (before, after, expected) in [
+                ("A\u{200b} \n", " B", "A\u{200b}B"),
+                ("A \n", " \u{200b}B", "A\u{200b}B"),
+                ("A\u{200b} ", " B", "A\u{200b} B"),
+                ("\u{200b}A \n", "B", "\u{200b}A B"),
+            ] {
+                let input = normalize_around_object(
+                    before,
+                    after,
+                    role,
+                    InlineWhiteSpaceCollapse::Collapse,
+                );
+                assert_eq!(input.text, expected, "{role:?}: {before:?}, {after:?}");
+            }
+        }
+    }
+
+    #[test]
+    fn segment_break_neighbors_ignore_injected_bidi_controls() {
+        let root = LayoutBoxId::from_index(0);
+        let inline = LayoutBoxId::from_index(1);
+        let mut normalizer = InlineNormalizer::new(root);
+        normalizer.push_text(
+            LayoutBoxId::from_index(2),
+            "A\u{200b}",
+            InlineWhiteSpaceCollapse::Collapse,
+            InlineTextTransform::None,
+            &[],
+        );
+        normalizer.open_inline(
+            inline,
+            InlineUnicodeBidi::Embed,
+            InlineDirection::Ltr,
+            &[],
+            InlineVerticalAlign::default(),
+        );
+        normalizer.push_text(
+            LayoutBoxId::from_index(3),
+            " \n B",
+            InlineWhiteSpaceCollapse::Collapse,
+            InlineTextTransform::None,
+            &[inline],
+        );
+        normalizer.close_inline(
+            inline,
+            InlineUnicodeBidi::Embed,
+            &[],
+            InlineVerticalAlign::default(),
+        );
+        let input = normalizer.finish();
+        assert_eq!(input.text, "A\u{200b}\u{202a}B\u{202c}");
+        assert!(input.source_map.iter().all(|entry| {
+            entry.box_id != LayoutBoxId::from_index(3) || entry.source_byte_range == (3..4)
+        }));
     }
 
     #[test]
