@@ -331,6 +331,7 @@ pub(super) fn style_mutation_effects_are_child_list_structural(
                 effect,
                 StyleMutationEffect::ChildList { .. }
                     | StyleMutationEffect::ConnectedSubtrees { .. }
+                    | StyleMutationEffect::DisconnectedSubtrees { .. }
                     | StyleMutationEffect::SlotAssignment { .. }
             )
         })

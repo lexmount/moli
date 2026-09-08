@@ -4219,7 +4219,7 @@ fn retained_stylo_invalidator_narrows_child_list_inserted_sibling_invalidation()
 }
 
 #[test]
-fn retained_stylo_invalidator_keeps_ua_structural_boundary_when_author_source_has_no_target() {
+fn reordered_summary_invalidates_ua_styles_when_author_source_has_no_target() {
     let mut host = test_host();
     let document = host.document_handle();
     let details = host.create_element("details");
@@ -4306,8 +4306,19 @@ fn retained_stylo_invalidator_keeps_ua_structural_boundary_when_author_source_ha
     );
     engine.drain_pending_style_invalidations_for_document_for_test(&host, document);
 
-    assert!(!engine.computed_style_cache_contains_handle_for_document_for_test(document, first));
-    assert!(!engine.computed_style_cache_contains_handle_for_document_for_test(document, second));
+    // Reordering uses lazy source-scope invalidation, not eager eviction of
+    // exact sibling targets. Both cached styles must be stale before a read.
+    let world = engine.world_for_document(document);
+    let invalidation = &world.document_state.lazy_invalidation_roots;
+    for handle in [first, second] {
+        assert!(
+            invalidation
+                .validation_path(&host, document, handle)
+                .iter()
+                .any(|entry| entry.element == handle
+                    && !invalidation.element_is_current(handle, entry.required_generation))
+        );
+    }
     assert!(engine.computed_style_cache_contains_handle_for_document_for_test(document, unrelated));
     assert_eq!(
         engine.computed_style_property_value(

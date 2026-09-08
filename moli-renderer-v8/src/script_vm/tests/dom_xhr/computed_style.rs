@@ -1,5 +1,7 @@
 use super::*;
 
+mod child_list;
+
 #[test]
 fn element_current_css_zoom_observes_fresh_effective_style_for_rendered_boxes() {
     let mut vm = new_parsed_test_vm(

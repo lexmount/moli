@@ -211,6 +211,7 @@ fn retained_stylo_invalidation_queries_for_child_list_mutations(
             if matches!(
                 effect,
                 StyleMutationEffect::ConnectedSubtrees { .. }
+                    | StyleMutationEffect::DisconnectedSubtrees { .. }
                     | StyleMutationEffect::SlotAssignment { .. }
             ) {
                 continue;

@@ -17,6 +17,7 @@ use super::{
     MoliStyleEngine, StyleMutationEffect, StyleViewport,
     cause::PendingStyleInvalidationCause,
     document_world::DocumentStyleWorld,
+    eligibility::child_list_effects_have_current_topology,
     mutation_effect::detached_style_subtree_roots_for_mutations,
     schedule::queue_style_invalidation_for_scope,
     scope::{
@@ -219,8 +220,10 @@ impl MoliStyleEngine {
         emulated_media: &EmulatedMediaOverrides,
         viewport: StyleViewport,
     ) {
-        if effects.len() <= IMMEDIATE_STRUCTURAL_MUTATION_EFFECT_LIMIT {
-            self.invalidate_detached_style_subtrees_for_mutations(host, effects);
+        self.invalidate_detached_style_subtrees_for_mutations(host, effects);
+        if effects.len() <= IMMEDIATE_STRUCTURAL_MUTATION_EFFECT_LIMIT
+            && child_list_effects_have_current_topology(host, effects)
+        {
             self.queue_style_invalidation_for_mutations(
                 document,
                 world,
@@ -250,6 +253,8 @@ impl MoliStyleEngine {
         emulated_media: &EmulatedMediaOverrides,
         viewport: StyleViewport,
     ) {
+        // Use all mutation handles to cover both the old and new tree scopes.
+        // Cause-local fallback roots are not enough when old neighbors moved.
         let source_scope = source_scope_for_mutations(host, effects);
         let cause = PendingStyleInvalidationCause::Mutation(Vec::new());
         self.queue_style_invalidation_scope(

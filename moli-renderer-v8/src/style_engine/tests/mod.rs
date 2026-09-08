@@ -524,6 +524,7 @@ fn collect_source_invalidation_roots_for_test(
 
 mod char_child;
 mod dependency;
+mod eligibility;
 mod invalidator;
 mod lifecycle;
 mod outcome;
