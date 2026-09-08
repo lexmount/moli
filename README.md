@@ -27,6 +27,12 @@
   <a href="docs/README.es.md">Español</a>
 </p>
 
+<p align="center">
+  <a href="https://discord.gg/4eXGtdWWnq">
+    <img src="https://img.shields.io/badge/Discord-Join%20Community-5865F2" alt="Discord" />
+  </a>
+</p>
+
 Moli is a production-ready headless browser for AI agents. Its on-demand layout
 and rendering design combines a complete browser runtime with a lightweight
 resource footprint.
