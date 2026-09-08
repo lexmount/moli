@@ -676,7 +676,7 @@ async fn page_with_installed_dialog_for_test() -> (
     let completion = RendererJavaScriptDialogCompletion::pending();
     let document = owner.document_handle_for_target(TARGET).unwrap();
     let key = owner
-        .install_document_javascript_dialog(
+        .install_document_javascript_dialog_for_test(
             document,
             RendererPendingJavaScriptDialog::new(
                 RendererJavaScriptDialogId::new(1),
@@ -935,7 +935,7 @@ async fn dialog_disable_and_exact_detach_dismiss_only_their_browser_dialogs() {
         .unwrap();
     let document_handle = owner.document_handle_for_target(TARGET).unwrap();
     let key = owner
-        .install_document_javascript_dialog(
+        .install_document_javascript_dialog_for_test(
             document_handle,
             RendererPendingJavaScriptDialog::new(
                 RendererJavaScriptDialogId::new(2),

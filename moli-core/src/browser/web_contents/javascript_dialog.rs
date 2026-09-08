@@ -16,11 +16,15 @@ pub struct JavaScriptDialogKey {
 }
 
 impl JavaScriptDialogKey {
-    pub fn new(document: DocumentId, dialog: &RendererPendingJavaScriptDialog) -> Self {
+    pub fn new(
+        document: DocumentId,
+        source: RendererDocumentLifecycleIdentity,
+        dialog: RendererJavaScriptDialogId,
+    ) -> Self {
         Self {
             document,
-            source: dialog.source_document(),
-            dialog: dialog.id(),
+            source,
+            dialog,
         }
     }
 }
@@ -53,7 +57,11 @@ struct JavaScriptDialog {
 
 impl JavaScriptDialog {
     fn key(&self) -> JavaScriptDialogKey {
-        JavaScriptDialogKey::new(self.document, &self.renderer)
+        JavaScriptDialogKey::new(
+            self.document,
+            self.renderer.source_document(),
+            self.renderer.id(),
+        )
     }
 }
 
@@ -61,9 +69,37 @@ impl JavaScriptDialog {
 #[derive(Debug, Default)]
 pub struct JavaScriptDialogs {
     pending: Vec<JavaScriptDialog>,
+    admitted: u64,
+    admission: Option<tokio::sync::watch::Sender<u64>>,
 }
 
 impl JavaScriptDialogs {
+    pub(in crate::browser) fn observe_admission(&mut self) -> tokio::sync::watch::Receiver<u64> {
+        self.admission
+            .get_or_insert_with(|| tokio::sync::watch::channel(self.admitted).0)
+            .subscribe()
+    }
+
+    pub(in crate::browser) fn mark_admitted(&mut self, id: RendererJavaScriptDialogId) {
+        self.admitted = self.admitted.max(id.sequence());
+        if let Some(admission) = &self.admission {
+            admission.send_replace(self.admitted);
+        }
+    }
+
+    pub(in crate::browser) fn snapshots(
+        &self,
+        document: crate::browser::DocumentHandle,
+    ) -> impl Iterator<Item = crate::browser::JavaScriptDialogOpened> + '_ {
+        self.pending
+            .iter()
+            .map(move |dialog| crate::browser::JavaScriptDialogOpened {
+                document,
+                key: dialog.key(),
+                opening: dialog.renderer.opening(),
+            })
+    }
+
     pub fn install(
         &mut self,
         document: DocumentId,
@@ -129,10 +165,6 @@ impl JavaScriptDialogs {
                 dialog_type: dialog.renderer.dialog_type().into(),
                 user_input,
             })
-    }
-
-    pub fn dismiss(&mut self, key: JavaScriptDialogKey) {
-        let _ = self.finish(key, false, Some(String::new()));
     }
 
     pub fn is_empty(&self) -> bool {

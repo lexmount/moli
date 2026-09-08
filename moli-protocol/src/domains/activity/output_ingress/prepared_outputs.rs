@@ -75,6 +75,9 @@ impl PreparedProtocolOutputs {
     ) -> Self {
         let mut prepared = Self::empty();
         match observation {
+            RendererProtocolObservation::JavaScriptDialog(_) => {
+                unreachable!("dialog projection must observe native admission first")
+            }
             RendererProtocolObservation::MainDocumentCommit(commit) => {
                 crate::domains::page::append_renderer_main_document_commit_to_output_sink(
                     commit.clone(),
@@ -194,6 +197,15 @@ impl PreparedProtocolOutputs {
         prepared
     }
 
+    pub(in crate::domains::activity) fn from_browser_javascript_dialog(
+        dialog: crate::conn::TargetPreparedJavaScriptDialog,
+    ) -> Self {
+        let mut prepared = Self::empty();
+        crate::domains::page::PagePreparedOutputs::from_browser_javascript_dialog(dialog)
+            .append_to_javascript_dialog_output_sink(&mut prepared);
+        prepared
+    }
+
     pub(in crate::domains::activity) async fn from_protocol_local_command_boundary(
         conn: &mut CdpConnection,
         owner: &CommandOwnerScope,
@@ -221,12 +233,6 @@ impl PreparedProtocolOutputs {
                     conn, owner, activation,
                 )
                 .append_to_output_sink(&mut prepared);
-            }
-            RendererOwnerAction::JavaScriptDialog(dialog) => {
-                crate::domains::page::PagePreparedOutputs::from_renderer_javascript_dialog(
-                    conn, owner, dialog,
-                )
-                .append_to_javascript_dialog_output_sink(&mut prepared);
             }
             RendererOwnerAction::Popup(activation) => {
                 crate::domains::page::PagePreparedOutputs::from_renderer_popup_activation(

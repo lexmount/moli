@@ -3,7 +3,7 @@ use std::{collections::VecDeque, sync::Arc};
 use parking_lot::{Condvar, Mutex};
 use tokio::sync::watch;
 
-use super::page_surface::RendererPendingJavaScriptDialog;
+use super::page_surface::{RendererJavaScriptDialogOpening, RendererPendingJavaScriptDialog};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RendererJavaScriptDialogResult {
@@ -99,11 +99,21 @@ pub(crate) struct RendererJavaScriptDialogWatch {
     open_signal_rx: watch::Receiver<()>,
 }
 
+/// Read-only wakeup for the native Page owner. Only that owner's Page handle
+/// can drain the actual requests; DevTools receives separate opening records.
+pub struct RendererJavaScriptDialogObservation(watch::Receiver<()>);
+
+impl RendererJavaScriptDialogObservation {
+    pub async fn changed(&mut self) -> bool {
+        self.0.changed().await.is_ok()
+    }
+}
+
 impl RendererJavaScriptDialogBroker {
     fn open(&self, dialog: RendererPendingJavaScriptDialog) {
         {
             let mut state = self.inner.state.lock();
-            state.open_count += 1;
+            state.open_count += usize::from(dialog.is_modal());
             state.pending.push_back(dialog);
         }
         self.inner.open_signal_tx.send_modify(|_| {});
@@ -145,6 +155,10 @@ impl RendererJavaScriptDialogBroker {
         }
     }
 
+    pub(crate) fn observe(&self) -> RendererJavaScriptDialogObservation {
+        RendererJavaScriptDialogObservation(self.inner.open_signal_tx.subscribe())
+    }
+
     fn has_open_dialog(&self) -> bool {
         self.inner.state.lock().open_count != 0
     }
@@ -173,18 +187,23 @@ impl RendererJavaScriptDialogRuntime {
         self.broker.clone()
     }
 
+    pub(crate) fn record(&self, dialog: RendererPendingJavaScriptDialog) {
+        self.broker.open(dialog);
+    }
+
     pub(crate) fn begin_modal(
         &self,
         mut dialog: RendererPendingJavaScriptDialog,
     ) -> (
-        RendererPendingJavaScriptDialog,
+        Arc<RendererJavaScriptDialogOpening>,
         RendererModalJavaScriptDialog,
     ) {
         let completion = RendererJavaScriptDialogCompletion::pending();
         dialog.install_completion(completion.clone());
-        self.broker.open(dialog.clone());
+        let opening = dialog.opening();
+        self.broker.open(dialog);
         (
-            dialog,
+            opening,
             RendererModalJavaScriptDialog {
                 broker: self.broker.clone(),
                 completion,

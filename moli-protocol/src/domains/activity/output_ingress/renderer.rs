@@ -11,7 +11,7 @@ use crate::conn::{
     BackgroundProtocolEvent, CdpConnection, CommandDispatchContext, CommandOwnerScope,
 };
 
-fn renderer_owner_action_owner(
+fn renderer_record_owner(
     conn: &CdpConnection,
     publication_owner: &CommandOwnerScope,
     renderer_cause: Option<&moli_core::RendererRuntimeCommandCausalIdentity>,
@@ -202,15 +202,41 @@ async fn project_renderer_output_records_for_owner(
             continue;
         }
         match item {
+            RendererOutputItem::Observation(
+                moli_core::RendererProtocolObservation::JavaScriptDialog(opening),
+            ) => {
+                let Some(renderer) = crate::conn::RendererPageResidenceIdentity::from_residence(
+                    cursor.stream().residence(),
+                ) else {
+                    continue;
+                };
+                let action_owner = renderer_record_owner(conn, owner, renderer_cause.as_ref());
+                let Some(dialog) = conn
+                    .prepare_renderer_javascript_dialog(&action_owner, renderer, opening)
+                    .await
+                else {
+                    continue;
+                };
+                let outputs = PreparedProtocolOutputs::from_browser_javascript_dialog(dialog);
+                order
+                    .route_publication_outputs(
+                        conn,
+                        &action_owner,
+                        renderer_cause.as_ref(),
+                        Some(cursor),
+                        outputs,
+                        command_context,
+                    )
+                    .await;
+            }
             RendererOutputItem::OwnerAction(action) => {
                 // A Page stream can remain bound to its implicit primary owner while a
-                // Runtime command arrives through an attached DevTools session. Owner
-                // actions caused by that command (notably modal dialogs) belong to the
-                // exact inspector attachment, not merely to the stream's base route.
+                // Runtime command arrives through an attached DevTools session. Effects
+                // caused by that command belong to its exact inspector attachment,
+                // not merely to the stream's base route.
                 // Asynchronous actions have no command cause; an unbound stream then
                 // selects the target's stable concrete Page attachment.
-                let action_owner =
-                    renderer_owner_action_owner(conn, owner, renderer_cause.as_ref());
+                let action_owner = renderer_record_owner(conn, owner, renderer_cause.as_ref());
                 let outputs = PreparedProtocolOutputs::from_renderer_owner_action(
                     conn,
                     &action_owner,
@@ -296,7 +322,7 @@ mod tests {
 
     use crate::conn::CommandOwnerScope;
 
-    use super::renderer_owner_action_owner;
+    use super::renderer_record_owner;
 
     #[tokio::test]
     async fn native_lifecycle_ingress_precedes_missing_routes_projection_filters_and_load_visibility()
@@ -517,12 +543,12 @@ mod tests {
         let owner = CommandOwnerScope::capture(&conn, None);
 
         assert_eq!(
-            renderer_owner_action_owner(&conn, &owner, None).session_id(),
+            renderer_record_owner(&conn, &owner, None).session_id(),
             Some("SID-owner-action"),
             "an asynchronous target action should use its concrete attachment"
         );
         assert_eq!(
-            renderer_owner_action_owner(
+            renderer_record_owner(
                 &conn,
                 &owner,
                 Some(&RendererRuntimeCommandCausalIdentity::new(
@@ -533,7 +559,7 @@ mod tests {
             .session_id(),
             Some("SID-owner-action"),
         );
-        let implicit = renderer_owner_action_owner(
+        let implicit = renderer_record_owner(
             &conn,
             &owner,
             Some(&RendererRuntimeCommandCausalIdentity::new(None, 2)),

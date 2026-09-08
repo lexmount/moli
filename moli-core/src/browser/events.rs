@@ -16,6 +16,11 @@ pub enum BrowserEvent {
     },
     DocumentCommitted(DocumentHandle),
     DocumentLifecycleChanged(DocumentLifecycleSnapshot),
+    DialogOpened(JavaScriptDialogOpened),
+    DialogClosed {
+        document: DocumentHandle,
+        key: super::web_contents::JavaScriptDialogKey,
+    },
     DownloadCreated(super::DownloadRecordSnapshot),
     DownloadUpdated(std::sync::Arc<super::DownloadEvent>),
     WebContentsClosed {
@@ -47,6 +52,7 @@ pub struct BrowserSnapshot {
     pub selected_web_contents: Vec<WebContentsHandle>,
     pub documents: Vec<DocumentHandle>,
     pub document_lifecycles: Vec<DocumentLifecycleSnapshot>,
+    pub javascript_dialogs: Vec<JavaScriptDialogOpened>,
     pub downloads: Vec<super::DownloadRecordSnapshot>,
 }
 
@@ -54,6 +60,13 @@ pub struct BrowserSnapshot {
 pub struct DocumentLifecycleSnapshot {
     pub document: DocumentHandle,
     pub lifecycle: crate::page::RendererDocumentLifecycleSnapshot,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct JavaScriptDialogOpened {
+    pub document: DocumentHandle,
+    pub key: super::web_contents::JavaScriptDialogKey,
+    pub opening: std::sync::Arc<crate::page::RendererJavaScriptDialogOpening>,
 }
 
 /// Current physical Page identity and URL read in one Browser owner turn.
@@ -113,6 +126,7 @@ impl BrowserEventStream {
         documents: impl Iterator<Item = DocumentHandle>,
         document_lifecycles: impl Iterator<Item = DocumentLifecycleSnapshot>,
         downloads: impl Iterator<Item = super::DownloadRecordSnapshot>,
+        javascript_dialogs: impl Iterator<Item = JavaScriptDialogOpened>,
     ) -> (BrowserSnapshot, BrowserEventReceiver) {
         (
             BrowserSnapshot {
@@ -123,6 +137,7 @@ impl BrowserEventStream {
                 documents: documents.collect(),
                 document_lifecycles: document_lifecycles.collect(),
                 downloads: downloads.collect(),
+                javascript_dialogs: javascript_dialogs.collect(),
             },
             self.sender.subscribe(),
         )
@@ -322,6 +337,7 @@ mod tests {
             std::iter::empty(),
             std::iter::empty(),
             std::iter::empty(),
+            std::iter::empty(),
         );
         for _ in 0..257 {
             stream.publish(BrowserEvent::ContextCreated(context));
@@ -329,6 +345,7 @@ mod tests {
         assert_eq!(slow.try_recv(), Err(TryRecvError::Lagged(1)));
         let (snapshot, mut recovered) = stream.subscribe(
             std::iter::once(context),
+            std::iter::empty(),
             std::iter::empty(),
             std::iter::empty(),
             std::iter::empty(),

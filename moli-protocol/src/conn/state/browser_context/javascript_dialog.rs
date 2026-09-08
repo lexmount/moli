@@ -1,8 +1,8 @@
 use super::BrowserContext;
-use moli_core::browser::DocumentHandle;
+use moli_core::browser::{BrowserContextHandle, DocumentHandle, JavaScriptDialogOpened};
 use moli_core::page::{
-    RendererDocumentLifecycleIdentity, RendererJavaScriptDialogId, RendererJavaScriptDialogSource,
-    RendererPendingJavaScriptDialog,
+    RendererDocumentLifecycleIdentity, RendererJavaScriptDialogId, RendererJavaScriptDialogOpening,
+    RendererJavaScriptDialogSource,
 };
 use std::sync::{
     Arc, Weak,
@@ -10,8 +10,6 @@ use std::sync::{
 };
 
 use crate::conn::state::TargetPageProtocolAttachmentIdentity;
-#[cfg(test)]
-use crate::conn::state::TargetPageResidenceIdentity;
 use moli_core::browser::web_contents::{
     JavaScriptDialogClosed, JavaScriptDialogError, JavaScriptDialogKey, JavaScriptDialogSnapshot,
 };
@@ -103,18 +101,28 @@ pub(crate) enum TargetPreparedJavaScriptDialogRoute {
     },
 }
 
-/// One concrete dialog output between renderer capture and protocol install.
+/// One concrete dialog observation waiting for protocol projection.
 ///
 /// The exact source attachment and weak Page-dialog scope authorize the
-/// capture. The optional renderer payload is a one-shot capability: consuming
-/// this value installs it under one destination Page, while dropping an
-/// unresolved value dismisses it so a blocking renderer call cannot hang.
-#[derive(Debug, PartialEq)]
+/// capture. The actual request stays in its original Browser Document, even
+/// when a lightweight popup projects the opening through another Target.
+/// Dropping undelivered output requests native dismissal by exact key.
+#[derive(Debug)]
 pub(crate) struct TargetPreparedJavaScriptDialog {
     source_attachment: TargetPageProtocolAttachmentIdentity,
     source_dialog_scope: TargetJavaScriptDialogScopeObserver,
     route: TargetPreparedJavaScriptDialogRoute,
-    renderer_dialog: Option<RendererPendingJavaScriptDialog>,
+    browser_context: BrowserContextHandle,
+    native_dialog: Option<JavaScriptDialogOpened>,
+}
+
+impl PartialEq for TargetPreparedJavaScriptDialog {
+    fn eq(&self, other: &Self) -> bool {
+        self.source_attachment == other.source_attachment
+            && self.source_dialog_scope == other.source_dialog_scope
+            && self.route == other.route
+            && self.native_dialog == other.native_dialog
+    }
 }
 
 impl TargetPreparedJavaScriptDialog {
@@ -122,9 +130,10 @@ impl TargetPreparedJavaScriptDialog {
         source_attachment: TargetPageProtocolAttachmentIdentity,
         source_dialog_scope: TargetJavaScriptDialogScopeObserver,
         root_frame_id: &str,
-        renderer_dialog: RendererPendingJavaScriptDialog,
+        browser_context: BrowserContextHandle,
+        native_dialog: JavaScriptDialogOpened,
     ) -> Self {
-        let route = match renderer_dialog.source() {
+        let route = match &native_dialog.opening.source {
             RendererJavaScriptDialogSource::RootFrame => {
                 TargetPreparedJavaScriptDialogRoute::AttachedPage {
                     source_frame_id: root_frame_id.to_owned(),
@@ -147,7 +156,8 @@ impl TargetPreparedJavaScriptDialog {
             source_attachment,
             source_dialog_scope,
             route,
-            renderer_dialog: Some(renderer_dialog),
+            browser_context,
+            native_dialog: Some(native_dialog),
         }
     }
 
@@ -173,48 +183,51 @@ impl TargetPreparedJavaScriptDialog {
     }
 
     pub(crate) fn id(&self) -> RendererJavaScriptDialogId {
-        self.renderer_dialog().id()
+        self.opening().id
     }
 
     pub(crate) fn source_document(&self) -> RendererDocumentLifecycleIdentity {
-        self.renderer_dialog().source_document()
+        self.opening().source_document
     }
 
     pub(crate) fn source_url(&self) -> &str {
-        self.renderer_dialog().source_url()
+        &self.opening().source_url
     }
 
     pub(crate) fn message(&self) -> &str {
-        self.renderer_dialog().message()
+        &self.opening().message
     }
 
     pub(crate) fn dialog_type(&self) -> &str {
-        self.renderer_dialog().dialog_type()
+        &self.opening().dialog_type
     }
 
     pub(crate) fn default_prompt(&self) -> &str {
-        self.renderer_dialog().default_prompt()
+        &self.opening().default_prompt
     }
 
     pub(crate) fn dismiss(mut self) {
         self.dismiss_inner();
     }
 
-    pub(crate) fn into_renderer_dialog(mut self) -> RendererPendingJavaScriptDialog {
-        self.renderer_dialog
+    pub(crate) fn into_native_dialog(mut self) -> JavaScriptDialogOpened {
+        self.native_dialog
             .take()
-            .expect("prepared dialog must own its renderer payload")
+            .expect("prepared dialog must retain its exact native key")
     }
 
-    fn renderer_dialog(&self) -> &RendererPendingJavaScriptDialog {
-        self.renderer_dialog
+    fn opening(&self) -> &RendererJavaScriptDialogOpening {
+        &self
+            .native_dialog
             .as_ref()
-            .expect("prepared dialog must retain its renderer payload until settlement")
+            .expect("prepared dialog must retain its opening until settlement")
+            .opening
     }
 
     fn dismiss_inner(&mut self) {
-        if let Some(dialog) = self.renderer_dialog.take() {
-            let _ = dialog.finish(false, String::new());
+        if let Some(dialog) = self.native_dialog.take() {
+            self.browser_context
+                .dismiss_document_javascript_dialog(dialog.document, dialog.key);
         }
     }
 }
@@ -229,6 +242,7 @@ impl Drop for TargetPreparedJavaScriptDialog {
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) struct TargetJavaScriptDialog {
     source_frame_id: String,
+    target_document: DocumentHandle,
     document: DocumentHandle,
     pub(in crate::conn::state) key: JavaScriptDialogKey,
 }
@@ -236,12 +250,14 @@ pub(crate) struct TargetJavaScriptDialog {
 impl TargetJavaScriptDialog {
     pub(crate) fn new(
         source_frame_id: String,
+        target_document: DocumentHandle,
         document: DocumentHandle,
         key: JavaScriptDialogKey,
     ) -> Self {
         debug_assert_eq!(document.id(), key.document);
         Self {
             source_frame_id,
+            target_document,
             document,
             key,
         }
@@ -301,13 +317,14 @@ impl TargetJavaScriptDialogState {
 }
 
 impl BrowserContext {
-    pub(crate) fn install_document_javascript_dialog(
+    #[cfg(test)]
+    pub(crate) fn install_document_javascript_dialog_for_test(
         &mut self,
         document: DocumentHandle,
-        dialog: RendererPendingJavaScriptDialog,
+        dialog: moli_core::page::RendererPendingJavaScriptDialog,
     ) -> Result<Option<JavaScriptDialogKey>, String> {
         self.browser_context
-            .install_document_javascript_dialog(document, dialog)
+            .install_document_javascript_dialog_for_test(document, dialog)
     }
 
     pub(crate) fn project_javascript_dialog_for_session(
@@ -318,10 +335,25 @@ impl BrowserContext {
         document: DocumentHandle,
         key: JavaScriptDialogKey,
     ) -> bool {
-        if self.document_handle_for_target(target_id) != Some(document)
-            || key.document != document.id()
+        let Some(target_document) = self.document_handle_for_target(target_id) else {
+            return false;
+        };
+        if key.document != document.id()
+            || document.web_contents().context() != self.browser_context.id()
+            || self
+                .browser_context
+                .ensure_document_current(document)
+                .is_err()
         {
             return false;
+        }
+        if self
+            .document_javascript_dialog_snapshot(document, key)
+            .is_none()
+        {
+            // Preserve a historical FIFO opening, without reviving a request
+            // already dismissed by native document lifecycle progress.
+            return true;
         }
         self.page_targets
             .get_mut(target_id)
@@ -330,7 +362,12 @@ impl BrowserContext {
             .ensure_session(session)
             .page_session_state
             .javascript_dialog_state
-            .push(TargetJavaScriptDialog::new(source_frame_id, document, key));
+            .push(TargetJavaScriptDialog::new(
+                source_frame_id,
+                target_document,
+                document,
+                key,
+            ));
         true
     }
 
@@ -348,7 +385,7 @@ impl BrowserContext {
             .page_session_state
             .javascript_dialog_state
             .peek_next()?;
-        (self.document_handle_for_target(target_id) == Some(dialog.document)
+        (self.document_handle_for_target(target_id) == Some(dialog.target_document)
             && self
                 .browser_context
                 .ensure_document_current(dialog.document)
@@ -437,20 +474,7 @@ impl BrowserContext {
 
 #[cfg(test)]
 mod tests {
-    use moli_core::{
-        PageId,
-        page::{
-            RendererDocumentLifecycleIdentity, RendererDocumentToken, RendererFrameToken,
-            RendererJavaScriptDialogCompletion, RendererJavaScriptDialogId,
-            RendererJavaScriptDialogSource, RendererLifecycleEpoch,
-            RendererPendingJavaScriptDialog,
-        },
-    };
-
-    use super::{
-        TargetJavaScriptDialogScope, TargetPageProtocolAttachmentIdentity,
-        TargetPageResidenceIdentity, TargetPreparedJavaScriptDialog,
-    };
+    use super::TargetJavaScriptDialogScope;
 
     #[test]
     fn dropping_page_scope_invalidates_its_prepared_observer() {
@@ -477,47 +501,5 @@ mod tests {
             !snapshot.observes(&observer),
             "retirement must invalidate every snapshot sharing the old scope"
         );
-    }
-
-    #[test]
-    fn dropping_uninstalled_prepared_dialog_dismisses_its_one_shot_completion() {
-        let page_id = PageId::new_for_testing(1);
-        let source_document = RendererDocumentLifecycleIdentity {
-            frame: RendererFrameToken { page_id },
-            document: RendererDocumentToken::new_for_testing(page_id, 1),
-            epoch: RendererLifecycleEpoch(1),
-        };
-        let completion = RendererJavaScriptDialogCompletion::pending();
-        let scope = TargetJavaScriptDialogScope::default();
-        let prepared = TargetPreparedJavaScriptDialog::capture(
-            TargetPageProtocolAttachmentIdentity::new(
-                TargetPageResidenceIdentity::new_for_test(
-                    "BID-dialog-drop".to_owned(),
-                    Some("TID-dialog-drop".to_owned()),
-                    1,
-                ),
-                Some("SID-dialog-drop".to_owned()),
-            ),
-            scope.observe(),
-            "TID-dialog-drop",
-            RendererPendingJavaScriptDialog::new(
-                RendererJavaScriptDialogId::new(1),
-                source_document,
-                RendererJavaScriptDialogSource::LightweightPopup {
-                    popup_id: 3,
-                    popup_document_id: 4,
-                },
-                "about:blank".to_owned(),
-                "alert".to_owned(),
-                "dismiss on drop".to_owned(),
-                String::new(),
-                Some(completion.clone()),
-            ),
-        );
-
-        drop(prepared);
-
-        assert!(!completion.finish(true, String::new()));
-        assert!(!completion.wait().accepted);
     }
 }

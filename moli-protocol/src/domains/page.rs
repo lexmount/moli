@@ -632,34 +632,11 @@ pub(crate) struct PagePreparedOutputSlot {
 }
 
 impl PagePreparedOutputs {
-    pub(crate) fn from_renderer_javascript_dialog(
-        conn: &CdpConnection,
-        owner: &CommandOwnerScope,
-        dialog: moli_core::page::RendererPendingJavaScriptDialog,
+    pub(crate) fn from_browser_javascript_dialog(
+        dialog: crate::conn::TargetPreparedJavaScriptDialog,
     ) -> Self {
-        let Some(source_attachment) =
-            conn.target_page_protocol_attachment_identity_for_owner(owner)
-        else {
-            let _ = dialog.finish(false, String::new());
-            return Self::default();
-        };
-        let Some((root_frame_id, _, _, _)) =
-            conn.target_session_owner_frame_tree_identity_for_owner(owner)
-        else {
-            let _ = dialog.finish(false, String::new());
-            return Self::default();
-        };
-        let Ok(runtime_slot) = conn.runtime_session_owner_slot_for_owner(owner) else {
-            let _ = dialog.finish(false, String::new());
-            return Self::default();
-        };
         Self {
-            javascript_dialogs: vec![crate::conn::TargetPreparedJavaScriptDialog::capture(
-                source_attachment,
-                runtime_slot.javascript_dialog_scope_observer(),
-                &root_frame_id,
-                dialog,
-            )],
+            javascript_dialogs: vec![dialog],
             ..Self::default()
         }
     }
@@ -1025,6 +1002,7 @@ impl PagePreparedOutputs {
 
     #[cfg(test)]
     pub(crate) fn from_javascript_dialogs_for_test(
+        conn: &CdpConnection,
         page_owner: crate::conn::TargetPageResidenceIdentity,
         source_session_id: Option<&str>,
         dialog_scope: crate::conn::TargetJavaScriptDialogScopeObserver,
@@ -1036,6 +1014,7 @@ impl PagePreparedOutputs {
                 .into_iter()
                 .map(|dialog| {
                     javascript_dialog::capture_for_test(
+                        conn,
                         page_owner.clone(),
                         source_session_id,
                         dialog_scope.clone(),
@@ -2761,6 +2740,35 @@ mod producer_tests {
     }
 
     #[tokio::test(flavor = "multi_thread")]
+    async fn dropping_unprojected_dialog_dismisses_its_native_request() {
+        let mut conn = crate::test_support::connection();
+        let mut context = conn.new_browser_context_fixture_for_test("BID-dialog-drop");
+        context.set_active_target_id("TID-dialog-drop");
+        context.attach_active_session("SID-dialog-drop");
+        conn.install_browser_context_fixture_for_test(context);
+        let page_owner = page_residence_identity_for_test(&mut conn, "SID-dialog-drop").await;
+        let completion = RendererJavaScriptDialogCompletion::pending();
+        let prepared = super::PagePreparedOutputs::from_javascript_dialogs_for_test(
+            &conn,
+            page_owner,
+            Some("SID-dialog-drop"),
+            javascript_dialog_scope_for_test(&conn, "SID-dialog-drop"),
+            "TID-dialog-drop",
+            vec![renderer_popup_javascript_dialog_for_test(
+                1,
+                renderer_document_identity_for_test(1, 1),
+                3,
+                4,
+                "dismiss on drop",
+                Some(completion.clone()),
+            )],
+        );
+        drop(prepared);
+        assert!(!completion.finish(true, String::new()));
+        assert!(!completion.wait().accepted);
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
     async fn javascript_dialog_drain_consumes_prepared_dialogs_without_page_readback() {
         let mut conn = crate::test_support::connection();
         let mut bc = conn.new_browser_context_fixture_for_test("BID-1");
@@ -2773,6 +2781,7 @@ mod producer_tests {
         let mut prepared =
             ProtocolOutputPayloads::from_slot(super::PagePreparedOutputSlot::from_outputs(
                 super::PagePreparedOutputs::from_javascript_dialogs_for_test(
+                    &conn,
                     page_owner.clone(),
                     Some("SID-1"),
                     javascript_dialog_scope_for_test(&conn, "SID-1"),
@@ -2844,6 +2853,7 @@ mod producer_tests {
         let mut prepared =
             ProtocolOutputPayloads::from_slot(super::PagePreparedOutputSlot::from_outputs(
                 super::PagePreparedOutputs::from_javascript_dialogs_for_test(
+                    &conn,
                     page_owner,
                     Some("SID-attached"),
                     javascript_dialog_scope_for_test(&conn, "SID-attached"),
@@ -2899,11 +2909,13 @@ mod producer_tests {
             )
         );
         conn.install_browser_context_fixture_for_test(browser_context);
+        let page_owner = page_residence_identity_for_test(&mut conn, "SID-detached").await;
         let completion = RendererJavaScriptDialogCompletion::pending();
         let mut prepared =
             ProtocolOutputPayloads::from_slot(super::PagePreparedOutputSlot::from_outputs(
                 super::PagePreparedOutputs::from_javascript_dialogs_for_test(
-                    page_residence_identity_for_test(&mut conn, "SID-detached").await,
+                    &conn,
+                    page_owner,
                     Some("SID-detached"),
                     javascript_dialog_scope_for_test(&conn, "SID-detached"),
                     "TID-dialog-detached",
@@ -2963,6 +2975,7 @@ mod producer_tests {
         let mut dialog_output =
             ProtocolOutputPayloads::from_slot(super::PagePreparedOutputSlot::from_outputs(
                 super::PagePreparedOutputs::from_javascript_dialogs_for_test(
+                    &conn,
                     page_owner.clone(),
                     Some("SID-source"),
                     javascript_dialog_scope_for_test(&conn, "SID-source"),
@@ -3055,6 +3068,7 @@ mod producer_tests {
         let mut prepared =
             ProtocolOutputPayloads::from_slot(super::PagePreparedOutputSlot::from_outputs(
                 super::PagePreparedOutputs::from_javascript_dialogs_for_test(
+                    &conn,
                     page_owner.clone(),
                     Some("SID-opener"),
                     source_dialog_scope.clone(),
@@ -3149,9 +3163,20 @@ mod producer_tests {
             1
         );
 
+        assert_eq!(
+            conn.target_page_session_state_for_session(Some(&popup_session_id))
+                .unwrap()
+                .javascript_dialog_state
+                .pending_dialogs()[0]
+                .document_id(),
+            page_owner.document_id(),
+            "popup routing must not transfer the request out of its original physical Document"
+        );
+
         let mut later_dialog =
             ProtocolOutputPayloads::from_slot(super::PagePreparedOutputSlot::from_outputs(
                 super::PagePreparedOutputs::from_javascript_dialogs_for_test(
+                    &conn,
                     page_owner,
                     Some("SID-opener"),
                     source_dialog_scope,
@@ -3207,6 +3232,7 @@ mod producer_tests {
         let mut prepared =
             ProtocolOutputPayloads::from_slot(super::PagePreparedOutputSlot::from_outputs(
                 super::PagePreparedOutputs::from_javascript_dialogs_for_test(
+                    &conn,
                     page_owner.clone(),
                     Some("SID-opener-no-session"),
                     javascript_dialog_scope_for_test(&conn, "SID-opener-no-session"),
@@ -3334,6 +3360,7 @@ mod producer_tests {
         let mut prepared =
             ProtocolOutputPayloads::from_slot(super::PagePreparedOutputSlot::from_outputs(
                 super::PagePreparedOutputs::from_javascript_dialogs_for_test(
+                    &conn,
                     page_owner.clone(),
                     Some("SID-dialog-stale-page"),
                     javascript_dialog_scope_for_test(&conn, "SID-dialog-stale-page"),
@@ -3388,6 +3415,7 @@ mod producer_tests {
         let mut prepared =
             ProtocolOutputPayloads::from_slot(super::PagePreparedOutputSlot::from_outputs(
                 super::PagePreparedOutputs::from_javascript_dialogs_for_test(
+                    &conn,
                     page_owner,
                     Some("SID-dialog-generation"),
                     javascript_dialog_scope_for_test(&conn, "SID-dialog-generation"),
@@ -3443,6 +3471,7 @@ mod producer_tests {
         let mut prepared =
             ProtocolOutputPayloads::from_slot(super::PagePreparedOutputSlot::from_outputs(
                 super::PagePreparedOutputs::from_javascript_dialogs_for_test(
+                    &conn,
                     page_owner,
                     Some("SID-dialog-source"),
                     javascript_dialog_scope_for_test(&conn, "SID-dialog-source"),
@@ -3534,6 +3563,7 @@ mod producer_tests {
         prepared.extend_payload(
             super::PagePreparedOutputSlot::from_outputs(
                 super::PagePreparedOutputs::from_javascript_dialogs_for_test(
+                    &conn,
                     page_owner.clone(),
                     Some("SID-activity-order"),
                     javascript_dialog_scope_for_test(&conn, "SID-activity-order"),

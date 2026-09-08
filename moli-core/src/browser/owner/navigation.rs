@@ -1010,6 +1010,7 @@ impl BrowserContextHandle {
                         crate::browser::BrowserEvent::DocumentCommitted(document),
                     );
                     browser.observe_document_lifecycle(document);
+                    browser.observe_javascript_dialogs(document);
                     Ok(BrowserCommittedInitialDocument {
                         key,
                         snapshot,
@@ -1213,9 +1214,13 @@ impl BrowserContextHandle {
             if prepared.contents.context() != context {
                 return Err("navigation document belongs to another BrowserContext".to_owned());
             }
+            let contents = prepared.contents;
             let NavigationWork::PreparedDocument(prepared) = prepared.value else {
                 return Err(unavailable());
             };
+            let dialogs = browser
+                .context(context)?
+                .web_contents_javascript_dialog_snapshots(contents);
             let commit = browser
                 .context_mut(context)?
                 .commit_document_navigation(*prepared)?;
@@ -1231,6 +1236,8 @@ impl BrowserContextHandle {
                 crate::browser::BrowserEvent::DocumentCommitted(document),
             );
             browser.observe_document_lifecycle(document);
+            browser.publish_closed_javascript_dialogs(dialogs);
+            browser.observe_javascript_dialogs(document);
             let (completion_tx, completion) = oneshot::channel();
             tokio::task::spawn_local(async move {
                 commit.retirement.close().await;

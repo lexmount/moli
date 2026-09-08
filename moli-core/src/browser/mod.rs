@@ -35,7 +35,7 @@ pub use emulation::{
 };
 pub use events::{
     BrowserEvent, BrowserEventReceiver, BrowserEventRecord, BrowserSnapshot,
-    DocumentLifecycleSnapshot, WebContentsSelection, WebContentsSnapshot,
+    DocumentLifecycleSnapshot, JavaScriptDialogOpened, WebContentsSelection, WebContentsSnapshot,
 };
 pub use owner::{
     BrowserBuiltInitialDocument, BrowserCommittedInitialDocument, BrowserContextHandle,

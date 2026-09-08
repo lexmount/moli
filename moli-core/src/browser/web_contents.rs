@@ -255,7 +255,7 @@ impl WebContents {
 
     pub fn replace_document(&mut self, next: Option<DocumentHost>) -> Option<Page> {
         self.navigation.cancel_initial_document_build();
-        self.javascript_dialogs.clear();
+        self.javascript_dialogs = Default::default();
         if let Some(document) = &next {
             self.navigation.seed_document_history((
                 document.page.final_url().to_string(),

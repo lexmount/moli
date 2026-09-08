@@ -15,6 +15,7 @@ use tokio::sync::{mpsc, oneshot};
 mod activation;
 mod document_lifecycle;
 mod downloads;
+mod javascript_dialog;
 pub use activation::PendingWebContentsActivation;
 mod navigation;
 pub use navigation::{
@@ -129,9 +130,11 @@ impl Browser {
             return false;
         };
         self.navigation_work.remove_context(id);
+        let dialogs = context.javascript_dialog_snapshots();
         self.events
             .publish(super::BrowserEvent::ContextDisposed(id));
         context.shutdown();
+        self.publish_closed_javascript_dialogs(dialogs);
         true
     }
 
@@ -143,7 +146,9 @@ impl Browser {
                 .publish(super::BrowserEvent::ContextDisposed(id));
         }
         for (_, context) in contexts {
+            let dialogs = context.javascript_dialog_snapshots();
             context.shutdown();
+            self.publish_closed_javascript_dialogs(dialogs);
         }
     }
 
@@ -189,6 +194,7 @@ impl Browser {
                 );
                 for (document, snapshot) in progress {
                     browser.commit_document_lifecycle(document, snapshot);
+                    browser.commit_javascript_dialogs(document);
                 }
                 let _ = completion_tx.send(result);
             }));
@@ -467,6 +473,10 @@ impl BrowserHandle {
                     .contexts
                     .values()
                     .flat_map(|context| context.downloads.snapshots()),
+                browser
+                    .contexts
+                    .values()
+                    .flat_map(BrowserContext::javascript_dialog_snapshots),
             )
         })
     }
@@ -482,6 +492,7 @@ impl BrowserHandle {
         self.execute(move |browser| {
             let context = browser.context_mut(handle.context())?;
             let was_selected = context.selected_web_contents_handle() == Some(handle);
+            let dialogs = context.web_contents_javascript_dialog_snapshots(handle);
             let closing = context.close_web_contents(handle)?;
             let activated = was_selected
                 .then(|| context.selected_web_contents_handle())
@@ -499,6 +510,7 @@ impl BrowserHandle {
                     web_contents: handle,
                     activated,
                 });
+            browser.publish_closed_javascript_dialogs(dialogs);
             let (completion_tx, completion) = oneshot::channel();
             let local_sender = browser.local_sender.clone();
             tokio::task::spawn_local(async move {
@@ -753,7 +765,9 @@ impl BrowserContextHandle {
                     .context_mut(context)?
                     .web_contents_handles()
                     .collect::<Vec<_>>();
+                let dialogs = browser.context(context)?.javascript_dialog_snapshots();
                 let closing = browser.context_mut(context)?.close_all_web_contents();
+                browser.publish_closed_javascript_dialogs(dialogs);
                 browser.navigation_work.remove_context(context);
                 Ok::<_, String>(
                     handles
@@ -1443,8 +1457,16 @@ impl BrowserContextHandle {
         fn ensure_document_current(document: super::DocumentHandle) -> ();
     }
 
-    forward_context_try_update! {
-        fn install_document_javascript_dialog(document: super::DocumentHandle, dialog: crate::page::RendererPendingJavaScriptDialog) -> Option<super::web_contents::JavaScriptDialogKey>;
+    #[cfg(any(test, feature = "test-support"))]
+    #[doc(hidden)]
+    pub fn install_document_javascript_dialog_for_test(
+        &self,
+        document: super::DocumentHandle,
+        dialog: crate::page::RendererPendingJavaScriptDialog,
+    ) -> Result<Option<super::web_contents::JavaScriptDialogKey>, String> {
+        self.try_update(move |context| {
+            context.install_document_javascript_dialog_for_test(document, dialog)
+        })
     }
 
     pub fn document_javascript_dialog_snapshot(
@@ -1474,9 +1496,20 @@ impl BrowserContextHandle {
         accepted: bool,
         prompt_text: Option<String>,
     ) -> Option<super::web_contents::JavaScriptDialogClosed> {
-        self.update_live(move |context| {
-            context.finish_document_javascript_dialog(document, key, accepted, prompt_text)
-        })
+        let context = self.id;
+        self.browser
+            .execute(move |browser| {
+                let context = browser.context_mut(context).ok()?;
+                context.document_javascript_dialog_snapshot(document, key)?;
+                let result =
+                    context.finish_document_javascript_dialog(document, key, accepted, prompt_text);
+                browser
+                    .events
+                    .publish(super::BrowserEvent::DialogClosed { document, key });
+                result
+            })
+            .ok()
+            .flatten()
     }
 
     pub fn dismiss_document_javascript_dialog(
@@ -1484,7 +1517,7 @@ impl BrowserContextHandle {
         document: super::DocumentHandle,
         key: super::web_contents::JavaScriptDialogKey,
     ) {
-        self.update_live(move |context| context.dismiss_document_javascript_dialog(document, key));
+        let _ = self.finish_document_javascript_dialog(document, key, false, Some(String::new()));
     }
 
     forward_context_try_read! {

@@ -6,6 +6,40 @@ use crate::domains::activity::{
 use moli_core::RendererOutputTransportMessage;
 
 impl CdpConnection {
+    pub(crate) async fn prepare_renderer_javascript_dialog(
+        &self,
+        owner: &super::CommandOwnerScope,
+        renderer: super::RendererPageResidenceIdentity,
+        opening: std::sync::Arc<moli_core::page::RendererJavaScriptDialogOpening>,
+    ) -> Option<super::TargetPreparedJavaScriptDialog> {
+        // Freeze the frontend attachment before awaiting native admission.
+        let route = self
+            .target_page_protocol_attachment_identity_for_owner(owner)
+            .zip(self.target_session_owner_frame_tree_identity_for_owner(owner))
+            .zip(
+                self.runtime_session_owner_slot_for_owner(owner)
+                    .ok()
+                    .map(|slot| slot.javascript_dialog_scope_observer()),
+            );
+        let dialog = self
+            .browser
+            .wait_for_renderer_javascript_dialog(renderer, opening)
+            .await?;
+        let context = self
+            .browser
+            .context_handle(dialog.document.web_contents().context())
+            .ok()?;
+        let Some(((attachment, (frame, _, _, _)), scope)) = route.filter(|((attachment, _), _)| {
+            attachment.page_owner().document_id() == dialog.document.id()
+        }) else {
+            context.dismiss_document_javascript_dialog(dialog.document, dialog.key);
+            return None;
+        };
+        Some(super::TargetPreparedJavaScriptDialog::capture(
+            attachment, scope, &frame, context, dialog,
+        ))
+    }
+
     pub(crate) fn native_renderer_page_output_owner(
         &self,
         renderer: super::RendererPageResidenceIdentity,

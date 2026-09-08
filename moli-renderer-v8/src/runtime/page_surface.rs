@@ -30,7 +30,8 @@ mod javascript_dialog;
 mod popup_activation;
 mod window_document_source;
 pub use javascript_dialog::{
-    RendererJavaScriptDialogId, RendererJavaScriptDialogSource, RendererPendingJavaScriptDialog,
+    RendererJavaScriptDialogId, RendererJavaScriptDialogOpening, RendererJavaScriptDialogSource,
+    RendererPendingJavaScriptDialog,
 };
 pub use popup_activation::{
     RendererPendingPopupActivation, RendererPopupActivationSource, RendererPopupDisposition,

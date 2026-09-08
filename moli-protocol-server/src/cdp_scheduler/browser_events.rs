@@ -73,7 +73,9 @@ impl CdpScheduler {
                 BrowserEvent::DocumentCommitted(document) => {
                     self.conn.project_browser_document_commit(document).await
                 }
-                BrowserEvent::DocumentLifecycleChanged(_) => {
+                BrowserEvent::DocumentLifecycleChanged(_)
+                | BrowserEvent::DialogOpened(_)
+                | BrowserEvent::DialogClosed { .. } => {
                     // Native state/waiters have already advanced. Frontend
                     // visibility still consumes the exact renderer FIFO so a
                     // lifecycle event cannot overtake an earlier dialog or

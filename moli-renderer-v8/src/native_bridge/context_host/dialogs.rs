@@ -33,10 +33,11 @@ impl JsContextHost {
         target: WindowDocumentTaskTarget,
         dialog: RendererPendingJavaScriptDialog,
     ) {
-        let published = self.append_live_turn_owner_action(
-            crate::runtime::RendererOwnerAction::JavaScriptDialog(dialog.clone()),
+        let published = self.append_live_turn_observation(
+            crate::runtime::RendererProtocolObservation::JavaScriptDialog(dialog.opening()),
         );
         if published {
+            self.javascript_dialog_runtime.record(dialog);
             return;
         }
         #[cfg(test)]
@@ -59,8 +60,8 @@ impl JsContextHost {
             return None;
         }
         let (dialog, modal) = self.javascript_dialog_runtime.begin_modal(dialog);
-        if self.append_live_turn_owner_action(
-            crate::runtime::RendererOwnerAction::JavaScriptDialog(dialog),
+        if self.append_live_turn_observation(
+            crate::runtime::RendererProtocolObservation::JavaScriptDialog(dialog),
         ) && self.publish_live_turn_output_prefix()
         {
             return Some(modal.wait());

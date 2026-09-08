@@ -29,7 +29,7 @@ impl BrowserContext {
         Ok(!self.web_contents(handle)?.javascript_dialogs.is_empty())
     }
 
-    pub fn install_document_javascript_dialog(
+    pub(in crate::browser) fn install_document_javascript_dialog(
         &mut self,
         document: DocumentHandle,
         dialog: RendererPendingJavaScriptDialog,
@@ -38,6 +38,9 @@ impl BrowserContext {
             let _ = dialog.finish(false, String::new());
             return Err(error);
         }
+        self.web_contents_mut(document.web_contents())?
+            .javascript_dialogs
+            .mark_admitted(dialog.id());
         let source = dialog.source_document();
         if self
             .document(document)?
@@ -61,6 +64,41 @@ impl BrowserContext {
                 .javascript_dialogs
                 .install(document.id(), dialog),
         ))
+    }
+
+    pub(in crate::browser) fn javascript_dialog_snapshots(
+        &self,
+    ) -> Vec<crate::browser::JavaScriptDialogOpened> {
+        self.web_contents_handles()
+            .flat_map(|contents| self.web_contents_javascript_dialog_snapshots(contents))
+            .collect()
+    }
+
+    pub(in crate::browser) fn web_contents_javascript_dialog_snapshots(
+        &self,
+        contents: WebContentsHandle,
+    ) -> Vec<crate::browser::JavaScriptDialogOpened> {
+        self.document_handle_for_web_contents(contents)
+            .ok()
+            .flatten()
+            .into_iter()
+            .flat_map(|document| {
+                self.web_contents(contents)
+                    .expect("live contents")
+                    .javascript_dialogs
+                    .snapshots(document)
+            })
+            .collect()
+    }
+
+    #[cfg(any(test, feature = "test-support"))]
+    #[doc(hidden)]
+    pub fn install_document_javascript_dialog_for_test(
+        &mut self,
+        document: DocumentHandle,
+        dialog: RendererPendingJavaScriptDialog,
+    ) -> Result<Option<JavaScriptDialogKey>, String> {
+        self.install_document_javascript_dialog(document, dialog)
     }
 
     pub fn document_javascript_dialog_snapshot(
@@ -101,17 +139,5 @@ impl BrowserContext {
             .ok()?
             .javascript_dialogs
             .finish(key, accepted, prompt_text)
-    }
-
-    pub fn dismiss_document_javascript_dialog(
-        &mut self,
-        document: DocumentHandle,
-        key: JavaScriptDialogKey,
-    ) {
-        if self.ensure_document_current(document).is_ok()
-            && let Ok(contents) = self.web_contents_mut(document.web_contents())
-        {
-            contents.javascript_dialogs.dismiss(key);
-        }
     }
 }

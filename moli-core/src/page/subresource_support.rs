@@ -8,8 +8,14 @@ use crate::RendererOutputFence;
 use crate::renderer::{RendererPageCommand, RendererPageReply};
 
 impl Page {
-    pub fn take_pending_modal_javascript_dialogs(&self) -> Vec<RendererPendingJavaScriptDialog> {
-        self.handle.take_pending_modal_javascript_dialogs()
+    pub(crate) fn take_pending_javascript_dialogs(&self) -> Vec<RendererPendingJavaScriptDialog> {
+        self.handle.take_pending_javascript_dialogs()
+    }
+
+    pub(crate) fn observe_javascript_dialogs(
+        &self,
+    ) -> moli_renderer_v8::RendererJavaScriptDialogObservation {
+        self.handle.observe_javascript_dialogs()
     }
 
     pub fn start_stop_document_lifecycle(&self) -> Result<PendingPageCommand> {

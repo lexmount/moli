@@ -84,9 +84,12 @@ fn dialog_projection_for_test(
     crate::conn::TargetJavaScriptDialog::new(
         frame_id.to_owned(),
         document,
+        document,
         crate::conn::JavaScriptDialogKey::new(
             page_owner.document_id(),
-            &renderer_dialog_for_test(Some(frame_id), "alert", "pending", "", None),
+            renderer_dialog_for_test(Some(frame_id), "alert", "pending", "", None)
+                .source_document(),
+            renderer_dialog_for_test(Some(frame_id), "alert", "pending", "", None).id(),
         ),
     )
 }

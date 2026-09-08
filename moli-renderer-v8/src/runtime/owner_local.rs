@@ -225,8 +225,12 @@ impl RendererPageHandle {
         self.committed_document_post_response_continuation.take()
     }
 
-    pub fn take_pending_modal_javascript_dialogs(&self) -> Vec<RendererPendingJavaScriptDialog> {
+    pub fn take_pending_javascript_dialogs(&self) -> Vec<RendererPendingJavaScriptDialog> {
         self.javascript_dialog_broker.take_pending()
+    }
+
+    pub fn observe_javascript_dialogs(&self) -> RendererJavaScriptDialogObservation {
+        self.javascript_dialog_broker.observe()
     }
 
     pub fn enqueue_async_command(

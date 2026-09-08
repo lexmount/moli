@@ -275,7 +275,8 @@ pub(crate) use self::javascript_dialog::{
     RendererJavaScriptDialogBroker, RendererJavaScriptDialogRuntime, RendererJavaScriptDialogWatch,
 };
 pub use self::javascript_dialog::{
-    RendererJavaScriptDialogCompletion, RendererJavaScriptDialogResult,
+    RendererJavaScriptDialogCompletion, RendererJavaScriptDialogObservation,
+    RendererJavaScriptDialogResult,
 };
 pub use self::lifecycle_decision::{
     RendererLifecycleDecider, RendererLifecycleDecision, RendererLifecycleSnapshot,
@@ -344,9 +345,10 @@ pub use self::page_surface::{
     RendererDragDataItem, RendererDraggedDirectory, RendererDraggedFile, RendererGeometryQuad,
     RendererInputDispatchOutcome, RendererInspectorProtocolConfiguration,
     RendererInspectorProtocolConfigurationCommand, RendererInspectorSessionRestoreSnapshot,
-    RendererJavaScriptDialogId, RendererJavaScriptDialogSource, RendererLayoutMetrics,
-    RendererMainDocumentCommit, RendererMoliDomMemoryDiagnostics, RendererMoliMemoryDiagnostics,
-    RendererMoliMemoryScopeDiagnostics, RendererMoliRuntimeMemoryDiagnostics, RendererPageCommand,
+    RendererJavaScriptDialogId, RendererJavaScriptDialogOpening, RendererJavaScriptDialogSource,
+    RendererLayoutMetrics, RendererMainDocumentCommit, RendererMoliDomMemoryDiagnostics,
+    RendererMoliMemoryDiagnostics, RendererMoliMemoryScopeDiagnostics,
+    RendererMoliRuntimeMemoryDiagnostics, RendererPageCommand,
     RendererPageCommandPostResponseContinuation, RendererPageCookieFacadeSnapshotReply,
     RendererPageCreationDiagnostics, RendererPageDiagnosticsSnapshot, RendererPageDumpFormat,
     RendererPageDumpOptions, RendererPageDumpStripOptions, RendererPageReply, RendererPageView,

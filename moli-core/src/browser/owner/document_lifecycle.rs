@@ -58,16 +58,23 @@ impl Browser {
         if context.ensure_document_current(document).is_err() {
             return;
         }
+        let mut dialogs = context.web_contents_javascript_dialog_snapshots(document.web_contents());
         if context
             .web_contents_mut(document.web_contents())
             .is_ok_and(|contents| contents.observe_native_document_lifecycle(lifecycle))
         {
+            dialogs.retain(|dialog| {
+                context
+                    .document_javascript_dialog_snapshot(document, dialog.key)
+                    .is_none()
+            });
             self.events.publish(BrowserEvent::DocumentLifecycleChanged(
                 DocumentLifecycleSnapshot {
                     document,
                     lifecycle,
                 },
             ));
+            self.publish_closed_javascript_dialogs(dialogs);
         }
     }
 }

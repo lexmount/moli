@@ -111,11 +111,11 @@ fn emit_to_attachment(
     let message = dialog.message().to_owned();
     let dialog_type = dialog.dialog_type().to_owned();
     let default_prompt = dialog.default_prompt().to_owned();
-    if !conn.install_javascript_dialog_for_session(
+    if !conn.project_javascript_dialog_for_session(
         event_session_id.as_deref(),
         destination_page_owner,
         source_frame_id.clone(),
-        dialog.into_renderer_dialog(),
+        dialog.into_native_dialog(),
     ) {
         return;
     }
@@ -199,12 +199,15 @@ fn emit_popup_dialogs_for_target(
 
 #[cfg(test)]
 pub(super) fn capture_for_test(
+    conn: &CdpConnection,
     source_page_owner: TargetPageResidenceIdentity,
     source_session_id: Option<&str>,
     dialog_scope: TargetJavaScriptDialogScopeObserver,
     root_frame_id: &str,
     renderer_dialog: RendererPendingJavaScriptDialog,
 ) -> PreparedJavaScriptDialog {
+    let (context, dialog) =
+        conn.admit_javascript_dialog_for_test(&source_page_owner, renderer_dialog);
     TargetPreparedJavaScriptDialog::capture(
         TargetPageProtocolAttachmentIdentity::new(
             source_page_owner,
@@ -212,6 +215,7 @@ pub(super) fn capture_for_test(
         ),
         dialog_scope,
         root_frame_id,
-        renderer_dialog,
+        context,
+        dialog,
     )
 }

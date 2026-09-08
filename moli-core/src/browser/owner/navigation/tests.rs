@@ -184,6 +184,266 @@ fn next_document_commit(
     }
 }
 
+async fn next_native_dialog(
+    events: &mut crate::browser::BrowserEventReceiver,
+    document: DocumentHandle,
+) -> crate::browser::JavaScriptDialogOpened {
+    tokio::time::timeout(std::time::Duration::from_secs(5), async {
+        loop {
+            if let crate::browser::BrowserEvent::DialogOpened(dialog) =
+                events.recv().await.unwrap().event
+                && dialog.document == document
+            {
+                break dialog;
+            }
+        }
+    })
+    .await
+    .expect("the exact native Document must own and publish its dialog without CDP ingress")
+}
+
+#[tokio::test]
+async fn native_javascript_dialog_is_admitted_without_devtools_ingress() {
+    use crate::page::RendererJavaScriptDialogSource;
+    for (kind, script) in [
+        ("root", "alert('native dialog')"),
+        (
+            "child",
+            "let child=document.createElement('iframe');document.body.append(child);child.contentWindow.alert('native dialog')",
+        ),
+        (
+            "popup",
+            r#"window.open("javascript:alert('native dialog')", 'native-dialog')"#,
+        ),
+    ] {
+        let service = BrowserService::start().unwrap();
+        let browser = service.handle();
+        let (context, contents) = context_with_contents(&service);
+        let (_, mut events) = browser.subscribe().unwrap();
+        let document = navigate(
+            &context,
+            contents,
+            &format!("data:text/html,<body><script>{script}</script>"),
+        )
+        .await;
+        let dialog = next_native_dialog(&mut events, document).await;
+        assert_eq!(context.document_handle(contents).unwrap(), Some(document));
+        assert_eq!(
+            context
+                .document_javascript_dialog_snapshot(document, dialog.key)
+                .unwrap()
+                .message,
+            "native dialog"
+        );
+        assert!(
+            context
+                .web_contents_has_pending_javascript_dialog(contents)
+                .unwrap()
+        );
+        assert!(
+            match kind {
+                "root" => matches!(
+                    dialog.opening.source,
+                    RendererJavaScriptDialogSource::RootFrame
+                ),
+                "child" => matches!(
+                    dialog.opening.source,
+                    RendererJavaScriptDialogSource::ChildFrame { .. }
+                ),
+                "popup" => matches!(
+                    dialog.opening.source,
+                    RendererJavaScriptDialogSource::LightweightPopup { .. }
+                ),
+                _ => unreachable!(),
+            },
+            "{kind} must retain its exact renderer Window source: {:?}",
+            dialog.opening.source
+        );
+        // No DevTools Target is required for a lightweight popup. Its request belongs
+        // to the physical Page containing that Window, not a later projection.
+        assert!(
+            browser
+                .subscribe()
+                .unwrap()
+                .0
+                .web_contents
+                .contains(&contents)
+        );
+        for _ in 0..130 {
+            let transient = browser
+                .create_context(
+                    BrowserContextStoragePartitionHandles::memory(),
+                    StoragePartitionKind::Ephemeral,
+                    None,
+                    None,
+                )
+                .unwrap();
+            transient.remove().unwrap();
+        }
+        assert!(matches!(
+            events.try_recv(),
+            Err(tokio::sync::broadcast::error::TryRecvError::Lagged(_))
+        ));
+        let (snapshot, mut events) = browser.subscribe().unwrap();
+        assert!(snapshot.javascript_dialogs.contains(&dialog));
+        context
+            .finish_document_javascript_dialog(document, dialog.key, false, None)
+            .unwrap();
+        let closed = tokio::time::timeout(std::time::Duration::from_secs(5), async {
+            loop {
+                let event = events.recv().await.unwrap();
+                if event.event
+                    == (crate::browser::BrowserEvent::DialogClosed {
+                        document,
+                        key: dialog.key,
+                    })
+                {
+                    break event;
+                }
+            }
+        })
+        .await
+        .unwrap();
+        assert!(closed.sequence > snapshot.sequence);
+        assert_eq!(
+            closed.event,
+            crate::browser::BrowserEvent::DialogClosed {
+                document,
+                key: dialog.key
+            }
+        );
+        assert!(browser.subscribe().unwrap().0.javascript_dialogs.is_empty());
+        assert!(
+            context
+                .finish_document_javascript_dialog(document, dialog.key, true, None)
+                .is_none()
+        );
+        service.shutdown();
+    }
+}
+
+#[tokio::test]
+async fn native_modal_dialog_resumes_its_original_renderer_without_devtools() {
+    for (blocks_root_parser, script) in [
+        (true, "globalThis.answer=prompt('native modal','seed')"),
+        (
+            true,
+            "let child=document.createElement('iframe');document.body.append(child);globalThis.answer=child.contentWindow.prompt('native modal','seed')",
+        ),
+        (
+            false,
+            r#"window.open("javascript:void(opener.answer=prompt('native modal','seed'))", 'native-modal')"#,
+        ),
+    ] {
+        let service = BrowserService::start().unwrap();
+        let browser = service.handle();
+        let (context, contents) = context_with_contents(&service);
+        context.set_javascript_dialog_handler_enabled(true);
+        let (_, mut events) = browser.subscribe().unwrap();
+        let document = navigate(
+            &context,
+            contents,
+            &format!("data:text/html,<body><script>{script}</script>"),
+        )
+        .await;
+        let dialog = next_native_dialog(&mut events, document).await;
+        assert_eq!(dialog.opening.default_prompt, "seed");
+        context
+            .set_document_javascript_dialog_prompt_text(
+                document,
+                dialog.key,
+                "native answer".into(),
+            )
+            .unwrap();
+        let closed = context
+            .finish_document_javascript_dialog(document, dialog.key, true, None)
+            .unwrap();
+        assert_eq!(closed.user_input, "native answer");
+        if blocks_root_parser {
+            tokio::time::timeout(std::time::Duration::from_secs(5), async {
+                loop {
+                    if let crate::browser::BrowserEvent::DocumentLifecycleChanged(snapshot) =
+                        events.recv().await.unwrap().event
+                        && snapshot.document == document
+                        && snapshot.lifecycle.load.is_some()
+                    {
+                        break;
+                    }
+                }
+            })
+            .await
+            .expect("native dialog completion must release the real parser");
+        }
+        assert_eq!(
+            context
+                .evaluate_document_expression_for_test(document, "globalThis.answer", false)
+                .await
+                .unwrap()["value"],
+            "native answer"
+        );
+        assert!(browser.subscribe().unwrap().0.javascript_dialogs.is_empty());
+        service.shutdown();
+    }
+}
+
+#[tokio::test]
+async fn native_dialog_retirement_rejects_late_completion_and_admission_waiters() {
+    use std::{
+        future::Future,
+        task::{Context, Waker},
+    };
+    let service = BrowserService::start().unwrap();
+    let browser = service.handle();
+    let (context, contents) = context_with_contents(&service);
+    context.set_javascript_dialog_handler_enabled(true);
+    let (_, mut events) = browser.subscribe().unwrap();
+    let document = navigate(
+        &context,
+        contents,
+        "data:text/html,<script>confirm('retiring modal')</script>",
+    )
+    .await;
+    let dialog = next_native_dialog(&mut events, document).await;
+    let renderer = context.document_renderer_residence(document).unwrap();
+    let mut later = (*dialog.opening).clone();
+    later.id = crate::page::RendererJavaScriptDialogId::new(later.id.sequence() + 1);
+    let waiting = browser.wait_for_renderer_javascript_dialog(renderer, std::sync::Arc::new(later));
+    tokio::pin!(waiting);
+    assert!(
+        waiting
+            .as_mut()
+            .poll(&mut Context::from_waker(Waker::noop()))
+            .is_pending()
+    );
+    tokio::time::timeout(
+        std::time::Duration::from_secs(5),
+        browser.close_web_contents(contents).unwrap().close_async(),
+    )
+    .await
+    .unwrap();
+    assert!(waiting.await.is_none());
+    assert!(
+        context
+            .finish_document_javascript_dialog(document, dialog.key, true, None)
+            .is_none()
+    );
+    assert!(browser.subscribe().unwrap().0.javascript_dialogs.is_empty());
+    let (replacement, _) = context.create_web_contents(Default::default()).unwrap();
+    let next = navigate(&context, replacement, "data:text/html,replacement").await;
+    assert_ne!(document, next);
+    assert!(
+        context
+            .finish_document_javascript_dialog(document, dialog.key, true, None)
+            .is_none()
+    );
+    assert!(
+        !context
+            .web_contents_has_pending_javascript_dialog(replacement)
+            .unwrap()
+    );
+    service.shutdown();
+}
+
 #[tokio::test]
 async fn native_document_stop_retires_dialogs_and_late_observers_without_devtools() {
     use crate::page::{
@@ -218,7 +478,10 @@ async fn native_document_stop_retires_dialogs_and_late_observers_without_devtool
     let original_completion = RendererJavaScriptDialogCompletion::pending();
     assert!(
         context
-            .install_document_javascript_dialog(document, dialog(1, original_completion.clone()))
+            .install_document_javascript_dialog_for_test(
+                document,
+                dialog(1, original_completion.clone())
+            )
             .unwrap()
             .is_some()
     );
@@ -252,7 +515,10 @@ async fn native_document_stop_retires_dialogs_and_late_observers_without_devtool
     let late_completion = RendererJavaScriptDialogCompletion::pending();
     assert!(
         context
-            .install_document_javascript_dialog(document, dialog(2, late_completion.clone()))
+            .install_document_javascript_dialog_for_test(
+                document,
+                dialog(2, late_completion.clone())
+            )
             .unwrap()
             .is_none()
     );
