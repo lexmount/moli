@@ -608,24 +608,24 @@ fn trusted_type_prototype_declared_methods_preserve_descriptors() {
       script: internalNames(script),
       scriptURL: internalNames(scriptURL)
     },
-    htmlMethods: ["toString", "valueOf"].map(name => describe(TrustedHTML.prototype, name)),
-    scriptMethods: ["toString", "valueOf"].map(name => describe(TrustedScript.prototype, name)),
-    scriptURLMethods: ["toString", "valueOf"].map(name => describe(TrustedScriptURL.prototype, name)),
+    htmlMethods: ["toString", "toJSON"].map(name => describe(TrustedHTML.prototype, name)),
+    scriptMethods: ["toString", "toJSON"].map(name => describe(TrustedScript.prototype, name)),
+    scriptURLMethods: ["toString", "toJSON"].map(name => describe(TrustedScriptURL.prototype, name)),
     values: [
       String(html),
-      html.valueOf(),
+      html.toJSON(),
       String(script),
-      script.valueOf(),
+      script.toJSON(),
       String(scriptURL),
-      scriptURL.valueOf()
+      scriptURL.toJSON()
     ],
     fakeResults: [
       probe(() => TrustedHTML.prototype.toString.call(fakeHTML)),
-      probe(() => TrustedHTML.prototype.valueOf.call(fakeHTML)),
+      probe(() => TrustedHTML.prototype.toJSON.call(fakeHTML)),
       probe(() => TrustedScript.prototype.toString.call(fakeScript)),
-      probe(() => TrustedScript.prototype.valueOf.call(fakeScript)),
+      probe(() => TrustedScript.prototype.toJSON.call(fakeScript)),
       probe(() => TrustedScriptURL.prototype.toString.call(fakeScriptURL)),
-      probe(() => TrustedScriptURL.prototype.valueOf.call(fakeScriptURL))
+      probe(() => TrustedScriptURL.prototype.toJSON.call(fakeScriptURL))
     ].join("|"),
     trustedChecks: [
       trustedTypes.isHTML(fakeHTML),
@@ -643,7 +643,7 @@ fn trusted_type_prototype_declared_methods_preserve_descriptors() {
 
     assert_eq!(
         result,
-        r#"{"prototypes":[true,true,true],"initialOwnSlots":{"html":[],"script":[],"scriptURL":[]},"spoofedOwnSlots":{"html":["__moliTrustedTypeKind","__moliTrustedTypeValue"],"script":["__moliTrustedTypeKind","__moliTrustedTypeValue"],"scriptURL":["__moliTrustedTypeKind","__moliTrustedTypeValue"]},"htmlMethods":["false:true:true:toString:0","false:true:true:valueOf:0"],"scriptMethods":["false:true:true:toString:0","false:true:true:valueOf:0"],"scriptURLMethods":["false:true:true:toString:0","false:true:true:valueOf:0"],"values":["<em>ok</em>","<em>ok</em>","1 + 1","1 + 1","data:text/javascript,","data:text/javascript,"],"fakeResults":"TypeError|TypeError|TypeError|TypeError|TypeError|TypeError","trustedChecks":[false,false,false,true,true,true]}"#
+        r#"{"prototypes":[true,true,true],"initialOwnSlots":{"html":[],"script":[],"scriptURL":[]},"spoofedOwnSlots":{"html":["__moliTrustedTypeKind","__moliTrustedTypeValue"],"script":["__moliTrustedTypeKind","__moliTrustedTypeValue"],"scriptURL":["__moliTrustedTypeKind","__moliTrustedTypeValue"]},"htmlMethods":["true:true:true:toString:0","true:true:true:toJSON:0"],"scriptMethods":["true:true:true:toString:0","true:true:true:toJSON:0"],"scriptURLMethods":["true:true:true:toString:0","true:true:true:toJSON:0"],"values":["<em>ok</em>","<em>ok</em>","1 + 1","1 + 1","data:text/javascript,","data:text/javascript,"],"fakeResults":"TypeError|TypeError|TypeError|TypeError|TypeError|TypeError","trustedChecks":[false,false,false,true,true,true]}"#
     );
 }
 

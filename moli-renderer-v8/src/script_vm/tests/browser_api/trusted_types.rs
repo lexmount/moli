@@ -41,6 +41,87 @@ fn trusted_types_csp_policy_creation_matches_only_valid_name_tokens() {
 }
 
 #[test]
+fn trusted_types_webidl_surface_checks_descriptors_arguments_and_brands() {
+    let mut vm = new_storage_test_vm("https://trusted-types-webidl.test/");
+    assert_eq!(
+        vm.eval(include_str!(
+            "../../../../tests/fixtures/trusted-types-webidl.js"
+        ))
+        .expect("Trusted Types WebIDL surface should match its declarations"),
+        "ok"
+    );
+}
+
+#[tokio::test]
+async fn trusted_types_webidl_getter_and_stringifiers_preserve_cross_realm_semantics() {
+    let mut vm = new_parsed_test_vm(
+        "https://trusted-types-webidl-realms.test/",
+        "<!doctype html><html><body></body></html>",
+    );
+    vm.eval(
+        r#"
+        const frame = document.createElement('iframe');
+        frame.id = 'trusted-types-webidl-child';
+        frame.srcdoc = '<!doctype html><p>child</p>';
+        document.body.appendChild(frame);
+        "#,
+    )
+    .expect("create child realm for Trusted Types getter checks");
+    run_child_navigation_commit_and_host_load_for_test(&mut vm, "Trusted Types child realm").await;
+    assert_eq!(
+        vm.eval(
+            r#"
+            (() => {
+              const assert = (condition, message) => {
+                if (!condition) throw new Error(message);
+              };
+              const child = document.getElementById('trusted-types-webidl-child').contentWindow;
+              const parentGetter = Object.getOwnPropertyDescriptor(window, 'trustedTypes').get;
+              const childGetter = Object.getOwnPropertyDescriptor(child, 'trustedTypes').get;
+              // Borrow the parent getter before the child's factory has been accessed.
+              const childFactory = parentGetter.call(child);
+              assert(childFactory === child.trustedTypes &&
+                childFactory instanceof child.TrustedTypePolicyFactory &&
+                !(childFactory instanceof TrustedTypePolicyFactory), 'factory receiver realm');
+              assert(childGetter.call(window) === trustedTypes, 'borrowed child getter');
+              assert(childGetter.call(null) === childFactory &&
+                childGetter.call(undefined) === childFactory, 'nullish receiver uses getter realm');
+              for (const [getter, ErrorType] of [[parentGetter, TypeError], [childGetter, child.TypeError]]) {
+                let error;
+                try { getter.call({}); } catch (caught) { error = caught; }
+                assert(error instanceof ErrorType, 'getter exception belongs to function realm');
+              }
+              const policy = childFactory.createPolicy('child', {
+                createHTML: value => value,
+                createScript: value => value,
+                createScriptURL: value => value,
+              });
+              const cases = [
+                [TrustedHTML, child.TrustedHTML, policy.createHTML('html'), 'html', 'isHTML'],
+                [TrustedScript, child.TrustedScript, policy.createScript('script'), 'script', 'isScript'],
+                [TrustedScriptURL, child.TrustedScriptURL, policy.createScriptURL('/app.js'), '/app.js', 'isScriptURL'],
+              ];
+              for (const [Parent, Child, value, text, predicate] of cases) {
+                assert(value instanceof Child && !(value instanceof Parent), 'value realm');
+                assert(trustedTypes[predicate](value), 'cross-realm predicate');
+                for (const method of ['toString', 'toJSON']) {
+                  assert(Parent.prototype[method].call(value) === text, 'cross-realm stringifier');
+                  let error;
+                  try { Child.prototype[method].call({}); } catch (caught) { error = caught; }
+                  assert(error instanceof child.TypeError && !(error instanceof TypeError),
+                    'stringifier exception belongs to function realm');
+                }
+              }
+              return 'ok';
+            })()
+            "#,
+        )
+        .expect("Trusted Types getter and stringifier realms should be preserved"),
+        "ok"
+    );
+}
+
+#[test]
 fn trusted_type_policy_callbacks_follow_webidl_dictionary_and_callback_rules() {
     let mut vm = new_storage_test_vm("https://trusted-type-policy-webidl.test/");
 

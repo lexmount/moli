@@ -8322,6 +8322,7 @@ trusted-types/eval-no-csp-no-tt.html
 trusted-types/eval-with-non-trusted-script-object.html
 trusted-types/eval-with-permissive-csp.html
 trusted-types/get-trusted-types-compliant-attribute-value.html
+trusted-types/idlharness.window.js?moli-wpt-script=window
 trusted-types/inheriting-csp-for-local-schemes.html
 trusted-types/legacy-trusted-script-urls.html
 trusted-types/legacy-trusted-scripts.html
