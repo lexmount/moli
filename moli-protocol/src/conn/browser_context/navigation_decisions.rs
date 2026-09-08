@@ -506,15 +506,15 @@ impl CdpConnection {
             .unwrap_or(false)
     }
 
-    pub(crate) fn is_native_navigation_auth(
+    pub(crate) fn navigation_interception_awaits_decision(
         &self,
-        pending: &crate::conn::PendingFetchAuthNavigation,
+        contents: WebContentsHandle,
+        permit: NavigationInterceptionPermit,
     ) -> bool {
-        self.native_navigation_decision_for_target(&pending.navigation.frame_id)
-            .is_some_and(|(_, decision)| {
-                decision.permit == pending.auth_permit
-                    && matches!(decision.stage, NavigationDecisionStage::Auth { .. })
-            })
+        self.browser
+            .context_handle(contents.context())
+            .and_then(|context| context.navigation_interception_awaits_decision(contents, permit))
+            .unwrap_or(false)
     }
 
     pub(crate) fn update_native_navigation_dispatch(&mut self, pending: &PendingFetchNavigation) {

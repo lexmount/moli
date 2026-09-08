@@ -1,6 +1,8 @@
-//! Browser navigation state, private in the current residence until Commit 24b.
-//! Protocol loader correlation and renderer output binding stay in TargetPageSlot.
+//! Browser-owned navigation state. Protocol loader correlation and renderer
+//! output bindings remain in the DevTools projection.
 
+use super::navigation_interception::PausedNavigationInterception;
+use crate::browser::navigation_decision::ResponseInterceptionStage;
 use crate::browser::{DocumentId, NavigationId, WebContentsId};
 
 mod history;
@@ -158,7 +160,7 @@ struct PendingNavigationRequest {
     navigation_id: NavigationId,
     document_id: DocumentId,
     history_update: Option<PendingNavigationHistoryUpdate>,
-    paused_interception: Option<super::navigation_interception::PausedNavigationInterception>,
+    paused_interception: Option<Box<PausedNavigationInterception>>,
     document_preparation: Option<(
         crate::browser::RendererPageResidenceIdentity,
         moli_fetch::FetchCancelHandle,
@@ -314,50 +316,34 @@ impl NavigationController {
     pub fn has_paused_request_for_test(&self) -> bool {
         self.pending_navigation_request
             .as_ref()
-            .and_then(|request| request.paused_interception.as_ref())
-            .is_some_and(|paused| {
-                matches!(
-                    paused,
-                    super::navigation_interception::PausedNavigationInterception::Request(_)
-                )
-            })
+            .and_then(|pending| pending.paused_interception.as_ref())
+            .is_some_and(|paused| paused.has_request())
     }
 
     #[cfg(any(test, feature = "test-support"))]
     pub fn has_paused_auth_for_test(&self) -> bool {
         self.pending_navigation_request
             .as_ref()
-            .and_then(|request| request.paused_interception.as_ref())
-            .is_some_and(|paused| {
-                matches!(
-                    paused,
-                    super::navigation_interception::PausedNavigationInterception::Auth(_)
-                )
-            })
+            .and_then(|pending| pending.paused_interception.as_ref())
+            .is_some_and(|paused| paused.has_auth())
     }
 
     #[cfg(any(test, feature = "test-support"))]
     pub fn paused_response_for_test(&self) -> Option<&super::PausedDocumentTransfer> {
-        match self
-            .pending_navigation_request
+        self.pending_navigation_request
             .as_ref()?
             .paused_interception
             .as_ref()?
-        {
-            super::navigation_interception::PausedNavigationInterception::Response(paused) => {
-                Some(&paused.transfer)
-            }
-            super::navigation_interception::PausedNavigationInterception::Request(_)
-            | super::navigation_interception::PausedNavigationInterception::Auth(_)
-            | super::navigation_interception::PausedNavigationInterception::Driver(_) => None,
-        }
+            .response_for_test()
     }
 
-    pub(super) fn pause_request(
+    fn pause_interception(
         &mut self,
         web_contents: WebContentsId,
         navigation: NavigationId,
-        navigation_request: super::navigation_interception::NavigationRequestInterception,
+        build: impl FnOnce(
+            super::NavigationInterceptionPermit,
+        ) -> Result<PausedNavigationInterception, String>,
     ) -> Result<super::NavigationInterceptionPermit, String> {
         let pending = self
             .pending_navigation_request
@@ -367,68 +353,54 @@ impl NavigationController {
                     && !pending.committed
                     && !pending.cancellation_handle().is_cancelled()
             })
-            .ok_or("stale request-stage navigation")?;
+            .ok_or("stale navigation interception")?;
         if pending.paused_interception.is_some() {
             return Err("navigation already has a paused interception".to_owned());
         }
-        let request = crate::browser::BrowserRequestId::allocate();
         let permit = super::NavigationInterceptionPermit {
             web_contents,
             navigation,
             document: pending.document_id,
-            request,
+            request: crate::browser::BrowserRequestId::allocate(),
         };
-        pending.paused_interception = Some(
-            super::navigation_interception::PausedNavigationInterception::Request(Box::new(
-                super::navigation_interception::PausedNavigationRequest {
-                    request,
-                    navigation_request,
-                },
-            )),
-        );
+        pending.paused_interception = Some(Box::new(build(permit)?));
         Ok(permit)
+    }
+
+    fn pending_interception(
+        &mut self,
+        permit: super::NavigationInterceptionPermit,
+    ) -> Option<&mut PendingNavigationRequest> {
+        self.pending_navigation_request.as_mut().filter(|pending| {
+            pending.navigation_id == permit.navigation
+                && pending.document_id == permit.document
+                && !pending.committed
+                && !pending.cancellation_handle().is_cancelled()
+        })
+    }
+
+    pub(super) fn pause_request(
+        &mut self,
+        web_contents: WebContentsId,
+        navigation: NavigationId,
+        request: super::NavigationRequestInterception,
+    ) -> Result<super::NavigationInterceptionPermit, String> {
+        self.pause_interception(web_contents, navigation, |permit| {
+            Ok(PausedNavigationInterception::request(permit, request))
+        })
     }
 
     pub(super) fn take_request(
         &mut self,
         permit: super::NavigationInterceptionPermit,
-    ) -> Option<super::navigation_interception::ClaimedNavigationRequest> {
-        let pending = self.pending_navigation_request.as_mut().filter(|pending| {
-            pending.navigation_id == permit.navigation
-                && pending.document_id == permit.document
-                && !pending.committed
-                && !pending.cancellation_handle().is_cancelled()
-        })?;
-        if let Some(super::navigation_interception::PausedNavigationInterception::Driver(paused)) =
-            pending.paused_interception.as_mut()
-        {
-            return paused.take_request(permit);
+    ) -> Option<super::ClaimedNavigationRequest> {
+        let pending = self.pending_interception(permit)?;
+        let paused = pending.paused_interception.as_mut()?;
+        let request = paused.take_request(permit)?;
+        if !paused.awaits_decision() {
+            pending.paused_interception = None;
         }
-        let super::navigation_interception::PausedNavigationInterception::Request(paused) =
-            pending.paused_interception.as_ref()?
-        else {
-            return None;
-        };
-        if paused.request != permit.request {
-            return None;
-        }
-        match pending
-            .paused_interception
-            .take()
-            .expect("validated paused navigation request")
-        {
-            super::navigation_interception::PausedNavigationInterception::Request(paused) => Some(
-                super::navigation_interception::ClaimedNavigationRequest::new(
-                    permit,
-                    paused.navigation_request,
-                ),
-            ),
-            super::navigation_interception::PausedNavigationInterception::Auth(_)
-            | super::navigation_interception::PausedNavigationInterception::Response(_)
-            | super::navigation_interception::PausedNavigationInterception::Driver(_) => {
-                unreachable!("validated request interception")
-            }
-        }
+        Some(request)
     }
 
     pub(super) fn pause_auth_response(
@@ -436,68 +408,25 @@ impl NavigationController {
         response: super::InterceptedNavigationResponse<moli_fetch::RawResponse>,
     ) -> Result<super::NavigationInterceptionPermit, String> {
         let identity = response.identity();
-        let pending = self
-            .pending_navigation_request
-            .as_mut()
-            .filter(|pending| {
-                pending.navigation_id == identity.navigation
-                    && pending.document_id == identity.document
-                    && !pending.committed
-                    && !identity.is_cancelled()
-            })
-            .ok_or("stale navigation auth response")?;
-        if pending.paused_interception.is_some() {
-            return Err("navigation already has a paused interception".to_owned());
+        if identity.is_cancelled()
+            || self.pending_document() != Some((identity.navigation, identity.document))
+        {
+            return Err("stale navigation auth response".to_owned());
         }
-        let request = crate::browser::BrowserRequestId::allocate();
-        let permit = super::NavigationInterceptionPermit {
-            web_contents: identity.web_contents,
-            navigation: identity.navigation,
-            document: identity.document,
-            request,
-        };
-        pending.paused_interception = Some(
-            super::navigation_interception::PausedNavigationInterception::Auth(Box::new(
-                super::navigation_interception::PausedNavigationAuth { request, response },
-            )),
-        );
-        Ok(permit)
+        self.pause_interception(identity.web_contents, identity.navigation, |permit| {
+            Ok(PausedNavigationInterception::auth(permit, response))
+        })
     }
 
     pub(super) fn take_auth_response(
         &mut self,
         permit: super::NavigationInterceptionPermit,
     ) -> Option<super::InterceptedNavigationResponse<moli_fetch::RawResponse>> {
-        let pending = self.pending_navigation_request.as_mut().filter(|pending| {
-            pending.navigation_id == permit.navigation
-                && pending.document_id == permit.document
-                && !pending.committed
-                && !pending.cancellation_handle().is_cancelled()
-        })?;
-        let super::navigation_interception::PausedNavigationInterception::Auth(paused) =
-            pending.paused_interception.as_ref()?
-        else {
-            return None;
-        };
-        if paused.request != permit.request || paused.response.identity().is_cancelled() {
+        let pending = self.pending_interception(permit)?;
+        if !pending.paused_interception.as_ref()?.accepts_auth(permit) {
             return None;
         }
-        Some(
-            match pending
-                .paused_interception
-                .take()
-                .expect("validated auth response")
-            {
-                super::navigation_interception::PausedNavigationInterception::Auth(paused) => {
-                    paused.response
-                }
-                super::navigation_interception::PausedNavigationInterception::Request(_)
-                | super::navigation_interception::PausedNavigationInterception::Response(_)
-                | super::navigation_interception::PausedNavigationInterception::Driver(_) => {
-                    unreachable!("validated auth interception")
-                }
-            },
-        )
+        pending.paused_interception.take()?.into_auth(permit)
     }
 
     pub(super) fn pause_response(
@@ -506,72 +435,22 @@ impl NavigationController {
         navigation: NavigationId,
         transfer: super::PausedDocumentTransfer,
     ) -> Result<super::NavigationInterceptionPermit, String> {
-        let pending = self
-            .pending_navigation_request
-            .as_mut()
-            .filter(|pending| {
-                pending.navigation_id == navigation
-                    && !pending.committed
-                    && !pending.cancellation_handle().is_cancelled()
-            })
-            .ok_or("stale response-stage navigation")?;
-        if pending.paused_interception.is_some() {
-            return Err("navigation already has a paused interception".to_owned());
-        }
-        let request = crate::browser::BrowserRequestId::allocate();
-        let permit = super::NavigationInterceptionPermit {
-            web_contents,
-            navigation,
-            document: pending.document_id,
-            request,
-        };
-        pending.paused_interception = Some(
-            super::navigation_interception::PausedNavigationInterception::Response(Box::new(
-                super::navigation_interception::PausedNavigationResponse { request, transfer },
-            )),
-        );
-        Ok(permit)
+        self.pause_interception(web_contents, navigation, |permit| {
+            Ok(PausedNavigationInterception::response(permit, transfer))
+        })
     }
 
     pub(super) fn take_response(
         &mut self,
         permit: super::NavigationInterceptionPermit,
     ) -> Option<super::PausedDocumentTransfer> {
-        let pending = self.pending_navigation_request.as_mut().filter(|pending| {
-            pending.navigation_id == permit.navigation
-                && pending.document_id == permit.document
-                && !pending.committed
-                && !pending.cancellation_handle().is_cancelled()
-        })?;
-        if let Some(super::navigation_interception::PausedNavigationInterception::Driver(paused)) =
-            pending.paused_interception.as_mut()
-        {
-            return paused.take_response(permit);
+        let pending = self.pending_interception(permit)?;
+        let paused = pending.paused_interception.as_mut()?;
+        let response = paused.take_response(permit)?;
+        if !paused.awaits_decision() {
+            pending.paused_interception = None;
         }
-        let super::navigation_interception::PausedNavigationInterception::Response(paused) =
-            pending.paused_interception.as_ref()?
-        else {
-            return None;
-        };
-        if paused.request != permit.request {
-            return None;
-        }
-        Some(
-            match pending
-                .paused_interception
-                .take()
-                .expect("validated paused navigation response")
-            {
-                super::navigation_interception::PausedNavigationInterception::Response(paused) => {
-                    paused.transfer
-                }
-                super::navigation_interception::PausedNavigationInterception::Request(_)
-                | super::navigation_interception::PausedNavigationInterception::Auth(_)
-                | super::navigation_interception::PausedNavigationInterception::Driver(_) => {
-                    unreachable!("validated response interception")
-                }
-            },
-        )
+        Some(response)
     }
 
     pub(super) fn restore_response(
@@ -579,30 +458,20 @@ impl NavigationController {
         permit: super::NavigationInterceptionPermit,
         transfer: super::PausedDocumentTransfer,
     ) -> Result<(), Box<super::PausedDocumentTransfer>> {
-        let Some(pending) = self.pending_navigation_request.as_mut().filter(|pending| {
-            pending.navigation_id == permit.navigation
-                && pending.document_id == permit.document
-                && !pending.committed
-                && !pending.cancellation_handle().is_cancelled()
-        }) else {
+        let Some(pending) = self.pending_interception(permit) else {
             return Err(Box::new(transfer));
         };
-        if let Some(super::navigation_interception::PausedNavigationInterception::Driver(paused)) =
-            pending.paused_interception.as_mut()
-        {
+        if let Some(paused) = pending.paused_interception.as_mut() {
             return paused.restore_response(permit, transfer);
         }
-        if pending.paused_interception.is_some() {
+        // A taken decision body cannot recreate a pause after its decision
+        // was consumed, even before the driver observes that completion.
+        if transfer.has_pending_decision() {
             return Err(Box::new(transfer));
         }
-        pending.paused_interception = Some(
-            super::navigation_interception::PausedNavigationInterception::Response(Box::new(
-                super::navigation_interception::PausedNavigationResponse {
-                    request: permit.request,
-                    transfer,
-                },
-            )),
-        );
+        pending.paused_interception = Some(Box::new(PausedNavigationInterception::response(
+            permit, transfer,
+        )));
         Ok(())
     }
 
@@ -1022,127 +891,98 @@ impl NavigationController {
         Ok(())
     }
 
-    pub(in crate::browser) fn pause_driver(
+    pub(in crate::browser) fn pause_navigation_decision(
         &mut self,
         web_contents: WebContentsId,
         navigation: NavigationId,
         stage: crate::browser::NavigationDecisionStage,
     ) -> Result<tokio::sync::oneshot::Receiver<crate::browser::NavigationDecision>, String> {
-        self.install_driver_decision(web_contents, navigation, move |permit, sender| {
-            crate::browser::navigation_decision::PendingNavigationDecision::new(
-                permit, stage, sender,
-            )
+        self.install_navigation_decision(web_contents, navigation, move |permit, sender| {
+            PausedNavigationInterception::new(permit, stage, sender)
         })
     }
 
-    pub(in crate::browser) fn pause_driver_response(
+    pub(in crate::browser) fn pause_response_decision(
         &mut self,
         web_contents: WebContentsId,
         navigation: NavigationId,
-        stage: crate::browser::NavigationDecisionStage,
+        stage: ResponseInterceptionStage,
         transfer: super::PausedDocumentTransfer,
     ) -> Result<tokio::sync::oneshot::Receiver<crate::browser::NavigationDecision>, String> {
-        self.install_driver_decision(web_contents, navigation, move |permit, sender| {
-            crate::browser::navigation_decision::PendingNavigationDecision::with_response(
+        self.install_navigation_decision(web_contents, navigation, move |permit, sender| {
+            Ok(PausedNavigationInterception::with_response(
                 permit, stage, sender, transfer,
-            )
+            ))
         })
     }
 
-    fn install_driver_decision(
+    fn install_navigation_decision(
         &mut self,
         web_contents: WebContentsId,
         navigation: NavigationId,
         build: impl FnOnce(
             super::NavigationInterceptionPermit,
             tokio::sync::oneshot::Sender<crate::browser::NavigationDecision>,
-        ) -> Result<
-            crate::browser::navigation_decision::PendingNavigationDecision,
-            String,
-        >,
+        ) -> Result<PausedNavigationInterception, String>,
     ) -> Result<tokio::sync::oneshot::Receiver<crate::browser::NavigationDecision>, String> {
-        let pending = self
-            .pending_navigation_request
-            .as_mut()
-            .filter(|pending| pending.matches(&navigation) && !pending.committed)
-            .ok_or("native navigation is no longer pending")?;
-        if pending.paused_interception.is_some() {
-            return Err("navigation already has a paused decision".into());
-        }
-        let permit = super::NavigationInterceptionPermit {
-            web_contents,
-            navigation,
-            document: pending.document_id,
-            request: crate::browser::BrowserRequestId::allocate(),
-        };
         let (completion, result) = tokio::sync::oneshot::channel();
-        pending.paused_interception = Some(
-            super::navigation_interception::PausedNavigationInterception::Driver(Box::new(build(
-                permit, completion,
-            )?)),
-        );
+        self.pause_interception(web_contents, navigation, |permit| build(permit, completion))?;
         Ok(result)
     }
 
-    pub(in crate::browser) fn driver_decision(
+    pub(in crate::browser) fn navigation_decision(
         &self,
     ) -> Option<crate::browser::NavigationDecisionSnapshot> {
-        let paused = self
-            .pending_navigation_request
+        self.pending_navigation_request
             .as_ref()?
             .paused_interception
-            .as_ref()?;
-        let super::navigation_interception::PausedNavigationInterception::Driver(paused) = paused
-        else {
-            return None;
-        };
-        paused.snapshot()
+            .as_ref()?
+            .snapshot()
     }
 
-    pub(in crate::browser) fn resolve_driver_decision(
+    pub(in crate::browser) fn interception_awaits_decision(
+        &self,
+        permit: super::NavigationInterceptionPermit,
+    ) -> bool {
+        self.pending_navigation_request
+            .as_ref()
+            .filter(|pending| !pending.committed && !pending.cancellation_handle().is_cancelled())
+            .and_then(|pending| pending.paused_interception.as_ref())
+            .is_some_and(|paused| paused.permit() == permit && paused.awaits_decision())
+    }
+
+    pub(in crate::browser) fn resolve_navigation_decision(
         &mut self,
         permit: super::NavigationInterceptionPermit,
         decision: crate::browser::NavigationDecision,
     ) -> bool {
-        let Some(super::navigation_interception::PausedNavigationInterception::Driver(paused)) =
-            self.pending_navigation_request
-                .as_ref()
-                .and_then(|request| request.paused_interception.as_ref())
-        else {
+        let Some(pending) = self.pending_interception(permit) else {
             return false;
         };
-        if !paused.accepts(permit, &decision) {
+        if !pending
+            .paused_interception
+            .as_ref()
+            .is_some_and(|paused| paused.accepts(permit, &decision))
+        {
             return false;
         }
-        let Some(super::navigation_interception::PausedNavigationInterception::Driver(paused)) =
-            self.pending_navigation_request
-                .as_mut()
-                .unwrap()
-                .paused_interception
-                .take()
-        else {
-            unreachable!("validated native decision")
-        };
-        paused.resolve(decision)
+        pending
+            .paused_interception
+            .take()
+            .expect("validated navigation decision")
+            .resolve(decision)
     }
 
-    pub(in crate::browser) fn finish_driver_decision(
+    pub(in crate::browser) fn finish_navigation_decision(
         &mut self,
         permit: super::NavigationInterceptionPermit,
     ) -> bool {
-        let Some(pending) = self.pending_navigation_request.as_mut().filter(|pending| {
-            pending.navigation_id == permit.navigation
-                && pending.document_id == permit.document
-                && !pending.committed
-                && !pending.cancellation_handle().is_cancelled()
-        }) else {
+        let Some(pending) = self.pending_interception(permit) else {
             return false;
         };
         match pending.paused_interception.as_ref() {
             None => true,
-            Some(super::navigation_interception::PausedNavigationInterception::Driver(paused))
-                if paused.permit() == permit =>
-            {
+            Some(paused) if paused.awaits_decision() && paused.permit() == permit => {
                 pending.paused_interception.take();
                 true
             }
@@ -1413,7 +1253,7 @@ mod tests {
         let mut owner = NavigationController::default();
         let navigation = owner.start_document_navigation();
         let mut result = owner
-            .pause_driver(
+            .pause_navigation_decision(
                 WebContentsId::allocate(),
                 navigation,
                 NavigationDecisionStage::Request {
@@ -1424,17 +1264,17 @@ mod tests {
                 },
             )
             .unwrap();
-        let permit = owner.driver_decision().unwrap().permit;
+        let permit = owner.navigation_decision().unwrap().permit;
         let claimed = owner.take_request(permit).unwrap();
         assert!(owner.take_request(permit).is_none());
-        assert!(owner.driver_decision().is_none());
+        assert!(owner.navigation_decision().is_none());
         drop(claimed);
         assert!(matches!(
             result.try_recv(),
             Ok(NavigationDecision::Continue)
         ));
-        assert!(owner.finish_driver_decision(permit));
-        assert!(!owner.resolve_driver_decision(permit, NavigationDecision::Cancel));
+        assert!(owner.finish_navigation_decision(permit));
+        assert!(!owner.resolve_navigation_decision(permit, NavigationDecision::Cancel));
     }
 
     #[test]
@@ -1443,7 +1283,7 @@ mod tests {
         let mut owner = NavigationController::default();
         let navigation = owner.start_document_navigation();
         let mut result = owner
-            .pause_driver(
+            .pause_navigation_decision(
                 WebContentsId::allocate(),
                 navigation,
                 NavigationDecisionStage::Request {
@@ -1454,7 +1294,7 @@ mod tests {
                 },
             )
             .unwrap();
-        let permit = owner.driver_decision().unwrap().permit;
+        let permit = owner.navigation_decision().unwrap().permit;
         let claimed = owner.take_request(permit).unwrap();
         let replacement = owner.start_document_navigation();
         assert!(matches!(
@@ -1462,7 +1302,7 @@ mod tests {
             Err(tokio::sync::oneshot::error::TryRecvError::Closed)
         ));
         drop(claimed);
-        assert!(!owner.finish_driver_decision(permit));
+        assert!(!owner.finish_navigation_decision(permit));
         assert_eq!(
             owner
                 .pending_navigation_request

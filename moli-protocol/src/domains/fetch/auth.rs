@@ -316,7 +316,12 @@ pub(super) fn start_devtools_continue_with_auth_command_for_pending(
         && pending
             .auth_stage_pause_state()
             .is_some_and(|chain| !chain.remaining_sessions.is_empty());
-    if !chained_default && conn.is_native_navigation_auth(&pending) {
+    if !chained_default
+        && conn.navigation_interception_awaits_decision(
+            pending.navigation.web_contents,
+            pending.auth_permit,
+        )
+    {
         let decision = match command.action {
             DevToolsAuthChallengeAction::Default => moli_core::browser::NavigationDecision::Cancel,
             DevToolsAuthChallengeAction::Cancel => moli_core::browser::NavigationDecision::Continue,
@@ -520,7 +525,10 @@ pub(super) async fn default_navigation_auth_as_background_events_async(
         return;
     }
 
-    if conn.is_native_navigation_auth(&pending) {
+    if conn.navigation_interception_awaits_decision(
+        pending.navigation.web_contents,
+        pending.auth_permit,
+    ) {
         conn.resolve_native_navigation_decision(
             pending.navigation.web_contents,
             pending.auth_permit,

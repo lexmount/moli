@@ -683,7 +683,7 @@ pub(super) async fn complete_fail_request_command_async(
             error_text,
         } => {
             let transfer = *transfer;
-            if transfer.is_native_driver() {
+            if transfer.has_pending_decision(conn) {
                 let (pending, _body) = transfer.into_parts();
                 conn.resolve_native_navigation_decision(
                     pending.navigation.web_contents,
@@ -1027,7 +1027,7 @@ pub(super) async fn complete_fulfill_request_command_async(
             let (pending, request) = claimed.into_parts();
             if request
                 .as_ref()
-                .is_some_and(|request| request.is_native_driver())
+                .is_some_and(|request| request.has_pending_decision())
             {
                 conn.update_native_navigation_dispatch(&pending);
                 conn.resolve_native_navigation_decision(
@@ -1085,7 +1085,7 @@ pub(super) async fn complete_fulfill_request_command_async(
         } => {
             let transfer = *transfer;
             emit_devtools_empty_success(out);
-            if transfer.is_native_driver() {
+            if transfer.has_pending_decision(conn) {
                 let (pending, _body) = transfer.into_parts();
                 conn.resolve_native_navigation_decision(
                     pending.navigation.web_contents,
@@ -1363,7 +1363,7 @@ fn start_devtools_continue_intercepted_response_command(
     {
         let _ = &command.response_phrase;
         let transfer_response_headers = response_headers.clone().unwrap_or_default();
-        if !transfer.is_native_driver()
+        if !transfer.has_pending_decision(conn)
             && let Some(sender) = conn.background_navigation_completion_sender_for_owner(owner)
         {
             match transfer.into_pending_streaming_document_response_navigation() {
@@ -1569,7 +1569,7 @@ async fn continue_response_transfer_inline(
     response_code: Option<u16>,
     response_headers: Vec<(String, String)>,
 ) {
-    if transfer.is_native_driver() {
+    if transfer.has_pending_decision(conn) {
         if transfer.has_active_body_stream() {
             conn.restore_pending_fetch_response_navigation_for_owner(owner, transfer);
             out.push_error(-32000, "ResponseBodyStreamActive");

@@ -671,9 +671,9 @@ pub(crate) async fn continue_navigation_without_request_pause_into_buffer_async(
         .await;
         return;
     };
-    if request.is_native_driver() {
+    if request.has_pending_decision() {
         let decision = request
-            .into_native_decision()
+            .into_navigation_decision()
             .expect("native request decision");
         conn.update_native_navigation_dispatch(&pending);
         conn.resolve_native_navigation_decision(
@@ -729,7 +729,10 @@ pub(super) async fn continue_navigation_response_neutrally_as_background_events_
     pending: crate::conn::PendingFetchResponseNavigation,
     transfer: Option<crate::conn::PausedDocumentTransfer>,
 ) {
-    if pending.is_native_driver() {
+    let claimed =
+        crate::conn::ClaimedFetchResponseNavigation::new(String::new(), pending, transfer);
+    if claimed.has_pending_decision(conn) {
+        let (pending, transfer) = claimed.into_parts();
         if let Some(transfer) = transfer {
             conn.resolve_native_navigation_decision(
                 pending.navigation.web_contents,
@@ -744,9 +747,7 @@ pub(super) async fn continue_navigation_response_neutrally_as_background_events_
         return;
     }
     let (token, navigation_state, navigation) =
-        crate::conn::ClaimedFetchResponseNavigation::new(String::new(), pending, transfer)
-            .continue_response_neutrally_async(conn)
-            .await;
+        claimed.continue_response_neutrally_async(conn).await;
     let navigation =
         network::materialize_navigation_load_result(conn, &navigation_state, navigation);
     complete_tokened_materialized_navigation_as_background_events_async(

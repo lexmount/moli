@@ -659,7 +659,7 @@ impl CdpConnection {
             .fetch_owner
             .register_pending_fetch_response_navigation(
                 pending.fetch_request_id,
-                PendingFetchResponseNavigation::new_native(pending.navigation, permit),
+                PendingFetchResponseNavigation::new(pending.navigation, permit),
             );
         self.browser_context_by_id_mut(&context_id)
             .expect("resolved Context")

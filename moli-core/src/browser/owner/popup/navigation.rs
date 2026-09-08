@@ -2,6 +2,7 @@ use tokio::sync::{oneshot, watch};
 use url::Url;
 
 use super::super::{Browser, BrowserLocalSender};
+use crate::browser::navigation_decision::ResponseInterceptionStage;
 use crate::browser::{
     CapturedBody, CapturedBodyWriter, NavigationDecision, NavigationDecisionStage,
     NavigationFailureReason, NavigationId, NavigationRequest, NavigationRequestLoadPolicy,
@@ -99,7 +100,7 @@ impl Browser {
         };
         self.install_navigation_decision(contents, provider, move |page| {
             page.navigation_mut()
-                .pause_driver(contents.id(), navigation, stage)
+                .pause_navigation_decision(contents.id(), navigation, stage)
         })
         .map(Some)
     }
@@ -118,7 +119,7 @@ impl Browser {
         let result = admit(page)?;
         let permit = page
             .navigation()
-            .driver_decision()
+            .navigation_decision()
             .expect("installed driver decision")
             .permit;
         let request = self
@@ -166,7 +167,7 @@ async fn await_decision(
         _ = provider.changed() => {
             on_owner(owner, move |browser| {
                 let controller = browser.context_mut(contents.context())?.web_contents_mut(contents)?.navigation_mut();
-                controller.resolve_driver_decision(permit, NavigationDecision::Continue);
+                controller.resolve_navigation_decision(permit, NavigationDecision::Continue);
                 Ok(())
             }).await?;
             result.await.map_err(|_| "native navigation decision canceled".to_owned())?
@@ -177,7 +178,7 @@ async fn await_decision(
             .context_mut(contents.context())?
             .web_contents_mut(contents)?
             .navigation_mut();
-        if !controller.finish_driver_decision(permit) {
+        if !controller.finish_navigation_decision(permit) {
             return Err("native navigation decision canceled".into());
         }
         Ok(())
@@ -410,15 +411,28 @@ async fn navigate(
                         )
                     };
                 prior.append(observations);
+                match &mut body {
+                    DocumentBodySource::BufferedRaw {
+                        network_observation_journal,
+                        ..
+                    }
+                    | DocumentBodySource::StreamingRaw {
+                        network_observation_journal,
+                        ..
+                    }
+                    | DocumentBodySource::CapturedRaw {
+                        network_observation_journal,
+                        ..
+                    } => {
+                        *network_observation_journal = prior.clone();
+                    }
+                }
                 if matches!(head.status, 401 | 407) {
                     let decision = decide_transfer(
                         owner,
                         contents,
                         navigation,
-                        NavigationDecisionStage::Auth {
-                            response: Box::new(head.clone()),
-                            observations: prior.clone(),
-                        },
+                        ResponseInterceptionStage::Auth,
                         PausedDocumentTransfer::pending(
                             NavigationRequestLoadPolicy::DocumentInitiated,
                             body,
@@ -463,10 +477,7 @@ async fn navigate(
         owner,
         contents,
         navigation,
-        NavigationDecisionStage::Response {
-            response: Box::new(response.clone()),
-            observations: observations.clone(),
-        },
+        ResponseInterceptionStage::Response,
         transfer,
     )
     .await?;
@@ -622,7 +633,7 @@ async fn decide_transfer(
     owner: &BrowserLocalSender,
     contents: WebContentsHandle,
     navigation: NavigationId,
-    stage: NavigationDecisionStage,
+    stage: ResponseInterceptionStage,
     transfer: PausedDocumentTransfer,
 ) -> Result<NavigationDecision, String> {
     let admission = on_owner(owner, move |browser| {
@@ -635,8 +646,12 @@ async fn decide_transfer(
             return Ok(TransferAdmission::Unobserved(Box::new(transfer)));
         };
         let pending = browser.install_navigation_decision(contents, provider, move |page| {
-            page.navigation_mut()
-                .pause_driver_response(contents.id(), navigation, stage, transfer)
+            page.navigation_mut().pause_response_decision(
+                contents.id(),
+                navigation,
+                stage,
+                transfer,
+            )
         })?;
         Ok(TransferAdmission::Paused(pending))
     })

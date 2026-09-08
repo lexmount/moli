@@ -1,17 +1,22 @@
 use crate::{
     browser::{
-        BrowserRequestId, DocumentId, NavigationId, NavigationRequestLoadPolicy, WebContentsId,
+        BrowserRequestId, DocumentId, NavigationDecision, NavigationDecisionSnapshot,
+        NavigationDecisionStage, NavigationId, NavigationRequestLoadPolicy, WebContentsId,
+        navigation_decision::{NavigationDecisionCompletion, ResponseInterceptionStage},
     },
     page::SubresourceAuthCredentials,
 };
 use moli_fetch::{
     NetworkFetchResult, NetworkObservationJournal, RawResponse, StreamingRawResponse,
 };
+use moli_renderer_v8::RendererPreparedDocumentInspectionEndpoint;
+use std::sync::{Arc, Weak};
+use tokio::sync::oneshot;
 use url::Url;
 
 use super::{
-    AdmittedNavigationLoad, InheritedDocumentPolicy, WebContents,
-    navigation_commit::DocumentNavigationIdentity,
+    AdmittedNavigationLoad, InheritedDocumentPolicy, InitialDocumentBuildKey,
+    PausedDocumentTransfer, WebContents, navigation_commit::DocumentNavigationIdentity,
 };
 
 /// A single Browser decision. Copying a protocol correlation cannot duplicate
@@ -115,39 +120,28 @@ impl NavigationRequestInterception {
 pub struct ClaimedNavigationRequest {
     permit: NavigationInterceptionPermit,
     request: NavigationRequestInterception,
-    native_decision: Option<crate::browser::navigation_decision::NavigationDecisionClaim>,
+    decision_claim: Option<crate::browser::navigation_decision::NavigationDecisionClaim>,
 }
 
 impl ClaimedNavigationRequest {
-    pub(super) fn new(
+    pub(in crate::browser) fn new(
         permit: NavigationInterceptionPermit,
         request: NavigationRequestInterception,
+        decision: Option<crate::browser::navigation_decision::NavigationDecisionClaim>,
     ) -> Self {
         Self {
             permit,
             request,
-            native_decision: None,
+            decision_claim: decision,
         }
     }
 
-    pub(in crate::browser) fn new_native(
-        permit: NavigationInterceptionPermit,
-        request: NavigationRequestInterception,
-        decision: crate::browser::navigation_decision::NavigationDecisionClaim,
-    ) -> Self {
-        Self {
-            permit,
-            request,
-            native_decision: Some(decision),
-        }
+    pub fn has_pending_decision(&self) -> bool {
+        self.decision_claim.is_some()
     }
 
-    pub fn is_native_driver(&self) -> bool {
-        self.native_decision.is_some()
-    }
-
-    pub fn into_native_decision(mut self) -> Option<crate::browser::NavigationDecision> {
-        self.native_decision.take()?.disarm();
+    pub fn into_navigation_decision(mut self) -> Option<crate::browser::NavigationDecision> {
+        self.decision_claim.take()?.disarm();
         Some(crate::browser::NavigationDecision::Request {
             url: self.request.requested_url,
             method: self.request.method,
@@ -342,36 +336,381 @@ impl InterceptedNavigationResponse<RawResponse> {
     }
 }
 
-#[derive(Debug)]
-pub(super) struct PausedNavigationAuth {
-    pub(super) request: BrowserRequestId,
-    pub(super) response: InterceptedNavigationResponse<RawResponse>,
+/// Stored in the exact pending navigation's mutually exclusive pause slot.
+/// Cancellation/supersession drops the sender and wakes the Browser driver.
+pub(super) struct PausedNavigationInterception {
+    permit: NavigationInterceptionPermit,
+    completion: Option<Arc<NavigationDecisionCompletion>>,
+    state: InterceptionState,
 }
 
 #[derive(Debug)]
-pub(super) struct PausedNavigationRequest {
-    pub(super) request: BrowserRequestId,
-    pub(super) navigation_request: NavigationRequestInterception,
+enum InterceptionResource<T> {
+    Available(T),
+    Claimed,
 }
 
-/// Browser-owned response-stage work for the exact pending navigation.
-///
-/// The DevTools projection keeps only the public request correlation and a
-/// [`NavigationInterceptionPermit`]. Dropping or superseding the navigation
-/// therefore drops the response stream and prepared renderer even if that
-/// projection is never drained.
-#[derive(Debug)]
-pub(super) struct PausedNavigationResponse {
-    pub(super) request: BrowserRequestId,
-    pub(super) transfer: super::PausedDocumentTransfer,
+impl<T> InterceptionResource<T> {
+    fn take(&mut self) -> Option<T> {
+        match std::mem::replace(self, Self::Claimed) {
+            Self::Available(value) => Some(value),
+            Self::Claimed => None,
+        }
+    }
 }
 
-#[derive(Debug)]
-pub(super) enum PausedNavigationInterception {
-    Request(Box<PausedNavigationRequest>),
-    Auth(Box<PausedNavigationAuth>),
-    Response(Box<PausedNavigationResponse>),
-    Driver(Box<crate::browser::navigation_decision::PendingNavigationDecision>),
+enum AuthenticationWork {
+    Intercepted(Box<InterceptedNavigationResponse<moli_fetch::RawResponse>>),
+    Transfer(InterceptionResource<Box<PausedDocumentTransfer>>),
+}
+
+enum InterceptionState {
+    InitialDocumentReserved {
+        key: InitialDocumentBuildKey,
+    },
+    InitialDocument {
+        key: InitialDocumentBuildKey,
+        inspection: RendererPreparedDocumentInspectionEndpoint,
+    },
+    Request {
+        request: InterceptionResource<Box<super::NavigationRequestInterception>>,
+        opening: Weak<crate::page::RendererPopupOpening>,
+    },
+    Auth(AuthenticationWork),
+    Response(InterceptionResource<Box<PausedDocumentTransfer>>),
+    PreparedDocument {
+        renderer: crate::browser::RendererPageResidenceIdentity,
+        inspection: RendererPreparedDocumentInspectionEndpoint,
+    },
+}
+
+impl std::fmt::Debug for PausedNavigationInterception {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("PausedNavigationInterception")
+            .field("permit", &self.permit)
+            .field("snapshot", &self.snapshot())
+            .finish()
+    }
+}
+
+impl PausedNavigationInterception {
+    pub fn request(
+        permit: NavigationInterceptionPermit,
+        request: NavigationRequestInterception,
+    ) -> Self {
+        Self {
+            permit,
+            completion: None,
+            state: InterceptionState::Request {
+                request: InterceptionResource::Available(Box::new(request)),
+                opening: Weak::new(),
+            },
+        }
+    }
+
+    pub fn auth(
+        permit: NavigationInterceptionPermit,
+        response: InterceptedNavigationResponse<moli_fetch::RawResponse>,
+    ) -> Self {
+        Self {
+            permit,
+            completion: None,
+            state: InterceptionState::Auth(AuthenticationWork::Intercepted(Box::new(response))),
+        }
+    }
+
+    pub fn response(
+        permit: NavigationInterceptionPermit,
+        transfer: PausedDocumentTransfer,
+    ) -> Self {
+        Self {
+            permit,
+            completion: None,
+            state: InterceptionState::Response(InterceptionResource::Available(Box::new(transfer))),
+        }
+    }
+
+    pub fn awaits_decision(&self) -> bool {
+        self.completion.is_some()
+    }
+
+    #[cfg(any(test, feature = "test-support"))]
+    pub fn has_request(&self) -> bool {
+        matches!(
+            self.state,
+            InterceptionState::Request {
+                request: InterceptionResource::Available(_),
+                ..
+            }
+        )
+    }
+
+    #[cfg(any(test, feature = "test-support"))]
+    pub fn has_auth(&self) -> bool {
+        matches!(
+            self.state,
+            InterceptionState::Auth(
+                AuthenticationWork::Intercepted(_)
+                    | AuthenticationWork::Transfer(InterceptionResource::Available(_))
+            )
+        )
+    }
+
+    #[cfg(any(test, feature = "test-support"))]
+    pub fn response_for_test(&self) -> Option<&PausedDocumentTransfer> {
+        match &self.state {
+            InterceptionState::Response(InterceptionResource::Available(transfer)) => {
+                Some(transfer)
+            }
+            _ => None,
+        }
+    }
+
+    pub fn new(
+        permit: NavigationInterceptionPermit,
+        stage: NavigationDecisionStage,
+        sender: oneshot::Sender<NavigationDecision>,
+    ) -> Result<Self, String> {
+        let state = match stage {
+            NavigationDecisionStage::InitialDocumentReserved { key } => {
+                InterceptionState::InitialDocumentReserved { key }
+            }
+            NavigationDecisionStage::InitialDocument { key, inspection } => {
+                InterceptionState::InitialDocument { key, inspection }
+            }
+            NavigationDecisionStage::PreparedDocument {
+                renderer,
+                inspection,
+            } => InterceptionState::PreparedDocument {
+                renderer,
+                inspection,
+            },
+            NavigationDecisionStage::Request {
+                url,
+                method,
+                headers,
+                opening,
+            } => InterceptionState::Request {
+                request: InterceptionResource::Available(Box::new(
+                    super::NavigationRequestInterception::new(
+                        url,
+                        method,
+                        None,
+                        headers,
+                        NavigationRequestLoadPolicy::DocumentInitiated,
+                    ),
+                )),
+                opening,
+            },
+            NavigationDecisionStage::Auth { .. } | NavigationDecisionStage::Response { .. } => {
+                return Err("response decision requires its transfer at admission".into());
+            }
+        };
+        Ok(Self {
+            permit,
+            completion: Some(NavigationDecisionCompletion::new(sender)),
+            state,
+        })
+    }
+
+    pub fn with_response(
+        permit: NavigationInterceptionPermit,
+        stage: ResponseInterceptionStage,
+        sender: oneshot::Sender<NavigationDecision>,
+        transfer: super::PausedDocumentTransfer,
+    ) -> Self {
+        let transfer = InterceptionResource::Available(Box::new(transfer));
+        let state = match stage {
+            ResponseInterceptionStage::Auth => {
+                InterceptionState::Auth(AuthenticationWork::Transfer(transfer))
+            }
+            ResponseInterceptionStage::Response => InterceptionState::Response(transfer),
+        };
+        Self {
+            permit,
+            completion: Some(NavigationDecisionCompletion::new(sender)),
+            state,
+        }
+    }
+
+    pub fn permit(&self) -> NavigationInterceptionPermit {
+        self.permit
+    }
+
+    pub fn snapshot(&self) -> Option<NavigationDecisionSnapshot> {
+        self.completion.as_ref()?;
+        let stage = match &self.state {
+            InterceptionState::InitialDocumentReserved { key } => {
+                NavigationDecisionStage::InitialDocumentReserved { key: *key }
+            }
+            InterceptionState::InitialDocument { key, inspection } => {
+                NavigationDecisionStage::InitialDocument {
+                    key: *key,
+                    inspection: inspection.clone(),
+                }
+            }
+            InterceptionState::PreparedDocument {
+                renderer,
+                inspection,
+            } => NavigationDecisionStage::PreparedDocument {
+                renderer: *renderer,
+                inspection: inspection.clone(),
+            },
+            InterceptionState::Request {
+                request: InterceptionResource::Available(request),
+                opening,
+            } => request.decision_stage(opening.clone()),
+            InterceptionState::Auth(AuthenticationWork::Transfer(
+                InterceptionResource::Available(transfer),
+            ))
+            | InterceptionState::Response(InterceptionResource::Available(transfer)) => {
+                let (head, observations) = transfer.response_snapshot();
+                if matches!(self.state, InterceptionState::Auth(_)) {
+                    NavigationDecisionStage::Auth {
+                        response: Box::new(head),
+                        observations,
+                    }
+                } else {
+                    NavigationDecisionStage::Response {
+                        response: Box::new(head),
+                        observations,
+                    }
+                }
+            }
+            _ => return None,
+        };
+        Some(NavigationDecisionSnapshot {
+            permit: self.permit,
+            stage,
+        })
+    }
+
+    pub fn take_request(
+        &mut self,
+        permit: NavigationInterceptionPermit,
+    ) -> Option<super::ClaimedNavigationRequest> {
+        if self.permit != permit {
+            return None;
+        }
+        let InterceptionState::Request { request, .. } = &mut self.state else {
+            return None;
+        };
+        Some(ClaimedNavigationRequest::new(
+            permit,
+            *request.take()?,
+            self.completion
+                .as_ref()
+                .map(NavigationDecisionCompletion::claim),
+        ))
+    }
+
+    pub fn into_auth(
+        self,
+        permit: NavigationInterceptionPermit,
+    ) -> Option<InterceptedNavigationResponse<moli_fetch::RawResponse>> {
+        if permit != self.permit {
+            return None;
+        }
+        match self.state {
+            InterceptionState::Auth(AuthenticationWork::Intercepted(response))
+                if !response.identity().is_cancelled() =>
+            {
+                Some(*response)
+            }
+            _ => None,
+        }
+    }
+
+    pub fn accepts_auth(&self, permit: NavigationInterceptionPermit) -> bool {
+        permit == self.permit
+            && matches!(&self.state,
+            InterceptionState::Auth(AuthenticationWork::Intercepted(response)) if !response.identity().is_cancelled())
+    }
+
+    pub fn take_response(
+        &mut self,
+        permit: NavigationInterceptionPermit,
+    ) -> Option<super::PausedDocumentTransfer> {
+        if self.permit != permit {
+            return None;
+        }
+        let response = match &mut self.state {
+            InterceptionState::Auth(AuthenticationWork::Transfer(response))
+            | InterceptionState::Response(response) => response,
+            _ => return None,
+        };
+        let mut transfer = response.take()?;
+        if let Some(completion) = &self.completion {
+            transfer.claim_decision(completion.claim_response());
+        }
+        Some(*transfer)
+    }
+
+    pub fn restore_response(
+        &mut self,
+        permit: NavigationInterceptionPermit,
+        mut transfer: super::PausedDocumentTransfer,
+    ) -> Result<(), Box<super::PausedDocumentTransfer>> {
+        if permit == self.permit
+            && let InterceptionState::Auth(AuthenticationWork::Transfer(response))
+            | InterceptionState::Response(response) = &mut self.state
+            && matches!(response, InterceptionResource::Claimed)
+        {
+            transfer.release_decision_claim();
+            *response = InterceptionResource::Available(Box::new(transfer));
+            return Ok(());
+        }
+        Err(Box::new(transfer))
+    }
+
+    pub fn accepts(
+        &self,
+        permit: NavigationInterceptionPermit,
+        decision: &NavigationDecision,
+    ) -> bool {
+        self.completion.is_some()
+            && permit == self.permit
+            && match decision {
+                NavigationDecision::Authenticate { .. } => {
+                    matches!(self.state, InterceptionState::Auth(_))
+                }
+                NavigationDecision::Request { .. } => {
+                    matches!(self.state, InterceptionState::Request { .. })
+                }
+                NavigationDecision::Response { .. } => matches!(
+                    self.state,
+                    InterceptionState::Auth(_) | InterceptionState::Response(_)
+                ),
+                NavigationDecision::Fulfill { .. } => matches!(
+                    self.state,
+                    InterceptionState::Request { .. } | InterceptionState::Response(_)
+                ),
+                NavigationDecision::Continue | NavigationDecision::Cancel => true,
+            }
+    }
+
+    pub fn resolve(mut self, mut decision: NavigationDecision) -> bool {
+        if matches!(decision, NavigationDecision::Continue)
+            && let InterceptionState::Auth(AuthenticationWork::Transfer(response))
+            | InterceptionState::Response(response) = &mut self.state
+        {
+            decision = match response.take() {
+                Some(transfer) => NavigationDecision::Response {
+                    transfer,
+                    status: None,
+                    headers: Vec::new(),
+                },
+                None => NavigationDecision::Cancel,
+            };
+        }
+        match &mut decision {
+            NavigationDecision::Response { transfer, .. } => transfer.release_decision_claim(),
+            NavigationDecision::Authenticate { response, .. } => response.release_decision_claim(),
+            _ => {}
+        }
+        self.completion
+            .is_some_and(|completion| completion.send(decision))
+    }
 }
 
 impl WebContents {
@@ -401,13 +740,13 @@ impl WebContents {
         if request.permit.web_contents != self.id {
             return Err("navigation request belongs to another WebContents".to_owned());
         }
-        if request.is_native_driver() {
+        if request.has_pending_decision() {
             return Err("native navigation requests resume through a Browser decision".into());
         }
         let ClaimedNavigationRequest {
             permit,
             request,
-            native_decision: _,
+            decision_claim: _,
         } = request;
         let load = self.start_navigation_load(permit.navigation, request.policy, inherited)?;
         Ok(InterceptedNavigationLoad::new(
@@ -571,9 +910,93 @@ mod tests {
         )
     }
 
+    #[test]
+    fn decided_body_claim_cannot_recreate_an_auth_or_response_pause() {
+        for stage in [
+            ResponseInterceptionStage::Auth,
+            ResponseInterceptionStage::Response,
+        ] {
+            let mut browser = BrowserFixture::new();
+            let contents = browser.contents.id();
+            let navigation = browser.contents.navigation.start_document_navigation();
+            let document = browser.contents.navigation.pending_document().unwrap();
+            let url = Url::parse("https://decided-body.example/").unwrap();
+            let auth = matches!(stage, ResponseInterceptionStage::Auth);
+            let mut result = browser
+                .contents
+                .navigation
+                .pause_response_decision(contents, navigation, stage, paused_response(url.clone()))
+                .unwrap();
+            let paused = browser.contents.navigation.navigation_decision().unwrap();
+            let response = match paused.stage {
+                NavigationDecisionStage::Auth { response, .. } if auth => response,
+                NavigationDecisionStage::Response { response, .. } if !auth => response,
+                _ => panic!("one response resource owns its actual stage"),
+            };
+            assert_eq!(response.final_url, url);
+            assert_eq!(response.status, 200);
+            let permit = paused.permit;
+            let transfer = browser.contents.take_navigation_response(permit).unwrap();
+            assert!(transfer.has_pending_decision());
+            assert!(
+                browser
+                    .contents
+                    .navigation
+                    .interception_awaits_decision(permit)
+            );
+            assert!(!browser.contents.navigation.interception_awaits_decision(
+                NavigationInterceptionPermit {
+                    request: BrowserRequestId::allocate(),
+                    ..permit
+                }
+            ));
+            assert!(
+                browser.contents.navigation.navigation_decision().is_none(),
+                "a borrowed body is not actionable a second time"
+            );
+            assert!(
+                browser
+                    .contents
+                    .navigation
+                    .resolve_navigation_decision(permit, NavigationDecision::Cancel)
+            );
+            assert!(matches!(result.try_recv(), Ok(NavigationDecision::Cancel)));
+            assert_eq!(
+                browser.contents.navigation.pending_document(),
+                Some(document),
+                "test the window before the driver observes the decision"
+            );
+            assert!(
+                !browser
+                    .contents
+                    .navigation
+                    .interception_awaits_decision(permit)
+            );
+            assert!(
+                browser
+                    .contents
+                    .restore_navigation_response(permit, transfer)
+                    .is_err(),
+                "a consumed decision must not be resurrected as a caller-owned pause"
+            );
+            assert!(
+                browser
+                    .contents
+                    .navigation
+                    .paused_response_for_test()
+                    .is_none()
+            );
+            assert!(!browser.contents.navigation.has_paused_auth_for_test());
+            assert!(matches!(
+                result.try_recv(),
+                Err(oneshot::error::TryRecvError::Closed)
+            ));
+        }
+    }
+
     #[tokio::test]
     async fn native_response_body_read_claim_is_restorable_and_abandonment_cancels() {
-        use crate::browser::{NavigationDecision, NavigationDecisionStage};
+        use crate::browser::{NavigationDecision, navigation_decision::ResponseInterceptionStage};
         for restore in [true, false] {
             let mut browser = BrowserFixture::new();
             let contents = browser.contents.id();
@@ -582,26 +1005,20 @@ mod tests {
                 paused_response(Url::parse("https://native-response.example/").unwrap())
                     .into_pending()
                     .unwrap();
-            let DocumentBodySource::BufferedRaw { response, .. } = &body else {
-                unreachable!()
-            };
             let mut result = browser
                 .contents
                 .navigation
-                .pause_driver_response(
+                .pause_response_decision(
                     contents,
                     navigation,
-                    NavigationDecisionStage::Response {
-                        response: Box::new(response.head()),
-                        observations: Default::default(),
-                    },
+                    ResponseInterceptionStage::Response,
                     PausedDocumentTransfer::pending(policy, body),
                 )
                 .unwrap();
             let permit = browser
                 .contents
                 .navigation
-                .driver_decision()
+                .navigation_decision()
                 .unwrap()
                 .permit;
             let transfer = browser.contents.take_navigation_response(permit).unwrap();
@@ -621,7 +1038,7 @@ mod tests {
                     browser
                         .contents
                         .navigation
-                        .driver_decision()
+                        .navigation_decision()
                         .unwrap()
                         .permit,
                     permit
@@ -630,7 +1047,7 @@ mod tests {
                     browser
                         .contents
                         .navigation
-                        .resolve_driver_decision(permit, NavigationDecision::Continue)
+                        .resolve_navigation_decision(permit, NavigationDecision::Continue)
                 );
                 let NavigationDecision::Response { transfer, .. } = result.try_recv().unwrap()
                 else {
@@ -641,13 +1058,18 @@ mod tests {
             } else {
                 drop(transfer);
                 assert!(matches!(result.try_recv(), Ok(NavigationDecision::Cancel)));
-                assert!(browser.contents.navigation.finish_driver_decision(permit));
+                assert!(
+                    browser
+                        .contents
+                        .navigation
+                        .finish_navigation_decision(permit)
+                );
             }
             assert!(
                 !browser
                     .contents
                     .navigation
-                    .resolve_driver_decision(permit, NavigationDecision::Cancel)
+                    .resolve_navigation_decision(permit, NavigationDecision::Cancel)
             );
         }
     }

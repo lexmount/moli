@@ -635,6 +635,11 @@ async fn native_popup_response_fulfillment_does_not_wait_for_the_original_body()
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn native_popup_response_failure_decides_even_while_a_body_reader_holds_the_transfer() {
+    assert_native_popup_response(NativePopupResponseResolution::FailWhileBodyBorrowed).await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn native_popup_response_fetch_disable_resumes_the_browser_driver() {
     assert_native_popup_response(NativePopupResponseResolution::Disable).await;
 }
@@ -645,6 +650,7 @@ enum NativePopupResponseResolution {
     ReadStream,
     Fulfill,
     Disable,
+    FailWhileBodyBorrowed,
 }
 
 async fn assert_native_popup_response(resolution: NativePopupResponseResolution) {
@@ -722,7 +728,7 @@ async fn assert_native_popup_response(resolution: NativePopupResponseResolution)
             && message["params"]["responseStatusCode"] == 200
     });
     let response_id = paused["params"]["requestId"].as_str().unwrap();
-    let (contents, _) = ctx
+    let (contents, decision) = ctx
         .conn
         .native_navigation_decision_for_target(&target)
         .unwrap();
@@ -742,6 +748,55 @@ async fn assert_native_popup_response(resolution: NativePopupResponseResolution)
                 || message["params"]["frame"]["url"] != url)
     );
     let expected = match resolution {
+        NativePopupResponseResolution::FailWhileBodyBorrowed => {
+            let owner = crate::conn::CommandOwnerScope::for_session(&session);
+            let transfer = ctx
+                .conn
+                .take_pending_fetch_response_transfer_for_body_read_for_owner(&owner, response_id)
+                .expect("exclusive body-read claim");
+            assert!(transfer.has_pending_decision());
+            ctx.process_async(
+                json!({"id": 93_031, "method": "Fetch.failRequest", "sessionId": session,
+                "params": {"requestId": response_id, "errorReason": "Aborted"}}),
+            )
+            .await;
+            ctx.expect_result(93_031, json!({}), Some(&session));
+            ctx.wait_until_scheduler_state("exact borrowed-response navigation canceled", |conn| {
+                !conn.has_pending_document_navigation_for_owner(&owner)
+            })
+            .await;
+            assert!(!ctx.conn.resolve_native_navigation_decision(
+                contents,
+                decision.permit,
+                moli_core::browser::NavigationDecision::Continue
+            ));
+            assert!(
+                !ctx.conn
+                    .restore_pending_fetch_response_transfer_for_body_read_for_owner(
+                        &owner,
+                        response_id,
+                        transfer
+                    )
+            );
+            ctx.process_async(
+                json!({"id": 93_033, "method": "Runtime.evaluate", "sessionId": session,
+                "params": {"expression": "location.href", "returnByValue": true}}),
+            )
+            .await;
+            let evaluated = take_response_by_id(&mut ctx, 93_033);
+            assert_eq!(evaluated["result"]["result"]["value"], "about:blank");
+            assert!(
+                ctx.sent
+                    .iter()
+                    .all(|message| message["method"] != "Page.frameNavigated"
+                        || message["sessionId"] != session
+                        || message["params"]["frame"]["url"] != url)
+            );
+            release_body.send(true).unwrap();
+            stop_server.send(()).unwrap();
+            server.await.unwrap();
+            return;
+        }
         NativePopupResponseResolution::ReadBody | NativePopupResponseResolution::ReadStream => {
             let (read_command, body_key) = if matches!(
                 resolution,

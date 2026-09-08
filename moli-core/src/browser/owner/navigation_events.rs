@@ -159,7 +159,7 @@ impl BrowserContextHandle {
                 .context(context)?
                 .web_contents(contents)?
                 .navigation()
-                .driver_decision())
+                .navigation_decision())
         })?
     }
 
@@ -179,6 +179,21 @@ impl BrowserContextHandle {
         })?
     }
 
+    pub fn navigation_interception_awaits_decision(
+        &self,
+        contents: WebContentsHandle,
+        permit: crate::browser::web_contents::NavigationInterceptionPermit,
+    ) -> Result<bool, String> {
+        let context = self.id;
+        self.browser.execute(move |browser| {
+            Ok(browser
+                .context(context)?
+                .web_contents(contents)?
+                .navigation()
+                .interception_awaits_decision(permit))
+        })?
+    }
+
     pub fn resolve_navigation_decision(
         &self,
         contents: WebContentsHandle,
@@ -193,7 +208,7 @@ impl BrowserContextHandle {
             }
             Ok(contents
                 .navigation_mut()
-                .resolve_driver_decision(permit, decision))
+                .resolve_navigation_decision(permit, decision))
         })?
     }
 }

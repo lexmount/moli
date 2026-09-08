@@ -575,23 +575,19 @@ pub struct PendingFetchResponseNavigation {
     active_body_stream_handle: Option<String>,
     body_progress_source: MainDocumentBodyProgressSource,
     prepared_document: Option<Box<PausedResponsePreparedDocument>>,
-    native_driver: bool,
 }
 
 impl PendingFetchResponseNavigation {
-    #[cfg(test)]
     pub(crate) fn new(
         navigation: NavigationDispatchState,
         permit: super::state::NavigationInterceptionPermit,
     ) -> Self {
-        Self {
+        Self::new_with_response_projection(
             navigation,
             permit,
-            active_body_stream_handle: None,
-            body_progress_source: MainDocumentBodyProgressSource::default(),
-            prepared_document: None,
-            native_driver: false,
-        }
+            MainDocumentBodyProgressSource::default(),
+            None,
+        )
     }
 
     pub(crate) fn new_with_response_projection(
@@ -606,30 +602,11 @@ impl PendingFetchResponseNavigation {
             active_body_stream_handle: None,
             body_progress_source,
             prepared_document,
-            native_driver: false,
         }
     }
 
     pub(crate) fn owner_session_id(&self) -> Option<&str> {
         self.navigation.session_id.as_deref()
-    }
-
-    pub(crate) fn new_native(
-        navigation: NavigationDispatchState,
-        permit: super::state::NavigationInterceptionPermit,
-    ) -> Self {
-        Self {
-            navigation,
-            permit,
-            active_body_stream_handle: None,
-            body_progress_source: MainDocumentBodyProgressSource::default(),
-            prepared_document: None,
-            native_driver: true,
-        }
-    }
-
-    pub(crate) fn is_native_driver(&self) -> bool {
-        self.native_driver
     }
 
     pub(crate) fn active_body_stream_handle(&self) -> Option<&str> {
@@ -643,9 +620,9 @@ impl PendingFetchResponseNavigation {
 
 /// One terminal DevTools decision claimed together with its Browser work.
 ///
-/// `transfer` is absent when the exact Browser navigation was already retired.
-/// The remaining projection still settles the old frontend navigation without
-/// reselecting or mutating the winning Document.
+/// `transfer` is absent when the exact navigation retired or a body reader
+/// holds its exclusive claim. The exact Core permit distinguishes a live
+/// decision from retirement without selecting a current Target/Document.
 #[derive(Debug)]
 pub(crate) struct ClaimedFetchResponseNavigation {
     request_id: String,
@@ -654,8 +631,15 @@ pub(crate) struct ClaimedFetchResponseNavigation {
 }
 
 impl ClaimedFetchResponseNavigation {
-    pub(crate) fn is_native_driver(&self) -> bool {
-        self.pending.is_native_driver()
+    pub(crate) fn has_pending_decision(&self, conn: &CdpConnection) -> bool {
+        if let Some(transfer) = &self.transfer {
+            return transfer.has_pending_decision();
+        }
+        // An IO body reader may hold the transfer while a terminal command
+        // arrives. Only the exact Browser pause knows whether it can decide;
+        // absence of a body must not turn that live decision into a legacy load.
+        let contents = self.pending.navigation.web_contents;
+        conn.navigation_interception_awaits_decision(contents, self.pending.permit)
     }
 
     pub(crate) fn has_active_body_stream(&self) -> bool {
