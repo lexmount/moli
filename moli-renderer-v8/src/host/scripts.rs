@@ -601,13 +601,6 @@ impl HostScriptScheduler {
         self.module_owner.native_module_source(entry_id)
     }
 
-    pub(crate) fn native_module_source_for(
-        &self,
-        module: v8::Local<'_, v8::Module>,
-    ) -> Option<(ModuleMapKey, ModuleSource)> {
-        self.module_owner.native_module_source_for(module)
-    }
-
     pub(crate) fn native_module_wasm_record_for(
         &self,
         module: v8::Local<'_, v8::Module>,

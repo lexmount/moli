@@ -12,6 +12,7 @@ mod record;
 mod record_resolver;
 mod resolver;
 mod single_module_fetch;
+mod synthetic_text;
 #[cfg(test)]
 mod tests;
 mod tree_adapter;
@@ -51,6 +52,7 @@ pub(crate) use self::resolver::{
     ResolverScopeGuard, resolve_static_module_callback, resolve_static_source_callback,
 };
 pub(crate) use self::single_module_fetch::NativeModuleSingleFetchRequest;
+pub(crate) use self::synthetic_text::SyntheticTextModuleSource;
 pub(crate) use self::tree_owner::{
     NativeModuleTreeDocumentOwnerAdapter, NativeModuleTreeFrameDocumentOwner,
 };
@@ -484,13 +486,6 @@ impl ModuleOwnerState {
 
     pub(crate) fn native_module_source(&self, entry_id: ModuleEntryId) -> Option<ModuleSource> {
         self.document_modulator.entry(entry_id).source().cloned()
-    }
-
-    pub(crate) fn native_module_source_for(
-        &self,
-        module: v8::Local<'_, v8::Module>,
-    ) -> Option<(ModuleMapKey, ModuleSource)> {
-        self.document_modulator.module_source_for(module)
     }
 
     pub(crate) fn native_module_wasm_record_for(
