@@ -4957,7 +4957,7 @@ async fn worker_importscripts_cross_origin_failures_throw_network_error() {
             "/throw.js",
             "HTTP/1.1 200 OK",
             "application/javascript",
-            "globalThis.__crossOriginLoaded = true;".to_owned(),
+            "globalThis.__crossOriginLoaded = true; throw new Error('private message');".to_owned(),
             Duration::ZERO,
         ),
     ])
@@ -5003,7 +5003,7 @@ async fn worker_importscripts_cross_origin_failures_throw_network_error() {
         .expect("channel closed");
     assert_eq!(
         expect_post_json(msg),
-        r#"[{"name":"NetworkError","domException":true,"loaded":false},{"name":"NetworkError","domException":true,"loaded":false}]"#
+        r#"[{"name":"NetworkError","domException":true,"loaded":false},{"name":"NetworkError","domException":true,"loaded":true}]"#
     );
     script_server
         .await
@@ -5011,7 +5011,7 @@ async fn worker_importscripts_cross_origin_failures_throw_network_error() {
 }
 
 #[tokio::test]
-async fn worker_importscripts_redirect_to_cross_origin_failure_throws_network_error() {
+async fn worker_importscripts_redirect_to_cross_origin_script_executes() {
     ensure_v8();
     let (cross_origin_base_url, script_server) = spawn_path_response_http_server(vec![(
         "/throw.js",
@@ -5037,7 +5037,7 @@ async fn worker_importscripts_redirect_to_cross_origin_failure_throws_network_er
         try {
             importScripts("./redirect-throw.js");
             postMessage({
-                name: "unexpected",
+                name: "ok",
                 domException: false,
                 loaded: globalThis.__redirectedCrossOriginLoaded === true,
             });
@@ -5061,7 +5061,7 @@ async fn worker_importscripts_redirect_to_cross_origin_failure_throws_network_er
         .expect("channel closed");
     assert_eq!(
         expect_post_json(msg),
-        r#"{"name":"NetworkError","domException":true,"loaded":false}"#
+        r#"{"name":"ok","domException":false,"loaded":true}"#
     );
     redirect_server
         .await

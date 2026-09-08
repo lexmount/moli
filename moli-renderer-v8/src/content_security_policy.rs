@@ -220,8 +220,8 @@ impl<'a> ContentSecurityPolicyViolationEventFields<'a> {
             disposition: violation.disposition,
             source_file: violation.source_file.as_str(),
             sample: violation.sample.as_str(),
-            line_number: 0,
-            column_number: 0,
+            line_number: violation.line_number,
+            column_number: violation.column_number,
             status_code: 0,
         }
     }
@@ -478,7 +478,7 @@ pub(crate) fn content_security_policy_report_to_endpoints(
 pub(crate) fn content_security_policy_violation_report_body(
     fields: &ContentSecurityPolicyViolationEventFields<'_>,
 ) -> String {
-    json!({
+    let mut report = json!({
         "csp-report": {
             "document-uri": fields.document_uri,
             "referrer": fields.referrer,
@@ -491,8 +491,14 @@ pub(crate) fn content_security_policy_violation_report_body(
             "status-code": fields.status_code,
             "script-sample": fields.sample,
         }
-    })
-    .to_string()
+    });
+    if fields.line_number != 0 {
+        report["csp-report"]["line-number"] = json!(fields.line_number);
+    }
+    if fields.column_number != 0 {
+        report["csp-report"]["column-number"] = json!(fields.column_number);
+    }
+    report.to_string()
 }
 
 pub(crate) fn content_security_policy_reporting_api_report_body(
@@ -928,6 +934,34 @@ pub(crate) fn content_security_policy_source_file_for_report(source_file: &str) 
     source_url.set_query(None);
     source_url.set_fragment(None);
     source_url.to_string()
+}
+
+pub(crate) fn current_script_violation_location(
+    scope: &mut v8::PinScope<'_, '_>,
+) -> Option<(String, i32, i32)> {
+    let stack = v8::StackTrace::current_stack_trace(scope, 1)?;
+    let frame = stack.get_frame(scope, 0)?;
+    // Imported worker scripts retain the originally requested URL separately
+    // from their final resource name and their (possibly muted) import base.
+    // Reporting the final URL could disclose a cross-origin redirect target.
+    let source_file = scope
+        .get_current_host_defined_options()
+        .and_then(|options| {
+            crate::util::script_request_url_from_host_defined_options(scope, options)
+        })
+        .map(|url| url.to_string())
+        .or_else(|| {
+            frame
+                .get_script_name_or_source_url(scope)
+                .map(|source| source.to_rust_string_lossy(scope))
+        })
+        .map(|source| content_security_policy_source_file_for_report(&source))
+        .unwrap_or_default();
+    let line_number = i32::try_from(frame.get_line_number())
+        .unwrap_or_default()
+        .max(0);
+    let column_number = i32::try_from(frame.get_column()).unwrap_or_default().max(0);
+    Some((source_file, line_number, column_number))
 }
 
 pub(crate) fn content_security_policy_trusted_types_sink_violation_with_disposition_and_reporting_endpoints(
@@ -2952,6 +2986,35 @@ mod tests {
             violation.report_uri_endpoints,
             vec!["https://app.test/csp-report".to_owned()]
         );
+    }
+
+    #[test]
+    fn violation_report_formats_preserve_captured_script_locations() {
+        let mut violation = content_security_policy_url_violation_with_redirect_status(
+            &["connect-src 'none'".to_owned()],
+            &protected_url(),
+            &request_url("https://api.test/data.json"),
+            ContentSecurityPolicyResourceKind::WorkerConnect,
+            ContentSecurityPolicyRedirectStatus::NoRedirect,
+        )
+        .unwrap();
+        violation.source_file = "https://app.test/imported/script.js".into();
+        violation.line_number = 12;
+        violation.column_number = 34;
+        let fields = ContentSecurityPolicyViolationEventFields::from_url_violation(&violation);
+        assert_eq!(fields.source_file, violation.source_file);
+        assert_eq!((fields.line_number, fields.column_number), (12, 34));
+        let legacy: serde_json::Value =
+            serde_json::from_str(&content_security_policy_violation_report_body(&fields)).unwrap();
+        assert_eq!(legacy["csp-report"]["source-file"], violation.source_file);
+        assert_eq!(legacy["csp-report"]["line-number"], 12);
+        assert_eq!(legacy["csp-report"]["column-number"], 34);
+        let reporting: serde_json::Value =
+            serde_json::from_str(&content_security_policy_reporting_api_report_body(&fields))
+                .unwrap();
+        assert_eq!(reporting[0]["body"]["sourceFile"], violation.source_file);
+        assert_eq!(reporting[0]["body"]["lineNumber"], 12);
+        assert_eq!(reporting[0]["body"]["columnNumber"], 34);
     }
 
     #[test]

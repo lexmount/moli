@@ -2649,6 +2649,7 @@ fn worker_bootstrap_error(
         v8::String::new(scope, summary).map(|message| v8::Exception::syntax_error(scope, message));
     (
         V8ExceptionReport {
+            muted_errors: false,
             summary: summary.to_owned(),
             source: Some(script_url.to_owned()),
             line: Some(1),
@@ -2675,6 +2676,7 @@ fn worker_bootstrap_value_error(
         .unwrap_or_else(|| "module worker evaluation failed".to_owned());
     (
         V8ExceptionReport {
+            muted_errors: false,
             summary,
             source: Some(script_url.to_owned()),
             line: Some(1),
@@ -3060,13 +3062,14 @@ fn worker_import_attributes_key(
 
 pub(super) fn worker_dynamic_import_callback<'s, 'i>(
     scope: &mut v8::PinScope<'s, 'i>,
-    _host_defined_options: v8::Local<'s, v8::Data>,
+    host_defined_options: v8::Local<'s, v8::Data>,
     resource_name: v8::Local<'s, v8::Value>,
     specifier: v8::Local<'s, v8::String>,
     import_attributes: v8::Local<'s, v8::FixedArray>,
 ) -> Option<v8::Local<'s, v8::Promise>> {
     queue_worker_dynamic_import(
         scope,
+        host_defined_options,
         resource_name,
         specifier,
         import_attributes,
@@ -3076,6 +3079,7 @@ pub(super) fn worker_dynamic_import_callback<'s, 'i>(
 
 fn queue_worker_dynamic_import<'s>(
     scope: &mut v8::PinScope<'s, '_>,
+    host_defined_options: v8::Local<'s, v8::Data>,
     resource_name: v8::Local<'s, v8::Value>,
     specifier: v8::Local<'s, v8::String>,
     import_attributes: v8::Local<'s, v8::FixedArray>,
@@ -3108,7 +3112,9 @@ fn queue_worker_dynamic_import<'s>(
         );
         return Some(promise);
     }
-    let base_url = resource_url;
+    let base_url =
+        crate::util::script_base_url_from_host_defined_options(scope, host_defined_options)
+            .or(resource_url);
     let Some(base_url) = base_url else {
         reject_worker_dynamic_import_resolver(
             scope,
@@ -3162,6 +3168,7 @@ pub(super) fn worker_dynamic_import_with_phase_callback<'s, 'i>(
             }
             queue_worker_dynamic_import(
                 scope,
+                host_defined_options,
                 resource_name,
                 specifier,
                 import_attributes,

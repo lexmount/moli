@@ -6442,6 +6442,7 @@ html/semantics/scripting-1/the-script-element/module/currentScript-null.html
 html/semantics/scripting-1/the-script-element/module/custom-element-exception.html
 html/semantics/scripting-1/the-script-element/module/duplicated-imports-1.html
 html/semantics/scripting-1/the-script-element/module/duplicated-imports-2.html
+html/semantics/scripting-1/the-script-element/module/dynamic-import/alpha/base-url-worker-importScripts.html
 html/semantics/scripting-1/the-script-element/module/dynamic-import/code-cache-nonce.html
 html/semantics/scripting-1/the-script-element/module/dynamic-import/delay-load-event.html
 html/semantics/scripting-1/the-script-element/module/dynamic-import/dynamic-imports-script-error.html

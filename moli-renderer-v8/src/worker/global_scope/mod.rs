@@ -1500,7 +1500,8 @@ pub(crate) struct WorkerGlobalState {
     pub(super) global_kind: super::thread::WorkerGlobalKind,
     /// Whether this worker was constructed as a classic or module worker.
     pub(super) script_kind: super::thread::WorkerScriptKind,
-    /// Base URL used to resolve relative worker script fetches.
+    /// Worker global's URL and settings base, unchanged by importScripts().
+    /// Imported scripts carry their separate import base in V8 ScriptOrigin.
     pub(super) current_script_url: Option<Url>,
     /// Referrer policy parsed from the top-level worker script response.
     pub(super) referrer_policy: Option<String>,
@@ -6853,6 +6854,7 @@ fn worker_import_scripts_callback<'s>(
         });
     }
     for mut script in prepared {
+        let request_url = script.final_url.clone();
         if script.source.is_none() {
             let import_source =
                 match materialize_worker_import_source(scope, &state, &script.final_url) {
@@ -6869,7 +6871,7 @@ fn worker_import_scripts_callback<'s>(
         let source = script.source.as_deref().unwrap_or_default();
         if let Err(error) = evaluate_worker_script(
             scope,
-            state.clone(),
+            &request_url,
             &script.final_url,
             source,
             script.muted_errors,
@@ -7034,23 +7036,6 @@ fn call_original_worker_console_method<'s>(
 }
 
 // ─── timers (minimal stubs) ─────────────────────────────────────────────────
-
-fn create_script_origin<'s>(scope: &mut v8::PinScope<'s, '_>, url: &str) -> v8::ScriptOrigin<'s> {
-    let name = v8::String::new(scope, url).expect("worker script origin");
-    v8::ScriptOrigin::new(
-        scope,
-        name.into(),
-        0,
-        0,
-        false,
-        -1,
-        None,
-        false,
-        false,
-        false,
-        None,
-    )
-}
 
 fn set_prop(
     scope: &mut v8::PinScope<'_, '_>,

@@ -2682,6 +2682,7 @@ async fn worker_main(
                 if let Some(error) = result.unhandled_error {
                     let global = ctx.global(scope);
                     let report = V8ExceptionReport {
+                        muted_errors: false,
                         summary: error.message,
                         source: Some(error.filename),
                         line: Some(error.lineno as usize),
@@ -3493,6 +3494,7 @@ fn worker_bootstrap_error(
         v8::String::new(scope, summary).map(|message| v8::Exception::syntax_error(scope, message));
     (
         V8ExceptionReport {
+            muted_errors: false,
             summary: summary.to_owned(),
             source: Some(script_url.to_owned()),
             line: Some(1),

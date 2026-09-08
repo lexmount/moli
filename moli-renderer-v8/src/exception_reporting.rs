@@ -13,6 +13,8 @@ const VALUE_DEBUG_SUMMARY_MAX_BYTES: usize = 160 * 4;
 const VALUE_DEBUG_OBJECT_SUMMARY_MAX_BYTES: usize = 240 * 4;
 
 pub(super) struct V8ExceptionReport {
+    /// Script-origin taint supplied by V8, retained until web-facing reporting.
+    pub(super) muted_errors: bool,
     pub(super) summary: String,
     pub(super) source: Option<String>,
     pub(super) line: Option<usize>,
@@ -155,6 +157,7 @@ pub(super) fn build_event_handler_exception_report<'s>(
         .or_else(|| exception.and_then(|exception| exception_stack_property(scope, exception)));
 
     let mut report = V8ExceptionReport {
+        muted_errors: message.is_some_and(|message| message.is_opaque()),
         summary,
         source,
         line,
@@ -727,6 +730,7 @@ fn invoke_callback_with_report_inner<'s>(
             if scope.is_execution_terminating() {
                 let _ = scope.rethrow();
                 captured_report = Some(V8ExceptionReport {
+                    muted_errors: false,
                     summary: format!("{callback_kind} `{callback_name}` was terminated"),
                     source: None,
                     line: None,
@@ -757,6 +761,7 @@ fn invoke_callback_with_report_inner<'s>(
     let _ = callback_kind;
     returned_value.ok_or_else(|| {
         Box::new(captured_report.unwrap_or_else(|| V8ExceptionReport {
+            muted_errors: false,
             summary: format!("{callback_kind} `{callback_name}` threw"),
             source: None,
             line: None,

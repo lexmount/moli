@@ -13,7 +13,8 @@ use crate::content_security_policy::{
     content_security_policy_trusted_types_sink_violation_with_disposition_and_reporting_endpoints,
     content_security_policy_url_violation_for_checked_url_with_redirect_status_disposition_and_reporting_endpoints,
     content_security_policy_url_violation_with_redirect_status_disposition_and_reporting_endpoints,
-    create_security_policy_violation_event, send_content_security_policy_reports,
+    create_security_policy_violation_event, current_script_violation_location,
+    send_content_security_policy_reports,
 };
 use crate::context_bootstrap::dispatch_simple_event_target_event;
 use crate::network::loads::{ResourceLoadDisposition, ResourceLoadKind, ResourceLoadLease};
@@ -104,7 +105,14 @@ pub(super) fn dispatch_worker_trusted_types_sink_violation_event_for_state<'s>(
                 &state_ref.content_security_reporting_endpoints,
         )
     };
-    if let Some(violation) = violation {
+    if let Some(mut violation) = violation {
+        if let Some((source_file, line_number, column_number)) =
+            current_script_violation_location(scope)
+        {
+            violation.source_file = source_file;
+            violation.line_number = line_number;
+            violation.column_number = column_number;
+        }
         dispatch_worker_content_security_policy_violation_event_for_state(scope, state, &violation);
     }
 }
@@ -115,7 +123,7 @@ pub(super) fn allows_worker_trusted_type_policy_name_for_state<'s>(
     policy_name: &str,
     is_duplicate: bool,
 ) -> bool {
-    let (report_only_violation, enforced_violation) = {
+    let (mut report_only_violation, mut enforced_violation) = {
         let state_ref = state.borrow();
         let Some(protected_url) = state_ref.current_script_url.as_ref() else {
             return true;
@@ -141,6 +149,21 @@ pub(super) fn allows_worker_trusted_type_policy_name_for_state<'s>(
         (report_only_violation, enforced_violation)
     };
     let allowed = enforced_violation.is_none();
+    if allowed && report_only_violation.is_none() {
+        return true;
+    }
+    if let Some((source_file, line_number, column_number)) =
+        current_script_violation_location(scope)
+    {
+        for violation in [&mut report_only_violation, &mut enforced_violation]
+            .into_iter()
+            .flatten()
+        {
+            violation.source_file = source_file.clone();
+            violation.line_number = line_number;
+            violation.column_number = column_number;
+        }
+    }
     // Match window policy creation reporting: enforce response policies are
     // modeled before report-only policies in the partitioned policy state.
     if let Some(violation) = enforced_violation {
