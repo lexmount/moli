@@ -145,6 +145,9 @@ impl std::str::FromStr for FetchResponseType {
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct FetchResponseMetadata {
+    /// Frozen CORS exposed-name list, retained through filtering, cloning and cache storage.
+    #[serde(default)]
+    pub cors_exposed_header_names: Option<Vec<String>>,
     pub response_type: FetchResponseType,
     /// Internal URLs, including those hidden by an opaque response's public URL.
     pub url_list: Vec<Url>,
@@ -157,6 +160,7 @@ pub struct FetchResponseMetadata {
 impl Default for FetchResponseMetadata {
     fn default() -> Self {
         Self {
+            cors_exposed_header_names: None,
             response_type: FetchResponseType::Default,
             url_list: Vec::new(),
             timing_allow_passed: true,
@@ -214,3 +218,61 @@ mod tests {
 }
 
 pub mod header_policy;
+
+impl FetchResponseMetadata {
+    pub fn capture_cors_exposed_headers(&mut self, headers: &[(String, Vec<u8>)]) {
+        if self.response_type == FetchResponseType::Cors && self.cors_exposed_header_names.is_none()
+        {
+            let names = headers
+                .iter()
+                .filter(|(name, _)| self.exposes_header(headers, name))
+                .map(|(name, _)| name.to_ascii_lowercase())
+                .collect::<std::collections::BTreeSet<_>>();
+            self.cors_exposed_header_names = Some(names.into_iter().collect());
+        }
+    }
+}
+
+impl FetchResponseMetadata {
+    // This earlier phase has no captured request credentials fact. A raw wildcard
+    // cannot prove credentialless exposure; explicit frozen names remain authoritative.
+    pub fn exposes_header(&self, headers: &[(String, Vec<u8>)], name: &str) -> bool {
+        if !self.response_type.is_readable() {
+            return false;
+        }
+        if self.response_type == FetchResponseType::Default {
+            return true;
+        }
+        if name.eq_ignore_ascii_case("set-cookie") || name.eq_ignore_ascii_case("set-cookie2") {
+            return false;
+        }
+        if self.response_type == FetchResponseType::Basic {
+            return true;
+        }
+        if [
+            "cache-control",
+            "content-language",
+            "content-length",
+            "content-type",
+            "expires",
+            "last-modified",
+            "pragma",
+        ]
+        .iter()
+        .any(|safe| name.eq_ignore_ascii_case(safe))
+        {
+            return true;
+        }
+        if let Some(names) = &self.cors_exposed_header_names {
+            return names
+                .iter()
+                .any(|exposed| exposed.eq_ignore_ascii_case(name));
+        }
+        headers
+            .iter()
+            .filter(|(field, _)| field.eq_ignore_ascii_case("access-control-expose-headers"))
+            .flat_map(|(_, value)| value.split(|byte| *byte == b','))
+            .map(|token| token.trim_ascii())
+            .any(|token| token.eq_ignore_ascii_case(name.as_bytes()))
+    }
+}

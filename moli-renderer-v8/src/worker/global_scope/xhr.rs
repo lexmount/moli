@@ -548,7 +548,14 @@ fn send_synchronous_worker_xhr(
         }
     }
     match result.map(|completion| completion.result) {
-        Ok(Ok(response)) => apply_xhr_response(scope, xhr, response),
+        Ok(Ok(mut response)) => {
+            response.headers = filter_cors_exposed_response_headers(
+                &worker_global_origin(scope).unwrap_or(moli_url::WebOrigin::Opaque),
+                &response.head(),
+                prepared.credentials_mode,
+            );
+            apply_xhr_response(scope, xhr, response);
+        }
         Ok(Err(_)) | Err(_) => {
             throw_synchronous_xhr_failure(scope, xhr, &request_url_text, "NetworkError")
         }

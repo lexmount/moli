@@ -7,9 +7,10 @@ use moli_fetch::{
 };
 
 use super::next_redirect_url;
+use moli_fetch::RequestMode;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub(super) enum SubresourceResponseTransition {
+pub(crate) enum SubresourceResponseTransition {
     FinalResponse,
     ManualResponse { response_url: url::Url },
     FollowedRedirect,
@@ -38,17 +39,21 @@ pub(super) fn advance_subresource_response(
     request: &mut Request,
     head: ResponseHead,
     network_response_extra_info: Option<NetworkResponseExtraInfo>,
+    source: RedirectSource,
     web_security_disabled: bool,
 ) -> Result<SubresourceResponseTransition, String> {
     // Preserve transport-refined snapshots, including cached/internal hops.
-    request.observe_redirect_requests(&head.redirect_chain);
-    if !web_security_disabled {
+    if source == moli_fetch::RedirectSource::Network {
+        request.observe_redirect_requests(&head.redirect_chain);
+    }
+    if source == moli_fetch::RedirectSource::Network && !web_security_disabled {
         request.validate_cors_response_for_url(&head.final_url, &head.headers)?;
     }
     advance_validated_subresource_response(
         request,
         head,
         network_response_extra_info,
+        source,
         web_security_disabled,
     )
 }
@@ -57,6 +62,7 @@ pub(super) fn advance_validated_subresource_response(
     request: &mut Request,
     head: ResponseHead,
     network_response_extra_info: Option<NetworkResponseExtraInfo>,
+    source: RedirectSource,
     web_security_disabled: bool,
 ) -> Result<SubresourceResponseTransition, String> {
     // Error mode rejects redirect statuses without consulting Location.
@@ -87,15 +93,35 @@ pub(super) fn advance_validated_subresource_response(
     else {
         return Ok(SubresourceResponseTransition::FinalResponse);
     };
-    let mut redirect = head.into_redirect(
-        next_url,
-        RedirectSource::Network,
-        network_response_extra_info.is_some(),
-    );
+    if !matches!(next_url.scheme(), "http" | "https") {
+        return Err(format!("CORS redirect requires an HTTP(S) URL: {next_url}"));
+    }
+    if request.request_mode == RequestMode::Cors
+        && (!next_url.username().is_empty() || next_url.password().is_some())
+        && request.request_origin().is_some_and(|origin| {
+            !origin.same_origin_url(&head.final_url) || !origin.same_origin_url(&next_url)
+        })
+    {
+        return Err("CORS redirect URL must not include credentials".to_owned());
+    }
+    if !moli_url::same_origin(&head.final_url, &next_url) {
+        request
+            .request_headers
+            .retain(|(name, _)| !name.eq_ignore_ascii_case("authorization"));
+        if request
+            .auth()
+            .is_some_and(|auth| auth.target == moli_fetch::RequestAuthTarget::Server)
+        {
+            request.set_auth(None);
+        }
+    }
+
+    let mut redirect = head.into_redirect(next_url, source, network_response_extra_info.is_some());
     redirect.response_extra_info = network_response_extra_info;
     request
         .follow_redirect_with_web_security(redirect, web_security_disabled)
         .map_err(|error| error.to_string())?;
+
     Ok(SubresourceResponseTransition::FollowedRedirect)
 }
 
