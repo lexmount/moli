@@ -1462,7 +1462,7 @@ impl DocumentRuntime {
     }
 
     #[allow(clippy::too_many_arguments)]
-    pub(crate) fn trusted_type_policy_name_csp_check_for_document(
+    pub(crate) fn trusted_type_policy_name_csp_violations_for_document(
         &self,
         document_handle: Option<DomHandle>,
         document_url: &Url,
@@ -1471,7 +1471,7 @@ impl DocumentRuntime {
         response_reporting_endpoints: &ContentSecurityPolicyReportingEndpoints,
         policy_name: &str,
         is_duplicate: bool,
-    ) -> DocumentContentSecurityPolicyCheck {
+    ) -> Vec<DocumentContentSecurityPolicyViolation> {
         let enforced_policies = self
             .document_content_security_policy_strings_for_optional_document(
                 document_handle,
@@ -1482,22 +1482,21 @@ impl DocumentRuntime {
             response_report_only_policies,
             response_reporting_endpoints,
         );
-        DocumentContentSecurityPolicyCheck {
-            report_only_violation: document_trusted_types_policy_violation_from_document_policies(
-                report_only_policies,
-                document_url,
-                policy_name,
-                is_duplicate,
-                ContentSecurityPolicyDisposition::Report,
-            ),
-            enforced_violation: document_trusted_types_policy_violation_from_document_policies(
-                enforced_policies,
-                document_url,
-                policy_name,
-                is_duplicate,
-                ContentSecurityPolicyDisposition::Enforce,
-            ),
-        }
+        iter_document_trusted_types_policy_violations(
+            enforced_policies,
+            document_url,
+            policy_name,
+            is_duplicate,
+            ContentSecurityPolicyDisposition::Enforce,
+        )
+        .chain(iter_document_trusted_types_policy_violations(
+            report_only_policies,
+            document_url,
+            policy_name,
+            is_duplicate,
+            ContentSecurityPolicyDisposition::Report,
+        ))
+        .collect()
     }
 
     pub(crate) fn queue_content_security_policy_violation_event_best_effort<'s>(
@@ -2084,10 +2083,9 @@ fn iter_document_trusted_types_sink_policy_violations<'a>(
     disposition: ContentSecurityPolicyDisposition,
 ) -> impl Iterator<Item = DocumentContentSecurityPolicyViolation> + 'a {
     policies.into_iter().filter_map(move |policy| {
-        let single_policy = [policy.policy.clone()];
         let mut violation =
             content_security_policy_trusted_types_sink_violation_with_disposition_and_reporting_endpoints(
-                &single_policy,
+                &policy.policy,
                 document_url,
                 sink,
                 sample,
@@ -2099,18 +2097,17 @@ fn iter_document_trusted_types_sink_policy_violations<'a>(
     })
 }
 
-fn document_trusted_types_policy_violation_from_document_policies(
+fn iter_document_trusted_types_policy_violations<'a>(
     policies: Vec<DocumentContentSecurityPolicyString>,
-    document_url: &Url,
-    policy_name: &str,
+    document_url: &'a Url,
+    policy_name: &'a str,
     is_duplicate: bool,
     disposition: ContentSecurityPolicyDisposition,
-) -> Option<DocumentContentSecurityPolicyViolation> {
-    policies.into_iter().find_map(|policy| {
-        let single_policy = [policy.policy.clone()];
+) -> impl Iterator<Item = DocumentContentSecurityPolicyViolation> + 'a {
+    policies.into_iter().filter_map(move |policy| {
         let mut violation =
             content_security_policy_trusted_types_policy_violation_with_disposition_and_reporting_endpoints(
-                &single_policy,
+                &policy.policy,
                 document_url,
                 policy_name,
                 is_duplicate,
@@ -2268,6 +2265,66 @@ mod tests {
             violation.disposition,
             ContentSecurityPolicyDisposition::Report
         );
+    }
+
+    #[test]
+    fn trusted_types_policy_reports_preserve_each_policy_endpoint_and_meta_suppression() {
+        let runtime = runtime_for_html(
+            r#"<!doctype html>
+            <meta http-equiv="Content-Security-Policy"
+                  content="trusted-types 'none'; report-uri /meta">"#,
+        );
+        let enforced = [
+            "trusted-types 'none'; report-uri /first",
+            "trusted-types 'none'; report-uri /second",
+        ]
+        .map(str::to_owned);
+        let report_only = [
+            "trusted-types * 'allow-duplicates'; report-uri /allowed",
+            "trusted-types 'none'; report-uri /report",
+        ]
+        .map(str::to_owned);
+        let reports = runtime.trusted_type_policy_name_csp_violations_for_document(
+            Some(runtime.document_handle()),
+            runtime.document_url(),
+            &enforced,
+            &report_only,
+            &Default::default(),
+            &"p".repeat(50),
+            false,
+        );
+        assert_eq!(reports.len(), 4);
+        let endpoints: Vec<_> = reports
+            .iter()
+            .map(|report| {
+                report
+                    .report_uri_endpoints
+                    .iter()
+                    .map(ToString::to_string)
+                    .collect::<Vec<_>>()
+            })
+            .collect();
+        assert_eq!(
+            endpoints,
+            vec![
+                vec!["https://example.test/first"],
+                vec!["https://example.test/second"],
+                vec![],
+                vec!["https://example.test/report"],
+            ]
+        );
+        for (index, report) in reports.iter().enumerate() {
+            assert_eq!(report.sample, "p".repeat(40));
+            assert_eq!(report.blocked_uri, "trusted-types-policy");
+            assert_eq!(
+                report.disposition,
+                if index == 3 {
+                    ContentSecurityPolicyDisposition::Report
+                } else {
+                    ContentSecurityPolicyDisposition::Enforce
+                }
+            );
+        }
     }
 
     #[test]

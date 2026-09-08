@@ -434,6 +434,78 @@ fn trusted_type_policy_creation_reports_name_and_duplicate_csp_violations() {
 }
 
 #[test]
+fn trusted_type_policy_creation_reports_every_violated_policy() {
+    let enforced = [
+        "trusted-types allowed duplicate reportOnly",
+        "trusted-types allowed duplicate reportOnly",
+        "trusted-types allowed duplicate reportOnly 'allow-duplicates'",
+    ]
+    .map(str::to_owned);
+    let report_only = [
+        "trusted-types allowed duplicate",
+        "trusted-types allowed duplicate",
+        "trusted-types allowed duplicate 'allow-duplicates'",
+    ]
+    .map(str::to_owned);
+
+    for enforce in [false, true] {
+        let mut vm = new_storage_test_vm("https://trusted-type-policy-csp.test/");
+        if enforce {
+            vm.set_response_content_security_policies(&enforced);
+        }
+        vm.set_response_content_security_report_only_policies(&report_only);
+        let result = vm
+            .eval(
+                r#"
+globalThis.policyReports = [];
+document.addEventListener('securitypolicyviolation', event => {
+  policyReports.push([event.sample, event.disposition, event.originalPolicy]);
+});
+JSON.stringify(['allowed', 'reportOnly', 'duplicate', 'duplicate', 'blocked'].map(name => {
+  try { return trustedTypes.createPolicy(name).name; }
+  catch (error) { return error.name; }
+}));
+"#,
+            )
+            .unwrap();
+        assert_eq!(
+            result,
+            if enforce {
+                r#"["allowed","reportOnly","duplicate","TypeError","TypeError"]"#
+            } else {
+                r#"["allowed","reportOnly","duplicate","duplicate","blocked"]"#
+            }
+        );
+        assert_eq!(vm.eval("policyReports.length").unwrap(), "0");
+
+        let mut expected = Vec::new();
+        for (name, count) in [("reportOnly", 3), ("duplicate", 2), ("blocked", 3)] {
+            if enforce && name != "reportOnly" {
+                expected.extend(
+                    enforced[..count]
+                        .iter()
+                        .map(|policy| serde_json::json!([name, "enforce", policy])),
+                );
+            }
+            expected.extend(
+                report_only[..count]
+                    .iter()
+                    .map(|policy| serde_json::json!([name, "report", policy])),
+            );
+        }
+        assert_eq!(
+            drain_pre_domcontentloaded_non_script_page_tasks_for_test(&mut vm),
+            expected.len()
+        );
+        let actual = vm.eval("JSON.stringify(policyReports)").unwrap();
+        assert_eq!(
+            serde_json::from_str::<serde_json::Value>(&actual).unwrap(),
+            serde_json::json!(expected)
+        );
+    }
+}
+
+#[test]
 fn element_markup_sinks_enforce_trusted_html_and_standard_sink_names() {
     let mut vm = new_storage_test_vm("https://element-markup-trusted-types.test/");
     vm.set_response_content_security_policies(&["require-trusted-types-for 'script'".to_owned()]);
