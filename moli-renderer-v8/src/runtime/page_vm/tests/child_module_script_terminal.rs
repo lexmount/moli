@@ -221,3 +221,36 @@ fn page_vm_replacement_rejects_naturally_colliding_terminal_owner() {
         },
     );
 }
+
+#[tokio::test(flavor = "current_thread")]
+async fn child_parser_module_evaluation_reports_error_to_its_window() {
+    run_page_vm_async_test(async {
+        let (base_url, server) = spawn_path_response_http_server(vec![(
+            "/throws.js", "HTTP/1.1 200 OK", "throw new RangeError('child module');".to_owned(),
+            Duration::from_millis(50),
+        )]).await;
+        let loader = crate::network::ResourceRequestClient::new(&FetchConfig::default())?;
+        let (mut page_vm, mut source, mut wake) = page_vm_with_bound_task_sources_and_owner_wake(
+            &loader, Url::parse(&format!("{base_url}/page"))?,
+        );
+        queue_real_child_module_terminal(&mut page_vm,&mut source,&mut wake,
+            "throws-frame",&format!("{base_url}/throws.js")).await?;
+        page_vm.vm_mut().eval(r#"
+            globalThis.trace = [];
+            addEventListener('error', () => trace.push('parent'));
+            const child = document.getElementById('throws-frame').contentWindow;
+            child.addEventListener('error', event => trace.push([
+               event.error instanceof child.RangeError, event.error.message
+            ]));
+            child.document.querySelector('script').addEventListener('load', () => trace.push('load'));
+        "#)?;
+        run_expected_child_module_script_terminal_turn(&mut page_vm, "throwing child module").await;
+        assert!(page_vm.run_exact_selected_page_task_for_test(
+            PageSelectedTaskTestSelector::ChildDocumentScriptReady, &loader,
+        ).await?);
+        assert_eq!(page_vm.vm_mut().eval("JSON.stringify(trace)")?,
+                   r#"[[true,"child module"],"load"]"#);
+        server.await?;
+        Ok::<_, anyhow::Error>(())
+    }).await.unwrap();
+}

@@ -192,6 +192,20 @@ impl FrameModuleScriptDocumentScriptHooks for ChildModuleScriptExecutionOwner<'_
         )
     }
 
+    fn report_module_evaluation_error(
+        &mut self,
+        work: &DocumentModuleGraphReadyWork,
+        error: &ModuleLoadError,
+    ) -> Result<()> {
+        self.vm.report_child_module_evaluation_error(
+            work.owner(),
+            work.realm_id(),
+            work.entry_id(),
+            work.script().url.as_str(),
+            error,
+        )
+    }
+
     fn dispatch_graph_failure_script_element_event(
         &mut self,
         work: &DocumentModuleGraphFailedWork,

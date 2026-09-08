@@ -226,6 +226,14 @@ pub(crate) trait FrameModuleScriptDocumentScriptHooks {
         kind: FrameDocumentScriptElementEventKind,
     ) -> Result<()>;
 
+    fn report_module_evaluation_error(
+        &mut self,
+        _work: &Self::GraphReadyWork,
+        _error: &ModuleLoadError,
+    ) -> Result<()> {
+        Ok(())
+    }
+
     fn dispatch_graph_failure_script_element_event(
         &mut self,
         work: &Self::GraphFailureWork,
@@ -804,17 +812,17 @@ where
         let owner = work.owner();
         let realm_id = work.realm_id();
         let script_handle = work.script_handle();
-        let event_result = self
-            .hooks
-            .dispatch_script_element_event(&work, FrameDocumentScriptElementEventKind::Error);
-        if let Err(dispatch_error) = event_result {
-            tracing::warn!(
-                owner = ?owner,
-                realm_id = ?realm_id,
-                script_handle = ?script_handle,
-                error = ?dispatch_error,
-                "frame parser module script error event dispatch failed"
-            );
+        if let Err(dispatch_error) = self.hooks.report_module_evaluation_error(&work, &error) {
+            tracing::warn!(?owner, ?realm_id, ?script_handle, error = ?dispatch_error,
+                "child module exception could not be reported");
+        }
+        if work.script().source_kind == crate::types::ScriptSourceKind::External
+            && let Err(dispatch_error) = self
+                .hooks
+                .dispatch_script_element_event(&work, FrameDocumentScriptElementEventKind::Load)
+        {
+            tracing::warn!(?owner, ?realm_id, ?script_handle, error = ?dispatch_error,
+                "child module terminal load event could not be dispatched");
         }
         self.hooks.record_runtime_warning(format_args!(
             "frame parser module graph `{}` failed during ready-lane evaluation: {}",
