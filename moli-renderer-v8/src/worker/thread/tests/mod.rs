@@ -1527,6 +1527,7 @@ fn service_worker_storage_apis_use_explicit_registration_storage_key() {
 
 mod abort_signal_statics;
 mod cors_redirects;
+mod imported_scripts;
 mod lazy_storage;
 mod lifecycle;
 mod modules;
