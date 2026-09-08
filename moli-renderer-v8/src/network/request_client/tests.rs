@@ -713,6 +713,54 @@ async fn text_stream_fetch_uses_disk_cache_for_safe_gets() -> Result<()> {
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn script_stream_preserves_context_http_cache_across_page_partitions() -> Result<()> {
+    let cache_dir = unique_test_cache_dir();
+    let listener = TcpListener::bind("127.0.0.1:0").await?;
+    let url = format!("http://{}/shared.js", listener.local_addr()?);
+    let server = tokio::spawn(async move {
+        let (mut stream, _) = listener.accept().await?;
+        read_http_request_head(&mut stream).await?;
+        let body = "context-cache-generation-1";
+        stream.write_all(format!("HTTP/1.1 200 OK\r\nContent-Type: application/javascript\r\nCache-Control: max-age=60\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}", body.len()).as_bytes()).await?;
+        Ok::<_, anyhow::Error>(())
+    });
+    let mut config = FetchConfig::default();
+    config.set_http_cache_dir(Some(cache_dir.display().to_string()));
+    let loader = ResourceRequestClient::new(&config)?;
+    let peer = loader.fork_with_isolated_page_network_policy();
+    let request = || {
+        Request::get(&url).map(|request| {
+            request
+                .with_page_network_policy()
+                .with_script_fetch_metadata(ScriptFetchRequestMetadata::default())
+        })
+    };
+    let first = loader
+        .fetch_cacheable_script_text_stream(
+            request()?,
+            crate::network::RendererResourceTaskRunner::for_test(),
+        )
+        .await?;
+    // The listener has gone away. A different Page partition must reuse the
+    // Context HTTP cache, not silently issue another network request.
+    server.await??;
+    let second = peer
+        .fetch_cacheable_script_text_stream(
+            request()?,
+            crate::network::RendererResourceTaskRunner::for_test(),
+        )
+        .await?;
+    assert_eq!(first.body_text(), "context-cache-generation-1");
+    assert_eq!(second.body_text(), first.body_text());
+    assert!(!first.from_cache);
+    assert!(second.from_cache);
+    drop(peer);
+    drop(loader);
+    std::fs::remove_dir_all(cache_dir)?;
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn script_text_fetch_uses_shared_memory_resource_cache_with_fresh_cache_headers() -> Result<()>
 {
     let listener = TcpListener::bind("127.0.0.1:0").await?;
@@ -745,10 +793,16 @@ async fn script_text_fetch_uses_shared_memory_resource_cache_with_fresh_cache_he
     };
 
     let first = loader
-        .fetch_cacheable_script_text_stream(request()?)
+        .fetch_cacheable_script_text_stream(
+            request()?,
+            crate::network::RendererResourceTaskRunner::for_test(),
+        )
         .await?;
     let second = loader
-        .fetch_cacheable_script_text_stream(request()?)
+        .fetch_cacheable_script_text_stream(
+            request()?,
+            crate::network::RendererResourceTaskRunner::for_test(),
+        )
         .await?;
 
     assert_eq!(first.body_text(), "window.scriptMemoryCacheHit = true;");
@@ -799,18 +853,37 @@ async fn cache_bypass_replaces_script_text_memory_entry() -> Result<()> {
     };
 
     let first = loader
-        .fetch_cacheable_script_text_stream(request()?)
+        .fetch_cacheable_script_text_stream(
+            request()?,
+            crate::network::RendererResourceTaskRunner::for_test(),
+        )
         .await?;
-    let peer_first = peer.fetch_cacheable_script_text_stream(request()?).await?;
+    let peer_first = peer
+        .fetch_cacheable_script_text_stream(
+            request()?,
+            crate::network::RendererResourceTaskRunner::for_test(),
+        )
+        .await?;
     loader.set_cache_disabled(true);
     let bypassed = loader
-        .fetch_cacheable_script_text_stream(request()?)
+        .fetch_cacheable_script_text_stream(
+            request()?,
+            crate::network::RendererResourceTaskRunner::for_test(),
+        )
         .await?;
     loader.set_cache_disabled(false);
     let restored = loader
-        .fetch_cacheable_script_text_stream(request()?)
+        .fetch_cacheable_script_text_stream(
+            request()?,
+            crate::network::RendererResourceTaskRunner::for_test(),
+        )
         .await?;
-    let peer_restored = peer.fetch_cacheable_script_text_stream(request()?).await?;
+    let peer_restored = peer
+        .fetch_cacheable_script_text_stream(
+            request()?,
+            crate::network::RendererResourceTaskRunner::for_test(),
+        )
+        .await?;
 
     assert_eq!(first.body_text(), "window.cacheGeneration = 1;");
     assert_eq!(peer_first.body_text(), "window.cacheGeneration = 1;");
@@ -840,6 +913,7 @@ async fn transport_replacement_preserves_cache_hits_and_revalidates_request_vari
             let response = client
                 .fetch_cacheable_script_text_stream(
                     request.with_script_fetch_metadata(ScriptFetchRequestMetadata::default()),
+                    crate::network::RendererResourceTaskRunner::for_test(),
                 )
                 .await?;
             Ok((response.body_text().to_owned(), response.from_cache))
@@ -950,7 +1024,12 @@ async fn unique_script_text_fetches_stay_within_one_loader_memory_budget() -> Re
         let url = format!("http://{addr}/script-{index}.js");
         let request =
             Request::get(&url)?.with_script_fetch_metadata(ScriptFetchRequestMetadata::default());
-        let response = loader.fetch_cacheable_script_text_stream(request).await?;
+        let response = loader
+            .fetch_cacheable_script_text_stream(
+                request,
+                crate::network::RendererResourceTaskRunner::for_test(),
+            )
+            .await?;
         assert_eq!(response.body_bytes().len(), SCRIPT_BYTES);
     }
 
@@ -1076,8 +1155,14 @@ async fn concurrent_script_text_waiter_preserves_owner_cache_state() -> Result<(
 
     let first_request = request()?;
     let second_request = request()?;
-    let first = loader.fetch_cacheable_script_text_stream(first_request);
-    let second = loader.fetch_cacheable_script_text_stream(second_request);
+    let first = loader.fetch_cacheable_script_text_stream(
+        first_request,
+        crate::network::RendererResourceTaskRunner::for_test(),
+    );
+    let second = loader.fetch_cacheable_script_text_stream(
+        second_request,
+        crate::network::RendererResourceTaskRunner::for_test(),
+    );
     let release = async move {
         sleep(Duration::from_millis(50)).await;
         let _ = release_tx.send(());
@@ -1101,7 +1186,10 @@ async fn concurrent_script_text_waiter_preserves_owner_cache_state() -> Result<(
     );
 
     let third = loader
-        .fetch_cacheable_script_text_stream(request()?)
+        .fetch_cacheable_script_text_stream(
+            request()?,
+            crate::network::RendererResourceTaskRunner::for_test(),
+        )
         .await?;
     assert_eq!(
         third.body_text(),
@@ -1147,7 +1235,10 @@ async fn script_text_fetch_respects_configured_request_timeout() -> Result<()> {
         .with_script_fetch_metadata(ScriptFetchRequestMetadata::default());
     let error = timeout(
         Duration::from_secs(2),
-        loader.fetch_cacheable_script_text_stream(request),
+        loader.fetch_cacheable_script_text_stream(
+            request,
+            crate::network::RendererResourceTaskRunner::for_test(),
+        ),
     )
     .await
     .expect("script fetch should complete with the configured request timeout")

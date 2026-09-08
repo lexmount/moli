@@ -2083,7 +2083,14 @@ async fn fetch_connected_link_readiness(
     options: ConnectedLinkReadinessFetchOptions,
 ) -> Result<crate::protocol_types::NavigationResponse, String> {
     let request = connected_link_readiness_request(&document_url, &url, &options);
-    fetch_connected_link_readiness_with_request(loader, url, options, request).await
+    fetch_connected_link_readiness_with_request(
+        loader,
+        url,
+        options,
+        request,
+        crate::network::RendererResourceTaskRunner::for_test(),
+    )
+    .await
 }
 
 async fn fetch_connected_link_readiness_with_service_worker(
@@ -2106,7 +2113,7 @@ async fn fetch_connected_link_readiness_with_service_worker(
                 document_url.clone(),
                 &request,
                 &loader,
-                resource_task_runner,
+                resource_task_runner.clone(),
                 destination,
                 options.resource_type,
             )
@@ -2133,7 +2140,7 @@ async fn fetch_connected_link_readiness_with_service_worker(
             }
         }
     }
-    fetch_connected_link_readiness_with_request(loader, url, options, request)
+    fetch_connected_link_readiness_with_request(loader, url, options, request, resource_task_runner)
         .await
         .map(|response| {
             let load_event_successful = connected_link_load_event_successful(&response, None);
@@ -2230,9 +2237,12 @@ async fn fetch_connected_link_readiness_with_request(
     url: Url,
     options: ConnectedLinkReadinessFetchOptions,
     request: moli_fetch::Request,
+    task_runner: crate::network::RendererResourceTaskRunner,
 ) -> Result<crate::protocol_types::NavigationResponse, String> {
     let response = if options.resource_type == SubresourceResourceType::Script {
-        loader.fetch_cacheable_script_text_stream(request).await
+        loader
+            .fetch_cacheable_script_text_stream(request, task_runner)
+            .await
     } else {
         loader.fetch_text_stream(request).await
     };
@@ -4808,7 +4818,10 @@ mod tests {
             });
 
         let script_response = loader
-            .fetch_cacheable_script_text_stream(script_request)
+            .fetch_cacheable_script_text_stream(
+                script_request,
+                crate::network::RendererResourceTaskRunner::for_test(),
+            )
             .await?;
         server.await?;
 

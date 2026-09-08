@@ -44,6 +44,9 @@ use super::super::{CookieProfileCommit, protocol_local_executor::spawn_protocol_
 
 const CLASSIC_SCRIPT_TERMINATION_TIMEOUT: Duration = Duration::from_secs(5);
 
+mod navigation;
+use navigation::ClassicPendingNavigation;
+
 #[derive(Debug, Clone, Default)]
 pub(in crate::protocol_server) struct SharedClassicSessionRegistry {
     inner: Arc<Mutex<ClassicSessionManager>>,
@@ -955,6 +958,7 @@ async fn handle_classic_session_runtime_request(
     receivers: &mut CdpSchedulerEventReceivers,
     request: ClassicSessionRuntimeRequest,
     mut attached_bidi: Option<&mut ClassicAttachedBidiSocket>,
+    pending_navigation: &mut Option<ClassicPendingNavigation>,
 ) -> ClassicSessionRuntimeRequestOutcome {
     match request {
         ClassicSessionRuntimeRequest::Execute {
@@ -976,6 +980,23 @@ async fn handle_classic_session_runtime_request(
                     ),
                 ));
                 return ClassicSessionRuntimeRequestOutcome::Continue;
+            }
+            if matches!(
+                *command,
+                DevToolsCommand::Navigate(_)
+                    | DevToolsCommand::Reload(_)
+                    | DevToolsCommand::TraverseHistory(_)
+            ) {
+                return navigation::start_navigation(
+                    scheduler,
+                    receivers,
+                    *command,
+                    timeout,
+                    response_tx,
+                    pending_navigation,
+                    attached_bidi,
+                )
+                .await;
             }
             let termination_context = command.context().clone();
             let mut execution = execute_classic_devtools_command_with_pending_navigation_retry(
@@ -1352,6 +1373,8 @@ async fn classic_session_runtime_loop(
     let mut attached_bidi: Option<ClassicAttachedBidiSocket> = None;
     let mut adapter_scheduler = ProtocolAdapterScheduler::default();
     let mut shutdown_response = None;
+    let mut pending_navigation = None;
+    let mut queued_requests = std::collections::VecDeque::new();
     loop {
         let output = scheduler.drain_browser_events().await;
         if let Some(attached) = attached_bidi.as_mut()
@@ -1371,6 +1394,25 @@ async fn classic_session_runtime_loop(
         if receivers.renderer_publication_rx.is_closed() {
             break;
         }
+        if matches!(
+            navigation::poll_navigation_lifecycle(
+                &mut scheduler,
+                &mut receivers,
+                &mut pending_navigation,
+                attached_bidi.as_mut(),
+            )
+            .await,
+            ClassicSessionRuntimeRequestOutcome::DetachBidi
+        ) && let Some(mut attached) = attached_bidi.take()
+        {
+            attached
+                .release_session(&mut scheduler, &mut receivers)
+                .await;
+        }
+        let navigation_deadline = pending_navigation
+            .as_ref()
+            .and_then(ClassicPendingNavigation::deadline);
+        let navigation_pending = pending_navigation.is_some();
         if attached_bidi.is_some() {
             let mut detach_bidi = false;
             {
@@ -1379,6 +1421,18 @@ async fn classic_session_runtime_loop(
                 adapter_scheduler.schedule_turn_if_needed(&scheduler, page_javascript_blocked);
                 tokio::select! {
                     biased;
+                    completed = navigation::recv_navigation_completion(&mut pending_navigation) => {
+                        if matches!(navigation::complete_navigation(
+                            &mut scheduler, &mut receivers, completed, &mut pending_navigation, Some(attached),
+                        ).await, ClassicSessionRuntimeRequestOutcome::DetachBidi) {
+                            detach_bidi = true;
+                        }
+                    }
+                    _ = navigation::wait_for_navigation_deadline(navigation_deadline) => {
+                        if let Some(pending) = pending_navigation.take() {
+                            pending.cancel(&mut scheduler, true);
+                        }
+                    }
                     event = scheduler.recv_adapter_owner_input() => {
                         let output = scheduler.complete_adapter_owner_input(&mut receivers, event).await;
                         if !attached.actor.send_or_route_protocol_output(&mut scheduler, &mut receivers, output, None).await {
@@ -1483,15 +1537,20 @@ async fn classic_session_runtime_loop(
                             }
                         }
                     }
-                    request = rx.recv() => {
+                    request = navigation::next_classic_request(&mut rx, &mut queued_requests, navigation_pending) => {
                         let Some(request) = request else {
                             break;
                         };
+                        if navigation::defer_classic_request(&request, pending_navigation.is_some()) {
+                            queued_requests.push_back(request);
+                            continue;
+                        }
                         match handle_classic_session_runtime_request(
                             &mut scheduler,
                             &mut receivers,
                             request,
                             Some(attached),
+                            &mut pending_navigation,
                         )
                         .await
                         {
@@ -1524,6 +1583,16 @@ async fn classic_session_runtime_loop(
             adapter_scheduler.schedule_turn_if_needed(&scheduler, page_javascript_blocked);
             tokio::select! {
                 biased;
+                completed = navigation::recv_navigation_completion(&mut pending_navigation) => {
+                    let _ = navigation::complete_navigation(
+                        &mut scheduler, &mut receivers, completed, &mut pending_navigation, None,
+                    ).await;
+                }
+                _ = navigation::wait_for_navigation_deadline(navigation_deadline) => {
+                    if let Some(pending) = pending_navigation.take() {
+                        pending.cancel(&mut scheduler, true);
+                    }
+                }
                 event = scheduler.recv_adapter_owner_input() => {
                     let _ = scheduler.complete_adapter_owner_input(&mut receivers, event).await;
                 }
@@ -1575,15 +1644,20 @@ async fn classic_session_runtime_loop(
                     // internal and cannot become a later frontend's reply.
                     let _ = scheduler.route_registered_runtime_inspector_response(response);
                 }
-                request = rx.recv() => {
+                request = navigation::next_classic_request(&mut rx, &mut queued_requests, navigation_pending) => {
                     let Some(request) = request else {
                         break;
                     };
+                    if navigation::defer_classic_request(&request, pending_navigation.is_some()) {
+                        queued_requests.push_back(request);
+                        continue;
+                    }
                     match handle_classic_session_runtime_request(
                         &mut scheduler,
                         &mut receivers,
                         request,
                         None,
+                        &mut pending_navigation,
                     )
                     .await
                     {
@@ -1608,6 +1682,9 @@ async fn classic_session_runtime_loop(
                 }
             }
         }
+    }
+    if let Some(pending) = pending_navigation {
+        pending.cancel(&mut scheduler, false);
     }
     if let Some(mut attached) = attached_bidi {
         attached

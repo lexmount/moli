@@ -303,6 +303,7 @@ impl DetachedParserScriptFetchContinuation {
                 &inner.request_client,
                 inner.document_character_set.as_deref(),
                 Some(moli_fetch::RequestResourceType::ParserBlockingScript),
+                inner.task_runner.clone(),
             )
             .await;
             inner.completer.finish(outcome);
