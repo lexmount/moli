@@ -196,3 +196,58 @@ fn original_webassembly_error_constructor<'s>(
     get_private_value(scope, global, original_slot)
         .and_then(|value| v8::Local::<v8::Function>::try_from(value).ok())
 }
+
+impl ScriptVm {
+    pub(crate) fn report_child_module_evaluation_error(
+        &mut self,
+        owner: crate::frame_owner_model::FrameDocumentTaskOwner,
+        realm: crate::frame_owner_model::FrameRealmId,
+        entry: ModuleEntryId,
+        fallback_url: &str,
+        error: &ModuleLoadError,
+    ) -> Result<()> {
+        anyhow::ensure!(
+            self.child_parser_module_route_task_is_current(owner, realm),
+            "module error Document is no longer current"
+        );
+        let module = self
+            .with_current_child_document_modulator(owner.document_owner(), realm, |_, modulator| {
+                modulator
+                    .compiled_record(entry)
+                    .map(|record| record.compiled_module().clone())
+            })
+            .flatten();
+        self.with_frame_realm_scope(realm, |scope, host_ptr| {
+            let retained = module
+                .as_ref()
+                .map(|module| v8::Local::new(scope, module))
+                .filter(|module| module.get_status() == v8::ModuleStatus::Errored)
+                .map(|module| module.get_exception());
+            let exception = if let Some(retained) = retained {
+                retained
+            } else {
+                let global = scope.get_current_context().global(scope);
+                let message = v8_string(scope, error.message())
+                    .ok_or_else(|| anyhow!("failed to allocate module error"))?;
+                window_script_failure_error_value(scope, global, error.error_constructor(), message)
+            };
+            let (message, source, line, column) =
+                crate::exception_reporting::exception_message_details(scope, exception);
+            let filename = if source.is_empty() {
+                fallback_url
+            } else {
+                &source
+            };
+            dispatch_window_error_event_with_details(
+                scope,
+                host_ptr,
+                &message,
+                filename,
+                line,
+                column,
+                Some(exception),
+            )
+            .map_err(anyhow::Error::msg)
+        })
+    }
+}
