@@ -10,6 +10,103 @@ pub(crate) enum PageCloseNotifications {
 }
 
 impl CdpConnection {
+    pub fn project_created_browser_context(&mut self, id: moli_core::browser::BrowserContextId) {
+        if self.browser_context_by_browser_id(id).is_some() {
+            return;
+        }
+        let Ok(handle) = self.browser.context_handle(id) else {
+            return;
+        };
+        if let Some(sender) = self.scheduler_hooks.renderer_publication_sender()
+            && handle.set_renderer_output_transport_sender(sender).is_err()
+        {
+            return;
+        }
+        let wire_id = loop {
+            let id = self.gen_bc_id();
+            if !self.has_browser_context_id(&id) {
+                break id;
+            }
+        };
+        // Adoption is observation, not Context creation or policy installation.
+        // In particular it must not bind the lazy default target to this Context.
+        self.inactive_browser_contexts
+            .push(BrowserContext::from_browser_handle(wire_id, handle));
+    }
+
+    pub async fn project_created_web_contents(
+        &mut self,
+        handle: moli_core::browser::WebContentsHandle,
+    ) -> Vec<BackgroundProtocolEvent> {
+        if self
+            .browser_context_by_browser_id(handle.context())
+            .is_some_and(|context| {
+                context
+                    .page_targets
+                    .get_for_web_contents(handle.id())
+                    .is_some()
+            })
+        {
+            return Vec::new();
+        }
+        let Ok(snapshot) = self.browser.web_contents_snapshot(handle) else {
+            return Vec::new();
+        };
+        self.project_created_browser_context(handle.context());
+        let target_id = self.gen_target_id();
+        let Some(context) = self.browser_context_by_browser_id_mut(handle.context()) else {
+            return Vec::new();
+        };
+        if !context.adopt_web_contents(&snapshot, target_id.clone()) {
+            return Vec::new();
+        }
+        let mut events = crate::domains::target::project_browser_created_target(
+            self,
+            &target_id,
+            snapshot.document.is_some(),
+        )
+        .await;
+        if let Some(document) = snapshot.document {
+            events.extend(self.project_browser_document_commit(document).await);
+        }
+        events
+    }
+
+    pub async fn project_browser_snapshot(
+        &mut self,
+        snapshot: moli_core::browser::BrowserSnapshot,
+    ) -> Vec<BackgroundProtocolEvent> {
+        let mut events = Vec::new();
+        let disposed = self
+            .browser_contexts()
+            .map(BrowserContext::browser_context_id)
+            .filter(|id| !snapshot.contexts.contains(id) && !self.browser.contains_context(*id))
+            .collect::<Vec<_>>();
+        for context in disposed {
+            events.extend(self.project_disposed_browser_context(context).await);
+        }
+        for handle in self.projected_web_contents() {
+            if !snapshot.web_contents.contains(&handle) {
+                let activated = snapshot
+                    .selected_web_contents
+                    .iter()
+                    .copied()
+                    .find(|selected| selected.context() == handle.context());
+                events.extend(self.project_closed_web_contents(handle, activated).await);
+            }
+        }
+        for context in snapshot.contexts {
+            self.project_created_browser_context(context);
+        }
+        for handle in snapshot.web_contents {
+            events.extend(self.project_created_web_contents(handle).await);
+        }
+        for document in snapshot.documents {
+            events.extend(self.project_browser_document_commit(document).await);
+        }
+        events
+    }
+
     /// Physical identities retained by this observer, including unselected pages.
     pub fn projected_web_contents(&self) -> Vec<moli_core::browser::WebContentsHandle> {
         self.browser_contexts()

@@ -140,7 +140,7 @@ pub(super) struct RendererPendingPageCreation {
 
 pub(super) struct RendererPageCreationResolution {
     outcome: PageCreationResolution<RendererPendingPageCreation, RendererAttachedPage>,
-    renderer_output: Option<RendererOutputPublication>,
+    renderer_output: Option<RendererSettledOutput>,
     retire_page_after_publication: bool,
 }
 
@@ -157,7 +157,7 @@ impl RendererPageCreationResolution {
 
     fn retiring(
         failure: PageCreationRetirement,
-        renderer_output: Option<RendererOutputPublication>,
+        renderer_output: Option<RendererSettledOutput>,
     ) -> Self {
         Self {
             outcome: PageCreationResolution::Retired { failure },
@@ -168,13 +168,12 @@ impl RendererPageCreationResolution {
 
     pub(super) fn publish_then_resolve(
         self,
-        publish: impl FnOnce(RendererOutputPublication),
     ) -> (
         PageCreationResolution<RendererPendingPageCreation, RendererAttachedPage>,
         bool,
     ) {
         if let Some(output) = self.renderer_output {
-            publish(output);
+            output.publish();
         }
         (self.outcome, self.retire_page_after_publication)
     }
@@ -297,16 +296,13 @@ pub(super) struct RendererFinalizedPageCreation {
 
 pub(super) struct RendererPageCreationCommit {
     finalized: Result<RendererFinalizedPageCreation>,
-    renderer_output: Option<RendererOutputPublication>,
+    renderer_output: Option<RendererSettledOutput>,
 }
 
 impl RendererPageCreationCommit {
-    pub(super) fn publish_then_finalize(
-        self,
-        publish: impl FnOnce(RendererOutputPublication),
-    ) -> Result<RendererFinalizedPageCreation> {
+    pub(super) fn publish_then_finalize(self) -> Result<RendererFinalizedPageCreation> {
         if let Some(output) = self.renderer_output {
-            publish(output);
+            output.publish();
         }
         self.finalized
     }

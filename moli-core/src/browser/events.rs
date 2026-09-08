@@ -1,6 +1,8 @@
 use tokio::sync::broadcast;
 
-use super::{BrowserContextId, BrowserSequence, DocumentHandle, WebContentsHandle};
+use super::{
+    BrowserContextId, BrowserSequence, DocumentHandle, MainFrameSlotId, WebContentsHandle,
+};
 
 /// A committed Browser lifetime change, with no protocol or session identity.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -30,6 +32,15 @@ pub struct BrowserSnapshot {
     pub web_contents: Vec<WebContentsHandle>,
     pub selected_web_contents: Vec<WebContentsHandle>,
     pub documents: Vec<DocumentHandle>,
+}
+
+/// Current physical Page identity and URL read in one Browser owner turn.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct WebContentsSnapshot {
+    pub handle: WebContentsHandle,
+    pub main_frame: MainFrameSlotId,
+    pub document: Option<DocumentHandle>,
+    pub url: String,
 }
 
 pub type BrowserEventReceiver = broadcast::Receiver<BrowserEventRecord>;

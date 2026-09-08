@@ -149,6 +149,50 @@ fn pending_resolution_releases_journal_before_later_producer_append() {
 }
 
 #[test]
+fn late_transport_replays_frozen_page_output_without_settling_an_active_turn() {
+    let journal = RendererTurnOutputJournal::new(
+        RendererOutputStreamIdentity::new_page_for_protocol_test(PageId::new_for_testing(7)),
+    );
+    journal.append(lifecycle_record(11));
+    let publication = journal.take_pending_for_resolution().unwrap().finish();
+    RendererSettledOutput::new(journal.clone(), publication).publish();
+    journal.append(lifecycle_record(12));
+
+    let (transport, mut receiver) = renderer_output_transport_channel();
+    journal.bind_transport(transport.clone());
+    assert_eq!(
+        receiver.try_recv().unwrap(),
+        RendererOutputTransportMessage::StreamControl(RendererOutputStreamControl::Opened {
+            stream: journal.stream(),
+        })
+    );
+    let RendererOutputTransportMessage::Publication(first) = receiver.try_recv().unwrap() else {
+        panic!("late observer must receive the exact frozen prefix");
+    };
+    assert_eq!(first.cursor().sequence(), 1);
+    assert_eq!(first.records(), &[lifecycle_record(11).resolve().unwrap()]);
+    assert_eq!(
+        journal.pending_len(),
+        1,
+        "binding cannot settle a producer's active turn"
+    );
+    assert!(receiver.try_recv().is_err());
+
+    let publication = journal.take_pending_for_resolution().unwrap().finish();
+    RendererSettledOutput::new(journal.clone(), publication).publish();
+    let RendererOutputTransportMessage::Publication(second) = receiver.try_recv().unwrap() else {
+        panic!("the owner must publish its next turn through the same journal");
+    };
+    assert_eq!(second.cursor().sequence(), 2);
+    assert_eq!(second.records(), &[lifecycle_record(12).resolve().unwrap()]);
+    journal.bind_transport(transport);
+    assert!(
+        receiver.try_recv().is_err(),
+        "rebinding must not duplicate publications"
+    );
+}
+
+#[test]
 fn retirement_publishes_the_final_batch_before_its_frozen_close_boundary() {
     let page_id = PageId::new_for_testing(9);
     let (transport, mut receiver) = super::renderer_output_transport_channel();

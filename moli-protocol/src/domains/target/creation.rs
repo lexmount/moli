@@ -32,6 +32,75 @@ impl TargetCreationCommit {
     }
 }
 
+pub(crate) async fn project_browser_created_target(
+    conn: &mut CdpConnection,
+    page_target_id: &str,
+    already_running: bool,
+) -> Vec<crate::conn::BackgroundProtocolEvent> {
+    let browser_context_id = conn
+        .browser_context_id_for_target(page_target_id)
+        .expect("adopted Page must retain its DevTools Context")
+        .to_owned();
+    let tab_target_id = conn.register_top_level_page_target(page_target_id);
+    let mut attached_tab_sessions = Vec::new();
+    let mut attached_sessions = Vec::new();
+    for (target, owners, attached) in [
+        (
+            tab_target_id.as_str(),
+            top_level_tab_auto_attach_owner_sessions(conn),
+            &mut attached_tab_sessions,
+        ),
+        (
+            page_target_id,
+            top_level_page_auto_attach_owner_sessions(conn),
+            &mut attached_sessions,
+        ),
+    ] {
+        for owner in owners {
+            let session_id = conn.gen_session_id();
+            let route = if target == page_target_id {
+                conn.prepare_auto_attached_page_session_binding_in_browser_context(
+                    &browser_context_id,
+                    target,
+                    session_id.clone(),
+                )
+            } else {
+                conn.prepare_auto_attached_tab_session_binding(
+                    target,
+                    session_id.clone(),
+                    owner.as_deref(),
+                )
+            };
+            if let Some(route) = route {
+                let waiting = !already_running
+                    && conn.auto_attach_owner_waits_for_debugger_on_start(owner.as_deref());
+                attached.push(TargetAttachSessionCommit::auto_attached(
+                    session_id, owner, route, waiting,
+                ));
+            }
+        }
+    }
+    super::auto_attach::ensure_initial_document_for_attached_page_targets_async(
+        conn,
+        attached_sessions
+            .iter()
+            .map(|session| (page_target_id, session.route())),
+    )
+    .await;
+    let mut output = Vec::new();
+    let commit = TargetCreationCommit {
+        page_target_id: page_target_id.to_owned(),
+        tab_target_id,
+        activation: None,
+        attached_tab_sessions,
+        attached_sessions,
+    };
+    if let Err(error) = emit_target_creation_protocol_events(conn, commit, &mut output) {
+        tracing::warn!(?error, "native Page target projection failed");
+    }
+    output
+}
+
 #[derive(Clone, Copy)]
 enum CreateTargetResultHost {
     Page,

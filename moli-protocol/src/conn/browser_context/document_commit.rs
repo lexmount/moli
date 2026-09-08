@@ -16,6 +16,12 @@ impl CdpConnection {
         let Ok(snapshot) = self.browser.document_commit_snapshot(document) else {
             return Vec::new();
         };
+        if let Some(sender) = self.scheduler_hooks.renderer_publication_sender()
+            && let Err(error) = snapshot.inspection_endpoint.bind_output_transport(sender)
+        {
+            tracing::warn!(%error, "native Document output transport binding failed");
+            return Vec::new();
+        }
         let metadata = snapshot.metadata.clone();
         let mut allocator = std::mem::take(&mut self.network_request_id_allocator);
         let projected = (|| {

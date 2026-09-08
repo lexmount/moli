@@ -313,6 +313,36 @@ impl BrowserHandle {
             .unwrap_or(false)
     }
 
+    pub fn context_handle(&self, id: BrowserContextId) -> Result<BrowserContextHandle, String> {
+        self.execute(move |browser| browser.context(id).map(|_| ()))??;
+        Ok(BrowserContextHandle {
+            browser: self.clone(),
+            id,
+        })
+    }
+
+    pub fn web_contents_snapshot(
+        &self,
+        handle: WebContentsHandle,
+    ) -> Result<super::WebContentsSnapshot, String> {
+        self.execute(move |browser| {
+            let context = browser.context(handle.context())?;
+            let (_, main_frame) = context.web_contents_identity(handle)?;
+            let document = context.document_handle(handle)?;
+            let url = document
+                .map(|document| context.document_url(document).map(|url| url.to_string()))
+                .transpose()?
+                .or(context.initial_document_url(handle)?)
+                .unwrap_or_else(|| "about:blank".to_owned());
+            Ok(super::WebContentsSnapshot {
+                handle,
+                main_frame,
+                document,
+                url,
+            })
+        })?
+    }
+
     pub fn document_commit_snapshot(
         &self,
         document: super::DocumentHandle,
@@ -717,8 +747,8 @@ impl BrowserContextHandle {
     pub fn set_renderer_output_transport_sender(
         &self,
         sender: crate::RendererOutputTransportSender,
-    ) {
-        self.update_live(move |context| context.set_renderer_output_transport_sender(sender));
+    ) -> Result<(), String> {
+        self.update(move |context| context.set_renderer_output_transport_sender(sender))
     }
 
     pub fn contains_web_contents(&self, handle: WebContentsHandle) -> bool {

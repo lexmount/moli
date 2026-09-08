@@ -21,6 +21,7 @@ mod browser_context;
 mod browser_context_disposal;
 mod closing;
 mod creation;
+pub(crate) use creation::project_browser_created_target;
 mod events;
 mod info;
 mod popup;

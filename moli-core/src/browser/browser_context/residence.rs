@@ -18,7 +18,9 @@ impl BrowserContext {
         renderer_output_transport_sender: Option<crate::RendererOutputTransportSender>,
     ) {
         self.page_navigation_runtime_config = Some(config.clone());
-        self.renderer_output_transport_sender = renderer_output_transport_sender;
+        if let Some(sender) = renderer_output_transport_sender {
+            self.set_renderer_output_transport_sender(sender);
+        }
 
         let sender = self.renderer_output_transport_sender.clone();
         let runtime = self.renderer_runtime_owner_access();

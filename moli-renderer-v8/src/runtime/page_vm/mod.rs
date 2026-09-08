@@ -1779,7 +1779,7 @@ impl PageVm {
 
     pub(super) fn settle_renderer_output_publication(
         &mut self,
-    ) -> Option<crate::runtime::RendererOutputPublication> {
+    ) -> Option<crate::runtime::RendererSettledOutput> {
         // Every owner turn must freeze its DOM facts into the same ordered
         // stream as its other observations before settlement. Command turns
         // have already moved their causal suffix into command records; this

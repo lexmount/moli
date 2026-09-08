@@ -117,6 +117,7 @@ pub(crate) enum CommandStartAction {
 pub(crate) struct CdpScheduler {
     conn: CdpConnection,
     browser_event_rx: Option<moli_core::browser::BrowserEventReceiver>,
+    initial_browser_snapshot: Option<moli_core::browser::BrowserSnapshot>,
     pending_navigation_background_events: VecDeque<PendingNavigationBackgroundEvent>,
     renderer_command_response_order: RendererCommandResponseOrder,
     queues: SchedulerQueues,
@@ -747,12 +748,13 @@ impl CdpScheduler {
     }
 
     fn new(conn: CdpConnection) -> Self {
-        let (_, browser_events) = conn
+        let (snapshot, browser_events) = conn
             .subscribe_browser_events()
             .expect("a scheduler must subscribe to its live Browser owner");
         Self {
             conn,
             browser_event_rx: Some(browser_events),
+            initial_browser_snapshot: Some(snapshot),
             pending_navigation_background_events: VecDeque::new(),
             renderer_command_response_order: RendererCommandResponseOrder::default(),
             queues: SchedulerQueues::default(),

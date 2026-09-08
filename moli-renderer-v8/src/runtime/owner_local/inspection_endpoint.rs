@@ -14,6 +14,22 @@ pub use page::RendererPageInspection;
 pub use runtime::RendererRuntimeInspection;
 
 impl RendererInspectionEndpoint {
+    /// Connect a late observer to this exact Page's frozen output stream.
+    pub fn bind_output_transport(
+        &self,
+        sender: crate::runtime::RendererOutputTransportSender,
+    ) -> Result<()> {
+        self.page_context_cancel_tx.with_inspector_admission(|| {
+            let journal = self
+                .devtools_target
+                .pause()
+                .output_journal()
+                .ok_or_else(|| anyhow!("renderer Page output stream unavailable"))?;
+            journal.bind_transport(sender);
+            Ok(())
+        })?
+    }
+
     /// Seals the frontend's Main/IO ingress synchronously, then destroys its
     /// V8 session through the target IO lifecycle receiver. Active JavaScript
     /// is interrupted only long enough to mutate the exact Page stack; an idle

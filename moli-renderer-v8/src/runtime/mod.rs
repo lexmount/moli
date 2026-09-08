@@ -407,7 +407,9 @@ use self::phase_one::PendingPhaseOneResidence;
 pub(in crate::runtime) use self::phase_one::{
     PhaseOneResidenceAdmission, PhaseOneRestoreRequirement,
 };
-pub(crate) use self::protocol_output::{PendingRendererOutputRecord, RendererTurnOutputJournal};
+pub(crate) use self::protocol_output::{
+    PendingRendererOutputRecord, RendererSettledOutput, RendererTurnOutputJournal,
+};
 pub use self::protocol_output::{
     RendererDocumentTitleChanged, RendererOutputCursor, RendererOutputFence,
     RendererOutputFenceLeaseId, RendererOutputItem, RendererOutputPublication,

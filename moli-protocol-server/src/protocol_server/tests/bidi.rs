@@ -1,6 +1,222 @@
 use super::*;
 
 #[tokio::test]
+async fn native_browser_page_is_discovered_shared_and_retained_across_frontends() {
+    use moli_core::browser::{
+        BrowserContextStoragePartitionHandles, BrowserInitialDocumentAdmission,
+        StoragePartitionKind, WebContentsCreation,
+    };
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let state = protocol_server_test_state(
+        addr,
+        FetchConfig::default(),
+        OptionalResourceFetchMask::NONE,
+    );
+    let browser = state.browser_service.handle();
+    let context = browser
+        .create_context(
+            BrowserContextStoragePartitionHandles::memory(),
+            StoragePartitionKind::Ephemeral,
+            None,
+            None,
+        )
+        .unwrap();
+    context.bind_page_navigation_engines(Default::default(), None);
+    let (native, _) = context
+        .create_web_contents(WebContentsCreation::with_initial_document(
+            "about:blank#native-running".into(),
+            None,
+            None,
+        ))
+        .unwrap();
+    assert!(context.select_web_contents(native.id()));
+    let BrowserInitialDocumentAdmission::Build(build) = context
+        .start_initial_document(
+            native,
+            context.inherited_document_policy(Default::default(), &[], None),
+        )
+        .unwrap()
+    else {
+        panic!("native initial document build");
+    };
+    let built = build.materialize().await.unwrap();
+    let committed = context
+        .commit_initial_document(built)
+        .unwrap_or_else(|_| panic!("native commit"));
+    let document = committed.snapshot.document;
+    drop(committed);
+    context
+        .evaluate_document_expression_for_test(
+            document,
+            "globalThis.nativeMarker = 'native document'; document.title = 'native owned'",
+            false,
+        )
+        .await
+        .unwrap();
+    let server = tokio::spawn(async move {
+        axum::serve(listener, build_router(state)).await.unwrap();
+    });
+
+    // The first discovery request must bootstrap from Browser membership without
+    // creating a physical default Page or requiring a preceding CDP connection.
+    let listed = classic_request_on_server_with_body(addr, "GET", "/json/list", json!({})).await;
+    let target = listed
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|entry| entry["url"] == "about:blank#native-running")
+        .unwrap_or_else(|| panic!("native Page missing from discovery: {listed}"))["id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    assert_eq!(browser.subscribe().unwrap().0.web_contents, [native]);
+    let (mut cdp, _) = connect_async(format!("ws://{addr}/devtools/browser/{DEFAULT_BROWSER_ID}"))
+        .await
+        .unwrap();
+    let attached = send_cdp_command(&mut cdp, 1, "Target.setAutoAttach", None,
+        json!({"autoAttach":true, "waitForDebuggerOnStart":false, "flatten":true, "filter":[{"type":"page"}]})).await;
+    let sid =
+        attached
+            .iter()
+            .find(|event| {
+                event["method"] == "Target.attachedToTarget"
+                    && event["params"]["targetInfo"]["targetId"] == target
+            })
+            .unwrap_or_else(|| panic!("native Page was not auto-attached: {attached:?}"))["params"]
+            ["sessionId"]
+            .as_str()
+            .unwrap()
+            .to_owned();
+    assert_eq!(
+        cdp_runtime_evaluate_string(&mut cdp, &sid, 2, "nativeMarker").await,
+        "native document"
+    );
+    assert_eq!(context.document_handle(native).unwrap(), Some(document));
+    let (mut bidi, _) = connect_async(format!("ws://{addr}/session")).await.unwrap();
+    assert_eq!(
+        send_bidi_command_response(&mut bidi, 1, "session.new", json!({})).await["type"],
+        "success"
+    );
+    let observed = send_bidi_command_response(
+        &mut bidi,
+        2,
+        "script.evaluate",
+        json!({"expression":"nativeMarker", "target":{"context":target}, "awaitPromise":false}),
+    )
+    .await;
+    assert_eq!(
+        observed["result"]["result"]["value"], "native document",
+        "{observed}"
+    );
+
+    send_cdp_command(
+        &mut cdp,
+        3,
+        "Target.setDiscoverTargets",
+        None,
+        json!({"discover":true}),
+    )
+    .await;
+    let before = send_cdp_command(&mut cdp, 30, "Target.getBrowserContexts", None, json!({})).await;
+    let context_count = bidi_message_by_id(&before, 30)["result"]["browserContextIds"]
+        .as_array()
+        .unwrap()
+        .len();
+    let later_context = browser
+        .create_context(
+            BrowserContextStoragePartitionHandles::memory(),
+            StoragePartitionKind::Ephemeral,
+            None,
+            None,
+        )
+        .unwrap();
+    let adopted =
+        send_cdp_command(&mut cdp, 31, "Target.getBrowserContexts", None, json!({})).await;
+    assert_eq!(
+        bidi_message_by_id(&adopted, 31)["result"]["browserContextIds"]
+            .as_array()
+            .unwrap()
+            .len(),
+        context_count + 1
+    );
+    // Native navigation configuration must preserve an already-installed observer.
+    later_context.bind_page_navigation_engines(Default::default(), None);
+    let (later, _) = later_context
+        .create_web_contents(WebContentsCreation::with_initial_document(
+            "about:blank#native-later".into(),
+            None,
+            None,
+        ))
+        .unwrap();
+    let created = recv_until_match(&mut cdp, |event| {
+        event["method"] == "Target.targetCreated"
+            && event["params"]["targetInfo"]["url"] == "about:blank#native-later"
+            && event["params"]["targetInfo"]["type"] == "page"
+    })
+    .await;
+    let later_target = created.last().unwrap()["params"]["targetInfo"]["targetId"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let attached = recv_until_match(&mut cdp, |event| {
+        event["method"] == "Target.attachedToTarget"
+            && event["params"]["targetInfo"]["targetId"] == later_target
+    })
+    .await;
+    let later_sid = attached.last().unwrap()["params"]["sessionId"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    assert_eq!(
+        cdp_runtime_evaluate_string(&mut cdp, &later_sid, 4, "location.href").await,
+        "about:blank#native-later"
+    );
+    let closed = send_cdp_command(
+        &mut cdp,
+        5,
+        "Target.closeTarget",
+        None,
+        json!({"targetId":later_target}),
+    )
+    .await;
+    assert_eq!(bidi_message_by_id(&closed, 5)["result"]["success"], true);
+    assert!(!later_context.contains_web_contents(later));
+    assert!(context.contains_web_contents(native));
+
+    assert_eq!(
+        send_bidi_command_response(&mut bidi, 3, "session.end", json!({})).await["type"],
+        "success"
+    );
+    bidi.close(None).await.unwrap();
+    cdp.close(None).await.unwrap();
+    let (mut reconnected, _) = connect_async(format!("ws://{addr}/devtools/page/{target}"))
+        .await
+        .unwrap();
+    let result = send_cdp_command(
+        &mut reconnected,
+        1,
+        "Runtime.evaluate",
+        None,
+        json!({"expression":"nativeMarker"}),
+    )
+    .await;
+    assert_eq!(
+        bidi_message_by_id(&result, 1)["result"]["result"]["value"],
+        "native document"
+    );
+    assert_eq!(context.document_handle(native).unwrap(), Some(document));
+    browser
+        .close_web_contents(native)
+        .unwrap()
+        .close_async()
+        .await;
+    assert!(context.is_live());
+    reconnected.close(None).await.unwrap();
+    abort_test_cdp_server(server).await;
+}
+
+#[tokio::test]
 async fn classic_busy_session_does_not_starve_renderer_ingress() {
     let (addr, server) = spawn_test_protocol_server().await;
     let (mut bidi, peer) = bidi_session_with_context(addr).await;

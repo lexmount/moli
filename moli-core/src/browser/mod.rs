@@ -33,7 +33,9 @@ pub use emulation::{
     EmulatedMediaOverrides, EmulatedNetworkConditions, EmulatedViewportSurface,
     viewport_surface_install_script,
 };
-pub use events::{BrowserEvent, BrowserEventReceiver, BrowserEventRecord, BrowserSnapshot};
+pub use events::{
+    BrowserEvent, BrowserEventReceiver, BrowserEventRecord, BrowserSnapshot, WebContentsSnapshot,
+};
 pub use owner::{
     BrowserBuiltInitialDocument, BrowserCommittedInitialDocument, BrowserContextHandle,
     BrowserDocumentMaterialization, BrowserDocumentNavigationCommit, BrowserHandle,

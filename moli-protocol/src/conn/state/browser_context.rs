@@ -316,7 +316,10 @@ impl BrowserContext {
         let browser_context = browser
             .create_context(partition, kind, http_cache_root, http_cache_max_bytes)
             .expect("BrowserContext creation should succeed");
+        Self::from_browser_handle(id, browser_context)
+    }
 
+    pub(crate) fn from_browser_handle(id: String, browser_context: BrowserContextHandle) -> Self {
         Self {
             id,
             page_targets: PageAgentHostRegistry::default(),
@@ -353,7 +356,9 @@ impl BrowserContext {
         &mut self,
         sender: moli_core::RendererOutputTransportSender,
     ) {
-        self.browser_context
+        // Observer registration can race native Context disposal.
+        let _ = self
+            .browser_context
             .set_renderer_output_transport_sender(sender);
     }
 

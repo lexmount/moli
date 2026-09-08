@@ -136,7 +136,7 @@ impl RendererOwnerHandle {
             (snapshot, renderer_output)
         };
         if let Some(output) = renderer_output {
-            self.publish_renderer_output(output);
+            output.publish();
         }
 
         let decision = match invoke_lifecycle_decider(decider, snapshot.clone()) {

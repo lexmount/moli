@@ -4,8 +4,9 @@ use parking_lot::Mutex;
 
 use super::{
     PendingRendererOutputRecord, RendererOutputCursor, RendererOutputFence,
-    RendererOutputPublication, RendererOutputRecord, RendererOutputStreamCloseReason,
-    RendererOutputStreamControl, RendererOutputStreamIdentity, RendererOutputTransportSender,
+    RendererOutputPublication, RendererOutputPublicationOrdering, RendererOutputRecord,
+    RendererOutputStreamCloseReason, RendererOutputStreamControl, RendererOutputStreamIdentity,
+    RendererOutputTransportSender,
 };
 
 #[derive(Debug)]
@@ -30,6 +31,40 @@ struct RendererTurnOutputJournalState {
 #[derive(Clone, Debug)]
 pub(crate) struct RendererTurnOutputJournal {
     state: Arc<Mutex<RendererTurnOutputJournalState>>,
+}
+
+/// Frozen Page output retains its exact producer journal until admission.
+/// The transport payload itself never retains the journal.
+pub(crate) struct RendererSettledOutput {
+    journal: RendererTurnOutputJournal,
+    publication: RendererOutputPublication,
+}
+
+impl RendererSettledOutput {
+    pub(crate) fn new(
+        journal: RendererTurnOutputJournal,
+        publication: RendererOutputPublication,
+    ) -> Self {
+        assert_eq!(journal.stream(), publication.cursor().stream());
+        Self {
+            journal,
+            publication,
+        }
+    }
+
+    pub(crate) fn cursor(&self) -> RendererOutputCursor {
+        self.publication.cursor()
+    }
+
+    pub(crate) fn with_ordering(mut self, ordering: RendererOutputPublicationOrdering) -> Self {
+        self.publication = self.publication.with_ordering(ordering);
+        self
+    }
+
+    pub(crate) fn publish(self) {
+        let mut state = self.journal.state.lock();
+        RendererTurnOutputJournal::publish_or_defer_locked(&mut state, self.publication);
+    }
 }
 
 /// Move-owned records reserved at one exact stream sequence but not yet
@@ -190,6 +225,14 @@ impl RendererTurnOutputJournal {
         let mut state = self.state.lock();
         let publication = Self::settle_locked(&mut state)?;
         let cursor = publication.cursor();
+        Self::publish_or_defer_locked(&mut state, publication);
+        Some(cursor)
+    }
+
+    fn publish_or_defer_locked(
+        state: &mut RendererTurnOutputJournalState,
+        publication: RendererOutputPublication,
+    ) {
         if let Some(transport) = state.transport.as_ref() {
             // A closed transport means the protocol owner has already
             // retired. The concrete prefix is still settled at `cursor`; it
@@ -199,7 +242,6 @@ impl RendererTurnOutputJournal {
         } else {
             state.deferred_publications.push(publication);
         }
-        Some(cursor)
     }
 
     /// Atomically appends and publishes one already-resolved producer batch.
@@ -331,13 +373,9 @@ impl RendererTurnOutputJournal {
             }
         }
         state.deferred_publications.clear();
-        if !state.records.is_empty() {
-            let publication = Self::settle_locked(&mut state)
-                .expect("pre-transport renderer records must settle");
-            if publication.publish_to(&transport).is_err() {
-                return;
-            }
-        }
+        // Unsettled records still belong to an active producer turn. A late
+        // observer may replay frozen publications, but must not resolve or
+        // publish the producer's in-progress records from another lane.
         if let Some(control) = state.deferred_close.take() {
             let _ = transport.send(control.into());
         }
