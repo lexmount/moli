@@ -1251,6 +1251,24 @@ mod tests {
     }
 
     #[test]
+    fn classic_cors_script_uses_the_crossorigin_credentials_mode() {
+        for (cross_origin, expected) in [
+            ("anonymous", RequestCredentialsMode::SameOrigin),
+            ("", RequestCredentialsMode::SameOrigin),
+            ("use-credentials", RequestCredentialsMode::Include),
+        ] {
+            let metadata = ScriptFetchMetadata {
+                cross_origin: Some(cross_origin.to_owned()),
+                ..ScriptFetchMetadata::default()
+            };
+            assert_eq!(
+                external_script_credentials_mode(ScriptKind::Classic, &metadata),
+                expected
+            );
+        }
+    }
+
+    #[test]
     fn external_script_request_sets_browser_fetch_mode() {
         let classic =
             prepared_external_script("https://example.test/classic.js", ScriptKind::Classic);
