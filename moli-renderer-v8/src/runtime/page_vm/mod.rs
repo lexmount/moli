@@ -143,6 +143,7 @@ pub use resource_search::{
     RendererMainDocumentResource, RendererResourceContentBody, RendererResourceSearchRequest,
 };
 mod page_resource_completion_task_completion;
+mod page_script_preparation_error;
 #[cfg(test)]
 mod page_selected_task_test_harness;
 mod page_service_worker_client_message;
@@ -241,6 +242,7 @@ pub(crate) use page_resource_completion::{
     AuthorizedCurrentPopupDocumentLoadCompletion, AuthorizedLiveMainModulepreloadFetchCompletion,
     CurrentChildDocumentLoadApplication,
 };
+pub(crate) use page_script_preparation_error::AuthorizedCurrentPageScriptPreparationError;
 pub(crate) use page_service_worker_client_message::AuthorizedCurrentPageServiceWorkerClientMessage;
 pub(crate) use page_service_worker_internal::AuthorizedCurrentPageServiceWorkerInternalTask;
 pub(crate) use page_shared_worker_client_event::AuthorizedCurrentPageSharedWorkerClientEvent;

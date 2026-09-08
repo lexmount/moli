@@ -748,6 +748,7 @@ mod input_dispatch;
 mod input_helpers;
 mod inspector;
 mod native_drag_data;
+mod script_preparation_error;
 pub(crate) use inspector::{dispatch_inspector_io_owner_wake, dispatch_inspector_main_owner_wake};
 mod document_context_transition;
 mod initial_window_document;
