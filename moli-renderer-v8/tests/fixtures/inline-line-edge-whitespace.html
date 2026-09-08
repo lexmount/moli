@@ -1,0 +1,88 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>Line-edge whitespace geometry</title>
+<style>
+  body { margin:0; font:20px/1.5 monospace }
+  .line { width:2em }
+  .target { position:relative; background:lime }
+  b { font-weight:normal }
+  .abs { position:absolute; left:0; top:0; width:4px; height:4px }
+</style>
+<body>
+<script>
+  const patterns = [
+    ['closing', '<span class="target">WW </span>WW', '<span class="target">WW</span><br>WW'],
+    ['split-run', '<span class="target"><b>WW</b> </span>WW', '<span class="target"><b>WW</b></span><br>WW'],
+    ['opening-positioned', 'WW <span class="target">\n<i class="abs"></i>WW</span>',
+      'WW<span class="target"><i class="abs"></i><br>WW</span>'],
+    ['closing-positioned', '<span class="target">WW <i class="abs"></i></span>WW',
+      '<span class="target">WW<i class="abs"></i></span><br>WW'],
+    ['nbsp', '<span class="target">WW\u00a0</span><br>WW',
+      '<span class="target" style="white-space:pre">WW </span><br>WW'],
+  ];
+  const pairs = patterns.flatMap(([name, actual, expected]) => ['ltr','rtl'].flatMap(direction =>
+    ['start','center'].map(align => {
+      const lines = [actual, expected].map(markup => {
+        const line = document.createElement('div');
+        line.className = 'line';
+        line.dir = direction;
+        line.style.textAlign = align;
+        line.innerHTML = markup;
+        document.body.appendChild(line);
+        return line;
+      });
+      return {id:name+'-'+direction+'-'+align,lines};
+    })));
+  const scroller = document.createElement('div');
+  scroller.style.cssText = 'width:100px;height:40px;overflow:auto;font:16px/20px sans-serif';
+  scroller.textContent = 'alpha beta gamma delta epsilon zeta eta theta iota kappa';
+  document.body.appendChild(scroller);
+  function collectInlineFragmentChecks() {
+    function geometry(line) {
+      const origin = line.getBoundingClientRect();
+      const rect = r => [r.x-origin.x,r.y-origin.y,r.width,r.height];
+      const glyphs = [];
+      function walk(node) {
+        if (node.nodeType === Node.TEXT_NODE) {
+          for (let index=0; index<node.length; index++) {
+            if (node.data[index] !== 'W') continue;
+            const range = document.createRange();
+            range.setStart(node,index);
+            range.setEnd(node,index+1);
+            glyphs.push(rect(range.getBoundingClientRect()));
+          }
+        } else for (const child of node.childNodes) walk(child);
+      }
+      walk(line);
+      return [origin.width,origin.height,glyphs,
+        Array.from(line.querySelectorAll('.target,.abs'), element => Array.from(element.getClientRects(),rect))];
+    }
+    const checks = pairs.map(({id,lines}) => {
+      const expected = geometry(lines[1]);
+      if (id.startsWith('opening-positioned-rtl-')) {
+        // The Latin run stays LTR inside an RTL paragraph. The soft break
+        // retains the opening edge after that run, whereas the reference's
+        // forced break resolves that zero-width edge to the paragraph level.
+        // Its correct soft-break anchor is the right edge of the equal-width
+        // text fragment on the next line (verified in Chromium).
+        const next = expected[3][0][1];
+        expected[3][0][0][0] = next[0] + next[2];
+      }
+      return {id,actual:geometry(lines[0]),expected};
+    });
+    checks.push({id:'collapsed-space-does-not-create-horizontal-scrollbar',
+      actual:[scroller.scrollWidth <= scroller.clientWidth, scroller.clientHeight], expected:[true,40]});
+    for (const {id,lines} of pairs.filter(pair => pair.id.startsWith('closing-ltr-'))) {
+      const text = lines[0].querySelector('.target').firstChild;
+      const range = document.createRange();
+      range.setStart(text,2); range.setEnd(text,2);
+      const preceding = range.getBoundingClientRect();
+      range.setStart(text,2); range.setEnd(text,3);
+      const collapsed = range.getBoundingClientRect();
+      checks.push({id:id+'-collapsed-range',
+        actual:[collapsed.x,collapsed.y,collapsed.width,collapsed.height],
+        expected:[preceding.x,preceding.y,0,preceding.height]});
+    }
+    return checks;
+  }
+</script>

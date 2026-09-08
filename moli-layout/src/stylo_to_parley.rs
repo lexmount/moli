@@ -179,6 +179,16 @@ pub(crate) fn text_style(computed: &ComputedValues) -> TextStyle<'static, 'stati
         line_height,
         word_spacing,
         letter_spacing,
+        line_edge_whitespace: match computed.clone_white_space_collapse() {
+            style::computed_values::white_space_collapse::T::Collapse
+            | style::computed_values::white_space_collapse::T::PreserveBreaks => {
+                parley::LineEdgeWhitespace::Collapse
+            }
+            style::computed_values::white_space_collapse::T::Preserve
+            | style::computed_values::white_space_collapse::T::BreakSpaces => {
+                parley::LineEdgeWhitespace::Preserve
+            }
+        },
         text_wrap_mode: match inherited_text.text_wrap_mode {
             style::computed_values::text_wrap_mode::T::Wrap => TextWrapMode::Wrap,
             style::computed_values::text_wrap_mode::T::Nowrap => TextWrapMode::NoWrap,

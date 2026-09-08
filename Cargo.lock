@@ -1347,7 +1347,7 @@ dependencies = [
 [[package]]
 name = "fontique"
 version = "0.11.1"
-source = "git+https://github.com/ldm0/parley?rev=10dc4e3f3611755318463d383386470a9a6f223c#10dc4e3f3611755318463d383386470a9a6f223c"
+source = "git+https://github.com/ldm0/parley?rev=8b320d3232d80c00aa003571a976ebd64c1bf6ae#8b320d3232d80c00aa003571a976ebd64c1bf6ae"
 dependencies = [
  "hashbrown 0.17.1",
  "linebender_resource_handle",
@@ -3721,12 +3721,12 @@ dependencies = [
 [[package]]
 name = "parlance"
 version = "0.1.0"
-source = "git+https://github.com/ldm0/parley?rev=10dc4e3f3611755318463d383386470a9a6f223c#10dc4e3f3611755318463d383386470a9a6f223c"
+source = "git+https://github.com/ldm0/parley?rev=8b320d3232d80c00aa003571a976ebd64c1bf6ae#8b320d3232d80c00aa003571a976ebd64c1bf6ae"
 
 [[package]]
 name = "parley"
 version = "0.11.1"
-source = "git+https://github.com/ldm0/parley?rev=10dc4e3f3611755318463d383386470a9a6f223c#10dc4e3f3611755318463d383386470a9a6f223c"
+source = "git+https://github.com/ldm0/parley?rev=8b320d3232d80c00aa003571a976ebd64c1bf6ae#8b320d3232d80c00aa003571a976ebd64c1bf6ae"
 dependencies = [
  "fontique",
  "harfrust",
@@ -3743,7 +3743,7 @@ dependencies = [
 [[package]]
 name = "parley_data"
 version = "0.11.1"
-source = "git+https://github.com/ldm0/parley?rev=10dc4e3f3611755318463d383386470a9a6f223c#10dc4e3f3611755318463d383386470a9a6f223c"
+source = "git+https://github.com/ldm0/parley?rev=8b320d3232d80c00aa003571a976ebd64c1bf6ae#8b320d3232d80c00aa003571a976ebd64c1bf6ae"
 dependencies = [
  "icu_properties",
 ]

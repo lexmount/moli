@@ -4691,10 +4691,13 @@ html,body{{margin:0;padding:0}}
             ],
             &[(0.0, 16.0), (24.0, 16.0), (36.0, 16.0), (0.0, 36.0)],
         );
+        // The segment break becomes a space in this English document, then
+        // collapses at the soft line end. Chromium reports zero width for its
+        // Range; it must not emit a paint glyph or move any visible character.
         assert_points(
             "cjk segment break and emoji fallback",
             &glyphs(&whitespace, rgb(41, 42, 43)),
-            &[(0.0, 58.0), (20.0, 58.0), (0.0, 78.0), (20.0, 78.0)],
+            &[(0.0, 58.0), (0.0, 78.0), (20.0, 78.0)],
         );
         assert_points(
             "preserve-breaks",

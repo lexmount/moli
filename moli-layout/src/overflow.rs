@@ -361,7 +361,9 @@ where
             local_overflow = local_overflow.union(offset_rect(line.rect, origin));
         }
         for fragment in &context.fragments.text {
-            local_overflow = local_overflow.union(offset_rect(fragment.rect, origin));
+            if fragment.kind == crate::inline::InlineTextFragmentKind::Content {
+                local_overflow = local_overflow.union(offset_rect(fragment.rect, origin));
+            }
         }
         for fragment in &context.fragments.boxes {
             local_overflow = local_overflow.union(offset_rect(fragment.box_model.border, origin));

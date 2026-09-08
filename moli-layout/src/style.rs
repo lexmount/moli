@@ -1648,6 +1648,14 @@ impl ResolvedLayoutStyle {
         }
         parley::TextStyle {
             font_size: self.font_size,
+            line_edge_whitespace: match self.white_space_collapse {
+                InlineWhiteSpaceCollapse::Collapse | InlineWhiteSpaceCollapse::PreserveBreaks => {
+                    parley::LineEdgeWhitespace::Collapse
+                }
+                InlineWhiteSpaceCollapse::Preserve | InlineWhiteSpaceCollapse::BreakSpaces => {
+                    parley::LineEdgeWhitespace::Preserve
+                }
+            },
             line_height: parley::LineHeight::Absolute(self.line_height),
             brush: crate::stylo_to_parley::TextBrush {
                 color: self.text_color,

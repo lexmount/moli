@@ -87,8 +87,8 @@ exclude = ["vendor/xml5ever-0.39.0"]
 license = "MIT OR Apache-2.0"
 
 [patch.crates-io]
-# Keep typed inline boundaries and out-of-flow semantics in paragraph layout.
-parley = { git = "https://github.com/ldm0/parley", rev = "10dc4e3f3611755318463d383386470a9a6f223c" }
+# Keep inline boundaries, out-of-flow items and line-edge whitespace in paragraph layout.
+parley = { git = "https://github.com/ldm0/parley", rev = "8b320d3232d80c00aa003571a976ebd64c1bf6ae" }
 xml5ever = { path = "vendor/xml5ever-0.39.0" }
 curl = { git = "https://github.com/ldm0/curl-rust", branch = "moli" }
 curl-sys = { git = "https://github.com/ldm0/curl-rust", branch = "moli" }

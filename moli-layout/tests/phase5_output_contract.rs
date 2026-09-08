@@ -800,8 +800,15 @@ fn scrollbar_feedback_rebreaks_the_reused_inline_layout_at_its_final_width() {
     assert_eq!(feedback.metrics.numeric_layout_pass_count, 2);
     assert_eq!(
         feedback.element_metrics_for_source(1).unwrap().client_size,
-        moli_layout::LayoutSize::new(85.0, 25.0),
+        moli_layout::LayoutSize::new(85.0, 40.0),
     );
+    // Collapsed line-end spaces do not create horizontal overflow. The
+    // vertical scrollbar changes line width, but must not reveal a second
+    // scrollbar (matching Chromium's 100px by 40px auto-overflow box).
+    let scroller = feedback.source_output(1).unwrap().principal_box.unwrap();
+    let extent = feedback.scroll_extent(scroller).unwrap();
+    assert!(extent.vertical_scrollbar.is_some());
+    assert!(extent.horizontal_scrollbar.is_none());
     let feedback_text = feedback.client_rects_for_source(2);
 
     // Lay out the same paragraph directly at the converged 85px content

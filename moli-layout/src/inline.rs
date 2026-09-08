@@ -420,7 +420,16 @@ pub(crate) struct InlineSourceFragment {
     pub(crate) source_byte_range: Range<usize>,
     pub(crate) source_utf16_range: Range<usize>,
     pub(crate) rtl: bool,
+    pub(crate) kind: InlineTextFragmentKind,
     pub(crate) rect: PaintRect,
+}
+
+/// A source position can survive CSS line-edge collapsing without contributing
+/// to an inline box, paint, or scrollable overflow.
+#[derive(Clone, Copy, Debug, Hash, PartialEq, Eq, PartialOrd, Ord)]
+pub(crate) enum InlineTextFragmentKind {
+    Content,
+    CollapsedWhitespace,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -549,11 +558,12 @@ pub(crate) fn build_inline_fragments<N>(
             let run_metrics = run.metrics();
             for cluster in run.visual_clusters() {
                 let range = cluster.text_range();
-                let style_index = cluster
-                    .glyphs()
-                    .next()
-                    .map(|glyph| glyph.style_index())
-                    .unwrap_or_default();
+                let style_index = cluster.first_style_index();
+                let kind = if cluster.is_collapsed() {
+                    InlineTextFragmentKind::CollapsedWhitespace
+                } else {
+                    InlineTextFragmentKind::Content
+                };
                 let vertical_offset = placement.map_or(0.0, |placement| {
                     placement.glyph_offset(run.index(), style_index)
                 });
@@ -576,7 +586,8 @@ pub(crate) fn build_inline_fragments<N>(
                     cluster.advance().max(0.0),
                     (ascent + descent).max(0.0),
                 );
-                if let Some(style) = layout.styles().get(style_index)
+                if kind == InlineTextFragmentKind::Content
+                    && let Some(style) = layout.styles().get(style_index)
                     && style.brush.paint
                 {
                     // Parley exposes typographic cluster boxes rather than
@@ -594,13 +605,15 @@ pub(crate) fn build_inline_fragments<N>(
                         None => line.paint_bounds = InlinePaintBounds::Unbounded,
                     }
                 }
-                for unit in overlapping_output_ranges(&context.text_units, &range) {
-                    for ancestor in &unit.ancestors {
-                        box_fragments
-                            .entry((ancestor.index(), line_index))
-                            .or_default()
-                            .bounds
-                            .include_inline_axis(rect.x, rect.width);
+                if kind == InlineTextFragmentKind::Content {
+                    for unit in overlapping_output_ranges(&context.text_units, &range) {
+                        for ancestor in &unit.ancestors {
+                            box_fragments
+                                .entry((ancestor.index(), line_index))
+                                .or_default()
+                                .bounds
+                                .include_inline_axis(rect.x, rect.width);
+                        }
                     }
                 }
                 for source in overlapping_output_ranges(&context.source_map, &range) {
@@ -613,6 +626,7 @@ pub(crate) fn build_inline_fragments<N>(
                             source_utf16_end: source.source_utf16_range.end,
                             line_index,
                             rtl: cluster.is_rtl(),
+                            kind,
                         })
                         .or_default()
                         .include(rect);
@@ -705,6 +719,7 @@ pub(crate) fn build_inline_fragments<N>(
                 source_byte_range: key.source_byte_start..key.source_byte_end,
                 source_utf16_range: key.source_utf16_start..key.source_utf16_end,
                 rtl: key.rtl,
+                kind: key.kind,
                 rect: accumulator.rect(line_rect)?,
             })
         })
@@ -1591,6 +1606,7 @@ struct SourceFragmentKey {
     source_utf16_end: usize,
     line_index: usize,
     rtl: bool,
+    kind: InlineTextFragmentKind,
 }
 
 #[derive(Clone, Copy, Debug, Default)]
