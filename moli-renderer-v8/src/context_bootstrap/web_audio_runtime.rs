@@ -12,6 +12,12 @@ use crate::util::{
 use crate::webidl;
 use moli_webapi_declare::{WebApiFunctionTemplate, WebApiObject};
 
+mod audio_param;
+mod biquad;
+mod graph;
+
+use audio_param::{audio_param, detune_param};
+
 const AUDIO_CONTEXT_LISTENERS_SLOT: &str = "__moliAudioContextListeners";
 const AUDIO_CONTEXT_MODULES_SLOT: &str = "__moliAudioContextModules";
 const AUDIO_CONTEXT_MODULE_LIST_SLOT: &str = "__moliAudioContextModuleList";
@@ -165,6 +171,8 @@ struct OscillatorNodeObjectDeclaration<'scope> {
     kind: &'static str,
     #[webapi(data_property)]
     frequency: v8::Local<'scope, v8::Object>,
+    #[webapi(data_property, readonly)]
+    detune: v8::Local<'scope, v8::Object>,
     #[webapi(method, length = 1, callback = audio_node_connect_callback)]
     connect: (),
     #[webapi(method, length = 0, callback = audio_node_disconnect_callback)]
@@ -251,15 +259,6 @@ struct OfflineAudioCompletionEventDeclaration<'scope> {
     event_type: &'static str,
     #[webapi(data_property = "renderedBuffer")]
     rendered_buffer: v8::Local<'scope, v8::Object>,
-}
-
-#[derive(WebApiObject)]
-#[webapi(interface = "AudioParam")]
-struct AudioParamObjectDeclaration {
-    #[webapi(data_property)]
-    value: f64,
-    #[webapi(method, length = 2, callback = audio_param_set_value_at_time_callback)]
-    set_value_at_time: (),
 }
 
 #[derive(Default, WebApiObject)]
@@ -414,6 +413,9 @@ struct AudioWorkletNodeTemplateDeclaration {
 #[derive(WebApiFunctionTemplate)]
 #[webapi(name = "BaseAudioContext", enumerable)]
 struct BaseAudioContextPrototypeDeclaration {
+    #[webapi(method = "createBiquadFilter", length = 0, callback = biquad::create_biquad_filter)]
+    create_biquad_filter: (),
+
     #[webapi(
         method = "createOscillator",
         length = 0,
@@ -464,7 +466,19 @@ pub(in crate::context_bootstrap) fn install_web_audio_template_bindings<'s>(
     template: v8::Local<'s, v8::FunctionTemplate>,
     interface_name: &str,
 ) {
+    if matches!(
+        interface_name,
+        "OscillatorNode"
+            | "DynamicsCompressorNode"
+            | "AnalyserNode"
+            | "BiquadFilterNode"
+            | "AudioDestinationNode"
+    ) {
+        graph::install(scope, template);
+    }
     match interface_name {
+        "AudioParam" => audio_param::install(scope, template),
+        "BiquadFilterNode" => biquad::install(scope, template),
         "BaseAudioContext" => {
             BaseAudioContextPrototypeDeclaration::initialize_prototype_template(
                 scope,
@@ -507,7 +521,7 @@ fn audio_context_constructor_callback<'s>(
     }
 
     let context = args.this();
-    let destination = audio_destination_node(scope);
+    let destination = audio_destination_node(scope, context);
     let modules = new_web_audio_map_object(scope);
     let module_list = v8::Array::new(scope, 0);
     let processors = new_web_audio_map_object(scope);
@@ -842,6 +856,7 @@ fn audio_worklet_node_constructor_callback<'s>(
     AudioWorkletNodeObjectDeclaration::new(context, port1)
         .initialize(scope, node)
         .expect("AudioWorkletNode declaration should initialize object");
+    graph::initialize_node(scope, node, context);
     if let Some(worker) =
         web_audio_object_slot(scope, module_state, AUDIO_WORKLET_MODULE_WORKER_SLOT)
     {
@@ -1248,7 +1263,7 @@ pub(in crate::context_bootstrap) fn offline_audio_context_constructor_callback<'
     }
 
     let context = args.this();
-    let destination = audio_destination_node(scope);
+    let destination = audio_destination_node(scope, context);
     let compressors = v8::Array::new(scope, 0);
     OfflineAudioContextObjectDeclaration::new(
         0.0,
@@ -1312,10 +1327,14 @@ fn audio_context_create_oscillator_callback<'s>(
     if !require_base_audio_context(scope, args.this()) {
         return;
     }
-    let frequency = audio_param(scope, 440.0);
-    let node = OscillatorNodeObjectDeclaration::new("sine", frequency)
+    let nyquist = audio_context_sample_rate(scope, args.this()) / 2.0;
+    let frequency = audio_param(scope, 440.0, -nyquist, nyquist);
+    let detune = detune_param(scope);
+    let node = OscillatorNodeObjectDeclaration::new("sine", frequency, detune)
         .bind(scope)
         .expect("OscillatorNode declaration should bind");
+    graph::initialize_node(scope, node, args.this());
+    graph::initialize_source(scope, node);
     rv.set(node.into());
 }
 
@@ -1327,15 +1346,16 @@ fn audio_context_create_dynamics_compressor_callback<'s>(
     if !require_base_audio_context(scope, args.this()) {
         return;
     }
-    let threshold = audio_param(scope, -24.0);
-    let knee = audio_param(scope, 30.0);
-    let ratio = audio_param(scope, 12.0);
-    let attack = audio_param(scope, 0.003);
-    let release = audio_param(scope, 0.25);
+    let threshold = audio_param(scope, -24.0, -100.0, 0.0);
+    let knee = audio_param(scope, 30.0, 0.0, 40.0);
+    let ratio = audio_param(scope, 12.0, 1.0, 20.0);
+    let attack = audio_param(scope, 0.003, 0.0, 1.0);
+    let release = audio_param(scope, 0.25, 0.0, 1.0);
     let node =
         DynamicsCompressorNodeObjectDeclaration::new(threshold, knee, ratio, attack, release, 0.0)
             .bind(scope)
             .expect("DynamicsCompressorNode declaration should bind");
+    graph::initialize_node(scope, node, args.this());
     remember_context_compressor(scope, args.this(), node);
     rv.set(node.into());
 }
@@ -1351,6 +1371,7 @@ fn audio_context_create_analyser_callback<'s>(
     let node = AnalyserNodeObjectDeclaration::new(2048.0, -100.0, -30.0, 0.8)
         .bind(scope)
         .expect("AnalyserNode declaration should bind");
+    graph::initialize_node(scope, node, args.this());
     rv.set(node.into());
 }
 
@@ -1365,7 +1386,8 @@ fn offline_audio_context_start_rendering_callback<'s>(
         .unwrap_or(44_100);
     let sample_rate =
         web_audio_number_slot(scope, context, OFFLINE_AUDIO_SAMPLE_RATE_SLOT).unwrap_or(44_100.0);
-    let rendered_buffer = build_audio_buffer(scope, length, sample_rate);
+    let has_input = graph::prepare_offline_render(scope, context, length as f64 / sample_rate);
+    let rendered_buffer = build_audio_buffer(scope, length, sample_rate, has_input);
     define_non_enumerable_string_property(scope, context, "state", "closed");
 
     let payload = OfflineAudioCompletePayloadDeclaration::new(context, rendered_buffer)
@@ -1453,12 +1475,12 @@ fn mark_context_compressors_rendered<'s>(
         let Ok(node) = v8::Local::<v8::Object>::try_from(value) else {
             continue;
         };
-        set_web_audio_number_slot(
-            scope,
-            node,
-            DYNAMICS_COMPRESSOR_REDUCTION_SLOT,
-            SYNTHETIC_COMPRESSOR_REDUCTION,
-        );
+        let reduction = if graph::rendered_with_input(scope, node) {
+            SYNTHETIC_COMPRESSOR_REDUCTION
+        } else {
+            0.0
+        };
+        set_web_audio_number_slot(scope, node, DYNAMICS_COMPRESSOR_REDUCTION_SLOT, reduction);
     }
 }
 
@@ -1467,19 +1489,17 @@ fn audio_node_connect_callback<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'s, v8::Value>,
 ) {
-    if args.length() > 0 {
-        rv.set(args.get(0));
-    } else {
-        rv.set(v8::undefined(scope).into());
+    if let Some(destination) = graph::connect(scope, &args) {
+        rv.set(destination.into());
     }
 }
 
 fn audio_node_disconnect_callback<'s>(
     scope: &mut v8::PinScope<'s, '_>,
-    _args: v8::FunctionCallbackArguments<'s>,
-    mut rv: v8::ReturnValue<'s, v8::Value>,
+    args: v8::FunctionCallbackArguments<'s>,
+    _rv: v8::ReturnValue<'s, v8::Value>,
 ) {
-    rv.set(v8::undefined(scope).into());
+    graph::disconnect(scope, &args);
 }
 
 fn analyser_get_float_frequency_data_callback<'s>(
@@ -1628,10 +1648,12 @@ fn copy_analyser_data<'s>(
     // Use the intrinsic view length, not a user-overridable JS property. The
     // validated fftSize bounds the work, and excess destination entries stay intact.
     let length = array.length().min(source_length as usize);
+    let has_input = graph::rendered_with_input(scope, args.this());
     for index in 0..length {
-        // Preserve the existing compatibility profile. This is synthetic data,
-        // not an FFT of connected nodes; real audio graph processing is separate.
+        // The existing connected-input profile is still synthetic, not an FFT.
+        // Never expose it before rendering or for a graph with no started source.
         let fill = match kind {
+            AnalyserData::FloatFrequency if !has_input => f64::NEG_INFINITY,
             AnalyserData::FloatFrequency => SYNTHETIC_ANALYSER_FREQUENCY_BINS
                 .get(index)
                 .or_else(|| SYNTHETIC_ANALYSER_FREQUENCY_BINS.last())
@@ -1649,10 +1671,10 @@ fn copy_analyser_data<'s>(
 
 fn oscillator_start_callback<'s>(
     scope: &mut v8::PinScope<'s, '_>,
-    _args: v8::FunctionCallbackArguments<'s>,
-    mut rv: v8::ReturnValue<'s, v8::Value>,
+    args: v8::FunctionCallbackArguments<'s>,
+    _rv: v8::ReturnValue<'s, v8::Value>,
 ) {
-    rv.set(v8::undefined(scope).into());
+    graph::start_source(scope, &args);
 }
 
 fn audio_param_set_value_at_time_callback<'s>(
@@ -1669,10 +1691,13 @@ fn audio_param_set_value_at_time_callback<'s>(
     rv.set(param.into());
 }
 
-fn audio_param<'s>(scope: &mut v8::PinScope<'s, '_>, value: f64) -> v8::Local<'s, v8::Object> {
-    AudioParamObjectDeclaration::new(value)
-        .bind(scope)
-        .expect("AudioParam declaration should bind")
+fn audio_context_sample_rate<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    context: v8::Local<'s, v8::Object>,
+) -> f64 {
+    // Realtime contexts currently have a fixed 44.1 kHz sample rate. Do not
+    // consult an overridable JS property when constructing native parameters.
+    web_audio_number_slot(scope, context, OFFLINE_AUDIO_SAMPLE_RATE_SLOT).unwrap_or(44_100.0)
 }
 
 fn web_audio_number_slot<'s>(
@@ -1711,18 +1736,25 @@ fn set_web_audio_number_slot(
     set_private_value(scope, object, slot, value.into());
 }
 
-fn audio_destination_node<'s>(scope: &mut v8::PinScope<'s, '_>) -> v8::Local<'s, v8::Object> {
-    AudioDestinationNodeObjectDeclaration::default()
+fn audio_destination_node<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    context: v8::Local<'s, v8::Object>,
+) -> v8::Local<'s, v8::Object> {
+    let node = AudioDestinationNodeObjectDeclaration::default()
         .bind(scope)
-        .expect("AudioDestinationNode declaration should bind")
+        .expect("AudioDestinationNode declaration should bind");
+    graph::initialize_node(scope, node, context);
+    graph::set_destination(scope, context, node);
+    node
 }
 
 fn build_audio_buffer<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     length: usize,
     sample_rate: f64,
+    has_input: bool,
 ) -> v8::Local<'s, v8::Object> {
-    let channel_data = build_channel_data_view(scope, length);
+    let channel_data = build_channel_data_view(scope, length, has_input);
     AudioBufferObjectDeclaration::new(
         length as f64,
         sample_rate,
@@ -1736,8 +1768,13 @@ fn build_audio_buffer<'s>(
 fn build_channel_data_view<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     length: usize,
+    has_input: bool,
 ) -> v8::Local<'s, v8::Object> {
-    let samples = synthetic_audio_samples(length);
+    let samples = if has_input {
+        synthetic_audio_samples(length)
+    } else {
+        vec![0.0; length]
+    };
     let mut bytes = Vec::with_capacity(samples.len() * std::mem::size_of::<f32>());
     for sample in samples {
         bytes.extend_from_slice(&sample.to_le_bytes());

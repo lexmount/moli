@@ -616,6 +616,7 @@ pub(in crate::context_bootstrap) fn build_constructor_template<'s>(
         | ConstructorKind::OscillatorNode
         | ConstructorKind::DynamicsCompressorNode
         | ConstructorKind::AnalyserNode
+        | ConstructorKind::BiquadFilterNode
         | ConstructorKind::AudioParam
         | ConstructorKind::AudioBuffer => {
             v8::FunctionTemplate::builder(illegal_constructor_callback)

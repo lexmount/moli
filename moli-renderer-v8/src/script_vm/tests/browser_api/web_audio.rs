@@ -9,7 +9,7 @@ fn web_audio_factories_are_shared_by_realtime_and_offline_contexts() {
 (() => {
   const realtime = new AudioContext();
   const offline = new OfflineAudioContext(1, 64, 44100);
-  return JSON.stringify(["createOscillator", "createAnalyser", "createDynamicsCompressor"].map(name => {
+  return JSON.stringify(["createOscillator", "createAnalyser", "createDynamicsCompressor", "createBiquadFilter"].map(name => {
     const method = BaseAudioContext.prototype[name];
     const liveNode = realtime[name]();
     const offlineNode = offline[name]();
@@ -30,7 +30,7 @@ fn web_audio_factories_are_shared_by_realtime_and_offline_contexts() {
         .expect("both audio context kinds should expose shared factories");
     assert_eq!(
         result,
-        r#"[[true,true,false,false,0,"OscillatorNode","OscillatorNode",true],[true,true,false,false,0,"AnalyserNode","AnalyserNode",true],[true,true,false,false,0,"DynamicsCompressorNode","DynamicsCompressorNode",true]]"#
+        r#"[[true,true,false,false,0,"OscillatorNode","OscillatorNode",true],[true,true,false,false,0,"AnalyserNode","AnalyserNode",true],[true,true,false,false,0,"DynamicsCompressorNode","DynamicsCompressorNode",true],[true,true,false,false,0,"BiquadFilterNode","BiquadFilterNode",true]]"#
     );
 }
 
@@ -76,7 +76,7 @@ fn web_audio_factories_reject_forged_contexts_and_keep_nodes_independent() {
 (() => {
   const errors = [];
   for (const context of [new AudioContext(), new OfflineAudioContext(1, 64, 44100)]) {
-    for (const name of ['createOscillator', 'createAnalyser', 'createDynamicsCompressor']) {
+    for (const name of ['createOscillator', 'createAnalyser', 'createDynamicsCompressor', 'createBiquadFilter']) {
       for (const receiver of [{}, BaseAudioContext.prototype, Object.create(context), new Proxy(context, {})]) {
         try { context[name].call(receiver); errors.push(name + ': accepted forged context'); }
         catch (error) { if (error.name !== 'TypeError') errors.push(name + ': ' + error.name); }
@@ -146,7 +146,7 @@ fn web_audio_analyser_writes_only_available_samples_in_the_destination_view() {
     for (const size of [32, 2048, 32768]) {
       analyser.fftSize = size;
       for (const [method, ArrayType, count, expected] of [
-        ['getFloatFrequencyData', Float32Array, size / 2, null],
+        ['getFloatFrequencyData', Float32Array, size / 2, -Infinity],
         ['getFloatTimeDomainData', Float32Array, size, 0],
         ['getByteFrequencyData', Uint8Array, size / 2, 0],
         ['getByteTimeDomainData', Uint8Array, size, 128]
@@ -159,7 +159,7 @@ fn web_audio_analyser_writes_only_available_samples_in_the_destination_view() {
           for (let i = 0; i < storage.length; i++) {
             const written = i >= 2 && i < 2 + Math.min(count, length);
             if (!written && storage[i] !== 57) errors.push(method + ': out-of-range write ' + i);
-            if (written && (expected === null ? !Number.isFinite(storage[i]) || storage[i] >= 0 : storage[i] !== expected)) errors.push(method + ': sample ' + i);
+            if (written && storage[i] !== expected) errors.push(method + ': sample ' + i);
           }
         }
       }
@@ -210,5 +210,135 @@ fn web_audio_analyser_checks_receiver_and_typed_array_without_duck_typing() {
   return JSON.stringify(errors);
 })()
 "#).expect("analyser data methods should reject incompatible receivers and buffers");
+    assert_eq!(result, "[]");
+}
+
+#[test]
+fn web_audio_biquad_and_existing_params_expose_native_readonly_metadata() {
+    let mut vm = new_storage_test_vm("https://audio-parameter-metadata.test/");
+    let result = vm.eval(r#"
+(() => {
+  const errors = [];
+  for (const rate of [8000, 44100, 48000]) {
+    const ctx = new OfflineAudioContext(1, 64, rate);
+    ctx.sampleRate = 123; // Native bounds must not depend on an overridable property.
+    const filter = ctx.createBiquadFilter(), other = ctx.createBiquadFilter();
+    if (!(filter instanceof BiquadFilterNode) || Object.prototype.toString.call(filter) !== '[object BiquadFilterNode]') errors.push('brand');
+    if (filter.type !== 'lowpass' || filter.frequency !== filter.frequency || filter.frequency === other.frequency) errors.push('node state');
+    if (Reflect.set(filter, 'frequency', {}) !== false) errors.push('writable frequency');
+    const osc = ctx.createOscillator(), comp = ctx.createDynamicsCompressor();
+    for (const node of [filter, osc, comp, ctx.createAnalyser(), ctx.destination]) {
+      if (node.context !== ctx || Reflect.set(node, 'context', {}) !== false) errors.push('context');
+    }
+    const rows = [
+      [filter.frequency, 350, 0, rate / 2],
+      [filter.Q, 1, -3.4028234663852886e38, 3.4028234663852886e38],
+      [filter.detune, 0, -153600, 153600],
+      [osc.frequency, 440, -rate / 2, rate / 2],
+      [osc.detune, 0, -153600, 153600],
+      [comp.threshold, -24, -100, 0], [comp.knee, 30, 0, 40],
+      [comp.ratio, 12, 1, 20], [comp.attack, Math.fround(.003), 0, 1],
+      [comp.release, .25, 0, 1]
+    ];
+    for (const [p, value, min, max] of rows) {
+      if (!(p instanceof AudioParam) || p.value !== value || p.defaultValue !== value || p.minValue !== min || p.maxValue !== max) errors.push('metadata ' + value);
+      p.value = 123;
+      if (p.defaultValue !== value) errors.push('default changed');
+      for (const key of ['defaultValue', 'minValue', 'maxValue']) {
+        const descriptor = Object.getOwnPropertyDescriptor(AudioParam.prototype, key);
+        if (!descriptor || !descriptor.enumerable || descriptor.set || Reflect.set(p, key, 999) !== false) errors.push('readonly ' + key);
+        for (const receiver of [{}, AudioParam.prototype, Object.create(p), new Proxy(p, {})]) {
+          try { descriptor.get.call(receiver); errors.push('accepted forged param'); }
+          catch (e) { if (e.name !== 'TypeError') errors.push(e.name); }
+        }
+      }
+    }
+    if (filter.gain.defaultValue !== 0 || filter.gain.minValue !== Math.fround(-3.4028234663852886e38) || !(filter.gain.maxValue > 1541 && filter.gain.maxValue < 1542)) errors.push('gain range');
+    try { filter.getFrequencyResponse(new Float32Array(1), new Float32Array(1), new Float32Array(1)); errors.push('fabricated frequency response'); }
+    catch (e) { if (e.name !== 'NotSupportedError') errors.push('response ' + e.name); }
+  }
+  return JSON.stringify(errors);
+})()
+"#).expect("BiquadFilter and AudioParam metadata should be native and context-specific");
+    assert_eq!(result, "[]");
+}
+
+#[test]
+fn offline_audio_silence_depends_on_reachable_started_sources() {
+    let mut vm = new_storage_test_vm("https://audio-graph-silence.test/");
+    vm.exec(r#"
+globalThis.__audioSilenceResults = [];
+for (const mode of ['empty', 'unconnected', 'not-started', 'future', 'disconnected-source', 'disconnected-sink', 'cycle', 'connected', 'duplicate', 'selected-disconnect']) {
+  const ctx = new OfflineAudioContext(1, 100, 44100);
+  const osc = ctx.createOscillator(), comp = ctx.createDynamicsCompressor();
+  if (mode !== 'empty' && mode !== 'unconnected') {
+    osc.connect(comp);
+    comp.connect(ctx.destination);
+  }
+  if (mode !== 'empty' && mode !== 'not-started') osc.start(mode === 'future' ? 1 : 0);
+  if (mode === 'disconnected-source') osc.disconnect();
+  if (mode === 'disconnected-sink') comp.disconnect(ctx.destination);
+  if (mode === 'cycle') { osc.disconnect(); const a = ctx.createAnalyser(); comp.connect(a); a.connect(comp); }
+  if (mode === 'duplicate') { osc.connect(comp); osc.connect(comp); }
+  if (mode === 'selected-disconnect') { const a = ctx.createAnalyser(); osc.connect(a); osc.disconnect(a); }
+  ctx.startRendering().then(buffer => {
+    __audioSilenceResults.push([mode, buffer.getChannelData(0).some(x => x !== 0), comp.reduction < 0]);
+  });
+}
+"#, None).expect("offline graph scenarios should render without hanging on a cycle");
+    let result = vm.eval("JSON.stringify(__audioSilenceResults)").unwrap();
+    assert_eq!(
+        result,
+        r#"[["empty",false,false],["unconnected",false,false],["not-started",false,false],["future",false,false],["disconnected-source",false,false],["disconnected-sink",false,false],["cycle",false,false],["connected",true,true],["duplicate",true,true],["selected-disconnect",true,true]]"#
+    );
+}
+
+#[test]
+fn offline_analyser_starts_silent_and_retains_the_rendered_input_snapshot() {
+    let mut vm = new_storage_test_vm("https://audio-analyser-silence.test/");
+    vm.exec(r#"
+const ctx = new OfflineAudioContext(1, 5000, 44100);
+const osc = ctx.createOscillator(), comp = ctx.createDynamicsCompressor();
+const analyser = ctx.createAnalyser(), silent = ctx.createAnalyser();
+const isSilent = node => { const data = new Float32Array(16); node.getFloatFrequencyData(data); return data.every(x => x === -Infinity); };
+globalThis.__analyserSilence = [isSilent(analyser)];
+osc.connect(comp); comp.connect(analyser); comp.connect(ctx.destination); osc.start();
+__analyserSilence.push(isSilent(analyser));
+ctx.oncomplete = () => {
+  comp.disconnect(); osc.disconnect();
+  __analyserSilence.push(isSilent(analyser), isSilent(silent));
+};
+ctx.startRendering();
+"#, None).expect("analyser silence and retained rendering state should evaluate");
+    assert_eq!(
+        vm.eval("JSON.stringify(__analyserSilence)").unwrap(),
+        "[true,true,false,true]"
+    );
+}
+
+#[test]
+fn web_audio_connections_validate_context_and_source_receivers() {
+    let mut vm = new_storage_test_vm("https://audio-connection-receivers.test/");
+    let result = vm.eval(r#"
+(() => {
+  const ctx = new AudioContext(), other = new AudioContext(), osc = ctx.createOscillator();
+  const errors = [];
+  const check = (fn, expected) => { try { fn(); errors.push('accepted ' + expected); } catch (e) { if (e.name !== expected) errors.push(e.name); } };
+  check(() => osc.connect(other.destination), 'InvalidAccessError');
+  check(() => osc.connect({}), 'TypeError');
+  check(() => osc.connect(ctx.destination, 1), 'IndexSizeError');
+  check(() => osc.connect(new Proxy(ctx.destination, {})), 'TypeError');
+  for (const receiver of [{}, Object.create(osc), new Proxy(osc, {})]) {
+    check(() => osc.connect.call(receiver, ctx.destination), 'TypeError');
+    check(() => osc.disconnect.call(receiver), 'TypeError');
+    check(() => osc.start.call(receiver), 'TypeError');
+  }
+  check(() => osc.start(-1), 'RangeError');
+  check(() => osc.start(Infinity), 'TypeError');
+  osc.start();
+  check(() => osc.start(), 'InvalidStateError');
+  return JSON.stringify(errors);
+})()
+"#).expect("audio graph operations should validate receivers and context ownership");
     assert_eq!(result, "[]");
 }

@@ -162,6 +162,7 @@ pub(in crate::context_bootstrap) enum ConstructorKind {
     OscillatorNode,
     DynamicsCompressorNode,
     AnalyserNode,
+    BiquadFilterNode,
     AudioParam,
     AudioBuffer,
     Text,

@@ -77,11 +77,13 @@ fn eval_can_use_realtime_audio_oscillator_and_analyser_shims() -> Result<()> {
           oscillator.frequency.setValueAtTime(880, context.currentTime);
           analyser.fftSize = 32;
           const connected = oscillator.connect(analyser).connect(context.destination);
-          oscillator.start(0);
+          // Before starting the source, the analyser must be silent. Reading
+          // after start would depend on whether an audio quantum has run yet.
           const frequencies = new Float32Array(analyser.frequencyBinCount + 1).fill(42);
           const readResult = analyser.getFloatFrequencyData(frequencies);
           const waveform = new Uint8Array(analyser.fftSize);
           analyser.getByteTimeDomainData(waveform);
+          const startResult = oscillator.start(0);
           oscillator.disconnect();
           analyser.disconnect();
           await context.close();
@@ -91,8 +93,9 @@ fn eval_can_use_realtime_audio_oscillator_and_analyser_shims() -> Result<()> {
             analyser: analyser instanceof AnalyserNode,
             connected: connected === context.destination,
             readReturnedUndefined: readResult === undefined,
+            startReturnedUndefined: startResult === undefined,
             bins: analyser.frequencyBinCount,
-            filled: frequencies.slice(0, -1).every(value => Number.isFinite(value) && value < 0),
+            silentFrequencies: frequencies.slice(0, -1).every(value => value === -Infinity),
             untouchedTail: frequencies[analyser.frequencyBinCount],
             silentWaveform: waveform.every(value => value === 128),
             state: context.state
@@ -110,8 +113,9 @@ fn eval_can_use_realtime_audio_oscillator_and_analyser_shims() -> Result<()> {
             "analyser": true,
             "connected": true,
             "readReturnedUndefined": true,
+            "startReturnedUndefined": true,
             "bins": 16,
-            "filled": true,
+            "silentFrequencies": true,
             "untouchedTail": 42,
             "silentWaveform": true,
             "state": "closed"

@@ -1745,6 +1745,7 @@ pub(crate) fn finish_context_bootstrap(
         ("OscillatorNode", "OscillatorNode"),
         ("DynamicsCompressorNode", "DynamicsCompressorNode"),
         ("AnalyserNode", "AnalyserNode"),
+        ("BiquadFilterNode", "BiquadFilterNode"),
         ("AudioParam", "AudioParam"),
         ("AudioBuffer", "AudioBuffer"),
         ("AbortSignal", "AbortSignal"),

@@ -1377,6 +1377,11 @@ const CONSTRUCTOR_SPECS_AFTER_STREAMS: &[ConstructorSpec] = &[
         kind: ConstructorKind::AudioParam,
     },
     ConstructorSpec {
+        name: "BiquadFilterNode",
+        parent: None,
+        kind: ConstructorKind::BiquadFilterNode,
+    },
+    ConstructorSpec {
         name: "AudioBuffer",
         parent: None,
         kind: ConstructorKind::AudioBuffer,
