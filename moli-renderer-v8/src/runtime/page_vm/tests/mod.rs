@@ -108,6 +108,7 @@ mod child_dynamic_import_owner_action;
 mod child_host_load;
 mod child_module_dependency_fetch_start;
 mod child_module_document_script_ready;
+mod child_module_error_reporting;
 mod child_module_script_terminal;
 mod child_module_script_terminal_completion;
 mod child_modulepreload_event_action;
@@ -5990,6 +5991,13 @@ globalThis.__childModuleDeferFailureOrderFirst = 1;
     <script id="first-module-defer-success" type="module" src="{first_script_url}"><\/script>
     <script id="second-module-defer-failure" type="module" src="{second_script_url}"><\/script>
     <script>
+      addEventListener("error", event => {{
+        parent.__childModuleDeferFailureOrderEvents.push("window-error:" + (
+          event instanceof ErrorEvent && event.error instanceof SyntaxError &&
+          event.target === window && event.isTrusted
+        ));
+        event.preventDefault();
+      }});
       document.getElementById("first-module-defer-success").addEventListener("load", () => {{
         parent.__childModuleDeferFailureOrderEvents.push("first-load");
       }});
@@ -6124,8 +6132,8 @@ globalThis.__childModuleDeferFailureOrderFirst = 1;
                     page_vm
                         .vm_mut()
                         .eval("__childModuleDeferFailureOrderEvents.join('|')")?,
-                    "before:true|after:undefined|first-module:true|first-load|second-error",
-                    "later graph failure should dispatch only after the earlier module-defer completes"
+                    "before:true|after:undefined|first-module:true|first-load|window-error:true|second-load",
+                    "later parse failure should report to its Window and fire external script load only after the earlier module-defer completes"
                 );
                 followup_sources.push(
                     run_expected_child_frame_task_source_after_realm_prerequisite_for_wait(
@@ -6186,7 +6194,7 @@ globalThis.__childModuleDeferFailureOrderFirst = 1;
         );
         assert_eq!(
             events_after_second_completion, "before:true|after:undefined",
-            "faster second graph failure completion must not dispatch script error before earlier parser module"
+            "faster second graph failure completion must not report an exception before the earlier parser module"
         );
         assert_eq!(
             events_after_second_module_owner, "before:true|after:undefined",
@@ -6198,7 +6206,7 @@ globalThis.__childModuleDeferFailureOrderFirst = 1;
         );
         assert_eq!(
             events_after_blocked_second_terminal, "before:true|after:undefined",
-            "blocked later graph failure should not dispatch script error or iframe load"
+            "blocked later graph failure should not report an exception or dispatch script or iframe load"
         );
         assert!(matches!(
             first_completion.action.source(),
@@ -6225,7 +6233,7 @@ globalThis.__childModuleDeferFailureOrderFirst = 1;
         );
         assert_eq!(
             final_events,
-            "before:true|after:undefined|first-module:true|first-load|second-error|load",
+            "before:true|after:undefined|first-module:true|first-load|window-error:true|second-load|load",
             "later graph failure should preserve parser module document order and keep iframe load on HostLoad"
         );
 
@@ -7832,7 +7840,7 @@ globalThis.__childDynamicImportLeafValue = 701;
 }
 
 #[tokio::test]
-async fn page_vm_child_module_graph_failure_blocks_host_load_until_error_dispatches() {
+async fn page_vm_child_module_parse_failure_blocks_host_load_until_exception_is_reported() {
     run_page_vm_async_test(async move {
         let (base_url, server) = spawn_path_response_http_server(vec![(
             "/child-bad-module.js",
@@ -7872,6 +7880,13 @@ async fn page_vm_child_module_graph_failure_blocks_host_load_until_error_dispatc
     <script>parent.__childModuleFailureHostLoadEvents.push("before:" + (globalThis === self));<\/script>
     <script id="bad-module" type="module" src="{script_url}"><\/script>
     <script>
+      addEventListener("error", event => {{
+        parent.__childModuleFailureHostLoadEvents.push("window-error:" + (
+          event instanceof ErrorEvent && event.error instanceof SyntaxError &&
+          event.target === window && event.isTrusted
+        ));
+        event.preventDefault();
+      }});
       document.getElementById("bad-module").addEventListener("load", () => {{
         parent.__childModuleFailureHostLoadEvents.push("script-load");
       }});
@@ -7979,7 +7994,7 @@ async fn page_vm_child_module_graph_failure_blocks_host_load_until_error_dispatc
         );
         assert_eq!(
             events_after_module_owner, "before:true|after",
-            "module owner event should not dispatch script error or iframe load inline"
+            "module owner event should not report an exception or dispatch script or iframe load inline"
         );
         assert_eq!(
             graph_failure_source,
@@ -7987,8 +8002,8 @@ async fn page_vm_child_module_graph_failure_blocks_host_load_until_error_dispatc
             "graph failure should dispatch through DocumentScriptReady"
         );
         assert_eq!(
-            events_after_graph_failure, "before:true|after|script-error",
-            "graph failure should dispatch script error without iframe load"
+            events_after_graph_failure, "before:true|after|window-error:true|script-load",
+            "parse failure should report to its Window and fire external script load without iframe load"
         );
         assert_eq!(
             host_load_source,
@@ -7996,7 +8011,7 @@ async fn page_vm_child_module_graph_failure_blocks_host_load_until_error_dispatc
             "iframe load should remain a later HostLoad source after graph failure"
         );
         assert_eq!(
-            final_events, "before:true|after|script-error|frame-load",
+            final_events, "before:true|after|window-error:true|script-load|frame-load",
             "HostLoad should dispatch iframe load only after graph failure finalizes"
         );
 

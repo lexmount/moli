@@ -2956,7 +2956,6 @@ html/semantics/scripting-1/the-script-element/module/dynamic-import/alpha/base-u
 html/semantics/scripting-1/the-script-element/module/dynamic-import/code-cache-base-url.html
 html/semantics/scripting-1/the-script-element/module/dynamic-import/string-compilation-nonce-classic.html
 html/semantics/scripting-1/the-script-element/module/dynamic-import/string-compilation-nonce-module.html
-html/semantics/scripting-1/the-script-element/module/errorhandling.html
 html/semantics/scripting-1/the-script-element/module/evaluation-error-5.html
 html/semantics/scripting-1/the-script-element/module/inline-async-execorder.html
 html/semantics/scripting-1/the-script-element/moving-between-documents/ordering/delay-load-event-1.html

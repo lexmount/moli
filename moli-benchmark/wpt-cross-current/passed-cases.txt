@@ -6461,6 +6461,7 @@ html/semantics/scripting-1/the-script-element/module/error-and-slow-dependency.h
 html/semantics/scripting-1/the-script-element/module/error-type-1.html
 html/semantics/scripting-1/the-script-element/module/error-type-2.html
 html/semantics/scripting-1/the-script-element/module/error-type-3.html
+html/semantics/scripting-1/the-script-element/module/errorhandling.html
 html/semantics/scripting-1/the-script-element/module/evaluation-error-1.html
 html/semantics/scripting-1/the-script-element/module/evaluation-error-2.html
 html/semantics/scripting-1/the-script-element/module/evaluation-error-3.html

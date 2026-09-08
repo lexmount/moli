@@ -27,7 +27,7 @@ document.body.appendChild(frame);
     Ok(())
 }
 
-async fn advance_to_child_parser_module_root(
+pub(super) async fn advance_to_child_parser_module_root(
     page_vm: &mut PageVm,
     loader: &crate::network::ResourceRequestClient,
 ) -> anyhow::Result<()> {
