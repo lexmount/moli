@@ -672,10 +672,9 @@ pub(super) use tree_mutation::{
 };
 pub(in crate::native_bridge) use url_attributes::parse_url_with_document_query_encoding;
 use url_attributes::{
-    default_port_for_scheme, disconnected_iframe_can_materialize_detached_content,
-    iframe_has_inactive_child_context, iframe_is_in_own_child_document,
-    iframe_is_inside_its_own_child_context_document, iframe_uses_detached_content_cache,
-    normalize_url_default_port, parsed_url_like_attribute, resolve_url_like_attribute,
+    disconnected_iframe_can_materialize_detached_content, iframe_has_inactive_child_context,
+    iframe_is_in_own_child_document, iframe_is_inside_its_own_child_context_document,
+    iframe_uses_detached_content_cache, parsed_url_like_attribute, resolve_url_like_attribute,
     set_resolved_url_attribute, should_block_dangling_markup_subresource,
 };
 pub(super) use url_attributes::{
@@ -2376,43 +2375,38 @@ fn anchor_host_getter_function<'s>(
     );
 }
 
+fn hyperlink_url_setter_input<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: &v8::FunctionCallbackArguments<'s>,
+    property: &'static str,
+) -> Option<(*mut JsContextHost, DomHandle, url::Url, String)> {
+    node_runtime_and_handle_from_object_or_detached(scope, args.this()).ok()?;
+    let value =
+        property_usv_string_value(scope, args.get(0), "HTMLHyperlinkElementUtils", property)?;
+    // Conversion can change href, the document's base, or the node's owner.
+    // Resolve the current node and URL only after those script side effects.
+    let (runtime_ptr, handle) =
+        node_runtime_and_handle_from_object_or_detached(scope, args.this()).ok()?;
+    let url = parsed_url_like_attribute(unsafe { &*runtime_ptr }, handle, "href")?;
+    Some((runtime_ptr, handle, url, value))
+}
+
 fn anchor_host_setter_function<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'_, v8::Value>,
 ) {
-    let Ok((runtime_ptr, handle)) =
-        node_runtime_and_handle_from_object_or_detached(scope, args.this())
+    let Some((runtime_ptr, handle, mut url, value)) =
+        hyperlink_url_setter_input(scope, &args, "host")
     else {
         return;
     };
-    let Some(mut url) = parsed_url_like_attribute(unsafe { &*runtime_ptr }, handle, "href") else {
+    if url.cannot_be_a_base() {
         return;
-    };
-    let Some(value) = property_string_value(scope, args.get(0)) else {
-        return;
-    };
-    let applied = if let Some((host, port)) = value
-        .rsplit_once(':')
-        .filter(|(_, port)| !port.is_empty() && port.chars().all(|ch| ch.is_ascii_digit()))
-    {
-        if url.set_host(Some(host)).is_err() {
-            false
-        } else {
-            let port = port.parse::<u16>().ok();
-            if default_port_for_scheme(url.scheme()) == port {
-                url.set_port(None).is_ok()
-            } else {
-                url.set_port(port).is_ok()
-            }
-        }
-    } else {
-        url.set_host(Some(&value)).is_ok()
-    };
-    if applied {
-        normalize_url_default_port(&mut url);
-        set_resolved_url_attribute(scope, runtime_ptr, handle, "href", &url);
     }
+    moli_url::components::set_host(&mut url, &value);
+    // HTML updates href even when component parsing leaves the URL unchanged.
+    set_resolved_url_attribute(scope, runtime_ptr, handle, "href", &url);
     rv.set_undefined();
 }
 
@@ -2435,21 +2429,17 @@ fn anchor_hostname_setter_function<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'_, v8::Value>,
 ) {
-    let Ok((runtime_ptr, handle)) =
-        node_runtime_and_handle_from_object_or_detached(scope, args.this())
+    let Some((runtime_ptr, handle, mut url, value)) =
+        hyperlink_url_setter_input(scope, &args, "hostname")
     else {
         return;
     };
-    let Some(mut url) = parsed_url_like_attribute(unsafe { &*runtime_ptr }, handle, "href") else {
+    if url.cannot_be_a_base() {
         return;
-    };
-    let Some(value) = property_string_value(scope, args.get(0)) else {
-        return;
-    };
-    if url.set_host(Some(&value)).is_ok() {
-        normalize_url_default_port(&mut url);
-        set_resolved_url_attribute(scope, runtime_ptr, handle, "href", &url);
     }
+    moli_url::components::set_hostname(&mut url, &value);
+    // HTML updates href even when component parsing leaves the URL unchanged.
+    set_resolved_url_attribute(scope, runtime_ptr, handle, "href", &url);
     rv.set_undefined();
 }
 
@@ -2472,36 +2462,17 @@ fn anchor_port_setter_function<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'_, v8::Value>,
 ) {
-    let Ok((runtime_ptr, handle)) =
-        node_runtime_and_handle_from_object_or_detached(scope, args.this())
+    let Some((runtime_ptr, handle, mut url, value)) =
+        hyperlink_url_setter_input(scope, &args, "port")
     else {
         return;
     };
-    let Some(mut url) = parsed_url_like_attribute(unsafe { &*runtime_ptr }, handle, "href") else {
+    if !anchor_url_can_have_userinfo(&url) {
         return;
-    };
-    let value = args.get(0);
-    let applied = if value.is_null_or_undefined() {
-        url.set_port(None).is_ok()
-    } else if let Some(value) = property_string_value(scope, value) {
-        if value.is_empty() {
-            url.set_port(None).is_ok()
-        } else if let Ok(port) = value.parse::<u16>() {
-            if default_port_for_scheme(url.scheme()) == Some(port) {
-                url.set_port(None).is_ok()
-            } else {
-                url.set_port(Some(port)).is_ok()
-            }
-        } else {
-            url.set_port(None).is_ok()
-        }
-    } else {
-        false
-    };
-    if applied {
-        normalize_url_default_port(&mut url);
-        set_resolved_url_attribute(scope, runtime_ptr, handle, "href", &url);
     }
+    moli_url::components::set_port(&mut url, &value);
+    // HTML updates href even when component parsing leaves the URL unchanged.
+    set_resolved_url_attribute(scope, runtime_ptr, handle, "href", &url);
     rv.set_undefined();
 }
 
@@ -2518,22 +2489,15 @@ fn anchor_pathname_setter_function<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'_, v8::Value>,
 ) {
-    let Ok((runtime_ptr, handle)) =
-        node_runtime_and_handle_from_object_or_detached(scope, args.this())
+    let Some((runtime_ptr, handle, mut url, value)) =
+        hyperlink_url_setter_input(scope, &args, "pathname")
     else {
         return;
     };
-    let Some(mut url) = parsed_url_like_attribute(unsafe { &*runtime_ptr }, handle, "href") else {
+    if url.cannot_be_a_base() {
         return;
-    };
-    let Some(value) = property_string_value(scope, args.get(0)) else {
-        return;
-    };
-    if value.starts_with('/') {
-        url.set_path(&value);
-    } else {
-        url.set_path(&format!("/{value}"));
     }
+    moli_url::components::set_pathname(&mut url, &value);
     set_resolved_url_attribute(scope, runtime_ptr, handle, "href", &url);
     rv.set_undefined();
 }
@@ -2557,15 +2521,9 @@ fn anchor_search_setter_function<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'_, v8::Value>,
 ) {
-    let Ok((runtime_ptr, handle)) =
-        node_runtime_and_handle_from_object_or_detached(scope, args.this())
+    let Some((runtime_ptr, handle, mut url, value)) =
+        hyperlink_url_setter_input(scope, &args, "search")
     else {
-        return;
-    };
-    let Some(mut url) = parsed_url_like_attribute(unsafe { &*runtime_ptr }, handle, "href") else {
-        return;
-    };
-    let Some(value) = property_string_value(scope, args.get(0)) else {
         return;
     };
     url::quirks::set_search(&mut url, &value);
@@ -2592,15 +2550,9 @@ fn anchor_hash_setter_function<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'_, v8::Value>,
 ) {
-    let Ok((runtime_ptr, handle)) =
-        node_runtime_and_handle_from_object_or_detached(scope, args.this())
+    let Some((runtime_ptr, handle, mut url, value)) =
+        hyperlink_url_setter_input(scope, &args, "hash")
     else {
-        return;
-    };
-    let Some(mut url) = parsed_url_like_attribute(unsafe { &*runtime_ptr }, handle, "href") else {
-        return;
-    };
-    let Some(value) = property_string_value(scope, args.get(0)) else {
         return;
     };
     url::quirks::set_hash(&mut url, &value);
@@ -2641,22 +2593,14 @@ fn anchor_protocol_setter_function<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'_, v8::Value>,
 ) {
-    let Ok((runtime_ptr, handle)) =
-        node_runtime_and_handle_from_object_or_detached(scope, args.this())
+    let Some((runtime_ptr, handle, mut url, value)) =
+        hyperlink_url_setter_input(scope, &args, "protocol")
     else {
         return;
     };
-    let Some(mut url) = parsed_url_like_attribute(unsafe { &*runtime_ptr }, handle, "href") else {
-        return;
-    };
-    let Some(value) = property_string_value(scope, args.get(0)) else {
-        return;
-    };
-    let scheme = value.trim_end_matches(':');
-    if url.set_scheme(scheme).is_ok() {
-        normalize_url_default_port(&mut url);
-        set_resolved_url_attribute(scope, runtime_ptr, handle, "href", &url);
-    }
+    let _ = url::quirks::set_protocol(&mut url, &value);
+    // HTML updates href even when component parsing leaves the URL unchanged.
+    set_resolved_url_attribute(scope, runtime_ptr, handle, "href", &url);
     rv.set_undefined();
 }
 
@@ -2673,23 +2617,16 @@ fn anchor_username_setter_function<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'_, v8::Value>,
 ) {
-    let Ok((runtime_ptr, handle)) =
-        node_runtime_and_handle_from_object_or_detached(scope, args.this())
+    let Some((runtime_ptr, handle, mut url, value)) =
+        hyperlink_url_setter_input(scope, &args, "username")
     else {
-        return;
-    };
-    let Some(mut url) = parsed_url_like_attribute(unsafe { &*runtime_ptr }, handle, "href") else {
         return;
     };
     if !anchor_url_can_have_userinfo(&url) {
         return;
     }
-    let Some(value) = property_string_value(scope, args.get(0)) else {
-        return;
-    };
-    if url.set_username(&value).is_ok() {
-        set_resolved_url_attribute(scope, runtime_ptr, handle, "href", &url);
-    }
+    let _ = url::quirks::set_username(&mut url, &value);
+    set_resolved_url_attribute(scope, runtime_ptr, handle, "href", &url);
     rv.set_undefined();
 }
 
@@ -2712,33 +2649,21 @@ fn anchor_password_setter_function<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'_, v8::Value>,
 ) {
-    let Ok((runtime_ptr, handle)) =
-        node_runtime_and_handle_from_object_or_detached(scope, args.this())
+    let Some((runtime_ptr, handle, mut url, value)) =
+        hyperlink_url_setter_input(scope, &args, "password")
     else {
-        return;
-    };
-    let Some(mut url) = parsed_url_like_attribute(unsafe { &*runtime_ptr }, handle, "href") else {
         return;
     };
     if !anchor_url_can_have_userinfo(&url) {
         return;
     }
-    let Some(value) = property_string_value(scope, args.get(0)) else {
-        return;
-    };
-    let password = if value.is_empty() {
-        None
-    } else {
-        Some(value.as_str())
-    };
-    if url.set_password(password).is_ok() {
-        set_resolved_url_attribute(scope, runtime_ptr, handle, "href", &url);
-    }
+    let _ = url::quirks::set_password(&mut url, &value);
+    set_resolved_url_attribute(scope, runtime_ptr, handle, "href", &url);
     rv.set_undefined();
 }
 
 fn anchor_url_can_have_userinfo(url: &url::Url) -> bool {
-    !url.cannot_be_a_base() && url.host().is_some()
+    url.scheme() != "file" && url.host_str().is_some_and(|host| !host.is_empty())
 }
 
 fn reflected_url_attribute_getter_function<'s>(

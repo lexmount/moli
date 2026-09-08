@@ -31,7 +31,7 @@ test(function () {
   url.pathname = "/changed";
   url.search = "?q=two";
   url.hash = "#done";
-  assert_equals(url.href, "http://user:pass@example.test/changed?q=two#done");
+  assert_equals(url.href, "http://user:pass@example.test:8443/changed?q=two#done");
   assert_equals(String(url), url.href);
   assert_equals(url.toJSON(), url.href);
 }, "URL resolves relative input and exposes mutable URL components");
@@ -49,8 +49,8 @@ test(function () {
   url.host = "static.example.test";
   assert_equals(
     url.href,
-    "https://user:pass@static.example.test/root/base/",
-    "host setter without an explicit port should clear the existing port",
+    "https://user:pass@static.example.test:8443/root/base/",
+    "host setter without an explicit port should preserve the existing port",
   );
 
   url.host = "cdn.example.test:9443";
@@ -58,6 +58,16 @@ test(function () {
     url.href,
     "https://user:pass@cdn.example.test:9443/root/base/",
     "host setter with an explicit port should replace both hostname and port",
+  );
+
+  url.host = "cdn.example.test:";
+  assert_equals(url.port, "9443", "host setter with an empty port should preserve the existing port");
+
+  url.port = "";
+  assert_equals(
+    url.href,
+    "https://user:pass@cdn.example.test/root/base/",
+    "port setter with an empty value should explicitly clear the port",
   );
 }, "URL host and hostname setters keep port semantics aligned");
 

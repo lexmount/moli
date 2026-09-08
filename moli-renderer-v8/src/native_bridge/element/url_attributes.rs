@@ -3,8 +3,7 @@ mod iframe;
 
 pub(in crate::native_bridge) use self::helpers::parse_url_with_document_query_encoding;
 pub(super) use self::helpers::{
-    default_port_for_scheme, normalize_url_default_port, parsed_url_like_attribute,
-    resolve_url_like_attribute, set_resolved_url_attribute,
+    parsed_url_like_attribute, resolve_url_like_attribute, set_resolved_url_attribute,
     should_block_dangling_markup_subresource,
 };
 pub(super) use self::iframe::{
