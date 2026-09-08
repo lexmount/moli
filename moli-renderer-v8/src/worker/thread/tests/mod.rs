@@ -1536,5 +1536,5 @@ mod strict_script_mime;
 mod network;
 mod postmessage;
 mod tls;
-
+mod trusted_types_reporting;
 mod xhr_failure;

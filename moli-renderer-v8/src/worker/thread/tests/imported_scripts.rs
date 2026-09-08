@@ -16,15 +16,17 @@ async fn worker_importscripts_trusted_types_reports_keep_script_and_document_loc
     let options = WorkerSpawnOptions::new(
         r#"
         const violations = [];
-        addEventListener('securitypolicyviolation', event => violations.push([
+        addEventListener('securitypolicyviolation', event => {
+          violations.push([
             event.effectiveDirective, event.documentURI, event.sourceFile,
             event.lineNumber, event.columnNumber > 0
-        ]));
+          ]);
+          if (violations.length === 4) { postMessage(violations); close(); }
+        });
         const setup = trustedTypes.createPolicy('bootstrap', { createScriptURL: s => s });
         importScripts(setup.createScriptURL('../imported/violations.js'));
         setTimeout(() => {
             violatePolicy(); violateSink();
-            postMessage(violations); close();
         }, 0);
         "#
         .into(),
@@ -56,7 +58,8 @@ async fn worker_importscripts_trusted_types_reports_do_not_expose_redirect_targe
         "/private-user/violations.js?credential=hidden",
         "HTTP/1.1 200 OK",
         "text/javascript",
-        "setTimeout(() => {\n  try { trustedTypes.createPolicy('forbidden'); } catch {}\n  postMessage(violations); close();\n}, 0);".into(),
+        "setTimeout(() => {\n  try { trustedTypes.createPolicy('forbidden'); } catch {}\n}, 0);"
+            .into(),
         Duration::ZERO,
     )])
     .await;
@@ -73,10 +76,13 @@ async fn worker_importscripts_trusted_types_reports_do_not_expose_redirect_targe
     let options = WorkerSpawnOptions::new(
         r#"
         const violations = [];
-        addEventListener('securitypolicyviolation', event => violations.push([
+        addEventListener('securitypolicyviolation', event => {
+          violations.push([
             event.disposition, event.documentURI, event.sourceFile,
             event.lineNumber, event.columnNumber > 0
-        ]));
+          ]);
+          if (violations.length === 2) { postMessage(violations); close(); }
+        });
         importScripts('./redirect.js');
         "#
         .into(),

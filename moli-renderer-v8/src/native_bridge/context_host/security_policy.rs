@@ -1,10 +1,10 @@
 use super::{JsContextHost, OwnerDispatchScope};
 use crate::{
     content_security_policy::{
-        ContentSecurityPolicyNonUrlKind, ContentSecurityPolicyRedirectStatus,
-        ContentSecurityPolicyReportingEndpoints, ContentSecurityPolicyScriptElementRequest,
-        ContentSecurityPolicyViolationEventFields, TrustedTypesForScriptRequirements,
-        current_script_violation_location,
+        ContentSecurityPolicyDisposition, ContentSecurityPolicyNonUrlKind,
+        ContentSecurityPolicyRedirectStatus, ContentSecurityPolicyReportingEndpoints,
+        ContentSecurityPolicyScriptElementRequest, ContentSecurityPolicyViolationEventFields,
+        TrustedTypesForScriptRequirements, current_script_violation_location,
     },
     context_bootstrap::CHILD_BROWSING_CONTEXT_HANDLE_SLOT,
     document_runtime::{
@@ -914,44 +914,38 @@ impl JsContextHost {
             return true;
         };
         // SAFETY: JsContextHost is owned by the ScriptVm that owns this DocumentRuntime.
-        let check = unsafe { &*self.runtime }.trusted_type_policy_name_csp_check_for_document(
-            snapshot.document_handle,
-            &snapshot.document_url,
-            &snapshot.policy_container.response_content_security_policies,
-            &snapshot
-                .policy_container
-                .response_content_security_report_only_policies,
-            &snapshot
-                .policy_container
-                .content_security_reporting_endpoints,
-            policy_name,
-            is_duplicate,
-        );
-        let (mut report_only_violation, mut enforced_violation) = check.into_violations();
+        let mut violations = unsafe { &*self.runtime }
+            .trusted_type_policy_name_csp_violations_for_document(
+                snapshot.document_handle,
+                &snapshot.document_url,
+                &snapshot.policy_container.response_content_security_policies,
+                &snapshot
+                    .policy_container
+                    .response_content_security_report_only_policies,
+                &snapshot
+                    .policy_container
+                    .content_security_reporting_endpoints,
+                policy_name,
+                is_duplicate,
+            );
         if !self.active_inspector_dispatch
             && let Some((source_file, line_number, column_number)) =
                 current_script_violation_location(scope)
         {
-            for violation in [&mut enforced_violation, &mut report_only_violation]
-                .into_iter()
-                .flatten()
-            {
+            for violation in &mut violations {
                 violation.source_file.clone_from(&source_file);
                 violation.line_number = line_number;
                 violation.column_number = column_number;
             }
         }
         let host_ptr: *mut JsContextHost = self;
-        let allowed = enforced_violation.is_none();
+        let allowed = !violations
+            .iter()
+            .any(|violation| violation.disposition == ContentSecurityPolicyDisposition::Enforce);
         // Policy creation reports expose CSP list ordering. Response policy
         // state is partitioned by disposition, with enforce policies modeled
         // before report-only policies, so preserve that order here.
-        if let Some(violation) = enforced_violation {
-            self.dispatch_content_security_policy_violation_event_for_owner_best_effort(
-                scope, host_ptr, owner, &violation,
-            );
-        }
-        if let Some(violation) = report_only_violation {
+        for violation in violations {
             self.dispatch_content_security_policy_violation_event_for_owner_best_effort(
                 scope, host_ptr, owner, &violation,
             );
