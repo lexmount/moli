@@ -26,11 +26,33 @@ References:
 <https://url.spec.whatwg.org/#path-state>, and
 <https://url.spec.whatwg.org/#shorten-a-urls-path>.
 
-The upstream WPT data is unchanged. The 39 file parsing/setter tests fixed by
-this patch were removed from `tests/expected_failures.txt`; the eight remaining
-upstream expected failures are retained. The obsolete unit-test expectation of
-a host/drive-letter syntax violation is replaced with an explicit preservation
-and no-violation assertion.
+Hierarchical URL parsing and mutation also keep the authority distinct from
+the logical path:
+
+- In relative special URLs, consume all authority slashes before the host.
+  In non-special URLs, backslashes remain path data and only two leading
+  forward slashes introduce an authority.
+- Share the serialization-only "/." prefix adjustment between parsing, path
+  replacement, and path-segment mutation. Keep query and fragment offsets in
+  sync when the prefix is added or removed.
+- Discard that prefix when adding a host, and restore it when removing a host
+  from a URL whose logical path starts with "//". Host removal also clears the
+  internal host kind and preserves an empty hierarchical path with a slash.
+- Distinguish a missing host from an empty authority when clearing pathname,
+  so the Web API adapter no longer needs its own empty-authority workaround.
+
+References:
+<https://url.spec.whatwg.org/#relative-state>,
+<https://url.spec.whatwg.org/#relative-slash-state>,
+<https://url.spec.whatwg.org/#special-authority-ignore-slashes-state>,
+<https://url.spec.whatwg.org/#concept-url-serializer>, and
+<https://url.spec.whatwg.org/#dom-url-pathname>.
+
+The upstream WPT data is unchanged. The 39 file parsing/setter tests and seven
+hierarchical setter tests fixed by these patches were removed from
+`tests/expected_failures.txt`; the one remaining upstream expected failure is
+retained. The obsolete unit-test expectation of a host/drive-letter syntax
+violation is replaced with an explicit preservation and no-violation assertion.
 
 Packaging adjustment: `debug_metadata/url.natvis` is copied from the same pinned
 upstream revision, and its include path is made package-local so the
@@ -43,6 +65,8 @@ cargo test --manifest-path vendor/url-2.5.8/Cargo.toml --all-features
 ```
 
 Workspace regressions live in `moli-url/src/file_url.rs`,
+`moli-url/src/hierarchical_path.rs`,
 `moli-renderer-v8/src/script_vm/tests/url_components.rs`, and
-`moli-url-policy/src/tests.rs`. Non-file parser and setter conformance issues
-remain separate work; this patch does not change resource access permissions.
+`moli-url-policy/src/tests.rs`. Remaining opaque-path and percent-encoding
+conformance issues are separate work; these patches do not change resource
+access permissions.
