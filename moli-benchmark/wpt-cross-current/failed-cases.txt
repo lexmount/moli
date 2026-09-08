@@ -3259,7 +3259,6 @@ trusted-types/ServiceWorkerContainer-register-from-DedicatedWorker.https.html
 trusted-types/ServiceWorkerContainer-register-from-ServiceWorker.https.html
 trusted-types/ServiceWorkerContainer-register-from-SharedWorker.https.html
 trusted-types/trusted-types-createHTMLDocument.html
-trusted-types/trusted-types-report-only.html
 trusted-types/trusted-types-reporting-for-DedicatedWorker-ServiceWorkerContainer-register.https.html
 trusted-types/trusted-types-reporting-for-ServiceWorker-ServiceWorkerContainer-register.https.html
 trusted-types/trusted-types-reporting-for-SharedWorker-ServiceWorkerContainer-register.https.html

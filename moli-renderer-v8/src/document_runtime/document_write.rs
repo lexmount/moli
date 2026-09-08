@@ -2320,9 +2320,13 @@ impl DocumentRuntime {
                     node_id,
                     failure.element_state_transition(),
                 );
-                self.send_parser_owned_pre_domcontentloaded_page_owned_work(vec![
-                    parser_script_preparation_failure_page_owned_work(failure),
-                ]);
+                if failure.is_external_source_failure() {
+                    unsafe { &mut *host_ptr }.queue_script_preparation_error(scope, node_id);
+                } else {
+                    self.send_parser_owned_pre_domcontentloaded_page_owned_work(vec![
+                        parser_script_preparation_failure_page_owned_work(failure),
+                    ]);
+                }
                 false
             }
         }

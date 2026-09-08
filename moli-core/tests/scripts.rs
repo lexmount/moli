@@ -14,6 +14,9 @@ use tokio::time::Duration;
 #[path = "scripts/child_synthetic_modules.rs"]
 mod child_synthetic_modules;
 
+#[path = "scripts/preparation_errors.rs"]
+mod preparation_errors;
+
 fn diagnostic_global<'a>(
     page: &'a moli_core::page::Page,
     name: &str,

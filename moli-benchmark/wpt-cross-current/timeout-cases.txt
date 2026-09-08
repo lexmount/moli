@@ -151,7 +151,6 @@ html/semantics/forms/the-button-element/button-submit-remove-children.html
 html/semantics/scripting-1/the-script-element/change-src-attr-prepare-a-script.html
 html/semantics/scripting-1/the-script-element/execution-timing/102.html
 html/semantics/scripting-1/the-script-element/microtasks/checkpoint-after-workerglobalscope-onerror-module.html
-html/semantics/scripting-1/the-script-element/script-onerror-insertion-point-2.html
 html/semantics/text-level-semantics/the-a-element/a-type.historical.html
 html/webappapis/dynamic-markup-insertion/document-write/iframe_010.html
 html/webappapis/scripting/event-loops/new-scroll-event-dispatched-at-next-updating-rendering-time.html

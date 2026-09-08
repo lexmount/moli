@@ -19,6 +19,7 @@ pub(crate) enum PageDomManipulationTestFamily {
     HashChange,
     ElementToggle,
     FileEntryFileCallback,
+    ScriptPreparationError,
     ImageLoadEvent,
     PopupLoadEvent,
     ConnectedStyleEvent,
@@ -46,6 +47,9 @@ impl PageDomManipulationTestFamily {
             ) | (
                 Self::FileEntryFileCallback,
                 RendererPageDomManipulationOwner::FileEntryFileCallback(_)
+            ) | (
+                Self::ScriptPreparationError,
+                RendererPageDomManipulationOwner::ScriptPreparationError(_)
             ) | (
                 Self::ImageLoadEvent,
                 RendererPageDomManipulationOwner::ImageLoadEvent(_)

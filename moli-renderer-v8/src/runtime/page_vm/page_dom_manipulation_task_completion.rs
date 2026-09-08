@@ -31,6 +31,9 @@ impl PageVm {
             PageDomManipulationTurnAction::FileEntryFileCallback(action) => {
                 action.into_page_task_completion()
             }
+            PageDomManipulationTurnAction::ScriptPreparationError(action) => {
+                action.into_page_task_completion()
+            }
             PageDomManipulationTurnAction::ImageLoadEvent(action) => {
                 action.into_page_task_completion()
             }

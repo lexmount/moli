@@ -1300,6 +1300,8 @@ impl<'loader, 'state> ParserDriver<'loader, 'state> {
                         .dom_host_mut()
                         .set_script_already_started(handle, true);
                     let _ = self.scheduler.grant_parse_visible_reevaluation_credit();
+                } else if failure.is_external_source_failure() {
+                    page_vm.vm_mut().queue_script_preparation_error(handle)?;
                 } else {
                     page_vm
                         .vm_mut()
