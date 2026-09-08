@@ -20,7 +20,7 @@ use percent_encoding::{percent_encode, utf8_percent_encode, AsciiSet, CONTROLS};
 const FRAGMENT: &AsciiSet = &CONTROLS.add(b' ').add(b'"').add(b'<').add(b'>').add(b'`');
 
 /// https://url.spec.whatwg.org/#path-percent-encode-set
-const PATH: &AsciiSet = &FRAGMENT.add(b'#').add(b'?').add(b'{').add(b'}');
+const PATH: &AsciiSet = &FRAGMENT.add(b'#').add(b'?').add(b'^').add(b'{').add(b'}');
 
 /// https://url.spec.whatwg.org/#userinfo-percent-encode-set
 pub(crate) const USERINFO: &AsciiSet = &PATH
@@ -32,7 +32,6 @@ pub(crate) const USERINFO: &AsciiSet = &PATH
     .add(b'[')
     .add(b'\\')
     .add(b']')
-    .add(b'^')
     .add(b'|');
 
 pub(crate) const PATH_SEGMENT: &AsciiSet = &PATH.add(b'/').add(b'%');
@@ -1341,8 +1340,17 @@ impl Parser<'_> {
                 }
                 Some((c, utf8_c)) => {
                     self.check_url_code_point(c, &input);
-                    self.serialization
-                        .extend(utf8_percent_encode(utf8_c, CONTROLS));
+                    // Encode only the last space before a suffix delimiter.
+                    // Input lookahead, like iteration, skips ASCII tabs/newlines.
+                    if c == ' '
+                        && self.context == Context::UrlParser
+                        && (input.starts_with('?') || input.starts_with('#'))
+                    {
+                        self.serialization.push_str("%20");
+                    } else {
+                        self.serialization
+                            .extend(utf8_percent_encode(utf8_c, CONTROLS));
+                    }
                 }
                 None => return input,
             }
