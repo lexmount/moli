@@ -1,4 +1,5 @@
 use crate::types::ScriptErrorConstructorKind;
+use moli_module_script_tree::ModuleExceptionId;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum ModuleLoadStage {
@@ -14,6 +15,7 @@ pub(crate) struct ModuleLoadError {
     stage: ModuleLoadStage,
     message: String,
     error_constructor: Option<ScriptErrorConstructorKind>,
+    exception_id: Option<ModuleExceptionId>,
     top_level_module_load_failure: bool,
 }
 
@@ -23,6 +25,7 @@ impl ModuleLoadError {
             stage,
             message: message.into(),
             error_constructor: None,
+            exception_id: None,
             top_level_module_load_failure: false,
         }
     }
@@ -38,6 +41,15 @@ impl ModuleLoadError {
     pub(crate) fn with_top_level_module_load_failure(mut self) -> Self {
         self.top_level_module_load_failure = true;
         self
+    }
+
+    pub(crate) fn with_exception_id(mut self, exception_id: ModuleExceptionId) -> Self {
+        self.exception_id = Some(exception_id);
+        self
+    }
+
+    pub(crate) fn exception_id(&self) -> Option<ModuleExceptionId> {
+        self.exception_id
     }
 
     pub(crate) fn stage(&self) -> ModuleLoadStage {
