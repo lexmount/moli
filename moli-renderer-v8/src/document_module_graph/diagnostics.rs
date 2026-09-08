@@ -1,4 +1,4 @@
-use crate::types::ScriptErrorConstructorKind;
+use crate::types::{ScriptErrorConstructorKind, ScriptErrorValue};
 use moli_module_script_tree::ModuleExceptionId;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -58,6 +58,17 @@ impl ModuleLoadError {
 
     pub(crate) fn message(&self) -> &str {
         &self.message
+    }
+
+    pub(crate) fn with_message(mut self, message: String) -> Self {
+        self.message = message;
+        self
+    }
+
+    pub(crate) fn error_value(&self) -> Option<ScriptErrorValue> {
+        self.exception_id
+            .map(ScriptErrorValue::Retained)
+            .or_else(|| self.error_constructor.map(ScriptErrorValue::Constructor))
     }
 
     pub(crate) fn error_constructor(&self) -> Option<ScriptErrorConstructorKind> {
