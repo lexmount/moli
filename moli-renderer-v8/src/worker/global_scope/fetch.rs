@@ -1207,32 +1207,41 @@ pub(crate) fn check_worker_websocket_csp(
     url: &Url,
 ) -> Option<WorkerWebSocketCspOutcome> {
     let state = get_worker_state(scope)?;
-    dispatch_worker_content_security_policy_report_only_violation_for_state(
-        scope,
-        &state,
-        document_url,
-        url,
-        crate::content_security_policy::ContentSecurityPolicyResourceKind::WorkerConnect,
-    );
-    let violation = {
+    let (wake_tx, report_only_violation, enforced_violation) = {
         let state_ref = state.borrow();
-        worker_content_security_policy_violation(
-            &state_ref,
-            document_url,
-            url,
-            crate::content_security_policy::ContentSecurityPolicyResourceKind::WorkerConnect,
+        (
+            state_ref.worker_wake_tx.clone(),
+            worker_content_security_policy_report_only_violation(
+                &state_ref,
+                document_url,
+                url,
+                crate::content_security_policy::ContentSecurityPolicyResourceKind::WorkerConnect,
+            ),
+            worker_content_security_policy_violation(
+                &state_ref,
+                document_url,
+                url,
+                crate::content_security_policy::ContentSecurityPolicyResourceKind::WorkerConnect,
+            ),
         )
     };
-    Some(match violation {
-        Some(violation) => {
-            let message = worker_content_security_policy_error_message(&violation, "WebSocket");
-            dispatch_worker_content_security_policy_violation_event_for_state(
-                scope, &state, &violation,
-            );
-            WorkerWebSocketCspOutcome::Blocked(message)
-        }
+    let outcome = match &enforced_violation {
+        Some(violation) => WorkerWebSocketCspOutcome::Blocked(
+            worker_content_security_policy_error_message(violation, "WebSocket"),
+        ),
         None => WorkerWebSocketCspOutcome::Allowed,
-    })
+    };
+    // CSP reports are tasks, including those produced by WebSocket construction.
+    // They must not overtake earlier queued Trusted Types violation reports.
+    for violation in [report_only_violation, enforced_violation]
+        .into_iter()
+        .flatten()
+    {
+        let _ = wake_tx.send(WorkerMessage::DispatchContentSecurityPolicyViolation(
+            Box::new(violation),
+        ));
+    }
+    Some(outcome)
 }
 
 pub(crate) fn register_worker_websocket<'s>(

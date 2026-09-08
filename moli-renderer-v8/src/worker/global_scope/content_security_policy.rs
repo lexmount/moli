@@ -28,7 +28,7 @@ use crate::service_worker_runtime::{
 };
 use crate::types::{AsyncSubresourceNetworkContext, SubresourceResourceType};
 use crate::worker::handle::WorkerPendingSubresourceFetch;
-use crate::worker::{WorkerPendingFetchContinue, WorkerToParentMessage};
+use crate::worker::{WorkerMessage, WorkerPendingFetchContinue, WorkerToParentMessage};
 use moli_fetch::{
     BrowserRequestMetadata, FetchCancelHandle, Request, RequestResourceType,
     should_request_be_blocked_due_to_bad_port,
@@ -91,30 +91,25 @@ pub(super) fn dispatch_worker_trusted_types_sink_violation_event_for_state<'s>(
     sink: &str,
     sample: &str,
 ) {
-    let violation = {
+    let violations = {
         let state_ref = state.borrow();
         let Some(protected_url) = state_ref.current_script_url.as_ref() else {
             return;
         };
-        content_security_policy_trusted_types_sink_violation_with_disposition_and_reporting_endpoints(
-                &state_ref.content_security_policies,
-                protected_url,
-                sink,
-                sample,
-                ContentSecurityPolicyDisposition::Enforce,
-                &state_ref.content_security_reporting_endpoints,
-        )
+        trusted_types_policies(&state_ref)
+            .filter_map(|(policy, disposition)| {
+                content_security_policy_trusted_types_sink_violation_with_disposition_and_reporting_endpoints(
+                    policy,
+                    protected_url,
+                    sink,
+                    sample,
+                    disposition,
+                    &state_ref.content_security_reporting_endpoints,
+                )
+            })
+            .collect()
     };
-    if let Some(mut violation) = violation {
-        if let Some((source_file, line_number, column_number)) =
-            current_script_violation_location(scope)
-        {
-            violation.source_file = source_file;
-            violation.line_number = line_number;
-            violation.column_number = column_number;
-        }
-        dispatch_worker_content_security_policy_violation_event_for_state(scope, state, &violation);
-    }
+    queue_worker_trusted_types_violations(scope, state, violations);
 }
 
 pub(super) fn allows_worker_trusted_type_policy_name_for_state<'s>(
@@ -123,56 +118,77 @@ pub(super) fn allows_worker_trusted_type_policy_name_for_state<'s>(
     policy_name: &str,
     is_duplicate: bool,
 ) -> bool {
-    let (mut report_only_violation, mut enforced_violation) = {
+    let violations: Vec<_> = {
         let state_ref = state.borrow();
         let Some(protected_url) = state_ref.current_script_url.as_ref() else {
             return true;
         };
-        let report_only_violation =
-            content_security_policy_trusted_types_policy_violation_with_disposition_and_reporting_endpoints(
-                &state_ref.content_security_report_only_policies,
-                protected_url,
-                policy_name,
-                is_duplicate,
-                ContentSecurityPolicyDisposition::Report,
-                &state_ref.content_security_reporting_endpoints,
-            );
-        let enforced_violation =
-            content_security_policy_trusted_types_policy_violation_with_disposition_and_reporting_endpoints(
-                &state_ref.content_security_policies,
-                protected_url,
-                policy_name,
-                is_duplicate,
-                ContentSecurityPolicyDisposition::Enforce,
-                &state_ref.content_security_reporting_endpoints,
-            );
-        (report_only_violation, enforced_violation)
+        trusted_types_policies(&state_ref)
+            .filter_map(|(policy, disposition)| {
+                content_security_policy_trusted_types_policy_violation_with_disposition_and_reporting_endpoints(
+                    policy,
+                    protected_url,
+                    policy_name,
+                    is_duplicate,
+                    disposition,
+                    &state_ref.content_security_reporting_endpoints,
+                )
+            })
+            .collect()
     };
-    let allowed = enforced_violation.is_none();
-    if allowed && report_only_violation.is_none() {
-        return true;
-    }
-    if let Some((source_file, line_number, column_number)) =
-        current_script_violation_location(scope)
-    {
-        for violation in [&mut report_only_violation, &mut enforced_violation]
-            .into_iter()
-            .flatten()
-        {
-            violation.source_file = source_file.clone();
-            violation.line_number = line_number;
-            violation.column_number = column_number;
-        }
-    }
-    // Match window policy creation reporting: enforce response policies are
-    // modeled before report-only policies in the partitioned policy state.
-    if let Some(violation) = enforced_violation {
-        dispatch_worker_content_security_policy_violation_event_for_state(scope, state, &violation);
-    }
-    if let Some(violation) = report_only_violation {
-        dispatch_worker_content_security_policy_violation_event_for_state(scope, state, &violation);
-    }
+    let allowed = !violations
+        .iter()
+        .any(|violation| violation.disposition == ContentSecurityPolicyDisposition::Enforce);
+    queue_worker_trusted_types_violations(scope, state, violations);
     allowed
+}
+
+fn trusted_types_policies(
+    state: &WorkerGlobalState,
+) -> impl Iterator<Item = (&str, ContentSecurityPolicyDisposition)> {
+    // Preserve the same partition ordering as document reporting. Identical
+    // policies remain distinct entries and each can produce a report.
+    [
+        (
+            &state.content_security_policies,
+            ContentSecurityPolicyDisposition::Enforce,
+        ),
+        (
+            &state.content_security_report_only_policies,
+            ContentSecurityPolicyDisposition::Report,
+        ),
+    ]
+    .into_iter()
+    .flat_map(|(policies, disposition)| {
+        policies
+            .iter()
+            .map(move |policy| (policy.as_str(), disposition))
+    })
+}
+
+fn queue_worker_trusted_types_violations(
+    scope: &mut v8::PinScope<'_, '_>,
+    state: &Rc<RefCell<WorkerGlobalState>>,
+    violations: Vec<ContentSecurityPolicyUrlViolation>,
+) {
+    if violations.is_empty() {
+        return;
+    }
+    // Capture the caller before returning from the sink, but deliver events
+    // in a later task. In particular, a listener must not reenter createPolicy
+    // before the original call has recorded the newly created policy name.
+    let location = current_script_violation_location(scope);
+    let wake_tx = state.borrow().worker_wake_tx.clone();
+    for mut violation in violations {
+        if let Some((source_file, line_number, column_number)) = &location {
+            violation.source_file.clone_from(source_file);
+            violation.line_number = *line_number;
+            violation.column_number = *column_number;
+        }
+        let _ = wake_tx.send(WorkerMessage::DispatchContentSecurityPolicyViolation(
+            Box::new(violation),
+        ));
+    }
 }
 
 fn create_worker_content_security_policy_violation_event<'s>(

@@ -6812,18 +6812,13 @@ fn worker_import_scripts_callback<'s>(
         throw_type_error(scope, "Module scripts don't support importScripts().");
         return;
     }
-    let require_trusted_types_for_script =
-        crate::content_security_policy::content_security_policy_requires_trusted_types_for_script(
-            &state.borrow().content_security_policies,
-        );
+    let requirements = worker_trusted_types_for_script_requirements(scope).unwrap_or_default();
     let mut prepared = Vec::with_capacity(args.length() as usize);
     for i in 0..args.length() {
         let Some(specifier) = crate::context_bootstrap::trusted_script_url_string_or_throw(
             scope,
             args.get(i),
-            crate::content_security_policy::TrustedTypesForScriptRequirements::enforced_only(
-                require_trusted_types_for_script,
-            ),
+            requirements,
             "WorkerGlobalScope importScripts",
             "importScripts",
         ) else {

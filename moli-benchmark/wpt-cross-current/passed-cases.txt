@@ -8356,8 +8356,11 @@ trusted-types/set-attributes-require-trusted-types-default-policy.html
 trusted-types/set-attributes-require-trusted-types-no-default-policy-error-cases.html
 trusted-types/set-attributes-require-trusted-types-no-default-policy.html
 trusted-types/should-sink-type-mismatch-violation-be-blocked-by-csp-001.html
+trusted-types/should-sink-type-mismatch-violation-be-blocked-by-csp-002-worker.html
 trusted-types/should-sink-type-mismatch-violation-be-blocked-by-csp-003.html
 trusted-types/should-trusted-type-policy-creation-be-blocked-by-csp-001.html
+trusted-types/should-trusted-type-policy-creation-be-blocked-by-csp-003.html
+trusted-types/should-trusted-type-policy-creation-be-blocked-by-csp-004-worker.html
 trusted-types/should-trusted-type-policy-creation-be-blocked-by-csp-005.html
 trusted-types/trusted-types-duplicate-names-list-report-only.html
 trusted-types/trusted-types-duplicate-names-list.html
@@ -8367,6 +8370,7 @@ trusted-types/trusted-types-eval-reporting-no-unsafe-eval.html
 trusted-types/trusted-types-eval-reporting-report-only.html
 trusted-types/trusted-types-event-handlers.html
 trusted-types/trusted-types-reporting-check-report-DedicatedWorker-create-policy.html
+trusted-types/trusted-types-reporting-check-report-DedicatedWorker-sink-mismatch.html
 trusted-types/trusted-types-reporting-clipping-of-sample.html
 trusted-types/trusted-types-reporting-for-DOMParser-parseFromString.html
 trusted-types/trusted-types-reporting-for-DedicatedWorker-DedicatedWorker-constructor.html
