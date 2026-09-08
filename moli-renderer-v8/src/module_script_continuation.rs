@@ -13,7 +13,7 @@ use crate::dom::NodeId;
 use crate::dynamic_script_owner::DynamicScriptOwnerId;
 use crate::frame_owner_model::{FrameDocumentTaskOwner, MainDocumentScriptLoadDelayLease};
 use crate::planning::PreparedScript;
-use crate::types::ScriptErrorConstructorKind;
+use crate::types::ScriptErrorValue;
 
 pub(crate) struct ModuleScriptContinuation {
     pub(crate) script: PreparedScript,
@@ -830,7 +830,7 @@ pub(crate) enum ModuleScriptEvaluationReactionState {
     Fulfilled,
     Rejected {
         reason: String,
-        error_constructor: Option<ScriptErrorConstructorKind>,
+        error_value: Option<ScriptErrorValue>,
     },
 }
 

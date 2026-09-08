@@ -68,8 +68,8 @@ use crate::page_task_queue::{
 };
 use crate::planning::PreparedScript;
 use crate::types::{
-    ChildDynamicImportFetchCompletion, ScriptErrorConstructorKind, SubresourceRequestInitiatorType,
-    SubresourceResourceType,
+    ChildDynamicImportFetchCompletion, ScriptErrorConstructorKind, ScriptErrorValue,
+    SubresourceRequestInitiatorType, SubresourceResourceType,
 };
 #[cfg(test)]
 use crate::types::{
@@ -91,6 +91,7 @@ mod child_ready_document_script;
 mod dynamic_import_selected_task_body;
 mod load_error;
 mod main_selected_task;
+pub(super) use load_error::retained_module_exception;
 use load_error::{module_load_error_value, retain_module_exception};
 pub(crate) use main_selected_task::{
     MainDynamicImportGraphFetchBodySettlement, MainNativeModuleSelectedTaskApplication,
@@ -735,17 +736,12 @@ fn native_module_script_reaction_rejected_callback<'s>(
     let Some(host_ptr) = context_host_ptr_from_global_bridge(scope) else {
         return;
     };
-    let reason = args.get(0);
-    let error_constructor = script_error_constructor_kind_from_value(scope, reason);
-    let reason = reason
-        .to_string(scope)
-        .map(|value| value.to_rust_string_lossy(scope))
-        .unwrap_or_else(|| "unknown promise rejection".to_owned());
+    let error = native_module_evaluation_exception_error(scope, args.get(0), "");
     unsafe { &mut *host_ptr }.queue_document_module_script_evaluation_rejected(
         document_owner,
         reaction_id,
-        reason,
-        error_constructor,
+        error.message().to_owned(),
+        error.error_value(),
     );
 }
 
@@ -782,18 +778,13 @@ fn child_parser_module_reaction_rejected_callback<'s>(
     let Some(host_ptr) = context_host_ptr_from_global_bridge(scope) else {
         return;
     };
-    let reason = args.get(0);
-    let error_constructor = script_error_constructor_kind_from_value(scope, reason);
-    let reason = reason
-        .to_string(scope)
-        .map(|value| value.to_rust_string_lossy(scope))
-        .unwrap_or_else(|| "unknown promise rejection".to_owned());
+    let error = native_module_evaluation_exception_error(scope, args.get(0), "");
     unsafe { &mut *host_ptr }.queue_child_parser_module_script_evaluation_rejected(
         document_owner,
         realm_id,
         reaction_id,
-        reason,
-        error_constructor,
+        error.message().to_owned(),
+        error.error_value(),
     );
 }
 
@@ -1098,11 +1089,26 @@ fn native_module_evaluation_exception_error(
     exception: v8::Local<'_, v8::Value>,
     prefix: &str,
 ) -> ModuleLoadError {
-    let message = exception
-        .to_string(scope)
-        .map(|message| message.to_rust_string_lossy(scope))
-        .unwrap_or_else(|| "unknown module evaluation exception".to_owned());
-    let error = ModuleLoadError::new(ModuleLoadStage::Evaluate, format!("{prefix}: {message}"));
+    let id = match retain_module_exception(scope, exception) {
+        Ok(id) => id,
+        Err(error) => {
+            return ModuleLoadError::new(
+                ModuleLoadStage::Evaluate,
+                format!("failed to retain module evaluation exception: {error}"),
+            );
+        }
+    };
+    // V8's internal diagnostic does not invoke author-defined toString or
+    // location getters. The diagnostic text never substitutes for the value.
+    let message = v8::Exception::create_message(scope, exception)
+        .get(scope)
+        .to_rust_string_lossy(scope);
+    let message = if prefix.is_empty() {
+        message
+    } else {
+        format!("{prefix}: {message}")
+    };
+    let error = ModuleLoadError::new(ModuleLoadStage::Evaluate, message).with_exception_id(id);
     match script_error_constructor_kind_from_value(scope, exception) {
         Some(error_constructor) => error.with_error_constructor(error_constructor),
         None => error,

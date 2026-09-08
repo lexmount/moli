@@ -415,7 +415,7 @@ impl PageVm {
                 }
                 ModuleScriptEvaluationReactionState::Rejected {
                     reason,
-                    error_constructor,
+                    error_value,
                 } => {
                     let message = format!(
                         "NativeEsmEvaluateFailed: native module graph evaluation rejected: {reason}"
@@ -441,7 +441,7 @@ impl PageVm {
                         self.vm_mut().report_window_error_body_best_effort(
                             &message,
                             Some(evaluation.script_continuation.script.url.as_str()),
-                            error_constructor,
+                            error_value,
                         );
                         MainParserContinuationTaskEffect::applied(
                             owner,
@@ -452,7 +452,7 @@ impl PageVm {
                             .report_module_tla_rejection_and_finish_reaction_best_effort(
                                 &message,
                                 Some(evaluation.script_continuation.script.url.as_str()),
-                                error_constructor,
+                                error_value,
                             );
                         MainParserContinuationTaskEffect::NotApplied
                     };
@@ -487,7 +487,7 @@ impl PageVm {
             }
             ModuleScriptEvaluationReactionState::Rejected {
                 reason,
-                error_constructor,
+                error_value,
             } => Some(
                 self.complete_module_script_failure_for_terminal_disposition(
                     evaluation.script_continuation,
@@ -500,7 +500,7 @@ impl PageVm {
                         module_failure_policy: Some(
                             crate::host::ModuleFailurePolicy::EvaluationFailure,
                         ),
-                        error_constructor,
+                        error_value,
                     },
                     PreparedScriptBodyActivity::NotEntered,
                     terminal_disposition,

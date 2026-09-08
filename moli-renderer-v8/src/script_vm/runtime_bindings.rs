@@ -151,6 +151,12 @@ fn flush_promise_rejection_state(
             .realm
             .with_current_scope(scope, host_ptr, |scope, dispatch_scope| {
                 let promise = v8::Local::new(scope, &rejection.promise);
+                // HTML rechecks PromiseIsHandled immediately before notifying.
+                // The host, or an earlier notification in this detached batch,
+                // may have handled it since it was first queued.
+                if promise.has_handler() {
+                    return;
+                }
                 let reason = rejection
                     .reason
                     .as_ref()

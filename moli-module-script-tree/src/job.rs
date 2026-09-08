@@ -698,6 +698,30 @@ struct DependencyCandidate {
 }
 
 fn is_parse_error(error: &ModuleLoadError) -> bool {
-    error.exception_id.is_some()
+    (error.exception_id.is_some()
+        && matches!(
+            error.stage,
+            ModuleLoadStage::Compile | ModuleLoadStage::Resolve
+        ))
         || error.error_constructor == Some(ModuleErrorConstructorKind::SyntaxError)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn retained_values_do_not_turn_link_or_evaluation_failures_into_parse_errors() {
+        for (stage, expected) in [
+            (ModuleLoadStage::Compile, true),
+            (ModuleLoadStage::Resolve, true),
+            (ModuleLoadStage::Fetch, false),
+            (ModuleLoadStage::Instantiate, false),
+            (ModuleLoadStage::Evaluate, false),
+        ] {
+            let error = ModuleLoadError::new(stage, "retained error")
+                .with_exception_id(crate::ModuleExceptionId(1));
+            assert_eq!(is_parse_error(&error), expected, "{stage:?}");
+        }
+    }
 }

@@ -4,7 +4,7 @@ use crate::document_script_scheduler::{
 use crate::document_task_lane::DocumentTaskQueue;
 use crate::module_runtime::ModuleEntryId;
 use crate::module_script_continuation::ModuleScriptEvaluationReactionState;
-use crate::types::ScriptErrorConstructorKind;
+use crate::types::ScriptErrorValue;
 
 #[derive(Debug)]
 pub(crate) struct ParserModuleEvaluationContinuation<Work> {
@@ -150,7 +150,7 @@ impl<Work> ParserModuleEvaluationStore<Work> {
         &mut self,
         reaction_id: u64,
         reason: String,
-        error_constructor: Option<ScriptErrorConstructorKind>,
+        error_value: Option<ScriptErrorValue>,
     ) -> Option<ModuleEntryId> {
         let evaluation = self
             .evaluations
@@ -158,7 +158,7 @@ impl<Work> ParserModuleEvaluationStore<Work> {
             .find(|evaluation| evaluation.reaction_id == reaction_id)?;
         evaluation.reaction_state = ModuleScriptEvaluationReactionState::Rejected {
             reason,
-            error_constructor,
+            error_value,
         };
         Some(evaluation.root_entry)
     }
