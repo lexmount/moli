@@ -329,6 +329,32 @@ fn worker_realm_lazy_properties_follow_chromium_exposure_sets() {
         assert!(first_url.strict_equals(second_url));
         assert_eq!(registry.build_count(url_id), 1);
 
+        let source = v8str(
+            scope,
+            r#"(() => {
+              const Original = URL;
+              const parse = Original.parse;
+              globalThis.URL = null;
+              try {
+                const value = parse('https://example.test/?q=value');
+                return value instanceof Original &&
+                  Object.getPrototypeOf(value) === Original.prototype &&
+                  value.searchParams.get('q') === 'value' && globalThis.URL === null;
+              } finally {
+                globalThis.URL = Original;
+              }
+            })()"#,
+        );
+        let script = v8::Script::compile(scope, source, None).expect("worker URL factory script");
+        assert!(
+            script
+                .run(scope)
+                .expect("worker URL factory evaluation")
+                .is_true(),
+            "worker URL factories must not follow the public constructor binding"
+        );
+        assert_eq!(registry.build_count(url_id), 1);
+
         [
             "Worker",
             "XMLHttpRequest",
@@ -337,6 +363,7 @@ fn worker_realm_lazy_properties_follow_chromium_exposure_sets() {
             "FileSystemSyncAccessHandle",
             "URL",
             "WorkerLocation",
+            "webkitURL",
         ]
         .iter()
         .map(|name| {
@@ -349,15 +376,15 @@ fn worker_realm_lazy_properties_follow_chromium_exposure_sets() {
 
     assert_eq!(
         own_properties(super::RealmKind::DedicatedWorker),
-        vec![true, true, true, false, true, true, false]
+        vec![true, true, true, false, true, true, false, false]
     );
     assert_eq!(
         own_properties(super::RealmKind::SharedWorker),
-        vec![true, true, true, false, false, true, false]
+        vec![true, true, true, false, false, true, false, false]
     );
     assert_eq!(
         own_properties(super::RealmKind::ServiceWorker),
-        vec![false, false, false, false, false, true, false]
+        vec![false, false, false, false, false, true, false, false]
     );
 }
 
