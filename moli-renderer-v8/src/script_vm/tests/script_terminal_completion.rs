@@ -2,6 +2,47 @@ use super::*;
 use crate::parser::{PreparedImportMap, PreparedImportMapSource};
 
 #[test]
+fn retained_window_error_body_preserves_identity_without_owning_the_checkpoint() {
+    let mut vm = new_storage_test_vm("https://script-terminal.test/retained.html");
+    vm.eval(
+        r#"
+        globalThis.__errors = [];
+        globalThis.__order = [];
+        addEventListener('error', event => {
+            __errors.push(event.error);
+            __order.push('error');
+            queueMicrotask(() => __order.push('microtask'));
+            event.preventDefault();
+        });
+    "#,
+    )
+    .unwrap();
+    let error = vm
+        .preserve_native_module_load_error(
+            None,
+            crate::module_runtime::ModuleLoadError::new(
+                crate::module_runtime::ModuleLoadStage::Compile,
+                "remembered syntax error",
+            )
+            .with_error_constructor(crate::types::ScriptErrorConstructorKind::SyntaxError),
+        )
+        .unwrap();
+    for _ in 0..2 {
+        vm.report_window_error_body(error.message(), Some("module.js"), error.error_value())
+            .unwrap();
+    }
+    assert_eq!(vm.eval_without_microtask_checkpoint_for_test(
+        "[__order.join('|'), __errors[0] === __errors[1], __errors[0] instanceof SyntaxError, Object.hasOwn(__errors[0], 'fileName')].join(',')",
+    ).unwrap(), "error|error,true,true,false");
+    vm.perform_script_task_checkpoint(None).unwrap();
+    assert_eq!(
+        vm.eval_without_microtask_checkpoint_for_test("__order.join('|')")
+            .unwrap(),
+        "error|error|microtask|microtask"
+    );
+}
+
+#[test]
 fn window_error_body_leaves_checkpoint_to_its_carrier() {
     let mut vm = new_storage_test_vm("https://script-terminal.test/body.html");
     vm.eval(

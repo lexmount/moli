@@ -37,6 +37,21 @@ pub(crate) enum ScriptErrorConstructorKind {
     WebAssemblyLinkError,
 }
 
+/// The value carried by script-failure reporting tasks. Constructor metadata
+/// remains a fallback for failures originating in the host; a JavaScript
+/// exception must instead retain its original value in the reporting realm.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ScriptErrorValue {
+    Constructor(ScriptErrorConstructorKind),
+    Retained(moli_module_script_tree::ModuleExceptionId),
+}
+
+impl From<ScriptErrorConstructorKind> for ScriptErrorValue {
+    fn from(constructor: ScriptErrorConstructorKind) -> Self {
+        Self::Constructor(constructor)
+    }
+}
+
 pub use moli_script::{
     ScriptElementClassificationInput, ScriptPreparationClassificationInput,
     classify_script_preparation,

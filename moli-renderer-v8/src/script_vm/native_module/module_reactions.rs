@@ -353,14 +353,10 @@ impl ScriptVm {
             RendererPageModuleReactionEvent::DocumentModuleScriptEvaluationRejected {
                 reaction_id,
                 reason,
-                error_constructor,
+                error_value,
                 ..
             } => self
-                .apply_native_module_script_evaluation_rejected(
-                    reaction_id,
-                    reason,
-                    error_constructor,
-                )
+                .apply_native_module_script_evaluation_rejected(reaction_id, reason, error_value)
                 .map(PageModuleReactionApplication::module_state_updated),
             RendererPageModuleReactionEvent::ChildParserModuleEvaluationFulfilled {
                 reaction_id,
@@ -373,12 +369,12 @@ impl ScriptVm {
             RendererPageModuleReactionEvent::ChildParserModuleEvaluationRejected {
                 reaction_id,
                 reason,
-                error_constructor,
+                error_value,
                 ..
             } => (self.apply_child_parser_module_evaluation_rejected(
                 reaction_id,
                 reason,
-                error_constructor,
+                error_value,
             ) > 0)
                 .then_some(PageModuleReactionApplication::module_state_updated(
                     PageModuleReactionFollowup::None,
@@ -513,12 +509,12 @@ impl ScriptVm {
         &mut self,
         reaction_id: u64,
         reason: String,
-        error_constructor: Option<ScriptErrorConstructorKind>,
+        error_value: Option<ScriptErrorValue>,
     ) -> Option<PageModuleReactionFollowup> {
         let update = self.mark_module_evaluation_reaction_rejected_for_owner(
             reaction_id,
             reason,
-            error_constructor,
+            error_value,
         )?;
         Some(match update {
             DocumentModuleReactionUpdate::ParserOwned(update) => {

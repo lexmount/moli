@@ -2473,7 +2473,7 @@ fn explicit_module_failure_policy_overrides_opaque_message_text() {
             load_event: ScriptEventDispatchPolicy::Dispatch,
             error_event: ScriptEventDispatchPolicy::Skip(ScriptEventSkipReason::ModuleGraphFailure),
             report_window_failure: true,
-            load_event_after_window_failure: false,
+            load_event_after_window_failure: true,
         }
     );
 }

@@ -6,10 +6,13 @@
       window.addEventListener("error", (event) => {
         window.dynamicModuleTlaPayloadOrder.push("window-error");
         window.dynamicModuleTlaPayloadErrorMessageMatches = Boolean(
-          event.error &&
-            typeof event.error.message === "string" &&
-            event.error.message.length > 0,
+          typeof event.message === "string" && event.message.length > 0,
         );
+        window.dynamicModuleTlaPayloadErrorIdentityMatches =
+          event.error === window.dynamicModuleTlaPayloadReason &&
+          Object.getPrototypeOf(event.error) === null &&
+          !Object.hasOwn(event.error, "message") &&
+          !Object.hasOwn(event.error, "fileName");
         window.dynamicModuleTlaPayloadFilenameMatches =
           typeof event.filename === "string" &&
           event.filename.includes(
@@ -23,7 +26,7 @@
         window.dynamicModuleTlaPayloadOrder.push("script-error");
       };
       broken.text =
-        'const reason = Object.create(null); await Promise.reject(reason);';
+        'const reason = window.dynamicModuleTlaPayloadReason = Object.create(null); await Promise.reject(reason);';
       document.body.appendChild(broken);
 
       const later = document.createElement("script");

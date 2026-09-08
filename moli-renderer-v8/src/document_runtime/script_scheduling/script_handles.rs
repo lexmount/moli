@@ -8,7 +8,7 @@ use crate::host::{
 };
 use crate::page_task_queue::PostParseLifecycleWork;
 use crate::planning::PreparedScript;
-use crate::types::{ScriptErrorConstructorKind, ScriptKind};
+use crate::types::{ScriptErrorValue, ScriptKind};
 use tracing::warn;
 
 impl DocumentRuntime {
@@ -156,7 +156,7 @@ impl DocumentRuntime {
         script: &PreparedScript,
         message: &str,
         module_failure_policy: Option<ModuleFailurePolicy>,
-        error_constructor: Option<ScriptErrorConstructorKind>,
+        error_value: Option<ScriptErrorValue>,
     ) -> Vec<PostParseLifecycleWork> {
         if script.host_script_handle.is_none()
             && matches!(script.kind, ScriptKind::Module | ScriptKind::ImportMap)
@@ -186,7 +186,7 @@ impl DocumentRuntime {
                 message,
                 Some(script.url.as_str()),
                 module_failure_policy,
-                error_constructor,
+                error_value,
             )
     }
 
@@ -196,17 +196,12 @@ impl DocumentRuntime {
         script: &PreparedScript,
         message: &str,
         module_failure_policy: Option<ModuleFailurePolicy>,
-        error_constructor: Option<ScriptErrorConstructorKind>,
+        error_value: Option<ScriptErrorValue>,
     ) -> Vec<PageTask> {
-        self.plan_script_failure_lifecycle_work(
-            script,
-            message,
-            module_failure_policy,
-            error_constructor,
-        )
-        .into_iter()
-        .map(PostParseLifecycleWork::into_page_task)
-        .collect()
+        self.plan_script_failure_lifecycle_work(script, message, module_failure_policy, error_value)
+            .into_iter()
+            .map(PostParseLifecycleWork::into_page_task)
+            .collect()
     }
 
     pub(crate) fn enqueue_parser_boundary_lifecycle_work(&mut self, work: PostParseLifecycleWork) {
