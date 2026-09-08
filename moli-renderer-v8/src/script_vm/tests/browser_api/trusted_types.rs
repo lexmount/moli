@@ -1601,6 +1601,138 @@ trustedTypes.createPolicy("default", {
 }
 
 #[test]
+fn inline_module_csp_hashes_use_prepared_source_without_duplicate_url_checks() {
+    use crate::module_runtime::NativeModuleGraphJobAdvance;
+    use base64::{Engine as _, engine::general_purpose::STANDARD};
+
+    const ORIGINAL: &str = "globalThis.__inlineModuleRuns.push('old')";
+    const PREPARED: &str = "globalThis.__inlineModuleRuns.push('new')";
+    for namespace in ["http://www.w3.org/1999/xhtml", "http://www.w3.org/2000/svg"] {
+        for runtime_owned in [false, true] {
+            for (allowed_source, report_only) in
+                [(PREPARED, false), (ORIGINAL, false), (ORIGINAL, true)]
+            {
+                let mut vm = new_storage_test_vm("https://inline-module-csp.test/page");
+                vm.eval(&format!(r#"
+                    globalThis.__inlineModuleRuns = [];
+                    globalThis.__inlineModuleCalls = [];
+                    globalThis.__inlineModuleViolations = [];
+                    addEventListener('securitypolicyviolation', event => {{
+                        __inlineModuleViolations.push([event.blockedURI, event.disposition, event.sample]);
+                    }});
+                    const root = document.appendChild(document.createElement('html'));
+                    const body = root.appendChild(document.createElement('body'));
+                    const element = document.createElementNS({namespace:?}, 'script');
+                    element.id = 'inline-module';
+                    element.setAttribute('type', 'application/json');
+                    element.appendChild(document.createTextNode({ORIGINAL:?}));
+                    body.appendChild(element);
+                    trustedTypes.createPolicy('default', {{
+                        createScript(input, type, sink) {{
+                            __inlineModuleCalls.push([input, type, sink]);
+                            return {PREPARED:?};
+                        }}
+                    }});
+                "#)).expect("install inert script and rewriting policy");
+                let hash = STANDARD.encode(
+                    moli_crypto::DigestAlgorithm::Sha256.digest_bytes(allowed_source.as_bytes()),
+                );
+                let policy = format!("script-src 'sha256-{hash}' 'report-sample'");
+                let mut enforced = vec!["require-trusted-types-for 'script'".to_owned()];
+                if report_only {
+                    vm.set_response_content_security_report_only_policies(&[policy]);
+                } else {
+                    enforced.push(policy);
+                }
+                vm.set_response_content_security_policies(&enforced);
+
+                let document_url = vm.document_runtime.document_url().clone();
+                let node_id = vm
+                    .document_runtime
+                    .get_element_by_id("inline-module")
+                    .unwrap();
+                let script = PreparedScript {
+                    position: 1,
+                    node_id,
+                    kind: ScriptKind::Module,
+                    mode: ScriptMode::ModuleInOrder,
+                    source_kind: ScriptSourceKind::Inline,
+                    fetch_metadata: crate::planning::ScriptFetchMetadata::default(),
+                    source: ScriptSource::Inline(ORIGINAL.to_owned()),
+                    url: document_url.clone(),
+                    base_url: document_url.clone(),
+                    initiator_url: document_url.clone(),
+                    host_script_handle: None,
+                };
+                let source = vm.inline_module_script_source_for_graph_start(&script, ORIGINAL);
+                let should_run = allowed_source == PREPARED || report_only;
+                assert_eq!(
+                    source.text_source(),
+                    Some(if should_run { PREPARED } else { "" })
+                );
+                let prepare_graph = if runtime_owned {
+                    crate::module_runtime::runtime_owned_loaded_module_script_graph_job
+                } else {
+                    crate::module_runtime::parser_owned_loaded_module_script_graph_job
+                };
+                let mut job = prepare_graph(
+                    &mut vm,
+                    source,
+                    &document_url,
+                    &document_url,
+                    &script.fetch_metadata,
+                    false,
+                )
+                .expect("a prepared inline module must not be checked as an external URL");
+                let NativeModuleGraphJobAdvance::Complete(graph) =
+                    job.advance_module_script_owner_lane(&mut vm).unwrap()
+                else {
+                    panic!("an import-free inline module must not fetch");
+                };
+                vm.instantiate_native_module_graph(&graph).unwrap();
+                vm.evaluate_native_module_graph(graph.root_entry).unwrap();
+                drain_pre_domcontentloaded_non_script_page_tasks_for_test(&mut vm);
+
+                assert_eq!(
+                    vm.eval("JSON.stringify(__inlineModuleRuns)").unwrap(),
+                    if should_run { r#"["new"]"# } else { "[]" }
+                );
+                let sink = if namespace == "http://www.w3.org/2000/svg" {
+                    "SVGScriptElement text"
+                } else {
+                    "HTMLScriptElement text"
+                };
+                assert_eq!(
+                    vm.eval("JSON.stringify(__inlineModuleCalls)").unwrap(),
+                    serde_json::json!([[ORIGINAL, "TrustedScript", sink]]).to_string()
+                );
+                let violations = if allowed_source == PREPARED {
+                    serde_json::json!([])
+                } else {
+                    serde_json::json!([[
+                        "inline",
+                        if report_only { "report" } else { "enforce" },
+                        PREPARED.chars().take(40).collect::<String>()
+                    ]])
+                };
+                assert_eq!(
+                    vm.eval("JSON.stringify(__inlineModuleViolations)").unwrap(),
+                    violations.to_string()
+                );
+                // The graph consumes the prepared copy without rewriting the DOM.
+                assert_eq!(
+                    vm.document_runtime
+                        .dom_host()
+                        .text_content(node_id)
+                        .as_deref(),
+                    Some(ORIGINAL)
+                );
+            }
+        }
+    }
+}
+
+#[test]
 fn script_src_enforces_trusted_script_url_and_applies_the_default_policy() {
     let mut vm = new_storage_test_vm("https://script-src-trusted-types.test/base/");
     vm.set_response_content_security_policies(&["require-trusted-types-for 'script'".to_owned()]);
