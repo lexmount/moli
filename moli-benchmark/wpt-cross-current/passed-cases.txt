@@ -119,7 +119,6 @@ content-security-policy/media-src/media-src-blocked-data-url.html
 content-security-policy/meta/meta-img-src.html
 content-security-policy/meta/meta-modified.html
 content-security-policy/meta/sandbox-iframe.html
-content-security-policy/navigation/javascript-url-navigation-evaluated-to-string-inherits-csp.html
 content-security-policy/navigation/to-javascript-parent-initiated-check-csp-order.html
 content-security-policy/navigation/to-javascript-parent-initiated-child-csp.html
 content-security-policy/navigation/to-javascript-url-frame-src.html
@@ -332,7 +331,6 @@ css/css-cascade/inherit-initial.html
 css/css-cascade/inline-style-background.html
 css/css-cascade/layer-basic.html
 css/css-cascade/layer-cssom-order-reverse-at-property.html
-css/css-cascade/layer-cssom-order-reverse.html
 css/css-cascade/layer-import.html
 css/css-cascade/layer-important.html
 css/css-cascade/layer-property-override.html
@@ -1553,11 +1551,9 @@ css/css-grid/abspos/orthogonal-positioned-grid-items-016.html
 css/css-grid/abspos/orthogonal-positioned-grid-items-017.html
 css/css-grid/abspos/positioned-grid-descendants-003.html
 css/css-grid/abspos/positioned-grid-descendants-006.html
-css/css-grid/abspos/positioned-grid-descendants-008.html
-css/css-grid/abspos/positioned-grid-descendants-009.html
-css/css-grid/abspos/positioned-grid-descendants-010.html
 css/css-grid/abspos/positioned-grid-descendants-011.html
 css/css-grid/abspos/positioned-grid-descendants-012.html
+css/css-grid/abspos/positioned-grid-descendants-013.html
 css/css-grid/abspos/positioned-grid-descendants-014.html
 css/css-grid/abspos/positioned-grid-descendants-015.html
 css/css-grid/abspos/positioned-grid-descendants-016.html
@@ -2070,6 +2066,7 @@ css/css-grid/parsing/grid-auto-rows-invalid.html
 css/css-grid/parsing/grid-auto-rows-valid.html
 css/css-grid/parsing/grid-column-invalid.html
 css/css-grid/parsing/grid-column-shorthand.html
+css/css-grid/parsing/grid-content-sized-columns-resolution.html
 css/css-grid/parsing/grid-row-invalid.html
 css/css-grid/parsing/grid-row-shorthand.html
 css/css-grid/parsing/grid-shorthand-invalid.html
@@ -3038,7 +3035,6 @@ css/cssom/css-style-declaration-modifications.html
 css/cssom/css-style-reparse.html
 css/cssom/cssimportrule-parent.html
 css/cssom/cssimportrule-sheet-identity.html
-css/cssom/cssimportrule.html
 css/cssom/cssom-cssText-serialize.html
 css/cssom/cssom-cssstyledeclaration-set.html
 css/cssom/cssom-fontfacerule-constructors.html
@@ -5333,6 +5329,7 @@ html/browsers/browsing-the-web/unloading-documents/unload/009.html
 html/browsers/history/joint-session-history/joint-session-history-iframe-state.html
 html/browsers/history/joint-session-history/joint-session-history-only-fully-active.html
 html/browsers/history/joint-session-history/joint-session-history-remove-iframe.html
+html/browsers/history/the-history-interface/004.html
 html/browsers/history/the-history-interface/005.html
 html/browsers/history/the-history-interface/006.html
 html/browsers/history/the-history-interface/008.html
@@ -5738,7 +5735,6 @@ html/semantics/document-metadata/the-meta-element/color-scheme/meta-color-scheme
 html/semantics/document-metadata/the-meta-element/http-equiv-and-name-1.html
 html/semantics/document-metadata/the-meta-element/http-equiv-and-name-2.html
 html/semantics/document-metadata/the-meta-element/pragma-directives/attr-meta-http-equiv-refresh/allow-scripts-flag-changing-1.html
-html/semantics/document-metadata/the-meta-element/pragma-directives/attr-meta-http-equiv-refresh/allow-scripts-flag-changing-2.html
 html/semantics/document-metadata/the-meta-element/pragma-directives/attr-meta-http-equiv-refresh/dynamic-append.html
 html/semantics/document-metadata/the-meta-element/pragma-directives/attr-meta-http-equiv-refresh/not-in-shadow-tree.html
 html/semantics/document-metadata/the-meta-element/pragma-directives/http-equiv-enumerated-ascii-case-insensitive.html
@@ -6352,6 +6348,7 @@ html/semantics/scripting-1/the-script-element/execution-timing/088.html
 html/semantics/scripting-1/the-script-element/execution-timing/089.html
 html/semantics/scripting-1/the-script-element/execution-timing/090.html
 html/semantics/scripting-1/the-script-element/execution-timing/091.html
+html/semantics/scripting-1/the-script-element/execution-timing/092.html
 html/semantics/scripting-1/the-script-element/execution-timing/094.html
 html/semantics/scripting-1/the-script-element/execution-timing/095.html
 html/semantics/scripting-1/the-script-element/execution-timing/096.html
@@ -7732,6 +7729,7 @@ selection/textcontrols/selectionchange-on-shadow-dom.html
 selection/textcontrols/selectionchange.html
 selection/toString-ff-bug-001.html
 selection/type.html
+service-workers/cache-storage/cache-api-nested-worker.https.html
 service-workers/cache-storage/credentials.https.html
 service-workers/service-worker/Service-Worker-Allowed-header.https.html
 service-workers/service-worker/ServiceWorkerGlobalScope/isSecureContext.https.html
@@ -7767,6 +7765,7 @@ service-workers/service-worker/fetch-event-respond-with-response-body-with-inval
 service-workers/service-worker/fetch-event-respond-with-stops-propagation.https.html
 service-workers/service-worker/fetch-event-throws-after-respond-with.https.html
 service-workers/service-worker/fetch-request-no-freshness-headers.https.html
+service-workers/service-worker/getregistration.https.html
 service-workers/service-worker/immutable-prototype-serviceworker.https.html
 service-workers/service-worker/import-scripts-data-url.https.html
 service-workers/service-worker/indexeddb.https.html
@@ -8901,6 +8900,7 @@ workers/interfaces/WorkerGlobalScope/close/setTimeout.html
 workers/interfaces/WorkerGlobalScope/location/members.html
 workers/interfaces/WorkerGlobalScope/location/setting-members.html
 workers/interfaces/WorkerGlobalScope/location/worker-separate-file.html
+workers/interfaces/WorkerGlobalScope/onerror/exception-in-onerror.html
 workers/interfaces/WorkerGlobalScope/onerror/handled.html
 workers/interfaces/WorkerGlobalScope/onerror/message-classic-DOMException.html
 workers/interfaces/WorkerGlobalScope/onerror/message-classic-Error.html

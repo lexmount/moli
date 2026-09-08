@@ -31,12 +31,12 @@ html/browsers/windows/auxiliary-browsing-contexts/opener-setter.html
 html/semantics/embedded-content/the-img-element/decode/image-decode-iframe.html
 html/semantics/embedded-content/the-object-element/object-events.html
 html/semantics/forms/form-submission-target/rel-base-target.html
-navigation-api/navigate-event/intercept-cross-origin.html
 payment-method-basic-card/apply_the_modifiers.html
 payment-method-basic-card/steps_for_selecting_the_payment_handler.html
 resource-timing/nested-context-navigations-embed.html
 resource-timing/nested-context-navigations-iframe.html
 resource-timing/nested-context-navigations-object.html
+resource-timing/tentative/initiator-url/inline-document-write.html
 service-workers/service-worker/fetch-mixed-content-to-inscope.https.html
 service-workers/service-worker/fetch-mixed-content-to-outscope.https.html
 service-workers/service-worker/interface-requirements-sw.https.html

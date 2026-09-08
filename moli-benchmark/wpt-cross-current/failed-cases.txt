@@ -16,6 +16,7 @@ content-security-policy/inheritance/document-write-iframe.html
 content-security-policy/inheritance/location-reload.html
 content-security-policy/inside-worker/dedicatedworker-report-only.html
 content-security-policy/inside-worker/serviceworker-report-only.https.sub.html
+content-security-policy/navigation/javascript-url-navigation-evaluated-to-string-inherits-csp.html
 content-security-policy/resource-hints/prefetch-allowed-by-default.html
 content-security-policy/resource-hints/prefetch-allowed-no-default.html
 content-security-policy/resource-hints/prefetch-allowed-with-conflicting-permissive-policies.html
@@ -44,6 +45,7 @@ css/css-cascade/all-prop-revert-noop.html?include=4
 css/css-cascade/all-prop-revert-noop.html?include=5
 css/css-cascade/import-conditions.html
 css/css-cascade/layer-counter-style-override.html
+css/css-cascade/layer-cssom-order-reverse.html
 css/css-cascade/layer-font-face-override.html
 css/css-cascade/layer-keyframes-override.html
 css/css-cascade/layer-media-query.html
@@ -504,7 +506,9 @@ css/css-grid/abspos/positioned-grid-descendants-002.html
 css/css-grid/abspos/positioned-grid-descendants-004.html
 css/css-grid/abspos/positioned-grid-descendants-005.html
 css/css-grid/abspos/positioned-grid-descendants-007.html
-css/css-grid/abspos/positioned-grid-descendants-013.html
+css/css-grid/abspos/positioned-grid-descendants-008.html
+css/css-grid/abspos/positioned-grid-descendants-009.html
+css/css-grid/abspos/positioned-grid-descendants-010.html
 css/css-grid/abspos/positioned-grid-items-020.html
 css/css-grid/abspos/positioned-grid-items-021.html
 css/css-grid/abspos/positioned-grid-items-024.html
@@ -1502,7 +1506,6 @@ css/css-grid/parsing/grid-area-computed.html
 css/css-grid/parsing/grid-area-valid.html
 css/css-grid/parsing/grid-column-shortest-serialization.html
 css/css-grid/parsing/grid-columns-rows-get-set-multiple.html
-css/css-grid/parsing/grid-content-sized-columns-resolution.html
 css/css-grid/parsing/grid-row-shortest-serialization.html
 css/css-grid/parsing/grid-shorthand-serialization.html
 css/css-grid/parsing/grid-shorthand-valid.html
@@ -2457,6 +2460,7 @@ css/cssom-view/table-with-border-client-width-height.html
 css/cssom-view/window-scroll-arguments.html
 css/cssom-view/window-scroll-promise-interruption.html
 css/cssom-view/window-scroll-promises.html
+css/cssom/cssimportrule.html
 css/cssom/cssom-getPropertyValue-common-checks.html
 css/cssom/cssom-pagerule.html
 css/cssom/flex-serialization.html
@@ -2737,7 +2741,6 @@ html/browsers/browsing-the-web/unloading-documents/005.html
 html/browsers/browsing-the-web/unloading-documents/beforeunload-synchronous.html
 html/browsers/browsing-the-web/unloading-documents/navigation-during-beforeunload.html
 html/browsers/browsing-the-web/unloading-documents/prompt/001.html
-html/browsers/history/the-history-interface/004.html
 html/browsers/history/the-history-interface/009.html
 html/browsers/history/the-history-interface/010.html
 html/browsers/history/the-history-interface/history_go_undefined.html
@@ -2940,7 +2943,6 @@ html/semantics/popovers/popover-types-with-hints.html
 html/semantics/scripting-1/the-script-element/css-module/cors-crossorigin-requests.html
 html/semantics/scripting-1/the-script-element/execution-timing/083.html
 html/semantics/scripting-1/the-script-element/execution-timing/085.html
-html/semantics/scripting-1/the-script-element/execution-timing/092.html
 html/semantics/scripting-1/the-script-element/execution-timing/125.html
 html/semantics/scripting-1/the-script-element/execution-timing/128.html
 html/semantics/scripting-1/the-script-element/execution-timing/137.html
@@ -3102,7 +3104,6 @@ resource-timing/tentative/initiator-url/event-handler.html
 resource-timing/tentative/initiator-url/external-script-in-posted-task.html
 resource-timing/tentative/initiator-url/external-script.html
 resource-timing/tentative/initiator-url/iframe-post-message.html
-resource-timing/tentative/initiator-url/inline-document-write.html
 resource-timing/tentative/initiator-url/inline-script.html
 resource-timing/tentative/initiator-url/post-task.html
 resource-timing/tentative/initiator-url/promise.html
@@ -3130,7 +3131,6 @@ secure-contexts/basic-dedicated-worker.html
 secure-contexts/basic-popup-and-iframe-tests.html
 selection/shadow-dom/tentative/Selection-getComposedRanges-range-update.html
 selection/toString-user-select-none.html
-service-workers/cache-storage/cache-api-nested-worker.https.html
 service-workers/cache-storage/cache-keys-attributes-for-service-worker.https.html
 service-workers/cache-storage/sandboxed-iframes.https.html
 service-workers/service-worker/active.https.html
@@ -3159,7 +3159,6 @@ service-workers/service-worker/fetch-request-xhr-sync-on-worker.https.html
 service-workers/service-worker/fetch-request-xhr-sync.https.html
 service-workers/service-worker/fetch-request-xhr.https.html
 service-workers/service-worker/fetch-waits-for-activate.https.html
-service-workers/service-worker/getregistration.https.html
 service-workers/service-worker/getregistrations.https.html
 service-workers/service-worker/import-scripts-cross-origin.https.html
 service-workers/service-worker/import-scripts-mime-types.https.html
@@ -3300,7 +3299,6 @@ webrtc-identity/RTCPeerConnection-constructor.html
 webrtc-priority/RTCPeerConnection-ondatachannel.html
 webrtc-priority/RTCRtpParameters-encodings.html
 webusb/usb-supported-by-permissions-policy.html
-workers/interfaces/WorkerGlobalScope/onerror/exception-in-onerror.html
 workers/semantics/structured-clone/dedicated.html
 workers/semantics/structured-clone/shared.html
 worklets/animation-worklet-service-worker-interception.https.html
