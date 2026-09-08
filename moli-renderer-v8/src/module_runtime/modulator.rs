@@ -655,14 +655,6 @@ impl NativeDocumentModulator {
             .set_record_state_for_entry(self.core.entry(entry_id), ModuleRecordState::Evaluated);
     }
 
-    pub(crate) fn module_source_for(
-        &self,
-        module: v8::Local<'_, v8::Module>,
-    ) -> Option<(ModuleMapKey, ModuleSource)> {
-        let entry = self.entry(self.module_entry_id_for(module)?);
-        Some((entry.effective_key().clone(), entry.source()?.clone()))
-    }
-
     pub(crate) fn module_wasm_record_for(
         &self,
         module: v8::Local<'_, v8::Module>,

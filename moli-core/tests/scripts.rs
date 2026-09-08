@@ -11,6 +11,9 @@ use moli_core::{
 use support::FixtureServer;
 use tokio::time::Duration;
 
+#[path = "scripts/child_synthetic_modules.rs"]
+mod child_synthetic_modules;
+
 fn diagnostic_global<'a>(
     page: &'a moli_core::page::Page,
     name: &str,

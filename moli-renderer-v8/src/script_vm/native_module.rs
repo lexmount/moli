@@ -3435,22 +3435,6 @@ impl ScriptVm {
             })
     }
 
-    fn compile_synthetic_module_record_in_context(
-        &mut self,
-        context_ptr: *const v8::Global<v8::Context>,
-        key: ModuleMapKey,
-        _source: &str,
-        source_url: &Url,
-    ) -> std::result::Result<(ModuleRecordEntry, ModuleIdentityHash), ModuleLoadError> {
-        self.compile_synthetic_module_record_with_exports_in_context(
-            context_ptr,
-            key,
-            source_url,
-            &["default"],
-            None,
-        )
-    }
-
     fn compile_wasm_module_record_in_context(
         &mut self,
         context_ptr: *const v8::Global<v8::Context>,
@@ -3501,7 +3485,7 @@ impl ScriptVm {
                     &scope,
                     module_name,
                     &export_names,
-                    synthetic_module_evaluation_steps,
+                    wasm_synthetic_module_evaluation_steps,
                 );
                 let identity = module_identity_hash_from_v8_module(module);
                 let compiled_module = v8::Global::new(scope.as_ref(), module);
@@ -3521,13 +3505,12 @@ impl ScriptVm {
             })
     }
 
-    fn compile_synthetic_module_record_with_exports_in_context(
+    fn compile_synthetic_module_record_in_context(
         &mut self,
         context_ptr: *const v8::Global<v8::Context>,
         key: ModuleMapKey,
+        source: &str,
         source_url: &Url,
-        export_names: &[&str],
-        wasm_record: Option<(Vec<ModuleRequestRecord>, WasmModuleRecord)>,
     ) -> std::result::Result<(ModuleRecordEntry, ModuleIdentityHash), ModuleLoadError> {
         self.renderer_document_isolate
             .with_entered_renderer_document_isolate(|isolate| {
@@ -3536,36 +3519,29 @@ impl ScriptVm {
                 let context = unsafe { v8::Local::new(scope, &*context_ptr) };
                 let scope = &mut v8::ContextScope::new(scope, context);
                 let try_catch = pin!(v8::TryCatch::new(scope));
-                let scope = try_catch.init();
+                let mut scope = try_catch.init();
 
                 let module_name = v8_string(&scope, source_url.as_str()).ok_or_else(|| {
                     anyhow::anyhow!("failed to allocate v8 synthetic module name")
                 })?;
-                let export_names = export_names
-                    .iter()
-                    .map(|name| {
-                        v8_string(&scope, name).ok_or_else(|| {
-                            anyhow::anyhow!("failed to allocate synthetic export name")
-                        })
-                    })
-                    .collect::<Result<Vec<_>>>()?;
+                let default_export = v8_string(&scope, "default")
+                    .ok_or_else(|| anyhow::anyhow!("failed to allocate synthetic export name"))?;
                 let module = v8::Module::create_synthetic_module(
                     &scope,
                     module_name,
-                    &export_names,
-                    synthetic_module_evaluation_steps,
+                    &[default_export],
+                    synthetic_text_module_evaluation_steps,
                 );
                 let identity = module_identity_hash_from_v8_module(module);
+                let evaluation_source = crate::module_runtime::SyntheticTextModuleSource::register(
+                    &mut scope,
+                    module,
+                    key.clone(),
+                    source,
+                );
                 let compiled_module = v8::Global::new(scope.as_ref(), module);
-                let entry = match wasm_record {
-                    Some((requests, wasm_module)) => ModuleRecordEntry::new_with_wasm_module(
-                        key,
-                        compiled_module,
-                        requests,
-                        wasm_module,
-                    ),
-                    None => ModuleRecordEntry::new(key, compiled_module, Vec::new()),
-                };
+                let entry = ModuleRecordEntry::new(key, compiled_module, Vec::new())
+                    .with_synthetic_text_module_source(evaluation_source);
                 Ok((entry, identity))
             })
             .map_err(|error| ModuleLoadError::new(ModuleLoadStage::Compile, error.to_string()))
@@ -4640,7 +4616,27 @@ fn get_i64_reaction_data_slot<'s>(
     lossless.then_some(value)
 }
 
-fn synthetic_module_evaluation_steps<'s>(
+fn synthetic_text_module_evaluation_steps<'s>(
+    context: v8::Local<'s, v8::Context>,
+    module: v8::Local<'s, v8::Module>,
+) -> Option<v8::Local<'s, v8::Value>> {
+    v8::callback_scope!(unsafe scope, context);
+    let Some(record) =
+        crate::module_runtime::SyntheticTextModuleSource::for_module(context, module)
+    else {
+        return throw_synthetic_module_error(scope, "synthetic module source is not available");
+    };
+    let source = record.source();
+    match record.key().kind() {
+        ModuleKind::Json => evaluate_json_synthetic_module(scope, module, source),
+        ModuleKind::Css => {
+            evaluate_css_synthetic_module(scope, module, record.key().url().as_str(), source)
+        }
+        _ => throw_synthetic_module_error(scope, "unexpected synthetic text module kind"),
+    }
+}
+
+fn wasm_synthetic_module_evaluation_steps<'s>(
     context: v8::Local<'s, v8::Context>,
     module: v8::Local<'s, v8::Module>,
 ) -> Option<v8::Local<'s, v8::Value>> {
@@ -4648,39 +4644,15 @@ fn synthetic_module_evaluation_steps<'s>(
     let Some(host_ptr) = context_host_ptr_from_global_bridge(scope) else {
         return throw_synthetic_module_error(scope, "synthetic module host is not available");
     };
-    let Some((key, source)) = (unsafe { &*host_ptr }).native_module_source_for(module) else {
-        return throw_synthetic_module_error(scope, "synthetic module source is not available");
-    };
-    match key.kind() {
-        ModuleKind::Json => {
-            let Some(source) = source.text_source() else {
-                return throw_synthetic_module_error(scope, "JSON module source is not text");
-            };
-            evaluate_json_synthetic_module(scope, module, source)
-        }
-        ModuleKind::Css => {
-            let Some(source) = source.text_source() else {
-                return throw_synthetic_module_error(scope, "CSS module source is not text");
-            };
-            evaluate_css_synthetic_module(scope, module, key.url().as_str(), source)
-        }
-        ModuleKind::WebAssembly => {
-            let Some(wasm_record) = (unsafe { &*host_ptr }).native_module_wasm_record_for(module)
-            else {
-                return throw_synthetic_module_error(
-                    scope,
-                    "WebAssembly synthetic module record is not available",
-                );
-            };
-            evaluate_wasm_synthetic_module(scope, module, &wasm_record, |scope, import| {
-                wasm_import_value(scope, module, import)
-            })
-        }
-        ModuleKind::JavaScript | ModuleKind::ModulePreloadText => throw_synthetic_module_error(
+    let Some(wasm_record) = (unsafe { &*host_ptr }).native_module_wasm_record_for(module) else {
+        return throw_synthetic_module_error(
             scope,
-            "non-synthetic module reached synthetic module evaluation",
-        ),
-    }
+            "WebAssembly synthetic module record is not available",
+        );
+    };
+    evaluate_wasm_synthetic_module(scope, module, &wasm_record, |scope, import| {
+        wasm_import_value(scope, module, import)
+    })
 }
 
 fn evaluate_json_synthetic_module<'s>(
