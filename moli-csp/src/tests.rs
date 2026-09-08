@@ -2587,6 +2587,11 @@ fn trusted_types_csp_name_grammar_matches_only_valid_tokens() {
             false
         ));
     }
+    assert!(!policy_allows_trusted_type_policy_name(
+        &ContentSecurityPolicy::from("trusted-types valid \u{000b}'allow-duplicates'"),
+        "valid",
+        true,
+    ));
 }
 
 #[test]
@@ -2606,6 +2611,12 @@ fn trusted_types_csp_name_grammar_does_not_restrict_unlisted_or_wildcard_names()
                 false
             ));
         }
+        assert!(!policy_allows_trusted_type_policy_name(
+            &ContentSecurityPolicy::from("trusted-types *"), name, true,
+        ));
+        assert!(policy_allows_trusted_type_policy_name(
+            &ContentSecurityPolicy::from("trusted-types * 'allow-duplicates'"), name, true,
+        ));
     }
 }
 
