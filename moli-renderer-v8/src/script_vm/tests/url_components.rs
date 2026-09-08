@@ -353,6 +353,64 @@ for (const tag of ['a', 'area']) {
 }
 
 #[test]
+fn file_url_components_preserve_hosts_drive_letters_and_empty_path_segments() {
+    assert_url_components(
+        r#"
+for (const [input, expected] of [
+  ['file://server///?q#f', 'file://server///?q#f'],
+  ['file://server/C|/path', 'file://server/C:/path'],
+  ['file:///w|/m', 'file:///w:/m'],
+  ['file://localhost////foo', 'file://////foo'],
+]) {
+  for (const [name, create] of factories) {
+    const object = create(input);
+    assert(object.href === expected, `${name}: parsing ${input}`);
+    assert(object.origin === 'null', `${name}: file origin stays opaque`);
+    object.href = object.href;
+    assert(object.href === expected, `${name}: file serialization round-trips`);
+  }
+}
+checkSetter('file://monkey/', 'pathname', '\\\\', 'file://monkey//');
+checkSetter('file:///unicorn', 'pathname', '//\\/', 'file://////');
+checkSetter('file:///unicorn', 'pathname', '//monkey/..//', 'file://///');
+checkSetter('file://host/old?q#f', 'pathname', 'C|/new', 'file://host/C:/new?q#f');
+"#,
+    );
+}
+
+#[test]
+fn file_url_relative_resolution_matches_document_base_and_static_url_parsing() {
+    assert_url_components(
+        r#"
+for (const [input, base, expected] of [
+  ['/', 'file://host/C:/a/b', 'file://host/C:/'],
+  ['C|/new', 'file://host/D:/a/b', 'file://host/C:/new'],
+  ['/..//share//file', 'file://host/path', 'file://host//share//file'],
+  ['..', 'file://host/a/C:/', 'file://host/a/'],
+]) {
+  for (const constructor of [URL, frame.contentWindow.URL]) {
+    assert(new constructor(input, base).href === expected, 'relative URL constructor');
+    assert(constructor.parse(input, base).href === expected, 'relative URL.parse');
+    assert(constructor.canParse(input, base), 'relative URL.canParse');
+  }
+  for (const owner of [document, frame.contentDocument,
+    document.implementation.createHTMLDocument('file base')]) {
+    const baseElement = owner.head.appendChild(owner.createElement('base'));
+    baseElement.href = base;
+    for (const tag of ['a', 'area']) {
+      const link = owner.body.appendChild(owner.createElement(tag));
+      link.href = input;
+      assert(link.href === expected, `${tag}: file document base`);
+      link.remove();
+    }
+    baseElement.remove();
+  }
+}
+"#,
+    );
+}
+
+#[test]
 fn location_components_empty_getters_preserve_document_urls() {
     assert_url_components(
         r#"

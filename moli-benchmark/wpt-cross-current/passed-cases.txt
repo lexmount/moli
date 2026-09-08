@@ -8405,6 +8405,7 @@ uievents/legacy/Event-subclasses-init.html
 uievents/textInput/api.html
 uievents/ui_event_pseudo_target.html
 url/a-element-origin.html
+url/a-element.html?include=file
 url/a-element.html?include=javascript
 url/a-element.html?include=mailto
 url/data-uri-fragment.html
