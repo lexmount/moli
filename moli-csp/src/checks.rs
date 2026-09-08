@@ -603,7 +603,7 @@ fn policy_allows_trusted_type_policy_name(
     let duplicate_is_allowed = !is_duplicate
         || sources
             .iter()
-            .any(|source| csp_keyword_eq(source.trim(), "allow-duplicates"));
+            .any(|source| csp_keyword_eq(source, "allow-duplicates"));
     name_is_allowed && duplicate_is_allowed
 }
 
