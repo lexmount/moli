@@ -1,0 +1,55 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>Empty-line inline fragments retain positions, not font or decoration extents</title>
+<style>
+  body { margin: 0; }
+  .case { position: relative; display: flow-root; width: 240px; height: 70px; font: 16px/40px serif; }
+  .inline { position: relative; }
+  .absolute { position: absolute; inset: 0; }
+  .fixed-size { width: 30px; height: 20px; }
+</style>
+<div class="case"><span id="empty" class="inline" data-rects="[[0,0,0,0]]"></span></div>
+<div class="case"><span id="absolute-block" class="inline" data-rects="[[0,0,0,0]]"><div id="block-target" class="absolute fixed-size" data-rects="[[0,0,30,20]]"></div></span></div>
+<div class="case"><span id="absolute-inline" class="inline" data-rects="[[0,0,0,0]]"><span id="inline-target" class="absolute fixed-size" data-rects="[[0,0,30,20]]"></span></span></div>
+<div class="case"><span id="whitespace" class="inline" data-rects="[[0,0,0,0]]">  <!-- Collapsible source whitespace. -->
+  <span id="whitespace-target" class="absolute" data-rects="[[0,0,0,0]]"></span>
+</span></div>
+<div class="case"><span id="large-font" class="inline" style="font-size:64px;line-height:100px" data-rects="[[0,0,0,0]]"><span id="large-font-target" class="absolute" data-rects="[[0,0,0,0]]"></span></span></div>
+<div class="case"><span id="large-line-height" class="inline" style="line-height:1000px" data-rects="[[0,0,0,0]]"></span></div>
+<div class="case"><span id="block-padding" class="inline" style="padding:10px 0" data-rects="[[0,0,0,0]]"><span id="padding-target" class="absolute" data-rects="[[0,0,0,0]]"></span></span></div>
+<div class="case"><span id="block-border" class="inline" style="border-top:5px solid blue;border-bottom:7px solid blue" data-rects="[[0,0,0,0]]"><span id="border-target" class="absolute" data-rects="[[0,5,0,0]]"></span></span></div>
+<div class="case"><span id="outer-aligned" class="inline" style="vertical-align:30px" data-rects="[[0,-30,0,0]]"><span id="inner-aligned" class="inline" style="vertical-align:-11px;font-size:64px" data-rects="[[0,-19,0,0]]"><span id="aligned-target" class="absolute" data-rects="[[0,-19,0,0]]"></span></span></span></div>
+<div class="case"><span id="outer-font" class="inline" style="font-size:64px" data-rects="[[0,0,0,0]]"><span id="inner-font" class="inline" style="font-size:4px" data-rects="[[0,0,0,0]]"></span></span></div>
+<!-- Use physical alignment to test RTL fragment geometry independently of
+     paragraph base-direction selection. -->
+<div class="case" style="direction:rtl;text-align:right"><span id="rtl" class="inline" data-rects="[[240,0,0,0]]"><span id="rtl-target" class="absolute fixed-size" data-rects="[[210,0,30,20]]"></span></span></div>
+<div class="case" style="text-align:center"><span id="centered" class="inline" data-rects="[[120,0,0,0]]"><span id="centered-target" class="absolute fixed-size" data-rects="[[120,0,30,20]]"></span></span></div>
+<div class="case" style="text-indent:24px"><span id="indented" class="inline" data-rects="[[24,0,0,0]]"></span></div>
+<div class="case" style="padding:7px 11px;border:3px solid transparent"><span id="padded-parent" class="inline" data-rects="[[14,10,0,0]]"><span id="padded-parent-target" class="absolute fixed-size" data-rects="[[14,10,30,20]]"></span></span></div>
+<div class="case"><span id="right-float" class="inline" data-rects="[[0,0,0,0]]"><span style="float:right;width:20px;height:20px"></span></span></div>
+<div class="case"><span id="break" class="inline" data-tail="40"><br><span id="after-break" style="position:absolute;width:30px;height:20px" data-rects="[[0,40,30,20]]"></span></span></div>
+<div class="case"><span id="side-padding" class="inline" style="padding:0 10px" data-nonempty></span></div>
+<div class="case"><span id="side-border" class="inline" style="border-left:5px solid blue" data-nonempty></span></div>
+<div class="case"><span id="text-reference">X</span><span id="beside-text" class="inline" data-font-box="text-reference"></span></div>
+<div class="case"><span id="around-atomic" class="inline" data-nonempty><span style="display:inline-block;width:20px;height:20px"></span></span></div>
+<div class="case" style="font-size:0"><span id="decorated-zero-font" class="inline" style="padding:10px;border:2px solid blue;background:red" data-rects="[[0,8,24,24]]"><span id="decorated-target" class="absolute" data-rects="[[2,10,20,20]]"></span></span></div>
+<div class="case"><span id="dynamic-font" class="inline" data-rects="[[0,0,0,0]]"><span id="dynamic-target" class="absolute" data-rects="[[0,0,0,0]]"></span></span></div>
+<script>
+  function collectInlineFragmentChecks() {
+    return Array.from(document.querySelectorAll('[data-rects], [data-tail], [data-nonempty], [data-font-box]'), element => {
+      const origin = element.closest('.case').getBoundingClientRect();
+      const rects = Array.from(element.getClientRects(), rect => [rect.x - origin.x, rect.y - origin.y, rect.width, rect.height]);
+      if (element.hasAttribute('data-rects')) {
+        return { id: element.id, actual: rects, expected: JSON.parse(element.dataset.rects) };
+      }
+      if (element.hasAttribute('data-tail')) {
+        return { id: element.id, actual: [rects.length, rects[0][3] > 0, rects[rects.length - 1]], expected: [2, true, [0, Number(element.dataset.tail), 0, 0]] };
+      }
+      if (element.hasAttribute('data-font-box')) {
+        const reference = document.getElementById(element.dataset.fontBox).getClientRects()[0];
+        return { id: element.id, actual: [rects.length, rects[0][1], rects[0][3]], expected: [1, reference.y - origin.y, reference.height] };
+      }
+      return { id: element.id, actual: [rects.length, rects[0][2] > 0, rects[0][3] > 0], expected: [1, true, true] };
+    });
+  }
+</script>

@@ -1242,7 +1242,7 @@ where
         .boxes
         .iter()
         .filter(|fragment| fragment.box_id == containing_block)
-        .map(|fragment| fragment.rect)
+        .map(|fragment| fragment.box_model.padding)
         .reduce(union_paint_rect)
 }
 
@@ -2197,8 +2197,13 @@ where
                     .line_placements
                     .as_ref()
                     .expect("final inline layout must retain line placements");
-                let fragments =
-                    build_inline_fragments(&inline_context, text_layout, line_placements);
+                let fragments = build_inline_fragments(
+                    &inline_context,
+                    text_layout,
+                    line_placements,
+                    &self.boxes,
+                    content_box_size.width,
+                );
                 self.position_inline_objects(
                     &inline_context,
                     text_layout,

@@ -364,7 +364,7 @@ where
             local_overflow = local_overflow.union(offset_rect(fragment.rect, origin));
         }
         for fragment in &context.fragments.boxes {
-            local_overflow = local_overflow.union(offset_rect(fragment.rect, origin));
+            local_overflow = local_overflow.union(offset_rect(fragment.box_model.border, origin));
         }
     }
     OverflowBoxGeometry {
