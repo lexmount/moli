@@ -10,10 +10,12 @@ use crate::{
     frame_owner_model::{
         FrameDocumentScriptElementEventKind, FrameDocumentTaskOwner, FrameRealmId,
     },
+    host::ModuleFailurePolicy,
     module_runtime::{ModuleEntryId, ModuleGraphHandle, ModuleLoadError, ModuleMapKey},
     module_script_continuation::ModuleScriptEvaluationReactionState,
     parser_module_evaluation::ParserModuleEvaluationContinuation,
     planning::PreparedScript,
+    types::{ScriptErrorValue, ScriptSourceKind},
 };
 
 use super::{
@@ -226,18 +228,19 @@ pub(crate) trait FrameModuleScriptDocumentScriptHooks {
         kind: FrameDocumentScriptElementEventKind,
     ) -> Result<()>;
 
-    fn report_module_evaluation_error(
-        &mut self,
-        _work: &Self::GraphReadyWork,
-        _error: &ModuleLoadError,
-    ) -> Result<()> {
-        Ok(())
-    }
-
     fn dispatch_graph_failure_script_element_event(
         &mut self,
         work: &Self::GraphFailureWork,
         kind: FrameDocumentScriptElementEventKind,
+    ) -> Result<()>;
+
+    fn report_module_exception(
+        &mut self,
+        owner: FrameDocumentTaskOwner,
+        realm_id: FrameRealmId,
+        message: &str,
+        filename: &str,
+        error_value: Option<ScriptErrorValue>,
     ) -> Result<()>;
 
     fn finish_graph_failure<'owner>(
@@ -290,6 +293,7 @@ enum FrameModuleScriptExecutionResult<GraphReady, GraphFailure> {
     EvaluationRejected {
         work: GraphReady,
         reason: String,
+        error_value: Option<ScriptErrorValue>,
     },
     EvaluationPending {
         work: GraphReady,
@@ -652,9 +656,14 @@ where
                     completion_kind: FrameModuleScriptEvaluationCompletionKind::TopLevelAwait,
                 }
             }
-            ModuleScriptEvaluationReactionState::Rejected { reason, .. } => {
-                FrameModuleScriptExecutionResult::EvaluationRejected { work, reason }
-            }
+            ModuleScriptEvaluationReactionState::Rejected {
+                reason,
+                error_value,
+            } => FrameModuleScriptExecutionResult::EvaluationRejected {
+                work,
+                reason,
+                error_value,
+            },
             ModuleScriptEvaluationReactionState::Pending => {
                 FrameModuleScriptExecutionResult::EvaluationPending { work }
             }
@@ -694,7 +703,9 @@ where
         } else {
             FrameModuleScriptTaskActivity::NoScriptOrEvent
         };
-        if completion_kind.dispatches_script_load_event() {
+        if completion_kind.dispatches_script_load_event()
+            && work.script().source_kind == ScriptSourceKind::External
+        {
             let event_result = self
                 .hooks
                 .dispatch_script_element_event(&work, FrameDocumentScriptElementEventKind::Load);
@@ -738,9 +749,10 @@ where
         let owner = work.owner();
         let realm_id = work.realm_id();
         let script_handle = work.script_handle();
-        if let Err(error) = self
-            .hooks
-            .dispatch_script_element_event(&work, FrameDocumentScriptElementEventKind::Load)
+        if work.script().source_kind == ScriptSourceKind::External
+            && let Err(error) = self
+                .hooks
+                .dispatch_script_element_event(&work, FrameDocumentScriptElementEventKind::Load)
         {
             tracing::warn!(
                 owner = ?owner,
@@ -764,19 +776,39 @@ where
         let realm_id = work.realm_id();
         let script_handle = work.script_handle();
         let request_url = work.request_key().url().clone();
-        let event_result = self.hooks.dispatch_graph_failure_script_element_event(
-            &work,
-            FrameDocumentScriptElementEventKind::Error,
+        let reports_exception = matches!(
+            ModuleFailurePolicy::for_module_load_error(work.error()),
+            ModuleFailurePolicy::GraphFailure | ModuleFailurePolicy::EvaluationFailure
         );
-        let event_dispatched = event_result.is_ok();
-        if let Err(error) = event_result {
+        let exception_reported = reports_exception
+            && self.report_module_exception(
+                owner,
+                realm_id,
+                work.error().message(),
+                work.script().url.as_str(),
+                work.error().error_value(),
+            );
+        let event_kind = if reports_exception {
+            FrameDocumentScriptElementEventKind::Load
+        } else {
+            FrameDocumentScriptElementEventKind::Error
+        };
+        let event_result = (!reports_exception
+            || work.script().source_kind == ScriptSourceKind::External)
+            .then(|| {
+                self.hooks
+                    .dispatch_graph_failure_script_element_event(&work, event_kind)
+            });
+        let event_dispatched =
+            exception_reported || event_result.as_ref().is_some_and(|result| result.is_ok());
+        if let Some(Err(error)) = event_result {
             tracing::warn!(
                 owner = ?owner,
                 realm_id = ?realm_id,
                 script_handle = ?script_handle,
                 url = %request_url,
                 error = ?error,
-                "frame parser module script error event dispatch failed after graph failure"
+                "frame module script terminal event dispatch failed after graph failure"
             );
         }
         self.hooks.record_runtime_warning(format_args!(
@@ -812,17 +844,25 @@ where
         let owner = work.owner();
         let realm_id = work.realm_id();
         let script_handle = work.script_handle();
-        if let Err(dispatch_error) = self.hooks.report_module_evaluation_error(&work, &error) {
-            tracing::warn!(?owner, ?realm_id, ?script_handle, error = ?dispatch_error,
-                "child module exception could not be reported");
-        }
-        if work.script().source_kind == crate::types::ScriptSourceKind::External
+        self.report_module_exception(
+            owner,
+            realm_id,
+            error.message(),
+            work.script().url.as_str(),
+            error.error_value(),
+        );
+        if work.script().source_kind == ScriptSourceKind::External
             && let Err(dispatch_error) = self
                 .hooks
                 .dispatch_script_element_event(&work, FrameDocumentScriptElementEventKind::Load)
         {
-            tracing::warn!(?owner, ?realm_id, ?script_handle, error = ?dispatch_error,
-                "child module terminal load event could not be dispatched");
+            tracing::warn!(
+                owner = ?owner,
+                realm_id = ?realm_id,
+                script_handle = ?script_handle,
+                error = ?dispatch_error,
+                "frame module script load event dispatch failed after evaluation failure"
+            );
         }
         self.hooks.record_runtime_warning(format_args!(
             "frame parser module graph `{}` failed during ready-lane evaluation: {}",
@@ -838,15 +878,48 @@ where
         &mut self,
         work: Hooks::GraphReadyWork,
         reason: String,
+        error_value: Option<ScriptErrorValue>,
     ) -> FrameModuleScriptOutputAction<Hooks::GraphReadyWork, Hooks::GraphFailureWork> {
         let request_url = work.request_key().url().clone();
         self.hooks.record_runtime_warning(format_args!(
             "frame parser module graph `{}` pending evaluation rejected: {}",
             request_url, reason
         ));
-        FrameModuleScriptOutputAction::without_script_or_event(
-            FrameModuleScriptFinalizationAction::FinishEvaluationRejected { work },
-        )
+        let reported = self.report_module_exception(
+            work.owner(),
+            work.realm_id(),
+            &reason,
+            work.script().url.as_str(),
+            error_value,
+        );
+        let finalization = FrameModuleScriptFinalizationAction::FinishEvaluationRejected { work };
+        if reported {
+            FrameModuleScriptOutputAction::after_script_or_event(finalization)
+        } else {
+            FrameModuleScriptOutputAction::without_script_or_event(finalization)
+        }
+    }
+
+    fn report_module_exception(
+        &mut self,
+        owner: FrameDocumentTaskOwner,
+        realm_id: FrameRealmId,
+        message: &str,
+        filename: &str,
+        error_value: Option<ScriptErrorValue>,
+    ) -> bool {
+        match self
+            .hooks
+            .report_module_exception(owner, realm_id, message, filename, error_value)
+        {
+            Ok(()) => true,
+            Err(error) => {
+                self.hooks.record_runtime_warning(format_args!(
+                    "frame module exception reporting failed for `{filename}`: {error}"
+                ));
+                false
+            }
+        }
     }
 }
 
@@ -918,9 +991,11 @@ where
             FrameModuleScriptExecutionResult::GraphFailure { work } => {
                 self.apply_graph_failure(work)
             }
-            FrameModuleScriptExecutionResult::EvaluationRejected { work, reason } => {
-                self.apply_evaluation_rejected(work, reason)
-            }
+            FrameModuleScriptExecutionResult::EvaluationRejected {
+                work,
+                reason,
+                error_value,
+            } => self.apply_evaluation_rejected(work, reason, error_value),
             FrameModuleScriptExecutionResult::EvaluationPending { work } => {
                 FrameModuleScriptOutputAction::without_script_or_event(
                     FrameModuleScriptFinalizationAction::FinishEvaluationPending { work },
@@ -1292,6 +1367,17 @@ mod tests {
             Ok(())
         }
 
+        fn report_module_exception(
+            &mut self,
+            _owner: FrameDocumentTaskOwner,
+            _realm_id: FrameRealmId,
+            _message: &str,
+            _filename: &str,
+            _error_value: Option<ScriptErrorValue>,
+        ) -> Result<()> {
+            Ok(())
+        }
+
         fn finish_graph_failure<'owner>(
             &'owner mut self,
             _work: &DocumentModuleGraphFailedWork,
@@ -1611,7 +1697,7 @@ mod tests {
         );
         assert!(
             runner.hooks.dispatch_script_element_event_called,
-            "failed graph evaluation should dispatch the error event"
+            "failed graph evaluation should still dispatch the external script load event"
         );
         assert!(
             runner.hooks.record_runtime_warning_called,

@@ -11,7 +11,7 @@ use crate::{
         FrameDocumentScriptElementEventKind, FrameDocumentTaskOwner, FrameRealmId,
     },
     module_runtime::{ModuleEntryId, ModuleLoadError},
-    types::ScriptMode,
+    types::{ScriptErrorValue, ScriptMode},
 };
 
 use super::super::super::{ScriptVm, child_document_event::ChildDocumentEventOwner};
@@ -192,20 +192,6 @@ impl FrameModuleScriptDocumentScriptHooks for ChildModuleScriptExecutionOwner<'_
         )
     }
 
-    fn report_module_evaluation_error(
-        &mut self,
-        work: &DocumentModuleGraphReadyWork,
-        error: &ModuleLoadError,
-    ) -> Result<()> {
-        self.vm.report_child_module_evaluation_error(
-            work.owner(),
-            work.realm_id(),
-            work.entry_id(),
-            work.script().url.as_str(),
-            error,
-        )
-    }
-
     fn dispatch_graph_failure_script_element_event(
         &mut self,
         work: &DocumentModuleGraphFailedWork,
@@ -217,6 +203,18 @@ impl FrameModuleScriptDocumentScriptHooks for ChildModuleScriptExecutionOwner<'_
             work.script_handle(),
             kind,
         )
+    }
+
+    fn report_module_exception(
+        &mut self,
+        owner: FrameDocumentTaskOwner,
+        realm_id: FrameRealmId,
+        message: &str,
+        filename: &str,
+        error_value: Option<ScriptErrorValue>,
+    ) -> Result<()> {
+        self.vm
+            .report_child_window_error_body(owner, realm_id, message, filename, error_value)
     }
 
     fn finish_graph_failure<'owner>(

@@ -12,6 +12,7 @@ use crate::context_bootstrap::{
     ORIGINAL_WEBASSEMBLY_COMPILE_ERROR_CONSTRUCTOR_SLOT,
     ORIGINAL_WEBASSEMBLY_LINK_ERROR_CONSTRUCTOR_SLOT, dispatch_window_error_event_with_details,
 };
+use crate::frame_owner_model::{FrameDocumentTaskOwner, FrameRealmId};
 use crate::host::ScriptEventTask;
 use crate::module_runtime::{ModuleEntryId, ModuleLoadError};
 use crate::native_bridge::PageScriptHost;
@@ -122,47 +123,89 @@ impl ScriptVm {
                     .map_err(anyhow::Error::msg);
                 }
             }
-            let global = scope.get_current_context().global(scope);
-            let message_value = v8_string(scope, message)
-                .ok_or_else(|| anyhow!("failed to allocate reportError message"))?;
-            let retained = matches!(error_value, Some(ScriptErrorValue::Retained(_)));
-            let error_value = match error_value {
-                Some(ScriptErrorValue::Retained(id)) => {
-                    super::native_module::retained_module_exception(scope, id)?
-                }
-                Some(ScriptErrorValue::Constructor(kind)) => {
-                    window_script_failure_error_value(scope, global, Some(kind), message_value)
-                }
-                None => window_script_failure_error_value(scope, global, None, message_value),
-            };
-            // Location metadata belongs to the ErrorEvent. Never mutate
-            // the original exception (or invoke an author's setter).
-            if !retained
-                && let Some(filename) = filename
-                && let Some(filename_value) = v8_string(scope, filename)
-                && let Ok(error_object) = v8::Local::<v8::Object>::try_from(error_value)
-            {
-                let _ = error_object.set(
-                    scope,
-                    v8str(scope, "fileName").into(),
-                    filename_value.into(),
-                );
-            }
-            // Internal script failure reporting must not call the page-visible
-            // window.reportError function while lifecycle state is unwinding.
-            // Dispatch the equivalent ErrorEvent body directly.
-            dispatch_window_error_event_with_details(
-                scope,
-                host_ptr,
-                message,
-                filename.unwrap_or(""),
-                0,
-                0,
-                Some(error_value),
-            )
-            .map_err(anyhow::Error::msg)
+            dispatch_script_failure_error_body(scope, host_ptr, message, filename, error_value)
         })
     }
+
+    pub(crate) fn report_child_window_error_body(
+        &mut self,
+        owner: FrameDocumentTaskOwner,
+        realm_id: FrameRealmId,
+        message: &str,
+        filename: &str,
+        error_value: Option<ScriptErrorValue>,
+    ) -> Result<()> {
+        anyhow::ensure!(
+            self.child_parser_module_route_task_is_current(owner, realm_id),
+            "child module exception reporting owner is no longer current"
+        );
+        self.with_frame_realm_scope(realm_id, |scope, host_ptr| {
+            if let Some(ScriptErrorValue::Retained(id)) = error_value {
+                let exception = super::native_module::retained_module_exception(scope, id)?;
+                let (message, source, line, column) =
+                    crate::exception_reporting::exception_message_details(scope, exception);
+                let filename = if source.is_empty() { filename } else { &source };
+                return dispatch_window_error_event_with_details(
+                    scope,
+                    host_ptr,
+                    &message,
+                    filename,
+                    line,
+                    column,
+                    Some(exception),
+                )
+                .map_err(anyhow::Error::msg);
+            }
+            dispatch_script_failure_error_body(scope, host_ptr, message, Some(filename), error_value)
+        })
+    }
+}
+
+fn dispatch_script_failure_error_body(
+    scope: &mut v8::PinScope<'_, '_>,
+    host_ptr: *mut PageScriptHost,
+    message: &str,
+    filename: Option<&str>,
+    error_value: Option<ScriptErrorValue>,
+) -> Result<()> {
+    let global = scope.get_current_context().global(scope);
+    let message_value = v8_string(scope, message)
+        .ok_or_else(|| anyhow!("failed to allocate reportError message"))?;
+    let retained = matches!(error_value, Some(ScriptErrorValue::Retained(_)));
+    let error_value = match error_value {
+        Some(ScriptErrorValue::Retained(id)) => {
+            super::native_module::retained_module_exception(scope, id)?
+        }
+        Some(ScriptErrorValue::Constructor(kind)) => {
+            window_script_failure_error_value(scope, global, Some(kind), message_value)
+        }
+        None => window_script_failure_error_value(scope, global, None, message_value),
+    };
+    // Location metadata belongs to the ErrorEvent. Never mutate
+    // the original exception (or invoke an author's setter).
+    if !retained
+        && let Some(filename) = filename
+        && let Some(filename_value) = v8_string(scope, filename)
+        && let Ok(error_object) = v8::Local::<v8::Object>::try_from(error_value)
+    {
+        let _ = error_object.set(
+            scope,
+            v8str(scope, "fileName").into(),
+            filename_value.into(),
+        );
+    }
+    // This body must not call the page-visible reportError function or own
+    // a checkpoint, whether it runs in the main Window or a child realm.
+    dispatch_window_error_event_with_details(
+        scope,
+        host_ptr,
+        message,
+        filename.unwrap_or(""),
+        0,
+        0,
+        Some(error_value),
+    )
+    .map_err(anyhow::Error::msg)
 }
 
 fn window_script_failure_error_value<'s>(
@@ -209,59 +252,4 @@ fn original_webassembly_error_constructor<'s>(
 ) -> Option<v8::Local<'s, v8::Function>> {
     get_private_value(scope, global, original_slot)
         .and_then(|value| v8::Local::<v8::Function>::try_from(value).ok())
-}
-
-impl ScriptVm {
-    pub(crate) fn report_child_module_evaluation_error(
-        &mut self,
-        owner: crate::frame_owner_model::FrameDocumentTaskOwner,
-        realm: crate::frame_owner_model::FrameRealmId,
-        entry: ModuleEntryId,
-        fallback_url: &str,
-        error: &ModuleLoadError,
-    ) -> Result<()> {
-        anyhow::ensure!(
-            self.child_parser_module_route_task_is_current(owner, realm),
-            "module error Document is no longer current"
-        );
-        let module = self
-            .with_current_child_document_modulator(owner.document_owner(), realm, |_, modulator| {
-                modulator
-                    .compiled_record(entry)
-                    .map(|record| record.compiled_module().clone())
-            })
-            .flatten();
-        self.with_frame_realm_scope(realm, |scope, host_ptr| {
-            let retained = module
-                .as_ref()
-                .map(|module| v8::Local::new(scope, module))
-                .filter(|module| module.get_status() == v8::ModuleStatus::Errored)
-                .map(|module| module.get_exception());
-            let exception = if let Some(retained) = retained {
-                retained
-            } else {
-                let global = scope.get_current_context().global(scope);
-                let message = v8_string(scope, error.message())
-                    .ok_or_else(|| anyhow!("failed to allocate module error"))?;
-                window_script_failure_error_value(scope, global, error.error_constructor(), message)
-            };
-            let (message, source, line, column) =
-                crate::exception_reporting::exception_message_details(scope, exception);
-            let filename = if source.is_empty() {
-                fallback_url
-            } else {
-                &source
-            };
-            dispatch_window_error_event_with_details(
-                scope,
-                host_ptr,
-                &message,
-                filename,
-                line,
-                column,
-                Some(exception),
-            )
-            .map_err(anyhow::Error::msg)
-        })
-    }
 }
