@@ -2179,6 +2179,7 @@ mod dom_token_list_native_receivers;
 
 mod canvas_arguments;
 mod canvas_fill_rect;
+mod canvas_gradients;
 mod canvas_paths;
 mod canvas_transform_snapshots;
 

@@ -16,16 +16,16 @@ use crate::geometry::{
 };
 use anyrender::PaintScene;
 use moli_layout::{
-    PaintBrush, PaintGradientColorSpace, PaintGradientExtend, PaintGradientHueDirection,
+    PaintBrush, PaintGradientAlphaSpace, PaintGradientColorSpace, PaintGradientExtend, PaintGradientHueDirection,
     PaintLineJoin, PaintStroke,
 };
 use peniko::color::{ColorSpaceTag, HueDirection};
 use peniko::kurbo::{Affine, BezPath, Join, Stroke};
-use peniko::{Color, Extend, Fill, Gradient};
+use peniko::{Color, Extend, Fill, Gradient, InterpolationAlphaSpace};
 
 pub(super) fn paint_stroke(scene: &mut impl PaintScene, stroke: &PaintStroke, scale: f64) {
     let width = f64::from(finite_nonnegative(stroke.width));
-    if width <= 0.0 || stroke.color.alpha <= 0.0 {
+    if width <= 0.0 {
         return;
     }
     let mut backend_stroke = Stroke::new(width);
@@ -44,11 +44,12 @@ pub(super) fn paint_stroke(scene: &mut impl PaintScene, stroke: &PaintStroke, sc
         .collect();
     backend_stroke.dash_offset = f64::from(finite_or_zero(stroke.dash_offset));
     let path = to_backend_path(&stroke.path);
+    let (brush, brush_transform) = backend_brush(&stroke.brush);
     scene.stroke(
         &backend_stroke,
         device_transform(stroke.transform, scale),
-        to_backend_color(stroke.color),
-        None,
+        peniko::BrushRef::from(&brush),
+        brush_transform,
         &path,
     );
 }
@@ -60,12 +61,21 @@ pub(super) fn paint_fill(
     transform: Affine,
     rule: Fill,
 ) {
+    let (brush, brush_transform) = backend_brush(brush);
+    scene.fill(
+        rule,
+        transform,
+        peniko::BrushRef::from(&brush),
+        brush_transform,
+        shape,
+    );
+}
+
+fn backend_brush(brush: &PaintBrush) -> (peniko::Brush, Option<Affine>) {
     match brush {
-        PaintBrush::Solid(color) => {
-            scene.fill(rule, transform, to_backend_color(*color), None, shape)
-        }
+        PaintBrush::Solid(color) => (to_backend_color(*color).into(), None),
         PaintBrush::LinearGradient(gradient) => {
-            let gradient = Gradient::new_linear(
+            let gradient_brush = Gradient::new_linear(
                 (f64::from(gradient.start.x), f64::from(gradient.start.y)),
                 (f64::from(gradient.end.x), f64::from(gradient.end.y)),
             )
@@ -73,11 +83,17 @@ pub(super) fn paint_fill(
             .with_interpolation_cs(to_backend_gradient_color_space(
                 gradient.interpolation.color_space,
             ))
+            .with_interpolation_alpha_space(backend_gradient_alpha_space(
+                gradient.interpolation.alpha_space,
+            ))
             .with_hue_direction(to_backend_gradient_hue_direction(
                 gradient.interpolation.hue_direction,
             ))
             .with_stops(backend_gradient_stops(&gradient.stops).as_slice());
-            scene.fill(rule, transform, &gradient, None, shape);
+            (
+                gradient_brush.into(),
+                Some(to_backend_transform(gradient.transform)),
+            )
         }
         PaintBrush::RadialGradient(gradient) => {
             let gradient_brush = Gradient::new_two_point_radial(
@@ -96,17 +112,17 @@ pub(super) fn paint_fill(
             .with_interpolation_cs(to_backend_gradient_color_space(
                 gradient.interpolation.color_space,
             ))
+            .with_interpolation_alpha_space(backend_gradient_alpha_space(
+                gradient.interpolation.alpha_space,
+            ))
             .with_hue_direction(to_backend_gradient_hue_direction(
                 gradient.interpolation.hue_direction,
             ))
             .with_stops(backend_gradient_stops(&gradient.stops).as_slice());
-            scene.fill(
-                rule,
-                transform,
-                &gradient_brush,
+            (
+                gradient_brush.into(),
                 Some(to_backend_transform(gradient.transform)),
-                shape,
-            );
+            )
         }
         PaintBrush::ConicGradient(gradient) => {
             let gradient_brush = Gradient::new_sweep(
@@ -118,18 +134,25 @@ pub(super) fn paint_fill(
             .with_interpolation_cs(to_backend_gradient_color_space(
                 gradient.interpolation.color_space,
             ))
+            .with_interpolation_alpha_space(backend_gradient_alpha_space(
+                gradient.interpolation.alpha_space,
+            ))
             .with_hue_direction(to_backend_gradient_hue_direction(
                 gradient.interpolation.hue_direction,
             ))
             .with_stops(backend_gradient_stops(&gradient.stops).as_slice());
-            scene.fill(
-                rule,
-                transform,
-                &gradient_brush,
+            (
+                gradient_brush.into(),
                 Some(to_backend_transform(gradient.transform)),
-                shape,
-            );
+            )
         }
+    }
+}
+
+fn backend_gradient_alpha_space(space: PaintGradientAlphaSpace) -> InterpolationAlphaSpace {
+    match space {
+        PaintGradientAlphaSpace::Premultiplied => InterpolationAlphaSpace::Premultiplied,
+        PaintGradientAlphaSpace::Unpremultiplied => InterpolationAlphaSpace::Unpremultiplied,
     }
 }
 
