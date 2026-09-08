@@ -30,7 +30,7 @@ impl CdpScheduler {
         receivers: &mut CdpSchedulerEventReceivers,
     ) -> Option<CdpSchedulerInterleavedInput> {
         receivers
-            .recv_interleaved_input(&mut self.browser_event_rx)
+            .recv_interleaved_input(&mut self.browser_event_rx, &mut self.detached_navigations)
             .await
     }
 

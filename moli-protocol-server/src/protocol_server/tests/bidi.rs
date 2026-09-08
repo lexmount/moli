@@ -1,6 +1,240 @@
 use super::*;
 
 #[tokio::test]
+async fn bidi_held_navigation_releases_scheduler_until_exact_completion() {
+    assert_held_navigation_releases_scheduler(false, false).await;
+}
+
+#[tokio::test]
+async fn classic_attached_bidi_held_navigation_releases_scheduler_until_exact_completion() {
+    assert_held_navigation_releases_scheduler(true, false).await;
+}
+
+#[tokio::test]
+async fn bidi_detached_navigation_retains_its_native_commit() {
+    assert_held_navigation_releases_scheduler(false, true).await;
+}
+
+#[tokio::test]
+async fn classic_bidi_reattach_does_not_cancel_or_receive_detached_navigation_reply() {
+    assert_held_navigation_releases_scheduler(true, true).await;
+}
+
+async fn assert_held_navigation_releases_scheduler(attached: bool, detach: bool) {
+    let (addr, server, browser) = super::browser_events::server_with_browser().await;
+    let (mut socket, context, classic_session) = if attached {
+        let session = classic_new_session_on_server(addr).await;
+        let mut socket = connect_classic_session_bidi_socket(addr, &session).await;
+        let tree =
+            send_bidi_command_response(&mut socket, 1, "browsingContext.getTree", json!({})).await;
+        let context = tree["result"]["contexts"][0]["context"]
+            .as_str()
+            .unwrap()
+            .to_owned();
+        (socket, context, Some(session))
+    } else {
+        let (socket, context) = bidi_session_with_context(addr).await;
+        (socket, context, None)
+    };
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let url = format!("http://{}/held-navigation", listener.local_addr().unwrap());
+    let request = tokio::spawn(async move {
+        let (mut stream, _) = listener.accept().await.unwrap();
+        let mut request = Vec::new();
+        let mut byte = [0];
+        while !request.ends_with(b"\r\n\r\n") {
+            stream.read_exact(&mut byte).await.unwrap();
+            request.push(byte[0]);
+        }
+        assert!(request.starts_with(b"GET /held-navigation HTTP/1.1\r\n"));
+        stream
+    });
+    socket
+        .send(WsMessage::Text(
+            json!({
+                "id": 10, "method": "browsingContext.navigate", "goog:channel": "navigation-owner",
+                "params": {"context": context, "url": url, "wait": "complete"},
+            })
+            .to_string()
+            .into(),
+        ))
+        .await
+        .unwrap();
+    let mut stream = timeout(Duration::from_secs(3), request)
+        .await
+        .expect("navigation must reach the held HTTP response")
+        .unwrap();
+
+    // The fixture retains the response. A status response and Classic request
+    // must be serviced now, not after the navigation's network waiter resolves.
+    let status = send_bidi_command_response(&mut socket, 11, "session.status", json!({})).await;
+    assert_eq!(status["type"], "success");
+    if let Some(session) = classic_session.as_ref() {
+        let windows = timeout(
+            Duration::from_secs(3),
+            classic_request_on_server_with_body(
+                addr,
+                "GET",
+                &format!("/session/{session}/window/handles"),
+                json!({}),
+            ),
+        )
+        .await
+        .expect("Classic must retain the same scheduler while BiDi waits");
+        assert!(
+            windows["value"]
+                .as_array()
+                .unwrap()
+                .contains(&json!(context))
+        );
+    }
+    if detach {
+        let ended = send_bidi_command_response(&mut socket, 12, "session.end", json!({})).await;
+        assert_eq!(ended["type"], "success");
+        let mut reattached = if let Some(session) = classic_session.as_ref() {
+            // This request's completion is an owner-turn barrier: the old
+            // socket releases its session before a replacement attaches.
+            let windows = classic_request_on_server_with_body(
+                addr,
+                "GET",
+                &format!("/session/{session}/window/handles"),
+                json!({}),
+            )
+            .await;
+            assert!(
+                windows["value"]
+                    .as_array()
+                    .unwrap()
+                    .contains(&json!(context))
+            );
+            Some(connect_classic_session_bidi_socket(addr, session).await)
+        } else {
+            None
+        };
+        let (_, mut events) = browser.subscribe().unwrap();
+        let body = "<title>detached-native-navigation</title>";
+        stream.write_all(format!("HTTP/1.1 200 OK\r\nContent-Type: text/html\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}", body.len()).as_bytes()).await.unwrap();
+        stream.shutdown().await.unwrap();
+        timeout(Duration::from_secs(3), async {
+            loop {
+                if let moli_core::browser::BrowserEvent::DocumentCommitted(document) =
+                    events.recv().await.unwrap().event
+                    && browser
+                        .document_commit_snapshot(document)
+                        .is_ok_and(|snapshot| {
+                            snapshot
+                                .metadata
+                                .info
+                                .as_ref()
+                                .is_some_and(|info| info.url.as_str() == url)
+                        })
+                {
+                    break;
+                }
+            }
+        })
+        .await
+        .expect("a disconnected frontend must not cancel the admitted native navigation");
+        if let Some(socket) = reattached.as_mut() {
+            socket.send(WsMessage::Text(json!({
+                "id": 14, "method": "script.evaluate", "params": {
+                    "target": {"context": context}, "expression": "document.title", "awaitPromise": false,
+                },
+            }).to_string().into())).await.unwrap();
+            let messages = recv_until_id(socket, 14).await;
+            assert_eq!(
+                bidi_message_by_id(&messages, 14)["result"]["result"]["value"],
+                "detached-native-navigation"
+            );
+            assert!(
+                messages.iter().all(|message| message["id"] != 10),
+                "the old socket's reply cannot be delivered to its successor"
+            );
+            let _ = socket.close(None).await;
+        }
+        if let Some(session) = classic_session {
+            classic_request_on_server_with_body(
+                addr,
+                "DELETE",
+                &format!("/session/{session}"),
+                json!({}),
+            )
+            .await;
+        }
+        abort_test_cdp_server(server).await;
+        return;
+    }
+    socket
+        .send(WsMessage::Text(
+            json!({
+                "id": 12, "method": "browsingContext.close", "params": {"context": context},
+            })
+            .to_string()
+            .into(),
+        ))
+        .await
+        .unwrap();
+    let mut messages = recv_until_match(&mut socket, |message| {
+        message["id"] == 12 || message["id"] == 10
+    })
+    .await;
+    while !messages.iter().any(|message| message["id"] == 12)
+        || !messages.iter().any(|message| message["id"] == 10)
+    {
+        messages.push(recv_ws_json(&mut socket).await);
+    }
+    assert_eq!(bidi_message_by_id(&messages, 12)["type"], "success");
+    assert_eq!(bidi_message_by_id(&messages, 10)["type"], "error");
+    assert_eq!(
+        bidi_message_by_id(&messages, 10)["goog:channel"],
+        "navigation-owner"
+    );
+    let mut byte = [0];
+    assert_eq!(
+        timeout(Duration::from_secs(3), stream.read(&mut byte))
+            .await
+            .expect("close must cancel the exact pending HTTP request")
+            .unwrap(),
+        0
+    );
+    socket
+        .send(WsMessage::Text(
+            json!({"id": 13, "method": "browsingContext.getTree", "params": {}})
+                .to_string()
+                .into(),
+        ))
+        .await
+        .unwrap();
+    messages.extend(recv_until_id(&mut socket, 13).await);
+    assert!(
+        !bidi_message_by_id(&messages, 13)["result"]["contexts"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|entry| entry["context"] == context)
+    );
+    assert_eq!(
+        messages
+            .iter()
+            .filter(|message| message["id"] == 10)
+            .count(),
+        1,
+        "a stale completion must produce exactly one reply and cannot resurrect the page"
+    );
+    if let Some(session) = classic_session {
+        classic_request_on_server_with_body(
+            addr,
+            "DELETE",
+            &format!("/session/{session}"),
+            json!({}),
+        )
+        .await;
+    }
+    let _ = socket.close(None).await;
+    abort_test_cdp_server(server).await;
+}
+
+#[tokio::test]
 async fn websocket_bidi_session_route_handles_static_session_commands() {
     let (cdp_addr, protocol_server) = spawn_test_protocol_server().await;
     let (mut socket, _) = connect_async(format!("ws://{cdp_addr}/session"))
@@ -43,6 +277,167 @@ async fn websocket_bidi_session_route_handles_static_session_commands() {
 
     let _ = socket.close(None).await;
     protocol_server.abort();
+}
+
+#[tokio::test]
+async fn bidi_document_request_interception_preserves_pending_navigation_reply() {
+    assert_bidi_document_interception_preserves_navigation(
+        "beforeRequestSent",
+        "network.continueRequest",
+    )
+    .await;
+}
+
+#[tokio::test]
+async fn bidi_document_response_interception_preserves_pending_navigation_reply() {
+    assert_bidi_document_interception_preserves_navigation(
+        "responseStarted",
+        "network.continueResponse",
+    )
+    .await;
+}
+
+async fn assert_bidi_document_interception_preserves_navigation(
+    phase: &str,
+    continue_method: &str,
+) {
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let url = format!("http://{}/document", listener.local_addr().unwrap());
+    let fixture = tokio::spawn(async move {
+        axum::serve(
+            listener,
+            Router::new().route(
+                "/document",
+                get(|| async {
+                    (
+                        [(axum::http::header::CONTENT_TYPE, "text/html")],
+                        "<title>continued-document</title>",
+                    )
+                }),
+            ),
+        )
+        .await
+        .unwrap();
+    });
+    let (addr, server) = spawn_test_protocol_server().await;
+    let (mut socket, context) = bidi_session_with_context(addr).await;
+    let event_method = format!("network.{phase}");
+    let subscribed = send_bidi_command_response(
+        &mut socket,
+        3,
+        "session.subscribe",
+        json!({
+            "events": [event_method, "browsingContext.load"], "contexts": [context],
+        }),
+    )
+    .await;
+    assert_eq!(subscribed["type"], "success");
+    let intercepted = send_bidi_command_response(&mut socket, 4, "network.addIntercept", json!({
+        "phases": [phase], "contexts": [context], "urlPatterns": [{"type": "string", "pattern": url}],
+    })).await;
+    assert_eq!(intercepted["type"], "success");
+    socket
+        .send(WsMessage::Text(
+            json!({
+                "id": 5, "method": "browsingContext.navigate", "goog:channel": "paused-document",
+                "params": {"context": context, "url": url, "wait": "complete"},
+            })
+            .to_string()
+            .into(),
+        ))
+        .await
+        .unwrap();
+    let paused = recv_until_match(&mut socket, |message| {
+        message["method"] == event_method
+            && message["params"]["context"] == context
+            && message["params"]["isBlocked"] == true
+    })
+    .await;
+    assert!(
+        paused.iter().all(|message| message["id"] != 5),
+        "navigate cannot complete at its {phase} pause: {paused:?}"
+    );
+    let request = paused.last().unwrap()["params"]["request"]["request"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    // The status reply also proves no navigation reply is queued behind the pause event.
+    socket
+        .send(WsMessage::Text(
+            json!({"id": 6, "method": "session.status", "params": {}})
+                .to_string()
+                .into(),
+        ))
+        .await
+        .unwrap();
+    let status = recv_until_id(&mut socket, 6).await;
+    assert!(
+        status.iter().all(|message| message["id"] != 5),
+        "navigate replied before continuation: {status:?}"
+    );
+    socket
+        .send(WsMessage::Text(
+            json!({"id": 7, "method": continue_method, "params": {"request": request}})
+                .to_string()
+                .into(),
+        ))
+        .await
+        .unwrap();
+    let mut messages = recv_until_id(&mut socket, 7).await;
+    if !messages.iter().any(|message| message["id"] == 5) {
+        messages.extend(recv_until_id(&mut socket, 5).await);
+    }
+    assert_eq!(
+        bidi_message_by_id(&messages, 7)["type"],
+        "success",
+        "{messages:?}"
+    );
+    assert_eq!(
+        bidi_message_by_id(&messages, 5)["type"],
+        "success",
+        "{messages:?}"
+    );
+    assert_eq!(
+        bidi_message_by_id(&messages, 5)["goog:channel"],
+        "paused-document"
+    );
+    assert_eq!(bidi_message_by_id(&messages, 5)["result"]["url"], url);
+    let load_index = messages
+        .iter()
+        .position(|message| {
+            message["method"] == "browsingContext.load"
+                && message["params"]["context"] == context
+                && message["params"]["url"] == url
+        })
+        .unwrap_or_else(|| {
+            panic!("wait=complete must observe the document's load before replying: {messages:?}; pause: {paused:?}; status: {status:?}")
+        });
+    assert!(
+        load_index
+            < messages
+                .iter()
+                .position(|message| message["id"] == 5)
+                .unwrap(),
+        "{messages:?}"
+    );
+    assert_eq!(
+        messages.iter().filter(|message| message["id"] == 5).count(),
+        1
+    );
+    let result = send_bidi_command_response(
+        &mut socket,
+        8,
+        "script.evaluate",
+        json!({
+            "target": {"context": context}, "expression": "document.title", "awaitPromise": false,
+        }),
+    )
+    .await;
+    assert_eq!(result["result"]["result"]["value"], "continued-document");
+    socket.close(None).await.unwrap();
+    abort_test_cdp_server(server).await;
+    fixture.abort();
+    let _ = fixture.await;
 }
 
 #[tokio::test]
