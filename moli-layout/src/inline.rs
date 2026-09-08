@@ -1922,8 +1922,8 @@ pub(crate) fn prepare_inline_contexts<N>(
         if input.units.is_empty() && input.objects.is_empty() {
             continue;
         }
-        let parley = services.parley_mut();
-        let context = input.build(world, parley);
+        let mut parley = services.parley_mut();
+        let context = input.build(world, &mut parley);
         world.boxes[owner.index()].inline_layout = Some(context);
         initialized = true;
     }
@@ -1995,7 +1995,9 @@ impl InlineBuildInput {
         let mut root_text_style = world.boxes[self.root_style.index()]
             .style
             .parley_text_style();
-        parley.resolve_font_families(&mut root_text_style, None);
+        parley
+            .fonts
+            .resolve_font_families(&mut root_text_style, None);
         let quantize = true;
         let mut styles = Vec::new();
         let mut style_parents = Vec::new();
@@ -2010,11 +2012,11 @@ impl InlineBuildInput {
             // direct box state; closing that state moves the complete subtree.
             base_style.brush.paint = !unit.control;
             let structural_parent = unit.ancestors.last().copied().unwrap_or(self.root_style);
-            if !parley.requires_character_font_resolution(&base_style) {
+            if !parley.fonts.requires_character_font_resolution(&base_style) {
                 let sample = (!unit.control)
                     .then(|| self.text[unit.output_range.clone()].chars().next())
                     .flatten();
-                parley.resolve_font_families(&mut base_style, None);
+                parley.fonts.resolve_font_families(&mut base_style, None);
                 let style_slot = intern_resolved_inline_style(
                     &mut styles,
                     &mut style_parents,
@@ -2034,7 +2036,9 @@ impl InlineBuildInput {
                 let start = unit.output_range.start + relative_start;
                 let end = start + character.len_utf8();
                 let mut style = base_style.clone();
-                parley.resolve_font_families(&mut style, Some(character));
+                parley
+                    .fonts
+                    .resolve_font_families(&mut style, Some(character));
                 let style_slot = intern_resolved_inline_style(
                     &mut styles,
                     &mut style_parents,
@@ -2047,7 +2051,7 @@ impl InlineBuildInput {
             }
         }
         let mut builder = parley.layout_context.style_run_builder(
-            &mut parley.font_context,
+            &mut parley.fonts.font_context,
             &self.text,
             1.0,
             quantize,
@@ -2103,7 +2107,7 @@ impl InlineBuildInput {
                 continue;
             }
             let mut style = world.boxes[object.box_id.index()].style.parley_text_style();
-            parley.resolve_font_families(&mut style, None);
+            parley.fonts.resolve_font_families(&mut style, None);
             structural_boxes.push(InlineStructuralBox {
                 box_id: object.box_id,
                 parent: object.ancestors.last().copied().unwrap_or(self.root_style),

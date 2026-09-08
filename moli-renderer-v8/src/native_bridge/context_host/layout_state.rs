@@ -1,12 +1,14 @@
 use std::collections::HashMap;
 
-use moli_layout::{DocumentLayoutServices, FrozenLayoutTree, LayoutViewport};
+use moli_layout::{DocumentFontServices, DocumentLayoutServices, FrozenLayoutTree, LayoutViewport};
 
 use super::layout_snapshot::LatestLayoutTreeCache;
 use crate::{
     css_resource_urls::{CompletedStylesheetWebFont, StylesheetLoadBlockingResource},
     document_runtime::DomHandle,
-    script_vm::web_fonts::{DocumentWebFontCompletion, DocumentWebFontState},
+    script_vm::web_fonts::{
+        DocumentWebFontAdmission, DocumentWebFontCompletion, DocumentWebFontState,
+    },
     style_engine::{StyleViewport, StylesheetResourceGeneration, StyloStyleEnvironment},
 };
 
@@ -37,7 +39,7 @@ struct CachedInferredFrameStyleViewport {
 /// snapshot instead of becoming separately keyed cache entries.
 #[derive(Default)]
 pub(super) struct DocumentLayoutState {
-    services: DocumentLayoutServices,
+    services: Option<DocumentLayoutServices>,
     embedded_document_services: HashMap<DomHandle, DocumentLayoutServices>,
     web_fonts: DocumentWebFontState,
     web_font_resource_generation: Option<StylesheetResourceGeneration>,
@@ -85,13 +87,17 @@ impl DocumentLayoutState {
         &mut self,
         document: DomHandle,
         main_document: DomHandle,
+        fonts: impl Fn(DomHandle) -> DocumentFontServices,
         consume: impl FnOnce(
             &mut DocumentLayoutServices,
             &mut HashMap<DomHandle, DocumentLayoutServices>,
         ) -> T,
     ) -> T {
         if document == main_document {
-            return consume(&mut self.services, &mut self.embedded_document_services);
+            let services = self
+                .services
+                .get_or_insert_with(|| DocumentLayoutServices::with_fonts(fonts(document)));
+            return consume(services, &mut self.embedded_document_services);
         }
 
         // Remove the exact child service while its recursive pass runs so the
@@ -100,7 +106,7 @@ impl DocumentLayoutState {
         let mut services = self
             .embedded_document_services
             .remove(&document)
-            .unwrap_or_default();
+            .unwrap_or_else(|| DocumentLayoutServices::with_fonts(fonts(document)));
         let output = consume(&mut services, &mut self.embedded_document_services);
         self.embedded_document_services.insert(document, services);
         output
@@ -227,23 +233,25 @@ impl DocumentLayoutState {
     pub(super) fn retain_active_slots<'a>(
         &mut self,
         resources: impl IntoIterator<Item = &'a StylesheetLoadBlockingResource>,
-    ) {
-        self.web_fonts
-            .retain_active_slots(resources, &mut self.services);
+        fonts: &DocumentFontServices,
+    ) -> bool {
+        self.web_fonts.retain_active_slots(resources, fonts)
     }
 
     pub(super) fn admit(
         &mut self,
         resource: StylesheetLoadBlockingResource,
-    ) -> Option<StylesheetLoadBlockingResource> {
-        self.web_fonts.admit(resource, &mut self.services)
+        fonts: &DocumentFontServices,
+    ) -> DocumentWebFontAdmission {
+        self.web_fonts.admit(resource, fonts)
     }
 
     pub(super) fn complete(
         &mut self,
         terminal: CompletedStylesheetWebFont,
+        fonts: &DocumentFontServices,
     ) -> DocumentWebFontCompletion {
-        let completion = self.web_fonts.complete(terminal, &mut self.services);
+        let completion = self.web_fonts.complete(terminal, fonts);
         if !matches!(&completion, DocumentWebFontCompletion::Stale) {
             self.mark_visual_state_dirty();
         }
@@ -251,11 +259,11 @@ impl DocumentLayoutState {
     }
 
     #[cfg(test)]
-    pub(super) fn web_font_counts(&self) -> (usize, usize, usize) {
+    pub(super) fn web_font_counts(&self, fonts: &DocumentFontServices) -> (usize, usize, usize) {
         (
             self.web_fonts.slot_count(),
             self.web_fonts.ready_slot_count(),
-            self.services.web_font_count(),
+            fonts.web_font_count(),
         )
     }
 }

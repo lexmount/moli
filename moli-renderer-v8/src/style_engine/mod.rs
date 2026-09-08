@@ -197,6 +197,28 @@ impl MoliStyleEngine {
         self.author_styles_disabled
     }
 
+    pub(crate) fn document_font_services(
+        &self,
+        document: DomHandle,
+    ) -> moli_layout::DocumentFontServices {
+        self.world_for_document(document)
+            .document_state
+            .fonts
+            .clone()
+    }
+
+    /// A committed font resource changes computed font-relative lengths. This
+    /// is a resource-owner invalidation, independent of synchronous geometry
+    /// reads and of whether a layout snapshot is currently retained.
+    pub(crate) fn invalidate_for_font_change(&self, host: &DomHost, document: DomHandle) {
+        let Some(world) = self.document_worlds.active_world(document) else {
+            return;
+        };
+        world.document_state.bump_target_context_epoch();
+        self.invalidation_cleanup_for_world(&world)
+            .invalidate_subtrees(host, [document]);
+    }
+
     pub(crate) fn author_shared_lock(&self) -> style::shared_lock::SharedRwLock {
         self.dom_adapter.shared_lock().clone()
     }
@@ -1123,6 +1145,7 @@ pub(crate) fn ensure_stylo_browser_compat_prefs() {
         stylo_static_prefs::set_pref!("layout.css.tree-counting-functions.enabled", true);
         stylo_static_prefs::set_pref!("layout.css.zoom.enabled", true);
         stylo_static_prefs::set_pref!("layout.grid.enabled", true);
+        stylo_static_prefs::set_pref!("layout.variable_fonts.enabled", true);
         // Stylo exposes the experimental CSS Sizing `fit-content(<length>)`
         // form behind a Servo pref. Chromium 147 rejects that function for
         // width/height while still accepting the bare `fit-content` keyword

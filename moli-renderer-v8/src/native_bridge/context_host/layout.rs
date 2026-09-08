@@ -230,6 +230,7 @@ impl JsContextHost {
             state.with_services_for_document(
                 document,
                 self.document_handle(),
+                |document| self.document_font_services(document),
                 |services, embedded_document_services| {
                     crate::layout_renderer::build_native_layout_pass(
                         self,
@@ -553,28 +554,69 @@ impl JsContextHost {
         &self,
         resources: impl IntoIterator<Item = &'a StylesheetLoadBlockingResource>,
     ) {
-        self.document_layout_state
+        let fonts = self.document_font_services(self.document_handle());
+        let changed = self
+            .document_layout_state
             .borrow_mut()
-            .retain_active_slots(resources);
+            .retain_active_slots(resources, &fonts);
+        if changed {
+            self.invalidate_styles_after_font_change();
+        }
     }
 
     pub(crate) fn admit_document_web_font(
         &self,
         resource: StylesheetLoadBlockingResource,
     ) -> Option<StylesheetLoadBlockingResource> {
-        self.document_layout_state.borrow_mut().admit(resource)
+        let fonts = self.document_font_services(self.document_handle());
+        let admission = self
+            .document_layout_state
+            .borrow_mut()
+            .admit(resource, &fonts);
+        if admission.registration_removed {
+            self.invalidate_styles_after_font_change();
+        }
+        admission.resource
     }
 
     pub(crate) fn complete_document_web_font(
         &self,
         terminal: CompletedStylesheetWebFont,
     ) -> DocumentWebFontCompletion {
-        self.document_layout_state.borrow_mut().complete(terminal)
+        let fonts = self.document_font_services(self.document_handle());
+        let completion = self
+            .document_layout_state
+            .borrow_mut()
+            .complete(terminal, &fonts);
+        if matches!(
+            completion,
+            DocumentWebFontCompletion::Registered(
+                moli_layout::WebFontRegistrationOutcome::Added
+                    | moli_layout::WebFontRegistrationOutcome::Replaced
+            )
+        ) {
+            self.invalidate_styles_after_font_change();
+        }
+        completion
+    }
+
+    pub(crate) fn document_font_services(
+        &self,
+        document: DomHandle,
+    ) -> moli_layout::DocumentFontServices {
+        self.style_engine.document_font_services(document)
+    }
+
+    fn invalidate_styles_after_font_change(&self) {
+        self.style_engine
+            .invalidate_for_font_change(self.dom_host(), self.document_handle());
     }
 
     #[cfg(test)]
     pub(crate) fn document_web_font_counts_for_test(&self) -> (usize, usize, usize) {
-        self.document_layout_state.borrow().web_font_counts()
+        self.document_layout_state
+            .borrow()
+            .web_font_counts(&self.document_font_services(self.document_handle()))
     }
 
     #[cfg(test)]

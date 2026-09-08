@@ -176,6 +176,7 @@ pub(super) fn ensure_retained_style_system(
         &shared_lock,
         &retained_source_records,
         author_styles_disabled,
+        &document_state.fonts,
     );
     if trace_enabled {
         trace_retained_style_system_change(

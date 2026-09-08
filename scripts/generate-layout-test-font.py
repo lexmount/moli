@@ -9,12 +9,15 @@
 
 import hashlib
 import os
+import tempfile
 from pathlib import Path
 
 from fontTools.fontBuilder import FontBuilder
 from fontTools.pens.ttGlyphPen import TTGlyphPen
 from fontTools.subset import Options, Subsetter
 from fontTools.ttLib import TTFont
+from fontTools.designspaceLib import AxisDescriptor, DesignSpaceDocument, SourceDescriptor
+from fontTools.varLib import build as build_variable_font
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -137,6 +140,71 @@ def convert(flavor: str) -> None:
     font.save(FIXTURES / f"moli-ahem.{flavor}", reorderTables=False)
 
 
+def build_metrics_variable_font() -> None:
+    """Independent h/v advances and MVAR heights expose font-unit mistakes."""
+    design = DesignSpaceDocument()
+    axis = AxisDescriptor()
+    axis.name, axis.tag = "Weight", "wght"
+    axis.minimum, axis.default, axis.maximum = 100, 400, 700
+    design.addAxis(axis)
+    with tempfile.TemporaryDirectory(prefix="moli-metrics-masters-") as temporary:
+        for weight, zero, water, vertical, x_height, cap_height in [
+            (100, 0, 800, 400, 300, 550),
+            (400, 500, 1000, 700, 400, 650),
+            (700, 750, 1200, 900, 500, 750),
+        ]:
+            builder = FontBuilder(1000, isTTF=True)
+            glyph_order = [".notdef", "space", "zero", "water", "x", "H"]
+            builder.setupGlyphOrder(glyph_order)
+            builder.setupCharacterMap({32: "space", 48: "zero", 0x6C34: "water", 120: "x", 72: "H"})
+            glyphs = {}
+            for glyph in glyph_order:
+                pen = TTGlyphPen(None)
+                if glyph != "space":
+                    height = x_height if glyph == "x" else cap_height
+                    pen.moveTo((0, 0))
+                    pen.lineTo((400, 0))
+                    pen.lineTo((400, height))
+                    pen.lineTo((0, height))
+                    pen.closePath()
+                glyphs[glyph] = pen.glyph()
+            builder.setupGlyf(glyphs)
+            builder.setupHorizontalMetrics({
+                glyph: (zero if glyph == "zero" else water if glyph == "water" else 500, 0)
+                for glyph in glyph_order
+            })
+            builder.setupVerticalMetrics({
+                glyph: (vertical + 500 if glyph == "water" else vertical, 100)
+                for glyph in glyph_order
+            })
+            builder.setupHorizontalHeader(ascent=850, descent=-150, lineGap=0)
+            builder.setupVerticalHeader(ascent=500, descent=-500, lineGap=0)
+            builder.setupNameTable({
+                "familyName": "Moli Metrics Variable",
+                "styleName": f"Weight{weight}",
+                "uniqueFontIdentifier": f"Moli Metrics Variable {weight} 1.0",
+                "fullName": f"Moli Metrics Variable {weight}",
+                "psName": f"MoliMetricsVariable-{weight}",
+            })
+            builder.setupOS2(sTypoAscender=850, sTypoDescender=-150,
+                             usWinAscent=850, usWinDescent=150, sxHeight=x_height,
+                             sCapHeight=cap_height, usWeightClass=weight)
+            builder.setupPost()
+            builder.setupMaxp()
+            builder.setupHead(created=OPEN_TYPE_UNIX_EPOCH, modified=OPEN_TYPE_UNIX_EPOCH)
+            master = Path(temporary) / f"{weight}.ttf"
+            builder.save(master)
+            source = SourceDescriptor()
+            source.path = str(master)
+            source.name = f"weight-{weight}"
+            source.location = {"Weight": weight}
+            design.addSource(source)
+        font, _, _ = build_variable_font(design)
+        font.recalcTimestamp = False
+        font["head"].created = font["head"].modified = OPEN_TYPE_UNIX_EPOCH
+        font.save(FIXTURES / "moli-metrics-variable.ttf")
+
+
 def main() -> None:
     FIXTURES.mkdir(parents=True, exist_ok=True)
     verify_source(DEJAVU_SOURCE, DEJAVU_SOURCE_SHA256)
@@ -144,6 +212,7 @@ def main() -> None:
     build_ttf()
     convert("woff")
     convert("woff2")
+    build_metrics_variable_font()
     subset_font(DEJAVU_SOURCE, HEBREW_EMOJI_PATH, [0x20, 0x05D0, 0x05D1, 0x1F600])
     subset_font(DROID_CJK_SOURCE, CJK_PATH, [0x20, 0x4E2D, 0x6587])
 

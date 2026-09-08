@@ -11,6 +11,7 @@ use std::{
     sync::Arc,
 };
 
+use parking_lot::{MappedMutexGuard, Mutex, MutexGuard};
 use parley::{
     FontContext, FontFamily, FontFamilyName, LayoutContext, TextStyle,
     fontique::{
@@ -23,9 +24,8 @@ use thiserror::Error;
 use crate::stylo_to_parley::TextBrush;
 use crate::system_fonts::SystemFontFamilyResolver;
 
-pub(crate) struct ParleyDocumentServices {
+pub(crate) struct ParleyFontContext {
     pub(crate) font_context: FontContext,
-    pub(crate) layout_context: LayoutContext<TextBrush>,
     system_font_family_resolver: Option<SystemFontFamilyResolver>,
     web_font_families: BTreeMap<String, SegmentedWebFontFamily>,
     font_family_resolution_plans: Vec<FontFamilyResolutionPlan>,
@@ -35,6 +35,24 @@ pub(crate) struct ParleyDocumentServices {
     )>,
     #[cfg(test)]
     font_family_resolution_miss_count: usize,
+}
+
+/// A layout demand borrows the document's font authority, but keeps shaping
+/// scratch space local. Stylo queries never acquire or initialize LayoutContext.
+pub(crate) struct ParleyDocumentServices<'a> {
+    pub(crate) fonts: MappedMutexGuard<'a, ParleyFontContext>,
+    pub(crate) layout_context: &'a mut LayoutContext<TextBrush>,
+}
+
+impl ParleyDocumentServices<'_> {
+    pub(crate) fn inline_font_metrics(
+        &mut self,
+        style: &TextStyle<'static, 'static, TextBrush>,
+        sample: Option<char>,
+    ) -> Option<InlineFontMetrics> {
+        self.fonts
+            .inline_font_metrics(style, sample, self.layout_context)
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -102,7 +120,7 @@ fn resolved_inline_x_height(ascent: f32, x_height: Option<f32>) -> f32 {
     x_height.unwrap_or(ascent * 0.56).max(0.0)
 }
 
-impl ParleyDocumentServices {
+impl ParleyFontContext {
     /// Resolves CSS downloadable-font families into the selected segmented
     /// face, then applies explicit platform-family substitutions.
     ///
@@ -301,6 +319,7 @@ impl ParleyDocumentServices {
         &mut self,
         style: &TextStyle<'static, 'static, TextBrush>,
         sample: Option<char>,
+        layout_context: &mut LayoutContext<TextBrush>,
     ) -> Option<InlineFontMetrics> {
         let cache_key = inline_font_metrics_cache_key(style);
         if let Some((_, metrics)) = self
@@ -323,12 +342,8 @@ impl ParleyDocumentServices {
         let primary_font = self.primary_font_identity(style);
         let metrics = ['x'].into_iter().chain(sample).find_map(|candidate| {
             let candidate = candidate.to_string();
-            let mut builder = self.layout_context.style_run_builder(
-                &mut self.font_context,
-                &candidate,
-                1.0,
-                true,
-            );
+            let mut builder =
+                layout_context.style_run_builder(&mut self.font_context, &candidate, 1.0, true);
             let style_index = builder.push_style(style.clone());
             builder.push_style_run(style_index, ..);
             let mut layout = builder.build(&candidate);
@@ -671,12 +686,24 @@ struct RegisteredWebFont {
 /// contexts while building pass-local Parley layouts; neither context escapes
 /// in [`crate::PaintSnapshot`].
 pub struct DocumentLayoutServices {
-    // FontContext and LayoutContext are both large. Keep them off the stack so
-    // embedding this sidecar in ScriptVm does not inflate every VM frame.
-    parley: Option<Box<ParleyDocumentServices>>,
+    fonts: DocumentFontServices,
+    layout_context: Option<Box<LayoutContext<TextBrush>>>,
+    pub(crate) text_layout_passes: u64,
+}
+
+/// One Document's font collection, shared by CSS unit resolution and shaping.
+/// Registrations and selection caches have the same lifetime and are changed
+/// only by the resource owner, never by a style or geometry observation.
+#[derive(Clone)]
+pub struct DocumentFontServices {
+    state: Arc<Mutex<DocumentFontState>>,
+}
+
+struct DocumentFontState {
+    context: Option<Box<ParleyFontContext>>,
+    platform_context: Option<Box<ParleyFontContext>>,
     system_font_policy: SystemFontPolicy,
     web_fonts: BTreeMap<String, RegisteredWebFont>,
-    pub(crate) text_layout_passes: u64,
 }
 
 impl Default for DocumentLayoutServices {
@@ -687,32 +714,33 @@ impl Default for DocumentLayoutServices {
 
 impl DocumentLayoutServices {
     /// Creates an uninitialized document sidecar.
-    pub const fn new() -> Self {
-        Self {
-            parley: None,
-            system_font_policy: SystemFontPolicy::Enabled,
-            web_fonts: BTreeMap::new(),
-            text_layout_passes: 0,
-        }
+    pub fn new() -> Self {
+        Self::with_fonts(DocumentFontServices::default())
     }
 
     /// Creates a document sidecar with an explicit platform-font policy.
-    pub const fn with_system_font_policy(system_font_policy: SystemFontPolicy) -> Self {
-        Self {
-            parley: None,
+    pub fn with_system_font_policy(system_font_policy: SystemFontPolicy) -> Self {
+        Self::with_fonts(DocumentFontServices::with_system_font_policy(
             system_font_policy,
-            web_fonts: BTreeMap::new(),
+        ))
+    }
+
+    /// Binds a layout sidecar to its Document's existing font authority.
+    pub fn with_fonts(fonts: DocumentFontServices) -> Self {
+        Self {
+            fonts,
+            layout_context: None,
             text_layout_passes: 0,
         }
     }
 
-    pub const fn system_font_policy(&self) -> SystemFontPolicy {
-        self.system_font_policy
+    pub fn system_font_policy(&self) -> SystemFontPolicy {
+        self.fonts.state.lock().system_font_policy
     }
 
     /// Returns whether a demand with non-empty text has initialized Parley.
     pub const fn is_initialized(&self) -> bool {
-        self.parley.is_some()
+        self.layout_context.is_some()
     }
 
     /// Counts text-bearing one-shot passes served by these reused contexts.
@@ -721,7 +749,66 @@ impl DocumentLayoutServices {
     }
 
     pub fn web_font_count(&self) -> usize {
-        self.web_fonts.len()
+        self.fonts.web_font_count()
+    }
+
+    pub fn register_web_font(
+        &mut self,
+        registration: WebFontRegistration,
+    ) -> Result<WebFontRegistrationOutcome, WebFontRegistrationError> {
+        self.fonts.register_web_font(registration)
+    }
+
+    pub fn remove_web_font(&mut self, slot: &str) -> bool {
+        self.fonts.remove_web_font(slot)
+    }
+
+    pub(crate) fn parley_mut(&mut self) -> ParleyDocumentServices<'_> {
+        ParleyDocumentServices {
+            fonts: self.fonts.context(),
+            layout_context: self
+                .layout_context
+                .get_or_insert_with(|| Box::new(LayoutContext::new())),
+        }
+    }
+}
+
+impl Default for DocumentFontServices {
+    fn default() -> Self {
+        Self::with_system_font_policy(SystemFontPolicy::Enabled)
+    }
+}
+
+impl std::fmt::Debug for DocumentFontServices {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("DocumentFontServices")
+            .finish_non_exhaustive()
+    }
+}
+
+impl DocumentFontServices {
+    pub fn with_system_font_policy(system_font_policy: SystemFontPolicy) -> Self {
+        Self {
+            state: Arc::new(Mutex::new(DocumentFontState {
+                context: None,
+                platform_context: None,
+                system_font_policy,
+                web_fonts: BTreeMap::new(),
+            })),
+        }
+    }
+
+    pub fn web_font_count(&self) -> usize {
+        self.state.lock().web_fonts.len()
+    }
+
+    /// Retires downloaded faces on document replacement. Shared consumers keep
+    /// the same font authority, but no old face or selection cache survives.
+    pub fn clear_web_fonts(&self) {
+        let mut state = self.state.lock();
+        state.web_fonts.clear();
+        state.context = None;
     }
 
     /// Adds or replaces one owner-validated font face.
@@ -730,7 +817,7 @@ impl DocumentLayoutServices {
     /// call it only after matching its stable document, rule/slot, and request
     /// identity. Invalid new bytes leave an existing slot untouched.
     pub fn register_web_font(
-        &mut self,
+        &self,
         registration: WebFontRegistration,
     ) -> Result<WebFontRegistrationOutcome, WebFontRegistrationError> {
         if registration.slot.trim().is_empty() {
@@ -743,7 +830,8 @@ impl DocumentLayoutServices {
             face: registration.face,
             sfnt_bytes,
         };
-        let outcome = match self.web_fonts.get(&registration.slot) {
+        let mut state = self.state.lock();
+        let outcome = match state.web_fonts.get(&registration.slot) {
             Some(current) if current == &font => WebFontRegistrationOutcome::Unchanged,
             Some(_) => WebFontRegistrationOutcome::Replaced,
             None => WebFontRegistrationOutcome::Added,
@@ -751,45 +839,56 @@ impl DocumentLayoutServices {
         if outcome == WebFontRegistrationOutcome::Unchanged {
             return Ok(outcome);
         }
-        self.web_fonts.insert(registration.slot, font);
-        if self.parley.is_some() {
-            self.parley = Some(Box::new(build_parley_services(
-                self.system_font_policy,
-                &self.web_fonts,
-            )));
-        }
+        state.web_fonts.insert(registration.slot, font);
+        state.context = None;
         Ok(outcome)
     }
 
     /// Removes a font slot. Returns whether a registered face was removed.
-    pub fn remove_web_font(&mut self, slot: &str) -> bool {
-        if self.web_fonts.remove(slot).is_none() {
+    pub fn remove_web_font(&self, slot: &str) -> bool {
+        let mut state = self.state.lock();
+        if state.web_fonts.remove(slot).is_none() {
             return false;
         }
-        if self.parley.is_some() {
-            self.parley = Some(Box::new(build_parley_services(
-                self.system_font_policy,
-                &self.web_fonts,
-            )));
-        }
+        state.context = None;
         true
     }
 
-    pub(crate) fn parley_mut(&mut self) -> &mut ParleyDocumentServices {
-        if self.parley.is_none() {
-            self.parley = Some(Box::new(build_parley_services(
-                self.system_font_policy,
-                &self.web_fonts,
-            )));
-        }
-        self.parley.as_deref_mut().expect("Parley was initialized")
+    pub(crate) fn context(&self) -> MappedMutexGuard<'_, ParleyFontContext> {
+        MutexGuard::map(self.state.lock(), |state| {
+            if state.context.is_none() {
+                state.context = Some(Box::new(build_font_context(
+                    state.system_font_policy,
+                    &state.web_fonts,
+                )));
+            }
+            state
+                .context
+                .as_deref_mut()
+                .expect("font context was initialized")
+        })
+    }
+
+    /// Media queries resolve against initial platform fonts, not @font-face.
+    pub(crate) fn platform_context(&self) -> MappedMutexGuard<'_, ParleyFontContext> {
+        MutexGuard::map(self.state.lock(), |state| {
+            state
+                .platform_context
+                .get_or_insert_with(|| {
+                    Box::new(build_font_context(
+                        state.system_font_policy,
+                        &BTreeMap::new(),
+                    ))
+                })
+                .as_mut()
+        })
     }
 }
 
-fn build_parley_services(
+fn build_font_context(
     system_font_policy: SystemFontPolicy,
     web_fonts: &BTreeMap<String, RegisteredWebFont>,
-) -> ParleyDocumentServices {
+) -> ParleyFontContext {
     let mut collection = Collection::new(CollectionOptions {
         shared: false,
         system_fonts: system_font_policy.is_enabled(),
@@ -871,9 +970,8 @@ fn build_parley_services(
             }
         }
     }
-    ParleyDocumentServices {
+    ParleyFontContext {
         font_context,
-        layout_context: LayoutContext::new(),
         system_font_family_resolver,
         web_font_families,
         font_family_resolution_plans: Vec::new(),
@@ -952,17 +1050,17 @@ mod tests {
         let mut services =
             DocumentLayoutServices::with_system_font_policy(SystemFontPolicy::Disabled);
         let style = TextStyle::default();
-        let parley = services.parley_mut();
+        let mut parley = services.parley_mut();
 
-        assert!(!parley.requires_character_font_resolution(&style));
-        assert!(!parley.requires_character_font_resolution(&style));
+        assert!(!parley.fonts.requires_character_font_resolution(&style));
+        assert!(!parley.fonts.requires_character_font_resolution(&style));
         for _ in 0..2 {
             let mut candidate = style.clone();
-            parley.resolve_font_families(&mut candidate, None);
+            parley.fonts.resolve_font_families(&mut candidate, None);
         }
 
-        assert_eq!(parley.font_family_resolution_plans.len(), 1);
-        assert_eq!(parley.font_family_resolution_miss_count, 1);
+        assert_eq!(parley.fonts.font_family_resolution_plans.len(), 1);
+        assert_eq!(parley.fonts.font_family_resolution_miss_count, 1);
     }
 
     #[test]
@@ -970,12 +1068,12 @@ mod tests {
         let mut services =
             DocumentLayoutServices::with_system_font_policy(SystemFontPolicy::Disabled);
         {
-            let parley = services.parley_mut();
+            let mut parley = services.parley_mut();
             let mut style = TextStyle::default();
-            parley.resolve_font_families(&mut style, None);
+            parley.fonts.resolve_font_families(&mut style, None);
             let _ = parley.inline_font_metrics(&style, None);
-            assert_eq!(parley.font_family_resolution_plans.len(), 1);
-            assert_eq!(parley.inline_font_metrics_cache.len(), 1);
+            assert_eq!(parley.fonts.font_family_resolution_plans.len(), 1);
+            assert_eq!(parley.fonts.inline_font_metrics_cache.len(), 1);
         }
 
         services
@@ -986,23 +1084,23 @@ mod tests {
             ))
             .unwrap();
         let parley = services.parley_mut();
-        assert!(parley.font_family_resolution_plans.is_empty());
-        assert!(parley.inline_font_metrics_cache.is_empty());
-        assert_eq!(parley.font_family_resolution_miss_count, 0);
+        assert!(parley.fonts.font_family_resolution_plans.is_empty());
+        assert!(parley.fonts.inline_font_metrics_cache.is_empty());
+        assert_eq!(parley.fonts.font_family_resolution_miss_count, 0);
     }
 
     #[test]
     fn inline_font_metrics_cache_ignores_paint_only_style_changes() {
         let mut services =
             DocumentLayoutServices::with_system_font_policy(SystemFontPolicy::Disabled);
-        let parley = services.parley_mut();
+        let mut parley = services.parley_mut();
         let style = TextStyle::default();
         let _ = parley.inline_font_metrics(&style, None);
         let mut unpainted = style;
         unpainted.brush.paint = false;
         let _ = parley.inline_font_metrics(&unpainted, None);
 
-        assert_eq!(parley.inline_font_metrics_cache.len(), 1);
+        assert_eq!(parley.fonts.inline_font_metrics_cache.len(), 1);
     }
 
     #[test]
@@ -1030,7 +1128,7 @@ mod tests {
             ])),
             ..TextStyle::default()
         };
-        let parley = services.parley_mut();
+        let mut parley = services.parley_mut();
 
         assert!(parley.inline_font_metrics(&style, None).is_none());
         assert!(
@@ -1052,12 +1150,16 @@ mod tests {
         mut style: TextStyle<'static, 'static, TextBrush>,
         character: char,
     ) -> Vec<u8> {
-        parley.resolve_font_families(&mut style, Some(character));
+        parley
+            .fonts
+            .resolve_font_families(&mut style, Some(character));
         let text = character.to_string();
-        let mut builder =
-            parley
-                .layout_context
-                .style_run_builder(&mut parley.font_context, &text, 1.0, true);
+        let mut builder = parley.layout_context.style_run_builder(
+            &mut parley.fonts.font_context,
+            &text,
+            1.0,
+            true,
+        );
         let style_index = builder.push_style(style);
         builder.push_style_run(style_index, ..);
         let mut layout = builder.build(&text);
@@ -1095,14 +1197,14 @@ mod tests {
                 TEST_CJK_TTF.to_vec(),
             ))
             .unwrap();
-        let parley = services.parley_mut();
+        let mut parley = services.parley_mut();
 
         assert_eq!(
-            shape_one_character(parley, web_font_style("Moli Segmented", 400.0), 'R'),
+            shape_one_character(&mut parley, web_font_style("Moli Segmented", 400.0), 'R'),
             TEST_TTF
         );
         assert_eq!(
-            shape_one_character(parley, web_font_style("moli segmented", 400.0), '中'),
+            shape_one_character(&mut parley, web_font_style("moli segmented", 400.0), '中'),
             TEST_CJK_TTF,
             "CSS family matching and segmented range selection must both be case-insensitive"
         );
@@ -1130,9 +1232,9 @@ mod tests {
                 TEST_CJK_TTF.to_vec(),
             ))
             .unwrap();
-        let parley = services.parley_mut();
+        let mut parley = services.parley_mut();
         let mut style = web_font_style("Moli Capability First", 700.0);
-        parley.resolve_font_families(&mut style, Some('R'));
+        parley.fonts.resolve_font_families(&mut style, Some('R'));
 
         assert!(
             matches!(&style.font_family, FontFamily::List(families) if families.is_empty()),
@@ -1154,6 +1256,7 @@ mod tests {
     fn has_family(services: &mut DocumentLayoutServices, family: &str) -> bool {
         services
             .parley_mut()
+            .fonts
             .font_context
             .collection
             .family_id(family)
@@ -1235,7 +1338,7 @@ mod tests {
             DocumentLayoutServices::with_system_font_policy(SystemFontPolicy::Disabled);
         let registration = registration("rule-11", "Stable Alias", TEST_TTF);
         services.register_web_font(registration.clone()).unwrap();
-        let font_context_address = std::ptr::from_ref(&services.parley_mut().font_context);
+        let font_context_address = std::ptr::from_ref(&services.parley_mut().fonts.font_context);
 
         assert_eq!(
             services.register_web_font(registration),
@@ -1243,7 +1346,7 @@ mod tests {
         );
         assert_eq!(
             font_context_address,
-            std::ptr::from_ref(&services.parley_mut().font_context)
+            std::ptr::from_ref(&services.parley_mut().fonts.font_context)
         );
         assert!(services.remove_web_font("rule-11"));
         assert!(!services.remove_web_font("rule-11"));

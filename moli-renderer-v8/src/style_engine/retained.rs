@@ -89,6 +89,7 @@ pub(super) fn build_retained_style_system(
     shared_lock: &SharedRwLock,
     retained_source_records: &[RetainedStylesheetSourceRecord<'_>],
     author_styles_disabled: bool,
+    fonts: &moli_layout::DocumentFontServices,
 ) -> RetainedStyleSystem {
     let mut stylist = new_stylist_with_viewport_bits(
         key.viewport_width_bits,
@@ -97,6 +98,7 @@ pub(super) fn build_retained_style_system(
         key.screen_height_bits,
         key.environment,
         key.quirks_mode,
+        fonts.clone(),
     );
     stylist.set_author_styles_enabled(if author_styles_disabled {
         AuthorStylesEnabled::No
@@ -169,6 +171,7 @@ pub(super) fn build_retained_style_system(
     );
 
     RetainedStyleSystem {
+        fonts: fonts.clone(),
         stylist_identity: NEXT_STYLIST_IDENTITY.fetch_add(1, Ordering::Relaxed),
         key,
         stylist,
@@ -394,6 +397,7 @@ fn update_document_scope(
             key.screen_height_bits,
             key.environment,
             key.quirks_mode,
+            retained.fonts.clone(),
         );
         let guard = shared_lock.read();
         let guards = StylesheetGuards::same(&guard);

@@ -1,0 +1,83 @@
+<!doctype html>
+<meta charset="utf-8">
+<style>
+@font-face {
+  font-family: Metrics;
+  src: url(data:font/ttf;base64,__METRICS_FONT__);
+  font-weight: 100 700;
+}
+@font-face {
+  font-family: Segmented;
+  src: url(data:font/ttf;base64,__METRICS_FONT__);
+  unicode-range: U+0030, U+6C34;
+}
+@font-face {
+  font-family: Segmented;
+  src: url(data:font/ttf;base64,__LATIN_FONT__);
+  unicode-range: U+0020, U+0041-007F;
+}
+html, body { margin: 0; }
+#host { font-family: Metrics; font-size: 20px; }
+.metric { height: 1px; }
+#system { font: 20px/2 monospace; width: 10ch; }
+</style>
+<div id="host"></div>
+<div id="system">0000000000</div>
+<div style="font-family: Segmented">xH</div>
+<script>
+const metrics = [
+  {weight: 100, ch: 0, ic: .8, verticalCh: .4, verticalIc: .9, ex: .3, cap: .55},
+  {weight: 400, ch: .5, ic: 1, verticalCh: .7, verticalIc: 1.2, ex: .4, cap: .65},
+  {weight: 700, ch: .75, ic: 1.2, verticalCh: .9, verticalIc: 1.4, ex: .5, cap: .75},
+];
+const metricCases = [];
+for (const metric of metrics) {
+  for (const orientation of ['horizontal', 'mixed', 'upright']) {
+    for (const unit of ['ch', 'ic', 'ex', 'cap']) {
+      const element = document.createElement('div');
+      element.className = 'metric';
+      element.id = unit + '-' + metric.weight + '-' + orientation;
+      element.style.cssText = 'width:calc(100px + 10' + unit + ');font-weight:' + metric.weight;
+      if (orientation !== 'horizontal') {
+        element.style.writingMode = 'vertical-rl';
+        element.style.textOrientation = orientation;
+      }
+      const vertical = orientation === 'upright' || (orientation === 'mixed' && unit === 'ic');
+      const ratio = vertical && unit === 'ch' ? metric.verticalCh :
+        vertical && unit === 'ic' ? metric.verticalIc : metric[unit];
+      metricCases.push({element, ratio});
+      host.append(element);
+    }
+  }
+}
+for (const unit of ['ch', 'ic', 'ex', 'cap']) {
+  const element = document.createElement('div');
+  element.id = 'segmented-' + unit;
+  element.className = 'metric';
+  element.style.cssText = 'font-family:Segmented;width:calc(100px + 10' + unit + ')';
+  metricCases.push({element, ratio: {ch: .5, ic: 1, ex: .8, cap: .8}[unit]});
+  host.append(element);
+}
+const override = document.createElement('div');
+override.id = 'explicit-variation-zero';
+override.className = 'metric';
+override.style.cssText = 'font-weight:700;font-variation-settings:"wght" 100;width:calc(100px + 10ch)';
+metricCases.push({element: override, ratio: 0});
+host.append(override);
+
+function collectFontMetricChecks(fontSize = 20, zoom = 1) {
+  const checks = metricCases.map(({element, ratio}) => {
+    const width = element.getBoundingClientRect().width;
+    const expectedWidth = (100 + 10 * ratio * fontSize) * zoom;
+    return {id: element.id, actual: Math.abs(width - expectedWidth) <= 1 / 64,
+      expected: true, width, expectedWidth};
+  });
+  const range = document.createRange();
+  range.selectNodeContents(system);
+  const width = system.getBoundingClientRect().width;
+  const glyphWidth = range.getBoundingClientRect().width;
+  checks.push({id: 'system-monospace-ch', actual: Math.abs(width - glyphWidth) <= 1 / 64,
+    expected: true, width, glyphWidth});
+  return checks;
+}
+</script>

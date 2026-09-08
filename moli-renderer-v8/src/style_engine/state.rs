@@ -28,6 +28,7 @@ use super::{
 };
 
 pub(super) struct RetainedStyleSystem {
+    pub(super) fonts: moli_layout::DocumentFontServices,
     pub(super) stylist_identity: u64,
     pub(super) key: StyleWorldKey,
     pub(super) stylist: Stylist,
@@ -80,6 +81,7 @@ pub(super) struct StyleDocumentGenerationSnapshot {
 }
 
 pub(super) struct StyleDocumentState {
+    pub(super) fonts: moli_layout::DocumentFontServices,
     pub(super) retained_style_system: RefCell<Option<RetainedStyleSystem>>,
     selector_caches: RefCell<SelectorCaches>,
     source_dirty_scopes: StyleSourceDirtyScopes,
@@ -105,6 +107,7 @@ pub(super) struct StyleDocumentState {
 impl StyleDocumentState {
     pub(super) fn new() -> Self {
         Self {
+            fonts: moli_layout::DocumentFontServices::default(),
             retained_style_system: RefCell::new(None),
             selector_caches: RefCell::new(SelectorCaches::default()),
             source_dirty_scopes: StyleSourceDirtyScopes::default(),

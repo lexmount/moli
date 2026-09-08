@@ -3886,6 +3886,128 @@ document.close();
 }
 
 #[tokio::test(flavor = "current_thread")]
+async fn font_relative_units_share_document_fonts_with_layout() {
+    run_page_vm_async_test(async move {
+        let loader = crate::network::ResourceRequestClient::new(&FetchConfig::default())?;
+        loader.set_optional_resource_fetch_mask(
+            crate::protocol_types::OptionalResourceFetchMask::FONT,
+        );
+        let mut page = test_page_vm_with_loader_and_document_url(
+            &loader,
+            Vec::new(),
+            Url::parse("https://example.com/font-relative-metrics.html")?,
+        );
+        page.vm_mut()
+            .set_layout_policy(moli_page_types::LayoutPolicy::OnDemand);
+        let fixture = include_str!("../../../../tests/fixtures/font-relative-metrics.html")
+            .replace(
+                "__METRICS_FONT__",
+                &base64::engine::general_purpose::STANDARD.encode(include_bytes!(
+                    "../../../../../moli-layout/tests/fixtures/moli-metrics-variable.ttf"
+                )),
+            )
+            .replace(
+                "__LATIN_FONT__",
+                &base64::engine::general_purpose::STANDARD.encode(include_bytes!(
+                    "../../../../../moli-layout/tests/fixtures/moli-ahem.ttf"
+                )),
+            );
+        page.vm_mut().eval(&format!(
+            "document.open();document.write({});document.close()",
+            serde_json::to_string(&fixture)?
+        ))?;
+        page.vm_mut()
+            .prime_document_lifecycle_processing_and_record_stylesheet_network_results();
+        for size in [20, 32] {
+            for zoom in [1.0, 1.5] {
+                page.vm_mut().eval(&format!(
+                    "host.style.fontSize='{size}px';host.style.zoom='{zoom}'"
+                ))?;
+                page.vm_mut()
+                    .screenshot_layout_snapshot(moli_layout::PaintViewport::new(800, 600, 1.0))?
+                    .expect("fixture layout");
+                let checks: serde_json::Value = serde_json::from_str(&page.vm_mut().eval(
+                    &format!("JSON.stringify(collectFontMetricChecks({size},{zoom}))"),
+                )?)?;
+                let checks = checks.as_array().expect("font-unit checks");
+                assert_eq!(checks.len(), 42);
+                for check in checks {
+                    assert_eq!(
+                        check["actual"], check["expected"],
+                        "{check}, font-size={size}, zoom={zoom}"
+                    );
+                }
+            }
+        }
+        Ok::<_, anyhow::Error>(())
+    })
+    .await
+    .expect("font-unit fixture should run");
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn font_resource_changes_restyle_lengths_without_refreshing_cached_geometry() {
+    run_page_vm_async_test(async move {
+        let loader = crate::network::ResourceRequestClient::new(&FetchConfig::default())?;
+        loader.set_optional_resource_fetch_mask(
+            crate::protocol_types::OptionalResourceFetchMask::FONT,
+        );
+        let mut page = test_page_vm_with_loader_and_document_url(
+            &loader,
+            Vec::new(),
+            Url::parse("https://example.com/font-unit-lifecycle.html")?,
+        );
+        page.vm_mut()
+            .set_layout_policy(moli_page_types::LayoutPolicy::OnDemand);
+        page.vm_mut().eval(r#"
+document.head.innerHTML='<style>html,body{margin:0}#sized{font:20px FutureFace,monospace;width:10ch}</style>';
+document.body.innerHTML='<div id=sized>0000000000</div>';
+"#)?;
+        page.vm_mut()
+            .screenshot_layout_snapshot(moli_layout::PaintViewport::new(800, 600, 1.0))?
+            .expect("fallback layout");
+        let read_width = "document.getElementById('sized').getBoundingClientRect().width";
+        let fallback = page.vm_mut().eval(read_width)?.parse::<f32>()?;
+        let encoded = base64::engine::general_purpose::STANDARD.encode(include_bytes!(
+            "../../../../../moli-layout/tests/fixtures/moli-metrics-variable.ttf"
+        ));
+        page.vm_mut().eval(&format!(r#"
+const faceStyle=document.createElement('style');
+faceStyle.textContent='@font-face{{font-family:FutureFace;src:url(data:font/ttf;base64,{encoded})}}';
+document.head.append(faceStyle);
+"#))?;
+        page.vm_mut()
+            .prime_document_lifecycle_processing_and_record_stylesheet_network_results();
+        assert_eq!(page.vm_mut().document_web_font_counts_for_test(), (1, 1, 1));
+        assert_eq!(
+            page.vm_mut().eval(read_width)?.parse::<f32>()?, fallback,
+            "font publication must not replace cached geometry"
+        );
+        page.vm_mut()
+            .screenshot_layout_snapshot(moli_layout::PaintViewport::new(800, 600, 1.0))?
+            .expect("web-font layout");
+        assert_eq!(
+            page.vm_mut().eval(read_width)?.parse::<f32>()?, 100.0,
+            "new layout uses the downloaded zero advance"
+        );
+        page.vm_mut().eval("faceStyle.remove()")?;
+        page.vm_mut()
+            .prime_document_lifecycle_processing_and_record_stylesheet_network_results();
+        assert_eq!(
+            page.vm_mut().eval(read_width)?.parse::<f32>()?, 100.0,
+            "removal also preserves the existing snapshot"
+        );
+        page.vm_mut()
+            .screenshot_layout_snapshot(moli_layout::PaintViewport::new(800, 600, 1.0))?
+            .expect("fallback layout after removal");
+        assert_eq!(page.vm_mut().eval(read_width)?.parse::<f32>()?, fallback);
+        Ok::<_, anyhow::Error>(())
+    })
+    .await
+    .expect("font-unit lifecycle should run");
+}
+
+#[tokio::test(flavor = "current_thread")]
 async fn same_family_unicode_range_faces_shape_mixed_text_with_both_subsets() {
     run_page_vm_async_test(async move {
         let loader =

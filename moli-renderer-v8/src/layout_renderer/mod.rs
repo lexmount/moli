@@ -110,7 +110,9 @@ impl EmbeddedFrameRenderer<DomHandle> for NativeEmbeddedFrameRenderer<'_> {
         let mut services = self
             .embedded_document_services
             .remove(&document)
-            .unwrap_or_default();
+            .unwrap_or_else(|| {
+                DocumentLayoutServices::with_fonts(self.runtime.document_font_services(document))
+            });
         let request = if self.capture_paint {
             let mut capture = moli_layout::PaintCaptureRequest::viewport();
             capture.include_backgrounds = self.include_backgrounds;

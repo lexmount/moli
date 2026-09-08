@@ -23,6 +23,17 @@ These three files are licensed under the repository's MIT OR Apache-2.0 terms.
 | `moli-ahem.woff` | `17b7bee15b40e764d785d69412ec4fdc87715a5c107d46e31664fb6393f29f85` |
 | `moli-ahem.woff2` | `c054d1e545d4c234c8c4bfea2bf903d8304fad3b20a51dab60338cea29c793d2` |
 
+## Variable metrics face
+
+`moli-metrics-variable.ttf` is original project-generated test data under the
+same MIT OR Apache-2.0 terms. Its `wght` axis has masters at 100, 400, and 700.
+The zero glyph has horizontal advances 0/500/750 and vertical advances
+400/700/900; the water ideograph has horizontal advances 800/1000/1200 and
+vertical advances 900/1200/1400. X-heights are 300/400/500 and cap heights
+550/650/750, in a 1000-unit em. `HVAR`, `VVAR`, `gvar`, and `MVAR` exercise
+font-relative units without depending on installed fonts or text shaping.
+SHA-256: `e37b0d1fd4642935a48dfc90896db4acb77efc0b9f6e60df39be4c1c537a60fa`.
+
 ## Subset fallback faces
 
 | Fixture | Included code points | Source and source SHA-256 | License | Fixture SHA-256 |

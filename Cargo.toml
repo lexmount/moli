@@ -88,20 +88,20 @@ license = "MIT OR Apache-2.0"
 
 [patch.crates-io]
 # Keep inline boundaries, out-of-flow items and line-edge whitespace in paragraph layout.
-parley = { git = "https://github.com/ldm0/parley", rev = "f7abed70b5f6b780823c4cdcba86029fecaa90a0" }
+parley = { git = "https://github.com/ldm0/parley", rev = "9e1fffaf84437cda87fa1fc726a61f9e091b9563" }
 xml5ever = { path = "vendor/xml5ever-0.39.0" }
 curl = { git = "https://github.com/ldm0/curl-rust", branch = "moli" }
 curl-sys = { git = "https://github.com/ldm0/curl-rust", branch = "moli" }
 cookie = { git = "https://github.com/ldm0/cookie-rs", branch = "priority" }
 v8 = { path = "vendor/v8-152.2.0" }
 deno_v8 = { path = "vendor/deno_v8-0.3.0" }
-selectors = { git = "https://github.com/ldm0/stylo", rev = "671d13d31b3b00e7b1e0088ba2b36a4e35c0858c" }
-servo_arc = { git = "https://github.com/ldm0/stylo", rev = "671d13d31b3b00e7b1e0088ba2b36a4e35c0858c" }
-stylo = { git = "https://github.com/ldm0/stylo", rev = "671d13d31b3b00e7b1e0088ba2b36a4e35c0858c" }
-stylo_atoms = { git = "https://github.com/ldm0/stylo", rev = "671d13d31b3b00e7b1e0088ba2b36a4e35c0858c" }
-stylo_dom = { git = "https://github.com/ldm0/stylo", rev = "671d13d31b3b00e7b1e0088ba2b36a4e35c0858c" }
-stylo_static_prefs = { git = "https://github.com/ldm0/stylo", rev = "671d13d31b3b00e7b1e0088ba2b36a4e35c0858c" }
-stylo_traits = { git = "https://github.com/ldm0/stylo", rev = "671d13d31b3b00e7b1e0088ba2b36a4e35c0858c" }
+selectors = { git = "https://github.com/ldm0/stylo", rev = "e6cdff0a2eb7e51a313dabe8dc48a13a08314493" }
+servo_arc = { git = "https://github.com/ldm0/stylo", rev = "e6cdff0a2eb7e51a313dabe8dc48a13a08314493" }
+stylo = { git = "https://github.com/ldm0/stylo", rev = "e6cdff0a2eb7e51a313dabe8dc48a13a08314493" }
+stylo_atoms = { git = "https://github.com/ldm0/stylo", rev = "e6cdff0a2eb7e51a313dabe8dc48a13a08314493" }
+stylo_dom = { git = "https://github.com/ldm0/stylo", rev = "e6cdff0a2eb7e51a313dabe8dc48a13a08314493" }
+stylo_static_prefs = { git = "https://github.com/ldm0/stylo", rev = "e6cdff0a2eb7e51a313dabe8dc48a13a08314493" }
+stylo_traits = { git = "https://github.com/ldm0/stylo", rev = "e6cdff0a2eb7e51a313dabe8dc48a13a08314493" }
 taffy = { git = "https://github.com/ldm0/taffy", rev = "c2820058f5a3d2fb578ec20a53ec32bb5b34c3d5" }
 
 [workspace.lints.clippy]

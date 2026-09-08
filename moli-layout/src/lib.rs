@@ -13,6 +13,7 @@ mod builder;
 mod capture;
 mod containment;
 mod error;
+mod font_metrics;
 mod form;
 mod gradient;
 mod grid;
@@ -98,8 +99,9 @@ pub use style::{
     LayoutPosition, ResolvedLayoutStyle,
 };
 pub use text::{
-    DocumentLayoutServices, SystemFontPolicy, WebFontFace, WebFontRegistration,
-    WebFontRegistrationError, WebFontRegistrationOutcome, WebFontStyle, WebFontUnicodeRange,
+    DocumentFontServices, DocumentLayoutServices, SystemFontPolicy, WebFontFace,
+    WebFontRegistration, WebFontRegistrationError, WebFontRegistrationOutcome, WebFontStyle,
+    WebFontUnicodeRange,
 };
 pub use world::{
     LayoutAnonymousReason, LayoutBox, LayoutBoxId, LayoutBoxKind, LayoutCapabilityDiagnostic,
