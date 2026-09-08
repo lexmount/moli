@@ -1,3 +1,4 @@
+use taffy::compute::{StaticPositionAxis, StaticPositionEdge as PhysicalAxisStaticEdge};
 use taffy::{
     AbsoluteAxis, AbstractAxis, AlignContent, AlignContentKeyword, AlignItems, AlignItemsKeyword,
     AlignSelf, AlignmentSafety, Direction, FlexWrap, Line, Point, Rect, Size, WritingMode,
@@ -102,6 +103,9 @@ impl PhysicalStaticPosition {
         }
     }
 
+    /// Resolve the border-box origin from the static margin-box edge and used
+    /// margins. Auto margins on a static-position axis have already become zero
+    /// during absolute sizing; this step must not distribute them a second time.
     pub(crate) fn border_box_origin(
         self,
         box_size: Size<f32>,
@@ -186,65 +190,51 @@ pub(crate) struct FlexCrossAxisStaticContext {
     pub(crate) container_writing_mode: WritingMode,
     pub(crate) container_direction: Direction,
     pub(crate) physical_axis: AbsoluteAxis,
-    pub(crate) overflows: bool,
 }
 
 impl FlexCrossAxisStaticContext {
-    pub(crate) fn resolve(self) -> LogicalStaticEdge {
+    pub(crate) fn resolve(self) -> LogicalStaticAlignment {
         let alignment = self
             .align_self
             .or(self.align_items)
             .unwrap_or(AlignItems::STRETCH);
-        let mut keyword = if alignment.safety == AlignmentSafety::Safe && self.overflows {
-            AlignItemsKeyword::Start
-        } else {
-            alignment.keyword()
-        };
-
-        keyword =
-            match keyword {
-                AlignItemsKeyword::Start => AlignItemsKeyword::FlexStart,
-                AlignItemsKeyword::End => AlignItemsKeyword::FlexEnd,
-                AlignItemsKeyword::SelfStart | AlignItemsKeyword::SelfEnd => {
-                    let child_start_reversed = self
-                        .child_writing_mode
-                        .is_axis_flow_reversed(self.physical_axis, self.child_direction);
-                    let container_start_reversed = self
+        let keyword = alignment.keyword();
+        let wrap_reverse = self.flex_wrap == FlexWrap::WrapReverse;
+        let edge = match keyword {
+            AlignItemsKeyword::Center => LogicalStaticEdge::Center,
+            AlignItemsKeyword::End => LogicalStaticEdge::End,
+            AlignItemsKeyword::SelfStart | AlignItemsKeyword::SelfEnd => {
+                let starts_match = self
+                    .child_writing_mode
+                    .is_axis_flow_reversed(self.physical_axis, self.child_direction)
+                    == self
                         .container_writing_mode
                         .is_axis_flow_reversed(self.physical_axis, self.container_direction);
-                    let starts_match = child_start_reversed == container_start_reversed;
-                    match (keyword, starts_match) {
-                        (AlignItemsKeyword::SelfStart, true)
-                        | (AlignItemsKeyword::SelfEnd, false) => AlignItemsKeyword::FlexStart,
-                        (AlignItemsKeyword::SelfStart, false)
-                        | (AlignItemsKeyword::SelfEnd, true) => AlignItemsKeyword::FlexEnd,
-                        _ => unreachable!("self-relative alignment was matched above"),
-                    }
+                if (keyword == AlignItemsKeyword::SelfStart) == starts_match {
+                    LogicalStaticEdge::Start
+                } else {
+                    LogicalStaticEdge::End
                 }
-                keyword => keyword,
-            };
-
-        if self.flex_wrap == FlexWrap::WrapReverse {
-            keyword = match keyword {
-                AlignItemsKeyword::FlexStart => AlignItemsKeyword::FlexEnd,
-                AlignItemsKeyword::FlexEnd => AlignItemsKeyword::FlexStart,
-                keyword => keyword,
-            };
-        }
-
-        match keyword {
-            AlignItemsKeyword::Center => LogicalStaticEdge::Center,
-            AlignItemsKeyword::FlexEnd => LogicalStaticEdge::End,
-            AlignItemsKeyword::Stretch if self.flex_wrap == FlexWrap::WrapReverse => {
+            }
+            AlignItemsKeyword::FlexEnd if !wrap_reverse => LogicalStaticEdge::End,
+            AlignItemsKeyword::FlexStart | AlignItemsKeyword::Stretch if wrap_reverse => {
                 LogicalStaticEdge::End
             }
             AlignItemsKeyword::Start
-            | AlignItemsKeyword::End
             | AlignItemsKeyword::FlexStart
-            | AlignItemsKeyword::SelfStart
-            | AlignItemsKeyword::SelfEnd
+            | AlignItemsKeyword::FlexEnd
             | AlignItemsKeyword::Baseline
             | AlignItemsKeyword::Stretch => LogicalStaticEdge::Start,
+        };
+        // Like Blink's OOF pipeline, the flex parent supplies only the static
+        // edge. The child's own self-alignment supplies overflow safety, which
+        // is applied later in the actual absolute containing block. Inheriting
+        // an alignment keyword must not also inherit the parent's safety.
+        LogicalStaticAlignment {
+            edge,
+            safety: self
+                .align_self
+                .map_or(AlignmentSafety::Unsafe, |value| value.safety),
         }
     }
 }
@@ -349,69 +339,6 @@ fn grid_item_alignment(
         .unwrap_or(AlignItems::STRETCH)
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum PhysicalAxisStaticEdge {
-    Min,
-    Center,
-    Max,
-}
-
-/// One physical axis of the inset-modified containing block. A centered
-/// static position grows equally toward both containing-block edges until
-/// the nearer edge is reached, as in Blink's ComputeUnclampedIMCBInOneAxis.
-struct StaticPositionAxis {
-    offset: f32,
-    edge: PhysicalAxisStaticEdge,
-    safety: AlignmentSafety,
-}
-
-impl StaticPositionAxis {
-    fn inset_modified_bounds(&self, available: f32) -> Line<f32> {
-        match self.edge {
-            PhysicalAxisStaticEdge::Min => Line {
-                start: self.offset,
-                end: available,
-            },
-            PhysicalAxisStaticEdge::Max => Line {
-                start: 0.0,
-                end: self.offset,
-            },
-            PhysicalAxisStaticEdge::Center => {
-                let half = self.offset.min(available - self.offset);
-                Line {
-                    start: self.offset - half,
-                    end: self.offset + half,
-                }
-            }
-        }
-    }
-
-    fn border_box_start(
-        &self,
-        available: f32,
-        size: f32,
-        margin: Line<f32>,
-        containing_start_reversed: bool,
-    ) -> f32 {
-        let bounds = self.inset_modified_bounds(available);
-        let margin_box_size = size + margin.start + margin.end;
-        if self.safety == AlignmentSafety::Safe && margin_box_size > bounds.end - bounds.start {
-            return if containing_start_reversed {
-                bounds.end - size - margin.end
-            } else {
-                bounds.start + margin.start
-            };
-        }
-        match self.edge {
-            PhysicalAxisStaticEdge::Min => self.offset + margin.start,
-            PhysicalAxisStaticEdge::Center => {
-                self.offset - size / 2.0 + (margin.start - margin.end) / 2.0
-            }
-            PhysicalAxisStaticEdge::Max => self.offset - size - margin.end,
-        }
-    }
-}
-
 fn physical_axis_static_position(
     min: f32,
     size: f32,
@@ -505,71 +432,26 @@ pub(crate) fn physical_static_position_from_logical(
     position
 }
 
-/// Resolve auto margins in one physical axis of an absolutely positioned box.
-///
-/// CSS Positioned Layout only distributes auto margins when both insets in
-/// the axis are definite. Inline-axis negative space preserves the dominant
-/// start edge; block-axis negative space is shared between both margins.
-pub(crate) fn resolve_absolute_axis_margins(
-    margin: Line<Option<f32>>,
-    inset: Line<Option<f32>>,
-    area_size: f32,
-    box_size: f32,
-    share_negative_space: bool,
-    start_is_dominant: bool,
-) -> Line<f32> {
-    if inset.start.is_none() || inset.end.is_none() {
-        return Line {
-            start: margin.start.unwrap_or(0.0),
-            end: margin.end.unwrap_or(0.0),
-        };
-    }
-
-    let free_space = area_size
-        - inset.start.unwrap()
-        - inset.end.unwrap()
-        - box_size
-        - margin.start.unwrap_or(0.0)
-        - margin.end.unwrap_or(0.0);
-    match (margin.start, margin.end) {
-        (Some(start), Some(end)) => Line { start, end },
-        (None, Some(end)) => Line {
-            start: free_space,
-            end,
-        },
-        (Some(start), None) => Line {
-            start,
-            end: free_space,
-        },
-        (None, None) if free_space > 0.0 || share_negative_space => {
-            let start = free_space / 2.0;
-            Line {
-                start,
-                end: free_space - start,
-            }
-        }
-        (None, None) if start_is_dominant => Line {
-            start: 0.0,
-            end: free_space,
-        },
-        (None, None) => Line {
-            start: free_space,
-            end: 0.0,
-        },
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+    use taffy::{WritingDirection, compute::resolve_absolute_margins};
 
-    const AUTO: Line<Option<f32>> = Line {
-        start: None,
-        end: None,
+    const AUTO: Rect<Option<f32>> = Rect {
+        left: None,
+        right: None,
+        top: None,
+        bottom: None,
     };
-    const ZERO_INSETS: Line<Option<f32>> = Line {
-        start: Some(0.0),
-        end: Some(0.0),
+    const ZERO_INSETS: Rect<Option<f32>> = Rect {
+        left: Some(0.0),
+        right: Some(0.0),
+        top: Some(0.0),
+        bottom: Some(0.0),
+    };
+    const HORIZONTAL_LTR: WritingDirection = WritingDirection {
+        mode: WritingMode::HorizontalTb,
+        direction: Direction::Ltr,
     };
 
     #[test]
@@ -697,9 +579,9 @@ mod tests {
                 container_writing_mode: WritingMode::HorizontalTb,
                 container_direction: Direction::Ltr,
                 physical_axis: AbsoluteAxis::Vertical,
-                overflows: false,
             }
-            .resolve(),
+            .resolve()
+            .edge,
             LogicalStaticEdge::End
         );
         assert_eq!(
@@ -712,20 +594,33 @@ mod tests {
                 container_writing_mode: WritingMode::HorizontalTb,
                 container_direction: Direction::Ltr,
                 physical_axis: AbsoluteAxis::Vertical,
-                overflows: true,
             }
-            .resolve(),
-            LogicalStaticEdge::Start
+            .resolve()
+            .edge,
+            LogicalStaticEdge::Center
         );
     }
 
     #[test]
     fn positive_space_is_shared_even_when_the_box_is_wider_than_that_space() {
         assert_eq!(
-            resolve_absolute_axis_margins(AUTO, ZERO_INSETS, 1440.0, 975.0, false, true),
-            Line {
-                start: 232.5,
-                end: 232.5,
+            resolve_absolute_margins(
+                AUTO,
+                ZERO_INSETS,
+                Size {
+                    width: 1440.0,
+                    height: 0.0
+                },
+                Size {
+                    width: 975.0,
+                    height: 0.0
+                },
+                HORIZONTAL_LTR
+            ),
+            Rect {
+                left: 232.5,
+                right: 232.5,
+                ..Rect::ZERO
             }
         );
     }
@@ -733,17 +628,46 @@ mod tests {
     #[test]
     fn inline_negative_space_preserves_the_dominant_start_edge() {
         assert_eq!(
-            resolve_absolute_axis_margins(AUTO, ZERO_INSETS, 100.0, 150.0, false, true),
-            Line {
-                start: 0.0,
-                end: -50.0,
+            resolve_absolute_margins(
+                AUTO,
+                ZERO_INSETS,
+                Size {
+                    width: 100.0,
+                    height: 0.0
+                },
+                Size {
+                    width: 150.0,
+                    height: 0.0
+                },
+                HORIZONTAL_LTR
+            ),
+            Rect {
+                left: 0.0,
+                right: -50.0,
+                ..Rect::ZERO
             }
         );
         assert_eq!(
-            resolve_absolute_axis_margins(AUTO, ZERO_INSETS, 100.0, 150.0, false, false),
-            Line {
-                start: -50.0,
-                end: 0.0,
+            resolve_absolute_margins(
+                AUTO,
+                ZERO_INSETS,
+                Size {
+                    width: 100.0,
+                    height: 0.0
+                },
+                Size {
+                    width: 150.0,
+                    height: 0.0
+                },
+                WritingDirection {
+                    direction: Direction::Rtl,
+                    ..HORIZONTAL_LTR
+                }
+            ),
+            Rect {
+                left: -50.0,
+                right: 0.0,
+                ..Rect::ZERO
             }
         );
     }
@@ -751,10 +675,23 @@ mod tests {
     #[test]
     fn block_negative_space_is_shared() {
         assert_eq!(
-            resolve_absolute_axis_margins(AUTO, ZERO_INSETS, 100.0, 120.0, true, true),
-            Line {
-                start: -10.0,
-                end: -10.0,
+            resolve_absolute_margins(
+                AUTO,
+                ZERO_INSETS,
+                Size {
+                    width: 0.0,
+                    height: 100.0
+                },
+                Size {
+                    width: 0.0,
+                    height: 120.0
+                },
+                HORIZONTAL_LTR
+            ),
+            Rect {
+                top: -10.0,
+                bottom: -10.0,
+                ..Rect::ZERO
             }
         );
     }
@@ -762,21 +699,23 @@ mod tests {
     #[test]
     fn an_auto_inset_forces_auto_margins_to_zero() {
         assert_eq!(
-            resolve_absolute_axis_margins(
+            resolve_absolute_margins(
                 AUTO,
-                Line {
-                    start: Some(0.0),
-                    end: None,
+                Rect {
+                    left: Some(0.0),
+                    ..AUTO
                 },
-                100.0,
-                20.0,
-                false,
-                true,
+                Size {
+                    width: 100.0,
+                    height: 100.0
+                },
+                Size {
+                    width: 20.0,
+                    height: 20.0
+                },
+                HORIZONTAL_LTR,
             ),
-            Line {
-                start: 0.0,
-                end: 0.0,
-            }
+            Rect::ZERO
         );
     }
 }

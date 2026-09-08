@@ -160,15 +160,6 @@ impl LayoutWritingMode {
             Self::VerticalLr => taffy::WritingMode::VerticalLr,
         }
     }
-
-    /// Physical edge used as block-start by vertical normal flow.
-    pub(crate) const fn vertical_block_start_is_right(self) -> Option<bool> {
-        match self {
-            Self::HorizontalTb => None,
-            Self::VerticalRl => Some(true),
-            Self::VerticalLr => Some(false),
-        }
-    }
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -1952,10 +1943,6 @@ impl ResolvedLayoutStyle {
 
     pub(crate) const fn uses_horizontal_writing_mode(&self) -> bool {
         self.writing_mode.is_horizontal()
-    }
-
-    pub(crate) const fn vertical_block_start_is_right(&self) -> Option<bool> {
-        self.writing_mode.vertical_block_start_is_right()
     }
 
     /// Returns the inherited writing mode used by the numeric layout tree.

@@ -29,7 +29,7 @@ use crate::{
     positioned::{
         FlexCrossAxisStaticContext, HorizontalStaticEdge, PhysicalStaticPosition,
         VerticalStaticEdge, flex_main_axis_static_edge, grid_static_alignment,
-        physical_static_position_from_logical, resolve_absolute_axis_margins,
+        physical_static_position_from_logical,
     },
     replaced::measure_replaced,
     style::{InlineDirection, resolve_stylo_calc_value},
@@ -250,7 +250,6 @@ where
         },
     );
     prepared.capture_numeric_geometry(world);
-    physicalize_vertical_block_flow(world);
     finish_positioned_layout(world, viewport, prepared);
     finish_form_control_contents(world);
     finish_outside_list_markers(world);
@@ -268,78 +267,6 @@ where
         round_layout_to_css_subpixels(world, marker.to_taffy());
     }
     world.finish_numeric_layout_tracking()
-}
-
-/// Converts Taffy's horizontal block-start anchor into the physical edge used
-/// by a vertical writing mode.
-///
-/// Taffy deliberately has no writing-mode input yet. Its block algorithm does
-/// still produce the right border-box size, margins and physical relative
-/// inset, but it chooses the x anchor from CSS `direction`: left for LTR and
-/// right for RTL. In a vertical formatting context, direction controls the
-/// vertical inline axis instead; block-start is always left for `vertical-lr`
-/// and right for `vertical-rl`.
-///
-/// Apply this adapter immediately after numeric layout so positioned, sticky,
-/// scroll-overflow, CSSOM and paint all observe the same real box coordinates.
-/// The preserved delta carries any physical relative inset through unchanged.
-fn physicalize_vertical_block_flow<N>(world: &mut LayoutWorld<N>)
-where
-    N: Copy + Debug + Eq + Hash,
-{
-    let mut adjusted_x = Vec::new();
-
-    for parent_index in 0..world.boxes.len() {
-        let parent = LayoutBoxId::from_index(parent_index);
-        let Some(block_start_is_right) = world.boxes[parent_index]
-            .style
-            .vertical_block_start_is_right()
-        else {
-            continue;
-        };
-        if !original_parent_uses_block_layout(world, parent) {
-            continue;
-        }
-
-        let parent_layout = world.boxes[parent_index].unrounded_layout;
-        let scrollbar = world.get_scrollbar_insets(parent.to_taffy());
-        let content_left = parent_layout.border.left + parent_layout.padding.left + scrollbar.left;
-        let content_right = parent_layout.size.width
-            - parent_layout.border.right
-            - parent_layout.padding.right
-            - scrollbar.right;
-        let taffy_anchored_right =
-            world.boxes[parent_index].style.taffy.direction == taffy::Direction::Rtl;
-
-        for child in world.boxes[parent_index].layout_children.iter().copied() {
-            let child_box = &world.boxes[child.index()];
-            if child_box.style.is_absolute_positioned()
-                || child_box.style.is_fixed_positioned()
-                || box_is_effectively_floated(world, child)
-            {
-                continue;
-            }
-
-            let layout = child_box.unrounded_layout;
-            let left_anchor = content_left + layout.margin.left;
-            let right_anchor = content_right - layout.size.width - layout.margin.right;
-            let taffy_anchor = if taffy_anchored_right {
-                right_anchor
-            } else {
-                left_anchor
-            };
-            let physical_anchor = if block_start_is_right {
-                right_anchor
-            } else {
-                left_anchor
-            };
-            adjusted_x.push((child, physical_anchor + (layout.location.x - taffy_anchor)));
-        }
-    }
-
-    for (child, x) in adjusted_x {
-        world.boxes[child.index()].unrounded_layout.location.x = x;
-    }
 }
 
 /// Quantize final browser geometry without teaching Taffy about CSS layout
@@ -654,7 +581,7 @@ where
             run_mode: RunMode::PerformLayout,
             axis: taffy::RequestedAxis::Both,
             block_auto_behavior: AutoSizeBehavior::FitContent,
-            vertical_margins_are_collapsible: Line::FALSE,
+            block_margins_are_collapsible: Line::FALSE,
         };
         let output = world.compute_child_layout(marker.to_taffy(), inputs);
         let marker_style = &world.boxes[marker.index()].style;
@@ -743,7 +670,7 @@ where
             run_mode: RunMode::PerformLayout,
             axis: taffy::RequestedAxis::Both,
             block_auto_behavior: AutoSizeBehavior::FitContent,
-            vertical_margins_are_collapsible: Line::FALSE,
+            block_margins_are_collapsible: Line::FALSE,
         };
         let output = world.compute_child_layout(content.to_taffy(), inputs);
         let x = control_layout.border.left + control_layout.padding.left + 4.0;
@@ -1133,13 +1060,6 @@ where
     } else {
         container_writing_mode.block_axis()
     };
-    let child_layout = child_box.unrounded_layout;
-    let child_cross_margin_size = match physical_cross_axis {
-        AbsoluteAxis::Horizontal => child_layout.margin.left + child_layout.margin.right,
-        AbsoluteAxis::Vertical => child_layout.margin.top + child_layout.margin.bottom,
-    };
-    let cross_overflows = child_layout.size.get_abs(physical_cross_axis) + child_cross_margin_size
-        > content_size.get_abs(physical_cross_axis);
     let main_edge =
         flex_main_axis_static_edge(container_box.style.taffy.justify_content, is_reverse);
     let cross_edge = FlexCrossAxisStaticContext {
@@ -1151,21 +1071,20 @@ where
         container_writing_mode,
         container_direction: container_box.style.taffy.direction,
         physical_axis: physical_cross_axis,
-        overflows: cross_overflows,
     }
     .resolve();
     let (inline_edge, block_edge) = if is_column {
-        (cross_edge, main_edge)
+        (cross_edge, main_edge.into())
     } else {
-        (main_edge, cross_edge)
+        (main_edge.into(), cross_edge)
     };
     physical_static_position_from_logical(
         content_origin,
         content_size,
         container_writing_mode,
         container_box.style.taffy.direction,
-        inline_edge.into(),
-        block_edge.into(),
+        inline_edge,
+        block_edge,
     )
 }
 
@@ -1397,7 +1316,7 @@ fn layout_inline_absolute_child<N>(
                 run_mode: RunMode::ComputeSize,
                 axis: taffy::RequestedAxis::Horizontal,
                 block_auto_behavior,
-                vertical_margins_are_collapsible: Line::FALSE,
+                block_margins_are_collapsible: Line::FALSE,
             },
             available_width,
         ));
@@ -1419,7 +1338,7 @@ fn layout_inline_absolute_child<N>(
                 run_mode: RunMode::ComputeSize,
                 axis: taffy::RequestedAxis::Both,
                 block_auto_behavior,
-                vertical_margins_are_collapsible: Line::FALSE,
+                block_margins_are_collapsible: Line::FALSE,
             },
         )
         .size;
@@ -1439,44 +1358,25 @@ fn layout_inline_absolute_child<N>(
             run_mode: RunMode::PerformLayout,
             axis: taffy::RequestedAxis::Both,
             block_auto_behavior,
-            vertical_margins_are_collapsible: Line::FALSE,
+            block_margins_are_collapsible: Line::FALSE,
         },
     );
 
-    let horizontal_margin = resolve_absolute_axis_margins(
-        Line {
-            start: margin.left,
-            end: margin.right,
+    let resolved_margin = taffy::compute::resolve_absolute_margins(
+        margin,
+        taffy::Rect {
+            left,
+            right,
+            top,
+            bottom,
         },
-        Line {
-            start: left,
-            end: right,
+        area.size,
+        final_size,
+        taffy::WritingDirection {
+            mode: area.writing_mode,
+            direction: area.direction,
         },
-        area_width,
-        final_size.width,
-        false,
-        area.direction != taffy::Direction::Rtl,
     );
-    let vertical_margin = resolve_absolute_axis_margins(
-        Line {
-            start: margin.top,
-            end: margin.bottom,
-        },
-        Line {
-            start: top,
-            end: bottom,
-        },
-        area_height,
-        final_size.height,
-        true,
-        true,
-    );
-    let resolved_margin = taffy::Rect {
-        left: horizontal_margin.start,
-        right: horizontal_margin.end,
-        top: vertical_margin.start,
-        bottom: vertical_margin.end,
-    };
     let static_origin = static_position.border_box_origin(
         final_size,
         resolved_margin,
@@ -1669,7 +1569,7 @@ where
             inputs
         };
         let resolved_intrinsic_inputs =
-            taffy::compute::resolve_intrinsic_width_inputs(self, node_id, intrinsic_inputs);
+            taffy::compute::resolve_intrinsic_inline_inputs(self, node_id, intrinsic_inputs);
         let inputs = LayoutInput {
             // The float parent has already removed horizontal margins from the
             // child's available space. Restoring them above is only an adapter
@@ -2249,7 +2149,7 @@ where
             parent_writing_mode,
             available_space,
             block_auto_behavior: AutoSizeBehavior::FitContent,
-            vertical_margins_are_collapsible: Line::FALSE,
+            block_margins_are_collapsible: Line::FALSE,
         };
         // A float's max-content contribution is measured independently from
         // the finite line slot it will eventually occupy. Final fit-content
@@ -2505,7 +2405,8 @@ where
             if let Some(block_context) = block_context {
                 let contains_floats = block_context.is_bfc_root();
                 if contains_floats {
-                    block_context.set_width(width + padding_border.left + padding_border.right);
+                    block_context
+                        .set_inline_size(width + padding_border.left + padding_border.right);
                 }
                 let mut content_context = block_context.sub_context(
                     padding_border.top,
@@ -2525,14 +2426,14 @@ where
                     &atomic_baseline_ascents,
                     &structural_edge_contributions,
                 );
-                alignment_float_height = content_context.floated_content_height_contribution();
+                alignment_float_height = content_context.floated_block_size_contribution();
                 if contains_floats {
                     float_height = Some(alignment_float_height);
                 }
             } else {
                 let mut formatting_context = BlockFormattingContext::new();
                 let mut root_context = formatting_context.root_block_context();
-                root_context.set_width(width + padding_border.left + padding_border.right);
+                root_context.set_inline_size(width + padding_border.left + padding_border.right);
                 let mut content_context = root_context.sub_context(
                     padding_border.top,
                     [padding_border.left, padding_border.right],
@@ -2551,7 +2452,7 @@ where
                     &atomic_baseline_ascents,
                     &structural_edge_contributions,
                 );
-                alignment_float_height = content_context.floated_content_height_contribution();
+                alignment_float_height = content_context.floated_block_size_contribution();
                 float_height = Some(alignment_float_height);
             }
         } else {
@@ -2926,7 +2827,7 @@ mod tests {
                 width: AvailableSpace::Definite(100.0),
                 height: AvailableSpace::MaxContent,
             },
-            vertical_margins_are_collapsible: Line::TRUE,
+            block_margins_are_collapsible: Line::TRUE,
         };
 
         let first = LayoutBlockContainer::compute_block_child_layout(
@@ -2943,10 +2844,10 @@ mod tests {
         );
 
         assert_eq!(first.size.height, 10.0);
-        assert_eq!(first.top_margin.resolve(), 3.0);
-        assert_eq!(first.bottom_margin.resolve(), 6.0);
-        assert_eq!(second.top_margin, first.top_margin);
-        assert_eq!(second.bottom_margin, first.bottom_margin);
+        assert_eq!(first.block_start_margin.resolve(), 3.0);
+        assert_eq!(first.block_end_margin.resolve(), 6.0);
+        assert_eq!(second.block_start_margin, first.block_start_margin);
+        assert_eq!(second.block_end_margin, first.block_end_margin);
         assert_eq!(
             second.margins_can_collapse_through,
             first.margins_can_collapse_through

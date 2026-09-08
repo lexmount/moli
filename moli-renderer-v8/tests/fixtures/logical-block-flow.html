@@ -1,0 +1,100 @@
+<!doctype html>
+<meta charset="utf-8">
+<style>
+html, body { margin: 0; font-size: 0; background: white; }
+* { box-sizing: border-box; }
+.cell { position: absolute; width: 160px; height: 160px; }
+.scene { display: flow-root; position: relative; inline-size: 120px; block-size: 100px; }
+.item { background: rgb(31, 127, 63); }
+</style>
+<body>
+<script>
+// This fixture is shared by the native screenshot regression and release
+// browser A/B checks. Geometry is read only after an explicit screenshot.
+const logicalBlockChecks = [];
+let sceneCount = 0;
+function addScene(mode, direction, name, style, contents, rectangles) {
+  const cell = document.createElement('div');
+  cell.className = 'cell';
+  cell.style.cssText = 'left:' + (sceneCount % 6 * 180) + 'px;top:' + (Math.floor(sceneCount / 6) * 180) + 'px';
+  const scene = document.createElement('div');
+  scene.className = 'scene';
+  scene.style.cssText = 'writing-mode:' + mode + ';direction:' + direction + ';' + style;
+  scene.innerHTML = contents;
+  cell.append(scene);
+  document.body.append(cell);
+  for (const [selector, inline, block, inlineSize, blockSize] of rectangles) {
+    logicalBlockChecks.push({
+      id: mode + '/' + direction + '/' + name + '/' + selector,
+      scene, element: scene.querySelector(selector), mode, direction,
+      logical: [inline, block, inlineSize, blockSize],
+    });
+  }
+  sceneCount++;
+}
+function item(name, inline, block, extra = '') {
+  return '<div class="item ' + name + '" style="inline-size:' + inline + 'px;block-size:' + block + 'px;' + extra + '"></div>';
+}
+for (const mode of ['horizontal-tb', 'vertical-rl', 'vertical-lr']) {
+  for (const direction of ['ltr', 'rtl']) {
+    const add = (name, style, contents, rectangles) => addScene(mode, direction, name, style, contents, rectangles);
+    add('stack', '', item('a', 20, 30) + item('b', 15, 20), [
+      ['.a', 0, 0, 20, 30], ['.b', 0, 30, 15, 20],
+    ]);
+    add('collapse', '',
+      item('a', 20, 30, 'margin-block:10px 15px') +
+      item('b', 20, 20, 'margin-block:20px -5px') +
+      item('c', 20, 20, 'margin-block-start:-3px'), [
+        ['.a', 0, 10, 20, 30], ['.b', 0, 60, 20, 20], ['.c', 0, 75, 20, 20],
+      ]);
+    add('auto-margins', '', item('a', 40, 20, 'margin:auto'), [['.a', 40, 0, 40, 20]]);
+    add('align-content', 'align-content:center', item('a', 40, 20) + item('b', 30, 10), [
+      ['.a', 0, 35, 40, 20], ['.b', 0, 55, 30, 10],
+    ]);
+    add('relative-insets', '',
+      item('a', 20, 30, 'position:relative;inset-inline:10px 30px;inset-block:7px 20px') + item('b', 15, 10), [
+        ['.a', 10, 7, 20, 30], ['.b', 0, 30, 15, 10],
+      ]);
+    add('percentage-edges', '', item('a', 20, 10, 'box-sizing:content-box;padding:5%;margin:10%'), [
+      ['.a', 12, 12, 32, 22],
+    ]);
+    add('float-clearance', '', item('a', 20, 30, 'float:left') + item('b', 30, 10, 'clear:both'), [
+      ['.a', direction === 'ltr' ? 0 : 100, 0, 20, 30], ['.b', 0, 30, 30, 10],
+    ]);
+    const horizontal = mode === 'horizontal-tb';
+    const orthogonal = horizontal ?
+      'writing-mode:vertical-rl;width:30px;height:20px;margin:7px 50px 2px 40px' :
+      'writing-mode:horizontal-tb;width:20px;height:30px;margin:40px 7px 50px 2px';
+    add('independent-margin-struts', '',
+      '<div class="item a" style="' + orthogonal + '"><div style="width:3px;height:3px"></div></div>' + item('b', 10, 10), [
+        ['.a', direction === 'ltr' ? 40 : 50, mode === 'vertical-lr' ? 2 : 7, 30, 20],
+        ['.b', 0, 29, 10, 10],
+      ]);
+    add('minimum-is-not-definite', 'block-size:auto;min-block-size:100px',
+      item('a', 20, 30, 'position:relative;inset-block-start:50%'), [['.a', 0, 0, 20, 30]]);
+    add('empty-collapsing-strut', '', item('a', 20, 10, 'margin-block-end:20px') +
+      '<div style="block-size:0;margin-block:30px 40px"></div>' + item('b', 20, 10, 'margin-block-start:15px'), [
+        ['.a', 0, 0, 20, 10], ['.b', 0, 50, 20, 10],
+      ]);
+  }
+}
+function collectLogicalBlockChecks() {
+  return logicalBlockChecks.map(({id, scene, element, mode, direction, logical}) => {
+    const [inline, block, inlineSize, blockSize] = logical;
+    const parent = scene.getBoundingClientRect();
+    const rect = element.getBoundingClientRect();
+    const inlinePosition = direction === 'ltr' ? inline : 120 - inline - inlineSize;
+    const expected = mode === 'horizontal-tb' ? [inlinePosition, block, inlineSize, blockSize] :
+      [mode === 'vertical-rl' ? 100 - block - blockSize : block, inlinePosition, blockSize, inlineSize];
+    return {
+      id, expected,
+      actual: [rect.x - parent.x, rect.y - parent.y, rect.width, rect.height],
+      // Sample near block-start to avoid the intentionally overlapping
+      // negative-margin siblings. This also tests final paint coordinates.
+      pixel: mode === 'horizontal-tb' ?
+        [parent.x + expected[0] + expected[2] / 2, parent.y + expected[1] + 2] :
+        [parent.x + expected[0] + (mode === 'vertical-rl' ? expected[2] - 2 : 2), parent.y + expected[1] + expected[3] / 2],
+    };
+  });
+}
+</script>

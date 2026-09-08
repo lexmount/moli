@@ -1,0 +1,114 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>Flex static-position margin boxes across containing blocks</title>
+<link rel="help" href="https://drafts.csswg.org/css-flexbox-1/#abspos-items">
+<style>
+  html, body { margin: 0; padding: 0; }
+  html { overflow: hidden; }
+  .slot { position: absolute; display: flow-root; width: 320px; height: 200px; font: 0/0 sans-serif; }
+  .flex {
+    display: flex;
+    box-sizing: border-box;
+    width: 220px;
+    height: 140px;
+    margin: 10px 0 0 30px;
+    border: 2px solid black;
+    padding: 10px 20px;
+    justify-content: center;
+    align-items: center;
+  }
+  .item { position: absolute; width: 40px; height: 20px; background: rgb(31, 127, 63); }
+</style>
+<body>
+<script>
+  // The flex content box is [52,22,176,116] relative to each slot.
+  // These literal border-box expectations are shared by native and browser
+  // tests. No expected value is derived from the observed child geometry.
+  const cases = [
+    {id:'zero', expected:[120,70,40,20]},
+    {id:'auto-left', item:'margin-left:auto', expected:[120,70,40,20]},
+    {id:'auto-right', item:'margin-right:auto', expected:[120,70,40,20]},
+    {id:'auto-top', item:'margin-top:auto', expected:[120,70,40,20]},
+    {id:'auto-bottom', item:'margin-bottom:auto', expected:[120,70,40,20]},
+    {id:'auto-all', item:'margin:auto', expected:[120,70,40,20]},
+    {id:'auto-and-length', item:'margin-left:auto;margin-right:30px', expected:[105,70,40,20]},
+    {id:'asymmetric', item:'margin:6px 30px 14px 10px', expected:[110,66,40,20]},
+    {id:'negative', item:'margin:-8px -12px 4px -4px', expected:[124,64,40,20]},
+    {id:'negative-margin-box', item:'margin-left:-60px;margin-right:-20px', expected:[100,70,40,20]},
+    {id:'overflow-auto', item:'width:200px;height:140px;margin:auto', expected:[40,10,200,140]},
+    {id:'overflow-asymmetric', item:'width:200px;height:140px;margin:6px 30px 14px 10px', expected:[30,6,200,140]},
+    {id:'cross-safe-auto', flex:'align-items:safe center', item:'height:140px;margin:auto', expected:[120,10,40,140]},
+    {id:'cross-safe-margin-overflow', flex:'align-items:safe center', item:'height:100px;margin:12px 0 20px', expected:[120,26,40,100]},
+    {id:'cross-safe-negative-fits', flex:'align-items:safe center', item:'height:140px;margin:-20px 0', expected:[120,10,40,140]},
+    {id:'cross-safe-wrap-reverse', flex:'flex-wrap:wrap-reverse;align-items:safe center', item:'height:100px;margin:12px 0 20px', expected:[120,26,40,100]},
+    {id:'self-safe-auto', item:'align-self:safe center;height:140px;margin:auto', expected:{ancestor:[120,10,40,140], flex:[120,12,40,140], inline:[120,10,40,140]}},
+    {id:'self-safe-margin-overflow', item:'align-self:safe center;height:100px;margin:20px 0 30px', expected:{ancestor:[120,25,40,100], flex:[120,32,40,100], inline:[120,30,40,100]}},
+    {id:'self-safe-wrap-reverse', flex:'flex-wrap:wrap-reverse', item:'align-self:safe center;height:140px;margin:auto', expected:{ancestor:[120,10,40,140], flex:[120,12,40,140], inline:[120,10,40,140]}},
+    {id:'self-safe-column', flex:'flex-direction:column', item:'align-self:safe center;width:240px;margin:auto', expected:{ancestor:[20,70,240,20], flex:[32,70,240,20], inline:[20,70,240,20]}},
+    {id:'wrap-reverse-flow-start', flex:'flex-wrap:wrap-reverse', item:'align-self:start;margin:6px 30px 14px 10px', expected:[110,28,40,20]},
+    {id:'wrap-reverse-self-start', flex:'flex-wrap:wrap-reverse', item:'align-self:self-start;margin:6px 30px 14px 10px', expected:[110,28,40,20]},
+    // Blink currently preserves the centered main-axis static edge even for
+    // safe center overflow. Cross-axis safety above has a different contract.
+    {id:'main-safe', flex:'justify-content:safe center', item:'width:200px;margin:auto', expected:[40,70,200,20]},
+    {id:'main-safe-reverse', flex:'justify-content:safe center;flex-direction:row-reverse', item:'width:200px;margin:auto', expected:[40,70,200,20]},
+    {id:'main-safe-rtl', flex:'justify-content:safe center;direction:rtl', item:'width:200px;margin:auto', expected:[40,70,200,20]},
+    {id:'reverse-start', flex:'flex-direction:row-reverse;justify-content:start', item:'margin:6px 30px 14px 10px', expected:[62,66,40,20]},
+    {id:'reverse-flex-start', flex:'flex-direction:row-reverse;justify-content:flex-start', item:'margin:6px 30px 14px 10px', expected:[158,66,40,20]},
+    {id:'rtl-flex-start', flex:'direction:rtl;justify-content:flex-start', item:'margin:6px 30px 14px 10px', expected:[158,66,40,20]},
+    {id:'rtl-reverse-flex-start', flex:'direction:rtl;flex-direction:row-reverse;justify-content:flex-start', item:'margin:6px 30px 14px 10px', expected:[62,66,40,20]},
+    {id:'column-reverse-start', flex:'flex-direction:column-reverse;justify-content:start', item:'margin:6px 30px 14px 10px', expected:[110,28,40,20]},
+    {id:'column-reverse-flex-start', flex:'flex-direction:column-reverse;justify-content:flex-start', item:'margin:6px 30px 14px 10px', expected:[110,104,40,20]},
+    {id:'wrap-reverse-start', flex:'flex-wrap:wrap-reverse;align-items:flex-start', item:'margin:6px 30px 14px 10px', expected:[110,104,40,20]},
+    {id:'vertical-start', flex:'writing-mode:vertical-rl;justify-content:flex-start;align-items:flex-start', item:'margin:6px 30px 14px 10px', expected:[158,28,40,20]},
+    {id:'vertical-rtl-start', flex:'writing-mode:vertical-rl;direction:rtl;justify-content:flex-start;align-items:flex-start', item:'margin:6px 30px 14px 10px', expected:[158,104,40,20]},
+    {id:'orthogonal-self-start', flex:'writing-mode:vertical-rl;justify-content:flex-start', item:'writing-mode:horizontal-tb;align-self:self-start;margin:6px 30px 14px 10px', expected:[62,28,40,20]},
+    // Specified insets and percentage margins use the actual containing block,
+    // not the flex content box. Auto margins distribute only with two insets.
+    {id:'one-inset-auto-margin', item:'left:25px;margin:auto', expected:{ancestor:[25,70,40,20], flex:[57,70,40,20], inline:[25,70,40,20]}},
+    {id:'two-insets-auto-margins', item:'left:20px;right:20px;margin:auto', expected:{ancestor:[140,70,40,20], flex:[120,70,40,20], inline:[140,70,40,20]}},
+    {id:'two-insets-mixed-margins', item:'left:20px;right:20px;margin-left:auto;margin-right:30px', expected:{ancestor:[230,70,40,20], flex:[158,70,40,20], inline:[230,70,40,20]}},
+    {id:'percentage-margins', item:'margin-left:12.5%;margin-right:25%', expected:{ancestor:[100,70,40,20], flex:[106.5,70,40,20], inline:[100,70,40,20]}},
+  ];
+  let index = 0;
+  for (const owner of ['ancestor', 'flex', 'inline']) {
+    for (const test of cases) {
+      const slot = document.createElement('div');
+      slot.className = 'slot';
+      slot.style.left = `${(index % 4) * 320}px`;
+      slot.style.top = `${Math.floor(index / 4) * 200}px`;
+      slot.id = `${owner}-${test.id}`;
+      slot.dataset.expected = JSON.stringify(Array.isArray(test.expected) ? test.expected : test.expected[owner]);
+      const flex = document.createElement('div');
+      flex.className = 'flex';
+      flex.style.cssText = test.flex || '';
+      if (owner === 'flex') flex.style.position = 'relative';
+      const item = document.createElement('div');
+      item.className = 'item';
+      item.style.cssText = test.item || '';
+      flex.append(item);
+      if (owner === 'inline') {
+        const inline = document.createElement('span');
+        inline.style.position = 'relative';
+        inline.append(flex);
+        slot.append(inline);
+      } else {
+        slot.append(flex);
+      }
+      document.body.append(slot);
+      index++;
+    }
+  }
+  function collectFlexStaticMarginChecks() {
+    return Array.from(document.querySelectorAll('.slot'), slot => {
+      const origin = slot.getBoundingClientRect();
+      const rect = slot.querySelector('.item').getBoundingClientRect();
+      const expected = JSON.parse(slot.dataset.expected);
+      return {
+        id: slot.id,
+        actual: [rect.x - origin.x, rect.y - origin.y, rect.width, rect.height],
+        expected,
+        pixel: [origin.x + expected[0] + 2, origin.y + expected[1] + 2],
+      };
+    });
+  }
+</script>

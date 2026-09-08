@@ -7,7 +7,7 @@ use std::{fmt::Debug, hash::Hash};
 use parley::{BreakerState, YieldData};
 use taffy::{
     BlockContext, Clear, FloatDirection, LayoutInput, LayoutOutput, LayoutPartialTree, MaybeMath,
-    Point, ResolveOrZero, Size,
+    Point, ResolveOrZero, Size, WritingMode,
 };
 
 use crate::{
@@ -41,7 +41,7 @@ impl MeasuredInlineFloat {
         content_offset: Point<f32>,
     ) -> InlineFloatPlacement {
         let position = block_context.place_floated_box(
-            self.margin_size(),
+            WritingMode::HorizontalTb.to_logical(self.margin_size()),
             min_y,
             self.direction,
             self.clear,
@@ -50,8 +50,8 @@ impl MeasuredInlineFloat {
         InlineFloatPlacement {
             child: self.child,
             location: Point {
-                x: content_offset.x + position.x + self.margin.left,
-                y: content_offset.y + position.y + self.margin.top,
+                x: content_offset.x + position.line_offset + self.margin.left,
+                y: content_offset.y + position.block_offset + self.margin.top,
             },
             output: self.output,
             order: self.order,

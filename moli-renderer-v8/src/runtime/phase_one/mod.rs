@@ -923,7 +923,9 @@ html,body{display:block;margin:0;padding:0}
                 ),
                 (
                     moli_layout::PaintColor::new(123.0 / 255.0, 45.0 / 255.0, 67.0 / 255.0, 1.0),
-                    moli_layout::PaintRect::new(20.0, 1010.0, 20.0, 100.0),
+                    // Chromium inherits the center keyword here, but OOF
+                    // overflow safety comes from the child's align-self.
+                    moli_layout::PaintRect::new(20.0, 1000.0, 20.0, 100.0),
                 ),
             ];
             for (color, expected) in cases {
