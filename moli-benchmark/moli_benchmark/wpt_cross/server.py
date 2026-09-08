@@ -2035,6 +2035,29 @@ def _make_handler(
                 )
                 return
 
+            if path == (
+                "/html/semantics/scripting-1/the-script-element/module/"
+                "dynamic-import/beta/redirect.py"
+            ):
+                params = parse_qs(parsed.query, keep_blank_values=True)
+                try:
+                    status_code = int(params.get("status", ["302"])[0])
+                except ValueError:
+                    status_code = 302
+                location = params.get("location", [""])[0]
+                if not 100 <= status_code <= 599 or any(
+                    character in location for character in "\r\n"
+                ):
+                    self.send_error(400)
+                    return
+                self._send_bytes(
+                    "text/plain; charset=utf-8",
+                    b"",
+                    emit_body=emit_body,
+                    extra_headers=[("Location", location)],
+                    status_code=status_code,
+                )
+                return
             if path in {
                 "/fetch/api/resources/redirect.py",
                 "/common/redirect.py",
