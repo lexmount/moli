@@ -125,11 +125,7 @@ fn worker_timer_callback_from_arg<'s>(
         return Ok(Some(WorkerTimerCallback::webidl_timer(scope, callback)));
     }
 
-    let require_trusted_types_for_script = get_worker_state(scope).is_some_and(|state| {
-        crate::content_security_policy::content_security_policy_requires_trusted_types_for_script(
-            &state.borrow().content_security_policies,
-        )
-    });
+    let requirements = worker_trusted_types_for_script_requirements(scope).unwrap_or_default();
     let sink = match timer_name {
         "setInterval" => "WorkerGlobalScope setInterval",
         _ => "WorkerGlobalScope setTimeout",
@@ -137,9 +133,7 @@ fn worker_timer_callback_from_arg<'s>(
     let Some(source) = crate::context_bootstrap::trusted_script_string_or_type_error(
         scope,
         value,
-        crate::content_security_policy::TrustedTypesForScriptRequirements::enforced_only(
-            require_trusted_types_for_script,
-        ),
+        requirements,
         sink,
         timer_name,
     ) else {

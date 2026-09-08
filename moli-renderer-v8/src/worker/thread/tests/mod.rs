@@ -1533,3 +1533,4 @@ mod modules;
 mod network;
 mod postmessage;
 mod tls;
+mod trusted_types_reporting;
