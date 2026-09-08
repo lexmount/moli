@@ -1,6 +1,6 @@
 use moli_core::page::RendererMainDocumentCommit;
 
-use crate::conn::{CdpConnection, CommandOwnerScope};
+use crate::conn::CdpConnection;
 use crate::domains::activity::{
     ProtocolOutputPayloads, ProtocolOutputProjectionContext, ProtocolOutputSink, ProtocolOutputSlot,
 };
@@ -66,10 +66,7 @@ pub(in crate::domains) async fn project_main_document_commit_async(
         let session_ids = conn.page_event_session_ids_for_owner(owner);
         let mut events = Vec::new();
         for session_id in session_ids {
-            let event_owner = session_id
-                .as_deref()
-                .map(CommandOwnerScope::for_session)
-                .unwrap_or_else(|| owner.clone());
+            let event_owner = owner.for_target_event_session(conn, session_id.as_deref());
             let lifecycle_enabled = conn
                 .target_page_session_state_for_owner(&event_owner)
                 .is_some_and(|state| state.page_lifecycle_events);

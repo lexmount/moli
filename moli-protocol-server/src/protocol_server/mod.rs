@@ -42,7 +42,7 @@ mod cdp_owner;
 mod cdp_socket;
 mod protocol_local_executor;
 mod tcp_options;
-mod webdriver_bidi;
+pub(crate) mod webdriver_bidi;
 mod webdriver_classic;
 mod webdriver_files;
 

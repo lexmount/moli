@@ -302,9 +302,9 @@ fn global_io_stream_id_allocator_rejects_u64_exhaustion() {
 #[should_panic(expected = "internal Runtime command id space exhausted")]
 fn internal_runtime_command_id_allocator_rejects_u64_exhaustion() {
     let mut conn = crate::test_support::connection();
-    conn.next_internal_runtime_command_id = u64::MAX;
+    conn.next_internal_devtools_command_id = u64::MAX;
 
-    let _ = conn.next_internal_runtime_command_id();
+    let _ = conn.next_internal_devtools_command_id();
 }
 
 #[test]

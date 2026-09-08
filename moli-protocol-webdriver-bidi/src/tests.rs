@@ -3856,7 +3856,6 @@ fn script_realm_subscription_plans_runtime_listener_hooks() {
         Some(["TID-1".to_owned()].as_slice())
     );
     assert!(plan.records_runtime_context_ownership());
-    assert!(!plan.runtime_events_enabled());
 
     let subscribe = state.handle_message_with_session_registry(
         json!({
@@ -4057,7 +4056,6 @@ fn runtime_unsubscribe_plans_owned_runtime_listener_cleanup() {
         cleanup_plan.runtime_disabled_contexts(),
         Some(["FRAME-1".to_owned()].as_slice())
     );
-    assert!(!cleanup_plan.runtime_events_disabled());
     assert_eq!(cleanup_plan.network_disabled_contexts(), None);
     assert_eq!(cleanup_plan.file_dialog_opened_disabled_contexts(), None);
 }
@@ -4111,7 +4109,6 @@ fn log_unsubscribe_keeps_runtime_listener_open_for_buffering() {
         &unsubscribe.response,
     );
     assert_eq!(cleanup_plan.runtime_disabled_contexts(), None);
-    assert!(!cleanup_plan.runtime_events_disabled());
 
     let resubscribe_plan = state
         .subscribe_hook_plan_for_params(&json!({
@@ -4142,7 +4139,7 @@ fn runtime_global_unsubscribe_plans_runtime_event_cleanup() {
         .subscribe_hook_plan_for_params(&subscribe_params)
         .expect("global runtime subscribe hook plan");
     assert_eq!(plan.runtime_contexts(), Some([].as_slice()));
-    assert!(plan.runtime_events_enabled());
+    assert!(plan.records_runtime_context_ownership());
 
     let subscribe = state.handle_message_with_session_registry(
         json!({
@@ -4153,7 +4150,7 @@ fn runtime_global_unsubscribe_plans_runtime_event_cleanup() {
         &mut registry,
     );
     assert_eq!(subscribe.response["type"], json!("success"));
-    state.record_bidi_runtime_events_opened();
+    state.record_bidi_runtime_event_source_opened("TID-existing");
     let subscription_id = subscribe.response["result"]["subscription"]
         .as_str()
         .expect("subscription id")
@@ -4177,8 +4174,10 @@ fn runtime_global_unsubscribe_plans_runtime_event_cleanup() {
         Some(&unsubscribe_params),
         &unsubscribe.response,
     );
-    assert!(cleanup_plan.runtime_events_disabled());
-    assert_eq!(cleanup_plan.runtime_disabled_contexts(), None);
+    assert_eq!(
+        cleanup_plan.runtime_disabled_contexts(),
+        Some(["TID-existing".to_owned()].as_slice())
+    );
 }
 
 #[test]
@@ -4201,7 +4200,7 @@ fn runtime_global_unsubscribe_cleans_runtime_listeners_for_new_contexts() {
         .subscribe_hook_plan_for_params(&subscribe_params)
         .expect("global runtime subscribe hook plan");
     assert_eq!(plan.runtime_contexts(), Some([].as_slice()));
-    assert!(plan.runtime_events_enabled());
+    assert!(plan.records_runtime_context_ownership());
 
     let subscribe = state.handle_message_with_session_registry(
         json!({
@@ -4212,7 +4211,6 @@ fn runtime_global_unsubscribe_cleans_runtime_listeners_for_new_contexts() {
         &mut registry,
     );
     assert_eq!(subscribe.response["type"], json!("success"));
-    state.record_bidi_runtime_events_opened();
     let subscription_id = subscribe.response["result"]["subscription"]
         .as_str()
         .expect("subscription id")
@@ -4253,7 +4251,6 @@ fn runtime_global_unsubscribe_cleans_runtime_listeners_for_new_contexts() {
         Some(&unsubscribe_params),
         &unsubscribe.response,
     );
-    assert!(cleanup_plan.runtime_events_disabled());
     assert_eq!(
         cleanup_plan.runtime_disabled_contexts(),
         Some(["TID-1".to_owned()].as_slice())
@@ -4450,7 +4447,6 @@ fn download_unsubscribe_plans_owned_download_event_cleanup() {
 #[test]
 fn session_end_plans_owned_event_source_cleanup() {
     let (mut state, mut registry) = bidi_connection_with_session();
-    state.record_bidi_runtime_events_opened();
     state.record_bidi_runtime_event_source_opened("FRAME-1");
     state.record_bidi_network_event_source_opened("FRAME-1");
     state.record_bidi_file_dialog_opened_source_opened("FRAME-2");
@@ -4476,7 +4472,6 @@ fn session_end_plans_owned_event_source_cleanup() {
         cleanup_plan.runtime_disabled_contexts(),
         Some(["FRAME-1".to_owned()].as_slice())
     );
-    assert!(cleanup_plan.runtime_events_disabled());
     assert_eq!(
         cleanup_plan.network_disabled_contexts(),
         Some(["FRAME-1".to_owned()].as_slice())
@@ -4493,7 +4488,6 @@ fn session_end_plans_owned_event_source_cleanup() {
         &outcome.response,
     );
     assert_eq!(second_cleanup_plan.runtime_disabled_contexts(), None);
-    assert!(!second_cleanup_plan.runtime_events_disabled());
     assert_eq!(second_cleanup_plan.network_disabled_contexts(), None);
     assert_eq!(
         second_cleanup_plan.file_dialog_opened_disabled_contexts(),

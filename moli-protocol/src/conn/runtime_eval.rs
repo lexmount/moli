@@ -1469,10 +1469,10 @@ impl CdpConnection {
         )
     }
 
-    pub(crate) fn next_internal_runtime_command_id(&mut self) -> u64 {
-        let id = self.next_internal_runtime_command_id;
-        self.next_internal_runtime_command_id = self
-            .next_internal_runtime_command_id
+    pub fn next_internal_devtools_command_id(&mut self) -> u64 {
+        let id = self.next_internal_devtools_command_id;
+        self.next_internal_devtools_command_id = self
+            .next_internal_devtools_command_id
             .checked_add(1)
             .expect("internal Runtime command id space exhausted");
         id
@@ -1481,7 +1481,7 @@ impl CdpConnection {
     pub(crate) fn next_bidi_channel_object_group(&mut self) -> String {
         format!(
             "{BIDI_CHANNEL_OBJECT_GROUP_PREFIX}{}",
-            self.next_internal_runtime_command_id()
+            self.next_internal_devtools_command_id()
         )
     }
 
@@ -5744,7 +5744,7 @@ impl CdpConnection {
         owner: &CommandOwnerScope,
         object_group: &str,
     ) {
-        let command_id = self.next_internal_runtime_command_id();
+        let command_id = self.next_internal_devtools_command_id();
         let raw_json = json!({
             "id": command_id,
             "method": "Runtime.releaseObjectGroup",
@@ -5881,7 +5881,7 @@ impl CdpConnection {
             .await;
             return;
         }
-        let command_id = self.next_internal_runtime_command_id();
+        let command_id = self.next_internal_devtools_command_id();
         let raw_json = bidi_channel_listener_call_function_json(command_id, listener);
         let descriptor = match RendererCommandDescriptor::from_synthesized_payload(raw_json) {
             Ok(descriptor) => descriptor,

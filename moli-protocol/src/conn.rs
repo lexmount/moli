@@ -1073,7 +1073,7 @@ pub struct CdpConnection {
     shared_tab_target_id_allocator: Option<Arc<AtomicU64>>,
     next_session_id: u32,
     next_page_domain_subscription_generation: u64,
-    next_internal_runtime_command_id: u64,
+    next_internal_devtools_command_id: u64,
     network_request_id_allocator: ConnectionNetworkRequestIdAllocator,
     // Browser profile, download and global IO state.
     download_policy: moli_core::browser::DownloadPolicy,
@@ -1175,7 +1175,7 @@ impl CdpConnection {
             shared_tab_target_id_allocator: None,
             next_session_id: 0,
             next_page_domain_subscription_generation: 0,
-            next_internal_runtime_command_id: 902_000_000,
+            next_internal_devtools_command_id: 902_000_000,
             network_request_id_allocator: ConnectionNetworkRequestIdAllocator::default(),
             base_browser_identity,
             browser_global_overrides: BrowserGlobalOverrides::default(),
@@ -1715,10 +1715,7 @@ impl CdpConnection {
             slot.retire_javascript_dialog_scope();
         }
         for event_session_id in event_session_ids {
-            let event_owner = event_session_id
-                .as_deref()
-                .map(CommandOwnerScope::for_session)
-                .unwrap_or_else(|| owner.clone());
+            let event_owner = owner.for_target_event_session(self, event_session_id.as_deref());
             let _ = self.with_target_devtools_session_state_for_owner_mut(&event_owner, |state| {
                 state.page_session_state.javascript_dialog_state.clear()
             });
@@ -1950,10 +1947,7 @@ impl CdpConnection {
         };
         let timestamp = monotonic_timestamp_seconds();
         for event_session_id in self.page_event_session_ids_for_owner(owner) {
-            let event_owner = event_session_id
-                .as_deref()
-                .map(CommandOwnerScope::for_session)
-                .unwrap_or_else(|| owner.clone());
+            let event_owner = owner.for_target_event_session(self, event_session_id.as_deref());
             let lifecycle_enabled = self
                 .target_page_session_state_for_owner(&event_owner)
                 .is_some_and(|state| state.page_lifecycle_events);

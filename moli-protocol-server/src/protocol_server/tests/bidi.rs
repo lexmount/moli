@@ -1,6 +1,329 @@
 use super::*;
 
 #[tokio::test]
+async fn bidi_and_cdp_share_agent_host_across_frontend_disconnect() {
+    let (addr, server) = spawn_test_protocol_server().await;
+    let (mut bidi, _) = connect_async(format!("ws://{addr}/session")).await.unwrap();
+    let session = send_bidi_command_response(&mut bidi, 1, "session.new", json!({})).await;
+    assert_eq!(session["type"], "success");
+    let created = send_bidi_command_response(
+        &mut bidi,
+        2,
+        "browsingContext.create",
+        json!({"type": "tab"}),
+    )
+    .await;
+    let target = created["result"]["context"].as_str().unwrap().to_owned();
+    let (mut cdp, _) = connect_async(format!("ws://{addr}/devtools/browser/{DEFAULT_BROWSER_ID}"))
+        .await
+        .unwrap();
+    let targets = send_cdp_command(&mut cdp, 1, "Target.getTargets", None, json!({})).await;
+    assert!(
+        bidi_message_by_id(&targets, 1)["result"]["targetInfos"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|info| info["targetId"] == target),
+        "BiDi page must belong to the shared AgentHost registry: {targets:?}"
+    );
+    let attached = send_cdp_command(
+        &mut cdp,
+        2,
+        "Target.attachToTarget",
+        None,
+        json!({"targetId": target, "flatten": true}),
+    )
+    .await;
+    let sid = bidi_message_by_id(&attached, 2)["result"]["sessionId"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let marker = send_cdp_command(
+        &mut cdp,
+        3,
+        "Runtime.evaluate",
+        Some(&sid),
+        json!({"expression": "globalThis.sharedPageMarker = 41"}),
+    )
+    .await;
+    assert_eq!(
+        bidi_message_by_id(&marker, 3)["result"]["result"]["value"],
+        41
+    );
+    let observed = send_bidi_command_response(&mut bidi, 3, "script.evaluate", json!({
+        "expression": "sharedPageMarker + 1", "target": {"context": target}, "awaitPromise": false,
+    })).await;
+    assert_eq!(observed["result"]["result"]["value"], 42, "{observed:?}");
+    let subscribed = send_bidi_command_response(
+        &mut bidi,
+        4,
+        "session.subscribe",
+        json!({"events": ["browsingContext.load"], "contexts": [target]}),
+    )
+    .await;
+    assert_eq!(subscribed["type"], "success");
+    let url = classic_data_url_for_bidi_test(
+        "<title>shared navigation</title><script>globalThis.sharedPageMarker = 73</script>",
+    );
+    let navigated = send_cdp_command(
+        &mut cdp,
+        4,
+        "Page.navigate",
+        Some(&sid),
+        json!({"url": url}),
+    )
+    .await;
+    assert!(
+        bidi_message_by_id(&navigated, 4)["result"]["loaderId"].is_string(),
+        "{navigated:?}"
+    );
+    recv_until_match(&mut bidi, |event| {
+        event["method"] == "browsingContext.load"
+            && event["params"]["context"] == target
+            && event["params"]["url"] == url
+    })
+    .await;
+    let observed = send_bidi_command_response(
+        &mut bidi,
+        5,
+        "script.evaluate",
+        json!({
+            "expression": "document.title", "target": {"context": target}, "awaitPromise": false,
+        }),
+    )
+    .await;
+    assert_eq!(
+        observed["result"]["result"]["value"], "shared navigation",
+        "{observed:?}"
+    );
+    bidi.close(None).await.unwrap();
+    cdp.close(None).await.unwrap();
+    let (mut reconnected, _) = connect_async(format!("ws://{addr}/devtools/page/{target}"))
+        .await
+        .unwrap();
+    let marker = send_cdp_command(
+        &mut reconnected,
+        1,
+        "Runtime.evaluate",
+        None,
+        json!({"expression": "sharedPageMarker"}),
+    )
+    .await;
+    assert_eq!(
+        bidi_message_by_id(&marker, 1)["result"]["result"]["value"],
+        73
+    );
+    reconnected.close(None).await.unwrap();
+    let (mut browser, _) =
+        connect_async(format!("ws://{addr}/devtools/browser/{DEFAULT_BROWSER_ID}"))
+            .await
+            .unwrap();
+    let closed = send_cdp_command(
+        &mut browser,
+        1,
+        "Target.closeTarget",
+        None,
+        json!({"targetId": target}),
+    )
+    .await;
+    assert_eq!(bidi_message_by_id(&closed, 1)["result"]["success"], true);
+    let targets = send_cdp_command(&mut browser, 2, "Target.getTargets", None, json!({})).await;
+    assert!(
+        bidi_message_by_id(&targets, 2)["result"]["targetInfos"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|info| info["targetId"] != target)
+    );
+    browser.close(None).await.unwrap();
+    abort_test_cdp_server(server).await;
+}
+
+#[tokio::test]
+async fn bidi_shared_subscriptions_survive_peer_disconnect_and_cdp_observation() {
+    assert_bidi_shared_subscriptions_survive_peer_disconnect(false).await;
+}
+
+#[tokio::test]
+async fn bidi_global_subscription_survives_scoped_peer_disconnect() {
+    assert_bidi_shared_subscriptions_survive_peer_disconnect(true).await;
+}
+
+async fn assert_bidi_shared_subscriptions_survive_peer_disconnect(global_peer: bool) {
+    let (addr, server) = spawn_test_protocol_server().await;
+    let (mut first, target) = bidi_session_with_context(addr).await;
+    let (mut second, _) = connect_async(format!("ws://{addr}/session")).await.unwrap();
+    let session = send_bidi_command_response(&mut second, 1, "session.new", json!({})).await;
+    assert_eq!(session["type"], "success");
+    for (index, socket) in [&mut first, &mut second].into_iter().enumerate() {
+        let params = if global_peer && index == 1 {
+            json!({"events": ["log.entryAdded"]})
+        } else {
+            json!({"events": ["log.entryAdded"], "contexts": [target]})
+        };
+        let subscribed = send_bidi_command_response(socket, 3, "session.subscribe", params).await;
+        assert_eq!(subscribed["type"], "success", "{subscribed:?}");
+    }
+    let (mut cdp, _) = connect_async(format!("ws://{addr}/devtools/page/{target}"))
+        .await
+        .unwrap();
+    send_cdp_command(&mut cdp, 1, "Runtime.enable", None, json!({})).await;
+    send_cdp_command(
+        &mut cdp,
+        2,
+        "Runtime.evaluate",
+        None,
+        json!({"expression": "console.log('both-frontends')"}),
+    )
+    .await;
+    for socket in [&mut first, &mut second] {
+        recv_until_match(socket, |event| {
+            event["method"] == "log.entryAdded" && event["params"]["text"] == "both-frontends"
+        })
+        .await;
+    }
+    let ended = send_bidi_command_response(&mut first, 4, "session.end", json!({})).await;
+    assert_eq!(ended["type"], "success");
+    let closed = timeout(Duration::from_secs(2), first.next()).await.unwrap();
+    assert!(matches!(closed, Some(Ok(WsMessage::Close(_))) | None));
+    send_cdp_command(
+        &mut cdp,
+        3,
+        "Runtime.evaluate",
+        None,
+        json!({"expression": "console.log('surviving-frontend')"}),
+    )
+    .await;
+    recv_until_match(&mut second, |event| {
+        event["method"] == "log.entryAdded" && event["params"]["text"] == "surviving-frontend"
+    })
+    .await;
+    second.close(None).await.unwrap();
+    cdp.close(None).await.unwrap();
+    abort_test_cdp_server(server).await;
+}
+
+#[tokio::test]
+async fn bidi_parser_wait_can_be_closed_from_browser_cdp() {
+    let (addr, server) = spawn_test_protocol_server().await;
+    let (mut bidi, target) = bidi_session_with_context(addr).await;
+    let (url, held_request) = held_document_fixture(true).await;
+    bidi.send(WsMessage::Text(
+        json!({"id": 10, "method": "browsingContext.navigate",
+        "params": {"context": target, "url": url, "wait": "complete"}})
+        .to_string()
+        .into(),
+    ))
+    .await
+    .unwrap();
+    let mut stream = timeout(Duration::from_secs(3), held_request)
+        .await
+        .unwrap()
+        .unwrap();
+    let (mut cdp, _) = connect_async(format!("ws://{addr}/devtools/browser/{DEFAULT_BROWSER_ID}"))
+        .await
+        .unwrap();
+    let closed = send_cdp_command(
+        &mut cdp,
+        1,
+        "Target.closeTarget",
+        None,
+        json!({"targetId": target}),
+    )
+    .await;
+    assert_eq!(bidi_message_by_id(&closed, 1)["result"]["success"], true);
+    let reply = recv_until_id(&mut bidi, 10).await;
+    assert_eq!(bidi_message_by_id(&reply, 10)["type"], "error", "{reply:?}");
+    let mut byte = [0];
+    assert_eq!(
+        timeout(Duration::from_secs(3), stream.read(&mut byte))
+            .await
+            .unwrap()
+            .unwrap(),
+        0
+    );
+    bidi.close(None).await.unwrap();
+    cdp.close(None).await.unwrap();
+    abort_test_cdp_server(server).await;
+}
+
+#[tokio::test]
+async fn bidi_shared_frontends_isolate_reused_async_command_ids() {
+    let (addr, server) = spawn_test_protocol_server().await;
+    let (mut first, target) = bidi_session_with_context(addr).await;
+    let (mut second, _) = connect_async(format!("ws://{addr}/session")).await.unwrap();
+    assert_eq!(
+        send_bidi_command_response(&mut second, 1, "session.new", json!({})).await["type"],
+        "success"
+    );
+    for (socket, resolver) in [
+        (&mut first, "resolveFirstFrontend"),
+        (&mut second, "resolveSecondFrontend"),
+    ] {
+        socket.send(WsMessage::Text(json!({
+            "id": 77, "method": "script.evaluate", "params": {
+                "expression": format!("new Promise(resolve => globalThis.{resolver} = resolve)"),
+                "target": {"context": target}, "awaitPromise": true,
+            }
+        }).to_string().into())).await.unwrap();
+        let admitted = send_bidi_command_response(socket, 78, "session.status", json!({})).await;
+        assert_eq!(admitted["type"], "success");
+    }
+    let (mut cdp, _) = connect_async(format!("ws://{addr}/devtools/page/{target}"))
+        .await
+        .unwrap();
+    let resolved = send_cdp_command(
+        &mut cdp,
+        1,
+        "Runtime.evaluate",
+        None,
+        json!({"expression": "resolveSecondFrontend(222); true"}),
+    )
+    .await;
+    assert_eq!(
+        bidi_message_by_id(&resolved, 1)["result"]["result"]["value"],
+        true
+    );
+    let second_reply = recv_until_id(&mut second, 77).await;
+    assert_eq!(
+        bidi_message_by_id(&second_reply, 77)["result"]["result"]["value"],
+        222,
+        "{second_reply:?}"
+    );
+    first
+        .send(WsMessage::Text(
+            json!({"id": 79, "method": "session.status", "params": {}})
+                .to_string()
+                .into(),
+        ))
+        .await
+        .unwrap();
+    let barrier = recv_until_id(&mut first, 79).await;
+    assert!(
+        barrier.iter().all(|message| message["id"] != 77),
+        "another frontend's completion must not consume this command: {barrier:?}"
+    );
+    send_cdp_command(
+        &mut cdp,
+        2,
+        "Runtime.evaluate",
+        None,
+        json!({"expression": "resolveFirstFrontend(111)"}),
+    )
+    .await;
+    let first_reply = recv_until_id(&mut first, 77).await;
+    assert_eq!(
+        bidi_message_by_id(&first_reply, 77)["result"]["result"]["value"],
+        111,
+        "{first_reply:?}"
+    );
+    first.close(None).await.unwrap();
+    second.close(None).await.unwrap();
+    cdp.close(None).await.unwrap();
+    abort_test_cdp_server(server).await;
+}
+
+#[tokio::test]
 async fn classic_http_navigation_releases_bidi_while_waiting_for_response() {
     assert_classic_navigation_releases_bidi(false, HeldClassicNavigation::Complete).await;
 }

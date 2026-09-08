@@ -1,5 +1,5 @@
 use std::{
-    collections::{HashMap, VecDeque},
+    collections::{HashMap, HashSet, VecDeque},
     sync::{Arc, atomic::AtomicU64},
     time::{Duration, Instant},
 };
@@ -27,6 +27,7 @@ use moli_protocol::{
         DevToolsCommand, DevToolsCommandResult, DevToolsError, DevToolsNavigationWait,
     },
 };
+#[cfg(test)]
 use serde_json::Value;
 use tokio::sync::mpsc;
 use tokio::time::Instant as TokioInstant;
@@ -38,6 +39,7 @@ mod adapter_scheduler;
 mod browser_events;
 mod command_dispatch;
 mod frontend_control;
+mod frontend_output;
 mod navigation_dispatch;
 mod protocol_residence;
 mod renderer_command_response_order;
@@ -49,6 +51,8 @@ pub(crate) use adapter_scheduler::{
 };
 pub(crate) use command_dispatch::{CommandDispatchState, CommandTurnOutput};
 pub(crate) use frontend_control::{CdpCookieSnapshot, CdpOwnerActorLifecycle};
+pub(crate) use frontend_output::DevToolsFrontendOutput;
+use frontend_output::{BidiEventSource, BidiFrontendTurn};
 pub(crate) use navigation_dispatch::{
     CompletedDevToolsNavigationExecution, DevToolsNavigationCommandProgress,
     DevToolsNavigationCommandWait, DevToolsNavigationReplyWait, PendingDevToolsNavigationLifecycle,
@@ -123,6 +127,11 @@ pub(crate) struct CdpScheduler {
     queues: SchedulerQueues,
     page_screencasts: HashMap<Option<String>, PageScreencastSchedule>,
     detached_navigations: FuturesUnordered<DevToolsNavigationCommandWait>,
+    frontend_output_tx: Option<mpsc::UnboundedSender<DevToolsFrontendOutput>>,
+    bidi_frontend_turn: Option<BidiFrontendTurn>,
+    bidi_sessions: HashMap<String, u64>,
+    bidi_event_sources: HashMap<BidiEventSource, HashSet<u64>>,
+    bidi_initial_target_discovery: Option<bool>,
 }
 
 #[derive(Clone, Copy)]
@@ -730,6 +739,11 @@ impl CdpScheduler {
             queues: SchedulerQueues::default(),
             page_screencasts: HashMap::new(),
             detached_navigations: FuturesUnordered::new(),
+            frontend_output_tx: None,
+            bidi_frontend_turn: None,
+            bidi_sessions: HashMap::new(),
+            bidi_event_sources: HashMap::new(),
+            bidi_initial_target_discovery: None,
         }
     }
 
@@ -1048,6 +1062,7 @@ impl CdpScheduler {
         }
     }
 
+    #[cfg(test)]
     pub(crate) async fn execute_internal_protocol_message(
         &mut self,
         receivers: &mut CdpSchedulerEventReceivers,
@@ -1062,35 +1077,53 @@ impl CdpScheduler {
     }
 
     pub(crate) fn enable_network_listener_for_target(&mut self, target_id: &str) -> bool {
-        self.conn.enable_network_listener_for_target(target_id)
+        let enabled = self.conn.enable_network_listener_for_target(target_id);
+        if enabled {
+            self.retain_bidi_event_source(BidiEventSource::Network(target_id.to_owned()));
+        }
+        enabled
     }
 
     pub(crate) fn disable_network_listener_for_target(&mut self, target_id: &str) -> bool {
-        self.conn.disable_network_listener_for_target(target_id)
+        !self.release_bidi_event_source(&BidiEventSource::Network(target_id.to_owned()))
+            || self.conn.disable_network_listener_for_target(target_id)
     }
 
     pub(crate) fn enable_file_dialog_opened_listener_for_target(
         &mut self,
         target_id: &str,
     ) -> bool {
-        self.conn
-            .enable_file_dialog_opened_listener_for_target(target_id)
+        let enabled = self
+            .conn
+            .enable_file_dialog_opened_listener_for_target(target_id);
+        if enabled {
+            self.retain_bidi_event_source(BidiEventSource::FileDialog(target_id.to_owned()));
+        }
+        enabled
     }
 
     pub(crate) fn disable_file_dialog_opened_listener_for_target(
         &mut self,
         target_id: &str,
     ) -> bool {
-        self.conn
-            .disable_file_dialog_opened_listener_for_target(target_id)
+        !self.release_bidi_event_source(&BidiEventSource::FileDialog(target_id.to_owned()))
+            || self
+                .conn
+                .disable_file_dialog_opened_listener_for_target(target_id)
     }
 
     pub(crate) fn enable_webdriver_bidi_download_events(&mut self) -> bool {
-        self.conn.enable_webdriver_bidi_download_events()
+        let enabled = self.conn.enable_webdriver_bidi_download_events();
+        if enabled || self.bidi_frontend_turn.is_some() {
+            self.retain_bidi_event_source(BidiEventSource::Download);
+            return true;
+        }
+        false
     }
 
     pub(crate) fn disable_webdriver_bidi_download_events(&mut self) -> bool {
-        self.conn.disable_webdriver_bidi_download_events()
+        !self.release_bidi_event_source(&BidiEventSource::Download)
+            || self.conn.disable_webdriver_bidi_download_events()
     }
 
     pub(crate) fn worker_target_id_for_session(&self, session_id: Option<&str>) -> Option<String> {
@@ -1109,6 +1142,7 @@ impl CdpScheduler {
         else {
             return Ok(ProtocolOutputSequence::empty());
         };
+        self.retain_bidi_event_source(BidiEventSource::Runtime(target_id.to_owned()));
         self.apply_renderer_owner_turn_outcome(receivers, outcome)
             .await
     }
@@ -1118,6 +1152,9 @@ impl CdpScheduler {
         receivers: &mut CdpSchedulerEventReceivers,
         target_id: &str,
     ) -> Result<ProtocolOutputSequence, RendererOutputTransportFailure> {
+        if !self.release_bidi_event_source(&BidiEventSource::Runtime(target_id.to_owned())) {
+            return Ok(ProtocolOutputSequence::empty());
+        }
         let Some(outcome) = self
             .conn
             .disable_runtime_listener_for_target(target_id)
@@ -1130,7 +1167,26 @@ impl CdpScheduler {
     }
 
     pub(crate) fn replace_target_discovery_enabled(&mut self, enabled: bool) -> bool {
-        self.conn.replace_root_target_discovery_enabled(enabled)
+        let Some(frontend) = self.bidi_frontend_turn else {
+            return self.conn.replace_root_target_discovery_enabled(enabled);
+        };
+        let source = BidiEventSource::TargetDiscovery;
+        let previous = self
+            .bidi_event_sources
+            .get(&source)
+            .is_some_and(|owners| owners.contains(&frontend.id));
+        if enabled {
+            if !self.bidi_event_sources.contains_key(&source) {
+                self.bidi_initial_target_discovery =
+                    Some(self.conn.replace_root_target_discovery_enabled(true));
+            }
+            self.retain_bidi_event_source(source);
+        } else if self.release_bidi_event_source(&source)
+            && let Some(initial) = self.bidi_initial_target_discovery.take()
+        {
+            self.conn.replace_root_target_discovery_enabled(initial);
+        }
+        previous
     }
 
     pub(crate) async fn execute_devtools_command_with_external_load_wait(

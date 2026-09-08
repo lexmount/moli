@@ -539,10 +539,7 @@ pub(super) async fn complete_crash_command_dispatch(
     let target_inspector_session_ids = conn.page_event_session_ids_for_owner(owner);
     let mut pending_await_events = Vec::new();
     for inspector_session_id in &target_inspector_session_ids {
-        let inspector_owner = inspector_session_id
-            .as_deref()
-            .map(CommandOwnerScope::for_session)
-            .unwrap_or_else(|| owner.clone());
+        let inspector_owner = owner.for_target_event_session(conn, inspector_session_id.as_deref());
         conn.fail_pending_inspector_awaits_for_owner_background_events_into(
             &mut pending_await_events,
             command_context.protocol_events_mut(),
@@ -590,10 +587,7 @@ async fn mark_page_target_crashed_background_events_async(
 ) -> Vec<BackgroundProtocolEvent> {
     let inspector_session_ids = conn.page_event_session_ids_for_owner(owner);
     for inspector_session_id in &inspector_session_ids {
-        let inspector_owner = inspector_session_id
-            .as_deref()
-            .map(CommandOwnerScope::for_session)
-            .unwrap_or_else(|| owner.clone());
+        let inspector_owner = owner.for_target_event_session(conn, inspector_session_id.as_deref());
         let _ = conn.with_target_devtools_session_state_for_owner_mut(&inspector_owner, |state| {
             state
                 .runtime_session_state
