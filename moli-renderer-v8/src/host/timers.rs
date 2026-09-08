@@ -18,7 +18,8 @@ use crate::{
     page_task_queue::RendererPageTimerSelection,
     script_provenance::CompiledStringProvenance,
     util::{
-        context_host_ptr_from_global_bridge, create_script_origin_with_base_url, get_private_value,
+        context_host_ptr_from_global_bridge, create_script_origin_with_base_url_and_nonce,
+        get_private_value, script_nonce_from_host_defined_options,
     },
 };
 use moli_time::{
@@ -44,6 +45,8 @@ struct ScheduledTimerSource {
     use_target_context: bool,
     source: String,
     provenance: CompiledStringProvenance,
+    // A snapshot of the initiating script, not the eventual timer caller/realm.
+    script_nonce: Option<String>,
 }
 
 struct ScheduledTimerFunction {
@@ -493,6 +496,9 @@ impl HostTimeoutScheduler {
         owner: HostTimerOwner,
         extra_args: Vec<v8::Global<v8::Value>>,
     ) -> u32 {
+        let script_nonce = scope
+            .get_current_host_defined_options()
+            .and_then(|options| script_nonce_from_host_defined_options(scope, options));
         let Some(owner) = scheduled_timer_owner_for_target(scope, owner, Some(receiver), context)
         else {
             return 0;
@@ -519,6 +525,7 @@ impl HostTimeoutScheduler {
                         use_target_context,
                         source,
                         provenance,
+                        script_nonce,
                     }),
                     owner,
                     is_interval: false,
@@ -541,6 +548,9 @@ impl HostTimeoutScheduler {
         owner: HostTimerOwner,
         extra_args: Vec<v8::Global<v8::Value>>,
     ) -> u32 {
+        let script_nonce = scope
+            .get_current_host_defined_options()
+            .and_then(|options| script_nonce_from_host_defined_options(scope, options));
         let Some(owner) = scheduled_timer_owner_for_target(scope, owner, Some(receiver), context)
         else {
             return 0;
@@ -567,6 +577,7 @@ impl HostTimeoutScheduler {
                         use_target_context,
                         source,
                         provenance,
+                        script_nonce,
                     }),
                     owner,
                     is_interval: true,
@@ -1268,11 +1279,12 @@ fn run_window_timer_source(
             exception: None,
         }));
     };
-    let origin = create_script_origin_with_base_url(
+    let origin = create_script_origin_with_base_url_and_nonce(
         &mut scope,
         source.provenance.source_url().as_str(),
         0,
         Some(source.provenance.module_base_url()),
+        source.script_nonce.as_deref(),
     );
     let Some(script) = v8::Script::compile(&scope, source_value, Some(&origin)) else {
         let exception = scope.exception();

@@ -6454,6 +6454,8 @@ html/semantics/scripting-1/the-script-element/module/dynamic-import/string-compi
 html/semantics/scripting-1/the-script-element/module/dynamic-import/string-compilation-base-url-inline-module.html
 html/semantics/scripting-1/the-script-element/module/dynamic-import/string-compilation-classic.html
 html/semantics/scripting-1/the-script-element/module/dynamic-import/string-compilation-module.html
+html/semantics/scripting-1/the-script-element/module/dynamic-import/string-compilation-nonce-classic.html
+html/semantics/scripting-1/the-script-element/module/dynamic-import/string-compilation-nonce-module.html
 html/semantics/scripting-1/the-script-element/module/dynamic-import/string-compilation-of-promise-result.html
 html/semantics/scripting-1/the-script-element/module/dynamic-import/string-compilation-other-document.html
 html/semantics/scripting-1/the-script-element/module/dynamic-import/v8-code-cache.html
