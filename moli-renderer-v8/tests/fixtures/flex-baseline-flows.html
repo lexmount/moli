@@ -13,7 +13,7 @@ html { overflow:hidden; }
 <script>
 // Literal Chromium 145 rectangle expectations; no expected coordinate depends
 // on measured Moli geometry. Slots do not overlap, including overflow.
-const cases = [
+const firstCases = [
   {"id":"horizontal-tb/ltr/row/wrap","children":[[0,0,50,50],[50,0,30,50],[0,50,40,70],[40,100,50,20]]},
   {"id":"horizontal-tb/ltr/row/wrap-reverse","children":[[0,50,50,50],[50,50,30,50],[0,-20,40,70],[40,30,50,20]]},
   {"id":"horizontal-tb/ltr/column/wrap","children":[[0,0,50,50],[0,50,30,50],[50,0,40,70],[50,70,50,20]]},
@@ -95,10 +95,16 @@ const cases = [
   {"id":"sideways-lr/rtl/column-reverse/wrap","children":[[50,0,50,50],[20,0,30,50],[60,50,40,70],[10,50,50,20]]},
   {"id":"sideways-lr/rtl/column-reverse/wrap-reverse","children":[[50,50,50,50],[20,50,30,50],[60,-20,40,70],[10,-20,50,20]]}
 ];
-cases.push(
-  {id:'vertical-rl/ltr/row/wrap/sideways-text', textOrientation:'sideways', sizes:[[40,30],[20,30]], children:[[60,0,40,30],[60,30,20,30]]},
-  {id:'vertical-rl/ltr/row/wrap/upright-text', textOrientation:'upright', sizes:[[40,30],[20,30]], children:[[60,0,40,30],[70,30,20,30]]}
+firstCases.push(
+  {id:'vertical-rl/ltr/row/wrap/sideways-text', textOrientation:'sideways', sizes:[[40,30],[20,30]], children:[[60,0,40,30],[60,30,20,30]], lastChildren:[[0,0,40,30],[0,30,20,30]]},
+  {id:'vertical-rl/ltr/row/wrap/upright-text', textOrientation:'upright', sizes:[[40,30],[20,30]], children:[[60,0,40,30],[70,30,20,30]], lastChildren:[[0,0,40,30],[10,30,20,30]]}
 );
+// Chromium gives the filled-line matrix above identical geometry for either
+// preference. The partially filled orientation cases exercise opposite edges.
+const cases = ['baseline','last baseline'].flatMap(alignment => firstCases.map(test => ({
+  ...test, alignment, id:test.id+(alignment==='baseline'?'':'/last'),
+  children:alignment==='baseline'?test.children:(test.lastChildren||test.children)
+})));
 const colors = [[31,127,63,255],[191,47,31,255],[47,79,191,255],[159,63,159,255]];
 for (const [index,test] of cases.entries()) {
   const [mode,direction,flexDirection,wrap] = test.id.split('/');
@@ -109,6 +115,7 @@ for (const [index,test] of cases.entries()) {
   const flex = document.createElement('div');
   flex.className = 'flex';
   flex.style.cssText = 'writing-mode:'+mode+';direction:'+direction+';flex-direction:'+flexDirection+';flex-wrap:'+wrap;
+  flex.style.alignItems = test.alignment;
   if (test.textOrientation) flex.style.textOrientation = test.textOrientation;
   for (const [i,[width,height]] of (test.sizes || [[50,50],[30,50],[40,70],[50,20]]).entries()) {
     const child = document.createElement('div');

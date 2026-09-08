@@ -202,7 +202,7 @@ impl FlexCrossAxisStaticContext {
         let wrap_reverse = self.flex_wrap == FlexWrap::WrapReverse;
         let edge = match keyword {
             AlignItemsKeyword::Center => LogicalStaticEdge::Center,
-            AlignItemsKeyword::End => LogicalStaticEdge::End,
+            AlignItemsKeyword::End | AlignItemsKeyword::LastBaseline => LogicalStaticEdge::End,
             AlignItemsKeyword::SelfStart | AlignItemsKeyword::SelfEnd => {
                 let starts_match = self
                     .child_writing_mode
@@ -254,7 +254,9 @@ pub(crate) fn grid_static_alignment(
         };
         let edge = match alignment.keyword() {
             AlignItemsKeyword::Center => LogicalStaticEdge::Center,
-            AlignItemsKeyword::End | AlignItemsKeyword::FlexEnd => LogicalStaticEdge::End,
+            AlignItemsKeyword::End
+            | AlignItemsKeyword::FlexEnd
+            | AlignItemsKeyword::LastBaseline => LogicalStaticEdge::End,
             AlignItemsKeyword::SelfStart | AlignItemsKeyword::SelfEnd => {
                 let starts_match = child
                     .writing_mode()
@@ -307,7 +309,7 @@ fn grid_item_alignment(
             ),
             _ => flags,
         };
-        stylo_taffy::convert::item_alignment(flags)
+        crate::style::taffy_item_alignment(flags)
     };
     let child_alignment = child.computed.as_ref().map_or_else(
         || match axis {

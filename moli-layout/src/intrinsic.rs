@@ -74,6 +74,16 @@ where
         inputs: LayoutInput,
         horizontal_margin: f32,
     ) -> LayoutOutput {
+        // The parent line needs the child's baseline even during intrinsic
+        // sizing. ComputeSize may legitimately return only a size for fixed
+        // dimensions; that would turn a real inline-block baseline into a
+        // synthesized one and change the parent's line height. Request a
+        // fragment, as flex/grid do for their baseline measurements. The
+        // fit-content probes below remain size-only intrinsic requests.
+        let inputs = LayoutInput {
+            run_mode: RunMode::PerformLayout,
+            ..inputs
+        };
         let layout_box = &self.boxes[child.index()];
         let uses_fit_content = !layout_box.is_replaced()
             && layout_box.style.taffy.size.width.is_auto()

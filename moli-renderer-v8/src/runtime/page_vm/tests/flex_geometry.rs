@@ -1,12 +1,23 @@
 use super::*;
 
 #[tokio::test(flavor = "current_thread")]
+async fn screenshot_resolves_first_and_last_baseline_groups_in_flex_and_grid() {
+    assert_flex_geometry_fixture(
+        include_str!("../../../../tests/fixtures/baseline-preference.html"),
+        "collectFlexBaselineChecks()",
+        148,
+        1320,
+    )
+    .await;
+}
+
+#[tokio::test(flavor = "current_thread")]
 async fn screenshot_resolves_flex_baselines_across_logical_flows() {
     assert_flex_geometry_fixture(
         include_str!("../../../../tests/fixtures/flex-baseline-flows.html"),
         "collectFlexBaselineChecks()",
-        324,
-        1980,
+        648,
+        3780,
     )
     .await;
 }

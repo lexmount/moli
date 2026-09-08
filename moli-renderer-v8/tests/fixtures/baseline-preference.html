@@ -1,0 +1,123 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>First and last baseline groups use final fragments, not used margins</title>
+<link rel="help" href="https://drafts.csswg.org/css-align-3/#baseline-values">
+<link rel="help" href="https://drafts.csswg.org/css-grid-2/#algo-baseline">
+<style>
+html,body { margin:0; padding:0; font:0/0 monospace; }
+html { overflow:hidden; }
+.target { position:absolute; width:120px; grid-template-columns:repeat(3,40px); }
+.item { width:40px; flex:none; }
+span { display:inline-block; width:10px; }
+</style>
+<body>
+<script>
+// Independent numeric expectations: two lines at baseline offsets 10/30 and
+// 20/50, with fixed border-box heights 80/60. No installed font is involved.
+const definitions = [
+  {id:'first-fixed', align:'baseline', height:150, y:[10,0]},
+  {id:'last-fixed', align:'last baseline', height:150, y:[70,50]},
+  {id:'first-auto', align:'first baseline', height:90, auto:true, y:[10,0]},
+  {id:'last-auto', align:'last baseline', height:100, auto:true, y:[20,0]},
+  {id:'mixed-fixed', align:'baseline', height:150, styles:['','align-self:last baseline'], y:[0,90]},
+  {id:'mixed-auto', align:'baseline', height:80, auto:true, styles:['','align-self:last baseline'], y:[0,20]},
+  {id:'first-nonparticipant', align:'baseline', height:120, auto:true, styles:['','','align-self:start'], y:[10,0,0]},
+  {id:'last-nonparticipant', align:'last baseline', height:120, auto:true, styles:['','','align-self:start'], y:[40,20,0]},
+  {id:'first-auto-margin', align:'baseline', height:150, styles:['margin-top:auto'], y:[70,0]},
+  {id:'last-asymmetric-margins', align:'last baseline', height:150, styles:['margin:5px 0 7px','margin:11px 0 13px'], y:[63,43]},
+  {id:'last-negative-margins', align:'last baseline', height:150, styles:['margin:-10px 0 -5px','margin:-4px 0 -3px'], y:[75,55]},
+  {id:'last-relative', align:'last baseline', height:150, styles:['position:relative;top:10px'], y:[80,50]},
+  // Abspos children cannot join a baseline-sharing group. Their static
+  // position uses the first/last preference's start/end fallback instead.
+  {id:'first-absolute-fallback', align:'first baseline', height:150,
+   styles:['position:absolute;left:0','position:absolute;left:40px'], y:[0,0]},
+  {id:'last-absolute-fallback', align:'last baseline', height:150,
+   styles:['position:absolute;left:0','position:absolute;left:40px'], y:[70,90]}
+];
+const cases = ['flex','grid'].flatMap(display => definitions.map(test => ({...test, display})));
+cases.push(
+  {id:'last-spanning-track', display:'grid', align:'last baseline', auto:true, height:200, rows:'80px auto',
+   styles:['grid-row:1/3','grid-row:2/3'], sizes:[100,60], y:[100,80]},
+  {id:'first-spanning-track', display:'grid', align:'baseline', auto:true, height:110, rows:'80px auto',
+   styles:['grid-row:1/3','grid-row:1/2'], sizes:[100,60], y:[10,0]},
+  ...[
+    {id:'first-final-wrapping', align:'baseline', height:60, y:[10,0]},
+    {id:'last-final-wrapping', align:'last baseline', height:70, y:[0,10]}
+  ].map(test => ({...test, display:'grid', auto:true, columns:'60px 60px', wrapped:true,
+    styles:['display:flex;flex-wrap:wrap;align-items:flex-start;width:auto;height:auto','width:60px'],
+    sizes:[50,60], widths:[60,60], x:[0,60]})),
+  ...[
+    {id:'inline-first-ltr', justify:'first baseline', direction:'ltr', x:[0,0]},
+    {id:'inline-last-ltr', justify:'last baseline', direction:'ltr', x:[40,40]},
+    {id:'inline-first-rtl', justify:'first baseline', direction:'rtl', x:[40,40]},
+    {id:'inline-last-rtl', justify:'last baseline', direction:'rtl', x:[0,0]}
+  ].map(test => ({...test, display:'grid', align:'start', height:120, rows:'60px 60px', columns:'120px',
+    styles:['width:80px','width:60px'], sizes:[40,40], widths:[80,60], y:[0,60]})),
+  ...['auto','minmax(0,1fr)'].flatMap(rows => [
+    {id:'first-percentage-cycle/'+rows, align:'first baseline', y:[0,0]},
+    {id:'last-percentage-cycle/'+rows, align:'last baseline', y:[40,0]}
+  ].map(test => ({...test, display:'grid', rows, auto:true, emptyFirst:true, height:80,
+    styles:['height:50%'], sizes:[40,80]}))),
+  ...[
+    // Blink excludes track-dependent synthesized baselines across fr tracks
+    // even with a definite container height (GridItemData::SetAlignmentFallback).
+    {id:'first-percentage-definite-fr', align:'first baseline', y:[0,0]},
+    {id:'last-percentage-definite-fr', align:'last baseline', y:[40,0]}
+  ].map(test => ({...test, display:'grid', rows:'minmax(0,1fr)', emptyFirst:true, height:80,
+    styles:['height:50%'], sizes:[40,80]})),
+  ...['vertical-lr','vertical-rl','sideways-lr','sideways-rl'].map(mode => ({
+    id:'inline-orthogonal/'+mode, display:'block', auto:true, height:90, y:[0,30],
+    styles:['display:inline-block;writing-mode:'+mode,'display:inline-block']
+  })),
+  {id:'inline-orthogonal-margins', display:'block', auto:true, height:110, y:[6,50],
+    styles:['display:inline-block;writing-mode:vertical-lr;margin:6px 0 14px','display:inline-block']},
+  {id:'inline-intrinsic-real-baselines', display:'block', auto:true, height:100, y:[20,0],
+    styles:['display:inline-block','display:inline-block']}
+);
+const colors = [[31,127,63,255],[191,47,31,255],[47,79,191,255]];
+for (const [index,test] of cases.entries()) {
+  const root = document.createElement('div');
+  root.className = 'target';
+  root.style.cssText = 'left:'+(index%8*160+10)+'px;top:'+(Math.floor(index/8)*220+10)+'px;display:'+test.display+
+    ';align-items:'+test.align+';height:'+(test.auto?'auto':test.height+'px');
+  if (test.rows) root.style.gridTemplateRows = test.rows;
+  if (test.columns) root.style.gridTemplateColumns = test.columns;
+  if (test.justify) root.style.justifyItems = test.justify;
+  if (test.direction) root.style.direction = test.direction;
+  for (let i=0; i<test.y.length; ++i) {
+    const child = document.createElement('div');
+    child.className = 'item';
+    child.style.cssText = 'height:'+(test.sizes||[80,60,120])[i]+'px;background:rgb('+colors[i].slice(0,3).join(',')+');'+(test.styles?.[i]||'');
+    if (test.wrapped && i===0) {
+      for (const height of [10,20,30]) {
+        const span = document.createElement('span');
+        span.style.cssText = 'width:30px;height:'+height+'px;flex:none';
+        child.append(span);
+      }
+    } else if (i<2 && !(test.emptyFirst && i===0)) {
+      for (const [line,height] of (i===0?[10,20]:test.wrapped?[20,20]:[20,30]).entries()) {
+        if (line) child.append(document.createElement('br'));
+        const span = document.createElement('span');
+        span.style.height = height+'px';
+        child.append(span);
+      }
+    }
+    root.append(child);
+  }
+  document.body.append(root);
+}
+function collectFlexBaselineChecks() {
+  return cases.flatMap((test,index) => {
+    const root = document.querySelectorAll('.target')[index];
+    const origin = root.getBoundingClientRect();
+    const id = test.display+'/'+test.id;
+    return [{id:id+'/container', actual:[0,0,origin.width,origin.height], expected:[0,0,120,test.height],
+      pixel:[origin.x+124,origin.y+2], color:[255,255,255,255]},
+      ...Array.from(root.children,(child,i) => {
+        const rect=child.getBoundingClientRect(), expected=[test.x?.[i]??i*40,test.y[i],test.widths?.[i]??40,(test.sizes||[80,60,120])[i]];
+        return {id:id+'/'+i, actual:[rect.x-origin.x,rect.y-origin.y,rect.width,rect.height], expected,
+          pixel:[origin.x+expected[0]+2,origin.y+expected[1]+2], color:colors[i]};
+      })];
+  });
+}
+</script>

@@ -809,6 +809,10 @@ impl ResolvedLayoutStyle {
             specified_aspect_ratio,
         );
         let mut taffy = stylo_taffy::to_taffy_style(&computed);
+        taffy.align_items = taffy_item_alignment(computed.clone_align_items().0);
+        taffy.align_self = taffy_item_alignment(computed.clone_align_self().0);
+        taffy.justify_items = taffy_item_alignment(*computed.clone_justify_items().computed.0);
+        taffy.justify_self = taffy_item_alignment(computed.clone_justify_self().0);
         taffy.size = Size {
             width: taffy_size_dimension(&position_style.width, taffy.size.width),
             height: taffy_size_dimension(&position_style.height, taffy.size.height),
@@ -2536,6 +2540,19 @@ fn stylo_vertical_align(
     )
 }
 
+/// Preserve the baseline preference at the style boundary. The pinned Blitz
+/// converter predates Taffy's last-baseline support and lowers it to `end`.
+/// Both normal-flow and positioned alignment must retain the same CSS value.
+pub(crate) fn taffy_item_alignment(
+    flags: style::values::specified::align::AlignFlags,
+) -> Option<taffy::AlignItems> {
+    if flags.value() == style::values::specified::align::AlignFlags::LAST_BASELINE {
+        Some(taffy::AlignItems::LAST_BASELINE)
+    } else {
+        stylo_taffy::convert::item_alignment(flags)
+    }
+}
+
 pub(crate) fn resolve_stylo_calc_value(calc_ptr: *const (), parent_size: f32) -> f32 {
     use style::values::computed::{CSSPixelLength, length_percentage::CalcLengthPercentage};
 
@@ -2544,6 +2561,36 @@ pub(crate) fn resolve_stylo_calc_value(calc_ptr: *const (), parent_size: f32) ->
     // originating `ComputedValues` until the containing `LayoutWorld` drops.
     let calc = unsafe { &*(calc_ptr as *const CalcLengthPercentage) };
     calc.resolve(CSSPixelLength::new(parent_size)).px()
+}
+
+#[cfg(test)]
+mod alignment_tests {
+    use super::taffy_item_alignment;
+    use style::values::specified::align::AlignFlags;
+    use taffy::{AlignItems, BaselinePreference};
+
+    #[test]
+    fn item_alignment_keeps_baseline_preference_and_positional_safety_distinct() {
+        for (flags, expected) in [
+            (AlignFlags::BASELINE, AlignItems::BASELINE),
+            (AlignFlags::LAST_BASELINE, AlignItems::LAST_BASELINE),
+            (AlignFlags::END, AlignItems::END),
+            (AlignFlags::SELF_END, AlignItems::SELF_END),
+            (
+                AlignFlags::CENTER | AlignFlags::SAFE,
+                AlignItems::SAFE_CENTER,
+            ),
+        ] {
+            assert_eq!(taffy_item_alignment(flags), Some(expected));
+        }
+        assert_eq!(taffy_item_alignment(AlignFlags::AUTO), None);
+        assert_eq!(
+            taffy_item_alignment(AlignFlags::LAST_BASELINE)
+                .unwrap()
+                .baseline_preference(),
+            Some(BaselinePreference::Last)
+        );
+    }
 }
 
 #[cfg(test)]
