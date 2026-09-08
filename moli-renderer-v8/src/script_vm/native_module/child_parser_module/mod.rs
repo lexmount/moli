@@ -183,9 +183,9 @@ impl ScriptVm {
         &mut self,
         reaction_id: u64,
         reason: String,
-        error_constructor: Option<ScriptErrorConstructorKind>,
+        error_value: Option<ScriptErrorValue>,
     ) -> usize {
         super::super::child_document_script_scheduler::ChildDocumentScriptSchedulerOwner::new(self)
-            .mark_parser_module_evaluation_rejected(reaction_id, reason, error_constructor)
+            .mark_parser_module_evaluation_rejected(reaction_id, reason, error_value)
     }
 }
