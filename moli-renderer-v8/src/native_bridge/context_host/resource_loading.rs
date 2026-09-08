@@ -2,10 +2,7 @@ use super::{JsContextHost, OwnerDispatchScope};
 use crate::network::loads::{ResourceLoadDisposition, ResourceLoadKind, ResourceLoadLease};
 use crate::types::DedicatedWorkerId;
 use crate::{
-    module_runtime::{
-        ModuleAttributesKey, ModuleMapKey, ModuleSource, PendingDynamicModuleImport,
-        WasmModuleRecord,
-    },
+    module_runtime::{ModuleAttributesKey, PendingDynamicModuleImport, WasmModuleRecord},
     page_task_queue::RendererResourceCompletionSender,
     renderer_resource_scheduler::RendererResourceScheduler,
     types::{
@@ -84,14 +81,6 @@ impl JsContextHost {
     ) -> std::result::Result<url::Url, String> {
         // SAFETY: JsContextHost is owned by the ScriptVm that owns this DocumentRuntime.
         unsafe { &mut *self.runtime }.resolve_module_specifier(specifier, base_url)
-    }
-
-    pub(crate) fn native_module_source_for(
-        &self,
-        module: v8::Local<'_, v8::Module>,
-    ) -> Option<(ModuleMapKey, ModuleSource)> {
-        // SAFETY: JsContextHost is owned by the ScriptVm that owns this DocumentRuntime.
-        unsafe { &*self.runtime }.native_module_source_for(module)
     }
 
     pub(crate) fn native_module_wasm_record_for(
