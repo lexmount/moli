@@ -1,0 +1,67 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>Physical absolute insets in reversed flex scroll containers</title>
+<link rel="help" href="https://drafts.csswg.org/css-position-3/#insets">
+<style>
+  html, body { margin: 0; padding: 0; overflow: hidden; }
+  .container {
+    position: absolute;
+    display: flex;
+    box-sizing: border-box;
+    width: 200px;
+    height: 160px;
+    border-style: solid;
+    border-width: 2px 5px 4px 3px;
+    padding: 3px 5px 7px 9px;
+    overflow: scroll;
+    font: 0/0 sans-serif;
+  }
+  .item { position: absolute; background: rgb(31, 127, 63); }
+</style>
+<body>
+<script>
+  const cases = [
+    {id:'near', style:'left:11px;top:7px;width:40px;height:20px;margin:2px 8px 6px 4px', expected:[18,11,40,20]},
+    {id:'far', style:'right:13px;bottom:9px;width:40px;height:20px;margin:2px 8px 6px 4px', expected:[119,106,40,20]},
+    {id:'percentage-insets', style:'left:25%;top:25%;width:40px;height:20px;margin:2px 8px 6px 4px', expected:[51.25,38.75,40,20]},
+    {id:'percentage-size', style:'left:0;top:0;width:100%;height:100%', expected:[3,2,177,139]},
+  ];
+  let index = 0;
+  for (const direction of ['ltr', 'rtl']) {
+    for (const flexDirection of ['row', 'row-reverse', 'column', 'column-reverse']) {
+      for (const flexWrap of ['nowrap', 'wrap', 'wrap-reverse']) {
+        const container = document.createElement('div');
+        container.className = 'container';
+        container.id = `${direction}-${flexDirection}-${flexWrap}`;
+        container.style.cssText = `left:${(index % 5) * 240}px;top:${Math.floor(index / 5) * 210}px;direction:${direction};flex-direction:${flexDirection};flex-wrap:${flexWrap}`;
+        for (const test of cases) {
+          const item = document.createElement('div');
+          item.className = 'item';
+          item.id = `${container.id}-${test.id}`;
+          item.style.cssText = test.style;
+          // Classic scrollbars reserve 15px. RTL moves the vertical gutter
+          // to the left; reversing flex axes never moves either gutter.
+          const expected = test.expected.slice();
+          if (direction === 'rtl') expected[0] += 15;
+          item.dataset.expected = JSON.stringify(expected);
+          container.append(item);
+        }
+        document.body.append(container);
+        index++;
+      }
+    }
+  }
+  function collectFlexPhysicalInsetChecks() {
+    return Array.from(document.querySelectorAll('.item'), item => {
+      const origin = item.parentElement.getBoundingClientRect();
+      const rect = item.getBoundingClientRect();
+      const expected = JSON.parse(item.dataset.expected);
+      return {
+        id: item.id,
+        actual: [rect.x - origin.x, rect.y - origin.y, rect.width, rect.height],
+        expected,
+        pixel: [origin.x + expected[0] + 2, origin.y + expected[1] + 2],
+      };
+    });
+  }
+</script>

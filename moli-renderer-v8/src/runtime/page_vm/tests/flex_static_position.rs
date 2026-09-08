@@ -2,27 +2,52 @@ use super::*;
 
 #[tokio::test(flavor = "current_thread")]
 async fn screenshot_resolves_flex_static_margin_boxes_across_containing_blocks() {
+    assert_flex_geometry_fixture(
+        include_str!("../../../../tests/fixtures/flex-static-position-margins.html"),
+        "collectFlexStaticMarginChecks()",
+        117,
+        6000,
+    )
+    .await;
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn screenshot_preserves_physical_absolute_insets_in_reversed_flex_scrollers() {
+    assert_flex_geometry_fixture(
+        include_str!("../../../../tests/fixtures/flex-physical-insets.html"),
+        "collectFlexPhysicalInsetChecks()",
+        96,
+        1260,
+    )
+    .await;
+}
+
+async fn assert_flex_geometry_fixture(
+    fixture: &'static str,
+    collect_checks: &'static str,
+    expected_count: usize,
+    viewport_height: u32,
+) {
     run_page_vm_async_test(async move {
         let loader = crate::network::ResourceRequestClient::new(&FetchConfig::default())?;
         let mut page = test_page_vm_with_loader_and_document_url(
             &loader,
             Vec::new(),
-            Url::parse("https://example.com/flex-static-position-margins.html")?,
+            Url::parse("https://example.com/flex-geometry.html")?,
         );
         page.set_viewport_surface(Some(crate::protocol_types::ViewportSurface {
             inner_width: 1280,
-            inner_height: 6000,
+            inner_height: viewport_height,
             outer_width: 1280,
-            outer_height: 6000,
+            outer_height: viewport_height,
             device_pixel_ratio: 1.0,
             screen_width: 1280,
-            screen_height: 6000,
+            screen_height: viewport_height,
             screen_avail_width: 1280,
-            screen_avail_height: 6000,
+            screen_avail_height: viewport_height,
         }))?;
         page.vm_mut()
             .set_layout_policy(moli_page_types::LayoutPolicy::OnDemand);
-        let fixture = include_str!("../../../../tests/fixtures/flex-static-position-margins.html");
         page.vm_mut().eval(&format!(
             "document.open();document.write({});document.close()",
             serde_json::to_string(fixture)?
@@ -40,10 +65,10 @@ async fn screenshot_resolves_flex_static_margin_boxes_across_containing_blocks()
         let checks: serde_json::Value = serde_json::from_str(
             &page
                 .vm_mut()
-                .eval("JSON.stringify(collectFlexStaticMarginChecks())")?,
+                .eval(&format!("JSON.stringify({collect_checks})"))?,
         )?;
-        let checks = checks.as_array().expect("flex static margin checks");
-        assert_eq!(checks.len(), 117);
+        let checks = checks.as_array().expect("flex geometry checks");
+        assert_eq!(checks.len(), expected_count);
         for check in checks {
             assert_eq!(check["actual"], check["expected"], "{check}");
             let x = check["pixel"][0].as_f64().expect("pixel x") as usize;
@@ -59,5 +84,5 @@ async fn screenshot_resolves_flex_static_margin_boxes_across_containing_blocks()
         Ok::<_, anyhow::Error>(())
     })
     .await
-    .expect("flex static-position margin fixture should run");
+    .expect("flex geometry fixture should run");
 }
