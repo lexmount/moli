@@ -2,6 +2,7 @@ use super::helpers::{
     can_parse_url_input, require_url_receiver, resolve_url_constructor_input, url_href_slot,
 };
 use super::*;
+use crate::context_bootstrap::{ensure_intrinsic_interface_constructor, shared::throw_error};
 use crate::util::get_private_value;
 use crate::web_api_interfaces;
 use crate::webidl;
@@ -127,14 +128,14 @@ pub(super) fn url_parse_callback<'s>(
         rv.set(v8::null(scope).into());
         return;
     };
-    let Some(constructor) = scope
-        .get_current_context()
-        .global(scope)
-        .get(scope, v8str(scope, "URL").into())
-        .and_then(|value| v8::Local::<v8::Function>::try_from(value).ok())
-    else {
-        rv.set(v8::null(scope).into());
-        return;
+    // The factory creates a URL in its own realm, regardless of author changes
+    // to the public URL binding (including during argument conversion).
+    let constructor = match ensure_intrinsic_interface_constructor(scope, "URL") {
+        Ok(constructor) => constructor,
+        Err(error) => {
+            throw_error(scope, &format!("Failed to create URL: {error}"));
+            return;
+        }
     };
     let Some(object) = constructor.new_instance(scope, &[url_value.into()]) else {
         rv.set(v8::null(scope).into());
