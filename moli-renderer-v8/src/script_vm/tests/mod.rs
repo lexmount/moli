@@ -2134,6 +2134,7 @@ mod blob_response_headers;
 mod browser_api;
 mod cache_interfaces;
 mod canvas_arguments;
+mod canvas_gradients;
 mod canvas_paths;
 mod canvas_webgl;
 mod child_dynamic_inline_scripts;
