@@ -107,12 +107,21 @@ pub(crate) fn current_script_violation_location(
 ) -> Option<(String, i32, i32)> {
     let stack = v8::StackTrace::current_stack_trace(scope, 1)?;
     let frame = stack.get_frame(scope, 0)?;
-    let source_file = frame
-        .get_script_name_or_source_url(scope)
-        .map(|source| source.to_rust_string_lossy(scope))
-        .map(|source| {
-            crate::content_security_policy::content_security_policy_source_file_for_report(&source)
+    // Imported worker scripts retain the originally requested URL separately
+    // from their final resource name and their (possibly muted) import base.
+    // Reporting the final URL could disclose a cross-origin redirect target.
+    let source_file = scope
+        .get_current_host_defined_options()
+        .and_then(|options| {
+            crate::util::script_request_url_from_host_defined_options(scope, options)
         })
+        .map(|url| url.to_string())
+        .or_else(|| {
+            frame
+                .get_script_name_or_source_url(scope)
+                .map(|source| source.to_rust_string_lossy(scope))
+        })
+        .map(|source| content_security_policy_source_file_for_report(&source))
         .unwrap_or_default();
     let line_number = i32::try_from(frame.get_line_number())
         .unwrap_or_default()
