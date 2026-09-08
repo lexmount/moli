@@ -145,7 +145,8 @@ fn fragment_auxiliary_units(snapshot: &PaintSnapshot, fragment: &PaintFragment) 
             .path
             .elements
             .len()
-            .saturating_add(stroke.dash_pattern.len()),
+            .saturating_add(stroke.dash_pattern.len())
+            .saturating_add(brush_units(&stroke.brush)),
         PaintFragment::TextShadow(shadow) => shadow.run.normalized_coords.len(),
         PaintFragment::GlyphRun(run) => run.normalized_coords.len(),
         PaintFragment::SvgImage(image) => snapshot

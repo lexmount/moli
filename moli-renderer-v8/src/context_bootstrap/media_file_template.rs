@@ -3,8 +3,9 @@ use super::canvas::{
     canvas_context_begin_path_callback, canvas_context_bezier_curve_to_callback,
     canvas_context_clear_rect_callback, canvas_context_close_path_callback,
     canvas_context_create_image_data_callback, canvas_context_create_linear_gradient_callback,
-    canvas_context_draw_image_callback, canvas_context_ellipse_callback,
-    canvas_context_fill_callback, canvas_context_fill_style_getter_callback,
+    canvas_context_create_radial_gradient_callback, canvas_context_draw_image_callback,
+    canvas_context_ellipse_callback, canvas_context_fill_callback,
+    canvas_context_fill_style_getter_callback,
     canvas_context_fill_style_setter_callback, canvas_context_fill_text_callback,
     canvas_context_font_getter_callback, canvas_context_font_setter_callback,
     canvas_context_get_image_data_callback, canvas_context_get_line_dash_callback,
@@ -365,6 +366,13 @@ struct CanvasRenderingContext2dTemplateDeclaration {
         callback = canvas_context_create_linear_gradient_callback
     )]
     create_linear_gradient: (),
+
+    #[webapi(
+        method = "createRadialGradient",
+        length = 6,
+        callback = canvas_context_create_radial_gradient_callback
+    )]
+    create_radial_gradient: (),
 
     #[webapi(
         method = "createImageData",

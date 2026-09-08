@@ -234,32 +234,51 @@ pub(super) fn draw_text<'s>(
         .max_width
         .filter(|width| *width < shaped.width)
         .map_or(1.0, |width| width / shaped.width);
+    let text_transform = PaintTransform2D::new([scale, 0.0, 0.0, 1.0, draw.x, draw.y]);
+    // Gradients are anchored in the canvas user space, not at the glyph origin.
+    let brush_transform =
+        PaintTransform2D::new([1.0 / scale, 0.0, 0.0, 1.0, -draw.x / scale, -draw.y]);
     let transform = canvas_path_state(scope, context)
         .borrow()
         .transform()
-        .concatenate(PaintTransform2D::new([
-            scale, 0.0, 0.0, 1.0, draw.x, draw.y,
-        ]));
+        .concatenate(text_transform);
     let (fonts, fragments) = match draw.paint {
         TextPaint::Fill => {
-            let color = context_fill_color(scope, context);
-            let mut fragments = Vec::with_capacity(shaped.runs.len());
-            for mut run in shaped.runs {
-                run.color = color;
-                run.transform = transform;
-                fragments.push(PaintFragment::GlyphRun(run));
-            }
-            (shaped.fonts, fragments)
-        }
-        TextPaint::Stroke => (
-            Vec::new(),
-            vec![PaintFragment::Stroke(context_stroke(
+            let brush = context_style_brush(
                 scope,
                 context,
-                shaped.outline_path(),
-                transform,
-            ))],
-        ),
+                CANVAS_CONTEXT_FILL_STYLE_SLOT,
+                brush_transform,
+            );
+            if let PaintBrush::Solid(color) = brush {
+                let mut fragments = Vec::with_capacity(shaped.runs.len());
+                for mut run in shaped.runs {
+                    run.color = color;
+                    run.transform = transform;
+                    fragments.push(PaintFragment::GlyphRun(run));
+                }
+                (shaped.fonts, fragments)
+            } else {
+                (
+                    Vec::new(),
+                    vec![PaintFragment::Fill {
+                        shape: PaintShape::Path(shaped.outline_path()),
+                        brush,
+                        transform,
+                    }],
+                )
+            }
+        }
+        TextPaint::Stroke => {
+            let mut stroke = context_stroke(scope, context, shaped.outline_path(), transform);
+            stroke.brush = context_style_brush(
+                scope,
+                context,
+                CANVAS_CONTEXT_STROKE_STYLE_SLOT,
+                brush_transform,
+            );
+            (Vec::new(), vec![PaintFragment::Stroke(stroke)])
+        }
     };
     rasterize_canvas_scene(scope, canvas, |snapshot| {
         snapshot.fonts = fonts;

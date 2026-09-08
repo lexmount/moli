@@ -155,7 +155,7 @@ pub enum PaintLineJoin {
 #[derive(Clone, Debug, PartialEq)]
 pub struct PaintStroke {
     pub path: PaintPath,
-    pub color: PaintColor,
+    pub brush: PaintBrush,
     pub width: f32,
     pub join: PaintLineJoin,
     pub start_cap: PaintLineCap,
@@ -360,6 +360,16 @@ pub enum PaintGradientHueDirection {
 pub struct PaintGradientInterpolation {
     pub color_space: PaintGradientColorSpace,
     pub hue_direction: PaintGradientHueDirection,
+    pub alpha_space: PaintGradientAlphaSpace,
+}
+
+/// CSS interpolates premultiplied colors; Canvas gradients interpolate straight
+/// color channels before applying the interpolated alpha.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum PaintGradientAlphaSpace {
+    #[default]
+    Premultiplied,
+    Unpremultiplied,
 }
 
 /// One resolved gradient stop. Offsets are normalized to the gradient line.
@@ -377,6 +387,8 @@ pub struct PaintLinearGradient {
     pub stops: Vec<PaintGradientStop>,
     pub extend: PaintGradientExtend,
     pub interpolation: PaintGradientInterpolation,
+    /// Brush-local coordinates relative to the primitive's coordinate space.
+    pub transform: PaintTransform2D,
 }
 
 /// An owned, resolved two-circle radial gradient.
