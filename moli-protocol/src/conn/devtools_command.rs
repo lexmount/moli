@@ -169,6 +169,31 @@ impl CdpConnection {
         command: DevToolsCommand,
         background_command_id: Option<u64>,
     ) -> DevToolsCommandDispatchOutcome {
+        if matches!(
+            command,
+            DevToolsCommand::Navigate(_)
+                | DevToolsCommand::Reload(_)
+                | DevToolsCommand::TraverseHistory(_)
+        ) {
+            let mut step = self
+                .start_devtools_navigation_command_dispatch(command, background_command_id)
+                .await;
+            let mut scheduler_events = Vec::new();
+            loop {
+                match step {
+                    crate::DevToolsNavigationCommandTaskStep::Complete(mut outcome) => {
+                        outcome.scheduler_events.splice(0..0, scheduler_events);
+                        return *outcome;
+                    }
+                    crate::DevToolsNavigationCommandTaskStep::Pending(mut pending) => {
+                        scheduler_events.extend(pending.take_scheduler_events());
+                        step = self
+                            .complete_devtools_navigation_command_dispatch(pending.wait().await)
+                            .await;
+                    }
+                }
+            }
+        }
         let command_context = command.context().clone();
         let mut renderer_output_predecessor = None;
         let (result, protocol_events) = match command {
@@ -213,9 +238,7 @@ impl CdpConnection {
                 )
                 .await
             }
-            command @ (DevToolsCommand::Navigate(_)
-            | DevToolsCommand::Reload(_)
-            | DevToolsCommand::CaptureScreenshot(_)
+            command @ (DevToolsCommand::CaptureScreenshot(_)
             | DevToolsCommand::PrintToPdf(_)
             | DevToolsCommand::GetJavaScriptDialog(_)
             | DevToolsCommand::SetJavaScriptDialogPromptText(_)
@@ -224,14 +247,12 @@ impl CdpConnection {
             | DevToolsCommand::GetFrameTrees(_)
             | DevToolsCommand::GetLayoutMetrics(_)
             | DevToolsCommand::GetNavigationHistory(_)
-            | DevToolsCommand::TraverseHistory(_)
             | DevToolsCommand::AddPreloadScript(_)
             | DevToolsCommand::RemovePreloadScript(_)) => {
                 let (result, protocol_events, predecessor) = Box::pin(
                     crate::domains::page::execute_devtools_page_command_async_with_protocol_events(
                         self,
                         command,
-                        background_command_id,
                     ),
                 )
                 .await;

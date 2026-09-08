@@ -572,6 +572,7 @@ async fn handle_streaming_response_head_for_navigation_into_buffer_async(
         prepared_document_projection,
     );
     out.extend_background_events_after_messages([navigation_response_stage_request_paused_event(
+        conn,
         pending.interception_session_id.as_deref(),
         &pending.fetch_request_id,
         &pending.navigation,
@@ -643,6 +644,7 @@ fn pause_buffered_raw_response_stage_navigation_into_buffer(
         None,
     );
     out.extend_background_events_after_messages([navigation_response_stage_request_paused_event(
+        conn,
         pending.interception_session_id.as_deref(),
         &pending.fetch_request_id,
         &pending.navigation,

@@ -144,10 +144,13 @@ pub(in crate::domains) use main_document_commit::{
     MainDocumentCommitPreparedOutput, append_renderer_main_document_commit_to_output_sink,
     project_main_document_commit_async,
 };
-pub use navigation::BackgroundNavigationCompletion;
 #[cfg(test)]
 pub(crate) use navigation::emit_prepared_child_frame_tree_background_events;
 pub(crate) use navigation::navigation_cookie_access_report;
+pub use navigation::{
+    BackgroundNavigationCompletion, CompletedDevToolsNavigationCommandDispatch,
+    DevToolsNavigationCommandTaskStep, PendingDevToolsNavigationCommandDispatch,
+};
 pub(crate) use navigation::{
     MaterializedNavigationCompletion, complete_materialized_navigation_into_buffer_async,
     emit_prepared_child_frame_activity, push_superseded_navigation_result,
@@ -6136,7 +6139,6 @@ fn page_set_download_behavior_command_output_plan(
 pub(crate) async fn execute_devtools_page_command_async_with_protocol_events(
     conn: &mut CdpConnection,
     command: DevToolsCommand,
-    background_command_id: Option<u64>,
 ) -> (
     Result<DevToolsCommandResult, DevToolsError>,
     Vec<crate::conn::BackgroundProtocolEvent>,
@@ -6187,16 +6189,6 @@ pub(crate) async fn execute_devtools_page_command_async_with_protocol_events(
             Vec::new(),
             None,
         ),
-        command @ (DevToolsCommand::Navigate(_)
-        | DevToolsCommand::Reload(_)
-        | DevToolsCommand::TraverseHistory(_)) => {
-            navigation::execute_devtools_navigation_command_async_with_protocol_events(
-                conn,
-                command,
-                background_command_id,
-            )
-            .await
-        }
         command @ (DevToolsCommand::AddPreloadScript(_)
         | DevToolsCommand::RemovePreloadScript(_)) => {
             preload::execute_devtools_preload_command_async(conn, command).await

@@ -1379,8 +1379,8 @@ async fn classic_session_runtime_loop(
                 adapter_scheduler.schedule_turn_if_needed(&scheduler, page_javascript_blocked);
                 tokio::select! {
                     biased;
-                    event = scheduler.recv_browser_event() => {
-                        let output = scheduler.handle_browser_event(event).await;
+                    event = scheduler.recv_adapter_owner_input() => {
+                        let output = scheduler.complete_adapter_owner_input(&mut receivers, event).await;
                         if !attached.actor.send_or_route_protocol_output(&mut scheduler, &mut receivers, output, None).await {
                             detach_bidi = true;
                         }
@@ -1474,6 +1474,13 @@ async fn classic_session_runtime_loop(
                             BidiSocketActorInput::RuntimeResponseReady(None) => {
                                 detach_bidi = true;
                             }
+                            BidiSocketActorInput::NavigationCompletion(completed) => {
+                                if !attached.actor.handle_navigation_completion(
+                                    &mut scheduler, &mut receivers, completed,
+                                ).await {
+                                    detach_bidi = true;
+                                }
+                            }
                         }
                     }
                     request = rx.recv() => {
@@ -1517,8 +1524,8 @@ async fn classic_session_runtime_loop(
             adapter_scheduler.schedule_turn_if_needed(&scheduler, page_javascript_blocked);
             tokio::select! {
                 biased;
-                event = scheduler.recv_browser_event() => {
-                    let _ = scheduler.handle_browser_event(event).await;
+                event = scheduler.recv_adapter_owner_input() => {
+                    let _ = scheduler.complete_adapter_owner_input(&mut receivers, event).await;
                 }
                 completion = receivers.background_navigation_completion_rx.recv() => {
                     let Some(completion) = completion else {

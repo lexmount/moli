@@ -840,58 +840,145 @@ fn start_devtools_page_command(
     }
 }
 
-pub(crate) async fn execute_devtools_navigation_command_async_with_protocol_events(
-    conn: &mut CdpConnection,
-    command: DevToolsCommand,
-    background_command_id: Option<u64>,
-) -> (
-    Result<DevToolsCommandResult, DevToolsError>,
-    Vec<crate::conn::BackgroundProtocolEvent>,
-    Option<moli_core::RendererOutputFence>,
-) {
-    let wait = devtools_navigation_wait(&command);
-    let route = match devtools_navigation_target_route(conn, &command) {
-        Ok(route) => route,
-        Err(error) => return (Err(error), Vec::new(), None),
-    };
-    let (mut step, mut direct_result) = start_protocol_neutral_navigation_command(
-        conn,
-        route.clone(),
-        command,
-        background_command_id,
-    );
-    let mut command_context = crate::conn::CommandDispatchContext::default();
-    loop {
+pub enum DevToolsNavigationCommandTaskStep {
+    Complete(Box<crate::DevToolsCommandDispatchOutcome>),
+    Pending(Box<PendingDevToolsNavigationCommandDispatch>),
+}
+
+struct DevToolsNavigationCommandState {
+    context: crate::devtools_runtime::DevToolsCommandContext,
+    wait: DevToolsNavigationWait,
+    route: CdpSessionRoute,
+    direct_result: Result<DirectNavigationResult, DevToolsError>,
+    command_context: CommandDispatchContext,
+}
+
+/// The existing Page continuation, without a borrow of the protocol owner.
+/// Browser work retains its exact navigation capability across the wait.
+pub struct PendingDevToolsNavigationCommandDispatch {
+    state: DevToolsNavigationCommandState,
+    pending: super::PendingPageCommandDispatch,
+    scheduler_events: Vec<crate::CdpSchedulerEvent>,
+}
+
+pub struct CompletedDevToolsNavigationCommandDispatch {
+    state: DevToolsNavigationCommandState,
+    completed: super::CompletedPageCommandDispatch,
+}
+
+impl PendingDevToolsNavigationCommandDispatch {
+    pub fn take_scheduler_events(&mut self) -> Vec<crate::CdpSchedulerEvent> {
+        std::mem::take(&mut self.scheduler_events)
+    }
+
+    pub async fn wait(self) -> CompletedDevToolsNavigationCommandDispatch {
+        assert!(
+            self.scheduler_events.is_empty(),
+            "navigation scheduler events must be consumed before waiting"
+        );
+        CompletedDevToolsNavigationCommandDispatch {
+            state: self.state,
+            completed: self.pending.wait().await,
+        }
+    }
+}
+
+impl CdpConnection {
+    pub async fn start_devtools_navigation_command_dispatch(
+        &mut self,
+        command: DevToolsCommand,
+        background_command_id: Option<u64>,
+    ) -> DevToolsNavigationCommandTaskStep {
+        let context = command.context().clone();
+        let wait = devtools_navigation_wait(&command);
+        let route = match devtools_navigation_target_route(self, &command) {
+            Ok(route) => route,
+            Err(error) => {
+                return DevToolsNavigationCommandTaskStep::Complete(Box::new(
+                    self.finish_devtools_command_dispatch(context, Err(error), Vec::new(), None)
+                        .await,
+                ));
+            }
+        };
+        let (step, direct_result) = start_protocol_neutral_navigation_command(
+            self,
+            route.clone(),
+            command,
+            background_command_id,
+        );
+        self.advance_devtools_navigation_command_dispatch(
+            DevToolsNavigationCommandState {
+                context,
+                wait,
+                route,
+                direct_result,
+                command_context: CommandDispatchContext::default(),
+            },
+            step,
+        )
+        .await
+    }
+
+    pub async fn complete_devtools_navigation_command_dispatch(
+        &mut self,
+        completed: CompletedDevToolsNavigationCommandDispatch,
+    ) -> DevToolsNavigationCommandTaskStep {
+        let CompletedDevToolsNavigationCommandDispatch {
+            mut state,
+            completed,
+        } = completed;
+        if let Ok(result) = state.direct_result.as_mut()
+            && let Err(error) = direct_navigation_result_from_completed(self, &completed, result)
+        {
+            state.direct_result = Err(error);
+        }
+        let step =
+            super::complete_pending_page_command(self, completed, &mut state.command_context).await;
+        self.advance_devtools_navigation_command_dispatch(state, step)
+            .await
+    }
+
+    async fn advance_devtools_navigation_command_dispatch(
+        &mut self,
+        mut state: DevToolsNavigationCommandState,
+        step: PageCommandTaskStep,
+    ) -> DevToolsNavigationCommandTaskStep {
         match step {
             PageCommandTaskStep::Complete(plan) => {
                 let (status, events) = plan.into_command_status_and_background_events();
                 if let Some(Err(error)) = status {
-                    direct_result = Err(error);
+                    state.direct_result = Err(error);
                 }
-                if wait == DevToolsNavigationWait::None
-                    && let Ok(direct_result) = direct_result.as_mut()
+                if state.wait == DevToolsNavigationWait::None
+                    && let Ok(direct_result) = state.direct_result.as_mut()
                 {
-                    fill_navigation_id_from_current_loader_for_route(conn, &route, direct_result);
+                    fill_navigation_id_from_current_loader_for_route(
+                        self,
+                        &state.route,
+                        direct_result,
+                    );
                 }
-                let mut ordered_events = command_context.take_protocol_events_before_events(events);
-                ordered_events.extend(command_context.take_post_response_events());
-                return (
-                    direct_result.map(DirectNavigationResult::into_result),
-                    ordered_events,
-                    command_context.take_renderer_output_predecessor(),
-                );
+                let mut ordered_events = state
+                    .command_context
+                    .take_protocol_events_before_events(events);
+                ordered_events.extend(state.command_context.take_post_response_events());
+                DevToolsNavigationCommandTaskStep::Complete(Box::new(
+                    self.finish_devtools_command_dispatch(
+                        state.context,
+                        state.direct_result.map(DirectNavigationResult::into_result),
+                        ordered_events,
+                        state.command_context.take_renderer_output_predecessor(),
+                    )
+                    .await,
+                ))
             }
-            PageCommandTaskStep::Pending(pending) => {
-                let completed = pending.wait().await;
-                if let Ok(result) = direct_result.as_mut()
-                    && let Err(error) =
-                        direct_navigation_result_from_completed(conn, &completed, result)
-                {
-                    direct_result = Err(error);
-                }
-                step = super::complete_pending_page_command(conn, completed, &mut command_context)
-                    .await;
-            }
+            PageCommandTaskStep::Pending(pending) => DevToolsNavigationCommandTaskStep::Pending(
+                Box::new(PendingDevToolsNavigationCommandDispatch {
+                    state,
+                    pending,
+                    scheduler_events: self.take_scheduler_events(),
+                }),
+            ),
         }
     }
 }
@@ -2736,10 +2823,12 @@ fn start_navigate_to_url_command_with_background_policy_and_request(
                     &mut out,
                     &pending.navigation,
                     pending.request_cookie_report.as_ref(),
+                    Some(&pending.fetch_request_id),
                 );
             }
             pending.navigation.request_announced = pending.navigation.request_id.is_some();
             let paused_event = fetch::request_paused_background_event(
+                conn,
                 pending.interception_session_id.as_deref(),
                 &pending,
             );
@@ -2766,6 +2855,7 @@ fn start_navigate_to_url_command_with_background_policy_and_request(
                 &mut out,
                 &pending.navigation,
                 pending.request_cookie_report.as_ref(),
+                None,
             );
         }
         pending.navigation.request_announced = pending.navigation.request_id.is_some();

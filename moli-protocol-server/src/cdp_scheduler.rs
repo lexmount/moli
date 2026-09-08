@@ -4,6 +4,7 @@ use std::{
     time::{Duration, Instant},
 };
 
+use futures_util::{StreamExt, stream::FuturesUnordered};
 use moli_cookie_jar::StoredCookie;
 use moli_core::page::RendererVisualStateToken;
 use moli_core::{
@@ -37,6 +38,7 @@ mod adapter_scheduler;
 mod browser_events;
 mod command_dispatch;
 mod frontend_control;
+mod navigation_dispatch;
 mod protocol_residence;
 mod renderer_command_response_order;
 mod runtime_dispatch;
@@ -47,6 +49,10 @@ pub(crate) use adapter_scheduler::{
 };
 pub(crate) use command_dispatch::{CommandDispatchState, CommandTurnOutput};
 pub(crate) use frontend_control::{CdpCookieSnapshot, CdpOwnerActorLifecycle};
+pub(crate) use navigation_dispatch::{
+    CompletedDevToolsNavigationExecution, DevToolsNavigationCommandProgress,
+    DevToolsNavigationCommandWait, DevToolsNavigationReplyWait,
+};
 use protocol_residence::{
     ClientTurnPredecessor, ProtocolSchedulerResidence, ProtocolSchedulerStep, SchedulerQueues,
 };
@@ -116,6 +122,7 @@ pub(crate) struct CdpScheduler {
     renderer_command_response_order: RendererCommandResponseOrder,
     queues: SchedulerQueues,
     page_screencasts: HashMap<Option<String>, PageScreencastSchedule>,
+    detached_navigations: FuturesUnordered<DevToolsNavigationCommandWait>,
 }
 
 #[derive(Clone, Copy)]
@@ -251,6 +258,7 @@ pub(crate) struct CdpSchedulerEventReceivers {
 /// is completed before the command wait selects again.
 pub(crate) enum CdpSchedulerInterleavedInput {
     BrowserEvent(browser_events::BrowserEventInput),
+    DetachedNavigation(Result<Box<CompletedDevToolsNavigationExecution>, tokio::task::JoinError>),
     BackgroundNavigationCompletion(BackgroundNavigationCompletion),
     BackgroundEvent(BackgroundProtocolEvent),
     RendererPublication(RendererOutputTransportMessage),
@@ -260,11 +268,15 @@ impl CdpSchedulerEventReceivers {
     async fn recv_interleaved_input(
         &mut self,
         browser_event_rx: &mut Option<moli_core::browser::BrowserEventReceiver>,
+        detached_navigations: &mut FuturesUnordered<DevToolsNavigationCommandWait>,
     ) -> Option<CdpSchedulerInterleavedInput> {
         tokio::select! {
             biased;
             event = browser_events::recv_browser_event(browser_event_rx) => {
                 Some(CdpSchedulerInterleavedInput::BrowserEvent(event))
+            }
+            completed = detached_navigations.next(), if !detached_navigations.is_empty() => {
+                completed.map(|completed| CdpSchedulerInterleavedInput::DetachedNavigation(completed.map(Box::new)))
             }
             maybe_completion = self.background_navigation_completion_rx.recv() => {
                 maybe_completion.map(
@@ -717,6 +729,7 @@ impl CdpScheduler {
             renderer_command_response_order: RendererCommandResponseOrder::default(),
             queues: SchedulerQueues::default(),
             page_screencasts: HashMap::new(),
+            detached_navigations: FuturesUnordered::new(),
         }
     }
 
@@ -1195,8 +1208,6 @@ impl CdpScheduler {
             && self
                 .conn
                 .devtools_context_routes_to_top_level_target(&navigation_context);
-        let mut foreground_navigation_network_barrier =
-            ForegroundNavigationNetworkBarrier::for_navigation_wait(navigation_wait);
         match self
             .drain_inflight_background_navigation_before_internal_command(
                 receivers,
@@ -1286,6 +1297,37 @@ impl CdpScheduler {
                     }
                 }
             };
+        execution = self
+            .finish_devtools_navigation_wait(
+                receivers,
+                navigation_context,
+                navigation_wait,
+                validate_root_document_lifecycle,
+                execution,
+                protocol_output,
+                navigation_command_output_start,
+            )
+            .await;
+        DevToolsPageCommandExecution {
+            execution,
+            page_residence,
+        }
+    }
+
+    async fn finish_devtools_navigation_wait(
+        &mut self,
+        receivers: &mut CdpSchedulerEventReceivers,
+        navigation_context: moli_protocol::devtools_runtime::DevToolsCommandContext,
+        navigation_wait: Option<DevToolsNavigationWait>,
+        validate_root_document_lifecycle: bool,
+        mut execution: DevToolsCommandExecution,
+        mut protocol_output: ProtocolOutputSequence,
+        navigation_command_output_start: usize,
+    ) -> DevToolsCommandExecution {
+        let navigation_lifecycle_milestone =
+            devtools_navigation_lifecycle_milestone(navigation_wait);
+        let mut foreground_navigation_network_barrier =
+            ForegroundNavigationNetworkBarrier::for_navigation_wait(navigation_wait);
         let expected_document_loader_id = devtools_navigation_result_loader_id(&execution.result);
         let mut document_lifecycle_wait_key =
             if validate_root_document_lifecycle && execution.result.is_ok() {
@@ -1432,10 +1474,7 @@ impl CdpScheduler {
         execution
             .protocol_output
             .append(foreground_navigation_network_barrier.finish());
-        DevToolsPageCommandExecution {
-            execution,
-            page_residence,
-        }
+        execution
     }
 
     async fn drain_inflight_background_navigation_before_internal_command(
@@ -2007,6 +2046,9 @@ impl CdpScheduler {
         match input {
             CdpSchedulerInterleavedInput::BrowserEvent(event) => {
                 Ok(self.handle_browser_event(event).await)
+            }
+            CdpSchedulerInterleavedInput::DetachedNavigation(completed) => {
+                Ok(Box::pin(self.complete_detached_navigation(receivers, completed)).await)
             }
             CdpSchedulerInterleavedInput::BackgroundNavigationCompletion(completion) => {
                 self.drain_background_navigation_completion_with_progress_barrier(
