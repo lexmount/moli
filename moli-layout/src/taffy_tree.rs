@@ -1,5 +1,8 @@
 use std::{fmt::Debug, hash::Hash};
 
+mod inline_containing_block;
+use inline_containing_block::InlineContainingBlocks;
+
 use parley::{AlignmentOptions, PositionedLayoutItem, YieldData};
 use style::Atom;
 use taffy::{
@@ -35,7 +38,8 @@ use crate::{
 };
 
 pub(crate) struct PreparedWorldLayout {
-    positioned_static_sources: Vec<PositionedStaticSource>,
+    positioned_children: Vec<PositionedChild>,
+    inline_containing_blocks: InlineContainingBlocks,
     numeric_unrounded_layouts: Vec<Layout>,
     numeric_viewport_layout: Layout,
     feedback_invalidation_marks: Vec<bool>,
@@ -74,6 +78,23 @@ impl PreparedWorldLayout {
                 .map(|layout_box| layout_box.unrounded_layout),
         );
         self.numeric_viewport_layout = world.viewport_layout.unrounded_layout;
+    }
+
+    /// Inline-owned absolute boxes run real numeric sublayouts after the root
+    /// traversal. Preserve their cache-owned descendant geometry too: restoring
+    /// the pre-sub-layout snapshot while keeping its PerformLayout cache would
+    /// leave a cached subtree with zero/stale descendants on scrollbar feedback.
+    /// The positioned root's own location is resolved separately each iteration.
+    fn capture_positioned_descendants<N>(&mut self, world: &LayoutWorld<N>, root: LayoutBoxId)
+    where
+        N: Copy + Debug + Eq + Hash,
+    {
+        let mut stack = world.boxes[root.index()].layout_children.clone();
+        while let Some(id) = stack.pop() {
+            let layout_box = &world.boxes[id.index()];
+            self.numeric_unrounded_layouts[id.index()] = layout_box.unrounded_layout;
+            stack.extend(layout_box.layout_children.iter().copied());
+        }
     }
 
     /// Clears only the cache entries on changed scrollbar boxes and their
@@ -151,10 +172,11 @@ where
     world.viewport_layout.unrounded_layout = Layout::with_order(0);
     world.viewport_layout.final_layout = Layout::with_order(0);
     update_viewport_layout_style(world, viewport);
-    let positioned_static_sources = prepare_layout_tree(world);
+    let positioned_children = prepare_layout_tree(world);
     prepare_table_layout_trees(world);
     let mut prepared = PreparedWorldLayout {
-        positioned_static_sources,
+        positioned_children,
+        inline_containing_blocks: InlineContainingBlocks::new(world),
         numeric_unrounded_layouts: Vec::with_capacity(world.boxes.len()),
         numeric_viewport_layout: Layout::with_order(0),
         feedback_invalidation_marks: vec![false; world.boxes.len()],
@@ -229,8 +251,7 @@ where
     );
     prepared.capture_numeric_geometry(world);
     physicalize_vertical_block_flow(world);
-    finish_positioned_static_layout(world, viewport, &prepared.positioned_static_sources);
-    finish_inline_positioned_layout(world, viewport);
+    finish_positioned_layout(world, viewport, prepared);
     finish_form_control_contents(world);
     finish_outside_list_markers(world);
     finish_sticky_positioning(world, viewport);
@@ -391,11 +412,11 @@ fn scale_layout(layout: Layout, factor: f32) -> Layout {
     }
 }
 
-fn prepare_layout_tree<N>(world: &mut LayoutWorld<N>) -> Vec<PositionedStaticSource>
+fn prepare_layout_tree<N>(world: &mut LayoutWorld<N>) -> Vec<PositionedChild>
 where
     N: Copy + Debug + Eq + Hash,
 {
-    let mut positioned_static_sources = Vec::new();
+    let mut positioned_children = Vec::new();
     let root = world.root;
     world.viewport_layout.children.push(root);
 
@@ -419,10 +440,11 @@ where
         let is_flattened = world.boxes[id.index()].inline_flattened;
         let is_positioned = world.boxes[id.index()].style.is_absolute_positioned()
             || world.boxes[id.index()].style.is_fixed_positioned();
+        let structural_parent = world.boxes[id.index()].structural_parent;
         let positioned_containing_block = if world.boxes[id.index()].style.is_fixed_positioned() {
-            nearest_fixed_containing_block(world, Some(original_parent))
+            nearest_fixed_containing_block(world, structural_parent)
         } else if world.boxes[id.index()].style.is_absolute_positioned() {
-            nearest_positioned_ancestor(world, Some(original_parent))
+            nearest_positioned_ancestor(world, structural_parent)
         } else {
             None
         };
@@ -450,14 +472,14 @@ where
             && layout_parent != Some(original_parent)
             && world.boxes[id.index()].style.has_auto_inset_axis()
             && inline_owner.is_none();
+        let mut static_source = None;
         if needs_static_position {
             if world.boxes[original_parent.index()]
                 .style
                 .display()
                 .is_flex_container()
             {
-                positioned_static_sources.push(PositionedStaticSource::FlexContainer {
-                    child: id,
+                static_source = Some(PositionedStaticSource::FlexContainer {
                     container: original_parent,
                 });
             } else if world.boxes[original_parent.index()]
@@ -465,8 +487,7 @@ where
                 .display()
                 .is_grid_container()
             {
-                positioned_static_sources.push(PositionedStaticSource::GridContainer {
-                    child: id,
+                static_source = Some(PositionedStaticSource::GridContainer {
                     container: original_parent,
                 });
             } else if original_parent_uses_block_layout(world, original_parent) {
@@ -494,8 +515,7 @@ where
                 world.boxes[original_parent.index()]
                     .layout_children
                     .push(placeholder);
-                positioned_static_sources.push(PositionedStaticSource::BlockPlaceholder {
-                    child: id,
+                static_source = Some(PositionedStaticSource::BlockPlaceholder {
                     placeholder,
                     container: original_parent,
                 });
@@ -506,6 +526,12 @@ where
                     LayoutCapabilityDiagnostic::PositionedStaticPositionDeferred,
                 );
             }
+        }
+        if is_positioned {
+            positioned_children.push(PositionedChild {
+                child: id,
+                static_source,
+            });
         }
         world.boxes[id.index()].positioned_containing_block = positioned_containing_block;
         world.boxes[id.index()].layout_parent = layout_parent;
@@ -538,7 +564,7 @@ where
         children.sort_by_key(|child| world.boxes[child.index()].style.order());
         world.boxes[parent_index].layout_children = children;
     }
-    positioned_static_sources
+    positioned_children
 }
 
 fn original_parent_uses_block_layout<N>(world: &LayoutWorld<N>, parent: LayoutBoxId) -> bool
@@ -885,59 +911,102 @@ struct PositionedContainingArea {
 }
 
 #[derive(Clone, Copy, Debug)]
+struct PositionedChild {
+    child: LayoutBoxId,
+    static_source: Option<PositionedStaticSource>,
+}
+
+#[derive(Clone, Copy, Debug)]
 enum PositionedStaticSource {
     /// A block formatting context computes the hypothetical position through
     /// a zero-sized out-of-flow probe in the original formatting parent.
     BlockPlaceholder {
-        child: LayoutBoxId,
         placeholder: LayoutBoxId,
         container: LayoutBoxId,
     },
     /// Flex alignment contributes a static-position point and edge pair even
     /// when the flex container is not the child's absolute containing block.
-    FlexContainer {
-        child: LayoutBoxId,
-        container: LayoutBoxId,
-    },
+    FlexContainer { container: LayoutBoxId },
     /// When the grid does not establish the containing block, its content box
     /// provides the static-position rectangle; grid placement is inapplicable.
-    GridContainer {
-        child: LayoutBoxId,
-        container: LayoutBoxId,
-    },
+    GridContainer { container: LayoutBoxId },
 }
 
-/// Resolves static-position contributions after the normal-flow formatting
-/// parents have their final numeric geometry. The real positioned box remains
-/// attached to its CSS containing block throughout numeric layout.
-fn finish_positioned_static_layout<N>(
+/// Complete positioned children in construction preorder. An inline containing
+/// block is not a numeric node, so all of its abspos descendants need this
+/// sizing step, even when a block/flex/grid (rather than an IFC placeholder)
+/// supplies the static position. Parents are completed before their nested
+/// positioning contexts; no allocation-order scan or stale geometry cache is
+/// needed.
+fn finish_positioned_layout<N>(
     world: &mut LayoutWorld<N>,
     viewport: PaintViewport,
-    sources: &[PositionedStaticSource],
+    prepared: &mut PreparedWorldLayout,
 ) where
     N: Copy + Debug + Eq + Hash,
 {
-    for source in sources {
-        let (child, static_global) = match *source {
-            PositionedStaticSource::BlockPlaceholder {
-                child,
-                placeholder,
-                container,
-            } => (child, block_static_position(world, placeholder, container)),
-            PositionedStaticSource::FlexContainer { child, container } => {
-                (child, flex_static_position(world, child, container))
-            }
-            PositionedStaticSource::GridContainer { child, container } => {
-                (child, grid_static_position(world, child, container))
-            }
+    for index in 0..prepared.positioned_children.len() {
+        let PositionedChild {
+            child,
+            static_source,
+        } = prepared.positioned_children[index];
+        let layout_box = &world.boxes[child.index()];
+        let static_global = if let Some(position) = layout_box.inline_static_position {
+            let owner_origin = unrounded_global_origin(world, position.owner);
+            Some(PhysicalStaticPosition::new(
+                Point {
+                    x: owner_origin.x + position.point.x,
+                    y: owner_origin.y + position.point.y,
+                },
+                if position.direction == InlineDirection::Rtl {
+                    HorizontalStaticEdge::Right
+                } else {
+                    HorizontalStaticEdge::Left
+                },
+                VerticalStaticEdge::Top,
+            ))
+        } else {
+            static_source.map(|source| match source {
+                PositionedStaticSource::BlockPlaceholder {
+                    placeholder,
+                    container,
+                } => block_static_position(world, placeholder, container),
+                PositionedStaticSource::FlexContainer { container } => {
+                    flex_static_position(world, child, container)
+                }
+                PositionedStaticSource::GridContainer { container } => {
+                    grid_static_position(world, child, container)
+                }
+            })
         };
-        let area = positioned_containing_area(world, child, viewport);
-        let static_in_area = static_global.relative_to(area.origin);
+        if static_global.is_none()
+            && !layout_box
+                .positioned_containing_block
+                .is_some_and(|id| world.boxes[id.index()].inline_flattened)
+        {
+            continue;
+        }
+        let area =
+            positioned_containing_area(world, child, viewport, &prepared.inline_containing_blocks);
+        let static_in_area = static_global.map(|position| position.relative_to(area.origin));
         let numeric_parent_origin = world.boxes[child.index()]
             .layout_parent
             .map(|parent| unrounded_global_origin(world, parent))
             .unwrap_or(Point::ZERO);
-        apply_static_position(world, child, area, static_in_area, numeric_parent_origin);
+        if area.requires_inline_layout {
+            // With explicit insets on both axes no static position is needed.
+            let position = static_in_area.unwrap_or_else(|| {
+                PhysicalStaticPosition::new(
+                    Point::ZERO,
+                    HorizontalStaticEdge::Left,
+                    VerticalStaticEdge::Top,
+                )
+            });
+            layout_inline_absolute_child(world, child, area, position, numeric_parent_origin);
+            prepared.capture_positioned_descendants(world, child);
+        } else if let Some(position) = static_in_area {
+            apply_static_position(world, child, area, position, numeric_parent_origin);
+        }
     }
 }
 
@@ -1100,77 +1169,11 @@ where
     )
 }
 
-/// Completes positioned descendants whose hypothetical position came from an
-/// IFC. Taffy can size ordinary absolute children itself, but an IFC is a leaf
-/// in the numeric tree and a flattened positioned inline is not a numeric node
-/// at all. Parley's zero-sized out-of-flow placeholder is therefore the sole
-/// owner of the static position for these cases.
-fn finish_inline_positioned_layout<N>(world: &mut LayoutWorld<N>, viewport: PaintViewport)
-where
-    N: Copy + Debug + Eq + Hash,
-{
-    let mut processed = vec![false; world.boxes.len()];
-    while let Some(index) = world
-        .boxes
-        .iter()
-        .enumerate()
-        .find_map(|(index, layout_box)| {
-            (!processed[index] && layout_box.inline_static_position.is_some()).then_some(index)
-        })
-    {
-        processed[index] = true;
-        let child = LayoutBoxId::from_index(index);
-        let static_position = world.boxes[index]
-            .inline_static_position
-            .expect("selected positioned box has an IFC static position");
-        let area = positioned_containing_area(world, child, viewport);
-        let owner_origin = unrounded_global_origin(world, static_position.owner);
-        let static_global = Point {
-            x: owner_origin.x + static_position.point.x,
-            y: owner_origin.y + static_position.point.y,
-        };
-        let static_in_area = Point {
-            x: static_global.x - area.origin.x,
-            y: static_global.y - area.origin.y,
-        };
-        let numeric_parent_origin = world.boxes[index]
-            .layout_parent
-            .map(|parent| unrounded_global_origin(world, parent))
-            .unwrap_or(Point::ZERO);
-
-        if area.requires_inline_layout {
-            layout_inline_absolute_child(
-                world,
-                child,
-                area,
-                static_in_area,
-                static_position.direction,
-                numeric_parent_origin,
-            );
-        } else {
-            apply_static_position(
-                world,
-                child,
-                area,
-                PhysicalStaticPosition::new(
-                    static_in_area,
-                    if static_position.direction == InlineDirection::Rtl {
-                        HorizontalStaticEdge::Right
-                    } else {
-                        HorizontalStaticEdge::Left
-                    },
-                    VerticalStaticEdge::Top,
-                ),
-                numeric_parent_origin,
-            );
-        }
-    }
-}
-
 fn positioned_containing_area<N>(
     world: &LayoutWorld<N>,
     child: LayoutBoxId,
     viewport: PaintViewport,
+    inline_containing_blocks: &InlineContainingBlocks,
 ) -> PositionedContainingArea
 where
     N: Copy + Debug + Eq + Hash,
@@ -1189,16 +1192,12 @@ where
     };
     let containing_box = &world.boxes[containing_block.index()];
     if containing_box.inline_flattened
-        && let Some(owner) = containing_box.inline_context_owner
-        && let Some(rect) = inline_box_containing_rect(world, owner, containing_block)
+        && let Some(rect) = inline_containing_blocks.rect(world, containing_block)
     {
-        let owner_box = &world.boxes[owner.index()];
-        let owner_layout = owner_box.unrounded_layout;
-        let owner_origin = unrounded_global_origin(world, owner);
         return PositionedContainingArea {
             origin: Point {
-                x: owner_origin.x + owner_layout.border.left + owner_layout.padding.left + rect.x,
-                y: owner_origin.y + owner_layout.border.top + owner_layout.padding.top + rect.y,
+                x: rect.x,
+                y: rect.y,
             },
             size: Size {
                 width: rect.width,
@@ -1226,37 +1225,6 @@ where
         writing_mode: containing_box.style.writing_mode(),
         requires_inline_layout: containing_box.inline_formatting_context,
     }
-}
-
-fn inline_box_containing_rect<N>(
-    world: &LayoutWorld<N>,
-    owner: LayoutBoxId,
-    containing_block: LayoutBoxId,
-) -> Option<PaintRect>
-where
-    N: Copy + Debug + Eq + Hash,
-{
-    let context = world.boxes[owner.index()].inline_layout.as_ref()?;
-    context
-        .fragments
-        .boxes
-        .iter()
-        .filter(|fragment| fragment.box_id == containing_block)
-        .map(|fragment| fragment.box_model.padding)
-        .reduce(union_paint_rect)
-}
-
-fn union_paint_rect(left: PaintRect, right: PaintRect) -> PaintRect {
-    let min_x = left.x.min(right.x);
-    let min_y = left.y.min(right.y);
-    let max_x = (left.x + left.width).max(right.x + right.width);
-    let max_y = (left.y + left.height).max(right.y + right.height);
-    PaintRect::new(
-        min_x,
-        min_y,
-        (max_x - min_x).max(0.0),
-        (max_y - min_y).max(0.0),
-    )
 }
 
 fn unrounded_global_origin<N>(world: &LayoutWorld<N>, id: LayoutBoxId) -> Point<f32>
@@ -1309,8 +1277,7 @@ fn layout_inline_absolute_child<N>(
     world: &mut LayoutWorld<N>,
     child: LayoutBoxId,
     area: PositionedContainingArea,
-    static_position: Point<f32>,
-    static_direction: InlineDirection,
+    static_position: PhysicalStaticPosition,
     numeric_parent_origin: Point<f32>,
 ) where
     N: Copy + Debug + Eq + Hash,
@@ -1414,8 +1381,7 @@ fn layout_inline_absolute_child<N>(
         let available_width = match (left, right) {
             (Some(left), None) => area_width - left,
             (None, Some(right)) => area_width - right,
-            (None, None) if static_direction == InlineDirection::Rtl => static_position.x,
-            (None, None) => area_width - static_position.x,
+            (None, None) => static_position.available_width(area_width),
             (Some(_), Some(_)) => unreachable!("both insets already resolve auto width"),
         } - non_auto_margin_width;
         known_dimensions.width = Some(world.measure_fit_content_width(
@@ -1511,6 +1477,13 @@ fn layout_inline_absolute_child<N>(
         top: vertical_margin.start,
         bottom: vertical_margin.end,
     };
+    let static_origin = static_position.border_box_origin(
+        final_size,
+        resolved_margin,
+        area.size,
+        area.writing_mode,
+        area.direction,
+    );
     let x = match (left, right) {
         (Some(left), Some(right)) => {
             if area.direction == taffy::Direction::Rtl {
@@ -1521,17 +1494,14 @@ fn layout_inline_absolute_child<N>(
         }
         (Some(left), None) => left + resolved_margin.left,
         (None, Some(right)) => area_width - final_size.width - right - resolved_margin.right,
-        (None, None) if static_direction == InlineDirection::Rtl => {
-            static_position.x - final_size.width - resolved_margin.right
-        }
-        (None, None) => static_position.x + resolved_margin.left,
+        (None, None) => static_origin.x,
     };
     let y = top
         .map(|top| top + resolved_margin.top)
         .or_else(|| {
             bottom.map(|bottom| area_height - final_size.height - bottom - resolved_margin.bottom)
         })
-        .unwrap_or(static_position.y + resolved_margin.top);
+        .unwrap_or(static_origin.y);
     let scrollbar_size = world.get_scrollbar_insets(child.to_taffy()).sum_axes();
     world.boxes[child.index()].unrounded_layout = Layout {
         order: 0,
@@ -1785,6 +1755,14 @@ where
         self.get_core_container_style(child_node_id)
     }
 
+    fn use_parent_percentage_resolution_block_size_for_children(&self, node_id: NodeId) -> bool {
+        !self.is_viewport_taffy_node(node_id)
+            && matches!(
+                self.boxes[LayoutBoxId::from_taffy(node_id).index()].kind,
+                LayoutBoxKind::AnonymousBlock | LayoutBoxKind::BlockInInline
+            )
+    }
+
     fn compute_block_child_layout(
         &mut self,
         node_id: NodeId,
@@ -1989,6 +1967,7 @@ where
             | LayoutBoxKind::TableCell
             | LayoutBoxKind::FormControl
             | LayoutBoxKind::AnonymousBlock
+            | LayoutBoxKind::BlockInInline
             | LayoutBoxKind::AnonymousFlexItem
             | LayoutBoxKind::AnonymousGridItem
             | LayoutBoxKind::AnonymousTableWrapper
@@ -1998,7 +1977,7 @@ where
                 compute_block_layout(self, node_id, inputs, block_context)
             }
             LayoutBoxKind::PrincipalInline
-            | LayoutBoxKind::InlineContinuation
+            | LayoutBoxKind::InlineContinuation { .. }
             | LayoutBoxKind::TableColumn
             | LayoutBoxKind::Text
             | LayoutBoxKind::LineBreak
@@ -2331,7 +2310,17 @@ where
                     inline_box.height = 0.0;
                 }
                 InlineObjectRole::StartEdge | InlineObjectRole::EndEdge => {
-                    let child_style = &self.boxes[object.box_id.index()].style;
+                    let child = &self.boxes[object.box_id.index()];
+                    if !(if object.role == InlineObjectRole::StartEdge {
+                        child.inline_start_edge
+                    } else {
+                        child.inline_end_edge
+                    }) {
+                        inline_box.width = 0.0;
+                        inline_box.height = 0.0;
+                        continue;
+                    }
+                    let child_style = &child.style;
                     let margins = child_style
                         .taffy
                         .margin

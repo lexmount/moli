@@ -61,13 +61,14 @@ pub enum LayoutBoxKind {
     LineBreak,
     Replaced,
     AnonymousBlock,
+    BlockInInline,
     AnonymousFlexItem,
     AnonymousGridItem,
     AnonymousTableWrapper,
     AnonymousTableRowGroup,
     AnonymousTableRow,
     AnonymousTableCell,
-    InlineContinuation,
+    InlineContinuation { principal: LayoutBoxId },
     Text,
     PseudoMarker,
     PseudoBefore,
@@ -127,13 +128,14 @@ impl LayoutBoxKind {
             Self::LineBreak => "line-break",
             Self::Replaced => "replaced",
             Self::AnonymousBlock => "anonymous-block",
+            Self::BlockInInline => "block-in-inline",
             Self::AnonymousFlexItem => "anonymous-flex-item",
             Self::AnonymousGridItem => "anonymous-grid-item",
             Self::AnonymousTableWrapper => "anonymous-table-wrapper",
             Self::AnonymousTableRowGroup => "anonymous-table-row-group",
             Self::AnonymousTableRow => "anonymous-table-row",
             Self::AnonymousTableCell => "anonymous-table-cell",
-            Self::InlineContinuation => "inline-continuation",
+            Self::InlineContinuation { .. } => "inline-continuation",
             Self::Text => "text",
             Self::PseudoMarker => "pseudo-marker",
             Self::PseudoBefore => "pseudo-before",
@@ -146,6 +148,7 @@ impl LayoutBoxKind {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum LayoutAnonymousReason {
     MixedFlowInlineRun,
+    BlockInInline,
     InlineSplitContinuation,
     FlexTextRun,
     GridTextRun,
@@ -160,6 +163,7 @@ impl LayoutAnonymousReason {
     pub(crate) const fn debug_name(self) -> &'static str {
         match self {
             Self::MixedFlowInlineRun => "mixed-flow-inline-run",
+            Self::BlockInInline => "block-in-inline",
             Self::InlineSplitContinuation => "inline-split-continuation",
             Self::FlexTextRun => "flex-text-run",
             Self::GridTextRun => "grid-text-run",
@@ -223,6 +227,10 @@ pub struct LayoutBox<N> {
     pub(crate) anonymous_reason: Option<LayoutAnonymousReason>,
     pub(crate) capability_diagnostics: Vec<LayoutCapabilityDiagnostic>,
     pub(crate) kind: LayoutBoxKind,
+    /// Decoration edges belonging to this normalized inline piece. Opening
+    /// and closing an IFC must not recreate edges removed by a block split.
+    pub(crate) inline_start_edge: bool,
+    pub(crate) inline_end_edge: bool,
     /// Parent in the source-backed LayoutObject hierarchy, before anonymous
     /// box normalization and block-in-inline promotion.
     ///
@@ -763,6 +771,29 @@ where
         id
     }
 
+    /// Formatting continuations are pieces of one inline LayoutObject, not
+    /// new containing blocks or independently queryable CSSOM boxes.
+    pub(crate) fn principal_inline_box(&self, id: LayoutBoxId) -> LayoutBoxId {
+        match self.boxes[id.index()].kind {
+            LayoutBoxKind::InlineContinuation { principal } => principal,
+            _ => id,
+        }
+    }
+
+    /// An anonymous block-in-inline emits a fragment for every inline it
+    /// interrupts. Nested inlines share the same numeric block wrapper.
+    pub(crate) fn block_in_inline_ancestors(
+        &self,
+        id: LayoutBoxId,
+    ) -> impl Iterator<Item = LayoutBoxId> + '_ {
+        let first = (self.boxes[id.index()].kind == LayoutBoxKind::BlockInInline)
+            .then_some(self.boxes[id.index()].structural_parent)
+            .flatten();
+        std::iter::successors(first, |id| self.boxes[id.index()].structural_parent)
+            .take_while(|id| self.boxes[id.index()].style.display().is_inline_flow())
+            .map(|id| self.principal_inline_box(id))
+    }
+
     pub(crate) fn map_source(&mut self, source: N, id: LayoutBoxId) {
         self.source_mapping.entry(source).or_insert(id);
     }
@@ -876,6 +907,10 @@ where
                 .structural_parent
                 .and_then(|parent| remap[parent.index()]);
             layout_box.parent = layout_box.parent.and_then(|parent| remap[parent.index()]);
+            if let LayoutBoxKind::InlineContinuation { principal } = &mut layout_box.kind {
+                *principal = remap[principal.index()]
+                    .expect("a reachable inline continuation retains its principal box");
+            }
             layout_box.children = layout_box
                 .children
                 .into_iter()
@@ -970,6 +1005,18 @@ where
         {
             return Err(LayoutError::InvalidBoxReference {
                 index: parent.index(),
+            });
+        }
+        if let LayoutBoxKind::InlineContinuation { principal } = layout_box.kind
+            && (principal == id
+                || !self.box_by_id(principal).is_some_and(|principal_box| {
+                    principal_box.source.or(principal_box.owner) == layout_box.owner
+                        && principal_box.style.display().is_inline_flow()
+                        && !matches!(principal_box.kind, LayoutBoxKind::InlineContinuation { .. })
+                }))
+        {
+            return Err(LayoutError::InvalidBoxReference {
+                index: principal.index(),
             });
         }
         if let Some(source) = layout_box.source {
@@ -1115,6 +1162,8 @@ where
             anonymous_reason,
             capability_diagnostics,
             kind,
+            inline_start_edge: true,
+            inline_end_edge: true,
             structural_parent: None,
             parent: None,
             children: Vec::new(),
@@ -1240,9 +1289,10 @@ fn default_capability_diagnostics(
         | Kind::PrincipalInline
         | Kind::PrincipalInlineBlock
         | Kind::AnonymousBlock
+        | Kind::BlockInInline
         | Kind::AnonymousFlexItem
         | Kind::AnonymousGridItem
-        | Kind::InlineContinuation
+        | Kind::InlineContinuation { .. }
         | Kind::Text
         | Kind::PseudoBefore
         | Kind::PseudoAfter => None,

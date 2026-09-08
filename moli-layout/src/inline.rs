@@ -434,6 +434,58 @@ pub(crate) struct InlineBoxFragment {
     pub(crate) has_end_edge: bool,
 }
 
+/// The middle fragment of an inline interrupted by a block uses the anonymous
+/// block's extent, not a font strut. It exposes the inline's geometric box
+/// model without painting its decorations or owning either inline edge.
+pub(crate) fn block_in_inline_box_model(
+    style: &ResolvedLayoutStyle,
+    size: Size<f32>,
+) -> LayoutFragmentBoxModel {
+    let without_inline_edges = |mut edges: taffy::Rect<f32>| {
+        if style.writing_mode().inline_axis() == taffy::AbsoluteAxis::Vertical {
+            edges.top = 0.0;
+            edges.bottom = 0.0;
+        } else {
+            edges.left = 0.0;
+            edges.right = 0.0;
+        }
+        edges
+    };
+    let basis = Some(style.writing_mode().to_logical(size).inline_size);
+    let resolve = crate::style::resolve_stylo_calc_value;
+    let border = PaintRect::new(0.0, 0.0, size.width, size.height);
+    let borders = without_inline_edges(style.taffy.border.resolve_or_zero(basis, resolve));
+    let paddings = without_inline_edges(style.taffy.padding.resolve_or_zero(basis, resolve));
+    let margins = without_inline_edges(style.taffy.margin.resolve_or_zero(basis, resolve));
+    let padding = inset_rect(
+        border,
+        borders.top,
+        borders.right,
+        borders.bottom,
+        borders.left,
+    );
+    let content = inset_rect(
+        padding,
+        paddings.top,
+        paddings.right,
+        paddings.bottom,
+        paddings.left,
+    );
+    let margin = outset_rect(
+        border,
+        margins.top,
+        margins.right,
+        margins.bottom,
+        margins.left,
+    );
+    LayoutFragmentBoxModel {
+        content,
+        padding,
+        border,
+        margin,
+    }
+}
+
 pub(crate) fn build_inline_fragments<N>(
     context: &InlineFormattingContext,
     layout: &Layout<TextBrush>,
@@ -601,8 +653,10 @@ pub(crate) fn build_inline_fragments<N>(
                         .entry((object.box_id.index(), line_index))
                         .or_default();
                     accumulator.include_inline_axis(positioned.x, positioned.width);
-                    accumulator.has_start_edge |= object.role == InlineObjectRole::StartEdge;
-                    accumulator.has_end_edge |= object.role == InlineObjectRole::EndEdge;
+                    accumulator.has_start_edge |= object.role == InlineObjectRole::StartEdge
+                        && boxes[object.box_id.index()].inline_start_edge;
+                    accumulator.has_end_edge |= object.role == InlineObjectRole::EndEdge
+                        && boxes[object.box_id.index()].inline_end_edge;
                 }
                 InlineObjectRole::Atomic
                 | InlineObjectRole::Float

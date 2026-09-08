@@ -110,12 +110,13 @@ where
                 | LayoutBoxKind::TableCell
                 | LayoutBoxKind::FormControl
                 | LayoutBoxKind::AnonymousBlock
+                | LayoutBoxKind::BlockInInline
                 | LayoutBoxKind::AnonymousFlexItem => Some(NormalizedFormattingContext::Block),
                 LayoutBoxKind::AnonymousGridItem | LayoutBoxKind::AnonymousTableCell => {
                     Some(NormalizedFormattingContext::Block)
                 }
                 LayoutBoxKind::PrincipalInline
-                | LayoutBoxKind::InlineContinuation
+                | LayoutBoxKind::InlineContinuation { .. }
                 | LayoutBoxKind::Text
                 | LayoutBoxKind::LineBreak
                 | LayoutBoxKind::PseudoMarker

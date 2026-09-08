@@ -295,33 +295,34 @@ where
     /// Paint order, source provenance, transforms, and clips are canonical
     /// tree data. The duplicated candidate vector is deliberately temporary.
     fn hit_test_entries(&self) -> Vec<LayoutHitTestEntry<N>> {
-        let mut entries = self
-            .fragments
-            .iter()
-            .filter_map(|fragment| {
-                let paint_order = fragment.paint_order?;
-                let (box_id, is_text) = match fragment.kind {
-                    LayoutFragmentKind::Box { box_id }
-                    | LayoutFragmentKind::InlineBox { box_id, .. } => (box_id, false),
-                    LayoutFragmentKind::Text { box_id, .. } => (box_id, true),
-                    LayoutFragmentKind::Line { .. } => return None,
-                };
-                let layout_box = self.boxes.get(box_id.index())?;
-                if !layout_box.visible {
-                    return None;
-                }
-                Some(LayoutHitTestEntry {
-                    source: layout_box.hit_source?,
-                    fragment: fragment.id,
-                    coordinate_space: fragment.coordinate_space,
-                    clip_chain: fragment.clip_chain,
-                    local_rect: fragment.rect,
-                    paint_order,
-                    is_text,
-                    pointer_events: layout_box.pointer_events,
+        let mut entries =
+            self.fragments
+                .iter()
+                .filter_map(|fragment| {
+                    let paint_order = fragment.paint_order?;
+                    let (box_id, is_text) = match fragment.kind {
+                        LayoutFragmentKind::Box { box_id }
+                        | LayoutFragmentKind::InlineBox { box_id, .. } => (box_id, false),
+                        LayoutFragmentKind::Text { box_id, .. } => (box_id, true),
+                        LayoutFragmentKind::Line { .. }
+                        | LayoutFragmentKind::BlockInInline { .. } => return None,
+                    };
+                    let layout_box = self.boxes.get(box_id.index())?;
+                    if !layout_box.visible {
+                        return None;
+                    }
+                    Some(LayoutHitTestEntry {
+                        source: layout_box.hit_source?,
+                        fragment: fragment.id,
+                        coordinate_space: fragment.coordinate_space,
+                        clip_chain: fragment.clip_chain,
+                        local_rect: fragment.rect,
+                        paint_order,
+                        is_text,
+                        pointer_events: layout_box.pointer_events,
+                    })
                 })
-            })
-            .collect::<Vec<_>>();
+                .collect::<Vec<_>>();
         entries.sort_by_key(|entry| std::cmp::Reverse(entry.paint_order));
         entries
     }
@@ -394,6 +395,7 @@ where
     fn fragment_box_id(&self, fragment: LayoutFragmentId) -> Option<LayoutOutputBoxId> {
         match self.fragment(fragment)?.kind {
             LayoutFragmentKind::Box { box_id }
+            | LayoutFragmentKind::BlockInInline { box_id }
             | LayoutFragmentKind::InlineBox { box_id, .. }
             | LayoutFragmentKind::Text { box_id, .. } => Some(box_id),
             LayoutFragmentKind::Line { owner, .. } => Some(owner),

@@ -23,7 +23,7 @@ impl<N> LayoutBox<N> {
                 LayoutBoxKind::Text
                     | LayoutBoxKind::LineBreak
                     | LayoutBoxKind::PrincipalInline
-                    | LayoutBoxKind::InlineContinuation
+                    | LayoutBoxKind::InlineContinuation { .. }
             )
     }
 

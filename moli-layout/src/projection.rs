@@ -412,13 +412,7 @@ where
                 ));
             }
             self.scrollable_overflow[index] = overflow.scrollable_overflow(box_id);
-            let source = layout_box.source.or_else(|| {
-                (layout_box.anonymous_reason
-                    == Some(LayoutAnonymousReason::InlineSplitContinuation))
-                .then_some(layout_box.owner)
-                .flatten()
-            });
-            self.box_sources.push(source);
+            self.box_sources.push(layout_box.source);
             self.hit_sources.push(layout_box.source.or_else(|| {
                 (layout_box.pseudo.is_some()
                     || layout_box.anonymous_reason
@@ -643,8 +637,11 @@ where
     }
 
     fn build_fragments(&mut self) {
-        for index in 0..self.world.boxes.len() {
+        let mut stack = vec![self.world.root];
+        while let Some(id) = stack.pop() {
+            let index = id.index();
             let layout_box = &self.world.boxes[index];
+            stack.extend(layout_box.children.iter().rev().copied());
             let output_box = LayoutOutputBoxId::from_index(index);
             let coordinate_space = LayoutCoordinateSpaceId::from_index(index + 1);
             if !layout_box.inline_flattened {
@@ -664,6 +661,25 @@ where
                 });
                 self.direct_fragments[index] = Some(fragment);
                 self.register_box_fragment(index, fragment);
+            }
+
+            for principal in self.world.block_in_inline_ancestors(id) {
+                let box_model = crate::inline::block_in_inline_box_model(
+                    &self.world.boxes[principal.index()].style,
+                    layout_box.final_layout.size,
+                );
+                let fragment = self.push_fragment(LayoutFragment {
+                    id: LayoutFragmentId::from_index(0),
+                    kind: LayoutFragmentKind::BlockInInline {
+                        box_id: LayoutOutputBoxId::from_index(principal.index()),
+                    },
+                    rect: box_model.border,
+                    box_model: Some(box_model),
+                    coordinate_space,
+                    clip_chain: None,
+                    paint_order: None,
+                });
+                self.register_box_fragment(principal.index(), fragment);
             }
 
             let Some(context) = layout_box.inline_layout.as_ref() else {
@@ -707,7 +723,7 @@ where
                 self.boxes[index].fragments.push(fragment);
             }
             for inline in &context.fragments.boxes {
-                let target = inline.box_id.index();
+                let target = self.world.principal_inline_box(inline.box_id).index();
                 let box_model = inline.box_model.translated(content_origin);
                 let fragment = self.push_fragment(LayoutFragment {
                     id: LayoutFragmentId::from_index(0),
@@ -858,7 +874,7 @@ where
             LayoutFragmentKind::Box { .. }
             | LayoutFragmentKind::InlineBox { .. }
             | LayoutFragmentKind::Text { .. } => {}
-            LayoutFragmentKind::Line { .. } => return,
+            LayoutFragmentKind::Line { .. } | LayoutFragmentKind::BlockInInline { .. } => return,
         }
         let order = self.next_paint_order();
         let fragment = &mut self.fragments[fragment_id.index()];

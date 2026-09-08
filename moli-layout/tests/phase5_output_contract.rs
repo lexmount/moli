@@ -2647,17 +2647,153 @@ fn split_inline_continuations_remain_mapped_to_the_originating_element() {
 
     let output = build(&source, &mut styles);
     let rects = output.client_rects_for_source(1);
-    assert_eq!(rects.len(), 2, "{rects:?}");
+    assert_eq!(rects.len(), 3, "{rects:?}");
     let first = rects[0].bounding_rect();
-    let second = rects[1].bounding_rect();
-    assert!(first.width > 0.0 && second.width > 0.0);
-    assert!(second.y > first.y, "{rects:?}");
+    let middle = rects[1].bounding_rect();
+    let last = rects[2].bounding_rect();
+    assert!(first.width > 0.0 && last.width > 0.0);
+    assert!(last.y > middle.y && middle.y > first.y, "{rects:?}");
+    assert_eq!(middle.x, 0.0);
+    assert_eq!(
+        middle.width, 200.0,
+        "the middle fragment spans the containing block, not the 50px child"
+    );
+    assert_eq!(middle.height, 20.0);
     let union = output
         .box_model_for_source(1)
         .expect("split inline box model")
         .border
         .bounding_rect();
-    assert!(union.height >= second.bottom() - first.y);
+    assert!(union.height >= last.bottom() - first.y);
+    assert_eq!(union.width, middle.width);
+}
+
+#[test]
+fn block_in_inline_fragment_exposes_geometry_without_painting_or_self_hit_testing() {
+    let source = Source(vec![
+        Node::element("root", vec![1]),
+        Node::element("split-inline", vec![2, 3, 4]),
+        Node::element("before", Vec::new()),
+        Node::element("block", Vec::new()),
+        Node::element("after", Vec::new()),
+    ]);
+    let inline_color = PaintColor::new(0.8, 0.1, 0.2, 1.0);
+    let block_color = PaintColor::new(0.1, 0.7, 0.3, 1.0);
+    let mut styles = Styles::default();
+    styles.0.insert(
+        0,
+        fixed_size(LayoutDisplay::Block, 200.0, 120.0).with_text_metrics(0.0, 20.0),
+    );
+    styles.0.insert(
+        1,
+        ResolvedLayoutStyle::synthetic(
+            LayoutDisplay::Inline,
+            Style {
+                border: Rect::length(2.0),
+                ..Style::default()
+            },
+            inline_color,
+        )
+        .with_text_metrics(0.0, 20.0),
+    );
+    for node in [2, 4] {
+        styles
+            .0
+            .insert(node, fixed_size(LayoutDisplay::InlineBlock, 20.0, 10.0));
+    }
+    styles.0.insert(
+        3,
+        ResolvedLayoutStyle::synthetic(
+            LayoutDisplay::Block,
+            Style {
+                size: Size {
+                    width: length(50.0),
+                    height: length(20.0),
+                },
+                ..Style::default()
+            },
+            block_color,
+        ),
+    );
+
+    let output = build_with_request(
+        &source,
+        &mut styles,
+        LayoutPassRequest::with_paint(LayoutViewport::new(320, 240, 1.0), LayoutFlushReason::Test),
+    );
+    let rects = output.client_rects_for_source(1);
+    assert_eq!(rects.len(), 3);
+    let first = rects[0].bounding_rect();
+    let middle = rects[1].bounding_rect();
+    let last = rects[2].bounding_rect();
+    assert_eq!(middle.width, 200.0);
+    assert_eq!(middle.height, 20.0);
+    let source_output = output.source_output(1).unwrap();
+    let middle_fragment = source_output
+        .fragments
+        .iter()
+        .filter_map(|id| output.fragment(*id))
+        .find(|fragment| matches!(fragment.kind, LayoutFragmentKind::BlockInInline { .. }))
+        .expect("the principal inline owns the middle geometry fragment");
+    assert_eq!(middle_fragment.paint_order, None);
+
+    let snapshot = output.paint_snapshot().unwrap();
+    let fills = snapshot
+        .fragments
+        .iter()
+        .filter_map(PaintFragment::solid_fill_in_surface)
+        .filter_map(|(rect, color)| (color == inline_color).then_some(rect))
+        .collect::<Vec<_>>();
+    assert_eq!(
+        fills.len(),
+        2,
+        "only first and last fragments paint: {fills:?}"
+    );
+    assert_rect(fills[0], first);
+    assert_rect(fills[1], last);
+    let borders = snapshot
+        .fragments
+        .iter()
+        .filter_map(|fragment| match fragment {
+            PaintFragment::Border {
+                rect,
+                widths,
+                transform,
+                ..
+            } => Some((transform.map_rect(*rect).bounding_rect(), widths)),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(borders.len(), 2, "the middle fragment has no inline border");
+    assert_rect(borders[0].0, first);
+    assert_eq!(borders[0].1.left, 2.0);
+    assert_eq!(borders[0].1.right, 0.0);
+    assert_rect(borders[1].0, last);
+    assert_eq!(borders[1].1.left, 0.0);
+    assert_eq!(borders[1].1.right, 2.0);
+
+    let block = output.client_rects_for_source(3)[0].bounding_rect();
+    let child_fill = snapshot.fragments[solid_fill_index(&snapshot.fragments, block_color)]
+        .solid_fill_in_surface()
+        .unwrap()
+        .0;
+    assert_rect(child_fill, block);
+    assert_eq!(
+        output
+            .hit_test(LayoutPoint::new(25.0, middle.y + 10.0), false)
+            .unwrap()
+            .source,
+        3,
+        "the real block child still accepts hits"
+    );
+    assert_eq!(
+        output
+            .hit_test(LayoutPoint::new(150.0, middle.y + 10.0), false)
+            .unwrap()
+            .source,
+        0,
+        "unused space in the middle fragment must not hit the inline"
+    );
 }
 
 #[test]

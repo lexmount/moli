@@ -81,6 +81,27 @@ impl PhysicalStaticPosition {
         }
     }
 
+    /// Fit-content width available on the side(s) selected by the static
+    /// position. A center edge constrains both sides, unlike a start point.
+    pub(crate) fn available_width(self, containing_width: f32) -> f32 {
+        let bounds = self
+            .horizontal_axis()
+            .inset_modified_bounds(containing_width);
+        bounds.end - bounds.start
+    }
+
+    fn horizontal_axis(self) -> StaticPositionAxis {
+        StaticPositionAxis {
+            offset: self.point.x,
+            edge: match self.horizontal_edge {
+                HorizontalStaticEdge::Left => PhysicalAxisStaticEdge::Min,
+                HorizontalStaticEdge::Center => PhysicalAxisStaticEdge::Center,
+                HorizontalStaticEdge::Right => PhysicalAxisStaticEdge::Max,
+            },
+            safety: self.safety.width,
+        }
+    }
+
     pub(crate) fn border_box_origin(
         self,
         box_size: Size<f32>,
@@ -89,15 +110,7 @@ impl PhysicalStaticPosition {
         containing_writing_mode: WritingMode,
         containing_direction: Direction,
     ) -> Point<f32> {
-        let horizontal = StaticPositionAxis {
-            offset: self.point.x,
-            edge: match self.horizontal_edge {
-                HorizontalStaticEdge::Left => PhysicalAxisStaticEdge::Min,
-                HorizontalStaticEdge::Center => PhysicalAxisStaticEdge::Center,
-                HorizontalStaticEdge::Right => PhysicalAxisStaticEdge::Max,
-            },
-            safety: self.safety.width,
-        };
+        let horizontal = self.horizontal_axis();
         let vertical = StaticPositionAxis {
             offset: self.point.y,
             edge: match self.vertical_edge {

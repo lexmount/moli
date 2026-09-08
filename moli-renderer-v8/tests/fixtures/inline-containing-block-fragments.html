@@ -1,0 +1,57 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>Inline containing blocks use principal-owned first and last line fragments</title>
+<style>
+  body { margin:0 }
+  .case { width:240px; height:120px; font:0/20px serif; display:flow-root; position:relative }
+  .cb { position:relative }
+  i { display:inline-block; width:100px; height:10px }
+  .abs { position:absolute; inset:0; background:green }
+  .block { width:100px; height:30px }
+</style>
+<div class="case"><i style="width:80px"></i><span class="cb"><i></i><br><i style="width:140px"></i><b id="wrap" class="abs" data-rect="[80,10,60,20]"></b></span></div>
+<div class="case"><i style="width:180px"></i><span class="cb"><i style="width:40px"></i><br><i></i><b id="disjoint" class="abs" data-rect="[180,10,0,20]"></b></span></div>
+<div class="case" style="direction:rtl;text-align:right"><i style="width:80px"></i><span class="cb"><i></i><br><i style="width:140px"></i><b id="rtl" class="abs" data-rect="[100,10,60,20]"></b></span></div>
+<div class="case"><span id="empty-split-source" class="cb" data-rects="[[0,0,0,0],[0,0,240,30],[0,30,0,0]]" data-offsets="[0,0,240,30]"><div class="block"></div><b id="empty-split" class="abs" data-rect="[0,0,240,30]"></b></span></div>
+<div class="case"><span class="cb"><div class="block"></div><b id="empty-fixed" class="abs" style="width:30px;height:20px" data-rect="[0,0,30,20]"></b></span></div>
+<div class="case"><i style="width:80px"></i><span id="split-source" class="cb" data-rects="[[80,10,100,0],[0,20,240,30],[0,60,140,0]]" data-offsets="[80,10,240,50]"><i></i><div class="block"></div><i style="width:140px"></i><b id="nonempty-split" class="abs" data-rect="[80,10,60,50]"></b></span></div>
+<div class="case"><i style="width:80px"></i><span class="cb"><i></i><div class="block"></div><b id="empty-tail" class="abs" data-rect="[80,10,160,40]"></b></span></div>
+<div class="case"><span class="cb"><div class="block"></div><i style="width:140px"></i><b id="empty-start" class="abs" data-rect="[0,0,140,40]"></b></span></div>
+<div class="case"><span class="cb"><div class="block"><b id="inside-block" class="abs" data-rect="[0,0,240,30]"></b></div></span></div>
+<div class="case"><span class="cb"><i></i><br><b id="phantom-tail" class="abs" data-rect="[0,10,100,0]"></b></span></div>
+<div class="case"><span class="cb"><i></i><br><i style="width:30px"></i><br><b id="phantom-last" class="abs" data-rect="[0,10,30,20]"></b></span></div>
+<div class="case" style="padding:7px 11px;border:3px solid transparent"><i style="width:80px"></i><span class="cb"><i></i><div class="block"></div><i style="width:140px"></i><b id="padded-split" class="abs" data-rect="[94,20,60,50]"></b></span></div>
+<div class="case"><i style="width:80px"></i><span class="cb"><i></i><br><i style="width:240px"></i><br><i style="width:140px"></i><b id="middle-is-not-unioned" class="abs" data-rect="[80,10,60,40]"></b></span></div>
+<div class="case"><i style="width:80px"></i><span class="cb" style="padding:5px 7px;border:3px solid blue"><i></i><b id="decorated-single" class="abs" data-rect="[83,5,114,10]"></b></span></div>
+<div class="case"><i style="width:80px"></i><span class="cb" style="padding:5px 7px;border:3px solid blue"><i></i><br><i style="width:140px"></i><b id="decorated-wrap" class="abs" data-rect="[83,5,64,30]"></b></span></div>
+<div class="case"><i style="width:80px"></i><span class="cb" style="padding:5px 7px;border:3px solid blue"><i></i><div class="block"></div><i style="width:140px"></i><b id="decorated-split" class="abs" data-rect="[83,5,64,60]"></b></span></div>
+<div class="case"><span id="consecutive-source" class="cb" data-rects="[[0,0,0,0],[0,0,240,60],[0,60,0,0]]"><div class="block"></div><div class="block"></div><b id="consecutive" class="abs" data-rect="[0,0,240,60]"></b></span></div>
+<div class="case"><span class="cb"><span class="cb"><div class="block"></div><b id="nested" class="abs" data-rect="[0,0,240,30]"></b></span></span></div>
+<div class="case"><span class="cb"><div class="block"></div><b id="percentages" class="abs" style="left:25%;top:50%;width:50%;height:50%" data-rect="[60,15,120,15]"></b></span></div>
+<div class="case"><i style="width:80px"></i><span class="cb"><i></i><br><i id="dynamic-last" style="width:140px"></i><b id="dynamic-target" class="abs" data-rect="[80,10,60,20]"></b></span></div>
+<div class="case"><span class="cb"><div class="block" style="padding:10px"><b id="block-static" class="abs" style="inset:auto;width:30px;height:10px" data-rect="[10,10,30,10]"></b></div></span></div>
+<div class="case"><span class="cb"><div class="block" style="display:flex;justify-content:center;align-items:center;height:40px"><b id="flex-static" class="abs" style="inset:auto;width:30px;height:10px" data-rect="[35,15,30,10]"></b></div></span></div>
+<div class="case"><span class="cb"><div class="block" style="display:grid;place-items:center;height:40px"><b id="grid-static" class="abs" style="inset:auto;width:30px;height:10px" data-rect="[35,15,30,10]"></b></div></span></div>
+<div class="case"><span class="cb"><div class="block"></div><div class="abs"><span class="cb"><div style="width:40px;height:10px"></div><b id="nested-positioning-context" class="abs" data-rect="[0,0,240,10]"></b></span></div></span></div>
+<div class="case"><i style="width:80px"></i><span class="cb" style="direction:rtl;unicode-bidi:embed;padding:5px 7px;border:3px solid blue"><i></i><br><i style="width:140px"></i><b id="opposite-inline-direction" class="abs" data-rect="[80,5,70,30]"></b></span></div>
+<div class="case" style="direction:rtl;text-align:right"><i style="width:80px"></i><span class="cb" style="direction:ltr;unicode-bidi:embed;padding:5px 7px;border:3px solid blue"><i></i><br><i style="width:140px"></i><b id="opposite-rtl-container" class="abs" data-rect="[90,5,70,30]"></b></span></div>
+<div class="case" style="direction:rtl;text-align:right"><i style="width:80px"></i><span class="cb" style="padding:5px 7px;border:3px solid blue"><i></i><br><i style="width:140px"></i><b id="decorated-rtl" class="abs" data-rect="[93,5,64,30]"></b></span></div>
+<div class="case" style="direction:rtl;text-align:right"><i style="width:80px"></i><span class="cb" style="direction:ltr;unicode-bidi:embed"><i></i><div id="rtl-block-flow" class="block" data-rect="[140,20,100,30]"></div><i style="width:140px"></i><b id="rtl-split" class="abs" data-rect="[100,10,60,50]"></b></span></div>
+<!-- Anonymous wrappers preserve percentages but real auto-height blocks do not. -->
+<div class="case" style="height:200px"><span><div id="percentage-block-height" class="block" style="height:50%;border:10px solid blue" data-rect="[0,0,120,120]"></div></span></div>
+<div class="case" style="height:200px"><span><div style="width:100px"><div id="percentage-real-auto-block" style="width:40px;height:50%" data-rect="[0,0,40,0]"></div><div style="height:30px"></div></div></span></div>
+<div class="case" style="height:200px"><span><div id="percentage-first-block" class="block" style="height:25%" data-rect="[0,0,100,50]"></div><div id="percentage-second-block" class="block" style="height:50%" data-rect="[0,50,100,100]"></div></span></div>
+<div class="case" style="height:200px"><span><div id="percentage-relative-block" class="block" style="position:relative;top:50%;height:40px" data-rect="[0,100,100,40]"></div></span></div>
+<script>
+  function collectInlineFragmentChecks() {
+    return Array.from(document.querySelectorAll('[data-rect], [data-rects], [data-offsets]')).flatMap(element => {
+      const origin = element.closest('.case').getBoundingClientRect();
+      const rect = r => [r.x-origin.x, r.y-origin.y, r.width, r.height];
+      const checks = [];
+      if (element.hasAttribute('data-rect')) checks.push({id:element.id, actual:rect(element.getBoundingClientRect()), expected:JSON.parse(element.dataset.rect)});
+      if (element.hasAttribute('data-rects')) checks.push({id:element.id+'.rects', actual:Array.from(element.getClientRects(), rect), expected:JSON.parse(element.dataset.rects)});
+      if (element.hasAttribute('data-offsets')) checks.push({id:element.id+'.offsets', actual:[element.offsetLeft, element.offsetTop, element.offsetWidth, element.offsetHeight], expected:JSON.parse(element.dataset.offsets)});
+      return checks;
+    });
+  }
+</script>

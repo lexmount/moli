@@ -957,17 +957,24 @@ fn inline_with_block_descendant_is_split_into_owned_continuations() {
     let root_children = world.box_by_id(world.root()).unwrap().children();
     assert_eq!(root_children.len(), 3);
     let before_wrapper = world.box_by_id(root_children[0]).unwrap();
-    let block = world.box_by_id(root_children[1]).unwrap();
+    let block_wrapper = world.box_by_id(root_children[1]).unwrap();
+    let block = world.box_by_id(block_wrapper.children()[0]).unwrap();
     let after_wrapper = world.box_by_id(root_children[2]).unwrap();
     assert_eq!(before_wrapper.kind(), LayoutBoxKind::AnonymousBlock);
     assert_eq!(block.kind(), LayoutBoxKind::PrincipalBlock);
+    assert_eq!(block_wrapper.kind(), LayoutBoxKind::BlockInInline);
     assert_eq!(after_wrapper.kind(), LayoutBoxKind::AnonymousBlock);
     let first_fragment_id = before_wrapper.children()[0];
     let first_fragment = world.box_by_id(first_fragment_id).unwrap();
     let continuation = world.box_by_id(after_wrapper.children()[0]).unwrap();
     assert_eq!(first_fragment.kind(), LayoutBoxKind::PrincipalInline);
     assert_eq!(first_fragment.source(), Some(1));
-    assert_eq!(continuation.kind(), LayoutBoxKind::InlineContinuation);
+    assert_eq!(
+        continuation.kind(),
+        LayoutBoxKind::InlineContinuation {
+            principal: first_fragment_id
+        }
+    );
     assert_eq!(continuation.source(), None);
     assert_eq!(continuation.owner(), Some(1));
     assert_eq!(

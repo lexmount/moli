@@ -622,10 +622,12 @@ where
         let mut output = Vec::new();
         let mut current = Some(principal);
         let mut run = Vec::new();
+        let mut block_run = Vec::new();
 
         for child in children {
             if self.is_block_in_flow(world, child) {
                 if let Some(fragment) = current.take() {
+                    world.boxes[fragment.index()].inline_end_edge = false;
                     self.replace_children_and_mark_context(
                         world,
                         fragment,
@@ -633,22 +635,49 @@ where
                     )?;
                     output.push(fragment);
                 }
-                output.push(child);
+                if world.boxes[child.index()].kind == LayoutBoxKind::BlockInInline {
+                    self.flush_block_in_inline(
+                        world,
+                        principal,
+                        owner,
+                        style,
+                        &mut output,
+                        &mut block_run,
+                    )?;
+                    output.push(child);
+                } else {
+                    block_run.push(child);
+                }
                 continue;
             }
 
+            self.flush_block_in_inline(
+                world,
+                principal,
+                owner,
+                style,
+                &mut output,
+                &mut block_run,
+            )?;
             if current.is_none() {
-                current =
-                    Some(self.allocate_inline_continuation(world, owner, style, semantics.clone()));
+                current = Some(self.allocate_inline_continuation(
+                    world,
+                    principal,
+                    owner,
+                    style,
+                    semantics.clone(),
+                ));
             }
             run.push(child);
         }
 
+        self.flush_block_in_inline(world, principal, owner, style, &mut output, &mut block_run)?;
         if let Some(fragment) = current {
             self.replace_children_and_mark_context(world, fragment, run)?;
             output.push(fragment);
         } else {
-            let continuation = self.allocate_inline_continuation(world, owner, style, semantics);
+            let continuation =
+                self.allocate_inline_continuation(world, principal, owner, style, semantics);
             self.replace_children_and_mark_context(world, continuation, Vec::new())?;
             output.push(continuation);
         }
@@ -658,6 +687,7 @@ where
     fn allocate_inline_continuation(
         &mut self,
         world: &mut LayoutWorld<S::NodeId>,
+        principal: LayoutBoxId,
         owner: S::NodeId,
         style: &ResolvedLayoutStyle,
         semantics: Option<LayoutElementSemantics>,
@@ -670,12 +700,47 @@ where
             Some(self.source.label(owner)),
             semantics,
             Some(LayoutAnonymousReason::InlineSplitContinuation),
-            LayoutBoxKind::InlineContinuation,
+            LayoutBoxKind::InlineContinuation { principal },
             style.clone(),
             None,
         );
+        continuation.inline_start_edge = false;
         continuation.css_images = self.css_image_resources(owner, style);
         world.allocate(continuation)
+    }
+
+    fn flush_block_in_inline(
+        &mut self,
+        world: &mut LayoutWorld<S::NodeId>,
+        principal: LayoutBoxId,
+        owner: S::NodeId,
+        style: &ResolvedLayoutStyle,
+        output: &mut Vec<LayoutBoxId>,
+        run: &mut Vec<LayoutBoxId>,
+    ) -> Result<(), LayoutError> {
+        if run.is_empty() {
+            return Ok(());
+        }
+        let style = self
+            .styles
+            .anonymous_style(owner, style, LayoutDisplay::Block)?;
+        let mut wrapper = LayoutWorld::new_box(
+            None,
+            Some(owner),
+            None,
+            format!("block-in-inline({})", self.source.label(owner)),
+            Some(self.source.label(owner)),
+            None,
+            Some(LayoutAnonymousReason::BlockInInline),
+            LayoutBoxKind::BlockInInline,
+            style,
+            None,
+        );
+        wrapper.structural_parent = Some(principal);
+        let wrapper = world.allocate(wrapper);
+        world.replace_children(wrapper, std::mem::take(run))?;
+        output.push(wrapper);
+        Ok(())
     }
 
     fn css_image_resources(
@@ -733,6 +798,16 @@ where
         parent_style: &ResolvedLayoutStyle,
         children: Vec<LayoutBoxId>,
     ) -> Result<Vec<LayoutBoxId>, LayoutError> {
+        for child in &children {
+            if world.boxes[child.index()].kind == LayoutBoxKind::BlockInInline {
+                // This anonymous formatting box belongs to the block flow,
+                // including its direction. Source children already retain
+                // their inline ancestor's computed inheritance from Stylo.
+                world.boxes[child.index()].style =
+                    self.styles
+                        .anonymous_style(owner, parent_style, LayoutDisplay::Block)?;
+            }
+        }
         let has_inline = children
             .iter()
             .copied()

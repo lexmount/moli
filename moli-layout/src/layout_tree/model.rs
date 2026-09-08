@@ -446,6 +446,13 @@ pub enum LayoutFragmentKind {
         has_start_edge: bool,
         has_end_edge: bool,
     },
+    /// Fragment generated for an inline by its anonymous block-in-inline
+    /// container. It retains the inline's identity and the block's space.
+    /// Like Blink's opaque inline fragments, it contributes geometry but
+    /// neither paints the inline's decoration nor acts as a hit target.
+    BlockInInline {
+        box_id: LayoutOutputBoxId,
+    },
     Text {
         box_id: LayoutOutputBoxId,
         line_index: usize,

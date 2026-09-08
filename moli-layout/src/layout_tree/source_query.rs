@@ -322,7 +322,9 @@ where
             .filter(|fragment| {
                 matches!(
                     fragment.kind,
-                    LayoutFragmentKind::Box { .. } | LayoutFragmentKind::InlineBox { .. }
+                    LayoutFragmentKind::Box { .. }
+                        | LayoutFragmentKind::InlineBox { .. }
+                        | LayoutFragmentKind::BlockInInline { .. }
                 )
             })
             .filter_map(|fragment| {
@@ -345,6 +347,7 @@ where
                     fragment.kind,
                     LayoutFragmentKind::Box { .. }
                         | LayoutFragmentKind::InlineBox { .. }
+                        | LayoutFragmentKind::BlockInInline { .. }
                         | LayoutFragmentKind::Text { .. }
                 )
             })
@@ -566,10 +569,13 @@ where
             let Some(fragment) = self.fragment(*id) else {
                 continue;
             };
-            let LayoutFragmentKind::InlineBox {
+            let (LayoutFragmentKind::InlineBox {
                 box_id: fragment_box,
                 ..
-            } = fragment.kind
+            }
+            | LayoutFragmentKind::BlockInInline {
+                box_id: fragment_box,
+            }) = fragment.kind
             else {
                 continue;
             };
