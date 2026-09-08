@@ -7970,6 +7970,9 @@ impl ScriptVm {
                         loader,
                         Some(&document_character_set),
                         None,
+                        self.current_main_document_resource_loader()
+                            .ok_or_else(|| PreparedScriptExecutionError::from_message("script Document resource authority is unavailable".to_owned()))?
+                            .task_runner(),
                     )
                     .await;
                 if let Some(network_result) = outcome.network_result.as_deref() {

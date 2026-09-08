@@ -42,6 +42,15 @@ impl std::fmt::Debug for SharedScriptSourceLoad {
 struct SharedScriptSourceLoadInner {
     state: Mutex<SharedScriptSourceLoadState>,
     notify: Notify,
+    task: Mutex<Option<tokio::task::JoinHandle<()>>>,
+}
+
+impl Drop for SharedScriptSourceLoadInner {
+    fn drop(&mut self) {
+        if let Some(task) = self.task.get_mut().take() {
+            task.abort();
+        }
+    }
 }
 
 #[derive(Default)]
@@ -56,6 +65,7 @@ impl SharedScriptSourceLoad {
             inner: Arc::new(SharedScriptSourceLoadInner {
                 state: Mutex::new(SharedScriptSourceLoadState::default()),
                 notify: Notify::new(),
+                task: Mutex::new(None),
             }),
         }
     }
@@ -84,23 +94,21 @@ impl SharedScriptSourceLoad {
         request_resource_type: Option<moli_fetch::RequestResourceType>,
         owner_wake: Option<crate::page_task_queue::RendererOwnerWakeSender>,
     ) -> Self {
-        let load = Self::pending();
-        let load_for_task = load.clone();
-        task_runner.spawn(async move {
-            load_for_task.finish(
+        let fetch_task_runner = task_runner.clone();
+        Self::spawn_outcome_with_owner_wake(
+            async move {
                 load_prepared_script_source_outcome_with_document_character_set(
                     &script,
                     &loader,
                     document_character_set.as_deref(),
                     request_resource_type,
+                    fetch_task_runner,
                 )
-                .await,
-            );
-            if let Some(owner_wake) = owner_wake {
-                owner_wake.signal_parse_time_document_script_work();
-            }
-        });
-        load
+                .await
+            },
+            task_runner,
+            owner_wake,
+        )
     }
 
     pub(crate) fn try_outcome(&self) -> Option<PreparedScriptSourceLoadOutcome> {
@@ -128,13 +136,21 @@ impl SharedScriptSourceLoad {
         F: std::future::Future<Output = PreparedScriptSourceLoadOutcome> + Send + 'static,
     {
         let load = Self::pending();
-        let load_for_task = load.clone();
-        task_runner.spawn(async move {
-            load_for_task.finish(task.await);
+        // The producer must not keep its own consumers alive. The last
+        // parser/preload consumer drops this task and its in-flight request;
+        // dropping just one shared consumer leaves the others unaffected.
+        let completion = Arc::downgrade(&load.inner);
+        let task = task_runner.spawn_abortable(async move {
+            let result = task.await;
+            let Some(inner) = completion.upgrade() else {
+                return;
+            };
+            SharedScriptSourceLoad { inner }.finish(result);
             if let Some(owner_wake) = owner_wake {
                 owner_wake.signal_parse_time_document_script_work();
             }
         });
+        *load.inner.task.lock() = Some(task);
         load
     }
 
@@ -219,16 +235,17 @@ impl SharedScriptSourceLoad {
     where
         F: std::future::Future<Output = std::result::Result<String, String>> + Send + 'static,
     {
-        let load = Self::pending();
-        let load_for_task = load.clone();
-        tokio::spawn(async move {
-            load_for_task.finish(PreparedScriptSourceLoadOutcome {
-                source_result: task.await,
-                source_bytes: None,
-                network_result: None,
-            });
-        });
-        load
+        Self::spawn_outcome_with_owner_wake(
+            async move {
+                PreparedScriptSourceLoadOutcome {
+                    source_result: task.await,
+                    source_bytes: None,
+                    network_result: None,
+                }
+            },
+            RendererResourceTaskRunner::from_current_tokio().expect("test resource runtime"),
+            None,
+        )
     }
 }
 
@@ -291,6 +308,7 @@ pub(crate) async fn load_prepared_script_source_outcome_with_document_character_
     loader: &ResourceRequestClient,
     document_character_set: Option<&str>,
     request_resource_type: Option<moli_fetch::RequestResourceType>,
+    task_runner: RendererResourceTaskRunner,
 ) -> PreparedScriptSourceLoadOutcome {
     match &script.source {
         ScriptSource::Inline(source) | ScriptSource::Loaded(source) => {
@@ -315,7 +333,7 @@ pub(crate) async fn load_prepared_script_source_outcome_with_document_character_
             let request = external_script_request(script, request_resource_type);
             // Box the streaming fetch future so parser/script planning does not
             // inherit the chunk collector's larger state machine across awaits.
-            match Box::pin(loader.fetch_cacheable_script_text_stream(request)).await {
+            match Box::pin(loader.fetch_cacheable_script_text_stream(request, task_runner)).await {
                 Ok(response) => {
                     let response = crate::protocol_types::NavigationResponse::from(response);
                     external_script_source_load_outcome_from_response(
@@ -382,7 +400,7 @@ pub(crate) async fn load_service_worker_aware_external_script_source_outcome(
             document_url,
             &request,
             loader,
-            resource_task_runner,
+            resource_task_runner.clone(),
             crate::service_worker_runtime::ServiceWorkerRequestDestination::Script,
             crate::types::SubresourceResourceType::Script,
         )
@@ -400,6 +418,7 @@ pub(crate) async fn load_service_worker_aware_external_script_source_outcome(
                 loader,
                 document_character_set,
                 request_resource_type,
+                resource_task_runner,
             )
             .await
         }
@@ -698,6 +717,53 @@ mod tests {
     use super::*;
 
     #[tokio::test]
+    async fn shared_source_load_last_consumer_cancels_its_producer() {
+        struct Dropped(Option<tokio::sync::oneshot::Sender<()>>);
+        impl Drop for Dropped {
+            fn drop(&mut self) {
+                let _ = self.0.take().unwrap().send(());
+            }
+        }
+        let (started_tx, started_rx) = tokio::sync::oneshot::channel();
+        let (dropped_tx, mut dropped_rx) = tokio::sync::oneshot::channel();
+        let load = SharedScriptSourceLoad::spawn_for_test(async move {
+            let _dropped = Dropped(Some(dropped_tx));
+            started_tx.send(()).unwrap();
+            std::future::pending().await
+        });
+        let retained = load.clone();
+        started_rx.await.unwrap();
+        drop(load);
+        assert_eq!(
+            dropped_rx.try_recv(),
+            Err(tokio::sync::oneshot::error::TryRecvError::Empty)
+        );
+        drop(retained);
+        tokio::time::timeout(std::time::Duration::from_secs(3), dropped_rx)
+            .await
+            .expect("the final consumer must cancel the actual resource task")
+            .unwrap();
+    }
+
+    #[tokio::test]
+    async fn shared_source_load_surviving_consumer_receives_its_completion() {
+        let (finish_tx, finish_rx) = tokio::sync::oneshot::channel();
+        let load = SharedScriptSourceLoad::spawn_for_test(async move {
+            finish_rx.await.unwrap();
+            Ok("retained-script".to_owned())
+        });
+        let retained = load.clone();
+        drop(load);
+        finish_tx
+            .send(())
+            .expect("a remaining consumer must retain the producer");
+        assert_eq!(
+            retained.wait_outcome().await.source_result.unwrap(),
+            "retained-script"
+        );
+    }
+
+    #[tokio::test]
     async fn shared_source_load_completion_uses_parse_time_owner_wake() {
         let (wake_tx, mut wake_rx) = tokio::sync::mpsc::unbounded_channel();
         let owner_wake = crate::page_task_queue::RendererOwnerWakeSender::new(
@@ -898,6 +964,7 @@ mod tests {
             &loader,
             Some("UTF-8"),
             None,
+            RendererResourceTaskRunner::for_test(),
         )
         .await;
 
@@ -987,6 +1054,7 @@ mod tests {
             &loader,
             Some("UTF-8"),
             None,
+            RendererResourceTaskRunner::for_test(),
         )
         .await;
         let second = load_prepared_script_source_outcome_with_document_character_set(
@@ -994,6 +1062,7 @@ mod tests {
             &loader,
             Some("UTF-8"),
             None,
+            RendererResourceTaskRunner::for_test(),
         )
         .await;
 

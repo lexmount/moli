@@ -65,6 +65,19 @@ pub(crate) struct CompletedDevToolsNavigationExecution {
 pub(crate) enum DevToolsNavigationCommandProgress {
     Complete(Box<DevToolsCommandExecution>),
     Pending(Box<PendingDevToolsNavigationExecution>),
+    PendingLifecycle {
+        pending: Box<PendingDevToolsNavigationLifecycle>,
+        protocol_output: ProtocolOutputSequence,
+    },
+}
+
+pub(crate) struct PendingDevToolsNavigationLifecycle {
+    context: DevToolsCommandContext,
+    key: moli_protocol::DevToolsDocumentLifecycleWaitKey,
+    result: Result<
+        moli_protocol::devtools_runtime::DevToolsCommandResult,
+        moli_protocol::devtools_runtime::DevToolsError,
+    >,
 }
 
 pub(crate) struct DevToolsNavigationReplyWait {
@@ -108,6 +121,49 @@ impl PendingDevToolsNavigationExecution {
 }
 
 impl CdpScheduler {
+    pub(crate) fn advance_devtools_navigation_lifecycle(
+        &mut self,
+        pending: Box<PendingDevToolsNavigationLifecycle>,
+        protocol_output: ProtocolOutputSequence,
+    ) -> DevToolsNavigationCommandProgress {
+        use moli_protocol::DevToolsDocumentLifecycleWaitState;
+        let state = self
+            .conn
+            .devtools_document_lifecycle_wait_state(&pending.context, &pending.key);
+        if state == DevToolsDocumentLifecycleWaitState::Pending
+            || (state == DevToolsDocumentLifecycleWaitState::Reached
+                && (!self
+                    .conn
+                    .devtools_document_lifecycle_wait_is_visible(&pending.context, &pending.key)
+                    || (pending.key.milestone()
+                        == moli_core::page::RendererDocumentLifecycleMilestone::Load
+                        && self.has_deferred_main_document_load_completion_for_devtools_context(
+                            &pending.context,
+                        ))))
+        {
+            return DevToolsNavigationCommandProgress::PendingLifecycle {
+                pending,
+                protocol_output,
+            };
+        }
+        let result = super::devtools_document_lifecycle_wait_error(state, pending.key.milestone())
+            .map_or(pending.result, Err);
+        self.conn
+            .release_devtools_document_lifecycle_wait_key(&pending.context, &pending.key);
+        DevToolsNavigationCommandProgress::Complete(Box::new(DevToolsCommandExecution {
+            result,
+            protocol_output,
+        }))
+    }
+
+    pub(crate) fn cancel_devtools_navigation_lifecycle(
+        &mut self,
+        pending: PendingDevToolsNavigationLifecycle,
+    ) {
+        self.conn
+            .release_devtools_document_lifecycle_wait_key(&pending.context, &pending.key);
+    }
+
     pub(crate) fn navigation_reply_wait(
         &mut self,
         target_id: &str,
@@ -246,6 +302,15 @@ impl CdpScheduler {
                 self.retain_detached_navigation(DevToolsNavigationCommandWait::new(*pending));
                 ProtocolOutputSequence::empty()
             }
+            DevToolsNavigationCommandProgress::PendingLifecycle {
+                pending,
+                protocol_output,
+            } => {
+                // The Browser commit is complete. Detach releases only this
+                // frontend's final milestone registration, not native work.
+                self.cancel_devtools_navigation_lifecycle(*pending);
+                protocol_output
+            }
         }
     }
 
@@ -324,23 +389,37 @@ impl CdpScheduler {
                         }
                     }
                 }
-                let execution = DevToolsCommandExecution {
-                    result,
-                    protocol_output: self
-                        .route_background_events_around_inflight_navigation(protocol_events),
-                };
-                DevToolsNavigationCommandProgress::Complete(Box::new(
-                    self.finish_devtools_navigation_wait(
-                        receivers,
-                        state.context,
-                        state.wait,
-                        state.validate_root_document_lifecycle,
-                        execution,
-                        state.output,
-                        0,
+                state.output.append(
+                    self.route_background_events_around_inflight_navigation(protocol_events),
+                );
+                state.output.append(
+                    self.complete_ready_protocol_residences_after_command()
+                        .await,
+                );
+                if result.is_ok()
+                    && state.validate_root_document_lifecycle
+                    && let Some((loader_id, milestone)) =
+                        super::devtools_navigation_result_loader_id(&result)
+                            .zip(devtools_navigation_lifecycle_milestone(state.wait))
+                    && let Some(key) = self.conn.capture_devtools_document_lifecycle_wait_key(
+                        &state.context,
+                        &loader_id,
+                        milestone,
                     )
-                    .await,
-                ))
+                {
+                    return self.advance_devtools_navigation_lifecycle(
+                        Box::new(PendingDevToolsNavigationLifecycle {
+                            context: state.context,
+                            key,
+                            result,
+                        }),
+                        state.output,
+                    );
+                }
+                DevToolsNavigationCommandProgress::Complete(Box::new(DevToolsCommandExecution {
+                    result,
+                    protocol_output: state.output,
+                }))
             }
         }
     }

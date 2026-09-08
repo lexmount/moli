@@ -2085,6 +2085,37 @@ impl CdpConnection {
             })
     }
 
+    /// Whether the exact milestone has crossed its protocol visibility gate.
+    /// Native waiter completion can precede the corresponding publication.
+    pub fn devtools_document_lifecycle_wait_is_visible(
+        &self,
+        context: &DevToolsCommandContext,
+        key: &DevToolsDocumentLifecycleWaitKey,
+    ) -> bool {
+        let Some(owner) = self.command_owner_scope_for_devtools_context(context) else {
+            return false;
+        };
+        let Ok(slot) = self.runtime_session_owner_slot_for_owner(&owner) else {
+            return false;
+        };
+        let Some(snapshot) = slot
+            .page_slot()
+            .renderer_document_lifecycle_visible_snapshot()
+        else {
+            return false;
+        };
+        snapshot.document == key.renderer_document
+            && snapshot.epoch == key.renderer_epoch
+            && match key.milestone {
+                moli_core::page::RendererDocumentLifecycleMilestone::DomContentLoaded => {
+                    snapshot.dom_content_loaded.is_some()
+                }
+                moli_core::page::RendererDocumentLifecycleMilestone::Load => {
+                    snapshot.load.is_some()
+                }
+            }
+    }
+
     pub(crate) fn accepts_document_body_completion_for_owner(
         &self,
         owner: &CommandOwnerScope,

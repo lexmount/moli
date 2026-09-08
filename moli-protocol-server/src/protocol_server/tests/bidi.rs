@@ -1,6 +1,296 @@
 use super::*;
 
 #[tokio::test]
+async fn classic_http_navigation_releases_bidi_while_waiting_for_response() {
+    assert_classic_navigation_releases_bidi(false, HeldClassicNavigation::Complete).await;
+}
+
+#[tokio::test]
+async fn classic_http_navigation_releases_bidi_while_waiting_for_parser() {
+    assert_classic_navigation_releases_bidi(true, HeldClassicNavigation::Complete).await;
+}
+
+#[tokio::test]
+async fn classic_http_navigation_releases_bidi_after_parser_wait_timeout() {
+    assert_classic_navigation_releases_bidi(true, HeldClassicNavigation::Timeout).await;
+}
+
+#[tokio::test]
+async fn classic_http_navigation_releases_bidi_after_network_wait_timeout() {
+    assert_classic_navigation_releases_bidi(false, HeldClassicNavigation::Timeout).await;
+}
+
+#[tokio::test]
+async fn classic_http_navigation_releases_bidi_for_session_shutdown() {
+    assert_classic_navigation_releases_bidi(false, HeldClassicNavigation::Shutdown).await;
+}
+
+#[tokio::test]
+async fn classic_http_navigation_releases_bidi_for_reattach_during_parser_wait() {
+    assert_classic_navigation_releases_bidi(true, HeldClassicNavigation::Reattach).await;
+}
+
+#[derive(Clone, Copy)]
+enum HeldClassicNavigation {
+    Complete,
+    Timeout,
+    Shutdown,
+    Reattach,
+}
+
+async fn held_document_fixture(
+    hold_script: bool,
+) -> (String, tokio::task::JoinHandle<tokio::net::TcpStream>) {
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let url = format!("http://{}/document", listener.local_addr().unwrap());
+    let held_request = tokio::spawn(async move {
+        loop {
+            let (mut stream, _) = listener.accept().await.unwrap();
+            let mut request = Vec::new();
+            let mut byte = [0];
+            while !request.ends_with(b"\r\n\r\n") {
+                stream.read_exact(&mut byte).await.unwrap();
+                request.push(byte[0]);
+            }
+            if hold_script && request.starts_with(b"GET /document HTTP/1.1\r\n") {
+                let body = "<title>classic-navigation</title><script src='/held.js'></script>";
+                stream.write_all(format!("HTTP/1.1 200 OK\r\nContent-Type: text/html\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}", body.len()).as_bytes()).await.unwrap();
+                stream.shutdown().await.unwrap();
+                continue;
+            }
+            let expected = if hold_script {
+                b"GET /held.js HTTP/1.1\r\n".as_slice()
+            } else {
+                b"GET /document HTTP/1.1\r\n".as_slice()
+            };
+            assert!(request.starts_with(expected));
+            return stream;
+        }
+    });
+    (url, held_request)
+}
+
+async fn release_held_document(stream: &mut tokio::net::TcpStream, hold_script: bool) {
+    let (content_type, body) = if hold_script {
+        ("text/javascript", "globalThis.heldScriptFinished = true;")
+    } else {
+        ("text/html", "<title>classic-navigation</title>")
+    };
+    stream.write_all(format!("HTTP/1.1 200 OK\r\nContent-Type: {content_type}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}", body.len()).as_bytes()).await.unwrap();
+    stream.shutdown().await.unwrap();
+}
+
+async fn assert_classic_navigation_releases_bidi(hold_script: bool, action: HeldClassicNavigation) {
+    let (addr, server) = spawn_test_protocol_server().await;
+    let session = classic_new_session_on_server(addr).await;
+    let mut socket = connect_classic_session_bidi_socket(addr, &session).await;
+    if matches!(action, HeldClassicNavigation::Timeout) {
+        let timeouts = classic_request_on_server_with_body(
+            addr,
+            "POST",
+            &format!("/session/{session}/timeouts"),
+            json!({"pageLoad": 100}),
+        )
+        .await;
+        assert_eq!(timeouts["value"], serde_json::Value::Null);
+    }
+    let (url, held_request) = held_document_fixture(hold_script).await;
+    let navigation_session = session.clone();
+    let navigation = tokio::spawn(async move {
+        let (status, response) = classic_request_status_on_server_with_body(
+            addr,
+            "POST",
+            &format!("/session/{navigation_session}/url"),
+            json!({"url": url}),
+        )
+        .await;
+        let expected_status = match action {
+            HeldClassicNavigation::Complete | HeldClassicNavigation::Reattach => 200,
+            HeldClassicNavigation::Timeout => 408,
+            HeldClassicNavigation::Shutdown => 404,
+        };
+        assert_eq!(status, expected_status, "{response:?}");
+        response
+    });
+    let mut stream = timeout(Duration::from_secs(3), held_request)
+        .await
+        .expect("Classic navigation must reach the exact held response")
+        .unwrap();
+    if !matches!(action, HeldClassicNavigation::Timeout) {
+        assert!(
+            !navigation.is_finished(),
+            "normal page-load strategy must still be waiting"
+        );
+    }
+    let status = timeout(
+        Duration::from_secs(3),
+        send_bidi_command_response(&mut socket, 30, "session.status", json!({})),
+    )
+    .await;
+
+    let response = match action {
+        HeldClassicNavigation::Complete | HeldClassicNavigation::Reattach => {
+            if matches!(action, HeldClassicNavigation::Reattach) {
+                let ended =
+                    send_bidi_command_response(&mut socket, 31, "session.end", json!({})).await;
+                assert_eq!(ended["type"], "success");
+                socket = timeout(
+                    Duration::from_secs(3),
+                    connect_classic_session_bidi_socket(addr, &session),
+                )
+                .await
+                .expect("reattach must not wait for the held Classic navigation");
+                let status =
+                    send_bidi_command_response(&mut socket, 32, "session.status", json!({})).await;
+                assert_eq!(status["type"], "success");
+                assert!(!navigation.is_finished());
+            }
+            // Cleanup cannot turn the already recorded control-path timeout
+            // into a successful assertion.
+            release_held_document(&mut stream, hold_script).await;
+            let response = timeout(Duration::from_secs(3), navigation)
+                .await
+                .expect("released navigation must complete")
+                .unwrap();
+            assert_eq!(response["value"], serde_json::Value::Null, "{response:?}");
+            response
+        }
+        HeldClassicNavigation::Timeout => {
+            let response = timeout(Duration::from_secs(3), navigation)
+                .await
+                .expect("the deadline must settle the reply without releasing native work")
+                .unwrap();
+            assert_eq!(response["value"]["error"], "timeout", "{response:?}");
+            release_held_document(&mut stream, hold_script).await;
+            response
+        }
+        HeldClassicNavigation::Shutdown => {
+            let deleted = timeout(
+                Duration::from_secs(3),
+                classic_request_on_server_with_body(
+                    addr,
+                    "DELETE",
+                    &format!("/session/{session}"),
+                    json!({}),
+                ),
+            )
+            .await
+            .expect("session shutdown must not wait for the held response");
+            assert_eq!(deleted["value"], serde_json::Value::Null);
+            let response = timeout(Duration::from_secs(3), navigation)
+                .await
+                .expect("shutdown must settle the pending HTTP reply")
+                .unwrap();
+            assert_eq!(
+                response["value"]["error"], "invalid session id",
+                "{response:?}"
+            );
+            let mut byte = [0];
+            assert_eq!(
+                timeout(Duration::from_secs(3), stream.read(&mut byte))
+                    .await
+                    .unwrap()
+                    .unwrap(),
+                0
+            );
+            let _ = socket.close(None).await;
+            abort_test_cdp_server(server).await;
+            assert_eq!(
+                status.expect("BiDi control must run before shutdown")["type"],
+                "success"
+            );
+            return;
+        }
+    };
+    let title = timeout(
+        Duration::from_secs(3),
+        classic_request_on_server_with_body(
+            addr,
+            "GET",
+            &format!("/session/{session}/title"),
+            json!({}),
+        ),
+    )
+    .await
+    .expect("the original native navigation must remain usable after reply or detach");
+    assert_eq!(
+        title["value"], "classic-navigation",
+        "{title:?}; {response:?}"
+    );
+    classic_request_on_server_with_body(addr, "DELETE", &format!("/session/{session}"), json!({}))
+        .await;
+    let _ = socket.close(None).await;
+    abort_test_cdp_server(server).await;
+    assert_eq!(
+        status.expect("BiDi control must run while the Classic navigation is held")["type"],
+        "success"
+    );
+}
+
+#[tokio::test]
+async fn bidi_parser_navigation_releases_scheduler_and_closes_exact_wait() {
+    let (addr, server) = spawn_test_protocol_server().await;
+    let (mut socket, context) = bidi_session_with_context(addr).await;
+    let (url, held_request) = held_document_fixture(true).await;
+    socket
+        .send(WsMessage::Text(
+            json!({
+                "id": 10, "method": "browsingContext.navigate", "goog:channel": "parser-owner",
+                "params": {"context": context, "url": url, "wait": "complete"},
+            })
+            .to_string()
+            .into(),
+        ))
+        .await
+        .unwrap();
+    let mut stream = timeout(Duration::from_secs(3), held_request)
+        .await
+        .unwrap()
+        .unwrap();
+    socket
+        .send(WsMessage::Text(
+            json!({"id": 11, "method": "session.status", "params": {}})
+                .to_string()
+                .into(),
+        ))
+        .await
+        .unwrap();
+    let status = recv_until_id(&mut socket, 11).await;
+    assert_eq!(bidi_message_by_id(&status, 11)["type"], "success");
+    assert!(status.iter().all(|message| message["id"] != 10));
+    socket
+        .send(WsMessage::Text(
+            json!({
+                "id": 12, "method": "browsingContext.close", "params": {"context": context},
+            })
+            .to_string()
+            .into(),
+        ))
+        .await
+        .unwrap();
+    let mut messages = recv_until_id(&mut socket, 12).await;
+    if !messages.iter().any(|message| message["id"] == 10) {
+        messages.extend(recv_until_id(&mut socket, 10).await);
+    }
+    assert_eq!(bidi_message_by_id(&messages, 12)["type"], "success");
+    assert_eq!(bidi_message_by_id(&messages, 10)["type"], "error");
+    assert_eq!(
+        bidi_message_by_id(&messages, 10)["goog:channel"],
+        "parser-owner"
+    );
+    let mut byte = [0];
+    assert_eq!(
+        timeout(Duration::from_secs(3), stream.read(&mut byte))
+            .await
+            .unwrap()
+            .unwrap(),
+        0
+    );
+    let _ = socket.close(None).await;
+    abort_test_cdp_server(server).await;
+}
+
+#[tokio::test]
 async fn bidi_held_navigation_releases_scheduler_until_exact_completion() {
     assert_held_navigation_releases_scheduler(false, false).await;
 }

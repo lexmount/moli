@@ -53,9 +53,10 @@ use tracing::warn;
 use crate::cdp_scheduler::{
     CdpScheduler, CdpSchedulerEventReceivers, CompletedDevToolsNavigationExecution,
     DevToolsNavigationCommandProgress, DevToolsNavigationCommandWait,
-    DevToolsRuntimeCommandProgress, PendingDevToolsRuntimeDeferredReplyExecution,
-    ProtocolAdapterScheduler, ProtocolAdapterSchedulerAdvance, ProtocolAdapterSchedulerInput,
-    ProtocolOutputSequence, RendererOutputTransportFailure,
+    DevToolsRuntimeCommandProgress, PendingDevToolsNavigationLifecycle,
+    PendingDevToolsRuntimeDeferredReplyExecution, ProtocolAdapterScheduler,
+    ProtocolAdapterSchedulerAdvance, ProtocolAdapterSchedulerInput, ProtocolOutputSequence,
+    RendererOutputTransportFailure,
 };
 
 use super::webdriver_files::selected_files_from_paths;
@@ -366,6 +367,9 @@ impl BidiSocketActor {
             Some(BidiPendingCommandWait::Navigation(wait)) => {
                 scheduler.retain_detached_navigation(wait);
             }
+            Some(BidiPendingCommandWait::NavigationLifecycle(wait)) => {
+                scheduler.cancel_devtools_navigation_lifecycle(*wait);
+            }
             None => {}
         }
         if let Some(previous_target_discovery) = pending.completion.previous_target_discovery {
@@ -489,6 +493,15 @@ impl BidiSocketActor {
                 self.pending_command = Some(command);
                 true
             }
+            DevToolsNavigationCommandProgress::PendingLifecycle {
+                pending,
+                protocol_output,
+            } => {
+                command.pending = Some(BidiPendingCommandWait::NavigationLifecycle(pending));
+                self.pending_command = Some(command);
+                self.send_or_route_protocol_output(scheduler, receivers, protocol_output, None)
+                    .await
+            }
         }
     }
 
@@ -558,6 +571,55 @@ impl BidiSocketActor {
         output: ProtocolOutputSequence,
         owner_context: Option<&str>,
     ) -> bool {
+        if self.pending_command.as_ref().is_some_and(|command| {
+            matches!(
+                command.pending,
+                Some(BidiPendingCommandWait::NavigationLifecycle(_))
+            )
+        }) {
+            let mut command = self
+                .pending_command
+                .take()
+                .expect("pending navigation lifecycle");
+            let Some(BidiPendingCommandWait::NavigationLifecycle(pending)) = command.pending.take()
+            else {
+                unreachable!()
+            };
+            return match scheduler.advance_devtools_navigation_lifecycle(pending, output) {
+                DevToolsNavigationCommandProgress::Complete(execution) => {
+                    complete_and_send_bidi_pending_command(
+                        &mut self.socket,
+                        scheduler,
+                        receivers,
+                        &mut self.bidi,
+                        &mut self.pending_navigation_response,
+                        command,
+                        *execution,
+                    )
+                    .await
+                }
+                DevToolsNavigationCommandProgress::PendingLifecycle {
+                    pending,
+                    protocol_output,
+                } => {
+                    command.pending = Some(BidiPendingCommandWait::NavigationLifecycle(pending));
+                    self.pending_command = Some(command);
+                    send_bidi_protocol_output(
+                        &mut self.socket,
+                        scheduler,
+                        receivers,
+                        &mut self.bidi,
+                        protocol_output,
+                        owner_context,
+                        &mut self.pending_navigation_response,
+                    )
+                    .await
+                }
+                DevToolsNavigationCommandProgress::Pending(_) => {
+                    unreachable!("a committed navigation cannot return to network admission")
+                }
+            };
+        }
         if self
             .pending_command
             .as_ref()
@@ -1558,13 +1620,15 @@ struct BidiPendingCommand {
 enum BidiPendingCommandWait {
     Runtime(Box<PendingDevToolsRuntimeDeferredReplyExecution>),
     Navigation(DevToolsNavigationCommandWait),
+    NavigationLifecycle(Box<PendingDevToolsNavigationLifecycle>),
 }
 
 impl BidiPendingCommand {
     fn runtime_pending(&self) -> Option<&PendingDevToolsRuntimeDeferredReplyExecution> {
         match self.pending.as_ref()? {
             BidiPendingCommandWait::Runtime(pending) => Some(pending),
-            BidiPendingCommandWait::Navigation(_) => None,
+            BidiPendingCommandWait::Navigation(_)
+            | BidiPendingCommandWait::NavigationLifecycle(_) => None,
         }
     }
 
@@ -2365,6 +2429,23 @@ async fn start_bidi_devtools_command(
                     pending: Some(BidiPendingCommandWait::Navigation(
                         DevToolsNavigationCommandWait::new(*pending),
                     )),
+                    completion,
+                }))
+            }
+            DevToolsNavigationCommandProgress::PendingLifecycle {
+                pending,
+                protocol_output,
+            } => {
+                let mut completion = completion;
+                completion
+                    .event_sources
+                    .extend_protocol_output(protocol_output);
+                BidiDevToolsCommandStart::Pending(Box::new(BidiPendingCommand {
+                    command_method: None,
+                    command_params: None,
+                    command_channel: None,
+                    pending_navigation_candidate: None,
+                    pending: Some(BidiPendingCommandWait::NavigationLifecycle(pending)),
                     completion,
                 }))
             }

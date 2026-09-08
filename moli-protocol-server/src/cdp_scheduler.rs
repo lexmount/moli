@@ -51,7 +51,7 @@ pub(crate) use command_dispatch::{CommandDispatchState, CommandTurnOutput};
 pub(crate) use frontend_control::{CdpCookieSnapshot, CdpOwnerActorLifecycle};
 pub(crate) use navigation_dispatch::{
     CompletedDevToolsNavigationExecution, DevToolsNavigationCommandProgress,
-    DevToolsNavigationCommandWait, DevToolsNavigationReplyWait,
+    DevToolsNavigationCommandWait, DevToolsNavigationReplyWait, PendingDevToolsNavigationLifecycle,
 };
 use protocol_residence::{
     ClientTurnPredecessor, ProtocolSchedulerResidence, ProtocolSchedulerStep, SchedulerQueues,

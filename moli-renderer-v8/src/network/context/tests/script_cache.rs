@@ -57,6 +57,82 @@ fn start_script(
     Ok(receive)
 }
 
+#[tokio::test]
+async fn streaming_script_owner_cancellation_preserves_shared_callback() -> Result<()> {
+    let listener = TcpListener::bind("127.0.0.1:0").await?;
+    let url = format!("http://{}/script.js", listener.local_addr()?);
+    let owner = ResourceRequestClient::new(&FetchConfig::default())?;
+    let document = document_loader((*owner).clone(), 1, &url);
+    let client = document.request_client();
+    let request = Request::get(&url)?
+        .with_page_network_policy()
+        .with_script_fetch_metadata(ScriptFetchRequestMetadata::default());
+    let mut first =
+        Box::pin(client.fetch_cacheable_script_text_stream(request, resource_task_runner()));
+    let (mut stream, _) = tokio::select! {
+        biased;
+        result = &mut first => panic!("the fixture still owns the response: {result:?}"),
+        accepted = listener.accept() => accepted?,
+    };
+    read_request(&mut stream).await?;
+    // Synchronous callback admission proves a second consumer exists before
+    // the initiating async consumer is canceled.
+    let second = start_script(
+        document
+            .register_load(
+                ResourceLoadKind::Script,
+                ResourceLoadDisposition::Ordinary,
+                None,
+            )
+            .unwrap(),
+        &url,
+    )?;
+    drop(first);
+    respond(&mut stream, "surviving-consumer").await?;
+    let result = timeout(Duration::from_secs(3), second).await???;
+    assert_eq!(result.body_text(), "surviving-consumer");
+    Ok(())
+}
+
+#[tokio::test]
+async fn streaming_script_last_consumer_cancels_held_transport() -> Result<()> {
+    assert_streaming_script_last_consumer_cancels_held_transport(true).await
+}
+
+#[tokio::test]
+async fn streaming_uncached_script_last_consumer_cancels_held_transport() -> Result<()> {
+    assert_streaming_script_last_consumer_cancels_held_transport(false).await
+}
+
+async fn assert_streaming_script_last_consumer_cancels_held_transport(
+    cacheable: bool,
+) -> Result<()> {
+    let listener = TcpListener::bind("127.0.0.1:0").await?;
+    let url = format!("http://{}/script.js", listener.local_addr()?);
+    let owner = ResourceRequestClient::new(&FetchConfig::default())?;
+    let document = document_loader((*owner).clone(), 1, &url);
+    let client = document.request_client();
+    let mut request = Request::get(&url)?.with_page_network_policy();
+    if cacheable {
+        request = request.with_script_fetch_metadata(ScriptFetchRequestMetadata::default());
+    }
+    let mut first =
+        Box::pin(client.fetch_cacheable_script_text_stream(request, resource_task_runner()));
+    let (mut stream, _) = tokio::select! {
+        biased;
+        result = &mut first => panic!("the fixture still owns the response: {result:?}"),
+        accepted = listener.accept() => accepted?,
+    };
+    read_request(&mut stream).await?;
+    drop(first);
+    let mut byte = [0];
+    assert_eq!(
+        timeout(Duration::from_secs(3), stream.read(&mut byte)).await??,
+        0
+    );
+    Ok(())
+}
+
 async fn check_loading_context(change: ContextChange) -> Result<()> {
     let foreign_context = !matches!(change, ContextChange::TransportOnly);
     let listener = TcpListener::bind("127.0.0.1:0").await?;
@@ -164,6 +240,7 @@ async fn check_loading_context(change: ContextChange) -> Result<()> {
                 Request::get(&url)?
                     .with_page_network_policy()
                     .with_script_fetch_metadata(ScriptFetchRequestMetadata::default()),
+                resource_task_runner(),
             )
             .await?;
         assert_eq!(response.body_text(), "second");
