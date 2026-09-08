@@ -160,6 +160,7 @@ mod markdown_dump;
 mod media_element_event;
 mod message_port_delivery;
 mod misc_platform_api;
+mod module_error_reporting;
 mod module_reaction;
 mod modulepreload_start_completion;
 mod navigation_api_task;

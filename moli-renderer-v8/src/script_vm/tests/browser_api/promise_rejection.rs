@@ -1,6 +1,30 @@
 use super::*;
 
 #[test]
+fn rejection_notification_rechecks_handlers_added_by_an_earlier_notification() {
+    let mut vm = new_storage_test_vm("https://promise-notification-batch.test/");
+    vm.eval(
+        r#"
+        globalThis.__notifications = [];
+        const first = Promise.reject('first');
+        const second = Promise.reject('second');
+        onunhandledrejection = event => {
+            __notifications.push(event.reason);
+            event.preventDefault();
+            if (event.promise === first) second.catch(() => {});
+        };
+        onrejectionhandled = () => __notifications.push('rejectionhandled');
+    "#,
+    )
+    .unwrap();
+    vm.eval("0").unwrap();
+    assert_eq!(
+        vm.eval("JSON.stringify(__notifications)").unwrap(),
+        r#"["first"]"#
+    );
+}
+
+#[test]
 fn main_window_unhandled_rejection_dispatches_to_main_window() {
     let mut vm = new_storage_test_vm("https://main-promise-rejection.test/");
 

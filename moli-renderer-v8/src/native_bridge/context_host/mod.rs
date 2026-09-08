@@ -38,8 +38,8 @@ use crate::{
             BroadcastChannelId, DedicatedWorkerId, ImageRequestKey, MessagePortId,
             NetworkBodySourceId, PendingSubresourceAuthState, PendingSubresourceFetchState,
             PendingSubresourceResponseState, PendingWebSocketResponseState,
-            RunningSubresourceFetchState, ScriptErrorConstructorKind, ScriptNetworkOutputItem,
-            StreamingSubresourceFetchState, SubresourceNetworkRequestHandle,
+            RunningSubresourceFetchState, ScriptNetworkOutputItem, StreamingSubresourceFetchState,
+            SubresourceNetworkRequestHandle,
         },
         util::{
             string_from_utf16_units_lossy, utf16_units, utf16_units_contain_unpaired_surrogate,

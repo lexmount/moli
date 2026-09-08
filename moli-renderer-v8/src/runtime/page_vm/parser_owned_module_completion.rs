@@ -416,7 +416,7 @@ impl PageVm {
                 }
                 ModuleScriptEvaluationReactionState::Rejected {
                     reason,
-                    error_constructor,
+                    error_value,
                 } => {
                     let message = format!(
                         "NativeEsmEvaluateFailed: native module graph evaluation rejected: {reason}"
@@ -442,7 +442,7 @@ impl PageVm {
                         self.vm_mut().report_window_error_body_best_effort(
                             &message,
                             Some(evaluation.script_continuation.script.url.as_str()),
-                            error_constructor,
+                            error_value,
                             Some(evaluation.root_entry),
                         );
                         MainParserContinuationTaskEffect::applied(
@@ -455,7 +455,7 @@ impl PageVm {
                                 evaluation.root_entry,
                                 &message,
                                 Some(evaluation.script_continuation.script.url.as_str()),
-                                error_constructor,
+                                error_value,
                             );
                         MainParserContinuationTaskEffect::NotApplied
                     };
@@ -490,7 +490,7 @@ impl PageVm {
             }
             ModuleScriptEvaluationReactionState::Rejected {
                 reason,
-                error_constructor,
+                error_value,
             } => Some(
                 self.complete_module_script_failure_for_terminal_disposition(
                     evaluation.script_continuation,
@@ -503,7 +503,7 @@ impl PageVm {
                         module_failure_policy: Some(
                             crate::host::ModuleFailurePolicy::EvaluationFailure,
                         ),
-                        error_constructor,
+                        error_value,
                         failed_module: Some(evaluation.root_entry),
                     },
                     PreparedScriptBodyActivity::NotEntered,

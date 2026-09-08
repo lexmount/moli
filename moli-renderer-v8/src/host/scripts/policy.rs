@@ -131,22 +131,18 @@ impl ScriptFailurePageTaskPolicy {
                     report_window_failure: false,
                     load_event_after_window_failure: false,
                 },
-                ModuleFailurePolicy::GraphFailure => Self {
-                    load_event: event_policy.dispatch_policy(ScriptEventKind::Load),
-                    error_event: ScriptEventDispatchPolicy::Skip(
-                        ScriptEventSkipReason::ModuleGraphFailure,
-                    ),
-                    report_window_failure: true,
-                    load_event_after_window_failure: true,
-                },
-                ModuleFailurePolicy::EvaluationFailure => Self {
-                    load_event: event_policy.dispatch_policy(ScriptEventKind::Load),
-                    error_event: ScriptEventDispatchPolicy::Skip(
-                        ScriptEventSkipReason::ModuleGraphFailure,
-                    ),
-                    report_window_failure: true,
-                    load_event_after_window_failure: false,
-                },
+                // A script with a fetched module graph still completes its
+                // external-script load step when running that graph rejects.
+                ModuleFailurePolicy::GraphFailure | ModuleFailurePolicy::EvaluationFailure => {
+                    Self {
+                        load_event: event_policy.dispatch_policy(ScriptEventKind::Load),
+                        error_event: ScriptEventDispatchPolicy::Skip(
+                            ScriptEventSkipReason::ModuleGraphFailure,
+                        ),
+                        report_window_failure: true,
+                        load_event_after_window_failure: true,
+                    }
+                }
             };
         }
         Self {

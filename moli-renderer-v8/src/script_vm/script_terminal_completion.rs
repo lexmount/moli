@@ -30,11 +30,11 @@ impl ScriptVm {
         &mut self,
         message: &str,
         filename: Option<&str>,
-        error_constructor: Option<crate::types::ScriptErrorConstructorKind>,
+        error_value: Option<crate::types::ScriptErrorValue>,
         failed_module: Option<ModuleEntryId>,
         boundary: &'static str,
     ) -> Result<()> {
-        self.report_window_error_body(message, filename, error_constructor, failed_module)?;
+        self.report_window_error_body(message, filename, error_value, failed_module)?;
         self.perform_owner_lane_task_microtask_checkpoints()
             .with_context(|| format!("{boundary} checkpoint failed"))
     }
@@ -44,7 +44,7 @@ impl ScriptVm {
         script: &PreparedScript,
         message: &str,
         module_failure_policy: Option<crate::host::ModuleFailurePolicy>,
-        error_constructor: Option<crate::types::ScriptErrorConstructorKind>,
+        error_value: Option<crate::types::ScriptErrorValue>,
         failed_module: Option<ModuleEntryId>,
         boundary: &'static str,
     ) {
@@ -52,7 +52,7 @@ impl ScriptVm {
             script,
             message,
             module_failure_policy,
-            error_constructor,
+            error_value,
         );
         for work in planned_failure_work {
             let result = match work {
@@ -63,7 +63,7 @@ impl ScriptVm {
                     .report_window_error_and_finish_synchronous_checkpoint(
                         &task.message,
                         task.filename.as_deref(),
-                        task.error_constructor,
+                        task.error_value,
                         failed_module,
                         boundary,
                     ),
@@ -106,14 +106,14 @@ impl ScriptVm {
         script: &PreparedScript,
         message: &str,
         module_failure_policy: Option<crate::host::ModuleFailurePolicy>,
-        error_constructor: Option<crate::types::ScriptErrorConstructorKind>,
+        error_value: Option<crate::types::ScriptErrorValue>,
         failed_module: Option<ModuleEntryId>,
     ) {
         self.dispatch_planned_script_failure_and_finish_each_synchronous_checkpoint(
             script,
             message,
             module_failure_policy,
-            error_constructor,
+            error_value,
             failed_module,
             "parser-owned module failure settlement",
         );
@@ -127,13 +127,13 @@ impl ScriptVm {
         script: &PreparedScript,
         message: &str,
         module_failure_policy: Option<crate::host::ModuleFailurePolicy>,
-        error_constructor: Option<crate::types::ScriptErrorConstructorKind>,
+        error_value: Option<crate::types::ScriptErrorValue>,
     ) {
         self.dispatch_planned_script_failure_and_finish_each_synchronous_checkpoint(
             script,
             message,
             module_failure_policy,
-            error_constructor,
+            error_value,
             None,
             "unclaimed runtime-script terminal",
         );
@@ -146,12 +146,12 @@ impl ScriptVm {
         root_entry: ModuleEntryId,
         message: &str,
         filename: Option<&str>,
-        error_constructor: Option<crate::types::ScriptErrorConstructorKind>,
+        error_value: Option<crate::types::ScriptErrorValue>,
     ) {
         if let Err(error) = self.report_window_error_and_finish_synchronous_checkpoint(
             message,
             filename,
-            error_constructor,
+            error_value,
             Some(root_entry),
             "module TLA rejection reaction",
         ) {
@@ -189,7 +189,7 @@ impl ScriptVm {
         if let Err(error) = self.report_window_error_and_finish_synchronous_checkpoint(
             &task.message,
             task.filename.as_deref(),
-            task.error_constructor,
+            task.error_value,
             None,
             "runtime script failure terminal",
         ) {
@@ -206,14 +206,14 @@ impl ScriptVm {
         script: &PreparedScript,
         message: &str,
         module_failure_policy: Option<crate::host::ModuleFailurePolicy>,
-        error_constructor: Option<crate::types::ScriptErrorConstructorKind>,
+        error_value: Option<crate::types::ScriptErrorValue>,
         failed_module: Option<ModuleEntryId>,
     ) -> ScriptTerminalBodyActivity {
         let planned_failure_work = self.document_runtime.plan_script_failure_lifecycle_work(
             script,
             message,
             module_failure_policy,
-            error_constructor,
+            error_value,
         );
         let mut activity = ScriptTerminalBodyActivity::NoEventDispatch;
         for work in planned_failure_work {
@@ -226,7 +226,7 @@ impl ScriptVm {
                     self.report_window_error_body_best_effort(
                         &task.message,
                         task.filename.as_deref(),
-                        task.error_constructor,
+                        task.error_value,
                         failed_module,
                     );
                     activity = ScriptTerminalBodyActivity::EventDispatchAttempted;
@@ -258,7 +258,7 @@ impl ScriptVm {
         self.report_window_script_failure_and_checkpoint_for_test(
             &task.message,
             task.filename.as_deref(),
-            task.error_constructor,
+            task.error_value,
         );
     }
 
@@ -267,12 +267,12 @@ impl ScriptVm {
         &mut self,
         message: &str,
         filename: Option<&str>,
-        error_constructor: Option<crate::types::ScriptErrorConstructorKind>,
+        error_value: Option<crate::types::ScriptErrorValue>,
     ) {
         if let Err(error) = self.report_window_error_and_finish_synchronous_checkpoint(
             message,
             filename,
-            error_constructor,
+            error_value,
             None,
             "test-only Window error",
         ) {
