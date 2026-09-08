@@ -193,12 +193,10 @@ fn indexed_attribute_object<'s>(
     let cache_key = indexed_attribute_cache_key(&attribute);
     let namespace_key =
         namespace_attr_cache_key(attribute.namespace_uri.as_deref(), &attribute.local_name);
-    let name_alias = indexed_attribute_can_alias_qualified_name(&attribute)
-        .then(|| object_property_as_object(scope, cache, &attribute.name))
-        .flatten();
+    // Qualified names are not unique across namespaces. Only canonical keys
+    // identify an Attr; the name alias is an exposed lookup projection.
     if let Some(attr) = object_property_as_object(scope, cache, &cache_key)
         .or_else(|| object_property_as_object(scope, cache, &namespace_key))
-        .or(name_alias)
     {
         if let Some(state) = attr_state_object(scope, attr) {
             let _ = state.set(scope, v8str(scope, "ownerElement").into(), element.into());
