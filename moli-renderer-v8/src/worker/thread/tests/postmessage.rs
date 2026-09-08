@@ -1,6 +1,23 @@
 use super::*;
 
 #[tokio::test]
+async fn worker_trusted_types_webidl_surface_checks_descriptors_arguments_and_brands() {
+    ensure_v8();
+    let mut handle = spawn_worker(
+        format!(
+            "postMessage({}); close();",
+            include_str!("../../../../tests/fixtures/trusted-types-webidl.js")
+        ),
+        "https://trusted-types-webidl.test/worker.js".into(),
+    );
+    let message = timeout(TIMEOUT, handle.recv())
+        .await
+        .expect("worker Trusted Types probe should settle")
+        .expect("worker Trusted Types probe should return a result");
+    assert_eq!(expect_post_json(message), r#""ok""#);
+}
+
+#[tokio::test]
 async fn worker_compression_streams_roundtrip_all_formats() {
     ensure_v8();
     let mut handle = spawn_worker(
