@@ -1,7 +1,4 @@
-use super::storage::{
-    font_face_set_owner_snapshot, is_font_face_value, replace_font_face_set_ready_promise,
-    set_font_face_set_status,
-};
+use super::storage::{font_face_set_owner_snapshot, is_font_face_value, set_font_face_set_status};
 use super::*;
 use crate::context_bootstrap::events::initialize_event_object;
 use crate::util::{
@@ -278,6 +275,35 @@ pub(super) fn dispatch_font_face_set_event<'s>(
     )
 }
 
+const READY_RESOLVER: &str = "__moliFontFaceSetReadyResolver";
+const LOADED_FACES: &str = "__moliFontFaceSetLoadedFaces";
+const FAILED_FACES: &str = "__moliFontFaceSetFailedFaces";
+
+pub(super) fn font_face_loading_started<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    face: v8::Local<'s, v8::Object>,
+) {
+    for owner in font_face_set_owner_snapshot(scope, face) {
+        if super::loading::string_slot(scope, owner, FONT_FACE_SET_STATUS_SLOT) == "loading" {
+            continue;
+        }
+        set_font_face_set_status(scope, owner, "loading");
+        let resolver = v8::PromiseResolver::new(scope).expect("FontFaceSet ready resolver");
+        set_private_value(scope, owner, READY_RESOLVER, resolver.into());
+        set_private_value(
+            scope,
+            owner,
+            FONT_FACE_SET_READY_SLOT,
+            resolver.get_promise(scope).into(),
+        );
+        for slot in [LOADED_FACES, FAILED_FACES] {
+            let array = v8::Array::new(scope, 0);
+            set_private_value(scope, owner, slot, array.into());
+        }
+        let _ = dispatch_font_face_set_event(scope, owner, "loading", None);
+    }
+}
+
 pub(super) fn notify_font_face_set_owners_of_load<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     face: v8::Local<'s, v8::Object>,
@@ -299,20 +325,55 @@ pub(super) fn notify_font_face_set_owners_of_load<'s>(
     if owners.is_empty() {
         return;
     }
-    let loaded_faces = v8::Array::new(scope, 1);
-    let _ = loaded_faces.set_index(scope, 0, face.into());
-    let completion_event_type = if font_face_load_failed(scope, face) {
-        "loadingerror"
+    let slot = if font_face_load_failed(scope, face) {
+        FAILED_FACES
     } else {
-        "loadingdone"
+        LOADED_FACES
     };
     for owner in owners {
-        set_font_face_set_status(scope, owner, "loading");
-        replace_font_face_set_ready_promise(scope, owner);
-        let _ = dispatch_font_face_set_event(scope, owner, "loading", None);
-        set_font_face_set_status(scope, owner, "loaded");
-        let _ =
-            dispatch_font_face_set_event(scope, owner, completion_event_type, Some(loaded_faces));
+        if let Some(array) = get_private_value(scope, owner, slot)
+            .and_then(|v| v8::Local::<v8::Array>::try_from(v).ok())
+        {
+            let _ = array.set_index(scope, array.length(), face.into());
+        }
+        finish_font_set_if_idle(scope, owner);
+    }
+}
+
+pub(super) fn finish_font_set_if_idle<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    owner: v8::Local<'s, v8::Object>,
+) {
+    if super::loading::string_slot(scope, owner, FONT_FACE_SET_STATUS_SLOT) != "loading" {
+        return;
+    }
+    let pending = super::storage::font_face_set_faces_array(scope, owner).is_some_and(|faces| {
+        (0..faces.length()).any(|index| {
+            faces
+                .get_index(scope, index)
+                .and_then(|v| v8::Local::<v8::Object>::try_from(v).ok())
+                .is_some_and(|face| {
+                    super::loading::string_slot(scope, face, FONT_FACE_STATUS_SLOT) == "loading"
+                })
+        })
+    });
+    if pending {
+        return;
+    }
+    set_font_face_set_status(scope, owner, "loaded");
+    if let Some(resolver) = super::loading::resolver_from_slot(scope, owner, READY_RESOLVER) {
+        let _ = resolver.resolve(scope, owner.into());
+    }
+    for (slot, event) in [
+        (LOADED_FACES, "loadingdone"),
+        (FAILED_FACES, "loadingerror"),
+    ] {
+        if let Some(array) = get_private_value(scope, owner, slot)
+            .and_then(|v| v8::Local::<v8::Array>::try_from(v).ok())
+            && (event == "loadingdone" || array.length() > 0)
+        {
+            let _ = dispatch_font_face_set_event(scope, owner, event, Some(array));
+        }
     }
 }
 

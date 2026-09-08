@@ -1,6 +1,8 @@
 use super::*;
 use crate::{
-    util::{callback_data_index_value, callback_data_item, get_private_value, set_private_value},
+    util::{
+        callback_data_index_value, callback_data_item, get_private_value, set_private_value, v8str,
+    },
     webidl,
 };
 use moli_webapi_declare::{WebApiFunctionTemplate, WebApiObject};
@@ -153,6 +155,9 @@ fn font_face_writable_attribute_getter_callback<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'s, v8::Value>,
 ) {
+    if !require_font_face_receiver(scope, args.this()) {
+        return;
+    }
     let Some(slot) = callback_data_item(
         scope,
         &args,
@@ -172,6 +177,9 @@ fn font_face_readonly_attribute_getter_callback<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'s, v8::Value>,
 ) {
+    if !require_font_face_receiver(scope, args.this()) {
+        return;
+    }
     let Some(slot) = callback_data_item(
         scope,
         &args,
@@ -191,6 +199,9 @@ fn font_face_attribute_setter_callback<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'s, v8::Value>,
 ) {
+    if !require_font_face_receiver(scope, args.this()) {
+        return;
+    }
     let Some(slot) = callback_data_item(
         scope,
         &args,
@@ -204,10 +215,17 @@ fn font_face_attribute_setter_callback<'s>(
         .get(0)
         .to_string(scope)
         .unwrap_or_else(|| v8::String::empty(scope));
-    let value = if slot == FONT_FACE_VARIATION_SETTINGS_SLOT {
+    let descriptor_name = match slot {
+        FONT_FACE_FAMILY_SLOT => Some("font-family"),
+        FONT_FACE_STYLE_SLOT => Some("font-style"),
+        FONT_FACE_WEIGHT_SLOT => Some("font-weight"),
+        FONT_FACE_STRETCH_SLOT => Some("font-stretch"),
+        FONT_FACE_VARIATION_SETTINGS_SLOT => Some("font-variation-settings"),
+        _ => None,
+    };
+    let value = if let Some(descriptor_name) = descriptor_name {
         let raw = value.to_rust_string_lossy(scope);
-        let Some(value) = canonical_font_face_descriptor_value("font-variation-settings", &raw)
-        else {
+        let Some(value) = canonical_font_face_descriptor_value(descriptor_name, &raw) else {
             webidl::throw_dom_exception(
                 scope,
                 "SyntaxError",
@@ -222,6 +240,7 @@ fn font_face_attribute_setter_callback<'s>(
         value.into()
     };
     set_font_face_slot_value(scope, args.this(), slot, value);
+    super::loading::sync_owners(scope, args.this());
     rv.set_undefined();
 }
 
@@ -250,26 +269,31 @@ pub(in crate::context_bootstrap) fn font_face_constructor_callback<'s>(
         return;
     };
     let display = descriptor_string_property(scope, descriptors, "display", "auto");
-    let (source, status, loaded) = match parsed.source {
+    let valid_descriptors = [
+        ("font-family", parsed.family.as_str()),
+        ("font-style", style.as_str()),
+        ("font-weight", weight.as_str()),
+        ("font-stretch", stretch.as_str()),
+    ]
+    .iter()
+    .all(|(name, value)| canonical_font_face_descriptor_value(name, value).is_some());
+    let (source, terminal) = match parsed.source {
         FontFaceConstructorSource::Css(source) => {
-            let loaded = resolved_promise(scope, this.into());
-            (source, "loaded", loaded)
+            let terminal = moli_css_parse::parse_font_face_sources(&source)
+                .is_none()
+                .then_some(Err(("SyntaxError", "Invalid FontFace source.")));
+            (source, terminal)
         }
-        FontFaceConstructorSource::Binary(bytes)
-            if moli_web_mime::sniff_font_mime_type(&bytes).is_some() =>
-        {
-            let loaded = resolved_promise(scope, this.into());
-            (String::new(), "loaded", loaded)
-        }
-        FontFaceConstructorSource::Binary(_) => {
-            let loaded = super::query::make_rejected_dom_exception_promise(
-                scope,
-                "SyntaxError",
-                "Invalid font data in ArrayBuffer.",
-            );
-            (String::new(), "error", Some(loaded))
-        }
+        FontFaceConstructorSource::Binary(bytes) => (
+            String::new(),
+            Some(
+                moli_layout::FontFaceData::from_bytes(&bytes)
+                    .map_err(|_| ("SyntaxError", "Invalid font data in ArrayBuffer.")),
+            ),
+        ),
     };
+    let resolver = v8::PromiseResolver::new(scope).expect("FontFace loaded resolver");
+    let loaded = Some(resolver.get_promise(scope));
     FontFaceObjectDeclaration::new(
         parsed.family,
         source,
@@ -280,11 +304,21 @@ pub(in crate::context_bootstrap) fn font_face_constructor_callback<'s>(
         feature_settings,
         variation_settings,
         display,
-        status,
+        "unloaded",
         loaded,
     )
     .initialize(scope, this)
     .expect("FontFace declaration should initialize object");
+    super::loading::initialize_resolver(scope, this, resolver);
+    if !valid_descriptors {
+        super::loading::settle_font(
+            scope,
+            this,
+            Err(("SyntaxError", "Invalid FontFace descriptor.")),
+        );
+    } else if let Some(terminal) = terminal {
+        super::loading::settle_font(scope, this, terminal);
+    }
     rv.set(this.into());
 }
 
@@ -332,16 +366,29 @@ pub(in crate::context_bootstrap) fn font_face_load_callback<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'s, v8::Value>,
 ) {
-    let this = args.this();
-    super::events::notify_font_face_set_owners_of_load(scope, this);
-    if let Some(loaded) = font_face_slot_value(scope, this, FONT_FACE_LOADED_SLOT) {
-        rv.set(loaded);
+    if get_private_value(scope, args.this(), FONT_FACE_STATUS_SLOT).is_none() {
+        let resolver = v8::PromiseResolver::new(scope).expect("FontFace.load resolver");
+        let message = v8str(scope, "Illegal invocation");
+        let error = v8::Exception::type_error(scope, message);
+        let _ = resolver.reject(scope, error);
+        rv.set(resolver.get_promise(scope).into());
         return;
     }
-    match resolved_promise(scope, this.into()) {
+    match super::loading::load_font(scope, args.this()) {
         Some(promise) => rv.set(v8::Local::<v8::Value>::from(promise)),
         None => rv.set(v8::undefined(scope).into()),
     }
+}
+
+fn require_font_face_receiver<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    receiver: v8::Local<'s, v8::Object>,
+) -> bool {
+    if get_private_value(scope, receiver, FONT_FACE_STATUS_SLOT).is_some() {
+        return true;
+    }
+    throw_type_error(scope, "Illegal invocation");
+    false
 }
 
 fn descriptor_string_property(
@@ -352,6 +399,7 @@ fn descriptor_string_property(
 ) -> String {
     object
         .and_then(|object| v8_string(scope, key).and_then(|key| object.get(scope, key.into())))
+        .filter(|value| !value.is_undefined())
         .and_then(|value| value.to_string(scope))
         .map(|value| value.to_rust_string_lossy(scope))
         .unwrap_or_else(|| default.to_owned())

@@ -1,5 +1,7 @@
 use super::*;
 
+mod text;
+
 async fn drain_canvas_image_load_event_tasks(
     page: &mut crate::runtime::PageVmTaskExecutorTestHarness,
     loader: &ResourceRequestClient,
@@ -1401,7 +1403,7 @@ fn canvas_context_string_setters_parse_webidl_domstring() {
 
     assert_eq!(
         result,
-        r##"{"fontNull":"null","fontUndefined":"undefined","fontObject":"16px serif","fontSymbol":"TypeError","fontAfterSymbol":"16px serif","fontThrow":"RangeError","fontAfterThrow":"16px serif","fillObject":"#ff0000","fillSymbol":"TypeError","fillAfterSymbol":"#ff0000","fillThrow":"RangeError","fillAfterThrow":"#ff0000","offscreenFont":"20px sans-serif","offscreenFill":"#00ff00"}"##
+        r##"{"fontNull":"10px sans-serif","fontUndefined":"10px sans-serif","fontObject":"16px serif","fontSymbol":"TypeError","fontAfterSymbol":"16px serif","fontThrow":"RangeError","fontAfterThrow":"16px serif","fillObject":"#ff0000","fillSymbol":"TypeError","fillAfterSymbol":"#ff0000","fillThrow":"RangeError","fillAfterThrow":"#ff0000","offscreenFont":"20px sans-serif","offscreenFill":"#00ff00"}"##
     );
 }
 

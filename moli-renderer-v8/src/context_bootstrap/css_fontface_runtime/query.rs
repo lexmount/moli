@@ -2,19 +2,16 @@ use super::storage::font_face_set_faces_array;
 use super::*;
 use crate::util::serialize_v8_iter_array;
 
-pub(super) fn font_load_query_contains_css_wide_keyword(query: &str) -> bool {
-    moli_css_parse::font_load_query_contains_css_wide_keyword(query)
-}
-
-fn font_face_matches_query(
-    scope: &mut v8::PinScope<'_, '_>,
-    face: v8::Local<'_, v8::Object>,
-    query: &str,
+fn font_face_matches_query<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    face: v8::Local<'s, v8::Object>,
+    families: &[String],
 ) -> bool {
-    let Some(query_family) = moli_css_parse::font_load_query_family(query) else {
-        return false;
-    };
-    object_string_property(scope, face, "family").is_some_and(|family| family == query_family)
+    let family = super::loading::string_slot(scope, face, FONT_FACE_FAMILY_SLOT);
+    let family = moli_css_parse::unquote_css_string(&family);
+    families
+        .iter()
+        .any(|query| query.eq_ignore_ascii_case(&family))
 }
 
 pub(super) fn font_face_set_matching_faces_array<'s>(
@@ -22,6 +19,7 @@ pub(super) fn font_face_set_matching_faces_array<'s>(
     object: v8::Local<'s, v8::Object>,
     query: &str,
 ) -> Option<v8::Local<'s, v8::Array>> {
+    let query = moli_css_parse::parse_font_shorthand(query)?;
     let faces = font_face_set_faces_array(scope, object)?;
     let mut matching = Vec::new();
     for index in 0..faces.length() {
@@ -31,7 +29,7 @@ pub(super) fn font_face_set_matching_faces_array<'s>(
         let Ok(face_object) = v8::Local::<v8::Object>::try_from(face) else {
             continue;
         };
-        if !font_face_matches_query(scope, face_object, query) {
+        if !font_face_matches_query(scope, face_object, &query.families) {
             continue;
         }
         matching.push(face);

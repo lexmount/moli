@@ -984,7 +984,7 @@ fn document_referrer_getter_function<'s>(
 ) {
     let Some((runtime_ptr, handle)) = document_receiver_runtime_and_handle(scope, args.this())
     else {
-        rv.set_undefined();
+        crate::util::throw_type_error(scope, "Illegal invocation");
         return;
     };
     let runtime = unsafe { &*runtime_ptr };

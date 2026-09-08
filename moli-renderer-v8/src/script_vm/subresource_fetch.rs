@@ -3569,6 +3569,11 @@ impl ScriptVm {
             let security_started = moli_trace::cdp_runtime_trace_enabled().then(Instant::now);
             let mut opaque_response_blocked = false;
             let result = result.and_then(|response| {
+                if matches!(pending.continuation, PendingSubresourceContinuation::FontFace(_))
+                    && !response.redirect_chain.is_empty()
+                    && !context_host.borrow_mut().font_request_allowed_by_csp(scope, pending.execution_context.dispatch_scope(), &pending.info.document_url, &response.final_url, crate::content_security_policy::ContentSecurityPolicyRedirectStatus::FollowedRedirect) {
+                    return Err("Font redirect blocked by Content Security Policy".to_owned());
+                }
                 if !response.redirect_chain.is_empty()
                     && let Some(message) = document_connect_csp_redirect_failure_message(
                         scope,
@@ -3783,6 +3788,12 @@ impl ScriptVm {
                                 observable_response.body_text(),
                             ),
                         ),
+                        PendingSubresourceContinuation::FontFace(face) => {
+                            let face = v8::Local::new(scope, face);
+                            let bytes = ((200..300).contains(&response_status) && !opaque_response_blocked)
+                                .then(|| observable_response.body_bytes());
+                            crate::context_bootstrap::finish_font_face_url_load(scope, face, bytes);
+                        }
                         PendingSubresourceContinuation::StylesheetSubresource {
                             binding,
                             web_font,
@@ -3920,6 +3931,10 @@ impl ScriptVm {
                             pending.info.internal_id,
                             Err(error_text.clone()),
                         ),
+                        PendingSubresourceContinuation::FontFace(face) => {
+                            let face = v8::Local::new(scope, face);
+                            crate::context_bootstrap::finish_font_face_url_load(scope, face, None);
+                        }
                         PendingSubresourceContinuation::StylesheetSubresource {
                             binding,
                             web_font,
@@ -4674,6 +4689,10 @@ impl ScriptVm {
                         started.internal_id,
                         Err(error_text.clone()),
                     ),
+                    PendingSubresourceContinuation::FontFace(face) => {
+                        let face = v8::Local::new(scope, face);
+                        crate::context_bootstrap::finish_font_face_url_load(scope, face, None);
+                    }
                     PendingSubresourceContinuation::StylesheetSubresource { binding, .. } => {
                         apply_stylesheet_subresource_terminal(&self._context_host, *binding);
                     }
@@ -4907,6 +4926,10 @@ impl ScriptVm {
                     started.internal_id,
                     Err("text-track response unexpectedly used streaming transport".to_owned()),
                 ),
+                PendingSubresourceContinuation::FontFace(face) => {
+                    let face = v8::Local::new(scope, face);
+                    crate::context_bootstrap::finish_font_face_url_load(scope, face, None);
+                }
                 PendingSubresourceContinuation::StylesheetSubresource { binding, .. } => {
                     apply_stylesheet_subresource_terminal(&self._context_host, *binding);
                 }
@@ -6237,6 +6260,7 @@ fn pending_subresource_continuation_kind(
         PendingSubresourceContinuation::Image { .. } => "image",
         PendingSubresourceContinuation::Media { .. } => "media",
         PendingSubresourceContinuation::TextTrack { .. } => "text_track",
+        PendingSubresourceContinuation::FontFace(_) => "font_face",
         PendingSubresourceContinuation::StylesheetSubresource { .. } => "stylesheet_subresource",
         PendingSubresourceContinuation::Beacon => "beacon",
         PendingSubresourceContinuation::CspReport { .. } => "csp_report",

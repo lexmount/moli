@@ -43,7 +43,7 @@ use super::{
     },
     util::{
         callback_data_index_value, callback_data_item, context_host_ptr_from_global_bridge,
-        get_private_object, global_constructor_prototype, serialize_v8_array,
+        get_private_object, get_private_value, global_constructor_prototype, serialize_v8_array,
         serialize_v8_iter_array, throw_range_error, throw_type_error, v8_string, v8str,
     },
     window_webidl_callback::WindowWebIdlCallbackFunctionOutcome,
@@ -97,29 +97,24 @@ struct MutationRecordDeclaration<'scope> {
 }
 
 #[derive(WebApiObject)]
-#[webapi(interface = "IntersectionObserverEntry", data_properties, enumerable)]
+#[webapi(interface = "IntersectionObserverEntry")]
 struct IntersectionObserverEntryDeclaration<'scope> {
+    #[webapi(slot = "__moliIntersectionEntryTarget")]
     target: v8::Local<'scope, v8::Value>,
+    #[webapi(slot = "__moliIntersectionEntryIntersecting")]
     is_intersecting: bool,
+    #[webapi(slot = "__moliIntersectionEntryVisible")]
     is_visible: bool,
+    #[webapi(slot = "__moliIntersectionEntryRatio")]
     intersection_ratio: f64,
+    #[webapi(slot = "__moliIntersectionEntryBoundingRect")]
     bounding_client_rect: v8::Local<'scope, v8::Value>,
+    #[webapi(slot = "__moliIntersectionEntryIntersectionRect")]
     intersection_rect: v8::Local<'scope, v8::Value>,
+    #[webapi(slot = "__moliIntersectionEntryRootBounds")]
     root_bounds: v8::Local<'scope, v8::Value>,
+    #[webapi(slot = "__moliIntersectionEntryTime")]
     time: f64,
-}
-
-#[derive(WebApiObject)]
-#[webapi(interface = "IntersectionObserverEntry", data_properties, enumerable)]
-struct IntersectionObserverEntryInitDeclaration<'scope> {
-    time: f64,
-    root_bounds: v8::Local<'scope, v8::Value>,
-    bounding_client_rect: v8::Local<'scope, v8::Value>,
-    intersection_rect: v8::Local<'scope, v8::Value>,
-    target: v8::Local<'scope, v8::Value>,
-    is_intersecting: bool,
-    is_visible: bool,
-    intersection_ratio: f64,
 }
 
 #[derive(WebApiFunctionTemplate)]
@@ -1483,7 +1478,7 @@ fn initialize_intersection_observer_entry_from_init<'s>(
         .number_value(scope)
         .unwrap_or(0.0);
 
-    let _ = IntersectionObserverEntryInitDeclaration {
+    let _ = IntersectionObserverEntryDeclaration {
         time,
         root_bounds,
         bounding_client_rect,
@@ -2518,37 +2513,25 @@ fn intersection_observer_attribute_getter_callback(
     );
 }
 
-fn intersection_observer_entry_attribute_getter_callback(
-    scope: &mut v8::PinScope<'_, '_>,
-    args: v8::FunctionCallbackArguments<'_>,
-    mut rv: v8::ReturnValue<'_, v8::Value>,
+fn intersection_observer_entry_attribute_getter_callback<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: v8::FunctionCallbackArguments<'s>,
+    mut rv: v8::ReturnValue<'s, v8::Value>,
 ) {
-    let Some(name) = callback_data_item(
+    let Some(slot) = callback_data_item(
         scope,
         &args,
-        INTERSECTION_OBSERVER_ENTRY_ATTRIBUTE_NAMES,
-        "IntersectionObserverEntry attribute names",
+        INTERSECTION_OBSERVER_ENTRY_ATTRIBUTE_SLOTS,
+        "IntersectionObserverEntry attribute slots",
     ) else {
         rv.set_undefined();
         return;
     };
-    // Runtime-created entries define their values as own data properties. The
-    // prototype getter exists for WebIDL shape and should read that own value
-    // without re-entering the same accessor through normal property lookup.
-    let key = v8str(scope, name);
-    let Some(descriptor) = args.this().get_own_property_descriptor(scope, key.into()) else {
-        rv.set_undefined();
+    let Some(value) = get_private_value(scope, args.this(), slot) else {
+        throw_type_error(scope, "Illegal invocation");
         return;
     };
-    let Ok(descriptor) = v8::Local::<v8::Object>::try_from(descriptor) else {
-        rv.set_undefined();
-        return;
-    };
-    rv.set(
-        descriptor
-            .get(scope, v8str(scope, "value").into())
-            .unwrap_or_else(|| v8::undefined(scope).into()),
-    );
+    rv.set(value);
 }
 
 const INTERSECTION_OBSERVER_ATTRIBUTE_NAMES: &[&str] = &[
@@ -2560,15 +2543,15 @@ const INTERSECTION_OBSERVER_ATTRIBUTE_NAMES: &[&str] = &[
     "trackVisibility",
 ];
 
-const INTERSECTION_OBSERVER_ENTRY_ATTRIBUTE_NAMES: &[&str] = &[
-    "time",
-    "rootBounds",
-    "boundingClientRect",
-    "intersectionRect",
-    "isIntersecting",
-    "isVisible",
-    "intersectionRatio",
-    "target",
+const INTERSECTION_OBSERVER_ENTRY_ATTRIBUTE_SLOTS: &[&str] = &[
+    "__moliIntersectionEntryTime",
+    "__moliIntersectionEntryRootBounds",
+    "__moliIntersectionEntryBoundingRect",
+    "__moliIntersectionEntryIntersectionRect",
+    "__moliIntersectionEntryIntersecting",
+    "__moliIntersectionEntryVisible",
+    "__moliIntersectionEntryRatio",
+    "__moliIntersectionEntryTarget",
 ];
 
 fn timestamp_millis() -> f64 {

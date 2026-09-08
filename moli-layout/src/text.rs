@@ -23,6 +23,11 @@ use thiserror::Error;
 use crate::stylo_to_parley::TextBrush;
 use crate::system_fonts::SystemFontFamilyResolver;
 
+mod canvas;
+mod font_source;
+pub use canvas::{CanvasFont, ShapedCanvasText};
+pub use font_source::FontFaceData;
+
 pub(crate) struct ParleyDocumentServices {
     pub(crate) font_context: FontContext,
     pub(crate) layout_context: LayoutContext<TextBrush>,
@@ -674,6 +679,7 @@ pub struct DocumentLayoutServices {
     // FontContext and LayoutContext are both large. Keep them off the stack so
     // embedding this sidecar in ScriptVm does not inflate every VM frame.
     parley: Option<Box<ParleyDocumentServices>>,
+    local_font_sources: Option<Box<font_source::LocalFontSources>>,
     system_font_policy: SystemFontPolicy,
     web_fonts: BTreeMap<String, RegisteredWebFont>,
     pub(crate) text_layout_passes: u64,
@@ -690,6 +696,7 @@ impl DocumentLayoutServices {
     pub const fn new() -> Self {
         Self {
             parley: None,
+            local_font_sources: None,
             system_font_policy: SystemFontPolicy::Enabled,
             web_fonts: BTreeMap::new(),
             text_layout_passes: 0,
@@ -700,6 +707,7 @@ impl DocumentLayoutServices {
     pub const fn with_system_font_policy(system_font_policy: SystemFontPolicy) -> Self {
         Self {
             parley: None,
+            local_font_sources: None,
             system_font_policy,
             web_fonts: BTreeMap::new(),
             text_layout_passes: 0,
@@ -773,6 +781,18 @@ impl DocumentLayoutServices {
             )));
         }
         true
+    }
+
+    /// Resolves a CSS local() source by its actual full or PostScript name.
+    /// This never substitutes a generic font or a document web-font alias.
+    pub fn local_font_source(&mut self, name: &str) -> Option<FontFaceData> {
+        self.local_font_sources
+            .get_or_insert_with(|| {
+                Box::new(font_source::LocalFontSources::new(
+                    self.system_font_policy.is_enabled(),
+                ))
+            })
+            .find(name)
     }
 
     pub(crate) fn parley_mut(&mut self) -> &mut ParleyDocumentServices {
