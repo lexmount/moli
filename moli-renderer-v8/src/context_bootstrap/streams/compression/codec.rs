@@ -1,11 +1,9 @@
 //! Streaming codecs, independent of V8 and the Streams lifecycle.
 //! One decoder accepts exactly one stream/member, including any checksum.
 
-use brotli2::{
-    CompressParams,
-    raw::{
-        CoStatus, Compress as BrotliCompress, CompressOp, DeStatus, Decompress as BrotliDecompress,
-    },
+use brotlic::{
+    BrotliDecoder, BrotliEncoder, BrotliEncoderOptions, Quality, decode::DecoderInfo,
+    encode::BrotliOperation,
 };
 use flate2::{Compress, Compression, Decompress, FlushCompress, FlushDecompress, Status};
 
@@ -30,8 +28,8 @@ impl Format {
 }
 
 enum Engine {
-    BrotliCompress(BrotliCompress),
-    BrotliDecompress(BrotliDecompress),
+    BrotliCompress(BrotliEncoder),
+    BrotliDecompress(BrotliDecoder),
     Compress(Compress),
     Decompress(Decompress),
 }
@@ -44,12 +42,14 @@ pub(super) struct Codec {
 impl Codec {
     pub(super) fn new(format: Format, decompress: bool) -> Self {
         let engine = match (format, decompress) {
-            (Format::Brotli, true) => Engine::BrotliDecompress(BrotliDecompress::new()),
+            (Format::Brotli, true) => Engine::BrotliDecompress(BrotliDecoder::new()),
             (Format::Brotli, false) => {
-                let mut encoder = BrotliCompress::new();
                 // Moderate quality for interactive streaming; retain the
                 // standard window size and generic compression mode.
-                encoder.set_params(CompressParams::new().quality(5));
+                let encoder = BrotliEncoderOptions::new()
+                    .quality(Quality::new(5).expect("Brotli quality 5 must be valid"))
+                    .build()
+                    .expect("fixed Brotli encoder parameters must be valid");
                 Engine::BrotliCompress(encoder)
             }
             (Format::Gzip, true) => Engine::Decompress(Decompress::new_gzip(15)),
@@ -92,40 +92,28 @@ impl Codec {
             let mut output = vec![0; 16 * 1024];
             let (status, consumed, produced) = match &mut self.engine {
                 Engine::BrotliCompress(engine) => {
-                    let (before_in, before_out) = (input.len(), output.len());
-                    let mut remaining_in = input;
-                    let mut remaining_out = output.as_mut_slice();
-                    let status = engine
-                        .compress(
-                            if finish {
-                                CompressOp::Finish
-                            } else {
-                                CompressOp::Process
-                            },
-                            &mut remaining_in,
-                            &mut remaining_out,
-                        )
-                        // Process completion is not the end of the stream.
-                        .map(|status| finish && status == CoStatus::Finished)
-                        .map_err(|_| "Compression failed");
+                    let operation = if finish {
+                        BrotliOperation::Finish
+                    } else {
+                        BrotliOperation::Process
+                    };
+                    let Ok(result) = engine.compress(input, &mut output, operation) else {
+                        return (chunks, Err("Compression failed"));
+                    };
                     (
-                        status,
-                        before_in - remaining_in.len(),
-                        before_out - remaining_out.len(),
+                        Ok(engine.is_finished()),
+                        result.bytes_read,
+                        result.bytes_written,
                     )
                 }
                 Engine::BrotliDecompress(engine) => {
-                    let (before_in, before_out) = (input.len(), output.len());
-                    let mut remaining_in = input;
-                    let mut remaining_out = output.as_mut_slice();
-                    let status = engine
-                        .decompress(&mut remaining_in, &mut remaining_out)
-                        .map(|status| status == DeStatus::Finished)
-                        .map_err(|_| "The compressed data was not valid");
+                    let Ok(result) = engine.decompress(input, &mut output) else {
+                        return (chunks, Err("The compressed data was not valid"));
+                    };
                     (
-                        status,
-                        before_in - remaining_in.len(),
-                        before_out - remaining_out.len(),
+                        Ok(result.info == DecoderInfo::Finished),
+                        result.bytes_read,
+                        result.bytes_written,
                     )
                 }
                 Engine::Compress(engine) => {
