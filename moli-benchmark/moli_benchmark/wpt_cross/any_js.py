@@ -54,9 +54,9 @@ def normalize_any_js_window_case_path(case_path: str) -> str:
     """Return an explicit case path that asks the fixture server for a wrapper.
 
     WPT ``.any.js`` files are script resources, not directly navigable test
-    pages. The benchmark keeps default enumeration HTML-only, but an explicit
-    ``--case path.any.js`` should run the window-global variant because that is
-    the common WPT translation and keeps wasm/jsapi coverage measurable.
+    pages. The benchmark opts selected semantic suites into script enumeration;
+    an explicit ``--case path.any.js`` also runs the window-global variant so
+    other suites, such as wasm/jsapi, remain measurable in focused runs.
     """
 
     case_path = case_path.lstrip("/")

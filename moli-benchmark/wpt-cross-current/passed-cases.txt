@@ -27,6 +27,14 @@ compat/webkit-gradient-sign.html
 compat/webkit-mask-box-enumeration.html
 compat/webkit-radial-gradient-radii.html
 compat/webkit-text-fill-color-currentColor.html
+compression/compression-constructor-error.any.js?moli-wpt-any=dedicatedworker
+compression/compression-constructor-error.any.js?moli-wpt-any=window
+compression/compression-with-detach.window.js?moli-wpt-script=window
+compression/decompression-constructor-error.any.js?moli-wpt-any=dedicatedworker
+compression/decompression-constructor-error.any.js?moli-wpt-any=window
+compression/decompression-with-detach.window.js?moli-wpt-script=window
+compression/idlharness.https.any.js?moli-wpt-any=dedicatedworker
+compression/idlharness.https.any.js?moli-wpt-any=window
 content-security-policy/default-src/default-src-strict_dynamic_and_unsafe_inline.html
 content-security-policy/embedded-enforcement/iframe-csp-attribute.html
 content-security-policy/font-src/font-self-allowed.html

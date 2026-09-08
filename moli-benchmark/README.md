@@ -45,6 +45,24 @@ uv run moli-benchmark synthetic \
   --runs 5
 ```
 
+### Script-authored semantic WPT
+
+The default semantic profile includes both Window and DedicatedWorker variants
+of `streams/` and `compression/`, plus their `.window.js` and `.worker.js`
+cases. Secure-context `.any.js` cases use the fixture's trustworthy loopback
+origin. To run the complete compression suite through the CLI path:
+
+```bash
+uv run python -m moli_benchmark.wpt_cross \
+  --wpt-root ../../wpt \
+  --engine moli --mode cli \
+  --dir-prefix compression \
+  --output-dir /tmp/moli-compression-wpt
+```
+
+Use `--mode cdp` to check the same cases through CDP. Unsupported formats
+remain failures in the report; they are not filtered out of this suite.
+
 ### Cross-engine layout WPT
 
 The standalone cross-engine runner has separate layout profiles, so its

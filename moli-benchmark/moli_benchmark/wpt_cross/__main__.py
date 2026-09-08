@@ -187,7 +187,7 @@ def _build_parser() -> argparse.ArgumentParser:
             "Include .any.js cases during --dir-prefix enumeration for the "
             "selected global: window, dedicatedworker, both, or none "
             "(default). The broad baseline includes both supported globals "
-            "for Streams automatically. Explicit --case path.any.js still "
+            "for Streams and Compression automatically. Explicit --case path.any.js still "
             "runs the window variant by default."
         ),
     )

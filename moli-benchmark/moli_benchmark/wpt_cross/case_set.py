@@ -295,9 +295,10 @@ ANY_JS_GLOBAL_CHOICES: tuple[str, ...] = (
 # of the runner contract. A non-``none`` ``--any-js-global`` remains an
 # explicit override for focused investigations.
 DEFAULT_ANY_JS_GLOBALS_BY_DIR_PREFIX: tuple[tuple[str, str], ...] = (
+    ("compression", "both"),
     ("streams", "both"),
 )
-DEFAULT_SCRIPT_CASE_DIR_PREFIXES: tuple[str, ...] = ("streams",)
+DEFAULT_SCRIPT_CASE_DIR_PREFIXES: tuple[str, ...] = ("compression", "streams")
 
 # The initial layout baseline deliberately starts with the CSS areas that are
 # both high-value for Moli and predominantly made up of deterministic, static
@@ -991,6 +992,10 @@ def _is_excluded_by_substring(
         if token == ".tentative." and include_tentative:
             continue
         if token == ".any." and include_any_js:
+            continue
+        # Opted-in script suites also include secure-context IDL cases. The
+        # runner routes these wrappers through its trustworthy loopback origin.
+        if token == ".https." and include_any_js:
             continue
         if token in {".window.", ".worker."} and include_script_js:
             continue

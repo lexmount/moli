@@ -3219,6 +3219,46 @@ done();
             ],
         )
 
+    def test_default_enumeration_includes_compression_script_cases(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            wpt_root = Path(temp_dir)
+            sources = {
+                "compression/compression-stream.any.js": "// META: global=window,worker\n",
+                "compression/idlharness.https.any.js": "// META: global=window,dedicatedworker\n",
+                "compression/compression-with-detach.window.js": "",
+                "compression/decompression-with-detach.window.js": "",
+                "compression/feature.tentative.any.js": "",
+                "compression/testdriver.any.js": "// META: script=/resources/testdriver.js\n",
+                "compression/resources/helper.any.js": "",
+                "compression-other/excluded.any.js": "",
+                "compression-other/excluded.window.js": "",
+            }
+            for name, meta in sources.items():
+                path = wpt_root / name
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_text(meta + 'test(() => {}, "case");', encoding="utf-8")
+
+            cases = enumerate_cases(wpt_root)
+            focused_cases = enumerate_cases(
+                wpt_root, dir_prefixes=("compression",), any_js_global="both"
+            )
+            window_cases = enumerate_cases(wpt_root, any_js_global="window")
+
+        expected = [
+            "compression/compression-stream.any.js?moli-wpt-any=dedicatedworker",
+            "compression/compression-stream.any.js?moli-wpt-any=window",
+            "compression/compression-with-detach.window.js?moli-wpt-script=window",
+            "compression/decompression-with-detach.window.js?moli-wpt-script=window",
+            "compression/idlharness.https.any.js?moli-wpt-any=dedicatedworker",
+            "compression/idlharness.https.any.js?moli-wpt-any=window",
+        ]
+        self.assertEqual([case.case_path for case in cases], expected)
+        self.assertEqual([case.case_path for case in focused_cases], expected)
+        self.assertEqual(
+            [case.case_path for case in window_cases if case.case_path.startswith("compression/")],
+            [path for path in expected if "dedicatedworker" not in path],
+        )
+
     def test_dir_prefix_expands_any_js_variants_and_respects_globals(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             wpt_root = Path(temp_dir)
