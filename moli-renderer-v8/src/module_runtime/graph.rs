@@ -1560,6 +1560,9 @@ impl<O: NativeModuleTreeDocumentOwnerAdapter> module_tree::ModuleScriptTreeHost
     {
         let entry = local_entry_id(entry);
         let key = self.owner.module_entry_key(entry);
+        if let Some(error) = self.owner.module_failure(entry) {
+            return Err(chromium_error(error).with_key(chromium_module_key(&key)));
+        }
         let base_url = self.owner.module_entry_url(entry);
         let effective_fetch_metadata = self.owner.module_effective_fetch_metadata(entry);
         let requested_modules = self
@@ -1627,6 +1630,23 @@ impl<O: NativeModuleTreeDocumentOwnerAdapter> module_tree::ModuleScriptTreeHost
             local_module_key(&key).unwrap_or_else(|_| ModuleMapKey::java_script(key.url.clone()));
         let entry = self.owner.mark_module_failed(local_key, local_error(error));
         chromium_entry_id(entry)
+    }
+
+    fn cache_module_request_error(
+        &mut self,
+        key: module_tree::ModuleMapKey,
+        error: module_tree::ModuleLoadError,
+    ) -> module_tree::ModuleLoadError {
+        let local_key = match local_module_key(&key) {
+            Ok(key) => key,
+            Err(error) => return chromium_error(error),
+        };
+        let error = match self.owner.preserve_module_load_error(local_error(error)) {
+            Ok(error) => error,
+            Err(error) => return chromium_error(error),
+        };
+        self.owner.mark_module_failed(local_key, error.clone());
+        chromium_error(error).with_key(key)
     }
 }
 
@@ -1935,10 +1955,14 @@ fn local_graph(graph: module_tree::ModuleGraphHandle) -> ModuleGraphHandle {
 fn chromium_error(error: ModuleLoadError) -> module_tree::ModuleLoadError {
     let stage = chromium_load_stage(error.stage());
     let constructor = error.error_constructor();
+    let exception_id = error.exception_id();
     let (message, failed_resource) = error.into_message_and_failed_resource();
     let mut converted = module_tree::ModuleLoadError::new(stage, message);
     if let Some(key) = failed_resource {
         converted = converted.with_key(into_chromium_module_key(*key));
+    }
+    if let Some(exception_id) = exception_id {
+        converted = converted.with_exception_id(exception_id);
     }
     if let Some(constructor) = constructor {
         let constructor = match constructor {
@@ -1967,6 +1991,9 @@ fn local_error(error: module_tree::ModuleLoadError) -> ModuleLoadError {
         && let Some(key) = error.key
     {
         converted = converted.with_failed_resource(into_local_module_key(*key));
+    }
+    if let Some(exception_id) = error.exception_id {
+        converted = converted.with_exception_id(exception_id);
     }
     if let Some(constructor) = error.error_constructor {
         converted = converted.with_error_constructor(local_error_constructor(constructor));

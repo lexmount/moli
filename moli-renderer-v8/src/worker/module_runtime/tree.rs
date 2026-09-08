@@ -211,6 +211,15 @@ impl module_tree::ModuleScriptTreeHost for WorkerModuleTreeHost<'_, '_, '_> {
         })
     }
 
+    fn cache_module_request_error(
+        &mut self,
+        key: module_tree::ModuleMapKey,
+        error: module_tree::ModuleLoadError,
+    ) -> module_tree::ModuleLoadError {
+        let entry = self.mark_module_failed(key.clone(), error.clone());
+        error.with_key(key).with_module_entry(entry)
+    }
+
     fn mark_module_failed(
         &mut self,
         key: module_tree::ModuleMapKey,

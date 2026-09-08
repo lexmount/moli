@@ -231,10 +231,11 @@ async fn worker_module_tree_failure_preserves_admitted_network_actions() {
         (async () => {
             await import('./a.mjs').catch(() => {});
             await import('./b.mjs').catch(() => {});
-            const failure = await import('./both.mjs').catch(error => error.name);
-            postMessage(['failed', failure]);
+            const failure = import('./both.mjs').catch(error => error.name);
+            await new Promise(resolve => { onmessage = resolve; });
             const retry = import('./a.mjs');
             postMessage('joined');
+            postMessage(['failed', await failure]);
             postMessage((await retry).value);
         })().catch(error => postMessage({ error: error.name }));
     "#
@@ -265,8 +266,8 @@ async fn worker_module_tree_failure_preserves_admitted_network_actions() {
             "import 'unresolvable-bare-specifier';",
         )
         .await;
-    // Both records now exist. The common tree admits A's retry before B's
-    // resolution failure ends the graph in the same drive call.
+    // A's retry is already admitted when B fails static resolution. The
+    // tree waits for the pending sibling, which a separate import joins.
     server
         .respond(
             "/worker/both.mjs",
@@ -276,10 +277,7 @@ async fn worker_module_tree_failure_preserves_admitted_network_actions() {
         )
         .await;
     let held = server.request("/worker/held.mjs").await;
-    assert_eq!(
-        recv_post_json(&mut handle).await,
-        r#"["failed","TypeError"]"#
-    );
+    handle.post_message(serialize_test_string("join"));
     assert_eq!(recv_post_json(&mut handle).await, r#""joined""#);
     ModuleSourceServer::write(
         held,
@@ -288,6 +286,10 @@ async fn worker_module_tree_failure_preserves_admitted_network_actions() {
         "export const value = 42;",
     )
     .await;
+    assert_eq!(
+        recv_post_json(&mut handle).await,
+        r#"["failed","TypeError"]"#
+    );
     assert_eq!(recv_post_json(&mut handle).await, "42");
     handle.terminate_and_join();
     server.assert_no_more_requests();
