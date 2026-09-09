@@ -30,12 +30,15 @@ use tokio::time::Duration;
 
 #[path = "web_apis/abort_signal.rs"]
 mod abort_signal;
+#[path = "web_apis/event_dispatch.rs"]
+mod event_dispatch;
 #[path = "web_apis/fetch_body_native.rs"]
 mod fetch_body_native;
 #[path = "web_apis/fetch_body_realm.rs"]
 mod fetch_body_realm;
 #[path = "web_apis/request_stream.rs"]
 mod request_stream;
+
 fn diagnostic_global<'a>(
     page: &'a moli_core::page::Page,
     name: &str,
