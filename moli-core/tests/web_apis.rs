@@ -10,6 +10,9 @@ use moli_fetch::FetchConfig;
 use support::FixtureServer;
 use tokio::time::Duration;
 
+#[path = "web_apis/event_dispatch.rs"]
+mod event_dispatch;
+
 fn diagnostic_global<'a>(
     page: &'a moli_core::page::Page,
     name: &str,
