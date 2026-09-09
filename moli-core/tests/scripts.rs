@@ -28,14 +28,14 @@ mod child_readiness;
 #[path = "scripts/child_markup_insertion.rs"]
 mod child_markup_insertion;
 
-#[path = "scripts/child_script_text.rs"]
-mod child_script_text;
-
 #[path = "scripts/module_document_write.rs"]
 mod module_document_write;
 
 #[path = "scripts/parser_cleanup.rs"]
 mod parser_cleanup;
+
+#[path = "scripts/parser_preparation.rs"]
+mod parser_preparation;
 
 fn diagnostic_global<'a>(
     page: &'a moli_core::page::Page,
