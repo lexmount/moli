@@ -479,30 +479,13 @@ where
             } else {
                 local_scrollport
             };
-            let scroll_size = LayoutSize::new(
-                local_scrollport
-                    .width
-                    .max((overflow.right() - local_scrollport.x).max(0.0)),
-                local_scrollport
-                    .height
-                    .max((overflow.bottom() - local_scrollport.y).max(0.0)),
-            );
-            let horizontal_range = (scroll_size.width - scrollport.width).max(0.0);
-            let vertical_range = (scroll_size.height - scrollport.height).max(0.0);
+            let dimensions = overflow_projection.scroll_dimensions(id);
+            let scroll_size = dimensions.size;
+            let (horizontal_overflow, vertical_overflow) = dimensions.overflowing_axes();
             let is_scroll_container = self.establishes_scroll_container(id);
             let requested = finite_point(self.world.boxes[index].scroll_offset);
             let (minimum_offset, maximum_offset) = if is_scroll_container {
-                if self.world.boxes[index].style.direction() == crate::style::InlineDirection::Rtl {
-                    (
-                        LayoutPoint::new(-horizontal_range, 0.0),
-                        LayoutPoint::new(0.0, vertical_range),
-                    )
-                } else {
-                    (
-                        LayoutPoint::ZERO,
-                        LayoutPoint::new(horizontal_range, vertical_range),
-                    )
-                }
+                (dimensions.minimum, dimensions.maximum)
             } else {
                 (LayoutPoint::ZERO, LayoutPoint::ZERO)
             };
@@ -515,11 +498,7 @@ where
                 LayoutPoint::ZERO
             };
             let horizontal_scrollbar = self
-                .has_scrollbar(
-                    id,
-                    LayoutScrollbarAxis::Horizontal,
-                    horizontal_range > f32::EPSILON,
-                )
+                .has_scrollbar(id, LayoutScrollbarAxis::Horizontal, horizontal_overflow)
                 .then(|| {
                     let frame = LayoutRect::new(
                         scrollport.x,
@@ -539,11 +518,7 @@ where
                 })
                 .filter(|bar| bar.frame.width > 0.0 && bar.frame.height > 0.0);
             let vertical_scrollbar = self
-                .has_scrollbar(
-                    id,
-                    LayoutScrollbarAxis::Vertical,
-                    vertical_range > f32::EPSILON,
-                )
+                .has_scrollbar(id, LayoutScrollbarAxis::Vertical, vertical_overflow)
                 .then(|| {
                     let x = if vertical_scrollbar_on_left {
                         scrollport.x - scrollbar_thickness

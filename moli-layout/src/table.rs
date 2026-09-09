@@ -1377,6 +1377,10 @@ fn set_table_part_layout<N>(
     world.boxes[id.index()].unrounded_layout = Layout {
         order: 0,
         location: Point { x, y },
+        in_flow: Some(taffy::InFlowLayout {
+            location: Point { x, y },
+            margin: Rect::ZERO,
+        }),
         size: Size { width, height },
         content_size: Size { width, height },
         scrollbar_size: Size::ZERO,
@@ -1409,6 +1413,7 @@ fn set_box_layout<N>(
     world.boxes[id.index()].unrounded_layout = Layout {
         order: u32::try_from(order).unwrap_or(u32::MAX),
         location,
+        in_flow: Some(taffy::InFlowLayout { location, margin }),
         size: output.size,
         content_size: output.content_size,
         scrollbar_size: Size::ZERO,

@@ -329,6 +329,10 @@ where
 fn scale_layout(layout: Layout, factor: f32) -> Layout {
     Layout {
         location: layout.location.map(|value| value * factor),
+        in_flow: layout.in_flow.map(|flow| taffy::InFlowLayout {
+            location: flow.location.map(|value| value * factor),
+            margin: flow.margin.map(|value| value * factor),
+        }),
         size: layout.size.map(|value| value * factor),
         content_size: layout.content_size.map(|value| value * factor),
         scrollbar_size: layout.scrollbar_size.map(|value| value * factor),
@@ -621,6 +625,7 @@ where
         world.set_inline_child_layout(
             marker,
             Point { x, y },
+            Point::ZERO,
             output,
             marker.index(),
             Some(parent_width),
@@ -679,6 +684,7 @@ where
         world.set_inline_child_layout(
             content,
             Point { x, y },
+            Point::ZERO,
             output,
             content.index(),
             Some(content_width),
@@ -1405,6 +1411,7 @@ fn layout_inline_absolute_child<N>(
     let scrollbar_size = world.get_scrollbar_insets(child.to_taffy()).sum_axes();
     world.boxes[child.index()].unrounded_layout = Layout {
         order: 0,
+        in_flow: None,
         size: final_size,
         content_size: output.content_size,
         scrollbar_size,
@@ -2566,6 +2573,7 @@ where
             self.set_inline_child_layout(
                 floated.child,
                 floated.location,
+                Point::ZERO,
                 floated.output,
                 floated.order,
                 floated.parent_width,
@@ -2642,6 +2650,7 @@ where
                             + vertical_offset
                             + inset_offset.y,
                     },
+                    inset_offset,
                     atomic.output,
                     object_index,
                     measurement.percentage_basis,
@@ -2654,6 +2663,7 @@ where
         &mut self,
         child: LayoutBoxId,
         location: Point<f32>,
+        relative_offset: Point<f32>,
         output: LayoutOutput,
         order: usize,
         parent_width: Option<f32>,
@@ -2672,6 +2682,13 @@ where
         self.boxes[child.index()].unrounded_layout = Layout {
             order: u32::try_from(order).unwrap_or(u32::MAX),
             location,
+            in_flow: Some(taffy::InFlowLayout {
+                location: Point {
+                    x: location.x - relative_offset.x,
+                    y: location.y - relative_offset.y,
+                },
+                margin,
+            }),
             size: output.size,
             content_size: output.content_size,
             scrollbar_size,

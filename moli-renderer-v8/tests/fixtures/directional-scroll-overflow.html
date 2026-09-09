@@ -1,0 +1,137 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>Directional scroll overflow preserves normal-flow and visual geometry</title>
+<link rel="help" href="https://drafts.csswg.org/css-overflow-3/#scrollable">
+<style>
+  html, body { margin: 0; padding: 0; }
+  html { overflow: hidden; }
+  .frame { position: absolute; width: 100px; height: 80px; padding: 10px;
+    border: 2px solid black; overflow: auto; scrollbar-width: none; }
+  .item { width: 180px; height: 140px; margin: 10px; flex: none;
+    background: rgb(31,127,63); }
+</style>
+<body>
+<script>
+  const modes = ['horizontal-tb','vertical-rl','vertical-lr','sideways-rl','sideways-lr'];
+  const contexts = [
+    ['block','display:flow-root',false,false],
+    ['grid','display:grid',false,false],
+    ['row','display:flex',false,false],
+    ['row-reverse','display:flex;flex-direction:row-reverse',true,false],
+    ['column-reverse','display:flex;flex-direction:column-reverse',false,true],
+    ['column-wrap-reverse','display:flex;flex-direction:column;flex-wrap:wrap-reverse',true,false],
+  ];
+  const checks = [];
+  const probes = [];
+  let phase = 'initial';
+  for (const mode of modes) for (const direction of ['ltr','rtl']) {
+    for (const [name,css,reverseInline,reverseBlock] of contexts) {
+      const inlineReverse = (direction === 'rtl') !== (mode === 'sideways-lr') !== reverseInline;
+      const blockReverse = (mode === 'vertical-rl' || mode === 'sideways-rl') !== reverseBlock;
+      const reverseX = mode === 'horizontal-tb' ? inlineReverse : blockReverse;
+      const reverseY = mode === 'horizontal-tb' ? blockReverse : inlineReverse;
+      for (const placement of ['flow','relative','transform']) {
+        const index = checks.length;
+        const frame = document.createElement('div');
+        frame.className = 'frame';
+        frame.id = `${mode}-${direction}-${name}-${placement}`;
+        frame.style.cssText = `${css};writing-mode:${mode};direction:${direction};left:${index%8*160}px;top:${Math.floor(index/8)*150}px`;
+        const item = document.createElement('div');
+        item.className = 'item';
+        const shiftX = placement === 'flow' ? 0 : reverseX ? 1000 : -1000;
+        const shiftY = placement === 'flow' ? 0 : reverseY ? 1000 : -1000;
+        if (placement === 'relative') item.style.cssText = `position:relative;left:${shiftX}px;top:${shiftY}px`;
+        if (placement === 'transform') item.style.transform = `translate(${shiftX}px,${shiftY}px)`;
+        frame.append(item);
+        document.body.append(frame);
+        checks.push({frame,item,placement,reverseX,reverseY,shiftX,shiftY});
+      }
+    }
+  }
+
+  // These geometry-only probes live outside the captured viewport. Each has
+  // its own element: no synchronous read depends on a preceding style mutation
+  // being implicitly flushed, unlike the upstream dynamic testharness loops.
+  function addProbe(id, css, html, expected, empty = [100,100]) {
+    const frame = document.createElement('div');
+    frame.id = id;
+    frame.style.cssText = `position:absolute;left:1400px;top:0;width:100px;height:100px;scrollbar-width:none;${css}`;
+    frame.innerHTML = html;
+    document.body.append(frame);
+    probes.push({frame,expected,empty});
+  }
+  for (const mode of modes) for (const direction of ['ltr','rtl']) {
+    for (const [name,css,reverseInline,reverseBlock] of contexts) {
+      const inlineReverse = (direction === 'rtl') !== (mode === 'sideways-lr') !== reverseInline;
+      const blockReverse = (mode === 'vertical-rl' || mode === 'sideways-rl') !== reverseBlock;
+      const reverseX = mode === 'horizontal-tb' ? inlineReverse : blockReverse;
+      const reverseY = mode === 'horizontal-tb' ? blockReverse : inlineReverse;
+      addProbe(`scaled-${mode}-${direction}-${name}`, `${css};writing-mode:${mode};direction:${direction};height:200px;overflow:scroll`,
+        '<div style="width:100px;height:200px;transform:translate(-3px,-6px) scale(1.1)"></div>',
+        [reverseX ? 108 : 102, reverseY ? 216 : 204], [100,200]);
+    }
+  }
+  for (const display of ['flex','grid']) for (const vertical of [false,true]) {
+    for (const overflow of ['auto','scroll','hidden','clip','visible','visible clip','visible hidden','visible auto']) {
+      const scrolls = overflow.includes('auto') || overflow.includes('scroll') || overflow.includes('hidden');
+      const extent = scrolls ? (display === 'flex' ? 950 : 1000) : 100;
+      addProbe(`margin-${display}-${vertical}-${overflow}`, `display:${display};overflow:${overflow};writing-mode:${vertical?'vertical-rl':'horizontal-tb'}`,
+        '<div style="width:50px;height:50px;margin-inline-end:950px"></div>', vertical ? [100,extent] : [extent,100]);
+    }
+  }
+  addProbe('transformed-absolute-margin', 'width:200px;height:200px;overflow:auto',
+    '<div style="position:absolute;width:150px;height:150px;margin-left:100px;transform:translateX(-100px)"></div>', [200,200], [200,200]);
+  for (const positioned of [false,true]) for (const translation of ['300px,-300px','-300px,300px']) {
+    addProbe(`unreachable-${positioned}-${translation}`, 'overflow:auto',
+      `<div style="${positioned?'position:absolute;':''}width:100px;height:100px;transform:translate(${translation})"></div>`, [100,100]);
+  }
+  addProbe('self-collapsing-end-strut', 'overflow:auto',
+    '<div style="height:100px;margin-bottom:10px"></div><div style="margin-bottom:50px"></div>', [100,150]);
+  addProbe('visible-trailing-margin', 'height:20px;overflow:visible',
+    '<div style="height:40px;margin-bottom:15px"></div>', [100,40], [100,20]);
+  addProbe('zero-width-relative-inflow', 'overflow:auto;padding:10px 5px',
+    '<div style="position:relative;width:0;height:200px;margin-bottom:50px;top:-1000px"></div>', [110,270], [110,120]);
+  addProbe('viewport-fixed-is-not-a-scroll-contribution', 'overflow:auto',
+    '<div style="position:fixed;left:0;top:0;width:300px;height:250px"></div>', [100,100]);
+  addProbe('containing-block-fixed-is-a-scroll-contribution', 'overflow:auto;transform:translate(0px)',
+    '<div style="position:fixed;left:0;top:0;width:300px;height:250px"></div>', [300,250]);
+
+  function setOverflowPhase(value) {
+    phase = value;
+    for (const c of checks) {
+      if (phase === 'hidden') c.item.style.display = 'none';
+      c.frame.scrollLeft = phase === 'end' ? (c.reverseX ? -10000 : 10000) : 0;
+      c.frame.scrollTop = phase === 'end' ? (c.reverseY ? -10000 : 10000) : 0;
+    }
+    if (phase === 'hidden') for (const c of probes) {
+      for (const child of c.frame.children) child.style.display = 'none';
+    }
+  }
+
+  function collectOverflowChecks() {
+    const results = [];
+    for (const c of checks) {
+      const x = phase === 'end' ? (c.reverseX ? -100 : 100) : 0;
+      const y = phase === 'end' ? (c.reverseY ? -80 : 80) : 0;
+      results.push({id:`${c.frame.id}:scroll`,
+        actual:[c.frame.scrollWidth,c.frame.scrollHeight,c.frame.clientWidth,c.frame.clientHeight,c.frame.scrollLeft,c.frame.scrollTop],
+        expected:[phase === 'hidden' ? 120 : 220,phase === 'hidden' ? 100 : 180,120,100,x,y]});
+      if (phase === 'hidden') continue;
+      const frame = c.frame.getBoundingClientRect();
+      const item = c.item.getBoundingClientRect();
+      // Constants come from the authored boxes: 2px border + 10px padding +
+      // 10px margin; reversing packs from the other edge of the 120x100 port.
+      const expectedX = (c.reverseX ? -78 : 22) + c.shiftX - x;
+      const expectedY = (c.reverseY ? -58 : 22) + c.shiftY - y;
+      const result = {id:`${c.frame.id}:fragment`, actual:[item.x-frame.x,item.y-frame.y,item.width,item.height],
+        expected:[expectedX,expectedY,180,140]};
+      if (c.placement === 'flow') {
+        result.pixel = [frame.x + Math.max(3,expectedX+1),frame.y + Math.max(3,expectedY+1)];
+        result.color = [31,127,63,255];
+      }
+      results.push(result);
+    }
+    return results.concat(probes.map(c => ({id:c.frame.id,
+      actual:[c.frame.scrollWidth,c.frame.scrollHeight], expected:phase === 'hidden' ? c.empty : c.expected})));
+  }
+</script>

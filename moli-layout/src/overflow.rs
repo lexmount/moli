@@ -1,9 +1,148 @@
 use std::{collections::VecDeque, fmt::Debug, hash::Hash};
 
 use crate::{
-    LayoutBoxId, LayoutPoint, LayoutRect, LayoutScrollbarAxis, LayoutTransform2D, LayoutViewport,
-    LayoutWorld, style::ResolvedLayoutTransform,
+    LayoutBoxId, LayoutPoint, LayoutRect, LayoutScrollbarAxis, LayoutSize, LayoutTransform2D,
+    LayoutViewport, LayoutWorld,
+    style::{LayoutOverflowMode, ResolvedLayoutStyle, ResolvedLayoutTransform},
 };
+
+/// The physical edge from which an axis scrolls. Flex packing can reverse it
+/// independently of the writing direction (including with wrap-reverse).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ScrollStartEdge {
+    Min,
+    Max,
+}
+
+impl ScrollStartEdge {
+    fn from_reversed(reversed: bool) -> Self {
+        if reversed { Self::Max } else { Self::Min }
+    }
+
+    fn reachable_edges(self, min: f32, max: f32, port_min: f32, port_max: f32) -> (f32, f32) {
+        match self {
+            Self::Min => (min.max(port_min), max.max(port_min)),
+            Self::Max => (min.min(port_max), max.min(port_max)),
+        }
+    }
+
+    fn flow_margins(self, min: f32, max: f32, size: f32) -> (f32, f32) {
+        // Negative margins can retract the scroll-end edge, but cannot remove
+        // more than the fragment's size or retract the opposite edge.
+        match self {
+            Self::Min => (min.max(0.0), max.max(-size)),
+            Self::Max => (min.max(-size), max.max(0.0)),
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug)]
+struct ScrollOrigin {
+    horizontal: ScrollStartEdge,
+    vertical: ScrollStartEdge,
+}
+
+impl ScrollOrigin {
+    fn for_style(style: &ResolvedLayoutStyle, is_viewport: bool) -> Self {
+        let mode = style.writing_mode();
+        let mut inline_reversed = mode.is_inline_flow_reversed(style.taffy.direction);
+        let mut block_reversed = mode.is_block_flow_reversed();
+        if !is_viewport && style.taffy.display == taffy::Display::Flex {
+            let reverse = matches!(
+                style.taffy.flex_direction,
+                taffy::FlexDirection::RowReverse | taffy::FlexDirection::ColumnReverse
+            );
+            let wrap_reverse = style.taffy.flex_wrap == taffy::FlexWrap::WrapReverse;
+            if matches!(
+                style.taffy.flex_direction,
+                taffy::FlexDirection::Column | taffy::FlexDirection::ColumnReverse
+            ) {
+                block_reversed ^= reverse;
+                inline_reversed ^= wrap_reverse;
+            } else {
+                inline_reversed ^= reverse;
+                block_reversed ^= wrap_reverse;
+            }
+        }
+        let reversed = mode.to_physical(taffy::LogicalSize {
+            inline_size: inline_reversed,
+            block_size: block_reversed,
+        });
+        Self {
+            horizontal: ScrollStartEdge::from_reversed(reversed.width),
+            vertical: ScrollStartEdge::from_reversed(reversed.height),
+        }
+    }
+
+    fn reachable_rect(self, rect: LayoutRect, port: LayoutRect) -> LayoutRect {
+        let (left, right) =
+            self.horizontal
+                .reachable_edges(rect.x, rect.right(), port.x, port.right());
+        let (top, bottom) =
+            self.vertical
+                .reachable_edges(rect.y, rect.bottom(), port.y, port.bottom());
+        LayoutRect::new(left, top, right - left, bottom - top)
+    }
+
+    fn add_visual_overflow(
+        self,
+        overflow: &mut LayoutRect,
+        contribution: LayoutRect,
+        scrollport: Option<LayoutRect>,
+    ) {
+        let reachable =
+            scrollport.map_or(contribution, |port| self.reachable_rect(contribution, port));
+        // Clip before union: a rectangle unreachable in one axis must not
+        // extend the other axis through the empty space back to the scrollport.
+        if reachable.width > 0.0 && reachable.height > 0.0 {
+            *overflow = overflow.union(reachable);
+        }
+    }
+
+    fn flow_bounds(self, flow: taffy::InFlowLayout, size: taffy::Size<f32>) -> LayoutRect {
+        let (left, right) =
+            self.horizontal
+                .flow_margins(flow.margin.left, flow.margin.right, size.width);
+        let (top, bottom) =
+            self.vertical
+                .flow_margins(flow.margin.top, flow.margin.bottom, size.height);
+        LayoutRect::new(
+            flow.location.x - left,
+            flow.location.y - top,
+            size.width + left + right,
+            size.height + top + bottom,
+        )
+    }
+}
+
+/// One derivation of content extent and signed scroll range, shared by
+/// automatic scrollbar feedback and frozen CSSOM/paint projection.
+pub(crate) struct ScrollDimensions {
+    pub(crate) size: LayoutSize,
+    pub(crate) minimum: LayoutPoint,
+    pub(crate) maximum: LayoutPoint,
+}
+
+impl ScrollDimensions {
+    fn from_rects(port: LayoutRect, overflow: LayoutRect) -> Self {
+        let overflow = port.union(overflow);
+        Self {
+            size: LayoutSize::new(overflow.width, overflow.height),
+            minimum: LayoutPoint::new(overflow.x - port.x, overflow.y - port.y),
+            maximum: LayoutPoint::new(
+                overflow.right() - port.right(),
+                overflow.bottom() - port.bottom(),
+            ),
+        }
+    }
+
+    pub(crate) fn overflowing_axes(&self) -> (bool, bool) {
+        (
+            self.maximum.x - self.minimum.x > f32::EPSILON,
+            self.maximum.y - self.minimum.y > f32::EPSILON,
+        )
+    }
+}
 
 /// Geometry needed to resolve scrollable overflow and no other projection
 /// concern. Keeping this sidecar smaller than `OutputProjection` lets automatic
@@ -22,6 +161,8 @@ pub(crate) struct OverflowBoxGeometry {
     pub(crate) horizontal_gutter: f32,
     pub(crate) horizontal_leading_gutter: f32,
     local_overflow: LayoutRect,
+    inflow_bounds: Option<LayoutRect>,
+    scroll_origin: ScrollOrigin,
 }
 
 /// One pass-local, incrementally refreshed scrollable-overflow projection.
@@ -84,6 +225,14 @@ impl OverflowProjection {
         self.scrollable_overflow[id.index()]
     }
 
+    pub(crate) fn scroll_dimensions(&self, id: LayoutBoxId) -> ScrollDimensions {
+        let geometry = self.geometry(id);
+        let reachable = geometry
+            .scroll_origin
+            .reachable_rect(self.scrollable_overflow(id), geometry.local_scrollport);
+        ScrollDimensions::from_rects(geometry.local_scrollport, reachable)
+    }
+
     pub(crate) fn overflowing_axes<N>(
         &self,
         world: &LayoutWorld<N>,
@@ -95,22 +244,7 @@ impl OverflowProjection {
         if !establishes_scroll_container(world, id) {
             return (false, false);
         }
-        let geometry = self.geometry(id);
-        let overflow = self.scrollable_overflow(id);
-        let horizontal_range = geometry
-            .local_scrollport
-            .width
-            .max((overflow.right() - geometry.local_scrollport.x).max(0.0))
-            - geometry.local_scrollport.width;
-        let vertical_range = geometry
-            .local_scrollport
-            .height
-            .max((overflow.bottom() - geometry.local_scrollport.y).max(0.0))
-            - geometry.local_scrollport.height;
-        (
-            horizontal_range > f32::EPSILON,
-            vertical_range > f32::EPSILON,
-        )
+        self.scroll_dimensions(id).overflowing_axes()
     }
 
     /// Reprojects the boxes changed by numeric layout and their overflow
@@ -222,9 +356,40 @@ impl OverflowProjection {
     where
         N: Copy + Debug + Eq + Hash,
     {
-        let mut overflow = self.geometries[id.index()].local_overflow;
+        let geometry = self.geometries[id.index()];
+        let mut overflow = geometry.local_overflow;
+        let is_scroller = establishes_scroll_container(world, id);
+        let mut inflow_bounds = is_scroller.then_some(geometry.inflow_bounds).flatten();
         for child in self.children[id.index()].iter().copied() {
-            overflow = overflow.union(self.child_contribution(world, child));
+            geometry.scroll_origin.add_visual_overflow(
+                &mut overflow,
+                self.child_contribution(world, child),
+                is_scroller.then_some(geometry.local_scrollport),
+            );
+            if is_scroller {
+                let layout = world.boxes[child.index()].final_layout;
+                if let Some(flow) = layout.in_flow {
+                    let bounds = geometry.scroll_origin.flow_bounds(flow, layout.size);
+                    inflow_bounds =
+                        Some(inflow_bounds.map_or(bounds, |current| current.union(bounds)));
+                }
+            }
+        }
+        if let Some(bounds) = inflow_bounds {
+            let padding = world.boxes[id.index()].final_layout.padding;
+            let padded = outset_rect(
+                bounds,
+                padding.top,
+                padding.right,
+                padding.bottom,
+                padding.left,
+            );
+            // Even zero-area in-flow fragments establish trailing padding.
+            overflow = overflow.union(
+                geometry
+                    .scroll_origin
+                    .reachable_rect(padded, geometry.local_scrollport),
+            );
         }
         self.scrollable_overflow[id.index()] = overflow;
     }
@@ -234,22 +399,23 @@ impl OverflowProjection {
         N: Copy + Debug + Eq + Hash,
     {
         let geometry = self.geometries[child.index()];
-        let visual_overflow = if clips_overflow(world, child) {
-            geometry.border_box
-        } else {
-            self.scrollable_overflow[child.index()]
-        };
+        let mut visual_overflow = self.scrollable_overflow[child.index()];
+        let modes = overflow_modes(world, child);
+        if modes[0] != LayoutOverflowMode::Visible {
+            let right = visual_overflow.right().min(geometry.border_box.right());
+            visual_overflow.x = visual_overflow.x.max(geometry.border_box.x);
+            visual_overflow.width = (right - visual_overflow.x).max(0.0);
+        }
+        if modes[1] != LayoutOverflowMode::Visible {
+            let bottom = visual_overflow.bottom().min(geometry.border_box.bottom());
+            visual_overflow.y = visual_overflow.y.max(geometry.border_box.y);
+            visual_overflow.height = (bottom - visual_overflow.y).max(0.0);
+        }
+        let visual_overflow = geometry.border_box.union(visual_overflow);
         let location = world.boxes[child.index()].final_layout.location;
         let layout_translation = LayoutTransform2D::translation(location.x, location.y);
         let local_to_parent = layout_translation.concatenate(geometry.resolved_transform.transform);
-        local_to_parent
-            .map_rect(visual_overflow)
-            .bounding_rect()
-            .union(
-                layout_translation
-                    .map_rect(geometry.margin_box)
-                    .bounding_rect(),
-            )
+        local_to_parent.map_rect(visual_overflow).bounding_rect()
     }
 }
 
@@ -257,10 +423,17 @@ fn overflow_parent<N>(world: &LayoutWorld<N>, id: LayoutBoxId) -> Option<LayoutB
 where
     N: Copy + Debug + Eq + Hash,
 {
-    if id == world.root || world.boxes[id.index()].style.is_fixed_positioned() {
+    let layout_box = &world.boxes[id.index()];
+    // Only viewport-anchored fixed boxes are outside the document's scrolling
+    // contents. A fixed child of a transformed containing block still belongs
+    // to that block's overflow and scroll translation.
+    if id == world.root
+        || (layout_box.style.is_fixed_positioned()
+            && layout_box.positioned_containing_block.is_none())
+    {
         return None;
     }
-    world.boxes[id.index()].layout_parent.or(Some(world.root))
+    layout_box.layout_parent.or(Some(world.root))
 }
 
 fn project_box<N>(
@@ -325,18 +498,10 @@ where
         horizontal_gutter,
         horizontal_leading_gutter,
     );
-    let mut local_overflow = LayoutRect::new(
-        local_scrollport.x,
-        local_scrollport.y,
-        local_scrollport
-            .width
-            .max(layout.content_size.width)
-            .max(0.0),
-        local_scrollport
-            .height
-            .max(layout.content_size.height)
-            .max(0.0),
-    );
+    let mut local_overflow = local_scrollport;
+    let scroll_origin = ScrollOrigin::for_style(&layout_box.style, is_root);
+    let clip_to_scrollport = establishes_scroll_container(world, id).then_some(local_scrollport);
+    let mut inflow_bounds: Option<LayoutRect> = None;
     if is_root {
         local_overflow = local_overflow.union(padding_box);
     }
@@ -358,15 +523,27 @@ where
                 },
         );
         for line in &context.fragments.lines {
-            local_overflow = local_overflow.union(offset_rect(line.rect, origin));
+            let rect = offset_rect(line.rect, origin);
+            if rect.width > 0.0 && rect.height > 0.0 {
+                local_overflow = local_overflow.union(rect);
+                inflow_bounds = Some(inflow_bounds.map_or(rect, |current| current.union(rect)));
+            }
         }
         for fragment in &context.fragments.text {
             if fragment.kind == crate::inline::InlineTextFragmentKind::Content {
-                local_overflow = local_overflow.union(offset_rect(fragment.rect, origin));
+                scroll_origin.add_visual_overflow(
+                    &mut local_overflow,
+                    offset_rect(fragment.rect, origin),
+                    clip_to_scrollport,
+                );
             }
         }
         for fragment in &context.fragments.boxes {
-            local_overflow = local_overflow.union(offset_rect(fragment.box_model.border, origin));
+            scroll_origin.add_visual_overflow(
+                &mut local_overflow,
+                offset_rect(fragment.box_model.border, origin),
+                clip_to_scrollport,
+            );
         }
     }
     OverflowBoxGeometry {
@@ -381,6 +558,8 @@ where
         horizontal_gutter,
         horizontal_leading_gutter,
         local_overflow,
+        inflow_bounds,
+        scroll_origin,
     }
 }
 
@@ -439,16 +618,16 @@ where
     }
 }
 
-fn clips_overflow<N>(world: &LayoutWorld<N>, id: LayoutBoxId) -> bool
+fn overflow_modes<N>(world: &LayoutWorld<N>, id: LayoutBoxId) -> [LayoutOverflowMode; 2]
 where
     N: Copy + Debug + Eq + Hash,
 {
     if id == world.root {
-        world.viewport_scroll_policy.clips_overflow()
+        world.viewport_scroll_policy.effective_overflow
     } else if world.is_viewport_defining_body(id) {
-        false
+        [LayoutOverflowMode::Visible; 2]
     } else {
-        world.boxes[id.index()].style.clips_overflow()
+        world.boxes[id.index()].style.overflow_modes()
     }
 }
 
@@ -518,4 +697,71 @@ fn scrollport_for_box(
     scrollport.x += vertical_leading_gutter;
     scrollport.y += horizontal_leading_gutter;
     scrollport
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn signed_scroll_ranges_derive_from_the_port_and_overflow_rectangles() {
+        let dimensions = ScrollDimensions::from_rects(
+            LayoutRect::new(12.0, 8.0, 100.0, 200.0),
+            LayoutRect::new(-8.0, 8.0, 120.0, 250.0),
+        );
+        assert_eq!(dimensions.size, LayoutSize::new(120.0, 250.0));
+        assert_eq!(dimensions.minimum, LayoutPoint::new(-20.0, 0.0));
+        assert_eq!(dimensions.maximum, LayoutPoint::new(0.0, 50.0));
+        assert_eq!(dimensions.overflowing_axes(), (true, true));
+    }
+
+    #[test]
+    fn unreachable_area_in_one_axis_does_not_create_scroll_in_the_other() {
+        let port = LayoutRect::new(0.0, 0.0, 100.0, 100.0);
+        let origin = ScrollOrigin {
+            horizontal: ScrollStartEdge::Min,
+            vertical: ScrollStartEdge::Max,
+        };
+        let unreachable = origin.reachable_rect(LayoutRect::new(200.0, 200.0, 100.0, 100.0), port);
+        assert_eq!(unreachable, LayoutRect::new(200.0, 100.0, 100.0, 0.0));
+        let mut overflow = port;
+        origin.add_visual_overflow(
+            &mut overflow,
+            LayoutRect::new(200.0, 200.0, 100.0, 100.0),
+            Some(port),
+        );
+        assert_eq!(overflow, port);
+        // Non-scrolling ancestors must retain it for a later scroll container
+        // to evaluate in that container's own coordinate system.
+        origin.add_visual_overflow(
+            &mut overflow,
+            LayoutRect::new(200.0, 200.0, 100.0, 100.0),
+            None,
+        );
+        assert_eq!(overflow, LayoutRect::new(0.0, 0.0, 300.0, 300.0));
+    }
+
+    #[test]
+    fn negative_flow_margins_retract_only_the_scroll_end_and_preserve_empty_bounds() {
+        let origin = ScrollOrigin {
+            horizontal: ScrollStartEdge::Max,
+            vertical: ScrollStartEdge::Min,
+        };
+        let bounds = origin.flow_bounds(
+            taffy::InFlowLayout {
+                location: taffy::Point { x: 100.0, y: 100.0 },
+                margin: taffy::Rect {
+                    left: -30.0,
+                    right: -6.0,
+                    top: -4.0,
+                    bottom: -100.0,
+                },
+            },
+            taffy::Size {
+                width: 20.0,
+                height: 10.0,
+            },
+        );
+        assert_eq!(bounds, LayoutRect::new(120.0, 100.0, 0.0, 0.0));
+    }
 }

@@ -119,6 +119,7 @@ mod command_checkpoint;
 mod computed_size;
 mod cssom_zoom;
 mod dedicated_worker_client_event;
+mod directional_overflow;
 mod document_script_completion;
 mod element_toggle_event;
 mod fetch_xhr;
