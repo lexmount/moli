@@ -22,7 +22,7 @@ use super::{
         ParserBlockingStylesheetPause, ParserFinishDiscoverySignals, ParserInputQueue,
         ParserInputSession, ParserPumpOutcome, ParserPumpStep, ParserScriptElementStateTransition,
         ParserScriptHandoff, ParserScriptNoExecutionOutcome, ParserScriptPreparationFailure,
-        ParserYield,
+        ParserScriptPreparationRequest, ParserYield,
     },
     live_target::{ParserRuntimeDomSinks, ParserStreamHtmlTreeSinkTarget},
     session::{
@@ -36,6 +36,7 @@ pub(super) struct HtmlTreeSinkStream {
     script_input: ParserInputQueue,
     parser_script_positions: HashMap<NativeNodeId, usize>,
     next_parser_script_position: usize,
+    defer_script_preparation: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -433,7 +434,22 @@ impl HtmlTreeSinkStream {
             script_input: session.script_input,
             parser_script_positions: HashMap::new(),
             next_parser_script_position: 0,
+            defer_script_preparation: false,
         }
+    }
+
+    pub fn defer_script_preparation_to_owner(&mut self) {
+        self.defer_script_preparation = true;
+    }
+
+    pub fn prepare_script(&self, request: ParserScriptPreparationRequest) -> ParserScriptHandoff {
+        let target = self.parser.sink().borrow_target();
+        prepare_parser_script(&*target, request.node_id, Some(request.position)).into_handoff(
+            request.node_id,
+            request.start_line,
+            request.start_column,
+            request.blocking_signatures_before,
+        )
     }
 
     pub(super) fn from_target_with_scripting(
@@ -588,6 +604,56 @@ impl HtmlTreeSinkStream {
             | RawParserStep::InputDrained => None,
         };
 
+        let defer_script_preparation = self.defer_script_preparation
+            && self
+                .parser
+                .sink()
+                .borrow_target()
+                .has_runtime_dom_consumer();
+        if defer_script_preparation {
+            // A speculative fetch is distinct from preparing a parser script.
+            // The live owner admits async execution only after its checkpoint;
+            // ordinary preload discovery continues on the separate preload lane.
+            let result = match result {
+                RawParserStep::Script(node_id) => {
+                    let target = self.parser.sink().borrow_target();
+                    let (start_line, start_column) =
+                        target.script_start_position(node_id).unwrap_or((0, 0));
+                    ParserPumpStep::Yield(ParserYield::ScriptPreparation(Box::new(
+                        ParserScriptPreparationRequest {
+                            node_id,
+                            start_line,
+                            start_column,
+                            position: handoff_parser_position.expect("script has parser position"),
+                            needs_microtask_checkpoint: target
+                                .read_is_html_element_named(node_id, "script"),
+                            blocking_signatures_before: captured_blocking_stylesheet_signatures,
+                        },
+                    )))
+                }
+                RawParserStep::BlockingStylesheet(node_id) => {
+                    assert_eq!(self.pop_pending_blocking_stylesheet_pause(), Some(node_id));
+                    ParserPumpStep::Yield(ParserYield::BlockingStylesheet(
+                        ParserBlockingStylesheetPause { node_id },
+                    ))
+                }
+                RawParserStep::CustomElementConstruction => {
+                    ParserPumpStep::Yield(ParserYield::CustomElementConstruction(Box::new(
+                        self.pop_pending_custom_element_construction_handoff()
+                            .expect("custom element boundary has a construction handoff"),
+                    )))
+                }
+                RawParserStep::InputDrained => ParserPumpStep::InputDrained,
+            };
+            return ParserPumpOutcome {
+                result,
+                discovered_async_prefetch_scripts: Vec::new(),
+                discovered_modulepreload_link_candidates:
+                    discovered_modulepreload_link_candidate_node_ids,
+                discovered_blocking_stylesheet_inputs,
+            };
+        }
+
         let (
             result,
             discovered_async_prefetch_scripts,
@@ -695,6 +761,7 @@ impl HtmlTreeSinkStream {
             script_input: _,
             parser_script_positions: _,
             next_parser_script_position: _,
+            defer_script_preparation: _,
         } = self;
         parser.finish_live_runtime_dom_sink_parser()
     }
@@ -855,6 +922,7 @@ impl HtmlTreeSinkStream {
             script_input: _,
             parser_script_positions: _,
             next_parser_script_position: _,
+            defer_script_preparation: _,
         } = self;
         let mut target = parser.finish();
         let signals = ParserFinishDiscoverySignals {

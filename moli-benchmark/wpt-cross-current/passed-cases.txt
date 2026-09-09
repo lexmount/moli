@@ -6950,6 +6950,7 @@ html/webappapis/dynamic-markup-insertion/document-write/module-tla-immediate-pro
 html/webappapis/dynamic-markup-insertion/document-write/module-tla-import.html
 html/webappapis/dynamic-markup-insertion/document-write/module-tla-promise.html
 html/webappapis/dynamic-markup-insertion/document-write/module.html
+html/webappapis/dynamic-markup-insertion/document-write/mutation-observer.html
 html/webappapis/dynamic-markup-insertion/document-write/script_001.html
 html/webappapis/dynamic-markup-insertion/document-write/script_002.html
 html/webappapis/dynamic-markup-insertion/document-write/script_003.html
@@ -6998,6 +6999,7 @@ html/webappapis/dynamic-markup-insertion/the-outerhtml-property/outerhtml-no-par
 html/webappapis/microtask-queuing/queue-microtask-cross-realm-callback-report-exception.html
 html/webappapis/scripting/event-loops/microtask_after_raf.html
 html/webappapis/scripting/event-loops/microtask_after_script.html
+html/webappapis/scripting/event-loops/microtask_before_prepare_the_script_element-01.html
 html/webappapis/scripting/event-loops/task_microtask_ordering.html
 html/webappapis/scripting/event-loops/update-the-rendering-resize-autofocus.html
 html/webappapis/scripting/events/body-onload.html

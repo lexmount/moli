@@ -2416,27 +2416,6 @@ impl PageVm {
         .await
     }
 
-    pub(super) async fn perform_script_task_checkpoint_on_named_owner_local_task(
-        &mut self,
-        script_url: Option<Url>,
-    ) -> Result<()> {
-        let local_executor = self.local_executor.clone();
-        let mut page_vm_ref = AwaitedOwnerLocalPageVm::new(self);
-        run_named_owner_local_task(
-            local_executor,
-            "phase-one script-task checkpoint local task channel closed",
-            async move {
-                let page_vm = page_vm_ref.get_mut();
-                page_vm
-                    .vm_mut()
-                    .perform_script_task_checkpoint(script_url.as_ref())?;
-                page_vm.absorb_parser_no_execution_runs();
-                Ok(())
-            },
-        )
-        .await
-    }
-
     pub(super) async fn construct_parser_custom_element_handoff_on_named_owner_local_task(
         &mut self,
         handoff: crate::parser::ParserCustomElementConstructionHandoff,

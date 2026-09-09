@@ -2964,9 +2964,7 @@ html/syntax/parsing/cdata-in-integration-point-fragment.html
 html/webappapis/dynamic-markup-insertion/document-write/module-delayed.html
 html/webappapis/dynamic-markup-insertion/document-write/module-static-import-delayed.html
 html/webappapis/dynamic-markup-insertion/document-write/module-tla-delayed.html
-html/webappapis/dynamic-markup-insertion/document-write/mutation-observer.html
 html/webappapis/dynamic-markup-insertion/document-write/write-active-document.html
-html/webappapis/scripting/event-loops/microtask_before_prepare_the_script_element-01.html
 html/webappapis/scripting/processing-model-2/integration-with-the-javascript-job-queue/promise-job-detached-iframe.html
 html/webappapis/scripting/processing-model-2/integration-with-the-javascript-job-queue/promise-job-incumbent.html
 html/webappapis/scripting/processing-model-2/unhandled-promise-rejections/promise-rejection-event-during-parse.html

@@ -35,6 +35,9 @@ mod module_document_write;
 #[path = "scripts/parser_cleanup.rs"]
 mod parser_cleanup;
 
+#[path = "scripts/parser_preparation.rs"]
+mod parser_preparation;
+
 fn diagnostic_global<'a>(
     page: &'a moli_core::page::Page,
     name: &str,

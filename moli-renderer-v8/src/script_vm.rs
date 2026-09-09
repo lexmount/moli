@@ -6511,6 +6511,12 @@ impl ScriptVm {
         false
     }
 
+    pub(crate) fn perform_parser_script_preparation_checkpoint(&mut self) -> Result<()> {
+        self.with_default_context_scope(|scope, _| {
+            crate::script_cleanup::perform_parser_script_preparation_checkpoint(scope)
+        })
+    }
+
     /// Run one explicit page-task microtask checkpoint before a queued script task.
     ///
     /// This does not make the runtime a full browser task queue yet. The point is

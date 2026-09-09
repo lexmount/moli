@@ -547,6 +547,42 @@ impl JsContextHost {
         self.child_browsing_context_host_for_document_handle(document_handle) == Some(child_handle)
     }
 
+    fn resolve_live_child_parser_script_preparation(
+        &mut self,
+        scope: &mut v8::PinScope<'_, '_>,
+        child_handle: DomHandle,
+        document_handle: DomHandle,
+        parser: &DocumentParserSession,
+        outcome: LiveDocumentParserStepOutcome,
+    ) -> Option<LiveDocumentParserStepOutcome> {
+        let LiveDocumentParserStepOutcome::ScriptPreparation(request) = outcome else {
+            return Some(outcome);
+        };
+        let document_owner = self
+            .frame_owner_store
+            .current_child_document_owner(child_handle);
+        if request.needs_microtask_checkpoint()
+            && let Err(error) =
+                crate::script_cleanup::perform_parser_script_preparation_checkpoint(scope)
+        {
+            tracing::warn!(%error, "child parser preparation checkpoint failed");
+        }
+        if self
+            .frame_owner_store
+            .current_child_document_owner(child_handle)
+            != document_owner
+            || !self.live_child_parser_document_is_current(child_handle, document_handle)
+        {
+            return None;
+        }
+        let handoff = self.with_live_child_parser_step(scope, document_handle, |owner| {
+            parser.prepare_script(*request, owner)
+        });
+        Some(LiveDocumentParserStepOutcome::ScriptHandoff(Box::new(
+            handoff,
+        )))
+    }
+
     fn recover_current_child_parser_script_admission_failure(
         &mut self,
         child_handle: DomHandle,
@@ -597,7 +633,20 @@ impl JsContextHost {
                 document_handle,
                 discovery_signals,
             );
+            let Some(outcome) = self.resolve_live_child_parser_script_preparation(
+                scope,
+                child_handle,
+                document_handle,
+                parser,
+                outcome,
+            ) else {
+                parser.stop(ParserStopReason::DocumentReplacement);
+                return ParserProgress::Stopped;
+            };
             match outcome {
+                LiveDocumentParserStepOutcome::ScriptPreparation(_) => {
+                    unreachable!("child parser preparation was resolved before dispatch")
+                }
                 LiveDocumentParserStepOutcome::InputBoundary => {
                     if parser.input_is_empty() {
                         return if parser.finishes_on_empty_input() {
@@ -1219,7 +1268,20 @@ impl JsContextHost {
                 document_handle,
                 discovery_signals,
             );
+            let Some(outcome) = self.resolve_live_child_parser_script_preparation(
+                scope,
+                child_handle,
+                document_handle,
+                &entry,
+                outcome,
+            ) else {
+                entry.stop(ParserStopReason::DocumentReplacement);
+                return false;
+            };
             match outcome {
+                LiveDocumentParserStepOutcome::ScriptPreparation(_) => {
+                    unreachable!("child parser preparation was resolved before dispatch")
+                }
                 LiveDocumentParserStepOutcome::InputBoundary => {
                     if parser_insertion_only {
                         // Script-inserted input parks after one boundary; the
