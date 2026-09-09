@@ -198,6 +198,47 @@ fn execute_source_text_on_current_stack_with_completion(
     report_target: UncaughtScriptReportTarget,
     completion_mode: SourceTextScriptCompletionMode,
 ) -> RawScriptExecutionResult<SourceTextScriptCompletion> {
+    let result = run_source_text_on_current_stack_with_completion(
+        scope,
+        source,
+        provenance,
+        line_offset,
+        script_nonce,
+        report_target,
+        completion_mode,
+    );
+    // HTML's script cleanup also runs after an exception has been reported.
+    // LogOnly callers report errors themselves before completing that cleanup.
+    // Keep this checkpoint inside the caller's currentScript/parser-nesting
+    // scopes, while leaving nested execution to its enclosing script cleanup.
+    let exception_reported = report_target == UncaughtScriptReportTarget::CurrentWindow
+        && matches!(&result, Err(RawScriptExecutionError::Exception { .. }));
+    if drain_microtasks
+        && (result.is_ok() || exception_reported)
+        && !scope
+            .get_current_context()
+            .get_microtask_queue()
+            .is_some_and(v8::MicrotaskQueue::is_running_microtasks)
+        && v8::StackTrace::current_stack_trace(scope, 1)
+            .is_some_and(|stack| stack.get_frame_count() == 0)
+    {
+        ScriptVm::perform_microtask_checkpoints(
+            scope,
+            provenance.map(CompiledStringProvenance::source_url),
+        )?;
+    }
+    result
+}
+
+fn run_source_text_on_current_stack_with_completion(
+    scope: &mut v8::PinScope<'_, '_>,
+    source: &str,
+    provenance: Option<&CompiledStringProvenance>,
+    line_offset: i32,
+    script_nonce: Option<&str>,
+    report_target: UncaughtScriptReportTarget,
+    completion_mode: SourceTextScriptCompletionMode,
+) -> RawScriptExecutionResult<SourceTextScriptCompletion> {
     let try_catch = std::pin::pin!(v8::TryCatch::new(scope));
     let mut scope = try_catch.init();
     if let Some(provenance) = provenance
@@ -264,12 +305,6 @@ fn execute_source_text_on_current_stack_with_completion(
         }
         SourceTextScriptCompletionMode::ValueTypeAware => SourceTextScriptCompletion::NonString,
     };
-    if drain_microtasks {
-        ScriptVm::perform_microtask_checkpoints(
-            &mut scope,
-            provenance.map(CompiledStringProvenance::source_url),
-        )?;
-    }
     Ok(completion)
 }
 
@@ -490,9 +525,10 @@ impl ScriptVm {
     /// Execute source text as the body of an already-selected Page task.
     ///
     /// The caller must return an execution-produced completion fact to the
-    /// unique selected-task dispatcher. This primitive therefore performs no
-    /// microtask checkpoint, child-record synchronization, runtime follow-up,
-    /// or turn-exit style drain of its own.
+    /// unique selected-task dispatcher. Classic script elements additionally
+    /// require their script-cleanup checkpoint before currentScript is restored
+    /// and the parser resumes. This does not complete the enclosing Page task
+    /// or perform its child-record synchronization, follow-up, or style drain.
     pub(super) fn execute_source_text_in_context_ptr_selected_page_task_body(
         &mut self,
         context_ptr: *const v8::Global<v8::Context>,
@@ -502,6 +538,7 @@ impl ScriptVm {
         line_offset: i32,
         script_nonce: Option<&str>,
         completion_mode: SourceTextScriptCompletionMode,
+        clean_up_classic_script: bool,
     ) -> Result<SourceTextScriptCompletion> {
         let provenance = script_url.cloned().map(|source_url| {
             let module_base_url = script_base_url
@@ -515,7 +552,7 @@ impl ScriptVm {
             provenance,
             line_offset,
             script_nonce,
-            false,
+            clean_up_classic_script,
             UncaughtScriptReportTarget::CurrentWindow,
             completion_mode,
         )
