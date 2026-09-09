@@ -696,7 +696,7 @@ const CONSTRUCTOR_SPECS_BEFORE_STREAMS: &[ConstructorSpec] = &[
     ConstructorSpec {
         name: "Location",
         parent: None,
-        kind: ConstructorKind::Illegal,
+        kind: ConstructorKind::Location,
     },
     ConstructorSpec {
         name: "Navigation",

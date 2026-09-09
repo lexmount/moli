@@ -20,8 +20,8 @@ pub(crate) use install::{
     storage_interface_materialization_count,
 };
 pub(crate) use materialize::{
-    ensure_intrinsic_interface_constructor, ensure_intrinsic_interface_prototype,
-    object_is_intrinsic_interface_instance,
+    build_intrinsic_interface_instance, ensure_intrinsic_interface_constructor,
+    ensure_intrinsic_interface_prototype, object_is_intrinsic_interface_instance,
 };
 pub(crate) use metadata::RealmKind;
 pub(in crate::context_bootstrap) use metadata::TemplateBuildProfile;

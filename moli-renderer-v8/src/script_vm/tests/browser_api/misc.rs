@@ -23288,6 +23288,61 @@ fn location_conversion_hooks_and_prevent_extensions_match_location_exotic_semant
 }
 
 #[test]
+fn location_prototype_is_immutable_while_same_prototype_assignments_succeed() {
+    let mut vm = new_storage_test_vm("https://example.com/path");
+
+    let result = vm
+        .eval(
+            r#"
+            (() => {
+              "use strict";
+              const original = Object.getPrototypeOf(location);
+              const replacement = {};
+              const throwsName = callback => {
+                try {
+                  callback();
+                  return "returned";
+                } catch (error) {
+                  return error && error.name;
+                }
+              };
+
+              const objectDifferent = throwsName(() => {
+                Object.setPrototypeOf(location, replacement);
+              });
+              const dunderDifferent = throwsName(() => {
+                location.__proto__ = replacement;
+              });
+              const reflectDifferent = Reflect.setPrototypeOf(location, replacement);
+              const unchanged = Object.getPrototypeOf(location) === original;
+              const objectSame = Object.setPrototypeOf(location, original) === location;
+              const dunderSame = throwsName(() => {
+                location.__proto__ = original;
+              });
+              const reflectSame = Reflect.setPrototypeOf(location, original);
+
+              return JSON.stringify({
+                objectDifferent,
+                dunderDifferent,
+                reflectDifferent,
+                unchanged,
+                objectSame,
+                dunderSame,
+                reflectSame,
+                instanceofLocation: location instanceof Location,
+              });
+            })()
+            "#,
+        )
+        .expect("Location immutable prototype probe should evaluate");
+
+    assert_eq!(
+        result,
+        r#"{"objectDifferent":"TypeError","dunderDifferent":"TypeError","reflectDifferent":false,"unchanged":true,"objectSame":true,"dunderSame":"returned","reflectSame":true,"instanceofLocation":true}"#
+    );
+}
+
+#[test]
 fn location_href_backing_slot_ignores_reflection_and_spoofing() {
     let mut vm = new_storage_test_vm("https://example.com/path?x=1#frag");
 

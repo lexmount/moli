@@ -138,6 +138,25 @@ pub(crate) fn ensure_intrinsic_interface_constructor<'s>(
         .map_err(|_| anyhow!("intrinsic constructor `{name}` is not a Function"))
 }
 
+pub(crate) fn build_intrinsic_interface_instance<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    name: &str,
+) -> Result<v8::Local<'s, v8::Object>> {
+    let _ = ensure_intrinsic_interface_constructor(scope, name)?;
+    let registry = ExposedInterfaceTemplateRegistry::current(scope)
+        .ok_or_else(|| anyhow!("exposed interface template registry is unavailable"))?;
+    let id = registry
+        .id_by_name(name)
+        .ok_or_else(|| anyhow!("unknown exposed interface `{name}`"))?;
+    let template = registry
+        .ready_template(scope, id)
+        .ok_or_else(|| anyhow!("missing FunctionTemplate for `{name}`"))?;
+    template
+        .instance_template(scope)
+        .new_instance(scope)
+        .ok_or_else(|| anyhow!("failed to instantiate `{name}` instance template"))
+}
+
 pub(crate) fn ensure_intrinsic_interface_prototype<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     name: &str,

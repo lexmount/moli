@@ -22,6 +22,7 @@ use super::super::{
     geometry_runtime::{dom_matrix_constructor_callback, dom_point_constructor_callback},
     idle_detection::idle_detector_constructor_callback,
     image_data::image_data_constructor_callback,
+    location_runtime::build_location_constructor_template,
     media_cues::{
         media_error_constructor_callback, text_track_cue_constructor_callback,
         vtt_cue_constructor_callback,
@@ -486,6 +487,7 @@ pub(in crate::context_bootstrap) fn build_constructor_template<'s>(
         ConstructorKind::History | ConstructorKind::Navigation => {
             v8::FunctionTemplate::builder(illegal_constructor_callback).build(scope)
         }
+        ConstructorKind::Location => build_location_constructor_template(scope),
         ConstructorKind::MediaError
         | ConstructorKind::TextTrack
         | ConstructorKind::TextTrackList

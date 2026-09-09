@@ -13,7 +13,7 @@ mod slots;
 mod surface;
 
 pub(super) use install::{
-    build_location_runtime_object, ensure_location_constructor_runtime_state,
+    build_location_constructor_template, build_location_runtime_object,
     install_location_runtime_state,
 };
 pub(super) use navigation::{

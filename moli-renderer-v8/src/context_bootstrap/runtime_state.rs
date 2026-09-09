@@ -9,10 +9,7 @@ use super::{
     css_runtime::install_css_runtime_state,
     exposed_interfaces::is_lazy_exposed_interface,
     indexed_db::ensure_indexed_db_runtime_state,
-    location_runtime::{
-        ensure_location_constructor_runtime_state, location_href_slot,
-        sync_document_location_runtime_state_from_window,
-    },
+    location_runtime::{location_href_slot, sync_document_location_runtime_state_from_window},
     navigation_bootstrap::install_window_location_history_navigation_runtime_state,
     navigator_runtime::{bind_window_navigator_identity_seed, install_navigator_runtime_state},
     performance_runtime::install_default_window_performance_seed,
@@ -1973,7 +1970,6 @@ fn install_window_runtime_state<'s>(
         v8::Boolean::new(scope, secure_context_available).into(),
     );
     install_date_locale_runtime_state(scope, global)?;
-    ensure_location_constructor_runtime_state(scope, global)?;
     install_webassembly_runtime_state(scope, global)?;
     install_webidl_collection_iterator_intrinsics(scope, global)?;
 
