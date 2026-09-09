@@ -55,7 +55,7 @@ where
                 && let Some(container_source) = self
                     .boxes
                     .get(box_id.index())
-                    .and_then(|layout_box| layout_box.geometry_source)
+                    .and_then(|layout_box| layout_box.geometry_source.or(layout_box.hit_source))
                 && seen.insert(container_source)
                 && let Some(metrics) = self.element_metrics_for_source(container_source)
             {

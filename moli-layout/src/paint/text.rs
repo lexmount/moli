@@ -41,6 +41,7 @@ pub(super) enum TextClipMaskScope {
 /// resulting rectangles cross the owned snapshot boundary.
 pub(super) fn project_text<N>(
     layout_box: &LayoutBox<N>,
+    content_box: LayoutRect,
     transform: LayoutTransform2D,
     local_cull: Option<LayoutRect>,
     metrics: &mut PaintProjectionMetrics,
@@ -48,6 +49,7 @@ pub(super) fn project_text<N>(
 ) {
     project_text_phase(
         layout_box,
+        content_box,
         transform,
         local_cull,
         metrics,
@@ -65,6 +67,7 @@ pub(super) fn project_text<N>(
 /// is consumed by a `DestIn` layer, so only alpha is observable.
 pub(super) fn project_text_clip_mask<N>(
     layout_box: &LayoutBox<N>,
+    content_box: LayoutRect,
     transform: LayoutTransform2D,
     local_cull: Option<LayoutRect>,
     metrics: &mut PaintProjectionMetrics,
@@ -73,6 +76,7 @@ pub(super) fn project_text_clip_mask<N>(
 ) {
     project_text_phase(
         layout_box,
+        content_box,
         transform,
         local_cull,
         metrics,
@@ -84,6 +88,7 @@ pub(super) fn project_text_clip_mask<N>(
 
 fn project_text_phase<N>(
     layout_box: &LayoutBox<N>,
+    content_box: LayoutRect,
     transform: LayoutTransform2D,
     local_cull: Option<LayoutRect>,
     metrics: &mut PaintProjectionMetrics,
@@ -97,9 +102,8 @@ fn project_text_phase<N>(
     let Some(text_layout) = context.laid_out.as_ref() else {
         return;
     };
-    let layout = layout_box.final_layout;
-    let origin_x = layout.border.left + layout.padding.left;
-    let origin_y = layout.border.top + layout.padding.top;
+    let origin_x = content_box.x;
+    let origin_y = content_box.y;
 
     if phase == TextPaintPhase::Foreground {
         project_selection(
@@ -154,6 +158,12 @@ fn project_text_phase<N>(
             continue;
         }
         let line_placement = context.line_placements.get(line_index);
+        let line_transform = line_placement.map_or(LayoutTransform2D::IDENTITY, |placement| {
+            context.coordinate_space.line_transform(placement.rect)
+        });
+        let glyph_transform = transform
+            .concatenate(LayoutTransform2D::translation(origin_x, origin_y))
+            .concatenate(line_transform);
         for (item_index, item) in line.items().enumerate() {
             let glyph_run = match item {
                 PositionedLayoutItem::InlineBox(positioned) => {
@@ -178,8 +188,8 @@ fn project_text_phase<N>(
                 .positioned_glyphs()
                 .map(|glyph| PaintGlyph {
                     id: glyph.id,
-                    x: origin_x + glyph.x,
-                    y: origin_y + glyph.y + vertical_offset,
+                    x: glyph.x,
+                    y: glyph.y + vertical_offset,
                 })
                 .collect::<Vec<_>>();
             if glyphs.is_empty() {
@@ -208,23 +218,29 @@ fn project_text_phase<N>(
                 glyph_skew_radians: synthesis.skew().map(f32::to_radians),
                 glyph_embolden,
                 glyphs,
-                transform,
+                transform: glyph_transform,
             };
             let brush = &glyph_run.style().brush;
             if phase == TextPaintPhase::Foreground {
                 for shadow in brush.shadows.iter().rev() {
+                    let inverse = line_transform
+                        .inverse()
+                        .expect("line orientation is invertible");
+                    let origin = inverse.map_point(crate::LayoutPoint::ZERO);
+                    let offset = inverse
+                        .map_point(crate::LayoutPoint::new(shadow.offset.x, shadow.offset.y));
                     snapshot.push_fragment(PaintFragment::TextShadow(PaintTextShadow {
                         run: owned_run.clone(),
                         color: shadow.color,
-                        offset: shadow.offset,
+                        offset: crate::PaintPoint::new(offset.x - origin.x, offset.y - origin.y),
                         blur_radius: shadow.blur_radius,
                     }));
                 }
             }
 
             let metrics = run.metrics();
-            let baseline = origin_y + glyph_run.baseline() + vertical_offset;
-            let x = origin_x + glyph_run.offset();
+            let baseline = glyph_run.baseline() + vertical_offset;
+            let x = glyph_run.offset();
             let width = glyph_run.advance().max(0.0);
             let decoration = brush.decoration;
             let decoration_color = if phase == TextPaintPhase::ClipMask {
@@ -245,7 +261,7 @@ fn project_text_phase<N>(
                         thickness,
                         color: decoration_color,
                         style: decoration.style,
-                        transform,
+                        transform: glyph_transform,
                     }),
                 )
             };
@@ -378,7 +394,19 @@ fn selection_rect(
     let (y, height) = context
         .line_placements
         .get(line_index)
-        .map(|placement| (placement.rect.y, placement.rect.height))
+        .map(|placement| (placement.rect.block_offset, placement.rect.block_size))
         .unwrap_or((fallback_y, fallback_height));
-    LayoutRect::new(origin_x + x, origin_y + y, width, height)
+    let rect = LayoutRect::new(x, y, width, height);
+    let rect = context
+        .line_placements
+        .get(line_index)
+        .map_or(rect, |placement| {
+            context.coordinate_space.line_rect(placement.rect, rect)
+        });
+    LayoutRect::new(
+        origin_x + rect.x,
+        origin_y + rect.y,
+        rect.width,
+        rect.height,
+    )
 }

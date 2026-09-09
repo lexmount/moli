@@ -254,7 +254,7 @@ where
         for (source, box_id) in &world.source_mapping {
             principal_sources[box_id.index()] = Some(*source);
         }
-        let scroll_proxy_links = world
+        let mut scroll_proxy_links = world
             .display_contents_mapping
             .iter()
             .flat_map(|(source, boxes)| {
@@ -262,7 +262,11 @@ where
                     .iter()
                     .map(|box_id| (*source, LayoutOutputBoxId::from_index(box_id.index())))
             })
-            .collect();
+            .collect::<Vec<_>>();
+        scroll_proxy_links.extend(world.source_mapping.iter().filter_map(|(source, id)| {
+            let content = world.fieldset_children(*id)?.content;
+            Some((*source, LayoutOutputBoxId::from_index(content.index())))
+        }));
         Self {
             world,
             viewport,
@@ -416,9 +420,10 @@ where
             self.hit_sources.push(layout_box.source.or_else(|| {
                 (layout_box.pseudo.is_some()
                     || layout_box.anonymous_reason
-                        == Some(LayoutAnonymousReason::InlineSplitContinuation))
-                .then_some(layout_box.owner)
-                .flatten()
+                        == Some(LayoutAnonymousReason::InlineSplitContinuation)
+                    || layout_box.kind == crate::LayoutBoxKind::FieldsetContent)
+                    .then_some(layout_box.owner)
+                    .flatten()
             }));
             let semantics = layout_box.element_semantics();
             self.boxes.push(LayoutBoxGeometry {
@@ -660,28 +665,8 @@ where
             let Some(context) = layout_box.inline_layout.as_ref() else {
                 continue;
             };
-            let layout = layout_box.final_layout;
-            let box_id = LayoutBoxId::from_index(index);
-            let vertical_leading_gutter =
-                if box_id == self.world.root || self.world.is_viewport_defining_body(box_id) {
-                    0.0
-                } else {
-                    layout_box
-                        .style
-                        .scrollbar_leading_gutter_thickness(LayoutScrollbarAxis::Vertical, false)
-                };
-            let horizontal_leading_gutter =
-                if box_id == self.world.root || self.world.is_viewport_defining_body(box_id) {
-                    0.0
-                } else {
-                    layout_box
-                        .style
-                        .scrollbar_leading_gutter_thickness(LayoutScrollbarAxis::Horizontal, false)
-                };
-            let content_origin = LayoutPoint::new(
-                layout.border.left + layout.padding.left + vertical_leading_gutter,
-                layout.border.top + layout.padding.top + horizontal_leading_gutter,
-            );
+            let content = self.boxes[index].content_box;
+            let content_origin = LayoutPoint::new(content.x, content.y);
             for line in &context.fragments.lines {
                 let fragment = self.push_fragment(LayoutFragment {
                     id: LayoutFragmentId::from_index(0),
@@ -725,7 +710,7 @@ where
                         box_id: LayoutOutputBoxId::from_index(target),
                         line_index: text.line_index,
                         source_utf16_range: text.source_utf16_range.clone(),
-                        rtl: text.rtl,
+                        direction: context.coordinate_space.mode.text_direction(text.rtl),
                     },
                     rect: offset_rect(text.rect, content_origin),
                     box_model: None,

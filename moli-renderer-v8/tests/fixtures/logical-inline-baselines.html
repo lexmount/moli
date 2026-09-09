@@ -1,0 +1,86 @@
+<!doctype html><meta charset="utf-8">
+<title>Quantized central baselines and table grid writing contexts</title>
+<link rel="help" href="https://drafts.csswg.org/css-align-3/#baseline-rules">
+<style>
+@font-face {font-family:MoliAhem;src:url("{{MOLI_AHEM_DATA_URL}}") format("truetype")}
+html,body {margin:0;padding:0} html {overflow:hidden}
+.target {position:absolute;box-sizing:content-box;font-family:MoliAhem}
+#groups {left:0;top:0;display:flex;flex-direction:column;flex-wrap:wrap-reverse;
+  align-items:last baseline;width:200px;border:3px solid}
+#groups > div {writing-mode:vertical-lr;font-size:31px;line-height:30px}
+#groups > :nth-child(1) {writing-mode:vertical-rl;margin-right:20px;padding-right:20px;
+  font-size:21px;line-height:20px;align-self:first baseline}
+#groups > :nth-child(3),#groups > :nth-child(6) {font-size:17px;line-height:16px}
+#groups > :nth-child(4) {margin-left:20px;padding-left:20px;
+  font-size:21px;line-height:20px;align-self:first baseline}
+#groups > :nth-child(5),#groups > :nth-child(6) {writing-mode:vertical-rl}
+#table-baseline {left:400px;top:0;display:flex;flex-direction:column;align-items:baseline;
+  width:200px;border:3px solid;font-size:10px;line-height:10px}
+#table-baseline > * {writing-mode:vertical-rl}
+#table-baseline table {border:5px solid;padding:5px;padding-left:30px;
+  margin-left:10px;border-spacing:2px}
+#table-baseline td {padding:1px;vertical-align:baseline}
+.orthogonal {top:500px;writing-mode:vertical-rl;border-spacing:0;border:0;padding:0}
+.orthogonal td {padding:0;border:0;vertical-align:top}
+.orthogonal td:first-child {writing-mode:horizontal-tb}
+</style>
+<div class="target" id="groups">
+  <div data-inline-baseline="15,60">line1<br>line2</div>
+  <div data-inline-baseline="0,60">line1<br>line2</div>
+  <div data-inline-baseline="21,32">line1<br>line2</div>
+  <div data-inline-baseline="125,60">line1<br>line2</div>
+  <div data-inline-baseline="140,60">line1<br>line2</div>
+  <div data-inline-baseline="147,32">line1<br>line2</div>
+</div>
+<div class="target" id="table-baseline">
+  <table data-table-rect="129,0,71,56"><tbody><tr>
+    <td data-table-rect="166,12,22,32"><div data-table-rect="167,13,20,30">two<br>lines</div></td>
+  </tr></tbody></table>
+  <div data-table-rect="177,56,10,30">hello</div>
+</div>
+<table class="target orthogonal" style="left:0;direction:ltr" data-direction="ltr"><tbody><tr>
+  <td><div style="width:40px;height:20px"></div></td>
+  <td><div style="width:10px;height:30px"></div></td>
+</tr></tbody></table>
+<table class="target orthogonal" style="left:200px;direction:rtl" data-direction="rtl"><tbody><tr>
+  <td><div style="width:40px;height:20px"></div></td>
+  <td><div style="width:10px;height:30px"></div></td>
+</tr></tbody></table>
+<script>
+let phase='initial';
+function setOverflowPhase(value) {
+  phase=value;
+  for(const table of document.querySelectorAll('.orthogonal')) {
+    table.style.direction=value==='end'?(table.dataset.direction==='ltr'?'rtl':'ltr'):table.dataset.direction;
+  }
+  for(const root of document.querySelectorAll('.target')) {
+    if(value==='start') root.style.transform='translate(4px,8px)';
+    if(value==='hidden') root.style.display='none';
+  }
+}
+function collectOverflowChecks() {
+  if(phase==='hidden') return Array.from(document.querySelectorAll('.target'),(root,index)=>
+    ({id:`hidden-${index}`,actual:[root.getClientRects().length],expected:[0]}));
+  const checks=Array.from(document.querySelectorAll('[data-inline-baseline]'),(node,index)=>({
+    id:`baseline-${index}`,actual:[node.offsetLeft,node.getBoundingClientRect().width],
+    expected:node.dataset.inlineBaseline.split(',').map(Number)}));
+  const parent=document.querySelector('#table-baseline').getBoundingClientRect();
+  for(const node of document.querySelectorAll('[data-table-rect]')) {
+    const rect=node.getBoundingClientRect();
+    checks.push({id:`table-${node.tagName}-${checks.length}`,
+      actual:[rect.x-parent.x-3,rect.y-parent.y-3,rect.width,rect.height],
+      expected:node.dataset.tableRect.split(',').map(Number)});
+  }
+  for(const table of document.querySelectorAll('.orthogonal')) {
+    const rect=table.getBoundingClientRect();
+    const rtl=(phase==='end')!==(table.dataset.direction==='rtl');
+    const expected=[[0,0,40,50],[0,rtl?30:0,40,20],[0,rtl?0:20,40,30]];
+    for(const [index,node] of [table,...table.querySelectorAll('td')].entries()) {
+      const child=node.getBoundingClientRect();
+      checks.push({id:`orthogonal-${table.dataset.direction}-${index}`,
+        actual:[child.x-rect.x,child.y-rect.y,child.width,child.height],expected:expected[index]});
+    }
+  }
+  return checks;
+}
+</script>

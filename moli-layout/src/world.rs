@@ -1,15 +1,13 @@
 use std::{collections::HashMap, fmt::Debug, hash::Hash, sync::Arc};
 
 use style::Atom;
-use taffy::{Cache, Layout, Point, Style};
+use taffy::{Cache, Layout, Style};
 
 use crate::{
     LayoutCssImageReference, LayoutElementSemantics, LayoutError, LayoutPoint, LayoutPseudo,
     LayoutResolvedGridTracks, LayoutScrollbarAxis, LayoutScrollbarColors, LayoutScrollbarGutter,
-    LayoutScrollbarWidth, ResolvedLayoutStyle,
-    inline::InlineFormattingContext,
-    replaced::ReplacedContext,
-    style::{InlineDirection, LayoutOverflowMode},
+    LayoutScrollbarWidth, ResolvedLayoutStyle, inline::InlineFormattingContext,
+    positioned::PhysicalStaticPosition, replaced::ReplacedContext, style::LayoutOverflowMode,
 };
 
 /// Dense identifier scoped to exactly one [`LayoutWorld`].
@@ -58,12 +56,14 @@ pub enum LayoutBoxKind {
     TableRow,
     TableCell,
     FormControl,
+    Fieldset,
     LineBreak,
     Replaced,
     AnonymousBlock,
     BlockInInline,
     AnonymousFlexItem,
     AnonymousGridItem,
+    FieldsetContent,
     AnonymousTableWrapper,
     AnonymousTableRowGroup,
     AnonymousTableRow,
@@ -125,12 +125,14 @@ impl LayoutBoxKind {
             Self::TableRow => "table-row",
             Self::TableCell => "table-cell",
             Self::FormControl => "form-control",
+            Self::Fieldset => "fieldset",
             Self::LineBreak => "line-break",
             Self::Replaced => "replaced",
             Self::AnonymousBlock => "anonymous-block",
             Self::BlockInInline => "block-in-inline",
             Self::AnonymousFlexItem => "anonymous-flex-item",
             Self::AnonymousGridItem => "anonymous-grid-item",
+            Self::FieldsetContent => "fieldset-content",
             Self::AnonymousTableWrapper => "anonymous-table-wrapper",
             Self::AnonymousTableRowGroup => "anonymous-table-row-group",
             Self::AnonymousTableRow => "anonymous-table-row",
@@ -157,6 +159,7 @@ pub enum LayoutAnonymousReason {
     MissingTableRow,
     MissingTableCell,
     FormControlContent,
+    FieldsetContent,
 }
 
 impl LayoutAnonymousReason {
@@ -172,6 +175,7 @@ impl LayoutAnonymousReason {
             Self::MissingTableRow => "missing-table-row",
             Self::MissingTableCell => "missing-table-cell",
             Self::FormControlContent => "form-control-content",
+            Self::FieldsetContent => "fieldset-content",
         }
     }
 }
@@ -195,11 +199,9 @@ pub enum LayoutCapabilityDiagnostic {
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(crate) struct InlineStaticPosition {
     pub(crate) owner: LayoutBoxId,
-    pub(crate) point: Point<f32>,
-    /// Resolved bidi direction for an inline-level placeholder, or the IFC's
-    /// direction for a block-level placeholder. Neither is necessarily the
-    /// direction of the actual containing block.
-    pub(crate) direction: InlineDirection,
+    /// Physical anchor and edges, resolved from the placeholder's line context
+    /// and bidi direction rather than the actual positioned containing block.
+    pub(crate) position: PhysicalStaticPosition,
 }
 
 impl LayoutCapabilityDiagnostic {
@@ -1277,7 +1279,9 @@ fn default_capability_diagnostics(
         | Kind::ListItem
         | Kind::InlineListItem
         | Kind::PseudoMarker
-        | Kind::FormControl => None,
+        | Kind::FormControl
+        | Kind::Fieldset
+        | Kind::FieldsetContent => None,
         Kind::LineBreak => None,
         Kind::Replaced => None,
         Kind::PrincipalBlock

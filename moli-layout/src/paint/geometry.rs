@@ -73,16 +73,10 @@ impl BoxAreas {
         let layout_box = &projection.world.boxes[id.index()];
         let geometry = &projection.boxes[id.index()];
         let layout = layout_box.final_layout;
-        // CSS ignores border-radius on boxes participating in the collapsed
-        // table border model. Their shared grid edges are painted by the table
-        // owner, and table-part backgrounds remain rectangular.
-        let border_radii = if layout_box.collapsed_table_border_part {
-            PaintCornerRadii::ZERO
-        } else {
-            layout_box
-                .style
-                .border_radii(geometry.border_box.width, geometry.border_box.height)
-        };
+        let decoration = super::fieldset::FieldsetDecoration::for_box(projection, id);
+        let border_rect =
+            decoration.map_or(geometry.border_box, |decoration| decoration.border_rect);
+        let border_radii = box_border_radii(projection, id, border_rect.width, border_rect.height);
         let border = PaintEdgeSizes::new(
             layout.border.top,
             layout.border.right,
@@ -95,11 +89,30 @@ impl BoxAreas {
             layout.padding.bottom,
             layout.padding.left,
         );
+        let (padding_rect, content_rect) = if decoration.is_some() {
+            let padding_rect = crate::overflow::inset_rect(
+                border_rect,
+                border.top,
+                border.right,
+                border.bottom,
+                border.left,
+            );
+            let content_rect = crate::overflow::inset_rect(
+                padding_rect,
+                padding.top,
+                padding.right,
+                padding.bottom,
+                padding.left,
+            );
+            (padding_rect, content_rect)
+        } else {
+            (geometry.padding_box, geometry.content_box)
+        };
         Self {
             margin_rect: geometry.margin_box,
-            border_rect: geometry.border_box,
-            padding_rect: geometry.padding_box,
-            content_rect: geometry.content_box,
+            border_rect,
+            padding_rect,
+            content_rect,
             border_radii,
             padding_radii: inset_radii(border_radii, border),
             content_radii: inset_radii(
@@ -143,6 +156,30 @@ impl BoxAreas {
         };
         canonical_shape(rect, radii)
     }
+}
+
+pub(super) fn box_border_radii<N: Copy + Debug + Eq + Hash>(
+    projection: &OutputProjection<'_, N>,
+    id: LayoutBoxId,
+    width: f32,
+    height: f32,
+) -> PaintCornerRadii {
+    let layout_box = &projection.world.boxes[id.index()];
+    if layout_box.collapsed_table_border_part {
+        return PaintCornerRadii::ZERO;
+    }
+    // HTML explicitly inherits border-radius onto the fieldset content box,
+    // including its percentage resolution against that box's own dimensions.
+    let style = if layout_box.kind == crate::LayoutBoxKind::FieldsetContent {
+        &projection.world.boxes[layout_box
+            .parent
+            .expect("fieldset content has an owner")
+            .index()]
+        .style
+    } else {
+        &layout_box.style
+    };
+    style.border_radii(width, height)
 }
 
 pub(super) fn inset_radii(radii: PaintCornerRadii, widths: PaintEdgeSizes) -> PaintCornerRadii {

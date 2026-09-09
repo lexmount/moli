@@ -22,6 +22,7 @@ use taffy::{MaybeResolve as _, Point, ResolveOrZero as _, Size};
 use crate::{
     LayoutBox, LayoutBoxId, LayoutBoxKind, LayoutFragmentBoxModel, LayoutWorld, PaintColor,
     PaintRect, ResolvedLayoutStyle,
+    inline_space::{InlineCoordinateSpace, InlineWritingMode, LineRelativeRect},
     overflow::{inset_rect, outset_rect},
     style::{
         InlineDirection, InlineTextTransform, InlineUnicodeBidi, InlineVerticalAlign,
@@ -38,7 +39,7 @@ use crate::{
 pub(crate) fn relative_atomic_inset_offset(
     style: &taffy::Style<style::Atom>,
     containing_block_size: Size<f32>,
-    container_direction: InlineDirection,
+    flow: taffy::WritingDirection,
 ) -> Point<f32> {
     let inset = taffy::Rect {
         left: style.inset.left.maybe_resolve(
@@ -59,7 +60,10 @@ pub(crate) fn relative_atomic_inset_offset(
         ),
     };
     Point {
-        x: if container_direction == InlineDirection::Rtl {
+        x: if flow
+            .mode
+            .is_axis_flow_reversed(taffy::AbsoluteAxis::Horizontal, flow.direction)
+        {
             inset
                 .right
                 .map(|value| -value)
@@ -71,10 +75,21 @@ pub(crate) fn relative_atomic_inset_offset(
                 .or(inset.right.map(|value| -value))
                 .unwrap_or(0.0)
         },
-        y: inset
-            .top
-            .or(inset.bottom.map(|value| -value))
-            .unwrap_or(0.0),
+        y: if flow
+            .mode
+            .is_axis_flow_reversed(taffy::AbsoluteAxis::Vertical, flow.direction)
+        {
+            inset
+                .bottom
+                .map(|value| -value)
+                .or(inset.top)
+                .unwrap_or(0.0)
+        } else {
+            inset
+                .top
+                .or(inset.bottom.map(|value| -value))
+                .unwrap_or(0.0)
+        },
     }
 }
 
@@ -149,6 +164,10 @@ pub(crate) struct InlineStructuralBox {
 #[derive(Debug)]
 pub(crate) struct InlineFormattingContext {
     pub(crate) root_style: LayoutBoxId,
+    /// Accepted IFC content-space mapping. Shaping and line breaking stay in
+    /// line-relative coordinates; retained fragments are always physical.
+    pub(crate) coordinate_space: InlineCoordinateSpace,
+    pub(crate) baseline_type: taffy::BaselineType,
     /// Reusable Parley layout for intrinsic and final-width probes. Line
     /// breaking replaces only Parley's line output while retaining the shaped
     /// runs, clusters, glyphs, and their allocations, so probes must not clone
@@ -271,6 +290,31 @@ pub(crate) struct InlineStrutMetrics {
     x_height: f32,
 }
 
+impl InlineStrutMetrics {
+    fn baseline_offset(self, baseline: taffy::BaselineType) -> f32 {
+        match baseline {
+            taffy::BaselineType::Alphabetic => 0.0,
+            // Used font ascent/descent have already been quantized. Split an
+            // odd font height with the extra pixel above the central baseline,
+            // as Blink FontMetrics::IntAscentInternal does. Moving an alphabetic
+            // strut by half the ascent/descent difference would introduce a new
+            // fractional baseline after that quantization.
+            taffy::BaselineType::Central => {
+                self.text_ascent - ((self.text_ascent + self.text_descent) / 2.0).ceil()
+            }
+        }
+    }
+
+    fn for_baseline(mut self, baseline: taffy::BaselineType) -> Self {
+        let offset = self.baseline_offset(baseline);
+        self.line_ascent -= offset;
+        self.line_descent += offset;
+        self.text_ascent -= offset;
+        self.text_descent += offset;
+        self
+    }
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) enum InlineSelection {
     Range(Range<usize>),
@@ -280,7 +324,7 @@ pub(crate) enum InlineSelection {
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) struct InlineLinePlacement {
     pub(crate) line_index: usize,
-    pub(crate) rect: PaintRect,
+    pub(crate) rect: LineRelativeRect,
     pub(crate) baseline: f32,
     /// CSS phantom line boxes retain positions for their inline descendants,
     /// but do not contribute height, baselines, or block margin-collapse
@@ -319,7 +363,7 @@ impl InlineLinePlacement {
     }
 
     pub(crate) fn translate_block_axis(&mut self, offset: f32) {
-        self.rect.y += offset;
+        self.rect.block_offset += offset;
         self.baseline += offset;
         self.content_offset += offset;
         for item_offset in &mut self.item_offsets {
@@ -391,7 +435,6 @@ pub(crate) struct InlineLineFragment {
     /// Conservative glyph/decoration/shadow ink used only by capture culling.
     /// CSSOM line geometry continues to use `rect`.
     pub(crate) paint_bounds: InlinePaintBounds,
-    pub(crate) baseline: f32,
     pub(crate) phantom: bool,
 }
 
@@ -513,7 +556,7 @@ pub(crate) fn build_inline_fragments<N>(
     let style_paint_outsets = layout
         .styles()
         .iter()
-        .map(text_style_paint_outsets)
+        .map(|style| text_style_paint_outsets(style, context.coordinate_space.mode))
         .collect::<Vec<_>>();
 
     for (line_index, line) in layout.lines().enumerate() {
@@ -530,7 +573,7 @@ pub(crate) fn build_inline_fragments<N>(
                     (metrics.block_max_coord - metrics.block_min_coord).max(0.0),
                 )
             },
-            |placement| placement.rect,
+            |placement| placement.rect.as_rect(),
         );
         fragments.lines.push(InlineLineFragment {
             line_index,
@@ -541,7 +584,6 @@ pub(crate) fn build_inline_fragments<N>(
                 .map_or(InlinePaintBounds::Empty, |_| {
                     InlinePaintBounds::Bounded(line_rect)
                 }),
-            baseline: placement.map_or(metrics.baseline, |placement| placement.baseline),
             phantom: placement.is_some_and(|placement| placement.phantom),
         });
         if let Some(placement) = placement {
@@ -678,6 +720,7 @@ pub(crate) fn build_inline_fragments<N>(
                         positioned.width,
                         positioned.is_rtl(),
                         containing_width,
+                        context.coordinate_space.mode,
                     );
                 }
                 InlineObjectRole::Atomic
@@ -701,6 +744,7 @@ pub(crate) fn build_inline_fragments<N>(
                     &boxes[box_index].style,
                     line,
                     containing_width,
+                    context.coordinate_space.mode,
                 )?,
                 has_start_edge: accumulator.has_start_edge,
                 has_end_edge: accumulator.has_end_edge,
@@ -724,6 +768,27 @@ pub(crate) fn build_inline_fragments<N>(
             })
         })
         .collect();
+    // This is the materialization boundary. No consumer of InlineFragments
+    // needs to know the shaper's axes or apply a writing-mode repair later.
+    let space = context.coordinate_space;
+    let line_rects = line_placements;
+    for fragment in &mut fragments.boxes {
+        let line = line_rects[fragment.line_index].rect;
+        fragment.box_model.content = space.line_rect(line, fragment.box_model.content);
+        fragment.box_model.padding = space.line_rect(line, fragment.box_model.padding);
+        fragment.box_model.border = space.line_rect(line, fragment.box_model.border);
+        fragment.box_model.margin = space.line_rect(line, fragment.box_model.margin);
+    }
+    for fragment in &mut fragments.text {
+        fragment.rect = space.line_rect(line_rects[fragment.line_index].rect, fragment.rect);
+    }
+    for fragment in &mut fragments.lines {
+        let line = line_rects[fragment.line_index].rect;
+        fragment.rect = space.line_rect(line, fragment.rect);
+        if let InlinePaintBounds::Bounded(bounds) = &mut fragment.paint_bounds {
+            *bounds = space.line_rect(line, *bounds);
+        }
+    }
     fragments
 }
 
@@ -750,7 +815,10 @@ impl TextPaintOutsets {
     }
 }
 
-fn text_style_paint_outsets(style: &parley::layout::Style<TextBrush>) -> Option<TextPaintOutsets> {
+fn text_style_paint_outsets(
+    style: &parley::layout::Style<TextBrush>,
+    mode: InlineWritingMode,
+) -> Option<TextPaintOutsets> {
     let mut outsets = TextPaintOutsets::default();
     for shadow in style
         .brush
@@ -771,6 +839,18 @@ fn text_style_paint_outsets(style: &parley::layout::Style<TextBrush>) -> Option<
         outsets.bottom = outsets.bottom.max(blur + shadow.offset.y);
     }
 
+    let physical = mode.line_edges(taffy::Rect {
+        left: outsets.left,
+        right: outsets.right,
+        top: outsets.top,
+        bottom: outsets.bottom,
+    });
+    outsets = TextPaintOutsets {
+        left: physical.left,
+        right: physical.right,
+        top: physical.top,
+        bottom: physical.bottom,
+    };
     let decoration = style.brush.decoration;
     if decoration.underline || decoration.overline || decoration.line_through {
         // Normal decoration ink remains inside the guarded typographic box.
@@ -944,8 +1024,13 @@ fn resolve_inline_lines<'a>(
         );
         if !metrics.phantom {
             result.has_non_phantom_line = true;
-            result.first_baseline.get_or_insert(metrics.baseline);
-            result.last_baseline = Some(metrics.baseline);
+            let baseline = if context.coordinate_space.mode.0 == taffy::WritingMode::VerticalLr {
+                2.0 * line_top + metrics.height - metrics.baseline
+            } else {
+                metrics.baseline
+            };
+            result.first_baseline.get_or_insert(baseline);
+            result.last_baseline = Some(baseline);
         }
         preceding_adjustment += metrics.height - advance;
     }
@@ -986,10 +1071,21 @@ fn resolve_inline_line(
                     primary_strut,
                     run_metrics,
                     context.box_includes_used_font_metrics(structural_parent),
+                    context.baseline_type,
+                );
+                let baseline_offset = primary_strut.map_or_else(
+                    || match context.baseline_type {
+                        taffy::BaselineType::Central => {
+                            let ascent = run_metrics.ascent.round();
+                            ascent - ((ascent + run_metrics.descent.round()) / 2.0).ceil()
+                        }
+                        taffy::BaselineType::Alphabetic => 0.0,
+                    },
+                    |strut| strut.baseline_offset(context.baseline_type),
                 );
                 InlineItemVerticalGeometry {
                     bounds,
-                    initial_top: glyph_run.baseline() + bounds.top,
+                    initial_top: glyph_run.baseline() + bounds.top - baseline_offset,
                     structural_parent,
                     edge_box: None,
                     vertical_align: InlineVerticalAlign::default(),
@@ -1316,7 +1412,7 @@ fn resolve_inline_line(
             .collect();
         placements.push(InlineLinePlacement {
             line_index,
-            rect: PaintRect::new(
+            rect: LineRelativeRect::new(
                 metrics.inline_min_coord + metrics.offset,
                 line_top,
                 metrics.advance,
@@ -1433,6 +1529,7 @@ fn glyph_line_bounds(
     primary_strut: Option<InlineStrutMetrics>,
     used_font: &parley::layout::RunMetrics,
     include_used_font_metrics: bool,
+    baseline: taffy::BaselineType,
 ) -> InlineVerticalBounds {
     let used_strut = inline_strut_metrics(
         InlineFontMetrics {
@@ -1442,9 +1539,12 @@ fn glyph_line_bounds(
             x_height: used_font.x_height.unwrap_or(used_font.ascent * 0.56),
         },
         true,
-    );
+    )
+    .for_baseline(baseline);
     let used_bounds = InlineVerticalBounds::from_strut(used_strut);
-    let mut bounds = primary_strut.map_or(used_bounds, InlineVerticalBounds::from_strut);
+    let mut bounds = primary_strut.map_or(used_bounds, |strut| {
+        InlineVerticalBounds::from_strut(strut.for_baseline(baseline))
+    });
     if include_used_font_metrics {
         bounds.include(used_bounds);
     }
@@ -1686,6 +1786,7 @@ impl InlineBoxFragmentAccumulator {
         advance: f32,
         rtl: bool,
         containing_width: f32,
+        mode: InlineWritingMode,
     ) {
         let applies_decoration = if start {
             child.inline_start_edge
@@ -1693,10 +1794,10 @@ impl InlineBoxFragmentAccumulator {
             child.inline_end_edge
         };
         let margin = if applies_decoration {
-            let margins = child.style.taffy.margin.resolve_or_zero(
+            let margins = mode.line_edges(child.style.taffy.margin.resolve_or_zero(
                 Some(containing_width),
                 crate::style::resolve_stylo_calc_value,
-            );
+            ));
             if start == (child.style.direction() == InlineDirection::Ltr) {
                 margins.left
             } else {
@@ -1728,21 +1829,28 @@ impl InlineBoxFragmentAccumulator {
         style: &ResolvedLayoutStyle,
         line: &InlineLineFragment,
         containing_width: f32,
+        mode: InlineWritingMode,
     ) -> Option<LayoutFragmentBoxModel> {
         let rect = self.bounds.rect(line.rect)?;
         let resolve = crate::style::resolve_stylo_calc_value;
-        let padding = style
-            .taffy
-            .padding
-            .resolve_or_zero(Some(containing_width), resolve);
-        let border = style
-            .taffy
-            .border
-            .resolve_or_zero(Some(containing_width), resolve);
-        let margin = style
-            .taffy
-            .margin
-            .resolve_or_zero(Some(containing_width), resolve);
+        let padding = mode.line_edges(
+            style
+                .taffy
+                .padding
+                .resolve_or_zero(Some(containing_width), resolve),
+        );
+        let border = mode.line_edges(
+            style
+                .taffy
+                .border
+                .resolve_or_zero(Some(containing_width), resolve),
+        );
+        let margin = mode.line_edges(
+            style
+                .taffy
+                .margin
+                .resolve_or_zero(Some(containing_width), resolve),
+        );
         let (has_left_edge, has_right_edge) = if style.direction() == InlineDirection::Ltr {
             (self.has_start_edge, self.has_end_edge)
         } else {
@@ -2096,7 +2204,9 @@ impl InlineBuildInput {
             .zip(style_samples)
             .map(|(style, sample)| parley.inline_font_metrics(style, sample))
             .collect();
-        let parent_strut = measure_inline_strut(parley, root_text_style.clone(), quantize);
+        let baseline_type = root_style.baseline_type();
+        let parent_strut = measure_inline_strut(parley, root_text_style.clone(), quantize)
+            .map(|strut| strut.for_baseline(baseline_type));
         let mut structural_boxes = Vec::new();
         for (_, object, _) in &self.objects {
             if object.role != InlineObjectRole::StartEdge
@@ -2112,7 +2222,8 @@ impl InlineBuildInput {
                 box_id: object.box_id,
                 parent: object.ancestors.last().copied().unwrap_or(self.root_style),
                 vertical_align: object.vertical_align,
-                strut: measure_inline_strut(parley, style, quantize),
+                strut: measure_inline_strut(parley, style, quantize)
+                    .map(|strut| strut.for_baseline(baseline_type)),
                 include_used_font_metrics: world.boxes[object.box_id.index()]
                     .style
                     .includes_used_font_metrics(),
@@ -2125,6 +2236,8 @@ impl InlineBuildInput {
             .collect();
         InlineFormattingContext {
             root_style: self.root_style,
+            coordinate_space: InlineWritingMode(root_style.writing_mode()).space(Size::ZERO),
+            baseline_type,
             measurement_layout: Some(layout),
             laid_out: None,
             content_widths: InlineContentWidthsMemo::default(),
@@ -2244,10 +2357,21 @@ where
     N: Copy + Debug + Eq + Hash,
 {
     let mut normalizer = InlineNormalizer::new(owner);
+    let style = &world.boxes[owner.index()].style;
+    // A block already owns its paragraph direction/isolation. Only an
+    // override adds controls here (Blink InlineItemsBuilder::EnterBlock).
+    let bidi = match style.unicode_bidi() {
+        InlineUnicodeBidi::BidiOverride | InlineUnicodeBidi::IsolateOverride => {
+            InlineUnicodeBidi::BidiOverride
+        }
+        _ => InlineUnicodeBidi::Normal,
+    };
+    normalizer.enter_bidi(owner, bidi, style.direction(), &[]);
     let children = world.boxes[owner.index()].children.clone();
     for child in children {
         collect_box(world, owner, child, &mut Vec::new(), &mut normalizer);
     }
+    normalizer.exit_bidi(owner, &[]);
     normalizer.finish()
 }
 
@@ -2349,12 +2473,7 @@ fn collect_box<N>(
         collect_box(world, owner, child, ancestors, normalizer);
     }
     ancestors.pop();
-    normalizer.close_inline(
-        id,
-        world.boxes[id.index()].style.unicode_bidi(),
-        ancestors,
-        vertical_align,
-    );
+    normalizer.close_inline(id, ancestors, vertical_align);
 }
 
 struct PendingWhitespace {
@@ -2374,6 +2493,13 @@ struct PendingCarriageReturn {
     origin: SourceOrigin,
 }
 
+#[derive(Clone, Copy)]
+struct InlineBidiContext {
+    owner: LayoutBoxId,
+    enter: char,
+    exit: char,
+}
+
 struct InlineNormalizer {
     root_style: LayoutBoxId,
     text: String,
@@ -2381,6 +2507,7 @@ struct InlineNormalizer {
     objects: Vec<(usize, InlineObject, InlineBoxKind)>,
     pending: Option<PendingWhitespace>,
     pending_carriage_return: Option<PendingCarriageReturn>,
+    bidi_contexts: Vec<InlineBidiContext>,
     line_has_content: bool,
     /// The preceding character in the CSS text-processing stream. Atomic
     /// inlines interrupt that stream; structural edges, injected bidi
@@ -2398,6 +2525,7 @@ impl InlineNormalizer {
             objects: Vec::new(),
             pending: None,
             pending_carriage_return: None,
+            bidi_contexts: Vec::new(),
             line_has_content: false,
             previous_character: None,
             capitalize_word_start: true,
@@ -2546,7 +2674,7 @@ impl InlineNormalizer {
             }
             InlineWhiteSpaceCollapse::PreserveBreaks if is_segment_break => {
                 self.pending = None;
-                self.append_unit(style_box, '\n', ancestors, sources, false);
+                self.append_forced_break(style_box, ancestors, sources);
                 self.line_has_content = false;
             }
             InlineWhiteSpaceCollapse::PreserveBreaks if collapsible => {
@@ -2559,7 +2687,11 @@ impl InlineNormalizer {
                 } else {
                     character
                 };
-                self.append_unit(style_box, character, ancestors, sources, false);
+                if character == '\n' {
+                    self.append_forced_break(style_box, ancestors, sources);
+                } else {
+                    self.append_unit(style_box, character, ancestors, sources, false);
+                }
                 if mode == InlineWhiteSpaceCollapse::BreakSpaces && character == ' ' {
                     // Parley 0.10 has no CSS `break-spaces` mode. U+200B adds
                     // the required opportunity after every preserved space;
@@ -2645,9 +2777,57 @@ impl InlineNormalizer {
     fn hard_break(&mut self, box_id: LayoutBoxId, ancestors: &[LayoutBoxId]) {
         self.flush_pending_carriage_return();
         self.pending = None;
-        self.append_unit(box_id, '\n', ancestors, Vec::new(), false);
+        self.append_forced_break(box_id, ancestors, Vec::new());
         self.line_has_content = false;
         self.capitalize_word_start = true;
+    }
+
+    fn enter_bidi(
+        &mut self,
+        owner: LayoutBoxId,
+        bidi: InlineUnicodeBidi,
+        direction: InlineDirection,
+        ancestors: &[LayoutBoxId],
+    ) {
+        self.flush_pending_carriage_return();
+        for (enter, exit) in bidi_open(bidi, direction)
+            .into_iter()
+            .zip(bidi_close(bidi).into_iter().rev())
+        {
+            self.append_unit(owner, enter, ancestors, Vec::new(), true);
+            self.bidi_contexts
+                .push(InlineBidiContext { owner, enter, exit });
+        }
+    }
+
+    fn exit_bidi(&mut self, owner: LayoutBoxId, ancestors: &[LayoutBoxId]) {
+        self.flush_pending_carriage_return();
+        while let Some(context) = self.bidi_contexts.last().copied()
+            && context.owner == owner
+        {
+            self.append_unit(owner, context.exit, ancestors, Vec::new(), true);
+            self.bidi_contexts.pop();
+        }
+    }
+
+    fn append_forced_break(
+        &mut self,
+        style_box: LayoutBoxId,
+        ancestors: &[LayoutBoxId],
+        sources: Vec<SourceOrigin>,
+    ) {
+        // CSS bidi contexts outlive Unicode paragraphs. Pop before a forced
+        // break and re-enter afterwards, preserving nesting and DOM offsets.
+        // Injected controls have no source ranges and never become glyph ink.
+        for index in (0..self.bidi_contexts.len()).rev() {
+            let exit = self.bidi_contexts[index].exit;
+            self.append_unit(style_box, exit, ancestors, Vec::new(), true);
+        }
+        self.append_unit(style_box, '\n', ancestors, sources, false);
+        for index in 0..self.bidi_contexts.len() {
+            let enter = self.bidi_contexts[index].enter;
+            self.append_unit(style_box, enter, ancestors, Vec::new(), true);
+        }
     }
 
     fn open_inline(
@@ -2661,9 +2841,7 @@ impl InlineNormalizer {
         // CSS Writing Modes injects the opening bidi controls outside the
         // inline box boundary. Keep the opaque item order aligned with
         // Blink's InlineItemsBuilder: enter bidi context, then open the tag.
-        for control in bidi_open(bidi, direction) {
-            self.append_unit(box_id, control, ancestors, Vec::new(), true);
-        }
+        self.enter_bidi(box_id, bidi, direction, ancestors);
         self.push_object(
             box_id,
             InlineObjectRole::StartEdge,
@@ -2676,7 +2854,6 @@ impl InlineNormalizer {
     fn close_inline(
         &mut self,
         box_id: LayoutBoxId,
-        bidi: InlineUnicodeBidi,
         ancestors: &[LayoutBoxId],
         vertical_align: InlineVerticalAlign,
     ) {
@@ -2688,9 +2865,7 @@ impl InlineNormalizer {
             ancestors,
             vertical_align,
         );
-        for control in bidi_close(bidi) {
-            self.append_unit(box_id, control, ancestors, Vec::new(), true);
-        }
+        self.exit_bidi(box_id, ancestors);
     }
 
     fn push_object(
@@ -2794,7 +2969,7 @@ fn bidi_open(bidi: InlineUnicodeBidi, direction: InlineDirection) -> Vec<char> {
         InlineUnicodeBidi::Embed => vec![embed],
         InlineUnicodeBidi::Isolate => vec![isolate],
         InlineUnicodeBidi::BidiOverride => vec![override_control],
-        InlineUnicodeBidi::IsolateOverride => vec![isolate, override_control],
+        InlineUnicodeBidi::IsolateOverride => vec!['\u{2068}', override_control],
         InlineUnicodeBidi::Plaintext => vec!['\u{2068}'],
     }
 }
@@ -2815,6 +2990,71 @@ fn is_combining_mark(character: char) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn central_baseline_preserves_quantized_odd_font_height_and_line_leading() {
+        let strut = inline_strut_metrics(
+            InlineFontMetrics {
+                ascent: 18.0,
+                descent: 5.0,
+                line_height: 20.0,
+                x_height: 10.0,
+            },
+            true,
+        );
+        assert_eq!(strut.baseline_offset(taffy::BaselineType::Central), 6.0);
+        let central = strut.for_baseline(taffy::BaselineType::Central);
+        assert_eq!(central.text_ascent, 12.0);
+        assert_eq!(central.text_descent, 11.0);
+        assert_eq!(central.line_ascent, 10.0);
+        assert_eq!(central.line_descent, 10.0);
+        assert_eq!(central.x_height, strut.x_height);
+        let alphabetic = strut.for_baseline(taffy::BaselineType::Alphabetic);
+        assert_eq!(alphabetic.line_ascent, strut.line_ascent);
+        assert_eq!(alphabetic.line_descent, strut.line_descent);
+    }
+
+    #[test]
+    fn css_bidi_contexts_survive_forced_breaks_without_claiming_source_offsets() {
+        let root = LayoutBoxId::from_index(0);
+        let inline = LayoutBoxId::from_index(1);
+        let text = LayoutBoxId::from_index(2);
+        for mode in [
+            InlineWhiteSpaceCollapse::Preserve,
+            InlineWhiteSpaceCollapse::PreserveBreaks,
+        ] {
+            let mut normalizer = InlineNormalizer::new(root);
+            normalizer.enter_bidi(
+                root,
+                InlineUnicodeBidi::BidiOverride,
+                InlineDirection::Rtl,
+                &[],
+            );
+            normalizer.enter_bidi(
+                inline,
+                InlineUnicodeBidi::IsolateOverride,
+                InlineDirection::Ltr,
+                &[],
+            );
+            normalizer.push_text(text, "A\nB", mode, InlineTextTransform::None, &[inline]);
+            normalizer.exit_bidi(inline, &[]);
+            normalizer.exit_bidi(root, &[]);
+            let input = normalizer.finish();
+            assert_eq!(
+                input.text,
+                "\u{202e}\u{2068}\u{202d}A\u{202c}\u{2069}\u{202c}\n\u{202e}\u{2068}\u{202d}B\u{202c}\u{2069}\u{202c}"
+            );
+            assert_eq!(input.source_map.len(), 3);
+            for (offset, source) in input.source_map.iter().enumerate() {
+                assert_eq!(source.box_id, text);
+                assert_eq!(source.source_utf16_range, offset..offset + 1);
+                assert_eq!(
+                    &input.text[source.output_range.clone()],
+                    &"A\nB"[offset..offset + 1]
+                );
+            }
+        }
+    }
 
     #[test]
     fn ordered_output_range_lookup_handles_duplicates_gaps_and_bidi_order() {
@@ -2865,11 +3105,21 @@ mod tests {
             ..parley::layout::RunMetrics::default()
         };
 
-        let explicit = glyph_line_bounds(Some(primary), &fallback, false);
+        let explicit = glyph_line_bounds(
+            Some(primary),
+            &fallback,
+            false,
+            taffy::BaselineType::Alphabetic,
+        );
         assert_eq!(explicit.top, -8.0);
         assert_eq!(explicit.bottom, 2.0);
 
-        let normal = glyph_line_bounds(Some(primary), &fallback, true);
+        let normal = glyph_line_bounds(
+            Some(primary),
+            &fallback,
+            true,
+            taffy::BaselineType::Alphabetic,
+        );
         assert_eq!(normal.top, -21.0);
         assert_eq!(normal.bottom, 9.0);
     }
@@ -3078,6 +3328,8 @@ mod tests {
 
         let context = InlineFormattingContext {
             root_style: root,
+            coordinate_space: InlineWritingMode(taffy::WritingMode::HorizontalTb).space(Size::ZERO),
+            baseline_type: taffy::BaselineType::Alphabetic,
             measurement_layout: Some(layout.clone()),
             laid_out: None,
             content_widths: InlineContentWidthsMemo::default(),
@@ -3248,12 +3500,7 @@ mod tests {
             InlineTextTransform::None,
             &[first_inline],
         );
-        normalizer.close_inline(
-            first_inline,
-            InlineUnicodeBidi::Normal,
-            &[],
-            InlineVerticalAlign::default(),
-        );
+        normalizer.close_inline(first_inline, &[], InlineVerticalAlign::default());
         normalizer.push_text(
             outer_space,
             " ",
@@ -3275,12 +3522,7 @@ mod tests {
             InlineTextTransform::None,
             &[second_inline],
         );
-        normalizer.close_inline(
-            second_inline,
-            InlineUnicodeBidi::Embed,
-            &[],
-            InlineVerticalAlign::default(),
-        );
+        normalizer.close_inline(second_inline, &[], InlineVerticalAlign::default());
         normalizer.push_text(
             trailing_text,
             "C",
@@ -3350,12 +3592,7 @@ mod tests {
             InlineTextTransform::None,
             &[inline],
         );
-        normalizer.close_inline(
-            inline,
-            InlineUnicodeBidi::Normal,
-            &[],
-            InlineVerticalAlign::default(),
-        );
+        normalizer.close_inline(inline, &[], InlineVerticalAlign::default());
         let input = normalizer.finish();
         assert_eq!(input.text, "WW WW");
         assert_eq!(
@@ -3578,12 +3815,7 @@ mod tests {
             InlineTextTransform::None,
             &[inline],
         );
-        normalizer.close_inline(
-            inline,
-            InlineUnicodeBidi::Embed,
-            &[],
-            InlineVerticalAlign::default(),
-        );
+        normalizer.close_inline(inline, &[], InlineVerticalAlign::default());
         let input = normalizer.finish();
         assert_eq!(input.text, "A\u{200b}\u{202a}B\u{202c}");
         assert!(input.source_map.iter().all(|entry| {

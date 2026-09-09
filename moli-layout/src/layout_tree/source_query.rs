@@ -113,6 +113,13 @@ where
         let geometry = self.box_geometry(box_id)?;
         let extent = self.scroll_extent(box_id)?;
         let coordinate_space = self.coordinate_space(geometry.coordinate_space)?;
+        // A fieldset's client box remains the outer principal box, but its
+        // scroll size, range and scrollport belong to the anonymous content.
+        // Resolve the ownership from frozen provenance, never from live style.
+        let scrolling_box = output.scroll_proxy_boxes.first().copied().unwrap_or(box_id);
+        let scrolling_extent = self.scroll_extent(scrolling_box)?;
+        let scrolling_space =
+            self.coordinate_space(self.box_geometry(scrolling_box)?.coordinate_space)?;
         let is_root = box_id == self.root_box;
         let offset_parent_id = self.offset_parent_box(box_id, &mut offset_parent_is_exposed);
         let offset_parent = offset_parent_id.and_then(|id| {
@@ -205,24 +212,24 @@ where
                     extent.scrollport.y - geometry.border_box.y
                 },
             )),
-            scroll_size: unzoom.size(extent.scroll_size),
-            scroll_offset: unzoom.point(extent.applied_offset),
-            minimum_scroll_offset: unzoom.point(extent.minimum_offset),
-            maximum_scroll_offset: unzoom.point(extent.maximum_offset),
+            scroll_size: unzoom.size(scrolling_extent.scroll_size),
+            scroll_offset: unzoom.point(scrolling_extent.applied_offset),
+            minimum_scroll_offset: unzoom.point(scrolling_extent.minimum_offset),
+            maximum_scroll_offset: unzoom.point(scrolling_extent.maximum_offset),
             scrollport: if is_root {
-                LayoutTransform2D::IDENTITY.map_rect(extent.scrollport)
+                LayoutTransform2D::IDENTITY.map_rect(scrolling_extent.scrollport)
             } else {
-                coordinate_space
+                scrolling_space
                     .local_to_viewport
-                    .map_rect(extent.scrollport)
+                    .map_rect(scrolling_extent.scrollport)
             },
-            scrollable_overflow: coordinate_space
+            scrollable_overflow: scrolling_space
                 .local_to_viewport
-                .map_rect(extent.scrollable_overflow),
-            is_scroll_container: extent.is_scroll_container,
-            allows_user_scroll_x: extent.allows_user_scroll_x,
-            allows_user_scroll_y: extent.allows_user_scroll_y,
-            clips_overflow: extent.clips_overflow,
+                .map_rect(scrolling_extent.scrollable_overflow),
+            is_scroll_container: scrolling_extent.is_scroll_container,
+            allows_user_scroll_x: scrolling_extent.allows_user_scroll_x,
+            allows_user_scroll_y: scrolling_extent.allows_user_scroll_y,
+            clips_overflow: scrolling_extent.clips_overflow,
             visible: geometry.visible,
             pointer_events: geometry.pointer_events,
         })
@@ -370,7 +377,7 @@ where
         struct SelectedTextRect {
             box_id: LayoutOutputBoxId,
             line_index: usize,
-            rtl: bool,
+            direction: super::model::LayoutTextDirection,
             coordinate_space: LayoutCoordinateSpaceId,
             rect: LayoutRect,
         }
@@ -384,7 +391,7 @@ where
                     box_id,
                     line_index,
                     source_utf16_range,
-                    rtl,
+                    direction,
                     ..
                 } = &fragment.kind
                 else {
@@ -418,17 +425,11 @@ where
                 let denominator = source_len.max(1) as f32;
                 let start_ratio = selected_start as f32 / denominator;
                 let end_ratio = selected_end as f32 / denominator;
-                let visual_start_ratio = if *rtl { 1.0 - end_ratio } else { start_ratio };
-                let rect = LayoutRect::new(
-                    fragment.rect.x + fragment.rect.width * visual_start_ratio,
-                    fragment.rect.y,
-                    fragment.rect.width * (end_ratio - start_ratio),
-                    fragment.rect.height,
-                );
+                let rect = direction.slice(fragment.rect, start_ratio, end_ratio);
                 Some(SelectedTextRect {
                     box_id: *box_id,
                     line_index: *line_index,
-                    rtl: *rtl,
+                    direction: *direction,
                     coordinate_space: fragment.coordinate_space,
                     rect,
                 })
@@ -445,28 +446,40 @@ where
                 .cmp(&right.coordinate_space.index())
                 .then_with(|| left.box_id.index().cmp(&right.box_id.index()))
                 .then_with(|| left.line_index.cmp(&right.line_index))
-                .then_with(|| left.rtl.cmp(&right.rtl))
-                .then_with(|| left.rect.y.total_cmp(&right.rect.y))
-                .then_with(|| left.rect.x.total_cmp(&right.rect.x))
+                .then_with(|| left.direction.cmp(&right.direction))
+                .then_with(|| {
+                    left.direction
+                        .block_interval(left.rect)
+                        .start
+                        .total_cmp(&right.direction.block_interval(right.rect).start)
+                })
+                .then_with(|| {
+                    left.direction
+                        .inline_interval(left.rect)
+                        .start
+                        .total_cmp(&right.direction.inline_interval(right.rect).start)
+                })
         });
         let mut merged: Vec<SelectedTextRect> = Vec::with_capacity(selected.len());
         for fragment in selected {
             let can_merge = merged.last().is_some_and(|previous| {
-                let tolerance = previous
-                    .rect
-                    .width
+                let previous_inline = previous.direction.inline_interval(previous.rect);
+                let next_inline = fragment.direction.inline_interval(fragment.rect);
+                let previous_block = previous.direction.block_interval(previous.rect);
+                let next_block = fragment.direction.block_interval(fragment.rect);
+                let tolerance = (previous_inline.end - previous_inline.start)
                     .abs()
-                    .max(fragment.rect.width.abs())
+                    .max((next_inline.end - next_inline.start).abs())
                     .max(1.0)
                     * f32::EPSILON
                     * 16.0;
                 previous.box_id == fragment.box_id
                     && previous.line_index == fragment.line_index
-                    && previous.rtl == fragment.rtl
+                    && previous.direction == fragment.direction
                     && previous.coordinate_space == fragment.coordinate_space
-                    && (previous.rect.y - fragment.rect.y).abs() <= tolerance
-                    && (previous.rect.height - fragment.rect.height).abs() <= tolerance
-                    && fragment.rect.x <= previous.rect.right() + tolerance
+                    && (previous_block.start - next_block.start).abs() <= tolerance
+                    && (previous_block.end - next_block.end).abs() <= tolerance
+                    && next_inline.start <= previous_inline.end + tolerance
             });
             if can_merge {
                 let previous = merged.last_mut().expect("checked above");

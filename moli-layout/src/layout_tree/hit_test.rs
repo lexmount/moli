@@ -336,7 +336,7 @@ where
         let LayoutFragmentKind::Text {
             box_id,
             source_utf16_range,
-            rtl,
+            direction,
             ..
         } = &fragment.kind
         else {
@@ -347,23 +347,15 @@ where
         let source_len = source_utf16_range
             .end
             .saturating_sub(source_utf16_range.start);
-        let on_left_half = local_point.x <= fragment.rect.x + fragment.rect.width * 0.5;
-        let at_source_start = if *rtl { !on_left_half } else { on_left_half };
+        let at_source_start = direction.source_start_half(fragment.rect, local_point);
         let fragment_offset = if at_source_start { 0 } else { source_len };
-        let caret_x = if at_source_start == *rtl {
-            fragment.rect.right()
-        } else {
-            fragment.rect.x
-        };
+        let ratio = if at_source_start { 0.0 } else { 1.0 };
         Some(LayoutCaretPosition {
             source: entry.source,
             utf16_offset: Some(source_utf16_range.start + fragment_offset),
-            rect: space.local_to_viewport.map_rect(LayoutRect::new(
-                caret_x,
-                fragment.rect.y,
-                0.0,
-                fragment.rect.height,
-            )),
+            rect: space
+                .local_to_viewport
+                .map_rect(direction.slice(fragment.rect, ratio, ratio)),
             ancestor_boxes: self.ancestor_box_models(*box_id),
         })
     }

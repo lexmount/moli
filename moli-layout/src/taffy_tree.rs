@@ -26,10 +26,11 @@ use crate::{
         build_inline_line_placements, measure_inline_lines, relative_atomic_inset_offset,
         reset_inline_layout_for_probe,
     },
+    inline_space::InlineWritingMode,
     positioned::{
-        FlexCrossAxisStaticContext, HorizontalStaticEdge, PhysicalStaticPosition,
-        VerticalStaticEdge, flex_main_axis_static_edge, grid_static_alignment,
-        physical_static_position_from_logical,
+        FlexCrossAxisStaticContext, HorizontalStaticEdge, LogicalStaticEdge,
+        PhysicalStaticPosition, VerticalStaticEdge, flex_main_axis_static_edge,
+        grid_static_alignment, physical_static_position_from_logical,
     },
     replaced::measure_replaced,
     style::{InlineDirection, resolve_stylo_calc_value},
@@ -379,6 +380,8 @@ where
         } else {
             None
         };
+        let positioned_containing_block = positioned_containing_block
+            .map(|container| world.fieldset_descendant_containing_box(container, id));
         let layout_parent = if world.boxes[id.index()].outside_list_marker {
             nearest_list_item_ancestor(world, Some(original_parent))
         } else if inline_owner.is_some() && (is_flattened || !is_positioned) {
@@ -466,6 +469,12 @@ where
         }
         world.boxes[id.index()].positioned_containing_block = positioned_containing_block;
         world.boxes[id.index()].layout_parent = layout_parent;
+        if let Some(parent) = layout_parent {
+            let direction = world.boxes[parent.index()].style.taffy.direction;
+            world.boxes[id.index()]
+                .style
+                .resolve_float_and_clear(direction);
+        }
         // Text, line breaks and structural inline boxes are represented by the
         // owner's single Parley item stream. Atomic inline boxes remain real
         // Taffy children so they can be measured before line breaking.
@@ -622,7 +631,7 @@ where
         let y = item_baseline
             .map(|baseline| baseline - marker_baseline)
             .unwrap_or(item_layout.border.top + item_layout.padding.top);
-        world.set_inline_child_layout(
+        world.set_measured_child_layout(
             marker,
             Point { x, y },
             Point::ZERO,
@@ -681,7 +690,7 @@ where
         let x = control_layout.border.left + control_layout.padding.left + 4.0;
         let y = ((control_layout.size.height - output.size.height) * 0.5)
             .max(control_layout.border.top + control_layout.padding.top);
-        world.set_inline_child_layout(
+        world.set_measured_child_layout(
             content,
             Point { x, y },
             Point::ZERO,
@@ -840,7 +849,7 @@ struct PositionedContainingArea {
     size: Size<f32>,
     direction: taffy::Direction,
     writing_mode: taffy::WritingMode,
-    requires_inline_layout: bool,
+    layout_is_deferred: bool,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -886,18 +895,7 @@ fn finish_positioned_layout<N>(
         let layout_box = &world.boxes[child.index()];
         let static_global = if let Some(position) = layout_box.inline_static_position {
             let owner_origin = unrounded_global_origin(world, position.owner);
-            Some(PhysicalStaticPosition::new(
-                Point {
-                    x: owner_origin.x + position.point.x,
-                    y: owner_origin.y + position.point.y,
-                },
-                if position.direction == InlineDirection::Rtl {
-                    HorizontalStaticEdge::Right
-                } else {
-                    HorizontalStaticEdge::Left
-                },
-                VerticalStaticEdge::Top,
-            ))
+            Some(position.position.translated(owner_origin))
         } else {
             static_source.map(|source| match source {
                 PositionedStaticSource::BlockPlaceholder {
@@ -912,21 +910,17 @@ fn finish_positioned_layout<N>(
                 }
             })
         };
-        if static_global.is_none()
-            && !layout_box
-                .positioned_containing_block
-                .is_some_and(|id| world.boxes[id.index()].inline_flattened)
-        {
-            continue;
-        }
         let area =
             positioned_containing_area(world, child, viewport, &prepared.inline_containing_blocks);
+        if static_global.is_none() && !area.layout_is_deferred {
+            continue;
+        }
         let static_in_area = static_global.map(|position| position.relative_to(area.origin));
         let numeric_parent_origin = world.boxes[child.index()]
             .layout_parent
             .map(|parent| unrounded_global_origin(world, parent))
             .unwrap_or(Point::ZERO);
-        if area.requires_inline_layout {
+        if area.layout_is_deferred {
             // With explicit insets on both axes no static position is needed.
             let position = static_in_area.unwrap_or_else(|| {
                 PhysicalStaticPosition::new(
@@ -935,7 +929,7 @@ fn finish_positioned_layout<N>(
                     VerticalStaticEdge::Top,
                 )
             });
-            layout_inline_absolute_child(world, child, area, position, numeric_parent_origin);
+            layout_deferred_absolute_child(world, child, area, position, numeric_parent_origin);
             prepared.capture_positioned_descendants(world, child);
         } else if let Some(position) = static_in_area {
             apply_static_position(world, child, area, position, numeric_parent_origin);
@@ -1112,7 +1106,7 @@ where
             },
             direction: world.boxes[world.root.index()].style.taffy.direction,
             writing_mode: world.boxes[world.root.index()].style.writing_mode(),
-            requires_inline_layout: false,
+            layout_is_deferred: false,
         };
     };
     let containing_box = &world.boxes[containing_block.index()];
@@ -1130,7 +1124,7 @@ where
             },
             direction: containing_box.style.taffy.direction,
             writing_mode: containing_box.style.writing_mode(),
-            requires_inline_layout: true,
+            layout_is_deferred: true,
         };
     }
 
@@ -1148,7 +1142,8 @@ where
         size: padding_box_size,
         direction: containing_box.style.taffy.direction,
         writing_mode: containing_box.style.writing_mode(),
-        requires_inline_layout: containing_box.inline_formatting_context,
+        layout_is_deferred: containing_box.inline_formatting_context
+            || containing_box.kind == LayoutBoxKind::Fieldset,
     }
 }
 
@@ -1198,7 +1193,7 @@ fn apply_static_position<N>(
     }
 }
 
-fn layout_inline_absolute_child<N>(
+fn layout_deferred_absolute_child<N>(
     world: &mut LayoutWorld<N>,
     child: LayoutBoxId,
     area: PositionedContainingArea,
@@ -1513,19 +1508,7 @@ where
             return taffy::BaselineType::Alphabetic;
         }
         let style = &self.boxes[LayoutBoxId::from_taffy(node_id).index()].style;
-        style.stylo_computed_values().map_or_else(
-            || taffy::BaselineType::for_writing_mode(style.writing_mode()),
-            |computed| {
-                // Stylo's writing direction includes text-orientation as well
-                // as writing-mode. Sideways text uses an alphabetic baseline;
-                // upright vertical text uses a central baseline, like Blink.
-                if computed.writing_mode.is_text_vertical() {
-                    taffy::BaselineType::Central
-                } else {
-                    taffy::BaselineType::Alphabetic
-                }
-            },
-        )
+        style.baseline_type()
     }
 
     fn get_scrollbar_insets(&self, node_id: NodeId) -> taffy::Rect<f32> {
@@ -1580,13 +1563,19 @@ where
             let id = LayoutBoxId::from_taffy(node_id);
             if box_is_effectively_floated(self, id) {
                 let style = &self.boxes[id.index()].style.taffy;
-                let margin = style
-                    .margin
-                    .resolve_or_zero(inputs.parent_size.width, resolve_stylo_calc_value);
+                let mode = inputs.parent_writing_mode;
+                let margin = style.margin.resolve_or_zero(
+                    mode.to_logical(inputs.parent_size).inline_size,
+                    resolve_stylo_calc_value,
+                );
                 LayoutInput {
-                    available_space: inputs
-                        .available_space
-                        .map_width(|width| width.maybe_add(margin.left + margin.right)),
+                    available_space: mode.to_physical(taffy::LogicalSize {
+                        inline_size: mode
+                            .to_logical(inputs.available_space)
+                            .inline_size
+                            .maybe_add(mode.to_logical(margin.sum_axes()).inline_size),
+                        block_size: mode.to_logical(inputs.available_space).block_size,
+                    }),
                     ..inputs
                 }
             } else {
@@ -1836,6 +1825,10 @@ where
         let inline_formatting_context = layout_box.inline_formatting_context;
         let is_replaced = layout_box.is_replaced();
 
+        if kind == LayoutBoxKind::Fieldset {
+            return crate::fieldset::compute_fieldset_layout(self, id, inputs);
+        }
+
         if is_replaced {
             return self.compute_leaf(id, inputs);
         }
@@ -1888,6 +1881,8 @@ where
             | LayoutBoxKind::TableRow
             | LayoutBoxKind::TableCell
             | LayoutBoxKind::FormControl
+            | LayoutBoxKind::Fieldset
+            | LayoutBoxKind::FieldsetContent
             | LayoutBoxKind::AnonymousBlock
             | LayoutBoxKind::BlockInInline
             | LayoutBoxKind::AnonymousFlexItem
@@ -1984,13 +1979,19 @@ where
         // restore them only around that adapter to keep the parent-owned
         // float-margin contract from being applied twice.
         let leaf_inputs = if is_floated {
-            let margin = style
-                .margin
-                .resolve_or_zero(inputs.parent_size.width, resolve_stylo_calc_value);
+            let mode = inputs.parent_writing_mode;
+            let margin = style.margin.resolve_or_zero(
+                mode.to_logical(inputs.parent_size).inline_size,
+                resolve_stylo_calc_value,
+            );
             LayoutInput {
-                available_space: inputs
-                    .available_space
-                    .map_width(|width| width.maybe_add(margin.left + margin.right)),
+                available_space: mode.to_physical(taffy::LogicalSize {
+                    inline_size: mode
+                        .to_logical(inputs.available_space)
+                        .inline_size
+                        .maybe_add(mode.to_logical(margin.sum_axes()).inline_size),
+                    block_size: mode.to_logical(inputs.available_space).block_size,
+                }),
                 ..inputs
             }
         } else {
@@ -2000,7 +2001,9 @@ where
         let mut inline_context = self.boxes[id.index()]
             .inline_layout
             .take()
-            .unwrap_or_else(empty_inline_context);
+            .unwrap_or_else(|| {
+                empty_inline_context(writing_mode, self.boxes[id.index()].style.baseline_type())
+            });
         let final_layout_requested = inputs.run_mode == RunMode::PerformLayout;
         // Reuse one mutable Parley paragraph throughout the ordinary
         // intrinsic -> final sequence. A later intrinsic probe clones lazily
@@ -2045,12 +2048,16 @@ where
             let text_layout = text_layout
                 .as_ref()
                 .expect("an inline measurement must retain its Parley layout");
+            let percentage_basis = inputs
+                .parent_writing_mode
+                .to_logical(inputs.parent_size)
+                .inline_size;
             let padding = style
                 .padding
-                .resolve_or_zero(inputs.parent_size.width, resolve_stylo_calc_value);
+                .resolve_or_zero(percentage_basis, resolve_stylo_calc_value);
             let border = style
                 .border
-                .resolve_or_zero(inputs.parent_size.width, resolve_stylo_calc_value);
+                .resolve_or_zero(percentage_basis, resolve_stylo_calc_value);
             let content_box_height = (output.size.height
                 - padding.top
                 - padding.bottom
@@ -2072,25 +2079,47 @@ where
             };
             let block_offset = single_subject_block_alignment_offset(
                 style.align_content,
-                content_box_height - measurement.alignment_block_size,
+                writing_mode.to_logical(content_box_size).block_size
+                    - measurement.alignment_block_size,
             );
             measurement.translate_block_axis(block_offset);
-            output.content_size.height = output.content_size.height.max(
+            let logical_padding = writing_mode.to_logical(padding.sum_axes());
+            let mut content_size = writing_mode.to_logical(output.content_size);
+            content_size.block_size = content_size.block_size.max(
                 measurement.alignment_block_size
-                    + padding.top
-                    + padding.bottom
+                    + logical_padding.block_size
                     + block_offset.max(0.0),
             );
-            output.first_baselines.y = measurement
-                .first_baseline
-                .map(|baseline| baseline + padding.top + border.top + scrollbar_insets.top);
-            output.last_baselines.y = measurement
-                .last_baseline
-                .map(|baseline| baseline + padding.top + border.top + scrollbar_insets.top);
+            output.content_size = writing_mode.to_physical(content_size);
+            let edges = taffy::WritingDirection::new(writing_mode, taffy::Direction::Ltr)
+                .to_logical_box_strut(padding + border + scrollbar_insets);
+            let physical_baseline = |baseline: f32| {
+                let baseline = baseline + edges.block_start;
+                if writing_mode.is_block_flow_reversed() {
+                    writing_mode.to_logical(output.size).block_size - baseline
+                } else {
+                    baseline
+                }
+            };
+            let first_baseline = measurement.first_baseline.map(physical_baseline);
+            let last_baseline = measurement.last_baseline.map(physical_baseline);
+            if writing_mode.is_horizontal() {
+                output.first_baselines.y = first_baseline;
+                output.last_baselines.y = last_baseline;
+            } else {
+                output.first_baselines.x = first_baseline;
+                output.last_baselines.x = last_baseline;
+            }
             if measurement.has_non_phantom_line {
                 output.margins_can_collapse_through = false;
             }
             if inputs.run_mode == RunMode::PerformLayout {
+                inline_context.coordinate_space = InlineWritingMode(writing_mode)
+                    .space(content_box_size)
+                    .with_origin(crate::LayoutPoint::new(
+                        padding.left + border.left + scrollbar_insets.left,
+                        padding.top + border.top + scrollbar_insets.top,
+                    ));
                 // Intrinsic and flex/grid probes need only the numeric IFC
                 // result. Materialize CSSOM/paint fragments once, after the
                 // accepted layout has received its final block alignment.
@@ -2103,17 +2132,12 @@ where
                     text_layout,
                     line_placements,
                     &self.boxes,
-                    content_box_size.width,
+                    writing_mode.to_logical(content_box_size).inline_size,
                 );
                 self.position_inline_objects(
                     &inline_context,
                     text_layout,
                     &measurement,
-                    Point {
-                        x: padding.left + border.left + scrollbar_insets.left,
-                        y: padding.top + border.top + scrollbar_insets.top,
-                    },
-                    content_box_size,
                     self.boxes[id.index()].style.direction(),
                 );
                 inline_context.fragments = fragments;
@@ -2160,6 +2184,7 @@ where
         reset_inline_layout_for_probe(layout);
 
         let parent_writing_mode = self.boxes[owner.index()].style.writing_mode();
+        let mode = InlineWritingMode(parent_writing_mode);
         let child_inputs = LayoutInput {
             run_mode: inputs.run_mode,
             sizing_mode: SizingMode::InherentSize,
@@ -2184,13 +2209,15 @@ where
             },
             ..child_inputs
         };
+        let available_space = parent_writing_mode.to_logical(available_space);
+        let known_dimensions = parent_writing_mode.to_logical(known_dimensions);
         // CSS Sizing resolves cyclic percentages against zero while measuring
         // intrinsic contributions. Keeping the basis as `None` discards the
         // entire calc expression, including its absolute term (for example
         // `calc(0% + 30px)`). A final definite-width layout still supplies its
         // actual basis here.
         let percentage_basis =
-            inline_percentage_basis(available_space.width, inputs.sizing_purpose);
+            inline_percentage_basis(available_space.inline_size, inputs.sizing_purpose);
         let mut atomic = vec![None; context.objects.len()];
         let mut atomic_baseline_ascents = vec![None; context.objects.len()];
         let mut structural_edge_contributions = vec![false; context.objects.len()];
@@ -2204,20 +2231,30 @@ where
                         .taffy
                         .margin
                         .resolve_or_zero(percentage_basis, resolve_stylo_calc_value);
-                    let child_output = self.compute_atomic_inline_layout(
-                        object.box_id,
-                        child_inputs,
-                        margins.left + margins.right,
-                    );
+                    let child_output =
+                        self.compute_atomic_inline_layout(object.box_id, child_inputs, margins);
+                    let line_margins = mode.line_edges(margins);
+                    let size = parent_writing_mode.to_logical(child_output.size);
                     inline_box.width =
-                        (margins.left + margins.right + child_output.size.width).max(0.0);
+                        (line_margins.left + line_margins.right + size.inline_size).max(0.0);
                     inline_box.height =
-                        (margins.top + margins.bottom + child_output.size.height).max(0.0);
+                        (line_margins.top + line_margins.bottom + size.block_size).max(0.0);
                     let object_index = usize::try_from(inline_box.id)
                         .expect("Parley returned an inline object id outside usize");
                     atomic_baseline_ascents[object_index] = self
-                        .atomic_inline_baseline(object.box_id, child_output)
-                        .map(|baseline| margins.top + baseline);
+                        .atomic_inline_baseline(
+                            object.box_id,
+                            child_output,
+                            taffy::compute::BaselineContext {
+                                writing_mode: mode.0,
+                                baseline_type: context.baseline_type,
+                            },
+                        )
+                        .map(|baseline| line_margins.top + baseline)
+                        .or_else(|| {
+                            (context.baseline_type == taffy::BaselineType::Central)
+                                .then_some(inline_box.height / 2.0)
+                        });
                     atomic[object_index] = Some(AtomicMeasurement {
                         output: child_output,
                         margins,
@@ -2243,18 +2280,24 @@ where
                         continue;
                     }
                     let child_style = &child.style;
-                    let margins = child_style
-                        .taffy
-                        .margin
-                        .resolve_or_zero(percentage_basis, resolve_stylo_calc_value);
-                    let padding = child_style
-                        .taffy
-                        .padding
-                        .resolve_or_zero(percentage_basis, resolve_stylo_calc_value);
-                    let border = child_style
-                        .taffy
-                        .border
-                        .resolve_or_zero(percentage_basis, resolve_stylo_calc_value);
+                    let margins = mode.line_edges(
+                        child_style
+                            .taffy
+                            .margin
+                            .resolve_or_zero(percentage_basis, resolve_stylo_calc_value),
+                    );
+                    let padding = mode.line_edges(
+                        child_style
+                            .taffy
+                            .padding
+                            .resolve_or_zero(percentage_basis, resolve_stylo_calc_value),
+                    );
+                    let border = mode.line_edges(
+                        child_style
+                            .taffy
+                            .border
+                            .resolve_or_zero(percentage_basis, resolve_stylo_calc_value),
+                    );
                     let logical_start = object.role == InlineObjectRole::StartEdge;
                     let physical_left =
                         logical_start == (child_style.direction() == InlineDirection::Ltr);
@@ -2274,8 +2317,8 @@ where
         }
 
         let containing_width = known_dimensions
-            .width
-            .or_else(|| available_space.width.into_option())
+            .inline_size
+            .or_else(|| available_space.inline_size.into_option())
             .unwrap_or_default();
         let (indent, indent_options) = self.boxes[owner.index()]
             .style
@@ -2286,17 +2329,28 @@ where
         // can be shared by all intrinsic and final probes in this fresh pass.
         let content_widths =
             content_widths_memo.content_widths_for_probe(layout, indent, indent_options);
-        let has_definite_width = known_dimensions.width.is_some()
-            || inputs.known_dimensions.width.is_some()
+        let has_definite_width = known_dimensions.inline_size.is_some()
+            || parent_writing_mode
+                .to_logical(inputs.known_dimensions)
+                .inline_size
+                .is_some()
             || self.boxes[owner.index()]
                 .style
                 .taffy
                 .size
-                .width
-                .maybe_resolve(inputs.parent_size.width, resolve_stylo_calc_value)
+                .get_abs(parent_writing_mode.inline_axis())
+                .maybe_resolve(
+                    parent_writing_mode
+                        .to_logical(inputs.parent_size)
+                        .inline_size,
+                    resolve_stylo_calc_value,
+                )
                 .is_some();
         let is_unstretched_flex_or_grid_item = inputs.run_mode == RunMode::PerformLayout
-            && inputs.known_dimensions.width.is_none()
+            && parent_writing_mode
+                .to_logical(inputs.known_dimensions)
+                .inline_size
+                .is_none()
             && self.boxes[owner.index()]
                 .layout_parent
                 .is_some_and(|parent| {
@@ -2326,17 +2380,17 @@ where
                 )
                 || self.boxes[owner.index()].style.taffy.item_is_table);
         let min_float_inputs = LayoutInput {
-            available_space: Size {
-                width: AvailableSpace::MinContent,
-                height: AvailableSpace::MaxContent,
-            },
+            available_space: parent_writing_mode.to_physical(taffy::LogicalSize {
+                inline_size: AvailableSpace::MinContent,
+                block_size: AvailableSpace::MaxContent,
+            }),
             ..child_inputs
         };
         let mut float_min_width: f32 = 0.0;
         let mut float_max_width: f32 = 0.0;
         let mut left_band: f32 = 0.0;
         let mut right_band: f32 = 0.0;
-        if !matches!(available_space.width, AvailableSpace::Definite(_)) || shrink_to_fit {
+        if !matches!(available_space.inline_size, AvailableSpace::Definite(_)) || shrink_to_fit {
             for object in context
                 .objects
                 .iter()
@@ -2358,9 +2412,15 @@ where
                     self.compute_child_layout(object.box_id.to_taffy(), min_float_inputs);
                 let max_output =
                     self.compute_child_layout(object.box_id.to_taffy(), float_max_content_inputs);
-                float_min_width =
-                    float_min_width.max(min_output.size.width + margin.left + margin.right);
-                let outer_width = max_output.size.width + margin.left + margin.right;
+                let margin_inline_size = parent_writing_mode
+                    .to_logical(margin.sum_axes())
+                    .inline_size;
+                float_min_width = float_min_width.max(
+                    parent_writing_mode.to_logical(min_output.size).inline_size
+                        + margin_inline_size,
+                );
+                let outer_width = parent_writing_mode.to_logical(max_output.size).inline_size
+                    + margin_inline_size;
                 match float {
                     taffy::Float::Left => left_band += outer_width,
                     taffy::Float::Right => right_band += outer_width,
@@ -2369,8 +2429,8 @@ where
                 float_max_width = float_max_width.max(left_band + right_band);
             }
         }
-        let width = known_dimensions.width.unwrap_or_else(|| {
-            match available_space.width {
+        let width = known_dimensions.inline_size.unwrap_or_else(|| {
+            match available_space.inline_size {
                 AvailableSpace::MinContent => content_widths.min.max(float_min_width),
                 AvailableSpace::MaxContent => content_widths.max + float_max_width,
                 // Taffy has already resolved and clamped the content-box
@@ -2401,7 +2461,7 @@ where
         } else {
             width
         };
-        let max_advance = match available_space.width {
+        let max_advance = match available_space.inline_size {
             AvailableSpace::MaxContent => None,
             AvailableSpace::MinContent | AvailableSpace::Definite(_) => Some(line_break_width),
         };
@@ -2417,22 +2477,29 @@ where
                 .is_some_and(|context| context.has_floats())
         {
             let container_style = &self.boxes[owner.index()].style.taffy;
+            let basis = inputs
+                .parent_writing_mode
+                .to_logical(inputs.parent_size)
+                .inline_size;
             let padding = container_style
                 .padding
-                .resolve_or_zero(inputs.parent_size.width, resolve_stylo_calc_value);
+                .resolve_or_zero(basis, resolve_stylo_calc_value);
             let border = container_style
                 .border
-                .resolve_or_zero(inputs.parent_size.width, resolve_stylo_calc_value);
-            let padding_border = padding + border;
+                .resolve_or_zero(basis, resolve_stylo_calc_value);
+            let padding_border =
+                taffy::WritingDirection::new(parent_writing_mode, taffy::Direction::Ltr)
+                    .to_logical_box_strut(padding + border);
             if let Some(block_context) = block_context {
                 let contains_floats = block_context.is_bfc_root();
                 if contains_floats {
-                    block_context
-                        .set_inline_size(width + padding_border.left + padding_border.right);
+                    block_context.set_inline_size(
+                        width + padding_border.inline_start + padding_border.inline_end,
+                    );
                 }
                 let mut content_context = block_context.sub_context(
-                    padding_border.top,
-                    [padding_border.left, padding_border.right],
+                    padding_border.block_start,
+                    [padding_border.inline_start, padding_border.inline_end],
                 );
                 self.break_inline_lines_with_floats(
                     context,
@@ -2440,10 +2507,6 @@ where
                     width,
                     child_inputs,
                     &mut content_context,
-                    Point {
-                        x: padding_border.left,
-                        y: padding_border.top,
-                    },
                     &mut floats,
                     &atomic_baseline_ascents,
                     &structural_edge_contributions,
@@ -2455,10 +2518,12 @@ where
             } else {
                 let mut formatting_context = BlockFormattingContext::new();
                 let mut root_context = formatting_context.root_block_context();
-                root_context.set_inline_size(width + padding_border.left + padding_border.right);
+                root_context.set_inline_size(
+                    width + padding_border.inline_start + padding_border.inline_end,
+                );
                 let mut content_context = root_context.sub_context(
-                    padding_border.top,
-                    [padding_border.left, padding_border.right],
+                    padding_border.block_start,
+                    [padding_border.inline_start, padding_border.inline_end],
                 );
                 self.break_inline_lines_with_floats(
                     context,
@@ -2466,10 +2531,6 @@ where
                     width,
                     child_inputs,
                     &mut content_context,
-                    Point {
-                        x: padding_border.left,
-                        y: padding_border.top,
-                    },
                     &mut floats,
                     &atomic_baseline_ascents,
                     &structural_edge_contributions,
@@ -2512,10 +2573,10 @@ where
         }
         let alignment_block_size = height.max(alignment_float_height);
         InlineMeasurement {
-            size: Size {
-                width: known_dimensions.width.unwrap_or(width),
-                height: known_dimensions.height.unwrap_or(height),
-            },
+            size: parent_writing_mode.to_physical(taffy::LogicalSize {
+                inline_size: known_dimensions.inline_size.unwrap_or(width),
+                block_size: known_dimensions.block_size.unwrap_or(height),
+            }),
             alignment_block_size,
             first_baseline: line_metrics.first_baseline,
             last_baseline: line_metrics.last_baseline,
@@ -2527,7 +2588,12 @@ where
         }
     }
 
-    fn atomic_inline_baseline(&self, id: LayoutBoxId, output: LayoutOutput) -> Option<f32> {
+    fn atomic_inline_baseline(
+        &self,
+        id: LayoutBoxId,
+        output: LayoutOutput,
+        baseline_context: taffy::compute::BaselineContext,
+    ) -> Option<f32> {
         let layout_box = &self.boxes[id.index()];
         let baselines = match layout_box.style.display() {
             // Blink's block layout marks these atomic fragments to use their
@@ -2548,16 +2614,21 @@ where
             // baseline at the appropriate box edge in the caller.
             _ => return None,
         };
-        // Parley's line construction uses horizontal line coordinates. A
-        // vertical atomic fragment cannot supply a real baseline in that
-        // context, even if one of its measurements exposed a Y coordinate.
-        // Use the same compatibility contract as flex/grid; None lets the
-        // line builder synthesize the atomic margin-box baseline.
-        taffy::compute::BaselineContext {
-            writing_mode: taffy::WritingMode::HorizontalTb,
-            baseline_type: taffy::BaselineType::Alphabetic,
-        }
-        .real_baseline(baselines, layout_box.style.writing_mode())
+        let mode = baseline_context.writing_mode;
+        let baseline =
+            baseline_context.real_baseline(baselines, layout_box.style.writing_mode())?;
+        Some(
+            if matches!(
+                mode,
+                taffy::WritingMode::VerticalRl
+                    | taffy::WritingMode::VerticalLr
+                    | taffy::WritingMode::SidewaysRl
+            ) {
+                mode.to_logical(output.size).block_size - baseline
+            } else {
+                baseline
+            },
+        )
     }
 
     fn position_inline_objects(
@@ -2565,18 +2636,22 @@ where
         context: &InlineFormattingContext,
         layout: &parley::Layout<crate::stylo_to_parley::TextBrush>,
         measurement: &InlineMeasurement,
-        content_offset: Point<f32>,
-        containing_block_size: Size<f32>,
         container_direction: InlineDirection,
     ) {
+        let space = context.coordinate_space;
+        let content_offset = space.content_origin;
         for floated in &measurement.floats {
-            self.set_inline_child_layout(
+            let origin = space.flow_origin(floated.flow_offset, floated.output.size);
+            self.set_measured_child_layout(
                 floated.child,
-                floated.location,
+                Point {
+                    x: content_offset.x + origin.x,
+                    y: content_offset.y + origin.y,
+                },
                 Point::ZERO,
                 floated.output,
                 floated.order,
-                floated.parent_width,
+                floated.percentage_basis,
             );
         }
         for (line_index, line) in layout.lines().enumerate() {
@@ -2610,19 +2685,36 @@ where
                         OutOfFlowDisplay::Inline => positioned.x,
                         OutOfFlowDisplay::Block => match container_direction {
                             InlineDirection::Ltr => 0.0,
-                            InlineDirection::Rtl => containing_block_size.width,
+                            InlineDirection::Rtl => space.logical_size().inline_size,
                         },
                     };
+                    let origin = space.flow_origin(
+                        taffy::LogicalOffset {
+                            inline_offset,
+                            block_offset: positioned.y + vertical_offset,
+                        },
+                        Size::ZERO,
+                    );
                     self.boxes[object.box_id.index()].inline_static_position =
                         Some(InlineStaticPosition {
                             owner: self.boxes[object.box_id.index()]
                                 .inline_context_owner
                                 .unwrap_or_else(|| panic!("out-of-flow IFC object lost its owner")),
-                            point: Point {
-                                x: content_offset.x + inline_offset,
-                                y: content_offset.y + positioned.y + vertical_offset,
-                            },
-                            direction,
+                            position: physical_static_position_from_logical(
+                                Point {
+                                    x: content_offset.x + origin.x,
+                                    y: content_offset.y + origin.y,
+                                },
+                                Size::ZERO,
+                                space.mode.0,
+                                if direction == InlineDirection::Rtl {
+                                    taffy::Direction::Rtl
+                                } else {
+                                    taffy::Direction::Ltr
+                                },
+                                LogicalStaticEdge::Start.into(),
+                                LogicalStaticEdge::Start.into(),
+                            ),
                         });
                     continue;
                 }
@@ -2637,18 +2729,33 @@ where
                 };
                 let inset_offset = relative_atomic_inset_offset(
                     &self.boxes[object.box_id.index()].style.taffy,
-                    containing_block_size,
-                    container_direction,
+                    space.content_size,
+                    taffy::WritingDirection::new(
+                        space.mode.0,
+                        if container_direction == InlineDirection::Rtl {
+                            taffy::Direction::Rtl
+                        } else {
+                            taffy::Direction::Ltr
+                        },
+                    ),
                 );
-                self.set_inline_child_layout(
+                let margins = space.mode.line_edges(atomic.margins);
+                let size = space.mode.0.to_logical(atomic.output.size);
+                let line_rect = line_placement.expect("final atomic layout has a line").rect;
+                let origin = space.line_rect(
+                    line_rect,
+                    PaintRect::new(
+                        positioned.x + margins.left,
+                        positioned.y + margins.top + vertical_offset,
+                        size.inline_size,
+                        size.block_size,
+                    ),
+                );
+                self.set_measured_child_layout(
                     object.box_id,
                     Point {
-                        x: content_offset.x + positioned.x + atomic.margins.left + inset_offset.x,
-                        y: content_offset.y
-                            + positioned.y
-                            + atomic.margins.top
-                            + vertical_offset
-                            + inset_offset.y,
+                        x: content_offset.x + origin.x + inset_offset.x,
+                        y: content_offset.y + origin.y + inset_offset.y,
                     },
                     inset_offset,
                     atomic.output,
@@ -2659,26 +2766,26 @@ where
         }
     }
 
-    fn set_inline_child_layout(
+    pub(crate) fn set_measured_child_layout(
         &mut self,
         child: LayoutBoxId,
         location: Point<f32>,
         relative_offset: Point<f32>,
         output: LayoutOutput,
         order: usize,
-        parent_width: Option<f32>,
+        percentage_basis: Option<f32>,
     ) {
         let scrollbar_size = self.get_scrollbar_insets(child.to_taffy()).sum_axes();
         let style = &self.boxes[child.index()].style.taffy;
         let padding = style
             .padding
-            .resolve_or_zero(parent_width, resolve_stylo_calc_value);
+            .resolve_or_zero(percentage_basis, resolve_stylo_calc_value);
         let border = style
             .border
-            .resolve_or_zero(parent_width, resolve_stylo_calc_value);
+            .resolve_or_zero(percentage_basis, resolve_stylo_calc_value);
         let margin = style
             .margin
-            .resolve_or_zero(parent_width, resolve_stylo_calc_value);
+            .resolve_or_zero(percentage_basis, resolve_stylo_calc_value);
         self.boxes[child.index()].unrounded_layout = Layout {
             order: u32::try_from(order).unwrap_or(u32::MAX),
             location,
@@ -2905,10 +3012,10 @@ struct AtomicMeasurement {
 #[derive(Clone, Copy)]
 struct InlineFloatPlacement {
     child: LayoutBoxId,
-    location: Point<f32>,
+    flow_offset: taffy::LogicalOffset<f32>,
     output: LayoutOutput,
     order: usize,
-    parent_width: Option<f32>,
+    percentage_basis: Option<f32>,
 }
 
 struct InlineMeasurement {
@@ -2946,7 +3053,7 @@ impl InlineMeasurement {
             }
         }
         for floated in &mut self.floats {
-            floated.location.y += offset;
+            floated.flow_offset.block_offset += offset;
         }
     }
 }
@@ -2987,9 +3094,14 @@ fn single_subject_block_alignment_offset(alignment: Option<AlignContent>, free_s
     }
 }
 
-fn empty_inline_context() -> InlineFormattingContext {
+fn empty_inline_context(
+    writing_mode: taffy::WritingMode,
+    baseline_type: taffy::BaselineType,
+) -> InlineFormattingContext {
     InlineFormattingContext {
         root_style: LayoutBoxId::from_index(0),
+        coordinate_space: InlineWritingMode(writing_mode).space(Size::ZERO),
+        baseline_type,
         measurement_layout: Some(parley::Layout::default()),
         laid_out: None,
         content_widths: InlineContentWidthsMemo::default(),

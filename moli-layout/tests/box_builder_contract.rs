@@ -1318,6 +1318,91 @@ fn form_control_kind_and_replaced_state_are_both_retained() {
 }
 
 #[test]
+fn fieldset_selects_legend_before_inline_splitting_and_preserves_source_ownership() {
+    for display in [
+        LayoutDisplay::Block,
+        LayoutDisplay::Inline,
+        LayoutDisplay::Flex,
+        LayoutDisplay::Grid,
+    ] {
+        let legend = |label, children| {
+            TestNode::semantic_element(
+                label,
+                "legend",
+                LayoutElementCategory::FormControl(LayoutFormControlKind::Legend),
+                None,
+                children,
+            )
+        };
+        let source = TestSource {
+            root: 0,
+            nodes: vec![
+                TestNode::semantic_element(
+                    "fieldset",
+                    "fieldset",
+                    LayoutElementCategory::FormControl(LayoutFormControlKind::FieldSet),
+                    None,
+                    vec![1, 2, 3, 4, 7],
+                ),
+                TestNode::text("before-legend", "content"),
+                legend("hidden", vec![]),
+                legend("absolute", vec![]),
+                TestNode::element("contents", vec![5]),
+                legend("rendered", vec![6]),
+                TestNode::element("legend-block", vec![]),
+                legend("second", vec![]),
+            ],
+        };
+        let mut styles = TestStyles::default();
+        styles.primary.extend([
+            (0, style(display)),
+            (2, style(LayoutDisplay::None)),
+            (
+                3,
+                style(LayoutDisplay::Block).with_position(LayoutPosition::Absolute),
+            ),
+            (4, style(LayoutDisplay::Contents)),
+            (5, style(LayoutDisplay::Inline)),
+            (6, style(LayoutDisplay::Block)),
+            (7, style(LayoutDisplay::Block)),
+        ]);
+        let world = build_layout_world(&source, &mut styles).unwrap();
+        world.validate_invariants().unwrap();
+        let root = world.box_by_id(world.root()).unwrap();
+        assert_eq!(root.kind(), LayoutBoxKind::Fieldset);
+        assert_eq!(root.children().len(), 2);
+        assert_eq!(root.children()[0], world.source_box(5).unwrap());
+        let content = world.box_by_id(root.children()[1]).unwrap();
+        assert_eq!(content.kind(), LayoutBoxKind::FieldsetContent);
+        assert_eq!(
+            content.style().display(),
+            match display {
+                LayoutDisplay::Flex => LayoutDisplay::Flex,
+                LayoutDisplay::Grid => LayoutDisplay::Grid,
+                _ => LayoutDisplay::FlowRoot,
+            }
+        );
+        let rendered = world.box_by_id(world.source_box(5).unwrap()).unwrap();
+        assert_eq!(rendered.style().display(), LayoutDisplay::FlowRoot);
+        assert_eq!(rendered.children(), &[world.source_box(6).unwrap()]);
+        assert_eq!(rendered.structural_parent(), Some(world.root()));
+        assert_eq!(
+            world
+                .box_by_id(world.source_box(7).unwrap())
+                .unwrap()
+                .structural_parent(),
+            Some(world.root())
+        );
+        assert_eq!(world.source_box(2), None);
+        assert_eq!(
+            styles.element_queries.len(),
+            7,
+            "each element is resolved once"
+        );
+    }
+}
+
+#[test]
 fn replaced_and_line_break_boxes_are_leaves_but_object_fallback_content_is_not() {
     let source = TestSource {
         root: 0,

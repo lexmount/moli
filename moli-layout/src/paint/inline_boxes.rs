@@ -8,8 +8,6 @@
 
 use std::{fmt::Debug, hash::Hash};
 
-use taffy::ResolveOrZero;
-
 use super::{
     PaintSpace,
     background::{project_background_color, project_background_layers},
@@ -23,6 +21,7 @@ use crate::{
 pub(super) fn project_inline_box_fragments<N>(
     world: &LayoutWorld<N>,
     owner: &LayoutBox<N>,
+    content_box: LayoutRect,
     paint_space: PaintSpace,
     include_backgrounds: bool,
     snapshot: &mut PaintSnapshot,
@@ -34,17 +33,7 @@ pub(super) fn project_inline_box_fragments<N>(
     let Some(context) = owner.inline_layout.as_ref() else {
         return;
     };
-    let owner_layout = owner.final_layout;
-    let origin = LayoutPoint::new(
-        owner_layout.border.left + owner_layout.padding.left,
-        owner_layout.border.top + owner_layout.padding.top,
-    );
-    let containing_width = (owner_layout.size.width
-        - owner_layout.border.left
-        - owner_layout.border.right
-        - owner_layout.padding.left
-        - owner_layout.padding.right)
-        .max(0.0);
+    let origin = LayoutPoint::new(content_box.x, content_box.y);
 
     for fragment in &context.fragments.boxes {
         let Some(inline_box) = world.box_by_id(fragment.box_id) else {
@@ -54,25 +43,6 @@ pub(super) fn project_inline_box_fragments<N>(
             continue;
         }
         let style = inline_box.style();
-        let padding = style.taffy.padding.resolve_or_zero(
-            Some(containing_width),
-            crate::style::resolve_stylo_calc_value,
-        );
-        let border = style.taffy.border.resolve_or_zero(
-            Some(containing_width),
-            crate::style::resolve_stylo_calc_value,
-        );
-        let ltr = style.direction() == crate::style::InlineDirection::Ltr;
-        let has_left_edge = if ltr {
-            fragment.has_start_edge
-        } else {
-            fragment.has_end_edge
-        };
-        let has_right_edge = if ltr {
-            fragment.has_end_edge
-        } else {
-            fragment.has_start_edge
-        };
         let box_model = fragment.box_model.translated(origin);
         let rect = box_model.border;
         if rect.width <= 0.0 || rect.height <= 0.0 {
@@ -83,18 +53,10 @@ pub(super) fn project_inline_box_fragments<N>(
         }
         let color = style.background_color();
         let radii = style.border_radii(rect.width, rect.height);
-        let widths = PaintEdgeSizes::new(
-            border.top,
-            if has_right_edge { border.right } else { 0.0 },
-            border.bottom,
-            if has_left_edge { border.left } else { 0.0 },
-        );
-        let padding_widths = PaintEdgeSizes::new(
-            padding.top,
-            if has_right_edge { padding.right } else { 0.0 },
-            padding.bottom,
-            if has_left_edge { padding.left } else { 0.0 },
-        );
+        // Used fragment boxes already encode percentages, physical axes and
+        // sliced inline edges. Paint must not resolve CSS or slice them again.
+        let widths = rect_insets(box_model.border, box_model.padding);
+        let padding_widths = rect_insets(box_model.padding, box_model.content);
         let areas = BoxAreas {
             margin_rect: box_model.margin,
             border_rect: rect,
@@ -148,4 +110,13 @@ pub(super) fn project_inline_box_fragments<N>(
             });
         }
     }
+}
+
+fn rect_insets(outer: LayoutRect, inner: LayoutRect) -> PaintEdgeSizes {
+    PaintEdgeSizes::new(
+        (inner.y - outer.y).max(0.0),
+        (outer.right() - inner.right()).max(0.0),
+        (outer.bottom() - inner.bottom()).max(0.0),
+        (inner.x - outer.x).max(0.0),
+    )
 }

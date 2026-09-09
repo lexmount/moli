@@ -429,6 +429,79 @@ impl LayoutFragmentBoxModel {
     }
 }
 
+/// Physical progression of source text within a shaped fragment. This retains
+/// enough information for Range and caret queries without keeping CSS styles
+/// or a live paragraph in the frozen tree.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+pub enum LayoutTextDirection {
+    LeftToRight,
+    RightToLeft,
+    TopToBottom,
+    BottomToTop,
+}
+
+impl LayoutTextDirection {
+    pub(crate) fn is_horizontal(self) -> bool {
+        matches!(self, Self::LeftToRight | Self::RightToLeft)
+    }
+
+    pub(crate) fn is_reversed(self) -> bool {
+        matches!(self, Self::RightToLeft | Self::BottomToTop)
+    }
+
+    pub(crate) fn inline_interval(self, rect: LayoutRect) -> Range<f32> {
+        if self.is_horizontal() {
+            rect.x..rect.right()
+        } else {
+            rect.y..rect.bottom()
+        }
+    }
+
+    pub(crate) fn block_interval(self, rect: LayoutRect) -> Range<f32> {
+        if self.is_horizontal() {
+            rect.y..rect.bottom()
+        } else {
+            rect.x..rect.right()
+        }
+    }
+
+    pub(crate) fn source_start_half(self, rect: LayoutRect, point: LayoutPoint) -> bool {
+        let interval = self.inline_interval(rect);
+        let position = if self.is_horizontal() {
+            point.x
+        } else {
+            point.y
+        };
+        (position <= (interval.start + interval.end) * 0.5) != self.is_reversed()
+    }
+
+    /// Select ratios along the source progression. Equal endpoints produce a
+    /// zero-inline-size caret, which is horizontal for vertical writing.
+    pub(crate) fn slice(self, rect: LayoutRect, start_ratio: f32, end_ratio: f32) -> LayoutRect {
+        let start = if self.is_reversed() {
+            1.0 - end_ratio
+        } else {
+            start_ratio
+        };
+        let length = end_ratio - start_ratio;
+        if self.is_horizontal() {
+            LayoutRect::new(
+                rect.x + rect.width * start,
+                rect.y,
+                rect.width * length,
+                rect.height,
+            )
+        } else {
+            LayoutRect::new(
+                rect.x,
+                rect.y + rect.height * start,
+                rect.width,
+                rect.height * length,
+            )
+        }
+    }
+}
+
 /// A geometry fragment kind. IDs contained here are valid only in the same
 /// [`crate::FrozenLayoutTree`].
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -457,7 +530,7 @@ pub enum LayoutFragmentKind {
         box_id: LayoutOutputBoxId,
         line_index: usize,
         source_utf16_range: Range<usize>,
-        rtl: bool,
+        direction: LayoutTextDirection,
     },
 }
 
@@ -476,6 +549,47 @@ pub struct LayoutFragment {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn text_direction_slices_ranges_and_carets_along_physical_source_progression() {
+        let rect = LayoutRect::new(10.0, 20.0, 40.0, 80.0);
+        for (direction, selected, caret, start_point, end_point) in [
+            (
+                LayoutTextDirection::LeftToRight,
+                LayoutRect::new(20.0, 20.0, 20.0, 80.0),
+                LayoutRect::new(10.0, 20.0, 0.0, 80.0),
+                LayoutPoint::new(11.0, 60.0),
+                LayoutPoint::new(49.0, 60.0),
+            ),
+            (
+                LayoutTextDirection::RightToLeft,
+                LayoutRect::new(20.0, 20.0, 20.0, 80.0),
+                LayoutRect::new(50.0, 20.0, 0.0, 80.0),
+                LayoutPoint::new(49.0, 60.0),
+                LayoutPoint::new(11.0, 60.0),
+            ),
+            (
+                LayoutTextDirection::TopToBottom,
+                LayoutRect::new(10.0, 40.0, 40.0, 40.0),
+                LayoutRect::new(10.0, 20.0, 40.0, 0.0),
+                LayoutPoint::new(30.0, 21.0),
+                LayoutPoint::new(30.0, 99.0),
+            ),
+            (
+                LayoutTextDirection::BottomToTop,
+                LayoutRect::new(10.0, 40.0, 40.0, 40.0),
+                LayoutRect::new(10.0, 100.0, 40.0, 0.0),
+                LayoutPoint::new(30.0, 99.0),
+                LayoutPoint::new(30.0, 21.0),
+            ),
+        ] {
+            assert_eq!(direction.slice(rect, 0.25, 0.75), selected);
+            assert_eq!(direction.slice(rect, 0.0, 0.0), caret);
+            assert_eq!(direction.slice(rect, 0.0, 1.0), rect);
+            assert!(direction.source_start_half(rect, start_point));
+            assert!(!direction.source_start_half(rect, end_point));
+        }
+    }
 
     #[test]
     fn affine_concatenation_and_inverse_round_trip() {

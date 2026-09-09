@@ -105,8 +105,9 @@ where
     pub root_box: LayoutOutputBoxId,
     pub boxes: Vec<FrozenLayoutBox<N>>,
     pub fragments: Vec<LayoutFragment>,
-    /// Source/box relationships for `display: contents` nodes, which own no
-    /// principal box but can still nominate rendered descendants for scroll.
+    /// Sources that delegate scrolling to generated boxes. A box-suppressed
+    /// `display: contents` source nominates descendants; a fieldset retains its
+    /// own CSSOM box but delegates scrolling to its anonymous content box.
     pub scroll_proxy_links: Vec<(N, LayoutOutputBoxId)>,
     viewport_coordinate_space: FrozenCoordinateSpace,
     pub clip_chain: Vec<LayoutClipNode>,

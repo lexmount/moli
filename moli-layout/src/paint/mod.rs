@@ -1,6 +1,7 @@
 mod background;
 mod clip_path;
 mod cull;
+mod fieldset;
 mod filters;
 mod form_controls;
 mod geometry;
@@ -504,7 +505,9 @@ fn push_clip_node<N>(
     );
     let shape = node.owner.map_or(PaintShape::Rect(node.rect), |owner| {
         let layout_box = &projection.world.boxes[owner.index()];
-        let border_radii = layout_box.style.border_radii(
+        let border_radii = geometry::box_border_radii(
+            projection,
+            LayoutBoxId::from_index(owner.index()),
             layout_box.final_layout.size.width,
             layout_box.final_layout.size.height,
         );
@@ -694,6 +697,14 @@ fn project_box_background<N>(
         && widths.has_positive_edge()
         && colors.has_visible_edge()
     {
+        let border_clip = fieldset::FieldsetDecoration::for_box(projection, id)
+            .and_then(|decoration| decoration.border_clip(paint_space, geometry.border_box));
+        if let Some(shape) = border_clip.as_ref() {
+            snapshot.push_fragment(PaintFragment::PushClip {
+                shape: shape.clone(),
+                transform: paint_space.property_transform(),
+            });
+        }
         snapshot.push_fragment(PaintFragment::Border {
             rect: paint_space.pre_transform_rect(rect),
             widths,
@@ -702,6 +713,9 @@ fn project_box_background<N>(
             radii,
             transform: paint_space.property_transform(),
         });
+        if border_clip.is_some() {
+            snapshot.push_fragment(PaintFragment::PopLayer);
+        }
     }
 }
 
@@ -774,7 +788,15 @@ fn project_box_text_clip_mask<N>(
     let local_cull = cull.local_rect(viewport_transform);
     let transform = snapshot.viewport_to_surface.concatenate(viewport_transform);
     let clip_count = push_clip_chain(projection, projection.content_clips[id.index()], snapshot);
-    project_text_clip_mask(layout_box, transform, local_cull, metrics, snapshot, scope);
+    project_text_clip_mask(
+        layout_box,
+        geometry.content_box,
+        transform,
+        local_cull,
+        metrics,
+        snapshot,
+        scope,
+    );
     pop_clips(clip_count, snapshot);
 }
 
@@ -886,13 +908,21 @@ fn project_box_contents<N>(
     project_inline_box_fragments(
         projection.world,
         layout_box,
+        geometry.content_box,
         paint_space,
         include_backgrounds,
         snapshot,
         local_cull,
         &mut text_clip_mask,
     );
-    project_text(layout_box, transform, local_cull, metrics, snapshot);
+    project_text(
+        layout_box,
+        geometry.content_box,
+        transform,
+        local_cull,
+        metrics,
+        snapshot,
+    );
 }
 
 fn unavailable_replaced_content_paint<N>(

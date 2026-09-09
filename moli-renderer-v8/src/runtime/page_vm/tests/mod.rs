@@ -139,6 +139,7 @@ mod inline_svg_paint;
 mod internal_loading_completion;
 mod intrinsic_percentage_resolution;
 mod lifecycle;
+mod logical_inline_flow;
 mod main_document_post_parse_completion;
 mod main_document_runtime;
 mod main_dynamic_import_completion;

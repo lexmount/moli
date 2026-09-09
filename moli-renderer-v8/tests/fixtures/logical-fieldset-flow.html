@@ -1,0 +1,126 @@
+<!doctype html><meta charset="utf-8">
+<title>Logical fieldset ownership, baseline, scrolling and border gaps</title>
+<link rel="help" href="https://html.spec.whatwg.org/multipage/rendering.html#the-fieldset-and-legend-elements">
+<style>
+@font-face {font-family:MoliAhem;src:url("{{MOLI_AHEM_DATA_URL}}") format("truetype")}
+html,body {margin:0;padding:0} html {overflow:hidden}
+.frame {position:absolute;width:220px;height:220px}
+.fixture {position:absolute;left:0;top:0;margin:0;border:4px solid black;padding:10px;
+  inline-size:100px;font:20px/20px MoliAhem;box-sizing:content-box}
+.fixture legend {padding:0;border:0;inline-size:40px;block-size:20px;margin:0;background:blue}
+.fixture .a {inline-size:20px;block-size:15px;background:green}
+.fixture .b {inline-size:30px;block-size:25px;background:red}
+.flex {display:flex;justify-content:center;gap:10px}
+.grid {display:grid;grid-template-columns:40px 40px;justify-content:space-between}
+.scroll {block-size:60px;overflow:auto;scrollbar-width:none}
+.scroll .a {block-size:100px}
+.scroll .b {block-size:80px}
+.zero {block-size:0}
+.percentage {padding:10%}
+.baseline {position:absolute;top:3100px;writing-mode:vertical-rl;line-height:0;font-family:MoliAhem}
+.baseline fieldset {margin:0;padding:10px;border:10px solid;font-size:20px}
+.baseline legend {padding:0}
+.baseline .buddy {font-size:30px}
+.baseline span {display:inline-block;width:1em;height:1em}
+</style>
+<script>
+const modes=['horizontal-tb','vertical-rl','vertical-lr','sideways-rl','sideways-lr'];
+const cases=[];
+for(const mode of modes) for(const direction of ['ltr','rtl'])
+  for(const kind of ['flow','flex','grid','scroll','zero','percentage']) {
+    const index=cases.length, frame=document.createElement('div');
+    frame.className='frame';frame.style.left=`${index%5*250}px`;frame.style.top=`${Math.floor(index/5)*250}px`;
+    const fieldset=document.createElement('fieldset');
+    fieldset.className=`fixture ${kind}`;fieldset.style.writingMode=mode;fieldset.style.direction=direction;
+    fieldset.innerHTML='<legend></legend><div class="a"></div><div class="b"></div>';
+    frame.appendChild(fieldset);document.documentElement.appendChild(frame);
+    cases.push({frame,fieldset,legend:fieldset.querySelector('legend'),a:fieldset.querySelector('.a'),
+      b:fieldset.querySelector('.b'),mode,direction,kind});
+  }
+const baselines=[];
+for(const display of ['flex','grid']) for(const alignment of ['first baseline','last baseline']) {
+  const root=document.createElement('div');root.className='baseline';
+  root.style.left=`${baselines.length*300}px`;root.style.display=display;root.style.alignItems=alignment;
+  if(display==='grid') {root.style.gridAutoFlow='column';root.style.width='min-content';}
+  root.innerHTML='<div class="buddy"><span></span></div><fieldset><legend><span></span></legend><span></span><br><span></span></fieldset>';
+  document.documentElement.appendChild(root);baselines.push({root,alignment});
+}
+let phase='initial';
+function setOverflowPhase(value) {
+  phase=value;
+  for(const test of cases) {
+    const {fieldset,legend,frame,kind,direction,mode}=test;
+    fieldset.style.direction=value==='end'?(direction==='ltr'?'rtl':'ltr'):direction;
+    if(value==='end') {
+      fieldset.appendChild(legend);
+      legend.style.position='relative';legend.style.insetInlineStart='8px';legend.style.insetBlockStart='4px';
+    } else {legend.style.position='static';legend.style.inset='auto';}
+    if(kind==='percentage') frame.style.width=value==='end'?'300px':'220px';
+    if(value==='start') fieldset.style.transform='translate(4px,8px)';
+    fieldset.scrollTop=value==='end'&&mode==='horizontal-tb'?999:0;
+    fieldset.scrollLeft=value==='end'&&mode!=='horizontal-tb'?
+      (mode==='vertical-rl'||mode==='sideways-rl'?-999:999):0;
+    if(value==='hidden') fieldset.style.display='none';
+  }
+  for(const {root} of baselines) {
+    if(value==='end') root.querySelector('fieldset').appendChild(root.querySelector('legend'));
+    if(value==='start') root.style.transform='translate(4px,8px)';
+    if(value==='hidden') root.style.display='none';
+  }
+}
+function physical(mode,direction,outerI,outerB,i,b,is,bs) {
+  const inlineReverse=(direction==='rtl')!==(mode==='sideways-lr');
+  const start=inlineReverse?outerI-i-is:i;
+  if(mode==='horizontal-tb') return [start,b,is,bs];
+  return [mode==='vertical-rl'||mode==='sideways-rl'?outerB-b-bs:b,start,bs,is];
+}
+function collectOverflowChecks() {
+  if(phase==='hidden') return [...cases.map(test=>test.fieldset),...baselines.map(test=>test.root)]
+    .map((node,index)=>({id:`hidden-${index}`,actual:[node.getClientRects().length],expected:[0]}));
+  const checks=[];
+  function check(id,actual,expected) {checks.push({id,actual,expected});}
+  for(const [index,test] of cases.entries()) {
+    const {fieldset,legend,a,b,mode,kind}=test, rect=fieldset.getBoundingClientRect();
+    const direction=phase==='end'?(test.direction==='ltr'?'rtl':'ltr'):test.direction;
+    const padding=kind==='percentage'?(phase==='end'?30:22):10;
+    const inlineSize=108+padding*2;
+    const contentBlock=kind==='flex'||kind==='grid'?25:kind==='scroll'?44:kind==='zero'?0:40;
+    const blockSize=24+padding*2+contentBlock;
+    const origin=physical(mode,direction,inlineSize,blockSize,0,0,inlineSize,blockSize);
+    check(`${index}-size`,[rect.width,rect.height],origin.slice(2));
+    const scroll=phase==='end'&&kind==='scroll'?136:0;
+    const positions=[
+      [legend,4+padding+(phase==='end'?8:0),phase==='end'?4:0,40,20],
+      [a,4+padding+(kind==='flex'?20:0),20+padding-scroll,20,kind==='scroll'?100:15],
+      [b,4+padding+(kind==='flex'?50:kind==='grid'?60:0),
+        20+padding+(kind==='flex'||kind==='grid'?0:kind==='scroll'?100:15)-scroll,30,kind==='scroll'?80:25]
+    ];
+    for(const [item,i,b,is,bs] of positions) {
+      const child=item.getBoundingClientRect();
+      check(`${index}-${item.tagName}-${checks.length}`,[child.x-rect.x,child.y-rect.y,child.width,child.height],
+        physical(mode,direction,inlineSize,blockSize,i,b,is,bs));
+    }
+    const client=mode==='horizontal-tb'?[inlineSize-8,blockSize-8]:[blockSize-8,inlineSize-8];
+    const scrollBlock=kind==='scroll'?200:kind==='zero'?50:contentBlock+padding*2;
+    const scrollSize=mode==='horizontal-tb'?[inlineSize-8,scrollBlock]:[scrollBlock,inlineSize-8];
+    const scrollPosition=mode==='horizontal-tb'?[0,scroll]:
+      [(mode==='vertical-rl'||mode==='sideways-rl'?-1:1)*scroll,0];
+    check(`${index}-scroll-metrics`,[fieldset.clientWidth,fieldset.clientHeight,fieldset.scrollWidth,
+      fieldset.scrollHeight,fieldset.scrollLeft,fieldset.scrollTop],[...client,...scrollSize,...scrollPosition]);
+    const pixels=[
+      [inlineSize-padding-8,10,[0,0,0,255]],
+      [inlineSize-padding-8,2,[255,255,255,255]],
+      [padding+6,10,phase==='end'?[255,255,255,255]:[0,0,255,255]],
+      [padding+8+(kind==='flex'?20:0),padding+24,kind==='scroll'&&phase==='end'?[255,0,0,255]:[0,128,0,255]]
+    ];
+    for(const [i,b,color] of pixels) {
+      const point=physical(mode,direction,inlineSize,blockSize,i,b,0,0);
+      checks.push({id:`${index}-pixel-${checks.length}`,actual:[],expected:[],pixel:[rect.x+point[0],rect.y+point[1]],color});
+    }
+  }
+  for(const [index,{root,alignment}] of baselines.entries()) {
+    check(`baseline-${index}`,[root.querySelector('.buddy').offsetLeft],[alignment==='first baseline'?35:15]);
+  }
+  return checks;
+}
+</script>

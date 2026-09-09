@@ -222,11 +222,8 @@ where
     }
     let mut local = projection.boxes[id.index()].border_box;
     if let Some(context) = layout_box.inline_layout.as_ref() {
-        let layout = layout_box.final_layout;
-        let origin = LayoutPoint::new(
-            layout.border.left + layout.padding.left,
-            layout.border.top + layout.padding.top,
-        );
+        let content = projection.boxes[id.index()].content_box;
+        let origin = LayoutPoint::new(content.x, content.y);
         for line in &context.fragments.lines {
             match line.paint_bounds {
                 InlinePaintBounds::Empty => {}

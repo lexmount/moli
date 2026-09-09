@@ -1,0 +1,142 @@
+<!doctype html><meta charset="utf-8">
+<title>Logical inline layout, physical fragments and source direction</title>
+<link rel="help" href="https://drafts.csswg.org/css-writing-modes-3/#line-directions">
+<style>
+@font-face {font-family:MoliAhem;src:url("{{MOLI_AHEM_DATA_URL}}") format("truetype")}
+html,body {margin:0;padding:0} html {overflow:hidden}
+.frame {position:absolute;width:100px;height:100px;overflow:scroll;
+  scrollbar-width:none;padding:10px 5px;line-height:0;font-size:0}
+.item {writing-mode:horizontal-tb;direction:ltr;background:rgb(31,127,63)}
+.paragraph {position:absolute;inline-size:40px;block-size:96px;
+  font:20px/24px MoliAhem;color:rgb(31,127,63)}
+</style><body><script>
+const modes=['horizontal-tb','vertical-rl','vertical-lr','sideways-rl','sideways-lr'];
+const boxes=[], paragraphs=[]; let phase='initial';
+for (const mode of modes) for (const direction of ['ltr','rtl']) {
+  const inlineReverse=(direction==='rtl')!==(mode==='sideways-lr');
+  const blockReverse=mode==='vertical-rl'||mode==='sideways-rl';
+  const reverseX=mode==='horizontal-tb'?inlineReverse:blockReverse;
+  const reverseY=mode==='horizontal-tb'?blockReverse:inlineReverse;
+  for (const display of ['block','inline-block']) for (const axis of ['x','y']) {
+    for (const empty of [false,true]) {
+      const index=boxes.length;
+      const frame=document.createElement('div'); frame.className='frame';
+      frame.id=`${mode}-${direction}-${display}-${axis}-${empty}`;
+      frame.style.cssText=`writing-mode:${mode};direction:${direction};left:${index%8*160}px;top:${Math.floor(index/8)*150}px`;
+      const reverse=axis==='x'?reverseX:reverseY;
+      const edge=axis==='x'?(reverse?'left':'right'):(reverse?'top':'bottom');
+      const width=axis==='x'?200:empty?0:20, height=axis==='y'?200:empty?0:20;
+      const item=document.createElement('div'); item.className='item';
+      item.style.cssText=`display:${display};width:${width}px;height:${height}px;margin-${edge}:50px`;
+      frame.append(item); document.body.append(frame);
+      boxes.push({frame,item,axis,reverse,width,height,reverseX,reverseY});
+    }
+  }
+  for (const orientation of ['mixed','sideways']) for (const bidi of ['normal','bidi-override','isolate-override']) {
+    const index=paragraphs.length;
+    const frame=document.createElement('div'); frame.className='paragraph';
+    frame.id=`text-${mode}-${direction}-${orientation}-${bidi}`;
+    frame.style.cssText=`writing-mode:${mode};direction:${direction};text-orientation:${orientation};unicode-bidi:${bidi};left:${index%8*160}px;top:${1700+Math.floor(index/8)*180}px`;
+    const span=document.createElement('span'); span.textContent='XXX XXX XXX';
+    frame.append(span); document.body.append(frame);
+    paragraphs.push({frame,span,mode,direction,sourceRtl:direction==='rtl'&&bidi!=='normal'});
+  }
+}
+function setOverflowPhase(value) {
+  phase=value;
+  for(const c of boxes) {
+    const shift=c.reverse?1000:-1000;
+    if(value==='end') {c.item.style.position='relative';c.item.style[c.axis==='x'?'left':'top']=`${shift}px`}
+    if(value==='start') {c.item.style.position='static';c.item.style.transform=`translate${c.axis.toUpperCase()}(${shift}px)`}
+    if(value==='hidden') c.item.style.display='none';
+  }
+  for(const c of paragraphs) {
+    // A CSS bidi context survives both <br> and preserved segment breaks.
+    // Each phase also rebuilds the source map used by Range and caret queries.
+    if(value==='end') c.span.innerHTML='XXX<br>XXX<br>XXX';
+    if(value==='start') {c.span.textContent='XXX\nXXX\nXXX';c.frame.style.whiteSpace='pre'}
+    if(value==='hidden') c.span.style.display='none';
+  }
+}
+// These are authored box/font constants, not values recovered from observed
+// geometry. The bundled font has 600-unit advances and 800/200 ascent/descent
+// in a 1000-unit em: at20px each X advances12px, with a20px typographic box.
+function textRect(c,line,inline,width) {
+  const over=line*24+2;
+  switch(c.mode) {
+    case 'horizontal-tb':return [inline,over,width,20];
+    case 'vertical-rl':case 'sideways-rl':return [96-over-20,inline,20,width];
+    case 'vertical-lr':return [over,inline,20,width];
+    case 'sideways-lr':return [over,40-inline-width,20,width];
+  }
+}
+function collectOverflowChecks() {
+  const results=[];
+  const rect=(r,origin)=>[r.x-origin.x,r.y-origin.y,r.width,r.height];
+  for(const c of boxes) {
+    results.push({id:`${c.frame.id}:scroll`,actual:[c.axis==='x'?c.frame.scrollWidth:c.frame.scrollHeight],
+      expected:[phase==='hidden'?(c.axis==='x'?110:120):(c.axis==='x'?260:270)]});
+    if(phase==='hidden') continue;
+    const frame=c.frame.getBoundingClientRect(),item=c.item.getBoundingClientRect();
+    const shift=phase==='initial'?0:c.reverse?1000:-1000;
+    results.push({id:`${c.frame.id}:box`,actual:rect(item,frame),
+      expected:[5+(c.reverseX?100-c.width:0)+(c.axis==='x'?shift:0),
+        10+(c.reverseY?100-c.height:0)+(c.axis==='y'?shift:0),c.width,c.height]});
+  }
+  for(const c of paragraphs) {
+    if(phase==='hidden') {
+      results.push({id:`${c.frame.id}:hidden`,actual:[c.span.getClientRects().length],expected:[0]});
+      continue;
+    }
+    const origin=c.frame.getBoundingClientRect();
+    const inline=c.direction==='rtl'?4:0;
+    const expected=[0,1,2].map(line=>textRect(c,line,inline,36));
+    const text=c.span.firstChild;
+    // Forced breaks also contribute empty quads in Blink. Select the three
+    // text runs explicitly in those phases; the initial phase checks the
+    // complete wrapping inline element as well as partial source ranges.
+    const actual=phase==='initial'?Array.from(c.span.getClientRects(),r=>rect(r,origin)):
+      [0,1,2].flatMap(line=>{
+        const node=phase==='end'?c.span.childNodes[line*2]:text;
+        const offset=phase==='end'?0:line*4;
+        const range=document.createRange();range.setStart(node,offset);range.setEnd(node,offset+3);
+        return Array.from(range.getClientRects(),r=>rect(r,origin));
+      });
+    results.push({id:`${c.frame.id}:lines`,actual,expected});
+    for(const end of [1,2]) {
+      const range=document.createRange();range.setStart(text,0);range.setEnd(text,end);
+      results.push({id:`${c.frame.id}:range-${end}`,
+        actual:Array.from(range.getClientRects(),r=>rect(r,origin)),
+        expected:[textRect(c,0,inline+(c.sourceRtl?36-end*12:0),end*12)]});
+    }
+    const range=document.createRange();range.setStart(text,0);range.collapse(true);
+    results.push({id:`${c.frame.id}:collapsed-range`,
+      actual:Array.from(range.getClientRects(),r=>rect(r,origin)),
+      expected:[textRect(c,0,inline+(c.sourceRtl?36:0),0)]});
+    const last=document.createRange(),lastNode=phase==='end'?c.span.lastChild:text;
+    const lastOffset=phase==='end'?0:8;
+    last.setStart(lastNode,lastOffset);last.setEnd(lastNode,lastOffset+1);
+    results.push({id:`${c.frame.id}:last-line-range`,
+      actual:Array.from(last.getClientRects(),r=>rect(r,origin)),
+      expected:[textRect(c,2,inline+(c.sourceRtl?24:0),12)]});
+    // Probe both halves of the middle glyph, away from bidi-run boundaries
+    // where two source offsets can have different caret affinities.
+    const first=textRect(c,0,inline+12,12);
+    const horizontal=c.mode==='horizontal-tb';
+    const reverse=c.sourceRtl!==(c.mode==='sideways-lr');
+    for(const high of [false,true]) {
+      const x=origin.x+first[0]+first[2]*(horizontal?(high?.75:.25):.5);
+      const y=origin.y+first[1]+first[3]*(horizontal?.5:(high?.75:.25));
+      const caret=document.caretPositionFromPoint(x,y);
+      results.push({id:`${c.frame.id}:caret-${high}`,
+        actual:[caret?.offsetNode===text,caret?.offset],expected:[true,high!==reverse?2:1]});
+    }
+    for(let line=0;line<3;line++) {
+      const r=expected[line];
+      results.push({id:`${c.frame.id}:ink-${line}`,actual:[],expected:[],
+        pixel:[origin.x+r[0]+r[2]/2,origin.y+r[1]+r[3]/2],color:[31,127,63,255]});
+    }
+  }
+  return results;
+}
+</script>

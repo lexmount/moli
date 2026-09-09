@@ -109,6 +109,8 @@ where
                 | LayoutBoxKind::TableCaption
                 | LayoutBoxKind::TableCell
                 | LayoutBoxKind::FormControl
+                | LayoutBoxKind::Fieldset
+                | LayoutBoxKind::FieldsetContent
                 | LayoutBoxKind::AnonymousBlock
                 | LayoutBoxKind::BlockInInline
                 | LayoutBoxKind::AnonymousFlexItem => Some(NormalizedFormattingContext::Block),

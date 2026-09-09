@@ -1,0 +1,67 @@
+<!doctype html><meta charset="utf-8">
+<title>Position final fieldset fragments inside block, flex and grid containers</title>
+<style>
+html,body {margin:0} html {overflow:hidden}
+.frame {position:absolute;left:200px;top:200px;width:100px;height:100px;
+  grid-template-columns:30px 70px;grid-template-rows:20px 80px;
+  justify-content:center;align-items:center}
+fieldset {position:absolute;margin:0;border:0;padding:0;inline-size:30px;block-size:0;min-inline-size:0}
+legend {margin:0;padding:0;border:0;inline-size:10px;block-size:40px}
+</style>
+<script>
+const cases=[];
+for(const mode of ['horizontal-tb','vertical-rl','vertical-lr','sideways-rl','sideways-lr'])
+ for(const direction of ['ltr','rtl']) {
+  const variants=[...['block','flex','grid'].flatMap(display=>['end','auto-margin'].map(kind=>({display,kind}))),
+    {display:'flex',kind:'static-center'},{display:'flex',kind:'static-safe'},{display:'grid',kind:'grid-area'}];
+  for(const {display,kind} of variants) {
+    const frame=document.createElement('div');frame.className='frame';
+    frame.style.display=display;frame.style.writingMode=mode;frame.style.direction=direction;
+    const fieldset=document.createElement('fieldset'),legend=document.createElement('legend');
+    fieldset.appendChild(legend);frame.appendChild(fieldset);document.documentElement.appendChild(frame);
+    if(kind==='end') {fieldset.style.inset='auto 10px 12px auto';fieldset.style.margin='6px 4px 8px 2px';}
+    if(kind==='auto-margin') {fieldset.style.inset='10px';fieldset.style.margin='auto';fieldset.style.maxBlockSize='10px';}
+    if(kind==='static-safe') {fieldset.style.alignSelf='safe center';legend.style.blockSize='140px';}
+    if(kind==='grid-area') {
+      fieldset.style.gridColumn='2 / 3';fieldset.style.gridRow='2 / 3';
+      fieldset.style.alignSelf='end';fieldset.style.justifySelf='end';
+    }
+    cases.push({frame,fieldset,legend,mode,direction,kind});
+  }
+ }
+let phase='initial';
+function setOverflowPhase(value) {
+ phase=value;
+ for(const {frame,fieldset,legend,direction,kind} of cases) {
+   frame.style.direction=value==='end'?(direction==='ltr'?'rtl':'ltr'):direction;
+   legend.style.blockSize=`${(kind==='static-safe'?140:40)+(value==='end'?20:0)}px`;
+   if(value==='end') fieldset.appendChild(legend);
+   if(value==='start') frame.style.transform='translate(4px,8px)';
+   if(value==='hidden') fieldset.style.display='none';
+ }
+}
+function collectOverflowChecks() {
+ if(phase==='hidden') return cases.map(({fieldset},index)=>({id:`hidden-${index}`,actual:[fieldset.getClientRects().length],expected:[0]}));
+ const checks=[];
+ for(const [index,{frame,fieldset,legend,mode,direction,kind}] of cases.entries()) {
+  const block=(kind==='static-safe'?140:40)+(phase==='end'?20:0);
+  const actualDirection=phase==='end'?(direction==='ltr'?'rtl':'ltr'):direction;
+  const horizontal=mode==='horizontal-tb',blockReversed=mode==='vertical-rl'||mode==='sideways-rl';
+  const inlineReversed=(actualDirection==='rtl')!==(mode==='sideways-lr');
+  const width=horizontal?30:block,height=horizontal?block:30;
+  let x,y;
+  if(kind==='end') {x=100-14-width;y=100-20-height;}
+  else if(kind==='grid-area') {
+    const i=inlineReversed?0:70,b=blockReversed?0:100-block;
+    x=horizontal?i:b;y=horizontal?b:i;
+  } else if(kind==='static-safe') {
+    x=horizontal?35:blockReversed?100-block:0;y=horizontal?0:35;
+  } else {x=(100-width)/2;y=(100-height)/2;}
+  const parent=frame.getBoundingClientRect(),box=fieldset.getBoundingClientRect(),child=legend.getBoundingClientRect();
+  checks.push({id:`${index}-${kind}-fragment`,actual:[box.x-parent.x,box.y-parent.y,box.width,box.height],expected:[x,y,width,height]});
+  checks.push({id:`${index}-${kind}-legend`,actual:[child.x-box.x,child.y-box.y,child.width,child.height],
+    expected:horizontal?[inlineReversed?20:0,0,10,block]:[0,inlineReversed?20:0,block,10]});
+ }
+ return checks;
+}
+</script>

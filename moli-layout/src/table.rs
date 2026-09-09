@@ -279,11 +279,12 @@ where
     let (mut output, grid_flow) = {
         let mut wrapper = TableTreeWrapper {
             world,
+            root,
             context: &mut context,
         };
-        let grid_root = NodeId::from(0usize);
-        // Structural parts consume the numeric grid's coordinate system,
-        // which is not necessarily the authored table writing mode.
+        let grid_root = wrapper.grid_root();
+        // Track sizing, cell baselines and structural parts all consume the
+        // table's logical coordinate system through the same numeric tree.
         let flow = WritingDirection::new(
             wrapper.get_writing_mode(grid_root),
             wrapper.context.style.direction,
@@ -1461,6 +1462,7 @@ where
     N: Copy + Debug + Eq + Hash,
 {
     world: &'a mut LayoutWorld<N>,
+    root: LayoutBoxId,
     context: &'a mut TableContext,
 }
 
@@ -1468,6 +1470,20 @@ impl<N> TableTreeWrapper<'_, N>
 where
     N: Copy + Debug + Eq + Hash,
 {
+    // Cell IDs retain their dense indices. Reserve a separate ID for the
+    // virtual grid root so root/cell writing modes and baselines cannot alias.
+    fn grid_root(&self) -> NodeId {
+        NodeId::from(self.context.cells.len())
+    }
+
+    fn world_id(&self, node: NodeId) -> LayoutBoxId {
+        if node == self.grid_root() {
+            self.root
+        } else {
+            self.context.cells[usize::from(node)].id
+        }
+    }
+
     /// Execute one Grid child query with the pass-local table-cell style.
     /// Taffy's cache keys layout inputs rather than style identity, so clear
     /// both sides of the swap to keep authored intrinsic measurements from
@@ -1499,12 +1515,16 @@ where
     where
         Self: 'a;
 
-    fn child_ids(&self, _parent_node_id: NodeId) -> Self::ChildIter<'_> {
-        VirtualChildIter(0..self.context.cells.len())
+    fn child_ids(&self, parent_node_id: NodeId) -> Self::ChildIter<'_> {
+        VirtualChildIter(0..self.child_count(parent_node_id))
     }
 
-    fn child_count(&self, _parent_node_id: NodeId) -> usize {
-        self.context.cells.len()
+    fn child_count(&self, parent_node_id: NodeId) -> usize {
+        if parent_node_id == self.grid_root() {
+            self.context.cells.len()
+        } else {
+            0
+        }
     }
 
     fn get_child_id(&self, _parent_node_id: NodeId, child_index: usize) -> NodeId {
@@ -1524,8 +1544,24 @@ where
         Self: 'a;
     type CustomIdent = Atom;
 
-    fn get_core_container_style(&self, _node_id: NodeId) -> Self::CoreContainerStyle<'_> {
-        &self.context.style
+    fn get_core_container_style(&self, node_id: NodeId) -> Self::CoreContainerStyle<'_> {
+        if node_id == self.grid_root() {
+            &self.context.style
+        } else {
+            &self.context.cells[usize::from(node_id)].style
+        }
+    }
+
+    fn get_writing_mode(&self, node_id: NodeId) -> WritingMode {
+        self.world.boxes[self.world_id(node_id).index()]
+            .style
+            .writing_mode()
+    }
+
+    fn get_baseline_type(&self, node_id: NodeId) -> taffy::BaselineType {
+        self.world.boxes[self.world_id(node_id).index()]
+            .style
+            .baseline_type()
     }
 
     fn resolve_calc_value(&self, value: *const (), basis: f32) -> f32 {

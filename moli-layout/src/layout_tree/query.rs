@@ -19,9 +19,9 @@ use super::{
 pub struct LayoutNodeOutput {
     pub principal_box: Option<LayoutOutputBoxId>,
     pub fragments: Vec<LayoutFragmentId>,
-    /// Direct generated boxes used only to resolve operations whose target is
-    /// a `display: contents` source. They do not manufacture CSSOM rects for
-    /// the box-suppressed element itself.
+    /// Generated boxes nominated for scrolling without manufacturing CSSOM
+    /// rects. A principal box can delegate its scrolling mechanism to one
+    /// anonymous box; a box-suppressed source can nominate several descendants.
     pub scroll_proxy_boxes: Vec<LayoutOutputBoxId>,
 }
 

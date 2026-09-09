@@ -73,10 +73,17 @@ impl PhysicalStaticPosition {
     }
 
     pub(crate) fn relative_to(self, origin: Point<f32>) -> Self {
+        self.translated(Point {
+            x: -origin.x,
+            y: -origin.y,
+        })
+    }
+
+    pub(crate) fn translated(self, offset: Point<f32>) -> Self {
         Self {
             point: Point {
-                x: self.point.x - origin.x,
-                y: self.point.y - origin.y,
+                x: self.point.x + offset.x,
+                y: self.point.y + offset.y,
             },
             ..self
         }

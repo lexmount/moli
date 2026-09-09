@@ -8,8 +8,8 @@
 use std::{fmt::Debug, hash::Hash};
 
 use taffy::{
-    AvailableSpace, LayoutInput, LayoutOutput, LayoutPartialTree, RequestedAxis, RunMode, Size,
-    SizingPurpose,
+    AvailableSpace, LayoutInput, LayoutOutput, LayoutPartialTree, LogicalSize, Rect, RequestedAxis,
+    RunMode, Size, SizingPurpose, WritingMode,
 };
 
 use crate::{LayoutBoxId, LayoutDisplay, LayoutWorld};
@@ -30,49 +30,76 @@ where
         inputs: LayoutInput,
         available_width: f32,
     ) -> f32 {
-        let intrinsic_input = |width| LayoutInput {
+        self.measure_fit_content_inline_size(
+            child,
+            inputs,
+            WritingMode::HorizontalTb,
+            available_width,
+        )
+    }
+
+    pub(crate) fn measure_fit_content_inline_size(
+        &mut self,
+        child: LayoutBoxId,
+        inputs: LayoutInput,
+        mode: WritingMode,
+        available_inline_size: f32,
+    ) -> f32 {
+        let intrinsic_input = |inline_size| LayoutInput {
             definite_dimensions: inputs.known_dimensions,
-            available_space: Size {
-                width,
-                height: inputs.available_space.height,
-            },
+            available_space: mode.to_physical(LogicalSize {
+                inline_size,
+                block_size: mode.to_logical(inputs.available_space).block_size,
+            }),
             run_mode: RunMode::ComputeSize,
             sizing_purpose: SizingPurpose::IntrinsicContribution,
-            axis: RequestedAxis::Horizontal,
+            axis: if mode.is_horizontal() {
+                RequestedAxis::Horizontal
+            } else {
+                RequestedAxis::Vertical
+            },
             ..inputs
         };
-        let min_content = self
-            .compute_child_layout(
-                child.to_taffy(),
-                intrinsic_input(AvailableSpace::MinContent),
+        let min_content = mode
+            .to_logical(
+                self.compute_child_layout(
+                    child.to_taffy(),
+                    intrinsic_input(AvailableSpace::MinContent),
+                )
+                .size,
             )
-            .size
-            .width;
-        let max_content = self
-            .compute_child_layout(
-                child.to_taffy(),
-                intrinsic_input(AvailableSpace::MaxContent),
+            .inline_size;
+        let max_content = mode
+            .to_logical(
+                self.compute_child_layout(
+                    child.to_taffy(),
+                    intrinsic_input(AvailableSpace::MaxContent),
+                )
+                .size,
             )
-            .size
-            .width;
+            .inline_size;
 
-        available_width.max(0.0).max(min_content).min(max_content)
+        available_inline_size
+            .max(0.0)
+            .max(min_content)
+            .min(max_content)
     }
 
     /// Lay out one non-replaced atomic inline-level box.
     ///
-    /// CSS 2.2 §10.3.9 defines an auto-width inline-block as fit-content:
+    /// CSS 2.2 §10.3.9 defines an auto-width inline-block as fit-content;
+    /// writing modes apply this rule to the child's inline axis:
     /// `min(max(min-content, available), max-content)`. A single Taffy call
     /// with definite available space cannot express that contract for an
-    /// inline-block containing block-level children: the auto-width child
+    /// inline-block containing block-level children: the auto-sized child
     /// block legitimately stretches and makes the outer contribution equal to
     /// the whole line. Measure both intrinsic constraints first, then perform
-    /// the final child layout with the selected border-box width.
+    /// the final child layout with the selected border-box inline size.
     pub(crate) fn compute_atomic_inline_layout(
         &mut self,
         child: LayoutBoxId,
         inputs: LayoutInput,
-        horizontal_margin: f32,
+        margins: Rect<f32>,
     ) -> LayoutOutput {
         // The parent line needs the child's baseline even during intrinsic
         // sizing. ComputeSize may legitimately return only a size for fixed
@@ -85,8 +112,12 @@ where
             ..inputs
         };
         let layout_box = &self.boxes[child.index()];
+        let mode = layout_box.style.writing_mode();
         let uses_fit_content = !layout_box.is_replaced()
-            && layout_box.style.taffy.size.width.is_auto()
+            && mode
+                .to_logical(layout_box.style.taffy.size)
+                .inline_size
+                .is_auto()
             && matches!(
                 layout_box.style.display(),
                 LayoutDisplay::InlineBlock
@@ -95,7 +126,9 @@ where
                     | LayoutDisplay::InlineListItem
                     | LayoutDisplay::InlineTable
             );
-        let AvailableSpace::Definite(available_width) = inputs.available_space.width else {
+        let AvailableSpace::Definite(available_inline_size) =
+            mode.to_logical(inputs.available_space).inline_size
+        else {
             return self.compute_child_layout(child.to_taffy(), inputs);
         };
         if !uses_fit_content {
@@ -107,19 +140,20 @@ where
             definite_dimensions: Size::NONE,
             ..inputs
         };
-        let fit_content = self.measure_fit_content_width(
+        let fit_content = self.measure_fit_content_inline_size(
             child,
             intrinsic_inputs,
-            available_width - horizontal_margin,
+            mode,
+            available_inline_size - mode.to_logical(margins.sum_axes()).inline_size,
         );
-        let known_dimensions = Size {
-            width: Some(fit_content),
-            height: inputs.known_dimensions.height,
-        };
-        let definite_dimensions = Size {
-            width: Some(fit_content),
-            height: inputs.definite_dimensions.height,
-        };
+        let known_dimensions = mode.to_physical(LogicalSize {
+            inline_size: Some(fit_content),
+            block_size: mode.to_logical(inputs.known_dimensions).block_size,
+        });
+        let definite_dimensions = mode.to_physical(LogicalSize {
+            inline_size: Some(fit_content),
+            block_size: mode.to_logical(inputs.definite_dimensions).block_size,
+        });
 
         self.compute_child_layout(
             child.to_taffy(),

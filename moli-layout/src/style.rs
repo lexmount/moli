@@ -1509,6 +1509,35 @@ impl ResolvedLayoutStyle {
         self.taffy.float != taffy::Float::None
     }
 
+    /// Resolve logical float/clear sides once their formatting parent is
+    /// known. They follow the containing block's direction, not the floated
+    /// element's own direction (Blink ComputedStyle::Floating/Clear).
+    /// Keep computed CSS untouched and preserve roles already suppressed by
+    /// box construction, such as the inner box of a floated table wrapper.
+    pub(crate) fn resolve_float_and_clear(&mut self, containing_direction: taffy::Direction) {
+        let Some(computed) = &self.computed else {
+            return;
+        };
+        let ltr = containing_direction == taffy::Direction::Ltr;
+        if self.taffy.float != taffy::Float::None {
+            self.taffy.float = match computed.clone_float() {
+                Float::InlineStart if ltr => taffy::Float::Left,
+                Float::InlineEnd if !ltr => taffy::Float::Left,
+                Float::InlineStart | Float::InlineEnd => taffy::Float::Right,
+                _ => self.taffy.float,
+            };
+        }
+        if self.taffy.clear != taffy::Clear::None {
+            use style::values::computed::Clear;
+            self.taffy.clear = match computed.clone_clear() {
+                Clear::InlineStart if ltr => taffy::Clear::Left,
+                Clear::InlineEnd if !ltr => taffy::Clear::Left,
+                Clear::InlineStart | Clear::InlineEnd => taffy::Clear::Right,
+                _ => self.taffy.clear,
+            };
+        }
+    }
+
     pub(crate) fn has_deferred_intrinsic_sizing(&self) -> bool {
         self.intrinsic_sizing_deferred
     }
@@ -1631,6 +1660,21 @@ impl ResolvedLayoutStyle {
 
     pub(crate) fn direction(&self) -> InlineDirection {
         self.direction
+    }
+
+    /// Text orientation participates in the dominant baseline independently
+    /// of block progression. Share this contract with Taffy and inline layout.
+    pub(crate) fn baseline_type(&self) -> taffy::BaselineType {
+        self.stylo_computed_values().map_or_else(
+            || taffy::BaselineType::for_writing_mode(self.writing_mode()),
+            |computed| {
+                if computed.writing_mode.is_text_vertical() {
+                    taffy::BaselineType::Central
+                } else {
+                    taffy::BaselineType::Alphabetic
+                }
+            },
+        )
     }
 
     pub(crate) fn unicode_bidi(&self) -> InlineUnicodeBidi {
@@ -2101,6 +2145,72 @@ impl ResolvedLayoutStyle {
                 _ => TaffyDisplay::Block,
             };
         }
+    }
+
+    /// HTML gives a rendered legend its own formatting context before box
+    /// normalization. The retained computed style remains the CSSOM authority.
+    pub(crate) fn prepare_rendered_legend(&mut self) {
+        let display = match self.display {
+            LayoutDisplay::Inline | LayoutDisplay::Block | LayoutDisplay::InlineBlock => {
+                LayoutDisplay::FlowRoot
+            }
+            LayoutDisplay::InlineFlex => LayoutDisplay::Flex,
+            LayoutDisplay::InlineGrid => LayoutDisplay::Grid,
+            LayoutDisplay::InlineTable => LayoutDisplay::Table,
+            display => display,
+        };
+        self.force_layout_display(display);
+    }
+
+    /// The outer fieldset owns its border and rendered legend. Formatting and
+    /// scrolling belong to the anonymous content box; authored padding stays
+    /// available here as an input to the fieldset's CSS sizing box.
+    pub(crate) fn prepare_fieldset_container(&mut self) {
+        self.force_layout_display(if self.display.is_inline_level() {
+            LayoutDisplay::InlineBlock
+        } else {
+            LayoutDisplay::FlowRoot
+        });
+        self.overflow_x = LayoutOverflowMode::Visible;
+        self.overflow_y = LayoutOverflowMode::Visible;
+        self.overflow_clips = false;
+        self.scrollbar_gutter = LayoutScrollbarGutter::Auto;
+        self.revealed_scrollbar_x = false;
+        self.revealed_scrollbar_y = false;
+        self.taffy.overflow = taffy::Point {
+            x: taffy::Overflow::Visible,
+            y: taffy::Overflow::Visible,
+        };
+        self.taffy.scrollbar_width = 0.0;
+    }
+
+    /// HTML's anonymous fieldset box inherits these otherwise non-inherited
+    /// formatting properties. Do not inherit outer sizing, margins, effects,
+    /// positioning, or flex/grid item placement from the fieldset itself.
+    pub(crate) fn inherit_fieldset_content_properties(&mut self, parent: &Self) {
+        self.taffy.padding = parent.taffy.padding;
+        self.taffy.align_content = parent.taffy.align_content;
+        self.taffy.align_items = parent.taffy.align_items;
+        self.taffy.justify_content = parent.taffy.justify_content;
+        self.taffy.justify_items = parent.taffy.justify_items;
+        self.taffy.flex_direction = parent.taffy.flex_direction;
+        self.taffy.flex_wrap = parent.taffy.flex_wrap;
+        self.taffy.gap = parent.taffy.gap;
+        self.taffy.grid_template_rows = parent.taffy.grid_template_rows.clone();
+        self.taffy.grid_template_columns = parent.taffy.grid_template_columns.clone();
+        self.taffy.grid_template_areas = parent.taffy.grid_template_areas.clone();
+        self.taffy.grid_template_row_names = parent.taffy.grid_template_row_names.clone();
+        self.taffy.grid_template_column_names = parent.taffy.grid_template_column_names.clone();
+        self.taffy.grid_auto_rows = parent.taffy.grid_auto_rows.clone();
+        self.taffy.grid_auto_columns = parent.taffy.grid_auto_columns.clone();
+        self.taffy.grid_auto_flow = parent.taffy.grid_auto_flow;
+        self.overflow_x = parent.overflow_x;
+        self.overflow_y = parent.overflow_y;
+        self.overflow_clips = parent.overflow_clips;
+        self.scrollbar_width = parent.scrollbar_width;
+        self.scrollbar_gutter = parent.scrollbar_gutter;
+        self.scrollbar_colors = parent.scrollbar_colors;
+        self.unicode_bidi = parent.unicode_bidi;
     }
 
     pub(crate) fn mark_replaced(&mut self) {

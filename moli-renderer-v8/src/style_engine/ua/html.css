@@ -50,6 +50,22 @@ input, textarea, select, button {
   display: inline-block;
 }
 
+fieldset {
+  margin-inline: 2px;
+  border: groove 2px ThreeDFace;
+  padding-block: 0.35em 0.625em;
+  padding-inline: 0.75em;
+  min-inline-size: min-content;
+}
+
+legend {
+  padding-inline: 2px;
+}
+
+legend[align=left i] { justify-self: left; }
+legend[align=center i] { justify-self: center; }
+legend[align=right i] { justify-self: right; }
+
 pre, xmp, plaintext, listing {
   font-family: monospace;
   white-space: pre;

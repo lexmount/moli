@@ -2585,10 +2585,17 @@ fn caret_query_uses_parley_cluster_sides_and_inline_direction() {
                 )
             })
             .expect("one UTF-16 code-unit text fragment");
-        let LayoutFragmentKind::Text { rtl, .. } = &fragment.kind else {
+        let LayoutFragmentKind::Text { direction, .. } = &fragment.kind else {
             unreachable!();
         };
-        assert_eq!(*rtl, expected_rtl);
+        assert_eq!(
+            *direction,
+            if expected_rtl {
+                moli_layout::LayoutTextDirection::RightToLeft
+            } else {
+                moli_layout::LayoutTextDirection::LeftToRight
+            }
+        );
         assert!(fragment.rect.width > 0.0);
 
         let left = output

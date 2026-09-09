@@ -1,0 +1,70 @@
+<!doctype html><meta charset="utf-8">
+<title>Paint consumes physical, sliced inline fragment boxes</title>
+<link rel="help" href="https://www.w3.org/TR/css-writing-modes-4/#physical-only">
+<style>
+@font-face {font-family:MoliAhem;src:url("{{MOLI_AHEM_DATA_URL}}") format("truetype")}
+html,body {margin:0;padding:0} html {overflow:hidden}
+.frame {position:absolute;inline-size:30px;block-size:100px;padding:5px 7px;font:20px/24px MoliAhem}
+.sample {unicode-bidi:bidi-override;word-break:break-all;color:rgb(31,31,31);
+  padding-inline:1px;border-inline-start:2px solid rgb(31,127,63);border-inline-end:4px solid rgb(31,63,127);
+  text-shadow:40px 60px 0 rgb(127,31,63)}
+</style><body><script>
+const cases=[];let phase='initial';
+for(const mode of ['horizontal-tb','vertical-rl','vertical-lr','sideways-rl','sideways-lr'])
+for(const direction of ['ltr','rtl']) for(const orientation of ['mixed','sideways']) for(const gutter of [0,10]) {
+  const index=cases.length,frame=document.createElement('div');frame.className='frame';
+  frame.id=`${mode}-${direction}-${orientation}-gutter${gutter}`;
+  frame.style.cssText=`writing-mode:${mode};direction:${direction};text-orientation:${orientation};left:${index%8*160}px;top:${Math.floor(index/8)*150}px`;
+  // Stable gutters occupy both inline edges, including top/bottom in vertical
+  // writing. Reserve 20px so every case retains a 30px content inline size.
+  if(gutter) frame.style.cssText+=';overflow:hidden;scrollbar-gutter:stable both-edges;scrollbar-width:thin;inline-size:50px';
+  const sample=document.createElement('span');sample.className='sample';sample.textContent='XXXX';
+  frame.append(sample);document.body.append(frame);cases.push({frame,sample,mode,direction,gutter});
+}
+function setOverflowPhase(value) {
+  phase=value;
+  for(const c of cases) {
+    c.frame.style.direction=value==='end'?(c.direction==='rtl'?'ltr':'rtl'):c.direction;
+    if(value==='start') c.frame.style.transform='translate(4px,8px)';
+    if(value==='hidden') c.sample.style.display='none';
+  }
+}
+function physicalRect(c,inline,block,isize,bsize) {
+  if((phase==='end')!==(c.direction==='rtl')) inline=30-inline-isize;
+  let rect;
+  switch(c.mode) {
+    case 'horizontal-tb':rect=[inline,block,isize,bsize];break;
+    case 'vertical-rl':case 'sideways-rl':rect=[100-block-bsize,inline,bsize,isize];break;
+    case 'vertical-lr':rect=[block,inline,bsize,isize];break;
+    case 'sideways-lr':rect=[block,30-inline-isize,bsize,isize];break;
+  }
+  rect[0]+=7+(c.mode==='horizontal-tb'?c.gutter:0);
+  rect[1]+=5+(c.mode==='horizontal-tb'?0:c.gutter);return rect;
+}
+function collectOverflowChecks() {
+  const checks=[];
+  for(const c of cases) {
+    if(phase==='hidden') {checks.push({id:c.frame.id,actual:[c.sample.getClientRects().length],expected:[0]});continue}
+    const origin=c.frame.getBoundingClientRect();
+    const expected=[physicalRect(c,0,2,27,20),physicalRect(c,0,26,29,20)];
+    checks.push({id:c.frame.id,actual:Array.from(c.sample.getClientRects(),r=>[r.x-origin.x,r.y-origin.y,r.width,r.height]),expected});
+    for(const [name,inline,block,color] of [
+      ['start-border',1,12,[31,127,63,255]],
+      ['end-border',27,36,[31,63,127,255]],
+      ['sliced-end',28,12,[255,255,255,255]],
+      ['sliced-end-ink',25,12,[31,31,31,255]],
+      ['sliced-start',1,36,[31,31,31,255]],
+    ]) {
+      const point=physicalRect(c,inline,block,0,0);
+      checks.push({id:`${c.frame.id}:${name}`,actual:[],expected:[],pixel:[origin.x+point[0],origin.y+point[1]],color});
+    }
+    // CSS shadow offsets are physical even when the glyphs rotate. The gutter
+    // cases also clip this outlying ink; the visible-overflow cases retain it.
+    const shadow=physicalRect(c,10,12,0,0);
+    checks.push({id:`${c.frame.id}:physical-shadow`,actual:[],expected:[],
+      pixel:[origin.x+shadow[0]+40,origin.y+shadow[1]+60],
+      color:c.gutter?[255,255,255,255]:[127,31,63,255]});
+  }
+  return checks;
+}
+</script>

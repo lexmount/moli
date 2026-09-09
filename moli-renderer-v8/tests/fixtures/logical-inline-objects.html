@@ -1,0 +1,68 @@
+<!doctype html><meta charset="utf-8">
+<title>Logical inline objects, float exclusions and static positions</title>
+<style>
+html,body {margin:0;padding:0} html {overflow:hidden}
+.frame {position:absolute;inline-size:120px;block-size:100px;font:0/0 sans-serif}
+.subject {background:rgb(31,127,63)}
+.atom {display:inline-block;inline-size:40px;block-size:10px;vertical-align:top}
+.float {float:inline-start;inline-size:30px;block-size:20px}
+</style><body><script>
+const modes=['horizontal-tb','vertical-rl','vertical-lr','sideways-rl','sideways-lr'];
+const cases=[];let phase='initial';
+const atom='<span class="subject atom"></span>';
+const floated='<span class="subject float"></span>';
+const scenarios=[
+  ['float-start',floated+atom,[[0,0,30,20],[30,0,40,10]]],
+  ['float-end','<span class="subject float" style="float:inline-end"></span>'+atom,[[90,0,30,20],[0,0,40,10]]],
+  ['float-own-direction','<span class="subject float" style="direction:ltr"></span>'+atom,[[0,0,30,20],[30,0,40,10]]],
+  ['physical-left','<span class="subject float" style="float:left"></span>'+atom,
+    rtl=>[[rtl?90:0,0,30,20],[rtl?0:30,0,40,10]]],
+  ['clear-own-direction',floated+'<span class="subject float" style="float:inline-end;clear:inline-start;direction:ltr"></span>',[[0,0,30,20],[90,20,30,20]]],
+  ['deferred-float','<span class="subject atom" style="inline-size:100px;block-size:20px"></span>'+floated+atom,
+    [[0,0,100,20],[0,20,30,20],[30,20,40,10]]],
+  ['inline-edges','<span style="padding-inline:5px 9px;border-inline:2px solid;border-inline-end-width:4px;margin-inline:3px 7px">'+atom+'</span>',[[10,0,40,10]]],
+  ['relative-atom','<span class="subject atom" style="position:relative;inset-inline-start:8px"></span>'+atom,[[8,0,40,10],[40,0,40,10]]],
+  ['static-inline',atom+'<span class="subject" style="display:inline-block;position:absolute;inline-size:20px;block-size:10px"></span>',[[0,0,40,10],[40,0,20,10]]],
+  ['fit-content','<span class="subject atom" style="inline-size:auto;block-size:auto"><div style="inline-size:40px;block-size:10px"></div></span>',[[0,0,40,10]]],
+];
+for(const mode of modes) for(const direction of ['ltr','rtl']) for(const [name,html,expected] of scenarios) {
+  const index=cases.length,frame=document.createElement('div');frame.className='frame';
+  frame.id=`${mode}-${direction}-${name}`;
+  frame.style.cssText=`writing-mode:${mode};direction:${direction};left:${index%8*160}px;top:${Math.floor(index/8)*150}px`;
+  frame.innerHTML=html;document.body.append(frame);
+  cases.push({frame,mode,direction,expected});
+}
+function setOverflowPhase(value) {
+  phase=value;
+  for(const c of cases) {
+    c.frame.style.direction=value==='end'?(c.direction==='ltr'?'rtl':'ltr'):c.direction;
+    if(value==='hidden') for(const node of c.frame.querySelectorAll('.subject')) node.style.display='none';
+  }
+}
+function physicalRect(c,logical) {
+  let [inline,block,isize,bsize]=logical;
+  if((phase==='end')!==(c.direction==='rtl')) inline=120-inline-isize;
+  switch(c.mode) {
+    case 'horizontal-tb':return [inline,block,isize,bsize];
+    case 'vertical-rl':case 'sideways-rl':return [100-block-bsize,inline,bsize,isize];
+    case 'vertical-lr':return [block,inline,bsize,isize];
+    case 'sideways-lr':return [block,120-inline-isize,bsize,isize];
+  }
+}
+function collectOverflowChecks() {
+  const checks=[];
+  for(const c of cases) {
+    const origin=c.frame.getBoundingClientRect();
+    const rtl=(phase==='end')!==(c.direction==='rtl');
+    const logical=typeof c.expected==='function'?c.expected(rtl):c.expected;
+    Array.from(c.frame.querySelectorAll('.subject')).forEach((node,index)=>{
+      const id=`${c.frame.id}:${index}`;
+      if(phase==='hidden') {checks.push({id,actual:[node.getClientRects().length],expected:[0]});return}
+      const rect=node.getBoundingClientRect(),expected=physicalRect(c,logical[index]);
+      checks.push({id,actual:[rect.x-origin.x,rect.y-origin.y,rect.width,rect.height],expected,
+        pixel:[origin.x+expected[0]+2,origin.y+expected[1]+2],color:[31,127,63,255]});
+    });
+  }
+  return checks;
+}
+</script>

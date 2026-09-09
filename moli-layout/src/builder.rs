@@ -63,6 +63,41 @@ enum AnonymousInlineRunRole {
     GridItem,
 }
 
+/// A rendered legend is selected before inline splitting and flex/grid item
+/// normalization. `display: contents` keeps this same child stream, while a
+/// child that generates a principal box starts a new one.
+enum ChildStreamRole {
+    Normal,
+    Fieldset { has_rendered_legend: bool },
+}
+
+impl ChildStreamRole {
+    fn select_rendered_legend(
+        &mut self,
+        semantics: &LayoutElementSemantics,
+        style: &ResolvedLayoutStyle,
+    ) -> bool {
+        let Self::Fieldset {
+            has_rendered_legend,
+        } = self
+        else {
+            return false;
+        };
+        if *has_rendered_legend
+            || !semantics.is_html_element("legend")
+            || style.is_out_of_flow()
+            || matches!(
+                style.display(),
+                LayoutDisplay::None | LayoutDisplay::Contents
+            )
+        {
+            return false;
+        }
+        *has_rendered_legend = true;
+        true
+    }
+}
+
 impl AnonymousInlineRunRole {
     fn box_kind(self) -> LayoutBoxKind {
         match self {
@@ -220,6 +255,7 @@ where
         world: &mut LayoutWorld<S::NodeId>,
         source_node: S::NodeId,
         inherited_style: &ResolvedLayoutStyle,
+        stream_role: &mut ChildStreamRole,
     ) -> Result<Vec<LayoutBoxId>, LayoutError> {
         let source_kind = self.source.node_kind(source_node);
         match source_kind {
@@ -248,7 +284,7 @@ where
                 world.map_source(source_node, id);
                 Ok(vec![id])
             }
-            LayoutSourceKind::Element => self.build_element(world, source_node),
+            LayoutSourceKind::Element => self.build_element(world, source_node, stream_role),
         }
     }
 
@@ -256,6 +292,7 @@ where
         &mut self,
         world: &mut LayoutWorld<S::NodeId>,
         source_node: S::NodeId,
+        stream_role: &mut ChildStreamRole,
     ) -> Result<Vec<LayoutBoxId>, LayoutError> {
         if !self.active_sources.insert(source_node) {
             return Err(LayoutError::SourceCycle {
@@ -270,6 +307,9 @@ where
                 return Ok(Vec::new());
             };
             let (mut style, before, after) = styles.into_parts();
+            if stream_role.select_rendered_legend(&semantics, &style) {
+                style.prepare_rendered_legend();
+            }
             if self.viewport_body_candidate.is_none()
                 && self.root_is_html
                 && self
@@ -303,8 +343,14 @@ where
             match style.display() {
                 LayoutDisplay::None => Ok(Vec::new()),
                 LayoutDisplay::Contents => {
-                    let children =
-                        self.build_element_child_stream(world, source_node, &style, before, after)?;
+                    let children = self.build_child_stream_with_role(
+                        world,
+                        source_node,
+                        &style,
+                        before,
+                        after,
+                        stream_role,
+                    )?;
                     world.map_display_contents_source(source_node, &children);
                     Ok(children)
                 }
@@ -428,6 +474,36 @@ where
         before: Option<ResolvedLayoutPseudoStyle>,
         after: Option<ResolvedLayoutPseudoStyle>,
     ) -> Result<Vec<LayoutBoxId>, LayoutError> {
+        let mut stream_role = if self
+            .source
+            .element_semantics(source_node)
+            .is_some_and(|semantics| semantics.is_html_element("fieldset"))
+        {
+            ChildStreamRole::Fieldset {
+                has_rendered_legend: false,
+            }
+        } else {
+            ChildStreamRole::Normal
+        };
+        self.build_child_stream_with_role(
+            world,
+            source_node,
+            style,
+            before,
+            after,
+            &mut stream_role,
+        )
+    }
+
+    fn build_child_stream_with_role(
+        &mut self,
+        world: &mut LayoutWorld<S::NodeId>,
+        source_node: S::NodeId,
+        style: &ResolvedLayoutStyle,
+        before: Option<ResolvedLayoutPseudoStyle>,
+        after: Option<ResolvedLayoutPseudoStyle>,
+        stream_role: &mut ChildStreamRole,
+    ) -> Result<Vec<LayoutBoxId>, LayoutError> {
         let mut children = Vec::new();
         if style.display().is_list_item() {
             let marker = self.styles.marker_style(source_node)?;
@@ -435,7 +511,7 @@ where
         }
         children.extend(self.build_pseudo(world, source_node, LayoutPseudo::Before, before)?);
         for child in self.checked_flat_children(source_node)? {
-            children.extend(self.build_source_node(world, child, style)?);
+            children.extend(self.build_source_node(world, child, style, stream_role)?);
         }
         children.extend(self.build_pseudo(world, source_node, LayoutPseudo::After, after)?);
         Ok(children)
@@ -543,6 +619,9 @@ where
         // formatting tree. A promoted block must still see its inline source
         // parent for containing-block and CSSOM ancestry.
         world.record_structural_children(box_id, &children)?;
+        if world.boxes[box_id.index()].kind == LayoutBoxKind::Fieldset {
+            return self.attach_fieldset_children(world, box_id, owner, parent_style, children);
+        }
         let table_role = self.table_role(world, box_id)?;
         let children = if table_role == Some(TableBoxRole::Column) {
             Vec::new()
@@ -606,6 +685,59 @@ where
 
         self.replace_children_and_mark_context(world, box_id, children)?;
         Ok(vec![box_id])
+    }
+
+    fn attach_fieldset_children(
+        &mut self,
+        world: &mut LayoutWorld<S::NodeId>,
+        fieldset: LayoutBoxId,
+        owner: S::NodeId,
+        style: &ResolvedLayoutStyle,
+        mut children: Vec<LayoutBoxId>,
+    ) -> Result<Vec<LayoutBoxId>, LayoutError> {
+        let legend = children
+            .iter()
+            .position(|child| {
+                let child = &world.boxes[child.index()];
+                child
+                    .element_semantics
+                    .as_ref()
+                    .is_some_and(|semantics| semantics.is_html_element("legend"))
+                    && !child.style.is_out_of_flow()
+            })
+            .map(|index| children.remove(index));
+        let display = if style.display().is_flex_container() {
+            LayoutDisplay::Flex
+        } else if style.display().is_grid_container() {
+            LayoutDisplay::Grid
+        } else {
+            LayoutDisplay::FlowRoot
+        };
+        let mut content_style = self.styles.anonymous_style(owner, style, display)?;
+        content_style.inherit_fieldset_content_properties(style);
+        let mut content = LayoutWorld::new_box(
+            None,
+            Some(owner),
+            None,
+            format!("fieldset-content({})", self.source.label(owner)),
+            Some(self.source.label(owner)),
+            None,
+            Some(LayoutAnonymousReason::FieldsetContent),
+            LayoutBoxKind::FieldsetContent,
+            content_style.clone(),
+            None,
+        );
+        content.scroll_offset = world.boxes[fieldset.index()].scroll_offset;
+        let content = world.allocate(content);
+        self.attach_children(world, content, owner, &content_style, children, false)?;
+        let mut fieldset_children = Vec::with_capacity(2);
+        fieldset_children.extend(legend);
+        fieldset_children.push(content);
+        world.replace_children(fieldset, fieldset_children)?;
+        world.boxes[fieldset.index()]
+            .style
+            .prepare_fieldset_container();
+        Ok(vec![fieldset])
     }
 
     fn split_inline_box(
@@ -1477,6 +1609,10 @@ fn principal_kind(
 ) -> LayoutBoxKind {
     match semantics.category {
         LayoutElementCategory::LineBreak => return LayoutBoxKind::LineBreak,
+        LayoutElementCategory::FormControl(crate::LayoutFormControlKind::FieldSet) => {
+            return LayoutBoxKind::Fieldset;
+        }
+        LayoutElementCategory::FormControl(crate::LayoutFormControlKind::Legend) => {}
         LayoutElementCategory::FormControl(_) => return LayoutBoxKind::FormControl,
         LayoutElementCategory::Generic
         | LayoutElementCategory::Table(_)
