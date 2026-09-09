@@ -9,6 +9,7 @@ use std::{
 
 use url::Url;
 
+mod destructive_writes;
 mod devtools_mutations;
 mod document_write;
 mod dom_facade;
@@ -741,6 +742,7 @@ pub(super) struct DocumentRuntime {
     processed_meta_content_security_policy_handles: RefCell<HashSet<(DomHandle, DomHandle)>>,
     resource_loader_binding: Option<DocumentResourceLoaderBinding>,
     script_context_stack: Vec<CurrentScriptContext>,
+    destructive_write_counters: destructive_writes::DocumentWriteCounters,
     root_document_parser: Option<DocumentParserSession>,
     post_parse_schedule_invalidated: bool,
     stylesheet_lifecycle: StylesheetLifecycleState,

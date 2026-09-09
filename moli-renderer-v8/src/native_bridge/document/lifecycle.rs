@@ -141,7 +141,8 @@ fn node_document_write_or_writeln_callback<'s>(
     let implicit_replacement_session = !runtime.has_active_parser_write_insertion_point()
         && !runtime.host_document().replace_on_close();
     if implicit_replacement_session
-        && current_script_ignores_document_write_without_parser_insertion_point(runtime)
+        && (runtime.has_ignore_destructive_writes_counter(handle)
+            || current_script_ignores_document_write_without_parser_insertion_point(runtime))
     {
         rv.set_undefined();
         return;
