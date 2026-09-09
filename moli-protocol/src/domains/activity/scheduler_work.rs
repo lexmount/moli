@@ -111,10 +111,8 @@ impl fmt::Debug for ProtocolSchedulerWork {
             }
             ProtocolSchedulerWorkPayload::TargetStartupOwnerAction(action) => {
                 debug
-                    .field("browser_context_id", &action.browser_context_id())
                     .field("target_id", &action.target_id())
-                    .field("url", &action.url())
-                    .field("navigation_kind", &action.kind());
+                    .field("decision", &action.decision());
             }
             ProtocolSchedulerWorkPayload::PageTargetTerminationOwnerAction(action) => {
                 debug
@@ -280,23 +278,6 @@ impl ProtocolSchedulerWork {
             &self.payload,
             ProtocolSchedulerWorkPayload::TopLevelLocationNavigationOwnerAction(_)
         )
-    }
-
-    /// Reports work that requires the scheduler-owned background navigation
-    /// channels rather than the command fixture's inline fallback.
-    ///
-    /// Popup target creation is projected before the causing Runtime response,
-    /// while its URL load is deliberately independent. A protocol-only test
-    /// harness without those channels must retain this action instead of
-    /// accidentally turning it into a blocking navigation wait.
-    #[cfg(test)]
-    pub(crate) fn requires_background_navigation_scheduler(&self) -> bool {
-        match &self.payload {
-            ProtocolSchedulerWorkPayload::TargetStartupOwnerAction(action) => {
-                action.requires_background_navigation_scheduler()
-            }
-            _ => false,
-        }
     }
 
     #[cfg(test)]

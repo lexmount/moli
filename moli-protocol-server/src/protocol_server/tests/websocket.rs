@@ -2,6 +2,83 @@ use super::*;
 use std::path::Path;
 
 #[tokio::test]
+async fn websocket_cdp_created_target_queues_runtime_until_its_initial_url_commits() {
+    let (release, body_ready) = tokio::sync::watch::channel(false);
+    let (requested, mut request_seen) = tokio::sync::watch::channel(false);
+    let fixture = Router::new().route(
+        "/",
+        get(move || {
+            let mut body_ready = body_ready.clone();
+            let requested = requested.clone();
+            async move {
+                requested.send_replace(true);
+                let _ = body_ready.wait_for(|ready| *ready).await;
+                axum::response::Html("<title>created native URL</title>")
+            }
+        }),
+    );
+    let (fixture_addr, _fixture_server) =
+        spawn_dedicated_fixture_server(fixture, "created-native-url");
+    let url = format!("http://{fixture_addr}/");
+    let (cdp_addr, server) = spawn_test_protocol_server().await;
+    let (mut socket, _) = connect_async(format!(
+        "ws://{cdp_addr}/devtools/browser/{DEFAULT_BROWSER_ID}"
+    ))
+    .await
+    .unwrap();
+    let completed = timeout(Duration::from_secs(5), async {
+        socket.send(WsMessage::Text(json!({"id": 1, "method": "Target.setAutoAttach",
+            "params": {"autoAttach": true, "waitForDebuggerOnStart": false, "flatten": true}
+        }).to_string().into())).await.unwrap();
+        recv_until_id(&mut socket, 1).await;
+        socket.send(WsMessage::Text(json!({"id": 2, "method": "Target.createTarget",
+            "params": {"url": url}}).to_string().into())).await.unwrap();
+        let created = recv_until_id(&mut socket, 2).await;
+        let target = created.iter().find(|message| message["id"] == 2).unwrap()["result"]["targetId"]
+            .as_str().unwrap().to_owned();
+        let attached = created.iter().find(|message| message["method"] == "Target.attachedToTarget"
+            && message["params"]["targetInfo"]["targetId"] == target).unwrap();
+        let session = attached["params"]["sessionId"].as_str().unwrap().to_owned();
+        request_seen.wait_for(|seen| *seen).await.unwrap();
+        socket.send(WsMessage::Text(json!({"id": 3, "method": "Runtime.evaluate", "sessionId": session,
+            "params": {"expression": "[document.URL, document.title]", "returnByValue": true}
+        }).to_string().into())).await.unwrap();
+        // An IO response is a deterministic ordering barrier while the Main
+        // command waits for this exact native Document, not a timing probe.
+        socket.send(WsMessage::Text(json!({"id": 4, "method": "Page.getNavigationHistory",
+            "sessionId": session}).to_string().into())).await.unwrap();
+        let before_commit = recv_until_id(&mut socket, 4).await;
+        release.send(true).unwrap();
+        let evaluation = match before_commit.iter().find(|message| message["id"] == 3) {
+            Some(early) => early.clone(),
+            None => recv_until_id(&mut socket, 3).await.into_iter()
+                .find(|message| message["id"] == 3).unwrap(),
+        };
+        (session, before_commit, evaluation)
+    }).await;
+    release.send_replace(true);
+    let _ = socket.close(None).await;
+    abort_test_cdp_server(server).await;
+    let (session, before_commit, evaluation) =
+        completed.expect("native creation must unblock its queued Runtime command");
+    assert!(
+        !before_commit.iter().any(|message| message["id"] == 3),
+        "Runtime crossed the initial navigation hold: {before_commit:?}"
+    );
+    let history = before_commit
+        .iter()
+        .find(|message| message["id"] == 4)
+        .unwrap();
+    assert!(history.get("error").is_none(), "{history}");
+    assert!(evaluation.get("error").is_none(), "{evaluation}");
+    assert_eq!(evaluation["sessionId"], session);
+    assert_eq!(
+        evaluation["result"]["result"]["value"],
+        json!([url, "created native URL"])
+    );
+}
+
+#[tokio::test]
 async fn websocket_cdp_native_popup_commit_releases_queued_startup_commands() {
     assert_native_popup_startup_during_fetch_pause("Response").await;
 }

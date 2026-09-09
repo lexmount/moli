@@ -3356,6 +3356,16 @@ async fn create_target_without_debugger_wait_starts_requested_url_navigation() {
         "Target.createTarget response should retain the created target id: {messages:?}"
     );
 
+    // The protocol-only fixture dispatches handlers directly, without the
+    // production command admission queue. Creation ACK is not a load barrier;
+    // observe the same native commit before inspecting its URL/title/history.
+    ctx.wait_for_scheduler_message("created target title metadata", |message| {
+        message["method"] == json!("Target.targetInfoChanged")
+            && message["params"]["targetInfo"]["targetId"] == json!(target_id)
+            && message["params"]["targetInfo"]["title"] == json!("created-target-ready")
+    })
+    .await;
+
     ctx.process_async(json!({
         "id": 9010,
         "sessionId": session_id,
@@ -3373,13 +3383,6 @@ async fn create_target_without_debugger_wait_starts_requested_url_navigation() {
             "{\"url\":\"data:text/html,<title>created-target-ready</title>\",\"title\":\"created-target-ready\"}"
         )
     );
-
-    ctx.wait_for_scheduler_message("created target title metadata", |message| {
-        message["method"] == json!("Target.targetInfoChanged")
-            && message["params"]["targetInfo"]["targetId"] == json!(target_id)
-            && message["params"]["targetInfo"]["title"] == json!("created-target-ready")
-    })
-    .await;
 
     ctx.process_async(json!({
         "id": 9011,

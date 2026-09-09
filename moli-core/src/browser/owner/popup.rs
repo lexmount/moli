@@ -5,8 +5,6 @@ use std::{
 
 use tokio::sync::watch;
 
-mod navigation;
-
 use super::{Browser, BrowserHandle, WebContentsCreation};
 use crate::browser::{
     BrowserEvent, BrowserPopupAdmission, BrowserPopupCreation, DocumentHandle,

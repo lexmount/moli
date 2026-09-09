@@ -932,7 +932,7 @@ impl CdpConnection {
             plan.extend(attached_state_delta_plan);
         }
         if released_debugger_barrier && !self.target_has_waiting_for_debugger_session(target_id) {
-            crate::domains::target::schedule_initial_document_target_url_navigation_after_debugger_barrier_release_for_target(
+            crate::domains::target::schedule_navigation_decision_after_debugger_barrier_release_for_target(
                 self,
                 target_id,
             );

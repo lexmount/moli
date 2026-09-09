@@ -18,6 +18,7 @@ mod downloads;
 mod javascript_dialog;
 pub use activation::PendingWebContentsActivation;
 mod navigation;
+mod navigation_driver;
 mod navigation_events;
 mod popup;
 pub use navigation::{
@@ -1134,7 +1135,6 @@ impl BrowserContextHandle {
         fn commit_same_document_navigation(handle: WebContentsHandle, document: super::DocumentId, url: url::Url, history_update: crate::page::SameDocumentHistoryUpdate) -> Option<super::web_contents::SameDocumentNavigationCommitted>;
         fn mark_renderer_crashed(handle: WebContentsHandle) -> ();
         fn begin_initial_empty_document(handle: WebContentsHandle, initial_url: String, creator: Option<super::web_contents::InitialDocumentCreator>, storage_key: Option<moli_storage_key::MoliStorageKey>) -> ();
-        fn mark_initial_url_replaces_empty_document(handle: WebContentsHandle) -> ();
         fn crash_web_contents_renderer_from_io(handle: WebContentsHandle) -> ();
         fn pause_navigation_request(handle: WebContentsHandle, navigation: super::NavigationId, request: super::web_contents::NavigationRequestInterception) -> super::web_contents::NavigationInterceptionPermit;
         fn pause_navigation_response(handle: WebContentsHandle, navigation: super::NavigationId, transfer: super::web_contents::PausedDocumentTransfer) -> super::web_contents::NavigationInterceptionPermit;

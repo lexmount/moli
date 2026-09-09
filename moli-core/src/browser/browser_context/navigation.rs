@@ -466,15 +466,6 @@ impl BrowserContext {
         Ok(())
     }
 
-    pub fn mark_initial_url_replaces_empty_document(
-        &mut self,
-        handle: WebContentsHandle,
-    ) -> Result<(), String> {
-        self.web_contents_mut(handle)?
-            .mark_next_navigation_history_replace_initial_empty_document();
-        Ok(())
-    }
-
     #[cfg(any(test, feature = "test-support"))]
     #[doc(hidden)]
     pub fn mark_initial_empty_document_materialized_for_test(

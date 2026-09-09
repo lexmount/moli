@@ -75,7 +75,7 @@ impl CdpScheduler {
                 }
                 BrowserEvent::NavigationAwaitingDecision(request) => {
                     self.conn
-                        .project_browser_navigation_decision(request.web_contents)
+                        .project_browser_navigation_decision(request.web_contents, None)
                         .await
                 }
                 BrowserEvent::NavigationResponseChanged(request) => {

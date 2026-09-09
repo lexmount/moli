@@ -746,34 +746,6 @@ impl BrowserContext {
                 .unwrap_or(true)
     }
 
-    /// Reports whether one exact Page target is still on its materialized
-    /// initial empty Document and has a non-empty target URL left to load.
-    ///
-    /// This target-addressed query is used when the last debugger barrier is
-    /// released by detaching its session, after that session can no longer be
-    /// used as a routing key.
-    pub(crate) fn target_needs_initial_document_navigation(&self, target_id: &str) -> bool {
-        let Some(target) = self.page_target(target_id) else {
-            return false;
-        };
-        let handle = self
-            .web_contents_handle_for_target(target.target_id())
-            .expect("live WebContents");
-        let Some(initial_url) = self
-            .browser_context
-            .initial_document_url(handle)
-            .ok()
-            .flatten()
-        else {
-            return false;
-        };
-        target.target_url() != initial_url
-            && !self
-                .browser_context
-                .initial_document_has_pending_navigation(handle)
-                .unwrap_or(false)
-    }
-
     pub(crate) fn loaded_document_renderer_owner_ids_for_diagnostics(&self) -> HashSet<u64> {
         self.browser_context.loaded_document_renderer_owner_ids()
     }

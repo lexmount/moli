@@ -8,6 +8,18 @@ use moli_core::browser::web_contents::NavigationInterceptionPermit;
 use moli_core::browser::{NavigationDecision, NavigationDecisionStage, WebContentsHandle};
 
 impl CdpConnection {
+    pub(crate) fn start_created_web_contents_navigation(
+        &self,
+        contents: WebContentsHandle,
+        url: String,
+    ) -> Result<(), String> {
+        let url = url::Url::parse(&url).map_err(|error| error.to_string())?;
+        self.browser
+            .context_handle(contents.context())?
+            .navigate_initial_document(contents, url)?;
+        Ok(())
+    }
+
     pub async fn project_browser_navigation_responses(
         &mut self,
         contents: WebContentsHandle,
@@ -90,15 +102,32 @@ impl CdpConnection {
         else {
             return false;
         };
-        self.browser
-            .context_handle(contents.context())
-            .and_then(|context| context.native_initial_document_navigation(contents))
-            .ok()
-            .flatten()
-            .is_some_and(|navigation| {
-                self.runtime_session_owner_slot_for_owner(owner)
-                    .is_ok_and(|slot| slot.allows_initial_document_access(navigation))
-            })
+        let Ok(context) = self.browser.context_handle(contents.context()) else {
+            return false;
+        };
+        let Ok(Some(navigation)) = context.native_initial_document_navigation(contents) else {
+            return false;
+        };
+        // Initial-document access is for a real inspector pause, not for the
+        // brief request-admission turns of an unpaused background navigation.
+        let inspecting_initial = self.target_has_waiting_for_debugger_session(&target_id)
+            || self
+                .browser_context_by_id(&context_id)
+                .and_then(|projection| {
+                    projection.native_navigation_dispatch(&target_id, navigation)
+                })
+                .is_some_and(|pending| {
+                    context
+                        .navigation_interception_awaits_decision(
+                            contents,
+                            pending.navigation_permit,
+                        )
+                        .unwrap_or(false)
+                });
+        inspecting_initial
+            && self
+                .runtime_session_owner_slot_for_owner(owner)
+                .is_ok_and(|slot| slot.allows_initial_document_access(navigation))
     }
 
     pub(crate) fn native_navigation_decision_for_target(
@@ -124,6 +153,7 @@ impl CdpConnection {
     pub async fn project_browser_navigation_decision(
         &mut self,
         contents: WebContentsHandle,
+        expected_permit: Option<NavigationInterceptionPermit>,
     ) -> Vec<BackgroundProtocolEvent> {
         let Some((context_id, target_id)) = self
             .browser_context_by_browser_id(contents.context())
@@ -144,6 +174,9 @@ impl CdpConnection {
         let Ok(Some(paused)) = context.navigation_decision(contents) else {
             return Vec::new();
         };
+        if expected_permit.is_some_and(|expected| paused.permit != expected) {
+            return Vec::new();
+        }
         let owner = CommandOwnerScope::for_route(CdpSessionRoute::PageTarget {
             browser_context_id: context_id.clone(),
             target_id: target_id.clone(),
@@ -561,7 +594,10 @@ impl CdpConnection {
                     )
                 })
             {
-                out.extend(self.project_browser_navigation_decision(contents).await);
+                out.extend(
+                    self.project_browser_navigation_decision(contents, None)
+                        .await,
+                );
             }
             match events.recv().await {
                 Ok(_) | Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {}

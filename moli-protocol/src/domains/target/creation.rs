@@ -18,13 +18,10 @@ pub(super) struct TargetCreationCommit {
     activation: Option<moli_core::browser::PendingWebContentsActivation>,
     attached_tab_sessions: Vec<TargetAttachSessionCommit>,
     attached_sessions: Vec<TargetAttachSessionCommit>,
+    initial_navigation: Option<(moli_core::browser::WebContentsHandle, String)>,
 }
 
 impl TargetCreationCommit {
-    pub(super) fn page_target_id(&self) -> &str {
-        &self.page_target_id
-    }
-
     pub(super) fn take_activation(
         &mut self,
     ) -> Option<moli_core::browser::PendingWebContentsActivation> {
@@ -94,8 +91,9 @@ pub(crate) async fn project_browser_created_target(
         activation: None,
         attached_tab_sessions,
         attached_sessions,
+        initial_navigation: None,
     };
-    if let Err(error) = emit_target_creation_protocol_events(conn, commit, &mut output) {
+    if let Err(error) = complete_target_creation(conn, commit, &mut output) {
         tracing::warn!(?error, "native Page target projection failed");
     }
     output
@@ -107,7 +105,24 @@ enum CreateTargetResultHost {
     Tab,
 }
 
-pub(super) fn emit_target_creation_protocol_events(
+pub(super) fn complete_target_creation(
+    conn: &mut CdpConnection,
+    mut commit: TargetCreationCommit,
+    out: &mut impl events::CdpTargetAutomationEventSink,
+) -> Result<(), DevToolsError> {
+    let navigation = commit.initial_navigation.take();
+    emit_target_creation_protocol_events(conn, commit, out)?;
+    // Attachment barriers are now installed. Admit the original request once;
+    // debugger release only decides its permit, never starts another load.
+    if let Some((contents, url)) = navigation
+        && let Err(error) = conn.start_created_web_contents_navigation(contents, url)
+    {
+        tracing::debug!(%error, "created WebContents initial URL was not admitted");
+    }
+    Ok(())
+}
+
+fn emit_target_creation_protocol_events(
     conn: &mut CdpConnection,
     events: TargetCreationCommit,
     out: &mut impl events::CdpTargetAutomationEventSink,
@@ -324,7 +339,7 @@ fn start_devtools_create_target_command_with_result_host(
             let mut output_plan = CommandOutputPlan::default();
             let mut protocol_events = Vec::new();
             if let Err(error) =
-                emit_target_creation_protocol_events(conn, creation_commit, &mut protocol_events)
+                complete_target_creation(conn, creation_commit, &mut protocol_events)
             {
                 return TargetCommandTaskStep::Complete(CommandOutputPlan::from_devtools_error(
                     error,
@@ -424,14 +439,16 @@ pub(super) fn execute_devtools_create_target_command(
             bc.set_target_crash_state(&target_id, false);
         }
         bc.set_base_cache_disabled_for_target(&target_id, browser_cache_disabled);
-        if command.url != initial_empty_document_url {
-            // Chromium gives Target.createTarget(url) one initial
-            // auto_toplevel history entry for url. The implementation still
-            // materializes an internal about:blank document for target setup,
-            // so replace that bookkeeping entry when the requested URL commits.
-            bc.mark_target_initial_url_replaces_empty_document(&target_id);
-        }
     }
+    let initial_navigation = (command.url != initial_empty_document_url).then(|| {
+        let contents = conn
+            .browser_context
+            .as_ref()
+            .unwrap()
+            .web_contents_handle_for_target(&target_id)
+            .expect("new target owns its physical WebContents");
+        (contents, command.url)
+    });
     let tab_target_id = conn.register_top_level_page_target(&target_id);
     if !creating_background_target && !activating_created_target {
         conn.notify_target_host_activated(&target_id);
@@ -499,6 +516,7 @@ pub(super) fn execute_devtools_create_target_command(
             activation,
             attached_tab_sessions,
             attached_sessions,
+            initial_navigation,
         },
     })
 }

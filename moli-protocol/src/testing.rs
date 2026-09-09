@@ -1375,7 +1375,7 @@ impl TestContext {
             }
             Ok(moli_core::browser::BrowserEvent::NavigationAwaitingDecision(request)) => {
                 self.conn
-                    .project_browser_navigation_decision(request.web_contents)
+                    .project_browser_navigation_decision(request.web_contents, None)
                     .await
             }
             Ok(moli_core::browser::BrowserEvent::NavigationResponseChanged(request)) => {
@@ -1790,20 +1790,6 @@ impl TestContext {
                 }
                 Some(_) | None => return,
             };
-            if !self.background_navigation_scheduler_enabled
-                && self
-                    .pending_protocol_scheduler_work
-                    .get(selected_index)
-                    .is_some_and(ProtocolSchedulerWork::requires_background_navigation_scheduler)
-            {
-                // The default protocol fixture has no owner task lane. Keep
-                // independent popup navigation resident rather than invoking
-                // the production function's synchronous fallback while the
-                // exact renderer cursor is still being projected. Tests that
-                // assert navigation progress opt into the production-shaped
-                // background scheduler and drive its typed completions.
-                return;
-            }
             let protocol_work = self
                 .pending_protocol_scheduler_work
                 .remove(selected_index)

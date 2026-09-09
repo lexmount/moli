@@ -204,7 +204,10 @@ impl CdpConnection {
         for contents in self.projected_web_contents() {
             events.extend(self.project_browser_navigation(contents).await);
             events.extend(self.project_browser_navigation_responses(contents).await);
-            events.extend(self.project_browser_navigation_decision(contents).await);
+            events.extend(
+                self.project_browser_navigation_decision(contents, None)
+                    .await,
+            );
         }
         for selected in snapshot.selected_web_contents {
             events.extend(self.project_browser_selection(selected, None, snapshot.sequence));

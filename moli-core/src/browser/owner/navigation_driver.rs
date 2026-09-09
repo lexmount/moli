@@ -1,15 +1,15 @@
 use tokio::sync::{oneshot, watch};
 use url::Url;
 
-use super::super::{Browser, BrowserLocalSender};
+use super::{Browser, BrowserContextHandle, BrowserLocalSender};
 use crate::browser::navigation_decision::ResponseInterceptionStage;
 use crate::browser::{
     CapturedBody, CapturedBodyWriter, NavigationDecision, NavigationDecisionStage,
     NavigationFailureReason, NavigationId, NavigationRequest, NavigationRequestLoadPolicy,
     NavigationResponseSnapshot, WebContentsHandle,
     web_contents::{
-        DocumentBodySource, DocumentNavigationDestination, InitialDocumentAdmission,
-        NavigationInterceptionPermit, PausedDocumentTransfer,
+        DocumentBodySource, DocumentNavigationDestination, InheritedDocumentPolicy,
+        InitialDocumentAdmission, NavigationInterceptionPermit, PausedDocumentTransfer,
     },
 };
 
@@ -22,6 +22,36 @@ use crate::runtime::{
     CommittedDocumentResourceSource, ExternalRawDocumentBodyStream, PageVmInitStage,
     RendererReplyBoundary,
 };
+
+impl BrowserContextHandle {
+    /// Admit the requested URL once against the original WebContents' initial
+    /// Document. The Browser owns all subsequent loading and decisions; an
+    /// observer is optional and cannot replace this request with a Target URL.
+    pub fn navigate_initial_document(
+        &self,
+        contents: WebContentsHandle,
+        url: Url,
+    ) -> Result<Option<NavigationId>, String> {
+        let context = self.id;
+        self.browser.execute(move |browser| {
+            let page = browser.context(context)?.web_contents(contents)?;
+            if page.navigation().is_on_initial_empty_document() != Some(true)
+                || page.navigation().has_pending_document_navigation()
+                || page.navigation().initial_empty_document_url_if_current() == Some(url.as_str())
+            {
+                return Ok(None);
+            }
+            let policy = browser.native_navigation_policy(contents)?;
+            browser
+                .context_mut(context)?
+                .web_contents_mut(contents)?
+                .mark_next_navigation_history_replace_initial_empty_document();
+            browser
+                .start_native_document_navigation(contents, url, policy, std::sync::Weak::new())
+                .map(Some)
+        })?
+    }
+}
 
 impl Browser {
     pub(super) fn start_popup_navigation(
@@ -36,7 +66,23 @@ impl Browser {
         if (created && moli_url::is_about_blank(&url)) || url.scheme() == "javascript" {
             return Ok(None);
         }
-        let policy = self.popup_navigation_policy(contents)?;
+        let policy = self.native_navigation_policy(contents)?;
+        self.start_native_document_navigation(
+            contents,
+            url,
+            policy,
+            std::sync::Arc::downgrade(opening),
+        )
+        .map(Some)
+    }
+
+    fn start_native_document_navigation(
+        &mut self,
+        contents: WebContentsHandle,
+        url: Url,
+        policy: InheritedDocumentPolicy,
+        opening: std::sync::Weak<crate::page::RendererPopupOpening>,
+    ) -> Result<NavigationId, String> {
         let navigation = self.start_navigation(contents)?;
         let initial = (|| {
             let context = self.context_mut(contents.context())?;
@@ -64,14 +110,13 @@ impl Browser {
             }
         };
         let owner = self.local_sender.clone();
-        let opening = std::sync::Arc::downgrade(opening);
         tokio::task::spawn_local(async move {
             if let Err(error) = navigate(
                 &owner, contents, navigation, initial, decision, url, opening,
             )
             .await
             {
-                tracing::debug!(%error, "native popup navigation did not commit");
+                tracing::debug!(%error, "native document navigation did not commit");
                 let _ = owner.send(Box::new(move |browser| {
                     let _ = browser.cancel_navigation(
                         contents,
@@ -81,7 +126,7 @@ impl Browser {
                 }));
             }
         });
-        Ok(Some(navigation))
+        Ok(navigation)
     }
 
     fn begin_navigation_decision(
@@ -136,7 +181,7 @@ impl Browser {
         })
     }
 
-    fn popup_navigation_policy(
+    fn native_navigation_policy(
         &self,
         contents: WebContentsHandle,
     ) -> Result<crate::browser::web_contents::InheritedDocumentPolicy, String> {
@@ -307,7 +352,7 @@ async fn navigate(
             .web_contents_mut(contents)?
             .navigation_mut()
             .set_native_initial_document(navigation, false)?;
-        let policy = browser.popup_navigation_policy(contents)?;
+        let policy = browser.native_navigation_policy(contents)?;
         browser
             .context_mut(contents.context())?
             .start_navigation_load(
@@ -599,7 +644,7 @@ async fn navigate(
     .await?;
     await_decision(owner, contents, decision).await?;
     let materialization = on_owner(owner, move |browser| {
-        let policy = browser.popup_navigation_policy(contents)?;
+        let policy = browser.native_navigation_policy(contents)?;
         browser
             .context_mut(contents.context())?
             .start_document_materialization(contents, navigation, prepared, destination, policy)

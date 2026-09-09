@@ -92,7 +92,7 @@ async fn reused_popup_native_request_waits_for_its_source_fifo_observation() {
     assert_eq!(contents, admission.web_contents);
     assert_eq!(Some(paused.permit.navigation()), admission.navigation);
     assert!(
-        conn.project_browser_navigation_decision(contents)
+        conn.project_browser_navigation_decision(contents, None)
             .await
             .is_empty(),
         "unobserved input cannot publish request events ahead of its source FIFO"
@@ -106,7 +106,8 @@ async fn reused_popup_native_request_waits_for_its_source_fifo_observation() {
         project(&mut conn, vec![opening]).await,
         std::slice::from_ref(&target)
     );
-    conn.project_browser_navigation_decision(contents).await;
+    conn.project_browser_navigation_decision(contents, None)
+        .await;
     assert!(
         conn.native_navigation_decision_for_target(&target)
             .is_none_or(|(_, next)| next.permit != paused.permit),

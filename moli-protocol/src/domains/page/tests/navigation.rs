@@ -239,11 +239,15 @@ async fn renderer_navigation_background_events_keep_typed_sidecars() {
     let mut events = Vec::new();
 
     let owner = crate::conn::CommandOwnerScope::for_session("SID-typed");
-    crate::domains::page::navigate_command_owner_from_renderer_background_events_async(
+    crate::domains::page::navigate_command_owner_from_renderer_request_background_events_async(
         &mut ctx.conn,
         &mut events,
-        &owner,
+        owner,
         "data:text/html,<body>typed</body>",
+        "GET",
+        None,
+        &[],
+        moli_fetch::BrowserNavigationRequestKind::Navigate,
     )
     .await;
 
@@ -322,11 +326,15 @@ async fn renderer_fragment_navigation_preserves_initial_document_residence() {
     let mut events = Vec::new();
 
     let owner = crate::conn::CommandOwnerScope::for_session("SID-renderer-fragment");
-    crate::domains::page::navigate_command_owner_from_renderer_background_events_async(
+    crate::domains::page::navigate_command_owner_from_renderer_request_background_events_async(
         &mut ctx.conn,
         &mut events,
-        &owner,
+        owner,
         "about:blank#popup",
+        "GET",
+        None,
+        &[],
+        moli_fetch::BrowserNavigationRequestKind::Navigate,
     )
     .await;
 

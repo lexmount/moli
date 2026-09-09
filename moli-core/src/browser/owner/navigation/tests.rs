@@ -406,6 +406,123 @@ async fn native_popup_admission_creates_a_web_contents_without_devtools_ingress(
 }
 
 #[tokio::test]
+async fn native_initial_url_failed_admission_does_not_change_the_next_history_entry() {
+    let service = BrowserService::start().unwrap();
+    let context = service
+        .handle()
+        .create_context(
+            BrowserContextStoragePartitionHandles::memory(),
+            StoragePartitionKind::Ephemeral,
+            None,
+            None,
+        )
+        .unwrap();
+    let (contents, _) = context
+        .create_web_contents(WebContentsCreation::default())
+        .unwrap();
+    context
+        .begin_initial_empty_document(contents, "about:blank".into(), None, None)
+        .unwrap();
+    assert_eq!(
+        context
+            .navigate_initial_document(contents, "data:text/html,rejected".parse().unwrap())
+            .unwrap_err(),
+        "navigation WebContents engine unavailable"
+    );
+    assert!(
+        context
+            .navigation_snapshot(contents)
+            .unwrap()
+            .attempt
+            .is_none()
+    );
+    context.bind_page_navigation_engines(Default::default(), None);
+    navigate(&context, contents, "data:text/html,independent").await;
+    let (_, history) = context.navigation_history_snapshot(contents).unwrap();
+    assert_eq!(history.last().unwrap().transition_type, "typed");
+    service.shutdown();
+}
+
+#[tokio::test]
+async fn native_initial_url_loads_without_devtools_and_replaces_only_its_initial_history() {
+    let server = FixtureServer::spawn().await.unwrap();
+    let service = BrowserService::start().unwrap();
+    let browser = service.handle();
+    let (context, contents) = context_with_contents(&service);
+    context
+        .begin_initial_empty_document(contents, "about:blank".into(), None, None)
+        .unwrap();
+    let (_, mut events) = browser.subscribe().unwrap();
+    let url = server.url("/static?created=native-navigation");
+    let navigation = context
+        .navigate_initial_document(contents, url.parse().unwrap())
+        .unwrap()
+        .expect("original initial navigation admitted");
+    assert!(
+        context
+            .navigate_initial_document(contents, "data:text/html,duplicate".parse().unwrap())
+            .unwrap()
+            .is_none(),
+        "a second creation completion cannot supersede its pending request"
+    );
+    let document = tokio::time::timeout(std::time::Duration::from_secs(5), async {
+        loop {
+            if let BrowserEvent::DocumentCommitted(document) = events.recv().await.unwrap().event
+                && document.web_contents() == contents
+                && context.document_url(document).unwrap().as_str() == url
+            {
+                break document;
+            }
+        }
+    })
+    .await
+    .expect("Browser must finish the requested URL without a DevTools consumer");
+    let snapshot = context.navigation_snapshot(contents).unwrap();
+    assert_eq!(snapshot.committed.unwrap().navigation, navigation);
+    let (index, history) = context.navigation_history_snapshot(contents).unwrap();
+    assert_eq!(index, 0);
+    assert_eq!(history.len(), 1);
+    assert_eq!(history[0].url, url);
+    assert_eq!(history[0].transition_type, "auto_toplevel");
+    assert!(
+        context
+            .navigate_initial_document(contents, "data:text/html,stale".parse().unwrap())
+            .unwrap()
+            .is_none()
+    );
+    assert_eq!(context.document_handle(contents).unwrap(), Some(document));
+    service.shutdown();
+}
+
+#[test]
+fn native_initial_url_does_not_replace_an_existing_candidate_or_closed_contents() {
+    let service = BrowserService::start().unwrap();
+    let (context, contents) = context_with_contents(&service);
+    context
+        .begin_initial_empty_document(contents, "about:blank".into(), None, None)
+        .unwrap();
+    let winner = context.start_document_navigation(contents).unwrap();
+    assert!(
+        context
+            .navigate_initial_document(contents, "data:text/html,obsolete".parse().unwrap())
+            .unwrap()
+            .is_none()
+    );
+    assert!(
+        context
+            .accepts_pending_navigation(contents, &winner)
+            .unwrap()
+    );
+    context.close_web_contents(contents).unwrap();
+    assert!(
+        context
+            .navigate_initial_document(contents, "data:text/html,removed".parse().unwrap())
+            .is_err()
+    );
+    service.shutdown();
+}
+
+#[tokio::test]
 async fn native_popup_navigates_its_requested_url_without_devtools_ingress() {
     let server = FixtureServer::spawn().await.unwrap();
     let service = BrowserService::start().unwrap();

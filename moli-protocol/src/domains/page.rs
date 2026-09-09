@@ -2279,25 +2279,6 @@ pub(crate) async fn navigate_page_owned_top_level_location_background_events_asy
     .await;
 }
 
-pub(crate) async fn navigate_command_owner_from_renderer_background_events_async(
-    conn: &mut CdpConnection,
-    out: &mut Vec<BackgroundProtocolEvent>,
-    owner: &CommandOwnerScope,
-    url: &str,
-) {
-    navigate_command_owner_from_renderer_request_background_events_async(
-        conn,
-        out,
-        owner.clone(),
-        url,
-        "GET",
-        None,
-        &[],
-        moli_fetch::BrowserNavigationRequestKind::Navigate,
-    )
-    .await;
-}
-
 async fn navigate_command_owner_from_renderer_request_background_events_async(
     conn: &mut CdpConnection,
     out: &mut Vec<BackgroundProtocolEvent>,

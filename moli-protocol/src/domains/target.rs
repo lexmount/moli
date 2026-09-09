@@ -39,8 +39,8 @@ pub(in crate::domains) use browser_context::devtools_client_window_info_for_targ
 pub(crate) use popup::{
     complete_target_startup_owner_action_async,
     emit_target_info_changed_for_owner_background_event, project_browser_popup_target,
-    schedule_initial_document_target_url_navigation_after_debugger_barrier_release_for_target,
-    schedule_initial_document_target_url_navigation_after_debugger_resume,
+    schedule_navigation_decision_after_debugger_barrier_release_for_target,
+    schedule_navigation_decision_after_debugger_resume,
 };
 pub(crate) use worker_target::retire_dedicated_worker_targets_for_replaced_page_async;
 pub(in crate::domains) use worker_target::{
@@ -569,7 +569,7 @@ pub(crate) async fn execute_devtools_create_target_command_async_with_protocol_e
         );
     }
     if let Err(error) =
-        creation::emit_target_creation_protocol_events(conn, creation_commit, &mut protocol_events)
+        creation::complete_target_creation(conn, creation_commit, &mut protocol_events)
     {
         return (Err(error), Vec::new(), renderer_output_predecessor);
     }
@@ -638,26 +638,17 @@ pub(crate) async fn execute_devtools_target_command_async_with_protocol_events(
     }
 }
 
-async fn target_creation_response_plan_after_initial_document(
+fn target_creation_response_plan_after_initial_document(
     conn: &mut CdpConnection,
     response_plan: CommandOutputPlan,
     creation_commit: creation::TargetCreationCommit,
     activation_events: Vec<BackgroundProtocolEvent>,
 ) -> CommandOutputPlan {
-    let target_id = creation_commit.page_target_id().to_owned();
     let mut plan = CommandOutputPlan::default();
     let mut events = activation_events;
-    if let Err(error) =
-        creation::emit_target_creation_protocol_events(conn, creation_commit, &mut events)
-    {
+    if let Err(error) = creation::complete_target_creation(conn, creation_commit, &mut events) {
         return CommandOutputPlan::from_devtools_error(error);
     }
-    popup::start_target_url_navigation_if_allowed_background_events_async(
-        conn,
-        &mut events,
-        &target_id,
-    )
-    .await;
     for event in events {
         plan.push_background_event(event);
     }
@@ -746,15 +737,12 @@ pub(crate) async fn complete_pending_target_command(
                 }
                 None => {}
             }
-            TargetCommandTaskStep::Complete(
-                target_creation_response_plan_after_initial_document(
-                    conn,
-                    response_plan,
-                    creation_commit,
-                    activation_events,
-                )
-                .await,
-            )
+            TargetCommandTaskStep::Complete(target_creation_response_plan_after_initial_document(
+                conn,
+                response_plan,
+                creation_commit,
+                activation_events,
+            ))
         }
         CompletedTargetCommandKind::DetachFromTarget {
             target_id,

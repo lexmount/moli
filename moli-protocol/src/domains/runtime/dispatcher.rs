@@ -8488,7 +8488,7 @@ async fn complete_pending_runtime_inspector_command(
         if completed.action == "runIfWaitingForDebugger"
             && conn.release_waiting_for_debugger_session(completed.session_id())
         {
-            crate::domains::target::schedule_initial_document_target_url_navigation_after_debugger_resume(
+            crate::domains::target::schedule_navigation_decision_after_debugger_resume(
                 conn,
                 completed.session_id(),
             );

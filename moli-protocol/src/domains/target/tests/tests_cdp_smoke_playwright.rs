@@ -37,6 +37,52 @@ async fn set_auto_attach_waiting_for_debugger(ctx: &mut TestContext, id: u64) {
     ctx.expect_result(id, json!({}), None);
 }
 
+#[tokio::test(flavor = "multi_thread")]
+async fn created_target_url_is_a_native_decision_before_debugger_release() {
+    let fixture = SmokeFixtureServer::start().await;
+    let mut ctx = TestContext::new();
+    set_auto_attach_waiting_for_debugger(&mut ctx, 100_000).await;
+    let url = fixture.url("/plain?created-native-decision");
+    ctx.process_async(json!({"id": 100_001, "method": "Target.createTarget",
+        "params": {"url": url}}))
+        .await;
+    let created = take_response_by_id(&mut ctx, 100_001);
+    let target = created["result"]["targetId"].as_str().unwrap().to_owned();
+    let attached = ctx.take_first_matching("created target attachment", |message| {
+        message["method"] == "Target.attachedToTarget"
+            && message["params"]["targetInfo"]["targetId"] == target
+    });
+    let session = attached["params"]["sessionId"].as_str().unwrap().to_owned();
+    assert_eq!(attached["params"]["waitingForDebugger"], true);
+    ctx.wait_until_scheduler_state("original created-target request decision", |conn| {
+        conn.native_navigation_decision_for_target(&target)
+            .is_some_and(|(_, paused)| {
+                matches!(
+                    paused.stage,
+                    moli_core::browser::NavigationDecisionStage::Request { .. }
+                )
+            })
+    })
+    .await;
+    let (_, paused) = ctx
+        .conn
+        .native_navigation_decision_for_target(&target)
+        .expect("Browser must own the URL decision before debugger release");
+    assert!(matches!(paused.stage,
+        moli_core::browser::NavigationDecisionStage::Request { url: requested, .. }
+        if requested.as_str() == url));
+    arm_popup_route(&mut ctx, 100_010, &target, &session, &url).await;
+    fulfill_popup_document_and_evaluate(
+        &mut ctx,
+        100_020,
+        &target,
+        &session,
+        &url,
+        "created-native-decision",
+    )
+    .await;
+}
+
 async fn open_popup_from_session(
     ctx: &mut TestContext,
     id: u64,
@@ -1255,7 +1301,7 @@ async fn assert_native_popup_authentication(action: &str, scheme: &str) {
     ));
     assert!(
         ctx.conn
-            .project_browser_navigation_decision(contents)
+            .project_browser_navigation_decision(contents, None)
             .await
             .is_empty(),
         "snapshot reconciliation must not duplicate this authentication decision"
@@ -1662,9 +1708,7 @@ async fn queued_popup_navigation_rechecks_a_late_debugger_barrier() {
         &popup_target_id,
     )
     .expect("the paused popup should have an exact navigation owner action");
-    let (contents, permit) = action
-        .native_decision()
-        .expect("native popup request decision");
+    let (contents, permit) = action.decision();
 
     assert!(
         ctx.conn

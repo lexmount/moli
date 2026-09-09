@@ -422,14 +422,6 @@ impl BrowserContext {
         }
     }
 
-    pub(crate) fn mark_target_initial_url_replaces_empty_document(&mut self, target_id: &str) {
-        if let Some(handle) = self.web_contents_handle_for_target(target_id) {
-            let _ = self
-                .browser_context
-                .mark_initial_url_replaces_empty_document(handle);
-        }
-    }
-
     #[cfg(test)]
     pub(crate) fn mark_target_initial_empty_document_exited(&mut self, target_id: &str) {
         if let Some(handle) = self.web_contents_handle_for_target(target_id) {
