@@ -5810,7 +5810,10 @@ async fn root_client_metrics_track_window_surface_profile() -> Result<()> {
 
     let value = page
         .evaluate_runtime_expression_async(
-            r#"JSON.stringify({
+            r#"(() => {
+              // Test the viewport/body distinction, not platform font ascent.
+              document.body.style.lineHeight = '20px';
+              return JSON.stringify({
                 innerWidth: window.innerWidth,
                 innerHeight: window.innerHeight,
                 documentElementClientWidth: document.documentElement.clientWidth,
@@ -5819,7 +5822,8 @@ async fn root_client_metrics_track_window_surface_profile() -> Result<()> {
                 bodyClientHeight: document.body.clientHeight,
                 documentElementRectWidth: document.documentElement.getBoundingClientRect().width,
                 documentElementRectHeight: document.documentElement.getBoundingClientRect().height
-            })"#,
+              });
+            })()"#,
         )
         .await?;
     let snapshot = value.get("value").and_then(|value| value.as_str());
@@ -5827,7 +5831,7 @@ async fn root_client_metrics_track_window_surface_profile() -> Result<()> {
     assert_eq!(
         snapshot,
         Some(
-            r#"{"innerWidth":1920,"innerHeight":1080,"documentElementClientWidth":1920,"documentElementClientHeight":1080,"bodyClientWidth":1904,"bodyClientHeight":19,"documentElementRectWidth":1920,"documentElementRectHeight":35}"#
+            r#"{"innerWidth":1920,"innerHeight":1080,"documentElementClientWidth":1920,"documentElementClientHeight":1080,"bodyClientWidth":1904,"bodyClientHeight":20,"documentElementRectWidth":1920,"documentElementRectHeight":36}"#
         )
     );
 

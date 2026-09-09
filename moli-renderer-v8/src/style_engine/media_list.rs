@@ -124,7 +124,8 @@ fn media_query_device(
     let environment = emulated_media
         .map(StyloStyleEnvironment::from_emulated_media)
         .unwrap_or_default();
-    let initial_style = ComputedValues::initial_values_with_font_override(Font::initial_values());
+    let initial_style =
+        ComputedValues::initial_values_with_font_override(super::font_defaults::initial_font());
     let viewport_width = viewport.width.unwrap_or(DEFAULT_VIEWPORT_WIDTH as f64) as f32;
     let viewport_height = viewport.height.unwrap_or(DEFAULT_VIEWPORT_HEIGHT as f64) as f32;
     let screen_width = viewport.screen_width.unwrap_or(viewport_width as f64) as f32;

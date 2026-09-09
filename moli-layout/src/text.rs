@@ -24,8 +24,10 @@ use thiserror::Error;
 use crate::stylo_to_parley::TextBrush;
 
 mod canvas;
+mod font_preferences;
 mod font_source;
 pub use canvas::{CanvasFont, ShapedCanvasText};
+pub use font_preferences::DEFAULT_STANDARD_FONT_FAMILY;
 pub use font_source::FontFaceData;
 
 pub(crate) struct ParleyDocumentServices {
@@ -155,6 +157,8 @@ impl ParleyDocumentServices {
                 }
                 FontFamily::Source(_) => {}
             }
+            #[cfg(any(target_os = "linux", target_os = "freebsd"))]
+            font_preferences::append_standard_fallback(&mut style.font_family);
         }
         let resolved = style.font_family.clone().into_owned();
         match character {
@@ -830,9 +834,11 @@ fn build_parley_services(
         shared: false,
         system_fonts: system_font_policy.is_enabled(),
     });
-    let system_font_family_resolver = system_font_policy
-        .is_enabled()
-        .then(|| SystemFontFamilyResolver::new(&mut collection));
+    let system_font_family_resolver = system_font_policy.is_enabled().then(|| {
+        let mut resolver = SystemFontFamilyResolver::new(&mut collection);
+        font_preferences::install_browser_generic_preferences(&mut resolver, &mut collection);
+        resolver
+    });
     let mut font_context = FontContext {
         collection,
         source_cache: Default::default(),
@@ -1027,6 +1033,30 @@ mod tests {
         parley.resolve_font_families(&mut style, None);
 
         assert_eq!(style.font_family, families);
+    }
+
+    #[cfg(any(target_os = "linux", target_os = "freebsd"))]
+    #[test]
+    fn missing_named_family_retains_standard_fallback_in_cached_resolution() {
+        let mut parley = build_parley_services(SystemFontPolicy::Disabled, &BTreeMap::new());
+        parley.system_font_family_resolver = Some(SystemFontFamilyResolver::new(
+            &mut parley.font_context.collection,
+        ));
+        let missing = FontFamilyName::Named(Cow::Borrowed("__moli_missing_css_family_3bb2__"));
+        let expected = FontFamily::List(Cow::Owned(vec![
+            missing.clone(),
+            FontFamilyName::Generic(parley::fontique::GenericFamily::Serif),
+        ]));
+        for _ in 0..2 {
+            let mut style = TextStyle {
+                font_family: FontFamily::Single(missing.clone()),
+                ..TextStyle::default()
+            };
+            parley.resolve_font_families(&mut style, None);
+            assert_eq!(style.font_family, expected);
+        }
+        assert_eq!(parley.font_family_resolution_plans.len(), 1);
+        assert_eq!(parley.font_family_resolution_miss_count, 1);
     }
 
     #[test]

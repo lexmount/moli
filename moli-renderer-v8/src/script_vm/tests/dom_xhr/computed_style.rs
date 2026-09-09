@@ -1,5 +1,6 @@
 use super::*;
 
+mod browser_font_preferences;
 mod child_list;
 
 #[test]

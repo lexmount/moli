@@ -412,7 +412,8 @@ pub(super) fn new_style_device_with_viewport_bits(
     let height = f32::from_bits(viewport_height_bits);
     let screen_width = f32::from_bits(screen_width_bits);
     let screen_height = f32::from_bits(screen_height_bits);
-    let initial_style = ComputedValues::initial_values_with_font_override(Font::initial_values());
+    let initial_style =
+        ComputedValues::initial_values_with_font_override(super::font_defaults::initial_font());
     let mut device = Device::new(
         environment.stylo_media_type(),
         quirks_mode,

@@ -99,9 +99,9 @@ pub use style::{
 };
 pub use svg_text::{LayoutSvgText, LayoutSvgTextElement};
 pub use text::{
-    CanvasFont, DocumentLayoutServices, FontFaceData, ShapedCanvasText, SystemFontPolicy,
-    WebFontFace, WebFontRegistration, WebFontRegistrationError, WebFontRegistrationOutcome,
-    WebFontStyle, WebFontUnicodeRange,
+    CanvasFont, DEFAULT_STANDARD_FONT_FAMILY, DocumentLayoutServices, FontFaceData,
+    ShapedCanvasText, SystemFontPolicy, WebFontFace, WebFontRegistration, WebFontRegistrationError,
+    WebFontRegistrationOutcome, WebFontStyle, WebFontUnicodeRange,
 };
 pub use world::{
     LayoutAnonymousReason, LayoutBox, LayoutBoxId, LayoutBoxKind, LayoutCapabilityDiagnostic,

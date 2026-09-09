@@ -768,7 +768,10 @@ fn auto_scrollbar_feedback_reveals_the_perpendicular_axis() {
 
 #[test]
 fn scrollbar_feedback_rebreaks_the_reused_inline_layout_at_its_final_width() {
-    const TEXT: &str = "alpha beta gamma delta epsilon zeta eta theta iota kappa";
+    // Synthetic Taffy Scroll represents CSS auto. Force horizontal overflow
+    // with an unbreakable word instead of relying on a platform font's widths.
+    const TEXT: &str =
+        "alpha beta gamma delta epsilon zeta eta theta iota kappa WWWWWWWWWWWWWWWWWWWWWWWW";
     let source = Source(vec![
         Node::element("root", vec![1]),
         Node::element("scroller", vec![2]),
