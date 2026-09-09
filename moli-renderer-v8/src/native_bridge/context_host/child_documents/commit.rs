@@ -1,6 +1,7 @@
 use super::super::window_security_tokens::WindowAccessOrigin;
 use super::super::{ChildBrowsingContextSnapshot, PageScriptHost};
 use crate::document_script_scheduler::FrameDocumentClassicScriptSchedulerWork;
+use crate::dom::native::DocumentReadyState;
 use crate::frame_owner_model::{
     DocumentCreationKind, FrameDocumentInteractiveLifecycleAction,
     FrameDocumentLocalWindowTransition, FrameLocalWindowOwnerTransition,
@@ -206,6 +207,9 @@ impl PageScriptHost {
         };
         self.dom_host_mut()
             .set_document_character_set_for_handle(document_handle, &snapshot.character_set);
+        // Expose the loading state before the new Document's parser can run script.
+        let _ = self
+            .set_dom_document_ready_state_for_handle(document_handle, DocumentReadyState::Loading);
         let document_url = self.document_url_for_handle(document_handle);
         let document_base_url = self.document_base_url_for_handle(document_handle);
         let parser_base_url = document_base_url.clone();

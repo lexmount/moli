@@ -1,3 +1,5 @@
+#[path = "scripts/child_readiness.rs"]
+mod child_readiness;
 #[path = "scripts/child_script_text.rs"]
 mod child_script_text;
 #[path = "scripts/integrity.rs"]
