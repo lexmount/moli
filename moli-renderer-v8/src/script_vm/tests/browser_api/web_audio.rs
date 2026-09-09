@@ -1,6 +1,55 @@
 use super::*;
 
 #[test]
+fn web_audio_connections_revalidate_after_coercion_without_page_hooks() {
+    let mut vm = new_storage_test_vm("https://audio-connection-reentrancy.test/");
+    let source = include_str!("../../../../tests/fixtures/audio-graph-reentrancy-check.js");
+    assert_eq!(vm.eval(&format!("JSON.stringify({source})")).unwrap(), "[]");
+}
+
+#[test]
+fn web_audio_native_state_boundaries_match_chromium() {
+    let mut vm = new_storage_test_vm("https://audio-native-boundaries.test/");
+    let source = include_str!("../../../../tests/fixtures/offline-audio-boundaries-check.js");
+    vm.exec(
+        &format!("({source}).then(value => globalThis.__audioBoundaries = value)"),
+        None,
+    )
+    .expect("audio boundary fixture should execute");
+    assert_eq!(vm.eval("JSON.stringify(__audioBoundaries)").unwrap(), "[]");
+}
+
+#[test]
+fn offline_audio_analyser_uses_rendered_pcm_and_a_real_fft() {
+    let mut vm = new_storage_test_vm("https://audio-rendered-pcm.test/");
+    let source = include_str!("../../../../tests/fixtures/offline-audio-analyser-check.js");
+    vm.exec(
+        &format!("({source}).then(value => globalThis.__renderedPcm = value)"),
+        None,
+    )
+    .expect("offline audio fixture should execute");
+    let result = vm
+        .eval("JSON.stringify(globalThis.__renderedPcm)")
+        .expect("offline rendering should settle its promise");
+    let rows: serde_json::Value = serde_json::from_str(&result).unwrap();
+    assert_eq!(rows.as_array().unwrap().len(), 3);
+    for row in rows.as_array().unwrap() {
+        for key in [
+            "waveformCorrect",
+            "timeMatchesPcm",
+            "retainsAfterDisconnect",
+            "peakCorrect",
+            "blackmanAmplitudeCorrect",
+            "frequencyReadStable",
+            "byteFrequencyCorrect",
+            "byteTimeCorrect",
+        ] {
+            assert_eq!(row[key], true, "{key}: {row}");
+        }
+    }
+}
+
+#[test]
 fn web_audio_factories_are_shared_by_realtime_and_offline_contexts() {
     let mut vm = new_storage_test_vm("https://audio-factories.test/");
     let result = vm
@@ -85,7 +134,10 @@ fn web_audio_factories_reject_forged_contexts_and_keep_nodes_independent() {
     const a = context.createOscillator(), b = context.createOscillator();
     a.type = 'triangle';
     if (a.frequency.setValueAtTime(880, 0) !== a.frequency) errors.push('AudioParam return value');
-    if (a.frequency.value !== 880 || b.frequency.value !== 440 || b.type !== 'sine') errors.push('shared oscillator state');
+    // Scheduling does not synchronously change .value (also true in Chromium).
+    if (a.frequency.value !== 440 || b.frequency.value !== 440 || b.type !== 'sine') errors.push('premature automation');
+    a.frequency.value = 880;
+    if (a.frequency.value !== 880 || b.frequency.value !== 440) errors.push('shared oscillator state');
     const analyser = context.createAnalyser();
     if (a.connect(analyser) !== analyser || analyser.connect(context.destination) !== context.destination) errors.push('connect return value');
     if (a.start(0) !== undefined || a.disconnect() !== undefined) errors.push('source return value');
@@ -254,8 +306,10 @@ fn web_audio_biquad_and_existing_params_expose_native_readonly_metadata() {
       }
     }
     if (filter.gain.defaultValue !== 0 || filter.gain.minValue !== Math.fround(-3.4028234663852886e38) || !(filter.gain.maxValue > 1541 && filter.gain.maxValue < 1542)) errors.push('gain range');
-    try { filter.getFrequencyResponse(new Float32Array(1), new Float32Array(1), new Float32Array(1)); errors.push('fabricated frequency response'); }
-    catch (e) { if (e.name !== 'NotSupportedError') errors.push('response ' + e.name); }
+    filter.type = 'allpass';
+    const magnitudes = new Float32Array(3), phases = new Float32Array(3);
+    filter.getFrequencyResponse(new Float32Array([0, 350, rate / 4]), magnitudes, phases);
+    if (!magnitudes.every(value => Math.abs(value - 1) < 1e-6) || !phases.every(Number.isFinite)) errors.push('allpass response');
   }
   return JSON.stringify(errors);
 })()
@@ -268,8 +322,9 @@ fn offline_audio_silence_depends_on_reachable_started_sources() {
     let mut vm = new_storage_test_vm("https://audio-graph-silence.test/");
     vm.exec(r#"
 globalThis.__audioSilenceResults = [];
+for (const length of [100, 1024]) {
 for (const mode of ['empty', 'unconnected', 'not-started', 'future', 'disconnected-source', 'disconnected-sink', 'cycle', 'connected', 'duplicate', 'selected-disconnect']) {
-  const ctx = new OfflineAudioContext(1, 100, 44100);
+  const ctx = new OfflineAudioContext(1, length, 44100);
   const osc = ctx.createOscillator(), comp = ctx.createDynamicsCompressor();
   if (mode !== 'empty' && mode !== 'unconnected') {
     osc.connect(comp);
@@ -282,14 +337,16 @@ for (const mode of ['empty', 'unconnected', 'not-started', 'future', 'disconnect
   if (mode === 'duplicate') { osc.connect(comp); osc.connect(comp); }
   if (mode === 'selected-disconnect') { const a = ctx.createAnalyser(); osc.connect(a); osc.disconnect(a); }
   ctx.startRendering().then(buffer => {
-    __audioSilenceResults.push([mode, buffer.getChannelData(0).some(x => x !== 0), comp.reduction < 0]);
+    const pcm = buffer.getChannelData(0);
+    __audioSilenceResults.push([length, mode, pcm.some(x => x !== 0), pcm.subarray(0, Math.min(264, length)).every(x => x === 0)]);
   });
+}
 }
 "#, None).expect("offline graph scenarios should render without hanging on a cycle");
     let result = vm.eval("JSON.stringify(__audioSilenceResults)").unwrap();
     assert_eq!(
         result,
-        r#"[["empty",false,false],["unconnected",false,false],["not-started",false,false],["future",false,false],["disconnected-source",false,false],["disconnected-sink",false,false],["cycle",false,false],["connected",true,true],["duplicate",true,true],["selected-disconnect",true,true]]"#
+        r#"[[100,"empty",false,true],[100,"unconnected",false,true],[100,"not-started",false,true],[100,"future",false,true],[100,"disconnected-source",false,true],[100,"disconnected-sink",false,true],[100,"cycle",false,true],[100,"connected",false,true],[100,"duplicate",false,true],[100,"selected-disconnect",false,true],[1024,"empty",false,true],[1024,"unconnected",false,true],[1024,"not-started",false,true],[1024,"future",false,true],[1024,"disconnected-source",false,true],[1024,"disconnected-sink",false,true],[1024,"cycle",false,true],[1024,"connected",true,true],[1024,"duplicate",true,true],[1024,"selected-disconnect",true,true]]"#
     );
 }
 
@@ -314,6 +371,64 @@ ctx.startRendering();
         vm.eval("JSON.stringify(__analyserSilence)").unwrap(),
         "[true,true,false,true]"
     );
+}
+
+#[test]
+fn offline_compressor_meter_follows_pull_demand_not_input_reachability() {
+    let mut vm = new_storage_test_vm("https://audio-compressor-demand.test/");
+    vm.exec(r#"
+globalThis.__meter = [];
+for (const mode of ['orphan', 'silent-destination', 'source-without-destination', 'source-to-destination']) {
+  const context = new OfflineAudioContext(1, 1024, 44100);
+  const compressor = context.createDynamicsCompressor(), oscillator = context.createOscillator();
+  if (mode.startsWith('source')) { oscillator.connect(compressor); oscillator.start(); }
+  if (mode.endsWith('destination') && mode !== 'source-without-destination') compressor.connect(context.destination);
+  const before = compressor.reduction;
+  context.startRendering().then(buffer => __meter.push([mode, before, compressor.reduction < 0, buffer.getChannelData(0).some(x => x !== 0)]));
+}
+"#, None).unwrap();
+    // Blink can have negative metering while processing silence. The old
+    // reachability-based "no source => zero reduction" assertion was incorrect.
+    assert_eq!(
+        vm.eval("JSON.stringify(__meter)").unwrap(),
+        r#"[["orphan",0,false,false],["silent-destination",0,true,false],["source-without-destination",0,false,false],["source-to-destination",0,true,true]]"#
+    );
+}
+
+#[test]
+fn offline_audio_automation_and_delayed_start_use_the_sample_clock() {
+    let mut vm = new_storage_test_vm("https://audio-automation.test/");
+    vm.exec(
+        r#"
+const context = new OfflineAudioContext(1, 4096, 8192), oscillator = context.createOscillator();
+oscillator.frequency.value = 256;
+oscillator.frequency.setValueAtTime(512, .25);
+oscillator.detune.setValueAtTime(1200, .375);
+oscillator.connect(context.destination);
+oscillator.start(.125);
+const before = oscillator.frequency.value;
+context.startRendering().then(buffer => {
+  const pcm = buffer.getChannelData(0);
+  const expected = i => i < 1024 ? 0 :
+    Math.sin(2 * Math.PI * (i < 2048 ? 256 : i < 3072 ? 512 : 1024) * i / 8192);
+  globalThis.__automation = {
+    before,
+    error: Math.max(...pcm.map((value, i) => Math.abs(value - expected(i)))),
+    silentPrefix: pcm.subarray(0, 1024).every(value => value === 0),
+    state: context.state, time: context.currentTime
+  };
+});
+"#,
+        None,
+    )
+    .unwrap();
+    let result: serde_json::Value =
+        serde_json::from_str(&vm.eval("JSON.stringify(__automation)").unwrap()).unwrap();
+    assert_eq!(result["before"], 256);
+    assert!(result["error"].as_f64().unwrap() < 1e-4, "{result}");
+    assert_eq!(result["silentPrefix"], true);
+    assert_eq!(result["state"], "closed");
+    assert_eq!(result["time"], 0.5);
 }
 
 #[test]
