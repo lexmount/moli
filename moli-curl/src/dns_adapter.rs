@@ -215,6 +215,18 @@ where
     pub(crate) fn drain(&mut self) -> impl Iterator<Item = P> + '_ {
         self.waiting.drain().map(|(_, pending)| pending)
     }
+
+    /// Removes retired work without letting a late resolver result recover it.
+    pub(crate) fn take_matching(&mut self, mut predicate: impl FnMut(&P) -> bool) -> Vec<P> {
+        let ids: Vec<_> = self
+            .waiting
+            .iter()
+            .filter_map(|(id, pending)| predicate(pending).then_some(*id))
+            .collect();
+        ids.into_iter()
+            .filter_map(|id| self.waiting.remove(&id))
+            .collect()
+    }
 }
 
 #[cfg(test)]

@@ -1,5 +1,5 @@
 mod config;
-mod identity;
+pub(crate) mod identity;
 mod owner;
 mod residence;
 

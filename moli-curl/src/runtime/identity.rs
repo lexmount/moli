@@ -21,11 +21,11 @@ impl CurlTransferId {
         Self(value)
     }
 
-    pub(super) fn from_token(token: usize) -> Option<Self> {
+    pub(crate) fn from_token(token: usize) -> Option<Self> {
         Some(Self::new(NonZeroUsize::new(token)?))
     }
 
-    pub(super) fn token(self) -> usize {
+    pub(crate) fn token(self) -> usize {
         self.0.get()
     }
 }
@@ -36,7 +36,7 @@ impl fmt::Display for CurlTransferId {
     }
 }
 
-pub(super) fn next_transfer_id() -> Result<CurlTransferId> {
+pub(crate) fn next_transfer_id() -> Result<CurlTransferId> {
     let value = next_nonzero_usize(&NEXT_CURL_TRANSFER_ID)
         .context("curl transfer identity space exhausted")?;
     Ok(CurlTransferId::new(value))

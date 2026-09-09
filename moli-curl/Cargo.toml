@@ -7,11 +7,17 @@ edition = "2024"
 [dependencies]
 anyhow = "1.0.100"
 crossbeam-channel = "0.5.15"
-curl = { version = "0.4.49", default-features = false, features = ["brotli", "http2", "poll_7_68_0", "ssl", "static-curl"] }
+curl = { version = "0.4.49", default-features = false, features = ["brotli", "http2", "poll_7_68_0", "ssl", "static-curl", "websocket"] }
 moli-dns-resolver = { path = "../moli-dns-resolver" }
 openssl-sys = { version = "0.9", features = ["aws-lc"] }
 parking_lot = "0.12"
 tracing = "0.1.41"
+tokio = { version = "1.51.0", features = ["sync"] }
+url = "2.5.7"
+
+[dev-dependencies]
+tokio = { version = "1.51.0", features = ["macros", "rt", "time"] }
+tokio-tungstenite = { version = "0.28.0", default-features = false, features = ["handshake"] }
 
 [lints]
 workspace = true

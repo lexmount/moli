@@ -2,6 +2,7 @@
 
 mod dns_adapter;
 mod runtime;
+pub mod websocket;
 
 pub use dns_adapter::CurlDnsResolution;
 pub use runtime::{

@@ -846,7 +846,7 @@ dependencies = [
 [[package]]
 name = "curl"
 version = "0.4.49"
-source = "git+https://github.com/lexmount/curl-rust?branch=moli#6ff212f081f6687feaabe17970e5fd249456584b"
+source = "git+https://github.com/lexmount/curl-rust?branch=moli#4a0b555254ab4492fe7ab37b3b91ab0505d952da"
 dependencies = [
  "curl-sys",
  "libc",
@@ -860,7 +860,7 @@ dependencies = [
 [[package]]
 name = "curl-sys"
 version = "0.4.87+curl-8.19.0"
-source = "git+https://github.com/lexmount/curl-rust?branch=moli#6ff212f081f6687feaabe17970e5fd249456584b"
+source = "git+https://github.com/lexmount/curl-rust?branch=moli#4a0b555254ab4492fe7ab37b3b91ab0505d952da"
 dependencies = [
  "brotlic-sys",
  "cc",
@@ -2470,7 +2470,10 @@ dependencies = [
  "moli-dns-resolver",
  "openssl-sys",
  "parking_lot",
+ "tokio",
+ "tokio-tungstenite",
  "tracing",
+ "url",
 ]
 
 [[package]]
