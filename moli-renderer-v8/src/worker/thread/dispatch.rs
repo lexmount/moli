@@ -425,9 +425,26 @@ fn pending_worker_promise_rejection_matches<'s>(
 pub(super) fn perform_worker_microtask_checkpoint_and_report_pending_promise_rejections(
     scope: &mut v8::PinScope<'_, '_>,
 ) {
+    let Some(_checkpoint_scope) = crate::script_cleanup::MicrotaskCheckpointScope::enter(scope)
+    else {
+        return;
+    };
     scope.perform_microtask_checkpoint();
     queue_pending_worker_promise_rejection_task(scope);
     crate::context_bootstrap::run_end_of_microtask_checkpoint_tasks(scope);
+}
+
+pub(crate) fn perform_callback_cleanup_checkpoint_if_worker(
+    scope: &mut v8::PinScope<'_, '_>,
+) -> bool {
+    if scope
+        .get_slot::<WorkerPromiseRejectDispatchSlot>()
+        .is_none()
+    {
+        return false;
+    }
+    perform_worker_microtask_checkpoint_and_report_pending_promise_rejections(scope);
+    true
 }
 
 fn queue_pending_worker_promise_rejection_task(scope: &mut v8::PinScope<'_, '_>) {
@@ -4181,6 +4198,10 @@ pub(super) fn dispatch_worker_exception_with_phase_and_source<'s>(
     parent_tx: &mpsc::UnboundedSender<WorkerToParentMessage>,
     script_url: &str,
 ) -> bool {
+    // A module bootstrap failure may arrive on a later evaluation task,
+    // after V8 has unwound the script or rejection job that owns its report.
+    let execution_scope = matches!(parent_phase, WorkerErrorPhase::Bootstrap)
+        .then(|| crate::script_cleanup::ScriptExecutionScope::enter(scope));
     let exception = if report.muted_errors {
         report.summary = "Script error.".to_owned();
         report.source = Some(String::new());
@@ -4205,6 +4226,10 @@ pub(super) fn dispatch_worker_exception_with_phase_and_source<'s>(
             source,
             parent_tx,
         );
+    }
+    drop(execution_scope);
+    if matches!(parent_phase, WorkerErrorPhase::Bootstrap) {
+        crate::script_cleanup::perform_callback_cleanup_checkpoint(scope);
     }
     handled
 }

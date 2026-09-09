@@ -74,7 +74,7 @@ pub(super) fn install_shared_worker_service_wake(
 }
 
 #[tokio::test(flavor = "current_thread")]
-async fn shared_worker_error_body_leaves_reactions_for_selected_completion() {
+async fn shared_worker_error_body_cleans_up_callbacks_before_selected_completion() {
     run_page_vm_async_test(async move {
         let loader =
             crate::network::ResourceRequestClient::new(&FetchConfig::default()).expect("loader");
@@ -136,8 +136,8 @@ async fn shared_worker_error_body_leaves_reactions_for_selected_completion() {
             page_vm
                 .vm_mut()
                 .eval("__typedSharedWorkerEvents.join('|')")?,
-            "error:error",
-            "the SharedWorker error body must leave listener reactions pending"
+            "error:error|microtask|runtime-script",
+            "listener cleanup must drain reactions before the selected task completes"
         );
         assert_eq!(
             page_vm
@@ -162,7 +162,7 @@ async fn shared_worker_error_body_leaves_reactions_for_selected_completion() {
                 .vm_mut()
                 .eval("__typedSharedWorkerEvents.join('|')")?,
             "error:error|microtask|runtime-script",
-            "selected completion must own the checkpoint and runtime follow-up"
+            "selected task completion must not repeat callback reactions or their inline scripts"
         );
         Ok::<_, anyhow::Error>(())
     })
