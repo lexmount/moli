@@ -187,6 +187,10 @@ impl FetchClientHandle {
         self.config.tls_verify_host()
     }
 
+    pub fn tls_config(&self) -> &moli_curl::CurlTlsConfig {
+        self.config.tls_config()
+    }
+
     pub fn request_timeout_ms(&self) -> u64 {
         self.config.request_timeout_ms()
     }

@@ -6,7 +6,7 @@ pub struct ConnectOptions {
     pub http_proxy: Option<String>,
     pub http_no_proxy: Option<String>,
     pub proxy_bearer_token: Option<String>,
-    pub tls_verify_host: bool,
+    pub tls: moli_curl::CurlTlsConfig,
     pub cookie_header: Option<String>,
     pub pause_after_handshake: bool,
 }

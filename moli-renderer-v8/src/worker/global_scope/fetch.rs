@@ -1288,7 +1288,7 @@ pub(crate) fn register_worker_websocket<'s>(
             .request_client()
             .proxy_bearer_token()
             .map(ToOwned::to_owned),
-        tls_verify_host: loader.request_client().tls_verify_host(),
+        tls: loader.request_client().tls_config().clone(),
         cookie_header: cookie_header_for_context,
         pause_after_handshake: false,
     };

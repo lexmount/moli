@@ -32,7 +32,9 @@ pub(crate) async fn open_websocket_stream(
         .headers
         .retain(|(name, _)| !name.eq_ignore_ascii_case("connection"));
     native.proxy = proxy.map(|url| url.to_string());
-    native.tls_verify = context.tls_verify_host;
+    // WebSocket opening handshakes use credentials=include, including across
+    // origins: https://websockets.spec.whatwg.org/#opening-handshake
+    native.tls = context.tls.clone();
     if native.proxy.is_some() {
         let mut validated = String::new();
         append_proxy_connect_header(&mut validated, "User-Agent", &context.user_agent)?;

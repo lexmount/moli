@@ -23,7 +23,9 @@ use curl::multi::MultiWaker;
 use parking_lot::Mutex;
 use tokio::sync::{OwnedSemaphorePermit, Semaphore, mpsc};
 
-use crate::{CurlDnsResolution, CurlTransferId, runtime::identity::next_transfer_id};
+use crate::{
+    CurlDnsResolution, CurlTlsConfig, CurlTransferId, runtime::identity::next_transfer_id,
+};
 pub use curl::easy::{WsFlags, WsFrame};
 
 /// Fragment large messages above this layer to bound native write residence.
@@ -40,7 +42,7 @@ pub struct CurlWebSocketRequest {
     /// An already resolved proxy policy. None explicitly disables environment proxies.
     pub proxy: Option<String>,
     pub proxy_headers: Vec<(String, String)>,
-    pub tls_verify: bool,
+    pub tls: CurlTlsConfig,
     pub dns_resolution: CurlDnsResolution,
     pub handshake_timeout: Duration,
 }
@@ -52,7 +54,7 @@ impl CurlWebSocketRequest {
             headers: Vec::new(),
             proxy: None,
             proxy_headers: Vec::new(),
-            tls_verify: true,
+            tls: CurlTlsConfig::default(),
             dns_resolution: CurlDnsResolution::curl_managed(),
             handshake_timeout: Duration::from_secs(30),
         }

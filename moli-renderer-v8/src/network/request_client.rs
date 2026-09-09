@@ -967,6 +967,10 @@ impl ResourceRequestClient {
         self.resource_runtime.client().tls_verify_host()
     }
 
+    pub fn tls_config(&self) -> &moli_fetch::CurlTlsConfig {
+        self.resource_runtime.client().tls_config()
+    }
+
     pub fn request_timeout_ms(&self) -> u64 {
         self.resource_runtime.client().request_timeout_ms()
     }

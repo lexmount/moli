@@ -67,8 +67,8 @@ pub(super) fn configure(request: &CurlWebSocketRequest) -> Result<Easy2<Handshak
     easy.signal(false)?;
     easy.ws_connect_only(true)?;
     easy.ws_options(WsOptions::new().no_auto_pong(true))?;
-    easy.ssl_verify_peer(request.tls_verify)?;
-    easy.ssl_verify_host(request.tls_verify)?;
+    // The caller selects the client identity carried by this connection request.
+    request.tls.configure(&mut easy, true)?;
     easy.proxy(request.proxy.as_deref().unwrap_or(""))?;
     // The browser has already applied no_proxy; do not evaluate environment policy twice.
     easy.noproxy("")?;

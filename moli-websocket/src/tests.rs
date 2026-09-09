@@ -16,6 +16,8 @@ use tokio::{
 };
 use url::Url;
 
+mod tls;
+
 #[test]
 fn websocket_slot_limit_blocks_until_permit_is_dropped() {
     let slots = Arc::new(Semaphore::new(1));
@@ -1050,7 +1052,7 @@ async fn websocket_transport_respects_disabled_tls_verify_for_self_signed_wss() 
     let (url, headers_rx, server) = spawn_tls_header_capture_websocket_server().await;
     let (event_tx, mut event_rx) = mpsc::channel(32);
     let mut context = test_websocket_context();
-    context.tls_verify_host = false;
+    context.tls.verify = false;
 
     let command_tx = spawn_connection(3, url, Vec::new(), context, event_tx);
     let headers = timeout(Duration::from_secs(3), headers_rx)
@@ -1078,7 +1080,7 @@ async fn websocket_transport_wss_allows_server_to_omit_response_subprotocol() {
     let (url, headers_rx, server) = spawn_tls_header_capture_websocket_server().await;
     let (event_tx, mut event_rx) = mpsc::channel(32);
     let mut context = test_websocket_context();
-    context.tls_verify_host = false;
+    context.tls.verify = false;
 
     let _command_tx = spawn_connection(
         4,

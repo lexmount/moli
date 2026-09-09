@@ -2,6 +2,9 @@
 // unboxed HTTP response, so these test-server callbacks cannot shrink it.
 #![allow(clippy::result_large_err)]
 
+mod tls;
+pub use tls::TlsWebSocketFixture;
+
 use std::sync::Arc;
 
 use futures_util::{SinkExt, StreamExt};
@@ -39,7 +42,7 @@ pub fn test_websocket_context() -> ConnectOptions {
         http_proxy: None,
         http_no_proxy: None,
         proxy_bearer_token: None,
-        tls_verify_host: true,
+        tls: Default::default(),
         cookie_header: None,
         pause_after_handshake: false,
     }

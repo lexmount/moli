@@ -58,9 +58,9 @@ impl JsContextHost {
             http_no_proxy: loader.and_then(|loader| loader.http_no_proxy().map(ToOwned::to_owned)),
             proxy_bearer_token: loader
                 .and_then(|loader| loader.proxy_bearer_token().map(ToOwned::to_owned)),
-            tls_verify_host: loader
-                .map(|loader| loader.tls_verify_host())
-                .unwrap_or(true),
+            tls: loader
+                .map(|loader| loader.tls_config().clone())
+                .unwrap_or_default(),
             cookie_header: cookie_header_for_context,
             pause_after_handshake: false,
         };

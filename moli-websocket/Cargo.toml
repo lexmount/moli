@@ -5,7 +5,7 @@ version = "0.1.0"
 edition = "2024"
 
 [features]
-test-support = ["dep:rcgen", "dep:tokio-tungstenite", "dep:tokio-rustls", "dep:rustls", "dep:futures-util", "tokio/net", "tokio/io-util"]
+test-support = ["dep:rcgen", "dep:openssl", "dep:tokio-tungstenite", "dep:tokio-rustls", "dep:rustls", "dep:futures-util", "tokio/net", "tokio/io-util"]
 
 [dependencies]
 base64 = "0.22"
@@ -15,7 +15,8 @@ moli-dns-resolver = { path = "../moli-dns-resolver" }
 futures-util = { version = "0.3", default-features = false, features = ["sink", "std"], optional = true }
 http = "1"
 moli-url = { path = "../moli-url" }
-rcgen = { version = "0.13", default-features = false, features = ["aws_lc_rs"], optional = true }
+rcgen = { version = "0.13", default-features = false, features = ["aws_lc_rs", "pem"], optional = true }
+openssl = { version = "0.10", optional = true }
 rustls = { version = "0.23", default-features = false, features = ["aws_lc_rs", "logging", "prefer-post-quantum", "std", "tls12"], optional = true }
 tokio = { version = "1.51.0", features = ["macros", "rt-multi-thread", "sync", "time"] }
 tokio-rustls = { version = "0.26", default-features = false, features = ["aws_lc_rs", "logging", "tls12"], optional = true }
@@ -28,7 +29,8 @@ rustls = { version = "0.23", default-features = false, features = ["aws_lc_rs", 
 tokio = { version = "1.51.0", features = ["io-util", "macros", "net", "rt-multi-thread", "sync", "time"] }
 tokio-rustls = { version = "0.26", default-features = false, features = ["aws_lc_rs", "logging", "tls12"] }
 tokio-tungstenite = { version = "0.28.0", default-features = false, features = ["handshake", "__rustls-tls"] }
-rcgen = { version = "0.13", default-features = false, features = ["aws_lc_rs"] }
+rcgen = { version = "0.13", default-features = false, features = ["aws_lc_rs", "pem"] }
+openssl = "0.10"
 
 [lints]
 workspace = true
