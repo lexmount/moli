@@ -2,7 +2,11 @@ use super::{
     JsContextHost, OwnerDispatchScope, child_frame_runtime::WINDOW_EVENT_HANDLER_PROPERTIES,
 };
 use crate::{
-    context_bootstrap::{EventHandlerType, apply_event_handler_return_value, event_is_error_event},
+    context_bootstrap::{
+        EVENT_DISPATCHING_SLOT, EVENT_STOP_IMMEDIATE_PROPAGATION_SLOT, EVENT_STOP_PROPAGATION_SLOT,
+        EventHandlerType, apply_event_handler_return_value, event_is_error_event,
+        set_event_internal_flag,
+    },
     document_runtime::DomHandle,
     document_runtime::EventTargetHandle,
     exception_reporting::invoke_event_handler,
@@ -497,6 +501,12 @@ impl JsContextHost {
         };
         let _ = event.set(scope, v8str(scope, "target").into(), target);
         let _ = event.set(scope, v8str(scope, "currentTarget").into(), window.into());
+        let _ = event.set(
+            scope,
+            v8str(scope, "eventPhase").into(),
+            v8::Integer::new(scope, 2).into(),
+        );
+        set_event_internal_flag(scope, event, EVENT_DISPATCHING_SLOT, true);
 
         if event_type == "load" {
             install_child_body_load_attribute_handler_if_needed(scope, self, handle);
@@ -545,6 +555,19 @@ impl JsContextHost {
                 break;
             }
         }
+        let _ = event.set(
+            scope,
+            v8str(scope, "eventPhase").into(),
+            v8::Integer::new(scope, 0).into(),
+        );
+        let _ = event.set(
+            scope,
+            v8str(scope, "currentTarget").into(),
+            v8::null(scope).into(),
+        );
+        set_event_internal_flag(scope, event, EVENT_DISPATCHING_SLOT, false);
+        set_event_internal_flag(scope, event, EVENT_STOP_PROPAGATION_SLOT, false);
+        set_event_internal_flag(scope, event, EVENT_STOP_IMMEDIATE_PROPAGATION_SLOT, false);
         self.pop_child_subresource_request_scope();
         restore_child_window_event_dispatch(scope, previous_active_child_window);
     }
