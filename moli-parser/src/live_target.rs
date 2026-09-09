@@ -2136,6 +2136,10 @@ impl ParserStreamHtmlTreeSinkTarget {
         Some(move || sink.finish())
     }
 
+    pub(super) fn has_runtime_dom_consumer(&self) -> bool {
+        self.runtime_dom_sinks.is_some()
+    }
+
     fn new(final_url: Url) -> Self {
         Self::new_with_declarative_shadow_roots(final_url, true)
     }
@@ -2373,7 +2377,11 @@ impl ParserStreamHtmlTreeSinkTarget {
         }
     }
 
-    fn read_is_html_element_named(&self, node_id: NativeNodeId, local_name: &str) -> bool {
+    pub(super) fn read_is_html_element_named(
+        &self,
+        node_id: NativeNodeId,
+        local_name: &str,
+    ) -> bool {
         if let Some(owner) = &self.runtime_dom_sinks {
             owner
                 .dom_read_sink()
