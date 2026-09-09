@@ -1053,8 +1053,6 @@ pub(crate) struct PageScriptHost {
         HashMap<DomHandle, IndexMap<String, Vec<ChildWindowEventListenerEntry>>>,
     next_child_window_event_registration_id: u64,
     event_callbacks: event_callbacks::EventCallbackRegistry,
-    explicit_event_dispatch_depth: usize,
-    event_callback_invocation_depth: usize,
     active_window_error_report_owners: HashSet<WindowExecutionContextOwner>,
     browser_context_runtime: crate::runtime::RendererBrowserContextRuntime,
     window_identity: crate::runtime::RendererPageWindowIdentity,

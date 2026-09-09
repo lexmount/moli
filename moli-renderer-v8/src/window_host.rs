@@ -45,7 +45,7 @@ use super::{
 use crate::event_listener_args::{
     AddEventListenerArgs, RemoveEventListenerArgs, parse_listener_args,
 };
-
+use crate::native_bridge::OwnerDispatchScope;
 use crate::web_api_interfaces;
 use moli_webapi::events::{construct_native_event, init::EventInit};
 pub(crate) use moli_webapi::idle_deadline::install_idle_deadline_template_bindings;
@@ -312,8 +312,6 @@ pub(super) fn event_target_dispatch_event_callback<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'s, v8::Value>,
 ) {
-    let _explicit_dispatch_scope = context_host_ptr_from_global_bridge(scope)
-        .map(|host_ptr| unsafe { &mut *host_ptr }.enter_explicit_event_dispatch_scope());
     // IndexedDB retains its transaction-owner dispatch scope while sharing the
     // public EventTarget operation with every other interface.
     if crate::web_api_interfaces::IDBDatabase::is_instance(scope, args.this())

@@ -226,8 +226,8 @@ __serviceWorkerInternalRegistration.addEventListener("updatefound", () => {
             page_vm
                 .vm_mut()
                 .eval("__serviceWorkerInternalLifecycleEvents.join('|')")?,
-            "callback",
-            "the event body must leave its Promise reaction for selected completion"
+            "callback|microtask|runtime-script",
+            "listener cleanup must drain reactions before the selected task completes"
         );
         assert_eq!(
             page_vm

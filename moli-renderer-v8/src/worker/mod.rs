@@ -29,6 +29,8 @@ pub(crate) use file_reading_tasks::{
 };
 pub(crate) use networking_tasks::queue_worker_networking_task;
 
+pub(crate) use thread::perform_callback_cleanup_checkpoint_if_worker;
+
 pub(crate) use data_url::decode_data_url_script_source;
 pub(crate) use global_scope::{
     NestedWorkerContext, WorkerFetchCompletion, WorkerFetchEvent, WorkerFetchResponse,

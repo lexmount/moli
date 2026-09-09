@@ -110,7 +110,7 @@ scrollTo(0, 12);
 }
 
 #[tokio::test(flavor = "current_thread")]
-async fn scroll_handler_reentrancy_queues_a_new_turn_and_checkpoints_after_scrollend() {
+async fn scroll_handler_reentrancy_queues_a_new_turn_and_cleans_up_before_scrollend() {
     let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).expect("loader");
     let mut vm = new_storage_page_task_executor_test_vm("https://scroll-reentrant-update.test/");
 
@@ -141,8 +141,8 @@ scrollTo(0, 10);
     assert_eq!(
         vm.eval("__scrollLog.join('|')")
             .expect("first-turn log should be readable"),
-        "scroll:10|scrollend:20|microtask:20",
-        "one rendering update dispatches its pending event list before the host-task checkpoint"
+        "scroll:10|microtask:20|scrollend:20",
+        "scroll callback cleanup precedes the next pending scrollend event"
     );
 
     assert!(
@@ -154,7 +154,7 @@ scrollTo(0, 10);
     assert_eq!(
         vm.eval("__scrollLog.join('|')")
             .expect("second-turn log should be readable"),
-        "scroll:10|scrollend:20|microtask:20|scroll:20|scrollend:20|microtask:20"
+        "scroll:10|microtask:20|scrollend:20|scroll:20|microtask:20|scrollend:20"
     );
     assert!(!vm.has_ready_timeout());
 }
@@ -187,8 +187,8 @@ scrollTo(0, 10);
     assert_eq!(
         vm.eval("__scrollErrorLog.join('|')")
             .expect("listener-error log should remain readable"),
-        "scroll|scrollend|microtask",
-        "public listener errors must not suppress later pending events or the host-task checkpoint"
+        "scroll|microtask|scrollend",
+        "public listener errors must not suppress callback cleanup or later pending events"
     );
     assert!(!vm.has_ready_timeout());
 }
