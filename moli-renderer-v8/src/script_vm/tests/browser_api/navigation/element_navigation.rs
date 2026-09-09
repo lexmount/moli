@@ -777,6 +777,51 @@ async fn javascript_form_actions_execute_without_serializing_the_entry_list() {
 }
 
 #[test]
+fn location_assign_before_complete_load_respects_user_activation() {
+    for activated in [false, true] {
+        let mut vm = new_storage_test_vm("https://location-before-load.test/source");
+        if activated {
+            vm._context_host
+                .borrow_mut()
+                .begin_protocol_user_gesture_activation();
+        }
+        let navigation_type = vm
+            .eval(
+                r#"
+          window.observedNavigationType = null;
+          navigation.addEventListener('navigate', e => observedNavigationType = e.navigationType);
+          location.assign('/destination');
+          observedNavigationType
+        "#,
+            )
+            .expect("Location navigation must expose its resolved history behavior");
+        if activated {
+            vm._context_host
+                .borrow_mut()
+                .end_protocol_user_gesture_activation();
+        }
+        assert_eq!(navigation_type, if activated { "push" } else { "replace" });
+        let pending = vm.take_pending_location_navigation_with_seed().unwrap();
+        let seed = pending.entry_seed.unwrap();
+        let from = seed.activation.as_ref().unwrap().from.as_ref().unwrap();
+        assert_eq!(
+            seed.current_index,
+            from.history_index + u32::from(activated)
+        );
+        assert_eq!(
+            seed.entries
+                .iter()
+                .any(|entry| entry.url == "https://location-before-load.test/source"),
+            activated
+        );
+        assert_eq!(
+            seed.entries.last().unwrap().url,
+            "https://location-before-load.test/destination"
+        );
+    }
+}
+
+#[test]
 fn form_target_blank_reloads_rel_opener_policy_for_each_submission() {
     for (rel, expected_exposes_opener) in [
         ("", false),
