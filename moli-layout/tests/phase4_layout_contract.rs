@@ -244,6 +244,86 @@ fn assert_close(actual: f32, expected: f32) {
 }
 
 #[test]
+fn inline_block_ratio_height_respects_automatic_content_minimum_and_opt_outs() {
+    let source = Source(vec![
+        Node::element("root", "div", LayoutElementCategory::Generic, None, vec![1]),
+        Node::element(
+            "ratio",
+            "div",
+            LayoutElementCategory::Generic,
+            None,
+            vec![2],
+        ),
+        Node::element(
+            "content",
+            "div",
+            LayoutElementCategory::Generic,
+            None,
+            vec![],
+        ),
+    ]);
+    for (minimum, maximum, overflow, explicit_height, expected) in [
+        (
+            Dimension::auto(),
+            Dimension::auto(),
+            Overflow::Visible,
+            Dimension::auto(),
+            20.0,
+        ),
+        (
+            Dimension::length(0.0),
+            Dimension::auto(),
+            Overflow::Visible,
+            Dimension::auto(),
+            10.0,
+        ),
+        (
+            Dimension::auto(),
+            Dimension::auto(),
+            Overflow::Hidden,
+            Dimension::auto(),
+            10.0,
+        ),
+        (
+            Dimension::auto(),
+            Dimension::length(18.0),
+            Overflow::Visible,
+            Dimension::auto(),
+            18.0,
+        ),
+        (
+            Dimension::auto(),
+            Dimension::auto(),
+            Overflow::Visible,
+            Dimension::length(10.0),
+            10.0,
+        ),
+    ] {
+        let mut styles = Styles::default();
+        styles.primary.insert(
+            0,
+            sized(LayoutDisplay::Block, 200.0, 100.0, PaintColor::TRANSPARENT),
+        );
+        styles.primary.insert(
+            1,
+            style(LayoutDisplay::InlineBlock, GREEN).tap_taffy(|style| {
+                style.size.width = Dimension::length(40.0);
+                style.size.height = explicit_height;
+                style.aspect_ratio = Some(4.0);
+                style.min_size.height = minimum;
+                style.max_size.height = maximum;
+                style.overflow.y = overflow;
+            }),
+        );
+        styles
+            .primary
+            .insert(2, sized(LayoutDisplay::Block, 10.0, 20.0, BLUE));
+        let snapshot = render(&source, &mut styles, 200, 100);
+        assert_close(rect(&snapshot, GREEN).height, expected);
+    }
+}
+
+#[test]
 fn table_caption_tracks_rows_cells_and_common_spans_share_one_wrapper_geometry() {
     use LayoutElementCategory::Table;
     use LayoutTableRole::{BodyGroup, Caption, Cell, Row, Table as Root};
