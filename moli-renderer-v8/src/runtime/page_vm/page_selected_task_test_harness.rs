@@ -52,6 +52,7 @@ pub(crate) enum PageSelectedTaskTestSelector {
     ChildNavigationCommit,
     ChildModulepreloadEventAction,
     DomManipulation(PageDomManipulationTestFamily),
+    AnyDomManipulation,
     DedicatedWorkerClientEvent,
     DynamicImportOwnerAction,
     FileReading,
@@ -91,6 +92,9 @@ impl PageSelectedTaskTestSelector {
             Self::ChildDocumentLifecycle => matches!(
                 descriptor,
                 RendererPageReadyDescriptor::ChildFrameTask { owner, .. }
+                    | RendererPageReadyDescriptor::DomManipulation {
+                        owner: crate::page_task_queue::RendererPageDomManipulationOwner::ChildDocumentLifecycle(owner), ..
+                    }
                     if matches!(
                         owner.target(),
                         crate::page_task_queue::RendererPageChildFrameTaskTarget::DocumentLifecycle(_)
@@ -154,6 +158,10 @@ impl PageSelectedTaskTestSelector {
             Self::ChildModulepreloadEventAction => matches!(
                 descriptor,
                 RendererPageReadyDescriptor::ChildModulepreloadEventAction { .. }
+            ),
+            Self::AnyDomManipulation => matches!(
+                descriptor,
+                RendererPageReadyDescriptor::DomManipulation { .. }
             ),
             Self::DomManipulation(family) => matches!(
                 descriptor,
@@ -319,7 +327,13 @@ impl PageSelectedTaskTestSelector {
 
     fn matches_task(self, task: &RendererPageSchedulerTask) -> bool {
         match (self, task) {
-            (Self::ChildDocumentLifecycle, RendererPageSchedulerTask::ChildFrameTask(task)) => {
+            (Self::ChildDocumentLifecycle, RendererPageSchedulerTask::ChildFrameTask(task))
+            | (
+                Self::ChildDocumentLifecycle,
+                RendererPageSchedulerTask::DomManipulation(
+                    RendererPageDomManipulationTask::ChildDocumentLifecycle(task),
+                ),
+            ) => {
                 matches!(
                     task.owner().target(),
                     crate::page_task_queue::RendererPageChildFrameTaskTarget::DocumentLifecycle(_)
@@ -380,6 +394,7 @@ impl PageSelectedTaskTestSelector {
                 Self::ChildModulepreloadEventAction,
                 RendererPageSchedulerTask::ChildModulepreloadEventAction(_),
             ) => true,
+            (Self::AnyDomManipulation, RendererPageSchedulerTask::DomManipulation(_)) => true,
             (Self::DomManipulation(family), RendererPageSchedulerTask::DomManipulation(task)) => {
                 family.matches_owner(task.owner())
             }

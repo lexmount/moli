@@ -1293,7 +1293,6 @@ globalThis.__childParserModuleWaitValue = 188;
                 ChildFrameSemanticTurnKind::DocumentScriptReady,
                 ChildFrameSemanticTurnKind::ParserModuleRootStart,
                 ChildFrameSemanticTurnKind::DocumentScriptReady,
-                ChildFrameSemanticTurnKind::DocumentLifecycle
             ],
             "the typed root fetch-start must preserve parser discovery FIFO, then the parser should run the following inline script and reach interactive"
         );

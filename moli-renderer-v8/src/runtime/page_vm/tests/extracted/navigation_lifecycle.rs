@@ -375,12 +375,12 @@ onload = () => {
             host_load_pending_after_completion,
             script_ready_source,
             events_after_script_ready,
-            interactive_source,
+            interactive_state,
             host_load_source,
             events_after_host_load,
             nested_script_ready_source,
             events_after_nested_script_ready,
-            nested_interactive_source,
+            nested_interactive_state,
             nested_host_load_source,
             events_after_nested_host_load,
         ) = local_executor
@@ -424,7 +424,7 @@ onload = () => {
                 let events_after_script_ready = page_vm
                     .vm_mut()
                     .eval("__hostLoadNestedEvents.join('|')")?;
-                let interactive_source = page_vm.run_next_child_frame_task_source_for_semantic_test().await;
+                let interactive_state = page_vm.vm_mut().eval("document.querySelector('iframe').contentDocument.readyState")?;
                 let host_load_source = Some(
                     run_child_domcontentloaded_then_host_load_for_wait(
                         &mut page_vm,
@@ -450,8 +450,7 @@ onload = () => {
                 let events_after_nested_script_ready = page_vm
                     .vm_mut()
                     .eval("__hostLoadNestedEvents.join('|')")?;
-                let nested_interactive_source =
-                    page_vm.run_next_child_frame_task_source_for_semantic_test().await;
+                let nested_interactive_state = page_vm.vm_mut().eval("document.querySelector('iframe').contentDocument.querySelector('iframe').contentDocument.readyState")?;
                 let nested_host_load_source = Some(
                     run_child_domcontentloaded_then_host_load_for_wait(
                         &mut page_vm,
@@ -469,12 +468,12 @@ onload = () => {
                     host_load_pending_after_completion,
                     script_ready_source,
                     events_after_script_ready,
-                    interactive_source,
+                    interactive_state,
                     host_load_source,
                     events_after_host_load,
                     nested_script_ready_source,
                     events_after_nested_script_ready,
-                    nested_interactive_source,
+                    nested_interactive_state,
                     nested_host_load_source,
                     events_after_nested_host_load,
                 ))
@@ -502,8 +501,8 @@ onload = () => {
         );
         assert_eq!(events_after_script_ready, "child-script");
         assert_eq!(
-            interactive_source,
-            Some(ChildFrameSemanticTurnKind::DocumentLifecycle),
+            interactive_state,
+            "interactive",
             "child parser EOF should become interactive before window load"
         );
         assert_eq!(
@@ -525,8 +524,8 @@ onload = () => {
             "nested script should run on the later DocumentScriptReady turn"
         );
         assert_eq!(
-            nested_interactive_source,
-            Some(ChildFrameSemanticTurnKind::DocumentLifecycle),
+            nested_interactive_state,
+            "interactive",
             "nested parser EOF should become interactive before nested HostLoad"
         );
         assert_eq!(
