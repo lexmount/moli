@@ -1487,7 +1487,7 @@ async fn set_blocked_urls_blocks_parser_external_script_but_preserves_following_
             [(CONTENT_TYPE.as_str(), "text/html")],
             r#"<!doctype html>
 <html><body>
-<script src="http://example.test/blocked/parser-script.js"></script>
+<script src="/blocked/parser-script.js"></script>
 <script>
 globalThis.__lm_after_blocked_parser_script = true;
 </script>
@@ -1495,12 +1495,26 @@ globalThis.__lm_after_blocked_parser_script = true;
         )
     }
 
+    async fn parser_script() -> impl IntoResponse {
+        // A real script makes the fixture fail if blocking is inactive, rather
+        // than accidentally passing because an external hostname cannot load.
+        (
+            [(CONTENT_TYPE.as_str(), "application/javascript")],
+            "globalThis.__lm_blocked_parser_script_loaded = true;",
+        )
+    }
+
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
     let server = tokio::spawn(async move {
-        axum::serve(listener, Router::new().route("/page", get(page)))
-            .await
-            .unwrap();
+        axum::serve(
+            listener,
+            Router::new()
+                .route("/page", get(page))
+                .route("/blocked/parser-script.js", get(parser_script)),
+        )
+        .await
+        .unwrap();
     });
 
     let page_url = format!("http://{addr}/page");
@@ -1510,11 +1524,12 @@ globalThis.__lm_after_blocked_parser_script = true;
     bc.attach_active_session("SID-1");
     ctx.conn.install_browser_context_fixture_for_test(bc);
 
+    enable_network_domain(&mut ctx, 70_009, Some("SID-1")).await;
     ctx.process_async(json!({
         "id": 70_010,
         "method": "Network.setBlockedURLs",
         "sessionId": "SID-1",
-        "params": { "urls": ["http://example.test/blocked/*"] }
+        "params": { "urls": [format!("http://{addr}/blocked/*")] }
     }))
     .await;
     ctx.expect_result(70_010, json!({}), Some("SID-1"));
@@ -1539,6 +1554,34 @@ globalThis.__lm_after_blocked_parser_script = true;
         },
     )
     .await;
+
+    let script_url = format!("http://{addr}/blocked/parser-script.js");
+    let request = ctx
+        .sent
+        .iter()
+        .find(|message| {
+            message["sessionId"] == "SID-1"
+                && message["method"] == "Network.requestWillBeSent"
+                && message["params"]["request"]["url"] == script_url
+        })
+        .expect("parser script request should be instrumented");
+    let request_id = request["params"]["requestId"]
+        .as_str()
+        .expect("parser script request id");
+    let failure = ctx
+        .sent
+        .iter()
+        .find(|message| {
+            message["sessionId"] == "SID-1"
+                && message["method"] == "Network.loadingFailed"
+                && message["params"]["requestId"] == request_id
+        })
+        .expect("the same parser script request must fail through URL blocking");
+    assert_eq!(failure["params"]["type"], "Script");
+    assert_eq!(
+        failure["params"]["errorText"],
+        format!("failed to fetch script `{script_url}`: net::ERR_BLOCKED_BY_CLIENT")
+    );
 
     ctx.process_async(json!({
         "id": 70_012,
