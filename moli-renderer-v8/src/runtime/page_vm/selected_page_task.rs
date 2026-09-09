@@ -23,7 +23,7 @@ impl PageVm {
                 self.apply_selected_page_action_window_turn(deadline)
             }
             RendererPageSchedulerTask::DomManipulation(task) => {
-                let outcome = self.apply_selected_page_dom_manipulation_turn(task)?;
+                let outcome = self.apply_selected_page_dom_manipulation_turn(task).await?;
                 self.finish_selected_page_dom_manipulation_task(outcome.action, loader)
                     .await?;
                 Ok(())

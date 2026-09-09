@@ -2375,7 +2375,7 @@ async fn child_window_load_replacement_stops_old_delivery_before_owner_output() 
             "old Window load listener must retain a current callback relevant realm"
         );
     }
-    for context in ["old interactive", "old DOMContentLoaded", "old complete"] {
+    for context in ["old DOMContentLoaded", "old complete"] {
         expect_child_frame_task_source_after_realm_prerequisite(
             &mut vm,
             ChildFrameSemanticTurnKind::DocumentLifecycle,
@@ -2427,11 +2427,7 @@ async fn child_window_load_replacement_stops_old_delivery_before_owner_output() 
         "replacement child load handlers should install",
     )
     .await;
-    for context in [
-        "replacement interactive",
-        "replacement DOMContentLoaded",
-        "replacement complete",
-    ] {
+    for context in ["replacement DOMContentLoaded", "replacement complete"] {
         expect_child_frame_task_source_after_realm_prerequisite(
             &mut vm,
             ChildFrameSemanticTurnKind::DocumentLifecycle,
@@ -2805,8 +2801,14 @@ async fn child_script_document_open_after_location_navigation_is_noop() {
     );
     expect_one_child_frame_task_source(
         &mut vm,
+        ChildFrameSemanticTurnKind::RealmMaterialization,
+        "blob replacement must materialize its exact realm",
+    )
+    .await;
+    expect_one_child_frame_task_source(
+        &mut vm,
         ChildFrameSemanticTurnKind::DocumentLifecycle,
-        "the queued srcdoc lifecycle task must stale-discard before blob lifecycle work",
+        "the older srcdoc DCL must stale-discard at the shared DOM head",
     )
     .await;
     for transition in ["interactive", "DOMContentLoaded", "complete"] {
