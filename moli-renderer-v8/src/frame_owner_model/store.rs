@@ -143,6 +143,7 @@ impl FrameOwnerStore {
                 realm_id: Some(realm_id),
                 settings,
                 lifecycle: LocalWindowLifecycleState::Current,
+                touch_feature_detection: None,
             },
         );
         let lifecycle_progress =
@@ -484,6 +485,7 @@ impl FrameOwnerStore {
                 realm_id: None,
                 settings,
                 lifecycle: LocalWindowLifecycleState::Current,
+                touch_feature_detection: None,
             },
         );
         self.documents.insert(
@@ -3284,6 +3286,18 @@ impl FrameOwnerStore {
         self.frames
             .get(&local_window.frame_id)
             .is_some_and(|frame| frame.scheduler_lane_id == owner.scheduler_lane_id)
+    }
+
+    pub(crate) fn init_window_touch_feature_detection(
+        &mut self,
+        owner: FrameDocumentTaskOwner,
+        enabled: bool,
+    ) -> Option<bool> {
+        if !self.document_task_owner_is_current(owner) {
+            return None;
+        }
+        let window = self.local_windows.get_mut(&owner.local_window_id)?;
+        Some(*window.touch_feature_detection.get_or_insert(enabled))
     }
 
     pub(crate) fn current_reserved_realm_id_for_document_task_owner(

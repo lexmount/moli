@@ -1,4 +1,6 @@
-use super::events::{new_uninitialized_text_event, set_event_initialized};
+use super::events::{
+    new_uninitialized_text_event, new_uninitialized_touch_event, set_event_initialized,
+};
 use super::*;
 use crate::webidl;
 use std::str::FromStr;
@@ -28,6 +30,7 @@ enum DocumentCreateEventKind {
     #[strum(serialize = "uievent", serialize = "uievents")]
     UiEvent,
     TextEvent,
+    TouchEvent,
     CompositionEvent,
     FocusEvent,
     HashChangeEvent,
@@ -50,6 +53,7 @@ impl DocumentCreateEventKind {
             DocumentCreateEventKind::DragEvent => "Event",
             DocumentCreateEventKind::UiEvent => "UIEvent",
             DocumentCreateEventKind::TextEvent => "TextEvent",
+            DocumentCreateEventKind::TouchEvent => "TouchEvent",
             DocumentCreateEventKind::CompositionEvent => "CompositionEvent",
             DocumentCreateEventKind::FocusEvent => "FocusEvent",
             DocumentCreateEventKind::HashChangeEvent => "Event",
@@ -70,6 +74,9 @@ fn new_uninitialized_document_event<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     kind: DocumentCreateEventKind,
 ) -> Option<v8::Local<'s, v8::Object>> {
+    if kind == DocumentCreateEventKind::TouchEvent {
+        return new_uninitialized_touch_event(scope);
+    }
     let name = kind.constructor_name();
     let constructor =
         super::exposed_interfaces::ensure_intrinsic_interface_constructor(scope, name).ok()?;
@@ -87,6 +94,12 @@ pub(super) fn document_create_event_callback<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'_, v8::Value>,
 ) {
+    if crate::native_bridge::document::document_receiver_runtime_and_handle(scope, args.this())
+        .is_none()
+    {
+        throw_type_error(scope, "Illegal invocation");
+        return;
+    }
     let Some(parsed) = webidl::parse_args::<DocumentCreateEventArgs>(scope, &args) else {
         return;
     };
@@ -94,8 +107,12 @@ pub(super) fn document_create_event_callback<'s>(
         throw_not_supported_dom_exception(scope, "The provided event type is not supported.");
         return;
     };
-    let relevant_context = crate::native_bridge::node_relevant_context(scope, args.this())
-        .unwrap_or_else(|| scope.get_current_context());
+    let relevant_context = if kind == DocumentCreateEventKind::TouchEvent {
+        crate::native_bridge::document::document_relevant_context(scope, args.this())
+    } else {
+        crate::native_bridge::node_relevant_context(scope, args.this())
+    }
+    .unwrap_or_else(|| scope.get_current_context());
     // Exposure follows the Document's realm, while an operation's exception
     // belongs to the callee realm even when its receiver is from another one.
     let exposed = {
@@ -103,7 +120,8 @@ pub(super) fn document_create_event_callback<'s>(
         super::exposed_interfaces::is_window_interface_exposed(
             target_scope,
             kind.constructor_name(),
-        )
+        ) && (kind != DocumentCreateEventKind::TouchEvent
+            || super::touch_feature_detection::enabled(target_scope))
     };
     if !exposed {
         throw_not_supported_dom_exception(

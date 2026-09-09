@@ -108,6 +108,32 @@ pub(in crate::context_bootstrap) fn new_uninitialized_text_event<'s>(
     Some(wrapper)
 }
 
+pub(in crate::context_bootstrap) fn new_uninitialized_touch_event<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+) -> Option<v8::Local<'s, v8::Object>> {
+    let prototype =
+        super::exposed_interfaces::ensure_intrinsic_interface_prototype(scope, "TouchEvent")
+            .ok()?;
+    let event = v8::Object::new(scope);
+    if event.set_prototype(scope, prototype.into()) != Some(true) {
+        return None;
+    }
+    let wrapper = event;
+    let event = new_event_state(scope);
+    base::initialize_event_object(scope, event, "", false, false);
+    super::touch_runtime::initialize_uninitialized_touch_event(scope, event);
+    set_private_value(
+        scope,
+        event,
+        EVENT_SUBCLASS_KIND_SLOT,
+        v8::Integer::new(scope, EventSubclassKind::TouchEvent as i32).into(),
+    );
+    base::set_event_initialized(scope, event, false);
+    web_api_interfaces::initialize(scope, event, "TouchEvent").ok()?;
+    initialize_event_wrapper(scope, wrapper, event)?;
+    Some(wrapper)
+}
+
 pub(crate) fn construct_original_page_transition_event<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     event_type: &str,

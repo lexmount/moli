@@ -6,6 +6,8 @@ use super::materialize::{
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum RealmDependentFinalizer {
+    Document,
+    TouchEventHandlers,
     NodeMixinUnscopables,
     CryptoSecureContextSurface,
     BaseAudioContextSecureContextSurface,
@@ -18,7 +20,7 @@ enum RealmDependentFinalizer {
 const REALM_DEPENDENT_FINALIZER_ALLOWLIST: &[(&str, RealmDependentFinalizer)] = &[
     // The template creates @@unscopables, but its object needs a realm-local
     // null prototype after materialization.
-    ("Document", RealmDependentFinalizer::NodeMixinUnscopables),
+    ("Document", RealmDependentFinalizer::Document),
     (
         "DocumentFragment",
         RealmDependentFinalizer::NodeMixinUnscopables,
@@ -34,6 +36,9 @@ const REALM_DEPENDENT_FINALIZER_ALLOWLIST: &[(&str, RealmDependentFinalizer)] = 
     ),
     // These entries install private realm state, context-conditional surface,
     // or constructor data whose JavaScript identity must be realm-local.
+    ("HTMLElement", RealmDependentFinalizer::TouchEventHandlers),
+    ("SVGElement", RealmDependentFinalizer::TouchEventHandlers),
+    ("MathMLElement", RealmDependentFinalizer::TouchEventHandlers),
     (
         "BaseAudioContext",
         RealmDependentFinalizer::BaseAudioContextSecureContextSurface,
@@ -82,6 +87,21 @@ pub(super) fn finalize_materialized_interface(
         return Ok(());
     };
     match finalizer {
+        RealmDependentFinalizer::Document => {
+            finalize_node_mixin_unscopables(scope, prototype);
+            crate::native_bridge::element::install_touch_event_handler_realm_bindings(
+                scope,
+                prototype,
+                crate::native_bridge::element::GlobalEventHandlerOwner::Document,
+            )?;
+        }
+        RealmDependentFinalizer::TouchEventHandlers => {
+            crate::native_bridge::element::install_touch_event_handler_realm_bindings(
+                scope,
+                prototype,
+                crate::native_bridge::element::GlobalEventHandlerOwner::Element,
+            )?;
+        }
         RealmDependentFinalizer::NodeMixinUnscopables => {
             finalize_node_mixin_unscopables(scope, prototype);
         }
@@ -148,6 +168,9 @@ mod tests {
                 "Element",
                 "DocumentType",
                 "CharacterData",
+                "HTMLElement",
+                "SVGElement",
+                "MathMLElement",
                 "BaseAudioContext",
                 "Crypto",
                 "XMLHttpRequestEventTarget",

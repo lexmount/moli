@@ -54,6 +54,12 @@ pub(in crate::context_bootstrap) fn install_window_global_accessors<'s>(
         .initialize(scope, global)
         .expect("Window global event handler accessors declaration should initialize");
     for name in WINDOW_EVENT_HANDLER_PROPERTIES {
+        if crate::context_bootstrap::touch_feature_detection::TOUCH_EVENT_HANDLER_PROPERTIES
+            .contains(name)
+            && !crate::context_bootstrap::touch_feature_detection::enabled(scope)
+        {
+            continue;
+        }
         if matches!(
             *name,
             "onerror" | "onunhandledrejection" | "onrejectionhandled"

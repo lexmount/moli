@@ -218,15 +218,6 @@ impl ScriptVm {
         self._context_host.borrow_mut().set_network_offline(offline);
     }
 
-    pub(crate) fn set_navigator_overrides(
-        &mut self,
-        overrides: &moli_page_types::NavigatorOverrides,
-    ) {
-        self._context_host
-            .borrow_mut()
-            .set_navigator_overrides(overrides);
-    }
-
     pub(crate) fn set_navigator_overrides_and_sync_surface(
         &mut self,
         overrides: &moli_page_types::NavigatorOverrides,

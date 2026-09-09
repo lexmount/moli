@@ -119,11 +119,11 @@ struct TouchUiEventInitDeclaration<'scope> {
 #[webapi(interface = web_api_interfaces::TouchEvent)]
 struct TouchEventObjectDeclaration<'scope> {
     #[webapi(slot = TOUCH_EVENT_TOUCHES_SLOT)]
-    touches: v8::Local<'scope, v8::Object>,
+    touches: v8::Local<'scope, v8::Value>,
     #[webapi(slot = TOUCH_EVENT_TARGET_TOUCHES_SLOT)]
-    target_touches: v8::Local<'scope, v8::Object>,
+    target_touches: v8::Local<'scope, v8::Value>,
     #[webapi(slot = TOUCH_EVENT_CHANGED_TOUCHES_SLOT)]
-    changed_touches: v8::Local<'scope, v8::Object>,
+    changed_touches: v8::Local<'scope, v8::Value>,
     #[webapi(slot = TOUCH_EVENT_ALT_KEY_SLOT)]
     alt_key: bool,
     #[webapi(slot = TOUCH_EVENT_META_KEY_SLOT)]
@@ -425,9 +425,9 @@ pub(in crate::context_bootstrap) fn initialize_touch_event<'s>(
     let ctrl_key = touch_event_init_bool(scope, init, "ctrlKey", false);
     let shift_key = touch_event_init_bool(scope, init, "shiftKey", false);
     TouchEventObjectDeclaration::new(
-        touches,
-        target_touches,
-        changed_touches,
+        touches.into(),
+        target_touches.into(),
+        changed_touches.into(),
         alt_key,
         meta_key,
         ctrl_key,
@@ -435,6 +435,17 @@ pub(in crate::context_bootstrap) fn initialize_touch_event<'s>(
     )
     .initialize(scope, event)
     .expect("TouchEvent declaration should initialize object");
+}
+
+pub(in crate::context_bootstrap) fn initialize_uninitialized_touch_event<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    event: v8::Local<'s, v8::Object>,
+) {
+    initialize_touch_ui_event(scope, event, None);
+    let null = v8::null(scope).into();
+    TouchEventObjectDeclaration::new(null, null, null, false, false, false, false)
+        .initialize(scope, event)
+        .expect("uninitialized TouchEvent state");
 }
 
 pub(in crate::context_bootstrap) fn install_touch_template_bindings<'s>(
