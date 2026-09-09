@@ -143,6 +143,9 @@ fn window_script_failure_error_value<'s>(
             Some(crate::types::ScriptErrorConstructorKind::SyntaxError) => {
                 v8::Exception::syntax_error(scope, message)
             }
+            Some(crate::types::ScriptErrorConstructorKind::TypeError) => {
+                v8::Exception::type_error(scope, message)
+            }
             _ => v8::Exception::error(scope, message),
         })
 }

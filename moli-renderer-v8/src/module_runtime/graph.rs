@@ -1327,6 +1327,7 @@ impl<O: NativeModuleTreeDocumentOwnerAdapter> module_tree::ModuleScriptTreeHost
                     module_tree::ModuleLoadStage::Resolve,
                     format!("{message} for import `{specifier}`"),
                 )
+                .with_error_constructor(module_tree::ModuleErrorConstructorKind::TypeError)
             },
         )?;
         if requested_phase == module_tree::ModuleImportPhase::Source
@@ -1865,9 +1866,19 @@ fn local_graph(graph: module_tree::ModuleGraphHandle) -> ModuleGraphHandle {
 fn chromium_error(error: ModuleLoadError) -> module_tree::ModuleLoadError {
     let mut converted =
         module_tree::ModuleLoadError::new(chromium_load_stage(error.stage()), error.message());
-    if error.error_constructor() == Some(ScriptErrorConstructorKind::SyntaxError) {
-        converted =
-            converted.with_error_constructor(module_tree::ModuleErrorConstructorKind::SyntaxError);
+    if let Some(constructor) = error.error_constructor() {
+        let constructor = match constructor {
+            ScriptErrorConstructorKind::SyntaxError => {
+                module_tree::ModuleErrorConstructorKind::SyntaxError
+            }
+            ScriptErrorConstructorKind::TypeError => {
+                module_tree::ModuleErrorConstructorKind::TypeError
+            }
+            ScriptErrorConstructorKind::Error
+            | ScriptErrorConstructorKind::WebAssemblyCompileError
+            | ScriptErrorConstructorKind::WebAssemblyLinkError => return converted,
+        };
+        converted = converted.with_error_constructor(constructor);
     }
     converted
 }
@@ -1887,6 +1898,7 @@ fn local_error_constructor(
         module_tree::ModuleErrorConstructorKind::SyntaxError => {
             ScriptErrorConstructorKind::SyntaxError
         }
+        module_tree::ModuleErrorConstructorKind::TypeError => ScriptErrorConstructorKind::TypeError,
     }
 }
 
@@ -1985,6 +1997,7 @@ fn module_key_for_root(
             ModuleLoadStage::Resolve,
             format!("{message} for module `{}`", root.source_url),
         )
+        .with_error_constructor(ScriptErrorConstructorKind::TypeError)
     })?;
     validate_source_phase_key(root.phase, &key, "module", root.source_url.as_str())?;
     Ok(key)
@@ -3389,6 +3402,10 @@ import "./c.mjs";
         };
 
         assert_eq!(error.stage(), ModuleLoadStage::Resolve);
+        assert_eq!(
+            error.error_constructor(),
+            Some(ScriptErrorConstructorKind::TypeError)
+        );
         assert!(
             error
                 .message()
