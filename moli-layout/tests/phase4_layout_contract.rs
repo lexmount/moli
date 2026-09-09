@@ -244,6 +244,62 @@ fn assert_close(actual: f32, expected: f32) {
 }
 
 #[test]
+fn inline_float_content_height_includes_both_padding_and_border_edges() {
+    let source = Source(vec![
+        Node::element("root", "div", LayoutElementCategory::Generic, None, vec![1]),
+        Node::element(
+            "container",
+            "div",
+            LayoutElementCategory::Generic,
+            None,
+            vec![2],
+        ),
+        Node::element(
+            "float",
+            "img",
+            LayoutElementCategory::Generic,
+            Some(LayoutReplacedKind::Image),
+            vec![],
+        )
+        .with_metrics(ReplacedMetrics {
+            intrinsic_width: Some(16.0),
+            intrinsic_height: Some(16.0),
+            ..ReplacedMetrics::default()
+        }),
+    ]);
+    let mut styles = Styles::default();
+    styles.primary.insert(
+        0,
+        sized(LayoutDisplay::Block, 200.0, 100.0, PaintColor::TRANSPARENT),
+    );
+    styles.primary.insert(
+        1,
+        style(LayoutDisplay::InlineBlock, GREEN).tap_taffy(|style| {
+            style.padding = Rect {
+                left: taffy::LengthPercentage::length(2.0),
+                right: taffy::LengthPercentage::length(2.0),
+                top: taffy::LengthPercentage::length(2.0),
+                bottom: taffy::LengthPercentage::length(2.0),
+            };
+            style.border = Rect {
+                left: taffy::LengthPercentage::length(3.0),
+                right: taffy::LengthPercentage::length(3.0),
+                top: taffy::LengthPercentage::length(3.0),
+                bottom: taffy::LengthPercentage::length(3.0),
+            };
+        }),
+    );
+    styles.primary.insert(
+        2,
+        sized(LayoutDisplay::Block, 16.0, 16.0, BLUE).with_float(Float::Left, Clear::None),
+    );
+    let snapshot = render(&source, &mut styles, 200, 100);
+    assert_close(rect(&snapshot, BLUE).height, 16.0);
+    assert_close(rect(&snapshot, GREEN).width, 26.0);
+    assert_close(rect(&snapshot, GREEN).height, 26.0);
+}
+
+#[test]
 fn inline_block_ratio_height_respects_automatic_content_minimum_and_opt_outs() {
     let source = Source(vec![
         Node::element("root", "div", LayoutElementCategory::Generic, None, vec![1]),
