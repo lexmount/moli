@@ -5978,7 +5978,7 @@ fn detached_simple_structural_accessors_use_owner_prototypes() {
     [HTMLOptGroupElement.prototype, ["disabled"]],
     [HTMLDetailsElement.prototype, ["open"]],
     [HTMLDialogElement.prototype, ["open", "returnValue"]],
-    [HTMLMetaElement.prototype, ["content", "httpEquiv"]],
+    [HTMLMetaElement.prototype, ["content", "httpEquiv", "scheme"]],
     [HTMLTitleElement.prototype, ["text"]]
   ];
   for (const [prototype, names] of prototypeCases) {
@@ -6011,6 +6011,7 @@ fn detached_simple_structural_accessors_use_owner_prototypes() {
       [dialog, "open", true, "", "open"],
       [meta, "content", "width=device-width", "width=device-width", "content"],
       [meta, "httpEquiv", "refresh", "refresh", "http-equiv"],
+      [meta, "scheme", "utf-8", "utf-8", "scheme"],
       [title, "text", "Page Title", "Page Title", null]
     ];
 
@@ -6090,11 +6091,13 @@ fn detached_simple_specialized_accessors_reject_incompatible_receivers() {
   const ol = doc.createElement("ol");
   const optgroup = doc.createElement("optgroup");
   const details = doc.createElement("details");
+  const link = doc.createElement("link");
   const meta = doc.createElement("meta");
+  const style = doc.createElement("style");
   const title = doc.createElement("title");
   const div = doc.createElement("div");
   const text = doc.createTextNode("x");
-  const elements = [li, ol, optgroup, details, meta, title, div];
+  const elements = [li, ol, optgroup, details, link, meta, style, title, div];
 
   const cases = [
     [HTMLLIElement.prototype, "value", li, 7],
@@ -6103,8 +6106,13 @@ fn detached_simple_specialized_accessors_reject_incompatible_receivers() {
     [HTMLOListElement.prototype, "type", ol, "A"],
     [HTMLOptGroupElement.prototype, "disabled", optgroup, true],
     [HTMLDetailsElement.prototype, "open", details, true],
+    [HTMLLinkElement.prototype, "integrity", link, "sha256-test"],
+    [HTMLLinkElement.prototype, "rev", link, "made"],
+    [HTMLLinkElement.prototype, "type", link, "text/css"],
     [HTMLMetaElement.prototype, "content", meta, "width=device-width"],
     [HTMLMetaElement.prototype, "httpEquiv", meta, "refresh"],
+    [HTMLMetaElement.prototype, "scheme", meta, "utf-8"],
+    [HTMLStyleElement.prototype, "type", style, "text/less"],
     [HTMLTitleElement.prototype, "text", title, "Page Title"]
   ];
 
@@ -7343,6 +7351,9 @@ fn detached_resource_template_accessors_use_owner_prototypes() {
   }
   accessor(HTMLLinkElement.prototype, "disabled");
   accessor(HTMLIFrameElement.prototype, "csp");
+  for (const name of ["integrity", "rev", "type"]) {
+    accessor(HTMLLinkElement.prototype, name);
+  }
   accessor(HTMLIFrameElement.prototype, "sandbox");
   accessor(HTMLIFrameElement.prototype, "allowFullscreen");
   for (const name of ["default", "kind", "src", "srclang", "label"]) {
@@ -7391,17 +7402,31 @@ fn detached_resource_template_accessors_use_owner_prototypes() {
   }
 
   for (const link of linkElements) {
-    assert(!own(link, "disabled"), "link.disabled should not be own before set");
+    for (const name of ["disabled", "integrity", "rev", "type"]) {
+      assert(!own(link, name), `link.${name} should not be own before set`);
+    }
+    assert(link.integrity === "" && link.rev === "" && link.type === "", "link string defaults");
+    link.integrity = "sha256-test";
+    link.rev = "made";
+    link.type = "text/css";
+    assert(link.integrity === "sha256-test" && link.getAttribute("integrity") === "sha256-test", "link integrity");
+    assert(link.rev === "made" && link.getAttribute("rev") === "made", "link rev");
+    assert(link.type === "text/css" && link.getAttribute("type") === "text/css", "link type");
     link.disabled = true;
     assert(link.disabled === true, "link disabled true");
     assert(link.getAttribute("disabled") === "", "link disabled attr");
-    assert(!own(link, "disabled"), "link.disabled should stay inherited after true");
+    for (const name of ["disabled", "integrity", "rev", "type"]) {
+      assert(!own(link, name), `link.${name} should stay inherited after set`);
+    }
     link.disabled = false;
     assert(link.disabled === false, "link disabled false");
     assert(link.getAttribute("disabled") === null, "link disabled attr removed");
     assert(!own(link, "disabled"), "link.disabled should stay inherited after false");
-    assert(delete link.disabled, "link.disabled delete");
-    assert(!own(link, "disabled"), "link.disabled should stay inherited after delete");
+    for (const name of ["disabled", "integrity", "rev", "type"]) {
+      assert(delete link[name], `link.${name} delete`);
+      assert(!own(link, name), `link.${name} should stay inherited after delete`);
+    }
+    assert(link.integrity === "sha256-test" && link.rev === "made" && link.type === "text/css", "link strings after delete");
   }
 
   for (const iframe of iframeElements) {
