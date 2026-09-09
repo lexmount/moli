@@ -154,16 +154,11 @@ impl TargetSessionOwnerMut<'_> {
         true
     }
 
-    fn audits_output_snapshot(&mut self) -> Vec<moli_core::page::InspectorIssueSnapshot> {
-        self.browser_context
-            .ingest_owner_page_observable_output_updates_for_target(&self.target_id);
-        self.runtime_slot_mut()
-            .inspector_issues()
-            .unwrap_or_default()
-    }
-
     fn enable_audits(mut self) -> SessionOwnerAuditsEnableResult {
-        let storage = self.sync_audits_storage();
+        // Concrete, exact-Document facts already own this replay storage.
+        // A cumulative renderer report can lag behind those FIFO facts and
+        // must never overwrite them when another session enables Audits.
+        let storage = self.mutate_target_owner_state(|state| state.audits_storage_state.clone());
         let cursor =
             self.mutate_session_state_ref(|state| state.enable_audits_with_storage(&storage));
         let replay = cursor.and_then(|cursor| {
@@ -174,18 +169,6 @@ impl TargetSessionOwnerMut<'_> {
             Some(crate::domains::audits::TargetAuditsReplaySnapshot { issues })
         });
         SessionOwnerAuditsEnableResult::Handled { replay }
-    }
-
-    fn sync_audits_storage(
-        &mut self,
-    ) -> crate::domains::audits_output_state::TargetAuditsStorageState {
-        let source_issues = self.audits_output_snapshot();
-        self.mutate_target_owner_state(|owner_state| {
-            owner_state
-                .audits_storage_state
-                .ingest_source_issues(&source_issues);
-            owner_state.audits_storage_state.clone()
-        })
     }
 
     fn disable_audits(mut self) -> bool {

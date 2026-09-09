@@ -747,10 +747,6 @@ impl<'a> TargetSessionOwnerMut<'a> {
             .await
     }
 
-    pub(super) fn runtime_slot_mut(&mut self) -> &mut TargetRuntimeSlot {
-        &mut self.target_mut().runtime_slot
-    }
-
     pub(super) fn into_runtime_slot_mut(self) -> &'a mut TargetRuntimeSlot {
         &mut self.into_target_mut().runtime_slot
     }
