@@ -1638,9 +1638,10 @@ fn font_face_declared_slots_ignore_prototype_spoofing() {
     assert_eq!(vm.eval("fakeLoadedResult").unwrap(), "rejected:TypeError");
 }
 
-#[test]
-fn invalid_font_face_defers_loaded_rejection_until_promise_is_observed() {
-    let mut vm = new_storage_test_vm("https://font-face-lazy-loaded-promise.test/");
+#[tokio::test(flavor = "current_thread")]
+async fn invalid_font_face_defers_loaded_rejection_until_promise_is_observed() {
+    let mut vm =
+        new_storage_page_task_executor_test_vm("https://font-face-lazy-loaded-promise.test/");
 
     let initial = vm
         .eval(
@@ -1675,6 +1676,12 @@ fn invalid_font_face_defers_loaded_rejection_until_promise_is_observed() {
         "[]",
     );
 
+    assert!(
+        !vm.has_ready_dom_manipulation_family_for_test(
+            PageDomManipulationTestFamily::PromiseRejection,
+        ),
+        "no rejection notification may remain queued"
+    );
     let observed = vm
         .eval(
             r#"

@@ -101,6 +101,7 @@ mod host_loads;
 mod image_decodes;
 mod image_loads;
 mod image_resources;
+mod promise_rejection_tasks;
 mod script_preparation_errors;
 pub(crate) use image_resources::{
     CssImageResourceAdmission, CssImageResourceRequestIdentity, ImageResponseDescriptor,
@@ -921,6 +922,7 @@ pub(crate) struct JsContextHost {
     misc_platform_api_tasks: misc_platform_api_tasks::MiscPlatformApiTaskState,
     file_entry_file_callbacks: file_entry_file_callbacks::FileEntryFileCallbackState,
     script_preparation_errors: script_preparation_errors::ScriptPreparationErrorState,
+    promise_rejection_tasks: promise_rejection_tasks::PromiseRejectionTaskState,
     pending_selectedcontent_updates: HashSet<DomHandle>,
     user_interaction_tasks: user_interaction_tasks::UserInteractionTaskState,
     pending_image_load_events: HashMap<DomHandle, PendingImageLoadEvent>,
@@ -1322,6 +1324,8 @@ impl JsContextHost {
             return;
         }
         self.page_context_resources_closed = true;
+        self.promise_rejection_tasks =
+            promise_rejection_tasks::PromiseRejectionTaskState::default();
         self.retire_all_document_resource_loaders();
         self.page_default_context = None;
         self.v8_finalizers.clear_for_context_teardown();

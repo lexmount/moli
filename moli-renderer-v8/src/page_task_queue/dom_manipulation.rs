@@ -34,6 +34,10 @@ use super::{
         RendererPagePopupLoadEventOwner, RendererPagePopupLoadEventSender,
         RendererPagePopupLoadEventTask,
     },
+    promise_rejection::{
+        RendererPagePromiseRejectionOwner, RendererPagePromiseRejectionSender,
+        RendererPagePromiseRejectionTask,
+    },
     script_preparation_error::{
         RendererPageScriptPreparationErrorOwner, RendererPageScriptPreparationErrorSender,
         RendererPageScriptPreparationErrorTask,
@@ -72,6 +76,7 @@ pub(crate) enum RendererPageDomManipulationOwner {
     ElementToggle(RendererPageElementToggleEventOwner),
     FileEntryFileCallback(RendererPageFileEntryFileCallbackOwner),
     ScriptPreparationError(RendererPageScriptPreparationErrorOwner),
+    PromiseRejection(RendererPagePromiseRejectionOwner),
     ImageLoadEvent(RendererPageImageLoadEventOwner),
     PopupLoadEvent(RendererPagePopupLoadEventOwner),
     PopupClose(RendererPagePopupCloseOwner),
@@ -90,6 +95,7 @@ pub(crate) enum RendererPageDomManipulationTask {
     ElementToggle(RendererPageElementToggleEventTask),
     FileEntryFileCallback(RendererPageFileEntryFileCallbackTask),
     ScriptPreparationError(RendererPageScriptPreparationErrorTask),
+    PromiseRejection(RendererPagePromiseRejectionTask),
     ImageLoadEvent(RendererPageImageLoadEventTask),
     PopupLoadEvent(RendererPagePopupLoadEventTask),
     PopupClose(RendererPagePopupCloseTask),
@@ -117,6 +123,9 @@ impl RendererPageDomManipulationTask {
             }
             Self::ScriptPreparationError(task) => {
                 RendererPageDomManipulationOwner::ScriptPreparationError(task.owner())
+            }
+            Self::PromiseRejection(task) => {
+                RendererPageDomManipulationOwner::PromiseRejection(task.owner())
             }
             Self::ImageLoadEvent(task) => {
                 RendererPageDomManipulationOwner::ImageLoadEvent(task.owner())
@@ -158,6 +167,7 @@ pub(crate) enum PageDomManipulationTurnAction {
     ElementToggle(super::PageElementToggleEventTurnAction),
     FileEntryFileCallback(super::PageFileEntryFileCallbackTurnAction),
     ScriptPreparationError(super::PageScriptPreparationErrorTurnAction),
+    PromiseRejection(super::PagePromiseRejectionTurnAction),
     ImageLoadEvent(super::PageImageLoadEventTurnAction),
     PopupLoadEvent(super::PagePopupLoadEventTurnAction),
     PopupClose(super::PagePopupCloseTurnAction),
@@ -214,6 +224,10 @@ impl RendererPageDomManipulationSender {
 
     pub(crate) fn script_preparation_error(&self) -> RendererPageScriptPreparationErrorSender {
         RendererPageScriptPreparationErrorSender::new(self.route.clone(), self.root_document)
+    }
+
+    pub(crate) fn promise_rejection(&self) -> RendererPagePromiseRejectionSender {
+        RendererPagePromiseRejectionSender::new(self.route.clone(), self.root_document)
     }
 
     pub(crate) fn image_load_event(&self) -> RendererPageImageLoadEventSender {

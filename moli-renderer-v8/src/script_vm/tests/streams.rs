@@ -4220,9 +4220,9 @@ fn readable_stream_pipe_to_aborts_on_signal_and_honors_prevent_flags() {
     );
 }
 
-#[test]
-fn readable_stream_pipe_abort_actions_own_all_rejections() {
-    let mut vm = stream_test_vm();
+#[tokio::test(flavor = "current_thread")]
+async fn readable_stream_pipe_abort_actions_own_all_rejections() {
+    let mut vm = new_storage_page_task_executor_test_vm("https://stream-runtime.test/");
 
     vm.eval(
         r#"
@@ -4284,6 +4284,12 @@ fn readable_stream_pipe_abort_actions_own_all_rejections() {
             .expect("pipe abort rejection ownership checkpoint should evaluate");
     }
 
+    assert!(
+        !vm.has_ready_dom_manipulation_family_for_test(
+            PageDomManipulationTestFamily::PromiseRejection,
+        ),
+        "no rejection notification may remain queued"
+    );
     let events = vm
         .eval("JSON.stringify(globalThis.__pipeAbortRejectionEvents.sort())")
         .expect("pipe abort rejection ownership events should evaluate");

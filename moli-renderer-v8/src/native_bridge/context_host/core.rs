@@ -305,6 +305,8 @@ impl JsContextHost {
                 super::file_entry_file_callbacks::FileEntryFileCallbackState::default(),
             script_preparation_errors:
                 super::script_preparation_errors::ScriptPreparationErrorState::default(),
+            promise_rejection_tasks:
+                super::promise_rejection_tasks::PromiseRejectionTaskState::default(),
             pending_selectedcontent_updates: HashSet::new(),
             user_interaction_tasks:
                 super::user_interaction_tasks::UserInteractionTaskState::default(),
@@ -752,6 +754,16 @@ impl JsContextHost {
             .expect("a live Page Window must install its task capabilities before script preparation error admission")
             .dom_manipulation()
             .script_preparation_error()
+    }
+
+    pub(crate) fn page_promise_rejection_sender(
+        &self,
+    ) -> crate::page_task_queue::RendererPagePromiseRejectionSender {
+        self.page_task_capabilities
+            .get()
+            .expect("a live Page Window must install its task capabilities before promise rejection admission")
+            .dom_manipulation()
+            .promise_rejection()
     }
 
     pub(crate) fn page_file_reading_sender(
