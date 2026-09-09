@@ -1,7 +1,3 @@
-// tokio-tungstenite's accept_hdr_async callback fixes the error type to an
-// unboxed HTTP response, so these test-server callbacks cannot shrink it.
-#![allow(clippy::result_large_err)]
-
 mod tls;
 pub use tls::TlsWebSocketFixture;
 
