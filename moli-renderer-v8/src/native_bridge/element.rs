@@ -451,6 +451,7 @@ pub(super) use global_attributes::{
     node_tab_index_setter_function, node_title_getter_function, node_title_setter_function,
     node_translate_getter_function, node_translate_setter_function,
     node_writing_suggestions_getter_function, node_writing_suggestions_setter_function,
+    null_to_empty_dom_string_reflection_getter_function,
     null_to_empty_dom_string_reflection_setter_function, object_archive_getter_function,
     object_code_base_getter_function, object_code_getter_function,
     object_code_type_getter_function, object_data_getter_function, object_declare_getter_function,
@@ -460,8 +461,8 @@ pub(super) use global_attributes::{
     table_cell_axis_getter_function, table_cell_headers_getter_function,
     table_cell_no_wrap_getter_function, table_cell_no_wrap_setter_function,
     table_cell_scope_getter_function, table_ch_getter_function, table_ch_off_getter_function,
-    table_col_span_getter_function, table_col_span_setter_function, table_v_align_getter_function,
-    unsigned_long_reflection_setter_function, usv_string_reflection_setter_function,
+    table_v_align_getter_function, unsigned_long_reflection_setter_function,
+    usv_string_reflection_setter_function,
 };
 pub(in crate::native_bridge) const BODY_LEGACY_PROTOTYPE_ACCESSORS: &[&str] = &[
     "onload",
@@ -485,19 +486,19 @@ use html_elements::{
     table_caption_getter_function, table_caption_setter_function,
     table_cell_col_span_getter_function, table_cell_col_span_setter_function,
     table_cell_index_getter_function, table_cell_row_span_getter_function,
-    table_cell_row_span_setter_function, table_create_caption_callback,
-    table_create_t_body_callback, table_create_t_foot_callback, table_create_t_head_callback,
-    table_delete_caption_callback, table_delete_row_callback, table_delete_t_foot_callback,
-    table_delete_t_head_callback, table_insert_row_callback, table_row_cells_getter_function,
-    table_row_delete_cell_callback, table_row_index_getter_function,
-    table_row_insert_cell_callback, table_rows_getter_function, table_section_delete_row_callback,
-    table_section_insert_row_callback, table_section_row_index_getter_function,
-    table_section_rows_getter_function, table_t_bodies_getter_function,
-    table_t_foot_getter_function, table_t_foot_setter_function, table_t_head_getter_function,
-    table_t_head_setter_function, track_default_getter_function, track_default_setter_function,
-    track_kind_getter_function, track_kind_setter_function, track_ready_state_getter_function,
-    track_src_getter_function, track_src_setter_function, track_srclang_getter_function,
-    track_srclang_setter_function,
+    table_cell_row_span_setter_function, table_col_span_getter_function,
+    table_col_span_setter_function, table_create_caption_callback, table_create_t_body_callback,
+    table_create_t_foot_callback, table_create_t_head_callback, table_delete_caption_callback,
+    table_delete_row_callback, table_delete_t_foot_callback, table_delete_t_head_callback,
+    table_insert_row_callback, table_row_cells_getter_function, table_row_delete_cell_callback,
+    table_row_index_getter_function, table_row_insert_cell_callback, table_rows_getter_function,
+    table_section_delete_row_callback, table_section_insert_row_callback,
+    table_section_row_index_getter_function, table_section_rows_getter_function,
+    table_t_bodies_getter_function, table_t_foot_getter_function, table_t_foot_setter_function,
+    table_t_head_getter_function, table_t_head_setter_function, track_default_getter_function,
+    track_default_setter_function, track_kind_getter_function, track_kind_setter_function,
+    track_ready_state_getter_function, track_src_getter_function, track_src_setter_function,
+    track_srclang_getter_function, track_srclang_setter_function,
 };
 use html_elements::{
     marquee_loop_getter_function, marquee_loop_setter_function,
@@ -1931,6 +1932,46 @@ struct HtmlTableElementPrototypeDeclaration {
         setter_data = DomStringReflection::TableBorder
     )]
     border: (),
+    #[webapi(
+        accessor_property,
+        enumerable,
+        getter = dom_string_reflection_getter_function,
+        setter = dom_string_reflection_setter_function,
+        data = DomStringReflection::TableFrame
+    )]
+    frame: (),
+    #[webapi(
+        accessor_property,
+        enumerable,
+        getter = dom_string_reflection_getter_function,
+        setter = dom_string_reflection_setter_function,
+        data = DomStringReflection::TableRules
+    )]
+    rules: (),
+    #[webapi(
+        accessor_property,
+        enumerable,
+        getter = dom_string_reflection_getter_function,
+        setter = dom_string_reflection_setter_function,
+        data = DomStringReflection::TableSummary
+    )]
+    summary: (),
+    #[webapi(
+        accessor_property = "cellPadding",
+        enumerable,
+        getter = null_to_empty_dom_string_reflection_getter_function,
+        setter = null_to_empty_dom_string_reflection_setter_function,
+        data = NullToEmptyDomStringReflection::TableCellPadding
+    )]
+    cell_padding: (),
+    #[webapi(
+        accessor_property = "cellSpacing",
+        enumerable,
+        getter = null_to_empty_dom_string_reflection_getter_function,
+        setter = null_to_empty_dom_string_reflection_setter_function,
+        data = NullToEmptyDomStringReflection::TableCellSpacing
+    )]
+    cell_spacing: (),
     #[webapi(
         accessor_property,
         enumerable,
