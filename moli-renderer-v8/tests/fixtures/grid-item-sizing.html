@@ -1,0 +1,78 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>Grid auto sizing preserves alignment and ratio constraint sources</title>
+<link rel="help" href="https://drafts.csswg.org/css-grid-2/#grid-item-sizing">
+<style>
+  html, body { margin:0; padding:0; }
+  html { overflow:hidden; }
+  .grid { position:absolute; display:grid; grid-template:300px / 240px; font:0/0 sans-serif; }
+  .item { background:green; aspect-ratio:2; }
+</style>
+<body>
+<script>
+  // Expected border-box dimensions in the child's logical axes; no fonts,
+  // network resources or measured reference boxes participate in expectations.
+  const cases = [
+    ['normal', '', '', [240,120]],
+    ['explicit-both', '', 'place-self:stretch', [240,300]],
+    ['explicit-inline', '', 'justify-self:stretch', [240,120]],
+    ['explicit-block', '', 'align-self:stretch', [600,300]],
+    ['specified-inline-normal', '', 'inline-size:100px', [100,50]],
+    ['specified-inline-stretch', '', 'inline-size:100px;align-self:stretch', [100,300]],
+    ['specified-block-normal', '', 'block-size:100px', [200,100]],
+    ['specified-block-stretch', '', 'block-size:100px;justify-self:stretch', [240,100]],
+    ['parent-stretch', 'place-items:stretch', '', [240,300]],
+    ['auto-inherits', 'place-items:stretch', 'place-self:auto', [240,300]],
+    ['normal-overrides-parent', 'place-items:stretch', 'place-self:normal', [240,120]],
+    ['normal-block-overrides-parent', 'place-items:stretch', 'align-self:normal', [240,120]],
+    ['auto-inline-margins', '', 'place-self:stretch;block-size:100px;margin-inline:auto', [200,100]],
+    ['auto-block-margins', '', 'place-self:stretch;inline-size:100px;margin-block:auto', [100,50]],
+    ['asymmetric-margins', '', 'place-self:stretch;margin-inline:10px 30px;margin-block:5px 15px', [200,280]],
+    ['negative-margins', '', 'place-self:stretch;margin-inline:-10px -30px;margin-block:-5px -15px', [280,320]],
+    ['content-box-edges', '', 'inline-size:100px;padding:5px;border:2px solid black', [114,64]],
+    ['stretched-content-box-edges', '', 'inline-size:100px;align-self:stretch;padding:5px;border:2px solid black', [114,300]],
+    ['max-block-stretch', '', 'place-self:stretch;max-block-size:75px', [240,75]],
+    ['min-block-stretch', '', 'place-self:stretch;min-block-size:400px', [240,400]],
+    ['max-inline-stretch', '', 'place-self:stretch;max-inline-size:100px', [100,300]],
+    ['min-inline-stretch', '', 'place-self:stretch;min-inline-size:400px', [400,300]],
+    ['intrinsic-inline-stretch', '', 'inline-size:max-content;align-self:stretch', [600,300]],
+    ['intrinsic-block-stretch', '', 'block-size:max-content;justify-self:stretch', [240,120]],
+    ['normal-content-small', '', '', [240,120], [80,20]],
+    ['normal-content-large', '', '', [240,180], [80,180]],
+    ['stretched-content-overflow', '', 'place-self:stretch', [240,300], [80,500]],
+    ['start-content', '', 'place-self:start', [80,40], [80,20]],
+    ['center-content', '', 'place-self:center', [80,40], [80,20]],
+    ['auto-margins-content', '', 'margin:auto', [80,40], [80,20]],
+    ['intrinsic-inline-content', '', 'inline-size:max-content;block-size:100px', [300,100], [300,20]],
+    ['intrinsic-block-content', '', 'inline-size:100px;block-size:max-content', [100,180], [80,180]],
+  ];
+  let index = 0;
+  for (const mode of ['horizontal-tb','vertical-rl','vertical-lr']) {
+    for (const display of ['block','flex','grid']) {
+      for (const [name, parentStyle, style, expected, contentSize] of cases) {
+        const grid = document.createElement('div');
+        grid.className = 'grid';
+        grid.style.cssText = `left:${index%3*500}px;top:${Math.floor(index/3)*450}px;writing-mode:${mode};${parentStyle}`;
+        const item = document.createElement('div');
+        item.className = 'item';
+        item.id = `${mode}-${display}-${name}`;
+        item.style.cssText = `display:${display};aspect-ratio:${mode === 'horizontal-tb' ? '2' : '1/2'};${style}`;
+        item.dataset.expected = JSON.stringify(mode === 'horizontal-tb' ? expected : [expected[1],expected[0]]);
+        if (contentSize) {
+          const content = document.createElement('div');
+          content.style.cssText = `inline-size:${contentSize[0]}px;block-size:${contentSize[1]}px`;
+          item.append(content);
+        }
+        grid.append(item);
+        document.body.append(grid);
+        index++;
+      }
+    }
+  }
+  function collectGridItemSizingChecks() {
+    return Array.from(document.querySelectorAll('.item'), item => {
+      const rect = item.getBoundingClientRect();
+      return {id:item.id, actual:[rect.width,rect.height], expected:JSON.parse(item.dataset.expected)};
+    });
+  }
+</script>

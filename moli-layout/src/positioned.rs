@@ -233,10 +233,15 @@ impl FlexCrossAxisStaticContext {
                 }
             }
             AlignItemsKeyword::FlexEnd if !wrap_reverse => LogicalStaticEdge::End,
-            AlignItemsKeyword::FlexStart | AlignItemsKeyword::Stretch if wrap_reverse => {
+            AlignItemsKeyword::Normal
+            | AlignItemsKeyword::FlexStart
+            | AlignItemsKeyword::Stretch
+                if wrap_reverse =>
+            {
                 LogicalStaticEdge::End
             }
-            AlignItemsKeyword::Start
+            AlignItemsKeyword::Normal
+            | AlignItemsKeyword::Start
             | AlignItemsKeyword::FlexStart
             | AlignItemsKeyword::FlexEnd
             | AlignItemsKeyword::Baseline
@@ -286,7 +291,8 @@ pub(crate) fn grid_static_alignment(
                     LogicalStaticEdge::End
                 }
             }
-            AlignItemsKeyword::Start
+            AlignItemsKeyword::Normal
+            | AlignItemsKeyword::Start
             | AlignItemsKeyword::FlexStart
             | AlignItemsKeyword::Baseline
             | AlignItemsKeyword::Stretch => LogicalStaticEdge::Start,

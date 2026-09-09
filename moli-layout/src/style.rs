@@ -2650,16 +2650,18 @@ fn stylo_vertical_align(
     )
 }
 
-/// Preserve the baseline preference at the style boundary. The pinned Blitz
-/// converter predates Taffy's last-baseline support and lowers it to `end`.
+/// Preserve normal versus auto and both baseline preferences at the style
+/// boundary. The pinned Blitz converter predates these Taffy distinctions.
 /// Both normal-flow and positioned alignment must retain the same CSS value.
 pub(crate) fn taffy_item_alignment(
     flags: style::values::specified::align::AlignFlags,
 ) -> Option<taffy::AlignItems> {
-    if flags.value() == style::values::specified::align::AlignFlags::LAST_BASELINE {
-        Some(taffy::AlignItems::LAST_BASELINE)
-    } else {
-        stylo_taffy::convert::item_alignment(flags)
+    match flags.value() {
+        style::values::specified::align::AlignFlags::NORMAL => Some(taffy::AlignItems::NORMAL),
+        style::values::specified::align::AlignFlags::LAST_BASELINE => {
+            Some(taffy::AlignItems::LAST_BASELINE)
+        }
+        _ => stylo_taffy::convert::item_alignment(flags),
     }
 }
 
@@ -2681,7 +2683,9 @@ mod alignment_tests {
 
     #[test]
     fn item_alignment_keeps_baseline_preference_and_positional_safety_distinct() {
+        assert_eq!(taffy_item_alignment(AlignFlags::AUTO), None);
         for (flags, expected) in [
+            (AlignFlags::NORMAL, AlignItems::NORMAL),
             (AlignFlags::BASELINE, AlignItems::BASELINE),
             (AlignFlags::LAST_BASELINE, AlignItems::LAST_BASELINE),
             (AlignFlags::END, AlignItems::END),
