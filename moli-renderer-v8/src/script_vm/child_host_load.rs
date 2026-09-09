@@ -116,16 +116,19 @@ impl ScriptVm {
         let Some(task) = source.take_scheduler_task_for_executor_test(|descriptor| {
             matches!(
                 descriptor,
-                crate::page_task_queue::RendererPageReadyDescriptor::ChildFrameTask {
-                    owner,
+                crate::page_task_queue::RendererPageReadyDescriptor::DomManipulation {
+                    owner: crate::page_task_queue::RendererPageDomManipulationOwner::ChildHostLoad(owner),
                     ..
                 } if matches!(owner.target(), RendererPageChildFrameTaskTarget::HostLoad(_))
             )
         }) else {
             return Ok(None);
         };
-        let crate::page_task_queue::RendererPageSchedulerTask::ChildFrameTask(task) = task else {
-            unreachable!("child-frame descriptor must dequeue its own family source")
+        let crate::page_task_queue::RendererPageSchedulerTask::DomManipulation(
+            crate::page_task_queue::RendererPageDomManipulationTask::ChildHostLoad(task),
+        ) = task
+        else {
+            unreachable!("HostLoad descriptor must dequeue its DOM task")
         };
         let RendererPageChildFrameTaskTarget::HostLoad(target) = task.owner().target() else {
             unreachable!("HostLoad selector must only dequeue HostLoad tasks")

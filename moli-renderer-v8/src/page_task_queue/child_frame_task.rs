@@ -577,13 +577,6 @@ impl RendererPageChildFrameTaskSender {
         self.send(RendererPageChildFrameTaskTarget::DocumentLifecycle(target))
     }
 
-    pub(crate) fn send_host_load(
-        &self,
-        target: RendererPageChildHostLoadTarget,
-    ) -> Result<(), RendererPageChildFrameTaskRouteClosed> {
-        self.send(RendererPageChildFrameTaskTarget::HostLoad(target))
-    }
-
     pub(crate) fn send_parser_module_root_start(
         &self,
         target: RendererPageChildParserModuleRootStartTarget,

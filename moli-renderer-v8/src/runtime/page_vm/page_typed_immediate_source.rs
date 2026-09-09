@@ -49,6 +49,38 @@ impl StaleWindowDocumentTaskAdmission {
 }
 
 impl PageVm {
+    pub(in crate::runtime) fn document_lifecycle_dom_owner_is_current(
+        &self,
+        owner: crate::page_task_queue::RendererPageDomManipulationOwner,
+    ) -> bool {
+        use crate::page_task_queue::{
+            RendererPageChildFrameTaskTarget, RendererPageDomManipulationOwner,
+        };
+        let root_document = self.document_lifecycle.identity().document;
+        match owner {
+            RendererPageDomManipulationOwner::MainDocumentLifecycle(owner) => {
+                owner.root_document == root_document
+                    && self.vm().current_main_document_task_owner() == Some(owner.body.owner())
+            }
+            RendererPageDomManipulationOwner::ChildDocumentLifecycle(owner) => {
+                let RendererPageChildFrameTaskTarget::DocumentLifecycle(target) = owner.target()
+                else {
+                    unreachable!("child lifecycle DOM task must retain its typed target");
+                };
+                owner.root_document() == root_document
+                    && self.vm().current_child_document_lifecycle_target(target) == Some(target)
+            }
+            RendererPageDomManipulationOwner::ChildHostLoad(owner) => {
+                let RendererPageChildFrameTaskTarget::HostLoad(target) = owner.target() else {
+                    unreachable!("child load DOM task must retain its typed target");
+                };
+                owner.root_document() == root_document
+                    && self.vm().current_child_host_load_target(target) == Some(target)
+            }
+            _ => false,
+        }
+    }
+
     pub(in crate::runtime::page_vm) fn authorize_current_window_document_task<T, K: Eq>(
         &self,
         task: T,
