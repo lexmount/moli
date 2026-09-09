@@ -2968,7 +2968,6 @@ html/webappapis/scripting/processing-model-2/integration-with-the-javascript-job
 html/webappapis/scripting/processing-model-2/integration-with-the-javascript-job-queue/promise-job-incumbent.html
 html/webappapis/scripting/processing-model-2/unhandled-promise-rejections/promise-rejection-event-during-parse.html
 html/webappapis/scripting/processing-model-2/unhandled-promise-rejections/promise-rejection-events.html
-html/webappapis/scripting/processing-model-2/unhandled-promise-rejections/promise-resolution-order.html
 inert/inert-and-find-flat-tree.html
 inert/inert-and-find.html
 inert/inert-on-non-html.html
