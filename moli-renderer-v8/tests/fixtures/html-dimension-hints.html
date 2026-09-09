@@ -1,0 +1,134 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>HTML dimension hints participate in the CSS cascade</title>
+<style>
+  html,body { margin:0; font:0/0 sans-serif; }
+  .slot { position:absolute; width:310px; height:210px; overflow:hidden; }
+  .container { width:240px; height:160px; }
+  .probe { display:block; box-sizing:content-box; margin:0; padding:0; border:0; background:rgb(31,127,63); }
+</style>
+<body>
+<script>
+  const common = [
+    {id:'length', width:'80', height:'40', expected:[80,40], ratio:'auto 80 / 40', cssSize:['80px','40px']},
+    {id:'percentage', width:'100%', height:'25%', expected:[240,40], resized:[320,50], cssSize:['100%','25%']},
+    {id:'decimal', width:'80.5', height:'20.25', expected:[80.5,20.25], ratio:'auto 80.5 / 20.25', cssSize:['80.5px','20.25px']},
+    {id:'legacy-suffix', width:' 80px', height:'40foo', expected:[80,40], ratio:'auto 80 / 40', cssSize:['80px','40px']},
+    {id:'author-width', width:'80', height:'40', style:'width:120px', expected:[120,40], ratio:'auto 80 / 40', cssSize:['120px','40px']},
+    {id:'zero', width:'0', height:'40', expected:[0,40], ratio:'auto 0 / 40', cssSize:['0px','40px']},
+  ];
+  const tests = [];
+  for (const tag of ['img','video','iframe','embed','object','input']) {
+    for (const test of common) tests.push({...test,tag,id:`${tag}-${test.id}`,
+      ratio:['img','video','input'].includes(tag) ? test.ratio : 'auto',
+      // A src-less embed has no layout box in Chromium. Test its cascade
+      // independently of the embedded-resource lifecycle, with display:none.
+      nonRendered:tag === 'embed'});
+  }
+  for (const test of [
+    {id:'ratio-width', width:'80', height:'40', style:'width:120px;height:auto', expected:[120,60], ratio:'auto 80 / 40'},
+    {id:'ratio-height', width:'80', height:'40', style:'width:auto;height:120px', expected:[240,120], ratio:'auto 80 / 40'},
+    {id:'both-auto', width:'80', height:'40', style:'width:auto;height:auto', expected:[0,0], ratio:'auto 80 / 40'},
+    {id:'no-ratio-from-percentage', width:'50%', height:'40', style:'height:auto', expected:[120,0], resized:[160,0]},
+    {id:'author-ratio-auto', width:'80', height:'40', style:'width:120px;height:auto;aspect-ratio:auto', expected:[120,0]},
+    {id:'author-ratio', width:'80', height:'40', style:'width:120px;height:auto;aspect-ratio:1/1', expected:[120,120], ratio:'1 / 1'},
+    {id:'hint-content-ratio', width:'80', height:'40', style:'box-sizing:border-box;width:120px;height:auto;padding:10px', expected:[120,70], ratio:'auto 80 / 40'},
+    {id:'author-border-ratio', width:'80', height:'40', style:'box-sizing:border-box;width:120px;height:auto;padding:10px;aspect-ratio:2', expected:[120,60], ratio:'2 / 1'},
+    {id:'vertical-percentage', width:'50%', height:'25%', style:'writing-mode:vertical-rl', expected:[120,40], resized:[160,50]},
+    {id:'mutate-dimensions', width:'20', height:'10', changedWidth:'50%', changedHeight:'25%', expected:[20,10], mutated:[120,40], resized:[160,50], ratio:'auto 20 / 10', changedRatio:'auto'},
+    {id:'remove-ratio-source', width:'80', height:'40', changedWidth:'80', changedHeight:null, style:'width:120px;height:auto', expected:[120,60], mutated:[120,0], ratio:'auto 80 / 40', changedRatio:'auto'},
+    {id:'mutate-overridden', width:'80', height:'40', changedWidth:'50%', changedHeight:'25%', style:'width:90px;height:30px', expected:[90,30], ratio:'auto 80 / 40', changedRatio:'auto'},
+  ]) tests.push({...test,tag:'img'});
+  for (const test of [
+    {id:'canvas-default', expected:[300,150], bitmap:[300,150]},
+    {id:'canvas-width', width:'600', expected:[600,150], bitmap:[600,150]},
+    {id:'canvas-decimal', width:'60.5', expected:[60,150], bitmap:[60,150]},
+    {id:'canvas-percent-is-integer', width:'60%', expected:[60,150], bitmap:[60,150]},
+    {id:'canvas-signed-prefix', width:' +60px', expected:[60,150], bitmap:[60,150]},
+    {id:'canvas-invalid', width:'-60', expected:[300,150], bitmap:[300,150]},
+    {id:'canvas-zero', width:'0', expected:[0,150], bitmap:[0,150]},
+    {id:'canvas-author-width', width:'600', style:'width:120px;height:auto', expected:[120,30], bitmap:[600,150]},
+    {id:'canvas-author-percent', width:'600', style:'width:50%;height:auto', expected:[120,30], resized:[160,40], bitmap:[600,150]},
+    {id:'canvas-out-of-range', width:'2147483648', height:'40', expected:[300,40], bitmap:[300,40], ratio:'auto 2147480000 / 40'},
+    {id:'canvas-zero-height', height:'0', expected:[300,0], bitmap:[300,0]},
+    {id:'canvas-negative-zero', width:'-0', expected:[0,150], bitmap:[0,150]},
+    {id:'canvas-non-html-space', width:'\u000b60', expected:[300,150], bitmap:[300,150]},
+    {id:'canvas-mutation', width:'60', height:'30', changedWidth:'90%', changedHeight:'45.5', expected:[60,30], mutated:[90,45], bitmap:[60,30], changedBitmap:[90,45], ratio:'auto 60 / 30', changedRatio:'auto 90 / 45'},
+  ]) tests.push({...test,tag:'canvas'});
+  for (const test of [
+    {id:'hidden-input', tag:'input', type:'HiDdEn', cssSize:['80px','40px'], ratio:'auto 80 / 40'},
+    {id:'text-input-ignores-dimensions', tag:'input', type:'text', cssSize:['auto','auto']},
+    {id:'div-ignores-dimensions', tag:'div', cssSize:['auto','auto']},
+    {id:'canvas-has-no-size-hints', tag:'canvas', cssSize:['auto','auto'], bitmap:[80,40], ratio:'auto 80 / 40'},
+    {id:'input-type-mutation', tag:'input', type:'image', changedType:'text', cssSize:['80px','40px'], changedCssSize:['auto','auto'], ratio:'auto 80 / 40', changedRatio:'auto'},
+  ]) tests.push({...test,width:'80',height:'40',nonRendered:true,expected:[0,0]});
+  for (const test of [
+    {id:'natural-ratio-wins', style:'width:120px;height:auto', expected:[120,120], ratio:'auto 80 / 40'},
+    {id:'author-ratio-wins', style:'width:120px;height:auto;aspect-ratio:4/1', expected:[120,30], ratio:'4 / 1'},
+    {id:'natural-size-with-css-auto', style:'width:auto;height:auto', expected:[1,1], ratio:'auto 80 / 40'},
+  ]) tests.push({...test,tag:'img',width:'80',height:'40',natural:true});
+  const setAttribute = (element,name,value)=>{
+    if (value == null) element.removeAttribute(name);
+    else element.setAttribute(name,value);
+  };
+  for (const [index,test] of tests.entries()) {
+    const slot = document.createElement('div');
+    slot.className = 'slot';
+    slot.style.cssText = `left:${(index%4)*320}px;top:${Math.floor(index/4)*220}px`;
+    const container = document.createElement('div');
+    container.className = 'container';
+    const probe = document.createElement(test.tag);
+    probe.id = test.id;
+    probe.className = 'probe';
+    if (test.tag === 'input') probe.type = test.type || 'image';
+    probe.setAttribute('alt','');
+    if (test.natural) probe.src = 'data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7';
+    setAttribute(probe,'width',test.width);
+    setAttribute(probe,'height',test.height);
+    probe.style.cssText = test.style || '';
+    if (test.nonRendered) probe.style.display = 'none';
+    container.append(probe);
+    slot.append(container);
+    document.body.append(slot);
+    test.container = container;
+    test.probe = probe;
+  }
+  let phase = 'initial';
+  function prepareDimensionFixture() {
+    return Promise.all(tests.filter(test=>test.natural).map(test=>test.probe.decode()));
+  }
+  function setDimensionPhase(value) {
+    phase = value;
+    const changed = phase === 'mutated' || phase === 'resized';
+    for (const test of tests) {
+      test.container.style.width = phase === 'resized' ? '320px' : '240px';
+      test.container.style.height = phase === 'resized' ? '200px' : '160px';
+      if ('changedWidth' in test) {
+        setAttribute(test.probe,'width',changed ? test.changedWidth : test.width);
+        setAttribute(test.probe,'height',changed ? test.changedHeight : test.height);
+      }
+      if (test.changedType) test.probe.type = changed ? test.changedType : test.type;
+    }
+  }
+  function collectDimensionChecks() {
+    return tests.map(test=>{
+      const rect = test.probe.getBoundingClientRect();
+      const style = getComputedStyle(test.probe);
+      // Compare ratio values, not the CSS serializer's choice of decimal vs
+      // scientific notation. This is exact numeric normalization, no tolerance.
+      const ratio = style.aspectRatio.replace(/\d+(?:\.\d+)?(?:e[+-]?\d+)?/gi, value=>String(Number(value)));
+      const expected = phase === 'resized' ? test.resized || test.mutated || test.expected
+        : phase === 'mutated' ? test.mutated || test.expected : test.expected;
+      const changed = phase === 'mutated' || phase === 'resized';
+      const expectedRatio = (changed ? test.changedRatio : null) || test.ratio || 'auto';
+      const cssSize = (changed ? test.changedCssSize : null) || test.cssSize;
+      return {id:test.id,actual:[rect.width,rect.height],expected:test.nonRendered ? [0,0] : expected,
+        style:[style.width,style.height,ratio],
+        expectedRatio,expectedStyle:test.nonRendered ? [...cssSize,expectedRatio] : null,
+        bitmap:test.tag === 'canvas' ? [test.probe.width,test.probe.height] : null,
+        expectedBitmap:(changed ? test.changedBitmap : null) || test.bitmap || null,
+        natural:test.natural ? [test.probe.naturalWidth,test.probe.naturalHeight] : null,
+        expectedNatural:test.natural ? [1,1] : null};
+    });
+  }
+</script>

@@ -140,14 +140,18 @@ impl LayoutSource for NativeLayoutSourceView<'_> {
         if semantics.replaced == Some(LayoutReplacedKind::Svg) {
             return Some(super::inline_svg::replaced_metrics(element));
         }
-        let attribute_width = numeric_dimension_attribute(self.host(), node, "width");
-        let attribute_height = numeric_dimension_attribute(self.host(), node, "height");
-        let intrinsic = self.runtime.image_resource_intrinsic_size(node);
+        let intrinsic = if semantics.replaced == Some(LayoutReplacedKind::Canvas) {
+            let size = moli_dom::canvas::CanvasDimensions::from_attributes(
+                element.attribute("width"),
+                element.attribute("height"),
+            );
+            Some((size.width as f32, size.height as f32))
+        } else {
+            self.runtime.image_resource_intrinsic_size(node)
+        };
         Some(ReplacedMetrics {
             intrinsic_width: intrinsic.map(|(width, _)| width),
             intrinsic_height: intrinsic.map(|(_, height)| height),
-            attribute_width,
-            attribute_height,
             intrinsic_ratio: intrinsic
                 .and_then(|(width, height)| (height > 0.0).then_some(width / height)),
         })
@@ -643,12 +647,6 @@ fn html_input_control_kind(value: Option<&str>) -> LayoutInputControlKind {
         "week" => Input::Week,
         _ => Input::Text,
     }
-}
-
-fn numeric_dimension_attribute(host: &DomHost, node: DomHandle, name: &str) -> Option<f32> {
-    let value = host.get_attribute(node, name)?;
-    let value = value.trim().parse::<f32>().ok()?;
-    value.is_finite().then_some(value.max(0.0))
 }
 
 #[cfg(test)]

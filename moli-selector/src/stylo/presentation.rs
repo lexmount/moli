@@ -135,6 +135,7 @@ impl QueryElement<'_> {
                 );
             }
         } else if element.namespace() == HTML_NAMESPACE {
+            append_html_replaced_size_declarations(element, &mut block);
             append_html_table_presentation_declarations(*self, &mut block);
         } else {
             return;
@@ -147,6 +148,82 @@ impl QueryElement<'_> {
                 LayerOrder::root(),
             ));
         }
+    }
+}
+
+fn append_html_replaced_size_declarations(element: &Element, block: &mut PropertyDeclarationBlock) {
+    use style::values::{generics::length::Size, specified::position::AspectRatio};
+
+    if element.local_name() == "canvas" {
+        // Canvas maps only an integer aspect ratio, not width/height. Its
+        // actual bitmap supplies natural dimensions independently and wins
+        // over this `auto` ratio when present, including bitmap defaults.
+        let width = element
+            .attribute("width")
+            .and_then(moli_dom::canvas::parse_dimension_attribute);
+        let height = element
+            .attribute("height")
+            .and_then(moli_dom::canvas::parse_dimension_attribute);
+        if let Some((width, height)) = width.zip(height) {
+            block.push(
+                PropertyDeclaration::AspectRatio(Box::new(AspectRatio::from_mapped_ratio(
+                    width as f32,
+                    height as f32,
+                ))),
+                Importance::Normal,
+            );
+        }
+        return;
+    }
+
+    // HTML dimensions are low-priority CSS declarations, not natural image
+    // dimensions. In particular, an author's `height: auto` must be able to
+    // override a height attribute without discarding its aspect-ratio hint.
+    // Unlike canvas above, these attributes use the HTML dimension grammar.
+    let maps_ratio = match element.local_name() {
+        "img" | "video" => true,
+        "iframe" | "embed" | "object" => false,
+        "input"
+            if element.attribute("type").is_some_and(|kind| {
+                kind.eq_ignore_ascii_case("image") || kind.eq_ignore_ascii_case("hidden")
+            }) =>
+        {
+            true
+        }
+        _ => return,
+    };
+    let width = element
+        .attribute("width")
+        .and_then(|value| parse_html_dimension(value, true, true));
+    let height = element
+        .attribute("height")
+        .and_then(|value| parse_html_dimension(value, true, true));
+    if maps_ratio
+        && let (Some(LengthPercentage::Length(width)), Some(LengthPercentage::Length(height))) =
+            (&width, &height)
+        && let (Some(width), Some(height)) = (width.to_px_if_absolute(), height.to_px_if_absolute())
+    {
+        // A percentage is a containing-block constraint, never a natural or
+        // preferred ratio component. Keep zero components in computed style;
+        // the aspect-ratio resolver owns degenerate-ratio semantics.
+        block.push(
+            PropertyDeclaration::AspectRatio(Box::new(AspectRatio::from_mapped_ratio(
+                width, height,
+            ))),
+            Importance::Normal,
+        );
+    }
+    if let Some(width) = width {
+        block.push(
+            PropertyDeclaration::Width(Size::LengthPercentage(NonNegative(width))),
+            Importance::Normal,
+        );
+    }
+    if let Some(height) = height {
+        block.push(
+            PropertyDeclaration::Height(Size::LengthPercentage(NonNegative(height))),
+            Importance::Normal,
+        );
     }
 }
 
@@ -272,7 +349,7 @@ fn append_parsed_presentation_declaration(
     }
 }
 
-/// Parses the legacy HTML dimension grammar used by table attributes.
+/// Parses the legacy HTML dimension grammar used by presentation attributes.
 ///
 /// Blink accepts an initial run of ASCII digits, an optional fractional part,
 /// and then either `%` or arbitrary trailing garbage. Blink classifies an

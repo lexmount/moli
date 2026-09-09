@@ -613,7 +613,6 @@ fn float_descendant_of_structural_inline_rounds_with_its_ifc_owner() {
             intrinsic_width: Some(166.0),
             intrinsic_height: Some(42.0),
             intrinsic_ratio: Some(166.0 / 42.0),
-            ..ReplacedMetrics::default()
         }),
     ]);
     let mut styles = Styles::default();
@@ -923,8 +922,6 @@ fn degenerate_css_ratio_falls_back_to_the_replaced_intrinsic_ratio() {
         .with_metrics(ReplacedMetrics {
             intrinsic_width: Some(80.0),
             intrinsic_height: Some(40.0),
-            attribute_width: None,
-            attribute_height: None,
             intrinsic_ratio: Some(2.0),
         }),
     ]);
@@ -996,7 +993,6 @@ fn fractional_replaced_images_project_contiguous_pre_transform_destinations() {
             intrinsic_width: Some(96.0),
             intrinsic_height: Some(12.0),
             intrinsic_ratio: Some(8.0),
-            ..ReplacedMetrics::default()
         })
         .with_image(image.clone())
     }));
@@ -1033,7 +1029,7 @@ fn fractional_replaced_images_project_contiguous_pre_transform_destinations() {
 }
 
 #[test]
-fn replaced_attributes_canvas_defaults_and_image_button_share_resource_free_sizing() {
+fn replaced_computed_style_and_natural_metrics_share_resource_free_sizing() {
     let source = Source(vec![
         Node::element(
             "root",
@@ -1049,11 +1045,7 @@ fn replaced_attributes_canvas_defaults_and_image_button_share_resource_free_sizi
             Some(LayoutReplacedKind::Image),
             Vec::new(),
         )
-        .with_metrics(ReplacedMetrics {
-            attribute_width: Some(80.0),
-            attribute_height: Some(40.0),
-            ..ReplacedMetrics::default()
-        }),
+        .with_metrics(ReplacedMetrics::default()),
         Node::element(
             "canvas",
             "canvas",
@@ -1062,7 +1054,8 @@ fn replaced_attributes_canvas_defaults_and_image_button_share_resource_free_sizi
             Vec::new(),
         )
         .with_metrics(ReplacedMetrics {
-            attribute_width: Some(600.0),
+            intrinsic_width: Some(600.0),
+            intrinsic_height: Some(150.0),
             ..ReplacedMetrics::default()
         }),
         Node::element(
@@ -1074,11 +1067,7 @@ fn replaced_attributes_canvas_defaults_and_image_button_share_resource_free_sizi
             Some(LayoutReplacedKind::FormControl),
             Vec::new(),
         )
-        .with_metrics(ReplacedMetrics {
-            attribute_width: Some(90.0),
-            attribute_height: Some(45.0),
-            ..ReplacedMetrics::default()
-        }),
+        .with_metrics(ReplacedMetrics::default()),
     ]);
     let mut styles = Styles::default();
     styles.primary.insert(
@@ -1094,13 +1083,18 @@ fn replaced_attributes_canvas_defaults_and_image_button_share_resource_free_sizi
                     width: Dimension::length(120.0),
                     height: Dimension::auto(),
                 },
+                aspect_ratio: Some(2.0),
                 ..Style::default()
             },
             RED,
         ),
     );
+    // Attribute declarations have already participated in the CSS cascade;
+    // the numeric source supplies only natural metrics (the canvas bitmap).
     styles.primary.insert(2, style(LayoutDisplay::Block, GREEN));
-    styles.primary.insert(3, style(LayoutDisplay::Block, BLUE));
+    styles
+        .primary
+        .insert(3, sized(LayoutDisplay::Block, 90.0, 45.0, BLUE));
 
     let snapshot = render(&source, &mut styles, 700, 400);
     assert_eq!(rect(&snapshot, RED), PaintRect::new(0.0, 0.0, 120.0, 60.0));
@@ -1155,11 +1149,7 @@ fn unavailable_images_use_zero_default_size_and_a_content_box_outline() {
             Some(LayoutReplacedKind::Image),
             Vec::new(),
         )
-        .with_metrics(ReplacedMetrics {
-            attribute_width: Some(80.0),
-            attribute_height: Some(40.0),
-            ..ReplacedMetrics::default()
-        }),
+        .with_metrics(ReplacedMetrics::default()),
         Node::element(
             "unsized-image",
             "img",
@@ -1184,9 +1174,10 @@ fn unavailable_images_use_zero_default_size_and_a_content_box_outline() {
     styles
         .primary
         .insert(1, style(LayoutDisplay::Block, PaintColor::TRANSPARENT));
-    styles
-        .primary
-        .insert(2, style(LayoutDisplay::Block, PaintColor::TRANSPARENT));
+    styles.primary.insert(
+        2,
+        sized(LayoutDisplay::Block, 80.0, 40.0, PaintColor::TRANSPARENT),
+    );
     styles
         .primary
         .insert(3, style(LayoutDisplay::Block, PaintColor::TRANSPARENT));

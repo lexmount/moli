@@ -1,3 +1,5 @@
+use moli_dom::canvas::CanvasDimensions;
+
 use crate::{
     context_bootstrap::{
         CanvasContextKind, attach_canvas_like_context_object,
@@ -36,7 +38,11 @@ pub(crate) fn html_canvas_width_getter_callback<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'_, v8::Value>,
 ) {
-    rv.set_uint32(canvas_dimension_value(scope, args.this(), "width", 300));
+    rv.set_uint32(
+        canvas_dimensions(scope, args.this())
+            .unwrap_or_default()
+            .width,
+    );
 }
 
 pub(crate) fn html_canvas_width_setter_callback<'s>(
@@ -52,7 +58,7 @@ pub(crate) fn html_canvas_width_setter_callback<'s>(
         args.get(0),
         "HTMLCanvasElement",
         "width",
-        300,
+        CanvasDimensions::default().width,
     );
     rv.set_undefined();
 }
@@ -62,7 +68,11 @@ pub(crate) fn html_canvas_height_getter_callback<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'_, v8::Value>,
 ) {
-    rv.set_uint32(canvas_dimension_value(scope, args.this(), "height", 150));
+    rv.set_uint32(
+        canvas_dimensions(scope, args.this())
+            .unwrap_or_default()
+            .height,
+    );
 }
 
 pub(crate) fn html_canvas_height_setter_callback<'s>(
@@ -78,7 +88,7 @@ pub(crate) fn html_canvas_height_setter_callback<'s>(
         args.get(0),
         "HTMLCanvasElement",
         "height",
-        150,
+        CanvasDimensions::default().height,
     );
     rv.set_undefined();
 }
@@ -112,43 +122,19 @@ fn set_canvas_dimension_attribute<'s>(
     true
 }
 
-fn canvas_dimension_value<'s>(
+fn canvas_dimensions<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     object: v8::Local<'s, v8::Object>,
-    name: &str,
-    default: u32,
-) -> u32 {
-    let Ok((runtime_ptr, handle)) = node_runtime_and_handle_from_object_or_detached(scope, object)
-    else {
-        return default;
-    };
-    element_attribute(unsafe { &*runtime_ptr }, handle, name)
-        .and_then(|value| parse_unsigned_long_prefix(&value))
-        .filter(|value| *value <= i32::MAX as u32)
-        .unwrap_or(default)
-}
-
-fn parse_unsigned_long_prefix(value: &str) -> Option<u32> {
-    let value = value.trim_start_matches(|ch: char| ch.is_ascii_whitespace());
-    let (value, negative) = if let Some(value) = value.strip_prefix('+') {
-        (value, false)
-    } else if let Some(value) = value.strip_prefix('-') {
-        (value, true)
-    } else {
-        (value, false)
-    };
-    let digits = value
-        .chars()
-        .take_while(|ch| ch.is_ascii_digit())
-        .collect::<String>();
-    if digits.is_empty() {
-        return None;
-    }
-    let value = digits.parse::<u32>().ok()?;
-    if negative && value != 0 {
-        return None;
-    }
-    Some(value)
+) -> Option<CanvasDimensions> {
+    let (runtime_ptr, handle) =
+        node_runtime_and_handle_from_object_or_detached(scope, object).ok()?;
+    let runtime = unsafe { &*runtime_ptr };
+    let width = element_attribute(runtime, handle, "width");
+    let height = element_attribute(runtime, handle, "height");
+    Some(CanvasDimensions::from_attributes(
+        width.as_deref(),
+        height.as_deref(),
+    ))
 }
 
 pub(crate) fn canvas_get_context_callback<'s>(
@@ -219,21 +205,11 @@ pub(crate) fn canvas_transfer_control_to_offscreen_callback<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'_, v8::Value>,
 ) {
-    let Ok((runtime_ptr, handle)) =
-        node_runtime_and_handle_from_object_or_detached(scope, args.this())
-    else {
+    let Some(size) = canvas_dimensions(scope, args.this()) else {
         rv.set_null();
         return;
     };
-    let width = element_attribute(unsafe { &*runtime_ptr }, handle, "width")
-        .and_then(|value| parse_unsigned_long_prefix(&value))
-        .filter(|value| *value <= i32::MAX as u32)
-        .unwrap_or(300);
-    let height = element_attribute(unsafe { &*runtime_ptr }, handle, "height")
-        .and_then(|value| parse_unsigned_long_prefix(&value))
-        .filter(|value| *value <= i32::MAX as u32)
-        .unwrap_or(150);
-    let value = build_offscreen_canvas_object(scope, width, height)
+    let value = build_offscreen_canvas_object(scope, size.width, size.height)
         .map(Into::into)
         .unwrap_or_else(|| v8::null(scope).into());
     rv.set(value);

@@ -406,17 +406,15 @@ impl LayoutPseudo {
 
 /// Replaced-element inputs known without decoding or querying a paint backend.
 ///
-/// Attribute dimensions remain distinct from intrinsic dimensions because CSS
-/// replaced sizing gives them different precedence. An unavailable HTML image
-/// has no intrinsic dimensions and represents no content, while replaced
-/// categories with a CSS default object size (for example canvas) keep their
-/// category-specific fallback.
+/// These are natural dimensions supplied by the element/resource owner, not
+/// HTML presentation attributes. Width/height and aspect-ratio hints belong in
+/// the computed style, so author CSS can override them through the cascade.
+/// An unavailable image has no natural dimensions; a canvas supplies its bitmap
+/// dimensions even before any drawing context or pixel storage exists.
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct ReplacedMetrics {
     pub intrinsic_width: Option<f32>,
     pub intrinsic_height: Option<f32>,
-    pub attribute_width: Option<f32>,
-    pub attribute_height: Option<f32>,
     pub intrinsic_ratio: Option<f32>,
 }
 

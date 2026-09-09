@@ -4,6 +4,7 @@
 //! mutation utilities shared by parser, selector, and renderer code.
 
 pub mod accessibility;
+pub mod canvas;
 pub mod custom_elements;
 pub mod forms;
 pub mod native;
