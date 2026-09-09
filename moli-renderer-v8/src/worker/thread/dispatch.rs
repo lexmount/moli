@@ -500,10 +500,6 @@ fn flush_pending_worker_promise_rejections(scope: &mut v8::PinScope<'_, '_>) {
             .reason
             .as_ref()
             .map(|reason| v8::Local::new(scope, reason));
-        remember_reported_worker_promise_rejection(
-            &reported_unhandled_rejections,
-            rejection.clone(),
-        );
         let allows_default = dispatch_worker_promise_rejection_event(
             scope,
             "unhandledrejection",
@@ -512,6 +508,14 @@ fn flush_pending_worker_promise_rejections(scope: &mut v8::PinScope<'_, '_>) {
             &parent_tx,
             &script_url,
         );
+        // Do not expose a `rejectionhandled` transition when the handler was
+        // attached by the `unhandledrejection` listener itself.
+        if !promise.has_handler() {
+            remember_reported_worker_promise_rejection(
+                &reported_unhandled_rejections,
+                rejection.clone(),
+            );
+        }
         if allows_default {
             log_unhandled_promise_rejection(scope, reason);
         }
@@ -582,14 +586,13 @@ unsafe extern "C" fn worker_promise_reject_callback(message: v8::PromiseRejectMe
                     })
                     .map(|index| reported.swap_remove(index))
             };
-            let reason = reported
+            let Some(rejection) = reported else {
+                return;
+            };
+            let reason = rejection
+                .reason
                 .as_ref()
-                .and_then(|rejection| {
-                    rejection
-                        .reason
-                        .as_ref()
-                        .map(|reason| v8::Local::new(scope, reason))
-                })
+                .map(|reason| v8::Local::new(scope, reason))
                 .or_else(|| message.get_value());
             let _ = dispatch_worker_promise_rejection_event(
                 scope,

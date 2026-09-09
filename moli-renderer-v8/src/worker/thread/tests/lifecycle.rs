@@ -8662,6 +8662,38 @@ async fn worker_global_rejectionhandled_event_dispatches_for_late_handler() {
 }
 
 #[tokio::test]
+async fn worker_handler_added_during_unhandled_rejection_suppresses_rejectionhandled() {
+    ensure_v8();
+    let mut handle = spawn_worker(
+        r#"
+        const events = [];
+        const rejected = Promise.reject("handled-during-worker-notification");
+        onunhandledrejection = event => {
+            event.preventDefault();
+            events.push(event.type);
+            rejected.catch(reason => {
+                events.push(reason === "handled-during-worker-notification"
+                    ? "handler"
+                    : "wrong-reason");
+            });
+            setTimeout(() => {
+                postMessage(events);
+                close();
+            }, 0);
+        };
+        onrejectionhandled = event => events.push(event.type);
+        "#
+        .into(),
+        "test://worker_handled_during_unhandledrejection".into(),
+    );
+
+    assert_eq!(
+        recv_post_json(&mut handle).await,
+        r#"["unhandledrejection","handler"]"#
+    );
+}
+
+#[tokio::test]
 async fn worker_unhandledrejection_notification_allows_one_message_port_turn() {
     ensure_v8();
     let mut handle = spawn_worker(

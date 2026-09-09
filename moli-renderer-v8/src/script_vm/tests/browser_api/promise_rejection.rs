@@ -26,6 +26,40 @@ Promise.reject("main-owned");
 }
 
 #[test]
+fn handler_added_during_unhandled_rejection_does_not_dispatch_rejectionhandled() {
+    let mut vm = new_storage_test_vm("https://handled-during-notification.test/");
+
+    vm.eval(
+        r#"
+globalThis.__handledDuringNotificationEvents = [];
+const reason = new Error("handled-during-notification");
+const rejected = Promise.reject(reason);
+onunhandledrejection = event => {
+  __handledDuringNotificationEvents.push(event.type);
+  event.preventDefault();
+  rejected.catch(value => {
+    __handledDuringNotificationEvents.push(value === reason ? "handler" : "wrong-reason");
+  });
+};
+onrejectionhandled = event => {
+  __handledDuringNotificationEvents.push(event.type);
+};
+"#,
+    )
+    .expect("rejection handled during notification setup should evaluate");
+    vm.eval("0")
+        .expect("unhandled rejection notification checkpoint should evaluate");
+    vm.eval("0")
+        .expect("rejection handler reaction checkpoint should evaluate");
+
+    assert_eq!(
+        vm.eval("JSON.stringify(__handledDuringNotificationEvents)")
+            .expect("rejection handled during notification result should evaluate"),
+        r#"["unhandledrejection","handler"]"#
+    );
+}
+
+#[test]
 fn universal_isolated_world_rejection_uses_its_registry_backed_realm() {
     let mut vm = new_storage_test_vm("https://isolated-promise-rejection.test/");
     let context_id = vm

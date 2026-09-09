@@ -121,7 +121,6 @@ pub(super) fn flush_pending_promise_rejections(scope: &mut v8::PinScope<'_, '_>)
                     .reason
                     .as_ref()
                     .map(|reason| v8::Local::new(scope, reason));
-                remember_reported_promise_rejection(&state.reported, rejection.clone());
                 let outcome = dispatch_window_promise_rejection_event(
                     scope,
                     host_ptr,
@@ -130,6 +129,13 @@ pub(super) fn flush_pending_promise_rejections(scope: &mut v8::PinScope<'_, '_>)
                     promise,
                     reason,
                 );
+                // A handler added by the `unhandledrejection` listener must not
+                // synchronously turn this notification into `rejectionhandled`.
+                // Only promises that remain unhandled after dispatch belong in
+                // the outstanding reported-rejection set.
+                if !promise.has_handler() {
+                    remember_reported_promise_rejection(&state.reported, rejection.clone());
+                }
                 if matches!(outcome, Ok(true)) {
                     log_unhandled_promise_rejection(scope, reason);
                 }
