@@ -627,6 +627,15 @@ pub(crate) enum RendererPageSchedulerTask {
 }
 
 impl RendererPageOwnedTaskSources {
+    pub(crate) fn has_queued_main_document_lifecycle_dom_task(
+        &mut self,
+        root_document: crate::runtime::RendererDocumentToken,
+        document: crate::frame_owner_model::FrameDocumentTaskOwner,
+    ) -> bool {
+        self.dom_manipulation
+            .has_main_document_lifecycle_task(root_document, document)
+    }
+
     pub(crate) fn new(
         runtime_wake: PageRuntimeWakeSignal,
         owner_wake: RendererOwnerWakeSender,
@@ -1955,6 +1964,43 @@ impl RendererPageOwnedTaskSourcesTestHarness {
             .find_map(|descriptor| match descriptor {
                 RendererPageReadyDescriptor::ChildFrameTask { owner, .. } => Some(owner.target()),
                 _ => None,
+            })
+    }
+
+    /// Compare the two child semantic source heads without changing either FIFO.
+    pub(crate) fn next_child_semantic_task_target(
+        &self,
+    ) -> Option<super::RendererPageChildFrameTaskTarget> {
+        self.sources
+            .borrow_mut()
+            .ready_descriptors()
+            .into_iter()
+            .filter(|descriptor| {
+                matches!(
+                    descriptor,
+                    RendererPageReadyDescriptor::ChildFrameTask { .. }
+                        | RendererPageReadyDescriptor::DomManipulation {
+                            owner: super::RendererPageDomManipulationOwner::ChildDocumentLifecycle(
+                                _
+                            ),
+                            ..
+                        }
+                )
+            })
+            .min_by_key(|descriptor| {
+                (
+                    descriptor.runnable_since(),
+                    descriptor.enqueue_order().unwrap_or(0),
+                    descriptor.source_kind(),
+                )
+            })
+            .map(|descriptor| match descriptor {
+                RendererPageReadyDescriptor::ChildFrameTask { owner, .. }
+                | RendererPageReadyDescriptor::DomManipulation {
+                    owner: super::RendererPageDomManipulationOwner::ChildDocumentLifecycle(owner),
+                    ..
+                } => owner.target(),
+                _ => unreachable!("child semantic selector must retain its exact target"),
             })
     }
 

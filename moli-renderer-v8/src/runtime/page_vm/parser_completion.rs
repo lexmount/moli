@@ -4,8 +4,8 @@
 //! owns the bounded handoff from that work to parser completion: it consumes a
 //! one-shot drained-queue permit, asks the lifecycle authority to claim the
 //! exact DOMContentLoaded successor, closes the selected parser task's
-//! checkpoint boundary, and only then hands that already-claimed successor to
-//! the lifecycle coordinator. The coordinator applies it to the surviving
+//! checkpoint boundary, and admits the claimed successor to the shared DOM
+//! task source. Its selected-task coordinator applies it to the surviving
 //! exact Document or stale-rejects it after replacement.
 //! It is not a scheduler lane and stores no durable lifecycle state.
 
@@ -16,9 +16,7 @@ use crate::frame_owner_model::FrameDocumentTaskOwner;
 use crate::network::ResourceRequestClient;
 use crate::page_task_queue::{PostParseLifecycleWork, PostParsePageOwnedWork};
 use crate::runtime::{PendingDocumentLifecycleTurn, RendererDocumentLifecycleIdentity};
-use crate::script_vm::{
-    MainDocumentLifecycleBodyKind, ParserFinishDomContentLoadedTask, PostParsePageOwnedTask,
-};
+use crate::script_vm::{MainDocumentLifecycleBody, PostParsePageOwnedTask};
 
 use super::super::document_lifecycle_turn::{
     DocumentLifecycleTurnAction, DocumentLifecycleTurnOutcome,
@@ -164,31 +162,20 @@ impl ParserCompletion {
                 };
             }
         };
-        // The parser continuation and DOMContentLoaded are distinct HTML task
-        // boundaries even though this Chromium-compatible direct successor
-        // deliberately does not reopen ordinary scheduler arbitration. Drain
-        // terminal reactions first; the lifecycle coordinator then owns DCL's
-        // separate task-end checkpoint.
+        // Finish parser reactions before admitting the DCL global task. An
+        // earlier DOM task keeps its FIFO position; later timer callbacks may
+        // enqueue DOM work only behind this already admitted lifecycle task.
         Self::finish_task(page_vm, task_effect)?;
+        page_vm.vm().queue_main_document_lifecycle_dom_task(
+            MainDocumentLifecycleBody::DomContentLoaded {
+                owner: successor_owner,
+            },
+            None,
+        )?;
         let request_client = page_vm.request_client.clone();
-        while page_vm
-            .vm()
-            .document_runtime
-            .has_ready_timeout_queued_by_classic_defer_script()
-        {
-            page_vm
-                .run_classic_defer_timer_before_domcontentloaded(&request_client)
-                .await?;
-        }
-        let run = super::main_document_lifecycle_completion::execute_parser_exact_domcontentloaded_on_owner_local_task(
-            page_vm,
-            successor_owner,
-        )
-        .await?;
-        anyhow::ensure!(
-            run.completion.kind() == MainDocumentLifecycleBodyKind::DomContentLoaded,
-            "parse-time DOMContentLoaded successor lost its typed lifecycle execution"
-        );
+        page_vm
+            .run_ready_classic_defer_timers_before_domcontentloaded(&request_client)
+            .await?;
         Ok(())
     }
 
@@ -228,32 +215,6 @@ impl PageVm {
         ParserCompletion::finish_parse_time(self, completion).await
     }
 
-    async fn execute_domcontentloaded_after_main_parser_finish_on_named_owner_lane(
-        &mut self,
-        mut task: ParserFinishDomContentLoadedTask,
-    ) -> Result<PostParsePageOwnedTask> {
-        let owner = task.owner();
-        let work = task.take_work_for_execution();
-        let PostParsePageOwnedWork::Lifecycle(work) = work else {
-            anyhow::bail!("parser-finish successor is not lifecycle work");
-        };
-        let successor_owner = match ParserCompletion::exact_domcontentloaded_owner(*work, owner) {
-            Ok(owner) => owner,
-            Err(message) => anyhow::bail!(message),
-        };
-
-        let run = super::main_document_lifecycle_completion::execute_parser_exact_domcontentloaded_on_owner_local_task(
-            self,
-            successor_owner,
-        )
-        .await?;
-        anyhow::ensure!(
-            run.completion.kind() == MainDocumentLifecycleBodyKind::DomContentLoaded,
-            "DOMContentLoaded direct successor lost its typed lifecycle execution"
-        );
-        Ok(task.into_completed_task())
-    }
-
     pub(super) async fn execute_and_complete_selected_post_parse_page_owned_task(
         &mut self,
         loader: &ResourceRequestClient,
@@ -262,12 +223,38 @@ impl PageVm {
         stage: PageVmInitStage,
         mut task: Box<PostParsePageOwnedTask>,
     ) -> Result<DocumentLifecycleTurnOutcome> {
+        let work = task.take_work_for_execution();
+        if let PostParsePageOwnedWork::Lifecycle(lifecycle) = &work
+            && matches!(
+                **lifecycle,
+                PostParseLifecycleWork::DispatchDomContentLoaded { .. }
+                    | PostParseLifecycleWork::DispatchWindowLoad { .. }
+            )
+        {
+            let body = MainDocumentLifecycleBody::from_post_parse_work(lifecycle)
+                .expect("selected DCL/load work must have a typed lifecycle body");
+            self.queue_post_parse_lifecycle_dom_task(
+                pending_document_lifecycle_turn
+                    .as_mut()
+                    .expect("lifecycle resident must remain installed"),
+                body,
+                *task,
+            )?;
+            if matches!(body, MainDocumentLifecycleBody::DomContentLoaded { .. }) {
+                self.run_ready_classic_defer_timers_before_domcontentloaded(loader)
+                    .await?;
+            }
+            return self.outcome_after_exact_post_parse_action(
+                pending_document_lifecycle_turn,
+                document,
+                stage,
+                DocumentLifecycleTurnAction::Progressed,
+                true,
+            );
+        }
         let replacement_lifecycle_snapshot = self.document_replacement_lifecycle_action_snapshot();
         let execution = self
-            .execute_post_parse_page_owned_task_on_named_owner_lane(
-                loader,
-                task.take_work_for_execution(),
-            )
+            .execute_post_parse_page_owned_task_on_named_owner_lane(loader, work)
             .await;
         // Generic post-parse callbacks must finish their old-realm task before
         // a synchronous `document.open()` replacement is admitted. MainParser
@@ -416,50 +403,32 @@ impl PageVm {
                         };
                     }
                 };
-                if let Some(dcl_task) = claimed_dcl {
+                if let Some(mut dcl_task) = claimed_dcl {
                     ParserCompletion::finish_task_with_replacement_admission(self, task_effect)?;
-                    while self
-                        .vm()
-                        .document_runtime
-                        .has_ready_timeout_queued_by_classic_defer_script()
-                    {
-                        self.run_classic_defer_timer_before_domcontentloaded(loader)
-                            .await?;
-                    }
-                    let replacement_lifecycle_snapshot =
-                        self.document_replacement_lifecycle_action_snapshot();
-                    let execution = self
-                        .execute_domcontentloaded_after_main_parser_finish_on_named_owner_lane(
-                            dcl_task,
-                        )
-                        .await;
-                    let admission = self
-                        .take_document_replacement_lifecycle_admission_after_action(
-                            replacement_lifecycle_snapshot,
-                        );
-                    let completed_dcl_task = match (execution, admission) {
-                        (Ok(task), Ok(_)) => task,
-                        (Err(execution_error), Ok(_)) => return Err(execution_error),
-                        (Ok(_), Err(admission_error)) => return Err(admission_error),
-                        (Err(execution_error), Err(admission_error)) => {
-                            return Err(anyhow::anyhow!(
-                                "parser-finish DOMContentLoaded action failed ({execution_error:#}) and its Document replacement admission also failed ({admission_error:#})"
-                            ));
-                        }
+                    let owner = dcl_task.owner();
+                    let PostParsePageOwnedWork::Lifecycle(work) =
+                        dcl_task.take_work_for_execution()
+                    else {
+                        anyhow::bail!("parser-finish successor is not lifecycle work");
                     };
-                    pending_document_lifecycle_turn
-                        .as_mut()
-                        .expect("post-parse lifecycle state should remain installed")
-                        .completed_task = Some(completed_dcl_task);
-                    if let Some(outcome) = self
-                        .transition_lifecycle_for_pending_top_level_navigation(
-                            pending_document_lifecycle_turn,
-                            document,
-                            stage,
-                        )
-                    {
-                        return Ok(outcome);
-                    }
+                    let owner = ParserCompletion::exact_domcontentloaded_owner(*work, owner)
+                        .map_err(anyhow::Error::msg)?;
+                    self.queue_post_parse_lifecycle_dom_task(
+                        pending_document_lifecycle_turn
+                            .as_mut()
+                            .expect("lifecycle resident must remain installed"),
+                        MainDocumentLifecycleBody::DomContentLoaded { owner },
+                        dcl_task.into_pending_task(),
+                    )?;
+                    self.run_ready_classic_defer_timers_before_domcontentloaded(loader)
+                        .await?;
+                    return self.outcome_after_exact_post_parse_action(
+                        pending_document_lifecycle_turn,
+                        document,
+                        stage,
+                        DocumentLifecycleTurnAction::Progressed,
+                        true,
+                    );
                 } else {
                     ParserCompletion::finish_task_with_replacement_admission(self, task_effect)?;
                 }
