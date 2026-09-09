@@ -18,6 +18,7 @@ mod popup;
 mod renderer_residence;
 mod service_workers;
 pub mod web_contents;
+mod workers;
 
 pub use browser_context::*;
 pub use captured_body::{
@@ -55,6 +56,7 @@ pub use permissions::{PermissionDefaults, PermissionOverrides};
 pub use popup::{BrowserPopupAdmission, BrowserPopupCreation};
 pub use renderer_residence::RendererPageResidenceIdentity;
 pub use service_workers::ServiceWorkerCommand;
+pub use workers::{WorkerHandle, WorkerSnapshot};
 
 /// Navigation semantics, independent of the protocol that requested the load.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]

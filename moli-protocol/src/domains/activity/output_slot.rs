@@ -5,8 +5,8 @@ use crate::conn::CdpConnection;
 use super::contextual_projection::ProtocolOutputProjectionContext;
 use super::output_payloads::{ProtocolOutputPayload, ProtocolOutputPayloads};
 
-/// Whether consuming prepared output is required for browser-owner progress
-/// or only projects an already-settled fact to a protocol subscriber.
+/// Whether consuming prepared output is required for owner/attachment cleanup
+/// or only publishes an observation to a protocol subscriber.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(in crate::domains) enum ProtocolOutputDelivery {
     OwnerAction,
@@ -67,6 +67,8 @@ impl ProtocolOutputSlot {
             | Self::Download
             | Self::JavascriptDialog
             | Self::Popup
+            // Native Worker lifetime already advanced, but canceled command
+            // barriers must still finish DevTools attachment/target cleanup.
             | Self::SharedWorkerTargetLifecycle
             | Self::ServiceWorkerTargetLifecycle
             | Self::DedicatedWorkerTargetLifecycle

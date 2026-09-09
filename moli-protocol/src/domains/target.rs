@@ -49,7 +49,7 @@ pub(in crate::domains) use worker_target::{
     project_worker_target_output_async,
     release_failed_dedicated_worker_target_after_debugger_resume,
     service_worker_target_lifecycle_prepared_outputs_for_event,
-    shared_worker_target_lifecycle_prepared_outputs_for_event,
+    shared_worker_observation_prepared_outputs, worker_lifecycle_prepared_outputs,
 };
 
 /// Browser-owned auto-attach policies may observe browser-level targets.

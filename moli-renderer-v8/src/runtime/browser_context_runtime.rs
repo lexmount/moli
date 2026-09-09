@@ -173,6 +173,7 @@ pub(crate) struct RendererStoragePartitionIdentity {
 #[derive(Debug)]
 struct RendererBrowserContextRuntimeInner {
     id: super::RendererBrowserContextRuntimeId,
+    worker_lifecycle: super::RendererWorkerLifecycleReporter,
     message_port_registry: crate::message_port_runtime::SharedMessagePortRegistry,
     broadcast_channel_registry: crate::broadcast_channel_runtime::SharedBroadcastChannelRegistry,
     browser_resource_runtime: crate::network::BrowserResourceRuntimeBinding,
@@ -536,14 +537,15 @@ impl RendererBrowserContextRuntime {
             NEXT_RENDERER_BROWSER_CONTEXT_RUNTIME_ID.fetch_add(1, Ordering::Relaxed),
         );
         let renderer_output_transport_tx = RendererOutputTransportSenderSlot::default();
+        let worker_lifecycle = super::RendererWorkerLifecycleReporter::new(id);
         let shared_worker_runtime = match shared_worker_runtime {
             Some(service) => shared_workers::LazySharedWorkerRuntime::from_service(
                 service,
-                id,
+                worker_lifecycle.clone(),
                 renderer_output_transport_tx.clone(),
             ),
             None => shared_workers::LazySharedWorkerRuntime::new(
-                id,
+                worker_lifecycle.clone(),
                 renderer_output_transport_tx.clone(),
             ),
         };
@@ -557,6 +559,7 @@ impl RendererBrowserContextRuntime {
         let runtime = Self {
             inner: Arc::new(RendererBrowserContextRuntimeInner {
                 id,
+                worker_lifecycle,
                 message_port_registry,
                 broadcast_channel_registry,
                 browser_resource_runtime: browser_resource_runtime.clone(),
@@ -593,6 +596,15 @@ impl RendererBrowserContextRuntime {
 
     pub fn id(&self) -> super::RendererBrowserContextRuntimeId {
         self.inner.id
+    }
+
+    /// The physical Browser owner installs this independently of DevTools output
+    /// transport. The callback must enqueue work, never wait on the owner.
+    pub fn install_worker_lifecycle_handler(
+        &self,
+        handler: impl Fn(super::RendererWorkerLifecycleInput) + Send + Sync + 'static,
+    ) {
+        self.inner.worker_lifecycle.install_handler(handler);
     }
 
     pub(crate) fn set_renderer_output_transport_sender(

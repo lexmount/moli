@@ -168,6 +168,9 @@ pub(super) fn loading_host(
         key.script_url().to_owned(),
         "loader".to_owned(),
         target_output,
+        crate::runtime::RendererWorkerLifecycleReporter::new(
+            crate::runtime::RendererBrowserContextRuntimeId::new_for_testing(0),
+        ),
     ))
 }
 
@@ -186,6 +189,7 @@ pub(super) fn loading_host_with_runtime_service(
         key.script_url().to_owned(),
         "loader".to_owned(),
         runtime_service.open_target_output_stream(instance_id),
+        runtime_service.worker_lifecycle(),
     ))
 }
 

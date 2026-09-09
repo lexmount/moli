@@ -556,13 +556,11 @@ pub(in crate::runtime) fn renderer_output_transport_channel_with_test_limits(
 mod tests {
     use std::sync::{Arc, Barrier};
 
-    use moli_shared_worker::SharedWorkerInstanceId;
-
     use super::*;
     use crate::runtime::{
-        RendererOutputItem, RendererOutputRecord, RendererOwnerAction,
-        RendererPendingDownloadActivation, RendererPendingDownloadResponse,
-        RendererProtocolObservation, RendererSharedWorkerTargetEvent,
+        RendererDedicatedWorkerTargetEvent, RendererOutputItem, RendererOutputRecord,
+        RendererOwnerAction, RendererPendingDownloadActivation, RendererPendingDownloadResponse,
+        RendererProtocolObservation,
     };
 
     fn test_limits() -> RendererOutputTransportLimits {
@@ -590,10 +588,8 @@ mod tests {
 
     fn owner_action_record() -> RendererOutputRecord {
         RendererOutputRecord::new_for_test(RendererOutputItem::OwnerAction(
-            RendererOwnerAction::SharedWorkerTargetLifecycle(
-                RendererSharedWorkerTargetEvent::Destroyed {
-                    instance_id: SharedWorkerInstanceId::from_u64(7),
-                },
+            RendererOwnerAction::DedicatedWorkerTargetLifecycle(
+                RendererDedicatedWorkerTargetEvent::Destroyed { instance_id: 7 },
             ),
         ))
     }

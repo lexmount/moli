@@ -20,7 +20,7 @@ use crate::runtime::RendererOwnerLocalHostId;
 pub(super) struct LazySharedWorkerRuntime {
     state: Mutex<LazySharedWorkerRuntimeState>,
     client_owner_id_allocator: crate::shared_worker_runtime::SharedWorkerClientOwnerIdAllocator,
-    browser_context_runtime_id: crate::runtime::RendererBrowserContextRuntimeId,
+    worker_lifecycle: crate::runtime::RendererWorkerLifecycleReporter,
     output_transport: crate::runtime::RendererOutputTransportSenderSlot,
 }
 
@@ -42,7 +42,7 @@ impl std::fmt::Debug for LazySharedWorkerRuntime {
 
 impl LazySharedWorkerRuntime {
     pub(super) fn new(
-        browser_context_runtime_id: crate::runtime::RendererBrowserContextRuntimeId,
+        worker_lifecycle: crate::runtime::RendererWorkerLifecycleReporter,
         output_transport: crate::runtime::RendererOutputTransportSenderSlot,
     ) -> Self {
         Self {
@@ -51,22 +51,21 @@ impl LazySharedWorkerRuntime {
                 owner_local_host_id: None,
             }),
             client_owner_id_allocator: Default::default(),
-            browser_context_runtime_id,
+            worker_lifecycle,
             output_transport,
         }
     }
 
     pub(super) fn from_service(
         service: crate::shared_worker_runtime::SharedWorkerRuntimeService,
-        browser_context_runtime_id: crate::runtime::RendererBrowserContextRuntimeId,
+        worker_lifecycle: crate::runtime::RendererWorkerLifecycleReporter,
         output_transport: crate::runtime::RendererOutputTransportSenderSlot,
     ) -> Self {
-        service
-            .configure_target_output_streams(browser_context_runtime_id, output_transport.clone());
+        service.configure_target_output_streams(worker_lifecycle.clone(), output_transport.clone());
         Self {
             client_owner_id_allocator: service.client_owner_id_allocator(),
             state: Mutex::new(LazySharedWorkerRuntimeState::Live(service)),
-            browser_context_runtime_id,
+            worker_lifecycle,
             output_transport,
         }
     }
@@ -90,7 +89,7 @@ impl LazySharedWorkerRuntime {
                 self.client_owner_id_allocator.clone(),
             );
         service.configure_target_output_streams(
-            self.browser_context_runtime_id,
+            self.worker_lifecycle.clone(),
             self.output_transport.clone(),
         );
         for sender in owner_wake_senders.into_senders() {
@@ -190,12 +189,9 @@ impl RendererBrowserContextRuntime {
             .map_or(0, |runtime| runtime.drain_service_lane())
     }
 
-    pub fn close_shared_worker_for_target_close(
-        &self,
-        instance_id: SharedWorkerInstanceId,
-    ) -> bool {
+    pub fn close_shared_worker(&self, instance_id: SharedWorkerInstanceId) -> bool {
         self.shared_worker_runtime_if_initialized()
-            .is_some_and(|runtime| runtime.close_instance_for_devtools_target_close(instance_id))
+            .is_some_and(|runtime| runtime.close_instance(instance_id))
     }
 
     pub(crate) fn remove_shared_worker_client(&self, client_id: SharedWorkerClientId) {

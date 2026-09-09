@@ -19,7 +19,7 @@ use moli_core::{
         RendererServiceWorkerFetchDiagnosticResult, RendererServiceWorkerRunIdentity,
         RendererServiceWorkerTargetEvent, RendererServiceWorkerTargetInfo,
         RendererServiceWorkerVersionStatus, RendererSharedWorkerConsoleMessage,
-        RendererSharedWorkerTargetEvent, RendererSharedWorkerTargetInfo,
+        RendererSharedWorkerObservation, RendererSharedWorkerTargetInfo,
         RuntimeConsoleMessageSnapshot, SubresourceRequestInitiatorType,
     },
 };
@@ -61,6 +61,9 @@ use crate::{
 use serde_json::Value;
 
 use super::events;
+
+#[cfg(test)]
+mod native_worker_tests;
 
 #[derive(Debug, Default, PartialEq)]
 pub(in crate::domains) struct TargetPreparedOutputs {
@@ -355,71 +358,127 @@ pub(in crate::domains) const SLOT_SERVICE_WORKER_TARGET_LIFECYCLE: ProtocolOutpu
 pub(in crate::domains) const SLOT_DEDICATED_WORKER_TARGET_LIFECYCLE: ProtocolOutputSlot =
     ProtocolOutputSlot::DedicatedWorkerTargetLifecycle;
 
-fn shared_worker_target_lifecycle_outputs_for_events(
+/// Only Browser-acknowledged occurrences can create or retire Worker projections.
+pub(in crate::domains) fn worker_lifecycle_prepared_outputs(
     conn: &mut CdpConnection,
-    browser_context_id: String,
-    events: Vec<RendererSharedWorkerTargetEvent>,
+    committed: moli_core::page::RendererCommittedWorkerLifecycle,
 ) -> TargetPreparedOutputs {
-    let mut outputs = TargetPreparedOutputs::default();
-    for event in events {
-        match event {
-            RendererSharedWorkerTargetEvent::Created(info) => {
-                let owner_target_id =
-                    conn.browser_context_by_id(&browser_context_id)
-                        .and_then(|context| {
-                            context.target_id_for_renderer_owner_local_host_id(
-                                info.owner_local_host_id,
-                            )
-                        });
-                outputs.extend(register_shared_worker_target(
-                    conn,
-                    &browser_context_id,
-                    owner_target_id,
-                    info,
-                ));
-            }
-            RendererSharedWorkerTargetEvent::Destroyed { instance_id } => {
-                outputs.extend(remove_shared_worker_target(
-                    conn,
-                    &browser_context_id,
-                    instance_id,
-                ));
-            }
-            RendererSharedWorkerTargetEvent::Console {
-                instance_id,
-                message,
-            } => {
-                outputs.extend(record_shared_worker_target_console_message(
-                    conn,
-                    &browser_context_id,
-                    instance_id,
-                    message,
-                ));
-            }
-            RendererSharedWorkerTargetEvent::RuntimeInspectorMessages {
-                instance_id,
-                inspector_session_id,
-                messages,
-            } => {
-                outputs.extend(record_shared_worker_target_runtime_inspector_messages(
-                    conn,
-                    &browser_context_id,
-                    instance_id,
-                    inspector_session_id,
-                    messages,
-                ));
-            }
+    let Some(context) = conn
+        .browser_contexts()
+        .find(|context| context.routes_renderer_browser_context_runtime(committed.runtime()))
+    else {
+        return TargetPreparedOutputs::default();
+    };
+    if context
+        .worker_snapshot_sequence
+        .is_some_and(|sequence| committed.browser_sequence() <= sequence.get())
+    {
+        return TargetPreparedOutputs::default();
+    }
+    let browser_context_id = context.id.clone();
+    match committed.lifecycle() {
+        moli_core::page::RendererWorkerLifecycle::SharedCreated(info) => {
+            register_native_shared_worker_projection(conn, &browser_context_id, info.clone())
+        }
+        moli_core::page::RendererWorkerLifecycle::SharedDestroyed(instance_id) => {
+            remove_shared_worker_target(conn, &browser_context_id, *instance_id)
         }
     }
-    outputs
 }
 
-pub(in crate::domains) fn shared_worker_target_lifecycle_prepared_outputs_for_event(
+fn register_native_shared_worker_projection(
+    conn: &mut CdpConnection,
+    browser_context_id: &str,
+    info: RendererSharedWorkerTargetInfo,
+) -> TargetPreparedOutputs {
+    let owner_target_id = conn
+        .browser_context_by_id(browser_context_id)
+        .and_then(|context| {
+            context.target_id_for_renderer_owner_local_host_id(info.owner_local_host_id)
+        });
+    register_shared_worker_target(conn, browser_context_id, owner_target_id, info)
+}
+
+pub(in crate::domains) fn shared_worker_observation_prepared_outputs(
     conn: &mut CdpConnection,
     browser_context_id: String,
-    event: RendererSharedWorkerTargetEvent,
+    event: RendererSharedWorkerObservation,
 ) -> TargetPreparedOutputs {
-    shared_worker_target_lifecycle_outputs_for_events(conn, browser_context_id, vec![event])
+    match event {
+        RendererSharedWorkerObservation::Console {
+            instance_id,
+            message,
+        } => record_shared_worker_target_console_message(
+            conn,
+            &browser_context_id,
+            instance_id,
+            message,
+        ),
+        RendererSharedWorkerObservation::RuntimeInspectorMessages {
+            instance_id,
+            inspector_session_id,
+            messages,
+        } => record_shared_worker_target_runtime_inspector_messages(
+            conn,
+            &browser_context_id,
+            instance_id,
+            inspector_session_id,
+            messages,
+        ),
+    }
+}
+
+impl CdpConnection {
+    pub(crate) async fn project_browser_workers(
+        &mut self,
+        workers: Vec<moli_core::browser::WorkerSnapshot>,
+        sequence: moli_core::browser::BrowserSequence,
+    ) -> Vec<BackgroundProtocolEvent> {
+        let mut outputs = TargetPreparedOutputs::default();
+        let retired = self
+            .browser_contexts()
+            .flat_map(|context| {
+                context.shared_worker_targets.keys().filter_map(|instance| {
+                    let handle = moli_core::browser::WorkerHandle::Shared {
+                        context: context.browser_context_id(),
+                        instance: *instance,
+                    };
+                    (!workers.iter().any(|worker| worker.handle() == handle))
+                        .then(|| (context.id.clone(), *instance))
+                })
+            })
+            .collect::<Vec<_>>();
+        for (context, instance) in retired {
+            outputs.extend(remove_shared_worker_target(self, &context, instance));
+        }
+        for worker in workers {
+            match worker {
+                moli_core::browser::WorkerSnapshot::Shared { context, info } => {
+                    let Some(context) = self.browser_context_by_browser_id(context) else {
+                        continue;
+                    };
+                    let context = context.id.clone();
+                    outputs.extend(register_native_shared_worker_projection(
+                        self, &context, info,
+                    ));
+                }
+            }
+        }
+        let contexts = self
+            .browser_contexts()
+            .map(|context| context.id.clone())
+            .collect::<Vec<_>>();
+        for id in contexts {
+            let context = self
+                .browser_context_by_id_mut(&id)
+                .expect("projected Context remains live");
+            // Recovery covers all occurrences at or before this atomic snapshot.
+            // Normal interleaved source FIFOs must not advance this watermark:
+            // another source may still carry an earlier committed creation.
+            context.worker_snapshot_sequence = Some(sequence);
+        }
+        worker_target_background_events_async(self, outputs).await
+    }
 }
 
 pub(in crate::domains) fn service_worker_target_lifecycle_prepared_outputs_for_event(
@@ -2315,10 +2374,10 @@ pub(super) async fn close_browser_context_worker_targets_for_dispose_async(
         ));
     }
 
-    worker_target_removal_background_events_async(conn, outputs).await
+    worker_target_background_events_async(conn, outputs).await
 }
 
-async fn worker_target_removal_background_events_async(
+async fn worker_target_background_events_async(
     conn: &mut CdpConnection,
     outputs: TargetPreparedOutputs,
 ) -> Vec<BackgroundProtocolEvent> {

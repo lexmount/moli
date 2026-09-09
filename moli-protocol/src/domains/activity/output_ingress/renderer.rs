@@ -214,6 +214,25 @@ async fn project_renderer_output_records_for_owner(
         }
         match item {
             RendererOutputItem::Observation(
+                moli_core::RendererProtocolObservation::WorkerLifecycle(observation),
+            ) => {
+                let Some(committed) = observation.committed().await else {
+                    continue;
+                };
+                let outputs =
+                    PreparedProtocolOutputs::from_browser_worker_lifecycle(conn, committed);
+                order
+                    .route_publication_outputs(
+                        conn,
+                        owner,
+                        renderer_cause.as_ref(),
+                        Some(cursor),
+                        outputs,
+                        command_context,
+                    )
+                    .await;
+            }
+            RendererOutputItem::Observation(
                 moli_core::RendererProtocolObservation::JavaScriptDialog(opening),
             ) => {
                 let Some(renderer) = crate::conn::RendererPageResidenceIdentity::from_residence(

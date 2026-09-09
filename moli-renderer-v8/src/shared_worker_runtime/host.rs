@@ -31,6 +31,7 @@ pub(super) struct RendererSharedWorkerHost {
     pub(super) state: Mutex<RendererSharedWorkerHostState>,
     pub(super) clients: Mutex<HashMap<SharedWorkerClientId, RendererSharedWorkerClient>>,
     target_output: crate::runtime::RendererTurnOutputJournal,
+    pub(super) worker_lifecycle: crate::runtime::RendererWorkerLifecycleReporter,
     target_output_retired: AtomicBool,
     pub(super) runtime_response_publications: Mutex<SharedWorkerRuntimeResponsePublicationState>,
 }
@@ -57,6 +58,7 @@ impl RendererSharedWorkerHost {
         initial_script_url: String,
         name: String,
         target_output: crate::runtime::RendererTurnOutputJournal,
+        worker_lifecycle: crate::runtime::RendererWorkerLifecycleReporter,
     ) -> Self {
         Self {
             instance_id,
@@ -67,6 +69,7 @@ impl RendererSharedWorkerHost {
             state: Mutex::new(RendererSharedWorkerHostState::Loading { task: None }),
             clients: Mutex::new(HashMap::new()),
             target_output,
+            worker_lifecycle,
             target_output_retired: AtomicBool::new(false),
             runtime_response_publications: Mutex::new(
                 SharedWorkerRuntimeResponsePublicationState::Active,

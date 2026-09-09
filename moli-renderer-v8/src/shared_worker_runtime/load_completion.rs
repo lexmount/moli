@@ -374,6 +374,7 @@ mod tests {
             key.script_url().to_owned(),
             "loader".to_owned(),
             runtime_service.open_target_output_stream(instance_id),
+            runtime_service.worker_lifecycle(),
         ));
         host.add_client(
             client_id,

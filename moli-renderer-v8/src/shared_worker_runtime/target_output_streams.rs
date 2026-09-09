@@ -4,7 +4,7 @@ use moli_shared_worker::SharedWorkerInstanceId;
 use parking_lot::Mutex;
 
 use crate::runtime::{
-    RendererBrowserContextRuntimeId, RendererOutputStreamCloseReason, RendererOutputStreamIdentity,
+    RendererOutputStreamCloseReason, RendererOutputStreamIdentity,
     RendererOutputTransportSenderSlot, RendererTurnOutputJournal,
 };
 
@@ -15,7 +15,7 @@ use crate::runtime::{
 /// concrete facts before CDP installs its channel without falling back to a
 /// service-wide lifecycle queue.
 pub(super) struct SharedWorkerTargetOutputStreams {
-    browser_context_runtime_id: RendererBrowserContextRuntimeId,
+    pub(super) worker_lifecycle: crate::runtime::RendererWorkerLifecycleReporter,
     transport: RendererOutputTransportSenderSlot,
     state: Mutex<SharedWorkerTargetOutputStreamsState>,
 }
@@ -31,11 +31,11 @@ struct SharedWorkerTargetOutputStreamsState {
 
 impl SharedWorkerTargetOutputStreams {
     pub(super) fn new(
-        browser_context_runtime_id: RendererBrowserContextRuntimeId,
+        worker_lifecycle: crate::runtime::RendererWorkerLifecycleReporter,
         transport: RendererOutputTransportSenderSlot,
     ) -> Self {
         Self {
-            browser_context_runtime_id,
+            worker_lifecycle,
             transport,
             state: Mutex::new(SharedWorkerTargetOutputStreamsState::default()),
         }
@@ -44,7 +44,7 @@ impl SharedWorkerTargetOutputStreams {
     pub(super) fn open(&self, instance_id: SharedWorkerInstanceId) -> RendererTurnOutputJournal {
         let mut state = self.state.lock();
         let stream = RendererOutputStreamIdentity::new_shared_worker(
-            self.browser_context_runtime_id,
+            self.worker_lifecycle.runtime(),
             instance_id.as_u64(),
         );
         let journal = match self.transport.sender() {
@@ -88,26 +88,31 @@ impl SharedWorkerTargetOutputStreams {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::runtime::RendererBrowserContextRuntimeId;
     use crate::runtime::{
         PendingRendererOutputRecord, RendererOutputItem, RendererOutputStreamControl,
-        RendererOutputTransportMessage, RendererOwnerAction, RendererSharedWorkerTargetEvent,
+        RendererOutputTransportMessage, RendererProtocolObservation, RendererWorkerLifecycle,
     };
 
     #[test]
     fn retired_pre_transport_stream_is_delivered_once_when_transport_binds() {
         let transport_slot = RendererOutputTransportSenderSlot::default();
         let streams = SharedWorkerTargetOutputStreams::new(
-            RendererBrowserContextRuntimeId::new_for_testing(31),
+            crate::runtime::RendererWorkerLifecycleReporter::new(
+                RendererBrowserContextRuntimeId::new_for_testing(31),
+            ),
             transport_slot.clone(),
         );
         let instance_id = SharedWorkerInstanceId::from_u64(7);
         let journal = streams.open(instance_id);
         let stream = journal.stream();
         journal.publish_record(
-            PendingRendererOutputRecord::owner_action(
+            PendingRendererOutputRecord::observation(
                 None,
-                RendererOwnerAction::SharedWorkerTargetLifecycle(
-                    RendererSharedWorkerTargetEvent::Destroyed { instance_id },
+                RendererProtocolObservation::WorkerLifecycle(
+                    streams
+                        .worker_lifecycle
+                        .report(RendererWorkerLifecycle::SharedDestroyed(instance_id)),
                 ),
             )
             .resolve()
@@ -139,11 +144,8 @@ mod tests {
             [record]
                 if matches!(
                     record.item(),
-                    RendererOutputItem::OwnerAction(
-                        RendererOwnerAction::SharedWorkerTargetLifecycle(
-                            RendererSharedWorkerTargetEvent::Destroyed { instance_id: actual }
-                        )
-                    ) if *actual == instance_id
+                    RendererOutputItem::Observation(RendererProtocolObservation::WorkerLifecycle(observation))
+                        if matches!(observation.lifecycle(), RendererWorkerLifecycle::SharedDestroyed(actual) if *actual == instance_id)
                 )
         ));
         assert_eq!(

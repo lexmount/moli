@@ -503,11 +503,7 @@ pub struct RendererSharedWorkerConsoleMessage {
 }
 
 #[derive(Debug, Clone, PartialEq)]
-pub enum RendererSharedWorkerTargetEvent {
-    Created(RendererSharedWorkerTargetInfo),
-    Destroyed {
-        instance_id: SharedWorkerInstanceId,
-    },
+pub enum RendererSharedWorkerObservation {
     Console {
         instance_id: SharedWorkerInstanceId,
         message: RendererSharedWorkerConsoleMessage,

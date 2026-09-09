@@ -24,6 +24,7 @@ mod navigation_driver;
 pub use navigation_driver::{BrowserNavigationOutcome, BrowserNavigationWaiter};
 mod navigation_events;
 mod popup;
+mod workers;
 
 use super::{
     BrowserContext, BrowserContextId, BrowserContextStoragePartitionHandles, MainFrameSlotId,
@@ -93,11 +94,15 @@ struct Browser {
     popup_admissions: popup::PopupAdmissions,
     document_decision_provider: Option<tokio::sync::watch::Receiver<()>>,
     local_sender: BrowserLocalSender,
+    native_sender: mpsc::WeakUnboundedSender<BrowserOwnerMessage>,
     events: super::events::BrowserEventStream,
 }
 
 impl Browser {
-    fn new(local_sender: BrowserLocalSender) -> Self {
+    fn new(
+        local_sender: BrowserLocalSender,
+        native_sender: mpsc::WeakUnboundedSender<BrowserOwnerMessage>,
+    ) -> Self {
         Self {
             contexts: IndexMap::new(),
             permission_defaults: super::PermissionDefaults::default(),
@@ -105,6 +110,7 @@ impl Browser {
             popup_admissions: popup::PopupAdmissions::default(),
             document_decision_provider: None,
             local_sender,
+            native_sender,
             events: super::events::BrowserEventStream::default(),
         }
     }
@@ -123,6 +129,14 @@ impl Browser {
 
     fn insert_context(&mut self, context: BrowserContext) -> BrowserContextId {
         let id = context.id();
+        let sender = self.native_sender.clone();
+        context.install_worker_lifecycle_handler(move |input| {
+            if let Some(sender) = sender.upgrade() {
+                let _ = sender.send(BrowserOwnerMessage::Execute(Box::new(move |browser| {
+                    browser.commit_worker_lifecycle(id, input);
+                })));
+            }
+        });
         let previous = self.contexts.insert(id, context);
         debug_assert!(previous.is_none(), "BrowserContext identity must be unique");
         self.events.publish(super::BrowserEvent::ContextCreated(id));
@@ -135,6 +149,7 @@ impl Browser {
         };
         let navigations = context.navigation_snapshots().collect::<Vec<_>>();
         let dialogs = context.javascript_dialog_snapshots();
+        self.publish_retired_workers(&context);
         self.events
             .publish(super::BrowserEvent::ContextDisposed(id));
         context.shutdown();
@@ -153,6 +168,7 @@ impl Browser {
                 .publish(super::BrowserEvent::ContextDisposed(id));
         }
         for (_, context) in contexts {
+            self.publish_retired_workers(&context);
             let navigations = context.navigation_snapshots().collect::<Vec<_>>();
             let dialogs = context.javascript_dialog_snapshots();
             context.shutdown();
@@ -263,6 +279,7 @@ impl fmt::Debug for BrowserHandle {
 impl BrowserHandle {
     fn start() -> Result<Self, String> {
         let (tx, mut rx) = mpsc::unbounded_channel();
+        let native_sender = tx.downgrade();
         let (ready_tx, ready_rx) = std_mpsc::sync_channel(1);
         let join = thread::Builder::new()
             .name("moli-browser-owner".to_owned())
@@ -284,7 +301,7 @@ impl BrowserHandle {
                 let _ = ready_tx.send(Ok(()));
                 local.block_on(&runtime, async move {
                     let (local_tx, mut local_rx) = mpsc::unbounded_channel();
-                    let mut browser = Browser::new(local_tx);
+                    let mut browser = Browser::new(local_tx, native_sender);
                     loop {
                         tokio::select! {
                             message = rx.recv() => match message {
@@ -494,6 +511,10 @@ impl BrowserHandle {
                     .contexts
                     .values()
                     .flat_map(BrowserContext::navigation_snapshots),
+                browser
+                    .contexts
+                    .values()
+                    .flat_map(BrowserContext::worker_snapshots),
             )
         })
     }

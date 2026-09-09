@@ -3,7 +3,7 @@ use super::{host_removal::SharedWorkerRemovedHost, service::SharedWorkerRuntimeS
 impl SharedWorkerRuntimeService {
     pub(crate) fn terminate_all_for_context_shutdown(&self) {
         for removed in self.take_context_shutdown_hosts() {
-            removed.terminate_for_context_shutdown();
+            removed.terminate();
         }
     }
 

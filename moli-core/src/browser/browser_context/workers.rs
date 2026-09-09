@@ -7,6 +7,26 @@ use moli_shared_worker::SharedWorkerInstanceId;
 use super::BrowserContext;
 
 impl BrowserContext {
+    pub(in crate::browser) fn install_worker_lifecycle_handler(
+        &self,
+        handler: impl Fn(crate::page::RendererWorkerLifecycleInput) + Send + Sync + 'static,
+    ) {
+        self.renderer_runtime()
+            .install_worker_lifecycle_handler(handler);
+    }
+
+    pub(in crate::browser) fn worker_snapshots(
+        &self,
+    ) -> impl Iterator<Item = super::super::WorkerSnapshot> + '_ {
+        self.shared_workers
+            .values()
+            .cloned()
+            .map(|info| super::super::WorkerSnapshot::Shared {
+                context: self.id(),
+                info,
+            })
+    }
+
     pub fn worker_inspection_endpoint(
         &self,
         target: RendererWorkerInspectionTarget,
@@ -128,8 +148,7 @@ impl BrowserContext {
     }
 
     pub fn close_shared_worker(&self, instance_id: SharedWorkerInstanceId) -> bool {
-        self.renderer_runtime()
-            .close_shared_worker_for_target_close(instance_id)
+        self.renderer_runtime().close_shared_worker(instance_id)
     }
 
     pub fn close_dedicated_worker(&self, instance_id: u64) -> bool {

@@ -43,7 +43,7 @@ use crate::planning::{
 };
 use crate::runtime::{
     RendererOwnerResourceActivitySource, RendererPageCommand, RendererRuntimeObservableSourceItem,
-    RendererSharedWorkerTargetEvent,
+    RendererSharedWorkerObservation,
 };
 use crate::script_vm::{PostParseLifecycleAdvance, PostParseLifecycleCompletionAction};
 use crate::types::{

@@ -66,6 +66,16 @@ impl PreparedProtocolOutputs {
         Some(prepared)
     }
 
+    pub(in crate::domains::activity) fn from_browser_worker_lifecycle(
+        conn: &mut CdpConnection,
+        committed: moli_core::page::RendererCommittedWorkerLifecycle,
+    ) -> Self {
+        let mut prepared = Self::empty();
+        crate::domains::target::worker_lifecycle_prepared_outputs(conn, committed)
+            .append_to_shared_worker_target_lifecycle_output_sink(&mut prepared);
+        prepared
+    }
+
     pub(in crate::domains::activity) fn from_renderer_observation(
         conn: &mut CdpConnection,
         owner: &CommandOwnerScope,
@@ -75,6 +85,19 @@ impl PreparedProtocolOutputs {
     ) -> Self {
         let mut prepared = Self::empty();
         match observation {
+            RendererProtocolObservation::WorkerLifecycle(_) => {
+                unreachable!("Worker projection requires native commit acknowledgement first")
+            }
+            RendererProtocolObservation::SharedWorker(event) => {
+                if let Some((browser_context_id, _)) = conn.target_owner_identity_for_owner(owner) {
+                    crate::domains::target::shared_worker_observation_prepared_outputs(
+                        conn,
+                        browser_context_id,
+                        event.clone(),
+                    )
+                    .append_to_shared_worker_target_lifecycle_output_sink(&mut prepared);
+                }
+            }
             RendererProtocolObservation::JavaScriptDialog(_) => {
                 unreachable!("dialog projection must observe native admission first")
             }
@@ -359,19 +382,6 @@ impl PreparedProtocolOutputs {
                     .await
                     .append_to_output_sink(&mut prepared);
             }
-            RendererOwnerAction::SharedWorkerTargetLifecycle(event) => {
-                if let Some((browser_context_id, _)) = conn.target_owner_identity_for_owner(owner) {
-                    crate::domains::target::
-                        shared_worker_target_lifecycle_prepared_outputs_for_event(
-                            conn,
-                            browser_context_id,
-                            event,
-                        )
-                        .append_to_shared_worker_target_lifecycle_output_sink(
-                            &mut prepared,
-                        );
-                }
-            }
             RendererOwnerAction::ServiceWorkerTargetLifecycle(event) => {
                 if let Some((browser_context_id, _)) = conn.target_owner_identity_for_owner(owner) {
                     crate::domains::target::
@@ -535,7 +545,7 @@ impl PreparedProtocolOutputs {
         (!self.ordered_slots.is_empty()).then_some(self)
     }
 
-    /// Completes browser-owner cleanup for a canceled or superseded barrier
+    /// Completes owner/attachment cleanup for a canceled or superseded barrier
     /// without projecting protocol-only observations from the stale command.
     pub(in crate::domains::activity) async fn project_owner_actions_async(
         mut self,

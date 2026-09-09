@@ -1660,22 +1660,24 @@ fn shared_worker_console_entry(
         })
 }
 
-fn has_console_probe_created_event(events: &[RendererSharedWorkerTargetEvent]) -> bool {
+fn has_console_probe_created_event(events: &[crate::runtime::RendererProtocolObservation]) -> bool {
     events.iter().any(|event| {
         matches!(
             event,
-            RendererSharedWorkerTargetEvent::Created(info)
-                if info.name == "console-probe"
-                    && info.url.starts_with("data:text/javascript,")
+            crate::runtime::RendererProtocolObservation::WorkerLifecycle(observation)
+                if matches!(observation.lifecycle(), crate::runtime::RendererWorkerLifecycle::SharedCreated(info)
+                    if info.name == "console-probe" && info.url.starts_with("data:text/javascript,"))
         )
     })
 }
 
-fn has_console_probe_target_console_event(events: &[RendererSharedWorkerTargetEvent]) -> bool {
+fn has_console_probe_target_console_event(
+    events: &[crate::runtime::RendererProtocolObservation],
+) -> bool {
     events.iter().any(|event| {
         matches!(
             event,
-            RendererSharedWorkerTargetEvent::Console { message, .. }
+            crate::runtime::RendererProtocolObservation::SharedWorker(RendererSharedWorkerObservation::Console { message, .. })
                 if message.message == SHARED_WORKER_CONSOLE_MESSAGE
         )
     })
@@ -1686,7 +1688,7 @@ async fn drain_until_shared_worker_console_activity(
     output_rx: &mut crate::runtime::RendererOutputTransportReceiver,
 ) -> anyhow::Result<(
     crate::runtime::RendererPageDiagnosticsSnapshot,
-    Vec<RendererSharedWorkerTargetEvent>,
+    Vec<crate::runtime::RendererProtocolObservation>,
 )> {
     let deadline = Instant::now() + Duration::from_secs(10);
     let mut target_events = Vec::new();
@@ -1709,8 +1711,9 @@ async fn drain_until_shared_worker_console_activity(
             };
             target_events.extend(output.records().iter().filter_map(
                 |record| match record.item() {
-                    RendererOutputItem::OwnerAction(
-                        RendererOwnerAction::SharedWorkerTargetLifecycle(event),
+                    RendererOutputItem::Observation(
+                        event @ (crate::runtime::RendererProtocolObservation::SharedWorker(_)
+                        | crate::runtime::RendererProtocolObservation::WorkerLifecycle(_)),
                     ) => Some(event.clone()),
                     _ => None,
                 },

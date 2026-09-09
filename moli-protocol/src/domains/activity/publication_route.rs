@@ -129,11 +129,25 @@ impl RendererPublicationOwner {
         match self {
             Self::Unobserved => None,
             Self::BrowserContext { browser_context_id } => {
+                let runtime = match stream.residence() {
+                    RendererOutputResidenceIdentity::SharedWorker {
+                        browser_context_runtime_id,
+                        ..
+                    }
+                    | RendererOutputResidenceIdentity::ServiceWorker {
+                        browser_context_runtime_id,
+                        ..
+                    } => browser_context_runtime_id,
+                    RendererOutputResidenceIdentity::Page { .. } => return None,
+                };
                 if !conn
                     .browser_context
                     .iter()
                     .chain(conn.inactive_browser_contexts.iter())
-                    .any(|browser_context| browser_context.id == *browser_context_id)
+                    .any(|browser_context| {
+                        browser_context.id == *browser_context_id
+                            && browser_context.routes_renderer_browser_context_runtime(runtime)
+                    })
                 {
                     return None;
                 }

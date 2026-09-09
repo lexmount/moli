@@ -88,8 +88,9 @@ pub use moli_renderer_v8::{
     RendererAutofillTriggerOutcome, RendererAutofillTriggerRequest,
     RendererCaptureScreencastFrameReply, RendererCaptureScreencastFrameRequest,
     RendererCaptureScreenshotReply, RendererCaptureScreenshotRequest,
-    RendererCommandTurnCompletion, RendererCommandTurnOutput, RendererDedicatedWorkerTargetEvent,
-    RendererDedicatedWorkerTargetInfo, RendererDevToolsAgentToken, RendererDocumentHitTestResult,
+    RendererCommandTurnCompletion, RendererCommandTurnOutput, RendererCommittedWorkerLifecycle,
+    RendererDedicatedWorkerTargetEvent, RendererDedicatedWorkerTargetInfo,
+    RendererDevToolsAgentToken, RendererDocumentHitTestResult,
     RendererDocumentIsolateAccountingDiagnostics, RendererDocumentLifecycleEvent,
     RendererDocumentLifecycleEventKind, RendererDocumentLifecycleIdentity,
     RendererDocumentLifecycleMilestone, RendererDocumentLifecycleSnapshot,
@@ -129,9 +130,10 @@ pub use moli_renderer_v8::{
     RendererServiceWorkerFetchDiagnosticResult, RendererServiceWorkerRunIdentity,
     RendererServiceWorkerTargetEvent, RendererServiceWorkerTargetInfo,
     RendererServiceWorkerVersionStatus, RendererSetDocumentContentResult,
-    RendererSharedWorkerConsoleMessage, RendererSharedWorkerTargetEvent,
+    RendererSharedWorkerConsoleMessage, RendererSharedWorkerObservation,
     RendererSharedWorkerTargetInfo, RendererSyntheticResponseBody, RendererTextSearchMatch,
     RendererTouchPoint, RendererVisualStateToken, RendererWindowDocumentSource,
+    RendererWorkerLifecycle, RendererWorkerLifecycleInput, RendererWorkerLifecycleObservation,
     RuntimeConsoleMessageSnapshot,
 };
 pub use moli_renderer_v8::{

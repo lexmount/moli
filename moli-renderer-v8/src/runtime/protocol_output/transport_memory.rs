@@ -97,6 +97,17 @@ fn observation_transport_charge_bytes(observation: &RendererProtocolObservation)
         .sum(),
         RendererProtocolObservation::DocumentTitleChanged(change) => string_charge(&change.title),
         RendererProtocolObservation::DocumentLifecycle(_) => 0,
+        RendererProtocolObservation::WorkerLifecycle(observation) => {
+            match observation.lifecycle() {
+                crate::runtime::RendererWorkerLifecycle::SharedCreated(info) => {
+                    string_charge(&info.url).saturating_add(string_charge(&info.name))
+                }
+                crate::runtime::RendererWorkerLifecycle::SharedDestroyed(_) => 0,
+            }
+        }
+        RendererProtocolObservation::SharedWorker(event) => {
+            shared_worker_event_transport_charge_bytes(event)
+        }
         RendererProtocolObservation::Network { item, .. } => item.renderer_transport_charge_bytes(),
         RendererProtocolObservation::RuntimeBinding(call) => {
             string_charge(&call.name).saturating_add(string_charge(&call.payload))
@@ -230,9 +241,6 @@ fn owner_action_transport_charge_bytes(action: &RendererOwnerAction) -> usize {
         RendererOwnerAction::DetachedParserScriptFetchPause { info, .. } => {
             info.renderer_transport_charge_bytes()
         }
-        RendererOwnerAction::SharedWorkerTargetLifecycle(event) => {
-            shared_worker_event_transport_charge_bytes(event)
-        }
         RendererOwnerAction::ServiceWorkerTargetLifecycle(event) => {
             service_worker_event_transport_charge_bytes(event)
         }
@@ -308,20 +316,17 @@ fn dom_mutation_transport_charge_bytes(event: &crate::runtime::RendererDomMutati
 }
 
 fn shared_worker_event_transport_charge_bytes(
-    event: &crate::runtime::RendererSharedWorkerTargetEvent,
+    event: &crate::runtime::RendererSharedWorkerObservation,
 ) -> usize {
     match event {
-        crate::runtime::RendererSharedWorkerTargetEvent::Created(info) => {
-            string_charge(&info.url).saturating_add(string_charge(&info.name))
-        }
-        crate::runtime::RendererSharedWorkerTargetEvent::Console { message, .. } => {
+        crate::runtime::RendererSharedWorkerObservation::Console { message, .. } => {
             message.args.iter().fold(
                 string_charge(&message.message)
                     .saturating_add(message.stack.as_deref().map(string_charge).unwrap_or(0)),
                 |total, value| total.saturating_add(json_charge(value)),
             )
         }
-        crate::runtime::RendererSharedWorkerTargetEvent::RuntimeInspectorMessages {
+        crate::runtime::RendererSharedWorkerObservation::RuntimeInspectorMessages {
             inspector_session_id,
             messages,
             ..
@@ -334,7 +339,6 @@ fn shared_worker_event_transport_charge_bytes(
                 total.saturating_add(runtime_inspector_message_transport_charge_bytes(message))
             },
         ),
-        crate::runtime::RendererSharedWorkerTargetEvent::Destroyed { .. } => 0,
     }
 }
 

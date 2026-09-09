@@ -11,7 +11,7 @@ use crate::runtime::{
     RendererPendingFileChooserActivation, RendererPendingTopLevelHistoryTraversal,
     RendererPopupOpening, RendererRuntimeCommandCausalIdentity,
     RendererRuntimeInspectorMessageBatch, RendererServiceWorkerTargetEvent,
-    RendererSharedWorkerTargetEvent,
+    RendererSharedWorkerObservation,
 };
 use moli_page_types::{
     PendingRuntimeBindingCall, PendingSubresourceContinueEvent, PendingSubresourceFetchInfo,
@@ -65,7 +65,6 @@ pub enum RendererOwnerAction {
         info: Box<PendingSubresourceFetchInfo>,
         continuation: DetachedParserScriptFetchContinuation,
     },
-    SharedWorkerTargetLifecycle(RendererSharedWorkerTargetEvent),
     ServiceWorkerTargetLifecycle(RendererServiceWorkerTargetEvent),
     DedicatedWorkerTargetLifecycle(RendererDedicatedWorkerTargetEvent),
 }
@@ -77,6 +76,8 @@ pub enum RendererOwnerAction {
 /// protocol-boundary responsibility.
 #[derive(Clone, Debug, PartialEq)]
 pub enum RendererProtocolObservation {
+    WorkerLifecycle(crate::runtime::RendererWorkerLifecycleObservation),
+    SharedWorker(RendererSharedWorkerObservation),
     Popup(std::sync::Arc<RendererPopupOpening>),
     JavaScriptDialog(std::sync::Arc<RendererJavaScriptDialogOpening>),
     MainDocumentCommit(RendererMainDocumentCommit),
@@ -171,8 +172,8 @@ impl PendingRendererOutputRecord {
                 batch,
             )) => (!batch.has_resolved_source_identities())
                 .then_some(RendererOutputResolutionError::RuntimeInspector),
-            RendererOutputItem::OwnerAction(RendererOwnerAction::SharedWorkerTargetLifecycle(
-                crate::runtime::RendererSharedWorkerTargetEvent::RuntimeInspectorMessages {
+            RendererOutputItem::Observation(RendererProtocolObservation::SharedWorker(
+                crate::runtime::RendererSharedWorkerObservation::RuntimeInspectorMessages {
                     messages,
                     ..
                 },
@@ -250,8 +251,15 @@ impl RendererOutputRecord {
         &self.item
     }
 
-    pub(crate) fn is_owner_action(&self) -> bool {
-        matches!(self.item, RendererOutputItem::OwnerAction(_))
+    pub(crate) fn requires_essential_transport_admission(&self) -> bool {
+        matches!(
+            self.item,
+            RendererOutputItem::OwnerAction(_)
+                | RendererOutputItem::Observation(
+                    RendererProtocolObservation::WorkerLifecycle(_)
+                        | RendererProtocolObservation::SharedWorker(_)
+                )
+        )
     }
 
     pub fn into_parts(

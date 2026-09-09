@@ -95,7 +95,9 @@ impl CdpScheduler {
                         .project_browser_navigation(request.web_contents)
                         .await
                 }
-                BrowserEvent::DocumentLifecycleChanged(_)
+                BrowserEvent::WorkerCreated(_)
+                | BrowserEvent::WorkerDestroyed(_)
+                | BrowserEvent::DocumentLifecycleChanged(_)
                 | BrowserEvent::DocumentTitleChanged(_)
                 | BrowserEvent::DialogOpened(_)
                 | BrowserEvent::DialogClosed { .. } => {

@@ -44,6 +44,12 @@ mod access;
 mod browser_context_runtime;
 mod worker_inspection;
 pub use worker_inspection::{RendererWorkerInspectionEndpoint, RendererWorkerInspectionTarget};
+mod worker_lifecycle;
+pub(crate) use worker_lifecycle::RendererWorkerLifecycleReporter;
+pub use worker_lifecycle::{
+    RendererCommittedWorkerLifecycle, RendererWorkerLifecycle, RendererWorkerLifecycleInput,
+    RendererWorkerLifecycleObservation,
+};
 mod document_lifecycle;
 mod document_lifecycle_turn;
 mod javascript_dialog;
@@ -374,7 +380,7 @@ pub use self::page_surface::{
     RendererServiceWorkerFetchDiagnostic, RendererServiceWorkerFetchDiagnosticResult,
     RendererServiceWorkerTargetEvent, RendererServiceWorkerTargetInfo,
     RendererServiceWorkerVersionStatus, RendererSetDocumentContentResult,
-    RendererSharedWorkerConsoleMessage, RendererSharedWorkerTargetEvent,
+    RendererSharedWorkerConsoleMessage, RendererSharedWorkerObservation,
     RendererSharedWorkerTargetInfo, RendererStyleSheetHeader, RendererStyleSheetInventoryUpdate,
     RendererStyleSheetPayload, RendererSyntheticResponseBody, RendererTextSearchMatch,
     RendererTouchPoint, RendererWindowDocumentSource, RuntimeConsoleMessageSnapshot,
