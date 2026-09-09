@@ -63,6 +63,7 @@ impl FrameOwnerStore {
         &mut self,
         load_delivery_kind: DocumentLoadDeliveryKind,
         continuation: Option<super::records::DocumentOpenLoadContinuation>,
+        completely_loaded: bool,
     ) -> DocumentLifecycleRecord {
         let parsing_delay_token = self.ids.document_load_delay_token();
         let domcontentloaded_transition_token = self.ids.document_load_delay_token();
@@ -71,6 +72,7 @@ impl FrameOwnerStore {
             parsing_delay_token,
             domcontentloaded_transition_token,
             continuation,
+            completely_loaded,
         )
     }
 
@@ -312,6 +314,7 @@ impl FrameOwnerStore {
         let load_continuation = retired_document
             .lifecycle_progress
             .document_open_load_continuation();
+        let completely_loaded = retired_document.lifecycle_progress.is_completely_loaded();
         retired_document.lifecycle = DocumentLifecycleState::Replaced;
         retired_document.lifecycle_progress.retire();
         retired_document.active_requests.clear();
@@ -320,6 +323,7 @@ impl FrameOwnerStore {
         let lifecycle_progress = self.new_loading_document_lifecycle_for_document_open(
             DocumentLoadDeliveryKind::Main,
             load_continuation,
+            completely_loaded,
         );
         self.documents.insert(
             document_id,
@@ -885,6 +889,7 @@ impl FrameOwnerStore {
         let load_continuation = retired_document
             .lifecycle_progress
             .document_open_load_continuation();
+        let completely_loaded = retired_document.lifecycle_progress.is_completely_loaded();
         retired_document.lifecycle = DocumentLifecycleState::Replaced;
         retired_document.lifecycle_progress.retire();
         retired_document.active_requests.clear();
@@ -893,6 +898,7 @@ impl FrameOwnerStore {
         let lifecycle_progress = self.new_loading_document_lifecycle_for_document_open(
             DocumentLoadDeliveryKind::Child,
             load_continuation,
+            completely_loaded,
         );
         self.documents.insert(
             document_id,
@@ -3354,6 +3360,18 @@ impl FrameOwnerStore {
             owner,
             realm_id: current_realm_id,
         }
+    }
+
+    pub(crate) fn current_document_is_completely_loaded(
+        &self,
+        owner: FrameDocumentOwner,
+    ) -> Option<bool> {
+        if !self.frame_document_owner_is_current(owner) {
+            return None;
+        }
+        self.documents
+            .get(&owner.document_id)
+            .map(|document| document.lifecycle_progress.is_completely_loaded())
     }
 
     pub(crate) fn frame_document_owner_is_current(&self, owner: FrameDocumentOwner) -> bool {
