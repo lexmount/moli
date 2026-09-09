@@ -6,7 +6,7 @@ use crate::{
         MAX_PENDING_WEBSOCKET_HANDSHAKES, MAX_WEBSOCKET_CONNECTIONS_PER_RUNTIME,
         acquire_limited_websocket_slot,
     },
-    proxy::{append_proxy_connect_header, no_proxy_matches},
+    proxy::no_proxy_matches,
     request::prepare_websocket_request,
     test_support::*,
 };
@@ -312,17 +312,6 @@ fn websocket_proxy_url_explicit_empty_proxy_disables_env_fallback() {
     );
 
     assert_eq!(proxy, None);
-}
-
-#[test]
-fn websocket_proxy_connect_header_rejects_newline_values() {
-    let mut request = String::new();
-    assert!(append_proxy_connect_header(&mut request, "User-Agent", "Moli").is_ok());
-    assert_eq!(request, "User-Agent: Moli\r\n");
-    assert!(
-        append_proxy_connect_header(&mut request, "Proxy-Authorization", "Bearer good\nbad")
-            .is_err()
-    );
 }
 
 #[test]
@@ -948,6 +937,7 @@ async fn websocket_transport_uses_explicit_http_proxy_connect_without_forwarding
     context.http_proxy = Some(proxy_url);
     context.http_no_proxy = Some(String::new());
     context.proxy_bearer_token = Some("proxy-token".to_owned());
+    let user_agent = context.user_agent.clone();
 
     let command_tx = spawn_connection(2, url.clone(), Vec::new(), context, event_tx);
     let proxy_request = timeout(Duration::from_secs(3), proxy_request_rx)
@@ -978,6 +968,7 @@ async fn websocket_transport_uses_explicit_http_proxy_connect_without_forwarding
         proxy_request.contains("\r\nProxy-Authorization: Bearer proxy-token\r\n"),
         "proxy bearer token should be sent only on CONNECT: {proxy_request:?}"
     );
+    assert!(proxy_request.contains(&format!("\r\nUser-Agent: {user_agent}\r\n")));
     assert_eq!(
         header_value(&headers, "origin").as_deref(),
         Some("https://example.com")

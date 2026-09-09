@@ -115,20 +115,3 @@ fn split_no_proxy_host_port(token: &str) -> (&str, Option<u16>) {
         _ => (token, None),
     }
 }
-
-pub(crate) fn append_proxy_connect_header(
-    request: &mut String,
-    name: &str,
-    value: &str,
-) -> Result<(), String> {
-    if value.bytes().any(|byte| matches!(byte, b'\r' | b'\n')) {
-        return Err(format!(
-            "invalid WebSocket proxy CONNECT header `{name}` contains a newline"
-        ));
-    }
-    request.push_str(name);
-    request.push_str(": ");
-    request.push_str(value);
-    request.push_str("\r\n");
-    Ok(())
-}

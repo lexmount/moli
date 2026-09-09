@@ -109,6 +109,23 @@ async fn native_upgrade_retains_socket_and_same_packet_empty_frame() {
     task.join().unwrap();
 }
 
+#[test]
+fn native_proxy_headers_reject_cr_lf_and_nul_values() {
+    let mut request = CurlWebSocketRequest::new("ws://example.test/socket".to_owned());
+    request.proxy = Some("http://127.0.0.1:8080".to_owned());
+    for name in ["User-Agent", "Proxy-Authorization"] {
+        request.proxy_headers = vec![(name.to_owned(), "valid".to_owned())];
+        assert!(super::request::configure(&request).is_ok());
+        for value in ["good\rbad", "good\nbad", "good\0bad"] {
+            request.proxy_headers[0].1 = value.to_owned();
+            let error = super::request::configure(&request)
+                .err()
+                .expect("native proxy headers must reject control bytes");
+            assert_eq!(error.to_string(), "invalid WebSocket request header");
+        }
+    }
+}
+
 #[tokio::test]
 async fn native_decoder_rejects_invalid_framing_before_delivering_payload() {
     let mut cases = Vec::new();

@@ -2,7 +2,7 @@ use crate::{
     ConnectOptions,
     handshake::{HandshakeResponse, parse_handshake_response, validate_handshake_response},
     headers::header_map_entries,
-    proxy::{append_proxy_connect_header, websocket_proxy_url},
+    proxy::websocket_proxy_url,
     request::PreparedWebSocketRequest,
 };
 use moli_curl::{
@@ -36,17 +36,13 @@ pub(crate) async fn open_websocket_connection(
     // origins: https://websockets.spec.whatwg.org/#opening-handshake
     native.tls = context.tls.clone();
     if native.proxy.is_some() {
-        let mut validated = String::new();
-        append_proxy_connect_header(&mut validated, "User-Agent", &context.user_agent)?;
         native
             .proxy_headers
             .push(("User-Agent".to_owned(), context.user_agent.clone()));
         if let Some(token) = &context.proxy_bearer_token {
-            let value = format!("Bearer {token}");
-            append_proxy_connect_header(&mut validated, "Proxy-Authorization", &value)?;
             native
                 .proxy_headers
-                .push(("Proxy-Authorization".to_owned(), value));
+                .push(("Proxy-Authorization".to_owned(), format!("Bearer {token}")));
         }
     } else {
         let url = &request.url;
