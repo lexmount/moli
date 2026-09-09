@@ -213,9 +213,10 @@ pub(crate) use self::broadcast_channel::{
     dispatch_authorized_page_broadcast_channel_event, dispatch_broadcast_channel_events_for_channel,
 };
 pub(crate) use self::canvas::{
-    CanvasContextKind, attach_canvas_like_context_object, build_canvas_rendering_context_2d_object,
-    build_offscreen_canvas_object, build_webgl_context_object, build_webgl2_context_object,
-    canvas_like_to_data_url, reset_html_canvas_backing_store_for_dimension_assignment,
+    BitmapRejection, BitmapTaskResult, CanvasContextKind, attach_canvas_like_context_object,
+    build_canvas_rendering_context_2d_object, build_offscreen_canvas_object,
+    build_webgl_context_object, build_webgl2_context_object, canvas_like_to_data_url,
+    reset_html_canvas_backing_store_for_dimension_assignment, settle_bitmap_task_result,
 };
 #[cfg(test)]
 pub(crate) use self::constructors::finalize_dom_exception_realm_bindings;

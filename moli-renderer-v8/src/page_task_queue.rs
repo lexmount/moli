@@ -1,3 +1,4 @@
+mod bitmap_task;
 mod broadcast_channel_delivery;
 mod child_frame_task;
 mod child_module_dependency_fetch_start;
@@ -155,6 +156,11 @@ pub(crate) struct PageWindowDocumentTaskTurnAction<I, K> {
 
 impl<I, K> PageWindowDocumentTaskTurnAction<I, K> {}
 
+pub(crate) use self::bitmap_task::{
+    PageBitmapTaskTargetEffect, PageBitmapTaskTurnAction, PageBitmapTaskTurnOutcome,
+    RendererPageBitmapTask, RendererPageBitmapTaskId, RendererPageBitmapTaskOwner,
+    RendererPageBitmapTaskProducer, RendererPageBitmapTaskSender,
+};
 pub(crate) use self::broadcast_channel_delivery::{
     PageBroadcastChannelDeliveryDocumentEffect, PageBroadcastChannelDeliveryTurnAction,
     PageBroadcastChannelDeliveryTurnOutcome, RendererPageBroadcastChannelDeliveryOwner,

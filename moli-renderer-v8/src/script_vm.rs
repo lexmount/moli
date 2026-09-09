@@ -786,6 +786,7 @@ mod subresource_command_completion;
 mod subresource_fetch;
 pub(crate) use subresource_command_completion::AsyncSubresourceCommandExecution;
 pub(crate) use subresource_fetch::AsyncSubresourceFetchBodyActivity;
+mod bitmap_tasks;
 mod page_resource_completion_task_completion;
 mod text_search;
 mod text_track_default_mode;
@@ -3784,6 +3785,8 @@ impl ScriptVm {
             let retired_image_decode_count = host.retire_image_decode_requests_for_context_token(
                 context.runtime_observable_context_token,
             );
+            let retired_bitmap_count =
+                host.retire_bitmap_context_token(context.runtime_observable_context_token);
             let retired_webcrypto_count =
                 host.retire_webcrypto_context_token(context.runtime_observable_context_token);
             host.retire_opfs_context_token(context.runtime_observable_context_token);
@@ -3814,6 +3817,7 @@ impl ScriptVm {
                 retired_message_port_count,
                 retired_window_message_count,
                 retired_window_execution_context_count,
+                retired_bitmap_count,
                 retired_webcrypto_count,
                 retired_worker_count,
                 retired_shared_worker_count,
@@ -3830,12 +3834,13 @@ impl ScriptVm {
             retired_message_port_count = runtime_binding_retirement.2,
             retired_window_message_count = runtime_binding_retirement.3,
             retired_window_execution_context_count = runtime_binding_retirement.4,
-            retired_webcrypto_count = runtime_binding_retirement.5,
-            retired_worker_count = runtime_binding_retirement.6,
-            retired_shared_worker_count = runtime_binding_retirement.7,
-            retired_xhr_count = runtime_binding_retirement.8,
-            aborted_fetch_count = runtime_binding_retirement.9.0,
-            detached_keepalive_fetch_count = runtime_binding_retirement.9.1,
+            retired_bitmap_count = runtime_binding_retirement.5,
+            retired_webcrypto_count = runtime_binding_retirement.6,
+            retired_worker_count = runtime_binding_retirement.7,
+            retired_shared_worker_count = runtime_binding_retirement.8,
+            retired_xhr_count = runtime_binding_retirement.9,
+            aborted_fetch_count = runtime_binding_retirement.10.0,
+            detached_keepalive_fetch_count = runtime_binding_retirement.10.1,
             retired_timer_count,
             "retired child Runtime binding context"
         );
@@ -3895,6 +3900,7 @@ impl ScriptVm {
             runtime_binding_retirement,
             retired_image_decode_count,
             retired_message_port_count,
+            retired_bitmap_count,
             retired_webcrypto_count,
             retired_worker_count,
             retired_shared_worker_count,
@@ -3907,6 +3913,8 @@ impl ScriptVm {
             let retired_image_decode_count = host.retire_image_decode_requests_for_context_token(
                 context.runtime_observable_context_token,
             );
+            let retired_bitmap_count =
+                host.retire_bitmap_context_token(context.runtime_observable_context_token);
             let retired_webcrypto_count =
                 host.retire_webcrypto_context_token(context.runtime_observable_context_token);
             host.retire_opfs_context_token(context.runtime_observable_context_token);
@@ -3929,6 +3937,7 @@ impl ScriptVm {
                 runtime_binding_retirement,
                 retired_image_decode_count,
                 retired_message_port_count,
+                retired_bitmap_count,
                 retired_webcrypto_count,
                 retired_worker_count,
                 retired_shared_worker_count,
@@ -3957,6 +3966,7 @@ impl ScriptVm {
                 .retired_execution_context_count(),
             retired_image_decode_count,
             retired_message_port_count,
+            retired_bitmap_count,
             retired_webcrypto_count,
             retired_worker_count,
             retired_shared_worker_count,
@@ -7323,6 +7333,9 @@ impl ScriptVm {
             .dedicated_worker_running_worker_isolate_count_for_diagnostics()
     }
 
+    pub(crate) fn has_pending_bitmap_tasks(&self) -> bool {
+        self._context_host.borrow().has_pending_bitmap_tasks()
+    }
     pub(crate) fn has_pending_webcrypto_tasks(&self) -> bool {
         self._context_host.borrow().has_pending_webcrypto_tasks()
     }

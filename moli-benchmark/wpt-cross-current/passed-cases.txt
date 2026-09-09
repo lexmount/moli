@@ -5496,6 +5496,7 @@ html/browsers/windows/noreferrer-null-opener.html
 html/browsers/windows/noreferrer-window-name.html
 html/browsers/windows/targeting-cross-origin-nested-browsing-contexts.html
 html/browsers/windows/targeting-with-embedded-null-in-target.html
+html/canvas/element/manual/imagebitmap/createImageBitmap-blob-invalidtype.html
 html/cross-origin-embedder-policy/no-secure-context.html
 html/cross-origin-opener-policy/no-https.html
 html/dom/access-key-label.html
@@ -7070,6 +7071,7 @@ html/webappapis/scripting/processing-model-2/unhandled-promise-rejections/promis
 html/webappapis/scripting/processing-model-2/unhandled-promise-rejections/promise-rejection-events-iframe.html
 html/webappapis/scripting/processing-model-2/unhandled-promise-rejections/promise-rejection-events-onerror.html
 html/webappapis/scripting/processing-model-2/unhandled-promise-rejections/promise-rejection-events.dedicatedworker.html
+html/webappapis/scripting/processing-model-2/unhandled-promise-rejections/promise-rejection-events.html
 html/webappapis/scripting/processing-model-2/unhandled-promise-rejections/promise-rejection-events.sharedworker.html
 html/webappapis/scripting/processing-model-2/unhandled-promise-rejections/promise-resolution-order.html
 html/webappapis/scripting/processing-model-2/window-onerror-parse-error.html

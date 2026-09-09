@@ -331,7 +331,9 @@ impl JsContextHost {
             next_image_decode_id: 1,
             pending_image_decode_requests: HashMap::new(),
             resource_timing_buffers: SharedResourceTimingBufferRegistry::new(),
+            next_bitmap_task_id: crate::page_task_queue::RendererPageBitmapTaskId::first(),
             next_webcrypto_task_id: crate::page_task_queue::RendererPageWebCryptoTaskId::first(),
+            pending_bitmap_tasks: HashMap::new(),
             pending_webcrypto_tasks: HashMap::new(),
             opfs_owner_state: None,
             history_queue: HistoryQueueState::default(),
@@ -953,6 +955,16 @@ impl JsContextHost {
             .worker_host_bridge()
     }
 
+    pub(crate) fn page_bitmap_task_sender(
+        &self,
+    ) -> &crate::page_task_queue::RendererPageBitmapTaskSender {
+        self.page_task_capabilities
+            .get()
+            .expect(
+                "a live Page Window must install its complete Page task capabilities before Bitmap registration",
+            )
+            .bitmap_task()
+    }
     pub(crate) fn page_webcrypto_task_sender(
         &self,
     ) -> &crate::page_task_queue::RendererPageWebCryptoTaskSender {
