@@ -1517,9 +1517,10 @@ async fn font_face_rejects_malformed_string_and_magic_prefixed_payloads() {
     );
 }
 
-#[test]
-fn invalid_font_face_defers_loaded_rejection_until_promise_is_observed() {
-    let mut vm = new_storage_test_vm("https://font-face-lazy-loaded-promise.test/");
+#[tokio::test(flavor = "current_thread")]
+async fn invalid_font_face_defers_loaded_rejection_until_promise_is_observed() {
+    let mut vm =
+        new_storage_page_task_executor_test_vm("https://font-face-lazy-loaded-promise.test/");
 
     let initial = vm
         .eval(
@@ -1554,6 +1555,12 @@ fn invalid_font_face_defers_loaded_rejection_until_promise_is_observed() {
         "[]",
     );
 
+    assert!(
+        !vm.has_ready_dom_manipulation_family_for_test(
+            PageDomManipulationTestFamily::PromiseRejection,
+        ),
+        "no rejection notification may remain queued"
+    );
     let observed = vm
         .eval(
             r#"
@@ -1606,9 +1613,11 @@ globalThis.fontDataFallback = {done: false, result: null, error: null};
   const loaded = face.loaded;
   const before = face.status;
   const returned = face.load();
+  const afterLoad = face.status;
   const value = await returned;
   return {
     before,
+    afterLoad,
     returnedLoaded: returned === loaded,
     resolvedSelf: value === face,
     stableLoaded: face.loaded === loaded,
@@ -1632,6 +1641,6 @@ globalThis.fontDataFallback = {done: false, result: null, error: null};
     assert_eq!(vm.eval("fontDataFallback.error === null").unwrap(), "true");
     assert_eq!(
         vm.eval("JSON.stringify(fontDataFallback.result)").unwrap(),
-        r#"{"before":"unloaded","returnedLoaded":true,"resolvedSelf":true,"stableLoaded":true,"final":"loaded"}"#
+        r#"{"before":"unloaded","afterLoad":"loading","returnedLoaded":true,"resolvedSelf":true,"stableLoaded":true,"final":"loaded"}"#
     );
 }
