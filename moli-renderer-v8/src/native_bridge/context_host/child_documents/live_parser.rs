@@ -1319,7 +1319,7 @@ impl JsContextHost {
             return true;
         }
         let executing_parser_script =
-            chunk.is_some() && self.child_document_is_executing_parser_script(document_handle);
+            self.child_document_is_executing_parser_script(document_handle);
         let nested_insertion = matches!(
             insertion.run_state(),
             DocumentParserRunState::Pumping { .. }
@@ -1330,7 +1330,9 @@ impl JsContextHost {
                 || executing_parser_script
                 || nested_insertion);
         let ready = if close_requested {
+            // Record EOF during parser-script execution and let its continuation finish.
             insertion.request_close() == DocumentParserCloseDisposition::DrainNow
+                && !executing_parser_script
         } else {
             matches!(
                 insertion.run_state(),
