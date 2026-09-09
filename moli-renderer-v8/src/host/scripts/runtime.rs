@@ -1,7 +1,9 @@
+#[cfg(test)]
+use super::ScriptEventKind;
 use super::{
     HostScriptScheduler, PreparedScriptElementStart, RuntimeScriptPreparationContext,
-    RuntimeScriptStartDecision, ScriptElementLoader, ScriptElementLoaderOptions, ScriptEventKind,
-    ScriptEventTask, ScriptHandleSource, ScriptStartCommitKind,
+    RuntimeScriptStartDecision, ScriptElementLoader, ScriptElementLoaderOptions, ScriptEventTask,
+    ScriptHandleSource, ScriptStartCommitKind,
 };
 #[cfg(test)]
 use crate::types::ScriptSourceKind;
@@ -37,14 +39,12 @@ impl RuntimeScriptStartPlan {
         matches!(
             self.prepared.decision,
             RuntimeScriptStartDecision::Queue { .. }
-                | RuntimeScriptStartDecision::QueueFailed { .. }
         )
     }
 
     pub(crate) fn load_delay_kind(&self) -> Option<MainDocumentScriptLoadDelayKind> {
         let kind = match &self.prepared.decision {
-            RuntimeScriptStartDecision::Queue { kind, .. }
-            | RuntimeScriptStartDecision::QueueFailed { kind, .. } => *kind,
+            RuntimeScriptStartDecision::Queue { kind, .. } => *kind,
             _ => return None,
         };
         Some(if kind == crate::types::ScriptKind::Module {
@@ -65,6 +65,9 @@ pub(crate) struct RuntimeScriptStartReservation {
 #[derive(Debug)]
 pub(crate) enum PreparedRuntimeScriptStartCommit {
     Noop,
+    PreparationError {
+        node: NativeNodeId,
+    },
     InlineClassic {
         node: NativeNodeId,
         host_script_handle: String,
@@ -441,10 +444,7 @@ pub(crate) fn prepare_runtime_script_start_commit(
                 &host_script_handle,
                 ScriptStartCommitKind::RejectImportMap,
             ) {
-                scripts.enqueue_script_event_lifecycle_work(
-                    ScriptEventKind::Error,
-                    &host_script_handle,
-                );
+                return Ok(PreparedRuntimeScriptStartCommit::PreparationError { node });
             }
             Ok(PreparedRuntimeScriptStartCommit::Noop)
         }
@@ -478,38 +478,21 @@ pub(crate) fn prepare_runtime_script_start_commit(
                 payload: Box::new(RuntimeScriptAdmissionPayload::Script(script)),
             })
         }
-        RuntimeScriptStartDecision::QueueFailed {
-            source,
-            kind,
-            mode,
-            source_kind,
-            message,
-        } => {
-            let node_id = scripts.next_virtual_node_id();
-            let failed = match scripts.prepare_failed_dynamic_script(
-                &preparation,
-                node_id,
+        RuntimeScriptStartDecision::QueueFailed { .. } => {
+            // URL preparation failed before fetching or load-delay admission.
+            // Commit already-started now; the caller queues the element error
+            // in the DOM-manipulation FIFO at this insertion boundary.
+            if finish_local_runtime_script_start(
+                dom_host,
+                scripts,
+                node,
                 &host_script_handle,
-                &source,
-                source_kind,
-                kind,
-                mode,
-                &message,
+                ScriptStartCommitKind::QueueFailed,
             ) {
-                Ok(failed) => failed,
-                Err(error) => {
-                    scripts.cancel_script_start(&host_script_handle, node);
-                    return Err(error);
-                }
-            };
-            Ok(PreparedRuntimeScriptStartCommit::Admission {
-                reservation: RuntimeScriptStartReservation {
-                    node,
-                    host_script_handle,
-                    commit_kind: ScriptStartCommitKind::QueueFailed,
-                },
-                payload: Box::new(RuntimeScriptAdmissionPayload::Failed(failed)),
-            })
+                Ok(PreparedRuntimeScriptStartCommit::PreparationError { node })
+            } else {
+                Ok(PreparedRuntimeScriptStartCommit::Noop)
+            }
         }
     }
 }

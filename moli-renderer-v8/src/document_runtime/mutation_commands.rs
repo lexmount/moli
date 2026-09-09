@@ -2253,7 +2253,16 @@ fn start_connected_child_document_script(
             }
         }
         RuntimeScriptStartDecision::RejectExternalImportMap
-        | RuntimeScriptStartDecision::QueueFailed { .. } => {}
+        | RuntimeScriptStartDecision::QueueFailed { .. } => {
+            let _ = runtime.dom_host.set_script_already_started(node, true);
+            if !unsafe { &mut *host_ptr }.queue_script_preparation_error(scope, node) {
+                tracing::debug!(
+                    node = ?node,
+                    owner_document_handle = ?owner_document_handle,
+                    "child script preparation error route rejected the element task"
+                );
+            }
+        }
         RuntimeScriptStartDecision::RegisterImportMap { source } => {
             PageScriptHost::register_child_dynamic_document_import_map(
                 scope,
