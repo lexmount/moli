@@ -29,7 +29,7 @@ use peniko::{
     ImageFormat, ImageQuality, ImageSampler, Mix,
     color::{ColorSpaceTag, HueDirection},
     kurbo::{
-        Affine, BezPath, Cap, Circle, Ellipse, Insets, Join, PathEl, Point, Rect, RoundedRect,
+        Affine, BezPath, Cap, Circle, Insets, Join, PathEl, Point, Rect, RoundedRect,
         RoundedRectRadii, Shape as _, Stroke, Vec2,
     },
 };
@@ -764,7 +764,7 @@ fn paint_border(
         return;
     };
     let radii = normalize_radii(radii, rect.width(), rect.height());
-    if paint_uniform_solid_border(scene, rect, widths, colors, styles, radii, transform) {
+    if paint_single_color_solid_border(scene, rect, widths, colors, styles, radii, transform) {
         return;
     }
     let edges = [
@@ -914,7 +914,7 @@ fn paint_border_edge(
     }
 }
 
-fn paint_uniform_solid_border(
+fn paint_single_color_solid_border(
     scene: &mut impl PaintScene,
     rect: Rect,
     widths: PaintEdgeSizes,
@@ -933,6 +933,34 @@ fn paint_uniform_solid_border(
     {
         return false;
     }
+
+    if paint_uniform_border_stroke(scene, rect, widths, colors.top, radii, transform) {
+        return true;
+    }
+
+    // As in Blink's solid-border fast path, paint the entire outer-minus-inner
+    // contour once, even when the widths or corner radii differ. Independently
+    // antialiased side clips leave seams and composite translucent joins more
+    // than once. Other styles and multiple colors retain per-side painting.
+    let ring = border_ring_path(rect, widths, radii, 0.0, 1.0);
+    scene.fill(
+        Fill::EvenOdd,
+        transform,
+        to_backend_color(colors.top),
+        None,
+        &ring,
+    );
+    true
+}
+
+fn paint_uniform_border_stroke(
+    scene: &mut impl PaintScene,
+    rect: Rect,
+    widths: PaintEdgeSizes,
+    color: PaintColor,
+    radii: PaintCornerRadii,
+    transform: Affine,
+) -> bool {
     let width = widths.top;
     if width <= 0.0
         || [widths.right, widths.bottom, widths.left]
@@ -971,30 +999,16 @@ fn paint_uniform_solid_border(
         scene.stroke(
             &stroke,
             transform,
-            to_backend_color(colors.top),
+            to_backend_color(color),
             None,
             &RoundedRect::from_rect(centerline, radii),
         );
         return true;
     }
 
-    let half_x = rect.width() / 2.0;
-    let half_y = rect.height() / 2.0;
-    let is_half = |radius: PaintCornerRadius| {
-        (f64::from(radius.x) - half_x).abs() < 0.01 && (f64::from(radius.y) - half_y).abs() < 0.01
-    };
-    if corners.into_iter().all(is_half) {
-        let radius_x = (rect.width() + (rect.width() - width * 2.0).max(0.0)) / 4.0;
-        let radius_y = (rect.height() + (rect.height() - width * 2.0).max(0.0)) / 4.0;
-        scene.stroke(
-            &stroke,
-            transform,
-            to_backend_color(colors.top),
-            None,
-            &Ellipse::new(rect.center(), (radius_x, radius_y), 0.0),
-        );
-        return true;
-    }
+    // An elliptical centerline's normal-offset stroke does not produce the
+    // CSS inner ellipse (outer radii minus the corresponding border widths).
+    // Let the caller use the actual inner and outer contours instead.
     false
 }
 
@@ -1164,10 +1178,7 @@ fn paint_border_ring_slice(
     transform: Affine,
 ) {
     let clip = border_edge_clip(rect, widths, edge);
-    let outer = border_slice(rect, widths, radii, outer_fraction);
-    let inner = border_slice(rect, widths, radii, inner_fraction);
-    let mut ring = rounded_rect_path(outer.0, outer.1, true);
-    ring.extend(rounded_rect_path(inner.0, inner.1, true));
+    let ring = border_ring_path(rect, widths, radii, outer_fraction, inner_fraction);
     scene.push_clip_layer(transform, &clip);
     scene.fill(
         Fill::EvenOdd,
@@ -1177,6 +1188,20 @@ fn paint_border_ring_slice(
         &ring,
     );
     scene.pop_layer();
+}
+
+fn border_ring_path(
+    rect: Rect,
+    widths: PaintEdgeSizes,
+    radii: PaintCornerRadii,
+    outer_fraction: f64,
+    inner_fraction: f64,
+) -> BezPath {
+    let outer = border_slice(rect, widths, radii, outer_fraction);
+    let inner = border_slice(rect, widths, radii, inner_fraction);
+    let mut ring = rounded_rect_path(outer.0, outer.1, true);
+    ring.extend(rounded_rect_path(inner.0, inner.1, true));
+    ring
 }
 
 fn border_slice(
@@ -2123,6 +2148,8 @@ fn to_backend_color(color: PaintColor) -> Color {
 mod tests {
     use super::*;
     use moli_layout::{PaintFilter, PaintViewport};
+
+    mod borders;
 
     fn snapshot(width: u32, height: u32, scale: f32) -> PaintSnapshot {
         PaintSnapshot::new(PaintViewport::new(width, height, scale), PaintColor::WHITE)

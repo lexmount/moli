@@ -98,6 +98,7 @@ use crate::frame_owner_model::{
 use crate::native_bridge::PendingWindowMessageEndpoint;
 
 mod async_subresource_completion;
+mod border_paint;
 mod broadcast_channel_delivery;
 mod child_classic_source_load_completion;
 mod child_document_completion;

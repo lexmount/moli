@@ -1,0 +1,84 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>Solid border contours composite their shared joins once</title>
+<style>
+  html, body { margin: 0; background: rgb(255, 0, 0); }
+  .slot { position: absolute; width: 220px; height: 184px; }
+  .border {
+    position: absolute; left: 16px; top: 16px;
+    box-sizing: border-box; width: 80px; height: 64px;
+    border-style: solid; transform-origin: 0 0;
+  }
+</style>
+<body>
+<script>
+  const cases = [];
+  const red = [255, 0, 0, 255];
+  const transforms = [
+    {name:'identity', css:'none', project:([x,y])=>[x,y], rect:[0,0,80,64]},
+    {name:'scale', css:'scale(2)', project:([x,y])=>[2*x,2*y], rect:[0,0,160,128]},
+    {name:'rotate', css:'matrix(0,1,-1,0,144,0)', project:([x,y])=>[144-y,x], rect:[80,0,64,80]},
+  ];
+  const widths = [
+    {css:'4px', joins:[[3,3],[76,3],[76,60],[3,60]]},
+    {css:'4px 12px 6px 10px', joins:[[5,2],[73,2],[73,61],[4,61]]},
+  ];
+  for (const width of widths) {
+    for (const radius of ['0', '8px / 6px', '4px 10px 9px 6px / 9px 4px 5px 8px']) {
+      for (const alpha of [1, 0.5]) {
+        for (const transform of transforms) {
+          const index = cases.length;
+          const x = (index % 5) * 220;
+          const y = Math.floor(index / 5) * 184;
+          const slot = document.createElement('div');
+          slot.className = 'slot';
+          slot.style.cssText = `left:${x}px;top:${y}px`;
+          const border = document.createElement('div');
+          border.className = 'border';
+          border.style.cssText = `border-width:${width.css};border-radius:${radius};border-color:rgba(0,0,255,${alpha});transform:${transform.css}`;
+          slot.append(border);
+          document.body.append(slot);
+          const color = alpha === 1 ? [0,0,255,255] : [127,0,128,255];
+          const samples = width.joins.map(point=>({point,color}));
+          samples.push({point:[40,32],color:red}, {point:[-1,-1],color:red});
+          if (radius !== '0') samples.push({point:[0,0],color:red});
+          cases.push({
+            id:`${width.css}; radius=${radius}; alpha=${alpha}; ${transform.name}`,
+            border,
+            expected:[x+16+transform.rect[0],y+16+transform.rect[1],...transform.rect.slice(2)],
+            samples:samples.map(({point,color})=>{
+              const [px,py] = transform.project([point[0]+0.5,point[1]+0.5]);
+              return {point:[Math.floor(x+16+px),Math.floor(y+16+py)],color};
+            }),
+          });
+        }
+      }
+    }
+  }
+  for (const [index,alpha] of [1,0.5].entries()) {
+    const slot = document.createElement('div');
+    slot.className = 'slot';
+    slot.style.cssText = `left:${index*300}px;top:1500px`;
+    const border = document.createElement('div');
+    border.className = 'border';
+    border.style.cssText = `left:20px;top:20px;width:240px;height:80px;border:16px solid rgba(0,0,255,${alpha});border-radius:50%`;
+    slot.append(border);
+    document.body.append(slot);
+    const color = alpha === 1 ? [0,0,255,255] : [127,0,128,255];
+    cases.push({
+      id:`ellipse inner contour; alpha=${alpha}`,
+      border,
+      expected:[index*300+20,1520,240,80],
+      samples:[
+        ...[[56,46],[223,46],[56,73],[223,73],[140,60]].map(point=>({point,color:red})),
+        ...[[140,25],[140,95],[25,60],[255,60]].map(point=>({point,color})),
+      ].map(({point,color})=>({point:[index*300+point[0],1500+point[1]],color})),
+    });
+  }
+  function collectBorderChecks() {
+    return cases.map(({id,border,expected,samples})=>{
+      const rect = border.getBoundingClientRect();
+      return {id,actual:[rect.x,rect.y,rect.width,rect.height],expected,samples};
+    });
+  }
+</script>
