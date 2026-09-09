@@ -89,8 +89,8 @@ license = "MIT OR Apache-2.0"
 
 [patch.crates-io]
 xml5ever = { path = "vendor/xml5ever-0.39.0" }
-curl = { git = "https://github.com/ldm0/curl-rust", branch = "moli" }
-curl-sys = { git = "https://github.com/ldm0/curl-rust", branch = "moli" }
+curl = { git = "https://github.com/lexmount/curl-rust", branch = "moli" }
+curl-sys = { git = "https://github.com/lexmount/curl-rust", branch = "moli" }
 cookie = { git = "https://github.com/ldm0/cookie-rs", branch = "priority" }
 v8 = { path = "vendor/v8-152.2.0" }
 deno_v8 = { path = "vendor/deno_v8-0.3.0" }
