@@ -799,6 +799,9 @@ impl ScriptVm {
             .dedicated_worker_running_worker_isolate_count_for_diagnostics()
     }
 
+    pub(crate) fn has_pending_bitmap_tasks(&self) -> bool {
+        self._context_host.borrow().has_pending_bitmap_tasks()
+    }
     pub(crate) fn has_pending_webcrypto_tasks(&self) -> bool {
         self._context_host.borrow().has_pending_webcrypto_tasks()
     }
