@@ -3,6 +3,7 @@ mod helpers;
 mod length;
 mod matrix;
 mod path;
+mod text;
 mod transform;
 
 pub use geometry::{
@@ -14,6 +15,7 @@ pub use length::{
     SvgLength, SvgLengthUnit, parse_length, parse_length_list, parse_number, parse_number_list,
 };
 pub use matrix::{SvgMatrixComponents, serialize_number};
+pub use text::{SvgTextCharacter, SvgTextFragment, SvgTextLayout, SvgTextQuery};
 pub use transform::{
     SvgTransform, SvgTransformKind, consolidate_transform_matrices, parse_transform_attribute,
     serialize_transform_list,
