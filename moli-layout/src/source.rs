@@ -432,6 +432,17 @@ pub struct LayoutImageResource {
     pub svg: Option<Arc<moli_image::SvgImage>>,
 }
 
+/// An unavailable HTML image's fallback content, sampled from its resource
+/// owner and attributes before layout. This does not change natural dimensions
+/// or introduce generated nodes into the live DOM.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct LayoutImageFallback {
+    pub alt_text: Option<Arc<str>>,
+    pub has_nonempty_alt_attribute: bool,
+    pub has_source: bool,
+    pub quirks_mode: bool,
+}
+
 /// Pass-local resources aligned with the computed CSS image-layer lists.
 ///
 /// The vectors preserve Stylo's layer indices. Missing entries represent a
@@ -507,6 +518,12 @@ pub trait LayoutSource {
     }
 
     fn replaced_metrics(&self, _node: Self::NodeId) -> Option<ReplacedMetrics> {
+        None
+    }
+
+    /// Returns fallback content only when an HTML image is unavailable. A
+    /// pending fetch/decode or ready image must retain its primary content.
+    fn image_fallback(&self, _node: Self::NodeId) -> Option<LayoutImageFallback> {
         None
     }
 

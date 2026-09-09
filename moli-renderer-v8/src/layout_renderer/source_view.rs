@@ -6,9 +6,9 @@ use std::{
 
 use moli_layout::{
     LayoutElementCategory, LayoutElementMetadata, LayoutElementSemantics, LayoutFormControlData,
-    LayoutFormControlKind, LayoutImageResource, LayoutInputControlKind, LayoutListData,
-    LayoutListRole, LayoutNamespace, LayoutReplacedKind, LayoutSource, LayoutSourceKind,
-    LayoutTableData, LayoutTableRole, LayoutTextSelection, ReplacedMetrics,
+    LayoutFormControlKind, LayoutImageFallback, LayoutImageResource, LayoutInputControlKind,
+    LayoutListData, LayoutListRole, LayoutNamespace, LayoutReplacedKind, LayoutSource,
+    LayoutSourceKind, LayoutTableData, LayoutTableRole, LayoutTextSelection, ReplacedMetrics,
 };
 
 use crate::{
@@ -184,6 +184,28 @@ impl LayoutSource for NativeLayoutSourceView<'_> {
             attribute_height,
             intrinsic_ratio: intrinsic
                 .and_then(|(width, height)| (height > 0.0).then_some(width / height)),
+        })
+    }
+
+    fn image_fallback(&self, node: Self::NodeId) -> Option<LayoutImageFallback> {
+        let element = self.host().node(node)?.as_element()?;
+        let semantics = layout_element_semantics_for_source(self.host(), node, element);
+        if semantics.namespace != LayoutNamespace::Html
+            || semantics.local_name.as_ref() != "img"
+            || self.runtime.image_resource_is_potentially_available(node)
+        {
+            return None;
+        }
+        let alt = element.attribute("alt");
+        Some(LayoutImageFallback {
+            // An explicitly empty alt suppresses the title fallback as well.
+            alt_text: alt.or_else(|| element.attribute("title")).map(Into::into),
+            has_nonempty_alt_attribute: alt.is_some_and(|alt| !alt.is_empty()),
+            has_source: element.attribute("src").is_some_and(|src| !src.is_empty()),
+            quirks_mode: self
+                .document
+                .and_then(|document| self.host().document_quirks_mode_for_handle(document))
+                == Some(style::context::QuirksMode::Quirks),
         })
     }
 

@@ -24,6 +24,8 @@ use crate::{
 };
 use style::values::generics::image::GenericImage;
 
+mod image_fallback;
+
 /// Constructs a complete pass-local CSS box tree from a borrowed source view.
 pub fn build_layout_world<S, R>(
     source: &S,
@@ -119,14 +121,14 @@ where
                 format!("view root must be an element, got {source_kind:?}"),
             ));
         }
-        let root_semantics = self.validated_element_semantics(source_root, source_kind)?;
+        let mut root_semantics = self.validated_element_semantics(source_root, source_kind)?;
         self.source_root = Some(source_root);
         self.root_is_html = root_semantics.is_html_element("html");
         let Some(root_styles) = self.styles.element_styles(source_root)? else {
             return Err(LayoutError::MissingRootStyle { source_label });
         };
         let (mut root_style, root_before, root_after) = root_styles.into_parts();
-        let root_metrics = self.source.replaced_metrics(source_root);
+        let mut root_metrics = self.source.replaced_metrics(source_root);
         if root_semantics.is_hidden_input()
             || (root_style.display() == LayoutDisplay::Contents
                 && root_semantics.display_contents_is_none())
@@ -135,6 +137,11 @@ where
             // Preserve that internal carrier but give it the correct no-box
             // used display and never construct source descendants.
             root_style.force_display_none();
+        }
+        let root_fallback =
+            self.prepare_image_fallback(source_root, &mut root_semantics, &mut root_style)?;
+        if root_fallback.is_some() {
+            root_metrics = None;
         }
         if root_semantics.is_replaced() {
             root_style.mark_replaced();
@@ -174,14 +181,25 @@ where
             LayoutDisplay::None | LayoutDisplay::Contents
         ) && !is_leaf_element(&root_semantics, root_kind, &root_style)
         {
-            self.populate_root(
-                &mut world,
-                root_box,
-                source_root,
-                &root_style,
-                root_before,
-                root_after,
-            )?;
+            if let Some(fallback) = root_fallback {
+                self.populate_image_fallback(
+                    &mut world,
+                    root_box,
+                    source_root,
+                    &root_style,
+                    fallback,
+                    (root_before, root_after),
+                )?;
+            } else {
+                self.populate_root(
+                    &mut world,
+                    root_box,
+                    source_root,
+                    &root_style,
+                    root_before,
+                    root_after,
+                )?;
+            }
         }
 
         world.compact_reachable();
@@ -264,7 +282,7 @@ where
         }
 
         let result = (|| {
-            let semantics =
+            let mut semantics =
                 self.validated_element_semantics(source_node, self.source.node_kind(source_node))?;
             let Some(styles) = self.styles.element_styles(source_node)? else {
                 return Ok(Vec::new());
@@ -283,7 +301,19 @@ where
                     blocks_propagation: style.applies_any_viewport_containment(),
                 });
             }
-            let metrics = self.source.replaced_metrics(source_node);
+            let mut metrics = self.source.replaced_metrics(source_node);
+            // Apply image fallback only after evaluating the original replaced
+            // element's no-box rules (notably display:contents).
+            if semantics.is_hidden_input()
+                || (style.display() == LayoutDisplay::Contents
+                    && semantics.display_contents_is_none())
+            {
+                return Ok(Vec::new());
+            }
+            let fallback = self.prepare_image_fallback(source_node, &mut semantics, &mut style)?;
+            if fallback.is_some() {
+                metrics = None;
+            }
             if semantics.is_replaced() {
                 style.mark_replaced();
             } else if matches!(
@@ -291,13 +321,6 @@ where
                 crate::LayoutElementCategory::FormControl(crate::LayoutFormControlKind::Button)
             ) {
                 style.mark_intrinsic_form_control_container();
-            }
-
-            if semantics.is_hidden_input()
-                || (style.display() == LayoutDisplay::Contents
-                    && semantics.display_contents_is_none())
-            {
-                return Ok(Vec::new());
             }
 
             match style.display() {
@@ -320,6 +343,18 @@ where
                     );
                     let id = world.allocate(box_node);
                     world.map_source(source_node, id);
+
+                    if let Some(fallback) = fallback {
+                        self.populate_image_fallback(
+                            world,
+                            id,
+                            source_node,
+                            &style,
+                            fallback,
+                            (before, after),
+                        )?;
+                        return Ok(vec![id]);
+                    }
 
                     if is_leaf_element(&semantics, kind, &style) {
                         return Ok(vec![id]);

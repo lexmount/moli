@@ -88,10 +88,10 @@ pub use snapshot::{
 };
 pub use source::{
     LayoutElementCategory, LayoutElementMetadata, LayoutElementSemantics, LayoutFormControlData,
-    LayoutFormControlKind, LayoutImageResource, LayoutInputControlKind, LayoutListData,
-    LayoutListRole, LayoutNamespace, LayoutPseudo, LayoutReplacedKind, LayoutSource,
-    LayoutSourceKind, LayoutStyleResolver, LayoutTableData, LayoutTableRole, LayoutTextSelection,
-    ReplacedMetrics, ResolvedLayoutElementStyles, ResolvedLayoutPseudoStyle,
+    LayoutFormControlKind, LayoutImageFallback, LayoutImageResource, LayoutInputControlKind,
+    LayoutListData, LayoutListRole, LayoutNamespace, LayoutPseudo, LayoutReplacedKind,
+    LayoutSource, LayoutSourceKind, LayoutStyleResolver, LayoutTableData, LayoutTableRole,
+    LayoutTextSelection, ReplacedMetrics, ResolvedLayoutElementStyles, ResolvedLayoutPseudoStyle,
 };
 pub use style::{
     LayoutDisplay, LayoutInlineAlignment, LayoutListMarkerPosition, LayoutListMarkerType,

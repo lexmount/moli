@@ -289,6 +289,17 @@ impl ImageResourceStore {
             .is_some_and(|slot| matches!(slot.state, ImageResourceState::Ready(_)))
     }
 
+    pub(super) fn is_potentially_available(&self, element: DomHandle) -> bool {
+        self.slots.get(&element).is_some_and(|slot| {
+            matches!(
+                slot.state,
+                ImageResourceState::Pending
+                    | ImageResourceState::DecodeQueued(_)
+                    | ImageResourceState::Ready(_)
+            )
+        })
+    }
+
     pub(super) fn has_ready_request(&self, request_key: &ImageRequestKey) -> bool {
         self.ready_by_request.contains_live(request_key)
     }
