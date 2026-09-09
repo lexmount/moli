@@ -1012,3 +1012,56 @@ async fn websocket_open_and_frames_record_network_trace_entries() {
     })
     .await;
 }
+
+#[tokio::test]
+async fn dropping_page_releases_native_websocket_and_websocket_stream_transports() {
+    run_page_vm_async_test(async move {
+        for constructor in ["WebSocket", "WebSocketStream"] {
+            let (url, server) =
+                moli_websocket::test_support::spawn_transport_retirement_websocket_server().await;
+            let page_vm = test_page_vm();
+            let local_executor = page_vm.local_executor.clone();
+            local_executor
+                .run(async move {
+                    let mut page_vm = page_vm;
+                    page_vm.vm_mut().eval(&format!(
+                        r#"
+                    globalThis.__nativeTransportOpened = false;
+                    globalThis.__nativeTransport = new {constructor}({url:?});
+                    if ({constructor:?} === 'WebSocket') {{
+                        __nativeTransport.onopen = () => {{ __nativeTransportOpened = true; }};
+                    }} else {{
+                        __nativeTransport.opened.then(() => {{ __nativeTransportOpened = true; }});
+                    }}
+                "#
+                    ))?;
+                    tokio::time::timeout(Duration::from_secs(3), async {
+                        loop {
+                            while page_vm
+                                .run_exact_page_websocket_selected_task_for_test()
+                                .await?
+                                .is_some()
+                            {}
+                            if page_vm.vm_mut().eval("String(__nativeTransportOpened)")? == "true" {
+                                break;
+                            }
+                            page_vm
+                                .wait_for_page_work_arrival_without_timeout(false)
+                                .await;
+                        }
+                        Ok::<(), anyhow::Error>(())
+                    })
+                    .await
+                    .expect("native transport should open")?;
+                    drop(page_vm);
+                    Ok::<(), anyhow::Error>(())
+                })
+                .await
+                .expect("page retirement should run on owner lane");
+            server
+                .await
+                .expect("dropping Page releases its native socket");
+        }
+    })
+    .await;
+}

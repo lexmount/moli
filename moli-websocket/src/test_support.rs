@@ -1068,3 +1068,24 @@ pub fn header_value(headers: &[(String, String)], name: &str) -> Option<String> 
         .iter()
         .find_map(|(header_name, value)| (header_name == name).then(|| value.clone()))
 }
+
+/// Observes physical transport retirement without cooperating in a Close handshake.
+pub async fn spawn_transport_retirement_websocket_server() -> (String, tokio::task::JoinHandle<()>)
+{
+    let listener = TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("bind retirement server");
+    let addr = listener.local_addr().unwrap();
+    let server = tokio::spawn(async move {
+        let (stream, _) = listener.accept().await.unwrap();
+        let mut socket = tokio_tungstenite::accept_async(stream).await.unwrap();
+        let terminal = timeout(Duration::from_secs(3), socket.next())
+            .await
+            .expect("retirement must physically release TCP");
+        assert!(
+            terminal.is_none() || terminal.is_some_and(|event| event.is_err()),
+            "retirement cancels without a graceful Close"
+        );
+    });
+    (format!("ws://{addr}/retirement"), server)
+}

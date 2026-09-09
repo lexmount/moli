@@ -2470,6 +2470,8 @@ dependencies = [
  "moli-dns-resolver",
  "openssl-sys",
  "parking_lot",
+ "rcgen",
+ "rustls",
  "tokio",
  "tokio-tungstenite",
  "tracing",

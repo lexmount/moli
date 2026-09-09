@@ -194,3 +194,63 @@ async fn native_large_incoming_frame_keeps_chunk_offsets_and_utf8() {
     assert_close(&mut rx, 74, 1000, "", true).await;
     server.await.unwrap();
 }
+
+#[tokio::test]
+async fn native_close_handshake_finishes_while_message_sink_is_blocked() {
+    use std::sync::Arc;
+    use tokio::{
+        io::AsyncReadExt,
+        sync::{Notify, Semaphore},
+    };
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let url = format!("ws://{}/blocked-delivery", listener.local_addr().unwrap());
+    let (released_tx, released_rx) = oneshot::channel();
+    let server = tokio::spawn(async move {
+        let (stream, _) = listener.accept().await.unwrap();
+        let mut socket = tokio_tungstenite::accept_async(stream).await.unwrap();
+        socket.send(Message::Text("blocked".into())).await.unwrap();
+        assert!(matches!(socket.next().await, Some(Ok(Message::Close(_)))));
+        let _ = socket.flush().await;
+        assert_eq!(socket.get_mut().read(&mut [0]).await.unwrap(), 0);
+        released_tx.send(()).unwrap();
+    });
+    let blocked = Arc::new(Notify::new());
+    let resume = Arc::new(Semaphore::new(0));
+    let (events, mut rx) = mpsc::channel(8);
+    let sink = crate::EventSender::with_async_sink({
+        let blocked = blocked.clone();
+        let resume = resume.clone();
+        move |event| {
+            let blocked = blocked.clone();
+            let resume = resume.clone();
+            let events = events.clone();
+            async move {
+                if matches!(event, Event::TextMessage { .. }) {
+                    blocked.notify_one();
+                    resume.acquire().await.unwrap().forget();
+                }
+                events.send(event).await.is_ok()
+            }
+        }
+    });
+    let handle = spawn_connection(75, url, Vec::new(), test_websocket_context(), sink);
+    recv_open_event(&mut rx).await;
+    timeout(Duration::from_secs(3), blocked.notified())
+        .await
+        .unwrap();
+    handle
+        .send(Command::Close {
+            code: Some(1000),
+            reason: String::new(),
+        })
+        .unwrap();
+    timeout(Duration::from_secs(3), released_rx)
+        .await
+        .expect("physical close must not wait for the event sink or closing timeout")
+        .unwrap();
+    resume.add_permits(1);
+    assert_text_message(&mut rx, 75, "blocked").await;
+    assert_closing(&mut rx, 75).await;
+    assert_close(&mut rx, 75, 1000, "", true).await;
+    server.await.unwrap();
+}

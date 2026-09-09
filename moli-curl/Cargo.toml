@@ -16,6 +16,8 @@ tokio = { version = "1.51.0", features = ["sync"] }
 url = "2.5.7"
 
 [dev-dependencies]
+rcgen = { version = "0.13", default-features = false, features = ["aws_lc_rs", "pem"] }
+rustls = { version = "0.23", default-features = false, features = ["aws_lc_rs", "std", "tls12"] }
 tokio = { version = "1.51.0", features = ["macros", "rt", "time"] }
 tokio-tungstenite = { version = "0.28.0", default-features = false, features = ["handshake"] }
 

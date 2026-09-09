@@ -6969,3 +6969,28 @@ async fn worker_xmlhttprequest_cross_origin_redirect_final_url_obeys_connect_src
         )
     );
 }
+
+#[tokio::test]
+async fn worker_termination_releases_native_websocket_transport() {
+    ensure_v8();
+    let (url, server) =
+        moli_websocket::test_support::spawn_transport_retirement_websocket_server().await;
+    let loader =
+        ResourceRequestClient::new(&FetchConfig::default()).expect("worker network client");
+    let mut handle = spawn_worker_with_request_client(
+        format!(
+            r#"
+            globalThis.socket = new WebSocket({url:?});
+            socket.onopen = () => postMessage('opened');
+            socket.onerror = () => postMessage('error');
+        "#
+        ),
+        "http://127.0.0.1/worker/main.js".into(),
+        loader,
+    );
+    assert_eq!(recv_post_json(&mut handle).await, r#""opened""#);
+    handle.terminate_and_join();
+    server
+        .await
+        .expect("terminating Worker releases its native socket");
+}

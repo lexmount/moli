@@ -362,3 +362,52 @@ async fn native_partial_write_retries_preserve_payload_and_control_boundaries() 
     .unwrap();
     task.join().unwrap();
 }
+
+#[test]
+fn native_wss_configuration_validates_chain_and_hostname() {
+    use rustls::{
+        ServerConfig, ServerConnection, StreamOwned,
+        pki_types::{CertificateDer, PrivateKeyDer, PrivatePkcs8KeyDer},
+    };
+    let certificate = rcgen::generate_simple_self_signed(vec!["localhost".to_owned()]).unwrap();
+    let config = Arc::new(
+        ServerConfig::builder()
+            .with_no_client_auth()
+            .with_single_cert(
+                vec![CertificateDer::from(certificate.cert.der().to_vec())],
+                PrivateKeyDer::from(PrivatePkcs8KeyDer::from(
+                    certificate.key_pair.serialize_der(),
+                )),
+            )
+            .unwrap(),
+    );
+    for (host, trusted, succeeds) in [
+        ("localhost", true, true),
+        ("127.0.0.1", true, false),
+        ("localhost", false, false),
+    ] {
+        let config = config.clone();
+        let (url, task) = server(move |stream| {
+            let tls = StreamOwned::new(ServerConnection::new(config).unwrap(), stream);
+            assert_eq!(tungstenite::accept(tls).is_ok(), succeeds);
+        });
+        let url = url.replacen("ws://127.0.0.1", &format!("wss://{host}"), 1);
+        let request = CurlWebSocketRequest::new(url);
+        let mut easy = super::request::configure(&request).unwrap();
+        if trusted {
+            easy.ssl_cainfo_blob(certificate.cert.pem().as_bytes())
+                .unwrap();
+        }
+        let result = easy.perform();
+        if succeeds {
+            result.unwrap();
+        } else {
+            assert!(
+                result.unwrap_err().is_peer_failed_verification(),
+                "certificate policy must reject the connection"
+            );
+        }
+        drop(easy);
+        task.join().unwrap();
+    }
+}
