@@ -1229,12 +1229,7 @@ fn glyph_line_bounds(
     include_used_font_metrics: bool,
 ) -> InlineVerticalBounds {
     let used_strut = inline_strut_metrics(
-        InlineFontMetrics {
-            ascent: used_font.ascent,
-            descent: used_font.descent,
-            line_height: used_font.line_height,
-            x_height: used_font.x_height.unwrap_or(used_font.ascent * 0.56),
-        },
+        InlineFontMetrics::from_run_metrics(used_font, include_used_font_metrics),
         true,
     );
     let used_bounds = InlineVerticalBounds::from_strut(used_strut);
@@ -2445,6 +2440,7 @@ mod tests {
         let fallback = parley::layout::RunMetrics {
             ascent: 18.0,
             descent: 6.0,
+            leading: 6.0,
             line_height: 30.0,
             ..parley::layout::RunMetrics::default()
         };
@@ -2456,6 +2452,21 @@ mod tests {
         let normal = glyph_line_bounds(Some(primary), &fallback, true);
         assert_eq!(normal.top, -21.0);
         assert_eq!(normal.bottom, 9.0);
+    }
+
+    #[test]
+    fn normal_fallback_line_spacing_rounds_ascent_descent_and_gap_separately() {
+        let fallback = parley::layout::RunMetrics {
+            ascent: 11.6,
+            descent: 2.8,
+            leading: 0.6,
+            line_height: 15.0,
+            ..parley::layout::RunMetrics::default()
+        };
+        let bounds = glyph_line_bounds(None, &fallback, true);
+        assert_eq!(bounds.top, -12.0);
+        assert_eq!(bounds.bottom, 4.0);
+        assert_eq!(bounds.height(), 16.0);
     }
 
     #[test]

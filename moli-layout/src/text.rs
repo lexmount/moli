@@ -105,6 +105,28 @@ pub(crate) struct InlineFontMetrics {
     pub(crate) x_height: f32,
 }
 
+impl InlineFontMetrics {
+    pub(crate) fn from_run_metrics(
+        metrics: &parley::layout::RunMetrics,
+        normal_line_height: bool,
+    ) -> Self {
+        Self {
+            ascent: metrics.ascent,
+            descent: metrics.descent,
+            // Blink's SimpleFontData rounds each font metric before adding
+            // them for normal line spacing. Rounding their sum instead can
+            // lose or gain a pixel. Explicit CSS line heights retain their
+            // own value; glyph and Canvas metrics stay unrounded as well.
+            line_height: if normal_line_height {
+                metrics.ascent.round() + metrics.descent.round() + metrics.leading.round()
+            } else {
+                metrics.line_height
+            },
+            x_height: resolved_inline_x_height(metrics.ascent, metrics.x_height),
+        }
+    }
+}
+
 fn resolved_inline_x_height(ascent: f32, x_height: Option<f32>) -> f32 {
     x_height.unwrap_or(ascent * 0.56).max(0.0)
 }
@@ -364,13 +386,10 @@ impl ParleyDocumentServices {
             {
                 return None;
             }
-            let metrics = *run.metrics();
-            Some(InlineFontMetrics {
-                ascent: metrics.ascent,
-                descent: metrics.descent,
-                line_height: metrics.line_height,
-                x_height: resolved_inline_x_height(metrics.ascent, metrics.x_height),
-            })
+            Some(InlineFontMetrics::from_run_metrics(
+                run.metrics(),
+                style.line_height == parley::LineHeight::MetricsRelative(1.0),
+            ))
         });
         if let Some((_, cached)) = self
             .inline_font_metrics_cache
@@ -987,6 +1006,43 @@ mod tests {
     fn missing_x_height_uses_the_blink_ascent_fallback() {
         assert!((resolved_inline_x_height(10.0, None) - 5.6).abs() < f32::EPSILON);
         assert_eq!(resolved_inline_x_height(10.0, Some(4.25)), 4.25);
+    }
+
+    #[test]
+    fn normal_line_height_rounds_font_metrics_without_rounding_explicit_height() {
+        let mut services =
+            DocumentLayoutServices::with_system_font_policy(SystemFontPolicy::Disabled);
+        services
+            .register_web_font(WebFontRegistration::new(
+                "line-spacing-face",
+                WebFontFace::new("Line Spacing Fixture"),
+                TEST_TTF.to_vec(),
+            ))
+            .unwrap();
+        let mut style = web_font_style("Line Spacing Fixture", 400.0);
+        style.font_size = 15.5;
+        style.line_height = parley::LineHeight::MetricsRelative(1.0);
+        let parley = services.parley_mut();
+        parley.resolve_font_families(&mut style, None);
+        let normal = parley.inline_font_metrics(&style, None).unwrap();
+        assert_eq!(normal.ascent.round(), 12.0);
+        assert_eq!(normal.descent.round(), 3.0);
+        assert_eq!(normal.line_height, 15.0);
+
+        style.line_height = parley::LineHeight::Absolute(15.5);
+        let explicit = parley.inline_font_metrics(&style, None).unwrap();
+        assert_eq!(explicit.line_height, 15.5);
+        assert_eq!(explicit.ascent, normal.ascent);
+        assert_eq!(explicit.descent, normal.descent);
+
+        style.line_height = parley::LineHeight::FontSizeRelative(2.0);
+        assert_eq!(
+            parley
+                .inline_font_metrics(&style, None)
+                .unwrap()
+                .line_height,
+            31.0
+        );
     }
 
     #[test]
