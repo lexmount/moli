@@ -887,6 +887,32 @@ impl ScriptVm {
         Some(ParserFinishDomContentLoadedWork::new(owner, *work))
     }
 
+    pub(crate) fn main_document_window_load_task_is_ready(
+        &mut self,
+        owner: FrameDocumentTaskOwner,
+    ) -> Option<bool> {
+        let has_runtime_delay = self.has_post_domcontentloaded_load_delaying_runtime_work();
+        self._context_host
+            .borrow()
+            .current_main_document_complete_transition_is_ready(owner)
+            .map(|ready| ready && !has_runtime_delay)
+    }
+
+    pub(crate) fn queue_main_document_lifecycle_dom_task(
+        &self,
+        body: super::MainDocumentLifecycleBody,
+        completion: Option<
+            tokio::sync::oneshot::Sender<
+                crate::page_task_queue::RendererPageMainDocumentLifecycleCompletion,
+            >,
+        >,
+    ) -> anyhow::Result<()> {
+        self._context_host
+            .borrow()
+            .page_main_document_lifecycle_sender()
+            .send(body, completion)
+    }
+
     /// Consume the completed parser task and claim only its exact, already
     /// queued DOMContentLoaded successor.
     ///

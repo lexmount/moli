@@ -1105,7 +1105,7 @@ impl PageScriptHost {
             document_handle,
             parser,
         ) {
-            self.queue_child_document_interactive_lifecycle_action(action);
+            self.finish_child_document_parser_stop(scope, action);
         }
     }
 

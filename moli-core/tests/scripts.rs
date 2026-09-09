@@ -20,6 +20,12 @@ use tokio::time::Duration;
 #[path = "scripts/child_synthetic_modules.rs"]
 mod child_synthetic_modules;
 
+#[path = "scripts/lifecycle_task_order.rs"]
+mod lifecycle_task_order;
+
+#[path = "scripts/module_document_write.rs"]
+mod module_document_write;
+
 fn diagnostic_global<'a>(
     page: &'a moli_core::page::Page,
     name: &str,
