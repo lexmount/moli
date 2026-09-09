@@ -74,6 +74,27 @@ impl PageVm {
         descriptor: RendererPageReadyDescriptor,
     ) -> bool {
         match descriptor {
+            RendererPageReadyDescriptor::DomManipulation {
+                owner:
+                    crate::page_task_queue::RendererPageDomManipulationOwner::ChildDocumentLifecycle(
+                        owner,
+                    ),
+                ..
+            } => {
+                if owner.root_document() != self.document_lifecycle.identity().document {
+                    return true;
+                }
+                let crate::page_task_queue::RendererPageChildFrameTaskTarget::DocumentLifecycle(
+                    target,
+                ) = owner.target()
+                else {
+                    unreachable!("child lifecycle DOM carrier must retain its exact target");
+                };
+                // A current task retains its DOM FIFO position while its
+                // separately queued realm prerequisite runs. It is not stale
+                // merely because that realm has not materialized yet.
+                !self.vm().child_document_lifecycle_waits_for_realm(target)
+            }
             RendererPageReadyDescriptor::ActionWindow { .. }
             | RendererPageReadyDescriptor::DomManipulation { .. }
             | RendererPageReadyDescriptor::UserInteraction { .. }

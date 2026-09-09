@@ -128,7 +128,8 @@ addEventListener("error", () => {
             base_url: document_url.clone(),
             initiator_url: document_url,
         },
-    );
+    )
+    .expect("parser import-map handoff should be admitted");
 
     assert_eq!(
         vm.eval_without_microtask_checkpoint_for_test("__importMapFailureOrder.join('|')")
@@ -182,7 +183,8 @@ fn parser_import_map_registration_obeys_inline_script_csp() {
                 base_url: document_url.clone(),
                 initiator_url: document_url,
             },
-        );
+        )
+        .expect("parser import-map handoff should be admitted");
     }
 
     let base_url = Url::parse("https://script-terminal.test/import-map.html").unwrap();

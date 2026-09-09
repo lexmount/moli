@@ -110,8 +110,8 @@ impl ScriptVm {
     /// The main-document lifecycle coordinator owns the ordinary task-end
     /// checkpoint. Keeping this primitive body-only prevents DCL and
     /// `readystatechange` helpers from silently becoming a second completion
-    /// authority. Parser-finish DCL temporarily uses the explicit compatibility
-    /// wrapper below until P5-A3 moves that direct successor as one unit.
+    /// authority. Parser completion admits DCL to the DOM task source after
+    /// finishing its own task-end checkpoint.
     pub(super) fn dispatch_document_lifecycle_event_body(
         &mut self,
         event_type: &str,

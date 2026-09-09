@@ -27,15 +27,29 @@ impl<'vm> ChildDocumentLifecycleOwner<'vm> {
     pub(super) fn notify_parser_stop_action(
         &mut self,
         action: FrameDocumentInteractiveLifecycleAction,
-    ) -> bool {
-        self.vm
-            ._context_host
-            .borrow_mut()
-            .queue_child_document_interactive_lifecycle_action(action)
+    ) -> Result<FrameDocumentLifecycleTaskEffect> {
+        let context_host = self.vm._context_host.clone();
+        self.vm.with_default_context_scope(move |scope, _| {
+            Ok(context_host
+                .borrow_mut()
+                .finish_child_document_parser_stop(scope, action))
+        })
     }
 }
 
 impl ScriptVm {
+    pub(crate) fn child_document_lifecycle_waits_for_realm(
+        &self,
+        target: RendererPageChildDocumentLifecycleTarget,
+    ) -> bool {
+        let host = self._context_host.borrow();
+        host.child_document_lifecycle_action_is_current(target.action())
+            && host.has_child_frame_realm_materialization_request(
+                target.child_handle(),
+                target.document_owner(),
+            )
+    }
+
     pub(crate) fn current_child_document_lifecycle_target(
         &self,
         expected: RendererPageChildDocumentLifecycleTarget,
@@ -102,9 +116,9 @@ impl ScriptVm {
         let Some(task) = source.take_scheduler_task_for_executor_test(|descriptor| {
             matches!(
                 descriptor,
-                crate::page_task_queue::RendererPageReadyDescriptor::ChildFrameTask {
-                    owner,
-                    ..
+                crate::page_task_queue::RendererPageReadyDescriptor::ChildFrameTask { owner, .. }
+                | crate::page_task_queue::RendererPageReadyDescriptor::DomManipulation {
+                    owner: crate::page_task_queue::RendererPageDomManipulationOwner::ChildDocumentLifecycle(owner), ..
                 } if matches!(
                     owner.target(),
                     RendererPageChildFrameTaskTarget::DocumentLifecycle(_)
@@ -113,8 +127,14 @@ impl ScriptVm {
         }) else {
             return Ok(None);
         };
-        let crate::page_task_queue::RendererPageSchedulerTask::ChildFrameTask(task) = task else {
-            unreachable!("child-frame descriptor must dequeue its own family source")
+        let task = match task {
+            crate::page_task_queue::RendererPageSchedulerTask::ChildFrameTask(task)
+            | crate::page_task_queue::RendererPageSchedulerTask::DomManipulation(
+                crate::page_task_queue::RendererPageDomManipulationTask::ChildDocumentLifecycle(
+                    task,
+                ),
+            ) => task,
+            _ => unreachable!("child lifecycle selector must dequeue its admitted task"),
         };
         let RendererPageChildFrameTaskTarget::DocumentLifecycle(target) = task.owner().target()
         else {
