@@ -1,19 +1,21 @@
 // Copyright 2025 the Parley Authors
 // SPDX-License-Identifier: Apache-2.0 OR MIT
 
-use crate::InlineBox;
 use crate::layout::alignment::align;
 use crate::layout::alignment::unjustify;
 use crate::layout::data::LayoutData;
+use crate::layout::data::LayoutItemKind;
+use crate::layout::text_advance::TextItemQuantization;
 use crate::style::Brush;
+use crate::InlineBox;
 use core::cmp::Ordering;
 use core::fmt;
 
-use crate::IndentOptions;
 use crate::layout::{
-    ContentWidths, Style, alignment::Alignment, alignment::AlignmentOptions, line::Line,
-    line_break::BreakLines,
+    alignment::Alignment, alignment::AlignmentOptions, line::Line, line_break::BreakLines,
+    ContentWidths, Style,
 };
+use crate::IndentOptions;
 
 /// Text layout.
 ///
@@ -81,6 +83,59 @@ impl<B: Brush> Layout<B> {
     /// mixed-direction text.
     pub fn calculate_content_widths(&self) -> ContentWidths {
         self.data.calculate_content_widths()
+    }
+
+    /// Allocate text items in multiples of `quantum`, rounding each item's
+    /// width upwards without modifying glyph advances. `item_ends` contains
+    /// the ordered UTF-8 end offsets of the caller's text items (for example,
+    /// DOM text nodes). A bidi-level transition or inline box also ends an
+    /// allocation item; a font fallback run alone does not.
+    ///
+    /// Configure this after shaping and before line breaking. Partial items
+    /// on either side of a line break are rounded independently. By default
+    /// no horizontal quantization is applied.
+    /// A glyph spanning multiple items is owned by the item containing its
+    /// first logical source character. Reconfiguration restores the original
+    /// shaping clusters before applying the new item boundaries.
+    pub fn set_text_item_quantization(&mut self, quantum: f32, item_ends: &[usize]) {
+        assert!(quantum.is_finite() && quantum > 0.0);
+        assert!(item_ends.windows(2).all(|pair| pair[0] < pair[1]));
+        assert!(item_ends.last().copied().unwrap_or(0) == self.data.text_len);
+        assert!(
+            self.data.lines.is_empty(),
+            "configure allocation before line breaking"
+        );
+        if let Some(previous) = self.data.text_item_quantization.take() {
+            previous.restore_clusters(&mut self.data.clusters);
+        }
+        let mut groups = alloc::vec![0; self.data.clusters.len()];
+        let mut previous = None;
+        let mut group = 0;
+        for item in &self.data.items {
+            if item.kind == LayoutItemKind::InlineBox {
+                previous = None;
+                continue;
+            }
+            let run = &self.data.runs[item.index];
+            for index in run.cluster_range.clone() {
+                let offset = self.data.clusters[index].text_range(run).start;
+                let key = (
+                    item_ends.partition_point(|end| *end <= offset),
+                    run.bidi_level,
+                );
+                if previous != Some(key) {
+                    group += 1;
+                    previous = Some(key);
+                }
+                groups[index] = group;
+            }
+        }
+        self.data.text_item_quantization = Some(TextItemQuantization::new(
+            quantum,
+            groups,
+            &self.data.runs,
+            &mut self.data.clusters,
+        ));
     }
 
     /// Returns the height of the layout.

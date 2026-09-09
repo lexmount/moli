@@ -2,8 +2,8 @@
 // SPDX-License-Identifier: Apache-2.0 OR MIT
 
 use super::{
-    BreakReason,
     data::{ClusterData, LineItemData},
+    BreakReason,
 };
 use crate::data::LayoutData;
 use crate::style::Brush;
@@ -161,16 +161,17 @@ fn align_impl<B: Brush, const UNDO_JUSTIFICATION: bool>(
                 // Iterate over text runs in the line and clusters in the text run
                 //   - Iterate forwards for even bidi levels (which represent LTR runs)
                 //   - Iterate backwards for odd bidi levels (which represent RTL runs)
-                let line_items: &mut dyn Iterator<Item = &LineItemData> = if is_rtl {
-                    &mut layout.line_items[line.item_range.clone()].iter().rev()
+                let line_items: &mut dyn Iterator<Item = &mut LineItemData> = if is_rtl {
+                    &mut layout.line_items[line.item_range.clone()].iter_mut().rev()
                 } else {
-                    &mut layout.line_items[line.item_range.clone()].iter()
+                    &mut layout.line_items[line.item_range.clone()].iter_mut()
                 };
                 line_items
                     .filter(|item| item.is_text_run())
                     .for_each(|line_item| {
                         let clusters = &mut layout.clusters[line_item.cluster_range.clone()];
                         let line_item_is_rtl = line_item.bidi_level & 1 != 0;
+                        let mut item_adjustment = 0.0;
                         let clusters: &mut dyn Iterator<Item = &mut ClusterData> =
                             if line_item_is_rtl {
                                 &mut clusters.iter_mut().rev()
@@ -183,9 +184,13 @@ fn align_impl<B: Brush, const UNDO_JUSTIFICATION: bool>(
                             }
                             if cluster.info.whitespace().is_space_or_nbsp() {
                                 cluster.advance += adjustment;
+                                item_adjustment += adjustment;
                                 applied += 1;
                             }
                         });
+                        if layout.text_item_quantization.is_some() {
+                            line_item.advance += item_adjustment;
+                        }
                     });
             }
         }

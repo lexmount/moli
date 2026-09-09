@@ -332,6 +332,10 @@ fn round_layout_to_css_subpixels(tree: &mut impl RoundTree, root: NodeId) {
     round_layout(&mut scaled, root);
 }
 
+fn round_inline_available_width(width: f32) -> f32 {
+    (width * LAYOUT_SUBPIXELS_PER_CSS_PIXEL).round() / LAYOUT_SUBPIXELS_PER_CSS_PIXEL
+}
+
 struct CssSubpixelRoundTree<'a, Tree>
 where
     Tree: RoundTree + ?Sized,
@@ -2548,6 +2552,11 @@ where
                 AvailableSpace::Definite(limit) => limit,
             })
             .max(0.0);
+        // Line breaking consumes the same 1/64 px content-box width that is
+        // published by the final Taffy rounding adapter. In particular, a
+        // Stylo app-unit width of 24.2 is painted as 24.203125; using 24.2 to
+        // break a quantized text item spuriously wraps an otherwise fitting line.
+        let width = round_inline_available_width(width);
         // Taffy may feed an intrinsic inline size back through a quantized
         // definite flex/grid constraint, while Parley's content-width and
         // line-breaking passes can accumulate the same glyph advances in a
@@ -2990,7 +2999,9 @@ fn inline_percentage_basis(
 
 #[cfg(test)]
 mod tests {
-    use super::{inline_percentage_basis, round_layout_to_css_subpixels};
+    use super::{
+        inline_percentage_basis, round_inline_available_width, round_layout_to_css_subpixels,
+    };
     use crate::{LayoutBoxKind, LayoutDisplay, LayoutWorld, PaintColor, ResolvedLayoutStyle};
     use style::Atom;
     use taffy::{
@@ -2998,6 +3009,14 @@ mod tests {
         LengthPercentageAuto, Line, NodeId, Point, RequestedAxis, RoundTree, RunMode, Size,
         SizingMode, SizingPurpose, Style, TraversePartialTree, TraverseTree, WritingMode,
     };
+
+    #[test]
+    fn inline_available_width_uses_the_final_geometry_subpixel_grid() {
+        assert_eq!(round_inline_available_width(24.2), 24.203125);
+        assert_eq!(round_inline_available_width(24.25), 24.25);
+        assert_eq!(round_inline_available_width(39.0), 39.0);
+        assert_eq!(round_inline_available_width(0.0), 0.0);
+    }
 
     fn synthetic_block_box(source: u8, style: Style<Atom>) -> crate::LayoutBox<u8> {
         LayoutWorld::new_box(
