@@ -29,6 +29,22 @@ The narrow and wide variants use 500-unit and 1000-unit advances. Four letters
 at 40px have widths of 80px and 160px respectively, providing controls for
 FontFaceSet selection order without relying on installed fonts.
 
+## Project-generated shared-glyph face
+
+`moli-ligatures.ttf` is original project test data under the repository's
+MIT OR Apache-2.0 terms. It has Latin `ff` / `fi` / `ffi`, combining
+`a` + U+0301, and Arabic lam-alef substitutions with deliberately fractional
+advances at common CSS font sizes. This makes glyph ownership and rounding
+across DOM text-item boundaries testable without platform fonts.
+
+Regenerate just this face, without external font sources, with:
+
+```bash
+uv run scripts/generate-layout-test-font.py --ligatures-only
+```
+
+SHA-256: `6d31f07720137b45db192ace541c50e3f526806fc07eeab648a2d7abd7dc01cd`.
+
 ## Subset fallback faces
 
 | Fixture | Included code points | Source and source SHA-256 | License | Fixture SHA-256 |
