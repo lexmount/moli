@@ -5,7 +5,8 @@ use crate::{
         DocumentStream, HtmlParser, ParserBlockingStylesheetPause,
         ParserCustomElementConstructionHandoff, ParserDomMutationConsumer, ParserDomReadConsumer,
         ParserElementCreationConsumer, ParserMutationEffectConsumer, ParserPumpOutcome,
-        ParserPumpStep, ParserScriptHandoff, ParserYield, PreparedScript, XmlDocumentStream,
+        ParserPumpStep, ParserScriptHandoff, ParserScriptPreparationRequest, ParserYield,
+        PreparedScript, XmlDocumentStream,
     },
 };
 use std::{
@@ -21,7 +22,8 @@ pub(crate) use insertion::ParserInsertionHandle;
 pub(crate) type DocumentParserStreamHandle = Rc<RefCell<DocumentStream>>;
 type XmlDocumentParserStreamHandle = Rc<RefCell<XmlDocumentStream>>;
 
-fn new_document_parser_stream_handle(stream: DocumentStream) -> DocumentParserStreamHandle {
+fn new_document_parser_stream_handle(mut stream: DocumentStream) -> DocumentParserStreamHandle {
+    stream.defer_script_preparation_to_owner();
     Rc::new(RefCell::new(stream))
 }
 
@@ -64,6 +66,9 @@ pub(crate) enum LiveDocumentParserStepOutcome {
     /// The tree builder reached a parser-connected script boundary. The owner
     /// decides whether this executes immediately or blocks on source/resources.
     ScriptHandoff(Box<ParserScriptHandoff>),
+    /// HTML script preparation must observe mutations from the parser's
+    /// microtask checkpoint, after every parser borrow has been released.
+    ScriptPreparation(Box<ParserScriptPreparationRequest>),
 }
 
 struct LiveDocumentParserStepAdvance {
@@ -166,6 +171,9 @@ fn live_document_parser_advance_from_outcome(
         }
         ParserPumpStep::Yield(ParserYield::Script(handoff)) => {
             LiveDocumentParserStepOutcome::ScriptHandoff(handoff)
+        }
+        ParserPumpStep::Yield(ParserYield::ScriptPreparation(request)) => {
+            LiveDocumentParserStepOutcome::ScriptPreparation(request)
         }
     };
     LiveDocumentParserStepAdvance {
@@ -835,6 +843,16 @@ impl DocumentParserSession {
             ExecutableDocumentParserBackend::Html(stream) => Some(stream.clone()),
             ExecutableDocumentParserBackend::Xml(_) => None,
         }
+    }
+
+    pub(crate) fn prepare_script(
+        &self,
+        request: ParserScriptPreparationRequest,
+        owner: &mut impl LiveDocumentParserOwner,
+    ) -> ParserScriptHandoff {
+        self.stream_handle()
+            .borrow()
+            .prepare_script_with_runtime_dom_consumer(request, owner)
     }
 
     pub(crate) fn lifetime(&self) -> DocumentParserLifetime {
