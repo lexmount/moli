@@ -1454,10 +1454,11 @@ mod tests {
         assert_eq!(prepared.source_kind, ScriptSourceKind::Inline);
 
         let (importmap_document, importmap_handle) = first_script_handle(
-            "<script type=\"importmap\">{\"imports\":{\"x\":\"/x.js\"}}</script>",
+            "<script type=\"importmap\" nonce=\"map-nonce\">{\"imports\":{\"x\":\"/x.js\"}}</script>",
         );
         let prepared = prepare_parser_import_map(&importmap_document, importmap_handle)
             .expect("inline importmap should produce a registration payload");
+        assert_eq!(prepared.nonce.as_deref(), Some("map-nonce"));
         assert!(matches!(
             prepared.source,
             crate::PreparedImportMapSource::Inline(ref source)

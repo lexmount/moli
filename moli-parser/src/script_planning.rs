@@ -252,6 +252,7 @@ pub struct PreparedImportMap {
     pub position: usize,
     pub node_id: NodeId,
     pub source: PreparedImportMapSource,
+    pub nonce: Option<String>,
     pub base_url: Url,
     pub initiator_url: Url,
 }
@@ -557,6 +558,7 @@ pub fn build_prepared_import_map(
         position,
         node_id: NodeId::new(node_id.index()),
         source,
+        nonce: classification.script.fetch_metadata.nonce.clone(),
         base_url: document_base_url,
         initiator_url: document_url,
     })

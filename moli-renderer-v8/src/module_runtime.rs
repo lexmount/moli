@@ -161,6 +161,14 @@ pub(crate) fn accept_parser_owned_import_map_handoff(
         .set_script_already_started(node_id, true);
     match import_map.source {
         PreparedImportMapSource::Inline(source) => {
+            let request =
+                crate::content_security_policy::ContentSecurityPolicyScriptElementRequest::
+                    parser_inserted_with_nonce(import_map.nonce.as_deref());
+            let Some(source) =
+                vm.inline_script_element_source_for_execution(node_id, &source, request)
+            else {
+                return;
+            };
             if let Err(error) =
                 register_parser_owned_import_map_source(vm, &source, &import_map.base_url)
             {

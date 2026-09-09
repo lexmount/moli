@@ -8552,7 +8552,7 @@ impl ScriptVm {
         }
     }
 
-    fn inline_script_element_source_for_execution(
+    pub(crate) fn inline_script_element_source_for_execution(
         &mut self,
         node_id: DomHandle,
         source: &str,
