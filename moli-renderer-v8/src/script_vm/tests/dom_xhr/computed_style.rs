@@ -12192,6 +12192,74 @@ fn computed_style_resolves_valid_typed_css_math_and_rejects_invalid_unit_algebra
 }
 
 #[test]
+fn svg_special_presentation_attributes_follow_element_scopes_and_cascade() {
+    let mut vm = new_parsed_test_vm(
+        "https://svg-special-presentation-attributes.test/",
+        r#"<!doctype html>
+        <style>#cascade { transform: scale(3); }</style>
+        <svg id="root" width="40" height="20">
+          <use id="positioned" x="1" y="2" width="3" height="4"></use>
+          <g id="group" transform="translate(200, 0)"></g>
+          <symbol id="symbol" transform="translate(100, 0)"></symbol>
+          <g id="group-alias" transform="scale(2)" patternTransform="scale(9)"></g>
+          <pattern id="pattern" patternTransform="scale(2)" transform="scale(9)"></pattern>
+          <linearGradient id="linear" gradientTransform="scale(4)" transform="scale(9)"></linearGradient>
+          <radialGradient id="radial" gradientTransform="scale(5)" transform="scale(9)"></radialGradient>
+          <g id="irrelevant" x="9" y="10" width="11" height="12"></g>
+          <g id="irrelevant-control"></g>
+          <path id="path" d="M0,0 L1,1"></path>
+          <path id="path-control"></path>
+          <animate id="animation" fill="blue"></animate>
+          <animate id="animation-control"></animate>
+          <svg id="nested" width="1" height="2"></svg>
+          <svg id="nested-control"></svg>
+          <g id="cascade" transform="scale(2)"></g>
+        </svg>"#,
+    );
+
+    let result = vm
+        .eval(
+            r#"
+(() => {
+  const get = id => document.getElementById(id);
+  const value = (id, property) =>
+    getComputedStyle(get(id)).getPropertyValue(property);
+  const sameProperties = (left, right, properties) =>
+    properties.every(property => value(left, property) === value(right, property));
+
+  const values = [
+    value('positioned', 'x'),
+    value('positioned', 'y'),
+    value('positioned', 'width'),
+    value('positioned', 'height'),
+    value('group', 'transform'),
+    value('symbol', 'transform'),
+    value('group-alias', 'transform'),
+    value('pattern', 'transform'),
+    value('linear', 'transform'),
+    value('radial', 'transform'),
+    sameProperties('irrelevant', 'irrelevant-control', ['x', 'y', 'width', 'height']),
+    value('path', 'd') !== value('path-control', 'd'),
+    value('animation', 'fill') === value('animation-control', 'fill'),
+    sameProperties('nested', 'nested-control', ['width', 'height']),
+    value('cascade', 'transform')
+  ];
+
+  get('group').setAttribute('transform', 'translate(12, 3)');
+  values.push(value('group', 'transform'));
+  return JSON.stringify(values);
+})()
+"#,
+        )
+        .expect("SVG presentation attributes should evaluate");
+
+    assert_eq!(
+        result,
+        r#"["1px","2px","3px","4px","matrix(1, 0, 0, 1, 200, 0)","matrix(1, 0, 0, 1, 100, 0)","matrix(2, 0, 0, 2, 0, 0)","matrix(2, 0, 0, 2, 0, 0)","matrix(4, 0, 0, 4, 0, 0)","matrix(5, 0, 0, 5, 0, 0)",true,true,true,true,"matrix(3, 0, 0, 3, 0, 0)","matrix(1, 0, 0, 1, 12, 3)"]"#
+    );
+}
+
+#[test]
 fn computed_transform_scale_serializes_as_matrix() {
     let mut vm = new_parsed_test_vm(
         "https://computed-transform-scale.test/",

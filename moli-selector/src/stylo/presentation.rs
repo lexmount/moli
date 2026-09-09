@@ -5,6 +5,7 @@
 // cascade, inheritance, and relative-length resolver own the result instead
 // of teaching layout about authored attribute strings.
 
+use cssparser::serialize_string;
 use selectors::{Element as SelectorsElement, sink::Push};
 use style::{
     applicable_declarations::ApplicableDeclarationBlock,
@@ -30,11 +31,12 @@ use super::query::QueryElement;
 const HTML_NAMESPACE: &str = "http://www.w3.org/1999/xhtml";
 const SVG_NAMESPACE: &str = "http://www.w3.org/2000/svg";
 
-// Mirrors Blink's CSSPropertyIdForSVGAttributeName allowlist. These attributes
-// participate in the author cascade as presentation hints: author rules and an
-// inline style override them, while inheritance observes their parsed CSS
-// value. Geometry attributes such as the root SVG width/height are handled
-// separately below because they have element-specific SVG parsing rules.
+// Mirrors the presentation attributes without element-specific SVG rules.
+// These attributes participate in the author cascade as presentation hints:
+// author rules and an inline style override them, while inheritance observes
+// their parsed CSS value. Geometry and transform attributes are selected by
+// `svg_presentation_property_name` because their spelling or applicability
+// depends on the element.
 const SVG_STYLE_PRESENTATION_ATTRIBUTES: &[&str] = &[
     "alignment-baseline",
     "baseline-shift",
@@ -96,10 +98,27 @@ const SVG_STYLE_PRESENTATION_ATTRIBUTES: &[&str] = &[
     "writing-mode",
 ];
 
+const SVG_SPECIAL_PRESENTATION_ATTRIBUTES: &[&str] = &[
+    "cx",
+    "cy",
+    "d",
+    "gradientTransform",
+    "height",
+    "patternTransform",
+    "r",
+    "rx",
+    "ry",
+    "transform",
+    "width",
+    "x",
+    "y",
+];
+
 /// Whether changing an attribute can change an SVG element's computed style
 /// without any selector dependency on that attribute.
 pub fn is_svg_presentation_attribute_name(name: &str) -> bool {
-    matches!(name, "width" | "height") || SVG_STYLE_PRESENTATION_ATTRIBUTES.contains(&name)
+    SVG_STYLE_PRESENTATION_ATTRIBUTES.contains(&name)
+        || SVG_SPECIAL_PRESENTATION_ATTRIBUTES.contains(&name)
 }
 
 impl QueryElement<'_> {
@@ -118,7 +137,11 @@ impl QueryElement<'_> {
         let element = self.element();
         let mut block = PropertyDeclarationBlock::new();
         if element.namespace() == SVG_NAMESPACE {
-            if element.local_name() == "svg" {
+            let is_outermost_svg = element.local_name() == "svg"
+                && self
+                    .parent_element()
+                    .is_none_or(|parent| parent.element().namespace() != SVG_NAMESPACE);
+            if is_outermost_svg {
                 append_root_svg_size_declarations(element, &mut block);
             }
 
@@ -463,19 +486,31 @@ fn append_svg_style_presentation_declarations(
     block: &mut PropertyDeclarationBlock,
 ) {
     for attribute in element.attributes() {
-        if !attribute.namespace().is_empty()
-            || !SVG_STYLE_PRESENTATION_ATTRIBUTES.contains(&attribute.local_name())
-        {
+        if !attribute.namespace().is_empty() {
             continue;
         }
-        let Ok(property) = PropertyId::parse_enabled_for_all_content(attribute.local_name()) else {
+        let Some(property_name) = svg_presentation_property_name(element, attribute.local_name())
+        else {
             continue;
+        };
+        let Ok(property) = PropertyId::parse_enabled_for_all_content(property_name) else {
+            continue;
+        };
+        let mut svg_path_value = String::new();
+        let value = if property_name == "d" {
+            svg_path_value.push_str("path(");
+            serialize_string(attribute.value(), &mut svg_path_value)
+                .expect("serializing an SVG path into a String cannot fail");
+            svg_path_value.push(')');
+            svg_path_value.as_str()
+        } else {
+            attribute.value()
         };
         let mut declarations = SourcePropertyDeclaration::default();
         if parse_one_declaration_into(
             &mut declarations,
             property,
-            attribute.value(),
+            value,
             Origin::Author,
             url_data,
             None,
@@ -488,6 +523,70 @@ fn append_svg_style_presentation_declarations(
             block.extend(declarations.drain(), Importance::Normal);
         }
     }
+}
+
+fn svg_presentation_property_name<'a>(
+    element: &Element,
+    attribute_name: &'a str,
+) -> Option<&'a str> {
+    // The timing `fill` attribute on SVG animation elements must not be
+    // reinterpreted as the CSS fill presentation hint. Other presentation
+    // attributes remain eligible even though they do not affect rendering.
+    if attribute_name == "fill"
+        && matches!(
+            element.local_name(),
+            "animate" | "animateMotion" | "animateTransform" | "set"
+        )
+    {
+        return None;
+    }
+
+    if SVG_STYLE_PRESENTATION_ATTRIBUTES.contains(&attribute_name) {
+        return Some(attribute_name);
+    }
+
+    let local_name = element.local_name();
+    let applies = match attribute_name {
+        "cx" | "cy" => matches!(local_name, "circle" | "ellipse"),
+        "r" => local_name == "circle",
+        "rx" | "ry" => matches!(local_name, "ellipse" | "rect"),
+        "x" | "y" | "width" | "height" => {
+            matches!(local_name, "foreignObject" | "image" | "rect" | "use")
+        }
+        "d" => local_name == "path",
+        "transform" => is_svg_graphics_element(local_name),
+        "patternTransform" => local_name == "pattern",
+        "gradientTransform" => matches!(local_name, "linearGradient" | "radialGradient"),
+        _ => false,
+    };
+    applies.then_some(match attribute_name {
+        "patternTransform" | "gradientTransform" => "transform",
+        _ => attribute_name,
+    })
+}
+
+fn is_svg_graphics_element(local_name: &str) -> bool {
+    matches!(
+        local_name,
+        "a" | "circle"
+            | "defs"
+            | "ellipse"
+            | "foreignObject"
+            | "g"
+            | "image"
+            | "line"
+            | "path"
+            | "polygon"
+            | "polyline"
+            | "rect"
+            | "svg"
+            | "symbol"
+            | "switch"
+            | "text"
+            | "textPath"
+            | "tspan"
+            | "use"
+    )
 }
 
 fn append_html_table_cell_padding_declarations(
@@ -606,7 +705,7 @@ mod tests {
     }
 
     #[test]
-    fn svg_paint_attributes_are_classified_as_presentational() {
+    fn svg_attributes_are_classified_as_presentational() {
         for name in [
             "fill",
             "fill-opacity",
@@ -616,6 +715,17 @@ mod tests {
             "shape-rendering",
             "width",
             "height",
+            "x",
+            "y",
+            "cx",
+            "cy",
+            "r",
+            "rx",
+            "ry",
+            "d",
+            "transform",
+            "patternTransform",
+            "gradientTransform",
         ] {
             assert!(
                 is_svg_presentation_attribute_name(name),
@@ -623,7 +733,65 @@ mod tests {
             );
         }
         assert!(!is_svg_presentation_attribute_name("viewBox"));
-        assert!(!is_svg_presentation_attribute_name("d"));
+    }
+
+    #[test]
+    fn svg_special_presentation_attributes_follow_element_scopes() {
+        let element = |local_name: &str| {
+            Element::new(
+                local_name.to_owned(),
+                SVG_NAMESPACE.to_owned(),
+                None,
+                Vec::new(),
+            )
+        };
+
+        for local_name in ["foreignObject", "image", "rect", "use"] {
+            let element = element(local_name);
+            for attribute in ["x", "y", "width", "height"] {
+                assert_eq!(
+                    svg_presentation_property_name(&element, attribute),
+                    Some(attribute),
+                    "{attribute} on {local_name}"
+                );
+            }
+        }
+        for local_name in ["g", "symbol"] {
+            let element = element(local_name);
+            assert_eq!(
+                svg_presentation_property_name(&element, "transform"),
+                Some("transform")
+            );
+        }
+        assert_eq!(
+            svg_presentation_property_name(&element("pattern"), "patternTransform"),
+            Some("transform")
+        );
+        assert_eq!(
+            svg_presentation_property_name(&element("linearGradient"), "gradientTransform"),
+            Some("transform")
+        );
+        assert_eq!(
+            svg_presentation_property_name(&element("radialGradient"), "gradientTransform"),
+            Some("transform")
+        );
+
+        let group = element("g");
+        for attribute in ["x", "y", "width", "height"] {
+            assert_eq!(svg_presentation_property_name(&group, attribute), None);
+        }
+        for local_name in ["pattern", "linearGradient", "radialGradient"] {
+            assert_eq!(
+                svg_presentation_property_name(&element(local_name), "transform"),
+                None
+            );
+        }
+        let animate = element("animate");
+        assert_eq!(svg_presentation_property_name(&animate, "fill"), None);
+        assert_eq!(
+            svg_presentation_property_name(&animate, "stroke"),
+            Some("stroke")
+        );
     }
 
     #[test]
