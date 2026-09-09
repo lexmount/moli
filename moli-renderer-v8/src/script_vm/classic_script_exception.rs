@@ -62,6 +62,7 @@ impl ScriptVm {
                 };
                 // SAFETY: as_ptr() — V8 callbacks are re-entrant; borrow_mut() panics. See util.rs.
                 let host_ptr: *mut JsContextHost = (*context_host).as_ptr();
+                let execution_scope = crate::script_cleanup::ScriptExecutionScope::enter(scope);
                 let dispatch_result = dispatch_window_error_event_with_details(
                     scope,
                     host_ptr,
@@ -72,6 +73,7 @@ impl ScriptVm {
                     error_value,
                 )
                 .map_err(anyhow::Error::msg);
+                drop(execution_scope);
                 let checkpoint_result = Self::perform_microtask_checkpoints(scope, None);
                 dispatch_result?;
                 checkpoint_result

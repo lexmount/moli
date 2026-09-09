@@ -70,15 +70,15 @@ onerror = message => { events.push(message.includes('listener sentinel') ? 'exce
         let first = take_error_task(&mut page_vm);
         let outcome = page_vm.apply_selected_page_script_preparation_error_turn(first)?;
         assert_eq!(outcome.action.target_effect, PageScriptPreparationErrorTargetEffect::DispatchedToCurrentOwner);
-        assert_eq!(page_vm.vm_mut().eval("events.join('|')")?, "broadcast|microtask:broadcast|first|exception",
-            "the body retains detached elements but leaves listener microtasks for task completion");
+        assert_eq!(page_vm.vm_mut().eval("events.join('|')")?, "broadcast|microtask:broadcast|first|microtask:first|exception",
+            "the body retains detached elements and cleans up the listener before reporting its exception");
         page_vm.finish_selected_page_callback_task(&loader).await?;
         assert!(page_vm.run_exact_selected_page_task_for_test(
             PageSelectedTaskTestSelector::DomManipulation(PageDomManipulationTestFamily::ScriptPreparationError),
             &loader,
         ).await?);
         assert_eq!(page_vm.vm_mut().eval("events.join('|')")?,
-            "broadcast|microtask:broadcast|first|exception|microtask:first|second|microtask:second");
+            "broadcast|microtask:broadcast|first|microtask:first|exception|second|microtask:second");
 
         let duplicate = page_vm.apply_selected_page_script_preparation_error_turn(first)?;
         assert!(matches!(duplicate.action.target_effect,

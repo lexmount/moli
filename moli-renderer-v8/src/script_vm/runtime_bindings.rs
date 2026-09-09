@@ -153,6 +153,10 @@ pub(super) fn flush_pending_promise_rejections(scope: &mut v8::PinScope<'_, '_>)
 pub(crate) fn perform_microtask_checkpoint_and_report_pending_promise_rejections(
     scope: &mut v8::PinScope<'_, '_>,
 ) {
+    let Some(_checkpoint_scope) = crate::script_cleanup::MicrotaskCheckpointScope::enter(scope)
+    else {
+        return;
+    };
     let trace_enabled = moli_trace::cdp_runtime_trace_enabled();
     let dom_binding_trace_enabled = trace_enabled && moli_trace::dom_binding_timing_enabled();
     let trace_started = trace_enabled.then(Instant::now);

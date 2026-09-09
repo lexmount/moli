@@ -11,6 +11,8 @@ use std::sync::{
 };
 use std::time::{Duration, Instant};
 
+pub(crate) use dispatch::perform_callback_cleanup_checkpoint_if_worker;
+
 #[cfg(test)]
 use crate::broadcast_channel_runtime::new_broadcast_channel_registry;
 use crate::broadcast_channel_runtime::{
@@ -1862,6 +1864,7 @@ async fn worker_main(
         let referrer_policy = { state.borrow().referrer_policy.clone() };
 
         // ── Evaluate the worker script ─────────────────────────────────────
+        let execution_scope = crate::script_cleanup::ScriptExecutionScope::enter(scope);
         match evaluate_worker_bootstrap_script(
             scope,
             &script_source,
@@ -1914,6 +1917,7 @@ async fn worker_main(
         }
 
         // Run microtask checkpoint after initial script evaluation.
+        drop(execution_scope);
         perform_worker_microtask_checkpoint_and_report_pending_promise_rejections(scope);
         drain_worker_dynamic_module_imports(scope, &state, &module_graph_fetch_tx);
     }
