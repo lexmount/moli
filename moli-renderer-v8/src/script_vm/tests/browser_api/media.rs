@@ -2875,7 +2875,7 @@ fn web_audio_numeric_entrypoints_parse_webidl_arguments() {
 
     assert_eq!(
         result,
-        r#"{"ctorMissing":"TypeError","ctorSymbol":"TypeError","length":16,"sampleRate":44100,"setMissingTime":"TypeError","setSymbol":"TypeError","frequency":123.5,"channelMissing":"TypeError","channelSymbol":"TypeError","channelRange":"RangeError","channel0":"[object Float32Array]"}"#
+        r#"{"ctorMissing":"TypeError","ctorSymbol":"TypeError","length":16,"sampleRate":44100,"setMissingTime":"TypeError","setSymbol":"TypeError","frequency":123.5,"channelMissing":"TypeError","channelSymbol":"TypeError","channelRange":"IndexSizeError","channel0":"[object Float32Array]"}"#
     );
 }
 #[test]

@@ -13,10 +13,12 @@ use crate::web_api_interfaces;
 use crate::webidl;
 use moli_webapi_declare::{WebApiFunctionTemplate, WebApiObject};
 
+mod audio_buffer;
 mod audio_param;
 mod biquad;
 mod graph;
 
+pub(in crate::context_bootstrap) use audio_buffer::build_constructor_template as build_audio_buffer_constructor_template;
 use audio_param::{audio_param, detune_param};
 
 const AUDIO_CONTEXT_LISTENERS_SLOT: &str = "__moliAudioContextListeners";
@@ -268,19 +270,6 @@ struct OfflineAudioCompletionEventDeclaration<'scope> {
 #[webapi(interface = web_api_interfaces::AudioDestinationNode)]
 struct AudioDestinationNodeObjectDeclaration {}
 
-#[derive(WebApiObject)]
-#[webapi(interface = web_api_interfaces::AudioBuffer)]
-struct AudioBufferObjectDeclaration<'scope> {
-    #[webapi(data_property)]
-    length: f64,
-    #[webapi(data_property = "sampleRate")]
-    sample_rate: f64,
-    #[webapi(data_property)]
-    duration: f64,
-    #[webapi(slot = OFFLINE_AUDIO_BUFFER_SLOT)]
-    channel_data: v8::Local<'scope, v8::Object>,
-}
-
 // Captured from the Chromium-on-Linux baseline we use for Zhihu probe parity.
 // If that browser profile changes, update this together with the audio probe
 // assertions in `script_vm/tests.rs`.
@@ -365,13 +354,6 @@ struct OfflineAudioContextConstructorArgs {
 }
 
 #[derive(webidl::WebIdlArgs)]
-#[webidl(prefix = "AudioBuffer.getChannelData")]
-struct AudioBufferGetChannelDataArgs {
-    #[webidl(required)]
-    channel: f64,
-}
-
-#[derive(webidl::WebIdlArgs)]
 #[webidl(prefix = "AudioParam.setValueAtTime")]
 struct AudioParamSetValueAtTimeArgs {
     #[webidl(required)]
@@ -416,6 +398,9 @@ struct AudioWorkletNodeTemplateDeclaration {
 #[derive(WebApiFunctionTemplate)]
 #[webapi(interface = web_api_interfaces::BaseAudioContext, enumerable)]
 struct BaseAudioContextPrototypeDeclaration {
+    #[webapi(method = "createBuffer", length = 3, callback = audio_buffer::create_buffer)]
+    create_buffer: (),
+
     #[webapi(method = "createBiquadFilter", length = 0, callback = biquad::create_biquad_filter)]
     create_biquad_filter: (),
 
@@ -1285,30 +1270,6 @@ pub(in crate::context_bootstrap) fn offline_audio_context_constructor_callback<'
     rv.set(context.into());
 }
 
-pub(in crate::context_bootstrap) fn audio_buffer_get_channel_data_callback<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    args: v8::FunctionCallbackArguments<'s>,
-    mut rv: v8::ReturnValue<'s, v8::Value>,
-) {
-    let buffer = args.this();
-    let Some(parsed) = webidl::parse_args::<AudioBufferGetChannelDataArgs>(scope, &args) else {
-        return;
-    };
-    let requested_channel = parsed.channel.trunc();
-    if !requested_channel.is_finite() || requested_channel != 0.0 {
-        throw_range_error(
-            scope,
-            "Failed to execute 'getChannelData' on 'AudioBuffer': channel index is out of range.",
-        );
-        return;
-    }
-    let Some(data) = web_audio_object_slot(scope, buffer, OFFLINE_AUDIO_BUFFER_SLOT) else {
-        rv.set_undefined();
-        return;
-    };
-    rv.set(data.into());
-}
-
 fn require_base_audio_context<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     object: v8::Local<'s, v8::Object>,
@@ -1388,7 +1349,13 @@ fn offline_audio_context_start_rendering_callback<'s>(
     let sample_rate =
         web_audio_number_slot(scope, context, OFFLINE_AUDIO_SAMPLE_RATE_SLOT).unwrap_or(44_100.0);
     let has_input = graph::prepare_offline_render(scope, context, length as f64 / sample_rate);
-    let rendered_buffer = build_audio_buffer(scope, length, sample_rate, has_input);
+    let channel_count = web_audio_number_slot(scope, context, OFFLINE_AUDIO_CHANNEL_COUNT_SLOT)
+        .unwrap_or(1.0) as u32;
+    let Some(rendered_buffer) =
+        build_audio_buffer(scope, channel_count, length, sample_rate, has_input)
+    else {
+        return;
+    };
     define_non_enumerable_string_property(scope, context, "state", "closed");
 
     let payload = OfflineAudioCompletePayloadDeclaration::new(context, rendered_buffer)
@@ -1751,40 +1718,30 @@ fn audio_destination_node<'s>(
 
 fn build_audio_buffer<'s>(
     scope: &mut v8::PinScope<'s, '_>,
+    channel_count: u32,
     length: usize,
     sample_rate: f64,
     has_input: bool,
-) -> v8::Local<'s, v8::Object> {
-    let channel_data = build_channel_data_view(scope, length, has_input);
-    AudioBufferObjectDeclaration::new(
-        length as f64,
-        sample_rate,
-        (length as f64) / sample_rate.max(1.0),
-        channel_data,
-    )
-    .bind(scope)
-    .expect("AudioBuffer declaration should bind")
-}
-
-fn build_channel_data_view<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    length: usize,
-    has_input: bool,
-) -> v8::Local<'s, v8::Object> {
-    let samples = if has_input {
-        synthetic_audio_samples(length)
-    } else {
-        vec![0.0; length]
+) -> Option<v8::Local<'s, v8::Object>> {
+    let Ok(length) = u32::try_from(length) else {
+        throw_dom_exception(
+            scope,
+            "NotSupportedError",
+            9,
+            "AudioBuffer length is too large.",
+        );
+        return None;
     };
-    let mut bytes = Vec::with_capacity(samples.len() * std::mem::size_of::<f32>());
-    for sample in samples {
-        bytes.extend_from_slice(&sample.to_le_bytes());
+    let buffer = audio_buffer::new_buffer(scope, channel_count, length, sample_rate)?;
+    if has_input {
+        // The existing input renderer remains synthetic. Buffer ownership and
+        // channel copies are independent of that backend and use actual PCM.
+        let samples = synthetic_audio_samples(length as usize);
+        for channel in 0..channel_count {
+            audio_buffer::write_channel(scope, buffer, channel, &samples)?;
+        }
     }
-    let backing_store = v8::ArrayBuffer::new_backing_store_from_vec(bytes).make_shared();
-    let buffer = v8::ArrayBuffer::with_backing_store(scope, &backing_store);
-    let view = v8::Float32Array::new(scope, buffer, 0, length)
-        .expect("Float32Array construction should succeed");
-    view.into()
+    Some(buffer)
 }
 
 fn synthetic_audio_samples(length: usize) -> Vec<f32> {
