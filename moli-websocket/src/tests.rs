@@ -590,13 +590,13 @@ async fn websocket_synthetic_delivery_stops_after_first_rejected_event() {
         ),
     )
     .await
-    .expect("synthetic producer must stop when FrameSent is rejected")
+    .expect("synthetic producer must stop when SendCompleted is rejected")
     .expect_err("synthetic event sink is closed");
     assert!(command_tx.is_closed());
     assert!(matches!(observed_rx.try_recv(), Ok(Event::Open { .. })));
     assert!(matches!(
         observed_rx.try_recv(),
-        Ok(Event::FrameSent { .. })
+        Ok(Event::SendCompleted { .. })
     ));
     assert!(
         observed_rx.try_recv().is_err(),
@@ -718,7 +718,7 @@ async fn websocket_synthetic_connection_opens_accounts_send_and_closes_cleanly()
         .expect("synthetic frame sent should arrive")
         .expect("synthetic websocket event channel should stay open");
     match event {
-        Event::FrameSent {
+        Event::SendCompleted {
             socket_id,
             opcode,
             payload_length,
@@ -728,17 +728,6 @@ async fn websocket_synthetic_connection_opens_accounts_send_and_closes_cleanly()
             assert_eq!(payload_length, 5);
         }
         event => panic!("expected synthetic websocket frame sent, got {event:?}"),
-    }
-    let event = timeout(Duration::from_secs(1), event_rx.recv())
-        .await
-        .expect("synthetic buffered amount consumption should arrive")
-        .expect("synthetic websocket event channel should stay open");
-    match event {
-        Event::BufferedAmountConsumed { socket_id, amount } => {
-            assert_eq!(socket_id, 92);
-            assert_eq!(amount, 5);
-        }
-        event => panic!("expected synthetic buffered amount event, got {event:?}"),
     }
 
     command_tx
@@ -1228,15 +1217,15 @@ async fn websocket_transport_sends_text_binary_and_reports_buffered_amount_consu
     command_tx
         .send_text("hello".to_owned())
         .expect("send text command");
-    assert_frame_sent(&mut event_rx, 4, FrameOpcode::Text, 5).await;
-    assert_buffered_amount_consumed(&mut event_rx, 4, 5).await;
+    assert_send_completed(&mut event_rx, 4, FrameOpcode::Text, 5).await;
+
     assert_text_message(&mut event_rx, 4, "hello").await;
 
     command_tx
         .send_binary(vec![1, 2, 3, 4])
         .expect("send binary command");
-    assert_frame_sent(&mut event_rx, 4, FrameOpcode::Binary, 4).await;
-    assert_buffered_amount_consumed(&mut event_rx, 4, 4).await;
+    assert_send_completed(&mut event_rx, 4, FrameOpcode::Binary, 4).await;
+
     assert_binary_message(&mut event_rx, 4, &[1, 2, 3, 4]).await;
 
     command_tx
@@ -1281,8 +1270,7 @@ async fn websocket_transport_reads_while_sending_many_large_messages() {
             Event::HandshakeResponse { .. }
             | Event::Open { .. }
             | Event::BinaryMessage { .. }
-            | Event::FrameSent { .. }
-            | Event::BufferedAmountConsumed { .. }
+            | Event::SendCompleted { .. }
             | Event::Closing { .. } => {}
         }
     }

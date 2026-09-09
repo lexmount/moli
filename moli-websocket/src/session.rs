@@ -269,7 +269,7 @@ impl Session {
                 && self
                     .outbox
                     .iter()
-                    .filter(|event| matches!(event, Event::FrameSent { .. }))
+                    .filter(|event| matches!(event, Event::SendCompleted { .. }))
                     .count()
                     >= MAX_QUEUED_MESSAGES
             {
@@ -378,14 +378,10 @@ impl Session {
                             .outgoing
                             .pop_front()
                             .expect("completed message is resident");
-                        self.outbox.push_back(Event::FrameSent {
+                        self.outbox.push_back(Event::SendCompleted {
                             socket_id: self.socket_id,
                             opcode: message.opcode,
                             payload_length: message.data.len(),
-                        });
-                        self.outbox.push_back(Event::BufferedAmountConsumed {
-                            socket_id: self.socket_id,
-                            amount: message.data.len(),
                         });
                         // The admission reservation drops only at native completion.
                     }

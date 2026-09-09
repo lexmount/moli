@@ -20,6 +20,7 @@ async fn websocket_text_echo_delivers_browser_style_async_events() {
                             globalThis.__wsEvents.push(`open:${{socket.readyState}}:${{socket.protocol}}`);
                             socket.send('hello');
                             globalThis.__wsEvents.push(`bufferedAfterSend:${{socket.bufferedAmount}}`);
+                            Promise.resolve().then(() => globalThis.__wsEvents.push(`bufferedInMicrotask:${{socket.bufferedAmount}}`));
                         }});
                         socket.addEventListener('message', event => {{
                             globalThis.__wsEvents.push(`message:${{event.data}}:${{socket.bufferedAmount}}`);
@@ -60,7 +61,7 @@ async fn websocket_text_echo_delivers_browser_style_async_events() {
         server.await.expect("websocket echo server should finish");
         assert_eq!(
             events,
-            r#"["constructed:0","open:1:","bufferedAfterSend:5","message:hello:0","afterCloseCall:2","close:3:1000:done:true"]"#
+            r#"["constructed:0","open:1:","bufferedAfterSend:5","bufferedInMicrotask:5","message:hello:0","afterCloseCall:2","close:3:1000:done:true"]"#
         );
         })
         .await;

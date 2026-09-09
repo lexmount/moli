@@ -44,6 +44,8 @@ struct WebSocketStreamWritableSinkDeclaration<'scope> {
     closed: Option<v8::Local<'scope, v8::Value>>,
     #[webapi(slot = WEBSOCKET_STREAM_PENDING_WRITES_SLOT, init = "array")]
     pending_writes: (),
+    #[webapi(slot = WEBSOCKET_STREAM_SEND_REJECTED_SLOT, init = false)]
+    send_rejected: (),
     #[webapi(method, callback = websocket_stream_sink_write_callback, length = 1)]
     write: (),
     #[webapi(method, callback = websocket_stream_sink_close_callback, length = 0)]
@@ -208,14 +210,13 @@ pub(super) fn dispatch_websocket_stream_event<'s>(
             let _ = enqueue_chunk(scope, readable, value.into());
             WebSocketDispatchResult::Dispatched
         }
-        WebSocketEvent::FrameSent { .. } => {
+        WebSocketEvent::SendCompleted { .. } => {
             if resolve_next_websocket_stream_pending_write(scope, stream) {
                 WebSocketDispatchResult::Dispatched
             } else {
                 WebSocketDispatchResult::Noop
             }
         }
-        WebSocketEvent::BufferedAmountConsumed { .. } => WebSocketDispatchResult::Noop,
         WebSocketEvent::Error { message, .. } => {
             let error = new_websocket_error_object(scope, message, Some(1006), "");
             set_websocket_value_slot(scope, stream, WEBSOCKET_STREAM_ERROR_SLOT, error);
@@ -252,7 +253,7 @@ pub(super) fn dispatch_websocket_stream_event<'s>(
             ..
         } => {
             if *was_clean {
-                let mut had_pending_write = false;
+                let mut had_interrupted_write = false;
                 if let Some(readable) =
                     websocket_object_slot(scope, stream, WEBSOCKET_STREAM_READABLE_SLOT)
                 {
@@ -261,8 +262,7 @@ pub(super) fn dispatch_websocket_stream_event<'s>(
                 if let Some(writable) =
                     websocket_object_slot(scope, stream, WEBSOCKET_STREAM_WRITABLE_SLOT)
                 {
-                    had_pending_write =
-                        websocket_stream_pending_write_count_for_writable(scope, writable) > 0;
+                    had_interrupted_write = websocket_stream_has_interrupted_write(scope, writable);
                     let error = websocket_dom_exception_value(
                         scope,
                         "InvalidStateError",
@@ -272,7 +272,7 @@ pub(super) fn dispatch_websocket_stream_event<'s>(
                     reject_all_websocket_stream_pending_writes(scope, writable, error);
                     error_writable_stream_with_value(scope, writable, error);
                 }
-                if had_pending_write {
+                if had_interrupted_write {
                     // WPT treats remote close that interrupts a queued write as a
                     // WebSocketStream close error, while the interrupted write and
                     // later writes reject with InvalidStateError from the writable.
@@ -429,6 +429,15 @@ fn websocket_stream_sink_write_callback<'s>(
     if sent {
         enqueue_websocket_stream_pending_write(scope, args.this(), promise, resolve, reject);
     } else {
+        // Native admission can end before the queued Close reaches this realm.
+        // Remember that this write failed even after WritableStream has drained
+        // its rejection reactions and no native pending-write record exists.
+        set_private_value(
+            scope,
+            args.this(),
+            WEBSOCKET_STREAM_SEND_REJECTED_SLOT,
+            v8::Boolean::new(scope, true).into(),
+        );
         let error = websocket_dom_exception_value(
             scope,
             "InvalidStateError",
@@ -524,14 +533,16 @@ fn websocket_stream_pending_writes_for_stream<'s>(
     Some((sink, pending))
 }
 
-fn websocket_stream_pending_write_count_for_writable<'s>(
+fn websocket_stream_has_interrupted_write<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     writable: v8::Local<'s, v8::Object>,
-) -> u32 {
-    stream_slot_object(scope, writable, WRITABLE_STREAM_SINK_SLOT)
-        .and_then(|sink| websocket_stream_pending_writes(scope, sink))
-        .map(|pending| pending.length())
-        .unwrap_or(0)
+) -> bool {
+    let Some(sink) = stream_slot_object(scope, writable, WRITABLE_STREAM_SINK_SLOT) else {
+        return false;
+    };
+    websocket_stream_pending_writes(scope, sink).is_some_and(|pending| pending.length() > 0)
+        || get_private_value(scope, sink, WEBSOCKET_STREAM_SEND_REJECTED_SLOT)
+            .is_some_and(|value| value.boolean_value(scope))
 }
 
 fn websocket_stream_pending_writes<'s>(

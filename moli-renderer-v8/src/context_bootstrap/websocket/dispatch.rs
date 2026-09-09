@@ -73,11 +73,10 @@ pub(crate) fn dispatch_websocket_event<'s>(
             )
             .into()
         }
-        WebSocketEvent::BufferedAmountConsumed { amount, .. } => {
-            add_buffered_amount(scope, socket, -(*amount as f64));
+        WebSocketEvent::SendCompleted { payload_length, .. } => {
+            add_buffered_amount(scope, socket, -(*payload_length as f64));
             WebSocketDispatchResult::Noop
         }
-        WebSocketEvent::FrameSent { .. } => WebSocketDispatchResult::Noop,
         WebSocketEvent::Error { message, .. } => {
             set_websocket_ready_state(scope, socket, CLOSED);
             if !message.is_empty() {

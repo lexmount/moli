@@ -44,7 +44,7 @@ impl ScriptVm {
 
             let previous_owner_context = dispatch_scope.enter(scope);
             match event {
-                moli_websocket::Event::FrameSent {
+                moli_websocket::Event::SendCompleted {
                     opcode,
                     payload_length,
                     ..

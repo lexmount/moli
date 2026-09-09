@@ -205,9 +205,10 @@ globalThis.__webSocketInternalStateSocket = new WebSocket({url_literal});
                         .vm()
                         .websocket_sender_for_test()
                         .event_sender()
-                        .send(moli_websocket::Event::BufferedAmountConsumed {
+                        .send(moli_websocket::Event::SendCompleted {
                             socket_id,
-                            amount: 0,
+                            opcode: moli_websocket::FrameOpcode::Text,
+                            payload_length: 0,
                         })
                         .await,
                     "internal WebSocket transition should enter the typed source"
@@ -409,4 +410,123 @@ async fn websocket_selected_dispatcher_owns_checkpoint_and_runtime_follow_up() {
         server.await.expect("triggered WebSocket server");
     })
     .await;
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn websocket_stream_send_completion_body_defers_write_reactions() {
+    run_page_vm_async_test(async move {
+        // This server discards application messages, so the empty write must
+        // complete through its own receipt without an incoming echo.
+        let (url, server) = spawn_close_after_goodbye_websocket_server().await;
+        let url = serde_json::to_string(&url).unwrap();
+        let page_vm = test_page_vm();
+        let local_executor = page_vm.local_executor.clone();
+        local_executor.run(async move {
+            let mut page_vm = page_vm;
+            page_vm.vm_mut().eval(&format!(r#"
+                globalThis.__completionEvents = [];
+                globalThis.__completionStream = new WebSocketStream({url});
+                __completionStream.opened.then(opened => {{
+                    globalThis.__completionWriter = opened.writable.getWriter();
+                }});
+                "queued"
+            "#))?;
+            let opened = wait_for_websocket_candidate(
+                &mut page_vm, claim_ready_websocket_selected_task, "stream open",
+            ).await?;
+            let socket_id = opened.websocket_owner().unwrap().socket_id();
+            let loader = page_vm.request_client.clone();
+            page_vm.run_claimed_selected_page_task_for_test(opened, &loader).await?;
+            page_vm.vm_mut().eval(r#"
+                __completionWriter.write("").then(() => __completionEvents.push("resolved"));
+                __completionEvents.push("after-write");
+                "queued"
+            "#)?;
+            let task = wait_for_websocket_candidate(
+                &mut page_vm, take_ready_websocket_body_task_for_test, "empty write completion",
+            ).await?;
+            assert!(matches!(task.event(), moli_websocket::Event::SendCompleted {
+                socket_id: actual, payload_length: 0, ..
+            } if *actual == socket_id));
+            let outcome = page_vm.apply_selected_page_websocket_turn(task)?;
+            assert_eq!(outcome.action.target_effect,
+                crate::page_task_queue::PageWebSocketTargetEffect::CallbackVisibleWorkAppliedToCurrentDocument);
+            assert_eq!(page_vm.vm_mut().eval("__completionEvents.join('|')")?, "after-write",
+                "settling a write must leave reactions for selected-task completion");
+            // This boundary witness deliberately omits task completion. Dropping
+            // the Page then retires its connection and the passive test server.
+            Ok::<_, anyhow::Error>(())
+        }).await.expect("stream completion body witness");
+        server.await.expect("passive completion server");
+    }).await;
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn websocket_stream_close_remembers_write_rejected_before_close_dispatch() {
+    run_page_vm_async_test(async move {
+        let (url, server) = spawn_close_after_goodbye_websocket_server().await;
+        let url = serde_json::to_string(&url).unwrap();
+        let page_vm = test_page_vm();
+        let local_executor = page_vm.local_executor.clone();
+        local_executor.run(async move {
+            let mut page_vm = page_vm;
+            page_vm.vm_mut().eval(&format!(r#"
+                globalThis.__closeEvents = [];
+                globalThis.__closeStream = new WebSocketStream({url});
+                __closeStream.opened.then(opened => {{
+                    globalThis.__closeWriter = opened.writable.getWriter();
+                }});
+                __closeStream.closed.then(
+                    () => __closeEvents.push('closed-ok'),
+                    error => __closeEvents.push(`closed:${{error.constructor === WebSocketError}}:${{error.closeCode}}:${{error.reason}}`)
+                );
+                "queued"
+            "#))?;
+            let opened = wait_for_websocket_candidate(
+                &mut page_vm, claim_ready_websocket_selected_task, "stream open",
+            ).await?;
+            let socket_id = opened.websocket_owner().unwrap().socket_id();
+            let loader = page_vm.request_client.clone();
+            page_vm.run_claimed_selected_page_task_for_test(opened, &loader).await?;
+            let connection = page_vm.vm().context_host_weak_for_test().upgrade().unwrap()
+                .borrow().websocket_connection_for_test(socket_id).unwrap();
+            page_vm.vm_mut().eval(r#"
+                __closeWriter.write('Goodbye').then(() => __closeEvents.push('goodbye'));
+                __closeWriter.write('queued').catch(error => {
+                    globalThis.__interruptedWrite = error;
+                    __closeEvents.push(`write:${error.name}:${error instanceof DOMException}`);
+                });
+                "queued"
+            "#)?;
+            // Claim the first send completion to free ingress capacity, but let
+            // the peer finish closing before executing its Page task. The next
+            // WritableStream write must then fail native admission, with Close
+            // still waiting for its own selected Page task.
+            let sent = wait_for_websocket_candidate(
+                &mut page_vm, claim_ready_websocket_selected_task, "Goodbye completion",
+            ).await?;
+            tokio::time::timeout(Duration::from_secs(2), server).await??;
+            tokio::time::timeout(Duration::from_secs(2), async {
+                while !connection.is_closed() {
+                    tokio::task::yield_now().await;
+                }
+            }).await?;
+            page_vm.run_claimed_selected_page_task_for_test(sent, &loader).await?;
+            assert_eq!(page_vm.vm_mut().eval("__closeEvents.join('|')")?,
+                "goodbye|write:InvalidStateError:true",
+                "the queued write must fail before the Close task is dispatched");
+            let closed = wait_for_websocket_candidate(
+                &mut page_vm, claim_ready_websocket_selected_task, "peer Close",
+            ).await?;
+            page_vm.run_claimed_selected_page_task_for_test(closed, &loader).await?;
+            page_vm.vm_mut().eval(r#"
+                __closeWriter.closed.catch(error => __closeEvents.push(`writer:${error === __interruptedWrite}`));
+                __closeWriter.write('later').catch(error => __closeEvents.push(`later:${error === __interruptedWrite}`));
+                "checked"
+            "#)?;
+            assert_eq!(page_vm.vm_mut().eval("__closeEvents.join('|')")?,
+                "goodbye|write:InvalidStateError:true|closed:true:1000:goodbye|writer:true|later:true");
+            Ok::<_, anyhow::Error>(())
+        }).await.expect("close after rejected queued write");
+    }).await;
 }

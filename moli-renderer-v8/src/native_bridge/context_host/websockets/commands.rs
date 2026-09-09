@@ -1,6 +1,14 @@
 use super::super::JsContextHost;
 
 impl JsContextHost {
+    #[cfg(test)]
+    pub(crate) fn websocket_connection_for_test(
+        &self,
+        socket_id: u64,
+    ) -> Option<moli_websocket::ConnectionHandle> {
+        self.websockets.get(&socket_id)?.connection.clone()
+    }
+
     pub(crate) fn signal_websocket_stream_pull(&self, socket_id: u64) {
         self.page_websocket_sender().signal_readable_pull(socket_id);
     }

@@ -28,8 +28,8 @@ async fn native_send_accounting_does_not_require_a_server_echo() {
     let handle = spawn_connection(70, url, Vec::new(), test_websocket_context(), tx);
     recv_open_event(&mut rx).await;
     handle.send_text("without echo".to_owned()).unwrap();
-    assert_frame_sent(&mut rx, 70, FrameOpcode::Text, 12).await;
-    assert_buffered_amount_consumed(&mut rx, 70, 12).await;
+    assert_send_completed(&mut rx, 70, FrameOpcode::Text, 12).await;
+
     timeout(Duration::from_secs(3), received_rx)
         .await
         .unwrap()

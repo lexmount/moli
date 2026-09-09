@@ -768,7 +768,7 @@ async fn websocket_wpt_target_buffered_amount_binary_payload_lengths() {
                             seen++;
                             // See the unicode bufferedAmount test: the stable contract here is
                             // immediate byte accounting plus eventual drain, not exact
-                            // BufferedAmountConsumed/message event ordering.
+                            // send-completion/message event ordering.
                             globalThis.__wsEvents.push(`message:${{seen}}:${{event.data.byteLength}}`);
                             if (seen === 3) socket.close(1000, 'buffered-binary');
                         }});

@@ -54,8 +54,8 @@ async fn native_close_waits_for_queued_data_before_starting_timeout() {
         "queued data was interrupted: {premature:?}"
     );
     resume_tx.send(()).unwrap();
-    assert_frame_sent(&mut rx, 80, FrameOpcode::Binary, MESSAGE_BYTES).await;
-    assert_buffered_amount_consumed(&mut rx, 80, MESSAGE_BYTES).await;
+    assert_send_completed(&mut rx, 80, FrameOpcode::Binary, MESSAGE_BYTES).await;
+
     assert_close(&mut rx, 80, 1000, "", true).await;
     timeout(Duration::from_secs(3), server)
         .await
@@ -165,8 +165,7 @@ async fn native_fragmented_sends_complete_while_incoming_sink_is_blocked() {
         .unwrap();
     assert_text_message(&mut rx, 82, "blocked").await;
     for _ in 0..2 {
-        assert_frame_sent(&mut rx, 82, FrameOpcode::Binary, MESSAGE_BYTES).await;
-        assert_buffered_amount_consumed(&mut rx, 82, MESSAGE_BYTES).await;
+        assert_send_completed(&mut rx, 82, FrameOpcode::Binary, MESSAGE_BYTES).await;
     }
     handle.close(Some(1000), String::new()).unwrap();
     assert_closing(&mut rx, 82).await;
@@ -209,7 +208,7 @@ async fn completed_send_notifications_bound_further_message_scheduling() {
     );
     assert!(matches!(
         session.outbox.pop_front(),
-        Some(Event::FrameSent { .. })
+        Some(Event::SendCompleted { .. })
     ));
     for _ in 0..2 {
         let (frame, flight) = session
@@ -224,7 +223,7 @@ async fn completed_send_notifications_bound_further_message_scheduling() {
         session
             .outbox
             .iter()
-            .filter(|event| matches!(event, Event::FrameSent { .. }))
+            .filter(|event| matches!(event, Event::SendCompleted { .. }))
             .count(),
         MAX_QUEUED_MESSAGES
     );

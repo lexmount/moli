@@ -50,16 +50,11 @@ pub(crate) async fn run_synthetic_websocket_connection(
                 let amount = text.len();
                 send_event(
                     &event_tx,
-                    Event::FrameSent {
+                    Event::SendCompleted {
                         socket_id,
                         opcode: FrameOpcode::Text,
                         payload_length: amount,
                     },
-                )
-                .await?;
-                send_event(
-                    &event_tx,
-                    Event::BufferedAmountConsumed { socket_id, amount },
                 )
                 .await?;
             }
@@ -67,16 +62,11 @@ pub(crate) async fn run_synthetic_websocket_connection(
                 let amount = bytes.len();
                 send_event(
                     &event_tx,
-                    Event::FrameSent {
+                    Event::SendCompleted {
                         socket_id,
                         opcode: FrameOpcode::Binary,
                         payload_length: amount,
                     },
-                )
-                .await?;
-                send_event(
-                    &event_tx,
-                    Event::BufferedAmountConsumed { socket_id, amount },
                 )
                 .await?;
             }

@@ -1411,8 +1411,7 @@ pub(in crate::worker) fn dispatch_worker_websocket_event(
         | WebSocketEvent::Open { socket_id, .. }
         | WebSocketEvent::TextMessage { socket_id, .. }
         | WebSocketEvent::BinaryMessage { socket_id, .. }
-        | WebSocketEvent::FrameSent { socket_id, .. }
-        | WebSocketEvent::BufferedAmountConsumed { socket_id, .. }
+        | WebSocketEvent::SendCompleted { socket_id, .. }
         | WebSocketEvent::Error { socket_id, .. }
         | WebSocketEvent::Closing { socket_id }
         | WebSocketEvent::Close { socket_id, .. } => *socket_id,
@@ -1503,7 +1502,7 @@ pub(in crate::worker) fn dispatch_worker_websocket_event(
                 .with_websocket_socket_id(socket_id),
             ));
         }
-        WebSocketEvent::FrameSent {
+        WebSocketEvent::SendCompleted {
             opcode,
             payload_length,
             ..
@@ -1572,8 +1571,7 @@ pub(in crate::worker) fn dispatch_worker_websocket_event(
         }
         WebSocketEvent::HandshakeResponse { .. }
         | WebSocketEvent::TextMessage { .. }
-        | WebSocketEvent::BinaryMessage { .. }
-        | WebSocketEvent::BufferedAmountConsumed { .. } => {}
+        | WebSocketEvent::BinaryMessage { .. } => {}
     }
     for message in parent_messages {
         let _ = parent_tx.send(message);

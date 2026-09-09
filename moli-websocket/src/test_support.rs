@@ -118,8 +118,7 @@ pub async fn recv_open_event(event_rx: &mut mpsc::Receiver<Event>) -> OpenEvent 
             }
             Event::TextMessage { .. }
             | Event::BinaryMessage { .. }
-            | Event::FrameSent { .. }
-            | Event::BufferedAmountConsumed { .. }
+            | Event::SendCompleted { .. }
             | Event::Closing { .. } => {}
         }
     }
@@ -140,8 +139,7 @@ pub async fn recv_handshake_failure_events(event_rx: &mut mpsc::Receiver<Event>)
             }
             Event::TextMessage { .. }
             | Event::BinaryMessage { .. }
-            | Event::FrameSent { .. }
-            | Event::BufferedAmountConsumed { .. }
+            | Event::SendCompleted { .. }
             | Event::Closing { .. } => {}
         }
     };
@@ -170,8 +168,7 @@ pub async fn recv_handshake_failure_events(event_rx: &mut mpsc::Receiver<Event>)
             }
             Event::TextMessage { .. }
             | Event::BinaryMessage { .. }
-            | Event::FrameSent { .. }
-            | Event::BufferedAmountConsumed { .. }
+            | Event::SendCompleted { .. }
             | Event::Closing { .. } => {}
         }
     }
@@ -184,14 +181,14 @@ async fn recv_next_event(event_rx: &mut mpsc::Receiver<Event>) -> Event {
         .expect("websocket event channel should stay open")
 }
 
-pub async fn assert_frame_sent(
+pub async fn assert_send_completed(
     event_rx: &mut mpsc::Receiver<Event>,
     expected_socket_id: u64,
     expected_opcode: FrameOpcode,
     expected_payload_length: usize,
 ) {
     match recv_next_event(event_rx).await {
-        Event::FrameSent {
+        Event::SendCompleted {
             socket_id,
             opcode,
             payload_length,
@@ -200,21 +197,7 @@ pub async fn assert_frame_sent(
             assert_eq!(opcode, expected_opcode);
             assert_eq!(payload_length, expected_payload_length);
         }
-        event => panic!("expected frame-sent event, got {event:?}"),
-    }
-}
-
-pub async fn assert_buffered_amount_consumed(
-    event_rx: &mut mpsc::Receiver<Event>,
-    expected_socket_id: u64,
-    expected_amount: usize,
-) {
-    match recv_next_event(event_rx).await {
-        Event::BufferedAmountConsumed { socket_id, amount } => {
-            assert_eq!(socket_id, expected_socket_id);
-            assert_eq!(amount, expected_amount);
-        }
-        event => panic!("expected buffered amount event, got {event:?}"),
+        event => panic!("expected send completion, got {event:?}"),
     }
 }
 

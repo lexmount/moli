@@ -42,14 +42,12 @@ pub enum Event {
         socket_id: u64,
         data: Vec<u8>,
     },
-    FrameSent {
+    /// One complete outgoing message, including an empty message.
+    /// Drives browser byte accounting, stream writes and CDP message records.
+    SendCompleted {
         socket_id: u64,
         opcode: FrameOpcode,
         payload_length: usize,
-    },
-    BufferedAmountConsumed {
-        socket_id: u64,
-        amount: usize,
     },
     Error {
         socket_id: u64,
@@ -73,8 +71,7 @@ impl Event {
             | Self::Open { socket_id, .. }
             | Self::TextMessage { socket_id, .. }
             | Self::BinaryMessage { socket_id, .. }
-            | Self::FrameSent { socket_id, .. }
-            | Self::BufferedAmountConsumed { socket_id, .. }
+            | Self::SendCompleted { socket_id, .. }
             | Self::Error { socket_id, .. }
             | Self::Closing { socket_id }
             | Self::Close { socket_id, .. } => *socket_id,
