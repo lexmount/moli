@@ -10,6 +10,8 @@ use moli_fetch::FetchConfig;
 use support::FixtureServer;
 use tokio::time::Duration;
 
+#[path = "web_apis/callback_cleanup.rs"]
+mod callback_cleanup;
 #[path = "web_apis/event_dispatch.rs"]
 mod event_dispatch;
 

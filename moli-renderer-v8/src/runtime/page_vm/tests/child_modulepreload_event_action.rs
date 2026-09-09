@@ -89,7 +89,7 @@ fn take_child_modulepreload_event_action_body_task(
 }
 
 #[tokio::test(flavor = "current_thread")]
-async fn child_modulepreload_event_body_leaves_reactions_for_selected_completion() {
+async fn child_modulepreload_event_body_cleans_up_listener_reactions() {
     run_page_vm_async_test(async move {
         let loader =
             crate::network::ResourceRequestClient::new(&FetchConfig::default()).expect("loader");
@@ -121,8 +121,8 @@ async fn child_modulepreload_event_body_leaves_reactions_for_selected_completion
                 .eval_without_microtask_checkpoint_for_test(
                     "__lmChildModulepreloadTaskBoundary.join('|')"
                 )?,
-            "callback",
-            "the modulepreload event body must leave listener reactions pending"
+            "callback|microtask",
+            "listener cleanup must drain reactions before the selected task completes"
         );
         Ok::<_, anyhow::Error>(())
     })
@@ -164,7 +164,7 @@ async fn selected_child_modulepreload_event_completes_reactions_and_runtime_foll
                     "__lmChildModulepreloadTaskBoundary.join('|')"
                 )?,
             "callback|microtask",
-            "selected completion must own the listener-reaction checkpoint"
+            "the selected modulepreload task must include listener cleanup"
         );
         assert!(
             has_ready_runtime_script_continuation_for_test(&page_vm),
