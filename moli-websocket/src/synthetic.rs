@@ -114,16 +114,8 @@ pub(crate) async fn run_synthetic_websocket_connection(
         }
     }
 
-    send_event(
-        &event_tx,
-        Event::Close {
-            socket_id,
-            code: 1006,
-            reason: String::new(),
-            was_clean: false,
-        },
-    )
-    .await
+    // Owner drop can close this channel before task cancellation is observed.
+    Ok(())
 }
 
 fn response_header<'a>(headers: &'a [(String, String)], name: &str) -> Option<&'a str> {
@@ -131,4 +123,46 @@ fn response_header<'a>(headers: &'a [(String, String)], name: &str) -> Option<&'
         .iter()
         .find(|(header_name, _)| header_name.eq_ignore_ascii_case(name))
         .map(|(_, value)| value.as_str())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tokio::{
+        sync::mpsc,
+        time::{Duration, timeout},
+    };
+
+    #[tokio::test]
+    async fn command_channel_closure_does_not_publish_close() {
+        let (commands, receiver) = crate::commands::command_channel();
+        let (events, mut incoming) = mpsc::channel(1);
+        let task = tokio::spawn(run_synthetic_websocket_connection(
+            97,
+            receiver,
+            events.into(),
+            Vec::new(),
+            101,
+            Vec::new(),
+        ));
+        assert!(matches!(
+            timeout(Duration::from_secs(3), incoming.recv())
+                .await
+                .unwrap(),
+            Some(Event::Open { socket_id: 97, .. })
+        ));
+        // CommandPort can drop before the owner's AbortOnDrop runs. Exercise
+        // that ordering directly, without racing the runtime's cancellation poll.
+        drop(commands);
+        timeout(Duration::from_secs(3), task)
+            .await
+            .unwrap()
+            .unwrap()
+            .unwrap();
+        let event = incoming.try_recv();
+        assert!(
+            matches!(event, Err(mpsc::error::TryRecvError::Disconnected)),
+            "dropping command producers must be silent: {event:?}"
+        );
+    }
 }
