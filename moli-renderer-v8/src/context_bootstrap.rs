@@ -41,6 +41,7 @@ pub(crate) use exposed_interfaces::{
     ready_interface_template_names as lazy_ready_constructor_template_names,
     storage_interface_materialization_count as lazy_storage_constructor_materialization_count,
 };
+mod form_navigation;
 mod location_history_storage;
 mod location_navigation;
 mod location_runtime;
@@ -143,6 +144,7 @@ pub(crate) use crypto::{
 pub(crate) use css_fontface_runtime::{
     load_font_faces_for_family, new_font_face_set, rebuild_font_face_set_faces,
 };
+pub(crate) use form_navigation::FormNavigationHistory;
 pub(crate) use location_navigation::{
     LocationNavigationKind, dispatch_top_level_form_navigation_event,
     dispatch_top_level_navigation_event_with_source_element, meta_refresh_navigation_kind,
@@ -153,7 +155,7 @@ pub(crate) use location_navigation::{
 pub(crate) use navigation_cancellation::{
     NavigationCancellationReason, inform_about_canceled_navigation_for_window,
 };
-pub(crate) use navigation_events::dispatch_cross_document_navigation_navigate_event_for_window_with_form_data;
+pub(crate) use navigation_events::dispatch_cross_document_navigation_navigate_event_for_window_with_type_and_form_data;
 pub(crate) use navigation_events::{
     construct_original_hash_change_event, dispatch_beforeunload_for_runtime_owner,
     dispatch_pagehide_for_runtime_owner, dispatch_unload_for_runtime_owner,
