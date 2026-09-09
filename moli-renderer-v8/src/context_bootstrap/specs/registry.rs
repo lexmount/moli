@@ -1209,7 +1209,7 @@ const CONSTRUCTOR_SPECS_AFTER_STREAMS: &[ConstructorSpec] = &[
     ConstructorSpec {
         name: "DOMPointReadOnly",
         parent: None,
-        kind: ConstructorKind::Illegal,
+        kind: ConstructorKind::DomPointReadOnly,
     },
     ConstructorSpec {
         name: "DOMPoint",

@@ -4919,6 +4919,83 @@ fn dom_point_accessors_use_private_slots_and_reject_forged_receivers() {
 }
 
 #[test]
+fn dom_point_readonly_constructor_uses_readonly_instances_and_shared_methods() {
+    let mut vm = new_storage_test_vm("https://dompoint-readonly-constructor.test/");
+
+    let result = vm
+        .eval(
+            r#"
+(() => {
+  const point = new DOMPointReadOnly(1, 2, 3, 4);
+  point.x = 9;
+  return [
+    point instanceof DOMPointReadOnly,
+    point instanceof DOMPoint,
+    [point.x, point.y, point.z, point.w].join(","),
+    JSON.stringify(point.toJSON()),
+    Object.hasOwn(DOMPointReadOnly.prototype, "x"),
+    Object.getOwnPropertyDescriptor(DOMPointReadOnly.prototype, "x").set === undefined,
+    Object.hasOwn(DOMPointReadOnly.prototype, "toJSON"),
+    Object.hasOwn(DOMPoint.prototype, "toJSON"),
+    new DOMPoint() instanceof DOMPointReadOnly
+  ].join("|");
+})()
+"#,
+        )
+        .expect("DOMPointReadOnly constructor should evaluate");
+
+    assert_eq!(
+        result,
+        "true|false|1,2,3,4|{\"x\":1,\"y\":2,\"z\":3,\"w\":4}|true|true|true|false|true"
+    );
+}
+
+#[test]
+fn dom_point_readonly_from_point_uses_dictionary_conversion_and_function_realm() {
+    let mut vm = new_storage_test_vm("https://dompoint-readonly-from-point.test/");
+
+    vm.eval(
+        r#"
+(() => {
+  const root = document.documentElement ||
+    document.appendChild(document.createElement("html"));
+  const body = document.body || root.appendChild(document.createElement("body"));
+  const frame = document.createElement("iframe");
+  frame.id = "dompoint-from-point-realm";
+  body.appendChild(frame);
+})()
+"#,
+    )
+    .expect("DOMPointReadOnly factory child frame should be created");
+    materialize_single_child_default_realm_for_test(
+        &mut vm,
+        "DOMPointReadOnly factory child Realm",
+    );
+
+    let result = vm
+        .eval(
+            r#"
+(() => {
+  const other = document.getElementById("dompoint-from-point-realm").contentWindow;
+  const point = other.DOMPointReadOnly.fromPoint({x: "1", z: 3, w: 4});
+  const empty = other.DOMPointReadOnly.fromPoint(null);
+  return [
+    other.DOMPointReadOnly.fromPoint.length,
+    point instanceof other.DOMPointReadOnly,
+    point instanceof other.DOMPoint,
+    point instanceof DOMPointReadOnly,
+    [point.x, point.y, point.z, point.w].join(","),
+    [empty.x, empty.y, empty.z, empty.w].join(",")
+  ].join("|");
+})()
+"#,
+        )
+        .expect("DOMPointReadOnly.fromPoint should evaluate");
+
+    assert_eq!(result, "0|true|false|false|1,0,3,4|0,0,0,1");
+}
+
+#[test]
 fn dom_matrix_objects_keep_declared_brand_and_own_slots() {
     let mut vm = new_storage_test_vm("https://dommatrix-declared-slots.test/");
 
