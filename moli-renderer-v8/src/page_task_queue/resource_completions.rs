@@ -209,6 +209,7 @@ pub(crate) enum RendererOwnerWakeSource {
     ServiceWorkerClientMessage,
     /// A completed WebCrypto operation entered its exact Page/Window task
     /// source. The queued task, not this admission hint, owns identity.
+    BitmapTask,
     WebCryptoTask,
     /// A Page-side IndexedDB task entered its exact Window-realm source.
     IndexedDbTask,

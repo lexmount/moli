@@ -111,6 +111,7 @@ impl JsContextHost {
         let timers = self.cancel_timers_for_context_token(realm_token);
         let bindings = self.retire_runtime_binding_context_token(realm_token);
         let images = self.retire_image_decode_requests_for_context_token(realm_token);
+        let bitmaps = self.retire_bitmap_context_token(realm_token);
         let crypto = self.retire_webcrypto_context_token(realm_token);
         let fonts = self.retire_font_face_loads_for_context_token(realm_token);
         self.retire_opfs_context_token(realm_token);
@@ -128,6 +129,7 @@ impl JsContextHost {
             timers,
             bindings = bindings.retired_execution_context_count(),
             images,
+            bitmaps,
             crypto,
             fonts,
             workers,

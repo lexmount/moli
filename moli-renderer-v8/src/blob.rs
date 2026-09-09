@@ -333,7 +333,7 @@ pub(crate) fn live_blob_count_for_test() -> usize {
     blob_store().live_blob_count()
 }
 
-fn blob_id_from_object<'s>(
+pub(crate) fn blob_id_from_object<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     object: v8::Local<'s, v8::Object>,
 ) -> Option<BlobId> {

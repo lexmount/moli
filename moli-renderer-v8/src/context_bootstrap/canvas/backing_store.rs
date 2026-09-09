@@ -43,14 +43,6 @@ pub(crate) fn attach_canvas_like_context_object<'s>(
     let _ = ensure_canvas_like_backing_store(scope, canvas);
 }
 
-pub(super) fn canvas_like_has_context<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    canvas: v8::Local<'s, v8::Object>,
-) -> bool {
-    get_private_value(scope, canvas, CANVAS_HAS_CONTEXT_SLOT)
-        .is_some_and(|value| value.boolean_value(scope))
-}
-
 pub(crate) fn reset_canvas_like_backing_store<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     canvas: v8::Local<'s, v8::Object>,
@@ -221,6 +213,13 @@ pub(super) fn canvas_like_dimensions<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     canvas: v8::Local<'s, v8::Object>,
 ) -> Option<(u32, u32)> {
+    if html_canvas_identity(scope, canvas).is_some() {
+        let width =
+            crate::native_bridge::element::canvas_dimension_value(scope, canvas, "width", 300);
+        let height =
+            crate::native_bridge::element::canvas_dimension_value(scope, canvas, "height", 150);
+        return Some((width, height));
+    }
     let width = canvas_like_dimension(scope, canvas, OFFSCREEN_CANVAS_WIDTH_SLOT, "width")?;
     let height = canvas_like_dimension(scope, canvas, OFFSCREEN_CANVAS_HEIGHT_SLOT, "height")?;
     Some((width, height))
