@@ -2875,9 +2875,9 @@ fn readable_stream_default_reader_release_lock_rejects_closed_and_reads() {
     );
 }
 
-#[test]
-fn readable_stream_default_reader_release_lock_suppresses_internal_closed_rejection() {
-    let mut vm = new_storage_test_vm("https://example.com/");
+#[tokio::test(flavor = "current_thread")]
+async fn readable_stream_default_reader_release_lock_suppresses_internal_closed_rejection() {
+    let mut vm = new_storage_page_task_executor_test_vm("https://example.com/");
 
     let initial = vm
         .eval(
@@ -2912,6 +2912,12 @@ fn readable_stream_default_reader_release_lock_suppresses_internal_closed_reject
             .expect("ReadableStreamDefaultReader.releaseLock suppress promises should drain");
     }
 
+    assert!(
+        !vm.has_ready_dom_manipulation_family_for_test(
+            PageDomManipulationTestFamily::PromiseRejection,
+        ),
+        "no rejection notification may remain queued"
+    );
     let unhandled = vm
         .eval("JSON.stringify(globalThis.__readerReleaseUnhandled)")
         .expect("ReadableStreamDefaultReader.releaseLock suppress events should evaluate");
