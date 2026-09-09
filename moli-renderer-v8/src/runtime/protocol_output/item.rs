@@ -3,15 +3,15 @@ use crate::protocol_types::{
     ChildFrameNavigationSnapshot, ChildFrameTreeEventSnapshot,
 };
 use crate::runtime::{
-    DetachedParserScriptFetchContinuation, RendererDedicatedWorkerTargetEvent,
+    DetachedParserScriptFetchContinuation, RendererDedicatedWorkerObservation,
     RendererDocumentLifecycleEvent, RendererDocumentLifecycleIdentity,
     RendererDocumentSourcedSameDocumentNavigation,
     RendererDocumentSourcedTopLevelLocationNavigation, RendererDomMutationEventBatch,
     RendererJavaScriptDialogOpening, RendererMainDocumentCommit, RendererPendingDownloadActivation,
     RendererPendingFileChooserActivation, RendererPendingTopLevelHistoryTraversal,
     RendererPopupOpening, RendererRuntimeCommandCausalIdentity,
-    RendererRuntimeInspectorMessageBatch, RendererServiceWorkerTargetEvent,
-    RendererSharedWorkerTargetEvent,
+    RendererRuntimeInspectorMessageBatch, RendererServiceWorkerObservation,
+    RendererSharedWorkerObservation,
 };
 use moli_page_types::{
     PendingRuntimeBindingCall, PendingSubresourceContinueEvent, PendingSubresourceFetchInfo,
@@ -69,9 +69,6 @@ pub enum RendererOwnerAction {
         info: Box<PendingSubresourceFetchInfo>,
         continuation: DetachedParserScriptFetchContinuation,
     },
-    SharedWorkerTargetLifecycle(RendererSharedWorkerTargetEvent),
-    ServiceWorkerTargetLifecycle(RendererServiceWorkerTargetEvent),
-    DedicatedWorkerTargetLifecycle(RendererDedicatedWorkerTargetEvent),
 }
 
 /// A concrete renderer fact that protocol may project to interested sessions.
@@ -81,6 +78,10 @@ pub enum RendererOwnerAction {
 /// protocol-boundary responsibility.
 #[derive(Clone, Debug, PartialEq)]
 pub enum RendererProtocolObservation {
+    WorkerLifecycle(crate::runtime::RendererWorkerLifecycleObservation),
+    SharedWorker(RendererSharedWorkerObservation),
+    ServiceWorker(RendererServiceWorkerObservation),
+    DedicatedWorker(RendererDedicatedWorkerObservation),
     Popup(std::sync::Arc<RendererPopupOpening>),
     JavaScriptDialog(std::sync::Arc<RendererJavaScriptDialogOpening>),
     MainDocumentCommit(RendererMainDocumentCommit),
@@ -175,8 +176,8 @@ impl PendingRendererOutputRecord {
                 batch,
             )) => (!batch.has_resolved_source_identities())
                 .then_some(RendererOutputResolutionError::RuntimeInspector),
-            RendererOutputItem::OwnerAction(RendererOwnerAction::SharedWorkerTargetLifecycle(
-                crate::runtime::RendererSharedWorkerTargetEvent::RuntimeInspectorMessages {
+            RendererOutputItem::Observation(RendererProtocolObservation::SharedWorker(
+                crate::runtime::RendererSharedWorkerObservation::RuntimeInspectorMessages {
                     messages,
                     ..
                 },
@@ -184,8 +185,8 @@ impl PendingRendererOutputRecord {
                 crate::runtime::RendererRuntimeInspectorMessage::has_resolved_source_identity,
             ))
             .then_some(RendererOutputResolutionError::SharedWorkerRuntimeInspector),
-            RendererOutputItem::OwnerAction(RendererOwnerAction::ServiceWorkerTargetLifecycle(
-                crate::runtime::RendererServiceWorkerTargetEvent::RuntimeInspectorMessages {
+            RendererOutputItem::Observation(RendererProtocolObservation::ServiceWorker(
+                crate::runtime::RendererServiceWorkerObservation::RuntimeInspectorMessages {
                     messages,
                     ..
                 },
@@ -193,14 +194,12 @@ impl PendingRendererOutputRecord {
                 crate::runtime::RendererRuntimeInspectorMessage::has_resolved_source_identity,
             ))
             .then_some(RendererOutputResolutionError::ServiceWorkerRuntimeInspector),
-            RendererOutputItem::OwnerAction(
-                RendererOwnerAction::DedicatedWorkerTargetLifecycle(
-                    crate::runtime::RendererDedicatedWorkerTargetEvent::RuntimeInspectorMessages {
-                        messages,
-                        ..
-                    },
-                ),
-            ) => (!messages.iter().all(
+            RendererOutputItem::Observation(RendererProtocolObservation::DedicatedWorker(
+                crate::runtime::RendererDedicatedWorkerObservation::RuntimeInspectorMessages {
+                    messages,
+                    ..
+                },
+            )) => (!messages.iter().all(
                 crate::runtime::RendererRuntimeInspectorMessage::has_resolved_source_identity,
             ))
             .then_some(RendererOutputResolutionError::DedicatedWorkerRuntimeInspector),
@@ -254,8 +253,17 @@ impl RendererOutputRecord {
         &self.item
     }
 
-    pub(crate) fn is_owner_action(&self) -> bool {
-        matches!(self.item, RendererOutputItem::OwnerAction(_))
+    pub(crate) fn requires_essential_transport_admission(&self) -> bool {
+        matches!(
+            self.item,
+            RendererOutputItem::OwnerAction(_)
+                | RendererOutputItem::Observation(
+                    RendererProtocolObservation::WorkerLifecycle(_)
+                        | RendererProtocolObservation::SharedWorker(_)
+                        | RendererProtocolObservation::ServiceWorker(_)
+                        | RendererProtocolObservation::DedicatedWorker(_)
+                )
+        )
     }
 
     pub fn into_parts(

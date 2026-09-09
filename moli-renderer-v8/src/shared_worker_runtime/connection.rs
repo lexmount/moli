@@ -136,6 +136,7 @@ impl SharedWorkerRuntimeService {
             params.key.script_url().to_owned(),
             params.launch_context.name.clone(),
             target_output,
+            self.worker_lifecycle(),
         ));
         host.add_client(client_id, client);
         self.store_loading_host_for_connect(instance_id, host.clone());

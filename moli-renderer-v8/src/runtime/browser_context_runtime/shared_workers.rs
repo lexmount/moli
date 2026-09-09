@@ -12,10 +12,7 @@ use moli_shared_worker::{
 use parking_lot::Mutex;
 
 use super::RendererBrowserContextRuntime;
-use crate::runtime::{
-    RendererOwnerLocalHostId, RendererRuntimeInspectorMessage,
-    RendererRuntimeInspectorResponseSender,
-};
+use crate::runtime::RendererOwnerLocalHostId;
 
 /// Defers the browser-context SharedWorker registry until the first actual
 /// `connect_shared_worker` call. ID allocation and owner routing do not require
@@ -23,7 +20,7 @@ use crate::runtime::{
 pub(super) struct LazySharedWorkerRuntime {
     state: Mutex<LazySharedWorkerRuntimeState>,
     client_owner_id_allocator: crate::shared_worker_runtime::SharedWorkerClientOwnerIdAllocator,
-    browser_context_runtime_id: crate::runtime::RendererBrowserContextRuntimeId,
+    worker_lifecycle: crate::runtime::RendererWorkerLifecycleReporter,
     output_transport: crate::runtime::RendererOutputTransportSenderSlot,
 }
 
@@ -45,7 +42,7 @@ impl std::fmt::Debug for LazySharedWorkerRuntime {
 
 impl LazySharedWorkerRuntime {
     pub(super) fn new(
-        browser_context_runtime_id: crate::runtime::RendererBrowserContextRuntimeId,
+        worker_lifecycle: crate::runtime::RendererWorkerLifecycleReporter,
         output_transport: crate::runtime::RendererOutputTransportSenderSlot,
     ) -> Self {
         Self {
@@ -54,22 +51,21 @@ impl LazySharedWorkerRuntime {
                 owner_local_host_id: None,
             }),
             client_owner_id_allocator: Default::default(),
-            browser_context_runtime_id,
+            worker_lifecycle,
             output_transport,
         }
     }
 
     pub(super) fn from_service(
         service: crate::shared_worker_runtime::SharedWorkerRuntimeService,
-        browser_context_runtime_id: crate::runtime::RendererBrowserContextRuntimeId,
+        worker_lifecycle: crate::runtime::RendererWorkerLifecycleReporter,
         output_transport: crate::runtime::RendererOutputTransportSenderSlot,
     ) -> Self {
-        service
-            .configure_target_output_streams(browser_context_runtime_id, output_transport.clone());
+        service.configure_target_output_streams(worker_lifecycle.clone(), output_transport.clone());
         Self {
             client_owner_id_allocator: service.client_owner_id_allocator(),
             state: Mutex::new(LazySharedWorkerRuntimeState::Live(service)),
-            browser_context_runtime_id,
+            worker_lifecycle,
             output_transport,
         }
     }
@@ -93,7 +89,7 @@ impl LazySharedWorkerRuntime {
                 self.client_owner_id_allocator.clone(),
             );
         service.configure_target_output_streams(
-            self.browser_context_runtime_id,
+            self.worker_lifecycle.clone(),
             self.output_transport.clone(),
         );
         for sender in owner_wake_senders.into_senders() {
@@ -147,7 +143,7 @@ impl LazySharedWorkerRuntime {
 }
 
 impl RendererBrowserContextRuntime {
-    fn shared_worker_runtime_if_initialized(
+    pub(super) fn shared_worker_runtime_if_initialized(
         &self,
     ) -> Option<crate::shared_worker_runtime::SharedWorkerRuntimeService> {
         self.inner.shared_worker_runtime.get()
@@ -193,12 +189,9 @@ impl RendererBrowserContextRuntime {
             .map_or(0, |runtime| runtime.drain_service_lane())
     }
 
-    pub fn close_shared_worker_for_target_close(
-        &self,
-        instance_id: SharedWorkerInstanceId,
-    ) -> bool {
+    pub fn close_shared_worker(&self, instance_id: SharedWorkerInstanceId) -> bool {
         self.shared_worker_runtime_if_initialized()
-            .is_some_and(|runtime| runtime.close_instance_for_devtools_target_close(instance_id))
+            .is_some_and(|runtime| runtime.close_instance(instance_id))
     }
 
     pub(crate) fn remove_shared_worker_client(&self, client_id: SharedWorkerClientId) {
@@ -445,71 +438,6 @@ impl RendererBrowserContextRuntime {
                     response_headers,
                     response_body,
                 )
-            })
-    }
-
-    pub async fn dispatch_shared_worker_runtime_protocol_message(
-        &self,
-        instance_id: SharedWorkerInstanceId,
-        inspector_session_id: Option<String>,
-        raw_json: String,
-    ) -> Result<Vec<RendererRuntimeInspectorMessage>, String> {
-        let Some(runtime) = self.shared_worker_runtime_if_initialized() else {
-            return Err("SharedWorkerRuntimeUnavailable".to_owned());
-        };
-        runtime
-            .dispatch_runtime_protocol_message(instance_id, inspector_session_id, raw_json)
-            .await
-    }
-
-    pub async fn dispatch_shared_worker_runtime_protocol_message_with_deferred_response(
-        &self,
-        instance_id: SharedWorkerInstanceId,
-        inspector_session_id: Option<String>,
-        raw_json: String,
-        deferred_response: RendererRuntimeInspectorResponseSender,
-    ) -> Result<Vec<RendererRuntimeInspectorMessage>, String> {
-        let Some(runtime) = self.shared_worker_runtime_if_initialized() else {
-            return Err("SharedWorkerRuntimeUnavailable".to_owned());
-        };
-        runtime
-            .dispatch_runtime_protocol_message_with_deferred_response(
-                instance_id,
-                inspector_session_id,
-                raw_json,
-                deferred_response,
-            )
-            .await
-    }
-
-    pub async fn dispatch_shared_worker_runtime_protocol_message_with_devtools_session_response(
-        &self,
-        instance_id: SharedWorkerInstanceId,
-        inspector_session_id: String,
-        raw_json: String,
-        response: RendererRuntimeInspectorResponseSender,
-    ) -> Result<crate::runtime::CompletedWorkerRuntimeInspectorCommandDispatch, String> {
-        let Some(runtime) = self.shared_worker_runtime_if_initialized() else {
-            return Err("SharedWorkerRuntimeUnavailable".to_owned());
-        };
-        runtime
-            .dispatch_runtime_protocol_message_with_devtools_session_response(
-                instance_id,
-                inspector_session_id,
-                raw_json,
-                response,
-            )
-            .await
-    }
-
-    pub fn detach_shared_worker_runtime_inspector_session(
-        &self,
-        instance_id: SharedWorkerInstanceId,
-        inspector_session_id: Option<String>,
-    ) -> bool {
-        self.shared_worker_runtime_if_initialized()
-            .is_some_and(|runtime| {
-                runtime.detach_runtime_inspector_session(instance_id, inspector_session_id)
             })
     }
 }

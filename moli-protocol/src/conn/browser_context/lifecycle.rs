@@ -216,6 +216,10 @@ impl CdpConnection {
         for selected in snapshot.selected_web_contents {
             events.extend(self.project_browser_selection(selected, None, snapshot.sequence));
         }
+        events.extend(
+            self.project_browser_workers(snapshot.workers, snapshot.sequence)
+                .await,
+        );
         for download in snapshot.downloads {
             events.extend(self.project_created_browser_download(download));
         }

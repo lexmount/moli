@@ -3,7 +3,7 @@ use crate::conn::{
     TargetPageResidenceIdentity,
 };
 use crate::domains::{command_output::CommandOutputBuffer, page};
-use moli_core::browser::{NavigationAttempt, WebContentsHandle};
+use moli_core::browser::{NavigationAttempt, NavigationId, WebContentsHandle};
 
 impl CdpConnection {
     /// Reconcile only this physical WebContents. Native completion releases
@@ -61,35 +61,32 @@ impl CdpConnection {
                     document,
                 ))
             });
-            let mut releases = Vec::new();
-            let mut native_failures = Vec::new();
-            for navigation in retired {
-                if let Some(failure) = context.take_failed_native_navigation(&target_id, navigation)
-                {
-                    native_failures.push(failure);
-                }
-                context.discard_target_navigation_projection(&target_id, &navigation);
-                if let Ok(release) = context
-                    .page_targets
-                    .get_mut(&target_id)?
-                    .runtime_slot
-                    .finish_navigation_without_document_projection(&navigation)
-                {
-                    releases.push(release);
-                }
-            }
-            Some((owner, releases, native_failures))
+            Some((target_id, owner, retired))
         })();
         self.network_request_id_allocator = allocator;
-        let Some((owner, releases, native_failures)) = prepared else {
+        let Some((target_id, owner, retired)) = prepared else {
             return events;
         };
         let mut out = CommandOutputBuffer::default();
         let mut command_context = CommandDispatchContext::default();
-        for (state, emit_network) in native_failures {
+        let mut releases = Vec::new();
+        for navigation in retired {
             out.extend_background_events_after_messages(
-                self.native_navigation_retirement_events(&state, emit_network),
+                self.native_navigation_retirement_events(contents, navigation),
             );
+            let context = self
+                .browser_context_by_browser_id_mut(contents.context())
+                .expect("resolved Context");
+            context.discard_target_navigation_projection(&target_id, &navigation);
+            if let Ok(release) = context
+                .page_targets
+                .get_mut(&target_id)
+                .expect("resolved Target")
+                .runtime_slot
+                .finish_navigation_without_document_projection(&navigation)
+            {
+                releases.push(release);
+            }
         }
         if let Some(owner) = owner {
             for release in releases {
@@ -110,15 +107,42 @@ impl CdpConnection {
 
     pub(crate) fn native_navigation_retirement_events(
         &mut self,
-        pending: &crate::conn::PendingFetchNavigation,
-        emit_network: bool,
+        contents: WebContentsHandle,
+        navigation: NavigationId,
     ) -> Vec<BackgroundProtocolEvent> {
-        let state = &pending.navigation;
-        let mut events = if emit_network {
-            crate::domains::network::native_navigation_failure_events(self, state)
-        } else {
-            Vec::new()
+        // Retirement was observed after the earlier response read. Browser may
+        // have failed in between: consume its exact terminal response before
+        // spending publication cursors on a synthetic supersession result.
+        let response = self
+            .browser
+            .context_handle(contents.context())
+            .and_then(|context| context.navigation_responses(contents))
+            .ok()
+            .and_then(|responses| {
+                responses
+                    .into_iter()
+                    .find(|response| response.request.navigation == navigation)
+            });
+        let mut events = response
+            .map(|response| self.project_native_navigation_network(&response, true))
+            .unwrap_or_default();
+        let Some((pending, emit_network)) = self
+            .browser_context_by_browser_id_mut(contents.context())
+            .and_then(|context| {
+                let target = context
+                    .target_id_for_web_contents(contents.id())?
+                    .to_owned();
+                context.take_failed_native_navigation(&target, navigation)
+            })
+        else {
+            return events;
         };
+        let state = &pending.navigation;
+        if emit_network {
+            events.extend(crate::domains::network::native_navigation_failure_events(
+                self, state,
+            ));
+        }
         if state.navigate_id.is_some() {
             let mut output = CommandOutputBuffer::default();
             let interrupted = self

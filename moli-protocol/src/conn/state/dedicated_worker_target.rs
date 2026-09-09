@@ -1,9 +1,12 @@
 use std::{
     collections::BTreeSet,
     ops::{Deref, DerefMut},
+    sync::Arc,
 };
 
-use moli_core::page::NavigationResponse;
+use moli_core::page::{
+    RendererDedicatedWorkerMainScript, RendererDedicatedWorkerMainScriptOutcome,
+};
 use moli_shared_worker::SharedWorkerInstanceId;
 
 use super::{SharedWorkerTargetState, TargetPageResidenceIdentity};
@@ -19,25 +22,11 @@ pub(crate) struct DedicatedWorkerTargetState {
     pub(crate) owner_page: TargetPageResidenceIdentity,
     pub(crate) owner_page_network_sessions: Vec<Option<String>>,
     pub(crate) inner: SharedWorkerTargetState,
-    main_script: Option<DedicatedWorkerMainScriptSnapshot>,
+    main_script: Option<Arc<RendererDedicatedWorkerMainScript>>,
     delivered_main_script_sessions: BTreeSet<String>,
     replayable_main_script_sessions: BTreeSet<String>,
     defer_failed_load_destroy_until_debugger_resume: bool,
     renderer_destroyed_while_waiting_for_debugger: bool,
-}
-
-#[derive(Clone, Debug)]
-pub(crate) enum DedicatedWorkerMainScriptOutcome {
-    Loaded(Box<NavigationResponse>),
-    Failed {
-        error_message: String,
-        response: Option<Box<NavigationResponse>>,
-    },
-}
-
-#[derive(Clone, Debug)]
-pub(crate) struct DedicatedWorkerMainScriptSnapshot {
-    pub(crate) outcome: DedicatedWorkerMainScriptOutcome,
 }
 
 impl DedicatedWorkerTargetState {
@@ -71,21 +60,23 @@ impl DedicatedWorkerTargetState {
 
     pub(crate) fn record_main_script(
         &mut self,
-        script_url: String,
-        outcome: DedicatedWorkerMainScriptOutcome,
+        script: Arc<RendererDedicatedWorkerMainScript>,
         pause_failed_target_until_debugger_resume: bool,
     ) {
         self.defer_failed_load_destroy_until_debugger_resume =
             pause_failed_target_until_debugger_resume
-                && matches!(&outcome, DedicatedWorkerMainScriptOutcome::Failed { .. });
-        self.inner.url = script_url.clone();
-        self.main_script = Some(DedicatedWorkerMainScriptSnapshot { outcome });
+                && matches!(
+                    &script.outcome,
+                    RendererDedicatedWorkerMainScriptOutcome::Failed { .. }
+                );
+        self.inner.url = script.script_url.clone();
+        self.main_script = Some(script);
         self.delivered_main_script_sessions.clear();
         self.replayable_main_script_sessions.clear();
     }
 
-    pub(crate) fn main_script(&self) -> Option<&DedicatedWorkerMainScriptSnapshot> {
-        self.main_script.as_ref()
+    pub(crate) fn main_script(&self) -> Option<&RendererDedicatedWorkerMainScript> {
+        self.main_script.as_deref()
     }
 
     pub(crate) fn main_script_was_delivered_to(&self, session_id: &str) -> bool {

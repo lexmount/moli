@@ -5,9 +5,9 @@ use tracing::trace;
 
 use crate::{
     runtime::{
-        PendingRendererOutputRecord, RendererOwnerAction, RendererRuntimeInspectorMessage,
-        RendererSharedWorkerConsoleMessage, RendererSharedWorkerTargetEvent,
-        RendererSharedWorkerTargetInfo,
+        PendingRendererOutputRecord, RendererProtocolObservation, RendererRuntimeInspectorMessage,
+        RendererSharedWorkerConsoleMessage, RendererSharedWorkerObservation,
+        RendererSharedWorkerTargetInfo, RendererWorkerLifecycle,
     },
     worker::{WorkerConsoleMessage, WorkerRuntimeInspectorMessageBatch},
 };
@@ -17,7 +17,7 @@ use super::host::SharedWorkerRuntimeResponsePublicationState;
 
 impl RendererSharedWorkerHost {
     pub(super) fn publish_created_target_event(&self) {
-        self.publish_target_event(RendererSharedWorkerTargetEvent::Created(self.target_info()));
+        self.publish_lifecycle(RendererWorkerLifecycle::SharedCreated(self.target_info()));
     }
 
     pub(super) fn publish_destroyed_target_event(self: &Arc<Self>) {
@@ -25,14 +25,12 @@ impl RendererSharedWorkerHost {
         if !self.claim_target_output_retirement() {
             return;
         }
-        self.publish_target_event(RendererSharedWorkerTargetEvent::Destroyed {
-            instance_id: self.instance_id(),
-        });
+        self.publish_lifecycle(RendererWorkerLifecycle::SharedDestroyed(self.instance_id()));
         self.finish_runtime_response_retirement();
         self.finish_target_output_retirement();
     }
 
-    pub(super) fn retire_target_output_without_destroyed(&self) {
+    pub(super) fn retire_unstarted_output(&self) {
         self.begin_runtime_response_retirement();
         if self.claim_target_output_retirement() {
             self.finish_runtime_response_retirement();
@@ -136,7 +134,7 @@ impl RendererSharedWorkerHost {
                 continue;
             }
             recorded |= self.publish_target_event_if_running(
-                RendererSharedWorkerTargetEvent::RuntimeInspectorMessages {
+                RendererSharedWorkerObservation::RuntimeInspectorMessages {
                     instance_id: self.instance_id(),
                     inspector_session_id: batch.inspector_session_id,
                     messages: notifications,
@@ -158,7 +156,7 @@ impl RendererSharedWorkerHost {
         console: &WorkerConsoleMessage,
     ) -> bool {
         self.publish_target_event_if_running(
-            RendererSharedWorkerTargetEvent::Console {
+            RendererSharedWorkerObservation::Console {
                 instance_id: self.instance_id(),
                 message: RendererSharedWorkerConsoleMessage {
                     message: console.message.clone(),
@@ -172,7 +170,7 @@ impl RendererSharedWorkerHost {
 
     fn publish_target_event_if_running(
         self: &Arc<Self>,
-        event: RendererSharedWorkerTargetEvent,
+        event: RendererSharedWorkerObservation,
         on_not_running: impl FnOnce(),
     ) -> bool {
         if !self.is_running_in_runtime_service() {
@@ -196,16 +194,23 @@ impl RendererSharedWorkerHost {
         }
     }
 
-    fn publish_target_event(&self, event: RendererSharedWorkerTargetEvent) {
+    fn publish_lifecycle(&self, lifecycle: RendererWorkerLifecycle) {
+        self.publish_observation(RendererProtocolObservation::WorkerLifecycle(
+            self.worker_lifecycle.report(lifecycle),
+        ));
+    }
+
+    fn publish_target_event(&self, event: RendererSharedWorkerObservation) {
+        self.publish_observation(RendererProtocolObservation::SharedWorker(event));
+    }
+
+    fn publish_observation(&self, observation: RendererProtocolObservation) {
         self.target_output().publish_record(
-            PendingRendererOutputRecord::owner_action(
-                None,
-                RendererOwnerAction::SharedWorkerTargetLifecycle(event),
-            )
-            .resolve()
-            .unwrap_or_else(|_| {
-                panic!("SharedWorker target output must have resolved source identity")
-            }),
+            PendingRendererOutputRecord::observation(None, observation)
+                .resolve()
+                .unwrap_or_else(|_| {
+                    panic!("SharedWorker target output must have resolved source identity")
+                }),
         );
     }
 
@@ -235,8 +240,8 @@ mod tests {
 
     use crate::{
         runtime::{
-            RendererOutputItem, RendererOwnerAction, RendererRuntimeInspectorMessage,
-            RendererSharedWorkerTargetEvent,
+            RendererOutputItem, RendererProtocolObservation, RendererRuntimeInspectorMessage,
+            RendererWorkerLifecycle,
         },
         shared_worker_runtime::test_support,
         worker::{WorkerConsoleMessage, WorkerRuntimeInspectorMessageBatch},
@@ -296,11 +301,8 @@ mod tests {
         };
         assert!(matches!(
             record.item(),
-            RendererOutputItem::OwnerAction(
-                RendererOwnerAction::SharedWorkerTargetLifecycle(
-                    RendererSharedWorkerTargetEvent::Created(info)
-                )
-            ) if info.instance_id == instance_id
+            RendererOutputItem::Observation(RendererProtocolObservation::WorkerLifecycle(observation))
+                if matches!(observation.lifecycle(), RendererWorkerLifecycle::SharedCreated(info) if info.instance_id == instance_id)
         ));
     }
 

@@ -403,7 +403,6 @@ async fn pending_native_download(
     let waiter = conn
         .start_native_navigation_fixture_for_test(
             &CommandOwnerScope::for_session("SID-source"),
-            "LOADER-source",
             NavigationRequestInterception::new(
                 Url::parse("https://source.test/report.txt").unwrap(),
                 "GET".into(),

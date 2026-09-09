@@ -201,6 +201,7 @@ struct RendererBrowserContextRuntimeInner {
     // Commit style and representations together, independently of any page's
     // V8 objects, so other pages can read a coherent snapshot in their own realm.
     clipboard_snapshot: Mutex<ClipboardSnapshot>,
+    worker_lifecycle: super::RendererWorkerLifecycleReporter,
     message_port_registry: crate::message_port_runtime::SharedMessagePortRegistry,
     broadcast_channel_registry: crate::broadcast_channel_runtime::SharedBroadcastChannelRegistry,
     browser_resource_runtime: crate::network::BrowserResourceRuntimeBinding,
@@ -390,6 +391,30 @@ impl RendererBrowserContextRuntime {
         *self.inner.clipboard_snapshot.lock() = snapshot;
     }
 
+    /// Resolves once, before the caller yields. The returned capability can
+    /// dispatch inspection only; it cannot control the Context or other workers.
+    pub fn worker_inspection_endpoint(
+        &self,
+        target: super::RendererWorkerInspectionTarget,
+    ) -> Option<super::RendererWorkerInspectionEndpoint> {
+        match target {
+            super::RendererWorkerInspectionTarget::Dedicated(instance_id) => {
+                self.dedicated_worker_inspection_endpoint(instance_id)
+            }
+            super::RendererWorkerInspectionTarget::Shared(instance_id) => self
+                .shared_worker_runtime_if_initialized()?
+                .inspection_endpoint(instance_id),
+            super::RendererWorkerInspectionTarget::Service { version_id, run } => self
+                .service_worker_runtime_for_existing_registration()?
+                .inspection_endpoint(
+                    crate::service_worker_runtime::ServiceWorkerVersionId::from_u64_for_binding(
+                        version_id,
+                    ),
+                    &run,
+                ),
+        }
+    }
+
     // A browser-context runtime is only valid while its thread-affine owner is
     // retained, so construction returns that owner rather than a bare handle.
     #[allow(clippy::new_ret_no_self)]
@@ -563,14 +588,15 @@ impl RendererBrowserContextRuntime {
             NEXT_RENDERER_BROWSER_CONTEXT_RUNTIME_ID.fetch_add(1, Ordering::Relaxed),
         );
         let renderer_output_transport_tx = RendererOutputTransportSenderSlot::default();
+        let worker_lifecycle = super::RendererWorkerLifecycleReporter::new(id);
         let shared_worker_runtime = match shared_worker_runtime {
             Some(service) => shared_workers::LazySharedWorkerRuntime::from_service(
                 service,
-                id,
+                worker_lifecycle.clone(),
                 renderer_output_transport_tx.clone(),
             ),
             None => shared_workers::LazySharedWorkerRuntime::new(
-                id,
+                worker_lifecycle.clone(),
                 renderer_output_transport_tx.clone(),
             ),
         };
@@ -578,13 +604,14 @@ impl RendererBrowserContextRuntime {
             service_worker_resource_store,
             service_worker_context_runtime,
             browser_resource_runtime.clone(),
-            id,
+            worker_lifecycle.clone(),
             renderer_output_transport_tx.clone(),
         );
         let runtime = Self {
             inner: Arc::new(RendererBrowserContextRuntimeInner {
                 id,
                 clipboard_snapshot: Mutex::new(ClipboardSnapshot::default()),
+                worker_lifecycle,
                 message_port_registry,
                 broadcast_channel_registry,
                 browser_resource_runtime: browser_resource_runtime.clone(),
@@ -620,6 +647,22 @@ impl RendererBrowserContextRuntime {
 
     pub fn id(&self) -> super::RendererBrowserContextRuntimeId {
         self.inner.id
+    }
+
+    /// The physical Browser owner installs this independently of DevTools output
+    /// transport. The callback must enqueue work, never wait on the owner.
+    pub fn install_worker_lifecycle_handler(
+        &self,
+        handler: impl Fn(super::RendererWorkerLifecycleInput) + Send + Sync + 'static,
+    ) {
+        self.inner.worker_lifecycle.install_handler(handler);
+    }
+
+    pub(crate) fn report_worker_lifecycle(
+        &self,
+        lifecycle: super::RendererWorkerLifecycle,
+    ) -> super::RendererWorkerLifecycleObservation {
+        self.inner.worker_lifecycle.report(lifecycle)
     }
 
     pub(crate) fn set_renderer_output_transport_sender(

@@ -239,7 +239,6 @@ async fn load_native_navigation_for_test(
     let waiter = conn
         .start_native_navigation_fixture_for_test(
             &owner,
-            crate::domains::page::LOADER_ID,
             moli_core::browser::web_contents::NavigationRequestInterception::new(
                 Url::parse(url).unwrap(),
                 "GET".into(),

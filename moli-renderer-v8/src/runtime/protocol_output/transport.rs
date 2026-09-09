@@ -556,13 +556,11 @@ pub(in crate::runtime) fn renderer_output_transport_channel_with_test_limits(
 mod tests {
     use std::sync::{Arc, Barrier};
 
-    use moli_shared_worker::SharedWorkerInstanceId;
-
     use super::*;
     use crate::runtime::{
         RendererOutputItem, RendererOutputRecord, RendererOwnerAction,
         RendererPendingDownloadActivation, RendererPendingDownloadResponse,
-        RendererProtocolObservation, RendererSharedWorkerTargetEvent,
+        RendererProtocolObservation,
     };
 
     fn test_limits() -> RendererOutputTransportLimits {
@@ -588,14 +586,60 @@ mod tests {
         ))
     }
 
-    fn owner_action_record() -> RendererOutputRecord {
-        RendererOutputRecord::new_for_test(RendererOutputItem::OwnerAction(
-            RendererOwnerAction::SharedWorkerTargetLifecycle(
-                RendererSharedWorkerTargetEvent::Destroyed {
-                    instance_id: SharedWorkerInstanceId::from_u64(7),
+    fn essential_worker_record() -> RendererOutputRecord {
+        let reporter = crate::runtime::RendererWorkerLifecycleReporter::new(
+            crate::runtime::RendererBrowserContextRuntimeId::new_for_testing(17),
+        );
+        RendererOutputRecord::new_for_test(RendererOutputItem::Observation(
+            RendererProtocolObservation::WorkerLifecycle(reporter.report(
+                crate::runtime::RendererWorkerLifecycle::Service(
+                    crate::runtime::RendererServiceWorkerLifecycle::Destroyed {
+                        version_id: 7,
+                        active_run: None,
+                    },
+                ),
+            )),
+        ))
+    }
+
+    #[test]
+    fn native_worker_lifecycle_and_inspector_output_keep_essential_admission() {
+        let reporter = crate::runtime::RendererWorkerLifecycleReporter::new(
+            crate::runtime::RendererBrowserContextRuntimeId::new_for_testing(17),
+        );
+        for observation in [
+            RendererProtocolObservation::WorkerLifecycle(reporter.report(
+                crate::runtime::RendererWorkerLifecycle::DedicatedDestroyed(7),
+            )),
+            RendererProtocolObservation::DedicatedWorker(
+                crate::runtime::RendererDedicatedWorkerObservation::RuntimeInspectorMessages {
+                    instance_id: 7,
+                    inspector_session_id: None,
+                    messages: Vec::new(),
                 },
             ),
-        ))
+            RendererProtocolObservation::WorkerLifecycle(reporter.report(
+                crate::runtime::RendererWorkerLifecycle::Service(
+                    crate::runtime::RendererServiceWorkerLifecycle::Stopped {
+                        version_id: 7,
+                        run: crate::runtime::RendererServiceWorkerRunIdentity::fresh(),
+                        reason: "idle_timeout".into(),
+                    },
+                ),
+            )),
+            RendererProtocolObservation::ServiceWorker(
+                crate::runtime::RendererServiceWorkerObservation::RuntimeInspectorMessages {
+                    version_id: 7,
+                    run: crate::runtime::RendererServiceWorkerRunIdentity::fresh(),
+                    inspector_session_id: None,
+                    messages: Vec::new(),
+                },
+            ),
+        ] {
+            let record =
+                RendererOutputRecord::new_for_test(RendererOutputItem::Observation(observation));
+            assert!(record.requires_essential_transport_admission());
+        }
     }
 
     fn publication(
@@ -647,7 +691,7 @@ mod tests {
     async fn mixed_publication_is_admitted_atomically_from_the_essential_reserve() {
         let (sender, mut receiver) = renderer_output_transport_channel_with_limits(test_limits());
         let observation = publication(1, vec![observation_record(1)]);
-        let mixed = publication(2, vec![observation_record(1), owner_action_record()]);
+        let mixed = publication(2, vec![observation_record(1), essential_worker_record()]);
 
         sender
             .send(observation.clone())
@@ -735,7 +779,7 @@ mod tests {
             let barrier = barrier.clone();
             workers.push(std::thread::spawn(move || {
                 barrier.wait();
-                sender.send(publication(sequence, vec![owner_action_record()]))
+                sender.send(publication(sequence, vec![essential_worker_record()]))
             }));
         }
 

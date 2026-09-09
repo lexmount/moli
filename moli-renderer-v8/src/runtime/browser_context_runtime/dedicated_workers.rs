@@ -1,6 +1,4 @@
-use tokio::sync::oneshot;
-
-use crate::runtime::{RendererRuntimeInspectorMessage, RendererRuntimeInspectorResponseSender};
+use crate::runtime::RendererWorkerInspectionEndpoint;
 use crate::worker::{WorkerDevToolsHandle, WorkerHandle};
 
 use super::{DedicatedWorkerDevToolsTarget, RendererBrowserContextRuntime};
@@ -58,130 +56,17 @@ impl RendererBrowserContextRuntime {
             .map(|target| target.handle.clone())
     }
 
-    fn dedicated_worker_devtools_target(
+    pub(super) fn dedicated_worker_inspection_endpoint(
         &self,
         instance_id: u64,
-    ) -> Option<DedicatedWorkerDevToolsTarget> {
-        self.inner
-            .dedicated_worker_devtools_targets
-            .lock()
-            .get(&instance_id)
-            .cloned()
-    }
-
-    pub async fn dispatch_dedicated_worker_runtime_protocol_message(
-        &self,
-        instance_id: u64,
-        inspector_session_id: Option<String>,
-        raw_json: String,
-    ) -> Result<Vec<RendererRuntimeInspectorMessage>, String> {
-        self.dispatch_dedicated_worker_runtime_protocol_message_with_optional_deferred_response(
-            instance_id,
-            inspector_session_id,
-            raw_json,
-            None,
-        )
-        .await
-    }
-
-    pub async fn dispatch_dedicated_worker_runtime_protocol_message_with_deferred_response(
-        &self,
-        instance_id: u64,
-        inspector_session_id: Option<String>,
-        raw_json: String,
-        deferred_response: RendererRuntimeInspectorResponseSender,
-    ) -> Result<Vec<RendererRuntimeInspectorMessage>, String> {
-        self.dispatch_dedicated_worker_runtime_protocol_message_with_optional_deferred_response(
-            instance_id,
-            inspector_session_id,
-            raw_json,
-            Some(deferred_response),
-        )
-        .await
-    }
-
-    pub async fn dispatch_dedicated_worker_runtime_protocol_message_with_devtools_session_response(
-        &self,
-        instance_id: u64,
-        inspector_session_id: String,
-        raw_json: String,
-        response: RendererRuntimeInspectorResponseSender,
-    ) -> Result<crate::runtime::CompletedWorkerRuntimeInspectorCommandDispatch, String> {
-        let Some(target) = self.dedicated_worker_devtools_target(instance_id) else {
-            return Err("DedicatedWorkerRuntimeUnavailable".to_owned());
-        };
-        let Some(output_journal) = target.output_journal else {
-            return Err("DedicatedWorkerRuntimeUnavailable".to_owned());
-        };
-        let response = response
-            .route_to_worker_devtools_session_output(inspector_session_id.clone(), output_journal);
-        let error_response = response.clone();
-        let settlement = response
-            .take_session_response_settlement_receiver()
-            .expect("a Worker DevTools response must own one settlement receiver");
-        let (response_tx, response_rx) = oneshot::channel();
-        let dispatched = target.handle.dispatch_runtime_protocol_message(
-            Some(inspector_session_id),
-            raw_json,
-            Some(response),
-            response_tx,
-        );
-        let dispatch = if dispatched {
-            response_rx
-                .await
-                .unwrap_or_else(|_| Err("DedicatedWorkerRuntimeUnavailable".to_owned()))
-        } else {
-            Err("DedicatedWorkerRuntimeUnavailable".to_owned())
-        };
-        Ok(
-            crate::runtime::CompletedWorkerRuntimeInspectorCommandDispatch::finish(
-                dispatch,
-                settlement,
-                error_response,
-            ),
-        )
-    }
-
-    async fn dispatch_dedicated_worker_runtime_protocol_message_with_optional_deferred_response(
-        &self,
-        instance_id: u64,
-        inspector_session_id: Option<String>,
-        raw_json: String,
-        deferred_response: Option<RendererRuntimeInspectorResponseSender>,
-    ) -> Result<Vec<RendererRuntimeInspectorMessage>, String> {
-        let Some(handle) = self.dedicated_worker_devtools_handle(instance_id) else {
-            return Err("DedicatedWorkerRuntimeUnavailable".to_owned());
-        };
-        let (response_tx, response_rx) = oneshot::channel();
-        if !handle.dispatch_runtime_protocol_message(
-            inspector_session_id,
-            raw_json,
-            deferred_response,
-            response_tx,
-        ) {
-            return Err("DedicatedWorkerRuntimeUnavailable".to_owned());
-        }
-        response_rx
-            .await
-            .map_err(|_| "DedicatedWorkerRuntimeUnavailable".to_owned())?
-    }
-
-    pub fn attach_dedicated_worker_runtime_inspector_session(
-        &self,
-        instance_id: u64,
-        inspector_session_id: Option<String>,
-    ) -> bool {
-        self.dedicated_worker_devtools_handle(instance_id)
-            .is_some_and(|handle| handle.attach_runtime_inspector_session(inspector_session_id))
-    }
-
-    pub fn detach_dedicated_worker_runtime_inspector_session(
-        &self,
-        instance_id: u64,
-        inspector_session_id: Option<String>,
-    ) -> bool {
-        self.dedicated_worker_devtools_handle(instance_id)
-            .is_some_and(|handle| handle.detach_runtime_inspector_session(inspector_session_id))
+    ) -> Option<RendererWorkerInspectionEndpoint> {
+        let targets = self.inner.dedicated_worker_devtools_targets.lock();
+        let target = targets.get(&instance_id)?;
+        Some(RendererWorkerInspectionEndpoint::new(
+            target.handle.clone(),
+            target.output_journal.clone(),
+            "DedicatedWorkerRuntimeUnavailable",
+        ))
     }
 
     pub fn run_dedicated_worker_if_waiting_for_debugger_for_devtools(

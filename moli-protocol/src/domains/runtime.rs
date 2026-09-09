@@ -55,75 +55,35 @@ pub(in crate::domains) async fn dispose_session_handler_async(
     Ok(())
 }
 
-/// Retires renderer-owned session state through its lifecycle endpoint.
-pub(in crate::domains) async fn detach_session_inspector_async(
-    conn: &mut CdpConnection,
+/// Resolve from the disposal plan, including an uncommitted attach that has no
+/// session route yet. The caller keeps this exact endpoint across async cleanup.
+pub(in crate::domains) fn worker_inspection_endpoint_for_disposal(
+    conn: &CdpConnection,
     plan: &SessionDisposalPlan,
-) -> anyhow::Result<()> {
-    let session_id = plan.session_id();
-    match plan.target() {
-        SessionDisposalTarget::PageTarget { .. } => {
-            conn.detach_runtime_inspector_session_for_session_owner(Some(session_id))
-                .await
-                .map_err(anyhow::Error::msg)?;
+) -> Option<moli_core::runtime::RendererWorkerInspectionEndpoint> {
+    use moli_core::runtime::RendererWorkerInspectionTarget;
+    let context = conn.browser_context_by_id(plan.browser_context_id()?)?;
+    let worker = match plan.target() {
+        SessionDisposalTarget::SharedWorkerTarget { target_id, .. } => {
+            RendererWorkerInspectionTarget::Shared(
+                context
+                    .shared_worker_target(target_id)?
+                    .renderer_instance_id,
+            )
         }
-        SessionDisposalTarget::SharedWorkerTarget {
-            browser_context_id,
-            target_id,
-        } => {
-            if let Some((browser_context, instance_id)) = conn
-                .browser_context_by_id(browser_context_id)
-                .and_then(|browser_context| {
-                    browser_context
-                        .shared_worker_target(target_id)
-                        .map(|target| (browser_context, target.renderer_instance_id))
-                })
-            {
-                browser_context.detach_shared_worker_inspector_session(
-                    instance_id,
-                    Some(session_id.to_owned()),
-                );
-            }
+        SessionDisposalTarget::DedicatedWorkerTarget { target_id, .. } => {
+            RendererWorkerInspectionTarget::Dedicated(
+                context
+                    .dedicated_worker_target(target_id)?
+                    .renderer_instance_id,
+            )
         }
-        SessionDisposalTarget::DedicatedWorkerTarget {
-            browser_context_id,
-            target_id,
-        } => {
-            if let Some((browser_context, instance_id)) = conn
-                .browser_context_by_id(browser_context_id)
-                .and_then(|browser_context| {
-                    browser_context
-                        .dedicated_worker_target(target_id)
-                        .map(|target| (browser_context, target.renderer_instance_id))
-                })
-            {
-                browser_context.detach_dedicated_worker_inspector_session(
-                    instance_id,
-                    Some(session_id.to_owned()),
-                );
-            }
-        }
-        SessionDisposalTarget::ServiceWorkerTarget {
-            browser_context_id,
-            target_id,
-        } => {
-            if let Some((browser_context, version_id)) = conn
-                .browser_context_by_id(browser_context_id)
-                .and_then(|browser_context| {
-                    browser_context
-                        .service_worker_target(target_id)
-                        .map(|target| (browser_context, target.renderer_version_id))
-                })
-            {
-                browser_context.detach_service_worker_inspector_session(
-                    version_id,
-                    Some(session_id.to_owned()),
-                );
-            }
-        }
-        SessionDisposalTarget::Browser | SessionDisposalTarget::TabTarget { .. } => {}
-    }
-    Ok(())
+        SessionDisposalTarget::ServiceWorkerTarget { target_id, .. } => context
+            .service_worker_target(target_id)?
+            .inspection_target()?,
+        _ => return None,
+    };
+    context.worker_inspection_endpoint(worker)
 }
 
 pub(in crate::domains) use activity::{

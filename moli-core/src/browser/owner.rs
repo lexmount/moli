@@ -24,6 +24,7 @@ mod navigation_driver;
 pub use navigation_driver::{BrowserNavigationOutcome, BrowserNavigationWaiter};
 mod navigation_events;
 mod popup;
+mod workers;
 
 use super::{
     BrowserContext, BrowserContextId, BrowserContextStoragePartitionHandles, MainFrameSlotId,
@@ -93,11 +94,15 @@ struct Browser {
     popup_admissions: popup::PopupAdmissions,
     document_decision_provider: Option<tokio::sync::watch::Receiver<()>>,
     local_sender: BrowserLocalSender,
+    native_sender: mpsc::WeakUnboundedSender<BrowserOwnerMessage>,
     events: super::events::BrowserEventStream,
 }
 
 impl Browser {
-    fn new(local_sender: BrowserLocalSender) -> Self {
+    fn new(
+        local_sender: BrowserLocalSender,
+        native_sender: mpsc::WeakUnboundedSender<BrowserOwnerMessage>,
+    ) -> Self {
         Self {
             contexts: IndexMap::new(),
             permission_defaults: super::PermissionDefaults::default(),
@@ -105,6 +110,7 @@ impl Browser {
             popup_admissions: popup::PopupAdmissions::default(),
             document_decision_provider: None,
             local_sender,
+            native_sender,
             events: super::events::BrowserEventStream::default(),
         }
     }
@@ -123,6 +129,14 @@ impl Browser {
 
     fn insert_context(&mut self, context: BrowserContext) -> BrowserContextId {
         let id = context.id();
+        let sender = self.native_sender.clone();
+        context.install_worker_lifecycle_handler(move |input| {
+            if let Some(sender) = sender.upgrade() {
+                let _ = sender.send(BrowserOwnerMessage::Execute(Box::new(move |browser| {
+                    browser.commit_worker_lifecycle(id, input);
+                })));
+            }
+        });
         let previous = self.contexts.insert(id, context);
         debug_assert!(previous.is_none(), "BrowserContext identity must be unique");
         self.events.publish(super::BrowserEvent::ContextCreated(id));
@@ -135,6 +149,7 @@ impl Browser {
         };
         let navigations = context.navigation_snapshots().collect::<Vec<_>>();
         let dialogs = context.javascript_dialog_snapshots();
+        self.publish_retired_workers(&context);
         self.events
             .publish(super::BrowserEvent::ContextDisposed(id));
         context.shutdown();
@@ -153,6 +168,7 @@ impl Browser {
                 .publish(super::BrowserEvent::ContextDisposed(id));
         }
         for (_, context) in contexts {
+            self.publish_retired_workers(&context);
             let navigations = context.navigation_snapshots().collect::<Vec<_>>();
             let dialogs = context.javascript_dialog_snapshots();
             context.shutdown();
@@ -263,6 +279,7 @@ impl fmt::Debug for BrowserHandle {
 impl BrowserHandle {
     fn start() -> Result<Self, String> {
         let (tx, mut rx) = mpsc::unbounded_channel();
+        let native_sender = tx.downgrade();
         let (ready_tx, ready_rx) = std_mpsc::sync_channel(1);
         let join = thread::Builder::new()
             .name("moli-browser-owner".to_owned())
@@ -284,7 +301,7 @@ impl BrowserHandle {
                 let _ = ready_tx.send(Ok(()));
                 local.block_on(&runtime, async move {
                     let (local_tx, mut local_rx) = mpsc::unbounded_channel();
-                    let mut browser = Browser::new(local_tx);
+                    let mut browser = Browser::new(local_tx, native_sender);
                     loop {
                         tokio::select! {
                             message = rx.recv() => match message {
@@ -494,6 +511,10 @@ impl BrowserHandle {
                     .contexts
                     .values()
                     .flat_map(BrowserContext::navigation_snapshots),
+                browser
+                    .contexts
+                    .values()
+                    .flat_map(BrowserContext::worker_snapshots),
             )
         })
     }
@@ -1278,15 +1299,11 @@ impl BrowserContextHandle {
     forward_context_read! {
         fn controlled_service_worker_window_client_ids(registration_id: u64, version_id: u64) -> Vec<u64>;
         fn set_service_worker_pause_on_start_for_version(version_id: u64, pause: bool) -> bool;
+        fn worker_inspection_endpoint(target: crate::runtime::RendererWorkerInspectionTarget) -> Option<crate::runtime::RendererWorkerInspectionEndpoint>;
         fn close_shared_worker(instance_id: moli_shared_worker::SharedWorkerInstanceId) -> bool;
         fn close_dedicated_worker(instance_id: u64) -> bool;
-        fn attach_dedicated_worker_inspector_session(instance_id: u64, session_id: Option<String>) -> bool;
-        fn detach_shared_worker_inspector_session(instance_id: moli_shared_worker::SharedWorkerInstanceId, session_id: Option<String>) -> bool;
-        fn detach_dedicated_worker_inspector_session(instance_id: u64, session_id: Option<String>) -> bool;
-        fn detach_service_worker_inspector_session(version_id: u64, session_id: Option<String>) -> bool;
         fn run_dedicated_worker_if_waiting_for_debugger(instance_id: u64) -> bool;
         fn run_service_worker_if_waiting_for_debugger(version_id: u64) -> bool;
-        fn worker_runtime_inspection_endpoint() -> crate::runtime::RendererBrowserContextRuntime;
         fn permission_override_count() -> usize;
         fn storage_partition_kind() -> super::StoragePartitionKind;
         fn storage_partition_kind_label() -> &'static str;

@@ -1,26 +1,10 @@
 use moli_shared_worker::SharedWorkerInstanceId;
 
-use super::{host_removal::SharedWorkerRemovedHost, service::SharedWorkerRuntimeService};
+use super::service::SharedWorkerRuntimeService;
 
 impl SharedWorkerRuntimeService {
-    pub(crate) fn close_instance_for_devtools_target_close(
-        &self,
-        instance_id: SharedWorkerInstanceId,
-    ) -> bool {
-        match self.downgrade().remove_host_for_instance(instance_id) {
-            SharedWorkerRemovedHost::Running { host, clients } => {
-                host.close_worker_ports_and_send_closed(clients);
-                host.terminate();
-                host.retire_target_output_without_destroyed();
-                true
-            }
-            SharedWorkerRemovedHost::Loading { host, clients } => {
-                host.cancel_loading();
-                host.close_worker_ports_and_send_closed(clients);
-                true
-            }
-            SharedWorkerRemovedHost::Missing => false,
-        }
+    pub(crate) fn close_instance(&self, instance_id: SharedWorkerInstanceId) -> bool {
+        self.remove_host_for_instance(instance_id).terminate()
     }
 }
 
@@ -45,7 +29,7 @@ mod tests {
     };
 
     #[test]
-    fn devtools_target_close_removes_running_host_and_closes_clients_without_lifecycle_duplicate() {
+    fn explicit_close_removes_running_host_and_publishes_one_native_destruction() {
         let service = test_support::runtime_service();
         let message_port_registry = new_message_port_registry();
         let (client_port_id, worker_port_id, message_port_owner) =
@@ -78,15 +62,36 @@ mod tests {
             SharedWorkerLoadReady::Running { .. }
         ));
         assert!(!host.is_closed());
+        let (sender, mut output) = crate::runtime::renderer_output_transport_channel();
+        service.bind_target_output_transport(sender);
+        host.publish_created_target_event();
 
-        assert!(service.close_instance_for_devtools_target_close(instance_id));
+        assert!(service.close_instance(instance_id));
+        assert!(!service.close_instance(instance_id));
+        let mut destructions = 0;
+        while let Ok(message) = output.try_recv() {
+            if let crate::runtime::RendererOutputTransportMessage::Publication(publication) =
+                message
+            {
+                for record in publication.records() {
+                    if let crate::runtime::RendererOutputItem::Observation(
+                        crate::runtime::RendererProtocolObservation::WorkerLifecycle(observation),
+                    ) = record.item()
+                        && matches!(observation.lifecycle(), crate::runtime::RendererWorkerLifecycle::SharedDestroyed(actual) if *actual == instance_id)
+                    {
+                        destructions += 1;
+                    }
+                }
+            }
+        }
+        assert_eq!(destructions, 1);
 
         assert!(host.is_closed());
         assert!(test_support::matching_is_empty(&service));
         assert!(
             host.target_output_retired()
                 .load(std::sync::atomic::Ordering::Acquire),
-            "CDP Target.closeTarget must retire the worker stream without publishing a second target teardown"
+            "explicit close must retire the worker stream after one native destruction"
         );
         let task = message_port_owner
             .pop_shared_worker_client_event()
@@ -142,7 +147,7 @@ mod tests {
         let (closed_tx, closed_rx) = std_mpsc::channel();
         let close_service = service.clone();
         let close_thread = std::thread::spawn(move || {
-            let closed = close_service.close_instance_for_devtools_target_close(instance_id);
+            let closed = close_service.close_instance(instance_id);
             let _ = closed_tx.send(closed);
         });
         let close_result = closed_rx.recv_timeout(Duration::from_millis(250));
@@ -165,9 +170,6 @@ mod tests {
     fn devtools_target_close_reports_missing_instance() {
         let service = test_support::runtime_service();
 
-        assert!(
-            !service
-                .close_instance_for_devtools_target_close(SharedWorkerInstanceId::from_u64(404))
-        );
+        assert!(!service.close_instance(SharedWorkerInstanceId::from_u64(404)));
     }
 }

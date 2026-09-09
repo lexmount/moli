@@ -61,18 +61,20 @@ impl SharedWorkerRemovedHost {
         }
     }
 
-    pub(super) fn terminate_for_context_shutdown(self) {
+    pub(super) fn terminate(self) -> bool {
         match self {
             Self::Running { host, clients } => {
                 host.publish_destroyed_target_event();
                 host.close_worker_ports_and_send_closed(clients);
                 host.terminate();
+                true
             }
             Self::Loading { host, clients } => {
                 host.cancel_loading();
                 host.close_worker_ports_and_send_closed(clients);
+                true
             }
-            Self::Missing => {}
+            Self::Missing => false,
         }
     }
 }

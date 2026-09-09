@@ -383,7 +383,6 @@ async fn lifecycle_events_enable_without_renderer_binding_does_not_synthesize_re
         .conn
         .start_native_navigation_fixture_for_test(
             &owner,
-            LOADER_ID,
             moli_core::browser::web_contents::NavigationRequestInterception::new(
                 url::Url::parse("data:text/html,<body>lifecycle</body>").unwrap(),
                 "GET".into(),

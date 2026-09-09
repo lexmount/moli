@@ -464,12 +464,6 @@ impl TargetRuntimeSlot {
             .flatten()
     }
 
-    pub(crate) fn inspector_issues(&self) -> Option<Vec<moli_core::page::InspectorIssueSnapshot>> {
-        self.current_renderer_inspection_binding()
-            .is_some()
-            .then(|| self.observable_queue.inspector_issues())
-    }
-
     pub(crate) fn ingest_observable_output_snapshot(
         &mut self,
         items: &[ScriptObservableOutputItem],

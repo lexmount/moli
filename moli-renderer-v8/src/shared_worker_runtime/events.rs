@@ -55,7 +55,8 @@ impl RendererSharedWorkerHost {
             WorkerToParentMessage::RuntimeInspectorResponse(publication) => {
                 self.publish_runtime_inspector_response(publication);
             }
-            WorkerToParentMessage::ServiceWorkerLifecycleCompleted(_) => {
+            WorkerToParentMessage::ServiceWorkerBootstrapCompleted(_)
+            | WorkerToParentMessage::ServiceWorkerLifecycleCompleted(_) => {
                 trace!(url = %script_url, ?message, "dropping service worker lifecycle message on shared worker host");
             }
             WorkerToParentMessage::ServiceWorkerFetchCompleted(_) => {

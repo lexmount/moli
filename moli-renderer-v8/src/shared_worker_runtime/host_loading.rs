@@ -77,7 +77,7 @@ impl RendererSharedWorkerHost {
             task.cancel();
         }
         if retired_loading {
-            self.retire_target_output_without_destroyed();
+            self.retire_unstarted_output();
         }
     }
 
@@ -93,7 +93,7 @@ impl RendererSharedWorkerHost {
         };
         drop(state);
         if retired_loading {
-            self.retire_target_output_without_destroyed();
+            self.retire_unstarted_output();
         }
     }
 }

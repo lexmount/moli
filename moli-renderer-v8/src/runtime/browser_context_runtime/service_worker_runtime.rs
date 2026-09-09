@@ -5,7 +5,6 @@ use url::Url;
 
 use crate::{
     page_task_queue::RendererPageServiceWorkerTaskSender,
-    runtime::{RendererRuntimeInspectorMessage, RendererRuntimeInspectorResponseSender},
     service_worker_runtime::{
         ServiceWorkerClientFrameType, ServiceWorkerClientId, ServiceWorkerRegistrationId,
         ServiceWorkerRuntimeOwnerWake, ServiceWorkerRuntimeOwnerWakeSender, ServiceWorkerVersionId,
@@ -24,7 +23,7 @@ pub(super) struct LazyServiceWorkerRuntime {
     restored_worker_context_runtime: super::RendererWorkerContextRuntime,
     browser_resource_runtime: crate::network::BrowserResourceRuntimeBinding,
     client_id_allocator: crate::service_worker_runtime::ServiceWorkerClientIdAllocator,
-    browser_context_runtime_id: crate::runtime::RendererBrowserContextRuntimeId,
+    worker_lifecycle: crate::runtime::RendererWorkerLifecycleReporter,
     output_transport: crate::runtime::RendererOutputTransportSenderSlot,
 }
 
@@ -60,7 +59,7 @@ impl LazyServiceWorkerRuntime {
         resource_store: crate::SharedServiceWorkerResourceStore,
         restored_worker_context_runtime: super::RendererWorkerContextRuntime,
         browser_resource_runtime: crate::network::BrowserResourceRuntimeBinding,
-        browser_context_runtime_id: crate::runtime::RendererBrowserContextRuntimeId,
+        worker_lifecycle: crate::runtime::RendererWorkerLifecycleReporter,
         output_transport: crate::runtime::RendererOutputTransportSenderSlot,
     ) -> Self {
         Self {
@@ -75,7 +74,7 @@ impl LazyServiceWorkerRuntime {
             restored_worker_context_runtime,
             browser_resource_runtime,
             client_id_allocator: Default::default(),
-            browser_context_runtime_id,
+            worker_lifecycle,
             output_transport,
         }
     }
@@ -106,7 +105,7 @@ impl LazyServiceWorkerRuntime {
                 self.restored_worker_context_runtime.clone(),
                 self.browser_resource_runtime.clone(),
                 self.client_id_allocator.clone(),
-                self.browser_context_runtime_id,
+                self.worker_lifecycle.clone(),
                 self.output_transport.clone(),
             );
         for sender in owner_wake_senders.into_senders() {
@@ -353,7 +352,7 @@ impl LazyServiceWorkerRuntime {
 }
 
 impl RendererBrowserContextRuntime {
-    fn service_worker_runtime_for_existing_registration(
+    pub(super) fn service_worker_runtime_for_existing_registration(
         &self,
     ) -> Option<crate::service_worker_runtime::ServiceWorkerRuntimeService> {
         self.inner
@@ -375,78 +374,6 @@ impl RendererBrowserContextRuntime {
             .service_worker_runtime
             .get()
             .map_or(0, |runtime| runtime.drain_service_lane())
-    }
-
-    pub async fn dispatch_service_worker_runtime_protocol_message(
-        &self,
-        version_id: u64,
-        inspector_session_id: Option<String>,
-        raw_json: String,
-    ) -> Result<Vec<RendererRuntimeInspectorMessage>, String> {
-        let Some(runtime) = self.service_worker_runtime_for_existing_registration() else {
-            return Err("ServiceWorkerRuntimeUnavailable".to_owned());
-        };
-        runtime
-            .dispatch_runtime_protocol_message(
-                ServiceWorkerVersionId::from_u64_for_binding(version_id),
-                inspector_session_id,
-                raw_json,
-            )
-            .await
-    }
-
-    pub async fn dispatch_service_worker_runtime_protocol_message_with_deferred_response(
-        &self,
-        version_id: u64,
-        inspector_session_id: Option<String>,
-        raw_json: String,
-        deferred_response: RendererRuntimeInspectorResponseSender,
-    ) -> Result<Vec<RendererRuntimeInspectorMessage>, String> {
-        let Some(runtime) = self.service_worker_runtime_for_existing_registration() else {
-            return Err("ServiceWorkerRuntimeUnavailable".to_owned());
-        };
-        runtime
-            .dispatch_runtime_protocol_message_with_deferred_response(
-                ServiceWorkerVersionId::from_u64_for_binding(version_id),
-                inspector_session_id,
-                raw_json,
-                deferred_response,
-            )
-            .await
-    }
-
-    pub async fn dispatch_service_worker_runtime_protocol_message_with_devtools_session_response(
-        &self,
-        version_id: u64,
-        inspector_session_id: String,
-        raw_json: String,
-        response: RendererRuntimeInspectorResponseSender,
-    ) -> Result<crate::runtime::CompletedWorkerRuntimeInspectorCommandDispatch, String> {
-        let Some(runtime) = self.service_worker_runtime_for_existing_registration() else {
-            return Err("ServiceWorkerRuntimeUnavailable".to_owned());
-        };
-        runtime
-            .dispatch_runtime_protocol_message_with_devtools_session_response(
-                ServiceWorkerVersionId::from_u64_for_binding(version_id),
-                inspector_session_id,
-                raw_json,
-                response,
-            )
-            .await
-    }
-
-    pub fn detach_service_worker_runtime_inspector_session(
-        &self,
-        version_id: u64,
-        inspector_session_id: Option<String>,
-    ) -> bool {
-        self.service_worker_runtime_for_existing_registration()
-            .is_some_and(|runtime| {
-                runtime.detach_runtime_inspector_session(
-                    ServiceWorkerVersionId::from_u64_for_binding(version_id),
-                    inspector_session_id,
-                )
-            })
     }
 
     pub fn unregister_service_worker_scope_for_devtools(

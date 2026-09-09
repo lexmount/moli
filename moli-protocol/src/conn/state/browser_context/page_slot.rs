@@ -953,20 +953,6 @@ impl BrowserContext {
             .root_post_load_observation = None;
     }
 
-    #[cfg(test)]
-    pub(crate) fn observe_navigation_fixture_for_test(
-        &mut self,
-        target_id: &str,
-        request: moli_core::browser::NavigationRequest,
-        loader_id: &str,
-    ) {
-        assert!(self.observe_target_navigation_started(target_id, request));
-        self.page_slot_for_target_mut(target_id)
-            .expect("registered fixture target")
-            .cdp_navigation_loaders
-            .push((request.navigation, loader_id.to_owned().into()));
-    }
-
     #[cfg(any(test, feature = "test-support"))]
     pub(crate) fn begin_target_document_navigation(
         &mut self,

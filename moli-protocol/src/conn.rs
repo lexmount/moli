@@ -583,14 +583,14 @@ pub use state::{
 };
 pub(crate) use state::{
     BrowserContextPageStorageHandles, BrowserContextStoragePartitionHandles,
-    CommittedRendererDocumentBinding, ContextNetworkPolicy, DedicatedWorkerMainScriptOutcome,
-    DedicatedWorkerMainScriptSnapshot, DedicatedWorkerTargetState, DevToolsBrowserIdentityOverride,
-    DevToolsConsoleOutputSessionState, DevToolsLogViolationThreshold, DocumentId,
-    DocumentProjectionOutputRelease, DuplicatePendingRendererCommand, EmulatedNetworkConditions,
-    EmulatedViewportSurface, EmulationPolicyChange, InitialDocumentCreator,
-    InspectorCommandDispatch, NETWORK_ERROR_PAGE_URL, NavigationId, NavigationResultProjection,
-    PageScreencastConfig, PageScreencastFormat, PendingBidiChannelListener, PendingInspectorAwait,
-    PerformanceTimeDomain, PreparedRendererCallDispatch, ProfilerAction, ProfilerInspectorCommand,
+    CommittedRendererDocumentBinding, ContextNetworkPolicy, DedicatedWorkerTargetState,
+    DevToolsBrowserIdentityOverride, DevToolsConsoleOutputSessionState,
+    DevToolsLogViolationThreshold, DocumentId, DocumentProjectionOutputRelease,
+    DuplicatePendingRendererCommand, EmulatedNetworkConditions, EmulatedViewportSurface,
+    EmulationPolicyChange, InitialDocumentCreator, InspectorCommandDispatch,
+    NETWORK_ERROR_PAGE_URL, NavigationId, NavigationResultProjection, PageScreencastConfig,
+    PageScreencastFormat, PendingBidiChannelListener, PendingInspectorAwait, PerformanceTimeDomain,
+    PreparedRendererCallDispatch, ProfilerAction, ProfilerInspectorCommand,
     RendererCommandCorrelation, RendererCommandDescriptor, RendererCommandReplay,
     RendererDocumentLifecycleObservation, RendererDocumentLifecycleObserver,
     RendererPageResidenceIdentity, ServiceWorkerRuntimeExceptionSnapshot, ServiceWorkerTargetState,
@@ -1388,6 +1388,17 @@ impl CdpConnection {
     ) -> bool {
         self.runtime_session_owner_slot(session_id)
             .is_ok_and(TargetRuntimeSlot::document_projection_is_pending)
+    }
+
+    pub fn devtools_context_document_projection_is_pending(
+        &self,
+        context: &DevToolsCommandContext,
+    ) -> bool {
+        self.command_owner_scope_for_devtools_context(context)
+            .is_some_and(|owner| {
+                self.runtime_session_owner_slot_for_owner(&owner)
+                    .is_ok_and(TargetRuntimeSlot::document_projection_is_pending)
+            })
     }
 
     pub(crate) fn accepts_pending_document_navigation_for_owner(

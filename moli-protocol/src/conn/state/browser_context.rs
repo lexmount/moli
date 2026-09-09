@@ -104,6 +104,8 @@ pub struct BrowserContext {
     pub(in crate::conn) automation_download_events_enabled: Option<bool>,
     pending_popup_javascript_dialogs:
         HashMap<(moli_core::browser::DocumentHandle, u64), Vec<TargetPreparedJavaScriptDialog>>,
+    /// Snapshot recovery cursor only; ordinary Worker FIFOs are independent.
+    pub(crate) worker_snapshot_sequence: Option<moli_core::browser::BrowserSequence>,
     pub(crate) shared_worker_targets: BTreeMap<SharedWorkerInstanceId, SharedWorkerTargetState>,
     pub(crate) dedicated_worker_targets: BTreeMap<u64, DedicatedWorkerTargetState>,
     pub(crate) service_worker_targets: BTreeMap<u64, ServiceWorkerTargetState>,
@@ -329,6 +331,7 @@ impl BrowserContext {
             default_document_cookie_manager_surface: BrowserContextCookieManagerSurface::default(),
             automation_download_events_enabled: None,
             pending_popup_javascript_dialogs: HashMap::new(),
+            worker_snapshot_sequence: None,
             shared_worker_targets: BTreeMap::new(),
             dedicated_worker_targets: BTreeMap::new(),
             service_worker_targets: BTreeMap::new(),

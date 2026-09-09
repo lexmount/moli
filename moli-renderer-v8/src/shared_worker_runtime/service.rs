@@ -63,13 +63,13 @@ impl SharedWorkerRuntimeService {
 
     pub(crate) fn configure_target_output_streams(
         &self,
-        browser_context_runtime_id: crate::runtime::RendererBrowserContextRuntimeId,
+        worker_lifecycle: crate::runtime::RendererWorkerLifecycleReporter,
         transport: crate::runtime::RendererOutputTransportSenderSlot,
     ) {
         self.inner
             .target_output_streams
             .set(SharedWorkerTargetOutputStreams::new(
-                browser_context_runtime_id,
+                worker_lifecycle,
                 transport,
             ))
             .unwrap_or_else(|_| {
@@ -91,6 +91,10 @@ impl SharedWorkerRuntimeService {
         self.target_output_streams().open(instance_id)
     }
 
+    pub(super) fn worker_lifecycle(&self) -> crate::runtime::RendererWorkerLifecycleReporter {
+        self.target_output_streams().worker_lifecycle.clone()
+    }
+
     pub(super) fn retire_target_output_stream(&self, instance_id: SharedWorkerInstanceId) {
         self.target_output_streams().retire(instance_id);
     }
@@ -108,7 +112,9 @@ impl SharedWorkerRuntimeService {
             .inner
             .target_output_streams
             .set(SharedWorkerTargetOutputStreams::new(
-                crate::runtime::RendererBrowserContextRuntimeId::new_for_testing(0),
+                crate::runtime::RendererWorkerLifecycleReporter::new(
+                    crate::runtime::RendererBrowserContextRuntimeId::new_for_testing(0),
+                ),
                 crate::runtime::RendererOutputTransportSenderSlot::default(),
             ));
     }

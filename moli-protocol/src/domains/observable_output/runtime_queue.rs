@@ -497,7 +497,6 @@ impl RuntimeObservableEmissionSnapshot {
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub(crate) struct TargetRuntimeObservableQueueState {
     observable_output_items: Vec<ScriptObservableOutputItem>,
-    source_inspector_issues: Vec<moli_core::page::InspectorIssueSnapshot>,
     latest_source_tail: Option<TargetRuntimeObservableSourceOutput>,
     source_tails_by_identity: HashMap<(String, DocumentId), TargetRuntimeObservableSourceOutput>,
     source_outputs: Vec<TargetRuntimeObservableSourceOutput>,
@@ -506,7 +505,6 @@ pub(crate) struct TargetRuntimeObservableQueueState {
 impl TargetRuntimeObservableQueueState {
     pub(crate) fn reset(&mut self) {
         self.observable_output_items.clear();
-        self.source_inspector_issues.clear();
         self.latest_source_tail = None;
         self.source_tails_by_identity.clear();
         self.source_outputs.clear();
@@ -550,28 +548,6 @@ impl TargetRuntimeObservableQueueState {
             .count()
     }
 
-    pub(crate) fn inspector_issues(&self) -> Vec<moli_core::page::InspectorIssueSnapshot> {
-        let report_issues = self
-            .observable_output_items
-            .iter()
-            .filter_map(|item| match item {
-                ScriptObservableOutputItem::InspectorIssue(issue) => Some((**issue).clone()),
-                ScriptObservableOutputItem::ConsoleMessage(_)
-                | ScriptObservableOutputItem::LifecycleError(_) => None,
-            })
-            .collect::<Vec<_>>();
-        if report_issues.len() <= self.source_inspector_issues.len()
-            && report_issues
-                .iter()
-                .zip(&self.source_inspector_issues)
-                .all(|(report, source)| report == source)
-        {
-            self.source_inspector_issues.clone()
-        } else {
-            report_issues
-        }
-    }
-
     #[cfg(test)]
     pub(crate) fn sync_source_from_renderer_snapshot(
         &mut self,
@@ -590,7 +566,6 @@ impl TargetRuntimeObservableQueueState {
         document_id: DocumentId,
         renderer_source: &RendererRuntimeObservableSourceSummary,
     ) -> Option<TargetRuntimeObservableSourceOutput> {
-        self.source_inspector_issues = renderer_source.inspector_issues().to_vec();
         let source_items = source_items_from_renderer_runtime_source(renderer_source);
         let summary = TargetRuntimeObservableSourceSummary::from_source_items(
             renderer_source.default_execution_context_id(),

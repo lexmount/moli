@@ -6,12 +6,11 @@ use tokio::sync::mpsc;
 
 use crate::{
     runtime::{
-        RendererRuntimeInspectorMessage, RendererServiceWorkerRunIdentity, ServiceWorkerFetchEvent,
-        ServiceWorkerLifecycleEvent, ServiceWorkerMessageEvent,
-        ServiceWorkerNavigationPreloadFailure, ServiceWorkerNavigationPreloadResponseStarted,
-        ServiceWorkerNavigationPreloadStreamChunk, ServiceWorkerNavigationPreloadStreamFinished,
-        ServiceWorkerNotificationEvent, ServiceWorkerPeriodicSyncEvent, ServiceWorkerPushEvent,
-        ServiceWorkerSyncEvent,
+        RendererServiceWorkerRunIdentity, ServiceWorkerFetchEvent, ServiceWorkerLifecycleEvent,
+        ServiceWorkerMessageEvent, ServiceWorkerNavigationPreloadFailure,
+        ServiceWorkerNavigationPreloadResponseStarted, ServiceWorkerNavigationPreloadStreamChunk,
+        ServiceWorkerNavigationPreloadStreamFinished, ServiceWorkerNotificationEvent,
+        ServiceWorkerPeriodicSyncEvent, ServiceWorkerPushEvent, ServiceWorkerSyncEvent,
     },
     types::{NetworkBodySourceId, SubresourcePolicyContext},
     worker::{
@@ -28,6 +27,7 @@ use super::{
         LoadedServiceWorkerScript, ServiceWorkerScriptResource, load_service_worker_script_source,
     },
     service::ServiceWorkerRuntimeService,
+    start_completion::ServiceWorkerTargetOutput,
     version::{ServiceWorkerFetchHandlerType, ServiceWorkerVersionStartFailure},
 };
 
@@ -134,71 +134,14 @@ impl RendererServiceWorkerHost {
         )
     }
 
-    pub(super) async fn dispatch_worker_runtime_protocol_message(
-        &self,
-        inspector_session_id: Option<String>,
-        raw_json: String,
-        deferred_response: Option<crate::runtime::RendererRuntimeInspectorResponseSender>,
-    ) -> Result<Vec<RendererRuntimeInspectorMessage>, String> {
-        let (response_tx, response_rx) = tokio::sync::oneshot::channel();
-        let dispatched = {
-            let state = self.state.lock();
-            let RendererServiceWorkerHostState::Running {
-                handle: Some(handle),
-            } = &*state
-            else {
-                return Err("ServiceWorkerRuntimeUnavailable".to_owned());
-            };
-            handle.dispatch_runtime_protocol_message(
-                inspector_session_id,
-                raw_json,
-                deferred_response,
-                response_tx,
-            )
-        };
-        if !dispatched {
-            return Err("ServiceWorkerRuntimeUnavailable".to_owned());
-        }
-        response_rx
-            .await
-            .map_err(|_| "ServiceWorkerRuntimeUnavailable".to_owned())?
-    }
-
-    pub(super) async fn dispatch_worker_runtime_protocol_message_with_deferred_response(
-        &self,
-        inspector_session_id: Option<String>,
-        raw_json: String,
-        deferred_response: crate::runtime::RendererRuntimeInspectorResponseSender,
-    ) -> Result<Vec<RendererRuntimeInspectorMessage>, String> {
-        self.dispatch_worker_runtime_protocol_message(
-            inspector_session_id,
-            raw_json,
-            Some(deferred_response),
-        )
-        .await
-    }
-
-    pub(super) async fn dispatch_worker_runtime_protocol_message_without_deferred_response(
-        &self,
-        inspector_session_id: Option<String>,
-        raw_json: String,
-    ) -> Result<Vec<RendererRuntimeInspectorMessage>, String> {
-        self.dispatch_worker_runtime_protocol_message(inspector_session_id, raw_json, None)
-            .await
-    }
-
-    pub(super) fn detach_worker_runtime_inspector_session(
-        &self,
-        inspector_session_id: Option<String>,
-    ) -> bool {
+    pub(super) fn inspection_handle(&self) -> Option<crate::worker::WorkerDevToolsHandle> {
         let state = self.state.lock();
-        let RendererServiceWorkerHostState::Running {
-            handle: Some(handle),
-        } = &*state
-        else {
-            return false;
-        };
-        handle.detach_runtime_inspector_session(inspector_session_id)
+        match &*state {
+            RendererServiceWorkerHostState::Running {
+                handle: Some(handle),
+            } => Some(handle.devtools_handle()),
+            _ => None,
+        }
     }
 
     pub(super) fn run_if_waiting_for_debugger_for_devtools(&self) -> bool {
@@ -643,7 +586,6 @@ impl RendererServiceWorkerHost {
             }
         };
         let script_resource = script.resource.clone();
-        let final_script_url = script_resource.final_url.to_string();
         if service.finish_worker_start_identical_script_update(
             params.run_owner.version_id(),
             params.run_owner.cloned_run_identity(),
@@ -652,17 +594,10 @@ impl RendererServiceWorkerHost {
             self.mark_failed();
             return;
         }
-        let (bootstrap_completion_tx, bootstrap_completion_rx) =
-            mpsc::unbounded_channel::<WorkerBootstrapCompletion>();
-        let mut handle = spawn_service_worker(
-            service.clone(),
-            params.clone(),
-            script,
-            bootstrap_completion_tx,
-        );
-        if let Some(receiver) = handle.take_receiver() {
-            spawn_parent_message_pump(service.clone(), Arc::clone(self), receiver);
-        }
+        let mut handle = spawn_service_worker(service.clone(), params.clone(), script);
+        let receiver = handle
+            .take_receiver()
+            .expect("new ServiceWorker owns its parent FIFO");
         let mut state = self.state.lock();
         if !matches!(*state, RendererServiceWorkerHostState::Loading) {
             drop(state);
@@ -673,16 +608,21 @@ impl RendererServiceWorkerHost {
             handle: Some(handle),
         };
         drop(state);
+        // No parent output may expose a run before its real host is installed.
+        if let Err(error) =
+            spawn_parent_message_pump(service.clone(), Arc::clone(self), receiver, script_resource)
+        {
+            service.enqueue_worker_start_failed(
+                params.run_owner,
+                ServiceWorkerVersionStartFailure::HostThreadSpawn {
+                    message: error.to_string(),
+                },
+            );
+            return;
+        }
         if service.take_devtools_evaluation_release_for_version(params.run_owner.version_id()) {
             self.run_if_waiting_for_debugger_for_devtools();
         }
-        report_bootstrap_completion(
-            service,
-            params.run_owner,
-            final_script_url,
-            script_resource,
-            bootstrap_completion_rx,
-        );
     }
 }
 
@@ -690,14 +630,26 @@ fn spawn_parent_message_pump(
     service: ServiceWorkerRuntimeService,
     source_host: SharedRendererServiceWorkerHost,
     mut receiver: mpsc::UnboundedReceiver<WorkerToParentMessage>,
-) {
+    script_resource: ServiceWorkerScriptResource,
+) -> std::io::Result<()> {
     let version_id = source_host.version_id();
-    let source_run = source_host.run_identity();
-    let _ = std::thread::Builder::new()
+    let owner = source_host.run_owner();
+    std::thread::Builder::new()
         .name(format!("service-worker-pump-{}", version_id.as_u64()))
         .spawn(move || {
+            let mut pending_script = Some(script_resource);
             while let Some(message) = receiver.blocking_recv() {
                 match message {
+                    WorkerToParentMessage::ServiceWorkerBootstrapCompleted(completion) => {
+                        if let Some(script) = pending_script.take() {
+                            report_bootstrap_completion(
+                                &service,
+                                owner.clone(),
+                                script,
+                                completion,
+                            );
+                        }
+                    }
                     WorkerToParentMessage::ServiceWorkerLifecycleCompleted(completion) => {
                         service.enqueue_lifecycle_event_completed(completion);
                     }
@@ -827,10 +779,9 @@ fn spawn_parent_message_pump(
                         event_kind,
                         phase,
                         source,
-                    } => {
-                        service.enqueue_target_exception_message(
-                            version_id,
-                            source_run.clone(),
+                    } => service.enqueue_target_output(
+                        owner.clone(),
+                        ServiceWorkerTargetOutput::Exception {
                             message,
                             filename,
                             lineno,
@@ -838,24 +789,25 @@ fn spawn_parent_message_pump(
                             event_kind,
                             phase,
                             source,
-                        );
-                    }
+                        },
+                    ),
                     WorkerToParentMessage::Console(message) => {
-                        service.enqueue_target_console_message(
-                            version_id,
-                            source_run.clone(),
-                            message,
+                        service.enqueue_target_output(
+                            owner.clone(),
+                            ServiceWorkerTargetOutput::Console(message),
                         );
                     }
                     WorkerToParentMessage::RuntimeInspectorMessages(messages) => {
-                        service.enqueue_target_runtime_inspector_messages(
-                            version_id,
-                            source_run.clone(),
-                            messages,
+                        service.enqueue_target_output(
+                            owner.clone(),
+                            ServiceWorkerTargetOutput::InspectorMessages(messages),
                         );
                     }
                     WorkerToParentMessage::RuntimeInspectorResponse(publication) => {
-                        let _ = publication.commit(None);
+                        service.enqueue_target_output(
+                            owner.clone(),
+                            ServiceWorkerTargetOutput::InspectorResponse(publication),
+                        );
                     }
                     WorkerToParentMessage::Post(_)
                     | WorkerToParentMessage::SharedWorkerClosed
@@ -868,41 +820,33 @@ fn spawn_parent_message_pump(
                     | WorkerToParentMessage::WebSocketFrame(_) => {}
                 }
             }
-        });
+            if pending_script.is_some() {
+                service.enqueue_worker_start_failed(
+                    owner,
+                    ServiceWorkerVersionStartFailure::BootstrapChannelClosed,
+                );
+            }
+        })
+        .map(|_| ())
 }
 
 fn report_bootstrap_completion(
-    service: ServiceWorkerRuntimeService,
+    service: &ServiceWorkerRuntimeService,
     owner: ServiceWorkerRunOwner,
-    final_script_url: String,
     script_resource: ServiceWorkerScriptResource,
-    mut receiver: mpsc::UnboundedReceiver<WorkerBootstrapCompletion>,
+    completion: WorkerBootstrapCompletion,
 ) {
-    match receiver.blocking_recv() {
-        Some(WorkerBootstrapCompletion {
-            result: Ok(success),
-        }) => {
-            service.enqueue_worker_start_completed(
-                owner,
-                final_script_url,
-                script_resource,
-                service_worker_fetch_handler_type(success),
-            );
-        }
-        Some(WorkerBootstrapCompletion {
-            result: Err(failure),
-        }) => {
-            service.enqueue_worker_start_failed(
-                owner,
-                ServiceWorkerVersionStartFailure::Bootstrap { failure },
-            );
-        }
-        None => {
-            service.enqueue_worker_start_failed(
-                owner,
-                ServiceWorkerVersionStartFailure::BootstrapChannelClosed,
-            );
-        }
+    match completion.result {
+        Ok(success) => service.enqueue_worker_start_completed(
+            owner,
+            script_resource.final_url.to_string(),
+            script_resource,
+            service_worker_fetch_handler_type(success),
+        ),
+        Err(failure) => service.enqueue_worker_start_failed(
+            owner,
+            ServiceWorkerVersionStartFailure::Bootstrap { failure },
+        ),
     }
 }
 
@@ -922,7 +866,6 @@ fn spawn_service_worker(
     service: ServiceWorkerRuntimeService,
     params: ServiceWorkerLaunchParams,
     script: LoadedServiceWorkerScript,
-    bootstrap_completion_tx: mpsc::UnboundedSender<WorkerBootstrapCompletion>,
 ) -> WorkerHandle {
     let storage_key = moli_storage_key::deserialize_serialized_storage_key(&params.storage_key)
         .unwrap_or_else(|| MoliStorageKey::first_party_from_url(&params.scope_url, None));
@@ -957,7 +900,7 @@ fn spawn_service_worker(
         .with_broadcast_channel_top_level_site(params.broadcast_channel_top_level_site)
         .with_indexed_db_manager(params.indexed_db_manager)
         .with_storage_bucket_store(params.storage_bucket_store)
-        .with_bootstrap_completion_sender(bootstrap_completion_tx)
+        .with_parent_bootstrap_completion()
         .with_pause_evaluation_until_debugger(params.pause_evaluation_until_debugger),
     )
 }
@@ -981,6 +924,39 @@ fn service_worker_script_policy_context(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn service_worker_parent_fifo_eof_queues_bootstrap_failure() {
+        let service = super::super::service::new_service_worker_runtime_service();
+        let (wake_tx, mut wake_rx) = super::super::owner_wake::service_worker_owner_wake_channel();
+        service.add_owner_wake_sender(wake_tx);
+        let owner = ServiceWorkerRunOwner::fresh(ServiceWorkerVersionId(7));
+        let host = RendererServiceWorkerHost::new_loading(&owner);
+        let script_url = url::Url::parse("https://example.test/app/sw.js").unwrap();
+        let resource = ServiceWorkerScriptResource {
+            request_url: script_url.clone(),
+            final_url: script_url,
+            kind: crate::worker::WorkerScriptResourceKind::JavaScript,
+            status: 200,
+            headers: Vec::new(),
+            body_len: 0,
+            body_sha256: String::new(),
+            response_time_ms: 0,
+            mime_type: Some("text/javascript".to_owned()),
+        };
+        let (parent_tx, parent_rx) = mpsc::unbounded_channel();
+        drop(parent_tx);
+        spawn_parent_message_pump(service.clone(), host, parent_rx, resource).unwrap();
+        tokio::time::timeout(std::time::Duration::from_secs(5), wake_rx.recv())
+            .await
+            .expect("closed bootstrap FIFO must wake its service owner")
+            .expect("service owner wake remains open");
+        assert_eq!(service.pending_service_lane_event_count(), 1);
+        // This physical run has already disappeared; its failure is consumed once.
+        assert_eq!(service.drain_service_lane(), 1);
+        assert_eq!(service.pending_service_lane_event_count(), 0);
+        assert_eq!(service.diagnostics_snapshot().version_count, 0);
+    }
 
     #[test]
     fn worker_hosts_preserve_their_reserved_exact_run_identity() {

@@ -65,7 +65,7 @@ async fn same_context_targets_restore_their_own_script_execution_disabled_after_
     consume_main_document_navigation_start(&mut ctx);
     ctx.expect_result(
         104174,
-        json!({ "frameId": second_target_id, "loaderId": "LID-0000000001" }),
+        json!({ "frameId": second_target_id, "loaderId": "LID-0000000002" }),
         Some(&second_session_id),
     );
     ctx.take_all();
@@ -119,7 +119,7 @@ async fn same_context_targets_restore_their_own_script_execution_disabled_after_
     consume_main_document_navigation_start(&mut ctx);
     ctx.expect_result(
         104177,
-        json!({ "frameId": "TID-000000000A", "loaderId": "LID-0000000002" }),
+        json!({ "frameId": "TID-000000000A", "loaderId": "LID-0000000003" }),
         Some("SID-active"),
     );
     ctx.take_all();
@@ -173,7 +173,7 @@ async fn same_context_targets_restore_their_own_script_execution_disabled_after_
     consume_main_document_navigation_start(&mut ctx);
     ctx.expect_result(
         104180,
-        json!({ "frameId": second_target_id, "loaderId": "LID-0000000003" }),
+        json!({ "frameId": second_target_id, "loaderId": "LID-0000000004" }),
         Some(&second_session_id),
     );
     ctx.take_all();

@@ -9,6 +9,9 @@ use super::{
 pub enum BrowserEvent {
     ContextCreated(BrowserContextId),
     ContextDisposed(BrowserContextId),
+    WorkerCreated(super::WorkerSnapshot),
+    WorkerUpdated(super::WorkerSnapshot),
+    WorkerDestroyed(super::WorkerHandle),
     WebContentsCreated(WebContentsHandle),
     WebContentsActivated {
         web_contents: WebContentsHandle,
@@ -71,6 +74,7 @@ pub struct BrowserSnapshot {
     pub javascript_dialogs: Vec<JavaScriptDialogOpened>,
     pub navigations: Vec<NavigationSnapshot>,
     pub downloads: Vec<super::DownloadRecordSnapshot>,
+    pub workers: Vec<super::WorkerSnapshot>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -209,6 +213,7 @@ impl BrowserEventStream {
         downloads: impl Iterator<Item = super::DownloadRecordSnapshot>,
         javascript_dialogs: impl Iterator<Item = JavaScriptDialogOpened>,
         navigations: impl Iterator<Item = NavigationSnapshot>,
+        workers: impl Iterator<Item = super::WorkerSnapshot>,
     ) -> (BrowserSnapshot, BrowserEventReceiver) {
         (
             BrowserSnapshot {
@@ -221,6 +226,7 @@ impl BrowserEventStream {
                 downloads: downloads.collect(),
                 javascript_dialogs: javascript_dialogs.collect(),
                 navigations: navigations.collect(),
+                workers: workers.collect(),
             },
             self.sender.subscribe(),
         )
@@ -422,6 +428,7 @@ mod tests {
             std::iter::empty(),
             std::iter::empty(),
             std::iter::empty(),
+            std::iter::empty(),
         );
         for _ in 0..257 {
             stream.publish(BrowserEvent::ContextCreated(context));
@@ -429,6 +436,7 @@ mod tests {
         assert_eq!(slow.try_recv(), Err(TryRecvError::Lagged(1)));
         let (snapshot, mut recovered) = stream.subscribe(
             std::iter::once(context),
+            std::iter::empty(),
             std::iter::empty(),
             std::iter::empty(),
             std::iter::empty(),

@@ -42,6 +42,14 @@ pub(crate) enum RendererPageStateCapturePolicy {
 
 mod access;
 mod browser_context_runtime;
+mod worker_inspection;
+pub use worker_inspection::{RendererWorkerInspectionEndpoint, RendererWorkerInspectionTarget};
+mod worker_lifecycle;
+pub(crate) use worker_lifecycle::RendererWorkerLifecycleReporter;
+pub use worker_lifecycle::{
+    RendererCommittedWorkerLifecycle, RendererWorkerLifecycle, RendererWorkerLifecycleInput,
+    RendererWorkerLifecycleObservation,
+};
 mod document_lifecycle;
 mod document_lifecycle_turn;
 mod javascript_dialog;
@@ -326,7 +334,8 @@ pub use self::page_surface::{
     RendererAutofillCreditCard, RendererAutofillTriggerOutcome, RendererAutofillTriggerRequest,
     RendererCaptureScreencastFrameReply, RendererCaptureScreenshotReply,
     RendererCapturedScreencastFrame, RendererCapturedScreenshot, RendererCommandTurnCompletion,
-    RendererCommandTurnOutput, RendererCountEntry, RendererDedicatedWorkerTargetEvent,
+    RendererCommandTurnOutput, RendererCountEntry, RendererDedicatedWorkerMainScript,
+    RendererDedicatedWorkerMainScriptOutcome, RendererDedicatedWorkerObservation,
     RendererDedicatedWorkerTargetInfo, RendererDevToolsAgentToken, RendererDocumentBoxModel,
     RendererDocumentChildNodeSnapshotEvent, RendererDocumentChildNodeSnapshotEvents,
     RendererDocumentChildNodeSnapshots, RendererDocumentFrontendNodeIdsResolution,
@@ -374,12 +383,13 @@ pub use self::page_surface::{
     RendererScriptSourceMemoryDiagnostics, RendererScrollIntoViewResult,
     RendererServiceWorkerConsoleMessage, RendererServiceWorkerExceptionMessage,
     RendererServiceWorkerFetchDiagnostic, RendererServiceWorkerFetchDiagnosticResult,
-    RendererServiceWorkerTargetEvent, RendererServiceWorkerTargetInfo,
-    RendererServiceWorkerVersionStatus, RendererSetDocumentContentResult,
-    RendererSharedWorkerConsoleMessage, RendererSharedWorkerTargetEvent,
-    RendererSharedWorkerTargetInfo, RendererStyleSheetHeader, RendererStyleSheetInventoryUpdate,
-    RendererStyleSheetPayload, RendererSyntheticResponseBody, RendererTextSearchMatch,
-    RendererTouchPoint, RendererWindowDocumentSource, RuntimeConsoleMessageSnapshot,
+    RendererServiceWorkerLifecycle, RendererServiceWorkerObservation,
+    RendererServiceWorkerTargetInfo, RendererServiceWorkerVersionStatus,
+    RendererSetDocumentContentResult, RendererSharedWorkerConsoleMessage,
+    RendererSharedWorkerObservation, RendererSharedWorkerTargetInfo, RendererStyleSheetHeader,
+    RendererStyleSheetInventoryUpdate, RendererStyleSheetPayload, RendererSyntheticResponseBody,
+    RendererTextSearchMatch, RendererTouchPoint, RendererWindowDocumentSource,
+    RuntimeConsoleMessageSnapshot,
 };
 pub(crate) use self::page_surface::{
     RendererCommandTurnOutputRecorder, RendererDevToolsSessionOutputHost,

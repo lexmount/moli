@@ -1,5 +1,5 @@
 use super::*;
-use crate::{RendererOutputItem, RendererOwnerAction};
+use crate::RendererOutputItem;
 
 const SHARED_WORKER_CONSOLE_MESSAGE: &str = "log: shared-console console-probe 7";
 
@@ -1662,22 +1662,24 @@ fn shared_worker_console_entry(
         })
 }
 
-fn has_console_probe_created_event(events: &[RendererSharedWorkerTargetEvent]) -> bool {
+fn has_console_probe_created_event(events: &[crate::runtime::RendererProtocolObservation]) -> bool {
     events.iter().any(|event| {
         matches!(
             event,
-            RendererSharedWorkerTargetEvent::Created(info)
-                if info.name == "console-probe"
-                    && info.url.starts_with("data:text/javascript,")
+            crate::runtime::RendererProtocolObservation::WorkerLifecycle(observation)
+                if matches!(observation.lifecycle(), crate::runtime::RendererWorkerLifecycle::SharedCreated(info)
+                    if info.name == "console-probe" && info.url.starts_with("data:text/javascript,"))
         )
     })
 }
 
-fn has_console_probe_target_console_event(events: &[RendererSharedWorkerTargetEvent]) -> bool {
+fn has_console_probe_target_console_event(
+    events: &[crate::runtime::RendererProtocolObservation],
+) -> bool {
     events.iter().any(|event| {
         matches!(
             event,
-            RendererSharedWorkerTargetEvent::Console { message, .. }
+            crate::runtime::RendererProtocolObservation::SharedWorker(RendererSharedWorkerObservation::Console { message, .. })
                 if message.message == SHARED_WORKER_CONSOLE_MESSAGE
         )
     })
@@ -1688,7 +1690,7 @@ async fn drain_until_shared_worker_console_activity(
     output_rx: &mut crate::runtime::RendererOutputTransportReceiver,
 ) -> anyhow::Result<(
     crate::runtime::RendererPageDiagnosticsSnapshot,
-    Vec<RendererSharedWorkerTargetEvent>,
+    Vec<crate::runtime::RendererProtocolObservation>,
 )> {
     let deadline = Instant::now() + Duration::from_secs(10);
     let mut target_events = Vec::new();
@@ -1711,8 +1713,9 @@ async fn drain_until_shared_worker_console_activity(
             };
             target_events.extend(output.records().iter().filter_map(
                 |record| match record.item() {
-                    RendererOutputItem::OwnerAction(
-                        RendererOwnerAction::SharedWorkerTargetLifecycle(event),
+                    RendererOutputItem::Observation(
+                        event @ (crate::runtime::RendererProtocolObservation::SharedWorker(_)
+                        | crate::runtime::RendererProtocolObservation::WorkerLifecycle(_)),
                     ) => Some(event.clone()),
                     _ => None,
                 },
@@ -1985,6 +1988,23 @@ async fn dedicated_worker_main_scripts_publish_split_target_lifecycle_records() 
         let document_url = Url::parse(&format!("{base_url}/page.html")).expect("document URL");
         let external_url = Url::parse(&format!("{base_url}/worker.js")).expect("worker URL");
         let mut page_vm = test_page_vm_with_document_url(document_url.clone());
+        let runtime = std::sync::Arc::new(
+            page_vm.vm_mut().context_host_weak_for_test().upgrade().unwrap()
+                .borrow().browser_context_runtime(),
+        );
+        let weak_runtime = std::sync::Arc::downgrade(&runtime);
+        let native_script_readiness = std::sync::Arc::new(parking_lot::Mutex::new(Vec::new()));
+        let readiness = native_script_readiness.clone();
+        runtime.install_worker_lifecycle_handler(move |input| {
+            if let crate::runtime::RendererWorkerLifecycle::DedicatedScriptCompleted { instance_id, script } = input.lifecycle.as_ref()
+                && matches!(script.outcome, crate::runtime::RendererDedicatedWorkerMainScriptOutcome::Loaded(_))
+            {
+                let ready = weak_runtime.upgrade().unwrap()
+                    .worker_inspection_endpoint(crate::runtime::RendererWorkerInspectionTarget::Dedicated(*instance_id))
+                    .is_some();
+                readiness.lock().push((script.script_url.clone(), ready));
+            }
+        });
         let output_journal = crate::runtime::RendererTurnOutputJournal::new(
             crate::runtime::RendererOutputStreamIdentity::new_page_for_protocol_test(
                 page_vm.page_id,
@@ -2041,8 +2061,8 @@ async fn dedicated_worker_main_scripts_publish_split_target_lifecycle_records() 
                         .into_records()
                         .into_iter()
                         .filter_map(|record| match record.into_parts().1 {
-                            RendererOutputItem::OwnerAction(
-                                RendererOwnerAction::DedicatedWorkerTargetLifecycle(event),
+                            RendererOutputItem::Observation(
+                                crate::runtime::RendererProtocolObservation::WorkerLifecycle(event),
                             ) => Some(event),
                             _ => None,
                         })
@@ -2052,13 +2072,21 @@ async fn dedicated_worker_main_scripts_publish_split_target_lifecycle_records() 
             .await
             .expect("worker main-script Network test should run on owner lane");
 
+        {
+            let readiness = native_script_readiness.lock();
+            assert_eq!(readiness.len(), 2);
+            assert!(readiness.iter().all(|(_, ready)| *ready),
+                "a native script completion must already expose its exact inspection endpoint: {readiness:?}");
+        }
+        drop(runtime);
+
         server
             .await
             .expect("worker main-script Network server should finish");
         let created = target_events
             .iter()
-            .filter_map(|event| match event {
-                crate::runtime::RendererDedicatedWorkerTargetEvent::Created(info) => Some(info),
+            .filter_map(|event| match event.lifecycle() {
+                crate::runtime::RendererWorkerLifecycle::DedicatedCreated(info) => Some(info),
                 _ => None,
             })
             .collect::<Vec<_>>();
@@ -2081,12 +2109,16 @@ async fn dedicated_worker_main_scripts_publish_split_target_lifecycle_records() 
 
         let loaded = target_events
             .iter()
-            .filter_map(|event| match event {
-                crate::runtime::RendererDedicatedWorkerTargetEvent::ScriptLoaded {
+            .filter_map(|event| match event.lifecycle() {
+                crate::runtime::RendererWorkerLifecycle::DedicatedScriptCompleted {
                     instance_id,
-                    script_url,
-                    response,
-                } => Some((*instance_id, script_url, response.as_ref())),
+                    script,
+                } => match &script.outcome {
+                    crate::runtime::RendererDedicatedWorkerMainScriptOutcome::Loaded(response) => {
+                        Some((*instance_id, &script.script_url, response.as_ref()))
+                    }
+                    _ => None,
+                },
                 _ => None,
             })
             .collect::<Vec<_>>();

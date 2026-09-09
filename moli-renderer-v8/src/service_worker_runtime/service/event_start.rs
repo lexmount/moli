@@ -359,6 +359,7 @@ impl ServiceWorkerRuntimeService {
                     );
                     version.running_state =
                         ServiceWorkerVersionRunningState::Starting { host: host.clone() };
+                    state.record_target_starting(host.version_id());
                     Some(ServiceWorkerLifecycleStart::Start(Box::new(
                         ServiceWorkerQueuedLaunch {
                             params,
@@ -427,6 +428,7 @@ impl ServiceWorkerRuntimeService {
                     .push_back(ServiceWorkerPendingStartEvent::Message(event));
                 version.running_state =
                     ServiceWorkerVersionRunningState::Starting { host: host.clone() };
+                state.record_target_starting(host.version_id());
                 ServiceWorkerMessageStart::Start(Box::new(ServiceWorkerQueuedLaunch {
                     params,
                     host,
@@ -489,6 +491,7 @@ impl ServiceWorkerRuntimeService {
                     .push_back(ServiceWorkerPendingStartEvent::Notification(event));
                 version.running_state =
                     ServiceWorkerVersionRunningState::Starting { host: host.clone() };
+                state.record_target_starting(host.version_id());
                 ServiceWorkerNotificationStart::Start(Box::new(ServiceWorkerQueuedLaunch {
                     params,
                     host,
@@ -553,6 +556,7 @@ impl ServiceWorkerRuntimeService {
                     .push_back(ServiceWorkerPendingStartEvent::Push(event));
                 version.running_state =
                     ServiceWorkerVersionRunningState::Starting { host: host.clone() };
+                state.record_target_starting(host.version_id());
                 ServiceWorkerPushStart::Start(Box::new(ServiceWorkerQueuedLaunch {
                     params,
                     host,
@@ -615,6 +619,7 @@ impl ServiceWorkerRuntimeService {
                     .push_back(ServiceWorkerPendingStartEvent::Sync(event));
                 version.running_state =
                     ServiceWorkerVersionRunningState::Starting { host: host.clone() };
+                state.record_target_starting(host.version_id());
                 ServiceWorkerSyncStart::Start(Box::new(ServiceWorkerQueuedLaunch {
                     params,
                     host,
@@ -677,6 +682,7 @@ impl ServiceWorkerRuntimeService {
                     .push_back(ServiceWorkerPendingStartEvent::PeriodicSync(event));
                 version.running_state =
                     ServiceWorkerVersionRunningState::Starting { host: host.clone() };
+                state.record_target_starting(host.version_id());
                 ServiceWorkerPeriodicSyncStart::Start(Box::new(ServiceWorkerQueuedLaunch {
                     params,
                     host,

@@ -30,7 +30,7 @@ pub(crate) use turn_journal::{RendererSettledOutput, RendererTurnOutputJournal};
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum RendererOutputPublicationAdmission {
     Observation,
-    EssentialOwnerProgress,
+    EssentialOrderedOutput,
     EssentialTerminalResponse,
 }
 
@@ -64,8 +64,11 @@ impl RendererOutputPublication {
             !records.is_empty(),
             "renderer output publications must be non-empty"
         );
-        let admission = if records.iter().any(RendererOutputRecord::is_owner_action) {
-            RendererOutputPublicationAdmission::EssentialOwnerProgress
+        let admission = if records
+            .iter()
+            .any(RendererOutputRecord::requires_essential_transport_admission)
+        {
+            RendererOutputPublicationAdmission::EssentialOrderedOutput
         } else {
             RendererOutputPublicationAdmission::Observation
         };

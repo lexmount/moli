@@ -76,8 +76,17 @@ fn unknown_session_output_plan() -> CommandOutputPlan {
 
 #[cfg(test)]
 mod tests {
+    use moli_core::page::{
+        ContentSecurityPolicyIssueSnapshot, ContentSecurityPolicyViolationType,
+        InspectorIssueSnapshot,
+    };
     use serde_json::json;
 
+    use crate::conn::CommandOwnerScope;
+    use crate::domains::observable_output::{
+        ObservableOutputProjectionStep, ObservablePreparedOutputSlot,
+        inspector_issue_prepared_outputs,
+    };
     use crate::testing::TestContext;
 
     async fn load_document(ctx: &mut TestContext, html: &str) {
@@ -94,6 +103,145 @@ mod tests {
             Some("SID-audits"),
         )
         .await;
+    }
+
+    fn csp_issue() -> InspectorIssueSnapshot {
+        InspectorIssueSnapshot::ContentSecurityPolicy(ContentSecurityPolicyIssueSnapshot::new(
+            false,
+            "script-src-elem".to_owned(),
+            ContentSecurityPolicyViolationType::Inline,
+        ))
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn reenable_replays_concrete_issue_before_lagging_report_snapshot() {
+        let mut ctx = TestContext::new();
+        load_document(&mut ctx, "<!doctype html><body>standards</body>").await;
+        assert!(
+            ctx.conn
+                .browser_context
+                .as_mut()
+                .unwrap()
+                .assign_attached_session_to_target("TID-audits", "SID-audits-peer".to_owned())
+        );
+        for (id, method, session) in [
+            (1, "Audits.enable", "SID-audits"),
+            (2, "Audits.enable", "SID-audits-peer"),
+            (3, "Audits.disable", "SID-audits-peer"),
+        ] {
+            ctx.process_async(json!({"id": id, "method": method, "sessionId": session}))
+                .await;
+            ctx.expect_result(id, json!({}), Some(session));
+        }
+
+        let owner = CommandOwnerScope::capture(&ctx.conn, Some("SID-audits"));
+        let source_document = ctx
+            .conn
+            .committed_renderer_document_binding_for_owner(&owner)
+            .unwrap()
+            .renderer_document_identity();
+        // Admit the concrete FIFO fact while the cumulative Page report still
+        // describes the issue-free fixture. This is the production race's exact
+        // ordering, without depending on how quickly a renderer snapshot arrives.
+        let prepared =
+            inspector_issue_prepared_outputs(&mut ctx.conn, source_document, csp_issue(), &owner);
+        let mut slot = ObservablePreparedOutputSlot::from_outputs(prepared);
+        let mut live = Vec::new();
+        slot.emit_activity_background_events_async(
+            ObservableOutputProjectionStep::Audits,
+            &mut ctx.conn,
+            &mut live,
+            owner.session_id(),
+        )
+        .await;
+        assert_eq!(live.len(), 1);
+        let live = live.pop().unwrap().into_protocol_message();
+        assert_eq!(live["sessionId"], json!("SID-audits"));
+        assert_eq!(live["method"], json!("Audits.issueAdded"));
+
+        for (id, method) in [
+            (4, "Audits.enable"),
+            (5, "Audits.enable"),
+            (6, "Audits.disable"),
+            (7, "Audits.enable"),
+        ] {
+            ctx.process_async(json!({
+                "id": id, "method": method, "sessionId": "SID-audits-peer",
+            }))
+            .await;
+            if id == 4 || id == 7 {
+                let replay = ctx.take_one();
+                assert_eq!(replay["method"], json!("Audits.issueAdded"));
+                assert_eq!(replay["sessionId"], json!("SID-audits-peer"));
+                assert_eq!(replay["params"], live["params"]);
+            }
+            ctx.expect_result(id, json!({}), Some("SID-audits-peer"));
+            assert!(
+                ctx.sent.is_empty(),
+                "unexpected replay or peer fanout: {:?}",
+                ctx.sent
+            );
+        }
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn replacement_document_retires_stored_issues_and_rejects_late_facts() {
+        let mut ctx = TestContext::new();
+        load_document(&mut ctx, "<!doctype html><body>predecessor</body>").await;
+        let owner = CommandOwnerScope::capture(&ctx.conn, Some("SID-audits"));
+        let source_document = ctx
+            .conn
+            .committed_renderer_document_binding_for_owner(&owner)
+            .unwrap()
+            .renderer_document_identity();
+        assert!(
+            inspector_issue_prepared_outputs(&mut ctx.conn, source_document, csp_issue(), &owner)
+                .is_empty()
+        );
+        assert_eq!(
+            ctx.conn
+                .target_owner_state_for_owner(&owner)
+                .unwrap()
+                .audits_storage_state
+                .issue_end(),
+            1
+        );
+
+        ctx.install_quiet_navigation_fixture_for_session_owner(
+            "data:text/html,<!doctype html><body>replacement</body>",
+            Some("SID-audits"),
+        )
+        .await;
+        let owner = CommandOwnerScope::capture(&ctx.conn, Some("SID-audits"));
+        assert_ne!(
+            ctx.conn
+                .committed_renderer_document_binding_for_owner(&owner)
+                .unwrap()
+                .renderer_document_identity(),
+            source_document
+        );
+        assert!(
+            inspector_issue_prepared_outputs(&mut ctx.conn, source_document, csp_issue(), &owner)
+                .is_empty()
+        );
+        assert_eq!(
+            ctx.conn
+                .target_owner_state_for_owner(&owner)
+                .unwrap()
+                .audits_storage_state
+                .issue_end(),
+            0
+        );
+        ctx.process_async(json!({
+            "id": 1, "method": "Audits.enable", "sessionId": "SID-audits",
+        }))
+        .await;
+        ctx.expect_result(1, json!({}), Some("SID-audits"));
+        assert!(
+            ctx.sent.is_empty(),
+            "retired issues must not replay: {:?}",
+            ctx.sent
+        );
     }
 
     #[tokio::test(flavor = "multi_thread")]

@@ -2,6 +2,133 @@ use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64_STANDARD};
 
 use super::*;
 
+#[tokio::test]
+async fn native_navigation_retirement_recovers_failure_after_an_earlier_response_read() {
+    let mut ctx = TestContext::new();
+    with_loaded_http_document(
+        &mut ctx,
+        "https://navigation.example/committed",
+        "SID-1",
+        "TID-1",
+    )
+    .await;
+    for (id, method, params) in [
+        (100, "Network.enable", json!({})),
+        (
+            102,
+            "Fetch.enable",
+            json!({"patterns": [{"resourceType": "Document", "requestStage": "Request"}]}),
+        ),
+    ] {
+        ctx.process_async(
+            json!({"id": id, "sessionId": "SID-1", "method": method, "params": params}),
+        )
+        .await;
+        ctx.expect_result(id, json!({}), Some("SID-1"));
+    }
+    ctx.process_async(json!({
+        "id": 103, "sessionId": "SID-1", "method": "Page.navigate",
+        "params": {"url": "http://example.test/rejected"}
+    }))
+    .await;
+    let pause = ctx
+        .wait_for_scheduler_message("held failing navigation", |event| {
+            event["method"] == "Fetch.requestPaused"
+                && event["params"]["request"]["url"] == "http://example.test/rejected"
+        })
+        .await;
+    let (contents, decision) = ctx
+        .conn
+        .native_navigation_decision_for_target("TID-1")
+        .unwrap();
+    let navigation = decision.permit.navigation();
+
+    // Freeze the real race boundary: response publication has read the still
+    // paused request, but the following retirement will observe its failure.
+    let earlier = ctx
+        .conn
+        .project_browser_navigation_responses(contents)
+        .await;
+    assert!(
+        earlier
+            .into_iter()
+            .all(|event| event.into_protocol_message()["id"] != 103)
+    );
+    assert!(ctx.sent.iter().all(|event| event["id"] != 103));
+    let owner = crate::conn::CommandOwnerScope::capture(&ctx.conn, Some("SID-1"));
+    let claimed = ctx
+        .conn
+        .take_pending_fetch_navigation_for_owner(
+            &owner,
+            Some("SID-1"),
+            pause["params"]["requestId"].as_str().unwrap(),
+        )
+        .unwrap();
+    let (_, mut events) = ctx.conn.subscribe_browser_events().unwrap();
+    let (pending, _request) = claimed.into_parts();
+    ctx.conn.update_native_navigation_dispatch(&pending);
+    assert!(ctx.conn.resolve_native_navigation_decision(
+        contents,
+        pending.navigation_permit,
+        moli_core::browser::NavigationDecision::Fail {
+            error_text: "net::ERR_BLOCKED_BY_CLIENT".into(),
+        },
+    ));
+    tokio::time::timeout(std::time::Duration::from_secs(5), async {
+        loop {
+            if matches!(events.recv().await.unwrap().event,
+                moli_core::browser::BrowserEvent::NavigationFailed { request, .. }
+                if request.web_contents == contents && request.navigation == navigation)
+            {
+                break;
+            }
+        }
+    })
+    .await
+    .unwrap();
+
+    let retired = ctx
+        .conn
+        .native_navigation_retirement_events(contents, navigation)
+        .into_iter()
+        .map(crate::conn::BackgroundProtocolEvent::into_protocol_message)
+        .collect::<Vec<_>>();
+    let replies = retired
+        .iter()
+        .filter(|event| event["id"] == 103)
+        .collect::<Vec<_>>();
+    assert_eq!(replies.len(), 1, "{retired:?}");
+    assert_eq!(replies[0]["sessionId"], "SID-1");
+    assert_eq!(
+        replies[0]["error"]["message"], "net::ERR_BLOCKED_BY_CLIENT",
+        "{retired:?}"
+    );
+    let failures = retired
+        .iter()
+        .filter(|event| event["method"] == "Network.loadingFailed")
+        .collect::<Vec<_>>();
+    assert_eq!(failures.len(), 1, "{retired:?}");
+    assert_eq!(
+        failures[0]["params"]["requestId"],
+        pause["params"]["networkId"]
+    );
+    assert_eq!(
+        failures[0]["params"]["errorText"],
+        "net::ERR_BLOCKED_BY_CLIENT"
+    );
+    assert!(
+        ctx.conn
+            .native_navigation_retirement_events(contents, navigation)
+            .is_empty()
+    );
+    assert!(
+        ctx.conn
+            .project_browser_navigation_responses(contents)
+            .await
+            .is_empty()
+    );
+}
+
 async fn assert_stale_fetch_completion_preserves_winning_navigation(method: &str) {
     for loaded in [true, false] {
         let mut ctx = TestContext::new();
