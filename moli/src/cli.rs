@@ -1,4 +1,4 @@
-use std::{ffi::OsString, num::NonZeroU32, path::PathBuf};
+use std::{ffi::OsString, num::NonZeroU32, path::PathBuf, str::FromStr};
 
 use clap::{Args, Parser, Subcommand, ValueEnum};
 use regex::Regex;
@@ -15,6 +15,50 @@ const DUMP_MODES: &[&str] = &[
 ];
 
 pub const DEFAULT_REDIRECT_WAIT_MS: u64 = 1_000;
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ClientCertificate {
+    path: PathBuf,
+    password: Option<String>,
+}
+
+impl ClientCertificate {
+    pub fn path(&self) -> &std::path::Path {
+        &self.path
+    }
+
+    pub fn password(&self) -> Option<&str> {
+        self.password.as_deref()
+    }
+}
+
+impl FromStr for ClientCertificate {
+    type Err = String;
+
+    fn from_str(value: &str) -> Result<Self, Self::Err> {
+        let mut path = String::new();
+        let mut chars = value.chars().peekable();
+        while let Some(character) = chars.next() {
+            match (character, chars.peek().copied()) {
+                ('\\', Some(':' | '"')) => {
+                    path.push(chars.next().expect("peeked character should exist"));
+                }
+                (':', _) => {
+                    let password = chars.collect::<String>();
+                    return Ok(Self {
+                        path: PathBuf::from(path),
+                        password: Some(password),
+                    });
+                }
+                _ => path.push(character),
+            }
+        }
+        Ok(Self {
+            path: PathBuf::from(path),
+            password: None,
+        })
+    }
+}
 
 #[derive(Debug, Clone, PartialEq, Eq, Parser)]
 #[command(
@@ -369,6 +413,22 @@ pub struct ServeArgs {
 pub struct CommonArgs {
     #[arg(long)]
     pub insecure_disable_tls_host_verification: bool,
+
+    /// Use this PEM file as the CA certificate bundle for HTTPS server
+    /// verification.
+    #[arg(long, value_name = "PATH")]
+    pub ca_cert: Option<PathBuf>,
+
+    /// Use this PEM, DER, or PKCS#12 certificate for HTTPS client authentication.
+    /// PEM may contain both the certificate and its private key. Use
+    /// `--client-key` when the private key is stored separately. `.p12` and
+    /// `.pfx` files are treated as PKCS#12 identities.
+    #[arg(long, value_name = "CERTIFICATE[:PASSWORD]")]
+    pub client_cert: Option<ClientCertificate>,
+
+    /// Use this PEM private key for HTTPS client-certificate authentication.
+    #[arg(long, value_name = "PATH", requires = "client_cert")]
+    pub client_key: Option<PathBuf>,
 
     /// Refuse a `fetch` whose URL the origin's `/robots.txt` disallows for the
     /// configured user agent. An unreachable `robots.txt` (5xx or a transport
@@ -734,6 +794,70 @@ mod tests {
             Commands::Serve(args) => assert_eq!(args.port, 0),
             other => panic!("expected serve command, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn tls_credentials_are_shared_by_fetch_and_serve() {
+        for command in ["fetch", "serve"] {
+            let mut args = vec![
+                "moli",
+                command,
+                "--ca-cert",
+                "ca.pem",
+                "--client-cert",
+                "client.pem:secret",
+                "--client-key",
+                "client-key.pem",
+            ];
+            if command == "fetch" {
+                args.push("https://example.test/");
+            }
+            let cli = Cli::parse_from(args);
+            let common = match cli.command {
+                Commands::Fetch(args) => args.common,
+                Commands::Serve(args) => args.common,
+            };
+            assert_eq!(common.ca_cert, Some(PathBuf::from("ca.pem")));
+            let certificate = common.client_cert.expect("client certificate");
+            assert_eq!(certificate.path(), std::path::Path::new("client.pem"));
+            assert_eq!(certificate.password(), Some("secret"));
+            assert_eq!(common.client_key, Some(PathBuf::from("client-key.pem")));
+        }
+    }
+
+    #[test]
+    fn client_certificate_can_contain_its_key_but_key_requires_certificate() {
+        let combined = Cli::try_parse_from([
+            "moli",
+            "fetch",
+            "--client-cert",
+            "combined.pem",
+            "https://example.test/",
+        ]);
+        assert!(combined.is_ok(), "a combined client PEM should be accepted");
+
+        let key_only = Cli::try_parse_from([
+            "moli",
+            "fetch",
+            "--client-key",
+            "client-key.pem",
+            "https://example.test/",
+        ]);
+        assert!(
+            key_only.is_err(),
+            "a private key without a certificate parsed"
+        );
+    }
+
+    #[test]
+    fn client_certificate_uses_curl_style_password_and_colon_escaping() {
+        let certificate = ClientCertificate::from_str(r"identity\:archive.p12:secret:tail")
+            .expect("client certificate should parse");
+        assert_eq!(
+            certificate.path(),
+            std::path::Path::new("identity:archive.p12")
+        );
+        assert_eq!(certificate.password(), Some("secret:tail"));
     }
 
     #[test]

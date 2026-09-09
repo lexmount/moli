@@ -191,6 +191,18 @@ fn apply_common_args(config: &mut AppConfig, common: &CommonArgs) -> Result<()> 
         .browser
         .fetch_mut()
         .set_tls_verify_host(!common.insecure_disable_tls_host_verification);
+    config.browser.fetch_mut().set_tls_credentials(
+        common.ca_cert.clone(),
+        common
+            .client_cert
+            .as_ref()
+            .map(|certificate| certificate.path().to_path_buf()),
+        common.client_key.clone(),
+        common
+            .client_cert
+            .as_ref()
+            .and_then(|certificate| certificate.password().map(str::to_owned)),
+    );
     configure_web_bot_auth(config.browser.fetch_mut(), common)?;
 
     for source in &common.document_start_script {
@@ -325,5 +337,44 @@ pub fn response_wait_criteria_from_args(
                 regex: json.regex().clone(),
             }
         }),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::AppConfig;
+    use crate::cli::{Cli, Commands};
+    use clap::Parser;
+    use std::path::Path;
+
+    #[test]
+    fn tls_credentials_reach_fetch_config_for_fetch_and_serve() {
+        for command in ["fetch", "serve"] {
+            let mut arguments = vec![
+                "moli",
+                command,
+                "--ca-cert",
+                "ca.pem",
+                "--client-cert",
+                "client.pem:secret",
+                "--client-key",
+                "client-key.pem",
+            ];
+            if command == "fetch" {
+                arguments.push("https://example.test/");
+            }
+
+            let cli = Cli::parse_from(arguments);
+            assert!(matches!(
+                &cli.command,
+                Commands::Fetch(_) | Commands::Serve(_)
+            ));
+            let config = AppConfig::from_cli(&cli).expect("TLS configuration should build");
+            let fetch = config.browser.fetch();
+            assert_eq!(fetch.ca_cert(), Some(Path::new("ca.pem")));
+            assert_eq!(fetch.client_cert(), Some(Path::new("client.pem")));
+            assert_eq!(fetch.client_key(), Some(Path::new("client-key.pem")));
+            assert_eq!(fetch.client_cert_password(), Some("secret"));
+        }
     }
 }
