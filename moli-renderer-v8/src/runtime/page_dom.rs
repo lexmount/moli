@@ -1612,6 +1612,7 @@ impl PageVm {
         let pending_runtime_work = self
             .vm_mut()
             .has_post_domcontentloaded_runtime_work_for_wait()
+            || self.vm().has_pending_bitmap_tasks()
             || self.vm().has_pending_webcrypto_tasks()
             || self.vm().has_pending_opfs_tasks();
         state.saw_post_domcontentloaded_runtime_work |= pending_runtime_work;
