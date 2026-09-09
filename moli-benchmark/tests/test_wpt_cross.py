@@ -123,6 +123,7 @@ from moli_benchmark.wpt_cross.server import (
     _host_header_hostname,
     _headers_include,
     _normalize_harness_case_key,
+    _inspect_headers_response_headers,
     _needs_wpt_template_substitution,
     _legacy_wpt_resource_alias,
     _pipe_response_header_operations,
@@ -4029,6 +4030,68 @@ test(() => {}, "ok");
         self.assertIsNone(_wpt_delay_seconds("ms=invalid"))
         self.assertIsNone(_wpt_delay_seconds("ms=-1"))
         self.assertIsNone(_wpt_delay_seconds("ms=nan"))
+
+    def test_fixture_server_models_fetch_inspect_headers_handler(self) -> None:
+        self.assertEqual(
+            _inspect_headers_response_headers(
+                "headers=referer%7Corigin%7Cmissing&cors&allow_headers=x-test",
+                [
+                    ("Referer", "http://source.test/path"),
+                    ("Origin", "http://origin.test"),
+                    ("X-Test", "value"),
+                ],
+            ),
+            [
+                ("x-request-referer", "http://source.test/path"),
+                ("x-request-origin", "http://origin.test"),
+                ("Access-Control-Allow-Origin", "http://origin.test"),
+                ("Access-Control-Allow-Credentials", "true"),
+                ("Access-Control-Allow-Methods", "GET, POST, HEAD"),
+                (
+                    "Access-Control-Expose-Headers",
+                    "x-request-referer, x-request-origin, x-request-missing",
+                ),
+                ("Access-Control-Allow-Headers", "x-test"),
+            ],
+        )
+
+        with tempfile.TemporaryDirectory() as root:
+            root_path = Path(root)
+            (root_path / "resources").mkdir()
+            (root_path / "resources" / "testharness.js").write_text(
+                "// testharness", encoding="utf-8"
+            )
+            with WptFixtureServer(root_path) as server:
+                url = (
+                    f"{server.base_url}/fetch/api/resources/"
+                    "inspect-headers.py?headers=referer%7Corigin&cors"
+                )
+                request = Request(
+                    url,
+                    headers={
+                        "Referer": "http://source.test/path",
+                        "Origin": "http://origin.test",
+                    },
+                )
+                with urlopen(request, timeout=2) as response:
+                    self.assertEqual(response.status, 200)
+                    self.assertEqual(response.read(), b"")
+                    self.assertEqual(
+                        response.headers["x-request-referer"],
+                        "http://source.test/path",
+                    )
+                    self.assertEqual(
+                        response.headers["x-request-origin"],
+                        "http://origin.test",
+                    )
+                    self.assertEqual(
+                        response.headers["Access-Control-Allow-Origin"],
+                        "http://origin.test",
+                    )
+                    self.assertEqual(
+                        response.headers["Access-Control-Expose-Headers"],
+                        "x-request-referer, x-request-origin",
+                    )
 
     def test_fixture_server_models_xhr_delay_py_methods(self) -> None:
         with tempfile.TemporaryDirectory() as root:
