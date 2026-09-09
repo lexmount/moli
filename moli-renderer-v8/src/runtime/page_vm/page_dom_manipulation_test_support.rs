@@ -21,6 +21,7 @@ pub(crate) enum PageDomManipulationTestFamily {
     FileEntryFileCallback,
     ScriptPreparationError,
     PromiseRejection,
+    MainDocumentLifecycle,
     ImageLoadEvent,
     PopupLoadEvent,
     ConnectedStyleEvent,
@@ -34,6 +35,9 @@ impl PageDomManipulationTestFamily {
         matches!(
             (self, owner),
             (
+                Self::MainDocumentLifecycle,
+                RendererPageDomManipulationOwner::MainDocumentLifecycle(_)
+            ) | (
                 Self::BroadcastChannel,
                 RendererPageDomManipulationOwner::BroadcastChannel(_)
             ) | (

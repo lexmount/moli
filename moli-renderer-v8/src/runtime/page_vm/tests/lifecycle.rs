@@ -204,6 +204,26 @@ async fn advance_unblocked_exact_lifecycle_to_stage(
                     },
                 ..
             } => assert_eq!(*runnable_document, document),
+            DocumentLifecycleTurnOutcome {
+                readiness: DocumentLifecycleTurnReadiness::Blocked { document: waiting },
+                ..
+            } if pending
+                .as_ref()
+                .is_some_and(|pending| pending.awaiting_dom_task.is_some()) =>
+            {
+                assert_eq!(*waiting, document);
+                let loader = page_vm.request_client.clone();
+                assert!(
+                    page_vm
+                        .run_exact_selected_page_task_for_test(
+                            super::super::PageSelectedTaskTestSelector::DomManipulation(
+                                super::super::PageDomManipulationTestFamily::MainDocumentLifecycle
+                            ),
+                            &loader
+                        )
+                        .await?
+                );
+            }
             _ => panic!(
                 "unblocked exact lifecycle should remain runnable before {stage:?}: {outcome:?}"
             ),
@@ -265,6 +285,47 @@ async fn prepare_parse_time_exact_domcontentloaded(
     Ok(owner)
 }
 
+impl PageVm {
+    async fn advance_lifecycle_and_selected_dom_task_for_test(
+        &mut self,
+        pending: &mut Option<PendingDocumentLifecycleTurn>,
+        document: RendererDocumentLifecycleIdentity,
+    ) -> anyhow::Result<DocumentLifecycleTurnOutcome> {
+        for _ in 0..64 {
+            let outcome = self
+                .advance_post_parse_lifecycle_one_owner_turn(pending, document)
+                .await?;
+            if !matches!(
+                outcome.readiness,
+                DocumentLifecycleTurnReadiness::Blocked { .. }
+            ) || pending
+                .as_ref()
+                .is_none_or(|pending| pending.awaiting_dom_task.is_none())
+            {
+                return Ok(outcome);
+            }
+            let snapshot = self.document_replacement_lifecycle_action_snapshot();
+            let loader = self.request_client.clone();
+            assert!(
+                self.run_exact_selected_page_task_for_test(
+                    super::super::PageSelectedTaskTestSelector::DomManipulation(
+                        super::super::PageDomManipulationTestFamily::MainDocumentLifecycle,
+                    ),
+                    &loader,
+                )
+                .await?
+            );
+            if let Some(outcome) = self
+                .reconcile_document_replacement_lifecycle_after_owner_action(snapshot, pending)
+                .await?
+            {
+                return Ok(outcome);
+            }
+        }
+        anyhow::bail!("lifecycle fixture exceeded its bounded DOM task turns")
+    }
+}
+
 async fn exact_lifecycle_turn_reaches_handler_navigation(
     event_target: &str,
     event_name: &str,
@@ -301,7 +362,7 @@ async fn exact_lifecycle_turn_reaches_handler_navigation(
 
             for _ in 0..128 {
                 match page_vm
-                    .advance_post_parse_lifecycle_one_owner_turn(&mut pending, document)
+                    .advance_lifecycle_and_selected_dom_task_for_test(&mut pending, document)
                     .await?
                 {
                     DocumentLifecycleTurnOutcome {
@@ -367,7 +428,7 @@ async fn exact_lifecycle_turn_publishes_document_open_replacement(
 
             for _ in 0..96 {
                 match page_vm
-                    .advance_post_parse_lifecycle_one_owner_turn(
+                    .advance_lifecycle_and_selected_dom_task_for_test(
                         &mut pending_document_lifecycle_turn,
                         document,
                     )
@@ -399,7 +460,17 @@ async fn exact_lifecycle_turn_publishes_document_open_replacement(
                             },
                         ..
                     } => {
-                        assert_eq!(next_document, document);
+                        if next_document != document {
+                            assert_ne!(next_document, initial_document);
+                            assert_eq!(page_vm.document_lifecycle.identity(), next_document);
+                            assert_eq!(
+                                pending_document_lifecycle_turn
+                                    .as_ref()
+                                    .map(|pending| pending.document),
+                                Some(next_document)
+                            );
+                            return Ok(());
+                        }
                         document = next_document;
                     }
                     DocumentLifecycleTurnOutcome {
@@ -574,7 +645,7 @@ fn load_stage_non_replacing_javascript_navigation_resumes_exact_lifecycle() {
 
                     for _ in 0..128 {
                         let outcome = page_vm
-                            .advance_post_parse_lifecycle_one_owner_turn(&mut pending, document)
+                            .advance_lifecycle_and_selected_dom_task_for_test(&mut pending, document)
                             .await?;
                         if !matches!(
                             outcome.action,
@@ -620,7 +691,7 @@ fn load_stage_non_replacing_javascript_navigation_resumes_exact_lifecycle() {
 
                         for _ in 0..128 {
                             let resumed = page_vm
-                                .advance_post_parse_lifecycle_one_owner_turn(
+                                .advance_lifecycle_and_selected_dom_task_for_test(
                                     &mut pending,
                                     document,
                                 )
@@ -1734,6 +1805,15 @@ Promise.resolve().then(() => __parseTimeExactDclOrder.push("module-terminal:micr
                         page_vm.vm_mut().eval_without_microtask_checkpoint_for_test(
                             "__parseTimeExactDclOrder.join('|')"
                         )?,
+                        "module-terminal:microtask",
+                        "parser completion must only enqueue DCL"
+                    );
+                    let loader = page_vm.request_client.clone();
+                    assert!(page_vm.run_exact_selected_page_task_for_test(super::super::PageSelectedTaskTestSelector::DomManipulation(super::super::PageDomManipulationTestFamily::MainDocumentLifecycle), &loader).await?);
+                    assert_eq!(
+                        page_vm.vm_mut().eval_without_microtask_checkpoint_for_test(
+                            "__parseTimeExactDclOrder.join('|')"
+                        )?,
                         "module-terminal:microtask|dcl|dcl:microtask",
                         "the parser task-end must settle its terminal reactions before the exact DCL successor runs its own task and checkpoint"
                     );
@@ -1790,6 +1870,8 @@ Promise.resolve().then(() => {
                         ParseTimeMainParserBoundaryOutcome::DocumentReplaced,
                         "the parser task-end checkpoint must report replacement before attempting the old exact DCL"
                     );
+                    let loader = page_vm.request_client.clone();
+                    assert!(page_vm.run_exact_selected_page_task_for_test(super::super::PageSelectedTaskTestSelector::DomManipulation(super::super::PageDomManipulationTestFamily::MainDocumentLifecycle), &loader).await?);
                     assert_ne!(
                         page_vm.vm().current_main_document_task_owner(),
                         Some(owner)
@@ -1919,13 +2001,16 @@ document.addEventListener("DOMContentLoaded", () => {
                         .await?;
                     assert_eq!(
                         outcome,
-                        ParseTimeMainParserBoundaryOutcome::DocumentReplaced,
-                        "phase one must stop the retired Document after an exact-DCL reaction replaces it"
+                        ParseTimeMainParserBoundaryOutcome::CurrentDocumentRetained,
+                        "the parser returns before the queued DCL listener can replace its Document"
                     );
-                    assert_ne!(
-                        page_vm.vm().current_main_document_task_owner(),
-                        Some(owner)
+                    let loader = page_vm.request_client.clone();
+                    assert!(
+                        page_vm
+                            .run_exact_selected_page_task_for_test(super::super::PageSelectedTaskTestSelector::DomManipulation(super::super::PageDomManipulationTestFamily::MainDocumentLifecycle), &loader)
+                            .await?
                     );
+                    assert_ne!(page_vm.vm().current_main_document_task_owner(), Some(owner));
                     assert_eq!(
                         page_vm.vm_mut().eval(
                             "String(document.getElementById('parse-time-replacement') !== null)"
@@ -2378,7 +2463,7 @@ fn domcontentloaded_turn_transitions_same_exact_document_to_load_residence() {
 
                     let dcl_outcome = loop {
                         let outcome = page_vm
-                            .advance_post_parse_lifecycle_one_owner_turn(
+                            .advance_lifecycle_and_selected_dom_task_for_test(
                                 &mut pending_document_lifecycle_turn,
                                 document,
                             )
@@ -2438,7 +2523,7 @@ fn domcontentloaded_turn_transitions_same_exact_document_to_load_residence() {
 
                     loop {
                         match page_vm
-                            .advance_post_parse_lifecycle_one_owner_turn(
+                            .advance_lifecycle_and_selected_dom_task_for_test(
                                 &mut pending_document_lifecycle_turn,
                                 document,
                             )
@@ -3606,7 +3691,7 @@ fn top_level_http_location_navigation_reserves_service_worker_client_until_commi
                     } => {
                         loop {
                             match page_vm
-                                .advance_post_parse_lifecycle_one_owner_turn(
+                                .advance_lifecycle_and_selected_dom_task_for_test(
                                     &mut pending_document_lifecycle_turn,
                                     lifecycle_document,
                                 )
