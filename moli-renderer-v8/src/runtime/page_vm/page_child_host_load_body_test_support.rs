@@ -20,12 +20,17 @@ impl PageVm {
             .take_scheduler_task_for_executor_test(|descriptor| {
                 matches!(
                     descriptor,
-                    RendererPageReadyDescriptor::ChildFrameTask { owner, .. }
+                    RendererPageReadyDescriptor::DomManipulation {
+                        owner: crate::page_task_queue::RendererPageDomManipulationOwner::ChildHostLoad(owner), ..
+                    }
                         if matches!(owner.target(), RendererPageChildFrameTaskTarget::HostLoad(_))
                 )
             })?;
-        let RendererPageSchedulerTask::ChildFrameTask(task) = task else {
-            unreachable!("HostLoad descriptor must dequeue a child-frame task")
+        let RendererPageSchedulerTask::DomManipulation(
+            crate::page_task_queue::RendererPageDomManipulationTask::ChildHostLoad(task),
+        ) = task
+        else {
+            unreachable!("HostLoad descriptor must dequeue its DOM task")
         };
         Some(self.apply_selected_page_child_host_load_turn(task))
     }

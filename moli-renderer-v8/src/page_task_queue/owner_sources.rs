@@ -627,13 +627,12 @@ pub(crate) enum RendererPageSchedulerTask {
 }
 
 impl RendererPageOwnedTaskSources {
-    pub(crate) fn has_queued_main_document_lifecycle_dom_task(
+    pub(crate) fn has_queued_document_lifecycle_dom_task(
         &mut self,
-        root_document: crate::runtime::RendererDocumentToken,
-        document: crate::frame_owner_model::FrameDocumentTaskOwner,
+        is_current: impl Fn(super::RendererPageDomManipulationOwner) -> bool,
     ) -> bool {
         self.dom_manipulation
-            .has_main_document_lifecycle_task(root_document, document)
+            .has_document_lifecycle_task(is_current)
     }
 
     pub(crate) fn new(
@@ -1982,7 +1981,7 @@ impl RendererPageOwnedTaskSourcesTestHarness {
                         | RendererPageReadyDescriptor::DomManipulation {
                             owner: super::RendererPageDomManipulationOwner::ChildDocumentLifecycle(
                                 _
-                            ),
+                            ) | super::RendererPageDomManipulationOwner::ChildHostLoad(_),
                             ..
                         }
                 )
@@ -1997,7 +1996,9 @@ impl RendererPageOwnedTaskSourcesTestHarness {
             .map(|descriptor| match descriptor {
                 RendererPageReadyDescriptor::ChildFrameTask { owner, .. }
                 | RendererPageReadyDescriptor::DomManipulation {
-                    owner: super::RendererPageDomManipulationOwner::ChildDocumentLifecycle(owner),
+                    owner:
+                        super::RendererPageDomManipulationOwner::ChildDocumentLifecycle(owner)
+                        | super::RendererPageDomManipulationOwner::ChildHostLoad(owner),
                     ..
                 } => owner.target(),
                 _ => unreachable!("child semantic selector must retain its exact target"),
