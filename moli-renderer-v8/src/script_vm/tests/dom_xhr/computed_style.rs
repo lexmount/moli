@@ -6389,7 +6389,7 @@ fn computed_font_family_serializes_css_fonts_generic_functions() {
 
     assert_eq!(
         result,
-        r#"generic(fangsong)|-webkit-generic(fangsong)|Times New Roman|"34J""#
+        r#"generic(fangsong)|-webkit-generic(fangsong)|"Times New Roman"|"34J""#
     );
 }
 #[test]

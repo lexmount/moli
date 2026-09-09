@@ -9565,7 +9565,7 @@ fn live_inline_font_family_getter_normalizes_quoted_family_names() {
 
     assert_eq!(
         result,
-        r#"[["Twisty Tie","Twisty Tie"],["Veronica","Veronica"],["\"34J\"","\"34J\""],["\"serif\"","\"serif\""]]"#
+        r#"[["\"Twisty Tie\"","\"Twisty Tie\""],["Veronica","Veronica"],["\"34J\"","\"34J\""],["\"serif\"","\"serif\""]]"#
     );
 }
 

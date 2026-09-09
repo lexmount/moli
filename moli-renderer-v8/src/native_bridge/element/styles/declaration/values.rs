@@ -999,17 +999,13 @@ fn normalize_cssom_font_family_value(value: &str) -> Option<String> {
 }
 
 fn font_family_name_can_serialize_unquoted(name: &str) -> bool {
-    if name.is_empty()
-        || name.trim() != name
-        || name.chars().any(|ch| ch.is_whitespace() && ch != ' ')
-    {
-        return false;
-    }
     let lowered = name.to_ascii_lowercase();
     if font_family_name_is_reserved(&lowered) {
         return false;
     }
-    name.split(' ').all(font_family_ident_is_valid)
+    // Like Blink's SerializeFontFamily, only one unescaped CSS identifier
+    // may lose its quotes, not a whitespace-separated identifier sequence.
+    font_family_ident_is_valid(name)
 }
 
 fn font_family_name_is_reserved(lowered: &str) -> bool {
@@ -1039,16 +1035,17 @@ fn font_family_name_is_reserved(lowered: &str) -> bool {
 
 fn font_family_ident_is_valid(ident: &str) -> bool {
     let mut chars = ident.chars();
-    let Some(first) = chars.next() else {
+    let Some(mut first) = chars.next() else {
         return false;
     };
-    if first.is_ascii_digit() {
-        return false;
+    if first == '-' {
+        let Some(next) = chars.next() else {
+            return false;
+        };
+        first = next;
     }
-    if first == '-' && chars.clone().next().is_some_and(|ch| ch.is_ascii_digit()) {
-        return false;
-    }
-    font_family_ident_char_is_valid(first) && chars.all(font_family_ident_char_is_valid)
+    (first.is_ascii_alphabetic() || first == '_' || !first.is_ascii())
+        && chars.all(font_family_ident_char_is_valid)
 }
 
 fn font_family_ident_char_is_valid(ch: char) -> bool {
@@ -7338,8 +7335,13 @@ mod tests {
     fn font_family_value_normalization_stays_renderer_local() {
         assert_eq!(
             normalize_style_value("font-family", "'Lucida Grande'"),
-            "Lucida Grande"
+            r#""Lucida Grande""#
         );
+        assert_eq!(normalize_style_value("font-family", "'Arial'"), "Arial");
+        assert_eq!(normalize_style_value("font-family", "'-Arial'"), "-Arial");
+        assert_eq!(normalize_style_value("font-family", "'-'"), r#""-""#);
+        assert_eq!(normalize_style_value("font-family", "'--'"), r#""--""#);
+        assert_eq!(normalize_style_value("font-family", "'-1'"), r#""-1""#);
         assert_eq!(normalize_style_value("font-family", "'34J'"), r#""34J""#);
         assert_eq!(
             normalize_style_value("font-family", "'serif'"),
