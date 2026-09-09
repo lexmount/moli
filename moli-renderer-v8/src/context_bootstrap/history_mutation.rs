@@ -409,7 +409,7 @@ fn effective_history_mutation_kind<'s>(
     };
     let host = unsafe { &*host_ptr };
     let is_initial_empty = child_browsing_context_handle_for_runtime_owner(scope, owner)
-        .is_some_and(|handle| host.child_browsing_context_is_on_initial_about_blank_entry(handle))
+        .is_some_and(|handle| host.child_current_document_is_initial_empty(handle))
         || crate::native_bridge::lightweight_popup_id_from_window(scope, owner).is_some_and(
             |popup_id| host.lightweight_popup_current_document_is_initial_empty(popup_id),
         );
