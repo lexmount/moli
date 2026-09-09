@@ -693,7 +693,7 @@ async fn child_parser_stylesheet_media(media: &'static str, imports: bool, block
                 }
                 assert_eq!(
                     page_vm.vm_mut().eval("__childParserStylesheetEvents.join('|')")?,
-                    if blocks_scripts { "" } else { "script::complete" },
+                    if blocks_scripts { "" } else { "script::loading" },
                     "only matching stylesheets may block the parser-created classic script: {media}"
                 );
                 assert!(
@@ -753,7 +753,7 @@ async fn child_parser_stylesheet_media(media: &'static str, imports: bool, block
                     page_vm
                         .vm_mut()
                         .eval("__childParserStylesheetEvents.join('|')")?,
-                    "script:stylesheet-ready:complete",
+                    "script:stylesheet-ready:loading",
                     "stylesheet source must be installed before the parser-blocking script executes"
                 );
                 followup_sources.push(
@@ -824,7 +824,7 @@ async fn child_parser_stylesheet_media(media: &'static str, imports: bool, block
             PageResourceCompletionOutputEffect::CaptureRequired
         );
         assert_eq!(
-            events_after_completion, if blocks_scripts { "" } else { "script::complete" },
+            events_after_completion, if blocks_scripts { "" } else { "script::loading" },
             "stylesheet resource completion must not inline-run child script"
         );
         assert_eq!(
@@ -837,7 +837,7 @@ async fn child_parser_stylesheet_media(media: &'static str, imports: bool, block
                 ChildFrameSemanticTurnKind::HostLoad,
             ] } else { vec![ChildFrameSemanticTurnKind::DocumentLifecycle, ChildFrameSemanticTurnKind::HostLoad] }
         );
-        assert_eq!(final_events, if blocks_scripts { "script:stylesheet-ready:complete|load" } else { "script::complete|load" });
+        assert_eq!(final_events, if blocks_scripts { "script:stylesheet-ready:loading|load" } else { "script::loading|load" });
         server.await.expect("child parser stylesheet server should finish");
     })
     .await;
