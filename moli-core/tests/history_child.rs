@@ -6,6 +6,9 @@ use support::FixtureServer;
 use tokio::time::Duration;
 use url::Url;
 
+#[path = "history_child/location_before_load.rs"]
+mod location_before_load;
+
 async fn wait_for_body_attribute(
     browser: &Browser,
     page: &mut moli_core::page::Page,
@@ -4148,7 +4151,7 @@ async fn child_browsing_context_location_hash_assignment_dispatches_local_popsta
         page.serialize_html_async()
             .await
             .unwrap()
-            .contains("data-top-history-unchanged=\"false\""),
+            .contains("data-top-history-unchanged=\"true\""),
         "{}",
         page.serialize_html_async().await.unwrap()
     );
@@ -4187,11 +4190,13 @@ async fn child_browsing_context_location_hash_assignment_dispatches_local_popsta
         "{}",
         page.serialize_html_async().await.unwrap()
     );
+    // The owner element's load callback runs before the child's pageshow
+    // completes, so this Location assignment replaces its history entry.
     assert!(
         page.serialize_html_async()
             .await
             .unwrap()
-            .contains("data-child-sync-history-length=\"2\""),
+            .contains("data-child-sync-history-length=\"1\""),
         "{}",
         page.serialize_html_async().await.unwrap()
     );
@@ -4222,7 +4227,7 @@ async fn child_browsing_context_location_hash_assignment_dispatches_local_popsta
         page.serialize_html_async()
             .await
             .unwrap()
-            .contains("data-child-timeout-history-length=\"2\""),
+            .contains("data-child-timeout-history-length=\"1\""),
         "{}",
         page.serialize_html_async().await.unwrap()
     );
