@@ -6402,3 +6402,6 @@ async fn window_host_globals_expose_aliases_performance_and_visual_viewport() ->
 
 #[path = "web_apis/keyboard_location.rs"]
 mod keyboard_location;
+
+#[path = "web_apis/event_dispatch.rs"]
+mod event_dispatch;
