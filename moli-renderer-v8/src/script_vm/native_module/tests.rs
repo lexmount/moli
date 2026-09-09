@@ -220,7 +220,7 @@ async fn finish_child_document_after_parser_script_for_dynamic_import_test(
     vm: &mut ScriptVm,
     label: &str,
 ) {
-    for transition in ["interactive", "DOMContentLoaded", "complete"] {
+    for transition in ["DOMContentLoaded", "complete"] {
         assert!(
             vm.run_child_frame_task_source_once_for_test(
                 ChildFrameSemanticTurnKind::DocumentLifecycle,
@@ -258,7 +258,6 @@ async fn finish_child_document_after_parser_script_for_page_executor_test(
     label: &str,
 ) {
     for expected in [
-        ChildFrameSemanticTurnKind::DocumentLifecycle,
         ChildFrameSemanticTurnKind::DocumentLifecycle,
         ChildFrameSemanticTurnKind::DocumentLifecycle,
         ChildFrameSemanticTurnKind::HostLoad,

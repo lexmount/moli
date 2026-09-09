@@ -377,9 +377,8 @@ globalThis.__childClassicDeferWaitValue = 73;
                 ChildFrameSemanticTurnKind::RealmMaterialization,
                 ChildFrameSemanticTurnKind::DocumentScriptReady,
                 ChildFrameSemanticTurnKind::DocumentScriptReady,
-                ChildFrameSemanticTurnKind::DocumentLifecycle
             ],
-            "child defer classic bootstrap should end with the document-owned interactive turn"
+            "child defer classic bootstrap should apply interactive at parser EOF"
         );
         assert_eq!(
             followup_sources,
@@ -748,7 +747,6 @@ globalThis.__childClassicAsyncWaitValue = 41;
                 ChildFrameSemanticTurnKind::DocumentScriptReady,
                 ChildFrameSemanticTurnKind::DocumentScriptReady,
                 ChildFrameSemanticTurnKind::DocumentLifecycle,
-                ChildFrameSemanticTurnKind::DocumentLifecycle
             ],
             "child async bootstrap should dispatch interactive and DCL before the later async completion"
         );
@@ -994,7 +992,6 @@ parent.__childClassicDeferOrderEvents.push("current:" + document.currentScript.i
                 ChildFrameSemanticTurnKind::RealmMaterialization,
                 ChildFrameSemanticTurnKind::DocumentScriptReady,
                 ChildFrameSemanticTurnKind::DocumentScriptReady,
-                ChildFrameSemanticTurnKind::DocumentLifecycle
             ],
             "child defer ordering bootstrap should reach interactive before either source completion"
         );
@@ -1096,7 +1093,7 @@ async fn page_vm_realm_materialization_created_ready_work_enters_document_script
                 .run_next_child_frame_task_source_for_semantic_test()
                 .await,
             Some(ChildFrameSemanticTurnKind::DocumentLifecycle),
-            "outer parser EOF should become interactive before nested document work"
+            "outer DOMContentLoaded must precede nested parser work admitted after it"
         );
         assert_eq!(
             page_vm
@@ -1117,7 +1114,7 @@ async fn page_vm_realm_materialization_created_ready_work_enters_document_script
                 .run_next_child_frame_task_source_for_semantic_test()
                 .await,
             Some(ChildFrameSemanticTurnKind::DocumentLifecycle),
-            "outer DOMContentLoaded should remain a later FIFO turn after nested work already admitted by realm materialization"
+            "nested DOMContentLoaded must remain a later FIFO turn after its parser work"
         );
         Ok::<_, anyhow::Error>(())
     })

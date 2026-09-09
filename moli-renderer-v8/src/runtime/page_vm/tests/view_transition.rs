@@ -213,7 +213,7 @@ JSON.stringify({
                 PageDomManipulationTestFamily::ViewTransitionUpdate,
             )
             .expect("view-transition update callback should queue one platform task");
-        let body = page_vm.apply_selected_page_dom_manipulation_turn(task)?;
+        let body = page_vm.apply_selected_page_dom_manipulation_turn(task).await?;
         let PageDomManipulationTurnAction::ViewTransitionUpdate(action) = body.action else {
             unreachable!("the selected view-transition task must retain its typed action")
         };
