@@ -58,8 +58,8 @@ use super::super::{
     url_form::build_url_constructor_template,
     url_search_params_runtime::build_url_search_params_constructor_template,
     web_audio_runtime::{
-        build_audio_context_constructor_template, build_audio_worklet_node_constructor_template,
-        offline_audio_context_constructor_callback,
+        build_audio_buffer_constructor_template, build_audio_context_constructor_template,
+        build_audio_worklet_node_constructor_template, offline_audio_context_constructor_callback,
     },
     webrtc::{
         rtc_data_channel_event_constructor_callback, rtc_ice_candidate_constructor_callback,
@@ -886,12 +886,12 @@ pub(in crate::context_bootstrap) fn build_constructor_template<'s>(
         | ConstructorKind::DynamicsCompressorNode
         | ConstructorKind::AnalyserNode
         | ConstructorKind::BiquadFilterNode
-        | ConstructorKind::AudioParam
-        | ConstructorKind::AudioBuffer => {
+        | ConstructorKind::AudioParam => {
             v8::FunctionTemplate::builder(illegal_constructor_callback)
                 .length(0)
                 .build(scope)
         }
+        ConstructorKind::AudioBuffer => build_audio_buffer_constructor_template(scope),
         ConstructorKind::Text => v8::FunctionTemplate::builder(text_constructor_callback)
             .length(0)
             .build(scope),
