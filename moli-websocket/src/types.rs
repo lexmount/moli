@@ -1,5 +1,3 @@
-use tokio::sync::mpsc;
-
 #[derive(Debug, Clone)]
 pub struct ConnectOptions {
     pub origin: String,
@@ -106,4 +104,5 @@ pub enum Command {
     },
 }
 
-pub type CommandSender = mpsc::UnboundedSender<Command>;
+/// Compatibility name for the connection's producer capability.
+pub type CommandSender = crate::ConnectionHandle;

@@ -140,10 +140,7 @@ impl JsContextHost {
             return false;
         };
         if let Some(command_tx) = state.command_tx {
-            let _ = command_tx.send(WebSocketCommand::Close {
-                code: None,
-                reason: String::new(),
-            });
+            command_tx.cancel();
         }
         let internal_ids = [state.fetch_internal_id, state.response_interception_pending]
             .into_iter()

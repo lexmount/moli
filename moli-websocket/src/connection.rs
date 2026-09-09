@@ -7,6 +7,7 @@ use tokio_tungstenite::tungstenite::protocol::{CloseFrame, Message};
 use crate::{
     Command, ConnectOptions, Event, FrameOpcode,
     events::{EventSender, send_error_and_close, send_event},
+    handle::AbortOnDrop,
     headers::header_map_entries,
     limits::{acquire_pending_websocket_handshake_slot, acquire_websocket_connection_slot},
     request::build_websocket_request,
@@ -197,6 +198,7 @@ async fn run_open_websocket_connection(
         writer_control_rx,
         writer_event_tx,
     ));
+    let _writer_task = AbortOnDrop::new(writer.abort_handle());
     let mut sent_close: Option<(u16, String)> = None;
     let mut pending_buffered_amount = VecDeque::new();
     let mut writer_done = false;
@@ -391,7 +393,6 @@ async fn run_open_websocket_connection(
             }
         }
     }
-    writer.abort();
 }
 
 enum WebSocketWriterEvent {

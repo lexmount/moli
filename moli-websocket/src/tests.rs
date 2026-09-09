@@ -454,6 +454,117 @@ async fn websocket_failed_connection_reports_error_then_abnormal_close() {
 }
 
 #[tokio::test]
+async fn websocket_last_handle_drop_releases_pending_handshake() {
+    use tokio::io::AsyncReadExt;
+
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let url = format!("ws://{}/pending", listener.local_addr().unwrap());
+    let (event_tx, _event_rx) = mpsc::channel(1);
+    let handle = spawn_connection(61, url, Vec::new(), test_websocket_context(), event_tx);
+    let retained = handle.clone();
+    let (mut server, _) = timeout(Duration::from_secs(3), listener.accept())
+        .await
+        .expect("connection should reach the server")
+        .unwrap();
+    drop(handle);
+    retained
+        .send(Command::SendText("ignored while connecting".to_owned()))
+        .expect("another producer still owns the connection");
+    drop(retained);
+    let result = timeout(Duration::from_secs(3), server.read_to_end(&mut Vec::new()))
+        .await
+        .expect("dropping the last producer must close a pending handshake");
+    if let Err(error) = result {
+        assert_eq!(error.kind(), std::io::ErrorKind::ConnectionReset);
+    }
+}
+
+struct WebSocketSinkDropSignal(mpsc::Sender<()>);
+
+impl Drop for WebSocketSinkDropSignal {
+    fn drop(&mut self) {
+        let _ = self.0.try_send(());
+    }
+}
+
+#[tokio::test]
+async fn websocket_cancel_releases_blocked_sink_and_open_writer() {
+    use futures_util::{SinkExt, StreamExt};
+
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let url = format!("ws://{}/cancel", listener.local_addr().unwrap());
+    let entered = Arc::new(tokio::sync::Notify::new());
+    let sink_entered = Arc::clone(&entered);
+    let (dropped_tx, mut dropped_rx) = mpsc::channel(1);
+    let sink = EventSender::with_async_sink(move |event| {
+        let entered = Arc::clone(&sink_entered);
+        let dropped_tx = dropped_tx.clone();
+        async move {
+            if matches!(event, Event::TextMessage { .. }) {
+                let _guard = WebSocketSinkDropSignal(dropped_tx);
+                entered.notify_one();
+                return std::future::pending::<bool>().await;
+            }
+            true
+        }
+    });
+    let handle = spawn_connection(62, url, Vec::new(), test_websocket_context(), sink);
+    let retained = handle.clone();
+    let (stream, _) = timeout(Duration::from_secs(3), listener.accept())
+        .await
+        .unwrap()
+        .unwrap();
+    let mut server = tokio_tungstenite::accept_async(stream).await.unwrap();
+    server.send("block the sink".into()).await.unwrap();
+    timeout(Duration::from_secs(3), entered.notified())
+        .await
+        .expect("receive task must enter the blocked sink");
+    handle.cancel();
+    handle.cancel();
+    assert!(retained.is_closed());
+    assert!(retained.send(Command::SendBinary(vec![1])).is_err());
+    timeout(Duration::from_secs(3), dropped_rx.recv())
+        .await
+        .expect("cancellation must release the blocked event future")
+        .expect("sink drop signal");
+    let terminal = timeout(Duration::from_secs(3), server.next())
+        .await
+        .expect("the writer must release its socket while producer clones remain alive");
+    assert!(terminal.is_none() || terminal.is_some_and(|result| result.is_err()));
+}
+
+#[tokio::test]
+async fn websocket_failed_and_synthetic_delivery_cancel_on_last_handle_drop() {
+    for synthetic in [false, true] {
+        let entered = Arc::new(tokio::sync::Notify::new());
+        let sink_entered = Arc::clone(&entered);
+        let (dropped_tx, mut dropped_rx) = mpsc::channel(1);
+        let sink = EventSender::with_async_sink(move |_event| {
+            let entered = Arc::clone(&sink_entered);
+            let dropped_tx = dropped_tx.clone();
+            async move {
+                let _guard = WebSocketSinkDropSignal(dropped_tx);
+                entered.notify_one();
+                std::future::pending::<bool>().await
+            }
+        });
+        let handle = if synthetic {
+            spawn_synthetic_connection(63, Vec::new(), 101, Vec::new(), sink)
+        } else {
+            spawn_failed_connection(63, "rejected".to_owned(), sink)
+        };
+        timeout(Duration::from_secs(3), entered.notified())
+            .await
+            .expect("connection should reach the async sink");
+        drop(handle);
+        timeout(Duration::from_secs(3), dropped_rx.recv())
+            .await
+            .expect("last producer drop must cancel blocked delivery")
+            .expect("sink drop signal");
+    }
+}
+
+#[tokio::test]
 async fn websocket_synthetic_connection_opens_accounts_send_and_closes_cleanly() {
     let (event_tx, mut event_rx) = mpsc::channel(32);
     let command_tx = spawn_synthetic_connection(

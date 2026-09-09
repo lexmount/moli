@@ -1,6 +1,7 @@
 mod connection;
 mod cookie;
 mod events;
+mod handle;
 mod handshake;
 mod headers;
 mod limits;
@@ -15,6 +16,7 @@ mod types;
 
 pub use cookie::websocket_cookie_url;
 pub use events::EventSender;
+pub use handle::{CommandSendError, ConnectionHandle};
 pub use protocol::{
     WebSocketCloseRequest, WebSocketCloseValidationError, WebSocketSubprotocolError,
     WebSocketUrlError, close_info_code_from_number, default_close_code_for_reason,

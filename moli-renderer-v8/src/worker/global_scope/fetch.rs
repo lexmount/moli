@@ -1335,10 +1335,7 @@ pub(crate) fn register_worker_websocket<'s>(
         );
         let cancel_tx = command_tx.clone();
         load.attach_consumer_cancel(move || {
-            let _ = cancel_tx.send(WebSocketCommand::Close {
-                code: Some(1001),
-                reason: "WorkerGlobalScope terminated".to_owned(),
-            });
+            cancel_tx.cancel();
         });
         (command_tx, Some(load))
     };
