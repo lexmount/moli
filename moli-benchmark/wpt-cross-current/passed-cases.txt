@@ -5275,7 +5275,16 @@ html/browsers/browsing-the-web/navigating-across-documents/refresh/same-document
 html/browsers/browsing-the-web/navigating-across-documents/replace-before-load/a-click-during-load.html
 html/browsers/browsing-the-web/navigating-across-documents/replace-before-load/a-click-during-pageshow.html
 html/browsers/browsing-the-web/navigating-across-documents/replace-before-load/a-click.html
+html/browsers/browsing-the-web/navigating-across-documents/replace-before-load/form-requestsubmit-during-load.html
+html/browsers/browsing-the-web/navigating-across-documents/replace-before-load/form-requestsubmit-during-pageshow.html
+html/browsers/browsing-the-web/navigating-across-documents/replace-before-load/form-requestsubmit.html
+html/browsers/browsing-the-web/navigating-across-documents/replace-before-load/form-submit-button-click-during-load.html
+html/browsers/browsing-the-web/navigating-across-documents/replace-before-load/form-submit-button-click-during-pageshow.html
+html/browsers/browsing-the-web/navigating-across-documents/replace-before-load/form-submit-button-click.html
 html/browsers/browsing-the-web/navigating-across-documents/replace-before-load/form-submit-cross-frame.html
+html/browsers/browsing-the-web/navigating-across-documents/replace-before-load/form-submit-during-load.html
+html/browsers/browsing-the-web/navigating-across-documents/replace-before-load/form-submit-during-pageshow.html
+html/browsers/browsing-the-web/navigating-across-documents/replace-before-load/form-submit.html
 html/browsers/browsing-the-web/navigating-across-documents/replace-before-load/history-pushstate-during-load.html
 html/browsers/browsing-the-web/navigating-across-documents/replace-before-load/history-pushstate-during-pageshow.html
 html/browsers/browsing-the-web/navigating-across-documents/replace-before-load/history-pushstate.html

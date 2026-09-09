@@ -5027,45 +5027,74 @@ root.appendChild(label);
 
 #[test]
 fn submit_button_click_queues_pending_top_level_location_navigation() {
-    let mut vm = new_storage_test_vm("https://form-submit-navigation.test/path/index.html");
+    for target in ["", "_self", "_SeLf"] {
+        for activated in [false, true] {
+            let mut vm = new_storage_test_vm("https://form-submit-navigation.test/path/index.html");
 
-    vm.eval(
-        r#"
-(() => {
-  if (!document.documentElement) {
-    document.appendChild(document.createElement('html'));
-  }
-  if (!document.body) {
-    document.documentElement.appendChild(document.createElement('body'));
-  }
-  const form = document.createElement('form');
-  form.action = '/submit?from=form';
-  const input = document.createElement('input');
-  input.type = 'hidden';
-  input.name = 'from';
-  input.value = 'form';
-  const button = document.createElement('button');
-  button.type = 'submit';
-  form.appendChild(input);
-  form.appendChild(button);
-  document.body.appendChild(form);
-  button.click();
-})()
-"#,
-    )
-    .expect("submit button click should execute");
+            vm.eval(&format!("globalThis.targetKeyword = {target:?}"))
+                .expect("target keyword should be set");
+            if activated {
+                vm._context_host
+                    .borrow_mut()
+                    .begin_protocol_user_gesture_activation();
+            }
+            vm.eval(
+                r#"
+        (() => {
+          if (!document.documentElement) {
+            document.appendChild(document.createElement('html'));
+          }
+          if (!document.body) {
+            document.documentElement.appendChild(document.createElement('body'));
+          }
+          const form = document.createElement('form');
+          form.action = '/submit?from=form';
+          form.target = globalThis.targetKeyword;
+          const input = document.createElement('input');
+          input.type = 'hidden';
+          input.name = 'from';
+          input.value = 'form';
+          const button = document.createElement('button');
+          button.type = 'submit';
+          form.appendChild(input);
+          form.appendChild(button);
+          document.body.appendChild(form);
+          button.click();
+        })()
+        "#,
+            )
+            .expect("submit button click should execute");
 
-    let pending = vm
-        .take_pending_location_navigation_with_seed()
-        .expect("submit button click should queue a pending location navigation");
-    assert_eq!(
-        pending.url.as_str(),
-        "https://form-submit-navigation.test/submit?from=form"
-    );
-    assert!(
-        pending.entry_seed.is_none(),
-        "default form submission should not synthesize a history seed"
-    );
+            if activated {
+                vm._context_host
+                    .borrow_mut()
+                    .end_protocol_user_gesture_activation();
+            }
+            let pending = vm
+                .take_pending_location_navigation_with_seed()
+                .expect("submit button click should queue a pending location navigation");
+            assert_eq!(
+                pending.url.as_str(),
+                "https://form-submit-navigation.test/submit?from=form"
+            );
+            let seed = pending
+                .entry_seed
+                .expect("script submission should retain its history decision");
+            let activation = seed
+                .activation
+                .as_ref()
+                .expect("form navigation activation");
+            let from = activation.from.as_ref().expect("previous document entry");
+            assert_eq!(activation.navigation_type.as_deref(), Some("replace"));
+            assert_eq!(seed.current_index, from.history_index);
+            assert_eq!(activation.entry.url, pending.url.as_str());
+            assert_eq!(
+                from.url,
+                "https://form-submit-navigation.test/path/index.html"
+            );
+            assert!(!seed.entries.iter().any(|entry| entry.url == from.url));
+        }
+    }
 }
 #[test]
 fn empty_get_form_submit_replaces_existing_action_query() {
@@ -5216,7 +5245,7 @@ fn get_form_submit_dispatches_cancelable_navigate_event_with_source_element() {
 }
 #[test]
 fn form_top_and_parent_targets_queue_plain_top_level_navigation() {
-    for target in ["_top", "_parent", "_ToP", "_PaReNt", "_SeLf"] {
+    for target in ["_top", "_parent", "_ToP", "_PaReNt"] {
         let mut vm = new_storage_test_vm("https://form-target-navigation.test/path/index.html");
 
         vm.eval(&format!(

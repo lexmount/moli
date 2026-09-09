@@ -638,6 +638,15 @@ pub(in crate::native_bridge) fn queue_deferred_named_iframe_target_navigation_fr
         source_document,
     )?;
     let runtime = unsafe { &mut *runtime_ptr };
+    let destination = url::Url::parse(resolved_url).ok()?;
+    let history = crate::context_bootstrap::FormNavigationHistory::capture(
+        scope,
+        runtime,
+        source_document,
+        Some(target_iframe),
+        &destination,
+        None,
+    );
     let target_url = url::Url::parse(resolved_url).ok();
     let target_is_same_origin_with_top = target_url
         .as_ref()
@@ -652,19 +661,31 @@ pub(in crate::native_bridge) fn queue_deferred_named_iframe_target_navigation_fr
         || target_is_same_document_with_child)
         && let Some(window) =
             runtime.existing_child_browsing_context_window_wrapper(scope, target_iframe)
-        && !dispatch_cross_document_navigation_navigate_event_for_window(
+        && !crate::context_bootstrap::dispatch_cross_document_navigation_navigate_event_for_window_with_type_and_form_data(
             scope,
             window,
             resolved_url,
+            history.mutation.navigation_type(),
             source_element,
             false,
+            None,
             None,
         )
     {
         return Some(target_iframe);
     }
     runtime
-        .queue_deferred_child_browsing_context_navigation_to_url(target_iframe, resolved_url)
+        .queue_deferred_child_form_navigation_request(
+            target_iframe,
+            ChildBrowsingContextNavigationRequest {
+                url: destination,
+                method: "GET".to_owned(),
+                body: None,
+                request_headers: Vec::new(),
+            },
+            history.entry_seed,
+            history.mutation,
+        )
         .then_some(target_iframe)
 }
 
@@ -677,20 +698,18 @@ fn urls_refer_to_same_document(current: &url::Url, target: &url::Url) -> bool {
 }
 
 pub(in crate::native_bridge) fn queue_deferred_named_iframe_target_request(
-    scope: &mut v8::PinScope<'_, '_>,
     runtime_ptr: *mut JsContextHost,
-    target_name: &str,
-    source_document: Option<DomHandle>,
+    target_iframe: DomHandle,
     request: ChildBrowsingContextNavigationRequest,
+    history: crate::context_bootstrap::FormNavigationHistory,
 ) -> Option<DomHandle> {
-    let target_iframe = named_iframe_target_handle_for_navigation(
-        scope,
-        runtime_ptr,
-        target_name,
-        source_document,
-    )?;
     let runtime = unsafe { &mut *runtime_ptr };
     runtime
-        .queue_deferred_child_browsing_context_navigation_request(target_iframe, request)
+        .queue_deferred_child_form_navigation_request(
+            target_iframe,
+            request,
+            history.entry_seed,
+            history.mutation,
+        )
         .then_some(target_iframe)
 }

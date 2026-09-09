@@ -1,4 +1,5 @@
-use super::JsContextHost;
+use super::{JsContextHost, OwnerDispatchScope};
+use crate::document_runtime::DomHandle;
 use crate::page_task_queue::RendererTopLevelNavigationHandoff;
 use crate::runtime::{
     RendererBrowserContextRuntime, RendererDocumentLifecycleIdentity,
@@ -7,7 +8,9 @@ use crate::runtime::{
 };
 use crate::service_worker_runtime::{ServiceWorkerClientId, ServiceWorkerClientNavigateError};
 use moli_fetch::BrowserNavigationRequestKind;
-use moli_page_types::{NavigationHistoryEntrySeed, SameDocumentHistoryUpdate};
+use moli_page_types::{
+    NavigationHistoryEntrySeed, NavigationHistoryMutation, SameDocumentHistoryUpdate,
+};
 use url::Url;
 
 pub(crate) struct PendingReservedServiceWorkerClient {
@@ -92,6 +95,47 @@ pub(crate) enum PendingTopLevelNavigation {
 }
 
 impl JsContextHost {
+    pub(crate) fn form_navigation_history_mutation(
+        &self,
+        source_document: Option<DomHandle>,
+        target_child: Option<DomHandle>,
+        destination: &Url,
+    ) -> NavigationHistoryMutation {
+        let target_scope = target_child.map_or(OwnerDispatchScope::Top, OwnerDispatchScope::Child);
+        let target_document = match target_child {
+            Some(handle) => self
+                .frame_owner_current_child_snapshot(handle)
+                .map(|s| s.document_handle),
+            None => Some(self.document_handle()),
+        };
+        // Form submission fixes history handling before planning the navigation.
+        // Unlike Location assignment, transient activation does not change this rule.
+        let replaces_loading_self = source_document.is_some()
+            && source_document == target_document
+            && source_document.and_then(|document| self.document_is_completely_loaded(document))
+                == Some(false);
+        let replaces_initial = target_child.is_some_and(|handle| {
+            self.child_browsing_context_is_on_initial_about_blank_entry(handle)
+        });
+        let same_origin = source_document
+            .and_then(|document| self.owner_dispatch_scope_for_node(document))
+            .and_then(|source| self.window_access_origin_for_dispatch_scope(source))
+            .zip(self.window_access_origin_for_dispatch_scope(target_scope))
+            .is_some_and(|(source, target)| source.has_same_origin(&target));
+        let replaces_same_url = same_origin
+            && target_document
+                .is_some_and(|document| self.document_url_for_handle(document) == *destination);
+        if replaces_loading_self
+            || replaces_initial
+            || replaces_same_url
+            || destination.scheme() == "javascript"
+        {
+            NavigationHistoryMutation::Replace
+        } else {
+            NavigationHistoryMutation::Push
+        }
+    }
+
     pub(crate) fn document_is_completely_loaded(
         &self,
         document_handle: crate::document_runtime::DomHandle,
