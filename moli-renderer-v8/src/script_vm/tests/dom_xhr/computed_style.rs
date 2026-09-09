@@ -3,6 +3,7 @@ use super::*;
 mod browser_font_preferences;
 mod child_list;
 mod image_presentation_hints;
+mod monospace_font_size;
 
 fn inspector_active_child_window_scope_callback<'s>(
     scope: &mut v8::PinScope<'s, '_>,
