@@ -128,6 +128,12 @@ impl ScriptVm {
             return Ok(SourceTextScriptCompletion::NonString);
         }
         let is_source_text = matches!(&job.source, FrameScriptSource::SourceText(_));
+        let clean_up_classic_script = matches!(
+            job.kind,
+            crate::frame_owner_model::FrameScriptJobKind::ParserClassic
+                | crate::frame_owner_model::FrameScriptJobKind::ExternalClassic
+                | crate::frame_owner_model::FrameScriptJobKind::DynamicClassic
+        );
         let context_ptr = is_source_text
             .then(|| self.frame_realm_context_ptr(realm_id))
             .transpose()?;
@@ -185,6 +191,7 @@ impl ScriptVm {
                             0,
                             script_nonce.as_deref(),
                             source_completion_mode,
+                            clean_up_classic_script,
                         ),
                 };
                 if let Some(token) = current_script_token {
