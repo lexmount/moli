@@ -9,7 +9,7 @@ use url::Url;
 
 use crate::{
     PageId,
-    context_bootstrap::{IndexedDbTaskId, WebCryptoTaskResult},
+    context_bootstrap::{BitmapRejection, IndexedDbTaskId, WebCryptoTaskResult},
     document_runtime::DomHandle,
     frame_owner_model::{
         ChildDocumentModuleFetchTarget, DocumentId,
@@ -38,7 +38,8 @@ use crate::{
     page_task_queue::{
         MainDocumentMetaRefreshNavigationTask, PageOwnedInternalLoadingTask,
         RendererDedicatedWorkerClientEvent, RendererDedicatedWorkerMessageEvent, RendererOwnerWake,
-        RendererPageChildFrameTaskSender, RendererPageChildRealmMaterializationTarget,
+        RendererPageBitmapTaskId, RendererPageBitmapTaskSender, RendererPageChildFrameTaskSender,
+        RendererPageChildRealmMaterializationTarget,
         RendererPageDedicatedWorkerClientEventProducer, RendererPageHistoryTraversalSender,
         RendererPageHistoryTraversalTaskId, RendererPageHistoryTraversalTaskKind,
         RendererPageIndexedDbTaskKind, RendererPageIndexedDbTaskSender,
@@ -65,7 +66,8 @@ use crate::{
 
 use super::{
     PageRuntimeWakeSignal, RendererOwnerWakeSender, RendererOwnerWakeSource,
-    RendererPageChildFrameTaskSource, RendererPageChildModuleDependencyFetchStartSender,
+    RendererPageBitmapTaskSource, RendererPageChildFrameTaskSource,
+    RendererPageChildModuleDependencyFetchStartSender,
     RendererPageChildModuleDependencyFetchStartSource, RendererPageChildModuleScriptTerminalSender,
     RendererPageChildModuleScriptTerminalSource, RendererPageChildModulepreloadEventActionSender,
     RendererPageChildModulepreloadEventActionSource, RendererPageDedicatedWorkerClientEventSource,
@@ -258,6 +260,14 @@ struct SharedWorkerClientEventLane {
     source: Option<RendererPageSharedWorkerClientEventSource>,
     initial_producer: RendererPageSharedWorkerClientEventProducer,
     replacement_producer: RendererPageSharedWorkerClientEventProducer,
+    wake_rx: tokio::sync::mpsc::UnboundedReceiver<RendererOwnerWake>,
+}
+
+struct BitmapTaskLane {
+    source: Option<RendererPageBitmapTaskSource>,
+    initial_sender: RendererPageBitmapTaskSender,
+    replacement_sender: RendererPageBitmapTaskSender,
+    execution_context: WindowExecutionContextIdentity,
     wake_rx: tokio::sync::mpsc::UnboundedReceiver<RendererOwnerWake>,
 }
 
@@ -708,6 +718,58 @@ impl IndexedDbTaskLane {
 }
 
 impl TypedPageSourceConformance for IndexedDbTaskLane {
+    fn enqueue_initial(&mut self, sequence: u64) -> bool {
+        Self::enqueue_with(&self.initial_sender, self.execution_context, sequence)
+    }
+
+    fn enqueue_replacement(&mut self, sequence: u64) -> bool {
+        Self::enqueue_with(&self.replacement_sender, self.execution_context, sequence)
+    }
+
+    fn pop_ready_metadata(&mut self) -> Option<RendererPageTaskReadyMetadata> {
+        self.source.as_mut()?.pop_front().map(|(ready, _)| ready)
+    }
+
+    fn take_wake(&mut self) -> Option<RendererOwnerWake> {
+        self.wake_rx.try_recv().ok()
+    }
+
+    fn retire_consumer(&mut self) {
+        drop(self.source.take());
+    }
+}
+
+impl BitmapTaskLane {
+    fn new() -> Self {
+        let (wake_tx, wake_rx) = tokio::sync::mpsc::unbounded_channel();
+        let source = RendererPageBitmapTaskSource::new(RendererOwnerWakeSender::new(
+            wake_tx,
+            RendererPageToken::new_for_testing(document_token(1).page_id),
+        ));
+        let route = source.route();
+        let initial_sender = route.sender(document_token(1));
+        let replacement_sender = route.sender(document_token(2));
+        Self {
+            source: Some(source),
+            initial_sender,
+            replacement_sender,
+            execution_context: window_execution_context(76),
+            wake_rx,
+        }
+    }
+
+    fn enqueue_with(
+        sender: &RendererPageBitmapTaskSender,
+        execution_context: WindowExecutionContextIdentity,
+        sequence: u64,
+    ) -> bool {
+        let producer = sender.bind_task(execution_context, RendererPageBitmapTaskId::new(sequence));
+        assert_eq!(producer.owner().task().task_id(), sequence);
+        producer.send(Err(BitmapRejection::InvalidState)).is_ok()
+    }
+}
+
+impl TypedPageSourceConformance for BitmapTaskLane {
     fn enqueue_initial(&mut self, sequence: u64) -> bool {
         Self::enqueue_with(&self.initial_sender, self.execution_context, sequence)
     }
@@ -2207,6 +2269,11 @@ fn shared_worker_client_event_source_conforms_to_page_queue_contract() {
 }
 
 #[test]
+fn bitmap_task_source_conforms_to_page_queue_contract() {
+    assert_fifo_replacement_and_route_retirement(BitmapTaskLane::new());
+}
+
+#[test]
 fn webcrypto_task_source_conforms_to_page_queue_contract() {
     assert_fifo_replacement_and_route_retirement(WebCryptoTaskLane::new());
 }
@@ -2439,6 +2506,14 @@ fn unified_ready_descriptors_expose_one_fifo_head_per_typed_source() {
         .send(SharedWorkerClientEvent::Closed)
         .expect("SharedWorker client event should enter the unified source set");
     routes
+        .bitmap_task_sender(document_token(1))
+        .bind_task(
+            window_execution_context(88),
+            RendererPageBitmapTaskId::new(13),
+        )
+        .send(Err(BitmapRejection::InvalidState))
+        .expect("Bitmap task should enter the unified source set");
+    routes
         .webcrypto_task_sender(document_token(1))
         .bind_task(
             window_execution_context(88),
@@ -2536,7 +2611,7 @@ fn unified_ready_descriptors_expose_one_fifo_head_per_typed_source() {
         .expect("dynamic-import action should enter the unified source set");
 
     let descriptors = sources.ready_descriptors();
-    assert_eq!(descriptors.len(), 18);
+    assert_eq!(descriptors.len(), 19);
     assert!(descriptors.iter().any(|descriptor| matches!(
         descriptor,
         RendererPageReadyDescriptor::DomManipulation { .. }
@@ -2557,6 +2632,11 @@ fn unified_ready_descriptors_expose_one_fifo_head_per_typed_source() {
         descriptor,
         RendererPageReadyDescriptor::SharedWorkerClientEvent { .. }
     )));
+    assert!(
+        descriptors
+            .iter()
+            .any(|descriptor| matches!(descriptor, RendererPageReadyDescriptor::BitmapTask { .. }))
+    );
     assert!(descriptors.iter().any(|descriptor| matches!(
         descriptor,
         RendererPageReadyDescriptor::WebCryptoTask { .. }
@@ -2626,7 +2706,7 @@ fn unified_ready_descriptors_expose_one_fifo_head_per_typed_source() {
     ));
     assert_eq!(
         sources.ready_descriptors().len(),
-        17,
+        18,
         "one Page turn must remove only the selected source head"
     );
 }
