@@ -266,9 +266,7 @@ pub(in crate::context_bootstrap) fn font_face_constructor_callback<'s>(
         }
         FontFaceConstructorSource::Css(source)
             if font_face_data_url_bytes(&source).is_some_and(|bytes| {
-                bytes
-                    .as_deref()
-                    .is_none_or(|bytes| moli_layout::validate_web_font_bytes(bytes).is_err())
+                bytes.is_none_or(|bytes| moli_layout::validate_web_font_bytes(bytes).is_err())
             }) =>
         {
             let loaded = super::query::make_rejected_dom_exception_promise(
@@ -282,19 +280,18 @@ pub(in crate::context_bootstrap) fn font_face_constructor_callback<'s>(
             let loaded = resolved_promise(scope, this.into());
             (source, "loaded", loaded)
         }
-        FontFaceConstructorSource::Binary(bytes)
-            if moli_layout::validate_web_font_bytes(&bytes).is_ok() =>
-        {
-            let loaded = resolved_promise(scope, this.into());
-            (String::new(), "loaded", loaded)
-        }
-        FontFaceConstructorSource::Binary(_) => {
-            let loaded = super::query::make_rejected_dom_exception_promise(
-                scope,
-                "SyntaxError",
-                "Invalid font data in ArrayBuffer.",
-            );
-            (String::new(), "error", Some(loaded))
+        FontFaceConstructorSource::Binary(bytes) => {
+            if moli_layout::validate_web_font_bytes(bytes).is_ok() {
+                let loaded = resolved_promise(scope, this.into());
+                (String::new(), "loaded", loaded)
+            } else {
+                let loaded = super::query::make_rejected_dom_exception_promise(
+                    scope,
+                    "SyntaxError",
+                    "Invalid font data in ArrayBuffer.",
+                );
+                (String::new(), "error", Some(loaded))
+            }
         }
     };
     FontFaceObjectDeclaration::new(
