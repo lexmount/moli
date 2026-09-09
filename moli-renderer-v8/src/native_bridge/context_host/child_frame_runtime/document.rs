@@ -422,10 +422,13 @@ fn child_document_close_callback<'s>(
         rv.set_undefined();
         return;
     }
-    if host.child_document_parser_is_active(handle)
-        && host
-            .child_current_script_handle_for_document(document_handle)
-            .is_some()
+    // close() only applies to a script-created parser. An executing parser
+    // script must still record EOF; the session defers finishing until that
+    // script exits instead of losing the close request here.
+    if !host
+        .frame_owner_store
+        .current_child_document_owner(handle)
+        .is_some_and(|owner| host.child_document_parsers.has_open_stream(owner))
     {
         rv.set_undefined();
         return;
