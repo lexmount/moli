@@ -2126,6 +2126,43 @@ fn font_face_binary_source_union_rejects_invalid_font_data() {
 }
 
 #[test]
+fn font_face_owned_binary_and_data_url_validation_accept_real_fonts() {
+    let mut vm = new_storage_test_vm("https://font-face-owned-validation.test/");
+    for bytes in [
+        include_bytes!("../../../../../moli-layout/tests/fixtures/moli-ahem.ttf").as_slice(),
+        include_bytes!("../../../../../moli-layout/tests/fixtures/moli-ahem.woff2").as_slice(),
+    ] {
+        let input = serde_json::to_string(bytes).unwrap();
+        vm.eval(&format!(
+            r#"
+(() => {{
+  const bytes = Uint8Array.from({input});
+  const url = 'data:application/octet-stream;base64,' + btoa(String.fromCharCode(...bytes));
+  const faces = [new FontFace('Binary', bytes), new FontFace('DataUrl', `url("${{url}}")`)];
+  globalThis.__ownedFontProbe = {{
+    status: faces.map(face => face.status),
+    promises: faces.map(face => face.load() === face.loaded),
+    settled: ['pending', 'pending'],
+    inputIntact: bytes.length === {length} && bytes[0] === {first}
+  }};
+  faces.forEach((face, index) => face.loaded.then(
+    () => {{ __ownedFontProbe.settled[index] = 'loaded'; }},
+    error => {{ __ownedFontProbe.settled[index] = error.name; }}
+  ));
+}})()
+"#,
+            length = bytes.len(),
+            first = bytes[0],
+        ))
+        .expect("owned font payloads should validate");
+        assert_eq!(
+            vm.eval("JSON.stringify(__ownedFontProbe)").unwrap(),
+            r#"{"status":["loaded","loaded"],"promises":[true,true],"settled":["loaded","loaded"],"inputIntact":true}"#
+        );
+    }
+}
+
+#[test]
 fn font_face_rejects_malformed_string_and_magic_prefixed_payloads() {
     let mut vm = new_storage_test_vm("https://font-face-payload-validation.test/");
 
