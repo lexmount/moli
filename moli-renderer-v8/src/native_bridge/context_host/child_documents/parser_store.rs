@@ -1,4 +1,3 @@
-#[cfg(test)]
 use crate::live_document_parser::DocumentParserLifetime;
 use crate::{
     frame_owner_model::FrameDocumentOwner,
@@ -107,7 +106,6 @@ impl ChildDocumentParserStore {
         self.sessions.remove(&owner)
     }
 
-    #[cfg(test)]
     pub(in crate::native_bridge::context_host) fn has_open_stream(
         &self,
         owner: FrameDocumentOwner,
