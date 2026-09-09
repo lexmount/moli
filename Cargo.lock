@@ -3204,6 +3204,7 @@ dependencies = [
  "kurbo",
  "moli-css-parse",
  "moli-image",
+ "moli-svg",
  "moli-system-fonts",
  "moli-trace",
  "parley",
