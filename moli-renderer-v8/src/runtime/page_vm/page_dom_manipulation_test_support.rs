@@ -20,6 +20,7 @@ pub(crate) enum PageDomManipulationTestFamily {
     ElementToggle,
     FileEntryFileCallback,
     ScriptPreparationError,
+    PromiseRejection,
     ImageLoadEvent,
     PopupLoadEvent,
     ConnectedStyleEvent,
@@ -50,6 +51,9 @@ impl PageDomManipulationTestFamily {
             ) | (
                 Self::ScriptPreparationError,
                 RendererPageDomManipulationOwner::ScriptPreparationError(_)
+            ) | (
+                Self::PromiseRejection,
+                RendererPageDomManipulationOwner::PromiseRejection(_)
             ) | (
                 Self::ImageLoadEvent,
                 RendererPageDomManipulationOwner::ImageLoadEvent(_)
