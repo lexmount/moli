@@ -1,4 +1,5 @@
 use crate::{
+    context_bootstrap::touch_feature_detection::{self, TOUCH_EVENT_HANDLER_PROPERTIES},
     document_runtime::EventTargetHandle,
     util::{context_host_ptr_from_global_bridge, node_wrapper_from_handle, v8_string, v8str},
 };
@@ -130,35 +131,10 @@ pub(crate) fn install_global_event_handler_template_bindings<'s>(
         if matches!(owner, GlobalEventHandlerOwner::Document) && *name == "onstorage" {
             continue;
         }
-        let data = v8str(scope, name).into();
-        let (getter, setter) = match owner {
-            GlobalEventHandlerOwner::Document => (
-                v8::FunctionTemplate::builder(document_event_handler_getter_function)
-                    .data(data)
-                    .length(0)
-                    .build(scope),
-                v8::FunctionTemplate::builder(document_event_handler_setter_function)
-                    .data(data)
-                    .length(1)
-                    .build(scope),
-            ),
-            GlobalEventHandlerOwner::Element => (
-                v8::FunctionTemplate::builder(node_event_handler_getter_function)
-                    .data(data)
-                    .length(0)
-                    .build(scope),
-                v8::FunctionTemplate::builder(node_event_handler_setter_function)
-                    .data(data)
-                    .length(1)
-                    .build(scope),
-            ),
-        };
-        if let Some(function_name) = v8_string(scope, &format!("get {name}")) {
-            getter.set_class_name(function_name);
+        if TOUCH_EVENT_HANDLER_PROPERTIES.contains(name) {
+            continue;
         }
-        if let Some(function_name) = v8_string(scope, &format!("set {name}")) {
-            setter.set_class_name(function_name);
-        }
+        let (getter, setter) = event_handler_templates(scope, name, owner);
         prototype.set_accessor_property(
             v8str(scope, name).into(),
             Some(getter),
@@ -166,6 +142,71 @@ pub(crate) fn install_global_event_handler_template_bindings<'s>(
             v8::PropertyAttribute::NONE,
         );
     }
+}
+
+fn event_handler_templates<'s>(
+    scope: &mut v8::PinScope<'s, '_, ()>,
+    name: &'static str,
+    owner: GlobalEventHandlerOwner,
+) -> (
+    v8::Local<'s, v8::FunctionTemplate>,
+    v8::Local<'s, v8::FunctionTemplate>,
+) {
+    let data = v8str(scope, name).into();
+    let (getter, setter) = match owner {
+        GlobalEventHandlerOwner::Document => (
+            v8::FunctionTemplate::builder(document_event_handler_getter_function)
+                .data(data)
+                .length(0)
+                .build(scope),
+            v8::FunctionTemplate::builder(document_event_handler_setter_function)
+                .data(data)
+                .length(1)
+                .build(scope),
+        ),
+        GlobalEventHandlerOwner::Element => (
+            v8::FunctionTemplate::builder(node_event_handler_getter_function)
+                .data(data)
+                .length(0)
+                .build(scope),
+            v8::FunctionTemplate::builder(node_event_handler_setter_function)
+                .data(data)
+                .length(1)
+                .build(scope),
+        ),
+    };
+    if let Some(function_name) = v8_string(scope, &format!("get {name}")) {
+        getter.set_class_name(function_name);
+    }
+    if let Some(function_name) = v8_string(scope, &format!("set {name}")) {
+        setter.set_class_name(function_name);
+    }
+    (getter, setter)
+}
+
+pub(crate) fn install_touch_event_handler_realm_bindings<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    prototype: v8::Local<'s, v8::Object>,
+    owner: GlobalEventHandlerOwner,
+) -> anyhow::Result<()> {
+    if !touch_feature_detection::enabled(scope) {
+        return Ok(());
+    }
+    for name in TOUCH_EVENT_HANDLER_PROPERTIES {
+        let (getter, setter) = event_handler_templates(scope, name, owner);
+        let getter = getter.get_function(scope).expect("touch handler getter");
+        let setter = setter.get_function(scope).expect("touch handler setter");
+        crate::definitions::define_get_set_property(
+            scope,
+            prototype,
+            v8str(scope, name).into(),
+            getter.into(),
+            setter.into(),
+            v8::PropertyAttribute::NONE,
+            name,
+        )?;
+    }
+    Ok(())
 }
 
 fn event_handler_property_value_for_target<'s>(

@@ -303,7 +303,22 @@ impl ScriptVmContextBootstrap {
                 child_handle: None, ..
             } => unsafe { &*host_ptr }.document_url().clone(),
         };
-        finish_context_bootstrap(scope, unsafe { &mut *host_ptr }, &secure_context_url)?;
+        let binding_owner = match mode {
+            WindowContextBootstrapMode::MainDefault => unsafe { &*host_ptr }
+                .current_main_document_task_owner()
+                .ok_or_else(|| anyhow::anyhow!("main realm requires a current document owner"))?,
+            WindowContextBootstrapMode::ChildDefault { expected_owner, .. }
+            | WindowContextBootstrapMode::Isolated { expected_owner, .. } => expected_owner,
+        };
+        let touch_feature_detection = unsafe { &mut *host_ptr }
+            .init_window_touch_feature_detection(binding_owner)
+            .ok_or_else(|| anyhow::anyhow!("touch binding owner is no longer current"))?;
+        finish_context_bootstrap(
+            scope,
+            unsafe { &mut *host_ptr },
+            &secure_context_url,
+            touch_feature_detection,
+        )?;
         match mode {
             WindowContextBootstrapMode::Isolated {
                 child_handle: Some(child_handle),

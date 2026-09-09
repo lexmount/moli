@@ -139,6 +139,44 @@ fn finish_test_child_load_delivery(
 }
 
 #[test]
+fn touch_feature_detection_is_frozen_per_window_without_materializing_a_realm() {
+    let mut store = FrameOwnerStore::default();
+    store.ensure_main_frame(
+        handle(1),
+        url("https://example.test/"),
+        url("https://example.test/"),
+        "https://example.test".to_owned(),
+        policy_container(),
+        policy_context(),
+        None,
+    );
+    let first = commit_test_child_document(&mut store, handle(2), handle(3), "child", Some("main"));
+    assert_eq!(
+        store.init_window_touch_feature_detection(first, true),
+        Some(true)
+    );
+    assert_eq!(
+        store.init_window_touch_feature_detection(first, false),
+        Some(true)
+    );
+    assert_eq!(store.local_windows[&first.local_window_id].realm_id, None);
+    let second =
+        commit_test_child_document(&mut store, handle(4), handle(5), "other", Some("main"));
+    assert_eq!(
+        store.init_window_touch_feature_detection(second, false),
+        Some(false)
+    );
+    let replacement =
+        commit_test_child_document(&mut store, handle(2), handle(6), "child", Some("main"));
+    assert_ne!(replacement.local_window_id, first.local_window_id);
+    assert_eq!(store.init_window_touch_feature_detection(first, true), None);
+    assert_eq!(
+        store.init_window_touch_feature_detection(replacement, false),
+        Some(false)
+    );
+}
+
+#[test]
 fn main_frame_identity_uses_reserved_owner_records() {
     let mut store = FrameOwnerStore::default();
     let realm_id = store.ensure_main_frame(

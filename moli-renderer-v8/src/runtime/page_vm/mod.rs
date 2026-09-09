@@ -4255,6 +4255,7 @@ impl PageVm {
         let vm_bootstrap = ScriptVmDefaultWorldBootstrap::from_dom_host_with_resource_completion_sender_browser_context_runtime_and_document_isolate(
             bootstrap_document,
             env.bypass_content_security_policy,
+            &env.navigator_overrides,
             post_domcontentloaded_page_task_sender,
             script_event_parser_boundary_sender,
             resource_completion_sender,
@@ -4383,9 +4384,6 @@ impl PageVm {
             .set_stored_runtime_bindings(&env.runtime_bindings);
         page_vm.vm_mut().set_emulated_media(&env.emulated_media);
         page_vm.vm_mut().set_idle_override(env.idle_override);
-        page_vm
-            .vm_mut()
-            .set_navigator_overrides(&env.navigator_overrides);
         page_vm
             .vm_mut()
             .set_viewport_surface_for_bootstrap(env.viewport_surface);

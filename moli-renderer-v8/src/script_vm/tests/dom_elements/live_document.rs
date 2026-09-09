@@ -4295,13 +4295,21 @@ fn global_touch_event_handlers_live_on_mixin_owners() {
         "https://global-touch-event-handlers.test/",
         "<!doctype html><html><head></head><body></body></html>",
     );
+    vm.set_navigator_overrides_and_sync_surface(&moli_page_types::NavigatorOverrides {
+        max_touch_points: Some(5),
+        ..Default::default()
+    })
+    .unwrap();
 
     let result = vm
         .eval(
             r#"
 (() => {
+  const frame = document.createElement('iframe');
+  document.body.appendChild(frame);
+  return frame.contentWindow.eval('(' + function() {
   const names = ['ontouchstart', 'ontouchend', 'ontouchmove', 'ontouchcancel'];
-  const owners = [window, HTMLElement.prototype, SVGElement.prototype, Document.prototype];
+  const owners = [window, HTMLElement.prototype, SVGElement.prototype, MathMLElement.prototype, Document.prototype];
   const descriptorIsEventHandler = (owner, name) => {
     const descriptor = Object.getOwnPropertyDescriptor(owner, name);
     return !!descriptor &&
@@ -4328,6 +4336,7 @@ fn global_touch_event_handlers_live_on_mixin_owners() {
   }
 
   return JSON.stringify({ ownAccessors, absentFromElement, calls });
+  }.toString() + ')()');
 })()
 "#,
         )
@@ -4337,6 +4346,20 @@ fn global_touch_event_handlers_live_on_mixin_owners() {
         result,
         r#"{"ownAccessors":true,"absentFromElement":true,"calls":["window:touchstart","document:touchstart","html:touchstart","svg:touchstart"]}"#
     );
+}
+
+#[test]
+fn desktop_touch_feature_detection_does_not_hide_event_constructors() {
+    let mut vm = new_parsed_test_vm(
+        "https://desktop-touch.test/",
+        "<!doctype html><body></body>",
+    );
+    assert_eq!(vm.eval(r#"(() => {
+        const names = ['ontouchstart', 'ontouchend', 'ontouchmove', 'ontouchcancel'];
+        const owners = [window, Document.prototype, HTMLElement.prototype, SVGElement.prototype, MathMLElement.prototype];
+        return names.every(name => owners.every(owner => !(name in owner))) &&
+            new TouchEvent('touchstart') instanceof TouchEvent && typeof Touch === 'function';
+    })()"#).unwrap(), "true");
 }
 
 #[test]

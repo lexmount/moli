@@ -1633,7 +1633,9 @@ pub(crate) fn finish_context_bootstrap(
     scope: &mut v8::PinScope<'_, '_>,
     document_runtime: &mut JsContextHost,
     secure_context_url: &url::Url,
+    touch_feature_detection: bool,
 ) -> Result<()> {
+    super::touch_feature_detection::initialize(scope, touch_feature_detection);
     super::exposed_interfaces::initialize_realm_interface_registry(
         scope,
         super::exposed_interfaces::RealmKind::Window,

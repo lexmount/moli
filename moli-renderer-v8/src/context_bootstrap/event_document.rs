@@ -1,4 +1,6 @@
-use super::events::{new_uninitialized_text_event, set_event_initialized};
+use super::events::{
+    new_uninitialized_text_event, new_uninitialized_touch_event, set_event_initialized,
+};
 use super::*;
 use crate::webidl;
 use std::str::FromStr;
@@ -28,6 +30,7 @@ enum DocumentCreateEventKind {
     #[strum(serialize = "uievent", serialize = "uievents")]
     UiEvent,
     TextEvent,
+    TouchEvent,
     CompositionEvent,
     FocusEvent,
     HashChangeEvent,
@@ -50,6 +53,7 @@ impl DocumentCreateEventKind {
             DocumentCreateEventKind::DragEvent => "Event",
             DocumentCreateEventKind::UiEvent => "UIEvent",
             DocumentCreateEventKind::TextEvent => "TextEvent",
+            DocumentCreateEventKind::TouchEvent => "TouchEvent",
             DocumentCreateEventKind::CompositionEvent => "CompositionEvent",
             DocumentCreateEventKind::FocusEvent => "FocusEvent",
             DocumentCreateEventKind::HashChangeEvent => "Event",
@@ -71,6 +75,12 @@ pub(super) fn document_create_event_callback<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'_, v8::Value>,
 ) {
+    if crate::native_bridge::document::document_receiver_runtime_and_handle(scope, args.this())
+        .is_none()
+    {
+        throw_type_error(scope, "Illegal invocation");
+        return;
+    }
     let Some(parsed) = webidl::parse_args::<DocumentCreateEventArgs>(scope, &args) else {
         return;
     };
@@ -78,6 +88,22 @@ pub(super) fn document_create_event_callback<'s>(
         throw_not_supported_dom_exception(scope, "The provided event type is not supported.");
         return;
     };
+    if kind == DocumentCreateEventKind::TouchEvent {
+        let Some(context) =
+            crate::native_bridge::document::document_relevant_context(scope, args.this())
+        else {
+            return;
+        };
+        let scope = &mut v8::ContextScope::new(scope, context);
+        if !super::touch_feature_detection::enabled(scope) {
+            throw_not_supported_dom_exception(scope, "The provided event type is not supported.");
+            return;
+        }
+        if let Some(event) = new_uninitialized_touch_event(scope) {
+            rv.set(event.into());
+        }
+        return;
+    }
     if kind == DocumentCreateEventKind::TextEvent {
         match new_uninitialized_text_event(scope) {
             Some(event) => rv.set(event.into()),

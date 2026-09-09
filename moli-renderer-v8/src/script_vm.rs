@@ -2194,6 +2194,7 @@ impl ScriptVmDefaultWorldBootstrap {
         Self::from_dom_host_with_resource_completion_sender_browser_context_runtime_and_document_isolate(
             bootstrap_dom_host,
             false,
+            &moli_page_types::NavigatorOverrides::default(),
             page_task_tx,
             page_task_parser_boundary_injection_tx,
             resource_completion_tx,
@@ -2213,6 +2214,7 @@ impl ScriptVmDefaultWorldBootstrap {
     pub(super) fn from_dom_host_with_resource_completion_sender_browser_context_runtime_and_document_isolate(
         bootstrap_dom_host: DomHost,
         bypass_content_security_policy: bool,
+        navigator_overrides: &moli_page_types::NavigatorOverrides,
         page_task_tx: RuntimePageTaskSender,
         page_task_parser_boundary_injection_tx: tokio::sync::mpsc::UnboundedSender<PageTask>,
         resource_completion_tx: RendererResourceCompletionSender,
@@ -2230,7 +2232,7 @@ impl ScriptVmDefaultWorldBootstrap {
             crate::service_worker_runtime::ServiceWorkerClientId,
         >,
     ) -> std::result::Result<Self, ScriptVmBootstrapError> {
-        ScriptVmPageRealmBootstrap::new_from_dom_host(
+        let bootstrap = ScriptVmPageRealmBootstrap::new_from_dom_host(
             bootstrap_dom_host,
             bypass_content_security_policy,
             page_task_tx,
@@ -2246,8 +2248,12 @@ impl ScriptVmDefaultWorldBootstrap {
             main_document_commit,
             top_level_storage_key,
             reserved_service_worker_client_id,
-        )?
-        .bootstrap_default_world()
+        )?;
+        bootstrap
+            .context_host
+            .borrow_mut()
+            .set_navigator_overrides(navigator_overrides);
+        bootstrap.bootstrap_default_world()
     }
 
     fn attach_context_and_capture_baseline_globals(
@@ -5158,15 +5164,6 @@ impl ScriptVm {
 
     pub(super) fn set_network_offline(&mut self, offline: bool) {
         self._context_host.borrow_mut().set_network_offline(offline);
-    }
-
-    pub(super) fn set_navigator_overrides(
-        &mut self,
-        overrides: &moli_page_types::NavigatorOverrides,
-    ) {
-        self._context_host
-            .borrow_mut()
-            .set_navigator_overrides(overrides);
     }
 
     pub(super) fn set_navigator_overrides_and_sync_surface(

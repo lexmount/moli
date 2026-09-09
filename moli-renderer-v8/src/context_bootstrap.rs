@@ -160,6 +160,7 @@ mod stream_objects;
 mod streams;
 mod style_font_template;
 pub(crate) mod svg_runtime;
+pub(crate) mod touch_feature_detection;
 mod touch_runtime;
 mod trusted_types;
 mod url_form;

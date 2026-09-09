@@ -6871,7 +6871,7 @@ fn zhihu_bot_detection_harness_fixture_matches_stable_moli_baseline() {
     assert_eq!(value["screenTouch"]["orientationType"], "landscape-primary");
     assert_eq!(value["screenTouch"]["touchType"], "function");
     assert_eq!(value["screenTouch"]["touchEventType"], "function");
-    assert_eq!(value["screenTouch"]["ontouchstartType"], "object");
+    assert_eq!(value["screenTouch"]["ontouchstartType"], "undefined");
 
     assert_eq!(value["canvasWebgl"]["canvasCtor"], "HTMLCanvasElement");
     assert_eq!(value["canvasWebgl"]["canvasTag"], "CANVAS");

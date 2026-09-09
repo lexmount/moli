@@ -482,6 +482,9 @@ pub(crate) struct LocalWindowRecord {
     pub(crate) realm_id: Option<FrameRealmId>,
     pub(crate) settings: FrameSettingsObject,
     pub(crate) lifecycle: LocalWindowLifecycleState,
+    /// The first realm freezes conditional touch bindings for all worlds of
+    /// this Window. Live emulation updates do not rewrite installed bindings.
+    pub(crate) touch_feature_detection: Option<bool>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

@@ -504,7 +504,7 @@ struct DocumentFragmentCollectionQueryPrototypeDeclaration {
     get_elements_by_name: (),
 }
 
-fn document_receiver_runtime_and_handle<'s>(
+pub(crate) fn document_receiver_runtime_and_handle<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     receiver: v8::Local<'s, v8::Object>,
 ) -> Option<(*mut JsContextHost, DomHandle)> {
@@ -1371,6 +1371,21 @@ pub(in crate::native_bridge) fn set_document_associated_window<'s>(
         DOCUMENT_ASSOCIATED_WINDOW_SLOT,
         window.into(),
     );
+}
+
+pub(crate) fn document_relevant_context<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    document: v8::Local<'s, v8::Object>,
+) -> Option<v8::Local<'s, v8::Context>> {
+    // A shared default-world reflector can predate its child realm. Its V8
+    // allocation context is then not the Document's current associated Window.
+    if let Some(window) = get_private_value(scope, document, DOCUMENT_ASSOCIATED_WINDOW_SLOT)
+        .and_then(|value| v8::Local::<v8::Object>::try_from(value).ok())
+    {
+        return window.get_creation_context(scope);
+    }
+    // Detached documents have no Window and retain their creation realm.
+    document.get_creation_context(scope)
 }
 
 pub(crate) fn install_document_template_bindings<'s>(
