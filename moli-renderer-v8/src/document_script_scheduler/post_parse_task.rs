@@ -63,12 +63,6 @@ impl PostParseDocumentScriptTask {
         }))
     }
 
-    pub(super) fn position(&self) -> usize {
-        match self {
-            Self::AsyncScript(task) => task.position(),
-        }
-    }
-
     #[cfg(test)]
     pub(super) fn as_script(&self) -> Option<&PreparedScript> {
         match self {
@@ -100,14 +94,6 @@ impl PostParseAsyncScriptTask {
             Self::Ready { script, .. }
             | Self::WaitingForSource { script, .. }
             | Self::Failure { script, .. } => script,
-        }
-    }
-
-    fn position(&self) -> usize {
-        match self {
-            Self::Ready { script, .. }
-            | Self::WaitingForSource { script, .. }
-            | Self::Failure { script, .. } => script.position,
         }
     }
 }

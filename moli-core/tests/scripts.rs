@@ -41,6 +41,9 @@ mod parser_preparation;
 #[path = "scripts/lifecycle_task_order.rs"]
 mod lifecycle_task_order;
 
+#[path = "scripts/post_parse_async.rs"]
+mod post_parse_async;
+
 fn diagnostic_global<'a>(
     page: &'a moli_core::page::Page,
     name: &str,

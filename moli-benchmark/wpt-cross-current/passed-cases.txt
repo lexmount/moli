@@ -6344,6 +6344,7 @@ html/semantics/scripting-1/the-script-element/execution-timing/079.html
 html/semantics/scripting-1/the-script-element/execution-timing/081.html
 html/semantics/scripting-1/the-script-element/execution-timing/082.html
 html/semantics/scripting-1/the-script-element/execution-timing/084.html
+html/semantics/scripting-1/the-script-element/execution-timing/085.html
 html/semantics/scripting-1/the-script-element/execution-timing/086.html
 html/semantics/scripting-1/the-script-element/execution-timing/087.html
 html/semantics/scripting-1/the-script-element/execution-timing/088.html

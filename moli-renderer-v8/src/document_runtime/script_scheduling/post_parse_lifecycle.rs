@@ -77,6 +77,13 @@ impl DocumentRuntime {
                         "dropping stale main parser-deferred adapter marker without owned parser work"
                     );
                 }
+            } else if item.is_async_phase_document_script() {
+                // Parser EOF does not make async scripts wait for the defer
+                // list or DOMContentLoaded. Transfer each remaining script to
+                // its exact Document producer; pending sources publish their
+                // own ready task when they complete.
+                self.enqueue_main_document_post_parse_work(item)
+                    .expect("post-parse async work must retain its main Document runtime route");
             } else {
                 queued_work.push(item);
             }
