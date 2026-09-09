@@ -1,11 +1,12 @@
 use tokio::net::TcpStream;
-use tokio_tungstenite::{
-    MaybeTlsStream, WebSocketStream, tungstenite::handshake::client::Response,
-};
+use tokio_tungstenite::{MaybeTlsStream, WebSocketStream};
+
+mod handshake;
+use handshake::browser_client_handshake;
 
 use crate::{
     ConnectOptions,
-    handshake::browser_client_handshake,
+    handshake::HandshakeResponse,
     proxy::{
         connect_websocket_via_http_proxy_tunnel, websocket_proxy_url, websocket_target_authority,
     },
@@ -15,7 +16,13 @@ use crate::{
 pub(crate) async fn open_websocket_stream(
     request: http::Request<()>,
     context: &ConnectOptions,
-) -> Result<(WebSocketStream<MaybeTlsStream<TcpStream>>, Response), String> {
+) -> Result<
+    (
+        WebSocketStream<MaybeTlsStream<TcpStream>>,
+        HandshakeResponse,
+    ),
+    String,
+> {
     let proxy_url = websocket_proxy_url(request.uri(), context)?;
     let tcp_stream = match proxy_url {
         Some(proxy_url) => {

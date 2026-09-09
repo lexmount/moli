@@ -6,7 +6,7 @@ use tokio_tungstenite::tungstenite::protocol::{CloseFrame, Message};
 
 use crate::{
     Command, ConnectOptions, Event, FrameOpcode,
-    events::{EventSender, send_error_and_close, send_event},
+    events::{EventResult, EventSender, send_error_and_close, send_event},
     handle::AbortOnDrop,
     headers::header_map_entries,
     limits::{acquire_pending_websocket_handshake_slot, acquire_websocket_connection_slot},
@@ -21,22 +21,22 @@ pub(crate) async fn run_websocket_connection(
     context: ConnectOptions,
     mut command_rx: mpsc::UnboundedReceiver<Command>,
     event_tx: EventSender,
-) {
+) -> EventResult {
     let Some(_connection_slot) = acquire_websocket_connection_slot() else {
         send_error_and_close(
             &event_tx,
             socket_id,
             "WebSocket connection failed: insufficient resources".to_owned(),
         )
-        .await;
-        return;
+        .await?;
+        return Ok(());
     };
 
     let request = match build_websocket_request(&url, &protocols, &context) {
         Ok(request) => request,
         Err(error) => {
-            send_error_and_close(&event_tx, socket_id, error).await;
-            return;
+            send_error_and_close(&event_tx, socket_id, error).await?;
+            return Ok(());
         }
     };
 
@@ -47,8 +47,8 @@ pub(crate) async fn run_websocket_connection(
             socket_id,
             "WebSocket connection failed: too many pending handshakes".to_owned(),
         )
-        .await;
-        return;
+        .await?;
+        return Ok(());
     };
     let handshake = open_websocket_stream(request, &context);
     tokio::pin!(handshake);
@@ -64,8 +64,8 @@ pub(crate) async fn run_websocket_connection(
                             socket_id,
                             "WebSocket connection closed before opening".to_owned(),
                         )
-                        .await;
-                        return;
+                        .await?;
+                        return Ok(());
                     }
                     Some(Command::SendText(_))
                     | Some(Command::SendBinary(_))
@@ -77,7 +77,7 @@ pub(crate) async fn run_websocket_connection(
                         // queueing frames before the opening handshake has succeeded.
                     }
                     Some(Command::ContinueOpen { .. }) | Some(Command::FailOpen(_)) => {}
-                    None => return,
+                    None => return Ok(()),
                 }
             }
             connected = &mut handshake => {
@@ -93,8 +93,8 @@ pub(crate) async fn run_websocket_connection(
                             socket_id,
                             format!("WebSocket connection failed: {error}"),
                         )
-                        .await;
-                        return;
+                        .await?;
+                        return Ok(());
                     }
                 }
             }
@@ -104,7 +104,7 @@ pub(crate) async fn run_websocket_connection(
     let mut response_status = response.status().as_u16();
     let mut response_headers = header_map_entries(response.headers());
     if context.pause_after_handshake {
-        let _ = send_event(
+        send_event(
             &event_tx,
             Event::HandshakeResponse {
                 socket_id,
@@ -119,7 +119,7 @@ pub(crate) async fn run_websocket_connection(
                 response_headers: response_headers.clone(),
             },
         )
-        .await;
+        .await?;
         loop {
             match command_rx.recv().await {
                 Some(Command::ContinueOpen {
@@ -135,8 +135,8 @@ pub(crate) async fn run_websocket_connection(
                     break;
                 }
                 Some(Command::FailOpen(message)) => {
-                    send_error_and_close(&event_tx, socket_id, message).await;
-                    return;
+                    send_error_and_close(&event_tx, socket_id, message).await?;
+                    return Ok(());
                 }
                 Some(Command::Close { .. }) => {
                     send_error_and_close(
@@ -144,8 +144,8 @@ pub(crate) async fn run_websocket_connection(
                         socket_id,
                         "WebSocket connection closed before opening".to_owned(),
                     )
-                    .await;
-                    return;
+                    .await?;
+                    return Ok(());
                 }
                 Some(Command::SendText(_))
                 | Some(Command::SendBinary(_))
@@ -155,7 +155,7 @@ pub(crate) async fn run_websocket_connection(
                     // Browser-visible `send()` throws until the open event, so crate users
                     // cannot enqueue application data while a response-stage pause is active.
                 }
-                None => return,
+                None => return Ok(()),
             }
         }
     }
@@ -165,7 +165,7 @@ pub(crate) async fn run_websocket_connection(
     let extensions = response_header(&response_headers, "sec-websocket-extensions")
         .unwrap_or_default()
         .to_owned();
-    let _ = send_event(
+    send_event(
         &event_tx,
         Event::Open {
             socket_id,
@@ -176,9 +176,9 @@ pub(crate) async fn run_websocket_connection(
             response_headers,
         },
     )
-    .await;
+    .await?;
 
-    run_open_websocket_connection(socket_id, stream, command_rx, event_tx).await;
+    run_open_websocket_connection(socket_id, stream, command_rx, event_tx).await
 }
 
 async fn run_open_websocket_connection(
@@ -188,7 +188,7 @@ async fn run_open_websocket_connection(
     >,
     command_rx: mpsc::UnboundedReceiver<Command>,
     event_tx: EventSender,
-) {
+) -> EventResult {
     let (write, mut read) = stream.split();
     let (writer_event_tx, mut writer_event_rx) = mpsc::unbounded_channel();
     let (writer_control_tx, writer_control_rx) = mpsc::unbounded_channel();
@@ -215,12 +215,12 @@ async fn run_open_websocket_connection(
                             socket_id,
                             &mut pending_buffered_amount,
                         )
-                        .await;
-                        let _ = send_event(&event_tx, Event::TextMessage {
+                        .await?;
+                        send_event(&event_tx, Event::TextMessage {
                             socket_id,
                             data: text.to_string(),
                         })
-                        .await;
+                        .await?;
                     }
                     Some(Ok(Message::Binary(data))) => {
                         send_next_buffered_amount(
@@ -228,12 +228,12 @@ async fn run_open_websocket_connection(
                             socket_id,
                             &mut pending_buffered_amount,
                         )
-                        .await;
-                        let _ = send_event(&event_tx, Event::BinaryMessage {
+                        .await?;
+                        send_event(&event_tx, Event::BinaryMessage {
                             socket_id,
                             data: data.to_vec(),
                         })
-                        .await;
+                        .await?;
                     }
                     Some(Ok(Message::Close(frame))) => {
                         flush_pending_buffered_amount(
@@ -241,11 +241,11 @@ async fn run_open_websocket_connection(
                             socket_id,
                             &mut pending_buffered_amount,
                         )
-                        .await;
+                        .await?;
                         let (code, reason) = frame
                             .map(|frame| (u16::from(frame.code), frame.reason.to_string()))
                             .unwrap_or((1005, String::new()));
-                        let _ = send_event(
+                        send_event(
                             &event_tx,
                             Event::Close {
                                 socket_id,
@@ -254,7 +254,7 @@ async fn run_open_websocket_connection(
                                 was_clean: true,
                             },
                         )
-                        .await;
+                        .await?;
                         break;
                     }
                     Some(Ok(Message::Ping(payload))) => {
@@ -283,7 +283,7 @@ async fn run_open_websocket_connection(
                                 &mut pending_buffered_amount,
                                 &mut writer_done,
                             )
-                            .await,
+                            .await?,
                             WriterEventOutcome::Terminate
                         ) {
                             // The drain itself surfaced a writer `Error` and
@@ -301,8 +301,8 @@ async fn run_open_websocket_connection(
                                 socket_id,
                                 &mut pending_buffered_amount,
                             )
-                            .await;
-                            let _ = send_event(
+                            .await?;
+                            send_event(
                                 &event_tx,
                                 Event::Close {
                                     socket_id,
@@ -311,20 +311,20 @@ async fn run_open_websocket_connection(
                                     was_clean: true,
                                 },
                             )
-                            .await;
+                            .await?;
                         } else {
                             flush_pending_buffered_amount(
                                 &event_tx,
                                 socket_id,
                                 &mut pending_buffered_amount,
                             )
-                            .await;
+                            .await?;
                             send_error_and_close(
                                 &event_tx,
                                 socket_id,
                                 format!("WebSocket receive failed: {error}"),
                             )
-                            .await;
+                            .await?;
                         }
                         break;
                     }
@@ -342,7 +342,7 @@ async fn run_open_websocket_connection(
                                 &mut pending_buffered_amount,
                                 &mut writer_done,
                             )
-                            .await,
+                            .await?,
                             WriterEventOutcome::Terminate
                         ) {
                             break;
@@ -352,12 +352,12 @@ async fn run_open_websocket_connection(
                             socket_id,
                             &mut pending_buffered_amount,
                         )
-                        .await;
+                        .await?;
                         let (code, reason, was_clean) = sent_close
                             .clone()
                             .map(|(code, reason)| (code, reason, true))
                             .unwrap_or((1006, String::new(), false));
-                        let _ = send_event(
+                        send_event(
                             &event_tx,
                             Event::Close {
                                 socket_id,
@@ -366,7 +366,7 @@ async fn run_open_websocket_connection(
                                 was_clean,
                             },
                         )
-                        .await;
+                        .await?;
                         break;
                     }
                 }
@@ -385,7 +385,7 @@ async fn run_open_websocket_connection(
                         &mut pending_buffered_amount,
                         &mut writer_done,
                     )
-                    .await,
+                    .await?,
                     WriterEventOutcome::Terminate
                 ) {
                     break;
@@ -393,6 +393,7 @@ async fn run_open_websocket_connection(
             }
         }
     }
+    Ok(())
 }
 
 enum WebSocketWriterEvent {
@@ -536,25 +537,26 @@ async fn send_next_buffered_amount(
     event_tx: &EventSender,
     socket_id: u64,
     pending_buffered_amount: &mut VecDeque<usize>,
-) {
+) -> EventResult {
     let Some(amount) = pending_buffered_amount.pop_front() else {
-        return;
+        return Ok(());
     };
-    let _ = send_event(
+    send_event(
         event_tx,
         Event::BufferedAmountConsumed { socket_id, amount },
     )
-    .await;
+    .await
 }
 
 async fn flush_pending_buffered_amount(
     event_tx: &EventSender,
     socket_id: u64,
     pending_buffered_amount: &mut VecDeque<usize>,
-) {
+) -> EventResult {
     while !pending_buffered_amount.is_empty() {
-        send_next_buffered_amount(event_tx, socket_id, pending_buffered_amount).await;
+        send_next_buffered_amount(event_tx, socket_id, pending_buffered_amount).await?;
     }
+    Ok(())
 }
 
 /// Outcome of processing a single `WebSocketWriterEvent`. `Terminate` means
@@ -580,13 +582,13 @@ async fn handle_writer_event(
     sent_close: &mut Option<(u16, String)>,
     pending_buffered_amount: &mut VecDeque<usize>,
     writer_done: &mut bool,
-) -> WriterEventOutcome {
+) -> EventResult<WriterEventOutcome> {
     match writer_event {
         WebSocketWriterEvent::FrameSent {
             opcode,
             payload_length,
         } => {
-            let _ = send_event(
+            send_event(
                 event_tx,
                 Event::FrameSent {
                     socket_id,
@@ -594,24 +596,24 @@ async fn handle_writer_event(
                     payload_length,
                 },
             )
-            .await;
+            .await?;
             pending_buffered_amount.push_back(payload_length);
-            WriterEventOutcome::Continue
+            Ok(WriterEventOutcome::Continue)
         }
         WebSocketWriterEvent::Closing { code, reason } => {
             *sent_close = Some((code, reason));
-            let _ = send_event(event_tx, Event::Closing { socket_id }).await;
-            flush_pending_buffered_amount(event_tx, socket_id, pending_buffered_amount).await;
-            WriterEventOutcome::Continue
+            send_event(event_tx, Event::Closing { socket_id }).await?;
+            flush_pending_buffered_amount(event_tx, socket_id, pending_buffered_amount).await?;
+            Ok(WriterEventOutcome::Continue)
         }
         WebSocketWriterEvent::Error(message) => {
-            flush_pending_buffered_amount(event_tx, socket_id, pending_buffered_amount).await;
-            send_error_and_close(event_tx, socket_id, message).await;
-            WriterEventOutcome::Terminate
+            flush_pending_buffered_amount(event_tx, socket_id, pending_buffered_amount).await?;
+            send_error_and_close(event_tx, socket_id, message).await?;
+            Ok(WriterEventOutcome::Terminate)
         }
         WebSocketWriterEvent::Done => {
             *writer_done = true;
-            WriterEventOutcome::Continue
+            Ok(WriterEventOutcome::Continue)
         }
     }
 }
@@ -637,7 +639,7 @@ async fn drain_pending_writer_events(
     sent_close: &mut Option<(u16, String)>,
     pending_buffered_amount: &mut VecDeque<usize>,
     writer_done: &mut bool,
-) -> WriterEventOutcome {
+) -> EventResult<WriterEventOutcome> {
     while let Ok(writer_event) = writer_event_rx.try_recv() {
         if matches!(
             handle_writer_event(
@@ -648,11 +650,11 @@ async fn drain_pending_writer_events(
                 pending_buffered_amount,
                 writer_done,
             )
-            .await,
+            .await?,
             WriterEventOutcome::Terminate
         ) {
-            return WriterEventOutcome::Terminate;
+            return Ok(WriterEventOutcome::Terminate);
         }
     }
-    WriterEventOutcome::Continue
+    Ok(WriterEventOutcome::Continue)
 }

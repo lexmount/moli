@@ -98,15 +98,26 @@ impl std::fmt::Debug for EventSender {
     }
 }
 
-pub(crate) async fn send_event(event_tx: &EventSender, event: Event) -> bool {
-    event_tx.send(event).await
+#[derive(Debug)]
+pub(crate) struct EventSinkClosed;
+
+pub(crate) type EventResult<T = ()> = Result<T, EventSinkClosed>;
+
+pub(crate) async fn send_event(event_tx: &EventSender, event: Event) -> EventResult {
+    event_tx
+        .send(event)
+        .await
+        .then_some(())
+        .ok_or(EventSinkClosed)
 }
 
-pub(crate) async fn send_error_and_close(event_tx: &EventSender, socket_id: u64, message: String) {
-    if !send_event(event_tx, Event::Error { socket_id, message }).await {
-        return;
-    }
-    let _ = send_event(
+pub(crate) async fn send_error_and_close(
+    event_tx: &EventSender,
+    socket_id: u64,
+    message: String,
+) -> EventResult {
+    send_event(event_tx, Event::Error { socket_id, message }).await?;
+    send_event(
         event_tx,
         Event::Close {
             socket_id,
@@ -115,5 +126,5 @@ pub(crate) async fn send_error_and_close(event_tx: &EventSender, socket_id: u64,
             was_clean: false,
         },
     )
-    .await;
+    .await
 }

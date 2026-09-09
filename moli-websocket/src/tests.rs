@@ -488,6 +488,119 @@ impl Drop for WebSocketSinkDropSignal {
 }
 
 #[tokio::test]
+async fn websocket_rejected_handshake_or_open_event_releases_transport() {
+    use futures_util::StreamExt;
+
+    for pause_after_handshake in [false, true] {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let url = format!("ws://{}/closed-sink", listener.local_addr().unwrap());
+        let (command_tx, command_rx) = mpsc::unbounded_channel();
+        let mut context = test_websocket_context();
+        context.pause_after_handshake = pause_after_handshake;
+        let server = async move {
+            let (stream, _) = listener.accept().await.unwrap();
+            let mut socket = tokio_tungstenite::accept_async(stream).await.unwrap();
+            let terminal = socket.next().await;
+            assert!(terminal.is_none() || terminal.is_some_and(|result| result.is_err()));
+        };
+        let client = crate::connection::run_websocket_connection(
+            64,
+            url,
+            Vec::new(),
+            context,
+            command_rx,
+            EventSender::closed(),
+        );
+        let (result, ()) = timeout(Duration::from_secs(3), async {
+            tokio::join!(client, server)
+        })
+        .await
+        .expect("a closed sink must release the connection before waiting for commands");
+        result.expect_err("delivery should report the unavailable sink");
+        assert!(command_tx.is_closed());
+    }
+}
+
+#[tokio::test]
+async fn websocket_rejected_message_event_releases_transport_and_writer() {
+    use futures_util::{SinkExt, StreamExt};
+
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let url = format!(
+        "ws://{}/closed-message-sink",
+        listener.local_addr().unwrap()
+    );
+    let (command_tx, command_rx) = mpsc::unbounded_channel();
+    let sink =
+        EventSender::with_async_sink(
+            |event| async move { !matches!(event, Event::TextMessage { .. }) },
+        );
+    let server = async move {
+        let (stream, _) = listener.accept().await.unwrap();
+        let mut socket = tokio_tungstenite::accept_async(stream).await.unwrap();
+        socket.send("reject delivery".into()).await.unwrap();
+        let terminal = socket.next().await;
+        assert!(terminal.is_none() || terminal.is_some_and(|result| result.is_err()));
+    };
+    let client = crate::connection::run_websocket_connection(
+        65,
+        url,
+        Vec::new(),
+        test_websocket_context(),
+        command_rx,
+        sink,
+    );
+    let (result, ()) = timeout(Duration::from_secs(3), async {
+        tokio::join!(client, server)
+    })
+    .await
+    .expect("message delivery rejection must stop both transport tasks");
+    result.expect_err("message sink is closed");
+    assert!(command_tx.is_closed());
+}
+
+#[tokio::test]
+async fn websocket_synthetic_delivery_stops_after_first_rejected_event() {
+    let (command_tx, command_rx) = mpsc::unbounded_channel();
+    command_tx
+        .send(Command::SendText("hello".to_owned()))
+        .unwrap();
+    let (observed_tx, mut observed_rx) = mpsc::unbounded_channel();
+    let sink = EventSender::with_async_sink(move |event| {
+        let observed_tx = observed_tx.clone();
+        async move {
+            let accept = matches!(event, Event::Open { .. });
+            observed_tx.send(event).unwrap();
+            accept
+        }
+    });
+    timeout(
+        Duration::from_secs(3),
+        crate::synthetic::run_synthetic_websocket_connection(
+            66,
+            command_rx,
+            sink,
+            Vec::new(),
+            101,
+            Vec::new(),
+        ),
+    )
+    .await
+    .expect("synthetic producer must stop when FrameSent is rejected")
+    .expect_err("synthetic event sink is closed");
+    assert!(command_tx.is_closed());
+    assert!(matches!(observed_rx.try_recv(), Ok(Event::Open { .. })));
+    assert!(matches!(
+        observed_rx.try_recv(),
+        Ok(Event::FrameSent { .. })
+    ));
+    assert!(
+        observed_rx.try_recv().is_err(),
+        "no further delivery attempts after rejection"
+    );
+}
+
+#[tokio::test]
 async fn websocket_cancel_releases_blocked_sink_and_open_writer() {
     use futures_util::{SinkExt, StreamExt};
 

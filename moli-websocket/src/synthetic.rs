@@ -2,7 +2,7 @@ use tokio::sync::mpsc;
 
 use crate::{
     Command, Event, FrameOpcode,
-    events::{EventSender, send_error_and_close, send_event},
+    events::{EventResult, EventSender, send_error_and_close, send_event},
     limits::acquire_websocket_connection_slot,
 };
 
@@ -13,15 +13,15 @@ pub(crate) async fn run_synthetic_websocket_connection(
     request_headers: Vec<(String, String)>,
     response_status: u16,
     response_headers: Vec<(String, String)>,
-) {
+) -> EventResult {
     let Some(_connection_slot) = acquire_websocket_connection_slot() else {
         send_error_and_close(
             &event_tx,
             socket_id,
             "WebSocket connection failed: insufficient resources".to_owned(),
         )
-        .await;
-        return;
+        .await?;
+        return Ok(());
     };
 
     let protocol = response_header(&response_headers, "sec-websocket-protocol")
@@ -30,7 +30,7 @@ pub(crate) async fn run_synthetic_websocket_connection(
     let extensions = response_header(&response_headers, "sec-websocket-extensions")
         .unwrap_or_default()
         .to_owned();
-    let _ = send_event(
+    send_event(
         &event_tx,
         Event::Open {
             socket_id,
@@ -41,13 +41,13 @@ pub(crate) async fn run_synthetic_websocket_connection(
             response_headers,
         },
     )
-    .await;
+    .await?;
 
     while let Some(command) = command_rx.recv().await {
         match command {
             Command::SendText(text) => {
                 let amount = text.len();
-                let _ = send_event(
+                send_event(
                     &event_tx,
                     Event::FrameSent {
                         socket_id,
@@ -55,16 +55,16 @@ pub(crate) async fn run_synthetic_websocket_connection(
                         payload_length: amount,
                     },
                 )
-                .await;
-                let _ = send_event(
+                .await?;
+                send_event(
                     &event_tx,
                     Event::BufferedAmountConsumed { socket_id, amount },
                 )
-                .await;
+                .await?;
             }
             Command::SendBinary(bytes) => {
                 let amount = bytes.len();
-                let _ = send_event(
+                send_event(
                     &event_tx,
                     Event::FrameSent {
                         socket_id,
@@ -72,23 +72,23 @@ pub(crate) async fn run_synthetic_websocket_connection(
                         payload_length: amount,
                     },
                 )
-                .await;
-                let _ = send_event(
+                .await?;
+                send_event(
                     &event_tx,
                     Event::BufferedAmountConsumed { socket_id, amount },
                 )
-                .await;
+                .await?;
             }
             Command::ReceiveText(data) => {
-                let _ = send_event(&event_tx, Event::TextMessage { socket_id, data }).await;
+                send_event(&event_tx, Event::TextMessage { socket_id, data }).await?;
             }
             Command::ReceiveBinary(data) => {
-                let _ = send_event(&event_tx, Event::BinaryMessage { socket_id, data }).await;
+                send_event(&event_tx, Event::BinaryMessage { socket_id, data }).await?;
             }
             Command::ServerClose { code, reason } => {
                 let close_event_code = code.unwrap_or(1005);
                 let close_event_reason = code.map(|_| reason).unwrap_or_default();
-                let _ = send_event(
+                send_event(
                     &event_tx,
                     Event::Close {
                         socket_id,
@@ -97,14 +97,14 @@ pub(crate) async fn run_synthetic_websocket_connection(
                         was_clean: true,
                     },
                 )
-                .await;
-                return;
+                .await?;
+                return Ok(());
             }
             Command::Close { code, reason } => {
                 let close_event_code = code.unwrap_or(1005);
                 let close_event_reason = code.map(|_| reason).unwrap_or_default();
-                let _ = send_event(&event_tx, Event::Closing { socket_id }).await;
-                let _ = send_event(
+                send_event(&event_tx, Event::Closing { socket_id }).await?;
+                send_event(
                     &event_tx,
                     Event::Close {
                         socket_id,
@@ -113,18 +113,18 @@ pub(crate) async fn run_synthetic_websocket_connection(
                         was_clean: true,
                     },
                 )
-                .await;
-                return;
+                .await?;
+                return Ok(());
             }
             Command::ContinueOpen { .. } => {}
             Command::FailOpen(message) => {
-                send_error_and_close(&event_tx, socket_id, message).await;
-                return;
+                send_error_and_close(&event_tx, socket_id, message).await?;
+                return Ok(());
             }
         }
     }
 
-    let _ = send_event(
+    send_event(
         &event_tx,
         Event::Close {
             socket_id,
@@ -133,7 +133,7 @@ pub(crate) async fn run_synthetic_websocket_connection(
             was_clean: false,
         },
     )
-    .await;
+    .await
 }
 
 fn response_header<'a>(headers: &'a [(String, String)], name: &str) -> Option<&'a str> {

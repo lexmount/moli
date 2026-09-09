@@ -18,7 +18,8 @@ pub fn spawn_connection(
     let event_tx = event_tx.into();
     let (command_tx, command_rx) = mpsc::unbounded_channel();
     let task = websocket_runtime().spawn(async move {
-        run_websocket_connection(socket_id, url, protocols, context, command_rx, event_tx).await;
+        let _ = run_websocket_connection(socket_id, url, protocols, context, command_rx, event_tx)
+            .await;
     });
     ConnectionHandle::new(command_tx, task.abort_handle())
 }
@@ -31,7 +32,7 @@ pub fn spawn_failed_connection(
     let event_tx = event_tx.into();
     let (command_tx, _command_rx) = mpsc::unbounded_channel();
     let task = websocket_runtime().spawn(async move {
-        send_error_and_close(&event_tx, socket_id, message).await;
+        let _ = send_error_and_close(&event_tx, socket_id, message).await;
     });
     ConnectionHandle::new(command_tx, task.abort_handle())
 }
@@ -46,7 +47,7 @@ pub fn spawn_synthetic_connection(
     let event_tx = event_tx.into();
     let (command_tx, command_rx) = mpsc::unbounded_channel();
     let task = websocket_runtime().spawn(async move {
-        run_synthetic_websocket_connection(
+        let _ = run_synthetic_websocket_connection(
             socket_id,
             command_rx,
             event_tx,
