@@ -1829,6 +1829,7 @@ pub(crate) fn finish_context_bootstrap(
         ("WebSocketStream", "WebSocketStream"),
         ("RTCPeerConnection", "RTCPeerConnection"),
         ("RTCIceCandidate", "RTCIceCandidate"),
+        ("RTCSessionDescription", "RTCSessionDescription"),
         ("RTCRtpReceiver", "RTCRtpReceiver"),
         ("RTCDataChannel", "RTCDataChannel"),
         ("Blob", "Blob"),

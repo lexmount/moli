@@ -6,7 +6,9 @@ use moli_webapi_declare::{WebApiFunctionTemplate, WebApiObject};
 
 mod ice_candidate;
 mod ice_candidate_parser;
+mod session_description;
 pub(in crate::context_bootstrap) use ice_candidate::rtc_ice_candidate_constructor_callback;
+pub(in crate::context_bootstrap) use session_description::rtc_session_description_constructor_callback;
 
 const RTC_PEER_CONNECTION_BRAND_SLOT: &str = "__moliRtcPeerConnectionBrand";
 const RTC_PEER_CONNECTION_CONFIGURATION_SLOT: &str = "__moliRtcPeerConnectionConfiguration";
@@ -125,7 +127,7 @@ struct RtcDataChannelObjectDeclaration<'scope> {
 
 #[derive(WebApiObject)]
 #[webapi(interface = "Object")]
-struct RtcSessionDescriptionDeclaration<'scope> {
+struct RtcSessionDescriptionInitDeclaration<'scope> {
     #[webapi(data_property, enumerable)]
     r#type: v8::Local<'scope, v8::String>,
     #[webapi(data_property, enumerable)]
@@ -208,6 +210,9 @@ pub(in crate::context_bootstrap) fn install_webrtc_template_bindings<'s>(
     match interface_name {
         "RTCIceCandidate" => {
             ice_candidate::install_ice_candidate_template_bindings(scope, template)
+        }
+        "RTCSessionDescription" => {
+            session_description::install_session_description_template_bindings(scope, template)
         }
         "RTCPeerConnection" => {
             RtcPeerConnectionPrototypeDeclaration::initialize_prototype_template(scope, prototype);
@@ -369,7 +374,7 @@ fn rtc_peer_connection_create_offer_callback<'s>(
         rv.set_undefined();
         return;
     };
-    let offer = RtcSessionDescriptionDeclaration::new(v8str(scope, "offer"), sdp)
+    let offer = RtcSessionDescriptionInitDeclaration::new(v8str(scope, "offer"), sdp)
         .bind(scope)
         .expect("RTC offer declaration should bind");
     set_resolved_promise(scope, &mut rv, offer.into());

@@ -87,6 +87,7 @@ pub(in crate::context_bootstrap) enum ConstructorKind {
     WebSocket,
     RtcPeerConnection,
     RtcIceCandidate,
+    RtcSessionDescription,
     Navigator,
     WorkerNavigator,
     Permissions,

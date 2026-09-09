@@ -1037,6 +1037,11 @@ const CONSTRUCTOR_SPECS_AFTER_STREAMS: &[ConstructorSpec] = &[
         kind: ConstructorKind::RtcIceCandidate,
     },
     ConstructorSpec {
+        name: "RTCSessionDescription",
+        parent: None,
+        kind: ConstructorKind::RtcSessionDescription,
+    },
+    ConstructorSpec {
         name: "RTCRtpReceiver",
         parent: None,
         kind: ConstructorKind::Illegal,

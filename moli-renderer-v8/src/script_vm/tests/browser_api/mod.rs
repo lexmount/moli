@@ -29,6 +29,7 @@ mod pointer_lock;
 mod promise_rejection;
 mod security_policy;
 mod service_worker_drain;
+mod session_description;
 mod speech_synthesis;
 mod storage_access;
 mod structured_clone;
