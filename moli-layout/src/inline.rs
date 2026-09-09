@@ -498,10 +498,13 @@ pub(crate) fn build_inline_fragments(
                 let ascent = font_metrics.map_or(run_metrics.ascent, |metrics| metrics.text_ascent);
                 let descent =
                     font_metrics.map_or(run_metrics.descent, |metrics| metrics.text_descent);
+                let left =
+                    metrics.inline_min_coord + cluster.visual_offset().unwrap_or(metrics.offset);
+                let (left, width) = encompass_text_inline_bounds(left, cluster.advance().max(0.0));
                 let rect = PaintRect::new(
-                    metrics.inline_min_coord + cluster.visual_offset().unwrap_or(metrics.offset),
+                    left,
                     metrics.baseline - ascent + vertical_offset,
-                    cluster.advance().max(0.0),
+                    width,
                     (ascent + descent).max(0.0),
                 );
                 if let Some(style) = layout.styles().get(style_index)
@@ -1722,7 +1725,8 @@ impl InlineBuildInput {
                 height: 0.0,
             });
         }
-        let layout = builder.build(&self.text);
+        let mut layout = builder.build(&self.text);
+        layout.set_text_item_quantization(1.0 / 64.0, &inline_text_item_ends(&self.units));
         let font_metrics = styles
             .iter()
             .zip(style_samples)
@@ -1775,6 +1779,36 @@ impl InlineBuildInput {
             fragments: InlineFragments::default(),
         }
     }
+}
+
+/// CSS inline allocation belongs to a normalized text node, not to each
+/// character or to the font fallback runs that happen to shape it.
+fn inline_text_item_ends(units: &[InlineTextUnit]) -> Vec<usize> {
+    let mut ends = Vec::new();
+    let mut previous = None;
+    for unit in units {
+        let key = (unit.style_box, unit.control);
+        if previous == Some(key) && ends.last() == Some(&unit.output_range.start) {
+            *ends.last_mut().expect("a continuing item has an end") = unit.output_range.end;
+        } else {
+            ends.push(unit.output_range.end);
+        }
+        previous = Some(key);
+    }
+    ends
+}
+
+fn encompass_text_inline_bounds(left: f32, width: f32) -> (f32, f32) {
+    let scale = crate::LAYOUT_SUBPIXELS_PER_CSS_PIXEL;
+    let start = (left * scale).floor() / scale;
+    // Blink's encompassing conversion preserves coincident endpoints. A
+    // zero-width control must not become a visible 1/64 px fragment.
+    let end = if left + width == left {
+        start
+    } else {
+        ((left + width) * scale).ceil() / scale
+    };
+    (start, end - start)
 }
 
 fn measure_inline_strut(
@@ -2401,6 +2435,7 @@ fn is_combining_mark(character: char) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    mod text_item_advance;
 
     #[test]
     fn ordered_output_range_lookup_handles_duplicates_gaps_and_bidi_order() {

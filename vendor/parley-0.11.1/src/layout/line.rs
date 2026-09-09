@@ -1,12 +1,12 @@
 // Copyright 2021 the Parley Authors
 // SPDX-License-Identifier: Apache-2.0 OR MIT
 
-use crate::layout::Style;
 use crate::layout::data::BreakReason;
 use crate::layout::data::{LayoutItemKind, LineData};
 use crate::layout::glyph::Glyph;
 use crate::layout::layout::Layout;
 use crate::layout::run::Run;
+use crate::layout::Style;
 use crate::style::Brush;
 use crate::{InlineBox, InlineBoxKind};
 use core::ops::Range;
@@ -100,6 +100,7 @@ impl<'a, B: Brush> Line<'a, B> {
             item_index: 0,
             glyph_start: 0,
             offset: 0.,
+            item_offset: 0.,
         }
     }
 }
@@ -250,6 +251,7 @@ struct GlyphRunIter<'a, B: Brush> {
     item_index: usize,
     glyph_start: usize,
     offset: f32,
+    item_offset: f32,
 }
 
 impl<'a, B: Brush> Iterator for GlyphRunIter<'a, B> {
@@ -279,6 +281,9 @@ impl<'a, B: Brush> Iterator for GlyphRunIter<'a, B> {
                     }));
                 }
                 LineItem::Run(run) => {
+                    if self.glyph_start == 0 {
+                        self.item_offset = self.offset;
+                    }
                     let mut iter = run
                         .visual_clusters()
                         .flat_map(|c| c.glyphs())
@@ -308,6 +313,9 @@ impl<'a, B: Brush> Iterator for GlyphRunIter<'a, B> {
                             baseline: self.line.data.metrics.baseline,
                             advance,
                         }));
+                    }
+                    if run.layout.data.text_item_quantization.is_some() {
+                        self.offset = self.item_offset + run.advance();
                     }
                     self.item_index += 1;
                     self.glyph_start = 0;
