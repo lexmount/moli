@@ -91,12 +91,13 @@ members = [
     "moli-http-cache",
     "moli-wpt-compat"
 ]
-exclude = ["vendor/xml5ever-0.39.0", "vendor/web-audio-api-1.7.0", "vendor/usvg-0.48.1"]
+exclude = ["vendor/parley-0.11.1", "vendor/xml5ever-0.39.0", "vendor/web-audio-api-1.7.0", "vendor/usvg-0.48.1"]
 
 [workspace.package]
 license = "MIT OR Apache-2.0"
 
 [patch.crates-io]
+parley = { path = "vendor/parley-0.11.1" }
 usvg = { path = "vendor/usvg-0.48.1" }
 web-audio-api = { path = "vendor/web-audio-api-1.7.0" }
 xml5ever = { path = "vendor/xml5ever-0.39.0" }
