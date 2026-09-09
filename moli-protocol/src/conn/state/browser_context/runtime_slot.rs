@@ -315,9 +315,30 @@ impl TargetRuntimeSlot {
         renderer_page: RendererPageResidenceIdentity,
         document_id: DocumentId,
     ) -> bool {
-        self.retiring_renderer_document_outputs
-            .iter()
-            .any(|entry| entry.renderer_page == renderer_page && entry.document_id == document_id)
+        self.projected_document_network_binding(renderer_page)
+            .is_some_and(|binding| binding.document_id == document_id)
+            || self.retiring_renderer_document_outputs.iter().any(|entry| {
+                entry.renderer_page == renderer_page && entry.document_id == document_id
+            })
+    }
+
+    fn projected_document_network_binding(
+        &self,
+        renderer_page: RendererPageResidenceIdentity,
+    ) -> Option<&CommittedRendererDocumentBinding> {
+        let attachment = self.current_renderer_attachment()?;
+        if self
+            .current_renderer_inspection_binding()?
+            .renderer_page_residence()
+            != renderer_page
+        {
+            return None;
+        }
+        // Native commit and the observer's rebind are independent. Until the
+        // observer rotates this ledger, terminal facts still use its exact
+        // projected Document, including when that Page has already closed.
+        self.page_slot
+            .retiring_document_lifecycle_binding(attachment.document(), renderer_page)
     }
 
     pub(crate) fn finish_renderer_page_output_retirement(
@@ -1081,9 +1102,17 @@ impl BrowserContext {
                         .document_renderer_residence(document)
                         .ok()
                 });
-        if let Some(binding) = self.renderer_document_lifecycle_binding_for_target(target_id)
+        let binding = self
+            .renderer_document_lifecycle_binding_for_target(target_id)
+            .filter(|_| source_renderer_page.is_none_or(|page| Some(page) == current_renderer_page))
+            .or_else(|| {
+                self.page_targets
+                    .get(target_id)?
+                    .runtime_slot
+                    .projected_document_network_binding(source_renderer_page?)
+            });
+        if let Some(binding) = binding
             && binding.renderer_document_identity() == source_document
-            && source_renderer_page.is_none_or(|page| Some(page) == current_renderer_page)
         {
             let loader_id = binding.loader_id.clone();
             self.page_targets

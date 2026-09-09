@@ -6,11 +6,6 @@ use moli_core::{
 use moli_fetch::FetchConfig;
 use url::Url;
 
-#[cfg(test)]
-mod fixtures;
-#[cfg(test)]
-pub(crate) use fixtures::ResponseCommitReady;
-
 pub(crate) struct PendingInitialDocumentProjection {
     context: moli_core::browser::BrowserContextHandle,
     contents: moli_core::browser::WebContentsHandle,

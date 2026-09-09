@@ -35,8 +35,6 @@ use crate::domains::{
 
 #[cfg(test)]
 use super::navigation_commit::commit_download_navigation_async;
-#[cfg(test)]
-use super::navigation_commit::commit_loaded_navigation_async;
 use super::{
     LOADER_ID, PageCommandTaskStep,
     child_frame_activity::{
@@ -2841,41 +2839,6 @@ async fn complete_materialized_navigation_into_buffer_inner_async(
     let navigation_owner = state.owner.clone();
     let document_projection_release = match navigation {
         #[cfg(test)]
-        network::MaterializedNavigationLoadOutcome::ResponseCommitReady(navigation) => {
-            match conn.start_response_document_materialization_for_owner(
-                &state.owner,
-                token,
-                *navigation,
-            ) {
-                Err(error) => {
-                    push_navigation_commit_error(out, &state, error);
-                    None
-                }
-                Ok(materialization) => match materialization.await {
-                    Ok(navigation) => {
-                        let (prepared, navigation) =
-                            network::materialize_loaded_navigation_progress(
-                                conn, &state, navigation,
-                            );
-                        commit_loaded_navigation_async(
-                            conn,
-                            out,
-                            &token,
-                            state,
-                            prepared,
-                            navigation,
-                            command_context,
-                        )
-                        .await
-                    }
-                    Err(error) => {
-                        push_navigation_commit_error(out, &state, error);
-                        None
-                    }
-                },
-            }
-        }
-        #[cfg(test)]
         network::MaterializedNavigationLoadOutcome::Download(navigation) => {
             commit_download_navigation_async(conn, out, state, navigation, command_context).await;
             None
@@ -2909,24 +2872,6 @@ async fn complete_materialized_navigation_into_buffer_inner_async(
         .await;
     }
     conn.clear_pending_document_navigation_for_owner_if_matches(&navigation_owner, &token);
-}
-
-#[cfg(test)]
-pub(super) fn push_navigation_commit_error(
-    out: &mut CommandOutputBuffer,
-    state: &NavigationDispatchState,
-    error: impl Into<String>,
-) {
-    let error = error.into();
-    if state.navigate_id.is_some() {
-        out.push_error_after_messages(-32000, error);
-    } else {
-        tracing::warn!(
-            %error,
-            session_id = state.owner.session_id(),
-            "navigation commit failed after early Page.navigate result"
-        );
-    }
 }
 
 pub(super) fn emit_same_document_navigation_background_events(

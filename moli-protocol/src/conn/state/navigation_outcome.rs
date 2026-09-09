@@ -1,123 +1,18 @@
 #[cfg(test)]
 use moli_core::browser::DownloadBody;
 use moli_core::browser::WebContentsHandle;
-#[cfg(test)]
-use moli_core::page::RendererPageCreationArtifacts;
-#[cfg(test)]
-use moli_core::page::{
-    Page, RendererMainDocumentCommit, RendererPendingDownloadActivation, RendererRuntimeRealmInfo,
-};
 use serde::Serialize;
 use serde_json::Value;
 use url::Url;
 
 use crate::conn::CommandOwnerScope;
-#[cfg(test)]
-use crate::conn::ResponseCommitReady;
 use crate::devtools_runtime::DevToolsProtocol;
 #[cfg(test)]
-use crate::domains::network::{
-    CompletedDocumentProgressTransfer, CompletedDownloadProgressTransfer,
-};
+use crate::domains::network::CompletedDownloadProgressTransfer;
 
 use super::browser_context::BrowserContext;
 
 pub(crate) const NETWORK_ERROR_PAGE_URL: &str = "chrome-error://chromewebdata/";
-
-#[cfg(test)]
-#[derive(Clone, Debug)]
-pub(crate) struct NetworkErrorPageNavigation {
-    error_text: String,
-    unreachable_url: Url,
-}
-
-#[cfg(test)]
-impl NetworkErrorPageNavigation {
-    pub(crate) fn new(error_text: String, unreachable_url: Url) -> Self {
-        Self {
-            error_text,
-            unreachable_url,
-        }
-    }
-
-    pub(crate) fn error_text(&self) -> &str {
-        &self.error_text
-    }
-
-    pub(crate) fn unreachable_url(&self) -> &Url {
-        &self.unreachable_url
-    }
-}
-
-/// Main-frame protocol identity frozen when a cross-document navigation starts.
-///
-/// The final URL is intentionally resolved later, after redirects. Everything
-/// else belongs to the navigation transaction and must not be rediscovered
-/// from mutable target state after Fetch interception or background loading.
-#[cfg(test)]
-#[derive(Clone, Debug)]
-pub(crate) struct RendererMainDocumentCommitSeed {
-    frame_id: String,
-    loader_id: String,
-    timestamp: f64,
-    inherited_security_origin: String,
-    inherited_secure_context_type: String,
-}
-
-#[cfg(test)]
-impl RendererMainDocumentCommitSeed {
-    /// Freezes the same renderer commit identity for a test navigation that
-    /// starts from an already-installed target without creating a synthetic
-    /// `NavigationDispatchState` or mutating the target's request counters.
-    #[cfg(test)]
-    pub(crate) fn from_navigation_fixture(
-        frame_id: String,
-        loader_id: String,
-        timestamp: f64,
-    ) -> Self {
-        Self {
-            frame_id,
-            loader_id,
-            timestamp,
-            inherited_security_origin: "null".into(),
-            inherited_secure_context_type: "Secure".into(),
-        }
-    }
-
-    pub(crate) fn resolve(
-        &self,
-        final_url: &Url,
-        network_error_page: Option<&NetworkErrorPageNavigation>,
-    ) -> RendererMainDocumentCommit {
-        let inherits_initial_origin = moli_url::is_about_blank(final_url);
-        let security_origin = if network_error_page.is_some() {
-            "://".to_owned()
-        } else if inherits_initial_origin {
-            self.inherited_security_origin.clone()
-        } else {
-            moli_url::origin_ascii_serialization(final_url)
-        };
-        let secure_context_type = if network_error_page.is_some() {
-            "InsecureScheme".to_owned()
-        } else if inherits_initial_origin {
-            self.inherited_secure_context_type.clone()
-        } else if moli_url::is_potentially_trustworthy_url(final_url) {
-            "Secure".to_owned()
-        } else {
-            "InsecureScheme".to_owned()
-        };
-        RendererMainDocumentCommit::Frame {
-            frame_id: self.frame_id.clone(),
-            loader_id: self.loader_id.clone(),
-            url: final_url.as_str().to_owned(),
-            unreachable_url: network_error_page
-                .map(|error_page| error_page.unreachable_url().as_str().to_owned()),
-            security_origin,
-            secure_context_type,
-            timestamp: self.timestamp,
-        }
-    }
-}
 
 #[derive(Debug)]
 #[cfg(test)]
@@ -141,48 +36,6 @@ impl CompletedDownloadBodyArtifact {
     }
 }
 
-#[cfg(test)]
-#[derive(Debug)]
-pub struct LoadedNavigation<P = Page> {
-    pub page: P,
-    pub pending_download: Option<RendererPendingDownloadActivation>,
-    // Already-built Page fixtures retain their creation data. In production
-    // the admitted Browser participant owns it through commit, not Protocol.
-    #[cfg(test)]
-    pub page_creation_artifacts: RendererPageCreationArtifacts,
-    pub requested_url: Url,
-    pub final_url: Url,
-    pub request_method: String,
-    pub request_headers: Vec<(String, String)>,
-    pub response_status: u16,
-    pub response_headers: Vec<(String, String)>,
-    pub response_from_cache: bool,
-    pub initial_runtime_realms: Vec<RendererRuntimeRealmInfo>,
-    pub renderer_output_predecessor: Option<moli_core::RendererOutputFence>,
-    pub(crate) document_progress_transfer: CompletedDocumentProgressTransfer,
-    pub(crate) network_error_page: Option<NetworkErrorPageNavigation>,
-}
-
-#[cfg(test)]
-impl<P> LoadedNavigation<P> {
-    #[cfg(test)]
-    pub(crate) fn response_body(&self) -> String {
-        self.document_progress_transfer
-            .body()
-            .materialize_lossy_string()
-            .expect("test navigation body should be readable")
-    }
-
-    #[cfg(test)]
-    pub(crate) fn completed_body_network_events(
-        &self,
-    ) -> &crate::domains::network::CompletedMainDocumentNetworkEvents {
-        self.document_progress_transfer
-            .completed_body_network_events()
-            .expect("navigation uses streaming body network events")
-    }
-}
-
 #[derive(Debug)]
 #[cfg(test)]
 pub struct DownloadNavigation {
@@ -193,18 +46,11 @@ pub struct DownloadNavigation {
 #[derive(Debug)]
 pub enum NavigationLoadOutcome {
     #[cfg(test)]
-    ResponseCommitReady(Box<ResponseCommitReady>),
-    #[cfg(test)]
     Download(Box<DownloadNavigation>),
     NetworkFailure(String),
 }
 
 impl NavigationLoadOutcome {
-    #[cfg(test)]
-    pub(crate) fn response_commit_ready(navigation: ResponseCommitReady) -> Self {
-        Self::ResponseCommitReady(Box::new(navigation))
-    }
-
     #[cfg(test)]
     pub(crate) fn download(navigation: DownloadNavigation) -> Self {
         Self::Download(Box::new(navigation))

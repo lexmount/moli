@@ -52,7 +52,6 @@ impl Browser {
         let navigation = self
             .context_mut(handle.context())?
             .start_document_navigation(handle)?;
-        self.navigation_work.remove_web_contents(handle);
         self.publish_failed_navigations([previous], NavigationFailureReason::Superseded);
         let request = self
             .pending_navigation(handle)?
@@ -107,7 +106,6 @@ impl Browser {
             .context_mut(handle.context())?
             .cancel_document_navigation(handle, &navigation, reason)?;
         if canceled {
-            self.navigation_work.remove_web_contents(handle);
             self.events
                 .publish(BrowserEvent::NavigationFailed { request, reason });
         }

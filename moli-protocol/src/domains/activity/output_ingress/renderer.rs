@@ -187,7 +187,8 @@ async fn project_renderer_output_records_for_owner(
             match &mut item {
                 RendererOutputItem::Observation(
                     moli_core::RendererProtocolObservation::DomMutations(_)
-                    | moli_core::RendererProtocolObservation::RuntimeBinding(_),
+                    | moli_core::RendererProtocolObservation::RuntimeBinding(_)
+                    | moli_core::RendererProtocolObservation::Network { .. },
                 ) => {}
                 RendererOutputItem::Observation(
                     moli_core::RendererProtocolObservation::RuntimeInspector(batch),

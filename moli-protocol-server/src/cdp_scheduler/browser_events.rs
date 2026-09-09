@@ -96,6 +96,7 @@ impl CdpScheduler {
                         .await
                 }
                 BrowserEvent::DocumentLifecycleChanged(_)
+                | BrowserEvent::DocumentTitleChanged(_)
                 | BrowserEvent::DialogOpened(_)
                 | BrowserEvent::DialogClosed { .. } => {
                     // Native state/waiters have already advanced. Frontend

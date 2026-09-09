@@ -1582,6 +1582,7 @@ pub(crate) struct PageVm {
     dom_agent_state: RendererDomAgentState,
     pending_dom_mutation_event_batches: Vec<RendererDomMutationEventBatch>,
     last_published_document_title: String,
+    native_document_title: tokio::sync::watch::Sender<RendererDocumentTitleChanged>,
     css_agent_sessions: HashMap<Option<String>, RendererCssAgentSessionState>,
     // Page-owned task queue lives on the page VM itself so parse-time turns and later lifecycle
     // turns share one owner-lane carrier. The runtime still uses it in narrow slices today, but
@@ -1795,6 +1796,18 @@ impl PageVm {
     }
 
     fn record_document_title_change_if_needed(&mut self) {
+        let title = self.vm().document_runtime.dom_host().dom().document_title();
+        let change = RendererDocumentTitleChanged {
+            source_document: self.document_lifecycle.identity(),
+            title,
+        };
+        self.native_document_title.send_if_modified(|current| {
+            if *current == change {
+                return false;
+            }
+            current.clone_from(&change);
+            true
+        });
         // A PageVm can exist without a DevTools-facing Page residence in
         // standalone embeddings and owner-boundary unit tests. Lifecycle
         // progress must not depend on an observer being installed. Keep the
@@ -1803,7 +1816,7 @@ impl PageVm {
         if !self.vm().has_renderer_output_journal() {
             return;
         }
-        let title = self.vm().document_runtime.dom_host().dom().document_title();
+        let title = change.title;
         if title == self.last_published_document_title {
             return;
         }
@@ -3982,6 +3995,7 @@ impl PageVm {
 
         Ok(PageVmStateCapture {
             document_lifecycle: self.document_lifecycle.observe(),
+            native_document_title: self.native_document_title.subscribe(),
             final_url,
             document_title,
             report,
@@ -4300,6 +4314,11 @@ impl PageVm {
         let document_loader = vm
             .current_main_document_resource_loader()
             .expect("PageVm bootstrap must publish the committed Document resource authority");
+        let native_document_title = tokio::sync::watch::channel(RendererDocumentTitleChanged {
+            source_document: document_lifecycle.identity(),
+            title: vm.document_runtime.dom_host().dom().document_title(),
+        })
+        .0;
         let mut page_vm = Self {
             page_id,
             creation_id,
@@ -4313,6 +4332,7 @@ impl PageVm {
             dom_agent_state,
             pending_dom_mutation_event_batches: Vec::new(),
             last_published_document_title: String::new(),
+            native_document_title,
             css_agent_sessions: HashMap::new(),
             page_task_queue,
             page_action_window: page_action_window::RendererPageActionWindow::default(),

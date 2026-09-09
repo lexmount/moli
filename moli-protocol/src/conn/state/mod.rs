@@ -27,11 +27,6 @@ pub(in crate::conn) use moli_core::browser::web_contents::InitialDocumentBuildKe
 pub(crate) use moli_core::browser::web_contents::{
     ClaimedNavigationRequest, NavigationInterceptionPermit,
 };
-#[cfg(test)]
-pub(in crate::conn) use moli_core::browser::{
-    BrowserNavigationLoad as AdmittedNavigationLoad,
-    BrowserPreparedNavigationResponse as PreparedNavigationResponse,
-};
 
 // Re-export everything so `use super::state::*` paths continue to work.
 
@@ -84,10 +79,6 @@ pub(crate) use javascript_dialog::{
     TargetPreparedJavaScriptDialog, TargetPreparedJavaScriptDialogRoute,
 };
 #[cfg(test)]
-pub(crate) use moli_core::browser::BrowserPreparedDocumentNavigation as PreparedDocumentNavigation;
-#[cfg(test)]
-pub(crate) use moli_core::browser::web_contents::DocumentNavigationDestination;
-#[cfg(test)]
 pub(crate) use moli_core::browser::web_contents::JavaScriptDialogKey;
 pub(crate) use moli_core::browser::web_contents::LIVE_DEVICE_METRICS_CLEAR_SCRIPT;
 pub(in crate::conn) use moli_core::browser::web_contents::PageSurface;
@@ -127,8 +118,6 @@ pub(crate) use shared_worker_attachment::{
 pub(crate) use shared_worker_target::SharedWorkerTargetState;
 
 pub use browser_context::BrowserContext;
-#[cfg(test)]
-pub(crate) use browser_context::LoadedNavigationPageCommit;
 pub(crate) use browser_context::PageInputCommand;
 pub(crate) use browser_context::{
     BrowserAppManifestLoadPreparation, CompletedAppManifestLoadPreparation,
@@ -188,10 +177,8 @@ pub(crate) use target_state::{
 #[cfg(test)]
 pub(crate) use navigation_outcome::CompletedDownloadBodyArtifact;
 #[cfg(test)]
-pub use navigation_outcome::{DownloadNavigation, LoadedNavigation};
+pub use navigation_outcome::DownloadNavigation;
 pub(crate) use navigation_outcome::{NETWORK_ERROR_PAGE_URL, NavigationResultProjection};
 pub use navigation_outcome::{
     NavigationDispatchState, NavigationLoadOutcome, NavigationRequestLoadPolicy, TargetInfo,
 };
-#[cfg(test)]
-pub(crate) use navigation_outcome::{NetworkErrorPageNavigation, RendererMainDocumentCommitSeed};

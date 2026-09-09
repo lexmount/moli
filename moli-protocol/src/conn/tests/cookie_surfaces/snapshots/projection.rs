@@ -6,22 +6,16 @@ async fn browser_context_cookie_manager_surface_projects_live_effective_browser_
         "BID-cookie-manager-context",
         "TID-cookie-manager-context",
     ));
-    let navigation = conn
-        .build_loaded_navigation_from_buffered_response_async(
-            Url::parse("https://child.example/app").unwrap(),
-            "GET".into(),
-            vec![],
-            200,
-            vec![],
-            "<!doctype html><html><body>ok</body></html>".into(),
-        )
-        .await
-        .expect("navigation should build");
-    conn.browser_context
-        .as_mut()
-        .unwrap()
-        .commit_active_navigation_for_test(navigation.page)
-        .await;
+    conn.install_buffered_navigation_fixture_for_test(
+        Url::parse("https://child.example/app").unwrap(),
+        "GET".into(),
+        vec![],
+        200,
+        vec![],
+        "<!doctype html><html><body>ok</body></html>".into(),
+    )
+    .await
+    .expect("navigation should build");
 
     conn.browser_context
         .as_mut()
@@ -167,22 +161,16 @@ async fn browser_context_cookie_manager_surface_tracks_schemeful_site_relationsh
         "BID-cookie-manager-schemeful-context",
         "TID-cookie-manager-schemeful-context",
     ));
-    let navigation = conn
-        .build_loaded_navigation_from_buffered_response_async(
-            Url::parse("https://app.example.com/app").unwrap(),
-            "GET".into(),
-            vec![],
-            200,
-            vec![],
-            "<!doctype html><html><body>ok</body></html>".into(),
-        )
-        .await
-        .expect("navigation should build");
-    conn.browser_context
-        .as_mut()
-        .unwrap()
-        .commit_active_navigation_for_test(navigation.page)
-        .await;
+    conn.install_buffered_navigation_fixture_for_test(
+        Url::parse("https://app.example.com/app").unwrap(),
+        "GET".into(),
+        vec![],
+        200,
+        vec![],
+        "<!doctype html><html><body>ok</body></html>".into(),
+    )
+    .await
+    .expect("navigation should build");
 
     conn.browser_context
         .as_mut()
@@ -277,43 +265,39 @@ async fn browser_context_cookie_manager_surface_tracks_redirected_navigation_tra
         "BID-cookie-manager-redirected-navigation",
         "TID-cookie-manager-redirected-navigation",
     ));
-    let requested_url = Url::parse("https://origin.example/start").unwrap();
-    let final_url = Url::parse("https://redirected.example/final").unwrap();
-    let mut response = moli_core::page::NavigationResponse::from_text_body(
-        final_url.clone(),
-        200,
-        Vec::new(),
-        "<!doctype html><html><body>ok</body></html>".into(),
-    );
-    response.redirected = true;
-    response.redirect_chain = vec![moli_core::page::NavigationRedirect {
-        from_url: requested_url.clone(),
-        to_url: final_url.clone(),
-        status: 302,
-        headers: vec![("location".into(), final_url.as_str().into())],
-        network_extra_info_available: true,
-        request_extra_info: None,
-        response_extra_info: None,
-        redirect_has_extra_info: true,
-        request_cookie_report: None,
-        cookie_set_reports: Vec::new(),
-        from_cache: false,
-        negotiated_http_version: None,
-    }];
-    let navigation = conn
-        .build_navigation_from_network_response_async(
-            requested_url,
-            "GET".into(),
-            Vec::new(),
-            moli_fetch::NetworkFetchResult::without_request_observation(response),
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    // Distinct loopback hosts exercise the same cross-site relationship as
+    // the former fabricated origin.example -> redirected.example response.
+    let app = axum::Router::new()
+        .route(
+            "/start",
+            axum::routing::get(move || async move {
+                (
+                    axum::http::StatusCode::FOUND,
+                    [(
+                        "location",
+                        format!("http://localhost:{}/final", addr.port()),
+                    )],
+                )
+            }),
         )
-        .await
-        .expect("redirected navigation should build");
-    conn.browser_context
-        .as_mut()
-        .unwrap()
-        .commit_active_navigation_for_test(navigation.page)
-        .await;
+        .route(
+            "/final",
+            axum::routing::get(|| async {
+                (
+                    [("content-type", "text/html")],
+                    "<!doctype html><body>ok</body>",
+                )
+            }),
+        );
+    let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+    conn.install_navigation_fixture_for_session_owner_for_test(
+        &format!("http://{addr}/start"),
+        None,
+    )
+    .await;
+    server.abort();
 
     let context = conn
         .browser_context
@@ -362,22 +346,16 @@ async fn browser_context_cookie_manager_surface_distinguishes_same_document_url_
         "BID-cookie-manager-same-document-transition",
         "TID-cookie-manager-same-document-transition",
     ));
-    let navigation = conn
-        .build_loaded_navigation_from_buffered_response_async(
-            Url::parse("https://app.example.test/app").unwrap(),
-            "GET".into(),
-            vec![],
-            200,
-            vec![],
-            "<!doctype html><html><body>ok</body></html>".into(),
-        )
-        .await
-        .expect("navigation should build");
-    conn.browser_context
-        .as_mut()
-        .unwrap()
-        .commit_active_navigation_for_test(navigation.page)
-        .await;
+    conn.install_buffered_navigation_fixture_for_test(
+        Url::parse("https://app.example.test/app").unwrap(),
+        "GET".into(),
+        vec![],
+        200,
+        vec![],
+        "<!doctype html><html><body>ok</body></html>".into(),
+    )
+    .await
+    .expect("navigation should build");
 
     conn.evaluate_runtime_expression_with_await_async(
         "history.pushState({}, '', '/next'); 'ok';",
@@ -441,39 +419,27 @@ async fn browser_context_cookie_manager_surface_projects_navigation_initiator_re
         "TID-cookie-manager-navigation-initiator",
     ));
 
-    let initial_navigation = conn
-        .build_loaded_navigation_from_buffered_response_async(
-            Url::parse("https://initiator.example/home").unwrap(),
-            "GET".into(),
-            vec![],
-            200,
-            vec![],
-            "<!doctype html><html><body>start</body></html>".into(),
-        )
-        .await
-        .expect("initial navigation should build");
-    conn.browser_context
-        .as_mut()
-        .unwrap()
-        .commit_active_navigation_for_test(initial_navigation.page)
-        .await;
+    conn.install_buffered_navigation_fixture_for_test(
+        Url::parse("https://initiator.example/home").unwrap(),
+        "GET".into(),
+        vec![],
+        200,
+        vec![],
+        "<!doctype html><html><body>start</body></html>".into(),
+    )
+    .await
+    .expect("initial navigation should build");
 
-    let next_navigation = conn
-        .build_loaded_navigation_from_buffered_response_async(
-            Url::parse("https://target.example/app").unwrap(),
-            "GET".into(),
-            vec![],
-            200,
-            vec![],
-            "<!doctype html><html><body>next</body></html>".into(),
-        )
-        .await
-        .expect("next navigation should build");
-    conn.browser_context
-        .as_mut()
-        .unwrap()
-        .commit_active_navigation_for_test(next_navigation.page)
-        .await;
+    conn.install_buffered_navigation_fixture_for_test(
+        Url::parse("https://target.example/app").unwrap(),
+        "GET".into(),
+        vec![],
+        200,
+        vec![],
+        "<!doctype html><html><body>next</body></html>".into(),
+    )
+    .await
+    .expect("next navigation should build");
 
     let context = conn
         .browser_context

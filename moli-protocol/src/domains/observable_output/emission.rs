@@ -420,6 +420,25 @@ mod tests {
         )
     }
 
+    fn set_source_only_runtime_frontend(ctx: &mut TestContext, enabled: bool) {
+        // These unit tests exercise source fallback, without a renderer Runtime
+        // agent. Set the frontend after native installation so navigation does
+        // not interpret it as a request to bind that agent.
+        let owner = crate::conn::CommandOwnerScope::capture(&ctx.conn, Some("SID-1"));
+        ctx.conn
+            .set_runtime_frontend_enabled_for_owner(&owner, enabled);
+        assert!(
+            !ctx.conn
+                .browser_context
+                .as_ref()
+                .unwrap()
+                .active_page_target()
+                .devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
+                .console_output_session_state
+                .renderer_runtime_agent_owns_page_console_api_events
+        );
+    }
+
     #[tokio::test(flavor = "multi_thread")]
     async fn observable_emission_plan_prepares_console_log_payloads_and_advances_cursors() {
         let mut ctx = TestContext::new();
@@ -941,10 +960,6 @@ mod tests {
         bc.set_active_target_id("TID-1".to_owned());
         bc.set_target_url("data:text/html,observable-runtime-prepared-range-test".to_owned());
         bc.attach_active_session("SID-1".to_owned());
-        bc.active_page_target_mut().devtools_sessions
-            [moli_page_types::DevToolsSessionKey::Primary]
-            .runtime_session_state
-            .runtime_frontend_enabled = true;
         install_navigation(
             &mut ctx,
             bc,
@@ -952,6 +967,7 @@ mod tests {
             "data:text/html,<!doctype html><body></body>",
         )
         .await;
+        set_source_only_runtime_frontend(&mut ctx, true);
         ctx.sent.clear();
         ctx.conn
             .evaluate_runtime_expression_with_await_async("console.warn('runtime prepared')", false)
@@ -1000,10 +1016,6 @@ mod tests {
         bc.set_active_target_id("TID-1".to_owned());
         bc.set_target_url("data:text/html,observable-runtime-source-payload-test".to_owned());
         bc.attach_active_session("SID-1".to_owned());
-        bc.active_page_target_mut().devtools_sessions
-            [moli_page_types::DevToolsSessionKey::Primary]
-            .runtime_session_state
-            .runtime_frontend_enabled = true;
         install_navigation(
             &mut ctx,
             bc,
@@ -1011,6 +1023,7 @@ mod tests {
             "data:text/html,<!doctype html><body></body>",
         )
         .await;
+        set_source_only_runtime_frontend(&mut ctx, true);
         ctx.sent.clear();
 
         let snapshot = RendererPageDiagnosticsSnapshot::from_runtime_observable_source(
@@ -1056,10 +1069,6 @@ mod tests {
         bc.set_active_target_id("TID-1".to_owned());
         bc.set_target_url("data:text/html,observable-runtime-stored-source-test".to_owned());
         bc.attach_active_session("SID-1".to_owned());
-        bc.active_page_target_mut().devtools_sessions
-            [moli_page_types::DevToolsSessionKey::Primary]
-            .runtime_session_state
-            .runtime_frontend_enabled = true;
         install_navigation(
             &mut ctx,
             bc,
@@ -1067,6 +1076,7 @@ mod tests {
             "data:text/html,<!doctype html><body></body>",
         )
         .await;
+        set_source_only_runtime_frontend(&mut ctx, true);
 
         let snapshot = RendererPageDiagnosticsSnapshot::from_runtime_observable_source(
             RendererRuntimeObservableSourceSummary::from_source_messages(
@@ -1187,10 +1197,6 @@ mod tests {
         bc.set_active_target_id("TID-1".to_owned());
         bc.set_target_url("data:text/html,observable-runtime-no-source-test".to_owned());
         bc.attach_active_session("SID-1".to_owned());
-        bc.active_page_target_mut().devtools_sessions
-            [moli_page_types::DevToolsSessionKey::Primary]
-            .runtime_session_state
-            .runtime_frontend_enabled = true;
         install_navigation(
             &mut ctx,
             bc,
@@ -1198,6 +1204,7 @@ mod tests {
             "data:text/html,<!doctype html><script>console.log('live page only')</script>",
         )
         .await;
+        set_source_only_runtime_frontend(&mut ctx, true);
         {
             let context = ctx.conn.browser_context.as_mut().unwrap();
             let target_id = context.active_target_id_owned().unwrap();
@@ -1225,10 +1232,6 @@ mod tests {
         bc.set_active_target_id("TID-1".to_owned());
         bc.set_target_url(page_url.to_owned());
         bc.attach_active_session("SID-1".to_owned());
-        bc.active_page_target_mut().devtools_sessions
-            [moli_page_types::DevToolsSessionKey::Primary]
-            .runtime_session_state
-            .runtime_frontend_enabled = true;
         install_navigation(
             &mut ctx,
             bc,
@@ -1236,6 +1239,7 @@ mod tests {
             "data:text/html,<!doctype html><body></body>",
         )
         .await;
+        set_source_only_runtime_frontend(&mut ctx, true);
 
         let snapshot = RendererPageDiagnosticsSnapshot::from_runtime_observable_source(
             RendererRuntimeObservableSourceSummary::from_source_messages(
@@ -1244,9 +1248,15 @@ mod tests {
                 Vec::new(),
             ),
         );
-        let mut prepared_slot =
-            observable_source_activity_outputs(&mut ctx.conn, &snapshot, None).into_prepared_slot();
+        let prepared = observable_source_activity_outputs(&mut ctx.conn, &snapshot, None);
+        assert!(
+            prepared
+                .runtime_observable_outputs()
+                .contains(&ObservableOutputProjectionStep::RuntimeObservable)
+        );
+        let mut prepared_slot = prepared.into_prepared_slot();
 
+        set_source_only_runtime_frontend(&mut ctx, false);
         ctx.install_navigation_fixture_for_session_owner(
             "data:text/html,<!doctype html><body></body>",
             Some("SID-1"),
@@ -1259,11 +1269,8 @@ mod tests {
                 .as_mut()
                 .expect("browser context should remain loaded");
             bc.set_target_url(page_url.to_owned());
-            bc.active_page_target_mut().devtools_sessions
-                [moli_page_types::DevToolsSessionKey::Primary]
-                .runtime_session_state
-                .runtime_frontend_enabled = true;
         }
+        set_source_only_runtime_frontend(&mut ctx, true);
 
         assert!(
             ObservableActivityEmissionPlan::prepare_async(
@@ -1286,10 +1293,6 @@ mod tests {
         bc.set_active_target_id("TID-1".to_owned());
         bc.set_target_url(page_url.to_owned());
         bc.attach_active_session("SID-1".to_owned());
-        bc.active_page_target_mut().devtools_sessions
-            [moli_page_types::DevToolsSessionKey::Primary]
-            .runtime_session_state
-            .runtime_frontend_enabled = true;
         install_navigation(
             &mut ctx,
             bc,
@@ -1297,6 +1300,7 @@ mod tests {
             "data:text/html,<!doctype html><body></body>",
         )
         .await;
+        set_source_only_runtime_frontend(&mut ctx, true);
         ctx.sent.clear();
         ctx.conn
             .evaluate_runtime_expression_with_await_async("console.warn('runtime old')", false)
@@ -1308,6 +1312,7 @@ mod tests {
             observable_source_activity_outputs(&mut ctx.conn, &old_snapshot, None)
                 .into_prepared_slot();
 
+        set_source_only_runtime_frontend(&mut ctx, false);
         ctx.install_navigation_fixture_for_session_owner(
             "data:text/html,<!doctype html><body></body>",
             Some("SID-1"),
@@ -1320,11 +1325,8 @@ mod tests {
                 .as_mut()
                 .expect("browser context should remain loaded");
             bc.set_target_url(page_url.to_owned());
-            bc.active_page_target_mut().devtools_sessions
-                [moli_page_types::DevToolsSessionKey::Primary]
-                .runtime_session_state
-                .runtime_frontend_enabled = true;
         }
+        set_source_only_runtime_frontend(&mut ctx, true);
         ctx.sent.clear();
         ctx.conn
             .evaluate_runtime_expression_with_await_async("console.warn('runtime new')", false)

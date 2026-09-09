@@ -55,19 +55,17 @@ async fn browser_context_document_cookie_facade_snapshot_projects_default_cookie
     );
 
     conn.install_browser_context_fixture_for_test(bc);
-    let navigation = conn
-        .build_loaded_navigation_from_buffered_response_async(
-            Url::parse("https://live.example.com/page").unwrap(),
-            "GET".into(),
-            vec![],
-            200,
-            vec![],
-            "<!doctype html><html><body>ok</body></html>".into(),
-        )
-        .await
-        .expect("navigation should build");
+    conn.install_buffered_navigation_fixture_for_test(
+        Url::parse("https://live.example.com/page").unwrap(),
+        "GET".into(),
+        vec![],
+        200,
+        vec![],
+        "<!doctype html><html><body>ok</body></html>".into(),
+    )
+    .await
+    .expect("navigation should build");
     let bc = conn.browser_context.as_mut().unwrap();
-    bc.commit_active_navigation_for_test(navigation.page).await;
 
     let after_load = bc.document_cookie_facade_snapshot_async().await;
     let after_load_manager = bc.cookie_manager_surface_snapshot_async().await;

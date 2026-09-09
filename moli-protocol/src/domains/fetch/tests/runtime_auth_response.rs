@@ -483,7 +483,10 @@ async fn runtime_child_frame_fetch_subresource_interception_uses_child_frame_att
     let child_url = format!("http://{addr}/child");
     let api_url = format!("http://{addr}/api");
     let mut ctx = TestContext::new();
-    with_loaded_http_document(&mut ctx, &top_url, "SID-1", "TID-1").await;
+    let bc = attached_browser_context(&ctx.conn);
+    ctx.conn.install_browser_context_fixture_for_test(bc);
+    // Subscribe before native navigation: the fully loaded fixture has already
+    // routed the child commit by the time it returns.
     ctx.enable_page_events_for_test(Some("SID-1"));
     ctx.conn
         .browser_context
@@ -493,7 +496,8 @@ async fn runtime_child_frame_fetch_subresource_interception_uses_child_frame_att
         .devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
         .runtime_session_state
         .inspector_enabled = true;
-    ctx.sent.clear();
+    ctx.install_navigation_fixture_for_session_owner(&top_url, Some("SID-1"))
+        .await;
     let child_frame_id = child_frame_id_for_single_iframe_async(&mut ctx, 36_400).await;
 
     ctx.process_async(json!({

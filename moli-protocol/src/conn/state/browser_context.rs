@@ -88,8 +88,6 @@ pub(in crate::conn) mod session;
 mod tests;
 mod workers;
 pub(crate) use moli_core::browser::{OriginStorageUsage, SiteDataClearOptions};
-#[cfg(test)]
-pub(crate) use page_state::LoadedNavigationPageCommit;
 
 /// DevTools projection for one Browser-owned Context.
 pub struct BrowserContext {

@@ -21,7 +21,7 @@ async fn evaluate(ctx: &mut TestContext, expression: &str) -> serde_json::Value 
 
 async fn setup() -> TestContext {
     let mut ctx = TestContext::new();
-    let mut bc = BrowserContext::new("BID-1".into());
+    let mut bc = ctx.conn.new_browser_context_fixture_for_test("BID-1");
     bc.set_active_target_id("TID-1");
     bc.attach_active_session("SID-1");
     install_geolocation_page_for_test(&mut ctx, bc).await;

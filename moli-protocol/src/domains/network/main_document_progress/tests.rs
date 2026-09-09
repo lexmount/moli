@@ -269,21 +269,6 @@ fn response_progress_batch_for_output_target() -> MainDocumentProgressEventBatch
 }
 
 #[test]
-fn pending_document_progress_transfer_keeps_body_unmaterialized() {
-    let transfer = CompletedDocumentProgressTransfer::new_pending_body(
-        MainDocumentBodyNetworkProgress::StreamingBody,
-    );
-
-    let (body, progress) = transfer.into_parts();
-
-    assert!(matches!(body, CompletedDocumentProgressBody::Pending));
-    assert!(matches!(
-        progress,
-        MainDocumentBodyNetworkProgress::StreamingBody
-    ));
-}
-
-#[test]
 fn progress_output_target_serializes_background_targets_consistently() {
     let (sender, mut receiver) = unbounded_channel();
     let mut background = MainDocumentProgressOutputTarget::background_sender(&sender);

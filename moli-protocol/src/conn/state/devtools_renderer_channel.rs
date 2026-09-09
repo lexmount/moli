@@ -184,6 +184,11 @@ impl RendererAgentBinding {
         self.endpoint.routes_output_stream(stream)
     }
 
+    pub(crate) fn renderer_page_residence(&self) -> crate::conn::RendererPageResidenceIdentity {
+        crate::conn::RendererPageResidenceIdentity::from_residence(self.endpoint.output_residence())
+            .expect("a Page inspection endpoint has a Page output residence")
+    }
+
     pub(crate) fn start_performance_get_metrics(
         &self,
         inspector_session_id: Option<String>,

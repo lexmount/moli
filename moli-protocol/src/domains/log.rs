@@ -198,18 +198,11 @@ mod tests {
         bc.set_target_url("data:text/html,log-test".to_owned());
         bc.attach_active_session("SID-1".to_owned());
         ctx.conn.insert_browser_context(bc);
-        ctx.install_navigation_fixture_for_session_owner(
+        ctx.install_quiet_navigation_fixture_for_session_owner(
             &format!("data:text/html,{html}"),
             Some("SID-1"),
         )
         .await;
-        // Only the fixture's completed navigation may precede the Log command.
-        // Keep replay-before-response and absence-of-unrelated-output assertions intact.
-        for message in ctx.take_all() {
-            assert_eq!(message["method"], "Page.frameNavigated");
-            assert_eq!(message["sessionId"], "SID-1");
-            assert_eq!(message["params"]["frame"]["id"], "TID-1");
-        }
     }
 
     fn loaded_lifecycle_error_contains(ctx: &TestContext, needle: &str) -> bool {

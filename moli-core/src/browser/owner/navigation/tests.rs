@@ -1,8 +1,9 @@
 use super::*;
+use crate::browser::NavigationId;
 use crate::browser::{
-    BrowserContextStoragePartitionHandles, BrowserEvent, BrowserService, DocumentHandle,
-    DocumentRetirement, NavigationAttempt, NavigationFailureReason, NavigationSnapshot,
-    StoragePartitionKind, WebContentsCreation,
+    BrowserContextHandle, BrowserContextStoragePartitionHandles, BrowserEvent, BrowserHandle,
+    BrowserService, DocumentHandle, DocumentRetirement, NavigationAttempt, NavigationFailureReason,
+    NavigationRequestLoadPolicy, NavigationSnapshot, StoragePartitionKind, WebContentsCreation,
 };
 use moli_test_support::FixtureServer;
 use tokio::{
@@ -10,6 +11,7 @@ use tokio::{
     net::TcpListener,
     sync::mpsc,
 };
+use url::Url;
 
 fn context_with_contents(service: &BrowserService) -> (BrowserContextHandle, WebContentsHandle) {
     let context = service
@@ -26,21 +28,6 @@ fn context_with_contents(service: &BrowserService) -> (BrowserContextHandle, Web
         .create_web_contents(WebContentsCreation::default())
         .unwrap();
     (context, contents)
-}
-
-fn start_load(
-    context: &BrowserContextHandle,
-    contents: WebContentsHandle,
-) -> BrowserNavigationLoad {
-    let navigation = context.start_document_navigation(contents).unwrap();
-    context
-        .start_navigation_load(
-            contents,
-            navigation,
-            NavigationRequestLoadPolicy::BrowserInitiated,
-            context.inherited_document_policy(Default::default(), &[], None, None),
-        )
-        .unwrap()
 }
 
 #[tokio::test]
@@ -273,72 +260,137 @@ async fn committed_native_navigation_is_not_reported_as_failed_on_close() {
     service.shutdown();
 }
 
-// Uses only public Browser capabilities: no Page access, DevTools connection,
-// renderer inspection binding or protocol lifecycle projection.
+// Uses only native Browser navigation and immutable Document observation.
+#[tokio::test]
+async fn native_document_titles_update_history_without_protocol_and_survive_replacement() {
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let title_url = format!("http://{}/title", listener.local_addr().unwrap());
+    let (release, released) = oneshot::channel();
+    let server = tokio::spawn(async move {
+        let (mut stream, _) = listener.accept().await.unwrap();
+        let mut request = Vec::new();
+        let mut byte = [0];
+        while !request.ends_with(b"\r\n\r\n") {
+            stream.read_exact(&mut byte).await.unwrap();
+            request.push(byte[0]);
+        }
+        released.await.unwrap();
+        stream.write_all(b"HTTP/1.1 200 OK\r\nAccess-Control-Allow-Origin: *\r\nContent-Type: text/plain\r\nContent-Length: 7\r\nConnection: close\r\n\r\ndynamic").await.unwrap();
+    });
+    let service = BrowserService::start().unwrap();
+    let (context, contents) = context_with_contents(&service);
+    let (_, mut events) = service.handle().subscribe().unwrap();
+    let first = navigate(&context, contents, &format!("data:text/html,<title>initial</title><script>fetch('{title_url}').then(r=>r.text()).then(t=>document.title=t)</script>")).await;
+    loop {
+        assert_eq!(context.document_handle(contents).unwrap(), Some(first));
+        let (index, history) = context.navigation_history_snapshot(contents).unwrap();
+        if history[index].title == "initial" {
+            break;
+        }
+        events.recv().await.unwrap();
+    }
+    // External input drives the renderer without taking BrowserContext out of
+    // its native owner through a test-only arbitrary evaluation helper.
+    release.send(()).unwrap();
+    loop {
+        let (index, history) = context.navigation_history_snapshot(contents).unwrap();
+        if history[index].title == "dynamic" {
+            break;
+        }
+        events.recv().await.unwrap();
+    }
+    server.await.unwrap();
+    let replacement = navigate(
+        &context,
+        contents,
+        "data:text/html,<title>replacement</title>",
+    )
+    .await;
+    loop {
+        assert_eq!(
+            context.document_handle(contents).unwrap(),
+            Some(replacement)
+        );
+        let (index, history) = context.navigation_history_snapshot(contents).unwrap();
+        assert_eq!(index, 1);
+        assert_eq!(history[0].title, "dynamic");
+        if history[1].title == "replacement" {
+            break;
+        }
+        events.recv().await.unwrap();
+    }
+    assert!(context.start_capture_document_snapshot(first).is_err());
+    service.shutdown();
+}
+
+// Uses only native Browser navigation and immutable Document observation.
 async fn navigate(
     context: &BrowserContextHandle,
     contents: WebContentsHandle,
     url: &str,
 ) -> DocumentHandle {
-    let mut load = start_load(context, contents);
-    let navigation = load.navigation_id();
-    let fetched = load
-        .fetch_navigation("GET", url, None, Vec::new())
-        .await
-        .unwrap();
-    let response = fetched
-        .fetch_result
-        .into_parts_with_observation_journal()
-        .0
-        .into_materialized_raw_response()
-        .await
-        .unwrap();
-    let destination = DocumentNavigationDestination::Document {
-        url: response.final_url.clone(),
-        security_origin: response.final_url.origin().ascii_serialization(),
-        secure_context_type: "SecureLocalhost".to_owned(),
-    };
-    let prepared = load
-        .prepare_document_response_async(
-            Url::parse(url).unwrap(),
-            response.final_url.clone(),
-            response.redirected,
-            response.redirect_chain.len(),
-            response.status,
-            response.headers.clone(),
-            ExternalRawDocumentBodyStream::from_bytes(response.clone_body_bytes()),
-            PageVmInitStage::DomContentLoaded,
-            RendererReplyBoundary::DocumentCommit,
-            CommittedDocumentResourceSource::Navigation(Box::new(
-                fetched.document_fetch_context_seed,
-            )),
-            fetched.reserved_service_worker_client,
-        )
-        .await
-        .unwrap();
-    let built = context
-        .start_document_materialization(
-            contents,
-            navigation,
-            prepared,
-            destination,
-            context.inherited_document_policy(Default::default(), &[], None, None),
-        )
+    let (_, mut events) = context.browser.subscribe().unwrap();
+    let document = commit_navigation(context, contents, url).await;
+    while context
+        .document_lifecycle_snapshot(document)
         .unwrap()
-        .materialize()
-        .await
+        .is_none_or(|snapshot| snapshot.dom_content_loaded.is_none())
+    {
+        events.recv().await.unwrap();
+    }
+    document
+}
+
+async fn commit_navigation(
+    context: &BrowserContextHandle,
+    contents: WebContentsHandle,
+    url: &str,
+) -> DocumentHandle {
+    let (_, mut events) = context.browser.subscribe().unwrap();
+    let waiter = context
+        .navigate_document(
+            contents,
+            crate::browser::web_contents::NavigationRequestInterception::new(
+                Url::parse(url).unwrap(),
+                "GET".into(),
+                None,
+                Vec::new(),
+                NavigationRequestLoadPolicy::BrowserInitiated,
+            ),
+        )
         .unwrap();
-    let committed = context.commit_document_navigation(built.page).unwrap();
-    assert_eq!(committed.snapshot.document.web_contents(), contents);
-    assert_eq!(committed.snapshot.metadata.navigation, Some(navigation));
-    committed
-        .post_response_continuation
-        .expect("Browser commit must release the native DocumentCommit boundary without DevTools")
-        .release();
-    committed.retirement.close().await;
-    // Dropping the unused inspection endpoint must not retire the Document.
-    drop(committed.snapshot.inspection_endpoint);
-    context.document_handle(contents).unwrap().unwrap()
+    let request = waiter.request();
+    let completed = waiter.wait();
+    tokio::pin!(completed);
+    let committed = loop {
+        if let Some(paused) = context.navigation_decision(contents).unwrap() {
+            assert_eq!(paused.permit.navigation(), request.navigation);
+            assert!(
+                context
+                    .resolve_navigation_decision(
+                        contents,
+                        paused.permit,
+                        crate::browser::NavigationDecision::Continue,
+                    )
+                    .unwrap()
+            );
+        }
+        tokio::select! {
+            result = &mut completed => match result.unwrap() {
+                crate::browser::BrowserNavigationOutcome::Document(committed) => break committed,
+                crate::browser::BrowserNavigationOutcome::Download { .. } => panic!("fixture navigation must commit a Document"),
+            },
+            event = events.recv() => { event.unwrap(); }
+        }
+    };
+    assert_eq!(committed.document.web_contents(), contents);
+    assert_eq!(committed.document.id(), request.document);
+    assert_eq!(committed.metadata.navigation, Some(request.navigation));
+    let document = committed.document;
+    // Dropping an observation cannot retire the Browser's live Document.
+    drop(committed);
+    assert_eq!(context.document_handle(contents).unwrap(), Some(document));
+    document
 }
 
 #[tokio::test]
@@ -420,7 +472,13 @@ fn next_document_commit(
                 assert_eq!(request.document, document.id());
                 started = true;
             }
-            BrowserEvent::DocumentLifecycleChanged(_) => {}
+            BrowserEvent::DocumentLifecycleChanged(_) | BrowserEvent::DocumentTitleChanged(_) => {}
+            BrowserEvent::NavigationResponseChanged(request) => {
+                assert_eq!(request.web_contents, document.web_contents());
+                if request.document == document.id() {
+                    assert!(started, "a response cannot precede its admission");
+                }
+            }
             _ => panic!("unexpected event before exact Document commit: {event:?}"),
         }
     }
@@ -1348,7 +1406,7 @@ async fn native_modal_dialog_resumes_its_original_renderer_without_devtools() {
         let (context, contents) = context_with_contents(&service);
         context.set_javascript_dialog_handler_enabled(true);
         let (_, mut events) = browser.subscribe().unwrap();
-        let document = navigate(
+        let document = commit_navigation(
             &context,
             contents,
             &format!("data:text/html,<body><script>{script}</script>"),
@@ -1405,7 +1463,7 @@ async fn native_dialog_retirement_rejects_late_completion_and_admission_waiters(
     let (context, contents) = context_with_contents(&service);
     context.set_javascript_dialog_handler_enabled(true);
     let (_, mut events) = browser.subscribe().unwrap();
-    let document = navigate(
+    let document = commit_navigation(
         &context,
         contents,
         "data:text/html,<script>confirm('retiring modal')</script>",
@@ -1636,23 +1694,67 @@ async fn native_document_commits_publish_exact_occurrences_and_recover_current_s
         snapshot.frame_slot
     );
     while let Ok(event) = events.try_recv() {
-        assert!(matches!(
-            event.event,
-            crate::browser::BrowserEvent::DocumentLifecycleChanged(_)
-        ));
+        match event.event {
+            BrowserEvent::DocumentLifecycleChanged(_) | BrowserEvent::DocumentTitleChanged(_) => {}
+            BrowserEvent::NavigationResponseChanged(request) => {
+                assert_eq!(request.web_contents, contents);
+                assert!([first.id(), second.id()].contains(&request.document));
+            }
+            _ => panic!("unexpected event after exact Document commit: {event:?}"),
+        }
     }
-    let pending = start_load(&context, contents);
+    let _provider = browser.register_document_decision_provider().unwrap();
+    let pending = context
+        .navigate_document(
+            contents,
+            crate::browser::web_contents::NavigationRequestInterception::new(
+                Url::parse("data:text/html,pending").unwrap(),
+                "GET".into(),
+                None,
+                Vec::new(),
+                NavigationRequestLoadPolicy::BrowserInitiated,
+            ),
+        )
+        .unwrap();
+    let request = pending.request();
+    let renderer = loop {
+        if let Some(paused) = context.navigation_decision(contents).unwrap() {
+            assert_eq!(paused.permit.navigation(), request.navigation);
+            if let crate::browser::NavigationDecisionStage::PreparedDocument { renderer, .. } =
+                paused.stage
+            {
+                break renderer;
+            }
+            assert!(
+                context
+                    .resolve_navigation_decision(
+                        contents,
+                        paused.permit,
+                        crate::browser::NavigationDecision::Continue
+                    )
+                    .unwrap()
+            );
+        }
+        events.recv().await.unwrap();
+    };
     assert_eq!(
-        browser.document_for_renderer(pending.renderer_page()),
-        Some(DocumentHandle::new(contents, pending.document_id()))
+        browser.document_for_renderer(renderer),
+        Some(DocumentHandle::new(contents, request.document))
     );
     drop(pending);
+    assert!(
+        context
+            .navigation_retains(contents, request.navigation)
+            .unwrap(),
+        "dropping an observation cannot cancel its Browser-owned work"
+    );
     browser
         .close_web_contents(contents)
         .unwrap()
         .close_async()
         .await;
     assert!(browser.document_commit_snapshot(second).is_err());
+    assert_eq!(browser.document_for_renderer(renderer), None);
     assert!(browser.subscribe().unwrap().0.documents.is_empty());
     service.shutdown();
 }
@@ -2054,13 +2156,21 @@ async fn assert_in_flight_navigation_retirement(retirement: NavigationRetirement
     let service = BrowserService::start().unwrap();
     let (context, contents) = context_with_contents(&service);
     let stale_navigation = context.start_document_navigation(contents).unwrap();
-    let mut load = start_load(&context, contents);
-    let navigation = load.navigation_id();
     let (_, mut navigation_events) = service.handle().subscribe().unwrap();
-    let fetching = tokio::spawn(async move {
-        let result = load.fetch_navigation("GET", &url, None, Vec::new()).await;
-        (load, result)
-    });
+    let waiter = context
+        .navigate_document(
+            contents,
+            crate::browser::web_contents::NavigationRequestInterception::new(
+                Url::parse(&url).unwrap(),
+                "GET".into(),
+                None,
+                Vec::new(),
+                NavigationRequestLoadPolicy::BrowserInitiated,
+            ),
+        )
+        .unwrap();
+    let navigation = waiter.request().navigation;
+    let fetching = tokio::spawn(waiter.wait());
     received.await.unwrap();
     let replacement = match retirement {
         NavigationRetirement::Context => {
@@ -2103,7 +2213,7 @@ async fn assert_in_flight_navigation_retirement(retirement: NavigationRetirement
             None
         }
     };
-    let (load, result) = fetching.await.unwrap();
+    let result = fetching.await.unwrap();
     assert!(result.is_err());
     server.await.unwrap();
     match retirement {
@@ -2124,15 +2234,12 @@ async fn assert_in_flight_navigation_retirement(retirement: NavigationRetirement
             assert!(!context.has_pending_document_navigation(contents).unwrap());
         }
     }
-    let retained = service
-        .handle()
-        .execute(|browser| browser.navigation_work.work.len())
-        .unwrap();
-    assert_eq!(
-        retained, 0,
-        "a late fetch completion must not retain retired navigation work"
+    assert!(
+        !context
+            .navigation_retains(contents, navigation)
+            .unwrap_or(false),
+        "a late fetch completion must not restore its retired navigation"
     );
-    drop(load);
     let failures = std::iter::from_fn(|| navigation_events.try_recv().ok())
         .filter_map(|record| match record.event {
             BrowserEvent::NavigationFailed { request, reason }

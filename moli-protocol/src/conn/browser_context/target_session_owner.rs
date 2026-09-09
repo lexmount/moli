@@ -1,5 +1,7 @@
 use super::*;
 #[cfg(test)]
+use crate::conn::BrowserContextPageStorageHandles;
+#[cfg(test)]
 use crate::conn::DocumentStartScript;
 #[cfg(test)]
 use crate::conn::state::BrowserContextResourceStorageHandles;
@@ -15,25 +17,16 @@ use crate::conn::{
     PendingSubresourceFetchAuthRequest, PendingSubresourceFetchRequest,
     PendingSubresourceFetchResponseRequest, RuntimeBindingDefinition,
 };
-#[cfg(test)]
-use crate::conn::{
-    BrowserContextPageStorageHandles, LoadedNavigationPageCommit, NetworkErrorPageNavigation,
-    RendererMainDocumentCommitSeed,
-};
 use crate::devtools_runtime::{DevToolsNetworkInterceptId, DevToolsNetworkResourceType};
 #[cfg(test)]
 use moli_cookie_jar::StoredCookieQueryReport;
 #[cfg(test)]
 use moli_cookie_jar::StoredCookieSetReport;
-#[cfg(test)]
-use moli_core::page::RendererMainDocumentCommit;
 use moli_core::page::{BidiPreloadChannelHandoff, SubresourceResourceType};
 #[cfg(test)]
 use moli_core::page::{
     RendererInspectorSessionRestoreSnapshot, RendererServiceWorkerVersionStatus,
 };
-#[cfg(test)]
-use moli_fetch::BrowserNavigationRequestKind;
 use moli_page_types::DevToolsSessionKey;
 use url::Url;
 
@@ -130,10 +123,6 @@ pub(crate) struct TargetNavigationLoadInputs {
     #[cfg(test)]
     pub(crate) navigation_initiator_url: Option<Url>,
     #[cfg(test)]
-    pub(crate) browser_navigation_kind: BrowserNavigationRequestKind,
-    #[cfg(test)]
-    pub(crate) infer_navigation_referrer: bool,
-    #[cfg(test)]
     pub(crate) document_start_scripts: Vec<DocumentStartScript>,
     #[cfg(test)]
     pub(crate) runtime_bindings: Vec<RuntimeBindingDefinition>,
@@ -161,8 +150,6 @@ pub(crate) struct TargetNavigationLoadInputs {
         (bool, Option<moli_core::page::SubresourceResourceType>),
     #[cfg(test)]
     pub(crate) permission_overrides: Vec<moli_core::page::PermissionOverrideRegistration>,
-    #[cfg(test)]
-    main_document_commit_seed: Option<RendererMainDocumentCommitSeed>,
 }
 
 fn prepared_document_inspection(
@@ -204,26 +191,6 @@ fn prepared_document_inspection(
 }
 
 impl TargetNavigationLoadInputs {
-    #[cfg(test)]
-    pub(crate) fn with_main_document_commit_seed(
-        mut self,
-        seed: RendererMainDocumentCommitSeed,
-    ) -> Self {
-        self.main_document_commit_seed = Some(seed);
-        self
-    }
-
-    #[cfg(test)]
-    pub(crate) fn main_document_commit_for_final_url(
-        &self,
-        final_url: &Url,
-        network_error_page: Option<&NetworkErrorPageNavigation>,
-    ) -> Option<RendererMainDocumentCommit> {
-        self.main_document_commit_seed
-            .as_ref()
-            .map(|seed| seed.resolve(final_url, network_error_page))
-    }
-
     #[cfg(test)]
     pub(crate) fn page_storage_handles(&self) -> BrowserContextPageStorageHandles {
         self.storage_handles.page_storage_handles()
@@ -311,10 +278,6 @@ impl TargetNavigationLoadInputs {
             #[cfg(test)]
             navigation_initiator_url: browser_context.target_navigation_initiator_url(target_id),
             #[cfg(test)]
-            browser_navigation_kind: BrowserNavigationRequestKind::Navigate,
-            #[cfg(test)]
-            infer_navigation_referrer: true,
-            #[cfg(test)]
             document_start_scripts: inspection.document_start_scripts,
             #[cfg(test)]
             runtime_bindings: inspection.runtime_bindings,
@@ -369,8 +332,6 @@ impl TargetNavigationLoadInputs {
                 .expect("live WebContents"),
             #[cfg(test)]
             permission_overrides: Vec::new(),
-            #[cfg(test)]
-            main_document_commit_seed: None,
         }
     }
 
@@ -424,10 +385,6 @@ impl TargetNavigationLoadInputs {
             #[cfg(test)]
             navigation_initiator_url: None,
             #[cfg(test)]
-            browser_navigation_kind: BrowserNavigationRequestKind::Navigate,
-            #[cfg(test)]
-            infer_navigation_referrer: true,
-            #[cfg(test)]
             document_start_scripts: Vec::new(),
             #[cfg(test)]
             runtime_bindings: Vec::new(),
@@ -453,24 +410,7 @@ impl TargetNavigationLoadInputs {
             fetch_subresource_interception: (false, None),
             #[cfg(test)]
             permission_overrides: Vec::new(),
-            #[cfg(test)]
-            main_document_commit_seed: None,
         }
-    }
-
-    #[cfg(test)]
-    pub(crate) fn without_inferred_referrer(mut self) -> Self {
-        self.infer_navigation_referrer = false;
-        self
-    }
-
-    #[cfg(test)]
-    pub(crate) fn with_browser_navigation_kind(
-        mut self,
-        kind: BrowserNavigationRequestKind,
-    ) -> Self {
-        self.browser_navigation_kind = kind;
-        self
     }
 }
 
@@ -1070,20 +1010,6 @@ impl CdpConnection {
     ) -> Option<()> {
         self.target_session_owner_mut_for_owner(owner)?
             .register_pending_fetch_navigation_request(pending)
-    }
-
-    #[cfg(test)]
-    pub(crate) fn commit_loaded_navigation(
-        &mut self,
-        prepared: crate::conn::PreparedDocumentNavigation,
-    ) -> anyhow::Result<LoadedNavigationPageCommit> {
-        let context = self
-            .browser_context
-            .iter_mut()
-            .chain(self.inactive_browser_contexts.iter_mut())
-            .find(|context| context.owns_web_contents(prepared.web_contents_id()))
-            .ok_or_else(|| anyhow::anyhow!("navigation WebContents unavailable"))?;
-        context.commit_loaded_navigation(prepared)
     }
 
     pub(crate) async fn mark_target_crashed_for_owner_async(

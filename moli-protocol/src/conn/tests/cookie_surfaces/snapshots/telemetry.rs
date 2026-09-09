@@ -4,22 +4,16 @@ async fn browser_context_document_cookie_snapshots_reflect_live_page_state() {
     let mut conn = crate::test_support::connection();
     conn.browser_context =
         Some(conn.new_page_target_fixture_for_test("BID-cookie-facade", "TID-cookie-facade"));
-    let navigation = conn
-        .build_loaded_navigation_from_buffered_response_async(
-            Url::parse("https://example.com/app").unwrap(),
-            "GET".into(),
-            vec![],
-            200,
-            vec![],
-            "<!doctype html><html><body>ok</body></html>".into(),
-        )
-        .await
-        .expect("navigation should build");
-    conn.browser_context
-        .as_mut()
-        .unwrap()
-        .commit_active_navigation_for_test(navigation.page)
-        .await;
+    conn.install_buffered_navigation_fixture_for_test(
+        Url::parse("https://example.com/app").unwrap(),
+        "GET".into(),
+        vec![],
+        200,
+        vec![],
+        "<!doctype html><html><body>ok</body></html>".into(),
+    )
+    .await
+    .expect("navigation should build");
 
     let before = conn
         .browser_context
@@ -120,22 +114,16 @@ async fn browser_context_document_cookie_facade_snapshot_projects_probe_telemetr
     bc.set_target_url("https://example.com/app".into());
     conn.install_browser_context_fixture_for_test(bc);
 
-    let navigation = conn
-        .build_loaded_navigation_from_buffered_response_async(
-            Url::parse("https://example.com/app").unwrap(),
-            "GET".into(),
-            vec![],
-            200,
-            vec![],
-            "<!doctype html><html><body>ok</body></html>".into(),
-        )
-        .await
-        .expect("navigation should build");
-    conn.browser_context
-        .as_mut()
-        .unwrap()
-        .commit_active_navigation_for_test(navigation.page)
-        .await;
+    conn.install_buffered_navigation_fixture_for_test(
+        Url::parse("https://example.com/app").unwrap(),
+        "GET".into(),
+        vec![],
+        200,
+        vec![],
+        "<!doctype html><html><body>ok</body></html>".into(),
+    )
+    .await
+    .expect("navigation should build");
 
     let payload = conn
         .evaluate_runtime_expression_with_await_async("navigator.cookieEnabled", false)

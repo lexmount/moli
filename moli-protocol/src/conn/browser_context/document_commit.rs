@@ -354,93 +354,54 @@ impl CdpConnection {
 mod tests {
     use super::*;
     use crate::testing::TestContext;
-    use moli_core::browser::web_contents::DocumentNavigationDestination;
     use moli_core::browser::{
         BrowserContextHandle, NavigationRequestLoadPolicy, WebContentsHandle,
-    };
-    use moli_core::runtime::{
-        CommittedDocumentResourceSource, ExternalRawDocumentBodyStream, PageVmInitStage,
-        RendererReplyBoundary,
     };
     use serde_json::json;
     use url::Url;
 
     // Deliberately no DevTools navigation admission, commit, loader, or frame
     // projection: the native Browser completes while its observer is idle.
+    fn admit_native(
+        context: &BrowserContextHandle,
+        contents: WebContentsHandle,
+        url: &str,
+    ) -> moli_core::browser::BrowserNavigationWaiter {
+        context
+            .navigate_document(
+                contents,
+                moli_core::browser::web_contents::NavigationRequestInterception::new(
+                    Url::parse(url).unwrap(),
+                    "GET".into(),
+                    None,
+                    Vec::new(),
+                    NavigationRequestLoadPolicy::BrowserInitiated,
+                ),
+            )
+            .unwrap()
+    }
+
     async fn navigate_native(
+        conn: &mut CdpConnection,
         context: &BrowserContextHandle,
         contents: WebContentsHandle,
         url: &str,
     ) -> DocumentHandle {
-        let navigation = context.start_document_navigation(contents).unwrap();
-        complete_native_navigation(context, contents, navigation, url).await
+        complete_native_navigation(conn, admit_native(context, contents, url)).await
     }
 
     async fn complete_native_navigation(
-        context: &BrowserContextHandle,
-        contents: WebContentsHandle,
-        navigation: moli_core::browser::NavigationId,
-        url: &str,
+        conn: &mut CdpConnection,
+        waiter: moli_core::browser::BrowserNavigationWaiter,
     ) -> DocumentHandle {
-        let inherited = context.inherited_document_policy(Default::default(), &[], None, None);
-        let mut load = context
-            .start_navigation_load(
-                contents,
-                navigation,
-                NavigationRequestLoadPolicy::BrowserInitiated,
-                inherited,
-            )
-            .unwrap();
-        let fetched = load
-            .fetch_navigation("GET", url, None, Vec::new())
+        let committed = conn
+            .wait_for_native_navigation_commit_for_test(waiter, false)
             .await
             .unwrap();
-        let response = fetched
-            .fetch_result
-            .into_parts_with_observation_journal()
-            .0
-            .into_materialized_raw_response()
+        conn.wait_for_native_document_load_for_test(committed.document)
             .await
             .unwrap();
-        let destination = DocumentNavigationDestination::Document {
-            url: response.final_url.clone(),
-            security_origin: response.final_url.origin().ascii_serialization(),
-            secure_context_type: "SecureLocalhost".to_owned(),
-        };
-        let prepared = load
-            .prepare_document_response_async(
-                Url::parse(url).unwrap(),
-                response.final_url.clone(),
-                response.redirected,
-                response.redirect_chain.len(),
-                response.status,
-                response.headers.clone(),
-                ExternalRawDocumentBodyStream::from_bytes(response.clone_body_bytes()),
-                PageVmInitStage::DomContentLoaded,
-                RendererReplyBoundary::DocumentCommit,
-                CommittedDocumentResourceSource::Navigation(Box::new(
-                    fetched.document_fetch_context_seed,
-                )),
-                fetched.reserved_service_worker_client,
-            )
-            .await
-            .unwrap();
-        let built = context
-            .start_document_materialization(
-                contents,
-                navigation,
-                prepared,
-                destination,
-                context.inherited_document_policy(Default::default(), &[], None, None),
-            )
-            .unwrap()
-            .materialize()
-            .await
-            .unwrap();
-        let commit = context.commit_document_navigation(built.page).unwrap();
-        commit.post_response_continuation.unwrap().release();
-        commit.retirement.close().await;
-        commit.snapshot.document
+        committed.document
     }
 
     async fn fixture() -> (
@@ -559,20 +520,19 @@ mod tests {
                 .resolved_page_owner_identity_for_owner(&owner)
                 .unwrap();
             let contents = document.web_contents();
-            let navigation = context.start_document_navigation(contents).unwrap();
-            ctx.conn.project_browser_navigation(contents).await;
-            let new = complete_native_navigation(
+            let waiter = admit_native(
                 &context,
                 contents,
-                navigation,
                 "data:text/html,<title>native commit fence</title>",
-            )
-            .await;
+            );
+            let navigation = waiter.request().navigation;
+            ctx.conn.project_browser_navigation(contents).await;
+            let new = complete_native_navigation(&mut ctx.conn, waiter).await;
             assert_ne!(new, document);
             let next = later_attempt.then(|| context.start_document_navigation(contents).unwrap());
-            // An older Browser event can be consumed after the native commit but
-            // before its DocumentCommitted record reaches the DevTools owner.
-            ctx.conn.project_browser_navigation(contents).await;
+            // Native commit alone cannot release the unpublished hold.
+            // Reconciliation below can recover DocumentCommitted from the real
+            // response snapshot even before that event is consumed.
             let target = ctx
                 .conn
                 .browser_context_by_id(&context_id)
@@ -584,6 +544,7 @@ mod tests {
                 target.runtime_slot.has_renderer_navigation(&navigation),
                 "native commit is not a failed attempt: retain its unpublished projection hold"
             );
+            ctx.conn.project_browser_navigation(contents).await;
             ctx.conn.project_browser_document_commit(new).await;
             let target = ctx
                 .conn
@@ -689,6 +650,7 @@ mod tests {
             .to_owned();
         ctx.take_all();
         let new = navigate_native(
+            &mut ctx.conn,
             &context,
             old.web_contents(),
             "data:text/html,<title>native</title><p>new</p>",
@@ -794,12 +756,14 @@ mod tests {
     async fn native_document_recovery_projects_only_latest_and_rejects_closed_document() {
         let (mut ctx, context, old, owner) = fixture().await;
         let skipped = navigate_native(
+            &mut ctx.conn,
             &context,
             old.web_contents(),
             "data:text/html,<title>skipped</title>",
         )
         .await;
         let current = navigate_native(
+            &mut ctx.conn,
             &context,
             old.web_contents(),
             "data:text/html,<title>current</title>",

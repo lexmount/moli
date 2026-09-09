@@ -22,7 +22,9 @@ use crate::domains::page;
 #[cfg(test)]
 use crate::{conn::CompletedDownloadBodyArtifact, domains::network};
 use moli_core::RendererDocumentLifecycleIdentity;
-use moli_core::page::{RendererDocumentLifecycleEvent, RendererPendingDownloadActivation};
+#[cfg(test)]
+use moli_core::page::RendererDocumentLifecycleEvent;
+use moli_core::page::RendererPendingDownloadActivation;
 #[cfg(test)]
 use moli_core::page::{RendererDocumentLifecycleEventKind, RendererDocumentLifecycleMilestone};
 
@@ -30,16 +32,7 @@ pub(crate) struct MainDocumentNavigationActivity {
     state: NavigationDispatchState,
     final_url: Url,
     progress_gate: MainDocumentProgressGate,
-    #[cfg(test)]
-    result_mode: LoadedNavigationResultMode,
     document_navigation_token: Option<NavigationId>,
-    deferred_initial_renderer_document_lifecycle_events: Vec<RendererDocumentLifecycleEvent>,
-}
-
-#[cfg(test)]
-enum LoadedNavigationResultMode {
-    Success,
-    NetworkErrorPage { error_text: String },
 }
 
 pub(crate) struct MainDocumentFailedNavigationActivity {
@@ -96,25 +89,8 @@ impl MainDocumentNavigationActivity {
             state,
             final_url,
             progress_gate,
-            #[cfg(test)]
-            result_mode: LoadedNavigationResultMode::Success,
             document_navigation_token,
-            deferred_initial_renderer_document_lifecycle_events: Vec::new(),
         }
-    }
-
-    #[cfg(test)]
-    pub(crate) fn with_network_error_page_result(mut self, error_text: String) -> Self {
-        self.result_mode = LoadedNavigationResultMode::NetworkErrorPage { error_text };
-        self
-    }
-
-    #[cfg(test)]
-    pub(crate) fn defer_initial_renderer_document_lifecycle_events_until_load_boundary(
-        &mut self,
-        events: Vec<RendererDocumentLifecycleEvent>,
-    ) {
-        self.deferred_initial_renderer_document_lifecycle_events = events;
     }
 
     pub(crate) fn state(&self) -> &NavigationDispatchState {
@@ -149,18 +125,7 @@ impl MainDocumentNavigationActivity {
                 elapsed_ms = timing_started.elapsed().as_millis(),
             );
         }
-        let network_error_text = match &self.result_mode {
-            LoadedNavigationResultMode::Success => None,
-            LoadedNavigationResultMode::NetworkErrorPage { error_text } => Some(error_text.clone()),
-        };
-        if let Some(error_text) = network_error_text.as_deref() {
-            let mut failure_events = Vec::new();
-            self.expose_loaded_response_metadata(&mut failure_events);
-            out.extend_background_events_after_messages(failure_events);
-            self.emit_network_error_page_navigation_result_into_buffer(out, error_text);
-        } else {
-            self.emit_navigation_result_from_state_into_buffer(out);
-        }
+        self.emit_navigation_result_from_state_into_buffer(out);
         let mut target_info_events = Vec::new();
         crate::domains::target::emit_target_info_changed_for_owner_background_event(
             conn,
@@ -177,11 +142,9 @@ impl MainDocumentNavigationActivity {
             );
         }
 
-        if network_error_text.is_none() {
-            let mut response_metadata_events = Vec::new();
-            self.expose_loaded_response_metadata(&mut response_metadata_events);
-            out.extend_background_events_after_messages(response_metadata_events);
-        }
+        let mut response_metadata_events = Vec::new();
+        self.expose_loaded_response_metadata(&mut response_metadata_events);
+        out.extend_background_events_after_messages(response_metadata_events);
         if let Some(renderer_output_boundary) = renderer_output_boundary {
             // Chromium can send Page.navigate/Fetch command responses and the
             // main-resource response metadata before Blink exposes the new
@@ -191,11 +154,6 @@ impl MainDocumentNavigationActivity {
             // output. DCL and child-Document observations remain on the far
             // side of the same concrete commit.
             out.insert_renderer_output_boundary_after_messages(renderer_output_boundary);
-        }
-        if network_error_text.is_some() {
-            let mut body_complete_events = Vec::new();
-            self.flush_body_complete_activity_background_events(&mut body_complete_events);
-            out.extend_background_events_after_messages(body_complete_events);
         }
         if timing_enabled {
             tracing::info!(
@@ -508,25 +466,17 @@ impl MainDocumentNavigationActivity {
         self.flush_body_complete_activity_background_events(&mut body_complete_events);
         out.extend_background_events(body_complete_events);
 
-        // Reaching this boundary means the protocol-side exact lifecycle
-        // observer has already consumed the live concrete load record. Only
-        // commit-time events and the visibility-barrier tail remain to be
-        // projected; rescanning renderer state here would rediscover output
-        // owned by an earlier turn.
-        let renderer_events =
-            std::mem::take(&mut self.deferred_initial_renderer_document_lifecycle_events);
-        let (binding, mut accepted_events) = conn
-            .project_renderer_document_lifecycle_events_for_owner(
-                &self.state.owner,
-                renderer_events,
-            );
-        accepted_events.extend(
-            conn.release_renderer_document_load_visibility_barrier_for_owner(
+        // The exact concrete Load record has already crossed source ingress.
+        // Only the frontend visibility barrier remains to be released.
+        let binding = conn
+            .committed_renderer_document_binding_for_owner(&self.state.owner)
+            .cloned();
+        let accepted_events = conn
+            .release_renderer_document_load_visibility_barrier_for_owner(
                 &self.state.owner,
                 &self.state.loader_id,
             )
-            .unwrap_or_default(),
-        );
+            .unwrap_or_default();
         let mut renderer_lifecycle_events = Vec::new();
         if let Some(binding) = binding.as_ref() {
             page::emit_bound_renderer_document_lifecycle_background_events(

@@ -99,16 +99,12 @@ pub(crate) use events::{
 };
 pub use events::{fetch_auth_required_params, fetch_request_paused_params};
 #[cfg(test)]
+pub(crate) use main_document_progress::CompletedMainDocumentNetworkEvents;
+#[cfg(test)]
 pub(crate) use main_document_progress::empty_main_document_progress_gate_for_test;
 #[cfg(test)]
 pub(crate) use main_document_progress::{
-    CompletedDocumentProgressTransfer, CompletedDownloadProgressTransfer,
-    MaterializedDownloadDocumentProgress, MaterializedLoadedDocumentProgress,
-};
-#[cfg(test)]
-pub(crate) use main_document_progress::{
-    CompletedMainDocumentNetworkEvents, MainDocumentBodyNetworkProgress,
-    materialize_loaded_navigation_progress,
+    CompletedDownloadProgressTransfer, MaterializedDownloadDocumentProgress,
 };
 pub(crate) use main_document_progress::{
     FailedNavigationResponseMode, MainDocumentBodyProgressSource,

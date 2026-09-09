@@ -66,22 +66,16 @@ async fn browser_context_document_cookie_facade_snapshot_projects_cookie_get_fre
     bc.set_target_url("https://example.com/app".into());
     conn.install_browser_context_fixture_for_test(bc);
 
-    let navigation = conn
-        .build_loaded_navigation_from_buffered_response_async(
-            Url::parse("https://example.com/app").unwrap(),
-            "GET".into(),
-            vec![],
-            200,
-            vec![("set-cookie".into(), "theme=dark; Path=/".into())],
-            "<!doctype html><html><body>ok</body></html>".into(),
-        )
-        .await
-        .expect("navigation should build");
-    conn.browser_context
-        .as_mut()
-        .unwrap()
-        .commit_active_navigation_for_test(navigation.page)
-        .await;
+    conn.install_buffered_navigation_fixture_for_test(
+        Url::parse("https://example.com/app").unwrap(),
+        "GET".into(),
+        vec![],
+        200,
+        vec![("set-cookie".into(), "theme=dark; Path=/".into())],
+        "<!doctype html><html><body>ok</body></html>".into(),
+    )
+    .await
+    .expect("navigation should build");
 
     let before_read = conn
         .browser_context

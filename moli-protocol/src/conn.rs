@@ -9,8 +9,6 @@ use std::{
 
 use indexmap::IndexMap;
 use moli_cookie_jar::StoredCookie;
-#[cfg(test)]
-use moli_cookie_jar::StoredCookieQueryReport;
 use parking_lot::Mutex;
 use serde_json::json;
 
@@ -55,6 +53,8 @@ mod fetch_support;
 #[cfg(test)]
 mod inspection_binding_tests;
 mod inspector_route;
+#[cfg(test)]
+mod navigation_fixtures;
 mod output;
 #[cfg(test)]
 mod permission_tests;
@@ -564,8 +564,6 @@ pub use runtime_eval::{
     PendingServiceWorkerRuntimeProtocolMessageDispatch,
     PendingSharedWorkerRuntimeProtocolMessageDispatch,
 };
-#[cfg(test)]
-pub(crate) use runtime_load::ResponseCommitReady;
 pub(crate) use runtime_load::{FailedInitialDocumentProjection, PendingInitialDocumentProjection};
 use scheduler_hooks::CdpSchedulerHooks;
 use scheduler_state::CdpConnectionSchedulerState;
@@ -576,6 +574,8 @@ pub(crate) use site_data_manager_surface::{
 };
 #[cfg(test)]
 pub(crate) use state::BrowserContextResourceStorageHandles;
+#[cfg(test)]
+pub use state::DownloadNavigation;
 pub(crate) use state::JavaScriptDialogError;
 pub use state::{
     BrowserContext, DevToolsPageResidenceIdentity, DocumentStartScript, EmulatedDeviceMetrics,
@@ -612,13 +612,9 @@ pub(crate) use state::{CommittedDocumentLifecycle, DocumentLifecycleEvent};
 #[cfg(test)]
 pub(crate) use state::{
     CompletedDownloadBodyArtifact, DevToolsEmulationSessionState, DevToolsSessionState,
-    DocumentNavigationDestination, DocumentProjectionFence, EmulationPolicy, JavaScriptDialogKey,
-    LoadedNavigationPageCommit, NetworkErrorPageNavigation, PreparedDocumentNavigation,
-    RendererMainDocumentCommitSeed, TargetJavaScriptDialog, TargetJavaScriptDialogScopeObserver,
-    TargetPageSlot, TargetRuntimeSessionState,
+    EmulationPolicy, JavaScriptDialogKey, TargetJavaScriptDialog,
+    TargetJavaScriptDialogScopeObserver, TargetPageSlot, TargetRuntimeSessionState,
 };
-#[cfg(test)]
-pub use state::{DownloadNavigation, LoadedNavigation};
 pub(crate) use state::{HistoryTraversalDestination, ResolvedHistoryTraversal};
 use target::{
     DevToolsAgentHostRegistry, TargetClosurePlan, TargetHostDelta,

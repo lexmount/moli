@@ -237,15 +237,25 @@ impl BrowserContext {
         target_id: &str,
         change: &moli_core::RendererDocumentTitleChanged,
     ) -> Option<bool> {
-        let handle = self.web_contents_handle_for_target(target_id)?;
-        let changed = self
+        let document = self.document_handle_for_target(target_id)?;
+        let lifecycle = self
             .browser_context
-            .commit_document_title(handle, change)
+            .document_lifecycle_snapshot(document)
             .ok()??;
-        self.page_targets
+        if moli_core::page::RendererDocumentLifecycleIdentity::from(lifecycle)
+            != change.source_document
+        {
+            return None;
+        }
+        // Native history can be ahead of this FIFO. Frontend publication is
+        // deduplicated against its own last observed title, not Browser state.
+        let projected = &mut self
+            .page_targets
             .get_mut(target_id)?
             .owner_state
-            .committed_document_title = Some(change.title.clone());
+            .committed_document_title;
+        let changed = projected.as_ref() != Some(&change.title);
+        *projected = Some(change.title.clone());
         Some(changed)
     }
 

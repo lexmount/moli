@@ -482,6 +482,23 @@ async fn navigate(
         document: load.document_id(),
     };
     let synthetic = synthetic.or_else(|| {
+        // Inline documents do not use the network and must still load while
+        // offline. Keep the historical raw inline HTML fragment convention
+        // local to document navigation, not the shared subresource decoder.
+        if let Some(html) = requested_url.as_str().strip_prefix("data:text/html,")
+            && html.contains('#')
+        {
+            return Some((
+                200,
+                vec![("Content-Type".into(), "text/html".into())],
+                percent_encoding::percent_decode_str(html).collect(),
+            ));
+        }
+        if let Some((body, mime)) =
+            moli_web_mime::data_url_body_and_mime_type(requested_url.as_str())
+        {
+            return Some((200, vec![("Content-Type".into(), mime)], body));
+        }
         moli_url::is_about_blank(&requested_url).then(|| {
             (
                 200,

@@ -24,10 +24,6 @@ mod navigation_driver;
 pub use navigation_driver::{BrowserNavigationOutcome, BrowserNavigationWaiter};
 mod navigation_events;
 mod popup;
-pub use navigation::{
-    BrowserDocumentMaterialization, BrowserDocumentNavigationCommit, BrowserNavigationLoad,
-    BrowserPreparedDocumentNavigation, BrowserPreparedNavigationResponse,
-};
 
 use super::{
     BrowserContext, BrowserContextId, BrowserContextStoragePartitionHandles, MainFrameSlotId,
@@ -94,7 +90,6 @@ struct Browser {
     contexts: IndexMap<BrowserContextId, BrowserContext>,
     permission_defaults: super::PermissionDefaults,
     download_policy: super::DownloadPolicy,
-    navigation_work: navigation::NavigationWorkRegistry,
     popup_admissions: popup::PopupAdmissions,
     document_decision_provider: Option<tokio::sync::watch::Receiver<()>>,
     local_sender: BrowserLocalSender,
@@ -107,7 +102,6 @@ impl Browser {
             contexts: IndexMap::new(),
             permission_defaults: super::PermissionDefaults::default(),
             download_policy: super::DownloadPolicy::default(),
-            navigation_work: navigation::NavigationWorkRegistry::default(),
             popup_admissions: popup::PopupAdmissions::default(),
             document_decision_provider: None,
             local_sender,
@@ -139,7 +133,6 @@ impl Browser {
         let Some(context) = self.contexts.shift_remove(&id) else {
             return false;
         };
-        self.navigation_work.remove_context(id);
         let navigations = context.navigation_snapshots().collect::<Vec<_>>();
         let dialogs = context.javascript_dialog_snapshots();
         self.events
@@ -154,7 +147,6 @@ impl Browser {
     }
 
     fn shutdown(&mut self) {
-        self.navigation_work.clear();
         let contexts = std::mem::take(&mut self.contexts);
         for id in contexts.keys().copied() {
             self.events
@@ -529,7 +521,6 @@ impl BrowserHandle {
                     None
                 })
             });
-            browser.navigation_work.remove_web_contents(handle);
             browser.publish_failed_navigations([navigation], super::NavigationFailureReason::WebContentsClosed);
             let event = browser
                 .events
@@ -803,7 +794,6 @@ impl BrowserContextHandle {
                     super::NavigationFailureReason::WebContentsClosed,
                 );
                 browser.publish_closed_javascript_dialogs(dialogs);
-                browser.navigation_work.remove_context(context);
                 Ok::<_, String>(
                     handles
                         .into_iter()
@@ -849,7 +839,6 @@ impl BrowserContextHandle {
             browser
                 .context_mut(context)?
                 .clear_document_navigation_state(handle)?;
-            browser.navigation_work.remove_web_contents(handle);
             browser
                 .publish_failed_navigations([previous], super::NavigationFailureReason::Canceled);
             Ok(())
@@ -1159,15 +1148,6 @@ impl BrowserContextHandle {
         transfer: super::web_contents::PausedDocumentTransfer,
     ) -> Result<(), Box<super::web_contents::PausedDocumentTransfer>> {
         self.update_live(move |context| context.restore_navigation_response(permit, transfer))
-    }
-
-    pub fn commit_document_title(
-        &self,
-        handle: WebContentsHandle,
-        change: &crate::RendererDocumentTitleChanged,
-    ) -> Result<Option<bool>, String> {
-        let change = change.clone();
-        self.try_update(move |context| context.commit_document_title(handle, &change))
     }
 
     pub fn arm_background_navigation_completion(

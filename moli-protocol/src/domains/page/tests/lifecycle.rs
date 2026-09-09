@@ -377,17 +377,40 @@ async fn lifecycle_events_enable_without_renderer_binding_does_not_synthesize_re
         "SID-PAGE-LIFECYCLE-COMPLETE",
         "about:blank",
     );
-    let page = ctx
+    let owner =
+        crate::conn::CommandOwnerScope::capture(&ctx.conn, Some("SID-PAGE-LIFECYCLE-COMPLETE"));
+    let waiter = ctx
         .conn
-        .load_page_via_runtime_async("data:text/html,<body>lifecycle</body>")
+        .start_native_navigation_fixture_for_test(
+            &owner,
+            LOADER_ID,
+            moli_core::browser::web_contents::NavigationRequestInterception::new(
+                url::Url::parse("data:text/html,<body>lifecycle</body>").unwrap(),
+                "GET".into(),
+                None,
+                Vec::new(),
+                crate::conn::NavigationRequestLoadPolicy::DocumentInitiated,
+            ),
+            moli_core::browser::NavigationDecision::Continue,
+        )
+        .unwrap();
+    let committed = ctx
+        .conn
+        .wait_for_native_navigation_commit_for_test(waiter, false)
         .await
-        .expect("page should load");
+        .unwrap();
     ctx.conn
-        .browser_context
-        .as_mut()
-        .expect("browser context")
-        .commit_active_navigation_for_test(page)
-        .await;
+        .wait_for_native_document_load_for_test(committed.document)
+        .await
+        .unwrap();
+    assert!(
+        ctx.conn
+            .browser_context
+            .as_ref()
+            .unwrap()
+            .renderer_document_lifecycle_binding_for_target("TID-PAGE-LIFECYCLE-COMPLETE")
+            .is_none()
+    );
 
     let raw = json!({
         "id": 1213,
@@ -823,33 +846,20 @@ async fn set_lifecycle_events_enabled_sets_flag() {
 async fn set_lifecycle_events_enabled_replays_loaded_page_events() {
     let mut ctx = TestContext::new();
     load_bc_with_session(&mut ctx, "BID-1", "TID-1", "SID-1", "about:blank");
-    let navigation = ctx
+    ctx.install_navigation_fixture_for_session_owner(
+        "data:text/html,<body>hello</body>",
+        Some("SID-1"),
+    )
+    .await;
+    let (_, lifecycle) = ctx
         .conn
-        .load_navigation_via_runtime_async("data:text/html,<body>hello</body>")
-        .await
-        .expect("page should load");
-    let dom_timestamp = navigation
-        .page_creation_artifacts
-        .lifecycle_snapshot
+        .renderer_document_lifecycle_visible_state_for_session_owner(Some("SID-1"))
+        .unwrap();
+    let dom_timestamp = lifecycle
         .dom_content_loaded
         .expect("loaded page should have renderer DCL")
         .timestamp_micros as f64
         / 1_000_000.0;
-    ctx.conn
-        .browser_context
-        .as_mut()
-        .unwrap()
-        .commit_active_navigation_for_test(navigation.page)
-        .await;
-    let (binding, initial_events) = ctx.conn.bind_renderer_document_lifecycle_for_owner(
-        &crate::conn::CommandOwnerScope::for_session("SID-1"),
-        navigation.page_creation_artifacts,
-        None,
-        "TID-1".to_owned(),
-        LOADER_ID.to_owned(),
-    );
-    assert!(binding.is_some());
-    assert_eq!(initial_events.len(), 2);
     let load_timestamp = wait_for_visible_renderer_load(&mut ctx, "SID-1")
         .await
         .timestamp_micros as f64
@@ -897,27 +907,21 @@ async fn set_lifecycle_events_enabled_replays_only_protocol_visible_load_state()
         "SID-visible",
         "about:blank",
     );
-    let navigation = ctx
-        .conn
-        .load_navigation_via_runtime_async("data:text/html,<body>visible lifecycle</body>")
-        .await
-        .expect("page should load");
-    let artifacts = navigation.page_creation_artifacts;
+    // Observe native load without draining the source FIFO into Protocol.
     ctx.conn
-        .browser_context
-        .as_mut()
-        .unwrap()
-        .commit_active_navigation_for_test(navigation.page)
+        .install_navigation_fixture_for_session_owner_for_test(
+            "data:text/html,<body>visible lifecycle</body>",
+            Some("SID-visible"),
+        )
         .await;
-    let (binding, initial_events) = ctx.conn.bind_renderer_document_lifecycle_for_owner(
-        &crate::conn::CommandOwnerScope::for_session("SID-visible"),
-        artifacts,
-        None,
-        "TID-visible".to_owned(),
-        LOADER_ID.to_owned(),
+    assert!(
+        ctx.conn
+            .browser_context
+            .as_ref()
+            .unwrap()
+            .renderer_document_lifecycle_binding_for_target("TID-visible")
+            .is_some()
     );
-    assert!(binding.is_some());
-    assert_eq!(initial_events.len(), 2);
     assert!(
         ctx.conn
             .begin_renderer_document_load_visibility_barrier_for_owner(
@@ -1001,29 +1005,18 @@ async fn set_lifecycle_events_enabled_is_session_local_for_active_attached_sessi
         "SID-primary",
         "about:blank",
     );
-    let navigation = ctx
-        .conn
-        .load_navigation_via_runtime_async("data:text/html,<body>active attached lifecycle</body>")
-        .await
-        .expect("page should load");
-    let artifacts = navigation.page_creation_artifacts;
-    let browser_context = ctx.conn.browser_context.as_mut().unwrap();
-    browser_context
-        .commit_active_navigation_for_test(navigation.page)
-        .await;
     assert!(
-        browser_context.assign_attached_session_to_target("TID-active", "SID-attached".to_owned())
+        ctx.conn
+            .browser_context
+            .as_mut()
+            .unwrap()
+            .assign_attached_session_to_target("TID-active", "SID-attached".to_owned())
     );
-    ctx.conn.commit_declared_session_fixtures_for_test();
-    let (binding, initial_events) = ctx.conn.bind_renderer_document_lifecycle_for_owner(
-        &crate::conn::CommandOwnerScope::for_session("SID-attached"),
-        artifacts,
-        None,
-        "TID-active".to_owned(),
-        LOADER_ID.to_owned(),
-    );
-    assert!(binding.is_some());
-    assert_eq!(initial_events.len(), 2);
+    ctx.install_navigation_fixture_for_session_owner(
+        "data:text/html,<body>active attached lifecycle</body>",
+        Some("SID-attached"),
+    )
+    .await;
     let _ = wait_for_visible_renderer_load(&mut ctx, "SID-attached").await;
     ctx.sent.clear();
 

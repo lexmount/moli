@@ -51,8 +51,6 @@ impl Browser {
             .web_contents_mut(request.web_contents)?
             .navigation_mut()
             .finish_navigation_as_download(request.navigation);
-        self.navigation_work
-            .remove_web_contents(request.web_contents);
         if let Some(admitted) = admitted {
             self.admit_download(admitted);
         }

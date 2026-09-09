@@ -640,21 +640,20 @@ async fn memory_diagnostics_reports_page_vm_document_isolate_model() {
         None,
     );
     conn.insert_browser_context(browser_context);
-    let first_page = conn
-        .load_page_via_runtime_async("data:text/html,<!doctype html><body>first</body>")
-        .await
-        .expect("first shared diagnostics page should load");
+    conn.install_navigation_fixture_for_session_owner_for_test(
+        "data:text/html,<!doctype html><body>first</body>",
+        None,
+    )
+    .await;
     conn.browser_context
         .as_mut()
         .expect("browser context")
         .set_active_target_id("TID-shared-diagnostics-bg");
-    let second_page = conn
-        .load_page_via_runtime_async("data:text/html,<!doctype html><body>second</body>")
-        .await
-        .expect("second shared diagnostics page should load");
-    let browser_context = conn.browser_context.as_mut().expect("browser context");
-    browser_context.commit_target_navigation_for_test("TID-shared-diagnostics-active", first_page);
-    browser_context.commit_target_navigation_for_test("TID-shared-diagnostics-bg", second_page);
+    conn.install_navigation_fixture_for_session_owner_for_test(
+        "data:text/html,<!doctype html><body>second</body>",
+        None,
+    )
+    .await;
 
     let pending_diagnostics = conn
         .start_moli_diagnostics()
@@ -861,22 +860,20 @@ async fn memory_diagnostics_excludes_empty_page_hosts_from_document_isolates() {
         None,
     );
     conn.insert_browser_context(browser_context);
-    let first_page = conn
-        .load_page_via_runtime_async("data:text/html,<!doctype html><body>first</body>")
-        .await
-        .expect("first shared diagnostics page should load");
+    conn.install_navigation_fixture_for_session_owner_for_test(
+        "data:text/html,<!doctype html><body>first</body>",
+        None,
+    )
+    .await;
     conn.browser_context
         .as_mut()
         .expect("browser context")
         .set_active_target_id("TID-doc-owner-diagnostics-bg");
-    let second_page = conn
-        .load_page_via_runtime_async("data:text/html,<!doctype html><body>second</body>")
-        .await
-        .expect("second shared diagnostics page should load");
-    let browser_context = conn.browser_context.as_mut().expect("browser context");
-    browser_context
-        .commit_target_navigation_for_test("TID-doc-owner-diagnostics-active", first_page);
-    browser_context.commit_target_navigation_for_test("TID-doc-owner-diagnostics-bg", second_page);
+    conn.install_navigation_fixture_for_session_owner_for_test(
+        "data:text/html,<!doctype html><body>second</body>",
+        None,
+    )
+    .await;
 
     let mut empty_context = conn.new_browser_context_fixture_for_test("BID-empty-page".to_owned());
     empty_context.set_active_target_id("TID-empty-page");

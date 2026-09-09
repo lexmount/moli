@@ -1,25 +1,17 @@
 #[cfg(test)]
-use crate::conn::{CompletedDownloadBodyArtifact, DownloadNavigation, LoadedNavigation};
+use crate::conn::{CompletedDownloadBodyArtifact, DownloadNavigation};
 mod emit;
 mod gate;
 #[cfg(test)]
 mod tests;
 
 use moli_cookie_jar::{StoredCookieQueryReport, StoredCookieSetReport};
-#[cfg(test)]
-use moli_core::RendererOutputFence;
 use moli_core::page::{NavigationRedirect, SubresourceRequestInitiatorType};
-#[cfg(test)]
-use moli_core::page::{RendererPendingDownloadActivation, RendererRuntimeRealmInfo};
-#[cfg(test)]
-use moli_fetch::StreamingRawResponse;
 use moli_fetch::{
     NegotiatedHttpVersion, NetworkExchangeObservation, NetworkObservationJournal, RedirectInfo,
 };
 use url::Url;
 
-#[cfg(test)]
-use crate::conn::ResponseCommitReady;
 use crate::conn::{
     BackgroundEventSender, BackgroundProtocolEvent, CapturedBody, CdpConnection,
     NavigationDispatchState, NavigationLoadOutcome, TargetRuntimeSlot,
@@ -32,20 +24,6 @@ use gate::{
     MainDocumentProgressEmission, MainDocumentProgressEventBatch, MainDocumentProgressOutputTarget,
     MainDocumentProgressPhase, MainDocumentProgressQueueHandle, MainDocumentProgressSource,
 };
-
-/// Protocol progress accompanies, but never owns or modifies, a Browser candidate.
-#[cfg(test)]
-pub(crate) struct MaterializedLoadedDocumentProgress {
-    pub(crate) pending_download: Option<RendererPendingDownloadActivation>,
-    pub(crate) final_url: Url,
-    pub(crate) response_headers: Vec<(String, String)>,
-    pub(crate) response_from_cache: bool,
-    pub(crate) main_document_body: Option<CapturedBody>,
-    pub(crate) initial_runtime_realms: Vec<RendererRuntimeRealmInfo>,
-    pub(crate) renderer_output_predecessor: Option<RendererOutputFence>,
-    pub(crate) progress_gate: MainDocumentProgressGate,
-    pub(crate) network_error_page: Option<crate::conn::NetworkErrorPageNavigation>,
-}
 
 #[cfg(test)]
 pub(crate) struct MaterializedDownloadDocumentProgress {
@@ -68,8 +46,6 @@ pub(crate) enum FailedNavigationResponseMode {
 
 pub(crate) enum MaterializedNavigationLoadOutcome {
     #[cfg(test)]
-    ResponseCommitReady(Box<ResponseCommitReady>),
-    #[cfg(test)]
     Download(MaterializedDownloadDocumentProgress),
     Failed(MaterializedFailedDocumentProgress),
 }
@@ -83,111 +59,16 @@ pub(crate) fn empty_main_document_progress_gate_for_test() -> MainDocumentProgre
 
 #[derive(Debug)]
 #[cfg(test)]
-pub(crate) struct CompletedDocumentProgressTransfer {
-    body: CompletedDocumentProgressBody,
-    network_progress: MainDocumentBodyNetworkProgress,
-}
-
-#[derive(Debug)]
-#[cfg(test)]
-enum CompletedDocumentProgressBody {
-    Captured { body: CapturedBody, synthetic: bool },
-    Pending,
-}
-
-#[cfg(test)]
-impl CompletedDocumentProgressTransfer {
-    pub(crate) fn new_captured(
-        body: CapturedBody,
-        synthetic: bool,
-        network_progress: MainDocumentBodyNetworkProgress,
-    ) -> Self {
-        Self {
-            body: CompletedDocumentProgressBody::Captured { body, synthetic },
-            network_progress,
-        }
-    }
-
-    pub(crate) fn new_pending_body(network_progress: MainDocumentBodyNetworkProgress) -> Self {
-        Self {
-            body: CompletedDocumentProgressBody::Pending,
-            network_progress,
-        }
-    }
-
-    fn captured_body(&self) -> Option<CapturedBody> {
-        match &self.body {
-            CompletedDocumentProgressBody::Captured { body, .. } => Some(body.clone()),
-            CompletedDocumentProgressBody::Pending => None,
-        }
-    }
-
-    fn into_progress_gate(
-        self,
-        conn: &mut CdpConnection,
-        state: &NavigationDispatchState,
-        final_url: &Url,
-    ) -> MainDocumentProgressGate {
-        let queue = completed_document_body_progress_queue(self, conn, state, final_url);
-        MainDocumentProgressGate::from_queue(queue)
-    }
-
-    fn into_parts(
-        self,
-    ) -> (
-        CompletedDocumentProgressBody,
-        MainDocumentBodyNetworkProgress,
-    ) {
-        (self.body, self.network_progress)
-    }
-
-    #[cfg(test)]
-    pub(crate) fn body(&self) -> &CapturedBody {
-        match &self.body {
-            CompletedDocumentProgressBody::Captured { body, .. } => body,
-            CompletedDocumentProgressBody::Pending => {
-                panic!("test navigation body is still pending")
-            }
-        }
-    }
-
-    #[cfg(test)]
-    pub(crate) fn completed_body_network_events(
-        &self,
-    ) -> Option<&CompletedMainDocumentNetworkEvents> {
-        self.network_progress.as_completed_body()
-    }
-}
-
-#[derive(Debug)]
-#[cfg(test)]
 pub(crate) struct CompletedDownloadProgressTransfer {
-    body: CompletedDownloadProgressBody,
+    body: Vec<u8>,
     network_events: CompletedMainDocumentNetworkEvents,
-}
-
-#[derive(Debug)]
-#[cfg(test)]
-enum CompletedDownloadProgressBody {
-    Buffered(Vec<u8>),
-    Streaming(Box<StreamingRawResponse>),
 }
 
 #[cfg(test)]
 impl CompletedDownloadProgressTransfer {
     pub(crate) fn new(body: Vec<u8>, network_events: CompletedMainDocumentNetworkEvents) -> Self {
         Self {
-            body: CompletedDownloadProgressBody::Buffered(body),
-            network_events,
-        }
-    }
-
-    pub(crate) fn new_streaming(
-        response: StreamingRawResponse,
-        network_events: CompletedMainDocumentNetworkEvents,
-    ) -> Self {
-        Self {
-            body: CompletedDownloadProgressBody::Streaming(Box::new(response)),
+            body,
             network_events,
         }
     }
@@ -200,37 +81,15 @@ impl CompletedDownloadProgressTransfer {
     ) -> (MainDocumentProgressGate, CompletedDownloadBodyArtifact) {
         let response_headers = self.network_events.response_headers.clone();
         let progress = CompletedDownloadBodyNetworkProgress {
-            encoded_data_length: completed_download_body_len_hint(&self.body, &response_headers),
+            encoded_data_length: self.body.len(),
             network_events: self.network_events,
         };
         let queue = completed_download_body_progress_queue(progress, conn, state, final_url);
-        let body = match self.body {
-            CompletedDownloadProgressBody::Buffered(body) => {
-                moli_core::browser::DownloadBody::Buffered(body)
-            }
-            CompletedDownloadProgressBody::Streaming(response) => {
-                moli_core::browser::DownloadBody::Streaming(response)
-            }
-        };
+        let body = moli_core::browser::DownloadBody::Buffered(self.body);
         (
             MainDocumentProgressGate::from_queue(queue),
             CompletedDownloadBodyArtifact::from_body(body, response_headers),
         )
-    }
-}
-
-#[cfg(test)]
-fn completed_download_body_len_hint(
-    body: &CompletedDownloadProgressBody,
-    response_headers: &[(String, String)],
-) -> usize {
-    match body {
-        CompletedDownloadProgressBody::Buffered(body) => body.len(),
-        CompletedDownloadProgressBody::Streaming(_) => response_headers
-            .iter()
-            .find(|(name, _)| name.eq_ignore_ascii_case("content-length"))
-            .and_then(|(_, value)| value.trim().parse().ok())
-            .unwrap_or_default(),
     }
 }
 
@@ -264,19 +123,6 @@ fn failed_navigation_progress_gate(
     ))
 }
 
-#[cfg(test)]
-fn network_error_page_progress_gate(
-    conn: &CdpConnection,
-    state: &NavigationDispatchState,
-    error_text: &str,
-) -> MainDocumentProgressGate {
-    let failure_event = observed_navigation_failure_event(conn, state, error_text);
-    let finish_event = observed_navigation_finished_event(conn, state);
-    MainDocumentProgressGate::from_queue(MainDocumentProgressQueueHandle::from_source(
-        MainDocumentProgressSource::error_page(failure_event, finish_event),
-    ))
-}
-
 fn materialize_failed_navigation_progress(
     conn: &CdpConnection,
     state: &NavigationDispatchState,
@@ -291,55 +137,12 @@ fn materialize_failed_navigation_progress(
     }
 }
 
-#[cfg(test)]
-pub(crate) fn materialize_loaded_navigation_progress<P>(
-    conn: &mut CdpConnection,
-    state: &NavigationDispatchState,
-    navigation: LoadedNavigation<P>,
-) -> (P, MaterializedLoadedDocumentProgress) {
-    let LoadedNavigation {
-        page,
-        pending_download,
-        final_url,
-        response_headers,
-        response_from_cache,
-        initial_runtime_realms,
-        renderer_output_predecessor,
-        document_progress_transfer,
-        network_error_page,
-        ..
-    } = navigation;
-    let main_document_body = document_progress_transfer.captured_body();
-    let progress_gate = match network_error_page.as_ref() {
-        Some(error_page) => network_error_page_progress_gate(conn, state, error_page.error_text()),
-        None => document_progress_transfer.into_progress_gate(conn, state, &final_url),
-    };
-    (
-        page,
-        MaterializedLoadedDocumentProgress {
-            pending_download,
-            final_url,
-            response_headers,
-            response_from_cache,
-            main_document_body,
-            initial_runtime_realms,
-            renderer_output_predecessor,
-            progress_gate,
-            network_error_page,
-        },
-    )
-}
-
 fn materialize_navigation_load_outcome(
     conn: &mut CdpConnection,
     state: &NavigationDispatchState,
     navigation: NavigationLoadOutcome,
 ) -> MaterializedNavigationLoadOutcome {
     match navigation {
-        #[cfg(test)]
-        NavigationLoadOutcome::ResponseCommitReady(navigation) => {
-            MaterializedNavigationLoadOutcome::ResponseCommitReady(navigation)
-        }
         #[cfg(test)]
         NavigationLoadOutcome::Download(navigation) => MaterializedNavigationLoadOutcome::Download(
             materialize_download_navigation_progress(conn, state, *navigation),
@@ -390,74 +193,6 @@ fn materialize_download_navigation_progress(
         progress_gate,
         body_artifact,
     }
-}
-
-#[cfg(test)]
-fn completed_document_body_progress_queue(
-    transfer: CompletedDocumentProgressTransfer,
-    conn: &mut CdpConnection,
-    state: &NavigationDispatchState,
-    final_url: &Url,
-) -> MainDocumentProgressQueueHandle {
-    let session_ids = conn.network_event_session_ids_for_owner(&state.owner);
-    let network_observed = main_document_network_observed(conn, &state.owner);
-    let (body, body_progress_source) = transfer.into_parts();
-    let encoded_data_length = match body {
-        CompletedDocumentProgressBody::Captured { body, synthetic } => {
-            let encoded_data_length = body.len();
-            let collector_ids = conn.network_data_collector_ids_for_owner_body(
-                &state.owner,
-                crate::devtools_runtime::DevToolsNetworkDataType::Response,
-                encoded_data_length,
-            );
-            let collection_was_gated = conn.network_data_collection_is_gated_for_body(
-                crate::devtools_runtime::DevToolsNetworkDataType::Response,
-            );
-            if network_observed
-                && !synthetic
-                && let Some(request_id) = state.request_id.clone()
-            {
-                conn.record_collected_network_data_body(
-                    request_id,
-                    crate::devtools_runtime::DevToolsNetworkDataType::Response,
-                    body.clone(),
-                    collector_ids.iter().cloned(),
-                    collection_was_gated,
-                );
-            }
-            let _ = conn
-                .runtime_session_owner_slot_mut_for_owner(&state.owner)
-                .ok()
-                .and_then(|runtime_slot| {
-                    record_main_document_response_body_for_network(
-                        runtime_slot,
-                        network_observed,
-                        state.request_id.clone(),
-                        &session_ids,
-                        collector_ids,
-                        collection_was_gated,
-                        synthetic,
-                        &body,
-                    )
-                });
-            encoded_data_length
-        }
-        CompletedDocumentProgressBody::Pending => {
-            record_pending_main_document_response_body(conn, state, &session_ids);
-            0
-        }
-    };
-    let event_request_id =
-        completed_body_main_document_network_request_id(network_observed, state.request_id.clone());
-    completed_or_streaming_document_progress_queue(
-        conn,
-        state,
-        network_observed,
-        event_request_id,
-        body_progress_source.into_completed_body_events(),
-        final_url,
-        encoded_data_length,
-    )
 }
 
 #[cfg(test)]
@@ -546,61 +281,6 @@ impl MainDocumentBodyProgressSource {
         Self {
             live_source,
             response_visibility,
-        }
-    }
-
-    #[cfg(test)]
-    pub(crate) fn emit_response_metadata(
-        &self,
-        final_request_method: &str,
-        final_request_headers: &[(String, String)],
-        final_request_cookie_report: Option<&StoredCookieQueryReport>,
-        redirect_chain: &[RedirectInfo],
-        final_url: &Url,
-        response_status: u16,
-        response_headers: &[(String, String)],
-        response_cookie_reports: &[StoredCookieSetReport],
-        network_observation_journal: &NetworkObservationJournal,
-        network_extra_info_available: bool,
-        response_from_cache: bool,
-        negotiated_http_version: Option<NegotiatedHttpVersion>,
-    ) {
-        let Some(live_source) = self.live_source.as_ref() else {
-            return;
-        };
-        match self.response_visibility {
-            MainDocumentResponseVisibility::Immediate => {
-                live_source.emit_redirect_requests(
-                    final_request_method,
-                    None,
-                    final_request_headers,
-                    final_request_cookie_report,
-                    redirect_chain,
-                    network_observation_journal,
-                    network_extra_info_available,
-                );
-                live_source.emit_response_received(
-                    final_url,
-                    response_status,
-                    response_headers,
-                    response_cookie_reports,
-                    network_observation_journal,
-                    redirect_chain.len(),
-                    network_extra_info_available,
-                    response_from_cache,
-                    negotiated_http_version,
-                );
-            }
-            MainDocumentResponseVisibility::AfterResponseStageContinue => {
-                live_source.emit_response_received_without_extra_info(
-                    final_url,
-                    response_status,
-                    response_headers,
-                    network_extra_info_available,
-                    response_from_cache,
-                    negotiated_http_version,
-                );
-            }
         }
     }
 
@@ -721,25 +401,6 @@ impl MainDocumentBodyProgressSource {
             live_source.emit_body_finished(encoded_data_length);
         }
     }
-
-    #[cfg(test)]
-    pub(crate) fn body_network_progress_for_completed_events(
-        &self,
-        completed_events: CompletedMainDocumentNetworkEvents,
-    ) -> MainDocumentBodyNetworkProgress {
-        if self
-            .live_source
-            .as_ref()
-            .is_some_and(|live_source| live_source.sender.is_some())
-        {
-            MainDocumentBodyNetworkProgress::StreamingBody
-        } else {
-            let mut completed_events = completed_events;
-            completed_events.response_stage_metadata_already_emitted = self.response_visibility
-                == MainDocumentResponseVisibility::AfterResponseStageContinue;
-            MainDocumentBodyNetworkProgress::CompletedBody(Box::new(completed_events))
-        }
-    }
 }
 
 #[derive(Debug, Clone)]
@@ -800,31 +461,6 @@ impl CompletedMainDocumentNetworkEvents {
     ) -> Self {
         self.network_observation_journal = network_observation_journal;
         self
-    }
-}
-
-#[derive(Debug)]
-#[cfg(test)]
-pub(crate) enum MainDocumentBodyNetworkProgress {
-    CompletedBody(Box<CompletedMainDocumentNetworkEvents>),
-    StreamingBody,
-}
-
-#[cfg(test)]
-impl MainDocumentBodyNetworkProgress {
-    pub(crate) fn into_completed_body_events(self) -> Option<CompletedMainDocumentNetworkEvents> {
-        match self {
-            Self::CompletedBody(events) => Some(*events),
-            Self::StreamingBody => None,
-        }
-    }
-
-    #[cfg(test)]
-    pub(crate) fn as_completed_body(&self) -> Option<&CompletedMainDocumentNetworkEvents> {
-        match self {
-            Self::CompletedBody(events) => Some(events),
-            Self::StreamingBody => None,
-        }
     }
 }
 
@@ -1058,31 +694,6 @@ impl MainDocumentLiveNetworkProgressSource {
             extra_info_headers,
             network_extra_info_available,
             network_extra_info_available,
-            response_from_cache,
-            negotiated_http_version,
-            network_extra_info_available && !response_from_cache,
-        );
-    }
-
-    #[cfg(test)]
-    fn emit_response_received_without_extra_info(
-        &self,
-        final_url: &Url,
-        response_status: u16,
-        response_headers: &[(String, String)],
-        network_extra_info_available: bool,
-        response_from_cache: bool,
-        negotiated_http_version: Option<NegotiatedHttpVersion>,
-    ) {
-        self.emit_response_received_with_extra_info_policy(
-            final_url,
-            response_status,
-            response_headers,
-            &[],
-            response_status,
-            response_headers.to_vec(),
-            network_extra_info_available,
-            false,
             response_from_cache,
             negotiated_http_version,
             network_extra_info_available && !response_from_cache,
@@ -1418,27 +1029,6 @@ fn observed_navigation_failure_event(
             timestamp: state.timestamp,
         },
         error_text: error_text.to_owned(),
-    })
-}
-
-#[cfg(test)]
-fn observed_navigation_finished_event(
-    conn: &CdpConnection,
-    state: &NavigationDispatchState,
-) -> Option<MainDocumentNavigationProgressEvent> {
-    if !main_document_network_observed(conn, &state.owner) {
-        return None;
-    }
-    let request_id = state.request_id.clone()?;
-    Some(MainDocumentNavigationProgressEvent::LoadingFinished {
-        target: MainDocumentProgressEventTarget {
-            session_ids: conn.network_event_session_ids_for_owner(&state.owner),
-            request_id,
-            loader_id: state.loader_id.clone(),
-            frame_id: state.frame_id.clone(),
-            timestamp: state.timestamp,
-        },
-        encoded_data_length: 0,
     })
 }
 

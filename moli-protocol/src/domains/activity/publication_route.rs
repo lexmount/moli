@@ -51,8 +51,9 @@ pub(crate) enum RendererPublicationRoute {
 pub(crate) enum RendererPublicationProjection {
     CurrentOwner,
     // DOM-agent output, binding calls and terminal Inspector replies need the exact live
-    // binding, not a Protocol-owned Browser Document. This grants no Browser
-    // lifecycle/actions or new Runtime execution-context projection.
+    // binding, not a Protocol-owned Browser Document. Network facts retain their
+    // exact projected Document correlations until observer rebind. This grants
+    // no Browser lifecycle/actions or new Runtime execution-context projection.
     InspectionOnly,
     RetiringNetworkOnly,
 }

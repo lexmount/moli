@@ -31,6 +31,7 @@ pub enum BrowserEvent {
         reason: NavigationFailureReason,
     },
     DocumentLifecycleChanged(DocumentLifecycleSnapshot),
+    DocumentTitleChanged(DocumentHandle),
     DialogOpened(JavaScriptDialogOpened),
     DialogClosed {
         document: DocumentHandle,

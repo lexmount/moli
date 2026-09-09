@@ -27,6 +27,7 @@ use super::{
 };
 
 pub(crate) struct PageVmStateCapture {
+    pub native_document_title: tokio::sync::watch::Receiver<super::RendererDocumentTitleChanged>,
     pub(crate) document_lifecycle: RendererDocumentLifecycleObservation,
     pub(crate) final_url: Url,
     pub(crate) document_title: String,

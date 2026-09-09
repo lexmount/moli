@@ -71,22 +71,16 @@ async fn browser_context_document_id_tracks_attach_and_detach() {
     assert_eq!(before.capability_surface.first_cookie_request, None);
     assert!(before.capability_surface.telemetry.is_none());
 
-    let navigation = conn
-        .build_loaded_navigation_from_buffered_response_async(
-            Url::parse("https://example.com/app").unwrap(),
-            "GET".into(),
-            vec![],
-            200,
-            vec![],
-            "<!doctype html><html><body>ok</body></html>".into(),
-        )
-        .await
-        .expect("navigation should build");
-    conn.browser_context
-        .as_mut()
-        .unwrap()
-        .commit_active_navigation_for_test(navigation.page)
-        .await;
+    conn.install_buffered_navigation_fixture_for_test(
+        Url::parse("https://example.com/app").unwrap(),
+        "GET".into(),
+        vec![],
+        200,
+        vec![],
+        "<!doctype html><html><body>ok</body></html>".into(),
+    )
+    .await
+    .expect("navigation should build");
 
     let after_attach = conn
         .browser_context

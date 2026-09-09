@@ -110,10 +110,6 @@ pub struct CommittedDocumentInfo {
 }
 
 impl PreparedDocumentNavigation {
-    pub(crate) fn renderer_residence(&self) -> RendererPageResidenceIdentity {
-        RendererPageResidenceIdentity::from_page(&self.page)
-    }
-
     /// Configure the move-owned Browser participant without borrowing its owner.
     /// These are effective values, never frontend registration/session identities.
     #[cfg(any(test, feature = "test-support"))]

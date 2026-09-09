@@ -224,28 +224,22 @@ async fn connection_preview_clear_cookie_store_with_persistent_scope_does_not_in
     ));
     let url = Url::parse("https://app.example.com/app").unwrap();
 
-    let navigation = conn
-        .build_loaded_navigation_from_buffered_response_async(
-            url.clone(),
-            "GET".into(),
-            vec![],
-            200,
-            vec![
-                ("set-cookie".into(), "theme=dark; Path=/app".into()),
-                (
-                    "set-cookie".into(),
-                    "persist=1; Path=/app; Max-Age=3600".into(),
-                ),
-            ],
-            "<!doctype html><html><body>ok</body></html>".into(),
-        )
-        .await
-        .expect("navigation should build");
-    conn.browser_context
-        .as_mut()
-        .unwrap()
-        .commit_active_navigation_for_test(navigation.page)
-        .await;
+    conn.install_buffered_navigation_fixture_for_test(
+        url.clone(),
+        "GET".into(),
+        vec![],
+        200,
+        vec![
+            ("set-cookie".into(), "theme=dark; Path=/app".into()),
+            (
+                "set-cookie".into(),
+                "persist=1; Path=/app; Max-Age=3600".into(),
+            ),
+        ],
+        "<!doctype html><html><body>ok</body></html>".into(),
+    )
+    .await
+    .expect("navigation should build");
 
     let before = conn
         .evaluate_runtime_expression_with_await_async("document.cookie", false)
@@ -316,28 +310,22 @@ async fn connection_clear_cookie_store_with_session_scope_invalidates_live_docum
     ));
     let url = Url::parse("https://app.example.com/app").unwrap();
 
-    let navigation = conn
-        .build_loaded_navigation_from_buffered_response_async(
-            url.clone(),
-            "GET".into(),
-            vec![],
-            200,
-            vec![
-                ("set-cookie".into(), "theme=dark; Path=/app".into()),
-                (
-                    "set-cookie".into(),
-                    "persist=1; Path=/app; Max-Age=3600".into(),
-                ),
-            ],
-            "<!doctype html><html><body>ok</body></html>".into(),
-        )
-        .await
-        .expect("navigation should build");
-    conn.browser_context
-        .as_mut()
-        .unwrap()
-        .commit_active_navigation_for_test(navigation.page)
-        .await;
+    conn.install_buffered_navigation_fixture_for_test(
+        url.clone(),
+        "GET".into(),
+        vec![],
+        200,
+        vec![
+            ("set-cookie".into(), "theme=dark; Path=/app".into()),
+            (
+                "set-cookie".into(),
+                "persist=1; Path=/app; Max-Age=3600".into(),
+            ),
+        ],
+        "<!doctype html><html><body>ok</body></html>".into(),
+    )
+    .await
+    .expect("navigation should build");
 
     let before = conn
         .evaluate_runtime_expression_with_await_async("document.cookie", false)
@@ -529,22 +517,16 @@ async fn connection_cookie_site_clear_invalidates_live_document_cookie_cache() {
         Some(conn.new_page_target_fixture_for_test("BID-live-sites", "TID-live-sites"));
     let url = Url::parse("https://app.example.com/app").unwrap();
 
-    let navigation = conn
-        .build_loaded_navigation_from_buffered_response_async(
-            url.clone(),
-            "GET".into(),
-            vec![],
-            200,
-            vec![("set-cookie".into(), "theme=dark; Path=/app".into())],
-            "<!doctype html><html><body>ok</body></html>".into(),
-        )
-        .await
-        .expect("navigation should build");
-    conn.browser_context
-        .as_mut()
-        .unwrap()
-        .commit_active_navigation_for_test(navigation.page)
-        .await;
+    conn.install_buffered_navigation_fixture_for_test(
+        url.clone(),
+        "GET".into(),
+        vec![],
+        200,
+        vec![("set-cookie".into(), "theme=dark; Path=/app".into())],
+        "<!doctype html><html><body>ok</body></html>".into(),
+    )
+    .await
+    .expect("navigation should build");
 
     let before = conn
         .evaluate_runtime_expression_with_await_async("document.cookie", false)
@@ -609,22 +591,16 @@ async fn connection_preview_clear_cookies_for_sites_does_not_invalidate_live_doc
     ));
     let url = Url::parse("https://app.example.com/app").unwrap();
 
-    let navigation = conn
-        .build_loaded_navigation_from_buffered_response_async(
-            url.clone(),
-            "GET".into(),
-            vec![],
-            200,
-            vec![("set-cookie".into(), "theme=dark; Path=/app".into())],
-            "<!doctype html><html><body>ok</body></html>".into(),
-        )
-        .await
-        .expect("navigation should build");
-    conn.browser_context
-        .as_mut()
-        .unwrap()
-        .commit_active_navigation_for_test(navigation.page)
-        .await;
+    conn.install_buffered_navigation_fixture_for_test(
+        url.clone(),
+        "GET".into(),
+        vec![],
+        200,
+        vec![("set-cookie".into(), "theme=dark; Path=/app".into())],
+        "<!doctype html><html><body>ok</body></html>".into(),
+    )
+    .await
+    .expect("navigation should build");
 
     let before = conn
         .evaluate_runtime_expression_with_await_async("document.cookie", false)

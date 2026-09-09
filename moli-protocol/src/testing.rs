@@ -82,66 +82,24 @@ impl CdpConnection {
         raw_url: &str,
         owner: &crate::conn::CommandOwnerScope,
     ) -> Option<RendererOutputFence> {
-        let token = self
-            .start_document_navigation_for_owner(owner, crate::domains::page::LOADER_ID.to_owned())
-            .expect("navigation fixture requires a live Browser owner");
-        let navigation = self
-            .load_navigation_via_runtime_for_owner_async(owner, raw_url)
+        let waiter = self
+            .start_native_navigation_fixture_for_test(
+                owner,
+                crate::domains::page::LOADER_ID,
+                moli_core::browser::web_contents::NavigationRequestInterception::new(
+                    url::Url::parse(raw_url).expect("fixture URL"),
+                    "GET".into(),
+                    None,
+                    Vec::new(),
+                    crate::conn::NavigationRequestLoadPolicy::DocumentInitiated,
+                ),
+                moli_core::browser::NavigationDecision::Continue,
+            )
+            .expect("navigation fixture must start on its exact Browser owner");
+        self.finish_native_navigation_fixture_for_test(waiter)
             .await
-            .expect("navigation fixture should load");
-        self.install_loaded_navigation_fixture_for_owner_for_test(navigation, owner, token)
-            .await
-    }
-
-    async fn install_loaded_navigation_fixture_for_owner_for_test(
-        &mut self,
-        navigation: crate::conn::LoadedNavigation<crate::conn::PreparedDocumentNavigation>,
-        owner: &crate::conn::CommandOwnerScope,
-        token: crate::conn::NavigationId,
-    ) -> Option<RendererOutputFence> {
-        let (_, target_id) = self
-            .target_owner_identity_for_owner(owner)
-            .expect("navigation fixture requires an installed browser context");
-        let target_id = target_id.expect("navigation fixture requires an exact target");
-        let renderer_output_predecessor = navigation.renderer_output_predecessor;
-        let page_commit = self
-            .commit_loaded_navigation(navigation.page)
-            .expect("navigation fixture Page commit must succeed");
-        let projection_fence = page_commit
-            .inspection_projection
-            .expect("navigation fixture must rebind its renderer inspection endpoint");
-        assert!(
-            page_commit
-                .committed_document_post_response_continuation
-                .is_none(),
-            "lifecycle-target fixture must not retain a DocumentCommit response gate"
-        );
-        page_commit.previous_document_retirement.close().await;
-        let (binding, _) = self.project_committed_document_lifecycle_for_owner(
-            owner,
-            page_commit.lifecycle,
-            Some(token),
-            target_id,
-            crate::domains::page::LOADER_ID.to_owned(),
-        );
-        let binding =
-            binding.expect("navigation fixture must install its exact renderer Document binding");
-        let finished =
-            self.publish_document_projection_fence_for_owner(owner, &binding, projection_fence);
-        assert!(
-            finished.released_output.is_empty(),
-            "fixture output is ingested after the Document binding"
-        );
-        assert!(
-            finished.renderer_call_replacements.is_none(),
-            "fixture must not replace in-flight renderer calls"
-        );
-        assert_eq!(
-            self.target_root_document_lifecycle_identity_for_owner(owner),
-            Some(binding.renderer_document_identity()),
-            "navigation fixture must retain its exact renderer Document binding"
-        );
-        renderer_output_predecessor
+            .expect("native fixture navigation should load")
+            .1
     }
 }
 
@@ -417,28 +375,31 @@ impl TestContext {
     ) {
         self.conn.commit_declared_session_fixtures_for_test();
         let owner = crate::conn::CommandOwnerScope::capture(&self.conn, session_id);
-        let token = self
+        let waiter = self
             .conn
-            .start_document_navigation_for_owner(&owner, crate::domains::page::LOADER_ID.to_owned())
-            .expect("navigation fixture requires a live Browser owner");
-        let navigation = self
-            .conn
-            .build_loaded_navigation_from_buffered_response_for_session_owner_async(
-                session_id,
-                requested_url,
-                "GET".into(),
-                Vec::new(),
-                200,
-                Vec::new(),
-                response_body,
+            .start_native_navigation_fixture_for_test(
+                &owner,
+                crate::domains::page::LOADER_ID,
+                moli_core::browser::web_contents::NavigationRequestInterception::new(
+                    requested_url,
+                    "GET".into(),
+                    None,
+                    Vec::new(),
+                    crate::conn::NavigationRequestLoadPolicy::DocumentInitiated,
+                ),
+                moli_core::browser::NavigationDecision::Fulfill {
+                    status: 200,
+                    headers: Vec::new(),
+                    body: response_body.into_bytes(),
+                },
             )
-            .await
-            .expect("buffered navigation fixture should build");
-        let owner = crate::conn::CommandOwnerScope::capture(&self.conn, session_id);
+            .expect("buffered navigation fixture should start");
         let predecessor = self
             .conn
-            .install_loaded_navigation_fixture_for_owner_for_test(navigation, &owner, token)
-            .await;
+            .finish_native_navigation_fixture_for_test(waiter)
+            .await
+            .expect("buffered navigation fixture should load")
+            .1;
         if let Some(predecessor) = predecessor {
             // Production does not expose a completed navigation response until
             // the Page-creation cursor has crossed ordered protocol ingress.

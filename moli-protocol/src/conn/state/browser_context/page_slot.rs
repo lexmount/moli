@@ -953,6 +953,20 @@ impl BrowserContext {
             .root_post_load_observation = None;
     }
 
+    #[cfg(test)]
+    pub(crate) fn observe_navigation_fixture_for_test(
+        &mut self,
+        target_id: &str,
+        request: moli_core::browser::NavigationRequest,
+        loader_id: &str,
+    ) {
+        assert!(self.observe_target_navigation_started(target_id, request));
+        self.page_slot_for_target_mut(target_id)
+            .expect("registered fixture target")
+            .cdp_navigation_loaders
+            .push((request.navigation, loader_id.to_owned().into()));
+    }
+
     #[cfg(any(test, feature = "test-support"))]
     pub(crate) fn begin_target_document_navigation(
         &mut self,
@@ -1203,29 +1217,6 @@ impl BrowserContext {
                         .unwrap_or(false))
                 .then_some(*navigation)
             })
-    }
-
-    #[cfg(test)]
-    pub(in crate::conn) fn project_navigation_load_for_target(
-        &mut self,
-        target_id: &str,
-        load: &moli_core::browser::BrowserNavigationLoad,
-    ) -> Result<(), String> {
-        let handle = self
-            .web_contents_handle_for_target(target_id)
-            .ok_or("navigation WebContents unavailable")?;
-        if handle.id() != load.web_contents_id() {
-            return Err("stale navigation WebContents".to_owned());
-        }
-        self.project_navigation_preparation_for_target(
-            target_id,
-            moli_core::browser::NavigationRequest {
-                web_contents: handle,
-                navigation: load.navigation_id(),
-                document: load.document_id(),
-            },
-            load.renderer_page(),
-        )
     }
 
     pub(in crate::conn) fn project_navigation_preparation_for_target(
