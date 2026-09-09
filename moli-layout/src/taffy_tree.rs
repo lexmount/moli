@@ -2439,6 +2439,8 @@ where
             .any(|object| object.role == InlineObjectRole::Float);
         let mut float_height = None;
         let mut alignment_float_height = 0.0;
+        let mut float_line_clearance = 0.0;
+        let mut line_clearances = Vec::new();
         if has_inline_float
             || block_context
                 .as_ref()
@@ -2461,7 +2463,7 @@ where
                     padding_border.top,
                     [padding_border.left, padding_border.right],
                 );
-                self.break_inline_lines_with_floats(
+                float_line_clearance = self.break_inline_lines_with_floats(
                     context,
                     layout,
                     width,
@@ -2472,6 +2474,7 @@ where
                         y: padding_border.top,
                     },
                     &mut floats,
+                    &mut line_clearances,
                 );
                 alignment_float_height = content_context.floated_content_height_contribution();
                 if contains_floats {
@@ -2485,7 +2488,7 @@ where
                     padding_border.top,
                     [padding_border.left, padding_border.right],
                 );
-                self.break_inline_lines_with_floats(
+                float_line_clearance = self.break_inline_lines_with_floats(
                     context,
                     layout,
                     width,
@@ -2496,6 +2499,7 @@ where
                         y: padding_border.top,
                     },
                     &mut floats,
+                    &mut line_clearances,
                 );
                 alignment_float_height = content_context.floated_content_height_contribution();
                 float_height = Some(alignment_float_height);
@@ -2516,6 +2520,7 @@ where
                 layout,
                 &atomic_baseline_ascents,
                 &structural_edge_contributions,
+                &line_clearances,
             );
             (metrics, Some(placements))
         } else {
@@ -2525,11 +2530,14 @@ where
                     layout,
                     &atomic_baseline_ascents,
                     &structural_edge_contributions,
+                    &line_clearances,
                 ),
                 None,
             )
         };
-        let mut height = layout.height() + line_metrics.line_expansion;
+        // Parley sums line heights without the vertical gaps introduced by
+        // float exclusion. Preserve those gaps in the container's auto height.
+        let mut height = layout.height() + float_line_clearance + line_metrics.line_expansion;
         if let Some(float_height) = float_height {
             height = height.max(float_height);
         }
@@ -2583,36 +2591,68 @@ where
         block_context: &mut BlockContext<'_>,
         content_offset: Point<f32>,
         floats: &mut Vec<InlineFloatPlacement>,
-    ) {
+        line_clearances: &mut Vec<f32>,
+    ) -> f32 {
         let mut breaker = layout.break_lines();
-        let initial_slot = block_context.find_content_slot(0.0, Clear::None, None);
-        let mut has_active_floats = initial_slot.segment_id.is_some();
+        let mut slot = block_context.find_content_slot(0.0, Clear::None, None);
+        let mut clearance = slot.y;
         {
             let state = breaker.state_mut();
             state.set_layout_max_advance(width);
-            state.set_line_max_advance(initial_slot.width.max(0.0));
-            state.set_line_x(initial_slot.x);
-            state.set_line_y(f64::from(initial_slot.y));
+            state.set_line_max_advance(slot.width.max(0.0));
+            state.set_line_x(slot.x);
+            state.set_line_y(f64::from(slot.y));
         }
+        let mut saved_state = breaker.state().clone();
 
         while let Some(yield_data) = breaker.break_next() {
             match yield_data {
                 YieldData::LineBreak(_) => {
+                    let metrics = breaker.last_line_metrics().expect("committed inline line");
+                    let advance = metrics.advance - metrics.trailing_whitespace;
+                    let tolerance = width.abs().max(1.0) * f32::EPSILON * 8.0;
+                    if slot.segment_id.is_some() && advance > slot.width.max(0.0) + tolerance {
+                        // CSS2 floats shorten line boxes, not unbreakable words.
+                        // Try the next exclusion band; after the last band the
+                        // word may overflow the full container width normally.
+                        let previous_y = slot.y;
+                        slot =
+                            block_context.find_content_slot(slot.y, Clear::None, slot.segment_id);
+                        if slot.segment_id.is_none() {
+                            slot = block_context.find_content_slot(
+                                block_context
+                                    .cleared_threshold(Clear::Both)
+                                    .unwrap_or(slot.y),
+                                Clear::None,
+                                None,
+                            );
+                        }
+                        clearance += slot.y - previous_y;
+                        breaker.revert_to(saved_state);
+                        let state = breaker.state_mut();
+                        state.set_line_max_advance(slot.width.max(0.0));
+                        state.set_line_x(slot.x);
+                        state.set_line_y(f64::from(slot.y));
+                        saved_state = state.clone();
+                        continue;
+                    }
+                    line_clearances.push(clearance);
                     let state = breaker.state_mut();
-                    if has_active_floats {
-                        let next_slot = block_context.find_content_slot(
+                    if slot.segment_id.is_some() {
+                        slot = block_context.find_content_slot(
                             state.line_y() as f32,
                             Clear::None,
                             None,
                         );
-                        has_active_floats = next_slot.segment_id.is_some();
-                        state.set_line_max_advance(next_slot.width.max(0.0));
-                        state.set_line_x(next_slot.x);
-                        state.set_line_y(f64::from(next_slot.y));
+                        clearance += slot.y - state.line_y() as f32;
+                        state.set_line_max_advance(slot.width.max(0.0));
+                        state.set_line_x(slot.x);
+                        state.set_line_y(f64::from(slot.y));
                     } else {
                         state.set_line_x(0.0);
                         state.set_line_max_advance(width);
                     }
+                    saved_state = state.clone();
                 }
                 YieldData::MaxHeightExceeded(_) => {}
                 YieldData::InlineBoxBreak(data) => {
@@ -2666,17 +2706,20 @@ where
                         order: usize::try_from(data.inline_box_id).unwrap_or(usize::MAX),
                         parent_width: child_inputs.parent_size.width,
                     });
-                    let next_slot =
+                    slot =
                         block_context.find_content_slot(state.line_y() as f32, Clear::None, None);
-                    has_active_floats = next_slot.segment_id.is_some();
-                    state.set_line_max_advance(next_slot.width.max(0.0));
-                    state.set_line_x(next_slot.x);
-                    state.set_line_y(f64::from(next_slot.y));
+                    clearance += slot.y - state.line_y() as f32;
+                    state.set_line_max_advance(slot.width.max(0.0));
+                    state.set_line_x(slot.x);
+                    state.set_line_y(f64::from(slot.y));
                     state.append_inline_box_to_line(data.advance, 0.0);
+                    // Rewinding a line must not place the same float twice.
+                    saved_state = state.clone();
                 }
             }
         }
         breaker.finish();
+        clearance
     }
 
     fn position_inline_objects(

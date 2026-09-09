@@ -771,12 +771,14 @@ pub(crate) fn measure_inline_lines(
     layout: &Layout<TextBrush>,
     atomic_baseline_ascents: &[Option<f32>],
     structural_edge_contributions: &[bool],
+    line_clearances: &[f32],
 ) -> InlineLineMetrics {
     resolve_inline_lines(
         context,
         layout,
         atomic_baseline_ascents,
         structural_edge_contributions,
+        line_clearances,
         None,
     )
 }
@@ -786,6 +788,7 @@ pub(crate) fn build_inline_line_placements(
     layout: &Layout<TextBrush>,
     atomic_baseline_ascents: &[Option<f32>],
     structural_edge_contributions: &[bool],
+    line_clearances: &[f32],
 ) -> (Vec<InlineLinePlacement>, InlineLineMetrics) {
     let mut placements = Vec::with_capacity(layout.lines().len());
     let metrics = resolve_inline_lines(
@@ -793,6 +796,7 @@ pub(crate) fn build_inline_line_placements(
         layout,
         atomic_baseline_ascents,
         structural_edge_contributions,
+        line_clearances,
         Some(&mut placements),
     );
     (placements, metrics)
@@ -803,6 +807,7 @@ fn resolve_inline_lines(
     layout: &Layout<TextBrush>,
     atomic_baseline_ascents: &[Option<f32>],
     structural_edge_contributions: &[bool],
+    line_clearances: &[f32],
     mut placements: Option<&mut Vec<InlineLinePlacement>>,
 ) -> InlineLineMetrics {
     let mut result = InlineLineMetrics::default();
@@ -811,7 +816,9 @@ fn resolve_inline_lines(
 
     for (line_index, line) in layout.lines().enumerate() {
         let metrics = line.metrics();
-        let raw_top = unadjusted_line_top;
+        // Float avoidance shifts whole lines before CSS vertical alignment.
+        // Keep that clearance separate from strut/inline-box height changes.
+        let raw_top = unadjusted_line_top + line_clearances.get(line_index).copied().unwrap_or(0.0);
         let raw_bottom = raw_top + metrics.line_height.max(0.0);
         let mut geometries = line
             .items()
@@ -2688,9 +2695,9 @@ mod tests {
             line_placements: Vec::new(),
             fragments: InlineFragments::default(),
         };
-        let summary = measure_inline_lines(&context, &layout, &[], &[]);
+        let summary = measure_inline_lines(&context, &layout, &[], &[], &[]);
         let (placements, materialized_summary) =
-            build_inline_line_placements(&context, &layout, &[], &[]);
+            build_inline_line_placements(&context, &layout, &[], &[], &[]);
 
         assert_eq!(summary, materialized_summary);
         assert_eq!(placements.len(), layout.lines().len());

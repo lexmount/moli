@@ -84,7 +84,7 @@ members = [
     "moli-http-cache",
     "moli-wpt-compat"
 ]
-exclude = ["vendor/xml5ever-0.39.0", "vendor/web-audio-api-1.7.0", "vendor/usvg-0.48.1"]
+exclude = ["vendor/xml5ever-0.39.0", "vendor/parley-0.11.1", "vendor/taffy-0.13.0", "vendor/web-audio-api-1.7.0", "vendor/usvg-0.48.1"]
 
 [workspace.package]
 license = "MIT OR Apache-2.0"
@@ -93,6 +93,7 @@ license = "MIT OR Apache-2.0"
 usvg = { path = "vendor/usvg-0.48.1" }
 web-audio-api = { path = "vendor/web-audio-api-1.7.0" }
 xml5ever = { path = "vendor/xml5ever-0.39.0" }
+parley = { path = "vendor/parley-0.11.1" }
 curl = { git = "https://github.com/lexmount/curl-rust", branch = "moli" }
 curl-sys = { git = "https://github.com/lexmount/curl-rust", branch = "moli" }
 cookie = { git = "https://github.com/ldm0/cookie-rs", branch = "priority" }
@@ -105,7 +106,7 @@ stylo_atoms = { git = "https://github.com/ldm0/stylo", rev = "671d13d31b3b00e7b1
 stylo_dom = { git = "https://github.com/ldm0/stylo", rev = "671d13d31b3b00e7b1e0088ba2b36a4e35c0858c" }
 stylo_static_prefs = { git = "https://github.com/ldm0/stylo", rev = "671d13d31b3b00e7b1e0088ba2b36a4e35c0858c" }
 stylo_traits = { git = "https://github.com/ldm0/stylo", rev = "671d13d31b3b00e7b1e0088ba2b36a4e35c0858c" }
-taffy = { git = "https://github.com/ldm0/taffy", rev = "71bc149ce5358406cdabba66da853ceb11ac74ee" }
+taffy = { path = "vendor/taffy-0.13.0" }
 
 [workspace.lints.clippy]
 disallowed_methods = "deny"

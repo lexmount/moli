@@ -300,6 +300,155 @@ fn inline_float_content_height_includes_both_padding_and_border_edges() {
 }
 
 #[test]
+fn unbreakable_inline_text_moves_below_a_float_when_its_slot_is_too_narrow() {
+    let source = Source(vec![
+        Node::element("root", "div", LayoutElementCategory::Generic, None, vec![1]),
+        Node::element(
+            "container",
+            "div",
+            LayoutElementCategory::Generic,
+            None,
+            vec![2, 3],
+        ),
+        Node::element(
+            "float",
+            "img",
+            LayoutElementCategory::Generic,
+            Some(LayoutReplacedKind::Image),
+            vec![],
+        )
+        .with_metrics(ReplacedMetrics {
+            intrinsic_width: Some(16.0),
+            intrinsic_height: Some(16.0),
+            ..ReplacedMetrics::default()
+        }),
+        Node::text("text", "abc"),
+    ]);
+    let mut styles = Styles::default();
+    styles.primary.insert(
+        0,
+        sized(LayoutDisplay::Block, 200.0, 100.0, PaintColor::TRANSPARENT),
+    );
+    styles.primary.insert(
+        1,
+        style(LayoutDisplay::InlineBlock, GREEN)
+            .tap_taffy(|style| {
+                style.size.width = Dimension::length(10.0);
+            })
+            .with_text_metrics(16.0, 20.0),
+    );
+    styles.primary.insert(
+        2,
+        sized(LayoutDisplay::Block, 16.0, 16.0, BLUE).with_float(Float::Left, Clear::None),
+    );
+    let snapshot = render(&source, &mut styles, 200, 100);
+    assert_close(rect(&snapshot, GREEN).height, 36.0);
+}
+
+#[test]
+fn inline_float_wrapping_ignores_hanging_space_and_uses_the_first_fitting_band() {
+    for with_tall_right_float in [false, true] {
+        let source = Source(vec![
+            Node::element(
+                "root",
+                "div",
+                LayoutElementCategory::Generic,
+                None,
+                vec![1, 4],
+            ),
+            Node::element(
+                "container",
+                "div",
+                LayoutElementCategory::Generic,
+                None,
+                if with_tall_right_float {
+                    vec![2, 6, 3]
+                } else {
+                    vec![2, 3]
+                },
+            ),
+            Node::element("left", "div", LayoutElementCategory::Generic, None, vec![]),
+            Node::text(
+                "text",
+                if with_tall_right_float {
+                    "abc"
+                } else {
+                    "abc abc"
+                },
+            ),
+            Node::element(
+                "reference",
+                "div",
+                LayoutElementCategory::Generic,
+                None,
+                vec![5],
+            ),
+            Node::text("reference-text", "abc"),
+            Node::element("right", "div", LayoutElementCategory::Generic, None, vec![]),
+        ]);
+        let mut styles = Styles::default();
+        styles.primary.insert(
+            0,
+            sized(LayoutDisplay::Block, 200.0, 100.0, PaintColor::TRANSPARENT),
+        );
+        styles.primary.insert(
+            1,
+            style(LayoutDisplay::InlineBlock, GREEN).with_text_metrics(16.0, 20.0),
+        );
+        styles.primary.insert(
+            2,
+            sized(LayoutDisplay::Block, 16.0, 16.0, BLUE).with_float(Float::Left, Clear::None),
+        );
+        styles.primary.insert(
+            4,
+            style(LayoutDisplay::InlineBlock, YELLOW).with_text_metrics(16.0, 20.0),
+        );
+        styles.primary.insert(
+            6,
+            sized(LayoutDisplay::Block, 16.0, 40.0, RED).with_float(Float::Right, Clear::None),
+        );
+        let reference = render(&source, &mut styles, 200, 100);
+        let word_width = rect(&reference, YELLOW).width;
+        // Paint rectangles are pixel-rounded. Leave one pixel for that
+        // rounding while keeping the first word's trailing space hanging.
+        let width = word_width + if with_tall_right_float { 28.0 } else { 17.0 };
+        styles.primary.insert(
+            1,
+            style(LayoutDisplay::InlineBlock, GREEN)
+                .tap_taffy(|style| style.size.width = Dimension::length(width))
+                .with_text_metrics(16.0, 20.0),
+        );
+        let snapshot = render(&source, &mut styles, 200, 100);
+        assert_close(rect(&snapshot, GREEN).height, 40.0);
+        if with_tall_right_float {
+            assert_close(rect(&snapshot, RED).y, rect(&snapshot, BLUE).y);
+        }
+        let first_baseline = snapshot
+            .fragments
+            .iter()
+            .find_map(|fragment| match fragment {
+                PaintFragment::GlyphRun(run) => {
+                    run.glyphs_in_surface().first().map(|glyph| glyph.y)
+                }
+                _ => None,
+            })
+            .expect("container text");
+        let short_float_bottom = rect(&snapshot, BLUE).y + 16.0;
+        if with_tall_right_float {
+            assert!(
+                first_baseline >= short_float_bottom
+                    && first_baseline < rect(&snapshot, RED).y + 40.0
+            );
+        } else {
+            assert!(
+                first_baseline < short_float_bottom,
+                "hanging whitespace must not push a fitting word below the float"
+            );
+        }
+    }
+}
+
+#[test]
 fn inline_block_ratio_height_respects_automatic_content_minimum_and_opt_outs() {
     let source = Source(vec![
         Node::element("root", "div", LayoutElementCategory::Generic, None, vec![1]),
