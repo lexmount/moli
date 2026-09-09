@@ -1,3 +1,4 @@
+use crate::browser::navigation_decision::{NavigationDecisionClaim, NavigationDecisionCompletion};
 use crate::{
     browser::{
         BrowserSequence, DocumentId, DocumentLifecycle, MainFrameSlotId,
@@ -5,7 +6,8 @@ use crate::{
     },
     runtime::{BuiltDocumentPage, PendingPreparedDocumentPage, PreparedDocumentPagePolicy},
 };
-use tokio::sync::watch;
+use std::sync::Arc;
+use tokio::sync::{oneshot, watch};
 
 use super::{CommittedDocumentLifecycle, DocumentHost, InheritedDocumentPolicy, WebContents};
 
@@ -96,11 +98,139 @@ impl InitialDocumentPageBuildWaiter {
 pub struct InitialDocumentBuildState {
     pub key: InitialDocumentBuildKey,
     pub completion: InitialDocumentBuildCompletion,
+    inspection: Option<InitialInspectionDecision>,
+}
+
+/// Inspector setup belongs to the real initial reservation, not a fabricated
+/// cross-document navigation. Each phase can be claimed once for this build.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(in crate::browser) enum InitialDocumentInspectionPhase {
+    Reserved,
+    Prepared,
+}
+
+pub enum InitialDocumentInspectionStage {
+    Reserved,
+    Prepared(moli_renderer_v8::RendererPreparedDocumentInspectionEndpoint),
+}
+
+enum InitialInspectionDecision {
+    Available {
+        stage: InitialDocumentInspectionStage,
+        completion: Arc<NavigationDecisionCompletion>,
+    },
+    Claimed {
+        phase: InitialDocumentInspectionPhase,
+        completion: Arc<NavigationDecisionCompletion>,
+    },
+}
+
+impl std::fmt::Debug for InitialInspectionDecision {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_tuple("InitialInspectionDecision")
+            .field(&self.phase())
+            .finish()
+    }
+}
+
+impl InitialDocumentInspectionStage {
+    pub(in crate::browser) fn phase(&self) -> InitialDocumentInspectionPhase {
+        match self {
+            Self::Reserved => InitialDocumentInspectionPhase::Reserved,
+            Self::Prepared(_) => InitialDocumentInspectionPhase::Prepared,
+        }
+    }
+}
+
+impl InitialInspectionDecision {
+    fn phase(&self) -> InitialDocumentInspectionPhase {
+        match self {
+            Self::Available { stage, .. } => stage.phase(),
+            Self::Claimed { phase, .. } => *phase,
+        }
+    }
+    fn completion(&self) -> &Arc<NavigationDecisionCompletion> {
+        match self {
+            Self::Available { completion, .. } | Self::Claimed { completion, .. } => completion,
+        }
+    }
+}
+
+/// Dropping an inspection claim releases only this phase. It owns neither the
+/// build nor the Browser; cancellation removes the weak completion authority.
+pub struct InitialDocumentInspectionClaim {
+    pub stage: InitialDocumentInspectionStage,
+    _completion: NavigationDecisionClaim,
 }
 
 impl InitialDocumentBuildState {
     pub fn waiter(&self) -> InitialDocumentPageBuildWaiter {
         self.completion.waiter()
+    }
+
+    pub(in crate::browser) fn pause_inspection(
+        &mut self,
+        stage: InitialDocumentInspectionStage,
+    ) -> Result<oneshot::Receiver<crate::browser::NavigationDecision>, String> {
+        if self.inspection.is_some() || !self.completion.pending() {
+            return Err("initial document inspection is unavailable".into());
+        }
+        let (sender, receiver) = oneshot::channel();
+        self.inspection = Some(InitialInspectionDecision::Available {
+            stage,
+            completion: NavigationDecisionCompletion::new(sender),
+        });
+        Ok(receiver)
+    }
+
+    pub(in crate::browser) fn claim_inspection(
+        &mut self,
+    ) -> Option<InitialDocumentInspectionClaim> {
+        let inspection = self.inspection.take()?;
+        match inspection {
+            InitialInspectionDecision::Available { stage, completion } => {
+                let claim = InitialDocumentInspectionClaim {
+                    _completion: completion.claim(),
+                    stage,
+                };
+                self.inspection = Some(InitialInspectionDecision::Claimed {
+                    phase: claim.stage.phase(),
+                    completion,
+                });
+                Some(claim)
+            }
+            claimed @ InitialInspectionDecision::Claimed { .. } => {
+                self.inspection = Some(claimed);
+                None
+            }
+        }
+    }
+
+    pub(in crate::browser) fn release_inspection(&self, phase: InitialDocumentInspectionPhase) {
+        if let Some(inspection) = self
+            .inspection
+            .as_ref()
+            .filter(|pending| pending.phase() == phase)
+        {
+            inspection
+                .completion()
+                .send(crate::browser::NavigationDecision::Continue);
+        }
+    }
+
+    pub(in crate::browser) fn finish_inspection(
+        &mut self,
+        phase: InitialDocumentInspectionPhase,
+    ) -> bool {
+        if self
+            .inspection
+            .as_ref()
+            .is_some_and(|pending| pending.phase() == phase)
+        {
+            self.inspection = None;
+            return true;
+        }
+        false
     }
 }
 
@@ -258,6 +388,7 @@ impl WebContents {
             InitialDocumentBuildState {
                 key,
                 completion: completion.work_guard(),
+                inspection: None,
             },
         );
         Ok(InitialDocumentAdmission::Build(Box::new(

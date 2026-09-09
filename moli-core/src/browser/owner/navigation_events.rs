@@ -116,20 +116,20 @@ impl Browser {
 }
 
 impl BrowserHandle {
-    pub fn register_navigation_decision_provider(
+    pub fn register_document_decision_provider(
         &self,
-    ) -> Result<crate::browser::NavigationDecisionProvider, String> {
+    ) -> Result<crate::browser::DocumentDecisionProvider, String> {
         self.execute(|browser| {
             if browser
-                .navigation_decision_provider
+                .document_decision_provider
                 .as_ref()
                 .is_some_and(|provider| provider.has_changed().is_ok())
             {
-                return Err("Browser already has a navigation decision provider".to_owned());
+                return Err("Browser already has a document decision provider".to_owned());
             }
             let (alive, receiver) = tokio::sync::watch::channel(());
-            browser.navigation_decision_provider = Some(receiver);
-            Ok(crate::browser::NavigationDecisionProvider { _alive: alive })
+            browser.document_decision_provider = Some(receiver);
+            Ok(crate::browser::DocumentDecisionProvider { _alive: alive })
         })?
     }
 }

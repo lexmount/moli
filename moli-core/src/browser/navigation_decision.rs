@@ -3,12 +3,12 @@ use std::sync::{Arc, Weak};
 use tokio::sync::{oneshot, watch};
 use url::Url;
 
-use super::web_contents::{InitialDocumentBuildKey, NavigationInterceptionPermit};
+use super::web_contents::NavigationInterceptionPermit;
 use moli_renderer_v8::RendererPreparedDocumentInspectionEndpoint;
 
 /// An optional observer's lifetime, not ownership of a Browser transaction.
 /// Dropping it releases outstanding decisions to their neutral fallback.
-pub struct NavigationDecisionProvider {
+pub struct DocumentDecisionProvider {
     pub(super) _alive: watch::Sender<()>,
 }
 
@@ -16,13 +16,6 @@ pub struct NavigationDecisionProvider {
 /// to the restricted renderer endpoint; it is never stored in Browser state.
 #[derive(Clone)]
 pub enum NavigationDecisionStage {
-    InitialDocumentReserved {
-        key: InitialDocumentBuildKey,
-    },
-    InitialDocument {
-        key: InitialDocumentBuildKey,
-        inspection: RendererPreparedDocumentInspectionEndpoint,
-    },
     Request {
         url: Url,
         method: String,
@@ -46,12 +39,6 @@ pub enum NavigationDecisionStage {
 impl std::fmt::Debug for NavigationDecisionStage {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::InitialDocumentReserved { key } => {
-                f.debug_tuple("InitialDocumentReserved").field(key).finish()
-            }
-            Self::InitialDocument { key, .. } => {
-                f.debug_tuple("InitialDocument").field(key).finish()
-            }
             Self::Request {
                 url,
                 method,

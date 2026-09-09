@@ -9,13 +9,8 @@ use crate::{
         RendererPageResidenceIdentity, WebContentsHandle, WebContentsId,
         web_contents::{
             AdmittedDocumentMaterialization as PhysicalDocumentMaterialization,
-            AdmittedInitialDocumentBuild as PhysicalInitialDocumentBuild,
-            AdmittedNavigationLoad as PhysicalNavigationLoad,
-            BuiltInitialDocument as PhysicalBuiltInitialDocument, ClaimedNavigationRequest,
-            CommittedInitialDocument as PhysicalCommittedInitialDocument,
+            AdmittedNavigationLoad as PhysicalNavigationLoad, ClaimedNavigationRequest,
             DocumentNavigationDestination, InheritedDocumentPolicy,
-            InitialDocumentAdmission as PhysicalInitialDocumentAdmission, InitialDocumentBuildKey,
-            InitialDocumentPageBuildWaiter,
             InterceptedNavigationLoad as PhysicalInterceptedNavigationLoad,
             NavigationInterceptionPermit,
             PreparedDocumentNavigation as PhysicalPreparedDocumentNavigation,
@@ -49,16 +44,6 @@ enum NavigationWork {
     PreparedResponse(Box<PhysicalPreparedNavigationResponse>),
     Materialization(Box<PhysicalDocumentMaterialization>),
     PreparedDocument(Box<PhysicalPreparedDocumentNavigation>),
-    InitialBuild(Box<PhysicalInitialDocumentBuild>),
-    BuiltInitialDocument(Box<PhysicalBuiltInitialDocument>),
-}
-
-impl NavigationWork {
-    fn retire(self) {
-        if let Self::BuiltInitialDocument(built) = self {
-            tokio::task::spawn_local(built.retire());
-        }
-    }
 }
 
 struct NavigationWorkEntry {
@@ -116,7 +101,7 @@ impl NavigationWorkRegistry {
             entry.value = value;
             return Ok(());
         }
-        value.retire();
+        drop(value);
         Err(unavailable())
     }
 
@@ -125,39 +110,25 @@ impl NavigationWorkRegistry {
     }
 
     fn remove(&mut self, id: NavigationWorkId) {
-        if let Some(entry) = self.work.remove(&id) {
-            entry.value.retire();
-        }
+        self.work.remove(&id);
     }
 
     pub(super) fn remove_context(&mut self, context: BrowserContextId) {
-        for (_, entry) in self
-            .work
-            .extract_if(|_, entry| entry.contents.context() == context)
-        {
-            entry.value.retire();
-        }
+        self.work
+            .retain(|_, entry| entry.contents.context() != context);
     }
 
     pub(super) fn remove_web_contents(&mut self, contents: WebContentsHandle) {
-        for (_, entry) in self.work.extract_if(|_, entry| entry.contents == contents) {
-            entry.value.retire();
-        }
+        self.work.retain(|_, entry| entry.contents != contents);
     }
 
     pub(super) fn clear(&mut self) {
-        for (_, entry) in self.work.drain() {
-            entry.value.retire();
-        }
+        self.work.clear();
     }
 }
 
 fn unavailable() -> String {
     "Browser navigation operation is unavailable".to_owned()
-}
-
-fn initial_document_cancelled() -> String {
-    "InitialDocumentPageBuildCancelled".to_owned()
 }
 
 fn receive_error() -> anyhow::Error {
@@ -602,160 +573,6 @@ impl BrowserInterceptedNavigationResponse<RawResponse> {
     }
 }
 
-pub enum BrowserInitialDocumentAdmission {
-    Present,
-    Join(InitialDocumentPageBuildWaiter),
-    Build(Box<BrowserInitialDocumentBuild>),
-}
-
-pub struct BrowserInitialDocumentBuild {
-    context: BrowserContextHandle,
-    work: Option<NavigationWorkId>,
-    key: InitialDocumentBuildKey,
-    inspection: moli_renderer_v8::RendererPreparedDocumentInspectionEndpoint,
-}
-
-impl BrowserInitialDocumentBuild {
-    pub fn key(&self) -> InitialDocumentBuildKey {
-        self.key
-    }
-
-    pub fn inspection_endpoint(
-        &self,
-    ) -> moli_renderer_v8::RendererPreparedDocumentInspectionEndpoint {
-        self.inspection.clone()
-    }
-
-    pub fn start_preparation(&mut self) -> anyhow::Result<()> {
-        let work = self
-            .work
-            .ok_or_else(|| anyhow::anyhow!(initial_document_cancelled()))?;
-        self.context
-            .browser
-            .execute(move |browser| {
-                let entry = browser
-                    .navigation_work
-                    .work
-                    .get_mut(&work)
-                    .ok_or_else(initial_document_cancelled)?;
-                let NavigationWork::InitialBuild(build) = &mut entry.value else {
-                    return Err(unavailable());
-                };
-                build.start_preparation().map_err(|error| error.to_string())
-            })
-            .map_err(anyhow::Error::msg)?
-            .map_err(anyhow::Error::msg)
-    }
-
-    pub async fn materialize(mut self) -> anyhow::Result<BrowserBuiltInitialDocument> {
-        let id = self
-            .work
-            .take()
-            .ok_or_else(|| anyhow::anyhow!(initial_document_cancelled()))?;
-        let context_handle = self.context.clone();
-        let completion = self
-            .context
-            .browser
-            .execute(move |browser| {
-                let NavigationWork::InitialBuild(value) = browser
-                    .navigation_work
-                    .begin(id)
-                    .map_err(|_| initial_document_cancelled())?
-                else {
-                    return Err(unavailable());
-                };
-                let local_sender = browser.local_sender.clone();
-                let (completion_tx, completion) = oneshot::channel();
-                tokio::task::spawn_local(async move {
-                    let result = value.materialize().await;
-                    let _ = local_sender.send(Box::new(move |browser| {
-                        let result = result.map_err(|error| error.to_string()).and_then(|built| {
-                            let key = built.key();
-                            browser
-                                .navigation_work
-                                .finish(id, NavigationWork::BuiltInitialDocument(Box::new(built)))
-                                .map_err(|_| initial_document_cancelled())?;
-                            Ok(BrowserBuiltInitialDocument {
-                                context: context_handle,
-                                work: Some(id),
-                                key,
-                            })
-                        });
-                        if result.is_err() {
-                            browser.navigation_work.remove(id);
-                        }
-                        let _ = completion_tx.send(result);
-                    }));
-                });
-                Ok::<_, String>(completion)
-            })
-            .map_err(anyhow::Error::msg)?
-            .map_err(anyhow::Error::msg)?;
-        completion
-            .await
-            .map_err(|_| receive_error())?
-            .map_err(anyhow::Error::msg)
-    }
-}
-
-impl Drop for BrowserInitialDocumentBuild {
-    fn drop(&mut self) {
-        if let Some(work) = self.work.take() {
-            self.context.browser.discard_navigation_work(work);
-        }
-    }
-}
-
-pub struct BrowserBuiltInitialDocument {
-    context: BrowserContextHandle,
-    work: Option<NavigationWorkId>,
-    key: InitialDocumentBuildKey,
-}
-
-impl BrowserBuiltInitialDocument {
-    pub fn key(&self) -> InitialDocumentBuildKey {
-        self.key
-    }
-
-    pub async fn retire(mut self) {
-        let Some(work) = self.work.take() else {
-            return;
-        };
-        let completion = self.context.browser.execute(move |browser| {
-            let built = browser
-                .navigation_work
-                .take(work)
-                .ok()
-                .map(|work| work.value);
-            let (completion_tx, completion) = oneshot::channel();
-            tokio::task::spawn_local(async move {
-                if let Some(NavigationWork::BuiltInitialDocument(built)) = built {
-                    built.retire().await;
-                }
-                let _ = completion_tx.send(());
-            });
-            completion
-        });
-        if let Ok(completion) = completion {
-            let _ = completion.await;
-        }
-    }
-}
-
-impl Drop for BrowserBuiltInitialDocument {
-    fn drop(&mut self) {
-        if let Some(work) = self.work.take() {
-            self.context.browser.discard_navigation_work(work);
-        }
-    }
-}
-
-pub struct BrowserCommittedInitialDocument {
-    pub key: InitialDocumentBuildKey,
-    pub snapshot: crate::browser::web_contents::DocumentCommitSnapshot,
-    pub diagnostics: crate::page::RendererPageCreationDiagnostics,
-}
-
 /// Exact prepared renderer reservation retained by the Browser owner.
 pub struct BrowserPreparedNavigationResponse {
     context: BrowserContextHandle,
@@ -912,116 +729,6 @@ pub struct BrowserDocumentNavigationCommit {
 }
 
 impl BrowserContextHandle {
-    pub fn start_initial_document(
-        &self,
-        handle: WebContentsHandle,
-        inherited: InheritedDocumentPolicy,
-    ) -> Result<BrowserInitialDocumentAdmission, String> {
-        let context_handle = self.clone();
-        self.browser.execute(move |browser| {
-            match browser
-                .context_mut(context_handle.id)?
-                .start_initial_document(handle, inherited)?
-            {
-                PhysicalInitialDocumentAdmission::Present => {
-                    Ok(BrowserInitialDocumentAdmission::Present)
-                }
-                PhysicalInitialDocumentAdmission::Join(waiter) => {
-                    Ok(BrowserInitialDocumentAdmission::Join(waiter))
-                }
-                PhysicalInitialDocumentAdmission::Build(build) => {
-                    let key = build.key();
-                    let inspection = build.inspection_endpoint();
-                    let work = browser.navigation_work.allocate();
-                    browser.navigation_work.work.insert(
-                        work,
-                        NavigationWorkEntry {
-                            contents: handle,
-                            value: NavigationWork::InitialBuild(build),
-                        },
-                    );
-                    Ok(BrowserInitialDocumentAdmission::Build(Box::new(
-                        BrowserInitialDocumentBuild {
-                            context: context_handle,
-                            work: Some(work),
-                            key,
-                            inspection,
-                        },
-                    )))
-                }
-            }
-        })?
-    }
-
-    pub fn commit_initial_document(
-        &self,
-        mut built: BrowserBuiltInitialDocument,
-    ) -> Result<BrowserCommittedInitialDocument, Box<BrowserBuiltInitialDocument>> {
-        if built.context.id != self.id {
-            return Err(Box::new(built));
-        }
-        let Some(work) = built.work.take() else {
-            return Err(Box::new(built));
-        };
-        let key = built.key;
-        let context_handle = self.clone();
-        let fallback_context = self.clone();
-        match self.browser.execute(move |browser| {
-            let Ok(stored) = browser.navigation_work.take(work) else {
-                return Err(Box::new(BrowserBuiltInitialDocument {
-                    context: context_handle,
-                    work: None,
-                    key,
-                }));
-            };
-            if stored.contents.context() != context_handle.id {
-                browser.navigation_work.work.insert(work, stored);
-                return Err(Box::new(BrowserBuiltInitialDocument {
-                    context: context_handle,
-                    work: Some(work),
-                    key,
-                }));
-            }
-            let NavigationWork::BuiltInitialDocument(value) = stored.value else {
-                return Err(Box::new(BrowserBuiltInitialDocument {
-                    context: context_handle,
-                    work: None,
-                    key,
-                }));
-            };
-            let committed = match browser.context_mut(context_handle.id) {
-                Ok(context) => context.commit_initial_document(*value),
-                Err(_) => Err(value),
-            };
-            match committed {
-                Ok(committed) => {
-                    Ok(browser.publish_initial_document_commit(stored.contents, committed))
-                }
-                Err(stale) => {
-                    browser.navigation_work.work.insert(
-                        work,
-                        NavigationWorkEntry {
-                            contents: stored.contents,
-                            value: NavigationWork::BuiltInitialDocument(stale),
-                        },
-                    );
-                    Err(Box::new(BrowserBuiltInitialDocument {
-                        context: context_handle,
-                        work: Some(work),
-                        key,
-                    }))
-                }
-            }
-        }) {
-            Ok(result) => result,
-            Err(_) => Err(Box::new(BrowserBuiltInitialDocument {
-                context: fallback_context,
-                work: Some(work),
-                key,
-            })),
-        }
-    }
-
     pub fn start_navigation_load(
         &self,
         handle: WebContentsHandle,
@@ -1204,37 +911,6 @@ impl BrowserContextHandle {
 }
 
 impl Browser {
-    pub(super) fn publish_initial_document_commit(
-        &mut self,
-        contents: WebContentsHandle,
-        committed: PhysicalCommittedInitialDocument,
-    ) -> BrowserCommittedInitialDocument {
-        let PhysicalCommittedInitialDocument {
-            key,
-            lifecycle,
-            diagnostics,
-            inspection_endpoint: _,
-        } = committed;
-        let document = crate::browser::DocumentHandle::new(contents, key.document());
-        let snapshot = self
-            .context(contents.context())
-            .expect("committed Context")
-            .document_commit_snapshot(document)
-            .expect("committed Document occurrence");
-        self.events.publish_committed(
-            lifecycle.browser_sequence,
-            crate::browser::BrowserEvent::DocumentCommitted(document),
-        );
-        self.observe_document_lifecycle(document);
-        self.observe_javascript_dialogs(document);
-        self.observe_popup_inputs(document);
-        BrowserCommittedInitialDocument {
-            key,
-            snapshot,
-            diagnostics,
-        }
-    }
-
     pub(super) fn commit_navigation(
         &mut self,
         contents: WebContentsHandle,

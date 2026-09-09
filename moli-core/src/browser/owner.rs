@@ -17,13 +17,14 @@ mod document_lifecycle;
 mod downloads;
 mod javascript_dialog;
 pub use activation::PendingWebContentsActivation;
+mod initial_document;
 mod navigation;
+pub use initial_document::{BrowserCommittedInitialDocument, BrowserInitialDocumentWaiter};
 mod navigation_driver;
 mod navigation_events;
 mod popup;
 pub use navigation::{
-    BrowserBuiltInitialDocument, BrowserCommittedInitialDocument, BrowserDocumentMaterialization,
-    BrowserDocumentNavigationCommit, BrowserInitialDocumentAdmission, BrowserInitialDocumentBuild,
+    BrowserDocumentMaterialization, BrowserDocumentNavigationCommit,
     BrowserInterceptedNavigationLoad, BrowserInterceptedNavigationResponse, BrowserNavigationLoad,
     BrowserPreparedDocumentNavigation, BrowserPreparedNavigationResponse,
 };
@@ -95,7 +96,7 @@ struct Browser {
     download_policy: super::DownloadPolicy,
     navigation_work: navigation::NavigationWorkRegistry,
     popup_admissions: popup::PopupAdmissions,
-    navigation_decision_provider: Option<tokio::sync::watch::Receiver<()>>,
+    document_decision_provider: Option<tokio::sync::watch::Receiver<()>>,
     local_sender: BrowserLocalSender,
     events: super::events::BrowserEventStream,
 }
@@ -108,7 +109,7 @@ impl Browser {
             download_policy: super::DownloadPolicy::default(),
             navigation_work: navigation::NavigationWorkRegistry::default(),
             popup_admissions: popup::PopupAdmissions::default(),
-            navigation_decision_provider: None,
+            document_decision_provider: None,
             local_sender,
             events: super::events::BrowserEventStream::default(),
         }

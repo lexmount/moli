@@ -15,8 +15,8 @@ use tokio::sync::oneshot;
 use url::Url;
 
 use super::{
-    AdmittedNavigationLoad, InheritedDocumentPolicy, InitialDocumentBuildKey,
-    PausedDocumentTransfer, WebContents, navigation_commit::DocumentNavigationIdentity,
+    AdmittedNavigationLoad, InheritedDocumentPolicy, PausedDocumentTransfer, WebContents,
+    navigation_commit::DocumentNavigationIdentity,
 };
 
 /// A single Browser decision. Copying a protocol correlation cannot duplicate
@@ -365,13 +365,6 @@ enum AuthenticationWork {
 }
 
 enum InterceptionState {
-    InitialDocumentReserved {
-        key: InitialDocumentBuildKey,
-    },
-    InitialDocument {
-        key: InitialDocumentBuildKey,
-        inspection: RendererPreparedDocumentInspectionEndpoint,
-    },
     Request {
         request: InterceptionResource<Box<super::NavigationRequestInterception>>,
         opening: Weak<crate::page::RendererPopupOpening>,
@@ -472,12 +465,6 @@ impl PausedNavigationInterception {
         sender: oneshot::Sender<NavigationDecision>,
     ) -> Result<Self, String> {
         let state = match stage {
-            NavigationDecisionStage::InitialDocumentReserved { key } => {
-                InterceptionState::InitialDocumentReserved { key }
-            }
-            NavigationDecisionStage::InitialDocument { key, inspection } => {
-                InterceptionState::InitialDocument { key, inspection }
-            }
             NavigationDecisionStage::PreparedDocument {
                 renderer,
                 inspection,
@@ -540,15 +527,6 @@ impl PausedNavigationInterception {
     pub fn snapshot(&self) -> Option<NavigationDecisionSnapshot> {
         self.completion.as_ref()?;
         let stage = match &self.state {
-            InterceptionState::InitialDocumentReserved { key } => {
-                NavigationDecisionStage::InitialDocumentReserved { key: *key }
-            }
-            InterceptionState::InitialDocument { key, inspection } => {
-                NavigationDecisionStage::InitialDocument {
-                    key: *key,
-                    inspection: inspection.clone(),
-                }
-            }
             InterceptionState::PreparedDocument {
                 renderer,
                 inspection,

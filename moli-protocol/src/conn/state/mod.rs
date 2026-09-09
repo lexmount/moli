@@ -23,15 +23,9 @@ mod shared_worker_target;
 mod target_state;
 #[cfg(test)]
 mod tests;
+pub(in crate::conn) use moli_core::browser::web_contents::InitialDocumentBuildKey;
 pub(crate) use moli_core::browser::web_contents::{
     ClaimedNavigationRequest, NavigationInterceptionPermit, NavigationRequestInterception,
-};
-pub(in crate::conn) use moli_core::browser::web_contents::{
-    InitialDocumentBuildKey, InitialDocumentPageBuildWaiter,
-};
-pub(in crate::conn) use moli_core::browser::{
-    BrowserBuiltInitialDocument as BuiltInitialDocument,
-    BrowserInitialDocumentAdmission as InitialDocumentAdmission,
 };
 pub(crate) use moli_core::browser::{
     BrowserInterceptedNavigationLoad as InterceptedNavigationLoad,

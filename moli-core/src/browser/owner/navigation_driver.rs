@@ -9,7 +9,7 @@ use crate::browser::{
     NavigationResponseSnapshot, WebContentsHandle,
     web_contents::{
         DocumentBodySource, DocumentNavigationDestination, InheritedDocumentPolicy,
-        InitialDocumentAdmission, NavigationInterceptionPermit, PausedDocumentTransfer,
+        NavigationInterceptionPermit, PausedDocumentTransfer,
     },
 };
 
@@ -64,6 +64,10 @@ impl Browser {
         // Empty auxiliary documents and javascript: evaluation belong to the
         // initial document, not to a second fetched Document candidate.
         if (created && moli_url::is_about_blank(&url)) || url.scheme() == "javascript" {
+            if created {
+                let policy = self.native_navigation_policy(contents)?;
+                self.start_initial_document(contents, policy)?;
+            }
             return Ok(None);
         }
         let policy = self.native_navigation_policy(contents)?;
@@ -90,19 +94,9 @@ impl Browser {
                 .web_contents_mut(contents)?
                 .navigation_mut()
                 .set_native_initial_document(navigation, true)?;
-            let initial = context.start_initial_document(contents, policy)?;
-            let decision = if let InitialDocumentAdmission::Build(build) = &initial {
-                self.begin_navigation_decision(
-                    contents,
-                    navigation,
-                    NavigationDecisionStage::InitialDocumentReserved { key: build.key() },
-                )?
-            } else {
-                None
-            };
-            Ok::<_, String>((initial, decision))
+            self.start_initial_document(contents, policy)
         })();
-        let (initial, decision) = match initial {
+        let initial = match initial {
             Ok(initial) => initial,
             Err(error) => {
                 self.cancel_navigation(contents, navigation, NavigationFailureReason::Canceled)?;
@@ -111,10 +105,7 @@ impl Browser {
         };
         let owner = self.local_sender.clone();
         tokio::task::spawn_local(async move {
-            if let Err(error) = navigate(
-                &owner, contents, navigation, initial, decision, url, opening,
-            )
-            .await
+            if let Err(error) = navigate(&owner, contents, navigation, initial, url, opening).await
             {
                 tracing::debug!(%error, "native document navigation did not commit");
                 let _ = owner.send(Box::new(move |browser| {
@@ -136,7 +127,7 @@ impl Browser {
         stage: NavigationDecisionStage,
     ) -> Result<Option<PendingDecision>, String> {
         let Some(provider) = self
-            .navigation_decision_provider
+            .document_decision_provider
             .as_ref()
             .filter(|provider| provider.has_changed().is_ok())
             .cloned()
@@ -238,7 +229,7 @@ async fn await_decision(
 // These participants run on the Browser's LocalSet. Calling the external
 // blocking BrowserHandle here would deadlock its own owner thread; only the
 // move-owned result returns to an owner turn through this private mailbox.
-async fn on_owner<R: 'static>(
+pub(super) async fn on_owner<R: 'static>(
     sender: &BrowserLocalSender,
     operation: impl FnOnce(&mut Browser) -> Result<R, String> + 'static,
 ) -> Result<R, String> {
@@ -257,52 +248,12 @@ async fn navigate(
     owner: &BrowserLocalSender,
     contents: WebContentsHandle,
     navigation: NavigationId,
-    initial: InitialDocumentAdmission,
-    decision: Option<PendingDecision>,
+    initial: Option<super::BrowserInitialDocumentWaiter>,
     mut requested_url: Url,
     opening: std::sync::Weak<crate::page::RendererPopupOpening>,
 ) -> Result<(), String> {
-    await_decision(owner, contents, decision).await?;
-    match initial {
-        InitialDocumentAdmission::Present => {}
-        InitialDocumentAdmission::Join(waiter) => waiter.wait().await?,
-        InitialDocumentAdmission::Build(mut build) => {
-            build
-                .start_preparation()
-                .map_err(|error| error.to_string())?;
-            let key = build.key();
-            let inspection = build.inspection_endpoint();
-            let decision = on_owner(owner, move |browser| {
-                browser.begin_navigation_decision(
-                    contents,
-                    navigation,
-                    NavigationDecisionStage::InitialDocument { key, inspection },
-                )
-            })
-            .await?;
-            await_decision(owner, contents, decision).await?;
-            let built = build
-                .materialize()
-                .await
-                .map_err(|error| error.to_string())?;
-            on_owner(owner, move |browser| {
-                let committed = match browser.context_mut(contents.context()) {
-                    Ok(context) => context.commit_initial_document(built),
-                    Err(_) => Err(Box::new(built)),
-                };
-                match committed {
-                    Ok(committed) => {
-                        browser.publish_initial_document_commit(contents, committed);
-                        Ok(())
-                    }
-                    Err(stale) => {
-                        tokio::task::spawn_local(stale.retire());
-                        Err("native initial document superseded".into())
-                    }
-                }
-            })
-            .await?;
-        }
+    if let Some(initial) = initial {
+        initial.wait().await?;
     }
     let request_url = requested_url.clone();
     let decision = on_owner(owner, move |browser| {
@@ -683,7 +634,7 @@ async fn decide_transfer(
 ) -> Result<NavigationDecision, String> {
     let admission = on_owner(owner, move |browser| {
         let Some(provider) = browser
-            .navigation_decision_provider
+            .document_decision_provider
             .as_ref()
             .filter(|provider| provider.has_changed().is_ok())
             .cloned()

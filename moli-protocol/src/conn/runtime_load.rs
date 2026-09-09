@@ -17,7 +17,6 @@ use tokio::sync::{mpsc, oneshot};
 use url::Url;
 
 use super::*;
-use crate::conn::state::InitialDocumentPageBuildWaiter;
 use crate::conn::state::{
     AdmittedNavigationLoad, NavigationInterceptionPermit, PreparedNavigationResponse,
 };
@@ -159,60 +158,78 @@ fn response_headers_indicate_xml_document(headers: &[(String, String)]) -> bool 
         .is_some_and(|mime| moli_web_mime::is_dom_parser_xml_mime(&mime))
 }
 
-pub(crate) struct PendingInitialDocumentPageBuild {
-    kind: PendingInitialDocumentPageBuildKind,
-}
-
-enum PendingInitialDocumentPageBuildKind {
-    Build {
-        key: crate::conn::state::InitialDocumentBuildKey,
-        pending: std::pin::Pin<
-            Box<
-                dyn std::future::Future<
-                        Output = anyhow::Result<crate::conn::state::BuiltInitialDocument>,
-                    > + Send,
-            >,
-        >,
-    },
-    Join {
-        waiter: InitialDocumentPageBuildWaiter,
-    },
-}
-
-pub(crate) enum CompletedInitialDocumentPageBuild {
-    Built(Box<crate::conn::state::BuiltInitialDocument>),
-    Joined,
+pub(crate) struct PendingInitialDocumentProjection {
+    context: moli_core::browser::BrowserContextHandle,
+    contents: moli_core::browser::WebContentsHandle,
+    waiter: moli_core::browser::BrowserInitialDocumentWaiter,
+    inspection: moli_renderer_v8::RendererPreparedDocumentInspectionConfiguration,
+    events: moli_core::browser::BrowserEventReceiver,
 }
 
 #[derive(Debug)]
-pub(crate) struct FailedInitialDocumentPageBuild {
-    key: Option<crate::conn::state::InitialDocumentBuildKey>,
+pub(crate) struct FailedInitialDocumentProjection {
+    key: crate::conn::state::InitialDocumentBuildKey,
     message: String,
 }
 
-impl std::fmt::Display for FailedInitialDocumentPageBuild {
+impl std::fmt::Display for FailedInitialDocumentProjection {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.write_str(&self.message)
     }
 }
 
-impl PendingInitialDocumentPageBuild {
+impl PendingInitialDocumentProjection {
     pub async fn wait(
         self,
-    ) -> Result<CompletedInitialDocumentPageBuild, FailedInitialDocumentPageBuild> {
-        match self.kind {
-            PendingInitialDocumentPageBuildKind::Build { key, pending } => pending
-                .await
-                .map(|built| CompletedInitialDocumentPageBuild::Built(Box::new(built)))
-                .map_err(|error| FailedInitialDocumentPageBuild {
-                    key: Some(key),
-                    message: format!("initial document page build failed: {error}"),
-                }),
-            PendingInitialDocumentPageBuildKind::Join { waiter } => waiter
-                .wait()
-                .await
-                .map(|()| CompletedInitialDocumentPageBuild::Joined)
-                .map_err(|message| FailedInitialDocumentPageBuild { key: None, message }),
+    ) -> Result<
+        Box<moli_core::browser::BrowserCommittedInitialDocument>,
+        FailedInitialDocumentProjection,
+    > {
+        use moli_core::browser::web_contents::InitialDocumentInspectionStage;
+        let Self {
+            context,
+            contents,
+            waiter,
+            inspection,
+            mut events,
+        } = self;
+        let key = waiter.key();
+        let completed = waiter.wait();
+        tokio::pin!(completed);
+        loop {
+            // This future may run off the protocol owner. Its only permission
+            // is inspector setup for the already-bound exact reservation.
+            if let Ok(Some(claim)) = context.claim_initial_document_inspection(contents, key) {
+                if let InitialDocumentInspectionStage::Prepared(endpoint) = &claim.stage
+                    && let Err(error) = endpoint.start_configure(inspection.clone()).await
+                {
+                    tracing::warn!(%error, "initial document inspection configuration failed");
+                }
+                drop(claim);
+            }
+            tokio::select! {
+                result = &mut completed => return result
+                    .and_then(|committed| match committed {
+                        Some(committed) => Ok(committed),
+                        // A native commit can outlive its first observer. A
+                        // joiner must also install the exact Document projection;
+                        // creation diagnostics belong to the original receipt.
+                        None => context.document_commit_snapshot(
+                            moli_core::browser::DocumentHandle::new(contents, key.document()),
+                        ).map(|snapshot| moli_core::browser::BrowserCommittedInitialDocument {
+                            key,
+                            snapshot,
+                            diagnostics: Default::default(),
+                        }),
+                    })
+                    .map(Box::new)
+                    .map_err(|message| FailedInitialDocumentProjection { key, message }),
+                event = events.recv() => {
+                    if matches!(event, Err(tokio::sync::broadcast::error::RecvError::Closed)) {
+                        return Err(FailedInitialDocumentProjection { key, message: "Browser stopped during initial document projection".into() });
+                    }
+                }
+            }
         }
     }
 }
@@ -1679,10 +1696,10 @@ impl CdpConnection {
         )))
     }
 
-    pub(crate) fn start_initial_document_page_ensure_for_owner(
+    pub(crate) fn start_initial_document_ensure_for_owner(
         &mut self,
         owner: &CommandOwnerScope,
-    ) -> Result<Option<PendingInitialDocumentPageBuild>, String> {
+    ) -> Result<Option<PendingInitialDocumentProjection>, String> {
         if self.runtime_session_owner_slot_for_owner(owner).is_err() {
             return Ok(None);
         }
@@ -1704,7 +1721,7 @@ impl CdpConnection {
             return Ok(None);
         }
 
-        self.start_initial_empty_document_page_build_for_owner(owner)
+        self.start_initial_document_projection_for_owner(owner)
     }
 
     pub(crate) fn runtime_session_owner_target_is_initial_about_blank(
@@ -1802,122 +1819,70 @@ impl CdpConnection {
         target_url != initial_url
     }
 
-    fn start_initial_empty_document_page_build_for_owner(
+    fn start_initial_document_projection_for_owner(
         &mut self,
         owner: &CommandOwnerScope,
-    ) -> Result<Option<PendingInitialDocumentPageBuild>, String> {
-        use crate::conn::state::InitialDocumentAdmission;
+    ) -> Result<Option<PendingInitialDocumentProjection>, String> {
         let Some((context_id, target_id)) = self.resolved_page_owner_identity_for_owner(owner)
         else {
             return Ok(None);
         };
         let defaults = self.document_fetch_defaults();
         let browser_globals = self.browser_global_overrides.clone();
-        let admission = self
+        let context = self
+            .browser_context_by_id_mut(&context_id)
+            .ok_or("TargetNotLoaded")?;
+        let contents = context
+            .web_contents_handle_for_target(&target_id)
+            .ok_or("TargetNotLoaded")?;
+        let Some(waiter) =
+            context.start_initial_document_for_target(&target_id, defaults, &browser_globals)?
+        else {
+            return Ok(None);
+        };
+        let key = waiter.key();
+        context.project_initial_document_build(&target_id, key);
+        self.bind_renderer_page_output_owner(
+            key.renderer(),
+            TargetPageResidenceIdentity::new(context_id, Some(target_id), key.document()),
+        );
+        Ok(Some(PendingInitialDocumentProjection {
+            context: self.browser.context_handle(contents.context())?,
+            contents,
+            waiter,
+            inspection: self.prepared_document_inspection_for_owner(owner),
+            events: self.browser.subscribe()?.1,
+        }))
+    }
+
+    pub(crate) fn retire_failed_initial_document_projection(
+        &mut self,
+        failed: FailedInitialDocumentProjection,
+    ) -> String {
+        for context in self
             .browser_context
             .iter_mut()
             .chain(self.inactive_browser_contexts.iter_mut())
-            .find(|context| context.id == context_id)
-            .ok_or("TargetNotLoaded")?
-            .start_initial_document_for_target(&target_id, defaults, &browser_globals)?;
-        let kind = match admission {
-            InitialDocumentAdmission::Present => return Ok(None),
-            InitialDocumentAdmission::Join(waiter) => {
-                PendingInitialDocumentPageBuildKind::Join { waiter }
-            }
-            InitialDocumentAdmission::Build(mut build) => {
-                let key = build.key();
-                self.browser_context_by_id_mut(&context_id)
-                    .expect("resolved BrowserContext")
-                    .project_initial_document_build(&target_id, key);
-                // Even preparation opens an output stream. Bind the native
-                // reservation before any renderer command can be enqueued.
-                self.bind_renderer_page_output_owner(
-                    key.renderer(),
-                    TargetPageResidenceIdentity::new(
-                        context_id.clone(),
-                        Some(target_id),
-                        key.document(),
-                    ),
-                );
-                if let Err(error) = build.start_preparation() {
-                    self.browser_context_by_id_mut(&context_id)
-                        .expect("resolved BrowserContext")
-                        .retire_initial_document_projection(key);
-                    return Err(error.to_string());
-                }
-                let inspection_ack = build
-                    .inspection_endpoint()
-                    .start_configure(self.prepared_document_inspection_for_owner(owner));
-                PendingInitialDocumentPageBuildKind::Build {
-                    key,
-                    pending: Box::pin(async move {
-                        if let Err(error) = inspection_ack.await {
-                            tracing::warn!(%error, "initial document inspection configuration failed");
-                        }
-                        build.materialize().await
-                    }),
-                }
-            }
-        };
-        Ok(Some(PendingInitialDocumentPageBuild { kind }))
-    }
-
-    pub(crate) fn reset_failed_initial_document_page_build_for_owner(
-        &mut self,
-        failed: FailedInitialDocumentPageBuild,
-    ) -> String {
-        if let Some(key) = failed.key {
-            for context in self
-                .browser_context
-                .iter_mut()
-                .chain(self.inactive_browser_contexts.iter_mut())
-            {
-                context.retire_initial_document_projection(key);
-            }
+        {
+            context.retire_initial_document_projection(failed.key);
         }
         failed.message
     }
 
-    pub(crate) async fn complete_initial_document_page_build_for_owner(
+    pub(crate) fn project_initial_document_completion(
         &mut self,
-        completed: CompletedInitialDocumentPageBuild,
-    ) -> Result<(), String> {
-        self.complete_initial_document_page_build_for_owner_with_creation_diagnostics(completed)
-            .await
-            .map(|_| ())
-    }
-
-    pub(crate) async fn complete_initial_document_page_build_for_owner_with_creation_diagnostics(
-        &mut self,
-        completed: CompletedInitialDocumentPageBuild,
-    ) -> Result<LoadedPageCreationDiagnosticsParts, String> {
-        let CompletedInitialDocumentPageBuild::Built(built) = completed else {
-            return Ok(LoadedPageCreationDiagnosticsParts::default());
-        };
-        let key = built.key();
+        committed: moli_core::browser::BrowserCommittedInitialDocument,
+    ) -> LoadedPageCreationDiagnosticsParts {
         let context = self
             .browser_context
             .iter_mut()
             .chain(self.inactive_browser_contexts.iter_mut())
-            .find(|context| context.owns_web_contents(key.web_contents()));
-        let committed = match context {
-            Some(context) => context.commit_initial_document(*built),
-            None => Err(built),
-        };
-        match committed {
-            Ok(diagnostics) => Ok(loaded_page_creation_diagnostics_parts(diagnostics)),
-            Err(stale) => {
-                for context in self
-                    .browser_context
-                    .iter_mut()
-                    .chain(self.inactive_browser_contexts.iter_mut())
-                {
-                    context.retire_initial_document_projection(key);
-                }
-                stale.retire().await;
-                Ok(LoadedPageCreationDiagnosticsParts::default())
-            }
+            .find(|context| context.owns_web_contents(committed.key.web_contents()));
+        match context {
+            Some(context) => loaded_page_creation_diagnostics_parts(
+                context.project_initial_document_commit(committed),
+            ),
+            None => LoadedPageCreationDiagnosticsParts::default(),
         }
     }
 

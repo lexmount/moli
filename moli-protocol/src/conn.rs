@@ -565,8 +565,8 @@ pub use runtime_eval::{
 pub(crate) use runtime_load::decode_data_url_response;
 pub(crate) use runtime_load::{
     BackgroundNavigationBodyCompletionSink, BackgroundNavigationEarlyResult,
-    BackgroundNavigationLoadJob, CompletedInitialDocumentPageBuild, FailedInitialDocumentPageBuild,
-    PausedResponsePreparedDocument, PendingInitialDocumentPageBuild, ResponseCommitReady,
+    BackgroundNavigationLoadJob, FailedInitialDocumentProjection, PausedResponsePreparedDocument,
+    PendingInitialDocumentProjection, ResponseCommitReady,
 };
 use scheduler_hooks::CdpSchedulerHooks;
 use scheduler_state::CdpConnectionSchedulerState;
@@ -1039,7 +1039,7 @@ pub(crate) struct BrowserGlobalOverrides {
 /// Persistent per-connection state.
 pub struct CdpConnection {
     browser: BrowserHandle,
-    _navigation_decision_provider: moli_core::browser::NavigationDecisionProvider,
+    _document_decision_provider: moli_core::browser::DocumentDecisionProvider,
     /// Native creations whose still-live renderer observation owns FIFO emission.
     pending_popup_projections: HashSet<moli_core::browser::WebContentsHandle>,
     webdriver_sessions: HashMap<String, automation_session::WebDriverSessionScope>,
@@ -1144,12 +1144,12 @@ impl CdpConnection {
         let base_http_proxy = fetch_config.http_proxy().map(str::to_owned);
         let base_http_no_proxy = fetch_config.http_no_proxy().map(str::to_owned);
         let base_tls_verify_host = fetch_config.tls_verify_host();
-        let navigation_decision_provider = browser
-            .register_navigation_decision_provider()
-            .expect("one shared DevTools navigation decision provider per Browser");
+        let document_decision_provider = browser
+            .register_document_decision_provider()
+            .expect("one shared DevTools document decision provider per Browser");
         Self {
             browser,
-            _navigation_decision_provider: navigation_decision_provider,
+            _document_decision_provider: document_decision_provider,
             webdriver_sessions: HashMap::new(),
             browser_context: None,
             inactive_browser_contexts: Vec::new(),

@@ -453,7 +453,7 @@ impl CdpConnection {
         let command_owner = CommandOwnerScope::for_route(route.clone());
         let mut initial_runtime_execution_context_ids = Vec::new();
         let mut renderer_output_predecessor = None;
-        let pending = match self.start_initial_document_page_ensure_for_owner(&command_owner) {
+        let pending = match self.start_initial_document_ensure_for_owner(&command_owner) {
             Ok(pending) => pending,
             Err(error) => {
                 tracing::debug!(
@@ -467,38 +467,22 @@ impl CdpConnection {
         if let Some(pending) = pending {
             match pending.wait().await {
                 Ok(completed) => {
-                    match self
-                        .complete_initial_document_page_build_for_owner_with_creation_diagnostics(
-                            completed,
-                        )
-                        .await
-                    {
-                        Ok(diagnostics) => {
-                            renderer_output_predecessor = diagnostics.renderer_output_predecessor;
-                            initial_runtime_execution_context_ids = diagnostics
-                                .initial_runtime_realms
-                                .into_iter()
-                                .filter(|realm| {
-                                    realm
-                                        .realm_id
-                                        .as_deref()
-                                        .is_some_and(|realm_id| !realm_id.is_empty())
-                                })
-                                .map(|realm| realm.context_id)
-                                .collect();
-                        }
-                        Err(error) => {
-                            tracing::debug!(
-                                ?error,
-                                target_id = %target_id.as_str(),
-                                "failed to complete create-target initial document page ensure"
-                            );
-                            return (Vec::new(), None);
-                        }
-                    }
+                    let diagnostics = self.project_initial_document_completion(*completed);
+                    renderer_output_predecessor = diagnostics.renderer_output_predecessor;
+                    initial_runtime_execution_context_ids = diagnostics
+                        .initial_runtime_realms
+                        .into_iter()
+                        .filter(|realm| {
+                            realm
+                                .realm_id
+                                .as_deref()
+                                .is_some_and(|realm_id| !realm_id.is_empty())
+                        })
+                        .map(|realm| realm.context_id)
+                        .collect();
                 }
                 Err(error) => {
-                    let error = self.reset_failed_initial_document_page_build_for_owner(error);
+                    let error = self.retire_failed_initial_document_projection(error);
                     tracing::debug!(
                         ?error,
                         target_id = %target_id.as_str(),

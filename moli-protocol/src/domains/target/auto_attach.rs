@@ -1131,7 +1131,7 @@ pub(super) async fn ensure_initial_document_for_attached_page_targets_async<'a>(
             continue;
         }
         let owner = CommandOwnerScope::for_route(route.clone());
-        let pending = match conn.start_initial_document_page_ensure_for_owner(&owner) {
+        let pending = match conn.start_initial_document_ensure_for_owner(&owner) {
             Ok(pending) => pending,
             Err(message) => {
                 warn_target_protocol_side_effect_failure(
@@ -1147,19 +1147,10 @@ pub(super) async fn ensure_initial_document_for_attached_page_targets_async<'a>(
         };
         match pending.wait().await {
             Ok(completed) => {
-                if let Err(message) = conn
-                    .complete_initial_document_page_build_for_owner(completed)
-                    .await
-                {
-                    warn_target_protocol_side_effect_failure(
-                        target_id,
-                        "complete_initial_document_page_build",
-                        &message,
-                    );
-                }
+                conn.project_initial_document_completion(*completed);
             }
             Err(failed) => {
-                let message = conn.reset_failed_initial_document_page_build_for_owner(failed);
+                let message = conn.retire_failed_initial_document_projection(failed);
                 warn_target_protocol_side_effect_failure(
                     target_id,
                     "reset_failed_initial_document_page_build",

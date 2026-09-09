@@ -202,6 +202,8 @@ fn is_native_browser_input(event: &moli_core::browser::BrowserEvent) -> bool {
         BrowserEvent::DownloadCreated(_)
             | BrowserEvent::DownloadUpdated(_)
             | BrowserEvent::NavigationAwaitingDecision(_)
+            | BrowserEvent::InitialDocumentAwaitingInspection { .. }
+            | BrowserEvent::InitialDocumentConstructionFailed { .. }
             | BrowserEvent::NavigationResponseChanged(_)
             | BrowserEvent::DocumentCommitted(_)
             | BrowserEvent::NavigationStarted(_)
@@ -1376,6 +1378,18 @@ impl TestContext {
             Ok(moli_core::browser::BrowserEvent::NavigationAwaitingDecision(request)) => {
                 self.conn
                     .project_browser_navigation_decision(request.web_contents, None)
+                    .await
+            }
+            Ok(moli_core::browser::BrowserEvent::InitialDocumentAwaitingInspection {
+                web_contents,
+                key,
+            })
+            | Ok(moli_core::browser::BrowserEvent::InitialDocumentConstructionFailed {
+                web_contents,
+                key,
+            }) => {
+                self.conn
+                    .project_browser_initial_document_inspection(web_contents, Some(key))
                     .await
             }
             Ok(moli_core::browser::BrowserEvent::NavigationResponseChanged(request)) => {

@@ -29,7 +29,7 @@ impl BrowserContext {
         target_id: &str,
         fetch_defaults: moli_fetch::FetchConfig,
         browser_globals: &crate::conn::BrowserGlobalOverrides,
-    ) -> Result<moli_core::browser::BrowserInitialDocumentAdmission, String> {
+    ) -> Result<Option<moli_core::browser::BrowserInitialDocumentWaiter>, String> {
         let inherited = self.browser_context.inherited_document_policy(
             fetch_defaults,
             &browser_globals.extra_headers,
@@ -43,14 +43,10 @@ impl BrowserContext {
             .start_initial_document(handle, inherited)
     }
 
-    pub(in crate::conn) fn commit_initial_document(
+    pub(in crate::conn) fn project_initial_document_commit(
         &mut self,
-        built: moli_core::browser::BrowserBuiltInitialDocument,
-    ) -> Result<
-        moli_core::page::RendererPageCreationDiagnostics,
-        Box<moli_core::browser::BrowserBuiltInitialDocument>,
-    > {
-        let commit = self.browser_context.commit_initial_document(built)?;
+        commit: moli_core::browser::BrowserCommittedInitialDocument,
+    ) -> moli_core::page::RendererPageCreationDiagnostics {
         // Native completion is final. A missing or retired AgentHost cannot
         // veto the Browser document or fail other Browser waiters.
         let Some(target_id) = self
@@ -58,14 +54,14 @@ impl BrowserContext {
             .get_for_web_contents(commit.key.web_contents())
             .map(|target| target.target_id().to_owned())
         else {
-            return Ok(commit.diagnostics);
+            return commit.diagnostics;
         };
         let target_id = target_id.as_str();
         let loader_id = self.target_initial_empty_document_loader_id_if_current(target_id);
         let lifecycle = commit.snapshot.metadata.lifecycle.clone();
         let Some(projection) = self.project_document_commit_snapshot(target_id, commit.snapshot)
         else {
-            return Ok(commit.diagnostics);
+            return commit.diagnostics;
         };
         if let Err(error) = projection.fence {
             tracing::warn!(%error, "initial document inspection projection failed");
@@ -79,7 +75,7 @@ impl BrowserContext {
                 loader_id,
             );
         }
-        Ok(commit.diagnostics)
+        commit.diagnostics
     }
 
     #[cfg(test)]

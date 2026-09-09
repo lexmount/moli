@@ -220,7 +220,7 @@ enum PendingTargetCommandKind {
     AttachToTarget {
         prepared_session: TargetAttachSessionCommit,
         target_info: DevToolsTargetInfo,
-        initial_document: Option<Box<crate::conn::PendingInitialDocumentPageBuild>>,
+        initial_document: Option<Box<crate::conn::PendingInitialDocumentProjection>>,
     },
     ActivateTarget {
         command: DevToolsActivateTargetCommand,
@@ -232,7 +232,7 @@ enum PendingTargetCommandKind {
     CreateTarget {
         response_plan: CommandOutputPlan,
         creation_commit: creation::TargetCreationCommit,
-        initial_document: Option<Box<crate::conn::PendingInitialDocumentPageBuild>>,
+        initial_document: Option<Box<crate::conn::PendingInitialDocumentProjection>>,
     },
     DetachFromTarget {
         target_id: Option<String>,
@@ -256,8 +256,8 @@ enum CompletedTargetCommandKind {
         target_info: DevToolsTargetInfo,
         initial_document: Option<
             Result<
-                Box<crate::conn::CompletedInitialDocumentPageBuild>,
-                crate::conn::FailedInitialDocumentPageBuild,
+                Box<moli_core::browser::BrowserCommittedInitialDocument>,
+                crate::conn::FailedInitialDocumentProjection,
             >,
         >,
     },
@@ -273,8 +273,8 @@ enum CompletedTargetCommandKind {
         creation_commit: creation::TargetCreationCommit,
         initial_document: Option<
             Result<
-                Box<crate::conn::CompletedInitialDocumentPageBuild>,
-                crate::conn::FailedInitialDocumentPageBuild,
+                Box<moli_core::browser::BrowserCommittedInitialDocument>,
+                crate::conn::FailedInitialDocumentProjection,
             >,
         >,
     },
@@ -305,7 +305,7 @@ impl PendingTargetCommandDispatch {
                 prepared_session,
                 target_info,
                 initial_document: match initial_document {
-                    Some(pending) => Some(pending.wait().await.map(Box::new)),
+                    Some(pending) => Some(pending.wait().await),
                     None => None,
                 },
             },
@@ -327,7 +327,7 @@ impl PendingTargetCommandDispatch {
                 response_plan,
                 creation_commit,
                 initial_document: match initial_document {
-                    Some(pending) => Some(pending.wait().await.map(Box::new)),
+                    Some(pending) => Some(pending.wait().await),
                     None => None,
                 },
             },
@@ -496,11 +496,6 @@ pub(crate) fn execute_immediate_devtools_target_command_with_protocol_events(
     Vec<crate::conn::BackgroundProtocolEvent>,
 ) {
     match command {
-        DevToolsCommand::CreateTarget(command) => {
-            let result = creation::execute_devtools_create_target_command(conn, command)
-                .map(|execution| DevToolsCommandResult::CreateTarget(execution.result));
-            (result, Vec::new())
-        }
         DevToolsCommand::GetTargets(command) => (
             browser_context::execute_devtools_get_targets_command(conn, &command)
                 .map(DevToolsCommandResult::GetTargets),
@@ -540,6 +535,18 @@ pub(crate) fn execute_immediate_devtools_target_command_with_protocol_events(
             Vec::new(),
         ),
     }
+}
+
+// Fixtures that specifically exercise the no-document state stop at the same
+// private admission as production. No production command may skip construction.
+#[cfg(test)]
+pub(crate) fn stage_initial_target_for_test(
+    conn: &mut CdpConnection,
+    command: DevToolsCreateTargetCommand,
+) -> crate::devtools_runtime::DevToolsCreateTargetResult {
+    creation::execute_devtools_create_target_command(conn, command)
+        .expect("initial target fixture admission")
+        .result
 }
 
 pub(crate) async fn execute_devtools_create_target_command_async_with_protocol_events(
@@ -710,27 +717,14 @@ pub(crate) async fn complete_pending_target_command(
             };
             match initial_document {
                 Some(Ok(completed_initial_document)) => {
-                    let completed_initial_document = *completed_initial_document;
-                    let result = conn
-                        .complete_initial_document_page_build_for_owner_with_creation_diagnostics(
-                            completed_initial_document,
-                        )
-                        .await;
-                    match result {
-                        Ok(diagnostics) => {
-                            if let Some(predecessor) = diagnostics.renderer_output_predecessor {
-                                command_context.set_renderer_output_predecessor(predecessor);
-                            }
-                        }
-                        Err(message) => {
-                            return TargetCommandTaskStep::Complete(CommandOutputPlan::error(
-                                -32000, message,
-                            ));
-                        }
+                    let diagnostics =
+                        conn.project_initial_document_completion(*completed_initial_document);
+                    if let Some(predecessor) = diagnostics.renderer_output_predecessor {
+                        command_context.set_renderer_output_predecessor(predecessor);
                     }
                 }
                 Some(Err(failed)) => {
-                    let message = conn.reset_failed_initial_document_page_build_for_owner(failed);
+                    let message = conn.retire_failed_initial_document_projection(failed);
                     return TargetCommandTaskStep::Complete(CommandOutputPlan::error(
                         -32000, message,
                     ));
@@ -1244,29 +1238,38 @@ mod devtools_runtime_entry_tests {
     }
 
     #[test]
-    fn immediate_create_target_staging_does_not_emit_target_created_before_initial_document() {
+    fn create_target_enters_pending_inspection_before_publishing_target_created() {
         let mut conn = crate::test_support::connection();
         conn.set_root_target_discovery_enabled(true);
-        let (result, protocol_events) =
-            execute_immediate_devtools_target_command_with_protocol_events(
-                &mut conn,
-                DevToolsCommand::CreateTarget(DevToolsCreateTargetCommand {
-                    context: cdp_context(),
-                    url: "about:blank".to_owned(),
-                    browser_context_id: None,
-                    activate: false,
-                }),
-            );
-
-        let DevToolsCommandResult::CreateTarget(result) =
-            result.expect("create target staging should succeed")
-        else {
-            panic!("expected create target result");
+        let step = start_devtools_target_command(
+            &mut conn,
+            Some(41),
+            None,
+            DevToolsCommand::CreateTarget(DevToolsCreateTargetCommand {
+                context: cdp_context(),
+                url: "about:blank".to_owned(),
+                browser_context_id: None,
+                activate: false,
+            }),
+        );
+        let TargetCommandTaskStep::Pending(pending) = step else {
+            panic!("native construction must wait for initial inspection");
         };
-        assert_eq!(result.target_id.as_str(), "TID-1");
-        assert!(
-            protocol_events.is_empty(),
-            "Target.targetCreated must be generated after initial document Page build"
+        let PendingTargetCommandKind::CreateTarget {
+            initial_document,
+            response_plan,
+            ..
+        } = *pending.kind
+        else {
+            panic!("expected create target projection");
+        };
+        assert!(initial_document.is_some());
+        let mut protocol_messages = Vec::new();
+        response_plan.emit_into(&mut protocol_messages, Some(41), None);
+        assert_eq!(
+            protocol_messages,
+            [json!({"id": 41, "result": {"targetId": "TID-1"}})],
+            "Target.targetCreated must not be included before native construction commits"
         );
         assert_eq!(
             conn.browser_context

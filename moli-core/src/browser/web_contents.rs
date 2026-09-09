@@ -22,9 +22,11 @@ mod initial_document;
 mod javascript_dialog;
 pub use initial_document::InitialDocumentAdmission;
 pub use initial_document::InitialDocumentBuildState;
+pub(in crate::browser) use initial_document::InitialDocumentInspectionPhase;
 pub use initial_document::{
     AdmittedInitialDocumentBuild, BuiltInitialDocument, CommittedInitialDocument,
-    InitialDocumentBuildKey, InitialDocumentPageBuildWaiter,
+    InitialDocumentBuildKey, InitialDocumentInspectionClaim, InitialDocumentInspectionStage,
+    InitialDocumentPageBuildWaiter,
 };
 mod navigation_commit;
 pub use navigation_commit::AdmittedDocumentMaterialization;

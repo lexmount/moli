@@ -489,6 +489,15 @@ impl NavigationController {
         }
     }
 
+    pub(in crate::browser) fn initial_document_build_mut(
+        &mut self,
+    ) -> Option<&mut super::InitialDocumentBuildState> {
+        match &mut self.initial_empty_document.as_mut()?.lifecycle {
+            InitialDocumentLifecycle::Building(build) => Some(build),
+            _ => None,
+        }
+    }
+
     pub fn admit_initial_document_build(
         &mut self,
         url: &str,

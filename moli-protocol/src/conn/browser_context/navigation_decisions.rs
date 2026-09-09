@@ -8,6 +8,69 @@ use moli_core::browser::web_contents::NavigationInterceptionPermit;
 use moli_core::browser::{NavigationDecision, NavigationDecisionStage, WebContentsHandle};
 
 impl CdpConnection {
+    pub async fn project_browser_initial_document_inspection(
+        &mut self,
+        contents: WebContentsHandle,
+        expected: Option<moli_core::browser::web_contents::InitialDocumentBuildKey>,
+    ) -> Vec<BackgroundProtocolEvent> {
+        use moli_core::browser::web_contents::InitialDocumentInspectionStage;
+        let Ok(context) = self.browser.context_handle(contents.context()) else {
+            return Vec::new();
+        };
+        let Ok(current) = context.initial_document_build_key(contents) else {
+            return Vec::new();
+        };
+        let Some(projection) = self.browser_context_by_browser_id_mut(contents.context()) else {
+            return Vec::new();
+        };
+        if let Some(expected) = expected
+            && current != Some(expected)
+        {
+            projection.retire_initial_document_projection(expected);
+            return Vec::new();
+        }
+        projection.reconcile_initial_document_projection(contents, current);
+        let Some(key) = current else {
+            return Vec::new();
+        };
+        let Some(target_id) = projection
+            .target_id_for_web_contents(contents.id())
+            .map(str::to_owned)
+        else {
+            return Vec::new();
+        };
+        let context_id = projection.id.clone();
+        let Ok(Some(claim)) = context.claim_initial_document_inspection(contents, key) else {
+            return Vec::new();
+        };
+        match &claim.stage {
+            InitialDocumentInspectionStage::Reserved => {
+                self.browser_context_by_id_mut(&context_id)
+                    .expect("resolved Context")
+                    .project_initial_document_build(&target_id, key);
+                self.bind_renderer_page_output_owner(
+                    key.renderer(),
+                    TargetPageResidenceIdentity::new(context_id, Some(target_id), key.document()),
+                );
+            }
+            InitialDocumentInspectionStage::Prepared(endpoint) => {
+                let owner = CommandOwnerScope::for_route(CdpSessionRoute::PageTarget {
+                    browser_context_id: context_id,
+                    target_id,
+                    session_key: moli_page_types::DevToolsSessionKey::Primary,
+                });
+                if let Err(error) = endpoint
+                    .start_configure(self.prepared_document_inspection_for_owner(&owner))
+                    .await
+                {
+                    tracing::warn!(%error, "initial document inspection configuration failed");
+                }
+            }
+        }
+        drop(claim);
+        Vec::new()
+    }
+
     pub(crate) fn start_created_web_contents_navigation(
         &self,
         contents: WebContentsHandle,
@@ -183,23 +246,6 @@ impl CdpConnection {
             session_key: moli_page_types::DevToolsSessionKey::Primary,
         });
         match paused.stage {
-            NavigationDecisionStage::InitialDocumentReserved { key } => {
-                self.browser_context_by_id_mut(&context_id)
-                    .expect("resolved Context")
-                    .project_initial_document_build(&target_id, key);
-                self.bind_renderer_page_output_owner(
-                    key.renderer(),
-                    TargetPageResidenceIdentity::new(context_id, Some(target_id), key.document()),
-                );
-            }
-            NavigationDecisionStage::InitialDocument { inspection, .. } => {
-                if let Err(error) = inspection
-                    .start_configure(self.prepared_document_inspection_for_owner(&owner))
-                    .await
-                {
-                    tracing::warn!(%error, "native navigation inspection configuration failed");
-                }
-            }
             NavigationDecisionStage::Auth { response, .. } => {
                 let pending = self
                     .browser_context_by_id(&context_id)
@@ -578,27 +624,13 @@ impl CdpConnection {
                 out.extend(self.project_browser_document_commit(document).await);
                 return Ok(out);
             }
-            if context
-                .native_initial_document_navigation(contents)?
-                .is_none()
-            {
-                return Ok(out);
+            if context.initial_document_build_key(contents)?.is_none() {
+                return Err("native popup initial construction is unavailable".into());
             }
-            if context
-                .navigation_decision(contents)?
-                .is_some_and(|paused| {
-                    matches!(
-                        paused.stage,
-                        NavigationDecisionStage::InitialDocumentReserved { .. }
-                            | NavigationDecisionStage::InitialDocument { .. }
-                    )
-                })
-            {
-                out.extend(
-                    self.project_browser_navigation_decision(contents, None)
-                        .await,
-                );
-            }
+            out.extend(
+                self.project_browser_initial_document_inspection(contents, None)
+                    .await,
+            );
             match events.recv().await {
                 Ok(_) | Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {}
                 Err(tokio::sync::broadcast::error::RecvError::Closed) => {

@@ -364,7 +364,7 @@ async fn next_native_dialog(
 }
 
 #[tokio::test]
-async fn native_popup_admission_creates_a_web_contents_without_devtools_ingress() {
+async fn native_popup_admission_commits_initial_document_without_devtools_ingress() {
     let service = BrowserService::start().unwrap();
     let browser = service.handle();
     let (context, contents) = context_with_contents(&service);
@@ -395,6 +395,34 @@ async fn native_popup_admission_creates_a_web_contents_without_devtools_ingress(
         Some((contents.id(), true))
     );
     assert_eq!(browser.subscribe().unwrap().0.web_contents.len(), 2);
+    let document = tokio::time::timeout(std::time::Duration::from_secs(5), async {
+        loop {
+            if let BrowserEvent::DocumentCommitted(document) = events.recv().await.unwrap().event
+                && document.web_contents() == popup
+            {
+                break document;
+            }
+        }
+    })
+    .await;
+    if document.is_err() {
+        service.shutdown();
+    }
+    let document = document.expect("a blank popup must construct without a DevTools observer");
+    assert_eq!(context.document_handle(popup).unwrap(), Some(document));
+    assert_eq!(
+        context.document_url(document).unwrap().as_str(),
+        "about:blank"
+    );
+    assert_eq!(
+        context.navigation_snapshot(popup).unwrap(),
+        NavigationSnapshot {
+            web_contents: popup,
+            committed: None,
+            attempt: None
+        },
+        "initial construction must not fabricate a cross-document navigation"
+    );
     context
         .close_web_contents(popup)
         .unwrap()
@@ -403,6 +431,173 @@ async fn native_popup_admission_creates_a_web_contents_without_devtools_ingress(
     assert_eq!(context.document_handle(contents).unwrap(), Some(source));
     assert_eq!(browser.subscribe().unwrap().0.web_contents, [contents]);
     service.shutdown();
+}
+
+#[tokio::test]
+async fn native_initial_document_disconnect_finishes_claimed_preparation() {
+    let service = BrowserService::start().unwrap();
+    let browser = service.handle();
+    let provider = browser.register_document_decision_provider().unwrap();
+    let (context, contents) = context_with_contents(&service);
+    let observation = context
+        .start_initial_document(
+            contents,
+            context.inherited_document_policy(Default::default(), &[], None),
+        )
+        .unwrap()
+        .unwrap();
+    let key = observation.key();
+    let claim = hold_initial_prepared_inspection(&browser, &context, contents, key).await;
+    assert!(
+        context
+            .claim_initial_document_inspection(contents, key)
+            .unwrap()
+            .is_none()
+    );
+    drop(provider);
+    let committed = tokio::time::timeout(std::time::Duration::from_secs(5), observation.wait())
+        .await
+        .expect("disconnected inspection must not hold Browser construction")
+        .unwrap()
+        .unwrap();
+    assert_eq!(committed.key, key);
+    assert_eq!(
+        context.document_handle(contents).unwrap(),
+        Some(committed.snapshot.document)
+    );
+    drop(claim);
+    assert_eq!(
+        context.document_handle(contents).unwrap(),
+        Some(committed.snapshot.document)
+    );
+    service.shutdown();
+}
+
+#[tokio::test]
+async fn native_initial_document_close_cancels_preparation_without_touching_peer() {
+    use crate::browser::web_contents::InitialDocumentInspectionStage;
+    let service = BrowserService::start().unwrap();
+    let browser = service.handle();
+    let _provider = browser.register_document_decision_provider().unwrap();
+    let (context, contents) = context_with_contents(&service);
+    let (peer, _) = context
+        .create_web_contents(WebContentsCreation::default())
+        .unwrap();
+    let peer_document = navigate(&context, peer, "data:text/html,<title>peer</title>").await;
+    assert_eq!(
+        context
+            .evaluate_document_expression_for_test(
+                peer_document,
+                "globalThis.__nativeInitialPeer = 'peer'",
+                false,
+            )
+            .await
+            .unwrap()["value"],
+        "peer"
+    );
+    let observation = context
+        .start_initial_document(
+            contents,
+            context.inherited_document_policy(Default::default(), &[], None),
+        )
+        .unwrap()
+        .unwrap();
+    let key = observation.key();
+    let claim = hold_initial_prepared_inspection(&browser, &context, contents, key).await;
+    let InitialDocumentInspectionStage::Prepared(endpoint) = &claim.stage else {
+        panic!("prepared phase");
+    };
+    context
+        .close_web_contents(contents)
+        .unwrap()
+        .close_async()
+        .await;
+    assert_eq!(
+        observation.wait().await.err().as_deref(),
+        Some("InitialDocumentPageBuildCancelled")
+    );
+    assert!(
+        endpoint.start_configure(Default::default()).await.is_err(),
+        "closed preparation must release its real renderer reservation"
+    );
+    drop(claim);
+    assert!(!context.contains_web_contents(contents));
+    assert_eq!(context.document_handle(peer).unwrap(), Some(peer_document));
+    assert_eq!(
+        context
+            .evaluate_document_expression_for_test(
+                peer_document,
+                "globalThis.__nativeInitialPeer",
+                false,
+            )
+            .await
+            .unwrap()["value"],
+        "peer",
+        "closing the prepared page must preserve the peer's live renderer state"
+    );
+    service.shutdown();
+}
+
+async fn hold_initial_prepared_inspection(
+    browser: &BrowserHandle,
+    context: &BrowserContextHandle,
+    contents: WebContentsHandle,
+    key: crate::browser::web_contents::InitialDocumentBuildKey,
+) -> crate::browser::web_contents::InitialDocumentInspectionClaim {
+    use crate::browser::web_contents::InitialDocumentInspectionStage;
+    let (_, mut events) = browser.subscribe().unwrap();
+    tokio::time::timeout(std::time::Duration::from_secs(5), async {
+        loop {
+            if let Some(claim) = context
+                .claim_initial_document_inspection(contents, key)
+                .unwrap()
+            {
+                if matches!(&claim.stage, InitialDocumentInspectionStage::Prepared(_)) {
+                    return claim;
+                }
+                drop(claim);
+            }
+            events.recv().await.unwrap();
+        }
+    })
+    .await
+    .expect("exact native prepared inspection phase")
+}
+
+#[tokio::test]
+async fn native_initial_document_construction_survives_a_dropped_observer() {
+    let service = BrowserService::start().unwrap();
+    let browser = service.handle();
+    let (context, contents) = context_with_contents(&service);
+    context
+        .begin_initial_empty_document(contents, "about:blank#native-initial".into(), None, None)
+        .unwrap();
+    let (_, mut events) = browser.subscribe().unwrap();
+    let observation = context
+        .start_initial_document(
+            contents,
+            context.inherited_document_policy(Default::default(), &[], None),
+        )
+        .unwrap();
+    drop(observation);
+    let document = tokio::time::timeout(std::time::Duration::from_secs(5), async {
+        loop {
+            if let BrowserEvent::DocumentCommitted(document) = events.recv().await.unwrap().event
+                && document.web_contents() == contents
+            {
+                break document;
+            }
+        }
+    })
+    .await;
+    let observed = context.document_handle(contents).unwrap();
+    let url = observed.map(|document| context.document_url(document).unwrap());
+    service.shutdown();
+    assert_eq!(
+        Some(document.expect("Browser construction must outlive its observer")),
+        observed
+    );
+    assert_eq!(url.unwrap().as_str(), "about:blank#native-initial");
 }
 
 #[tokio::test]
@@ -766,7 +961,7 @@ async fn assert_native_popup_request_release(drop_claim: bool) {
     let server = FixtureServer::spawn().await.unwrap();
     let service = BrowserService::start().unwrap();
     let browser = service.handle();
-    let mut provider = Some(browser.register_navigation_decision_provider().unwrap());
+    let mut provider = Some(browser.register_document_decision_provider().unwrap());
     let (context, source) = context_with_contents(&service);
     let (_, mut events) = browser.subscribe().unwrap();
     let url = server.url("/static?popup=provider-drop");
@@ -778,8 +973,16 @@ async fn assert_native_popup_request_release(drop_claim: bool) {
     .await;
     let (popup, permit) = tokio::time::timeout(std::time::Duration::from_secs(5), async {
         loop {
-            if let BrowserEvent::NavigationAwaitingDecision(request) =
-                events.recv().await.unwrap().event
+            let event = events.recv().await.unwrap().event;
+            if let BrowserEvent::InitialDocumentAwaitingInspection { web_contents, key } = event {
+                drop(
+                    context
+                        .claim_initial_document_inspection(web_contents, key)
+                        .unwrap(),
+                );
+                continue;
+            }
+            if let BrowserEvent::NavigationAwaitingDecision(request) = event
                 && request.web_contents != source
                 && let Some(paused) = context.navigation_decision(request.web_contents).unwrap()
             {
@@ -870,14 +1073,22 @@ async fn native_popup_decision_cannot_resume_a_replacement_navigation() {
     use crate::browser::NavigationDecision;
     let service = BrowserService::start().unwrap();
     let browser = service.handle();
-    let _provider = browser.register_navigation_decision_provider().unwrap();
+    let _provider = browser.register_document_decision_provider().unwrap();
     let (context, source) = context_with_contents(&service);
     let (_, mut events) = browser.subscribe().unwrap();
     navigate(&context, source, "data:text/html,<script>window.open('data:text/html,obsolete','superseded-native')</script>").await;
     let (popup, permit) = tokio::time::timeout(std::time::Duration::from_secs(5), async {
         loop {
-            if let BrowserEvent::NavigationAwaitingDecision(request) =
-                events.recv().await.unwrap().event
+            let event = events.recv().await.unwrap().event;
+            if let BrowserEvent::InitialDocumentAwaitingInspection { web_contents, key } = event {
+                drop(
+                    context
+                        .claim_initial_document_inspection(web_contents, key)
+                        .unwrap(),
+                );
+                continue;
+            }
+            if let BrowserEvent::NavigationAwaitingDecision(request) = event
                 && request.web_contents != source
                 && let Some(paused) = context.navigation_decision(request.web_contents).unwrap()
             {

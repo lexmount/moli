@@ -202,6 +202,10 @@ impl CdpConnection {
         // holds whose terminal occurrence was evicted. Committed Document
         // fences above and command-response holds remain independently owned.
         for contents in self.projected_web_contents() {
+            events.extend(
+                self.project_browser_initial_document_inspection(contents, None)
+                    .await,
+            );
             events.extend(self.project_browser_navigation(contents).await);
             events.extend(self.project_browser_navigation_responses(contents).await);
             events.extend(

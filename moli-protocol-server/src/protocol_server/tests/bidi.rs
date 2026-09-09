@@ -3,8 +3,7 @@ use super::*;
 #[tokio::test]
 async fn native_browser_page_is_discovered_shared_and_retained_across_frontends() {
     use moli_core::browser::{
-        BrowserContextStoragePartitionHandles, BrowserInitialDocumentAdmission,
-        StoragePartitionKind, WebContentsCreation,
+        BrowserContextStoragePartitionHandles, StoragePartitionKind, WebContentsCreation,
     };
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
@@ -31,19 +30,14 @@ async fn native_browser_page_is_discovered_shared_and_retained_across_frontends(
         ))
         .unwrap();
     assert!(context.select_web_contents(native.id()));
-    let BrowserInitialDocumentAdmission::Build(build) = context
+    let observation = context
         .start_initial_document(
             native,
             context.inherited_document_policy(Default::default(), &[], None, None),
         )
         .unwrap()
-    else {
-        panic!("native initial document build");
-    };
-    let built = build.materialize().await.unwrap();
-    let committed = context
-        .commit_initial_document(built)
-        .unwrap_or_else(|_| panic!("native commit"));
+        .expect("native initial construction");
+    let committed = observation.wait().await.unwrap().expect("native commit");
     let document = committed.snapshot.document;
     drop(committed);
     context

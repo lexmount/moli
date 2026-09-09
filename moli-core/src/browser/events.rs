@@ -15,6 +15,14 @@ pub enum BrowserEvent {
         previous: Option<WebContentsHandle>,
     },
     DocumentCommitted(DocumentHandle),
+    InitialDocumentAwaitingInspection {
+        web_contents: WebContentsHandle,
+        key: super::web_contents::InitialDocumentBuildKey,
+    },
+    InitialDocumentConstructionFailed {
+        web_contents: WebContentsHandle,
+        key: super::web_contents::InitialDocumentBuildKey,
+    },
     NavigationStarted(NavigationRequest),
     NavigationAwaitingDecision(NavigationRequest),
     NavigationResponseChanged(NavigationRequest),

@@ -224,18 +224,14 @@ async fn ensure_initial_document_for_session(ctx: &mut TestContext, session_id: 
     };
     let pending = ctx
         .conn
-        .start_initial_document_page_ensure_for_owner(&owner)
+        .start_initial_document_ensure_for_owner(&owner)
         .expect("target lifecycle initial document ensure should start")
         .expect("metadata-only initial target should need an initial document page build");
     let completed = pending
         .wait()
         .await
         .expect("initial document page build should complete");
-    let diagnostics = ctx
-        .conn
-        .complete_initial_document_page_build_for_owner_with_creation_diagnostics(completed)
-        .await
-        .expect("initial document should install on captured owner");
+    let diagnostics = ctx.conn.project_initial_document_completion(*completed);
     if let Some(predecessor) = diagnostics.renderer_output_predecessor {
         ctx.route_direct_command_renderer_predecessor_for_test(predecessor)
             .await;

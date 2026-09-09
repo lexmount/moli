@@ -158,8 +158,7 @@ enum PendingRendererPageBinding {
         document_id: DocumentId,
     },
     InitialDocumentBuild {
-        renderer_page: RendererPageResidenceIdentity,
-        document_id: DocumentId,
+        key: moli_core::browser::web_contents::InitialDocumentBuildKey,
     },
     DocumentNavigation {
         navigation: NavigationId,
@@ -173,8 +172,8 @@ impl PendingRendererPageBinding {
         match self {
             #[cfg(test)]
             Self::PageBuild { renderer_page, .. } => *renderer_page,
-            Self::InitialDocumentBuild { renderer_page, .. }
-            | Self::DocumentNavigation { renderer_page, .. } => *renderer_page,
+            Self::InitialDocumentBuild { key } => key.renderer(),
+            Self::DocumentNavigation { renderer_page, .. } => *renderer_page,
         }
     }
 
@@ -183,8 +182,8 @@ impl PendingRendererPageBinding {
         match self {
             #[cfg(test)]
             Self::PageBuild { document_id, .. } => *document_id,
-            Self::InitialDocumentBuild { document_id, .. }
-            | Self::DocumentNavigation { document_id, .. } => *document_id,
+            Self::InitialDocumentBuild { key } => key.document(),
+            Self::DocumentNavigation { document_id, .. } => *document_id,
         }
     }
 }
@@ -539,10 +538,7 @@ impl BrowserContext {
         );
         self.page_slot_for_target_mut(target_id)
             .expect("resolved projection")
-            .pending_renderer_page = Some(PendingRendererPageBinding::InitialDocumentBuild {
-            renderer_page: key.renderer(),
-            document_id: key.document(),
-        });
+            .pending_renderer_page = Some(PendingRendererPageBinding::InitialDocumentBuild { key });
     }
 
     pub(in crate::conn) fn retire_initial_document_projection(
@@ -563,8 +559,26 @@ impl BrowserContext {
             .runtime_slot
             .page_slot_mut();
         if matches!(slot.pending_renderer_page.as_ref(), Some(PendingRendererPageBinding::InitialDocumentBuild {
-            renderer_page, document_id,
-        }) if *renderer_page == key.renderer() && *document_id == key.document())
+            key: pending,
+        }) if *pending == key)
+        {
+            slot.pending_renderer_page = None;
+        }
+    }
+
+    pub(in crate::conn) fn reconcile_initial_document_projection(
+        &mut self,
+        contents: moli_core::browser::WebContentsHandle,
+        current: Option<moli_core::browser::web_contents::InitialDocumentBuildKey>,
+    ) {
+        let Some(target) = self.page_targets.get_for_web_contents(contents.id()) else {
+            return;
+        };
+        let target_id = target.target_id().to_owned();
+        let slot = self
+            .page_slot_for_target_mut(&target_id)
+            .expect("resolved projection");
+        if matches!(slot.pending_renderer_page.as_ref(), Some(PendingRendererPageBinding::InitialDocumentBuild { key }) if Some(*key) != current)
         {
             slot.pending_renderer_page = None;
         }
@@ -2543,37 +2557,37 @@ mod pending_renderer_page_tests {
 
     #[tokio::test]
     async fn initial_build_binding_is_exact_and_late_retirement_preserves_retry() {
-        use crate::conn::state::InitialDocumentAdmission;
-        let mut context = context_with_page_slot_for_test(
-            TargetPageSlot::empty_for_initial_document_page_build(),
-        );
+        let browser = moli_core::browser::BrowserService::start()
+            .unwrap()
+            .handle();
+        let _provider = browser.register_document_decision_provider().unwrap();
+        let mut context =
+            BrowserContext::new_with_browser_for_test(&browser, "BID-initial-binding");
+        context.set_active_target_id(PAGE_SLOT_TEST_TARGET);
         context.bind_page_navigation_engines(Default::default(), None);
-        let InitialDocumentAdmission::Build(first) = context
+        let first = context
             .start_initial_document_for_target(
                 PAGE_SLOT_TEST_TARGET,
                 Default::default(),
                 &Default::default(),
             )
             .unwrap()
-        else {
-            panic!("expected build");
-        };
+            .expect("pending construction");
         let first_key = first.key();
         context.project_initial_document_build(PAGE_SLOT_TEST_TARGET, first_key);
         assert!(
             context.routes_renderer_page_for_target(PAGE_SLOT_TEST_TARGET, first_key.renderer())
         );
-        drop(first);
-        let InitialDocumentAdmission::Build(second) = context
+        context.clear_document_navigation_state_for_active_target();
+        assert!(first.wait().await.is_err());
+        let second = context
             .start_initial_document_for_target(
                 PAGE_SLOT_TEST_TARGET,
                 Default::default(),
                 &Default::default(),
             )
             .unwrap()
-        else {
-            panic!("expected retry");
-        };
+            .expect("pending retry");
         let second_key = second.key();
         assert_ne!(first_key.document(), second_key.document());
         assert_ne!(first_key.renderer(), second_key.renderer());

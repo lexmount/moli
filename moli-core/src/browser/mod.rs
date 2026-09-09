@@ -42,16 +42,16 @@ pub use events::{
     WebContentsSnapshot,
 };
 pub use navigation_decision::{
-    NavigationDecision, NavigationDecisionProvider, NavigationDecisionSnapshot,
+    DocumentDecisionProvider, NavigationDecision, NavigationDecisionSnapshot,
     NavigationDecisionStage,
 };
 pub use owner::{
-    BrowserBuiltInitialDocument, BrowserCommittedInitialDocument, BrowserContextHandle,
-    BrowserDocumentMaterialization, BrowserDocumentNavigationCommit, BrowserHandle,
-    BrowserInitialDocumentAdmission, BrowserInitialDocumentBuild, BrowserInterceptedNavigationLoad,
-    BrowserInterceptedNavigationResponse, BrowserNavigationLoad, BrowserPreparedDocumentNavigation,
-    BrowserPreparedNavigationResponse, BrowserService, PendingDocumentRetirement,
-    PendingWebContentsActivation, PendingWebContentsClose, WebContentsCreation,
+    BrowserCommittedInitialDocument, BrowserContextHandle, BrowserDocumentMaterialization,
+    BrowserDocumentNavigationCommit, BrowserHandle, BrowserInitialDocumentWaiter,
+    BrowserInterceptedNavigationLoad, BrowserInterceptedNavigationResponse, BrowserNavigationLoad,
+    BrowserPreparedDocumentNavigation, BrowserPreparedNavigationResponse, BrowserService,
+    PendingDocumentRetirement, PendingWebContentsActivation, PendingWebContentsClose,
+    WebContentsCreation,
 };
 pub use permissions::{PermissionDefaults, PermissionOverrides};
 pub use popup::{BrowserPopupAdmission, BrowserPopupCreation};

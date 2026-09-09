@@ -226,7 +226,7 @@ async fn ensure_initial_document_for_target_id_for_test(
         .unwrap_or_else(|| panic!("target route should exist for {}", target_id.as_str()));
     let owner = CommandOwnerScope::for_route(route);
     let pending = conn
-        .start_initial_document_page_ensure_for_owner(&owner)
+        .start_initial_document_ensure_for_owner(&owner)
         .unwrap_or_else(|message| {
             panic!(
                 "target lifecycle ensure should start for {}: {message}",
@@ -240,9 +240,7 @@ async fn ensure_initial_document_for_target_id_for_test(
         .wait()
         .await
         .unwrap_or_else(|message| panic!("initial document build should complete: {message}"));
-    conn.complete_initial_document_page_build_for_owner(completed)
-        .await
-        .unwrap_or_else(|message| panic!("initial document should install: {message}"));
+    conn.project_initial_document_completion(*completed);
 }
 
 async fn install_navigation_fixture_for_target_for_test(
@@ -1573,21 +1571,15 @@ async fn devtools_runtime_command_uses_background_initial_document_without_resol
         browser_context_id: None,
     };
 
-    let (first_result, _) =
-        crate::domains::target::execute_immediate_devtools_target_command_with_protocol_events(
-            &mut conn,
-            DevToolsCommand::CreateTarget(DevToolsCreateTargetCommand {
-                context: context.clone(),
-                url: "about:blank".to_owned(),
-                browser_context_id: None,
-                activate: false,
-            }),
-        );
-    let DevToolsCommandResult::CreateTarget(first_result) =
-        first_result.expect("initial target create should succeed")
-    else {
-        panic!("expected create target result");
-    };
+    let first_result = crate::domains::target::stage_initial_target_for_test(
+        &mut conn,
+        DevToolsCreateTargetCommand {
+            context: context.clone(),
+            url: "about:blank".to_owned(),
+            browser_context_id: None,
+            activate: false,
+        },
+    );
     let first_target_id = first_result.target_id;
     ensure_initial_document_for_target_id_for_test(&mut conn, &first_target_id).await;
 
@@ -1730,21 +1722,15 @@ async fn protocol_neutral_await_promise_keeps_background_owner_route_across_pend
         browser_context_id: None,
     };
 
-    let (first_result, _) =
-        crate::domains::target::execute_immediate_devtools_target_command_with_protocol_events(
-            &mut conn,
-            DevToolsCommand::CreateTarget(DevToolsCreateTargetCommand {
-                context: context.clone(),
-                url: "about:blank".to_owned(),
-                browser_context_id: None,
-                activate: false,
-            }),
-        );
-    let DevToolsCommandResult::CreateTarget(first_result) =
-        first_result.expect("initial target create should succeed")
-    else {
-        panic!("expected create target result");
-    };
+    let first_result = crate::domains::target::stage_initial_target_for_test(
+        &mut conn,
+        DevToolsCreateTargetCommand {
+            context: context.clone(),
+            url: "about:blank".to_owned(),
+            browser_context_id: None,
+            activate: false,
+        },
+    );
     let first_target_id = first_result.target_id;
     ensure_initial_document_for_target_id_for_test(&mut conn, &first_target_id).await;
 
@@ -1895,21 +1881,15 @@ async fn pending_runtime_binding_page_phase_keeps_background_owner_route_across_
         browser_context_id: None,
     };
 
-    let (first_result, _) =
-        crate::domains::target::execute_immediate_devtools_target_command_with_protocol_events(
-            conn,
-            DevToolsCommand::CreateTarget(DevToolsCreateTargetCommand {
-                context: context.clone(),
-                url: "about:blank".to_owned(),
-                browser_context_id: None,
-                activate: false,
-            }),
-        );
-    let DevToolsCommandResult::CreateTarget(first_result) =
-        first_result.expect("initial target create should succeed")
-    else {
-        panic!("expected create target result");
-    };
+    let first_result = crate::domains::target::stage_initial_target_for_test(
+        conn,
+        DevToolsCreateTargetCommand {
+            context: context.clone(),
+            url: "about:blank".to_owned(),
+            browser_context_id: None,
+            activate: false,
+        },
+    );
     let first_target_id = first_result.target_id;
     ensure_initial_document_for_target_id_for_test(conn, &first_target_id).await;
 
@@ -2014,38 +1994,26 @@ async fn runtime_enable_uses_background_initial_document_through_attached_sessio
         browser_context_id: None,
     };
 
-    let (first_result, _) =
-        crate::domains::target::execute_immediate_devtools_target_command_with_protocol_events(
-            &mut conn,
-            DevToolsCommand::CreateTarget(DevToolsCreateTargetCommand {
-                context: context.clone(),
-                url: "about:blank".to_owned(),
-                browser_context_id: None,
-                activate: false,
-            }),
-        );
-    let DevToolsCommandResult::CreateTarget(first_result) =
-        first_result.expect("initial target create should succeed")
-    else {
-        panic!("expected create target result");
-    };
+    let first_result = crate::domains::target::stage_initial_target_for_test(
+        &mut conn,
+        DevToolsCreateTargetCommand {
+            context: context.clone(),
+            url: "about:blank".to_owned(),
+            browser_context_id: None,
+            activate: false,
+        },
+    );
     let first_target_id = first_result.target_id;
 
-    let (second_result, _) =
-        crate::domains::target::execute_immediate_devtools_target_command_with_protocol_events(
-            &mut conn,
-            DevToolsCommand::CreateTarget(DevToolsCreateTargetCommand {
-                context,
-                url: "about:blank".to_owned(),
-                browser_context_id: None,
-                activate: false,
-            }),
-        );
-    let DevToolsCommandResult::CreateTarget(second_result) =
-        second_result.expect("background target create should succeed")
-    else {
-        panic!("expected create target result");
-    };
+    let second_result = crate::domains::target::stage_initial_target_for_test(
+        &mut conn,
+        DevToolsCreateTargetCommand {
+            context,
+            url: "about:blank".to_owned(),
+            browser_context_id: None,
+            activate: false,
+        },
+    );
     let second_target_id = second_result.target_id;
 
     let background_route = conn
@@ -2053,16 +2021,14 @@ async fn runtime_enable_uses_background_initial_document_through_attached_sessio
         .expect("background target route");
     let background_owner = CommandOwnerScope::for_route(background_route.clone());
     let pending_initial_document = conn
-        .start_initial_document_page_ensure_for_owner(&background_owner)
+        .start_initial_document_ensure_for_owner(&background_owner)
         .expect("background target lifecycle ensure should start")
         .expect("fresh background target should need an initial document page build");
     let completed_initial_document = pending_initial_document
         .wait()
         .await
         .expect("background initial document page build should complete");
-    conn.complete_initial_document_page_build_for_owner(completed_initial_document)
-        .await
-        .expect("background initial document should install on captured owner");
+    conn.project_initial_document_completion(*completed_initial_document);
 
     let background_session =
         attach_page_session_for_test(&mut conn, second_target_id.as_str()).await;
@@ -2125,38 +2091,26 @@ async fn page_enable_uses_background_initial_document_through_attached_session()
         browser_context_id: None,
     };
 
-    let (first_result, _) =
-        crate::domains::target::execute_immediate_devtools_target_command_with_protocol_events(
-            &mut conn,
-            DevToolsCommand::CreateTarget(DevToolsCreateTargetCommand {
-                context: context.clone(),
-                url: "about:blank".to_owned(),
-                browser_context_id: None,
-                activate: false,
-            }),
-        );
-    let DevToolsCommandResult::CreateTarget(first_result) =
-        first_result.expect("initial target create should succeed")
-    else {
-        panic!("expected create target result");
-    };
+    let first_result = crate::domains::target::stage_initial_target_for_test(
+        &mut conn,
+        DevToolsCreateTargetCommand {
+            context: context.clone(),
+            url: "about:blank".to_owned(),
+            browser_context_id: None,
+            activate: false,
+        },
+    );
     let first_target_id = first_result.target_id;
 
-    let (second_result, _) =
-        crate::domains::target::execute_immediate_devtools_target_command_with_protocol_events(
-            &mut conn,
-            DevToolsCommand::CreateTarget(DevToolsCreateTargetCommand {
-                context,
-                url: "about:blank".to_owned(),
-                browser_context_id: None,
-                activate: false,
-            }),
-        );
-    let DevToolsCommandResult::CreateTarget(second_result) =
-        second_result.expect("background target create should succeed")
-    else {
-        panic!("expected create target result");
-    };
+    let second_result = crate::domains::target::stage_initial_target_for_test(
+        &mut conn,
+        DevToolsCreateTargetCommand {
+            context,
+            url: "about:blank".to_owned(),
+            browser_context_id: None,
+            activate: false,
+        },
+    );
     let second_target_id = second_result.target_id;
 
     let background_route = conn
@@ -2164,16 +2118,14 @@ async fn page_enable_uses_background_initial_document_through_attached_session()
         .expect("background target route");
     let background_owner = CommandOwnerScope::for_route(background_route.clone());
     let pending_initial_document = conn
-        .start_initial_document_page_ensure_for_owner(&background_owner)
+        .start_initial_document_ensure_for_owner(&background_owner)
         .expect("background target lifecycle ensure should start")
         .expect("fresh background target should need an initial document page build");
     let completed_initial_document = pending_initial_document
         .wait()
         .await
         .expect("background initial document page build should complete");
-    conn.complete_initial_document_page_build_for_owner(completed_initial_document)
-        .await
-        .expect("background initial document should install on captured owner");
+    conn.project_initial_document_completion(*completed_initial_document);
 
     let background_session =
         attach_page_session_for_test(&mut conn, second_target_id.as_str()).await;
@@ -2222,38 +2174,26 @@ async fn initial_document_page_ensure_completion_uses_captured_owner() {
         browser_context_id: None,
     };
 
-    let (first_result, _) =
-        crate::domains::target::execute_immediate_devtools_target_command_with_protocol_events(
-            &mut conn,
-            DevToolsCommand::CreateTarget(DevToolsCreateTargetCommand {
-                context: context.clone(),
-                url: "about:blank".to_owned(),
-                browser_context_id: None,
-                activate: false,
-            }),
-        );
-    let DevToolsCommandResult::CreateTarget(first_result) =
-        first_result.expect("initial target create should succeed")
-    else {
-        panic!("expected create target result");
-    };
+    let first_result = crate::domains::target::stage_initial_target_for_test(
+        &mut conn,
+        DevToolsCreateTargetCommand {
+            context: context.clone(),
+            url: "about:blank".to_owned(),
+            browser_context_id: None,
+            activate: false,
+        },
+    );
     let first_target_id = first_result.target_id;
 
-    let (second_result, _) =
-        crate::domains::target::execute_immediate_devtools_target_command_with_protocol_events(
-            &mut conn,
-            DevToolsCommand::CreateTarget(DevToolsCreateTargetCommand {
-                context,
-                url: "about:blank".to_owned(),
-                browser_context_id: None,
-                activate: false,
-            }),
-        );
-    let DevToolsCommandResult::CreateTarget(second_result) =
-        second_result.expect("background target create should succeed")
-    else {
-        panic!("expected create target result");
-    };
+    let second_result = crate::domains::target::stage_initial_target_for_test(
+        &mut conn,
+        DevToolsCreateTargetCommand {
+            context,
+            url: "about:blank".to_owned(),
+            browser_context_id: None,
+            activate: false,
+        },
+    );
     let second_target_id = second_result.target_id;
 
     let background_route = conn
@@ -2261,7 +2201,7 @@ async fn initial_document_page_ensure_completion_uses_captured_owner() {
         .expect("background target route");
     let background_owner = CommandOwnerScope::for_route(background_route);
     let pending = conn
-        .start_initial_document_page_ensure_for_owner(&background_owner)
+        .start_initial_document_ensure_for_owner(&background_owner)
         .expect("background initial document page ensure should start")
         .expect("background initial document page ensure should pend");
 
@@ -2269,9 +2209,7 @@ async fn initial_document_page_ensure_completion_uses_captured_owner() {
         .wait()
         .await
         .expect("initial document page build should complete");
-    conn.complete_initial_document_page_build_for_owner(completed)
-        .await
-        .expect("completion should install on captured owner");
+    conn.project_initial_document_completion(*completed);
 
     let browser_context = conn.browser_context.as_ref().expect("browser context");
     assert_eq!(
@@ -2299,53 +2237,43 @@ async fn target_lifecycle_ensure_installs_initial_about_blank_page_for_active_ta
         browser_context_id: None,
     };
 
-    let (create_result, _) =
-        crate::domains::target::execute_immediate_devtools_target_command_with_protocol_events(
-            &mut conn,
-            DevToolsCommand::CreateTarget(DevToolsCreateTargetCommand {
-                context,
-                url: "about:blank".to_owned(),
-                browser_context_id: None,
-                activate: true,
-            }),
-        );
-    let DevToolsCommandResult::CreateTarget(_) =
-        create_result.expect("active target create should succeed")
-    else {
-        panic!("expected create target result");
-    };
+    crate::domains::target::stage_initial_target_for_test(
+        &mut conn,
+        DevToolsCreateTargetCommand {
+            context,
+            url: "about:blank".to_owned(),
+            browser_context_id: None,
+            activate: true,
+        },
+    );
     assert!(
         !conn
             .browser_context
             .as_ref()
             .expect("browser context")
             .has_loaded_page(),
-        "immediate target create path should still only stage owner metadata before lifecycle ensure"
+        "unbuilt fixture must remain without a Document before lifecycle ensure"
     );
 
     let initial_document_owner = CommandOwnerScope::capture(&conn, None);
     let pending = conn
-        .start_initial_document_page_ensure_for_owner(&initial_document_owner)
+        .start_initial_document_ensure_for_owner(&initial_document_owner)
         .expect("target lifecycle ensure should start active initial page")
         .expect("fresh initial target should pend active initial document page build");
     let joined_pending = conn
-        .start_initial_document_page_ensure_for_owner(&initial_document_owner)
+        .start_initial_document_ensure_for_owner(&initial_document_owner)
         .expect("second ensure should join the active initial page build")
         .expect("second ensure should wait for the active initial page build");
     let completed = pending
         .wait()
         .await
         .expect("active initial document page build should complete");
-    conn.complete_initial_document_page_build_for_owner(completed)
-        .await
-        .expect("active initial page should install");
+    conn.project_initial_document_completion(*completed);
     let joined_completed = joined_pending
         .wait()
         .await
         .expect("joined initial document page build should observe completion");
-    conn.complete_initial_document_page_build_for_owner(joined_completed)
-        .await
-        .expect("joined initial page completion should be a no-op");
+    conn.project_initial_document_completion(*joined_completed);
     assert!(
         conn.browser_context
             .as_ref()
@@ -2355,10 +2283,54 @@ async fn target_lifecycle_ensure_installs_initial_about_blank_page_for_active_ta
     );
 
     assert!(
-        conn.start_initial_document_page_ensure_for_owner(&initial_document_owner)
+        conn.start_initial_document_ensure_for_owner(&initial_document_owner)
             .expect("second target lifecycle ensure should succeed")
             .is_none(),
         "second ensure should be a no-op"
+    );
+}
+
+#[tokio::test]
+async fn joined_initial_document_projects_after_the_first_observer_is_dropped() {
+    let mut conn = crate::test_support::connection();
+    let mut context = DevToolsCommandContext {
+        protocol: DevToolsProtocol::WebDriverBidi,
+        session_id: None,
+        target_id: None,
+        browser_context_id: None,
+    };
+    let target = crate::domains::target::stage_initial_target_for_test(
+        &mut conn,
+        DevToolsCreateTargetCommand {
+            context: context.clone(),
+            url: "about:blank".into(),
+            browser_context_id: None,
+            activate: false,
+        },
+    );
+    let owner = CommandOwnerScope::capture(&conn, None);
+    let first = conn
+        .start_initial_document_ensure_for_owner(&owner)
+        .unwrap()
+        .unwrap();
+    let joined = conn
+        .start_initial_document_ensure_for_owner(&owner)
+        .unwrap()
+        .unwrap();
+    drop(first);
+    let committed = joined.wait().await.unwrap();
+    conn.project_initial_document_completion(*committed);
+    context.target_id = Some(target.target_id);
+    assert_eq!(
+        evaluate_string_for_test(
+            &mut conn,
+            context,
+            "'joined native Document'",
+            "joined initial observer"
+        )
+        .await,
+        "joined native Document",
+        "a joining observer must project the exact commit even if the starter disappeared"
     );
 }
 
@@ -2372,25 +2344,19 @@ async fn stale_initial_document_page_build_does_not_overwrite_committed_page() {
         browser_context_id: None,
     };
 
-    let (create_result, _) =
-        crate::domains::target::execute_immediate_devtools_target_command_with_protocol_events(
-            &mut conn,
-            DevToolsCommand::CreateTarget(DevToolsCreateTargetCommand {
-                context,
-                url: "about:blank".to_owned(),
-                browser_context_id: None,
-                activate: true,
-            }),
-        );
-    let DevToolsCommandResult::CreateTarget(_) =
-        create_result.expect("active target create should succeed")
-    else {
-        panic!("expected create target result");
-    };
+    crate::domains::target::stage_initial_target_for_test(
+        &mut conn,
+        DevToolsCreateTargetCommand {
+            context,
+            url: "about:blank".to_owned(),
+            browser_context_id: None,
+            activate: true,
+        },
+    );
 
     let initial_document_owner = CommandOwnerScope::capture(&conn, None);
     let pending = conn
-        .start_initial_document_page_ensure_for_owner(&initial_document_owner)
+        .start_initial_document_ensure_for_owner(&initial_document_owner)
         .expect("target lifecycle ensure should start active initial page")
         .expect("fresh initial target should pend active initial document page build");
     let real_page_url = "data:text/html,<title>real-page</title>";
@@ -2406,9 +2372,7 @@ async fn stale_initial_document_page_build_does_not_overwrite_committed_page() {
         .expect("browser context")
         .document_id();
 
-    conn.complete_initial_document_page_build_for_owner(completed)
-        .await
-        .expect("stale initial document page build should be discarded");
+    conn.project_initial_document_completion(*completed);
     let messages = conn
         .dispatch_runtime_helper_protocol_message_for_session_owner_async(
             None,
@@ -2596,38 +2560,26 @@ async fn target_lifecycle_ensure_installs_initial_about_blank_page_for_backgroun
         browser_context_id: None,
     };
 
-    let (first_result, _) =
-        crate::domains::target::execute_immediate_devtools_target_command_with_protocol_events(
-            &mut conn,
-            DevToolsCommand::CreateTarget(DevToolsCreateTargetCommand {
-                context: context.clone(),
-                url: "about:blank".to_owned(),
-                browser_context_id: None,
-                activate: false,
-            }),
-        );
-    let DevToolsCommandResult::CreateTarget(first_result) =
-        first_result.expect("initial target create should succeed")
-    else {
-        panic!("expected create target result");
-    };
+    let first_result = crate::domains::target::stage_initial_target_for_test(
+        &mut conn,
+        DevToolsCreateTargetCommand {
+            context: context.clone(),
+            url: "about:blank".to_owned(),
+            browser_context_id: None,
+            activate: false,
+        },
+    );
     let first_target_id = first_result.target_id;
 
-    let (second_result, _) =
-        crate::domains::target::execute_immediate_devtools_target_command_with_protocol_events(
-            &mut conn,
-            DevToolsCommand::CreateTarget(DevToolsCreateTargetCommand {
-                context,
-                url: "about:blank".to_owned(),
-                browser_context_id: None,
-                activate: false,
-            }),
-        );
-    let DevToolsCommandResult::CreateTarget(second_result) =
-        second_result.expect("background target create should succeed")
-    else {
-        panic!("expected create target result");
-    };
+    let second_result = crate::domains::target::stage_initial_target_for_test(
+        &mut conn,
+        DevToolsCreateTargetCommand {
+            context,
+            url: "about:blank".to_owned(),
+            browser_context_id: None,
+            activate: false,
+        },
+    );
     let second_target_id = second_result.target_id;
 
     let background_route = conn
@@ -2635,7 +2587,7 @@ async fn target_lifecycle_ensure_installs_initial_about_blank_page_for_backgroun
         .expect("background target route");
     let background_owner = CommandOwnerScope::for_route(background_route);
     let pending = conn
-        .start_initial_document_page_ensure_for_owner(&background_owner)
+        .start_initial_document_ensure_for_owner(&background_owner)
         .expect("target lifecycle ensure should start background initial page")
         .expect("fresh background initial target should pend initial document page build");
 
@@ -2643,9 +2595,7 @@ async fn target_lifecycle_ensure_installs_initial_about_blank_page_for_backgroun
         .wait()
         .await
         .expect("background initial document page build should complete");
-    conn.complete_initial_document_page_build_for_owner(completed)
-        .await
-        .expect("background initial page should install on captured owner");
+    conn.project_initial_document_completion(*completed);
 
     let browser_context = conn.browser_context.as_ref().expect("browser context");
     assert_eq!(

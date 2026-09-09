@@ -66,9 +66,6 @@ pub(crate) async fn project_browser_popup_target(
             return out;
         }
     }
-    if !ensure_popup_initial_document_page_async(conn, target_id).await {
-        return out;
-    }
     let Some(target_info) = conn
         .browser_context_by_id(&browser_context_id)
         .and_then(|context| context.devtools_target_info(target_id))
@@ -100,55 +97,6 @@ pub(crate) async fn project_browser_popup_target(
         target_info,
     );
     out
-}
-
-async fn ensure_popup_initial_document_page_async(
-    conn: &mut CdpConnection,
-    target_id: &str,
-) -> bool {
-    let Some(route) = conn.target_session_route_for_target_id(target_id) else {
-        return false;
-    };
-    let owner = CommandOwnerScope::for_route(route);
-    {
-        let pending = match conn.start_initial_document_page_ensure_for_owner(&owner) {
-            Ok(pending) => pending,
-            Err(message) => {
-                tracing::debug!(
-                    target_id,
-                    ?message,
-                    "failed to start popup initial document page ensure"
-                );
-                return false;
-            }
-        };
-        if let Some(pending) = pending {
-            let completed = match pending.wait().await {
-                Ok(completed) => completed,
-                Err(failed) => {
-                    let message = conn.reset_failed_initial_document_page_build_for_owner(failed);
-                    tracing::debug!(
-                        target_id,
-                        ?message,
-                        "failed to await popup initial document page ensure"
-                    );
-                    return false;
-                }
-            };
-            if let Err(message) = conn
-                .complete_initial_document_page_build_for_owner(completed)
-                .await
-            {
-                tracing::debug!(
-                    target_id,
-                    ?message,
-                    "failed to complete popup initial document page ensure"
-                );
-                return false;
-            }
-        }
-    }
-    true
 }
 
 fn push_committed_auto_attached_session_events(

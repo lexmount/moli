@@ -78,6 +78,12 @@ impl CdpScheduler {
                         .project_browser_navigation_decision(request.web_contents, None)
                         .await
                 }
+                BrowserEvent::InitialDocumentAwaitingInspection { web_contents, key }
+                | BrowserEvent::InitialDocumentConstructionFailed { web_contents, key } => {
+                    self.conn
+                        .project_browser_initial_document_inspection(web_contents, Some(key))
+                        .await
+                }
                 BrowserEvent::NavigationResponseChanged(request) => {
                     self.conn
                         .project_browser_navigation_responses(request.web_contents)
