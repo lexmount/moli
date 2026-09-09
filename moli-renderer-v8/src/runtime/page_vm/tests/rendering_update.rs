@@ -2,6 +2,7 @@ use super::*;
 
 mod image_repeat;
 mod planar_transforms;
+mod image_dimensions;
 mod print;
 mod print_isolation;
 mod transform_precision;
