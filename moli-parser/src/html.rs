@@ -95,6 +95,22 @@ pub struct ParserFinishDiscoverySignals {
 }
 
 #[derive(Debug, Clone)]
+pub struct ParserScriptPreparationRequest {
+    pub(super) node_id: NativeNodeId,
+    pub(super) start_line: u64,
+    pub(super) start_column: u64,
+    pub(super) position: usize,
+    pub(super) needs_microtask_checkpoint: bool,
+    pub(super) blocking_signatures_before: HashSet<DocumentBlockingStylesheetSignature>,
+}
+
+impl ParserScriptPreparationRequest {
+    pub fn needs_microtask_checkpoint(&self) -> bool {
+        self.needs_microtask_checkpoint
+    }
+}
+
+#[derive(Debug, Clone)]
 pub enum ParserScriptHandoff {
     BlockingClassic {
         node_id: NativeNodeId,
@@ -330,6 +346,9 @@ pub struct ParserBlockingStylesheetPause {
 #[derive(Debug, Clone)]
 pub enum ParserYield {
     Script(Box<ParserScriptHandoff>),
+    /// The runtime must release the parser borrow and perform the HTML parser
+    /// microtask checkpoint before reading the script's preparation inputs.
+    ScriptPreparation(Box<ParserScriptPreparationRequest>),
     CustomElementConstruction(Box<ParserCustomElementConstructionHandoff>),
     BlockingStylesheet(ParserBlockingStylesheetPause),
 }
@@ -859,6 +878,31 @@ impl DocumentStream {
         // parser-step Drop guard removes every erased callback before return.
         let sinks = unsafe { ParserRuntimeDomSinks::from_consumer(consumer) };
         self.pump_parser_step_with_runtime_dom_sinks(chunk, sinks)
+    }
+
+    /// Live document owners can execute JavaScript at a script boundary. Keep
+    /// the offline parser's eager planning separate from that runtime boundary.
+    pub fn defer_script_preparation_to_owner(&mut self) {
+        self.inner.defer_script_preparation_to_owner();
+    }
+
+    pub fn prepare_script_with_runtime_dom_consumer<T>(
+        &mut self,
+        request: ParserScriptPreparationRequest,
+        consumer: &mut T,
+    ) -> ParserScriptHandoff
+    where
+        T: ParserDomReadConsumer
+            + ParserDomMutationConsumer
+            + ParserMutationEffectConsumer
+            + ParserElementCreationConsumer,
+    {
+        // SAFETY: the owner remains borrowed until the guard clears the scoped
+        // callbacks. Preparation only reads the DOM; it never executes script.
+        let sinks = unsafe { ParserRuntimeDomSinks::from_consumer(consumer) };
+        self.inner.enter_runtime_dom_sinks_parse_step(sinks);
+        let step = RuntimeDomSinksParserStep { stream: self };
+        step.stream.inner.prepare_script(request)
     }
 
     pub fn pump_next_parser_step_with_runtime_dom_consumer<T>(

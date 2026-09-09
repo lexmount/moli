@@ -97,3 +97,12 @@ pub(crate) fn perform_callback_cleanup_checkpoint(scope: &mut v8::PinScope<'_, '
         tracing::warn!(%error, "callback cleanup microtask checkpoint failed");
     }
 }
+
+pub(crate) fn perform_parser_script_preparation_checkpoint(
+    scope: &mut v8::PinScope<'_, '_>,
+) -> anyhow::Result<()> {
+    if can_perform_script_cleanup_checkpoint(scope) {
+        crate::script_vm::ScriptVm::perform_microtask_checkpoints(scope, None)?;
+    }
+    Ok(())
+}
