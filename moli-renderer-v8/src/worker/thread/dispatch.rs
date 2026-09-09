@@ -706,6 +706,8 @@ fn clear_event_dispatch_fields(scope: &mut v8::PinScope<'_, '_>, event: v8::Loca
         EVENT_DISPATCHING_SLOT,
         v8::Boolean::new(scope, false).into(),
     );
+    set_event_internal_flag(scope, event, EVENT_STOP_PROPAGATION_SLOT, false);
+    set_event_internal_flag(scope, event, EVENT_STOP_IMMEDIATE_PROPAGATION_SLOT, false);
 }
 
 fn worker_event_prevent_default_callback(
