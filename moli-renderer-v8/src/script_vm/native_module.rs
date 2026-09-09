@@ -3734,6 +3734,14 @@ impl ScriptVm {
             })?;
         self.document_runtime
             .mark_native_module_evaluating(root_entry);
+        // currentScript is null for modules. The execute-script-element guard
+        // belongs to its Document and lasts through the cleanup checkpoint,
+        // not the lifetime of the module's evaluation promise.
+        let _ignore_destructive_writes =
+            (owner == NativeModuleEvaluationOwner::Script).then(|| {
+                self.document_runtime
+                    .enter_ignore_destructive_writes(self.document_runtime.document_handle())
+            });
         let promise = self
             .renderer_document_isolate
             .with_entered_renderer_document_isolate(|isolate| {

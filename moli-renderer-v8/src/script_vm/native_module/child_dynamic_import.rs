@@ -1042,6 +1042,25 @@ impl ScriptVm {
                 )
             })?;
         document_modulator.mark_evaluating(root_entry);
+        let _ignore_destructive_writes = if owner == NativeModuleEvaluationOwner::Script {
+            let host = self._context_host.borrow();
+            let document = host
+                .frame_owner_current_child_snapshot_for_realm(realm_id)
+                .filter(|snapshot| {
+                    snapshot.local_window_id == document_owner.local_window_id
+                        && snapshot.document_id == document_owner.document_id
+                })
+                .ok_or_else(|| {
+                    ModuleLoadError::new(
+                        ModuleLoadStage::Evaluate,
+                        "module script has no current child Document for its execution guard",
+                    )
+                })?;
+            Some(host.enter_ignore_destructive_writes(document.document_handle))
+        } else {
+            // import() is not execution of a script element.
+            None
+        };
         let promise = self
             .renderer_document_isolate
             .with_entered_renderer_document_isolate(|isolate| {
