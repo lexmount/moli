@@ -35,6 +35,7 @@ mod document_world;
 mod drain;
 mod eligibility;
 mod fallback;
+mod font_defaults;
 mod invalidation;
 mod lazy_invalidation;
 pub(crate) mod media_list;
