@@ -67,6 +67,7 @@ DEFAULT_TESTHARNESS_TIMEOUT_SECONDS = 10.0
 MAX_REQUEST_BODY_BYTES = 16 * 1024 * 1024
 MAX_REQUEST_BODY_LINE_BYTES = 64 * 1024
 BENCH_TIMEOUT_MULTIPLIER_QUERY = "__moli_bench_timeout_multiplier"
+FORM_ECHO_PATH = "/html/semantics/forms/form-submission-0/form-echo.py"
 BENCH_REPORT_BRIDGE_SRC_RE = re.compile(
     rb"(?P<prefix>\bsrc\s*=\s*)(?P<quote>['\"])"
     rb"/resources/testharnessreport\.js(?P=quote)",
@@ -1050,6 +1051,10 @@ def _wpt_delay_seconds(query: str) -> float | None:
     return delay_ms / 1_000.0
 
 
+def _form_echo_response(body: bytes) -> bytes:
+    return b" ".join(f"{byte:02x}".encode("ascii") for byte in body)
+
+
 def _redirect_fixture_response(query: str) -> tuple[int, str] | None:
     """Return the shared redirect response used by static WPT fixture handlers."""
 
@@ -1572,6 +1577,15 @@ def _make_handler(
         def do_POST(self) -> None:  # noqa: N802
             parsed = urlparse(self.path)
             path = unquote(parsed.path)
+            if path == FORM_ECHO_PATH:
+                raw = self._read_content_length_request_body()
+                if raw is not None:
+                    self._send_bytes(
+                        "text/plain",
+                        _form_echo_response(raw),
+                        emit_body=True,
+                    )
+                return
             if path == "/xhr/resources/delay.py":
                 if self._consume_request_body():
                     self._serve_xhr_delay(parsed.query, emit_body=True)
@@ -1749,6 +1763,9 @@ def _make_handler(
                 return
             if path == "/resources/testdriver-vendor.js":
                 self._send_bytes("application/javascript; charset=utf-8", BENCH_TESTDRIVER_VENDOR_BRIDGE, emit_body=emit_body)
+                return
+            if path == FORM_ECHO_PATH:
+                self._send_bytes("text/plain", b"", emit_body=emit_body)
                 return
             if path == "/xhr/resources/delay.py":
                 self._serve_xhr_delay(parsed.query, emit_body=emit_body)
@@ -2099,6 +2116,34 @@ def _make_handler(
             if length > MAX_REQUEST_BODY_BYTES:
                 return self._reject_request_body(413)
             return self._discard_request_body_bytes(length)
+
+        def _read_content_length_request_body(self) -> bytes | None:
+            if self.headers.get("Transfer-Encoding") is not None:
+                self._reject_request_body(400)
+                return None
+            length_str = self.headers.get("Content-Length")
+            if length_str is None:
+                return b""
+            try:
+                length = int(length_str)
+            except ValueError:
+                self._reject_request_body(400)
+                return None
+            if length < 0:
+                self._reject_request_body(400)
+                return None
+            if length > MAX_REQUEST_BODY_BYTES:
+                self._reject_request_body(413)
+                return None
+            try:
+                raw = self.rfile.read(length)
+            except (BrokenPipeError, ConnectionResetError, OSError):
+                self.close_connection = True
+                return None
+            if len(raw) != length:
+                self.close_connection = True
+                return None
+            return raw
 
         def _consume_chunked_request_body(self) -> bool:
             total = 0
