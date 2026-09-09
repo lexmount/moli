@@ -1109,9 +1109,13 @@ async fn main_document_navigation_broadcasts_to_attached_network_session() {
         "params": { "url": next_url }
     }))
     .await;
+    let loader_id = ctx
+        .conn
+        .current_document_loader_id_for_session_owner(Some("SID-primary"))
+        .unwrap();
     ctx.expect_result(
         7_260,
-        json!({ "frameId": "TID-1", "loaderId": LOADER_ID }),
+        json!({ "frameId": "TID-1", "loaderId": loader_id }),
         Some("SID-primary"),
     );
 
@@ -1123,7 +1127,7 @@ async fn main_document_navigation_broadcasts_to_attached_network_session() {
             messages.iter().any(|message| {
                 message["sessionId"] == json!("SID-attached")
                     && message["method"] == json!("Network.loadingFinished")
-                    && message["params"]["requestId"] == json!(LOADER_ID)
+                    && message["params"]["requestId"] == json!(loader_id)
             })
         },
     )
@@ -1139,19 +1143,19 @@ async fn main_document_navigation_broadcasts_to_attached_network_session() {
                 && message["params"]["request"]["url"] == json!(next_url)
         })
         .expect("attached document request event");
-    assert_eq!(aux_request["params"]["requestId"], json!(LOADER_ID));
-    assert_eq!(aux_request["params"]["loaderId"], json!(LOADER_ID));
+    assert_eq!(aux_request["params"]["requestId"], json!(loader_id));
+    assert_eq!(aux_request["params"]["loaderId"], json!(loader_id));
     assert!(messages.iter().any(|message| {
         message["sessionId"] == json!("SID-attached")
             && message["method"] == json!("Network.responseReceived")
-            && message["params"]["requestId"] == json!(LOADER_ID)
+            && message["params"]["requestId"] == json!(loader_id)
             && message["params"]["type"] == json!("Document")
             && message["params"]["response"]["url"] == json!(next_url)
     }));
     assert!(messages.iter().any(|message| {
         message["sessionId"] == json!("SID-primary")
             && message["method"] == json!("Network.responseReceived")
-            && message["params"]["requestId"] == json!(LOADER_ID)
+            && message["params"]["requestId"] == json!(loader_id)
             && message["params"]["type"] == json!("Document")
     }));
 

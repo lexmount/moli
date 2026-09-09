@@ -44,7 +44,6 @@ impl CdpConnection {
         let owner = CommandOwnerScope::capture(self, None);
         let waiter = self.start_native_navigation_fixture_for_test(
             &owner,
-            crate::domains::page::LOADER_ID,
             NavigationRequestInterception::new(
                 url,
                 method,
@@ -86,7 +85,6 @@ impl CdpConnection {
     pub(crate) fn start_native_navigation_fixture_for_test(
         &mut self,
         owner: &CommandOwnerScope,
-        loader_id: &str,
         request: NavigationRequestInterception,
         decision: NavigationDecision,
     ) -> Result<BrowserNavigationWaiter, String> {
@@ -103,9 +101,21 @@ impl CdpConnection {
         let admitted_request = request.clone();
         let waiter = native.navigate_document(contents, request)?;
         let request = waiter.request();
-        self.browser_context_by_id_mut(&context_id)
-            .expect("resolved fixture context")
-            .observe_navigation_fixture_for_test(&target_id, request, loader_id);
+        // Use the production projection allocator: hand-written fixture IDs
+        // can alias the next real navigation and falsely satisfy its fences.
+        let mut allocator = std::mem::take(&mut self.network_request_id_allocator);
+        let context = self
+            .browser_context_by_id_mut(&context_id)
+            .expect("resolved fixture context");
+        assert!(context.observe_target_navigation_started(&target_id, request));
+        context
+            .project_document_navigation_loader_for_target(
+                &target_id,
+                Some(request.navigation),
+                &mut allocator,
+            )
+            .expect("fixture navigation must have a unique projection identity");
+        self.network_request_id_allocator = allocator;
         let paused = native
             .navigation_decision(contents)?
             .filter(|paused| paused.permit.navigation() == request.navigation)

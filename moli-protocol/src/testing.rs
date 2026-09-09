@@ -81,7 +81,6 @@ impl CdpConnection {
         let waiter = self
             .start_native_navigation_fixture_for_test(
                 owner,
-                crate::domains::page::LOADER_ID,
                 moli_core::browser::web_contents::NavigationRequestInterception::new(
                     url::Url::parse(raw_url).expect("fixture URL"),
                     "GET".into(),
@@ -361,7 +360,6 @@ impl TestContext {
             .conn
             .start_native_navigation_fixture_for_test(
                 &owner,
-                crate::domains::page::LOADER_ID,
                 moli_core::browser::web_contents::NavigationRequestInterception::new(
                     requested_url,
                     "GET".into(),

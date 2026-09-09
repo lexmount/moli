@@ -7915,6 +7915,10 @@ mod tests {
                     .as_ref()
                     .unwrap()
                     .target_document_id("TID-replay-exhaustion");
+                let old_loader = ctx
+                    .conn
+                    .current_document_loader_id_for_session_owner(sessions[2])
+                    .unwrap();
                 let outgoing = ctx
                     .conn
                     .current_renderer_agent_attachment_id_for_owner(&owner)
@@ -7978,6 +7982,10 @@ mod tests {
                 let response = ctx.take_response_by_id(2000);
                 assert!(response.get("error").is_none());
                 let loader = response["result"]["loaderId"].as_str().unwrap().to_owned();
+                assert_ne!(
+                    loader, old_loader,
+                    "fixture and subsequent navigation must not alias a loader identity"
+                );
                 ctx.wait_until_scheduler_state("all session replay responses", |conn| {
                     sessions.iter().all(|session| {
                         (71..=73).all(|id| {

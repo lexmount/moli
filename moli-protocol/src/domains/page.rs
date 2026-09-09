@@ -5194,14 +5194,17 @@ mod producer_tests {
 
         assert_eq!(message["sessionId"], json!("SID-location"));
         assert_eq!(message["params"]["frameId"], json!("TID-location"));
-        assert_eq!(message["params"]["loaderId"], json!(super::LOADER_ID));
+        let loader_id = conn
+            .current_document_loader_id_for_session_owner(Some("SID-location"))
+            .unwrap();
+        assert_eq!(message["params"]["loaderId"], json!(loader_id));
         assert_eq!(message["params"]["url"], json!(target_url));
         assert!(matches!(
             automation_event,
             Some(AutomationEvent::NavigationFrame(event))
                 if event.kind == NavigationFrameEventKind::StartedNavigating
                     && event.frame_id.as_str() == "TID-location"
-                    && event.loader_id.as_ref().map(|id| id.as_str()) == Some(super::LOADER_ID)
+                    && event.loader_id.as_ref().map(|id| id.as_str()) == Some(loader_id.as_str())
                     && event.url == target_url
         ));
     }

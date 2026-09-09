@@ -33,7 +33,6 @@ impl DerefMut for DocumentOwnerFixture {
 
 async fn prepare_navigation(
     owner: &mut DocumentOwnerFixture,
-    loader_id: &str,
     url: &str,
 ) -> BrowserNavigationWaiter {
     let command_owner = CommandOwnerScope::capture(&owner.conn, None);
@@ -41,7 +40,6 @@ async fn prepare_navigation(
         .conn
         .start_native_navigation_fixture_for_test(
             &command_owner,
-            loader_id,
             moli_core::browser::web_contents::NavigationRequestInterception::new(
                 url::Url::parse(url).unwrap(),
                 "GET".into(),
@@ -153,7 +151,7 @@ async fn context_with_document_and_runtime_config(
     runtime_config: moli_core::runtime::NavigationRuntimeConfig,
 ) -> DocumentOwnerFixture {
     let mut owner = empty_document_context_with_runtime_config(runtime_config);
-    let waiter = prepare_navigation(&mut owner, "LOADER-fixture", url).await;
+    let waiter = prepare_navigation(&mut owner, url).await;
     let (metadata, projection) = observe_navigation_commit(&mut owner, waiter).await.unwrap();
     owner.initial_artifacts = Some(metadata.lifecycle.artifacts.clone());
     let projection_fence = projection
@@ -179,13 +177,12 @@ async fn context_with_document(url: &str) -> DocumentOwnerFixture {
 async fn loaded_navigation_commit_settles_document_history_and_navigation_together() {
     let mut owner = context_with_document("data:text/html,<title>first</title>").await;
     let old_document = owner.target_document_id(TARGET).unwrap();
-    let loaded = prepare_navigation(
-        &mut owner,
-        "LOADER-atomic",
-        "data:text/html,<title>second</title>",
-    )
-    .await;
+    let loaded = prepare_navigation(&mut owner, "data:text/html,<title>second</title>").await;
     let expected_document = loaded.request().document;
+    let expected_loader = owner
+        .current_document_loader_id_for_target(TARGET)
+        .unwrap()
+        .to_owned();
     let (committed, projection) = observe_navigation_commit(&mut owner, loaded).await.unwrap();
     let url = &committed.info.as_ref().unwrap().url;
     assert!(projection.unwrap().fence.is_ok());
@@ -201,7 +198,7 @@ async fn loaded_navigation_commit_settles_document_history_and_navigation_togeth
     );
     assert_eq!(
         owner.committed_document_loader_id_for_target(TARGET),
-        Some("LOADER-atomic")
+        Some(expected_loader.as_str())
     );
     let (_, entries) = owner.target_navigation_history_snapshot(TARGET).unwrap();
     assert_eq!(entries.last().unwrap().url, url.as_str());
@@ -238,12 +235,7 @@ async fn late_title_projection_does_not_rewind_native_history_or_cross_documents
     let (_, history) = owner.target_navigation_history_snapshot(TARGET).unwrap();
     assert_eq!(history.last().unwrap().title, "native current");
 
-    let next = prepare_navigation(
-        &mut owner,
-        "LOADER-title-replacement",
-        "data:text/html,<title>replacement</title>",
-    )
-    .await;
+    let next = prepare_navigation(&mut owner, "data:text/html,<title>replacement</title>").await;
     observe_navigation_commit(&mut owner, next).await.unwrap();
     assert_eq!(owner.commit_target_document_title(TARGET, &earlier), None);
     let (_, history) = owner.target_navigation_history_snapshot(TARGET).unwrap();
@@ -254,12 +246,7 @@ async fn late_title_projection_does_not_rewind_native_history_or_cross_documents
 #[tokio::test]
 async fn disappearing_agent_host_cannot_cancel_an_admitted_browser_commit() {
     let mut owner = empty_document_context();
-    let loaded = prepare_navigation(
-        &mut owner,
-        "LOADER-native",
-        "data:text/html,<title>native</title>",
-    )
-    .await;
+    let loaded = prepare_navigation(&mut owner, "data:text/html,<title>native</title>").await;
     let request = loaded.request();
     let navigation = request.navigation;
     let contents = request.web_contents;
@@ -419,16 +406,15 @@ async fn disappearing_agent_host_cannot_cancel_an_admitted_browser_commit() {
 async fn creation_projection_cannot_rewind_native_progress_or_retarget_a_replacement() {
     use crate::conn::CommittedDocumentLifecycle;
     let mut owner = empty_document_context();
-    let loaded = prepare_navigation(
-        &mut owner,
-        "LOADER-native",
-        "data:text/html,<title>native</title>",
-    )
-    .await;
+    let loaded = prepare_navigation(&mut owner, "data:text/html,<title>native</title>").await;
     let navigation = loaded.request().navigation;
     let renderer_page = prepared_renderer(&owner, &loaded);
     let (commit, _) = observe_navigation_commit(&mut owner, loaded).await.unwrap();
     let artifacts = commit.lifecycle.artifacts.clone();
+    let loader = owner
+        .committed_document_loader_id_for_target(TARGET)
+        .unwrap()
+        .to_owned();
     let snapshot = artifacts.lifecycle_snapshot;
     let loaded_snapshot = owner
         .renderer_document_lifecycle_authoritative_snapshot_for_target(TARGET)
@@ -469,7 +455,7 @@ async fn creation_projection_cannot_rewind_native_progress_or_retarget_a_replace
             },
             Some(navigation),
             TARGET.into(),
-            "LOADER-native".into(),
+            loader.clone(),
         );
         assert_eq!(projected, artifacts.initial_lifecycle_events);
         assert_eq!(
@@ -527,7 +513,7 @@ async fn creation_projection_cannot_rewind_native_progress_or_retarget_a_replace
         native
     );
 
-    let loaded = prepare_navigation(&mut owner, "LOADER-next", "data:text/html,next").await;
+    let loaded = prepare_navigation(&mut owner, "data:text/html,next").await;
     observe_navigation_commit(&mut owner, loaded).await.unwrap();
     let next_snapshot = owner
         .renderer_document_lifecycle_authoritative_snapshot_for_target(TARGET)
@@ -548,7 +534,7 @@ async fn creation_projection_cannot_rewind_native_progress_or_retarget_a_replace
                 commit.lifecycle.clone(),
                 Some(navigation),
                 TARGET.into(),
-                "LOADER-native".into(),
+                loader,
             )
             .is_empty()
     );
@@ -567,12 +553,7 @@ async fn creation_projection_cannot_rewind_native_progress_or_retarget_a_replace
 async fn failed_inspection_projection_cannot_veto_browser_document_commit() {
     let mut owner = context_with_document("data:text/html,<title>first</title>").await;
     let previous_document = owner.target_document_id(TARGET).unwrap();
-    let loaded = prepare_navigation(
-        &mut owner,
-        "LOADER-projection",
-        "data:text/html,<title>committed</title>",
-    )
-    .await;
+    let loaded = prepare_navigation(&mut owner, "data:text/html,<title>committed</title>").await;
     // Fail only the DevTools projection. The Browser WebContents and its pending
     // navigation remain live and must not require that projection's approval.
     owner
@@ -627,12 +608,7 @@ async fn committed_occurrence_retains_the_previous_document_output_projection() 
             .renderer_document_lifecycle_binding_for_target(TARGET)
             .is_some()
     );
-    let loaded = prepare_navigation(
-        &mut owner,
-        "LOADER-current",
-        "data:text/html,<title>current</title>",
-    )
-    .await;
+    let loaded = prepare_navigation(&mut owner, "data:text/html,<title>current</title>").await;
     let current_renderer = prepared_renderer(&owner, &loaded);
     observe_navigation_commit(&mut owner, loaded).await.unwrap();
     let current_document = owner.target_document_id(TARGET).unwrap();
@@ -795,10 +771,7 @@ async fn old_network_ingress_survives_native_commit_before_projection() {
 #[tokio::test]
 async fn inspection_configuration_failure_cannot_roll_back_a_committed_browser_document() {
     let mut owner = context_with_document("data:text/html,<title>first</title>").await;
-    let loaded = prepare_navigation(
-        &mut owner,
-        "LOADER-restore",
-        "data:text/html,<title>committed</title><script>Object.defineProperty(globalThis,'protectedBinding',{value:1,configurable:false})</script>",
+    let loaded = prepare_navigation(&mut owner, "data:text/html,<title>committed</title><script>Object.defineProperty(globalThis,'protectedBinding',{value:1,configurable:false})</script>",
     )
     .await;
     let (committed, projection) = observe_navigation_commit(&mut owner, loaded).await.unwrap();
@@ -856,12 +829,7 @@ async fn rejected_browser_candidate_cannot_rotate_inspection_or_document_project
         .unwrap()
         .runtime_slot
         .current_renderer_attachment();
-    let loaded = prepare_navigation(
-        &mut owner,
-        "LOADER-stale",
-        "data:text/html,<title>stale</title>",
-    )
-    .await;
+    let loaded = prepare_navigation(&mut owner, "data:text/html,<title>stale</title>").await;
     let request = loaded.request();
     let stale_permit = owner
         .browser_context
@@ -869,8 +837,7 @@ async fn rejected_browser_candidate_cannot_rotate_inspection_or_document_project
         .unwrap()
         .unwrap()
         .permit;
-    let replacement =
-        prepare_navigation(&mut owner, "LOADER-current", "data:text/html,current").await;
+    let replacement = prepare_navigation(&mut owner, "data:text/html,current").await;
     let current = replacement.request().navigation;
     let history = owner.target_navigation_history_snapshot(TARGET).unwrap();
     let target_url = owner
@@ -921,12 +888,7 @@ async fn document_replacement_updates_inspection_binding_with_physical_page() {
         .runtime_slot
         .current_renderer_attachment()
         .unwrap();
-    let loaded = prepare_navigation(
-        &mut owner,
-        "LOADER-second",
-        "data:text/html,<title>second</title>",
-    )
-    .await;
+    let loaded = prepare_navigation(&mut owner, "data:text/html,<title>second</title>").await;
     observe_navigation_commit(&mut owner, loaded).await.unwrap();
     let attachment = owner
         .active_page_target()
@@ -1018,12 +980,7 @@ async fn page_with_installed_dialog_for_test() -> (
 #[tokio::test]
 async fn document_replacement_dismisses_dialog_without_protocol_session_cleanup() {
     let (mut owner, completion) = page_with_installed_dialog_for_test().await;
-    let loaded = prepare_navigation(
-        &mut owner,
-        "LOADER-replacement",
-        "data:text/html,<p>replacement</p>",
-    )
-    .await;
+    let loaded = prepare_navigation(&mut owner, "data:text/html,<p>replacement</p>").await;
     observe_navigation_commit(&mut owner, loaded).await.unwrap();
 
     assert!(
@@ -1326,12 +1283,8 @@ async fn document_policy_completion_rejects_replacement_document() {
         .wait()
         .await;
 
-    let loaded = prepare_navigation(
-        &mut owner,
-        "LOADER-replacement",
-        "data:text/html,<p>replacement policy owner</p>",
-    )
-    .await;
+    let loaded =
+        prepare_navigation(&mut owner, "data:text/html,<p>replacement policy owner</p>").await;
     observe_navigation_commit(&mut owner, loaded).await.unwrap();
     let replacement = owner.document_handle_for_target(TARGET).unwrap();
     assert_ne!(replacement, document);
@@ -1393,7 +1346,6 @@ async fn document_native_command_completions_reject_replacement_document() {
 
     let loaded = prepare_navigation(
         &mut owner,
-        "LOADER-replacement",
         "data:text/html,<p>replacement native command owner</p>",
     )
     .await;
@@ -1511,7 +1463,6 @@ async fn document_replacement_preserves_stable_page_engine_history_and_storage()
 
     let loaded = prepare_navigation(
         &mut owner,
-        "second-loader",
         "data:text/html,<title>second</title><p>second</p>",
     )
     .await;
@@ -1588,7 +1539,7 @@ async fn web_contents_owns_live_document_and_navigation_after_protocol_residence
     let observer = owner.document_lifetime_observer_for_target(TARGET).unwrap();
     let handle = owner.web_contents_handle_for_target(TARGET).unwrap();
     let (stable_id, frame_id) = owner.browser_context.web_contents_identity(handle).unwrap();
-    let pending = prepare_navigation(&mut owner, "pending-loader", "data:text/html,pending").await;
+    let pending = prepare_navigation(&mut owner, "data:text/html,pending").await;
     let navigation = pending.request().navigation;
     let cancellation = owner
         .document_navigation_cancellation_handle_for_target(TARGET, &navigation)
@@ -1669,7 +1620,7 @@ async fn replacement_retires_document_identity_lifecycle_and_lifetime_together()
     // Moving the whole Context or failing a pending navigation must not retire
     // the current Document. Its Page/lifecycle/identity move as one object.
     let mut moved = owner;
-    let failed = prepare_navigation(&mut moved, "failed-loader", "data:text/html,canceled").await;
+    let failed = prepare_navigation(&mut moved, "data:text/html,canceled").await;
     let failed_navigation = failed.request().navigation;
     let before = moved.renderer_document_lifecycle_authoritative_snapshot_for_target(TARGET);
     assert!(
@@ -1684,8 +1635,7 @@ async fn replacement_retires_document_identity_lifecycle_and_lifetime_together()
     let mut context = Context::from_waker(Waker::noop());
     assert_eq!(first_wait.as_mut().poll(&mut context), Poll::Pending);
 
-    let loaded =
-        prepare_navigation(&mut moved, "second-loader", "data:text/html,<p>second</p>").await;
+    let loaded = prepare_navigation(&mut moved, "data:text/html,<p>second</p>").await;
     let navigation = loaded.request().navigation;
     let reserved_id = loaded.request().document;
     let second_renderer = prepared_renderer(&moved, &loaded);
@@ -1787,12 +1737,7 @@ async fn discarded_prepared_candidate_preserves_current_document_until_owner_los
         .unwrap();
     let first_id = owner.target_document_id(TARGET);
     let observer = owner.document_lifetime_observer_for_target(TARGET).unwrap();
-    let candidate = prepare_navigation(
-        &mut owner,
-        "candidate-loader",
-        "data:text/html,<p>candidate</p>",
-    )
-    .await;
+    let candidate = prepare_navigation(&mut owner, "data:text/html,<p>candidate</p>").await;
     let navigation = candidate.request().navigation;
     assert_ne!(prepared_renderer(&owner, &candidate), first_renderer);
     drop(candidate);
