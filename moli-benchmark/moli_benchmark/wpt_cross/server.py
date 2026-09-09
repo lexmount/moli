@@ -458,7 +458,7 @@ BENCH_TESTDRIVER_VENDOR_BRIDGE = b"""\
   }
 
   function dispatchKey(target, type, key, modifiers) {
-    target.dispatchEvent(new KeyboardEvent(type, {
+    return target.dispatchEvent(new KeyboardEvent(type, {
       key: key,
       altKey: !!modifiers.Alt,
       ctrlKey: !!modifiers.Control,
@@ -467,6 +467,29 @@ BENCH_TESTDRIVER_VENDOR_BRIDGE = b"""\
       cancelable: true,
       composed: true,
     }));
+  }
+
+  function insertSendKeyText(target, key, modifiers) {
+    if (!target || key.length !== 1 || modifiers.Alt || modifiers.Control) {
+      return;
+    }
+    var codePoint = key.codePointAt(0);
+    if (codePoint >= 0xE000 && codePoint <= 0xF8FF) {
+      return;
+    }
+    var localName = String(target.localName || '').toLowerCase();
+    var type = localName === 'input' ? String(target.type || '').toLowerCase() : '';
+    var isTextControl =
+      localName === 'textarea' ||
+      (localName === 'input' &&
+       ['text', 'search', 'tel', 'url', 'email', 'password'].includes(type));
+    if (!isTextControl && !target.isContentEditable) {
+      return;
+    }
+    var doc = target.ownerDocument || document;
+    try {
+      doc.execCommand('insertText', false, key);
+    } catch (e) {}
   }
 
   async function action_sequence(actions, context) {
@@ -527,12 +550,19 @@ BENCH_TESTDRIVER_VENDOR_BRIDGE = b"""\
   }
 
   async function sendKeys(element, keys) {
+    var wasFocused = document.activeElement === element;
     if (
       element &&
       typeof element.focus === 'function' &&
       String(element.localName || '').toLowerCase() !== 'body'
     ) {
       element.focus();
+    }
+    if (!wasFocused && element && typeof element.setSelectionRange === 'function') {
+      try {
+        var end = String(element.value || '').length;
+        element.setSelectionRange(end, end);
+      } catch (e) {}
     }
     var modifiers = { Alt: false, Control: false, Shift: false };
     for (var keyValue of String(keys || '')) {
@@ -543,7 +573,10 @@ BENCH_TESTDRIVER_VENDOR_BRIDGE = b"""\
         dispatchKey(target, 'keydown', key, modifiers);
         continue;
       }
-      dispatchKey(target, 'keydown', key, modifiers);
+      var keyAllowed = dispatchKey(target, 'keydown', key, modifiers);
+      if (keyAllowed) {
+        insertSendKeyText(document.activeElement || target, key, modifiers);
+      }
       dispatchKey(document.activeElement || target, 'keyup', key, modifiers);
     }
     for (var modifier in modifiers) {
