@@ -5,7 +5,10 @@ use crate::frame_owner_model::{
     DocumentCreationKind, FrameDocumentInteractiveLifecycleAction,
     FrameDocumentLocalWindowTransition, FrameLocalWindowOwnerTransition,
 };
-use crate::{document_runtime::DomHandle, frame_owner_model::FrameDocumentOwnerTransition};
+use crate::{
+    document_runtime::DomHandle, dom::native::DocumentReadyState,
+    frame_owner_model::FrameDocumentOwnerTransition,
+};
 use moli_web_mime::is_dom_parser_xml_mime;
 use url::Url;
 
@@ -200,6 +203,10 @@ impl JsContextHost {
                 );
             document_handle
         };
+        // Navigation-created Documents start loading before parser scripts can
+        // observe them. Keep the generic detached/initial-empty default complete.
+        let _ = self
+            .set_dom_document_ready_state_for_handle(document_handle, DocumentReadyState::Loading);
         let document_url = self.document_url_for_handle(document_handle);
         let document_base_url = self.document_base_url_for_handle(document_handle);
         let parser_document_url = document_url.clone();
