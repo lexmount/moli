@@ -346,6 +346,22 @@ fn child_document_write_or_writeln_callback<'s>(
         rv.set_undefined();
         return;
     }
+    let Some(document_handle) = child_document_native_handle_for_runtime(scope, host_ptr, document)
+    else {
+        rv.set_undefined();
+        return;
+    };
+    let has_open_stream = host
+        .frame_owner_store
+        .current_child_document_owner(handle)
+        .is_some_and(|owner| host.child_document_parsers.has_open_stream(owner));
+    if host.has_ignore_destructive_writes_counter(document_handle)
+        && !has_open_stream
+        && !host.child_document_is_executing_parser_script(document_handle)
+    {
+        rv.set_undefined();
+        return;
+    }
     let script_context = if host.child_document_parser_is_active(handle) {
         match unsafe { &mut *host_ptr }.ensure_prebootstrapped_child_default_context(scope, handle)
         {
@@ -366,11 +382,6 @@ fn child_document_write_or_writeln_callback<'s>(
             return;
         };
         context
-    };
-    let Some(document_handle) = child_document_native_handle_for_runtime(scope, host_ptr, document)
-    else {
-        rv.set_undefined();
-        return;
     };
     let _ = unsafe { &mut *host_ptr }.pump_child_document_write_parser(
         scope,
