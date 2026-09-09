@@ -319,8 +319,13 @@ mod tests {
     fn font_family_value_normalization_stays_renderer_local() {
         assert_eq!(
             normalize_style_value("font-family", "'Lucida Grande'"),
-            "Lucida Grande"
+            r#""Lucida Grande""#
         );
+        assert_eq!(normalize_style_value("font-family", "'Arial'"), "Arial");
+        assert_eq!(normalize_style_value("font-family", "'-Arial'"), "-Arial");
+        assert_eq!(normalize_style_value("font-family", "'-'"), r#""-""#);
+        assert_eq!(normalize_style_value("font-family", "'--'"), r#""--""#);
+        assert_eq!(normalize_style_value("font-family", "'-1'"), r#""-1""#);
         assert_eq!(normalize_style_value("font-family", "'34J'"), r#""34J""#);
         assert_eq!(
             normalize_style_value("font-family", "'serif'"),
