@@ -14,9 +14,9 @@ pub(crate) use self::events::{
     mark_simple_event_target_slot, simple_event_target_add_event_listener_callback,
     simple_event_target_dispatch_event_callback, simple_event_target_inspector_listener_snapshots,
     simple_event_target_remove_event_listener_callback, simple_event_target_slot_name,
-    simple_object_event_listeners_snapshot, simple_object_event_remove_listener_value_for_type,
-    simple_object_event_set_ordered_handler, simple_object_event_target_add_listener,
-    simple_object_event_target_remove_listener,
+    simple_object_event_listener_is_registered, simple_object_event_listeners_snapshot,
+    simple_object_event_remove_listener_value_for_type, simple_object_event_set_ordered_handler,
+    simple_object_event_target_add_listener, simple_object_event_target_remove_listener,
 };
 pub(super) use self::events::{
     media_query_list_add_event_listener_callback, media_query_list_add_listener_callback,
