@@ -1,5 +1,5 @@
 use crate::document_runtime::DomHandle;
-use crate::dom::native::Node;
+use crate::dom::{forms::InputType, native::Node};
 use crate::util::v8_string;
 use crate::webidl;
 
@@ -1923,7 +1923,10 @@ pub(in crate::native_bridge) fn node_autocorrect_getter_function<'s>(
     };
 
     if element.is_html_input()
-        && matches!(element.input_type().as_str(), "email" | "password" | "url")
+        && matches!(
+            element.input_type(),
+            InputType::Email | InputType::Password | InputType::Url
+        )
     {
         rv.set_bool(false);
         return;

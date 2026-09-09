@@ -115,7 +115,7 @@ pub(crate) fn is_valid_submit_button(runtime: &JsContextHost, handle: DomHandle)
         .and_then(Node::as_element)
         .is_some_and(|element| {
             if element.is_html_input() {
-                matches!(element.input_type().as_str(), "submit" | "image")
+                element.input_type().is_submit_button()
             } else if element.is_html_element("button") {
                 !matches!(element.attribute("type"), Some("reset" | "button"))
             } else {

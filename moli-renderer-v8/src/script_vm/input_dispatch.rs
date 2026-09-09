@@ -11,7 +11,10 @@ use super::inspector::{
 };
 use super::{ActiveDragSession, ActiveScrollbarDrag, ActiveTouchPoint, ScriptVm};
 use crate::document_runtime::DomHandle;
-use crate::dom::native::{Node, SelectedFile};
+use crate::dom::{
+    forms::InputType,
+    native::{Node, SelectedFile},
+};
 use crate::native_bridge::element::{
     TouchEventPoint, activate_handle_via_click,
     activate_handle_via_click_with_detail_and_modifiers, cache_input_files_from_selected_files,
@@ -1723,7 +1726,7 @@ impl ScriptVm {
             let Some(element) = runtime.dom_host().node(handle).and_then(Node::as_element) else {
                 return Ok(false);
             };
-            if !element.is_html_input() || element.input_type() != "file" {
+            if !element.is_html_input() || element.input_type() != InputType::File {
                 return Ok(false);
             }
             let multiple = element.attribute("multiple").is_some();

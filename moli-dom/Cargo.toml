@@ -8,6 +8,7 @@ edition = "2024"
 html5ever = "0.39.0"
 indexmap = "2.6"
 moli-css-parse = { path = "../moli-css-parse" }
+moli-html-input-type = { path = "../moli-html-input-type" }
 moli-html-input-temporal = { path = "../moli-html-input-temporal" }
 percent-encoding = "2.3"
 selectors = "0.40"

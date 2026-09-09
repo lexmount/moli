@@ -1,4 +1,7 @@
-use crate::dom::native::{Element, Node};
+use crate::dom::{
+    forms::InputType,
+    native::{Element, Node},
+};
 use crate::{
     construct_form_data_entries_for_form, custom_elements,
     document_runtime::DomHandle,

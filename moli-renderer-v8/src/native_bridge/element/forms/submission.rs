@@ -629,7 +629,7 @@ fn dialog_submission_result(
         return Some(String::new());
     };
     let element = runtime.dom_host().node(submitter)?.as_element()?;
-    if element.is_html_input() && element.input_type() == "image" {
+    if element.is_html_input() && element.input_type() == InputType::Image {
         let (x, y) = runtime
             .active_image_submitter_coordinate(submitter)
             .unwrap_or((0, 0));
@@ -1044,7 +1044,7 @@ fn build_form_reset_plan(runtime: &JsContextHost, handle: DomHandle) -> Option<F
     match element.local_name() {
         "input" => {
             let input_type = element.input_type();
-            if matches!(input_type.as_str(), "checkbox" | "radio") {
+            if input_type.is_checkable() {
                 Some(FormResetPlan::Checked {
                     handle,
                     checked: element.attribute("checked").is_some(),

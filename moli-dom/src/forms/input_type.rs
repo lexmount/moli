@@ -4,83 +4,17 @@ use moli_html_input_temporal::{
     is_valid_date_input_value, is_valid_month_input_value, is_valid_time_input_value,
     is_valid_week_input_value,
 };
-
-pub fn canonical_input_type(value: &str) -> &'static str {
-    match value.trim().to_ascii_lowercase().as_str() {
-        "button" => "button",
-        "checkbox" => "checkbox",
-        "color" => "color",
-        "date" => "date",
-        "datetime-local" => "datetime-local",
-        "email" => "email",
-        "file" => "file",
-        "hidden" => "hidden",
-        "image" => "image",
-        "month" => "month",
-        "number" => "number",
-        "password" => "password",
-        "radio" => "radio",
-        "range" => "range",
-        "reset" => "reset",
-        "search" => "search",
-        "submit" => "submit",
-        "tel" => "tel",
-        "text" => "text",
-        "time" => "time",
-        "url" => "url",
-        "week" => "week",
-        _ => "text",
-    }
-}
-
-pub fn input_type_supports_value_as_number(input_type: &str) -> bool {
-    matches!(
-        canonical_input_type(input_type),
-        "number" | "range" | "date" | "time" | "datetime-local" | "month" | "week"
-    )
-}
-
-pub fn input_type_supports_pattern(input_type: &str) -> bool {
-    matches!(
-        canonical_input_type(input_type),
-        "text" | "search" | "tel" | "url" | "email" | "password"
-    )
-}
-
-pub fn input_type_supports_text_length_validation(input_type: &str) -> bool {
-    matches!(
-        canonical_input_type(input_type),
-        "text" | "search" | "url" | "tel" | "email" | "password"
-    )
-}
-
-pub fn input_type_suppresses_immutable_required(input_type: &str) -> bool {
-    matches!(
-        canonical_input_type(input_type),
-        "text"
-            | "search"
-            | "url"
-            | "tel"
-            | "email"
-            | "password"
-            | "date"
-            | "month"
-            | "week"
-            | "time"
-            | "datetime-local"
-            | "number"
-    )
-}
+use moli_html_input_type::InputType;
 
 pub fn form_control_type_supports_intrinsic_validation(
     local_name: &str,
-    input_type: Option<&str>,
+    input_type: Option<InputType>,
     button_type: Option<&str>,
 ) -> bool {
     match local_name {
         "input" => !matches!(
-            canonical_input_type(input_type.unwrap_or("text")),
-            "hidden" | "button" | "reset"
+            input_type.unwrap_or_default(),
+            InputType::Hidden | InputType::Button | InputType::Reset
         ),
         "select" | "textarea" => true,
         "button" => !matches!(
@@ -95,37 +29,39 @@ pub fn form_control_type_supports_intrinsic_validation(
     }
 }
 
-pub fn sanitize_input_value_for_type(input_type: &str, value: &str) -> String {
-    match canonical_input_type(input_type) {
+pub fn sanitize_input_value_for_type(input_type: InputType, value: &str) -> String {
+    match input_type {
         // Text-family — strip newlines / CR but leave whitespace runs alone.
-        "text" | "search" | "tel" | "password" => strip_input_value_line_breaks(value),
+        InputType::Text | InputType::Search | InputType::Tel | InputType::Password => {
+            strip_input_value_line_breaks(value)
+        }
         // URL / Email — strip newlines AND trim leading/trailing ASCII whitespace.
         // (Email's multi-value parsing isn't relevant here since the dirty
         //  value path only ever sees a single value.)
-        "url" | "email" => {
+        InputType::Url | InputType::Email => {
             let stripped = strip_input_value_line_breaks(value);
             stripped.trim_matches(is_ascii_whitespace_char).to_owned()
         }
-        "number" if !is_valid_number_input_value(value) => String::new(),
-        "date" if !is_valid_date_input_value(value) => String::new(),
-        "time" if !is_valid_time_input_value(value) => String::new(),
-        "datetime-local" => datetime_local_input_milliseconds(value)
+        InputType::Number if !is_valid_number_input_value(value) => String::new(),
+        InputType::Date if !is_valid_date_input_value(value) => String::new(),
+        InputType::Time if !is_valid_time_input_value(value) => String::new(),
+        InputType::DatetimeLocal => datetime_local_input_milliseconds(value)
             .and_then(datetime_local_input_value_from_milliseconds)
             .unwrap_or_default(),
-        "month" if !is_valid_month_input_value(value) => String::new(),
-        "week" if !is_valid_week_input_value(value) => String::new(),
+        InputType::Month if !is_valid_month_input_value(value) => String::new(),
+        InputType::Week if !is_valid_week_input_value(value) => String::new(),
         // Range — sanitization: parse as float, clamp to [min, max], else
         // default to "(min+max)/2". Without min/max context here we use the
         // attribute-less default range 0..=100 (midpoint 50). Callers with
         // attribute context can override.
-        "range" => sanitize_range_value(value),
+        InputType::Range => sanitize_range_value(value),
         // HTML-compatible color inputs accept CSS colors, discard alpha, and
         // expose an opaque lowercase sRGB simple color.
-        "color" => sanitize_color_value(value),
+        InputType::Color => sanitize_color_value(value),
         // File — IDL value is always the empty string when set
         // programmatically; the user-selected files are the only path to a
         // non-empty file list.
-        "file" => String::new(),
+        InputType::File => String::new(),
         _ => value.to_owned(),
     }
 }
@@ -165,20 +101,25 @@ fn sanitize_color_value(value: &str) -> String {
         .unwrap_or_else(|| "#000000".to_owned())
 }
 
-pub fn input_type_has_value_sanitization(input_type: &str) -> bool {
+pub fn input_type_has_value_sanitization(input_type: InputType) -> bool {
     matches!(
-        canonical_input_type(input_type),
-        "number" | "date" | "time" | "datetime-local" | "month" | "week"
+        input_type,
+        InputType::Number
+            | InputType::Date
+            | InputType::Time
+            | InputType::DatetimeLocal
+            | InputType::Month
+            | InputType::Week
     )
 }
 
-pub fn input_type_value_mismatch(input_type: &str, value: &str, multiple: bool) -> bool {
+pub fn input_type_value_mismatch(input_type: InputType, value: &str, multiple: bool) -> bool {
     if value.is_empty() {
         return false;
     }
-    match canonical_input_type(input_type) {
-        "email" => email_value_type_mismatch(value, multiple),
-        "url" => url_value_type_mismatch(value),
+    match input_type {
+        InputType::Email => email_value_type_mismatch(value, multiple),
+        InputType::Url => url_value_type_mismatch(value),
         _ => false,
     }
 }
@@ -251,84 +192,130 @@ pub fn url_value_type_mismatch(value: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::sanitize_input_value_for_type;
+    use moli_html_input_type::InputType;
 
     const INITIAL: &str = "  foo\rbar  ";
 
     #[test]
     fn text_family_strips_cr_but_preserves_surrounding_whitespace() {
-        for kw in ["text", "search", "tel", "password"] {
+        for input_type in [
+            InputType::Text,
+            InputType::Search,
+            InputType::Tel,
+            InputType::Password,
+        ] {
             assert_eq!(
-                sanitize_input_value_for_type(kw, INITIAL),
+                sanitize_input_value_for_type(input_type, INITIAL),
                 "  foobar  ",
-                "{kw}: surrounding whitespace must survive"
+                "{input_type}: surrounding whitespace must survive"
             );
         }
     }
 
     #[test]
     fn url_email_strip_cr_then_trim_whitespace() {
-        for kw in ["url", "email"] {
+        for input_type in [InputType::Url, InputType::Email] {
             assert_eq!(
-                sanitize_input_value_for_type(kw, INITIAL),
+                sanitize_input_value_for_type(input_type, INITIAL),
                 "foobar",
-                "{kw}: must trim AND strip CR"
+                "{input_type}: must trim AND strip CR"
             );
-            assert_eq!(sanitize_input_value_for_type(kw, ""), "");
+            assert_eq!(sanitize_input_value_for_type(input_type, ""), "");
             // Already-trimmed values pass through unchanged.
-            assert_eq!(sanitize_input_value_for_type(kw, "foobar"), "foobar");
+            assert_eq!(
+                sanitize_input_value_for_type(input_type, "foobar"),
+                "foobar"
+            );
         }
     }
 
     #[test]
     fn range_defaults_to_midpoint_for_invalid_input() {
         // "  foo\rbar  " parses as NaN -> default midpoint of 0..=100 = "50".
-        assert_eq!(sanitize_input_value_for_type("range", INITIAL), "50");
+        assert_eq!(
+            sanitize_input_value_for_type(InputType::Range, INITIAL),
+            "50"
+        );
         // Empty -> default.
-        assert_eq!(sanitize_input_value_for_type("range", ""), "50");
+        assert_eq!(sanitize_input_value_for_type(InputType::Range, ""), "50");
         // Valid float in-range round-trips and gets integer-serialised when
         // it lands exactly on an integer.
-        assert_eq!(sanitize_input_value_for_type("range", "42"), "42");
+        assert_eq!(sanitize_input_value_for_type(InputType::Range, "42"), "42");
         // Out-of-range -> clamped.
-        assert_eq!(sanitize_input_value_for_type("range", "150"), "100");
-        assert_eq!(sanitize_input_value_for_type("range", "-5"), "0");
+        assert_eq!(
+            sanitize_input_value_for_type(InputType::Range, "150"),
+            "100"
+        );
+        assert_eq!(sanitize_input_value_for_type(InputType::Range, "-5"), "0");
     }
 
     #[test]
     fn color_parses_css_colors_and_defaults_to_black_for_invalid_input() {
-        assert_eq!(sanitize_input_value_for_type("color", INITIAL), "#000000");
-        assert_eq!(sanitize_input_value_for_type("color", ""), "#000000");
-        assert_eq!(sanitize_input_value_for_type("color", "red"), "#ff0000");
-        assert_eq!(sanitize_input_value_for_type("color", "#FFAA00"), "#ffaa00");
-        assert_eq!(sanitize_input_value_for_type("color", "#abc"), "#aabbcc");
         assert_eq!(
-            sanitize_input_value_for_type("color", "color(display-p3 .5 0 0)"),
+            sanitize_input_value_for_type(InputType::Color, INITIAL),
+            "#000000"
+        );
+        assert_eq!(
+            sanitize_input_value_for_type(InputType::Color, ""),
+            "#000000"
+        );
+        assert_eq!(
+            sanitize_input_value_for_type(InputType::Color, "red"),
+            "#ff0000"
+        );
+        assert_eq!(
+            sanitize_input_value_for_type(InputType::Color, "#FFAA00"),
+            "#ffaa00"
+        );
+        assert_eq!(
+            sanitize_input_value_for_type(InputType::Color, "#abc"),
+            "#aabbcc"
+        );
+        assert_eq!(
+            sanitize_input_value_for_type(InputType::Color, "color(display-p3 .5 0 0)"),
             "#8c0000"
         );
         assert_eq!(
-            sanitize_input_value_for_type("color", "not-a-color"),
+            sanitize_input_value_for_type(InputType::Color, "not-a-color"),
             "#000000"
         );
     }
 
     #[test]
     fn file_always_yields_empty_string() {
-        assert_eq!(sanitize_input_value_for_type("file", INITIAL), "");
-        assert_eq!(sanitize_input_value_for_type("file", "anything"), "");
+        assert_eq!(sanitize_input_value_for_type(InputType::File, INITIAL), "");
+        assert_eq!(
+            sanitize_input_value_for_type(InputType::File, "anything"),
+            ""
+        );
     }
 
     #[test]
     fn states_without_sanitization_pass_value_through_unchanged() {
-        for kw in [
-            "hidden", "checkbox", "radio", "submit", "reset", "button", "image",
+        for input_type in [
+            InputType::Hidden,
+            InputType::Checkbox,
+            InputType::Radio,
+            InputType::Submit,
+            InputType::Reset,
+            InputType::Button,
+            InputType::Image,
         ] {
-            assert_eq!(sanitize_input_value_for_type(kw, INITIAL), INITIAL);
+            assert_eq!(sanitize_input_value_for_type(input_type, INITIAL), INITIAL);
         }
     }
 
     #[test]
     fn invalid_temporal_values_collapse_to_empty_string() {
-        for kw in ["number", "date", "time", "datetime-local", "month", "week"] {
-            assert_eq!(sanitize_input_value_for_type(kw, INITIAL), "");
+        for input_type in [
+            InputType::Number,
+            InputType::Date,
+            InputType::Time,
+            InputType::DatetimeLocal,
+            InputType::Month,
+            InputType::Week,
+        ] {
+            assert_eq!(sanitize_input_value_for_type(input_type, INITIAL), "");
         }
     }
 }

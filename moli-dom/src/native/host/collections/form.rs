@@ -1,5 +1,5 @@
 use super::*;
-use crate::forms::parse_non_negative_integer_prefix;
+use crate::forms::{InputType, parse_non_negative_integer_prefix};
 
 impl DomHost {
     pub fn option_value(&self, handle: DomHandle) -> Option<String> {
@@ -10,20 +10,20 @@ impl DomHost {
         let input = self.node(handle).and_then(Node::as_element)?;
         if !input.is_html_input()
             || !matches!(
-                input.input_type().as_str(),
-                "text"
-                    | "search"
-                    | "tel"
-                    | "url"
-                    | "email"
-                    | "date"
-                    | "month"
-                    | "week"
-                    | "time"
-                    | "datetime-local"
-                    | "number"
-                    | "range"
-                    | "color"
+                input.input_type(),
+                InputType::Text
+                    | InputType::Search
+                    | InputType::Tel
+                    | InputType::Url
+                    | InputType::Email
+                    | InputType::Date
+                    | InputType::Month
+                    | InputType::Week
+                    | InputType::Time
+                    | InputType::DatetimeLocal
+                    | InputType::Number
+                    | InputType::Range
+                    | InputType::Color
             )
         {
             return None;
@@ -147,7 +147,7 @@ impl DomHost {
         let Some(element) = self.node(handle).and_then(Node::as_element) else {
             return Vec::new();
         };
-        if !element.is_html_input() || element.input_type() != "radio" {
+        if !element.is_html_input() || element.input_type() != InputType::Radio {
             return Vec::new();
         }
         let Some(name) = element.name_attribute() else {
@@ -162,7 +162,7 @@ impl DomHost {
                 .and_then(Node::as_element)
                 .is_some_and(|candidate_element| {
                     candidate_element.is_html_input()
-                        && candidate_element.input_type() == "radio"
+                        && candidate_element.input_type() == InputType::Radio
                         && candidate_element.matches_name(name)
                         && self.form_control_owner(candidate) == form_owner
                 })
@@ -289,7 +289,7 @@ fn is_listed_form_control_element(element: &Element) -> bool {
     }
 
     match element.local_name() {
-        "input" => element.input_type() != "image",
+        "input" => element.input_type() != InputType::Image,
         "button" | "fieldset" | "object" | "output" | "select" | "textarea" => true,
         _ => false,
     }

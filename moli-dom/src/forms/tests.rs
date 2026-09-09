@@ -67,40 +67,36 @@ fn integer_prefix_parsers_follow_html_attribute_rules() {
 
 #[test]
 fn input_type_tokens_and_support_matrices_are_shared() {
-    assert_eq!(canonical_input_type("EMAIL"), "email");
-    assert_eq!(canonical_input_type(" datetime-local "), "datetime-local");
-    assert_eq!(canonical_input_type("unknown"), "text");
+    assert!(InputType::Week.supports_value_as_number());
+    assert!(!InputType::Email.supports_value_as_number());
 
-    assert!(input_type_supports_value_as_number("week"));
-    assert!(!input_type_supports_value_as_number("email"));
+    assert!(InputType::Password.supports_pattern());
+    assert!(!InputType::Number.supports_pattern());
 
-    assert!(input_type_supports_pattern("password"));
-    assert!(!input_type_supports_pattern("number"));
+    assert!(InputType::Email.supports_text_length_validation());
+    assert!(!InputType::Date.supports_text_length_validation());
 
-    assert!(input_type_supports_text_length_validation("email"));
-    assert!(!input_type_supports_text_length_validation("date"));
-
-    assert!(input_type_suppresses_immutable_required("number"));
-    assert!(!input_type_suppresses_immutable_required("checkbox"));
+    assert!(InputType::Number.supports_readonly());
+    assert!(!InputType::Checkbox.supports_readonly());
 
     assert!(form_control_type_supports_intrinsic_validation(
         "input",
-        Some("text"),
+        Some(InputType::Text),
         None
     ));
     assert!(!form_control_type_supports_intrinsic_validation(
         "input",
-        Some("hidden"),
+        Some(InputType::Hidden),
         None
     ));
     assert!(form_control_type_supports_intrinsic_validation(
         "input",
-        Some("submit"),
+        Some(InputType::Submit),
         None
     ));
     assert!(form_control_type_supports_intrinsic_validation(
         "input",
-        Some("image"),
+        Some(InputType::Image),
         None
     ));
     assert!(!form_control_type_supports_intrinsic_validation(
@@ -112,26 +108,38 @@ fn input_type_tokens_and_support_matrices_are_shared() {
 
 #[test]
 fn input_type_mismatch_and_length_rules_are_shared() {
-    assert!(!input_type_value_mismatch("email", "a@example.com", false));
-    assert!(input_type_value_mismatch("email", "a@", false));
     assert!(!input_type_value_mismatch(
-        "email",
+        InputType::Email,
+        "a@example.com",
+        false
+    ));
+    assert!(input_type_value_mismatch(InputType::Email, "a@", false));
+    assert!(!input_type_value_mismatch(
+        InputType::Email,
         "a@example.com, b@example.org",
         true
     ));
     assert!(input_type_value_mismatch(
-        "email",
+        InputType::Email,
         "a@example.com, broken",
         true
     ));
 
     assert!(!input_type_value_mismatch(
-        "url",
+        InputType::Url,
         "https://example.com/a",
         false
     ));
-    assert!(input_type_value_mismatch("url", "not a url", false));
-    assert!(!input_type_value_mismatch("text", "not a url", false));
+    assert!(input_type_value_mismatch(
+        InputType::Url,
+        "not a url",
+        false
+    ));
+    assert!(!input_type_value_mismatch(
+        InputType::Text,
+        "not a url",
+        false
+    ));
 
     assert_eq!(text_control_value_length("a\u{1f980}"), 3);
     assert!(text_control_suffers_too_long("abcd", Some("3")));
@@ -142,82 +150,129 @@ fn input_type_mismatch_and_length_rules_are_shared() {
 
 #[test]
 fn input_value_sanitization_uses_shared_temporal_parsers() {
-    assert_eq!(sanitize_input_value_for_type("text", "a\nb\rc"), "abc");
-    assert_eq!(sanitize_input_value_for_type("search", "a\r\nb"), "ab");
     assert_eq!(
-        sanitize_input_value_for_type("password", "\nsecret\r"),
+        sanitize_input_value_for_type(InputType::Text, "a\nb\rc"),
+        "abc"
+    );
+    assert_eq!(
+        sanitize_input_value_for_type(InputType::Search, "a\r\nb"),
+        "ab"
+    );
+    assert_eq!(
+        sanitize_input_value_for_type(InputType::Password, "\nsecret\r"),
         "secret"
     );
-    assert_eq!(sanitize_input_value_for_type("number", "NaN"), "");
-    assert_eq!(sanitize_input_value_for_type("number", "1."), "");
-    assert_eq!(sanitize_input_value_for_type("number", "+1"), "");
-    assert_eq!(sanitize_input_value_for_type("number", " 1"), "");
-    assert_eq!(sanitize_input_value_for_type("date", "2024-02-30"), "");
-    assert_eq!(sanitize_input_value_for_type("time", "24:00"), "");
+    assert_eq!(sanitize_input_value_for_type(InputType::Number, "NaN"), "");
+    assert_eq!(sanitize_input_value_for_type(InputType::Number, "1."), "");
+    assert_eq!(sanitize_input_value_for_type(InputType::Number, "+1"), "");
+    assert_eq!(sanitize_input_value_for_type(InputType::Number, " 1"), "");
     assert_eq!(
-        sanitize_input_value_for_type("datetime-local", "2024-02-29 12:30"),
+        sanitize_input_value_for_type(InputType::Date, "2024-02-30"),
+        ""
+    );
+    assert_eq!(sanitize_input_value_for_type(InputType::Time, "24:00"), "");
+    assert_eq!(
+        sanitize_input_value_for_type(InputType::DatetimeLocal, "2024-02-29 12:30"),
         "2024-02-29T12:30"
     );
     assert_eq!(
-        sanitize_input_value_for_type("datetime-local", "2022-04-19T12:34:56.010"),
+        sanitize_input_value_for_type(InputType::DatetimeLocal, "2022-04-19T12:34:56.010"),
         "2022-04-19T12:34:56.01"
     );
-    assert_eq!(sanitize_input_value_for_type("month", "2024-13"), "");
-    assert_eq!(sanitize_input_value_for_type("week", "2024-W99"), "");
     assert_eq!(
-        sanitize_input_value_for_type("text", "2024-W99"),
+        sanitize_input_value_for_type(InputType::Month, "2024-13"),
+        ""
+    );
+    assert_eq!(
+        sanitize_input_value_for_type(InputType::Week, "2024-W99"),
+        ""
+    );
+    assert_eq!(
+        sanitize_input_value_for_type(InputType::Text, "2024-W99"),
         "2024-W99"
     );
-    assert!(input_type_has_value_sanitization("DATETIME-LOCAL"));
+    assert!(input_type_has_value_sanitization(InputType::DatetimeLocal));
 }
 
 #[test]
 fn input_numeric_value_and_step_rules_are_shared() {
-    assert_eq!(parse_input_numeric_value("number", "1.25"), Some(1.25));
-    assert_eq!(parse_input_numeric_value("range", "50"), Some(50.0));
     assert_eq!(
-        parse_input_numeric_value("date", "1970-01-02"),
+        parse_input_numeric_value(InputType::Number, "1.25"),
+        Some(1.25)
+    );
+    assert_eq!(
+        parse_input_numeric_value(InputType::Range, "50"),
+        Some(50.0)
+    );
+    assert_eq!(
+        parse_input_numeric_value(InputType::Date, "1970-01-02"),
         Some(MS_PER_DAY)
     );
     assert_eq!(
-        input_number_to_value_string("month", 13.0),
+        input_number_to_value_string(InputType::Month, 13.0),
         Some("1971-02".to_owned())
     );
     assert_eq!(
-        input_number_to_value_string("range", 50.0),
+        input_number_to_value_string(InputType::Range, 50.0),
         Some("50".to_owned())
     );
     assert_eq!(
-        input_number_to_value_string("time", -MS_PER_HOUR),
+        input_number_to_value_string(InputType::Time, -MS_PER_HOUR),
         Some("23:00".to_owned())
     );
     assert_eq!(
-        input_number_to_value_string("time", 2.734_333_707_189_448e26),
+        input_number_to_value_string(InputType::Time, 2.734_333_707_189_448e26),
         Some("10:54:10.944".to_owned())
     );
 
-    assert_eq!(input_step("number", None), Some(1.0));
-    assert_eq!(input_step("time", Some("2")), Some(2.0 * MS_PER_SECOND));
-    assert_eq!(input_step("week", Some("any")), None);
-    assert_eq!(input_step_base("week", None, None), WEEK_INPUT_STEP_BASE);
+    assert_eq!(input_step(InputType::Number, None), Some(1.0));
     assert_eq!(
-        input_step_base("date", Some("1970-01-02"), Some("1970-01-03")),
+        input_step(InputType::Time, Some("2")),
+        Some(2.0 * MS_PER_SECOND)
+    );
+    assert_eq!(input_step(InputType::Week, Some("any")), None);
+    assert_eq!(
+        input_step_base(InputType::Week, None, None),
+        WEEK_INPUT_STEP_BASE
+    );
+    assert_eq!(
+        input_step_base(InputType::Date, Some("1970-01-02"), Some("1970-01-03")),
         MS_PER_DAY
     );
 
     assert!(number_aligns_to_step(4.0, 0.0, 2.0));
-    assert!(input_range_underflow("number", 2.0, Some("3"), Some("8")));
-    assert!(!input_range_underflow("number", 4.0, Some("3"), Some("8")));
-    assert!(input_range_overflow("number", 9.0, Some("3"), Some("8")));
-    assert!(!input_range_overflow("number", 4.0, Some("3"), Some("8")));
     assert!(input_range_underflow(
-        "time",
+        InputType::Number,
+        2.0,
+        Some("3"),
+        Some("8")
+    ));
+    assert!(!input_range_underflow(
+        InputType::Number,
+        4.0,
+        Some("3"),
+        Some("8")
+    ));
+    assert!(input_range_overflow(
+        InputType::Number,
+        9.0,
+        Some("3"),
+        Some("8")
+    ));
+    assert!(!input_range_overflow(
+        InputType::Number,
+        4.0,
+        Some("3"),
+        Some("8")
+    ));
+    assert!(input_range_underflow(
+        InputType::Time,
         time_input_milliseconds("06:00").unwrap(),
         Some("23:00"),
         Some("05:00")
     ));
     assert!(input_range_overflow(
-        "time",
+        InputType::Time,
         time_input_milliseconds("06:00").unwrap(),
         Some("23:00"),
         Some("05:00")
@@ -359,7 +414,7 @@ fn meter_values_share_html_numeric_clamping_and_gauge_region_rules() {
 fn input_step_up_down_rules_are_shared() {
     let stepped = step_input_value(
         InputStepState {
-            input_type: "number",
+            input_type: InputType::Number,
             value: "2",
             min: Some("0"),
             max: Some("10"),
@@ -374,7 +429,7 @@ fn input_step_up_down_rules_are_shared() {
 
     let unaligned = step_input_value(
         InputStepState {
-            input_type: "number",
+            input_type: InputType::Number,
             value: "3",
             min: Some("0"),
             max: Some("10"),
@@ -389,7 +444,7 @@ fn input_step_up_down_rules_are_shared() {
 
     let empty_with_positive_min = step_input_value(
         InputStepState {
-            input_type: "number",
+            input_type: InputType::Number,
             value: "",
             min: Some("7"),
             max: None,
@@ -407,7 +462,7 @@ fn input_step_up_down_rules_are_shared() {
 
     let below_min_step_down = step_input_value(
         InputStepState {
-            input_type: "number",
+            input_type: InputType::Number,
             value: "3",
             min: Some("7"),
             max: None,
@@ -422,7 +477,7 @@ fn input_step_up_down_rules_are_shared() {
 
     let clamped = step_input_value(
         InputStepState {
-            input_type: "date",
+            input_type: InputType::Date,
             value: "1970-01-01",
             min: Some("1970-01-01"),
             max: Some("1970-01-02"),
@@ -437,7 +492,7 @@ fn input_step_up_down_rules_are_shared() {
 
     let huge_date_step = step_input_value(
         InputStepState {
-            input_type: "date",
+            input_type: InputType::Date,
             value: "",
             min: Some("2010-02-10"),
             max: None,
@@ -455,7 +510,7 @@ fn input_step_up_down_rules_are_shared() {
 
     let impossible_range = step_input_value(
         InputStepState {
-            input_type: "number",
+            input_type: InputType::Number,
             value: "1",
             min: Some("10"),
             max: Some("1"),
@@ -470,7 +525,7 @@ fn input_step_up_down_rules_are_shared() {
 
     let no_allowed_step = step_input_value(
         InputStepState {
-            input_type: "number",
+            input_type: InputType::Number,
             value: "1",
             min: None,
             max: None,
@@ -484,7 +539,7 @@ fn input_step_up_down_rules_are_shared() {
 
     let unsupported = step_input_value(
         InputStepState {
-            input_type: "text",
+            input_type: InputType::Text,
             value: "1",
             min: None,
             max: None,

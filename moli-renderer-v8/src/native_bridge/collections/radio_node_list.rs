@@ -25,7 +25,10 @@ pub(in crate::native_bridge::collections) fn radio_node_list_value_getter<'s>(
         let Some(element) = runtime.dom_host().node(handle).and_then(Node::as_element) else {
             continue;
         };
-        if !element.is_html_input() || element.input_type() != "radio" || !element.checked() {
+        if !element.is_html_input()
+            || element.input_type() != InputType::Radio
+            || !element.checked()
+        {
             continue;
         }
         if let Some(value) = v8_string(scope, &element.input_value()) {
@@ -69,7 +72,7 @@ pub(in crate::native_bridge::collections) fn radio_node_list_value_setter<'s>(
                 .and_then(Node::as_element)
                 .is_some_and(|element| {
                     element.is_html_input()
-                        && element.input_type() == "radio"
+                        && element.input_type() == InputType::Radio
                         && element.input_value() == target
                 })
         })

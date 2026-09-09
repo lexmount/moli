@@ -2,7 +2,10 @@ use crate::context_bootstrap::{
     LocationNavigationKind, navigate_location_object_with_source_element,
     selection_value_for_window,
 };
-use crate::dom::native::{Element, Node, SelectedFile};
+use crate::dom::{
+    forms::InputType,
+    native::{Element, Node, SelectedFile},
+};
 use crate::util::{
     call_object_method, get_private_value, node_wrapper_from_handle, object_bool_property,
     object_number_property, object_property_as_object, utf16_len, v8_string, v8str,
@@ -159,8 +162,14 @@ fn is_text_drop_target(element: &Element) -> bool {
         return false;
     }
     matches!(
-        element.input_type().as_str(),
-        "" | "text" | "search" | "url" | "tel" | "email" | "password" | "number"
+        element.input_type(),
+        InputType::Text
+            | InputType::Search
+            | InputType::Url
+            | InputType::Tel
+            | InputType::Email
+            | InputType::Password
+            | InputType::Number
     )
 }
 
@@ -652,7 +661,7 @@ fn is_radio_input(runtime: &JsContextHost, handle: DomHandle) -> bool {
         .dom_host()
         .node(handle)
         .and_then(Node::as_element)
-        .is_some_and(|element| element.is_html_input() && element.input_type() == "radio")
+        .is_some_and(|element| element.is_html_input() && element.input_type() == InputType::Radio)
 }
 
 fn is_checkbox_input(runtime: &JsContextHost, handle: DomHandle) -> bool {
@@ -660,7 +669,9 @@ fn is_checkbox_input(runtime: &JsContextHost, handle: DomHandle) -> bool {
         .dom_host()
         .node(handle)
         .and_then(Node::as_element)
-        .is_some_and(|element| element.is_html_input() && element.input_type() == "checkbox")
+        .is_some_and(|element| {
+            element.is_html_input() && element.input_type() == InputType::Checkbox
+        })
 }
 
 fn radio_group_members(runtime: &JsContextHost, handle: DomHandle) -> Vec<DomHandle> {
@@ -686,7 +697,7 @@ fn radio_group_members(runtime: &JsContextHost, handle: DomHandle) -> Vec<DomHan
                 .and_then(Node::as_element)
                 .is_some_and(|candidate_element| {
                     candidate_element.is_html_input()
-                        && candidate_element.input_type() == "radio"
+                        && candidate_element.input_type() == InputType::Radio
                         && candidate_element.attribute("name") == Some(name)
                         && form_associated_form_owner(runtime, *candidate) == form_owner
                 })
@@ -1662,7 +1673,7 @@ fn is_valid_reset_button(runtime: &JsContextHost, handle: DomHandle) -> bool {
         .node(handle)
         .and_then(Node::as_element)
         .is_some_and(|element| {
-            (element.is_html_input() && element.input_type() == "reset")
+            (element.is_html_input() && element.input_type() == InputType::Reset)
                 || (element.is_html_element("button") && element.attribute("type") == Some("reset"))
         })
 }
@@ -1672,7 +1683,7 @@ fn is_image_submit_button(runtime: &JsContextHost, handle: DomHandle) -> bool {
         .dom_host()
         .node(handle)
         .and_then(Node::as_element)
-        .is_some_and(|element| element.is_html_input() && element.input_type() == "image")
+        .is_some_and(|element| element.is_html_input() && element.input_type() == InputType::Image)
 }
 
 fn image_submitter_coordinate(
@@ -1789,7 +1800,7 @@ fn perform_file_chooser_default_action_with_source(
     let (allow_multiple, should_auto_cancel) = {
         let runtime = unsafe { &*runtime_ptr };
         let element = runtime.dom_host().node(handle).and_then(Node::as_element)?;
-        if !element.is_html_input() || element.input_type() != "file" {
+        if !element.is_html_input() || element.input_type() != InputType::File {
             return None;
         }
         (
@@ -2218,7 +2229,7 @@ pub(crate) fn perform_drop_default_action(
         let Some(element) = runtime.dom_host().node(handle).and_then(Node::as_element) else {
             return false;
         };
-        let is_file_input = element.is_html_input() && element.input_type() == "file";
+        let is_file_input = element.is_html_input() && element.input_type() == InputType::File;
         let is_text_target = is_text_drop_target(element);
         let editing_host = (!is_text_target && !is_file_input)
             .then(|| contenteditable_editing_host(runtime, handle))

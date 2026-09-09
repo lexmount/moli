@@ -52,8 +52,14 @@ pub(crate) fn is_text_control(runtime: &JsContextHost, handle: DomHandle) -> boo
             element.is_html_textarea()
                 || (element.is_html_input()
                     && !matches!(
-                        element.input_type().as_str(),
-                        "hidden" | "checkbox" | "radio" | "button" | "submit" | "reset" | "image"
+                        element.input_type(),
+                        InputType::Hidden
+                            | InputType::Checkbox
+                            | InputType::Radio
+                            | InputType::Button
+                            | InputType::Submit
+                            | InputType::Reset
+                            | InputType::Image
                     ))
         })
 }
@@ -69,10 +75,7 @@ pub(super) fn supports_variable_length_selection(
         .is_some_and(|element| {
             element.is_html_textarea()
                 || (element.is_html_input()
-                    && matches!(
-                        element.input_type().as_str(),
-                        "text" | "search" | "tel" | "url" | "password"
-                    ))
+                    && element.input_type().supports_variable_length_selection())
         })
 }
 

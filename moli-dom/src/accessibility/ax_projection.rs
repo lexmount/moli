@@ -1,5 +1,6 @@
 use crate::{
     NodeData, NodeId,
+    forms::InputType,
     native::{Element, NativeDom, Node},
 };
 
@@ -170,7 +171,7 @@ fn ax_node_inclusion(node: &Node) -> AxNodeInclusion {
 }
 
 fn ax_element_inclusion(element: &Element) -> AxNodeInclusion {
-    if element.is_html_input() && element.input_type() == "hidden" {
+    if element.is_html_input() && element.input_type() == InputType::Hidden {
         return AxNodeInclusion::ExcludeSubtree;
     }
 

@@ -2489,6 +2489,7 @@ dependencies = [
  "indexmap",
  "moli-css-parse",
  "moli-html-input-temporal",
+ "moli-html-input-type",
  "percent-encoding",
  "selectors",
  "serde_json",
@@ -2573,6 +2574,13 @@ name = "moli-html-input-temporal"
 version = "0.1.0"
 dependencies = [
  "time",
+]
+
+[[package]]
+name = "moli-html-input-type"
+version = "0.1.0"
+dependencies = [
+ "strum",
 ]
 
 [[package]]
@@ -2822,6 +2830,7 @@ dependencies = [
  "moli-cookie-jar",
  "moli-core",
  "moli-fetch",
+ "moli-html-input-type",
  "moli-protocol",
  "moli-protocol-cdp",
  "moli-protocol-webdriver-bidi",

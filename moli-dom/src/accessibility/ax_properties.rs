@@ -1,5 +1,6 @@
 use crate::{
     NodeData, NodeId,
+    forms::InputType,
     native::{Element, NativeDom, Node},
 };
 use serde_json::{Value, json};
@@ -178,11 +179,11 @@ fn ax_native_element_name(
     }
 
     match element.local_name() {
-        "input" => match element.input_type().as_str() {
-            "button" => Some(normalize_ax_whitespace(&element.input_value())),
-            "submit" => Some(ax_input_button_name(element, "Submit")),
-            "reset" => Some(ax_input_button_name(element, "Reset")),
-            "image" => element
+        "input" => match element.input_type() {
+            InputType::Button => Some(normalize_ax_whitespace(&element.input_value())),
+            InputType::Submit => Some(ax_input_button_name(element, "Submit")),
+            InputType::Reset => Some(ax_input_button_name(element, "Reset")),
+            InputType::Image => element
                 .attribute("alt")
                 .map(normalize_ax_whitespace)
                 .or_else(|| {
@@ -267,7 +268,7 @@ fn ax_is_labelable(element: &Element) -> bool {
     }
     match element.local_name() {
         "button" | "meter" | "output" | "progress" | "select" | "textarea" => true,
-        "input" => element.is_html_input() && element.input_type() != "hidden",
+        "input" => element.is_html_input() && element.input_type() != InputType::Hidden,
         _ => false,
     }
 }
@@ -276,8 +277,14 @@ fn ax_is_text_control(element: &Element) -> bool {
     element.is_html_textarea()
         || (element.is_html_input()
             && matches!(
-                element.input_type().as_str(),
-                "email" | "number" | "password" | "search" | "tel" | "text" | "url"
+                element.input_type(),
+                InputType::Email
+                    | InputType::Number
+                    | InputType::Password
+                    | InputType::Search
+                    | InputType::Tel
+                    | InputType::Text
+                    | InputType::Url
             ))
 }
 
@@ -386,8 +393,14 @@ pub(super) fn ax_value(document: &NativeDom, node_id: NodeId, node: &Node) -> Op
     let value = match element.local_name() {
         "input"
             if !matches!(
-                element.input_type().as_str(),
-                "button" | "checkbox" | "hidden" | "image" | "radio" | "reset" | "submit"
+                element.input_type(),
+                InputType::Button
+                    | InputType::Checkbox
+                    | InputType::Hidden
+                    | InputType::Image
+                    | InputType::Radio
+                    | InputType::Reset
+                    | InputType::Submit
             ) =>
         {
             element.input_value()
@@ -494,8 +507,14 @@ pub(super) fn ax_properties(document: &NativeDom, node_id: NodeId, node: &Node) 
             }
             if element.is_html_element("input") {
                 let input_type = element.input_type();
-                match input_type.as_str() {
-                    "text" | "email" | "tel" | "url" | "search" | "password" | "number" => {
+                match input_type {
+                    InputType::Text
+                    | InputType::Email
+                    | InputType::Tel
+                    | InputType::Url
+                    | InputType::Search
+                    | InputType::Password
+                    | InputType::Number => {
                         let disabled = ax_control_is_disabled(document, node_id, element);
                         if disabled {
                             properties.push(ax_bool_property("disabled", "boolean", true));
@@ -528,7 +547,7 @@ pub(super) fn ax_properties(document: &NativeDom, node_id: NodeId, node: &Node) 
                             element.has_attribute("required"),
                         ));
                     }
-                    "checkbox" | "radio" => {
+                    InputType::Checkbox | InputType::Radio => {
                         let disabled = ax_control_is_disabled(document, node_id, element);
                         if disabled {
                             properties.push(ax_bool_property("disabled", "boolean", true));
@@ -543,7 +562,7 @@ pub(super) fn ax_properties(document: &NativeDom, node_id: NodeId, node: &Node) 
                         }
                         properties.push(ax_tristate_property(
                             "checked",
-                            if input_type == "checkbox" && element.indeterminate() {
+                            if input_type == InputType::Checkbox && element.indeterminate() {
                                 "mixed"
                             } else if element.checked() {
                                 "true"
@@ -552,7 +571,7 @@ pub(super) fn ax_properties(document: &NativeDom, node_id: NodeId, node: &Node) 
                             },
                         ));
                     }
-                    "button" | "submit" | "reset" | "image" => {
+                    InputType::Button | InputType::Submit | InputType::Reset | InputType::Image => {
                         let disabled = ax_control_is_disabled(document, node_id, element);
                         if disabled {
                             properties.push(ax_bool_property("disabled", "boolean", true));

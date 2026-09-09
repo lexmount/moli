@@ -1,7 +1,7 @@
 use super::storage::{form_data_entries, form_data_is_object, push_form_data_entry};
 use super::*;
 use crate::custom_elements::is_form_associated_custom_element_handle;
-use crate::dom::native::Node;
+use crate::dom::{forms::InputType, native::Node};
 use crate::native_bridge::{
     element::{
         element_attribute_for_object, element_internals_form_value_for_target,
@@ -93,8 +93,8 @@ fn append_form_data_entries_for_control<'s>(
     let is_submitter = submitter.is_some_and(|submitter| control.strict_equals(submitter.into()));
 
     match tag.as_str() {
-        "input" => match control_type.as_str() {
-            "checkbox" | "radio" => {
+        "input" => match InputType::from_attribute_value(Some(&control_type)) {
+            InputType::Checkbox | InputType::Radio => {
                 if !object_bool_property(scope, control, "checked").unwrap_or(false)
                     || name.is_empty()
                 {
@@ -103,7 +103,7 @@ fn append_form_data_entries_for_control<'s>(
                 let value = form_control_value(scope, control, "on");
                 push_string_form_data_entry(scope, entries, &name, value);
             }
-            "submit" => {
+            InputType::Submit => {
                 if is_submitter {
                     if !name.is_empty() {
                         let value = form_control_value(scope, control, "");
@@ -112,7 +112,7 @@ fn append_form_data_entries_for_control<'s>(
                     append_dirname_form_data_entry(scope, entries, control);
                 }
             }
-            "image" => {
+            InputType::Image => {
                 if is_submitter {
                     let (x, y) = image_submitter_coordinates(scope, control);
                     let prefix = if name.is_empty() {
@@ -134,14 +134,14 @@ fn append_form_data_entries_for_control<'s>(
                     );
                 }
             }
-            "button" | "reset" => {}
-            "file" => {
+            InputType::Button | InputType::Reset => {}
+            InputType::File => {
                 if name.is_empty() {
                     return;
                 }
                 append_file_form_data_entries(scope, entries, control, &name);
             }
-            "hidden" if is_charset_control_name(&name) => {
+            InputType::Hidden if is_charset_control_name(&name) => {
                 push_string_form_data_entry(scope, entries, &name, "UTF-8".to_owned());
                 append_dirname_form_data_entry(scope, entries, control);
             }
@@ -151,7 +151,7 @@ fn append_form_data_entries_for_control<'s>(
                 }
                 let value = form_control_value(scope, control, "");
                 push_string_form_data_entry(scope, entries, &name, value);
-                if input_type_supports_dirname(&control_type) {
+                if InputType::from_attribute_value(Some(&control_type)).supports_dirname() {
                     append_dirname_form_data_entry(scope, entries, control);
                 }
             }
@@ -259,13 +259,6 @@ fn image_submitter_coordinates(
     unsafe { &*runtime_ptr }
         .active_image_submitter_coordinate(handle)
         .unwrap_or((0, 0))
-}
-
-fn input_type_supports_dirname(input_type: &str) -> bool {
-    matches!(
-        input_type,
-        "hidden" | "text" | "search" | "tel" | "url" | "email" | "password"
-    )
 }
 
 fn is_charset_control_name(name: &str) -> bool {

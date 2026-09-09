@@ -75,6 +75,7 @@ members = [
     "moli-file-api",
     "moli-geometry",
     "moli-header-field",
+    "moli-html-input-type",
     "moli-html-input-temporal",
     "moli-time",
     "moli-trace",

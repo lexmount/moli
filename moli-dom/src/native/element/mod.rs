@@ -21,9 +21,7 @@ use thin_vec::ThinVec;
 use super::NativeDom;
 use super::node::{NativeNodeId, Node};
 use crate::custom_elements::is_valid_custom_element_name;
-use crate::forms::{
-    canonical_input_type, is_valid_number_input_value, sanitize_input_value_for_type,
-};
+use crate::forms::{InputType, is_valid_number_input_value, sanitize_input_value_for_type};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CustomElementState {
@@ -449,13 +447,13 @@ impl Element {
         self.namespace() == "http://www.w3.org/1999/xhtml" && self.name_attribute() == Some(name)
     }
 
-    pub fn input_type(&self) -> String {
-        canonical_input_type(self.attribute("type").unwrap_or("text")).to_owned()
+    pub fn input_type(&self) -> InputType {
+        InputType::from_attribute_value(self.attribute("type"))
     }
 
     pub fn input_value(&self) -> String {
         if self.is_html_input()
-            && matches!(self.input_type().as_str(), "checkbox" | "radio")
+            && self.input_type().is_checkable()
             && !self.input_value_dirty()
             && self.attribute("value").is_none()
         {
@@ -548,14 +546,14 @@ impl Element {
         if !self.is_html_input() && !self.is_html_textarea() {
             return false;
         }
-        if self.is_html_input() && self.input_type() == "file" {
+        if self.is_html_input() && self.input_type() == InputType::File {
             if !value.is_empty() {
                 return false;
             }
             return self.set_selected_files(Vec::new());
         }
         let value = if self.is_html_input() {
-            sanitize_input_value_for_type(&self.input_type(), value)
+            sanitize_input_value_for_type(self.input_type(), value)
         } else {
             value.to_owned()
         };
@@ -566,14 +564,14 @@ impl Element {
         if !self.is_html_input() && !self.is_html_textarea() {
             return false;
         }
-        if self.is_html_input() && self.input_type() == "file" {
+        if self.is_html_input() && self.input_type() == InputType::File {
             if !value.is_empty() {
                 return false;
             }
             return self.set_selected_files(Vec::new());
         }
         let value = if self.is_html_input() {
-            sanitize_input_value_for_type(&self.input_type(), value)
+            sanitize_input_value_for_type(self.input_type(), value)
         } else {
             value.to_owned()
         };
@@ -592,17 +590,18 @@ impl Element {
         if !self.is_html_input() && !self.is_html_textarea() {
             return false;
         }
-        if self.is_html_input() && self.input_type() == "file" {
+        if self.is_html_input() && self.input_type() == InputType::File {
             return false;
         }
         let (value, bad_input) = if self.is_html_input() {
             let input_type = self.input_type();
-            let bad_input =
-                input_type == "number" && !value.is_empty() && !is_valid_number_input_value(value);
+            let bad_input = input_type == InputType::Number
+                && !value.is_empty()
+                && !is_valid_number_input_value(value);
             let value = if bad_input {
                 String::new()
             } else {
-                sanitize_input_value_for_type(&input_type, value)
+                sanitize_input_value_for_type(input_type, value)
             };
             (value, bad_input)
         } else {
@@ -619,7 +618,10 @@ impl Element {
         has_connected_datalist: bool,
     ) -> bool {
         if !self.is_html_input()
-            || !matches!(self.input_type().as_str(), "text" | "tel" | "url" | "email")
+            || !matches!(
+                self.input_type(),
+                InputType::Text | InputType::Tel | InputType::Url | InputType::Email
+            )
         {
             return false;
         }
@@ -628,7 +630,7 @@ impl Element {
     }
 
     pub fn set_selected_files(&mut self, files: Vec<SelectedFile>) -> bool {
-        if !self.is_html_input() || self.input_type() != "file" {
+        if !self.is_html_input() || self.input_type() != InputType::File {
             return false;
         }
 
@@ -1104,14 +1106,14 @@ impl Element {
             && self.local_name() == "input"
             && attribute_name == "type"
         {
-            attribute_value.unwrap_or("text").to_owned()
+            InputType::from_attribute_value(attribute_value)
         } else {
             self.input_type()
         };
         self.rare_data.sync_control_state_from_attribute(
             self.namespace.as_ref(),
             self.local_name.as_ref(),
-            &input_type,
+            input_type,
             attribute_name,
             attribute_value,
         );

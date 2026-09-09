@@ -31,6 +31,34 @@ fn object_set_custom_validity_updates_validity_state() {
 }
 
 #[test]
+fn input_type_enumerated_attribute_preserves_raw_value_and_exposes_canonical_state() {
+    let mut vm = new_storage_test_vm("https://input-type-enumerated-attribute.test/");
+
+    let result = vm
+        .eval(
+            r#"
+(() => {
+  const input = document.createElement('input');
+  const results = [];
+  for (const value of ['EMAIL', ' datetime-local ', 'unknown', 'datetime-local']) {
+    input.type = value;
+    results.push(`${input.type}/${input.getAttribute('type')}`);
+  }
+  input.removeAttribute('type');
+  results.push(`${input.type}/${input.getAttribute('type')}`);
+  return results.join('|');
+})()
+"#,
+        )
+        .expect("input type enumerated attribute should evaluate");
+
+    assert_eq!(
+        result,
+        "email/EMAIL|text/ datetime-local |text/unknown|datetime-local/datetime-local|text/null"
+    );
+}
+
+#[test]
 fn readonly_controls_match_validity_pseudo_without_will_validate() {
     let mut vm = new_storage_test_vm("https://readonly-validity-pseudo.test/");
 
@@ -4410,7 +4438,7 @@ picker.click();
             .and_then(crate::dom::native::Node::as_element)
             .expect("the detached source input should retain its native node identity");
         assert!(retained_picker.is_html_input());
-        assert_eq!(retained_picker.input_type(), expected_type);
+        assert_eq!(retained_picker.input_type().as_ref(), expected_type);
         assert_eq!(
             retained_picker.attribute("multiple").is_some(),
             expected_multiple

@@ -416,7 +416,7 @@ fn is_form_control_handle(
                 return false;
             }
             match element.local_name() {
-                "input" => include_image_inputs || element.input_type() != "image",
+                "input" => include_image_inputs || element.input_type() != InputType::Image,
                 "button" | "fieldset" | "object" | "output" | "select" | "textarea" => true,
                 _ => false,
             }

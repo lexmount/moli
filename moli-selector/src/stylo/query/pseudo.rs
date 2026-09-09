@@ -5,7 +5,7 @@ use crate::{
     dom::{
         NodeId,
         forms::{
-            form_control_type_supports_intrinsic_validation, input_range_overflow,
+            InputType, form_control_type_supports_intrinsic_validation, input_range_overflow,
             input_range_underflow, parse_input_numeric_value, parse_non_negative_integer_prefix,
         },
         native::{DomHost, Element, Node},
@@ -177,15 +177,16 @@ impl<'a> QueryElement<'a> {
                 }
                 if self.matches_required_pseudo() {
                     let ty = self.input_type();
-                    if matches!(ty.as_str(), "checkbox" | "radio") {
+                    if ty.is_checkable() {
                         return !self.element().checked();
                     }
                     return self.element().input_value().is_empty();
                 }
                 if self.element().local_name() == "input"
-                    && self.input_type() == "number"
+                    && self.input_type() == InputType::Number
                     && !self.element().input_value().is_empty()
-                    && parse_input_numeric_value("number", &self.element().input_value()).is_none()
+                    && parse_input_numeric_value(InputType::Number, &self.element().input_value())
+                        .is_none()
                 {
                     return true;
                 }
@@ -195,7 +196,7 @@ impl<'a> QueryElement<'a> {
         }
     }
 
-    pub(super) fn input_type(self) -> String {
+    pub(super) fn input_type(self) -> InputType {
         self.element().input_type()
     }
 
@@ -328,10 +329,7 @@ impl<'a> QueryElement<'a> {
     pub(super) fn can_match_required_pseudo(self) -> bool {
         match self.element().local_name() {
             "select" | "textarea" => true,
-            "input" => !matches!(
-                self.input_type().as_str(),
-                "hidden" | "button" | "submit" | "reset" | "image"
-            ),
+            "input" => self.input_type().supports_required(),
             _ => false,
         }
     }
@@ -358,21 +356,7 @@ impl<'a> QueryElement<'a> {
         match self.element().local_name() {
             "textarea" => !self.element().has_attribute("readonly"),
             "input" => {
-                matches!(
-                    self.input_type().as_str(),
-                    "text"
-                        | "search"
-                        | "url"
-                        | "tel"
-                        | "email"
-                        | "password"
-                        | "date"
-                        | "month"
-                        | "week"
-                        | "time"
-                        | "datetime-local"
-                        | "number"
-                ) && !self.element().has_attribute("readonly")
+                self.input_type().supports_readonly() && !self.element().has_attribute("readonly")
             }
             _ => self.is_editable(),
         }
@@ -404,10 +388,7 @@ impl<'a> QueryElement<'a> {
         }
         match self.element().local_name() {
             "textarea" => true,
-            "input" => matches!(
-                self.input_type().as_str(),
-                "text" | "search" | "url" | "tel" | "email" | "password"
-            ),
+            "input" => self.input_type().supports_placeholder(),
             _ => false,
         }
     }
@@ -415,10 +396,7 @@ impl<'a> QueryElement<'a> {
     pub(super) fn matches_checked_pseudo(self) -> bool {
         match self.element().local_name() {
             "option" => self.element().selected(),
-            "input" => {
-                matches!(self.input_type().as_str(), "checkbox" | "radio")
-                    && self.element().checked()
-            }
+            "input" => self.input_type().is_checkable() && self.element().checked(),
             _ => false,
         }
     }
@@ -426,8 +404,10 @@ impl<'a> QueryElement<'a> {
     pub(super) fn matches_indeterminate_pseudo(self) -> bool {
         match self.element().local_name() {
             "progress" => !self.element().has_attribute("value"),
-            "input" if self.input_type() == "checkbox" => self.element().indeterminate(),
-            "input" if self.input_type() == "radio" => !self.radio_group_has_checked_input(),
+            "input" if self.input_type() == InputType::Checkbox => self.element().indeterminate(),
+            "input" if self.input_type() == InputType::Radio => {
+                !self.radio_group_has_checked_input()
+            }
             _ => false,
         }
     }
@@ -442,7 +422,7 @@ impl<'a> QueryElement<'a> {
             stack.extend(self.host.child_handles_reversed(handle));
             if let Some(element) = self.host.node(handle).and_then(Node::as_element)
                 && element.local_name() == "input"
-                && element.input_type() == "radio"
+                && element.input_type() == InputType::Radio
                 && element.attribute("name").unwrap_or_default() == name
                 && element.checked()
             {
@@ -458,7 +438,9 @@ impl<'a> QueryElement<'a> {
         }
         form_control_type_supports_intrinsic_validation(
             self.element().local_name(),
-            self.element().attribute("type"),
+            self.element()
+                .is_html_input()
+                .then(|| self.element().input_type()),
             self.element().attribute("type"),
         )
     }
@@ -483,19 +465,19 @@ impl<'a> QueryElement<'a> {
             return None;
         }
         let input_type = self.input_type();
-        let value = parse_input_numeric_value(&input_type, &self.element().input_value())?;
-        if input_type != "range" {
+        let value = parse_input_numeric_value(input_type, &self.element().input_value())?;
+        if input_type != InputType::Range {
             return Some(value);
         }
         let min = self
             .element()
             .attribute("min")
-            .and_then(|value| parse_input_numeric_value("range", value))
+            .and_then(|value| parse_input_numeric_value(InputType::Range, value))
             .unwrap_or(0.0);
         let max = self
             .element()
             .attribute("max")
-            .and_then(|value| parse_input_numeric_value("range", value))
+            .and_then(|value| parse_input_numeric_value(InputType::Range, value))
             .unwrap_or(100.0);
         Some(if min <= max {
             value.clamp(min, max)
@@ -508,19 +490,17 @@ impl<'a> QueryElement<'a> {
         if self.element().local_name() != "input" {
             return false;
         }
-        matches!(
-            self.input_type().as_str(),
-            "date" | "time" | "datetime-local" | "month" | "week" | "number" | "range"
-        ) && (self.input_type() == "range"
-            || self.element().attribute("min").is_some()
-            || self.element().attribute("max").is_some())
+        self.input_type().supports_value_as_number()
+            && (self.input_type() == InputType::Range
+                || self.element().attribute("min").is_some()
+                || self.element().attribute("max").is_some())
     }
 
     pub(super) fn matches_range_underflow_pseudo(self) -> bool {
         self.has_range_limitations()
             && self.numeric_input_value().is_some_and(|value| {
                 input_range_underflow(
-                    &self.input_type(),
+                    self.input_type(),
                     value,
                     self.element().attribute("min"),
                     self.element().attribute("max"),
@@ -532,7 +512,7 @@ impl<'a> QueryElement<'a> {
         self.has_range_limitations()
             && self.numeric_input_value().is_some_and(|value| {
                 input_range_overflow(
-                    &self.input_type(),
+                    self.input_type(),
                     value,
                     self.element().attribute("min"),
                     self.element().attribute("max"),
@@ -554,10 +534,8 @@ impl<'a> QueryElement<'a> {
     pub(super) fn matches_default_pseudo(self) -> bool {
         match self.element().local_name() {
             "option" => self.element().selected(),
-            "input" if matches!(self.input_type().as_str(), "checkbox" | "radio") => {
-                self.element().has_attribute("checked")
-            }
-            "input" if matches!(self.input_type().as_str(), "submit" | "image") => {
+            "input" if self.input_type().is_checkable() => self.element().has_attribute("checked"),
+            "input" if self.input_type().is_submit_button() => {
                 self.is_first_default_submit_button()
             }
             "button" => {
@@ -627,7 +605,7 @@ pub(crate) fn html_directionality(host: &DomHost, handle: NodeId) -> CssDirectio
             {
                 return auto_direction_for_element(host, handle).unwrap_or(CssDirection::Ltr);
             }
-            if element.is_html_input() && element.input_type() == "tel" {
+            if element.is_html_input() && element.input_type() == InputType::Tel {
                 return CssDirection::Ltr;
             }
         }
@@ -681,25 +659,11 @@ fn descendant_is_directionally_isolated_for_auto(element: &Element) -> bool {
 }
 
 fn input_auto_direction(element: &Element) -> Option<CssDirection> {
-    input_type_uses_value_for_auto_direction(&element.input_type())
+    element
+        .input_type()
+        .uses_value_for_auto_direction()
         .then(|| first_strong_text_direction(&element.input_value()))
         .flatten()
-}
-
-fn input_type_uses_value_for_auto_direction(input_type: &str) -> bool {
-    matches!(
-        input_type,
-        "hidden"
-            | "text"
-            | "search"
-            | "tel"
-            | "url"
-            | "email"
-            | "password"
-            | "submit"
-            | "reset"
-            | "button"
-    )
 }
 
 fn default_submit_button_element(element: &Element) -> bool {
@@ -712,7 +676,7 @@ fn default_submit_button_element(element: &Element) -> bool {
                 .to_ascii_lowercase();
             !matches!(ty.as_str(), "button" | "reset")
         }
-        "input" => matches!(element.input_type().as_str(), "submit" | "image"),
+        "input" => element.input_type().is_submit_button(),
         _ => false,
     }
 }
