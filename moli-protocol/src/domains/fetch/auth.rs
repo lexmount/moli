@@ -1,24 +1,19 @@
 use crate::conn::{
     BackgroundProtocolEvent, CdpConnection, Cmd, CommandOwnerScope, CompletedDocumentFetchCommand,
-    DocumentFetchCommand, PendingFetchAuthNavigation, PendingFetchNavigation,
-    PendingSubresourceFetchAuthRequest, PendingSubresourceFetchRequest,
+    DocumentFetchCommand, PendingFetchAuthNavigation, PendingSubresourceFetchAuthRequest,
+    PendingSubresourceFetchRequest,
 };
 use crate::devtools_runtime::{
     DevToolsAuthChallengeAction, DevToolsCommand, DevToolsContinueWithAuthCommand,
     DevToolsProtocol, DevToolsRequestId,
 };
+use crate::domains::activity;
 use crate::domains::command_output::CommandOutputPlan;
-use crate::domains::{activity, network};
-use moli_core::page::SubresourceAuthCredentials;
 
 use super::PendingFetchCommandOperation;
 use super::helpers::{
     pending_fetch_auth_navigation_required_event, pending_subresource_auth_required_event,
     request_auth_for_challenge,
-};
-use super::navigation::{
-    complete_tokened_materialized_navigation_as_background_events_async,
-    load_or_pause_navigation_for_auth_as_background_events_async,
 };
 use super::params::{AuthChallengeResponseResponse, ContinueWithAuthParams};
 use super::state::{
@@ -41,16 +36,6 @@ pub(super) enum PendingContinueWithAuthState {
     },
     SubresourceAuthContinue {
         correlation: PreparedSubresourceCorrelation,
-    },
-    NavigationCancel {
-        pending: Box<crate::conn::PendingFetchAuthNavigation>,
-    },
-    NavigationFail {
-        pending: Box<crate::conn::PendingFetchAuthNavigation>,
-    },
-    NavigationContinue {
-        pending: Box<crate::conn::PendingFetchAuthNavigation>,
-        auth: SubresourceAuthCredentials,
     },
 }
 
@@ -312,138 +297,78 @@ pub(super) fn start_devtools_continue_with_auth_command_for_pending(
         &request_id,
     )?;
 
-    let chained_default = matches!(command.action, DevToolsAuthChallengeAction::Default)
-        && pending
-            .auth_stage_pause_state()
-            .is_some_and(|chain| !chain.remaining_sessions.is_empty());
-    if !chained_default
-        && conn.navigation_interception_awaits_decision(
-            pending.navigation.web_contents,
-            pending.auth_permit,
-        )
-    {
-        let decision = match command.action {
-            DevToolsAuthChallengeAction::Default => moli_core::browser::NavigationDecision::Fail {
-                error_text: "Fetch auth challenge aborted".into(),
-            },
-            DevToolsAuthChallengeAction::Cancel => moli_core::browser::NavigationDecision::Continue,
-            DevToolsAuthChallengeAction::ProvideCredentials => {
-                let Some(credentials) = request_auth_for_challenge(
-                    &pending.challenge,
-                    command.username.as_deref().unwrap_or_default(),
-                    command.password.as_deref().unwrap_or_default(),
-                ) else {
-                    conn.register_pending_fetch_auth_navigation_for_owner(
-                        owner, request_id, pending,
-                    );
-                    return Some(FetchCommandTaskStep::Complete(CommandOutputPlan::error(
-                        -32000,
-                        "NotImplemented",
-                    )));
-                };
-                if pending.intercept_response
-                    && !matches!(
-                        credentials.scheme,
-                        moli_core::page::SubresourceAuthScheme::Basic
-                            | moli_core::page::SubresourceAuthScheme::Digest
-                    )
-                {
-                    conn.resolve_native_navigation_decision(
-                        pending.navigation.web_contents,
-                        pending.auth_permit,
-                        moli_core::browser::NavigationDecision::Fail {
-                            error_text: format!(
-                                "Fetch response-stage interception after {:?} authentication is not supported for navigation without buffering",
-                                credentials.scheme
-                            ),
-                        },
-                    );
-                    return Some(FetchCommandTaskStep::Complete(CommandOutputPlan::success()));
-                }
-                let Some(response) = conn.take_navigation_response(pending.auth_permit) else {
-                    return Some(FetchCommandTaskStep::Complete(CommandOutputPlan::error(
-                        -32000,
-                        "RequestNotFound",
-                    )));
-                };
-                moli_core::browser::NavigationDecision::Authenticate {
-                    credentials,
-                    response: Box::new(response),
-                }
-            }
-        };
-        conn.resolve_native_navigation_decision(
-            pending.navigation.web_contents,
-            pending.auth_permit,
-            decision,
-        );
+    if !conn.navigation_interception_awaits_decision(
+        pending.navigation.web_contents,
+        pending.auth_permit,
+    ) {
+        // Browser may have retired the navigation before its wire correlation.
+        // Acknowledge that known pause without forwarding or restarting any work.
         return Some(FetchCommandTaskStep::Complete(CommandOutputPlan::success()));
     }
-
-    Some(match command.action {
-        DevToolsAuthChallengeAction::Default
-            if pending
-                .auth_stage_pause_state()
-                .is_some_and(|chain| !chain.remaining_sessions.is_empty()) =>
-        {
-            FetchCommandTaskStep::Complete(
-                chained_navigation_auth_required_output_plan(conn, command_session_id, pending)
-                    .unwrap_or_else(|| CommandOutputPlan::error(-32000, "RequestNotFound")),
-            )
-        }
-        DevToolsAuthChallengeAction::Default => {
-            FetchCommandTaskStep::Pending(PendingFetchCommandDispatch::new_for_owner(
-                command_id,
-                owner.clone(),
-                PendingFetchCommandKind::ContinueWithAuth {
-                    state: Box::new(PendingContinueWithAuthState::NavigationFail {
-                        pending: Box::new(pending),
-                    }),
-                },
-                PendingFetchCommandOperation::Ready,
-            ))
-        }
-        DevToolsAuthChallengeAction::Cancel => {
-            FetchCommandTaskStep::Pending(PendingFetchCommandDispatch::new_for_owner(
-                command_id,
-                owner.clone(),
-                PendingFetchCommandKind::ContinueWithAuth {
-                    state: Box::new(PendingContinueWithAuthState::NavigationCancel {
-                        pending: Box::new(pending),
-                    }),
-                },
-                PendingFetchCommandOperation::Ready,
-            ))
-        }
+    if matches!(command.action, DevToolsAuthChallengeAction::Default)
+        && pending
+            .auth_stage_pause_state()
+            .is_some_and(|chain| !chain.remaining_sessions.is_empty())
+    {
+        return Some(FetchCommandTaskStep::Complete(
+            chained_navigation_auth_required_output_plan(conn, command_session_id, pending)
+                .unwrap_or_else(|| CommandOutputPlan::error(-32000, "RequestNotFound")),
+        ));
+    }
+    let decision = match command.action {
+        DevToolsAuthChallengeAction::Default => moli_core::browser::NavigationDecision::Fail {
+            error_text: "Fetch auth challenge aborted".into(),
+        },
+        DevToolsAuthChallengeAction::Cancel => moli_core::browser::NavigationDecision::Continue,
         DevToolsAuthChallengeAction::ProvideCredentials => {
-            let Some(auth) = request_auth_for_challenge(
+            let Some(credentials) = request_auth_for_challenge(
                 &pending.challenge,
                 command.username.as_deref().unwrap_or_default(),
                 command.password.as_deref().unwrap_or_default(),
             ) else {
-                conn.register_pending_fetch_auth_navigation_for_owner(
-                    owner,
-                    request_id.clone(),
-                    pending,
-                );
+                conn.register_pending_fetch_auth_navigation_for_owner(owner, request_id, pending);
                 return Some(FetchCommandTaskStep::Complete(CommandOutputPlan::error(
                     -32000,
                     "NotImplemented",
                 )));
             };
-            FetchCommandTaskStep::Pending(PendingFetchCommandDispatch::new_for_owner(
-                command_id,
-                owner.clone(),
-                PendingFetchCommandKind::ContinueWithAuth {
-                    state: Box::new(PendingContinueWithAuthState::NavigationContinue {
-                        pending: Box::new(pending),
-                        auth,
-                    }),
-                },
-                PendingFetchCommandOperation::Ready,
-            ))
+            if pending.intercept_response
+                && !matches!(
+                    credentials.scheme,
+                    moli_core::page::SubresourceAuthScheme::Basic
+                        | moli_core::page::SubresourceAuthScheme::Digest
+                )
+            {
+                conn.resolve_native_navigation_decision(
+                    pending.navigation.web_contents,
+                    pending.auth_permit,
+                    moli_core::browser::NavigationDecision::Fail {
+                        error_text: format!(
+                            "Fetch response-stage interception after {:?} authentication is not supported for navigation without buffering",
+                            credentials.scheme
+                        ),
+                    },
+                );
+                return Some(FetchCommandTaskStep::Complete(CommandOutputPlan::success()));
+            }
+            let Some(response) = conn.take_navigation_response(pending.auth_permit) else {
+                return Some(FetchCommandTaskStep::Complete(CommandOutputPlan::error(
+                    -32000,
+                    "RequestNotFound",
+                )));
+            };
+            moli_core::browser::NavigationDecision::Authenticate {
+                credentials,
+                response: Box::new(response),
+            }
         }
-    })
+    };
+    conn.resolve_native_navigation_decision(
+        pending.navigation.web_contents,
+        pending.auth_permit,
+        decision,
+    );
+    Some(FetchCommandTaskStep::Complete(CommandOutputPlan::success()))
 }
 
 fn continued_subresource_request(
@@ -546,35 +471,13 @@ pub(super) async fn default_navigation_auth_as_background_events_async(
         return;
     }
 
-    if conn.navigation_interception_awaits_decision(
+    conn.resolve_native_navigation_decision(
         pending.navigation.web_contents,
         pending.auth_permit,
-    ) {
-        conn.resolve_native_navigation_decision(
-            pending.navigation.web_contents,
-            pending.auth_permit,
-            moli_core::browser::NavigationDecision::Fail {
-                error_text: "Fetch auth challenge aborted".into(),
-            },
-        );
-        return;
-    }
-    drop(conn.take_navigation_auth(pending.auth_permit));
-    let token = Some(pending.auth_permit.navigation());
-    let navigation_state = pending.navigation;
-    let navigation = network::materialize_navigation_load_result(
-        conn,
-        &navigation_state,
-        Err("Fetch auth challenge aborted".to_owned()),
+        moli_core::browser::NavigationDecision::Fail {
+            error_text: "Fetch auth challenge aborted".into(),
+        },
     );
-    complete_tokened_materialized_navigation_as_background_events_async(
-        conn,
-        out,
-        token,
-        navigation_state,
-        navigation,
-    )
-    .await;
 }
 
 fn next_chained_subresource_auth_required_event(
@@ -649,61 +552,6 @@ pub(super) async fn complete_continue_with_auth_command_async(
                 return;
             }
             out.push_success();
-        }
-        PendingContinueWithAuthState::NavigationCancel { pending } => {
-            out.push_success();
-            super::navigation::cancel_navigation_auth_as_background_events_async(
-                conn, out, *pending,
-            )
-            .await;
-        }
-        PendingContinueWithAuthState::NavigationFail { pending } => {
-            out.push_success();
-            default_navigation_auth_as_background_events_async(
-                conn,
-                out,
-                owner.session_id(),
-                *pending,
-            )
-            .await;
-        }
-        PendingContinueWithAuthState::NavigationContinue { pending, auth } => {
-            out.push_success();
-            let response = conn.take_navigation_auth(pending.auth_permit);
-            let Some(response) = response else {
-                let token = Some(pending.auth_permit.navigation());
-                let navigation = network::materialize_navigation_load_result(
-                    conn,
-                    &pending.navigation,
-                    Err("stale navigation auth response".to_owned()),
-                );
-                complete_tokened_materialized_navigation_as_background_events_async(
-                    conn,
-                    out,
-                    token,
-                    pending.navigation,
-                    navigation,
-                )
-                .await;
-                return;
-            };
-            load_or_pause_navigation_for_auth_as_background_events_async(
-                conn,
-                out,
-                PendingFetchNavigation {
-                    fetch_request_id: pending.response_stage_request_id,
-                    interception_session_id: pending.interception_session_id.clone(),
-                    navigation_permit: pending.auth_permit,
-                    navigation: pending.navigation,
-                    request_cookie_report: None,
-                    intercept_response: pending.intercept_response,
-                    response_stage_url_match_policy: pending.response_stage_url_match_policy,
-                    auth_required_blocked_intercepts: Vec::new(),
-                },
-                Some(auth),
-                response.retry(),
-            )
-            .await;
         }
     }
 }

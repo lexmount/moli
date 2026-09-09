@@ -1,6 +1,9 @@
-use moli_core::browser::{DownloadBody, WebContentsHandle};
+#[cfg(test)]
+use moli_core::browser::DownloadBody;
+use moli_core::browser::WebContentsHandle;
 #[cfg(test)]
 use moli_core::page::RendererPageCreationArtifacts;
+#[cfg(test)]
 use moli_core::page::{
     Page, RendererMainDocumentCommit, RendererPendingDownloadActivation, RendererRuntimeRealmInfo,
 };
@@ -8,8 +11,11 @@ use serde::Serialize;
 use serde_json::Value;
 use url::Url;
 
-use crate::conn::{CommandOwnerScope, ResponseCommitReady};
+use crate::conn::CommandOwnerScope;
+#[cfg(test)]
+use crate::conn::ResponseCommitReady;
 use crate::devtools_runtime::DevToolsProtocol;
+#[cfg(test)]
 use crate::domains::network::{
     CompletedDocumentProgressTransfer, CompletedDownloadProgressTransfer,
 };
@@ -18,12 +24,14 @@ use super::browser_context::BrowserContext;
 
 pub(crate) const NETWORK_ERROR_PAGE_URL: &str = "chrome-error://chromewebdata/";
 
+#[cfg(test)]
 #[derive(Clone, Debug)]
 pub(crate) struct NetworkErrorPageNavigation {
     error_text: String,
     unreachable_url: Url,
 }
 
+#[cfg(test)]
 impl NetworkErrorPageNavigation {
     pub(crate) fn new(error_text: String, unreachable_url: Url) -> Self {
         Self {
@@ -41,37 +49,12 @@ impl NetworkErrorPageNavigation {
     }
 }
 
-/// Security state inherited only by URLs such as `about:blank`.
-///
-/// Ordinary final URLs compute their own origin after redirects. Keeping this
-/// source-Document fact separate avoids duplicating the navigation's frame,
-/// loader, and timestamp inside `NavigationDispatchState`.
-#[derive(Clone, Debug)]
-pub(crate) struct NavigationSourceDocumentSecurityContext {
-    security_origin: String,
-    secure_context_type: String,
-}
-
-impl NavigationSourceDocumentSecurityContext {
-    pub(crate) fn new(security_origin: String, secure_context_type: String) -> Self {
-        Self {
-            security_origin,
-            secure_context_type,
-        }
-    }
-}
-
-impl Default for NavigationSourceDocumentSecurityContext {
-    fn default() -> Self {
-        Self::new("null".to_owned(), "Secure".to_owned())
-    }
-}
-
 /// Main-frame protocol identity frozen when a cross-document navigation starts.
 ///
 /// The final URL is intentionally resolved later, after redirects. Everything
 /// else belongs to the navigation transaction and must not be rediscovered
 /// from mutable target state after Fetch interception or background loading.
+#[cfg(test)]
 #[derive(Clone, Debug)]
 pub(crate) struct RendererMainDocumentCommitSeed {
     frame_id: String,
@@ -81,20 +64,8 @@ pub(crate) struct RendererMainDocumentCommitSeed {
     inherited_secure_context_type: String,
 }
 
+#[cfg(test)]
 impl RendererMainDocumentCommitSeed {
-    pub(crate) fn from_navigation(navigation: &NavigationDispatchState) -> Self {
-        Self {
-            frame_id: navigation.frame_id.clone(),
-            loader_id: navigation.loader_id.clone(),
-            timestamp: navigation.timestamp,
-            inherited_security_origin: navigation.source_document_security.security_origin.clone(),
-            inherited_secure_context_type: navigation
-                .source_document_security
-                .secure_context_type
-                .clone(),
-        }
-    }
-
     /// Freezes the same renderer commit identity for a test navigation that
     /// starts from an already-installed target without creating a synthetic
     /// `NavigationDispatchState` or mutating the target's request counters.
@@ -104,13 +75,12 @@ impl RendererMainDocumentCommitSeed {
         loader_id: String,
         timestamp: f64,
     ) -> Self {
-        let source_document_security = NavigationSourceDocumentSecurityContext::default();
         Self {
             frame_id,
             loader_id,
             timestamp,
-            inherited_security_origin: source_document_security.security_origin,
-            inherited_secure_context_type: source_document_security.secure_context_type,
+            inherited_security_origin: "null".into(),
+            inherited_secure_context_type: "Secure".into(),
         }
     }
 
@@ -150,12 +120,15 @@ impl RendererMainDocumentCommitSeed {
 }
 
 #[derive(Debug)]
+#[cfg(test)]
 pub(crate) struct CompletedDownloadBodyArtifact {
     body: DownloadBody,
     response_headers: Vec<(String, String)>,
 }
 
+#[cfg(test)]
 impl CompletedDownloadBodyArtifact {
+    #[cfg(test)]
     pub(crate) fn from_body(body: DownloadBody, response_headers: Vec<(String, String)>) -> Self {
         Self {
             body,
@@ -168,6 +141,7 @@ impl CompletedDownloadBodyArtifact {
     }
 }
 
+#[cfg(test)]
 #[derive(Debug)]
 pub struct LoadedNavigation<P = Page> {
     pub page: P,
@@ -189,6 +163,7 @@ pub struct LoadedNavigation<P = Page> {
     pub(crate) network_error_page: Option<NetworkErrorPageNavigation>,
 }
 
+#[cfg(test)]
 impl<P> LoadedNavigation<P> {
     #[cfg(test)]
     pub(crate) fn response_body(&self) -> String {
@@ -209,6 +184,7 @@ impl<P> LoadedNavigation<P> {
 }
 
 #[derive(Debug)]
+#[cfg(test)]
 pub struct DownloadNavigation {
     pub final_url: Url,
     pub(crate) progress_transfer: CompletedDownloadProgressTransfer,
@@ -216,22 +192,22 @@ pub struct DownloadNavigation {
 
 #[derive(Debug)]
 pub enum NavigationLoadOutcome {
+    #[cfg(test)]
     ResponseCommitReady(Box<ResponseCommitReady>),
+    #[cfg(test)]
     Download(Box<DownloadNavigation>),
     NetworkFailure(String),
 }
 
 impl NavigationLoadOutcome {
+    #[cfg(test)]
     pub(crate) fn response_commit_ready(navigation: ResponseCommitReady) -> Self {
         Self::ResponseCommitReady(Box::new(navigation))
     }
 
+    #[cfg(test)]
     pub(crate) fn download(navigation: DownloadNavigation) -> Self {
         Self::Download(Box::new(navigation))
-    }
-
-    pub(crate) fn network_failure(error_text: String) -> Self {
-        Self::NetworkFailure(error_text)
     }
 }
 
@@ -305,7 +281,6 @@ pub struct NavigationDispatchState {
     pub request_headers: Vec<(String, String)>,
     pub request_load_policy: NavigationRequestLoadPolicy,
     pub timestamp: f64,
-    pub(crate) source_document_security: NavigationSourceDocumentSecurityContext,
 }
 
 impl NavigationDispatchState {

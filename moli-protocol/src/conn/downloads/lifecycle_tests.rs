@@ -391,10 +391,7 @@ async fn retiring_context_cancels_download_and_new_same_wire_context_cannot_read
 }
 
 fn navigation_download_state(conn: &CdpConnection) -> NavigationDispatchState {
-    use crate::conn::{
-        NavigationRequestLoadPolicy, NavigationResultProjection,
-        NavigationSourceDocumentSecurityContext,
-    };
+    use crate::conn::{NavigationRequestLoadPolicy, NavigationResultProjection};
 
     let owner = CommandOwnerScope::for_session("SID-source");
     NavigationDispatchState {
@@ -414,10 +411,6 @@ fn navigation_download_state(conn: &CdpConnection) -> NavigationDispatchState {
         request_headers: Vec::new(),
         request_load_policy: NavigationRequestLoadPolicy::DocumentInitiated,
         timestamp: 0.0,
-        source_document_security: NavigationSourceDocumentSecurityContext::new(
-            "https://source.test".into(),
-            "Secure".into(),
-        ),
     }
 }
 

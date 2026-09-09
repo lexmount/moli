@@ -1,8 +1,7 @@
 use crate::conn::{
     BackgroundProtocolEvent, CdpConnection, CdpSessionRoute, CommandOwnerScope, FetchRequestStage,
-    NavigationDispatchState, NavigationResultProjection, NavigationSourceDocumentSecurityContext,
-    PendingFetchNavigation, ResponseStageUrlMatchPolicy, TargetPageResidenceIdentity,
-    monotonic_timestamp_seconds,
+    NavigationDispatchState, NavigationResultProjection, PendingFetchNavigation,
+    ResponseStageUrlMatchPolicy, TargetPageResidenceIdentity, monotonic_timestamp_seconds,
 };
 use moli_core::browser::web_contents::NavigationInterceptionPermit;
 use moli_core::browser::{NavigationDecision, NavigationDecisionStage, WebContentsHandle};
@@ -672,10 +671,6 @@ impl CdpConnection {
             request_headers: request_headers.clone(),
             request_load_policy: request.policy,
             timestamp: monotonic_timestamp_seconds(),
-            source_document_security: NavigationSourceDocumentSecurityContext::new(
-                preflight.inherited_security_origin.clone(),
-                preflight.inherited_secure_context_type.clone(),
-            ),
         };
         self.project_admitted_navigation_request(
             state,

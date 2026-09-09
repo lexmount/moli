@@ -22,9 +22,8 @@ use crate::conn::{
     CompletedNavigationHistoryReset, CompletedTopLevelHistoryTraversal,
     CompletedTopLevelSameDocumentNavigation, NavigationDispatchState, NavigationId,
     NavigationLoadOutcome, NavigationRequestLoadPolicy, NavigationResultProjection,
-    NavigationSourceDocumentSecurityContext, PendingChildFrameNavigation,
-    PendingTopLevelHistoryTraversal, PendingTopLevelSameDocumentNavigation,
-    monotonic_timestamp_seconds,
+    PendingChildFrameNavigation, PendingTopLevelHistoryTraversal,
+    PendingTopLevelSameDocumentNavigation, monotonic_timestamp_seconds,
 };
 use moli_cookie_jar::{NetworkCookieRequestContext, StoredCookieQueryReport};
 
@@ -34,6 +33,10 @@ use crate::domains::{
     network,
 };
 
+#[cfg(test)]
+use super::navigation_commit::commit_download_navigation_async;
+#[cfg(test)]
+use super::navigation_commit::commit_loaded_navigation_async;
 use super::{
     LOADER_ID, PageCommandTaskStep,
     child_frame_activity::{
@@ -46,7 +49,6 @@ use super::{
         emit_child_frame_document_opened_background_events, emit_child_frame_lifecycle_terminal,
         emit_child_frame_navigation_commit, emit_navigation_started_background_events,
     },
-    navigation_commit::{commit_download_navigation_async, commit_loaded_navigation_async},
 };
 
 pub(super) struct PendingNavigateLoadCommand {
@@ -372,6 +374,7 @@ pub struct BackgroundMainDocumentBodyCompletion {
 }
 
 impl BackgroundMainDocumentBodyCompletion {
+    #[cfg(test)]
     pub(crate) fn new(
         token: NavigationId,
         state: NavigationDispatchState,
@@ -463,19 +466,6 @@ pub struct BackgroundNavigationLifecycleCompletion {
 }
 
 impl BackgroundNavigationLifecycleCompletion {
-    pub(crate) fn new(
-        token: NavigationId,
-        state: NavigationDispatchState,
-        navigation: Result<NavigationLoadOutcome, String>,
-    ) -> Self {
-        Self {
-            token,
-            state,
-            navigation,
-            ready_at: std::time::Instant::now(),
-        }
-    }
-
     pub(crate) fn navigation_token(&self) -> &NavigationId {
         &self.token
     }
@@ -501,16 +491,7 @@ impl BackgroundNavigationLifecycleCompletion {
 }
 
 impl BackgroundNavigationCompletion {
-    pub(crate) fn new(
-        token: NavigationId,
-        state: NavigationDispatchState,
-        navigation: Result<NavigationLoadOutcome, String>,
-    ) -> Self {
-        Self::Lifecycle(Box::new(BackgroundNavigationLifecycleCompletion::new(
-            token, state, navigation,
-        )))
-    }
-
+    #[cfg(test)]
     pub(crate) fn main_document_body(
         token: NavigationId,
         state: NavigationDispatchState,
@@ -2565,10 +2546,6 @@ fn start_navigate_to_url_command_with_background_policy_and_request(
         request_headers: headers,
         request_load_policy: initiator_policy,
         timestamp: monotonic_timestamp_seconds(),
-        source_document_security: NavigationSourceDocumentSecurityContext::new(
-            preflight.inherited_security_origin.clone(),
-            preflight.inherited_secure_context_type.clone(),
-        ),
     };
     // Subscribe before admission. The observer retains no load, response stream,
     // renderer candidate or commit permission; Browser owns the entire operation.
@@ -2862,22 +2839,25 @@ async fn complete_materialized_navigation_into_buffer_inner_async(
     command_context: &mut crate::conn::CommandDispatchContext,
 ) {
     let navigation_owner = state.owner.clone();
-    let mut document_projection_release = None;
-    match navigation {
+    let document_projection_release = match navigation {
+        #[cfg(test)]
         network::MaterializedNavigationLoadOutcome::ResponseCommitReady(navigation) => {
             match conn.start_response_document_materialization_for_owner(
                 &state.owner,
                 token,
                 *navigation,
             ) {
-                Err(error) => push_navigation_commit_error(out, &state, error),
+                Err(error) => {
+                    push_navigation_commit_error(out, &state, error);
+                    None
+                }
                 Ok(materialization) => match materialization.await {
                     Ok(navigation) => {
                         let (prepared, navigation) =
                             network::materialize_loaded_navigation_progress(
                                 conn, &state, navigation,
                             );
-                        document_projection_release = commit_loaded_navigation_async(
+                        commit_loaded_navigation_async(
                             conn,
                             out,
                             &token,
@@ -2886,14 +2866,19 @@ async fn complete_materialized_navigation_into_buffer_inner_async(
                             navigation,
                             command_context,
                         )
-                        .await;
+                        .await
                     }
-                    Err(error) => push_navigation_commit_error(out, &state, error),
+                    Err(error) => {
+                        push_navigation_commit_error(out, &state, error);
+                        None
+                    }
                 },
             }
         }
+        #[cfg(test)]
         network::MaterializedNavigationLoadOutcome::Download(navigation) => {
             commit_download_navigation_async(conn, out, state, navigation, command_context).await;
+            None
         }
         network::MaterializedNavigationLoadOutcome::Failed(navigation) => {
             let network::MaterializedFailedDocumentProgress {
@@ -2907,8 +2892,9 @@ async fn complete_materialized_navigation_into_buffer_inner_async(
                 response_mode,
             )
             .emit_navigation_error_into_buffer(out, &error_text);
+            None
         }
-    }
+    };
     let release = document_projection_release.or_else(|| {
         conn.finish_navigation_without_document_projection_for_owner(&navigation_owner, &token)
     });
@@ -2925,6 +2911,7 @@ async fn complete_materialized_navigation_into_buffer_inner_async(
     conn.clear_pending_document_navigation_for_owner_if_matches(&navigation_owner, &token);
 }
 
+#[cfg(test)]
 pub(super) fn push_navigation_commit_error(
     out: &mut CommandOutputBuffer,
     state: &NavigationDispatchState,

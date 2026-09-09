@@ -48,10 +48,10 @@ pub use navigation_decision::{
 pub use owner::{
     BrowserCommittedInitialDocument, BrowserContextHandle, BrowserDocumentMaterialization,
     BrowserDocumentNavigationCommit, BrowserHandle, BrowserInitialDocumentWaiter,
-    BrowserInterceptedNavigationLoad, BrowserInterceptedNavigationResponse, BrowserNavigationLoad,
-    BrowserNavigationOutcome, BrowserNavigationWaiter, BrowserPreparedDocumentNavigation,
-    BrowserPreparedNavigationResponse, BrowserService, PendingDocumentRetirement,
-    PendingWebContentsActivation, PendingWebContentsClose, WebContentsCreation,
+    BrowserNavigationLoad, BrowserNavigationOutcome, BrowserNavigationWaiter,
+    BrowserPreparedDocumentNavigation, BrowserPreparedNavigationResponse, BrowserService,
+    PendingDocumentRetirement, PendingWebContentsActivation, PendingWebContentsClose,
+    WebContentsCreation,
 };
 pub use permissions::{PermissionDefaults, PermissionOverrides};
 pub use popup::{BrowserPopupAdmission, BrowserPopupCreation};

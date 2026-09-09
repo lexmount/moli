@@ -656,66 +656,55 @@ fn new_browser_context_inherits_effective_http_cache_owner() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn clear_browser_cache_keeps_pending_response_navigation_transfer() {
+    let (addr, server) = crate::testing::spawn_html_response_server("body").await;
     let mut ctx = TestContext::new();
-    let mut bc = ctx.conn.new_page_target_fixture_for_test("BID-1", "TID-1");
-    let url = Url::parse("https://example.test/document").unwrap();
-    bc.register_pending_fetch_response_navigation(
-        "INT-1".to_owned(),
-        None,
-        NavigationDispatchState {
-            navigate_id: Some(1),
-            owner: crate::conn::CommandOwnerScope::for_session("SID-1"),
-            web_contents: NavigationDispatchState::detached_web_contents_for_test(),
-            result_projection: crate::conn::NavigationResultProjection::Cdp(
-                json!({"frameId": "TID-1", "loaderId": LOADER_ID}),
-            ),
-            frame_id: "TID-1".to_owned(),
-            session_id: Some("SID-1".to_owned()),
-            request_id: Some("REQ-1".to_owned()),
-            loader_id: LOADER_ID.to_owned(),
-            request_announced: true,
-            requested_url: url.clone(),
-            request_method: "GET".to_owned(),
-            request_body: None,
-            request_body_bytes: None,
-            request_headers: Vec::new(),
-            request_load_policy: crate::conn::NavigationRequestLoadPolicy::DocumentInitiated,
-            timestamp: 0.0,
-            source_document_security: Default::default(),
+    ctx.conn.browser_context = Some(ctx.conn.new_page_target_fixture_for_test("BID-1", "TID-1"));
+    ctx.process_async(json!({
+        "id": 1, "method": "Fetch.enable",
+        "params": { "patterns": [{ "urlPattern": "*", "resourceType": "Document", "requestStage": "Response" }] }
+    })).await;
+    ctx.expect_result(1, json!({}), None);
+    let url = format!("http://{addr}/document");
+    ctx.process_async(json!({ "id": 2, "method": "Page.navigate", "params": { "url": url } }))
+        .await;
+    crate::testing::wait_until_scheduler_message(
+        &mut ctx,
+        "exact native response pause",
+        |message| {
+            message["method"] == "Fetch.requestPaused"
+                && message["params"]["request"]["url"] == url
+                && message["params"]["responseStatusCode"] == 200
         },
-        DocumentBodySource::BufferedRaw {
-            requested_url: url.clone(),
-            request_method: "GET".to_owned(),
-            request_headers: Vec::new(),
-            response: RawResponse::from_head_and_body(
-                ResponseHead {
-                    final_url: url,
-                    status: 200,
-                    headers: Vec::new(),
-                    request_cookie_report: None,
-                    cookie_set_reports: Vec::new(),
-                    redirected: false,
-                    redirect_chain: Vec::new(),
-                    from_cache: false,
-                    negotiated_http_version: None,
-                },
-                b"body".to_vec(),
-            ),
-            network_observation_journal: Default::default(),
-        },
-    );
-    ctx.conn.install_browser_context_fixture_for_test(bc);
-
+    )
+    .await;
+    let request_id = ctx
+        .sent
+        .iter()
+        .find(|message| {
+            message["method"] == "Fetch.requestPaused" && message["params"]["request"]["url"] == url
+        })
+        .unwrap()["params"]["requestId"]
+        .as_str()
+        .unwrap()
+        .to_owned();
     ctx.process_async(json!({"id": 5, "method": "Network.clearBrowserCache"}))
         .await;
     ctx.expect_result(5, json!({}), None);
-
-    let bc = ctx.conn.browser_context.as_ref().unwrap();
     assert!(
-        bc.active_page_target()
+        ctx.conn
+            .browser_context
+            .as_ref()
+            .unwrap()
+            .active_page_target()
             .fetch_owner
-            .has_pending_fetch_response_navigation_for_test("INT-1")
+            .has_pending_fetch_response_navigation_for_test(&request_id)
     );
+    ctx.process_async(
+        json!({"id": 6, "method": "Fetch.getResponseBody", "params": {"requestId": request_id}}),
+    )
+    .await;
+    ctx.expect_result(6, json!({"body": "body", "base64Encoded": false}), None);
+    server.abort();
 }
 #[tokio::test(flavor = "multi_thread")]
 async fn set_cache_disabled_requires_browser_context() {

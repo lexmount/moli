@@ -113,6 +113,13 @@ async fn supersession_retires_browser_auth_work_before_late_protocol_decision() 
         let context = ctx.conn.browser_context.as_ref().unwrap();
         assert_eq!(context.target_document_id("TID-1"), document);
         assert_eq!(context.target_navigation_history_snapshot("TID-1"), history);
+        assert!(
+            !context
+                .active_page_target()
+                .fetch_owner
+                .has_pending_fetch_auth_navigation_for_test(&auth_id),
+            "acknowledging a retired pause must consume its wire correlation"
+        );
         assert!(context.has_pending_document_navigation_for_target("TID-1"));
         assert_eq!(
             requests.load(Ordering::SeqCst),

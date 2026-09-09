@@ -49,6 +49,7 @@ impl CdpSchedulerHooks {
         self.background_navigation_completion_sender = Some(sender);
     }
 
+    #[cfg(test)]
     pub(super) fn background_navigation_completion_sender(
         &self,
     ) -> Option<

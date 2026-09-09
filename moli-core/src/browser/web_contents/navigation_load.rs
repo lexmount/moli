@@ -13,7 +13,6 @@ use crate::{
 };
 use moli_fetch::{
     BrowserNavigationRequestKind, FetchCancelHandle, NetworkFetchResult, RawResponse, Request,
-    StreamingRawResponse,
 };
 use url::Url;
 
@@ -235,25 +234,6 @@ impl AdmittedNavigationLoad {
         }
         request.set_auth(auth.map(Into::into));
         Ok(request)
-    }
-
-    pub async fn fetch_intercepted_response(
-        &self,
-        method: &str,
-        raw_url: &str,
-        body: Option<Vec<u8>>,
-        headers: Vec<(String, String)>,
-        auth: Option<SubresourceAuthCredentials>,
-    ) -> anyhow::Result<NetworkFetchResult<StreamingRawResponse>> {
-        let request = self.intercepted_request(method, raw_url, body, headers, auth)?;
-        self.engine
-            .resource_request_client()
-            .expect("admitted resource runtime")
-            .fetch_raw_stream_with_cancel_and_network_metadata(
-                request,
-                self.request_cancellation.clone(),
-            )
-            .await
     }
 
     pub async fn fetch_intercepted_auth_response(

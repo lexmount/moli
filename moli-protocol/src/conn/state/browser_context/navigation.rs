@@ -20,87 +20,6 @@ impl BrowserContext {
         self.browser_context.take_navigation_request(permit)
     }
 
-    pub(in crate::conn) fn start_claimed_navigation_request(
-        &mut self,
-        request: crate::conn::state::ClaimedNavigationRequest,
-        fetch_defaults: moli_fetch::FetchConfig,
-        browser_globals: &crate::conn::BrowserGlobalOverrides,
-    ) -> Result<(String, moli_core::browser::BrowserInterceptedNavigationLoad), String> {
-        let web_contents = request.permit().web_contents();
-        let target_id = self
-            .page_targets
-            .get_for_web_contents(web_contents)
-            .ok_or("navigation Target projection unavailable")?
-            .target_id()
-            .to_owned();
-        let inherited = self.browser_context.inherited_document_policy(
-            fetch_defaults,
-            &browser_globals.extra_headers,
-            browser_globals.network_conditions,
-            browser_globals.geolocation.as_ref(),
-        );
-        let load = self
-            .browser_context
-            .start_claimed_navigation_request(request, inherited)?;
-        self.project_navigation_load_for_target(&target_id, &load.load)?;
-        Ok((target_id, load))
-    }
-
-    pub(in crate::conn) fn start_navigation_load_for_interception(
-        &mut self,
-        permit: crate::conn::state::NavigationInterceptionPermit,
-        policy: moli_core::browser::NavigationRequestLoadPolicy,
-        fetch_defaults: moli_fetch::FetchConfig,
-        browser_globals: &crate::conn::BrowserGlobalOverrides,
-    ) -> Result<(String, crate::conn::state::AdmittedNavigationLoad), String> {
-        let web_contents = permit.web_contents();
-        let target_id = self
-            .page_targets
-            .get_for_web_contents(web_contents)
-            .ok_or("navigation Target projection unavailable")?
-            .target_id()
-            .to_owned();
-        let inherited = self.browser_context.inherited_document_policy(
-            fetch_defaults,
-            &browser_globals.extra_headers,
-            browser_globals.network_conditions,
-            browser_globals.geolocation.as_ref(),
-        );
-        let load = self
-            .browser_context
-            .start_navigation_load_for_interception(permit, policy, inherited)?;
-        self.project_navigation_load_for_target(&target_id, &load)?;
-        Ok((target_id, load))
-    }
-
-    pub(in crate::conn) fn pause_navigation_auth(
-        &mut self,
-        response: moli_core::browser::BrowserInterceptedNavigationResponse<moli_fetch::RawResponse>,
-    ) -> Result<moli_core::browser::web_contents::NavigationInterceptionPermit, String> {
-        self.browser_context.pause_navigation_auth(response)
-    }
-
-    pub(in crate::conn) fn take_navigation_auth(
-        &mut self,
-        permit: moli_core::browser::web_contents::NavigationInterceptionPermit,
-    ) -> Option<moli_core::browser::BrowserInterceptedNavigationResponse<moli_fetch::RawResponse>>
-    {
-        self.browser_context.take_navigation_auth(permit)
-    }
-
-    pub(in crate::conn) fn pause_navigation_response_for_target(
-        &mut self,
-        target: &str,
-        navigation: moli_core::browser::NavigationId,
-        transfer: crate::conn::PausedDocumentTransfer,
-    ) -> Result<moli_core::browser::web_contents::NavigationInterceptionPermit, String> {
-        let handle = self
-            .web_contents_handle_for_target(target)
-            .ok_or("navigation WebContents unavailable")?;
-        self.browser_context
-            .pause_navigation_response(handle, navigation, transfer)
-    }
-
     pub(in crate::conn) fn take_navigation_response(
         &mut self,
         permit: moli_core::browser::web_contents::NavigationInterceptionPermit,
@@ -115,16 +34,6 @@ impl BrowserContext {
     ) -> Result<(), Box<crate::conn::PausedDocumentTransfer>> {
         self.browser_context
             .restore_navigation_response(permit, transfer)
-    }
-
-    #[cfg(test)]
-    pub(crate) fn paused_navigation_response_renderer_agent_for_target(
-        &self,
-        target: &str,
-    ) -> Option<moli_core::page::RendererDevToolsAgentToken> {
-        let handle = self.web_contents_handle_for_target(target)?;
-        self.browser_context
-            .paused_navigation_response_renderer_agent_for_test(handle)
     }
 
     pub(in crate::conn) fn resolve_target_history_traversal(

@@ -11,8 +11,10 @@ use url::Url;
 
 use super::{
     BackgroundProtocolEvent, CdpConnection, CommandDispatchContext, CommandOwnerScope,
-    CompletedDownloadBodyArtifact, NavigationDispatchState, output::BackgroundEventSender,
+    output::BackgroundEventSender,
 };
+#[cfg(test)]
+use super::{CompletedDownloadBodyArtifact, NavigationDispatchState};
 
 #[cfg(test)]
 #[path = "downloads/lifecycle_tests.rs"]
@@ -192,6 +194,7 @@ impl CdpConnection {
         Ok(())
     }
 
+    #[cfg(test)]
     pub(crate) async fn handle_navigation_download_response_async(
         &mut self,
         out: &mut Vec<BackgroundProtocolEvent>,
@@ -571,6 +574,7 @@ impl DownloadProjection {
     }
 }
 
+#[cfg(test)]
 pub(crate) fn response_headers_indicate_download(headers: &[(String, String)]) -> bool {
     moli_web_mime::response_headers_indicate_attachment_download(headers)
 }

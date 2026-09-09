@@ -4,30 +4,35 @@ use crate::conn::DocumentStartScript;
 #[cfg(test)]
 use crate::conn::state::BrowserContextResourceStorageHandles;
 use crate::conn::state::{
-    BrowserContextPageStorageHandles, DevToolsSessionState, PageAgentHost,
-    PageNavigationHistoryEntry, RendererMainDocumentCommitSeed, TargetFetchConfig,
+    DevToolsSessionState, PageAgentHost, PageNavigationHistoryEntry, TargetFetchConfig,
     TargetOwnerState, TargetPageResidenceIdentity, TargetRuntimeSessionState, TargetRuntimeSlot,
     WindowSurfaceState,
 };
 use crate::conn::{
     BackgroundProtocolEvent, CommandOwnerScope, ConnectionNetworkRequestIdAllocator,
-    EmulatedDeviceMetrics, FetchInterceptionPattern, FetchRequestStage, LoadedNavigationPageCommit,
-    NETWORK_ERROR_PAGE_URL, NetworkErrorPageNavigation, PendingFetchAuthNavigation,
-    PendingFetchNavigation, PendingFetchResponseNavigation, PendingSubresourceFetchAuthRequest,
-    PendingSubresourceFetchRequest, PendingSubresourceFetchResponseRequest,
-    RuntimeBindingDefinition,
+    EmulatedDeviceMetrics, FetchInterceptionPattern, FetchRequestStage, NETWORK_ERROR_PAGE_URL,
+    PendingFetchAuthNavigation, PendingFetchNavigation, PendingFetchResponseNavigation,
+    PendingSubresourceFetchAuthRequest, PendingSubresourceFetchRequest,
+    PendingSubresourceFetchResponseRequest, RuntimeBindingDefinition,
+};
+#[cfg(test)]
+use crate::conn::{
+    BrowserContextPageStorageHandles, LoadedNavigationPageCommit, NetworkErrorPageNavigation,
+    RendererMainDocumentCommitSeed,
 };
 use crate::devtools_runtime::{DevToolsNetworkInterceptId, DevToolsNetworkResourceType};
 #[cfg(test)]
 use moli_cookie_jar::StoredCookieQueryReport;
+#[cfg(test)]
 use moli_cookie_jar::StoredCookieSetReport;
-use moli_core::page::{
-    BidiPreloadChannelHandoff, RendererMainDocumentCommit, SubresourceResourceType,
-};
+#[cfg(test)]
+use moli_core::page::RendererMainDocumentCommit;
+use moli_core::page::{BidiPreloadChannelHandoff, SubresourceResourceType};
 #[cfg(test)]
 use moli_core::page::{
     RendererInspectorSessionRestoreSnapshot, RendererServiceWorkerVersionStatus,
 };
+#[cfg(test)]
 use moli_fetch::BrowserNavigationRequestKind;
 use moli_page_types::DevToolsSessionKey;
 use url::Url;
@@ -74,8 +79,6 @@ pub(crate) struct TargetNavigationRequestPreflight {
     pub(crate) frame_id: String,
     pub(crate) session_id: Option<String>,
     pub(crate) document_fetch_event_session_id: Option<String>,
-    pub(crate) inherited_security_origin: String,
-    pub(crate) inherited_secure_context_type: String,
     pub(crate) request_headers: Vec<(String, String)>,
     pub(crate) document_fetch_request_stage: Option<FetchRequestStage>,
     pub(crate) document_fetch_response_stage_candidate: bool,
@@ -85,11 +88,13 @@ pub(crate) struct TargetNavigationRequestPreflight {
     pub(crate) fetch_navigation_request_id: Option<String>,
 }
 
+#[cfg(test)]
 #[derive(Clone)]
 pub(crate) struct TargetNavigationStorageHandles {
     page_handles: BrowserContextPageStorageHandles,
 }
 
+#[cfg(test)]
 impl TargetNavigationStorageHandles {
     fn from_page_handles(page_handles: BrowserContextPageStorageHandles) -> Self {
         Self { page_handles }
@@ -113,6 +118,7 @@ impl TargetNavigationStorageHandles {
 #[derive(Clone)]
 pub(crate) struct TargetNavigationLoadInputs {
     pub(crate) browser_context_id: Option<String>,
+    #[cfg(test)]
     storage_handles: TargetNavigationStorageHandles,
     #[cfg(test)]
     pub(crate) root_frame_id: Option<String>,
@@ -123,7 +129,9 @@ pub(crate) struct TargetNavigationLoadInputs {
     pub(crate) tls_verify_host_override: Option<bool>,
     #[cfg(test)]
     pub(crate) navigation_initiator_url: Option<Url>,
+    #[cfg(test)]
     pub(crate) browser_navigation_kind: BrowserNavigationRequestKind,
+    #[cfg(test)]
     pub(crate) infer_navigation_referrer: bool,
     #[cfg(test)]
     pub(crate) document_start_scripts: Vec<DocumentStartScript>,
@@ -153,6 +161,7 @@ pub(crate) struct TargetNavigationLoadInputs {
         (bool, Option<moli_core::page::SubresourceResourceType>),
     #[cfg(test)]
     pub(crate) permission_overrides: Vec<moli_core::page::PermissionOverrideRegistration>,
+    #[cfg(test)]
     main_document_commit_seed: Option<RendererMainDocumentCommitSeed>,
 }
 
@@ -195,6 +204,7 @@ fn prepared_document_inspection(
 }
 
 impl TargetNavigationLoadInputs {
+    #[cfg(test)]
     pub(crate) fn with_main_document_commit_seed(
         mut self,
         seed: RendererMainDocumentCommitSeed,
@@ -203,6 +213,7 @@ impl TargetNavigationLoadInputs {
         self
     }
 
+    #[cfg(test)]
     pub(crate) fn main_document_commit_for_final_url(
         &self,
         final_url: &Url,
@@ -223,6 +234,7 @@ impl TargetNavigationLoadInputs {
         self.storage_handles.resource_storage_handles()
     }
 
+    #[cfg(test)]
     pub(crate) fn store_response_cookie_reports(
         &self,
         response_url: &Url,
@@ -279,6 +291,7 @@ impl TargetNavigationLoadInputs {
 
         Self {
             browser_context_id: Some(browser_context.id.clone()),
+            #[cfg(test)]
             storage_handles: TargetNavigationStorageHandles::from_page_handles(
                 browser_context
                     .page_storage_handles_for_target(target_id)
@@ -297,7 +310,9 @@ impl TargetNavigationLoadInputs {
                 .or(browser_context.network_policy().tls_verify_host),
             #[cfg(test)]
             navigation_initiator_url: browser_context.target_navigation_initiator_url(target_id),
+            #[cfg(test)]
             browser_navigation_kind: BrowserNavigationRequestKind::Navigate,
+            #[cfg(test)]
             infer_navigation_referrer: true,
             #[cfg(test)]
             document_start_scripts: inspection.document_start_scripts,
@@ -354,6 +369,7 @@ impl TargetNavigationLoadInputs {
                 .expect("live WebContents"),
             #[cfg(test)]
             permission_overrides: Vec::new(),
+            #[cfg(test)]
             main_document_commit_seed: None,
         }
     }
@@ -363,6 +379,7 @@ impl TargetNavigationLoadInputs {
         browser_globals: &crate::conn::BrowserGlobalOverrides,
     ) -> Self {
         let mut inputs = TargetNavigationLoadInputs::no_loaded_browser_context(
+            #[cfg(test)]
             browser_context.page_storage_handles(),
         );
         inputs.browser_context_id = Some(browser_context.id.clone());
@@ -391,9 +408,12 @@ impl TargetNavigationLoadInputs {
         inputs
     }
 
-    fn no_loaded_browser_context(page_handles: BrowserContextPageStorageHandles) -> Self {
+    fn no_loaded_browser_context(
+        #[cfg(test)] page_handles: BrowserContextPageStorageHandles,
+    ) -> Self {
         Self {
             browser_context_id: None,
+            #[cfg(test)]
             storage_handles: TargetNavigationStorageHandles::from_page_handles(page_handles),
             #[cfg(test)]
             root_frame_id: None,
@@ -403,7 +423,9 @@ impl TargetNavigationLoadInputs {
             tls_verify_host_override: None,
             #[cfg(test)]
             navigation_initiator_url: None,
+            #[cfg(test)]
             browser_navigation_kind: BrowserNavigationRequestKind::Navigate,
+            #[cfg(test)]
             infer_navigation_referrer: true,
             #[cfg(test)]
             document_start_scripts: Vec::new(),
@@ -431,15 +453,18 @@ impl TargetNavigationLoadInputs {
             fetch_subresource_interception: (false, None),
             #[cfg(test)]
             permission_overrides: Vec::new(),
+            #[cfg(test)]
             main_document_commit_seed: None,
         }
     }
 
+    #[cfg(test)]
     pub(crate) fn without_inferred_referrer(mut self) -> Self {
         self.infer_navigation_referrer = false;
         self
     }
 
+    #[cfg(test)]
     pub(crate) fn with_browser_navigation_kind(
         mut self,
         kind: BrowserNavigationRequestKind,
@@ -827,9 +852,6 @@ impl<'a> TargetSessionOwnerMut<'a> {
             let target = self.target();
             let frame_id = self.target_id.clone();
             let target_session_id = target.session_id().map(str::to_owned);
-            let inherited_security_origin = target.target_identity().security_origin().to_owned();
-            let inherited_secure_context_type =
-                target.target_identity().secure_context_type().to_owned();
             let target_has_network_event_listeners =
                 target.runtime_slot().has_network_event_listeners();
             let effective_policy = self
@@ -919,8 +941,6 @@ impl<'a> TargetSessionOwnerMut<'a> {
                 frame_id,
                 session_id: target_session_id,
                 document_fetch_event_session_id,
-                inherited_security_origin,
-                inherited_secure_context_type,
                 request_headers,
                 document_fetch_request_stage,
                 document_fetch_response_stage_candidate,
@@ -966,6 +986,7 @@ impl CdpConnection {
                 })
                 .unwrap_or_else(|| {
                     TargetNavigationLoadInputs::no_loaded_browser_context(
+                        #[cfg(test)]
                         self.initial_storage_partition.page_storage_handles(),
                     )
                 }),
@@ -1051,6 +1072,7 @@ impl CdpConnection {
             .register_pending_fetch_navigation_request(pending)
     }
 
+    #[cfg(test)]
     pub(crate) fn commit_loaded_navigation(
         &mut self,
         prepared: crate::conn::PreparedDocumentNavigation,

@@ -270,6 +270,7 @@ mod tests {
 
 #[derive(Default)]
 pub(super) struct CdpConnectionSchedulerState {
+    #[cfg(test)]
     next_deferred_main_document_load_observation_id: u64,
     next_protocol_work_publish_sequence: u64,
     pub(super) renderer_output_ingress: crate::domains::activity::OrderedRendererOutputIngress,
@@ -291,6 +292,7 @@ impl CdpConnectionSchedulerState {
         )
     }
 
+    #[cfg(test)]
     pub(super) fn allocate_deferred_main_document_load_observation_id(
         &mut self,
     ) -> super::DeferredMainDocumentLoadObservationId {

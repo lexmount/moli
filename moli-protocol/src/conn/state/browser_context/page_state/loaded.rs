@@ -2,13 +2,19 @@ use crate::conn::TargetPageResidenceIdentity;
 use crate::conn::state::TargetPageAbsenceReason;
 use crate::conn::state::{DevToolsRendererChannelError, DocumentId, DocumentProjectionFence};
 use crate::conn::{BrowserContext, PageAgentHost, TargetRuntimeSlot};
+#[cfg(test)]
+use moli_core::browser::PendingDocumentRetirement;
+#[cfg(test)]
 use moli_core::browser::web_contents::DocumentNavigationDestination;
+#[cfg(test)]
 use moli_core::browser::{
     BrowserDocumentMaterialization, BrowserPreparedDocumentNavigation,
-    BrowserPreparedNavigationResponse, PendingDocumentRetirement,
+    BrowserPreparedNavigationResponse,
 };
+#[cfg(test)]
 use moli_core::page::RendererPageCommandPostResponseContinuation;
 
+#[cfg(test)]
 pub(crate) struct LoadedNavigationPageCommit {
     pub(crate) lifecycle: moli_core::browser::web_contents::CommittedDocumentLifecycle,
     pub(crate) inspection_projection: Result<DocumentProjectionFence, DevToolsRendererChannelError>,
@@ -296,6 +302,7 @@ impl BrowserContext {
             ))
     }
 
+    #[cfg(test)]
     pub(in crate::conn) fn start_document_materialization_for_target(
         &mut self,
         target_id: &str,
@@ -366,6 +373,7 @@ impl BrowserContext {
             .capture_document_policy_for_test(handle, inherited, final_url)
     }
 
+    #[cfg(test)]
     pub(crate) fn commit_loaded_navigation(
         &mut self,
         prepared: BrowserPreparedDocumentNavigation,

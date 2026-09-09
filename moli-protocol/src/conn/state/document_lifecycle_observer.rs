@@ -56,6 +56,7 @@ pub(crate) struct RendererDocumentLifecycleObserver {
 }
 
 impl RendererDocumentLifecycleObserver {
+    #[cfg(test)]
     pub(crate) fn channel(
         initial: RendererDocumentLifecycleObservation,
     ) -> (
@@ -69,6 +70,7 @@ impl RendererDocumentLifecycleObserver {
         )
     }
 
+    #[cfg(test)]
     pub(crate) fn resolved(observation: RendererDocumentLifecycleObservation) -> Self {
         assert!(
             observation.is_terminal(),
@@ -79,6 +81,7 @@ impl RendererDocumentLifecycleObserver {
         observer
     }
 
+    #[cfg(test)]
     pub(crate) fn observation(&self) -> RendererDocumentLifecycleObservation {
         *self.receiver.borrow()
     }

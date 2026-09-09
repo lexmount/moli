@@ -8,7 +8,9 @@ use std::{
 };
 
 use indexmap::IndexMap;
-use moli_cookie_jar::{StoredCookie, StoredCookieQueryReport};
+use moli_cookie_jar::StoredCookie;
+#[cfg(test)]
+use moli_cookie_jar::StoredCookieQueryReport;
 use parking_lot::Mutex;
 use serde_json::json;
 
@@ -17,10 +19,11 @@ use crate::devtools_runtime::{
 };
 use crate::domains::command_output::{BackgroundProtocolEventBuffer, CommandOutputBuffer};
 
+#[cfg(test)]
+use moli_core::network::{SharedWebStorageStore, new_shared_web_storage_store};
 use moli_core::{
     LayoutPolicy, RendererOutputPublicationOrdering, RendererOutputTransportMessage,
     browser::BrowserHandle,
-    network::{SharedWebStorageStore, new_shared_web_storage_store},
     runtime::{NavigationRuntimeConfig, storage_partition::StoragePartitionState},
 };
 
@@ -68,6 +71,7 @@ mod settings;
 mod site_data_manager_surface;
 mod state;
 mod target_startup_work;
+pub(crate) use state::ClaimedNavigationRequest;
 pub(crate) use state::PageInputCommand;
 pub(crate) use state::{
     BrowserAppManifestLoadPreparation, CompletedAppManifestLoadPreparation,
@@ -96,9 +100,6 @@ pub(crate) use state::{
     PendingSetDocumentContent, PendingTopLevelHistoryTraversal,
     PendingTopLevelSameDocumentNavigation,
 };
-pub(crate) use state::{
-    ClaimedNavigationRequest, InterceptedNavigationLoad, InterceptedNavigationResponse,
-};
 pub(crate) use state::{CompletedContextPermissionUpdate, PendingContextPermissionUpdate};
 mod target;
 mod top_level_navigation_work;
@@ -110,9 +111,11 @@ pub(crate) use bidi_channel_work::{
     BidiChannelListenerResidence, BidiChannelOwnerAction, BidiChannelOwnerActionBody,
     BidiChannelPageOwner,
 };
+#[cfg(test)]
+pub(crate) use browser_context::TargetNavigationLoadInputs;
 pub(crate) use browser_context::{
     PageCloseNotifications, PageLifecycleEventsEnableResult, SessionOwnerInspectorEnableResult,
-    SessionOwnerRuntimeFrontendEnableResult, TargetNavigationLoadInputs,
+    SessionOwnerRuntimeFrontendEnableResult,
 };
 pub(crate) use command_owner_scope::CommandOwnerScope;
 pub use command_view::Cmd;
@@ -135,7 +138,6 @@ pub use dispatch::{
     PendingCdpCommandDispatch, RendererDispatch, RendererDispatchBinding, RendererDispatchLane,
     RendererPageDispatchBinding,
 };
-pub(crate) use fetch_support::PendingStreamingDocumentResponseNavigation;
 pub(crate) use fetch_support::{
     ClaimedFetchNavigation, ClaimedFetchResponseNavigation, ClaimedSubresourceContinueRequest,
     CompletedFetchResponseBodyStreamReadDispatch, PendingFetchResponseBodyStreamRead,
@@ -153,11 +155,13 @@ pub use fetch_support::{
     ResponseStageUrlMatchPolicy, fetch_subresource_interception_config,
     fetch_subresource_interception_config_for_patterns,
 };
+pub(crate) use moli_core::browser::CapturedBody;
+#[cfg(test)]
+pub(crate) use moli_core::browser::CapturedBodyWriter;
 pub(crate) use moli_core::browser::web_contents::OpenBodyStreamError;
 pub use moli_core::browser::web_contents::{
     DocumentBodySource, PausedDocumentTransfer, PendingFetchResponseOpenedBodyStream,
 };
-pub(crate) use moli_core::browser::{CapturedBody, CapturedBodyWriter};
 pub use moli_protocol_cdp::{
     CdpRendererCommandPolicy, CdpRendererCommandReplacement, CdpRendererCommandReplayDispatch,
     CdpRequest, ParsedCdpCommand,
@@ -560,11 +564,9 @@ pub use runtime_eval::{
     PendingServiceWorkerRuntimeProtocolMessageDispatch,
     PendingSharedWorkerRuntimeProtocolMessageDispatch,
 };
-pub(crate) use runtime_load::decode_data_url_response;
-pub(crate) use runtime_load::{
-    BackgroundNavigationBodyCompletionSink, FailedInitialDocumentProjection,
-    PausedResponsePreparedDocument, PendingInitialDocumentProjection, ResponseCommitReady,
-};
+#[cfg(test)]
+pub(crate) use runtime_load::ResponseCommitReady;
+pub(crate) use runtime_load::{FailedInitialDocumentProjection, PendingInitialDocumentProjection};
 use scheduler_hooks::CdpSchedulerHooks;
 use scheduler_state::CdpConnectionSchedulerState;
 pub use scheduler_state::{CdpRendererOwnerTurnOutcome, CdpSchedulerEvent, CdpTurnOutcome};
@@ -576,29 +578,26 @@ pub(crate) use site_data_manager_surface::{
 pub(crate) use state::BrowserContextResourceStorageHandles;
 pub(crate) use state::JavaScriptDialogError;
 pub use state::{
-    BrowserContext, DevToolsPageResidenceIdentity, DocumentStartScript, DownloadNavigation,
-    EmulatedDeviceMetrics, EmulatedGeolocationOverride, EmulatedGeolocationOverrideState,
-    EmulatedMediaOverrides, IsolatedWorldDefinition, LoadedNavigation, NavigationDispatchState,
-    NavigationLoadOutcome, NavigationRequestLoadPolicy, PageAgentHost, PageNavigationHistoryEntry,
+    BrowserContext, DevToolsPageResidenceIdentity, DocumentStartScript, EmulatedDeviceMetrics,
+    EmulatedGeolocationOverride, EmulatedGeolocationOverrideState, EmulatedMediaOverrides,
+    IsolatedWorldDefinition, NavigationDispatchState, NavigationLoadOutcome,
+    NavigationRequestLoadPolicy, PageAgentHost, PageNavigationHistoryEntry,
     RuntimeBindingDefinition, TargetInfo, URL_BASE,
 };
 pub(crate) use state::{
     BrowserContextPageStorageHandles, BrowserContextStoragePartitionHandles,
-    CommittedRendererDocumentBinding, CompletedDownloadBodyArtifact, ContextNetworkPolicy,
-    DedicatedWorkerMainScriptOutcome, DedicatedWorkerMainScriptSnapshot,
-    DedicatedWorkerTargetState, DevToolsBrowserIdentityOverride, DevToolsConsoleOutputSessionState,
-    DevToolsLogViolationThreshold, DocumentId, DocumentProjectionFence,
+    CommittedRendererDocumentBinding, ContextNetworkPolicy, DedicatedWorkerMainScriptOutcome,
+    DedicatedWorkerMainScriptSnapshot, DedicatedWorkerTargetState, DevToolsBrowserIdentityOverride,
+    DevToolsConsoleOutputSessionState, DevToolsLogViolationThreshold, DocumentId,
     DocumentProjectionOutputRelease, DuplicatePendingRendererCommand, EmulatedNetworkConditions,
     EmulatedViewportSurface, EmulationPolicyChange, InitialDocumentCreator,
     InspectorCommandDispatch, NETWORK_ERROR_PAGE_URL, NavigationId, NavigationResultProjection,
-    NavigationSourceDocumentSecurityContext, NetworkErrorPageNavigation, PageScreencastConfig,
-    PageScreencastFormat, PendingBidiChannelListener, PendingInspectorAwait, PerformanceTimeDomain,
-    PreparedRendererCallDispatch, ProfilerAction, ProfilerInspectorCommand, RendererAgentBinding,
-    RendererCommandCorrelation, RendererCommandDescriptor, RendererCommandReplay,
-    RendererDocumentLifecycleObservation, RendererDocumentLifecycleObserver,
-    RendererMainDocumentCommitSeed, RendererPageResidenceIdentity,
-    ServiceWorkerRuntimeExceptionSnapshot, ServiceWorkerTargetState, SharedWorkerTargetState,
-    SiteDataClearOptions, TargetIdentityState, TargetOwnerState,
+    PageScreencastConfig, PageScreencastFormat, PendingBidiChannelListener, PendingInspectorAwait,
+    PerformanceTimeDomain, PreparedRendererCallDispatch, ProfilerAction, ProfilerInspectorCommand,
+    RendererAgentBinding, RendererCommandCorrelation, RendererCommandDescriptor,
+    RendererCommandReplay, RendererDocumentLifecycleObservation, RendererDocumentLifecycleObserver,
+    RendererPageResidenceIdentity, ServiceWorkerRuntimeExceptionSnapshot, ServiceWorkerTargetState,
+    SharedWorkerTargetState, SiteDataClearOptions, TargetIdentityState, TargetOwnerState,
     TargetPageProtocolAttachmentIdentity, TargetPageResidenceIdentity, TargetPageSessionState,
     TargetPreparedJavaScriptDialog, TargetPreparedJavaScriptDialogRoute,
     TargetRootDocumentProtocolAttachmentIdentity, TargetRuntimeSlot,
@@ -609,16 +608,17 @@ pub(crate) use state::{
     TargetSharedWorkerProtocolAttachmentRetirement, WindowSurface, WindowSurfaceState,
     viewport_surface_install_script,
 };
-pub(crate) use state::{
-    CommittedDocumentLifecycle, DocumentLifecycleEvent, DocumentNavigationDestination,
-    LoadedNavigationPageCommit, PreparedDocumentNavigation,
-};
+pub(crate) use state::{CommittedDocumentLifecycle, DocumentLifecycleEvent};
 #[cfg(test)]
 pub(crate) use state::{
-    DevToolsEmulationSessionState, DevToolsSessionState, EmulationPolicy, JavaScriptDialogKey,
-    TargetJavaScriptDialog, TargetJavaScriptDialogScopeObserver, TargetPageSlot,
-    TargetRuntimeSessionState,
+    CompletedDownloadBodyArtifact, DevToolsEmulationSessionState, DevToolsSessionState,
+    DocumentNavigationDestination, DocumentProjectionFence, EmulationPolicy, JavaScriptDialogKey,
+    LoadedNavigationPageCommit, NetworkErrorPageNavigation, PreparedDocumentNavigation,
+    RendererMainDocumentCommitSeed, TargetJavaScriptDialog, TargetJavaScriptDialogScopeObserver,
+    TargetPageSlot, TargetRuntimeSessionState,
 };
+#[cfg(test)]
+pub use state::{DownloadNavigation, LoadedNavigation};
 pub(crate) use state::{HistoryTraversalDestination, ResolvedHistoryTraversal};
 use target::{
     DevToolsAgentHostRegistry, TargetClosurePlan, TargetHostDelta,
@@ -706,6 +706,7 @@ impl ConnectionNetworkRequestIdAllocator {
 }
 
 impl PendingDeferredMainDocumentLoadCompletion {
+    #[cfg(test)]
     pub(crate) fn new(
         inner: crate::domains::activity::PendingDeferredMainDocumentLoadCompletionActivity,
     ) -> Self {
@@ -735,6 +736,7 @@ impl PendingDeferredMainDocumentLoadCompletion {
 }
 
 impl CompletedDeferredMainDocumentLoadCompletion {
+    #[cfg(test)]
     pub(crate) fn new(
         inner: crate::domains::activity::CompletedDeferredMainDocumentLoadCompletionActivity,
     ) -> Self {
@@ -835,6 +837,7 @@ impl DeferredMainDocumentLoadPredecessorCandidate {
 #[derive(Clone)]
 pub struct CdpInitialStoragePartition {
     handles: BrowserContextStoragePartitionHandles,
+    #[cfg(test)]
     fallback_session_storage_store: SharedWebStorageStore,
 }
 
@@ -852,6 +855,7 @@ impl CdpInitialStoragePartition {
     fn new(handles: BrowserContextStoragePartitionHandles) -> Self {
         Self {
             handles,
+            #[cfg(test)]
             fallback_session_storage_store: new_shared_web_storage_store(),
         }
     }
@@ -867,35 +871,9 @@ impl CdpInitialStoragePartition {
             ),
         )
     }
-
-    fn into_parts(self) -> (BrowserContextStoragePartitionHandles, SharedWebStorageStore) {
-        (self.handles, self.fallback_session_storage_store)
-    }
 }
 
-struct CdpInitialStoragePartitionOwner {
-    handles: BrowserContextStoragePartitionHandles,
-    fallback_session_storage_store: SharedWebStorageStore,
-}
-
-impl CdpInitialStoragePartitionOwner {
-    fn new(
-        handles: BrowserContextStoragePartitionHandles,
-        fallback_session_storage_store: SharedWebStorageStore,
-    ) -> Self {
-        Self {
-            handles,
-            fallback_session_storage_store,
-        }
-    }
-
-    fn from_initial_storage_partition(
-        initial_storage_partition: CdpInitialStoragePartition,
-    ) -> Self {
-        let (handles, fallback_session_storage_store) = initial_storage_partition.into_parts();
-        Self::new(handles, fallback_session_storage_store)
-    }
-
+impl CdpInitialStoragePartition {
     fn new_default_browser_context(
         &self,
         browser: &BrowserHandle,
@@ -918,6 +896,7 @@ impl CdpInitialStoragePartitionOwner {
             .resource_storage_handles(self.fallback_session_storage_store.clone())
     }
 
+    #[cfg(test)]
     fn page_storage_handles(&self) -> BrowserContextPageStorageHandles {
         self.handles
             .page_storage_handles(self.fallback_session_storage_store.clone())
@@ -1084,7 +1063,7 @@ pub struct CdpConnection {
     base_http_proxy: Option<String>,
     base_http_no_proxy: Option<String>,
     base_tls_verify_host: bool,
-    initial_storage_partition: CdpInitialStoragePartitionOwner,
+    initial_storage_partition: CdpInitialStoragePartition,
     pub(crate) global_io_streams: HashMap<String, IoStreamState>,
     pub(crate) tracing_state: crate::domains::tracing::TracingState,
 
@@ -1132,10 +1111,6 @@ impl CdpConnection {
         initial_storage_partition: CdpInitialStoragePartition,
         navigation_runtime_config: NavigationRuntimeConfig,
     ) -> Self {
-        let initial_storage_partition =
-            CdpInitialStoragePartitionOwner::from_initial_storage_partition(
-                initial_storage_partition,
-            );
         let fetch_config = navigation_runtime_config.fetch_config();
         let base_browser_identity = fetch_config.browser_identity().clone();
         let base_http_proxy = fetch_config.http_proxy().map(str::to_owned);
@@ -1260,6 +1235,7 @@ impl CdpConnection {
             .find_map(|context| context.document_navigation_cancellation_handle(token))
     }
 
+    #[cfg(any(test, feature = "test-support"))]
     pub(crate) fn arm_background_navigation_completion(
         &mut self,
         token: &NavigationId,
@@ -1721,6 +1697,7 @@ impl CdpConnection {
         }
     }
 
+    #[cfg(test)]
     pub(crate) fn begin_renderer_document_load_visibility_barrier_for_owner(
         &mut self,
         owner: &CommandOwnerScope,
@@ -1806,6 +1783,7 @@ impl CdpConnection {
         ))
     }
 
+    #[cfg(test)]
     pub(crate) fn register_exact_renderer_document_lifecycle_observer_for_owner(
         &mut self,
         owner: &CommandOwnerScope,
@@ -2204,6 +2182,7 @@ impl CdpConnection {
         }));
     }
 
+    #[cfg(test)]
     pub(crate) fn background_navigation_completion_sender_for_owner(
         &self,
         owner: &CommandOwnerScope,
@@ -2217,6 +2196,7 @@ impl CdpConnection {
             .background_navigation_completion_sender()
     }
 
+    #[cfg(test)]
     fn can_run_background_navigation_for_owner(&self, owner: &CommandOwnerScope) -> bool {
         if !self
             .scheduler_hooks
@@ -2315,6 +2295,7 @@ impl CdpConnection {
             .await
     }
 
+    #[cfg(test)]
     pub(crate) fn enqueue_deferred_main_document_load_completion(
         &mut self,
         admission: crate::domains::activity::DeferredMainDocumentLoadCompletionAdmission,

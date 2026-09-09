@@ -1,11 +1,8 @@
 #[cfg(test)]
 use crate::conn::OpenBodyStreamError;
-use crate::conn::{BrowserContext, ConnectionNetworkRequestIdAllocator, PageAgentHost};
 #[cfg(test)]
-use crate::conn::{
-    DocumentBodySource, NavigationDispatchState, NavigationId, PausedDocumentTransfer,
-    PendingFetchResponseNavigation, PendingSubresourceFetchRequest,
-};
+use crate::conn::PendingSubresourceFetchRequest;
+use crate::conn::{BrowserContext, ConnectionNetworkRequestIdAllocator, PageAgentHost};
 
 fn document_navigation_loader_id(sequence: u64) -> String {
     format!("LID-{sequence:010}")
@@ -113,46 +110,6 @@ impl BrowserContext {
         self.active_page_target_mut()
             .fetch_owner
             .take_pending_subresource_fetch_request(request_id, None)
-    }
-
-    #[cfg(test)]
-    pub(crate) fn register_pending_fetch_response_navigation(
-        &mut self,
-        request_id: String,
-        document_navigation_token: Option<NavigationId>,
-        navigation: NavigationDispatchState,
-        body: DocumentBodySource,
-    ) {
-        let target_id = self
-            .active_target_id()
-            .expect("response pause requires an active page target")
-            .to_owned();
-        let navigation_token = document_navigation_token.unwrap_or_else(|| {
-            self.begin_target_document_navigation(&target_id, navigation.loader_id.clone())
-        });
-        let transfer = PausedDocumentTransfer::pending(navigation.request_load_policy, body);
-        let permit = self
-            .pause_navigation_response_for_target(&target_id, navigation_token, transfer)
-            .expect("test response pause must address the pending Browser navigation");
-        self.page_target_mut(&target_id)
-            .expect("response pause target remains registered")
-            .fetch_owner
-            .register_pending_fetch_response_navigation(
-                request_id,
-                PendingFetchResponseNavigation::new(navigation, permit),
-            );
-    }
-
-    #[cfg(test)]
-    pub(crate) fn pending_fetch_response_prepared_renderer_agent_for_test(
-        &self,
-        request_id: &str,
-    ) -> Option<moli_core::page::RendererDevToolsAgentToken> {
-        let target_id = self.active_target_id()?;
-        self.page_target(target_id)?
-            .fetch_owner
-            .pending_fetch_response_navigation(request_id)?;
-        self.paused_navigation_response_renderer_agent_for_target(target_id)
     }
 
     #[cfg(test)]
@@ -354,10 +311,8 @@ impl PageAgentHost {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::conn::{NavigationResultProjection, PendingSubresourceFetchOwnerKind};
+    use crate::conn::PendingSubresourceFetchOwnerKind;
     use moli_core::page::SubresourceResourceType;
-    use moli_fetch::{RawResponse, ResponseHead};
-    use serde_json::json;
     use url::Url;
 
     fn pending_subresource_fetch(internal_id: u64) -> PendingSubresourceFetchRequest {
@@ -380,53 +335,6 @@ mod tests {
             resource_type: SubresourceResourceType::Fetch,
             websocket_socket_id: None,
             request_stage_chain: None,
-        }
-    }
-
-    fn navigation_state(url: &Url) -> NavigationDispatchState {
-        NavigationDispatchState {
-            navigate_id: Some(1),
-            owner: crate::conn::CommandOwnerScope::for_session("SID-1"),
-            web_contents: NavigationDispatchState::detached_web_contents_for_test(),
-            result_projection: NavigationResultProjection::Cdp(
-                json!({"frameId": "TID-1", "loaderId": "LID-0000000001"}),
-            ),
-            frame_id: "TID-1".to_owned(),
-            session_id: Some("SID-1".to_owned()),
-            request_id: Some("REQ-1".to_owned()),
-            loader_id: "LID-0000000001".to_owned(),
-            request_announced: false,
-            requested_url: url.clone(),
-            request_method: "GET".to_owned(),
-            request_body: None,
-            request_body_bytes: None,
-            request_headers: Vec::new(),
-            request_load_policy: crate::conn::NavigationRequestLoadPolicy::DocumentInitiated,
-            timestamp: 0.0,
-            source_document_security: Default::default(),
-        }
-    }
-
-    fn buffered_body_source(url: &Url, body: &[u8]) -> DocumentBodySource {
-        DocumentBodySource::BufferedRaw {
-            requested_url: url.clone(),
-            request_method: "GET".to_owned(),
-            request_headers: Vec::new(),
-            response: RawResponse::from_head_and_body(
-                ResponseHead {
-                    final_url: url.clone(),
-                    status: 200,
-                    headers: vec![("content-type".to_owned(), "text/html".to_owned())],
-                    request_cookie_report: None,
-                    cookie_set_reports: Vec::new(),
-                    redirected: false,
-                    redirect_chain: Vec::new(),
-                    from_cache: false,
-                    negotiated_http_version: None,
-                },
-                body.to_vec(),
-            ),
-            network_observation_journal: Default::default(),
         }
     }
 
@@ -489,28 +397,63 @@ mod tests {
         );
     }
 
-    #[test]
-    fn fetch_response_body_stream_workflow_buffers_reusable_response_body() {
-        let mut bc = BrowserContext::new_with_page_for_test("BID-1", "TID-1");
-        let url = Url::parse("https://example.test/page").unwrap();
-        bc.register_pending_fetch_response_navigation(
-            "INT-1".to_owned(),
+    #[tokio::test]
+    async fn fetch_response_body_stream_workflow_buffers_reusable_response_body() {
+        let (addr, server) = crate::testing::spawn_html_response_server("buffered response").await;
+        let mut ctx = crate::testing::TestContext::new();
+        ctx.conn.browser_context =
+            Some(ctx.conn.new_page_target_fixture_for_test("BID-1", "TID-1"));
+        ctx.process_async(serde_json::json!({
+            "id": 1, "method": "Fetch.enable",
+            "params": { "patterns": [{ "urlPattern": "*", "resourceType": "Document", "requestStage": "Response" }] }
+        })).await;
+        ctx.expect_result(1, serde_json::json!({}), None);
+        let url = format!("http://{addr}/document");
+        ctx.process_async(
+            serde_json::json!({"id": 2, "method": "Page.navigate", "params": {"url": url}}),
+        )
+        .await;
+        crate::testing::wait_until_scheduler_message(
+            &mut ctx,
+            "exact native response pause",
+            |message| {
+                message["method"] == "Fetch.requestPaused"
+                    && message["params"]["request"]["url"] == url
+                    && message["params"]["responseStatusCode"] == 200
+            },
+        )
+        .await;
+        let request_id = ctx
+            .sent
+            .iter()
+            .find(|message| {
+                message["method"] == "Fetch.requestPaused"
+                    && message["params"]["request"]["url"] == url
+            })
+            .unwrap()["params"]["requestId"]
+            .as_str()
+            .unwrap()
+            .to_owned();
+        ctx.process_async(serde_json::json!({
+            "id": 3, "method": "Fetch.getResponseBody", "params": {"requestId": request_id}
+        }))
+        .await;
+        ctx.expect_result(
+            3,
+            serde_json::json!({"body": "buffered response", "base64Encoded": false}),
             None,
-            navigation_state(&url),
-            buffered_body_source(&url, b"buffered response"),
         );
-
+        let bc = ctx.conn.browser_context.as_mut().unwrap();
         let stream = bc
-            .open_pending_fetch_response_body_stream("INT-1")
+            .open_pending_fetch_response_body_stream(&request_id)
             .expect("opening buffered response body stream should not fail")
             .expect("buffered response body should produce an IO stream handle");
-
         assert_eq!(stream, "STREAM-1");
         assert!(
             bc.active_page_target()
                 .fetch_owner
-                .has_pending_fetch_response_navigation_for_test("INT-1"),
-            "buffered body stream reads from IO artifacts and keeps the paused response reusable"
+                .has_pending_fetch_response_navigation_for_test(&request_id),
+            "buffered IO reads keep the exact response pause reusable"
         );
         assert!(
             bc.active_page_target()
@@ -518,12 +461,12 @@ mod tests {
                 .active_fetch_response_body_stream_request_id_for_test(&stream)
                 .is_none()
         );
-
         let read = bc
             .read_io_stream(&stream, None, None)
-            .expect("buffered body bytes should be registered as a target-local IO stream");
+            .expect("buffered bytes must remain a target-local IO stream");
         assert_eq!(read.bytes, b"buffered response");
         assert!(read.eof);
+        server.abort();
     }
 
     #[test]

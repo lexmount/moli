@@ -11,10 +11,13 @@ mod subresource;
 
 pub(in crate::domains) use contextual_projection::ProtocolOutputProjectionContext;
 pub(crate) use main_document::{
-    CompletedDeferredMainDocumentLoadCompletionActivity,
-    DeferredMainDocumentLoadCompletionAdmission, MainDocumentDownloadNavigationActivity,
-    MainDocumentFailedNavigationActivity, MainDocumentNavigationActivity,
+    CompletedDeferredMainDocumentLoadCompletionActivity, MainDocumentFailedNavigationActivity,
     PendingDeferredMainDocumentLoadCompletionActivity,
+};
+#[cfg(test)]
+pub(crate) use main_document::{
+    DeferredMainDocumentLoadCompletionAdmission, MainDocumentDownloadNavigationActivity,
+    MainDocumentNavigationActivity,
 };
 pub(crate) use output_ingress::{
     OrderedRendererOutputIngress, RendererOutputIngressAdmission,

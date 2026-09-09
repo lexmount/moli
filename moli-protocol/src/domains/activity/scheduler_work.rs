@@ -12,9 +12,9 @@ use crate::{
     devtools_runtime::DevToolsCommandContext,
 };
 
-use super::{
-    main_document::DeferredMainDocumentLoadCompletionActivity, output_work::ProtocolOutputWork,
-};
+#[cfg(test)]
+use super::main_document::DeferredMainDocumentLoadCompletionActivity;
+use super::output_work::ProtocolOutputWork;
 
 /// Monotonic sequence assigned when protocol-owned scheduler work becomes
 /// durable.
@@ -67,6 +67,7 @@ pub struct ProtocolSchedulerWork {
 
 enum ProtocolSchedulerWorkPayload {
     ProtocolObservation(ProtocolOutputWork),
+    #[cfg(test)]
     MainDocumentLoadOwnerAction(Box<DeferredMainDocumentLoadCompletionActivity>),
     BidiChannelOwnerAction(BidiChannelOwnerAction),
     TopLevelLocationNavigationOwnerAction(TopLevelLocationNavigationOwnerAction),
@@ -84,6 +85,7 @@ impl fmt::Debug for ProtocolSchedulerWork {
             ProtocolSchedulerWorkPayload::ProtocolObservation(output) => {
                 debug.field("payload", output);
             }
+            #[cfg(test)]
             ProtocolSchedulerWorkPayload::MainDocumentLoadOwnerAction(completion) => {
                 debug
                     .field("observation_id", &completion.observation_id())
@@ -135,6 +137,7 @@ impl ProtocolSchedulerWork {
         }
     }
 
+    #[cfg(test)]
     pub(crate) fn main_document_load_owner_action(
         publish_sequence: ProtocolWorkPublishSequence,
         completion: DeferredMainDocumentLoadCompletionActivity,
@@ -196,6 +199,7 @@ impl ProtocolSchedulerWork {
             ProtocolSchedulerWorkPayload::ProtocolObservation(_) => {
                 ProtocolSchedulerWorkKind::ProtocolObservation
             }
+            #[cfg(test)]
             ProtocolSchedulerWorkPayload::MainDocumentLoadOwnerAction(_) => {
                 ProtocolSchedulerWorkKind::MainDocumentLoadOwnerAction
             }
@@ -223,6 +227,7 @@ impl ProtocolSchedulerWork {
     pub fn is_ready(&self) -> bool {
         match &self.payload {
             ProtocolSchedulerWorkPayload::ProtocolObservation(_) => true,
+            #[cfg(test)]
             ProtocolSchedulerWorkPayload::MainDocumentLoadOwnerAction(completion) => {
                 completion.has_terminal_lifecycle_observation()
             }
@@ -245,8 +250,9 @@ impl ProtocolSchedulerWork {
             | ProtocolSchedulerWorkPayload::TopLevelLocationNavigationOwnerAction(_)
             | ProtocolSchedulerWorkPayload::PageTargetTerminationOwnerAction(_) => true,
             ProtocolSchedulerWorkPayload::TargetStartupOwnerAction(_) => false,
-            ProtocolSchedulerWorkPayload::ProtocolObservation(_)
-            | ProtocolSchedulerWorkPayload::MainDocumentLoadOwnerAction(_) => false,
+            ProtocolSchedulerWorkPayload::ProtocolObservation(_) => false,
+            #[cfg(test)]
+            ProtocolSchedulerWorkPayload::MainDocumentLoadOwnerAction(_) => false,
         }
     }
 
@@ -255,6 +261,7 @@ impl ProtocolSchedulerWork {
             ProtocolSchedulerWorkPayload::ProtocolObservation(output) => {
                 output.navigation_gate_target_id()
             }
+            #[cfg(test)]
             ProtocolSchedulerWorkPayload::MainDocumentLoadOwnerAction(completion) => {
                 Some(completion.target_id())
             }
@@ -301,24 +308,28 @@ impl ProtocolSchedulerWork {
     pub fn main_document_load_output_interest(
         &self,
     ) -> Option<DeferredMainDocumentLoadCompletionOutputInterest> {
-        let ProtocolSchedulerWorkPayload::MainDocumentLoadOwnerAction(completion) = &self.payload
-        else {
-            return None;
-        };
-        Some(DeferredMainDocumentLoadCompletionOutputInterest::new(
-            completion.renderer_page_residence_identity(),
-            completion.renderer_document_identity(),
-        ))
+        match &self.payload {
+            #[cfg(test)]
+            ProtocolSchedulerWorkPayload::MainDocumentLoadOwnerAction(completion) => {
+                Some(DeferredMainDocumentLoadCompletionOutputInterest::new(
+                    completion.renderer_page_residence_identity(),
+                    completion.renderer_document_identity(),
+                ))
+            }
+            _ => None,
+        }
     }
 
     pub fn main_document_load_observation_id(
         &self,
     ) -> Option<crate::conn::DeferredMainDocumentLoadObservationId> {
-        let ProtocolSchedulerWorkPayload::MainDocumentLoadOwnerAction(completion) = &self.payload
-        else {
-            return None;
-        };
-        Some(completion.observation_id())
+        match &self.payload {
+            #[cfg(test)]
+            ProtocolSchedulerWorkPayload::MainDocumentLoadOwnerAction(completion) => {
+                Some(completion.observation_id())
+            }
+            _ => None,
+        }
     }
 
     #[cfg(test)]
@@ -343,16 +354,23 @@ impl ProtocolSchedulerWork {
         conn: &CdpConnection,
         context: &DevToolsCommandContext,
     ) -> bool {
-        let ProtocolSchedulerWorkPayload::MainDocumentLoadOwnerAction(completion) = &self.payload
-        else {
-            return false;
+        let owner: Option<&crate::conn::CommandOwnerScope> = match &self.payload {
+            #[cfg(test)]
+            ProtocolSchedulerWorkPayload::MainDocumentLoadOwnerAction(completion) => {
+                Some(completion.owner_scope())
+            }
+            _ => None,
         };
-        conn.command_owner_scope_for_devtools_context(context)
-            .is_some_and(|owner_scope| completion.owner_scope() == &owner_scope)
+        owner.is_some_and(|owner| {
+            conn.command_owner_scope_for_devtools_context(context)
+                .as_ref()
+                == Some(owner)
+        })
     }
 
     pub fn start_main_document_load_wait(self) -> PendingDeferredMainDocumentLoadCompletion {
         match self.payload {
+            #[cfg(test)]
             ProtocolSchedulerWorkPayload::MainDocumentLoadOwnerAction(completion) => {
                 PendingDeferredMainDocumentLoadCompletion::new((*completion).start_scheduler_step())
             }
@@ -407,6 +425,7 @@ impl ProtocolSchedulerWork {
 
 pub(crate) enum ReadyProtocolSchedulerWork {
     ProtocolObservation(ProtocolOutputWork),
+    #[cfg(test)]
     MainDocumentLoadOwnerAction(
         Box<super::main_document::CompletedDeferredMainDocumentLoadCompletionActivity>,
     ),
@@ -422,6 +441,7 @@ impl ProtocolSchedulerWork {
             ProtocolSchedulerWorkPayload::ProtocolObservation(output) => {
                 ReadyProtocolSchedulerWork::ProtocolObservation(output)
             }
+            #[cfg(test)]
             ProtocolSchedulerWorkPayload::MainDocumentLoadOwnerAction(completion) => {
                 let completion = completion.try_complete().unwrap_or_else(|_| {
                     panic!(

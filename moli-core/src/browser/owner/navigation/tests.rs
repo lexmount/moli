@@ -523,7 +523,7 @@ async fn native_initial_document_disconnect_finishes_claimed_preparation() {
     let observation = context
         .start_initial_document(
             contents,
-            context.inherited_document_policy(Default::default(), &[], None),
+            context.inherited_document_policy(Default::default(), &[], None, None),
         )
         .unwrap()
         .unwrap();
@@ -579,7 +579,7 @@ async fn native_initial_document_close_cancels_preparation_without_touching_peer
     let observation = context
         .start_initial_document(
             contents,
-            context.inherited_document_policy(Default::default(), &[], None),
+            context.inherited_document_policy(Default::default(), &[], None, None),
         )
         .unwrap()
         .unwrap();
@@ -657,7 +657,7 @@ async fn native_initial_document_construction_survives_a_dropped_observer() {
     let observation = context
         .start_initial_document(
             contents,
-            context.inherited_document_policy(Default::default(), &[], None),
+            context.inherited_document_policy(Default::default(), &[], None, None),
         )
         .unwrap();
     drop(observation);

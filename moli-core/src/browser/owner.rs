@@ -25,8 +25,7 @@ pub use navigation_driver::{BrowserNavigationOutcome, BrowserNavigationWaiter};
 mod navigation_events;
 mod popup;
 pub use navigation::{
-    BrowserDocumentMaterialization, BrowserDocumentNavigationCommit,
-    BrowserInterceptedNavigationLoad, BrowserInterceptedNavigationResponse, BrowserNavigationLoad,
+    BrowserDocumentMaterialization, BrowserDocumentNavigationCommit, BrowserNavigationLoad,
     BrowserPreparedDocumentNavigation, BrowserPreparedNavigationResponse,
 };
 
@@ -1138,8 +1137,6 @@ impl BrowserContextHandle {
         fn mark_renderer_crashed(handle: WebContentsHandle) -> ();
         fn begin_initial_empty_document(handle: WebContentsHandle, initial_url: String, creator: Option<super::web_contents::InitialDocumentCreator>, storage_key: Option<moli_storage_key::MoliStorageKey>) -> ();
         fn crash_web_contents_renderer_from_io(handle: WebContentsHandle) -> ();
-        fn pause_navigation_request(handle: WebContentsHandle, navigation: super::NavigationId, request: super::web_contents::NavigationRequestInterception) -> super::web_contents::NavigationInterceptionPermit;
-        fn pause_navigation_response(handle: WebContentsHandle, navigation: super::NavigationId, transfer: super::web_contents::PausedDocumentTransfer) -> super::web_contents::NavigationInterceptionPermit;
     }
 
     pub fn take_navigation_request(
@@ -2003,21 +2000,6 @@ impl BrowserContextHandle {
     #[doc(hidden)]
     pub fn has_paused_navigation_auth_for_test(&self, handle: WebContentsHandle) -> bool {
         self.read_live(move |context| context.has_paused_navigation_auth_for_test(handle))
-    }
-
-    #[cfg(any(test, feature = "test-support"))]
-    #[doc(hidden)]
-    pub fn paused_navigation_response_renderer_agent_for_test(
-        &self,
-        handle: WebContentsHandle,
-    ) -> Option<crate::page::RendererDevToolsAgentToken> {
-        self.read_live(move |context| {
-            context
-                .paused_navigation_response_for_test(handle)
-                .and_then(
-                    super::web_contents::PausedDocumentTransfer::prepared_renderer_agent_token,
-                )
-        })
     }
 
     #[cfg(any(test, feature = "test-support"))]

@@ -9,23 +9,17 @@ use crate::{
         RendererPageResidenceIdentity, WebContentsHandle, WebContentsId,
         web_contents::{
             AdmittedDocumentMaterialization as PhysicalDocumentMaterialization,
-            AdmittedNavigationLoad as PhysicalNavigationLoad, ClaimedNavigationRequest,
-            DocumentNavigationDestination, InheritedDocumentPolicy,
-            InterceptedNavigationLoad as PhysicalInterceptedNavigationLoad,
-            NavigationInterceptionPermit,
+            AdmittedNavigationLoad as PhysicalNavigationLoad, DocumentNavigationDestination,
+            InheritedDocumentPolicy,
             PreparedDocumentNavigation as PhysicalPreparedDocumentNavigation,
             PreparedNavigationResponse as PhysicalPreparedNavigationResponse,
         },
     },
-    page::SubresourceAuthCredentials,
     runtime::{
         BuiltDocumentPage, CommittedDocumentResourceSource, ExternalRawDocumentBodyStream,
         NavigationStreamingRawResponse, PageVmInitStage, RendererReplyBoundary,
         RendererReservedServiceWorkerClient,
     },
-};
-use moli_fetch::{
-    NetworkFetchResult, NetworkObservationJournal, RawResponse, StreamingRawResponse,
 };
 
 use super::{
@@ -256,82 +250,6 @@ impl BrowserNavigationLoad {
         completion.await.map_err(|_| receive_error())?
     }
 
-    async fn fetch_intercepted_response(
-        &mut self,
-        method: String,
-        raw_url: String,
-        body: Option<Vec<u8>>,
-        headers: Vec<(String, String)>,
-        auth: Option<SubresourceAuthCredentials>,
-    ) -> anyhow::Result<NetworkFetchResult<StreamingRawResponse>> {
-        let id = self.work().map_err(anyhow::Error::msg)?;
-        let completion = self
-            .context
-            .browser
-            .execute(move |browser| {
-                let NavigationWork::Load(value) = browser.navigation_work.begin(id)? else {
-                    return Err(unavailable());
-                };
-                let local_sender = browser.local_sender.clone();
-                let (completion_tx, completion) = oneshot::channel();
-                tokio::task::spawn_local(async move {
-                    let result = value
-                        .fetch_intercepted_response(&method, &raw_url, body, headers, auth)
-                        .await;
-                    let _ = local_sender.send(Box::new(move |browser| {
-                        let result = browser
-                            .navigation_work
-                            .finish(id, NavigationWork::Load(value))
-                            .map_err(anyhow::Error::msg)
-                            .and(result);
-                        let _ = completion_tx.send(result);
-                    }));
-                });
-                Ok::<_, String>(completion)
-            })
-            .map_err(anyhow::Error::msg)?
-            .map_err(anyhow::Error::msg)?;
-        completion.await.map_err(|_| receive_error())?
-    }
-
-    async fn fetch_intercepted_auth_response(
-        &mut self,
-        method: String,
-        raw_url: String,
-        body: Option<Vec<u8>>,
-        headers: Vec<(String, String)>,
-        auth: SubresourceAuthCredentials,
-    ) -> anyhow::Result<NetworkFetchResult<RawResponse>> {
-        let id = self.work().map_err(anyhow::Error::msg)?;
-        let completion = self
-            .context
-            .browser
-            .execute(move |browser| {
-                let NavigationWork::Load(value) = browser.navigation_work.begin(id)? else {
-                    return Err(unavailable());
-                };
-                let local_sender = browser.local_sender.clone();
-                let (completion_tx, completion) = oneshot::channel();
-                tokio::task::spawn_local(async move {
-                    let result = value
-                        .fetch_intercepted_auth_response(&method, &raw_url, body, headers, auth)
-                        .await;
-                    let _ = local_sender.send(Box::new(move |browser| {
-                        let result = browser
-                            .navigation_work
-                            .finish(id, NavigationWork::Load(value))
-                            .map_err(anyhow::Error::msg)
-                            .and(result);
-                        let _ = completion_tx.send(result);
-                    }));
-                });
-                Ok::<_, String>(completion)
-            })
-            .map_err(anyhow::Error::msg)?
-            .map_err(anyhow::Error::msg)?;
-        completion.await.map_err(|_| receive_error())?
-    }
-
     #[allow(clippy::too_many_arguments)]
     pub async fn prepare_document_response_async(
         &mut self,
@@ -414,162 +332,6 @@ impl Drop for BrowserNavigationLoad {
         if let Some(work) = self.work.take() {
             self.context.browser.discard_navigation_work(work);
         }
-    }
-}
-
-/// Browser-owned intercepted request whose renderer reservation stays on the
-/// Browser owner sequence while network transport is awaited.
-pub struct BrowserInterceptedNavigationLoad {
-    pub load: BrowserNavigationLoad,
-    pub requested_url: Url,
-    pub method: String,
-    body: Option<Vec<u8>>,
-    pub headers: Vec<(String, String)>,
-    prior_observations: NetworkObservationJournal,
-}
-
-impl std::fmt::Debug for BrowserInterceptedNavigationLoad {
-    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        formatter
-            .debug_struct("BrowserInterceptedNavigationLoad")
-            .field("renderer", &self.load.renderer_page())
-            .field("requested_url", &self.requested_url)
-            .finish_non_exhaustive()
-    }
-}
-
-impl BrowserInterceptedNavigationLoad {
-    pub fn new(
-        load: BrowserNavigationLoad,
-        requested_url: Url,
-        method: String,
-        body: Option<Vec<u8>>,
-        headers: Vec<(String, String)>,
-    ) -> Self {
-        Self {
-            load,
-            requested_url,
-            method,
-            body,
-            headers,
-            prior_observations: NetworkObservationJournal::default(),
-        }
-    }
-
-    pub async fn fetch_streaming(
-        mut self,
-        auth: Option<SubresourceAuthCredentials>,
-    ) -> Result<BrowserInterceptedNavigationResponse<StreamingRawResponse>, String> {
-        let response = self
-            .load
-            .fetch_intercepted_response(
-                self.method.clone(),
-                self.requested_url.to_string(),
-                self.body.clone(),
-                self.headers.clone(),
-                auth,
-            )
-            .await
-            .map_err(|error| format!("failed to fetch page `{}`: {error}", self.requested_url))?;
-        Ok(self.with_response(response))
-    }
-
-    pub async fn fetch_auth(
-        mut self,
-        auth: SubresourceAuthCredentials,
-    ) -> Result<BrowserInterceptedNavigationResponse<RawResponse>, String> {
-        let response = self
-            .load
-            .fetch_intercepted_auth_response(
-                self.method.clone(),
-                self.requested_url.to_string(),
-                self.body.clone(),
-                self.headers.clone(),
-                auth,
-            )
-            .await
-            .map_err(|error| format!("failed to fetch page `{}`: {error}", self.requested_url))?;
-        Ok(self.with_response(response))
-    }
-
-    pub fn with_response<R>(
-        mut self,
-        response: NetworkFetchResult<R>,
-    ) -> BrowserInterceptedNavigationResponse<R> {
-        let (response, observations) = response.into_parts_with_observation_journal();
-        let mut prior = std::mem::take(&mut self.prior_observations);
-        prior.append(observations);
-        BrowserInterceptedNavigationResponse {
-            work: self,
-            response: NetworkFetchResult::with_observation_journal(response, prior),
-        }
-    }
-
-    pub fn into_request_parts(
-        self,
-    ) -> (
-        BrowserNavigationLoad,
-        Url,
-        String,
-        Option<Vec<u8>>,
-        Vec<(String, String)>,
-    ) {
-        (
-            self.load,
-            self.requested_url,
-            self.method,
-            self.body,
-            self.headers,
-        )
-    }
-}
-
-#[derive(Debug)]
-pub struct BrowserInterceptedNavigationResponse<R> {
-    work: BrowserInterceptedNavigationLoad,
-    response: NetworkFetchResult<R>,
-}
-
-impl<R> BrowserInterceptedNavigationResponse<R> {
-    pub fn web_contents(&self) -> WebContentsId {
-        self.work.load.web_contents_id()
-    }
-
-    pub fn response(&self) -> &R {
-        self.response.response()
-    }
-
-    pub fn observation_journal(&self) -> &NetworkObservationJournal {
-        self.response.observation_journal()
-    }
-
-    pub fn into_parts(self) -> (BrowserInterceptedNavigationLoad, NetworkFetchResult<R>) {
-        (self.work, self.response)
-    }
-}
-
-impl BrowserInterceptedNavigationResponse<StreamingRawResponse> {
-    pub async fn materialize(
-        self,
-    ) -> Result<BrowserInterceptedNavigationResponse<RawResponse>, String> {
-        let (response, observations) = self.response.into_parts_with_observation_journal();
-        let response = response
-            .into_materialized_raw_response()
-            .await
-            .map_err(|error| format!("failed to read page body from stream: {error}"))?;
-        Ok(BrowserInterceptedNavigationResponse {
-            work: self.work,
-            response: NetworkFetchResult::with_observation_journal(response, observations),
-        })
-    }
-}
-
-impl BrowserInterceptedNavigationResponse<RawResponse> {
-    pub fn retry(self) -> BrowserInterceptedNavigationLoad {
-        let (mut work, response) = self.into_parts();
-        let (_, observations) = response.into_parts_with_observation_journal();
-        work.prior_observations = observations;
-        work
     }
 }
 
@@ -743,104 +505,6 @@ impl BrowserContextHandle {
                 .start_navigation_load(handle, navigation, policy, inherited)?;
             Ok(browser.navigation_work.insert_load(context_handle, load))
         })?
-    }
-
-    pub fn start_claimed_navigation_request(
-        &self,
-        request: ClaimedNavigationRequest,
-        inherited: InheritedDocumentPolicy,
-    ) -> Result<BrowserInterceptedNavigationLoad, String> {
-        let context_handle = self.clone();
-        self.browser.execute(move |browser| {
-            let work = browser
-                .context_mut(context_handle.id)?
-                .start_claimed_navigation_request(request, inherited)?;
-            let (load, requested_url, method, body, headers) = work.into_owner_parts();
-            Ok(BrowserInterceptedNavigationLoad::new(
-                browser.navigation_work.insert_load(context_handle, load),
-                requested_url,
-                method,
-                body,
-                headers,
-            ))
-        })?
-    }
-
-    pub fn start_navigation_load_for_interception(
-        &self,
-        permit: NavigationInterceptionPermit,
-        policy: NavigationRequestLoadPolicy,
-        inherited: InheritedDocumentPolicy,
-    ) -> Result<BrowserNavigationLoad, String> {
-        let context_handle = self.clone();
-        self.browser.execute(move |browser| {
-            let load = browser
-                .context_mut(context_handle.id)?
-                .start_navigation_load_for_interception(permit, policy, inherited)?;
-            Ok(browser.navigation_work.insert_load(context_handle, load))
-        })?
-    }
-
-    pub fn pause_navigation_auth(
-        &self,
-        response: BrowserInterceptedNavigationResponse<RawResponse>,
-    ) -> Result<NavigationInterceptionPermit, String> {
-        let (work, response) = response.into_parts();
-        let BrowserInterceptedNavigationLoad {
-            mut load,
-            requested_url,
-            method,
-            body,
-            headers,
-            prior_observations: _,
-        } = work;
-        if load.context.id != self.id {
-            return Err("navigation auth belongs to another BrowserContext".to_owned());
-        }
-        let id = load.take_work()?;
-        let context = self.id;
-        self.browser.execute(move |browser| {
-            let load = browser.navigation_work.take(id)?;
-            if load.contents.context() != context {
-                return Err("navigation auth belongs to another BrowserContext".to_owned());
-            }
-            let NavigationWork::Load(load) = load.value else {
-                return Err(unavailable());
-            };
-            let work =
-                PhysicalInterceptedNavigationLoad::new(*load, requested_url, method, body, headers);
-            browser
-                .context_mut(context)?
-                .pause_navigation_auth(work.with_response(response))
-        })?
-    }
-
-    pub fn take_navigation_auth(
-        &self,
-        permit: NavigationInterceptionPermit,
-    ) -> Option<BrowserInterceptedNavigationResponse<RawResponse>> {
-        let context_handle = self.clone();
-        self.browser
-            .execute(move |browser| {
-                let response = browser
-                    .context_mut(context_handle.id)
-                    .ok()?
-                    .take_navigation_auth(permit)?;
-                let (work, response) = response.into_parts();
-                let (load, requested_url, method, body, headers) = work.into_owner_parts();
-                Some(BrowserInterceptedNavigationResponse {
-                    work: BrowserInterceptedNavigationLoad::new(
-                        browser.navigation_work.insert_load(context_handle, load),
-                        requested_url,
-                        method,
-                        body,
-                        headers,
-                    ),
-                    response,
-                })
-            })
-            .ok()
-            .flatten()
     }
 
     pub fn start_document_materialization(

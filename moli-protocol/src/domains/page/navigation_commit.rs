@@ -1,16 +1,22 @@
-use crate::conn::{CdpConnection, CommandDispatchContext, NavigationDispatchState, NavigationId};
+use crate::conn::{CdpConnection, CommandDispatchContext};
+#[cfg(test)]
+use crate::conn::{NavigationDispatchState, NavigationId};
+#[cfg(test)]
 use crate::domains::activity::{
     MainDocumentDownloadNavigationActivity, MainDocumentNavigationActivity,
 };
 use crate::domains::command_output::CommandOutputBuffer;
+#[cfg(test)]
 use crate::domains::network::{
     MaterializedDownloadDocumentProgress, MaterializedLoadedDocumentProgress,
 };
+#[cfg(test)]
 use moli_core::page::{
     RendererDocumentLifecycleEvent, RendererDocumentLifecycleEventKind,
     RendererDocumentLifecycleMilestone, RendererPageCreationArtifacts, RendererRuntimeRealmInfo,
 };
 
+#[cfg(test)]
 pub(super) async fn commit_loaded_navigation_async(
     conn: &mut CdpConnection,
     out: &mut CommandOutputBuffer,
@@ -128,6 +134,7 @@ pub(super) async fn commit_loaded_navigation_async(
     }
 }
 
+#[cfg(test)]
 fn split_renderer_page_creation_lifecycle_at_load_boundary(
     mut artifacts: RendererPageCreationArtifacts,
 ) -> (
@@ -178,6 +185,7 @@ fn split_renderer_page_creation_lifecycle_at_load_boundary(
     (artifacts, deferred)
 }
 
+#[cfg(test)]
 pub(super) async fn commit_download_navigation_async(
     conn: &mut CdpConnection,
     out: &mut CommandOutputBuffer,
@@ -205,6 +213,7 @@ pub(super) async fn commit_download_navigation_async(
     .await;
 }
 
+#[cfg(test)]
 async fn commit_and_project_loaded_navigation_async(
     conn: &mut CdpConnection,
     out: &mut CommandOutputBuffer,
@@ -381,10 +390,12 @@ pub(crate) fn fail_navigation_inspection_sessions(
     out.extend_background_events_after_messages(events);
 }
 
+#[cfg(test)]
 fn runtime_realm_execution_context_id(realm: &RendererRuntimeRealmInfo) -> Option<i64> {
     runtime_realm_has_native_unique_id(realm).then_some(realm.context_id)
 }
 
+#[cfg(test)]
 fn runtime_realm_has_native_unique_id(realm: &RendererRuntimeRealmInfo) -> bool {
     realm
         .realm_id
@@ -392,6 +403,7 @@ fn runtime_realm_has_native_unique_id(realm: &RendererRuntimeRealmInfo) -> bool 
         .is_some_and(|realm_id| !realm_id.is_empty())
 }
 
+#[cfg(test)]
 fn dedupe_preload_channel_execution_context_ids(mut ids: Vec<i64>) -> Vec<i64> {
     let mut deduped = Vec::new();
     for id in ids.drain(..) {

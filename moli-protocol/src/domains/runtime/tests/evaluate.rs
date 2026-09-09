@@ -2476,10 +2476,6 @@ async fn page_navigate_network_failure_commits_error_document() {
             request_headers: Vec::new(),
             request_load_policy: crate::conn::NavigationRequestLoadPolicy::DocumentInitiated,
             timestamp: 0.0,
-            source_document_security: crate::conn::NavigationSourceDocumentSecurityContext::new(
-                "http://127.0.0.1".to_owned(),
-                "InsecureScheme".to_owned(),
-            ),
         },
         Ok(crate::conn::CapturedBody::from_string(
             "stale body".to_owned(),

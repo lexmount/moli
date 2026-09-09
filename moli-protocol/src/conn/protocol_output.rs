@@ -277,6 +277,7 @@ impl CdpConnection {
                     Vec::new(),
                 )
             }
+            #[cfg(test)]
             ReadyProtocolSchedulerWork::MainDocumentLoadOwnerAction(completion) => {
                 self.complete_deferred_main_document_load_completion_for_scheduler(
                     super::CompletedDeferredMainDocumentLoadCompletion::new(*completion),

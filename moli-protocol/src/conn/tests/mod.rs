@@ -1480,7 +1480,6 @@ fn materialized_navigation_test_state(
         request_headers: Vec::new(),
         request_load_policy: crate::conn::NavigationRequestLoadPolicy::DocumentInitiated,
         timestamp: 0.0,
-        source_document_security: Default::default(),
     }
 }
 

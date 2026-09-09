@@ -274,16 +274,6 @@ impl FetchCommandOutput {
         self.plan.extend(plan);
     }
 
-    fn extend_plan_as_background_events(
-        &mut self,
-        plan: CommandOutputPlan,
-        command_id: Option<u64>,
-        session_id: Option<&str>,
-    ) {
-        self.plan
-            .extend(plan.into_background_event_plan(command_id, session_id));
-    }
-
     fn set_renderer_output_predecessor(&mut self, predecessor: moli_core::RendererOutputFence) {
         self.plan.set_renderer_output_predecessor(predecessor);
     }
@@ -1071,12 +1061,10 @@ async fn release_main_document_interceptions_neutrally_async(
 ) {
     for pending in pending_navigations {
         let request = conn.take_navigation_request(pending.navigation_permit);
-        navigation::continue_navigation_request_as_background_events_async(
+        navigation::continue_navigation_request(
             conn,
-            out,
             crate::conn::ClaimedFetchNavigation::new(pending, request),
-        )
-        .await;
+        );
     }
     for pending in pending_auth_navigations {
         auth::default_navigation_auth_as_background_events_async(
@@ -1089,10 +1077,7 @@ async fn release_main_document_interceptions_neutrally_async(
     }
     for pending in pending_response_navigations {
         let transfer = conn.take_navigation_response(pending.permit);
-        navigation::continue_navigation_response_neutrally_as_background_events_async(
-            conn, out, pending, transfer,
-        )
-        .await;
+        navigation::continue_navigation_response_neutrally(conn, pending, transfer);
     }
 }
 

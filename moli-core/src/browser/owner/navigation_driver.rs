@@ -291,7 +291,7 @@ impl Browser {
             .web_contents_navigation_fetch_config(contents)
             .cloned()
             .ok_or("navigation WebContents engine unavailable")?;
-        Ok(context.inherited_document_policy(config, &self.permission_defaults, &[], None))
+        Ok(context.inherited_document_policy(config, &self.permission_defaults, &[], None, None))
     }
 
     fn navigation_destination(
@@ -600,7 +600,6 @@ async fn navigate(
                                 request_headers: request_headers.clone(),
                                 response,
                                 network_observation_journal: observations.clone(),
-                                prepared_document: None,
                             },
                             CommittedDocumentResourceSource::Navigation(Box::new(
                                 fetched.document_fetch_context_seed,

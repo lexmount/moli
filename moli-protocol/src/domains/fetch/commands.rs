@@ -1,7 +1,6 @@
 use crate::conn::{
-    BackgroundNavigationBodyCompletionSink, CapturedBody, CdpConnection, Cmd, CommandOwnerScope,
-    CompletedDocumentFetchCommand, DEFAULT_LOADER_ID, DocumentFetchCommand,
-    PendingStreamingDocumentResponseNavigation, monotonic_timestamp_seconds,
+    CdpConnection, Cmd, CommandOwnerScope, CompletedDocumentFetchCommand, DEFAULT_LOADER_ID,
+    DocumentFetchCommand, monotonic_timestamp_seconds,
 };
 use crate::devtools_runtime::{
     DevToolsAuthChallengeAction, DevToolsCommand, DevToolsContinueInterceptedRequestCommand,
@@ -19,10 +18,7 @@ use super::helpers::{
     decode_base64_bytes, decode_base64_to_string, response_headers_from_params,
     response_headers_with_presence_from_params,
 };
-use super::navigation::{
-    complete_tokened_materialized_navigation_as_background_events_async,
-    continue_navigation_request_as_background_events_async,
-};
+use super::navigation::continue_navigation_request;
 use super::params::{
     CloseWebSocketParams, ContinueRequestParams, ContinueResponseParams,
     DispatchWebSocketMessageParams, FailRequestParams, FulfillRequestParams,
@@ -397,7 +393,7 @@ pub(super) async fn complete_continue_request_command_async(
         }
         PendingContinueRequestState::Navigation { pending } => {
             emit_devtools_empty_success(out);
-            continue_navigation_request_as_background_events_async(conn, out, *pending).await;
+            continue_navigation_request(conn, *pending);
         }
     }
 }
@@ -628,34 +624,12 @@ pub(super) async fn complete_fail_request_command_async(
         } => {
             let claimed = *pending;
             emit_devtools_empty_success(out);
-            let token = Some(claimed.navigation_token());
-            let (pending, request) = claimed.into_parts();
-            if request
-                .as_ref()
-                .is_some_and(|request| request.has_pending_decision())
-            {
-                conn.resolve_native_navigation_decision(
-                    pending.navigation.web_contents,
-                    pending.navigation_permit,
-                    moli_core::browser::NavigationDecision::Fail { error_text },
-                );
-                return;
-            }
-            drop(request);
-            let navigation_state = pending.navigation;
-            let navigation = network::materialize_navigation_load_result(
-                conn,
-                &navigation_state,
-                Err(error_text),
+            let (pending, _request) = claimed.into_parts();
+            conn.resolve_native_navigation_decision(
+                pending.navigation.web_contents,
+                pending.navigation_permit,
+                moli_core::browser::NavigationDecision::Fail { error_text },
             );
-            complete_tokened_materialized_navigation_as_background_events_async(
-                conn,
-                out,
-                token,
-                navigation_state,
-                navigation,
-            )
-            .await;
         }
         PendingFailRequestState::SubresourceFetch { pending } => {
             if let Err(message) = super::finish_document_fetch_command(conn, completed) {
@@ -693,29 +667,13 @@ pub(super) async fn complete_fail_request_command_async(
             transfer,
             error_text,
         } => {
-            let transfer = *transfer;
-            if transfer.has_pending_decision(conn) {
-                let (pending, _body) = transfer.into_parts();
-                conn.resolve_native_navigation_decision(
-                    pending.navigation.web_contents,
-                    pending.permit,
-                    moli_core::browser::NavigationDecision::Fail { error_text },
-                );
-                emit_devtools_empty_success(out);
-                return;
-            }
-            let (token, navigation_state, navigation) = transfer.fail(error_text);
-            let navigation =
-                network::materialize_navigation_load_result(conn, &navigation_state, navigation);
+            let (pending, _body) = transfer.into_parts();
+            conn.resolve_native_navigation_decision(
+                pending.navigation.web_contents,
+                pending.permit,
+                moli_core::browser::NavigationDecision::Fail { error_text },
+            );
             emit_devtools_empty_success(out);
-            complete_tokened_materialized_navigation_as_background_events_async(
-                conn,
-                out,
-                token,
-                navigation_state,
-                navigation,
-            )
-            .await;
         }
     }
 }
@@ -1032,61 +990,20 @@ pub(super) async fn complete_fulfill_request_command_async(
             response_headers,
             decoded_body,
         } => {
-            let claimed = *pending;
-            emit_devtools_empty_success(out);
-            let token = Some(claimed.navigation_token());
-            let (pending, request) = claimed.into_parts();
-            if request
-                .as_ref()
-                .is_some_and(|request| request.has_pending_decision())
-            {
-                conn.update_native_navigation_dispatch(&pending);
-                conn.resolve_native_navigation_decision(
-                    pending.navigation.web_contents,
-                    pending.navigation_permit,
-                    moli_core::browser::NavigationDecision::Fulfill {
-                        status: response_code,
-                        headers: response_headers,
-                        body: decoded_body
-                            .unwrap_or_else(RendererSyntheticResponseBody::empty)
-                            .into_body_bytes(),
-                    },
-                );
-                return;
-            }
-            let body = CapturedBody::from_optional_renderer_synthetic_response_body(decoded_body);
-            let navigation_state = pending.navigation;
-            let navigation = match request {
-                Some(request) => match conn.start_claimed_intercepted_navigation_load(request) {
-                    Ok(work) => conn
-                        .build_navigation_from_buffered_body_source_for_intercepted_request_async(
-                            &navigation_state,
-                            work,
-                            navigation_state.requested_url.clone(),
-                            response_code,
-                            response_headers,
-                            body,
-                            pending.request_cookie_report,
-                            Default::default(),
-                            network::MainDocumentBodyProgressSource::default(),
-                        )
-                        .await,
-                    Err(message) => Err(message),
+            let (pending, _request) = pending.into_parts();
+            conn.update_native_navigation_dispatch(&pending);
+            conn.resolve_native_navigation_decision(
+                pending.navigation.web_contents,
+                pending.navigation_permit,
+                moli_core::browser::NavigationDecision::Fulfill {
+                    status: response_code,
+                    headers: response_headers,
+                    body: decoded_body
+                        .unwrap_or_else(RendererSyntheticResponseBody::empty)
+                        .into_body_bytes(),
                 },
-                None => Err(
-                    "renderer channel navigation was superseded by a newer navigation".to_owned(),
-                ),
-            };
-            let navigation =
-                network::materialize_navigation_load_result(conn, &navigation_state, navigation);
-            complete_tokened_materialized_navigation_as_background_events_async(
-                conn,
-                out,
-                token,
-                navigation_state,
-                navigation,
-            )
-            .await;
+            );
+            emit_devtools_empty_success(out);
         }
         PendingFulfillRequestState::ResponseTransfer {
             transfer,
@@ -1094,41 +1011,19 @@ pub(super) async fn complete_fulfill_request_command_async(
             response_headers,
             decoded_body,
         } => {
-            let transfer = *transfer;
+            let (pending, _body) = transfer.into_parts();
+            conn.resolve_native_navigation_decision(
+                pending.navigation.web_contents,
+                pending.permit,
+                moli_core::browser::NavigationDecision::Fulfill {
+                    status: response_code,
+                    headers: response_headers,
+                    body: decoded_body
+                        .unwrap_or_else(RendererSyntheticResponseBody::empty)
+                        .into_body_bytes(),
+                },
+            );
             emit_devtools_empty_success(out);
-            if transfer.has_pending_decision(conn) {
-                let (pending, _body) = transfer.into_parts();
-                conn.resolve_native_navigation_decision(
-                    pending.navigation.web_contents,
-                    pending.permit,
-                    moli_core::browser::NavigationDecision::Fulfill {
-                        status: response_code,
-                        headers: response_headers,
-                        body: decoded_body
-                            .unwrap_or_else(RendererSyntheticResponseBody::empty)
-                            .into_body_bytes(),
-                    },
-                );
-                return;
-            }
-            let (token, navigation_state, navigation) = transfer
-                .fulfill_synthetic_async(
-                    conn,
-                    response_code,
-                    response_headers,
-                    CapturedBody::from_optional_renderer_synthetic_response_body(decoded_body),
-                )
-                .await;
-            let navigation =
-                network::materialize_navigation_load_result(conn, &navigation_state, navigation);
-            complete_tokened_materialized_navigation_as_background_events_async(
-                conn,
-                out,
-                token,
-                navigation_state,
-                navigation,
-            )
-            .await;
         }
     }
 }
@@ -1374,43 +1269,6 @@ fn start_devtools_continue_intercepted_response_command(
     {
         let _ = &command.response_phrase;
         let transfer_response_headers = response_headers.clone().unwrap_or_default();
-        if !transfer.has_pending_decision(conn)
-            && let Some(sender) = conn.background_navigation_completion_sender_for_owner(owner)
-        {
-            match transfer.into_pending_streaming_document_response_navigation() {
-                Ok(pending) => {
-                    // Chromium ACKs Fetch.continueResponse when the response-stage
-                    // pause is released; parser/DCL/body completion continues
-                    // asynchronously. Keep streaming main-document bodies on the
-                    // same background completion path as Page.navigate so the
-                    // command result never waits for body EOF.
-                    continue_streaming_document_response_in_background(
-                        conn,
-                        sender,
-                        pending,
-                        response_code,
-                        transfer_response_headers,
-                    );
-                    return FetchCommandTaskStep::Complete(CommandOutputPlan::success());
-                }
-                Err(transfer) => {
-                    return FetchCommandTaskStep::Pending(
-                        PendingFetchCommandDispatch::new_for_owner(
-                            command_id,
-                            owner.clone(),
-                            PendingFetchCommandKind::ContinueResponse {
-                                state: Box::new(PendingContinueResponseState::ResponseTransfer {
-                                    transfer,
-                                    response_code,
-                                    response_headers: transfer_response_headers,
-                                }),
-                            },
-                            PendingFetchCommandOperation::Ready,
-                        ),
-                    );
-                }
-            }
-        }
         return FetchCommandTaskStep::Pending(PendingFetchCommandDispatch::new_for_owner(
             command_id,
             owner.clone(),
@@ -1572,7 +1430,7 @@ fn continue_response_auth_command(
     }
 }
 
-async fn continue_response_transfer_inline(
+fn continue_response_transfer(
     conn: &mut CdpConnection,
     owner: &CommandOwnerScope,
     out: &mut FetchCommandOutput,
@@ -1580,49 +1438,24 @@ async fn continue_response_transfer_inline(
     response_code: Option<u16>,
     response_headers: Vec<(String, String)>,
 ) {
-    if transfer.has_pending_decision(conn) {
-        if transfer.has_active_body_stream() {
-            conn.restore_pending_fetch_response_navigation_for_owner(owner, transfer);
-            out.push_error(-32000, "ResponseBodyStreamActive");
-            return;
-        }
-        let (pending, transfer) = transfer.into_parts();
-        if let Some(transfer) = transfer {
-            conn.resolve_native_navigation_decision(
-                pending.navigation.web_contents,
-                pending.permit,
-                moli_core::browser::NavigationDecision::Response {
-                    transfer: Box::new(transfer),
-                    status: response_code,
-                    headers: response_headers,
-                },
-            );
-        }
-        emit_devtools_empty_success(out);
+    if transfer.has_active_body_stream() {
+        conn.restore_pending_fetch_response_navigation_for_owner(owner, transfer);
+        out.push_error(-32000, "ResponseBodyStreamActive");
         return;
     }
-    match transfer
-        .continue_response_async(conn, response_code, response_headers)
-        .await
-    {
-        Ok((document_navigation_token, navigation_state, navigation)) => {
-            let navigation =
-                network::materialize_navigation_load_result(conn, &navigation_state, navigation);
-            emit_devtools_empty_success(out);
-            complete_tokened_materialized_navigation_as_background_events_async(
-                conn,
-                out,
-                document_navigation_token,
-                navigation_state,
-                navigation,
-            )
-            .await;
-        }
-        Err(transfer) => {
-            conn.restore_pending_fetch_response_navigation_for_owner(owner, transfer);
-            out.push_error(-32000, "ResponseBodyStreamActive");
-        }
+    let (pending, transfer) = transfer.into_parts();
+    if let Some(transfer) = transfer {
+        conn.resolve_native_navigation_decision(
+            pending.navigation.web_contents,
+            pending.permit,
+            moli_core::browser::NavigationDecision::Response {
+                transfer: Box::new(transfer),
+                status: response_code,
+                headers: response_headers,
+            },
+        );
     }
+    emit_devtools_empty_success(out);
 }
 
 pub(super) async fn complete_continue_response_command_async(
@@ -1638,15 +1471,14 @@ pub(super) async fn complete_continue_response_command_async(
             response_code,
             response_headers,
         } => {
-            continue_response_transfer_inline(
+            continue_response_transfer(
                 conn,
                 owner,
                 out,
                 *transfer,
                 response_code,
                 response_headers,
-            )
-            .await;
+            );
         }
         PendingContinueResponseState::SubresourceResponse { pending } => {
             let pending = *pending;
@@ -1666,79 +1498,6 @@ pub(super) async fn complete_continue_response_command_async(
             out.extend_background_events(events);
         }
     }
-}
-
-fn continue_streaming_document_response_in_background(
-    conn: &mut CdpConnection,
-    sender: tokio::sync::mpsc::UnboundedSender<page::BackgroundNavigationCompletion>,
-    pending: PendingStreamingDocumentResponseNavigation,
-    response_code: Option<u16>,
-    response_headers: Vec<(String, String)>,
-) {
-    let PendingStreamingDocumentResponseNavigation {
-        permit,
-        request_load_policy,
-        navigation,
-        response,
-        network_observation_journal,
-        body_progress_source,
-        prepared_document,
-        prepared_document_projection,
-    } = pending;
-    let document_navigation_token = permit.navigation();
-    let cancellation = response.cancellation_handle();
-    if response_code.is_none()
-        && response_headers.is_empty()
-        && let (Some(prepared_document), Some(projection)) =
-            (prepared_document, prepared_document_projection)
-    {
-        conn.arm_background_navigation_completion(&document_navigation_token, Some(cancellation));
-        tokio::task::spawn_local(async move {
-            let body_completion_sink = BackgroundNavigationBodyCompletionSink::new(
-                sender.clone(),
-                document_navigation_token,
-                navigation.clone(),
-            );
-            let navigation_result = projection.resume_streaming(
-                *prepared_document,
-                response,
-                Some(body_completion_sink),
-            );
-            let _ = sender.send(page::BackgroundNavigationCompletion::new(
-                document_navigation_token,
-                navigation,
-                Ok(navigation_result),
-            ));
-        });
-        return;
-    }
-    let job = conn.background_streaming_response_navigation_load_job_for_navigation(
-        permit,
-        request_load_policy,
-        &navigation,
-        response,
-        network_observation_journal,
-        response_code,
-        response_headers,
-        body_progress_source,
-    );
-    conn.arm_background_navigation_completion(&document_navigation_token, Some(cancellation));
-    tokio::task::spawn_local(async move {
-        let body_completion_sink = BackgroundNavigationBodyCompletionSink::new(
-            sender.clone(),
-            document_navigation_token,
-            navigation.clone(),
-        );
-        let navigation_result = match job {
-            Ok(job) => job.run(Some(body_completion_sink)).await,
-            Err(error) => Err(error),
-        };
-        let _ = sender.send(page::BackgroundNavigationCompletion::new(
-            document_navigation_token,
-            navigation,
-            navigation_result,
-        ));
-    });
 }
 
 #[cfg(test)]

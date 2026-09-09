@@ -281,6 +281,10 @@ async fn canceled_document_materialization_does_not_mutate_engine_policy() {
 }
 
 async fn buffered_navigation_policy_checkpoint(reject_canceled: Option<bool>) {
+    use moli_core::browser::web_contents::NavigationRequestInterception;
+    use moli_core::browser::{
+        BrowserNavigationOutcome, NavigationDecision, NavigationDecisionStage,
+    };
     let mut conn = crate::test_support::connection();
     let mut ambient_context = conn.new_browser_context("BID-ambient".to_owned());
     ambient_context.set_active_target_id("TID-ambient");
@@ -288,67 +292,73 @@ async fn buffered_navigation_policy_checkpoint(reject_canceled: Option<bool>) {
     let ambient_renderer_owner = conn
         .browser_context
         .as_ref()
-        .and_then(|context| context.page_navigation_renderer_owner_id("TID-ambient"))
-        .expect("ambient target renderer owner");
+        .unwrap()
+        .page_navigation_renderer_owner_id("TID-ambient")
+        .unwrap();
 
     let mut target_context = conn.new_browser_context("BID-target".to_owned());
     target_context.set_active_target_id("TID-target");
     target_context.attach_active_session("SID-target");
     target_context.begin_active_target_initial_empty_document("about:blank".to_owned());
-    let token = target_context
-        .start_document_navigation_for_active_target("LOADER-target".to_owned())
-        .expect("target should accept its synthetic navigation");
+    let contents = target_context
+        .web_contents_handle_for_target("TID-target")
+        .unwrap();
     conn.push_inactive_browser_context_fixture_for_test(target_context);
-    let owner = crate::conn::CommandOwnerScope::for_session("SID-target");
+    conn.commit_declared_session_fixtures_for_test();
+    let owner = crate::conn::CommandOwnerScope::capture(&conn, Some("SID-target"));
     let load_inputs = conn.navigation_load_inputs_for_owner(&owner);
     let resident_client = conn
         .ensure_resource_request_client_for_navigation_load_inputs(&load_inputs)
         .expect("inactive target must initialize its resident navigation engine");
-
+    let native = conn.browser.context_handle(contents.context()).unwrap();
+    let (_, mut events) = conn.browser.subscribe().unwrap();
     let requested_url = Url::parse("https://target.example/fulfilled").unwrap();
-    let navigation = NavigationDispatchState {
-        navigate_id: Some(1),
-        owner,
-        web_contents: NavigationDispatchState::detached_web_contents_for_test(),
-        result_projection: NavigationResultProjection::Cdp(json!({
-            "frameId": "TID-target",
-            "loaderId": "LOADER-target",
-        })),
-        frame_id: "TID-target".to_owned(),
-        session_id: Some("SID-target".to_owned()),
-        request_id: Some("LOADER-target".to_owned()),
-        loader_id: "LOADER-target".to_owned(),
-        request_announced: true,
-        requested_url: requested_url.clone(),
-        request_method: "GET".to_owned(),
-        request_body: None,
-        request_body_bytes: None,
-        request_headers: Vec::new(),
-        request_load_policy: crate::conn::NavigationRequestLoadPolicy::DocumentInitiated,
-        timestamp: 0.0,
-        source_document_security: Default::default(),
-    };
-
-    let outcome = conn
-        .build_navigation_from_buffered_body_source_for_navigation_async(
-            &navigation,
-            requested_url,
-            200,
-            vec![("content-type".to_owned(), "text/html".to_owned())],
-            crate::conn::CapturedBody::from_string(
-                "<script>document.title = new Intl.DateTimeFormat().resolvedOptions().locale</script>".to_owned(),
+    let waiter = native
+        .navigate_document(
+            contents,
+            NavigationRequestInterception::new(
+                requested_url.clone(),
+                "GET".into(),
+                None,
+                Vec::new(),
+                crate::conn::NavigationRequestLoadPolicy::DocumentInitiated,
             ),
-            None,
-            moli_fetch::NetworkObservationJournal::default(),
-            crate::domains::network::MainDocumentBodyProgressSource::default(),
         )
-        .await
-        .expect("buffered target navigation should prepare");
-    let NavigationLoadOutcome::ResponseCommitReady(response) = outcome else {
-        panic!("buffered HTML must retain an unmaterialized renderer candidate");
+        .unwrap();
+    let request = waiter.request();
+    let paused = native.navigation_decision(contents).unwrap().unwrap();
+    assert_eq!(paused.permit.navigation(), request.navigation);
+    assert!(matches!(
+        paused.stage,
+        NavigationDecisionStage::Request { .. }
+    ));
+    assert!(native.resolve_navigation_decision(contents, paused.permit, NavigationDecision::Fulfill {
+        status: 200, headers: vec![("content-type".into(), "text/html".into())],
+        body: b"<script>document.title = new Intl.DateTimeFormat().resolvedOptions().locale</script>".to_vec(),
+    }).unwrap());
+    let prepared = loop {
+        if let Some(paused) = native.navigation_decision(contents).unwrap() {
+            assert_eq!(paused.permit.navigation(), request.navigation);
+            match paused.stage {
+                NavigationDecisionStage::PreparedDocument { .. } => break paused.permit,
+                NavigationDecisionStage::Response { .. } => {
+                    assert!(
+                        native
+                            .resolve_navigation_decision(
+                                contents,
+                                paused.permit,
+                                NavigationDecision::Continue,
+                            )
+                            .unwrap()
+                    );
+                }
+                _ => panic!("fulfilled native navigation must prepare its exact response"),
+            }
+        }
+        events.recv().await.unwrap();
     };
     let context = conn.browser_context_by_id_mut("BID-target").unwrap();
-    context.set_base_locale_override_for_target("TID-target", Some("fr-FR".to_owned()));
+    context.set_base_locale_override_for_target("TID-target", Some("fr-FR".into()));
     if let Some(canceled) = reject_canceled {
         assert!(
             context
@@ -357,23 +367,36 @@ async fn buffered_navigation_policy_checkpoint(reject_canceled: Option<bool>) {
                 .tls_verify_host()
         );
         context.set_tls_verify_host_override_for_target("TID-target", Some(false));
-        let admission = if canceled {
-            context
-                .document_navigation_cancellation_handle_for_target("TID-target", &token)
-                .unwrap()
-                .cancel();
-            token
+        let winner = if canceled {
+            assert!(
+                native
+                    .cancel_document_navigation(contents, &request.navigation)
+                    .unwrap()
+            );
+            None
         } else {
-            moli_core::browser::NavigationId::allocate()
+            Some(
+                native
+                    .navigate_document(
+                        contents,
+                        NavigationRequestInterception::new(
+                            Url::parse("data:text/html,winner").unwrap(),
+                            "GET".into(),
+                            None,
+                            Vec::new(),
+                            crate::conn::NavigationRequestLoadPolicy::DocumentInitiated,
+                        ),
+                    )
+                    .unwrap(),
+            )
         };
-        let result = conn.start_response_document_materialization_for_owner(
-            &navigation.owner,
-            admission,
-            *response,
-        );
         assert!(
-            matches!(result, Err(ref message) if message == "renderer channel navigation was superseded by a newer navigation")
+            !native
+                .resolve_navigation_decision(contents, prepared, NavigationDecision::Continue)
+                .unwrap(),
+            "a late prepared-document decision must never resume a retired navigation"
         );
+        assert!(waiter.wait().await.is_err());
         assert!(
             conn.browser_context_by_id("BID-target")
                 .unwrap()
@@ -382,73 +405,99 @@ async fn buffered_navigation_policy_checkpoint(reject_canceled: Option<bool>) {
                 .tls_verify_host(),
             "rejected admission must not install the new native TLS policy on the engine"
         );
+        if let Some(winner) = winner {
+            assert!(
+                native
+                    .cancel_document_navigation(contents, &winner.request().navigation)
+                    .unwrap()
+            );
+            assert!(winner.wait().await.is_err());
+        }
         return;
     }
-    let materialization = conn
-        .start_response_document_materialization_for_owner(&navigation.owner, token, *response)
-        .unwrap();
+
     let context = conn.browser_context_by_id_mut("BID-target").unwrap();
-    context.set_base_locale_override_for_target("TID-target", Some("de-DE".to_owned()));
     assert!(context.dispose_devtools_session_for_target(
         "TID-target",
         "SID-target",
         &moli_page_types::DevToolsSessionKey::Primary,
     ));
     context.set_active_target_id("TID-peer");
-    // Complete both halves of DevTools disposal: domain state and the service
-    // route. Resetting the primary domain slot alone does not detach its wire id.
     conn.detach_known_session_event_plan("TID-target", "SID-target", None, None);
     assert!(conn.session_route(Some("SID-target")).is_none());
     assert!(
-        conn.target_runtime_session_state_for_owner(&navigation.owner)
+        conn.target_runtime_session_state_for_owner(&owner)
             .is_none()
     );
-    let loaded = materialization.await.unwrap();
-    let commit = conn.commit_loaded_navigation(loaded.page).unwrap();
-    assert!(commit.inspection_projection.is_ok());
-    if let Some(continuation) = commit.committed_document_post_response_continuation {
-        continuation.release();
-    }
-    commit.previous_document_retirement.close().await;
+    // The original session is gone while the Browser still holds the exact
+    // prepared-document decision. Projection must not reselect the active peer.
+    assert_eq!(
+        native
+            .navigation_decision(contents)
+            .unwrap()
+            .unwrap()
+            .permit,
+        prepared
+    );
+    let mut ctx = TestContext::from_conn(conn);
+    ctx.conn
+        .project_browser_navigation_decision(contents, Some(prepared))
+        .await;
+    let BrowserNavigationOutcome::Document(snapshot) = waiter.wait().await.unwrap() else {
+        panic!("the Browser must commit the fulfilled HTML after the session detached");
+    };
+    let document = snapshot.document;
+    // Change the default only after the real Browser materialization boundary.
+    ctx.conn
+        .browser_context_by_id_mut("BID-target")
+        .unwrap()
+        .set_base_locale_override_for_target("TID-target", Some("de-DE".into()));
+    ctx.conn.project_browser_document_commit(document).await;
+    ctx.wait_until_scheduler_state("original detached document DOMContentLoaded", |_| {
+        native
+            .document_lifecycle_snapshot(document)
+            .unwrap()
+            .is_some_and(|snapshot| snapshot.dom_content_loaded.is_some())
+    })
+    .await;
+    let title = native
+        .evaluate_document_expression_for_test(document, "document.title", false)
+        .await
+        .unwrap();
+    assert_eq!(
+        title["value"], "fr-FR",
+        "creation must use the policy captured at actual Browser admission"
+    );
+    let conn = &mut ctx.conn;
     let defaults = conn.document_fetch_defaults();
     let browser_globals = conn.browser_global_overrides.clone();
-    let context = conn
-        .browser_context_by_id_mut("BID-target")
-        .expect("inactive target context");
+    let context = conn.browser_context_by_id_mut("BID-target").unwrap();
     let retained_client = context
         .resource_request_client_for_test("TID-target", defaults, &browser_globals)
-        .expect("resident target engine must keep a resource request client");
+        .unwrap();
     let target_renderer_owner = context
         .page_navigation_renderer_owner_id("TID-target")
-        .expect("inactive target must keep its navigation engine after completion");
-
+        .unwrap();
     assert!(
         resident_client.shares_page_network_policy_with(&retained_client),
-        "navigation completion must not replace the target's resident engine policy"
+        "completion must not replace the target's resident engine policy"
     );
     assert_eq!(
-        conn.browser_context_by_id("BID-target")
-            .unwrap()
+        context
             .target_renderer_page_residence_identity("TID-target")
             .unwrap()
             .owner_local_host_id()
             .as_u64(),
         target_renderer_owner,
-        "the loaded Page and the engine handed to its target must share one renderer owner"
+        "the Document and resident engine must keep one renderer owner"
     );
     assert_ne!(
         target_renderer_owner, ambient_renderer_owner,
-        "a browser-level Fetch action must not build an inactive target on the ambient context engine"
+        "inactive target work must not use the ambient engine"
     );
-    let context = conn.browser_context_by_id_mut("BID-target").unwrap();
     assert_eq!(context.active_target_id(), Some("TID-peer"));
     assert!(!context.target_has_loaded_page("TID-peer"));
     assert!(!context.has_pending_document_navigation_for_target("TID-target"));
-    assert_eq!(
-        context.target_document_title("TID-target").unwrap(),
-        "fr-FR",
-        "creation must use policy captured by Browser admission, before detach or later policy changes"
-    );
     assert_eq!(
         context
             .target_navigation_history_snapshot("TID-target")
@@ -457,7 +506,7 @@ async fn buffered_navigation_policy_checkpoint(reject_canceled: Option<bool>) {
             .last()
             .unwrap()
             .url,
-        "https://target.example/fulfilled"
+        requested_url.as_str()
     );
 }
 

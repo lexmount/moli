@@ -444,35 +444,6 @@ impl CommandOutputPlan {
         )
     }
 
-    pub(crate) fn into_background_event_plan(
-        self,
-        command_id: Option<u64>,
-        session_id: Option<&str>,
-    ) -> Self {
-        Self {
-            outputs: self
-                .outputs
-                .into_iter()
-                .map(|output| {
-                    let event = match output {
-                        CommandOutput::Command(command) => {
-                            command.into_background_event(command_id, session_id)
-                        }
-                        CommandOutput::CommandWithoutSession(command) => {
-                            command.into_background_event(command_id, None)
-                        }
-                        CommandOutput::OwnerEvent(event) => event.into_background_event(),
-                        CommandOutput::BackgroundEvent(event) => event,
-                    };
-                    CommandOutput::BackgroundEvent(event)
-                })
-                .collect(),
-            post_response_events: self.post_response_events,
-            renderer_output_predecessor: self.renderer_output_predecessor,
-            renderer_output_boundary: self.renderer_output_boundary,
-        }
-    }
-
     pub(crate) fn into_runtime_inspector_response_and_background_events(
         self,
         command_id: u64,
@@ -510,13 +481,6 @@ pub(crate) struct BackgroundProtocolEventBuffer {
 }
 
 impl CommandOutputBuffer {
-    pub(crate) fn set_renderer_output_predecessor(
-        &mut self,
-        predecessor: moli_core::RendererOutputFence,
-    ) {
-        self.plan.set_renderer_output_predecessor(predecessor);
-    }
-
     pub(crate) fn extend_background_events_after_messages(
         &mut self,
         events: impl IntoIterator<Item = BackgroundProtocolEvent>,
@@ -534,6 +498,7 @@ impl CommandOutputBuffer {
         self.plan.push_error(code, message);
     }
 
+    #[cfg(test)]
     pub(crate) fn insert_renderer_output_boundary_after_messages(
         &mut self,
         cursor: moli_core::RendererOutputFence,

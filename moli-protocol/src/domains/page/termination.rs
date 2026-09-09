@@ -215,7 +215,6 @@ async fn fail_pending_fetch_state_for_owner_background_events_async(
         merge_renderer_output_predecessor(&mut renderer_output_predecessor, predecessor);
     }
     for pending in pending_auth_navigations {
-        drop(conn.take_navigation_auth(pending.auth_permit));
         let token = Some(pending.auth_permit.navigation());
         let navigation_state = pending.navigation;
         let navigation = network::materialize_navigation_load_result(

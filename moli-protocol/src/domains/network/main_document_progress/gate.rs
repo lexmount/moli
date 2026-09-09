@@ -6,7 +6,9 @@ use serde_json::Value;
 
 use crate::conn::{BackgroundEventSender, BackgroundProtocolEvent, build_event};
 
-use super::{MainDocumentNavigationProgressEvent, MainDocumentNavigationProgressEventBatches};
+use super::MainDocumentNavigationProgressEvent;
+#[cfg(test)]
+use super::MainDocumentNavigationProgressEventBatches;
 
 pub(crate) struct MainDocumentProgressGate {
     queue: MainDocumentProgressQueueHandle,
@@ -41,6 +43,7 @@ struct MainDocumentProgressOutputQueue {
 
 #[derive(Clone, Copy, Eq, PartialEq, Ord, PartialOrd)]
 pub(super) enum MainDocumentProgressOutputBoundary {
+    #[cfg(test)]
     ResponseMetadataVisible,
     BodyFinishedVisible,
 }
@@ -57,7 +60,9 @@ pub(super) struct MainDocumentProgressEventBatch {
 pub(super) enum MainDocumentProgressSourceKind {
     Streaming,
     FailedNavigation(Box<MainDocumentFailedNavigationProgressSource>),
+    #[cfg(test)]
     ErrorPage(Box<MainDocumentErrorPageProgressSource>),
+    #[cfg(test)]
     CompletedBody(MainDocumentCompletedBodyProgressSource),
 }
 
@@ -70,6 +75,7 @@ pub(super) enum MainDocumentProgressPhase {
     BodyFinished,
 }
 
+#[cfg(test)]
 pub(super) struct MainDocumentCompletedBodyProgressSource {
     event_batches: MainDocumentNavigationProgressEventBatches,
 }
@@ -78,6 +84,7 @@ pub(super) struct MainDocumentFailedNavigationProgressSource {
     pub(super) failure_event: Option<MainDocumentNavigationProgressEvent>,
 }
 
+#[cfg(test)]
 pub(super) struct MainDocumentErrorPageProgressSource {
     pub(super) failure_event: Option<MainDocumentNavigationProgressEvent>,
     pub(super) finish_event: Option<MainDocumentNavigationProgressEvent>,
@@ -92,6 +99,7 @@ impl MainDocumentProgressSource {
         Self::new(MainDocumentProgressSourceKind::Streaming)
     }
 
+    #[cfg(test)]
     pub(super) fn completed_body(batches: MainDocumentNavigationProgressEventBatches) -> Self {
         Self::new(MainDocumentProgressSourceKind::CompletedBody(
             MainDocumentCompletedBodyProgressSource::new(batches),
@@ -106,6 +114,7 @@ impl MainDocumentProgressSource {
         )))
     }
 
+    #[cfg(test)]
     pub(super) fn error_page(
         failure_event: Option<MainDocumentNavigationProgressEvent>,
         finish_event: Option<MainDocumentNavigationProgressEvent>,
@@ -159,6 +168,7 @@ impl<'a> MainDocumentProgressBackgroundEventBarrier<'a> {
         Self { out, progress_gate }
     }
 
+    #[cfg(test)]
     pub(crate) fn drain_until_response_metadata_visible(
         out: &'a mut Vec<BackgroundProtocolEvent>,
         progress_gate: &'a mut MainDocumentProgressGate,
@@ -185,6 +195,7 @@ impl<'a> MainDocumentProgressBackgroundEventBarrier<'a> {
         self.progress_gate.drain_into_background_events(self.out);
     }
 
+    #[cfg(test)]
     pub(crate) fn events_after_progress(&mut self) -> &mut Vec<BackgroundProtocolEvent> {
         self.drain_progress();
         self.out
@@ -365,6 +376,7 @@ impl MainDocumentProgressOutputQueue {
 impl MainDocumentProgressOutputBoundary {
     fn progress_phase(self) -> MainDocumentProgressPhase {
         match self {
+            #[cfg(test)]
             Self::ResponseMetadataVisible => MainDocumentProgressPhase::ResponseReceived,
             Self::BodyFinishedVisible => MainDocumentProgressPhase::BodyFinished,
         }
@@ -456,7 +468,9 @@ impl MainDocumentProgressSourceKind {
         match self {
             Self::Streaming => {}
             Self::FailedNavigation(source) => source.append_to_drain(drain),
+            #[cfg(test)]
             Self::ErrorPage(source) => source.append_to_drain(drain),
+            #[cfg(test)]
             Self::CompletedBody(source) => source.append_to_drain(drain),
         }
     }
@@ -476,6 +490,7 @@ impl MainDocumentFailedNavigationProgressSource {
     }
 }
 
+#[cfg(test)]
 impl MainDocumentErrorPageProgressSource {
     fn append_to_drain(self, drain: &mut MainDocumentProgressDrain) {
         if let Some(event) = self.failure_event {
@@ -499,6 +514,7 @@ impl MainDocumentErrorPageProgressSource {
     }
 }
 
+#[cfg(test)]
 impl MainDocumentCompletedBodyProgressSource {
     fn new(event_batches: MainDocumentNavigationProgressEventBatches) -> Self {
         Self { event_batches }

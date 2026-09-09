@@ -1,37 +1,42 @@
-use serde_json::{Value, json};
+#[cfg(test)]
+use serde_json::Value;
+use serde_json::json;
 use url::Url;
 
+#[cfg(test)]
 use moli_fetch::NET_ERR_ABORTED_ERROR_TEXT;
 
 use crate::conn::{
     BackgroundProtocolEvent, CdpConnection, CommandDispatchContext, CommandOwnerScope,
-    CommittedRendererDocumentBinding, CompletedDownloadBodyArtifact,
-    DeferredMainDocumentLoadObservationId, NavigationDispatchState, NavigationId,
-    RendererDocumentLifecycleObservation, RendererDocumentLifecycleObserver,
-    RendererPageResidenceIdentity,
+    CommittedRendererDocumentBinding, DeferredMainDocumentLoadObservationId,
+    NavigationDispatchState, NavigationId, RendererDocumentLifecycleObservation,
+    RendererDocumentLifecycleObserver, RendererPageResidenceIdentity,
 };
 use crate::devtools_runtime::DevToolsProtocol;
 use crate::domains::command_output::{BackgroundProtocolEventBuffer, CommandOutputBuffer};
 use crate::domains::network::{
-    self, FailedNavigationResponseMode, MainDocumentProgressBackgroundEventBarrier,
+    FailedNavigationResponseMode, MainDocumentProgressBackgroundEventBarrier,
     MainDocumentProgressGate,
 };
 use crate::domains::page;
+#[cfg(test)]
+use crate::{conn::CompletedDownloadBodyArtifact, domains::network};
 use moli_core::RendererDocumentLifecycleIdentity;
-use moli_core::page::{
-    RendererDocumentLifecycleEvent, RendererDocumentLifecycleEventKind,
-    RendererDocumentLifecycleMilestone, RendererPendingDownloadActivation,
-};
+use moli_core::page::{RendererDocumentLifecycleEvent, RendererPendingDownloadActivation};
+#[cfg(test)]
+use moli_core::page::{RendererDocumentLifecycleEventKind, RendererDocumentLifecycleMilestone};
 
 pub(crate) struct MainDocumentNavigationActivity {
     state: NavigationDispatchState,
     final_url: Url,
     progress_gate: MainDocumentProgressGate,
+    #[cfg(test)]
     result_mode: LoadedNavigationResultMode,
     document_navigation_token: Option<NavigationId>,
     deferred_initial_renderer_document_lifecycle_events: Vec<RendererDocumentLifecycleEvent>,
 }
 
+#[cfg(test)]
 enum LoadedNavigationResultMode {
     Success,
     NetworkErrorPage { error_text: String },
@@ -43,6 +48,7 @@ pub(crate) struct MainDocumentFailedNavigationActivity {
     response_mode: FailedNavigationResponseMode,
 }
 
+#[cfg(test)]
 pub(crate) struct MainDocumentDownloadNavigationActivity {
     navigation_activity: MainDocumentNavigationActivity,
     body_artifact: CompletedDownloadBodyArtifact,
@@ -54,11 +60,13 @@ struct DeferredMainDocumentLoadCompletionState {
     pending_download: Option<RendererPendingDownloadActivation>,
 }
 
+#[cfg(test)]
 pub(crate) struct DeferredMainDocumentLoadCompletionAdmission {
     state: DeferredMainDocumentLoadCompletionState,
 }
 
 pub(crate) struct DeferredMainDocumentLoadCompletionActivity {
+    #[cfg(test)]
     target_id: String,
     state: DeferredMainDocumentLoadCompletionState,
     observation_id: DeferredMainDocumentLoadObservationId,
@@ -77,6 +85,7 @@ pub(crate) struct CompletedDeferredMainDocumentLoadCompletionActivity {
 }
 
 impl MainDocumentNavigationActivity {
+    #[cfg(test)]
     pub(crate) fn new(
         state: NavigationDispatchState,
         final_url: Url,
@@ -87,17 +96,20 @@ impl MainDocumentNavigationActivity {
             state,
             final_url,
             progress_gate,
+            #[cfg(test)]
             result_mode: LoadedNavigationResultMode::Success,
             document_navigation_token,
             deferred_initial_renderer_document_lifecycle_events: Vec::new(),
         }
     }
 
+    #[cfg(test)]
     pub(crate) fn with_network_error_page_result(mut self, error_text: String) -> Self {
         self.result_mode = LoadedNavigationResultMode::NetworkErrorPage { error_text };
         self
     }
 
+    #[cfg(test)]
     pub(crate) fn defer_initial_renderer_document_lifecycle_events_until_load_boundary(
         &mut self,
         events: Vec<RendererDocumentLifecycleEvent>,
@@ -109,6 +121,7 @@ impl MainDocumentNavigationActivity {
         &self.state
     }
 
+    #[cfg(test)]
     fn expose_loaded_response_metadata(&mut self, out: &mut Vec<BackgroundProtocolEvent>) {
         MainDocumentProgressBackgroundEventBarrier::drain_until_response_metadata_visible(
             out,
@@ -116,6 +129,7 @@ impl MainDocumentNavigationActivity {
         );
     }
 
+    #[cfg(test)]
     pub(crate) async fn emit_loaded_navigation_commit_async(
         mut self,
         conn: &mut CdpConnection,
@@ -320,6 +334,7 @@ impl MainDocumentNavigationActivity {
             .is_some_and(|url| url == self.final_url.as_str())
     }
 
+    #[cfg(test)]
     async fn emit_download_navigation_commit_into_buffer_async(
         &mut self,
         conn: &mut CdpConnection,
@@ -340,6 +355,7 @@ impl MainDocumentNavigationActivity {
         .await;
     }
 
+    #[cfg(test)]
     fn emit_navigation_result_from_state_into_buffer(&mut self, out: &mut CommandOutputBuffer) {
         self.emit_navigation_result_into_buffer(
             out,
@@ -347,6 +363,7 @@ impl MainDocumentNavigationActivity {
         );
     }
 
+    #[cfg(test)]
     fn emit_network_error_page_navigation_result_into_buffer(
         &mut self,
         out: &mut CommandOutputBuffer,
@@ -370,6 +387,7 @@ impl MainDocumentNavigationActivity {
         }
     }
 
+    #[cfg(test)]
     fn emit_download_navigation_result_into_buffer(&mut self, out: &mut CommandOutputBuffer) {
         let mut result_payload = self.state.result_projection.payload().clone();
         if let Some(payload) = result_payload.as_object_mut() {
@@ -380,6 +398,7 @@ impl MainDocumentNavigationActivity {
         self.emit_navigation_result_into_buffer(out, result_payload);
     }
 
+    #[cfg(test)]
     fn emit_download_frame_stop_background_events(
         &mut self,
         out: &mut Vec<BackgroundProtocolEvent>,
@@ -399,6 +418,7 @@ impl MainDocumentNavigationActivity {
         );
     }
 
+    #[cfg(test)]
     fn emit_navigation_result_into_buffer(
         &mut self,
         out: &mut CommandOutputBuffer,
@@ -527,6 +547,7 @@ impl MainDocumentNavigationActivity {
         out.extend_background_events(renderer_lifecycle_events);
     }
 
+    #[cfg(test)]
     async fn emit_navigation_download_response_into_buffer_async(
         &mut self,
         conn: &mut CdpConnection,
@@ -601,6 +622,7 @@ impl MainDocumentNavigationActivity {
         out.extend_background_events(command_context.take_protocol_events());
     }
 
+    #[cfg(test)]
     fn emit_pre_domcontentloaded_network_backlog_background_events(
         &self,
         conn: &mut CdpConnection,
@@ -626,6 +648,7 @@ impl MainDocumentNavigationActivity {
     }
 }
 
+#[cfg(test)]
 impl DeferredMainDocumentLoadCompletionAdmission {
     fn new(
         navigation_activity: MainDocumentNavigationActivity,
@@ -706,6 +729,7 @@ impl DeferredMainDocumentLoadCompletionActivity {
         self.owner_scope().session_id()
     }
 
+    #[cfg(test)]
     pub(crate) fn target_id(&self) -> &str {
         &self.target_id
     }
@@ -718,10 +742,12 @@ impl DeferredMainDocumentLoadCompletionActivity {
         self.renderer_page_residence_identity
     }
 
+    #[cfg(test)]
     pub(crate) fn has_terminal_lifecycle_observation(&self) -> bool {
         self.lifecycle_observer.observation().is_terminal()
     }
 
+    #[cfg(test)]
     pub(crate) fn try_complete(
         self: Box<Self>,
     ) -> Result<CompletedDeferredMainDocumentLoadCompletionActivity, Box<Self>> {
@@ -737,6 +763,7 @@ impl DeferredMainDocumentLoadCompletionActivity {
         })
     }
 
+    #[cfg(test)]
     pub(crate) fn start_scheduler_step(self) -> PendingDeferredMainDocumentLoadCompletionActivity {
         PendingDeferredMainDocumentLoadCompletionActivity { completion: self }
     }
@@ -781,7 +808,8 @@ impl PendingDeferredMainDocumentLoadCompletionActivity {
 
     pub(crate) async fn wait(self) -> CompletedDeferredMainDocumentLoadCompletionActivity {
         let DeferredMainDocumentLoadCompletionActivity {
-            target_id: _,
+            #[cfg(test)]
+                target_id: _,
             state,
             observation_id,
             renderer_page_residence_identity: _,
@@ -885,6 +913,7 @@ impl MainDocumentFailedNavigationActivity {
     }
 }
 
+#[cfg(test)]
 impl MainDocumentDownloadNavigationActivity {
     pub(crate) fn new(
         navigation_activity: MainDocumentNavigationActivity,
@@ -951,7 +980,6 @@ mod tests {
             request_headers: vec![("Accept".to_owned(), "text/html".to_owned())],
             request_load_policy: crate::conn::NavigationRequestLoadPolicy::DocumentInitiated,
             timestamp: 12.5,
-            source_document_security: Default::default(),
         }
     }
 

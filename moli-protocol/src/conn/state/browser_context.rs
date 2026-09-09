@@ -88,6 +88,7 @@ pub(in crate::conn) mod session;
 mod tests;
 mod workers;
 pub(crate) use moli_core::browser::{OriginStorageUsage, SiteDataClearOptions};
+#[cfg(test)]
 pub(crate) use page_state::LoadedNavigationPageCommit;
 
 /// DevTools projection for one Browser-owned Context.
@@ -394,6 +395,7 @@ impl BrowserContext {
         self.browser_context.resource_storage_handles_for_test()
     }
 
+    #[cfg(test)]
     pub(crate) fn page_storage_handles(&self) -> BrowserContextPageStorageHandles {
         self.browser_context
             .page_storage_handles(None)
@@ -855,6 +857,7 @@ impl BrowserContext {
         Some(self.begin_target_document_navigation(target_id, loader_id))
     }
 
+    #[cfg(any(test, feature = "test-support"))]
     pub(crate) fn accepts_pending_document_navigation_event(&self, token: &NavigationId) -> bool {
         self.browser_context
             .accepts_any_pending_navigation_event(token)
@@ -869,6 +872,7 @@ impl BrowserContext {
             .document_navigation_cancellation_handle_for_test(token)
     }
 
+    #[cfg(any(test, feature = "test-support"))]
     pub(crate) fn arm_background_navigation_completion(
         &mut self,
         token: &NavigationId,

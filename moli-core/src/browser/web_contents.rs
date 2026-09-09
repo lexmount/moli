@@ -33,8 +33,7 @@ pub use navigation_commit::AdmittedDocumentMaterialization;
 mod navigation_history;
 mod navigation_interception;
 pub use navigation_interception::{
-    ClaimedNavigationRequest, InterceptedNavigationLoad, InterceptedNavigationResponse,
-    NavigationInterceptionPermit, NavigationRequestInterception,
+    ClaimedNavigationRequest, NavigationInterceptionPermit, NavigationRequestInterception,
 };
 mod navigation_load;
 pub use navigation_history::SameDocumentNavigationCommitted;
@@ -64,8 +63,7 @@ pub use page_surface::LIVE_DEVICE_METRICS_CLEAR_SCRIPT;
 pub use page_surface::PageSurface;
 pub use paused_document_transfer::{
     DocumentBodySource, OpenBodyStreamError, PausedDocumentTransfer,
-    PausedResponsePreparedDocument, PausedStreamingDocumentResponse,
-    PendingFetchResponseOpenedBodyStream, SyntheticDocumentResponseContext,
+    PendingFetchResponseOpenedBodyStream,
 };
 pub use session_storage::SessionStorageNamespace;
 pub use window::{Window, WindowOpener};

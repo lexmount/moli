@@ -156,14 +156,12 @@ async fn assert_empty_http_error_response_stage(ctx: &mut TestContext, url: &str
         .as_str()
         .expect("HTTP error response-stage network id")
         .to_owned();
+    let (_, decision) = ctx
+        .conn
+        .native_navigation_decision_for_target("TID-1")
+        .unwrap();
     assert!(
-        ctx.conn
-            .browser_context
-            .as_ref()
-            .and_then(|bc| {
-                bc.pending_fetch_response_prepared_renderer_agent_for_test(&request_id)
-            })
-            .is_none(),
+        matches!(decision.stage, moli_core::browser::NavigationDecisionStage::Response { response, .. } if response.status == 429),
         "an empty HTTP error must be classified from its body after continueResponse"
     );
 

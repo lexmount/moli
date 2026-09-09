@@ -2203,6 +2203,18 @@ impl<'a> TestSessionId<'a> for Option<&'a str> {}
 impl<'a> TestSessionId<'a> for &'a str {}
 
 #[cfg(test)]
+pub(crate) async fn spawn_html_response_server(body: &'static str) -> (SocketAddr, JoinHandle<()>) {
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let app = axum::Router::new().route(
+        "/document",
+        axum::routing::get(move || async move { ([("content-type", "text/html")], body) }),
+    );
+    let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+    (addr, server)
+}
+
+#[cfg(test)]
 pub async fn spawn_connection_drop_server() -> (SocketAddr, JoinHandle<()>) {
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();

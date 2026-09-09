@@ -744,7 +744,6 @@ async fn bidi_fetch_control_resolves_background_request_owner() {
                 request_headers: Vec::new(),
                 request_load_policy: crate::conn::NavigationRequestLoadPolicy::DocumentInitiated,
                 timestamp: 0.0,
-                source_document_security: Default::default(),
             },
             request_cookie_report: None,
             intercept_response: false,

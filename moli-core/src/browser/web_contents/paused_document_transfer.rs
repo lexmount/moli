@@ -1,67 +1,11 @@
-use tokio::sync::{mpsc, oneshot};
 use url::Url;
 
 use crate::browser::{
     CapturedBody, CapturedBodyWriter, NavigationRequestLoadPolicy, ensure_materialize_limit,
 };
-use moli_cookie_jar::StoredCookieQueryReport;
 use moli_fetch::{NetworkObservationJournal, RawResponse, ResponseHead, StreamingRawResponse};
 
-use crate::browser::BrowserPreparedNavigationResponse;
-
-/// Renderer resources prepared before a response-stage interception decision.
-pub struct PausedResponsePreparedDocument {
-    prepared_page: BrowserPreparedNavigationResponse,
-    renderer_body_tx: mpsc::Sender<Vec<u8>>,
-    renderer_completion_tx: oneshot::Sender<anyhow::Result<()>>,
-}
-
-impl std::fmt::Debug for PausedResponsePreparedDocument {
-    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        formatter
-            .debug_struct("PausedResponsePreparedDocument")
-            .field(
-                "renderer_devtools_agent_token",
-                &self.prepared_page.renderer_devtools_agent_token(),
-            )
-            .finish_non_exhaustive()
-    }
-}
-
-impl PausedResponsePreparedDocument {
-    pub fn new(
-        prepared_page: BrowserPreparedNavigationResponse,
-        renderer_body_tx: mpsc::Sender<Vec<u8>>,
-        renderer_completion_tx: oneshot::Sender<anyhow::Result<()>>,
-    ) -> Self {
-        Self {
-            prepared_page,
-            renderer_body_tx,
-            renderer_completion_tx,
-        }
-    }
-
-    pub fn renderer_devtools_agent_token(&self) -> crate::page::RendererDevToolsAgentToken {
-        self.prepared_page.renderer_devtools_agent_token()
-    }
-
-    pub fn into_parts(
-        self,
-    ) -> (
-        BrowserPreparedNavigationResponse,
-        mpsc::Sender<Vec<u8>>,
-        oneshot::Sender<anyhow::Result<()>>,
-    ) {
-        (
-            self.prepared_page,
-            self.renderer_body_tx,
-            self.renderer_completion_tx,
-        )
-    }
-}
-
-/// Browser-owned response body and renderer preparation retained while a
-/// response-stage interception decision is pending.
+/// Browser-owned response body retained while a navigation decision is pending.
 #[derive(Debug)]
 pub enum DocumentBodySource {
     BufferedRaw {
@@ -77,7 +21,6 @@ pub enum DocumentBodySource {
         request_headers: Vec<(String, String)>,
         response: StreamingRawResponse,
         network_observation_journal: NetworkObservationJournal,
-        prepared_document: Option<Box<PausedResponsePreparedDocument>>,
     },
     CapturedRaw {
         requested_url: Url,
@@ -133,25 +76,6 @@ pub enum OpenBodyStreamError {
         transfer: Box<PausedDocumentTransfer>,
         message: String,
     },
-}
-
-pub struct PausedStreamingDocumentResponse {
-    pub request_load_policy: NavigationRequestLoadPolicy,
-    pub requested_url: Url,
-    pub request_method: String,
-    pub request_headers: Vec<(String, String)>,
-    pub response: StreamingRawResponse,
-    pub network_observation_journal: NetworkObservationJournal,
-    pub prepared_document: Option<Box<PausedResponsePreparedDocument>>,
-}
-
-pub struct SyntheticDocumentResponseContext {
-    pub request_load_policy: NavigationRequestLoadPolicy,
-    pub requested_url: Url,
-    pub request_method: String,
-    pub request_headers: Vec<(String, String)>,
-    pub final_url: Url,
-    pub request_cookie_report: Option<StoredCookieQueryReport>,
 }
 
 impl PausedDocumentTransfer {
@@ -211,19 +135,6 @@ impl PausedDocumentTransfer {
         }
     }
 
-    pub fn prepared_renderer_agent_token(&self) -> Option<crate::page::RendererDevToolsAgentToken> {
-        match &self.state {
-            PausedDocumentTransferState::Pending {
-                body:
-                    DocumentBodySource::StreamingRaw {
-                        prepared_document: Some(prepared_document),
-                        ..
-                    },
-            } => Some(prepared_document.renderer_devtools_agent_token()),
-            _ => None,
-        }
-    }
-
     pub fn into_pending(
         self,
     ) -> Result<(NavigationRequestLoadPolicy, DocumentBodySource), Box<Self>> {
@@ -239,29 +150,6 @@ impl PausedDocumentTransfer {
                 state,
                 decision_claim,
             })),
-        }
-    }
-
-    pub fn into_streaming_response(self) -> Result<PausedStreamingDocumentResponse, Box<Self>> {
-        let (request_load_policy, body) = self.into_pending()?;
-        match body {
-            DocumentBodySource::StreamingRaw {
-                requested_url,
-                request_method,
-                request_headers,
-                response,
-                network_observation_journal,
-                prepared_document,
-            } => Ok(PausedStreamingDocumentResponse {
-                request_load_policy,
-                requested_url,
-                request_method,
-                request_headers,
-                response,
-                network_observation_journal,
-                prepared_document,
-            }),
-            body => Err(Box::new(Self::pending(request_load_policy, body))),
         }
     }
 
@@ -294,7 +182,6 @@ impl PausedDocumentTransfer {
                 request_headers,
                 response,
                 network_observation_journal,
-                prepared_document: _,
             } => Ok(PendingFetchResponseOpenedBodyStream {
                 handle,
                 buffered_bytes: None,
@@ -485,73 +372,6 @@ impl PausedDocumentTransfer {
         }
     }
 
-    pub fn into_synthetic_response_context(self) -> SyntheticDocumentResponseContext {
-        let Self {
-            decision_claim: _,
-            request_load_policy,
-            state,
-        } = self;
-        let (requested_url, request_method, request_headers, final_url, request_cookie_report) =
-            match state {
-                PausedDocumentTransferState::Pending { body } => match body {
-                    DocumentBodySource::BufferedRaw {
-                        requested_url,
-                        request_method,
-                        request_headers,
-                        response,
-                        ..
-                    } => (
-                        requested_url,
-                        request_method,
-                        request_headers,
-                        response.final_url.clone(),
-                        response.request_cookie_report.clone(),
-                    ),
-                    DocumentBodySource::StreamingRaw {
-                        requested_url,
-                        request_method,
-                        request_headers,
-                        response,
-                        ..
-                    } => (
-                        requested_url,
-                        request_method,
-                        request_headers,
-                        response.final_url.clone(),
-                        response.request_cookie_report.clone(),
-                    ),
-                    DocumentBodySource::CapturedRaw {
-                        requested_url,
-                        request_method,
-                        request_headers,
-                        head,
-                        ..
-                    } => (
-                        requested_url,
-                        request_method,
-                        request_headers,
-                        head.final_url.clone(),
-                        head.request_cookie_report.clone(),
-                    ),
-                },
-                PausedDocumentTransferState::ActiveBodyStream { stream } => (
-                    stream.requested_url,
-                    stream.request_method,
-                    stream.request_headers,
-                    stream.response.final_url.clone(),
-                    stream.response.request_cookie_report.clone(),
-                ),
-            };
-        SyntheticDocumentResponseContext {
-            request_load_policy,
-            requested_url,
-            request_method,
-            request_headers,
-            final_url,
-            request_cookie_report,
-        }
-    }
-
     pub async fn materialize_body_limited_async(
         mut self,
         limit: usize,
@@ -623,7 +443,6 @@ impl DocumentBodySource {
                 request_headers,
                 response,
                 network_observation_journal,
-                prepared_document: _,
             } => {
                 let preserved_head = response.head();
                 let (head, body) = match capture_streaming_raw_response(response).await {

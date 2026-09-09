@@ -1,24 +1,28 @@
+#[cfg(test)]
+use crate::conn::{CompletedDownloadBodyArtifact, DownloadNavigation, LoadedNavigation};
 mod emit;
 mod gate;
 #[cfg(test)]
 mod tests;
 
 use moli_cookie_jar::{StoredCookieQueryReport, StoredCookieSetReport};
+#[cfg(test)]
 use moli_core::RendererOutputFence;
-use moli_core::page::{
-    NavigationRedirect, RendererPendingDownloadActivation, RendererRuntimeRealmInfo,
-    SubresourceRequestInitiatorType,
-};
+use moli_core::page::{NavigationRedirect, SubresourceRequestInitiatorType};
+#[cfg(test)]
+use moli_core::page::{RendererPendingDownloadActivation, RendererRuntimeRealmInfo};
+#[cfg(test)]
+use moli_fetch::StreamingRawResponse;
 use moli_fetch::{
     NegotiatedHttpVersion, NetworkExchangeObservation, NetworkObservationJournal, RedirectInfo,
-    StreamingRawResponse,
 };
 use url::Url;
 
+#[cfg(test)]
+use crate::conn::ResponseCommitReady;
 use crate::conn::{
     BackgroundEventSender, BackgroundProtocolEvent, CapturedBody, CdpConnection,
-    CompletedDownloadBodyArtifact, DownloadNavigation, LoadedNavigation, NavigationDispatchState,
-    NavigationLoadOutcome, ResponseCommitReady, TargetRuntimeSlot,
+    NavigationDispatchState, NavigationLoadOutcome, TargetRuntimeSlot,
 };
 
 #[cfg(test)]
@@ -30,6 +34,7 @@ use gate::{
 };
 
 /// Protocol progress accompanies, but never owns or modifies, a Browser candidate.
+#[cfg(test)]
 pub(crate) struct MaterializedLoadedDocumentProgress {
     pub(crate) pending_download: Option<RendererPendingDownloadActivation>,
     pub(crate) final_url: Url,
@@ -42,6 +47,7 @@ pub(crate) struct MaterializedLoadedDocumentProgress {
     pub(crate) network_error_page: Option<crate::conn::NetworkErrorPageNavigation>,
 }
 
+#[cfg(test)]
 pub(crate) struct MaterializedDownloadDocumentProgress {
     pub(crate) final_url: Url,
     pub(crate) progress_gate: MainDocumentProgressGate,
@@ -61,7 +67,9 @@ pub(crate) enum FailedNavigationResponseMode {
 }
 
 pub(crate) enum MaterializedNavigationLoadOutcome {
+    #[cfg(test)]
     ResponseCommitReady(Box<ResponseCommitReady>),
+    #[cfg(test)]
     Download(MaterializedDownloadDocumentProgress),
     Failed(MaterializedFailedDocumentProgress),
 }
@@ -74,17 +82,20 @@ pub(crate) fn empty_main_document_progress_gate_for_test() -> MainDocumentProgre
 }
 
 #[derive(Debug)]
+#[cfg(test)]
 pub(crate) struct CompletedDocumentProgressTransfer {
     body: CompletedDocumentProgressBody,
     network_progress: MainDocumentBodyNetworkProgress,
 }
 
 #[derive(Debug)]
+#[cfg(test)]
 enum CompletedDocumentProgressBody {
     Captured { body: CapturedBody, synthetic: bool },
     Pending,
 }
 
+#[cfg(test)]
 impl CompletedDocumentProgressTransfer {
     pub(crate) fn new_captured(
         body: CapturedBody,
@@ -149,17 +160,20 @@ impl CompletedDocumentProgressTransfer {
 }
 
 #[derive(Debug)]
+#[cfg(test)]
 pub(crate) struct CompletedDownloadProgressTransfer {
     body: CompletedDownloadProgressBody,
     network_events: CompletedMainDocumentNetworkEvents,
 }
 
 #[derive(Debug)]
+#[cfg(test)]
 enum CompletedDownloadProgressBody {
     Buffered(Vec<u8>),
     Streaming(Box<StreamingRawResponse>),
 }
 
+#[cfg(test)]
 impl CompletedDownloadProgressTransfer {
     pub(crate) fn new(body: Vec<u8>, network_events: CompletedMainDocumentNetworkEvents) -> Self {
         Self {
@@ -205,6 +219,7 @@ impl CompletedDownloadProgressTransfer {
     }
 }
 
+#[cfg(test)]
 fn completed_download_body_len_hint(
     body: &CompletedDownloadProgressBody,
     response_headers: &[(String, String)],
@@ -220,11 +235,13 @@ fn completed_download_body_len_hint(
 }
 
 #[derive(Debug)]
+#[cfg(test)]
 struct CompletedDownloadBodyNetworkProgress {
     encoded_data_length: usize,
     network_events: CompletedMainDocumentNetworkEvents,
 }
 
+#[cfg(test)]
 impl CompletedDownloadBodyNetworkProgress {
     fn len(&self) -> usize {
         self.encoded_data_length
@@ -247,6 +264,7 @@ fn failed_navigation_progress_gate(
     ))
 }
 
+#[cfg(test)]
 fn network_error_page_progress_gate(
     conn: &CdpConnection,
     state: &NavigationDispatchState,
@@ -273,6 +291,7 @@ fn materialize_failed_navigation_progress(
     }
 }
 
+#[cfg(test)]
 pub(crate) fn materialize_loaded_navigation_progress<P>(
     conn: &mut CdpConnection,
     state: &NavigationDispatchState,
@@ -317,9 +336,11 @@ fn materialize_navigation_load_outcome(
     navigation: NavigationLoadOutcome,
 ) -> MaterializedNavigationLoadOutcome {
     match navigation {
+        #[cfg(test)]
         NavigationLoadOutcome::ResponseCommitReady(navigation) => {
             MaterializedNavigationLoadOutcome::ResponseCommitReady(navigation)
         }
+        #[cfg(test)]
         NavigationLoadOutcome::Download(navigation) => MaterializedNavigationLoadOutcome::Download(
             materialize_download_navigation_progress(conn, state, *navigation),
         ),
@@ -352,6 +373,7 @@ pub(crate) fn materialize_navigation_load_result(
     }
 }
 
+#[cfg(test)]
 fn materialize_download_navigation_progress(
     conn: &CdpConnection,
     state: &NavigationDispatchState,
@@ -370,6 +392,7 @@ fn materialize_download_navigation_progress(
     }
 }
 
+#[cfg(test)]
 fn completed_document_body_progress_queue(
     transfer: CompletedDocumentProgressTransfer,
     conn: &mut CdpConnection,
@@ -437,6 +460,7 @@ fn completed_document_body_progress_queue(
     )
 }
 
+#[cfg(test)]
 fn completed_download_body_progress_queue(
     progress: CompletedDownloadBodyNetworkProgress,
     conn: &CdpConnection,
@@ -456,6 +480,7 @@ fn completed_download_body_progress_queue(
     )
 }
 
+#[cfg(test)]
 fn completed_or_streaming_document_progress_queue(
     conn: &CdpConnection,
     state: &NavigationDispatchState,
@@ -524,6 +549,7 @@ impl MainDocumentBodyProgressSource {
         }
     }
 
+    #[cfg(test)]
     pub(crate) fn emit_response_metadata(
         &self,
         final_request_method: &str,
@@ -578,39 +604,7 @@ impl MainDocumentBodyProgressSource {
         }
     }
 
-    pub(crate) fn emit_response_without_extra_info_into_background_events(
-        &self,
-        out: &mut Vec<BackgroundProtocolEvent>,
-        final_url: &Url,
-        response_status: u16,
-        response_headers: &[(String, String)],
-        response_from_cache: bool,
-    ) {
-        let Some(live_source) = self.live_source.as_ref() else {
-            return;
-        };
-        let mut output = MainDocumentProgressOutputTarget::background_events(out);
-        live_source.send_progress_events_into_output(
-            MainDocumentProgressPhase::ResponseReceived,
-            vec![MainDocumentNavigationProgressEvent::ResponseReceived {
-                target: live_source.progress_target(),
-                final_url: final_url.clone(),
-                status: response_status,
-                headers: response_headers.to_vec(),
-                cookie_set_reports: Vec::new(),
-                extra_info_status: response_status,
-                extra_info_headers: response_headers.to_vec(),
-                network_extra_info_available: false,
-                emit_extra_info: false,
-                encoded_data_length: 0,
-                from_cache: response_from_cache,
-                negotiated_http_version: None,
-                has_extra_info: false,
-            }],
-            &mut output,
-        );
-    }
-
+    #[cfg(test)]
     pub(crate) fn emit_failed_initial_request_extra_info(
         &self,
         network_observation_journal: &NetworkObservationJournal,
@@ -639,6 +633,7 @@ impl MainDocumentBodyProgressSource {
         );
     }
 
+    #[cfg(test)]
     pub(crate) fn emit_failed_request_progress(
         &self,
         final_request_method: &str,
@@ -727,6 +722,7 @@ impl MainDocumentBodyProgressSource {
         }
     }
 
+    #[cfg(test)]
     pub(crate) fn body_network_progress_for_completed_events(
         &self,
         completed_events: CompletedMainDocumentNetworkEvents,
@@ -808,11 +804,13 @@ impl CompletedMainDocumentNetworkEvents {
 }
 
 #[derive(Debug)]
+#[cfg(test)]
 pub(crate) enum MainDocumentBodyNetworkProgress {
     CompletedBody(Box<CompletedMainDocumentNetworkEvents>),
     StreamingBody,
 }
 
+#[cfg(test)]
 impl MainDocumentBodyNetworkProgress {
     pub(crate) fn into_completed_body_events(self) -> Option<CompletedMainDocumentNetworkEvents> {
         match self {
@@ -852,6 +850,7 @@ impl MainDocumentLiveNetworkProgressSource {
         })
     }
 
+    #[cfg(test)]
     pub(crate) fn emit_redirect_requests(
         &self,
         final_request_method: &str,
@@ -1030,6 +1029,7 @@ impl MainDocumentLiveNetworkProgressSource {
         events
     }
 
+    #[cfg(test)]
     pub(crate) fn emit_response_received(
         &self,
         final_url: &Url,
@@ -1064,6 +1064,7 @@ impl MainDocumentLiveNetworkProgressSource {
         );
     }
 
+    #[cfg(test)]
     fn emit_response_received_without_extra_info(
         &self,
         final_url: &Url,
@@ -1088,6 +1089,7 @@ impl MainDocumentLiveNetworkProgressSource {
         );
     }
 
+    #[cfg(test)]
     fn emit_response_received_with_extra_info_policy(
         &self,
         final_url: &Url,
@@ -1419,6 +1421,7 @@ fn observed_navigation_failure_event(
     })
 }
 
+#[cfg(test)]
 fn observed_navigation_finished_event(
     conn: &CdpConnection,
     state: &NavigationDispatchState,
@@ -1479,6 +1482,7 @@ impl CompletedMainDocumentProgressContext {
         }
     }
 
+    #[cfg(test)]
     fn event_batches(
         &self,
         events: &CompletedMainDocumentNetworkEvents,
@@ -1696,6 +1700,7 @@ impl CompletedMainDocumentProgressContext {
     }
 }
 
+#[cfg(test)]
 struct MainDocumentNavigationProgressEventBatches {
     request_started: Vec<MainDocumentNavigationProgressEvent>,
     response_received: Vec<MainDocumentNavigationProgressEvent>,
@@ -1856,6 +1861,7 @@ fn observed_response_metadata(
         .unwrap_or_else(|| (fallback_status, fallback_headers.to_vec()))
 }
 
+#[cfg(test)]
 impl MainDocumentNavigationProgressEventBatches {
     fn new(
         request_started: Vec<MainDocumentNavigationProgressEvent>,
@@ -2030,6 +2036,7 @@ impl MainDocumentNavigationProgressEvent {
     }
 }
 
+#[cfg(test)]
 fn completed_body_main_document_network_request_id(
     network_enabled: bool,
     request_id: Option<String>,

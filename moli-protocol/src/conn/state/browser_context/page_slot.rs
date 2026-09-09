@@ -16,9 +16,10 @@ use moli_core::{
     },
 };
 
+#[cfg(test)]
+use crate::conn::state::document_lifecycle_observer::RendererDocumentLifecycleObserver;
 use crate::conn::state::document_lifecycle_observer::{
     RendererDocumentLifecycleObservation, RendererDocumentLifecycleObservationPublisher,
-    RendererDocumentLifecycleObserver,
 };
 
 #[cfg(test)]
@@ -285,6 +286,7 @@ impl TargetPageSlot {
             .map(|(_, projection)| projection.loader_id.as_str())
     }
 
+    #[cfg(test)]
     pub(crate) fn begin_renderer_document_load_visibility_barrier(
         &mut self,
         loader_id: &str,
@@ -1203,6 +1205,7 @@ impl BrowserContext {
             })
     }
 
+    #[cfg(test)]
     pub(in crate::conn) fn project_navigation_load_for_target(
         &mut self,
         target_id: &str,
@@ -2058,6 +2061,7 @@ impl BrowserContext {
         Some((id, binding))
     }
 
+    #[cfg(test)]
     pub(crate) fn register_exact_renderer_document_lifecycle_observer_for_target(
         &mut self,
         target_id: &str,
@@ -2264,18 +2268,26 @@ mod native_navigation_projection_tests {
             NativeResponsePhase::Response,
             NativeResponsePhase::Complete,
         ] {
-            let mut context = context_with_page_slot_for_test(TargetPageSlot::default());
-            let navigation = context
-                .begin_target_document_navigation(PAGE_SLOT_TEST_TARGET, "LOADER-native".into());
+            let service = moli_core::browser::BrowserService::start().unwrap();
+            let browser = service.handle();
+            let _provider = browser.register_document_decision_provider().unwrap();
+            let mut context = BrowserContext::new_with_browser_for_test(&browser, "BID-page-slot");
+            context.bind_page_navigation_engines(Default::default(), None);
+            assert!(context.register_page_target_fixture(
+                PAGE_SLOT_TEST_TARGET.into(),
+                None,
+                crate::conn::TargetIdentityState::about_blank(),
+                TargetPageSlot::default(),
+            ));
+            context.set_active_target_id(PAGE_SLOT_TEST_TARGET);
             let contents = context
                 .web_contents_handle_for_target(PAGE_SLOT_TEST_TARGET)
                 .unwrap();
             let url = url::Url::parse("https://native.example/original").unwrap();
-            let permit = context
+            let waiter = context
                 .browser_context
-                .pause_navigation_request(
+                .navigate_document(
                     contents,
-                    navigation,
                     NavigationRequestInterception::new(
                         url.clone(),
                         "GET".into(),
@@ -2285,6 +2297,13 @@ mod native_navigation_projection_tests {
                     ),
                 )
                 .unwrap();
+            let navigation = waiter.request().navigation;
+            let permit = context
+                .browser_context
+                .navigation_decision(contents)
+                .unwrap()
+                .unwrap()
+                .permit;
             let mut pending = PendingFetchNavigation {
                 fetch_request_id: "FETCH-native".into(),
                 interception_session_id: None,
@@ -2307,7 +2326,6 @@ mod native_navigation_projection_tests {
                     request_load_policy:
                         crate::conn::NavigationRequestLoadPolicy::DocumentInitiated,
                     timestamp: 0.0,
-                    source_document_security: Default::default(),
                 },
                 request_cookie_report: None,
                 intercept_response: true,
@@ -2389,6 +2407,7 @@ mod native_navigation_projection_tests {
                     .observe_native_navigation_response(PAGE_SLOT_TEST_TARGET, navigation, true)
                     .is_none()
             );
+            service.shutdown();
         }
     }
 }

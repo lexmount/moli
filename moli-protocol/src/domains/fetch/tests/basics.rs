@@ -1202,7 +1202,6 @@ async fn disable_clears_fetch_state() {
                 request_headers: vec![("x-auth".to_owned(), "1".to_owned())],
                 request_load_policy: crate::conn::NavigationRequestLoadPolicy::DocumentInitiated,
                 timestamp: 0.0,
-                source_document_security: Default::default(),
             },
             request_cookie_report: None,
             intercept_response: false,
@@ -1244,7 +1243,6 @@ async fn disable_clears_fetch_state() {
                     request_load_policy:
                         crate::conn::NavigationRequestLoadPolicy::DocumentInitiated,
                     timestamp: 0.0,
-                    source_document_security: Default::default(),
                 },
                 challenge: FetchAuthChallenge {
                     origin: "http://example.test".to_owned(),
@@ -1467,7 +1465,6 @@ async fn continue_with_auth_rejects_invalid_response_without_consuming_pending_a
                     request_load_policy:
                         crate::conn::NavigationRequestLoadPolicy::DocumentInitiated,
                     timestamp: 0.0,
-                    source_document_security: Default::default(),
                 },
                 challenge: FetchAuthChallenge {
                     origin: "http://example.test".to_owned(),
@@ -1507,64 +1504,77 @@ async fn continue_with_auth_rejects_invalid_response_without_consuming_pending_a
 
 #[tokio::test]
 async fn continue_with_auth_unsupported_challenge_preserves_pending_auth_navigation() {
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let url = format!("http://{}/auth", listener.local_addr().unwrap());
+    let server = tokio::spawn(async move {
+        axum::serve(
+            listener,
+            Router::new().route(
+                "/auth",
+                get(|| async {
+                    (
+                        StatusCode::UNAUTHORIZED,
+                        [(WWW_AUTHENTICATE.as_str(), r#"Bearer realm="token-area""#)],
+                        "auth required",
+                    )
+                }),
+            ),
+        )
+        .await
+        .unwrap();
+    });
     let mut ctx = TestContext::new();
-    let mut bc = attached_browser_context(&ctx.conn);
-    bc.active_page_target_mut()
-        .fetch_owner
-        .register_pending_fetch_auth_navigation(
-            "INT-9".to_owned(),
-            PendingFetchAuthNavigation {
-                owner_session_id: Some("SID-1".to_owned()),
-                action_session_id: Some("SID-1".to_owned()),
-                interception_session_id: Some("SID-1".to_owned()),
-                owner_kind: crate::conn::PendingSubresourceFetchOwnerKind::Fetch,
-                fetch_request_id: "INT-9".to_owned(),
-                response_stage_request_id: "INT-9".to_owned(),
-                navigation: crate::conn::NavigationDispatchState {
-                    navigate_id: Some(1),
-                    owner: crate::conn::CommandOwnerScope::for_session("SID-1"),
-                    web_contents:
-                        crate::conn::NavigationDispatchState::detached_web_contents_for_test(),
-                    result_projection: crate::conn::NavigationResultProjection::Cdp(
-                        json!({"frameId": "TID-1", "loaderId": "LID-0000000001"}),
-                    ),
-                    frame_id: "TID-1".to_owned(),
-                    session_id: Some("SID-1".to_owned()),
-                    request_id: Some("REQ-9".to_owned()),
-                    loader_id: "LID-0000000001".to_owned(),
-                    request_announced: false,
-                    requested_url: Url::parse("http://example.test/auth").unwrap(),
-                    request_method: "GET".to_owned(),
-                    request_body: None,
-                    request_body_bytes: None,
-                    request_headers: Vec::new(),
-                    request_load_policy:
-                        crate::conn::NavigationRequestLoadPolicy::DocumentInitiated,
-                    timestamp: 0.0,
-                    source_document_security: Default::default(),
-                },
-                challenge: FetchAuthChallenge {
-                    origin: "http://example.test".to_owned(),
-                    source: "Server".to_owned(),
-                    scheme: "bearer".to_owned(),
-                    realm: "token-area".to_owned(),
-                },
-                request_cookie_report: None,
-                auth_permit: PendingFetchAuthNavigation::test_auth_permit(),
-                intercept_response: false,
-                response_stage_url_match_policy:
-                    crate::conn::ResponseStageUrlMatchPolicy::AlreadyMatched,
-                auth_stage_chain: None,
-            },
-        );
+    let bc = attached_browser_context(&ctx.conn);
     ctx.conn.install_browser_context_fixture_for_test(bc);
+    ctx.process_async(json!({
+        "id": 75, "method": "Fetch.enable", "sessionId": "SID-1",
+        "params": {"handleAuthRequests": true}
+    }))
+    .await;
+    ctx.expect_result(75, json!({}), Some("SID-1"));
+    ctx.process_async(json!({
+        "id": 76, "method": "Page.navigate", "sessionId": "SID-1",
+        "params": {"url": url}
+    }))
+    .await;
+    let request = ctx
+        .wait_for_scheduler_message("unsupported auth navigation request", |event| {
+            event["method"] == "Fetch.requestPaused"
+                && event["sessionId"] == "SID-1"
+                && event["params"]["request"]["url"] == url
+        })
+        .await;
+    ctx.process_async(json!({
+        "id": 77, "method": "Fetch.continueRequest", "sessionId": "SID-1",
+        "params": {"requestId": request["params"]["requestId"]}
+    }))
+    .await;
+    ctx.expect_result(77, json!({}), Some("SID-1"));
+    let auth = ctx
+        .wait_for_scheduler_message("unsupported navigation auth challenge", |event| {
+            event["method"] == "Fetch.authRequired"
+                && event["sessionId"] == "SID-1"
+                && event["params"]["request"]["url"] == url
+        })
+        .await;
+    assert_eq!(auth["params"]["authChallenge"]["scheme"], "bearer");
+    assert_eq!(auth["params"]["authChallenge"]["realm"], "token-area");
+    let request_id = auth["params"]["requestId"].as_str().unwrap();
+    let (_, paused) = ctx
+        .conn
+        .native_navigation_decision_for_target("TID-1")
+        .expect("Browser auth decision");
+    assert!(matches!(
+        paused.stage,
+        moli_core::browser::NavigationDecisionStage::Auth { .. }
+    ));
 
     ctx.process_async(json!({
         "id": 78,
         "method": "Fetch.continueWithAuth",
         "sessionId": "SID-1",
         "params": {
-            "requestId": "INT-9",
+            "requestId": request_id,
             "authChallengeResponse": {
                 "response": "ProvideCredentials",
                 "username": "u",
@@ -1579,8 +1589,18 @@ async fn continue_with_auth_unsupported_challenge_preserves_pending_auth_navigat
     assert!(
         bc.active_page_target()
             .fetch_owner
-            .has_pending_fetch_auth_navigation_for_test("INT-9")
+            .has_pending_fetch_auth_navigation_for_test(request_id)
     );
+    let (_, still_paused) = ctx
+        .conn
+        .native_navigation_decision_for_target("TID-1")
+        .expect("unsupported credentials must not consume Browser auth");
+    assert_eq!(still_paused.permit, paused.permit);
+    assert!(matches!(
+        still_paused.stage,
+        moli_core::browser::NavigationDecisionStage::Auth { .. }
+    ));
+    server.abort();
 }
 
 #[test]
@@ -1711,7 +1731,6 @@ fn emit_auth_required_preserves_request_headers_and_post_data_shape() {
             request_headers: vec![("x-test".to_owned(), "yes".to_owned())],
             request_load_policy: crate::conn::NavigationRequestLoadPolicy::DocumentInitiated,
             timestamp: 0.0,
-            source_document_security: Default::default(),
         },
         request_cookie_report: None,
         intercept_response: false,

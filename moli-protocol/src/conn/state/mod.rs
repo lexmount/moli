@@ -27,10 +27,7 @@ pub(in crate::conn) use moli_core::browser::web_contents::InitialDocumentBuildKe
 pub(crate) use moli_core::browser::web_contents::{
     ClaimedNavigationRequest, NavigationInterceptionPermit,
 };
-pub(crate) use moli_core::browser::{
-    BrowserInterceptedNavigationLoad as InterceptedNavigationLoad,
-    BrowserInterceptedNavigationResponse as InterceptedNavigationResponse,
-};
+#[cfg(test)]
 pub(in crate::conn) use moli_core::browser::{
     BrowserNavigationLoad as AdmittedNavigationLoad,
     BrowserPreparedNavigationResponse as PreparedNavigationResponse,
@@ -86,14 +83,17 @@ pub(crate) use javascript_dialog::{
     TargetJavaScriptDialogScope, TargetJavaScriptDialogScopeObserver,
     TargetPreparedJavaScriptDialog, TargetPreparedJavaScriptDialogRoute,
 };
+#[cfg(test)]
 pub(crate) use moli_core::browser::BrowserPreparedDocumentNavigation as PreparedDocumentNavigation;
+#[cfg(test)]
+pub(crate) use moli_core::browser::web_contents::DocumentNavigationDestination;
 #[cfg(test)]
 pub(crate) use moli_core::browser::web_contents::JavaScriptDialogKey;
 pub(crate) use moli_core::browser::web_contents::LIVE_DEVICE_METRICS_CLEAR_SCRIPT;
 pub(in crate::conn) use moli_core::browser::web_contents::PageSurface;
 pub(crate) use moli_core::browser::web_contents::SameDocumentNavigationCommitted;
 pub(crate) use moli_core::browser::web_contents::{
-    CommittedDocumentLifecycle, DocumentLifecycleEvent, DocumentNavigationDestination,
+    CommittedDocumentLifecycle, DocumentLifecycleEvent,
 };
 pub(crate) use moli_core::browser::web_contents::{
     EmulationPolicy, EmulationPolicyChange, SessionStorageNamespace, WindowSurface,
@@ -127,6 +127,9 @@ pub(crate) use shared_worker_attachment::{
 pub(crate) use shared_worker_target::SharedWorkerTargetState;
 
 pub use browser_context::BrowserContext;
+#[cfg(test)]
+pub(crate) use browser_context::LoadedNavigationPageCommit;
+pub(crate) use browser_context::PageInputCommand;
 pub(crate) use browser_context::{
     BrowserAppManifestLoadPreparation, CompletedAppManifestLoadPreparation,
     CompletedAppManifestPublication, CompletedCaptureDocumentImage,
@@ -154,7 +157,6 @@ pub(crate) use browser_context::{
     PendingSetDocumentContent, PendingTopLevelHistoryTraversal,
     PendingTopLevelSameDocumentNavigation,
 };
-pub(crate) use browser_context::{LoadedNavigationPageCommit, PageInputCommand};
 #[cfg(test)]
 pub(crate) use moli_core::browser::BrowserContextResourceStorageHandles;
 pub(crate) use moli_core::browser::{
@@ -183,12 +185,13 @@ pub(crate) use target_state::{
     PendingBidiChannelListener, PendingInspectorAwait, TargetOwnerState,
 };
 
+#[cfg(test)]
 pub(crate) use navigation_outcome::CompletedDownloadBodyArtifact;
+#[cfg(test)]
+pub use navigation_outcome::{DownloadNavigation, LoadedNavigation};
+pub(crate) use navigation_outcome::{NETWORK_ERROR_PAGE_URL, NavigationResultProjection};
 pub use navigation_outcome::{
-    DownloadNavigation, LoadedNavigation, NavigationDispatchState, NavigationLoadOutcome,
-    NavigationRequestLoadPolicy, TargetInfo,
+    NavigationDispatchState, NavigationLoadOutcome, NavigationRequestLoadPolicy, TargetInfo,
 };
-pub(crate) use navigation_outcome::{
-    NETWORK_ERROR_PAGE_URL, NavigationResultProjection, NavigationSourceDocumentSecurityContext,
-    NetworkErrorPageNavigation, RendererMainDocumentCommitSeed,
-};
+#[cfg(test)]
+pub(crate) use navigation_outcome::{NetworkErrorPageNavigation, RendererMainDocumentCommitSeed};

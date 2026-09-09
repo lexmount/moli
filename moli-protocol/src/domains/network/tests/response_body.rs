@@ -524,7 +524,6 @@ async fn get_request_post_data_returns_main_document_navigation_post_body() {
         request_headers: Vec::new(),
         request_load_policy: crate::conn::NavigationRequestLoadPolicy::DocumentInitiated,
         timestamp: 0.0,
-        source_document_security: Default::default(),
     };
 
     record_main_document_request_body(&mut ctx.conn, &navigation_state);
@@ -608,7 +607,6 @@ async fn get_request_post_data_uses_text_projection_while_bidi_collector_keeps_t
         request_headers: Vec::new(),
         request_load_policy: crate::conn::NavigationRequestLoadPolicy::DocumentInitiated,
         timestamp: 0.0,
-        source_document_security: Default::default(),
     };
 
     record_main_document_request_body(&mut ctx.conn, &navigation_state);
