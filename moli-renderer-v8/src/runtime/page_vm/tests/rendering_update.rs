@@ -1,5 +1,6 @@
 use super::*;
 
+mod image_dimensions;
 mod transform_precision;
 
 use base64::Engine as _;

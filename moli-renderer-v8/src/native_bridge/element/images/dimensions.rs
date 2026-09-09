@@ -2,14 +2,18 @@ use crate::document_runtime::DomHandle;
 use crate::webidl;
 
 use super::super::super::{JsContextHost, node::node_runtime_and_handle_from_object_or_detached};
-use super::super::{element_attribute, parse_non_negative_dimension, set_reflected_attribute};
+use super::super::{
+    element_attribute, geometry::observable_element_metrics, set_reflected_attribute,
+};
 
 pub(in crate::native_bridge) fn image_width_getter_function<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'s, v8::Value>,
 ) {
-    rv.set_uint32(image_width_value(scope, args.this()));
+    if let Some(value) = image_dimension_value(scope, args.this(), true) {
+        rv.set_uint32(value);
+    }
 }
 
 pub(in crate::native_bridge) fn image_width_setter_function<'s>(
@@ -26,7 +30,9 @@ pub(in crate::native_bridge) fn image_height_getter_function<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'s, v8::Value>,
 ) {
-    rv.set_uint32(image_height_value(scope, args.this()));
+    if let Some(value) = image_dimension_value(scope, args.this(), false) {
+        rv.set_uint32(value);
+    }
 }
 
 pub(in crate::native_bridge) fn image_height_setter_function<'s>(
@@ -44,36 +50,68 @@ pub(in crate::native_bridge) fn image_height_setter_function<'s>(
     rv.set_undefined();
 }
 
-fn image_width_value<'s>(
+fn image_dimension_value<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     object: v8::Local<'s, v8::Object>,
-) -> u32 {
+    horizontal: bool,
+) -> Option<u32> {
     let Ok((runtime_ptr, handle)) = node_runtime_and_handle_from_object_or_detached(scope, object)
     else {
-        return 0;
+        return Some(0);
     };
     let runtime = unsafe { &*runtime_ptr };
-    element_attribute(runtime, handle, "width")
-        .map(|value| parse_non_negative_dimension(Some(value)))
-        .filter(|value| *value > 0)
-        .or_else(|| image_intrinsic_dimensions(runtime, handle).map(|(width, _)| width))
-        .unwrap_or(0)
+    let attribute = if horizontal { "width" } else { "height" };
+    if runtime.layout_policy().uses_real_layout() {
+        // Like Blink's LayoutBoxWidth/Height, use the content box before CSS
+        // transforms and with absolute zoom removed. SynchronousGeometry keeps
+        // Moli's existing frozen-tree contract: this is not a forced refresh.
+        match observable_element_metrics(
+            runtime,
+            handle,
+            moli_layout::LayoutFlushReason::SynchronousGeometry,
+        ) {
+            Ok(Some(metrics)) => {
+                let size = if horizontal {
+                    metrics.content_size.width
+                } else {
+                    metrics.content_size.height
+                };
+                return Some(size.round() as u32);
+            }
+            Ok(None) => {}
+            Err(error) => {
+                let message = format!("Layout failed while reading image {attribute}: {error}");
+                if let Some(message) = crate::util::v8_string(scope, &message) {
+                    let exception = v8::Exception::error(scope, message);
+                    scope.throw_exception(exception);
+                }
+                return None;
+            }
+        }
+    }
+    // No rendered box (or Mock): a valid zero attribute is different from an
+    // absent/invalid one and must not fall back to the decoded natural size.
+    Some(
+        element_attribute(runtime, handle, attribute)
+            .as_deref()
+            .and_then(parse_dimension_attribute)
+            .or_else(|| {
+                image_intrinsic_dimensions(runtime, handle)
+                    .map(|(width, height)| if horizontal { width } else { height })
+            })
+            .unwrap_or(0),
+    )
 }
 
-fn image_height_value<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    object: v8::Local<'s, v8::Object>,
-) -> u32 {
-    let Ok((runtime_ptr, handle)) = node_runtime_and_handle_from_object_or_detached(scope, object)
-    else {
-        return 0;
-    };
-    let runtime = unsafe { &*runtime_ptr };
-    element_attribute(runtime, handle, "height")
-        .map(|value| parse_non_negative_dimension(Some(value)))
-        .filter(|value| *value > 0)
-        .or_else(|| image_intrinsic_dimensions(runtime, handle).map(|(_, height)| height))
-        .unwrap_or(0)
+fn parse_dimension_attribute(value: &str) -> Option<u32> {
+    // Blink's ParseHTMLNonNegativeInteger accepts a digit prefix and -0, but
+    // rejects overflow, negative nonzero values and non-HTML whitespace.
+    let value = value.trim_start_matches([' ', '\t', '\r', '\n', '\u{000c}']);
+    let negative = value.starts_with('-');
+    let digits = value.strip_prefix(['+', '-']).unwrap_or(value);
+    let end = digits.bytes().take_while(u8::is_ascii_digit).count();
+    let parsed = digits[..end].parse::<u32>().ok()?;
+    (!negative || parsed == 0).then_some(parsed)
 }
 
 fn set_image_unsigned_long_attribute_on_object<'s>(
