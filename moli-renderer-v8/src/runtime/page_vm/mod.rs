@@ -133,6 +133,7 @@ mod page_parser_async_module_admission;
 mod page_parser_owned_module_continuation;
 mod page_popup_close;
 mod page_popup_load_event;
+mod page_promise_rejection;
 mod page_rendering_update;
 #[cfg(test)]
 mod page_rendering_update_body_test_support;
@@ -225,6 +226,7 @@ pub(crate) use page_navigation_api_task::AuthorizedCurrentPageNavigationApiTask;
 pub(crate) use page_opfs_task::AuthorizedCurrentPageOpfsTask;
 pub(crate) use page_popup_close::AuthorizedCurrentPagePopupClose;
 pub(crate) use page_popup_load_event::AuthorizedCurrentPagePopupLoadEvent;
+pub(crate) use page_promise_rejection::AuthorizedCurrentPagePromiseRejection;
 pub(crate) use page_rendering_update::AuthorizedCurrentPageRenderingUpdate;
 pub(crate) use page_resource_completion::{
     AuthorizedCurrentChildDocumentLoadCompletion, AuthorizedCurrentChildModuleFetchCompletion,
