@@ -80,6 +80,7 @@ pub(crate) enum RendererPageDomManipulationOwner {
     ImageLoadEvent(RendererPageImageLoadEventOwner),
     MainDocumentLifecycle(super::RendererPageMainDocumentLifecycleOwner),
     ChildDocumentLifecycle(super::RendererPageChildFrameTaskOwner),
+    ChildHostLoad(super::RendererPageChildFrameTaskOwner),
     PopupLoadEvent(RendererPagePopupLoadEventOwner),
     PopupClose(RendererPagePopupCloseOwner),
     ConnectedStyleEvent(RendererPageStylesheetTaskOwner),
@@ -101,6 +102,7 @@ pub(crate) enum RendererPageDomManipulationTask {
     ImageLoadEvent(RendererPageImageLoadEventTask),
     MainDocumentLifecycle(super::RendererPageMainDocumentLifecycleTask),
     ChildDocumentLifecycle(super::RendererPageChildFrameTask),
+    ChildHostLoad(super::RendererPageChildFrameTask),
     PopupLoadEvent(RendererPagePopupLoadEventTask),
     PopupClose(RendererPagePopupCloseTask),
     ConnectedStyleEvent(RendererPageConnectedStyleEventTask),
@@ -139,6 +141,9 @@ impl RendererPageDomManipulationTask {
             }
             Self::ChildDocumentLifecycle(task) => {
                 RendererPageDomManipulationOwner::ChildDocumentLifecycle(task.owner())
+            }
+            Self::ChildHostLoad(task) => {
+                RendererPageDomManipulationOwner::ChildHostLoad(task.owner())
             }
             Self::PopupLoadEvent(task) => {
                 RendererPageDomManipulationOwner::PopupLoadEvent(task.owner())
@@ -181,6 +186,7 @@ pub(crate) enum PageDomManipulationTurnAction {
     ImageLoadEvent(super::PageImageLoadEventTurnAction),
     MainDocumentLifecycle(super::PageMainDocumentLifecycleTurnAction),
     ChildDocumentLifecycle(super::PageChildDocumentLifecycleTurnAction),
+    ChildHostLoad(super::PageChildHostLoadTurnAction),
     PopupLoadEvent(super::PagePopupLoadEventTurnAction),
     PopupClose(super::PagePopupCloseTurnAction),
     ConnectedStyleEvent(PageConnectedStyleEventTurnAction),
@@ -270,6 +276,22 @@ impl RendererPageDomManipulationSender {
             .map_err(|_| super::child_frame_task::RendererPageChildFrameTaskRouteClosed)
     }
 
+    pub(crate) fn send_child_host_load(
+        &self,
+        target: super::RendererPageChildHostLoadTarget,
+    ) -> Result<(), super::child_frame_task::RendererPageChildFrameTaskRouteClosed> {
+        self.route
+            .send(RendererPageDomManipulationTask::ChildHostLoad(
+                super::RendererPageChildFrameTask::new(
+                    super::RendererPageChildFrameTaskOwner::new(
+                        self.root_document,
+                        super::RendererPageChildFrameTaskTarget::HostLoad(target),
+                    ),
+                ),
+            ))
+            .map_err(|_| super::child_frame_task::RendererPageChildFrameTaskRouteClosed)
+    }
+
     pub(crate) fn popup_load_event(&self) -> RendererPagePopupLoadEventSender {
         RendererPagePopupLoadEventSender::new(self.route.clone(), self.root_document)
     }
@@ -328,18 +350,17 @@ pub(crate) struct RendererPageDomManipulationSource {
 }
 
 impl RendererPageDomManipulationSource {
-    pub(crate) fn has_main_document_lifecycle_task(
+    pub(crate) fn has_document_lifecycle_task(
         &mut self,
-        root_document: RendererDocumentToken,
-        document: crate::frame_owner_model::FrameDocumentTaskOwner,
+        is_current: impl Fn(RendererPageDomManipulationOwner) -> bool,
     ) -> bool {
         self.source.has_matching_task(|ready| {
             matches!(
                 ready.value(),
-                RendererPageDomManipulationTask::MainDocumentLifecycle(task)
-                    if task.owner.root_document == root_document
-                        && task.owner.body.owner() == document
-            )
+                RendererPageDomManipulationTask::MainDocumentLifecycle(_)
+                    | RendererPageDomManipulationTask::ChildDocumentLifecycle(_)
+                    | RendererPageDomManipulationTask::ChildHostLoad(_)
+            ) && is_current(ready.value().owner())
         })
     }
 
