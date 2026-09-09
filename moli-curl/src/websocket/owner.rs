@@ -13,7 +13,7 @@ use curl::{
 };
 
 use super::{
-    CurlWebSocketEvent, QueuedSend, SessionIo, Submission,
+    CurlWebSocketEvent, SessionIo, Submission,
     request::{self, Handshake},
 };
 use crate::{CurlDnsResolution, CurlTransferId, dns_adapter::CurlDnsOwnerResidence};
@@ -35,13 +35,7 @@ struct Session {
     deadline: Instant,
     open: bool,
     received_close: bool,
-    send: Option<PendingSend>,
     io: SessionIo,
-}
-
-struct PendingSend {
-    queued: QueuedSend,
-    offset: usize,
 }
 
 pub(super) fn run(
@@ -238,7 +232,6 @@ fn start(multi: &mut Multi, sessions: &mut HashMap<CurlTransferId, Session>, mut
                     deadline: pending.deadline,
                     open: false,
                     received_close: false,
-                    send: None,
                     io: pending.io,
                 },
             );
@@ -261,34 +254,28 @@ impl Session {
             if self.io.cancelled() {
                 return Err(Ok(()));
             }
-            if self.send.is_none() {
-                self.send = self
-                    .io
-                    .control_frames
-                    .try_recv()
-                    .or_else(|_| self.io.data.try_recv())
-                    .ok()
-                    .map(|queued| PendingSend { queued, offset: 0 });
-            }
-            if let Some(send) = &mut self.send {
-                match self.handle.ws_send(
-                    &send.queued.frame.data[send.offset..],
-                    0,
-                    send.queued.frame.flags,
-                ) {
-                    Ok(count) => {
-                        send.offset += count;
-                        progressed = true;
-                        if send.offset == send.queued.frame.data.len() {
-                            let send = self.send.take().expect("completed frame");
-                            let _ = send.queued.completed.send(send.offset);
+            {
+                // Keep the single frame resident across partial nonblocking writes.
+                let mut pending = self.io.control.send.lock();
+                if let Some(send) = &mut *pending {
+                    match self
+                        .handle
+                        .ws_send(&send.frame.data[send.offset..], 0, send.frame.flags)
+                    {
+                        Ok(count) => {
+                            send.offset += count;
+                            progressed = true;
+                            if send.offset == send.frame.data.len() {
+                                let send = pending.take().expect("completed frame");
+                                let _ = send.completed.send(send.offset);
+                            }
                         }
+                        Err(error) if error.is_again() => {
+                            #[cfg(test)]
+                            self.io.control.write_blocked.notify_one();
+                        }
+                        Err(error) => return Err(Err(format!("WebSocket send failed: {error}"))),
                     }
-                    Err(error) if error.is_again() => {
-                        #[cfg(test)]
-                        self.io.control.write_blocked.notify_one();
-                    }
-                    Err(error) => return Err(Err(format!("WebSocket send failed: {error}"))),
                 }
             }
             if self.received_close || !self.io.control.reading.load(Ordering::Acquire) {
@@ -329,8 +316,7 @@ impl Session {
         let reading = self.io.events.capacity() > 0
             && !self.received_close
             && self.io.control.reading.load(Ordering::Acquire);
-        let writing =
-            self.send.is_some() || !self.io.data.is_empty() || !self.io.control_frames.is_empty();
+        let writing = self.io.control.send.lock().is_some();
         if !reading && !writing {
             return None;
         }

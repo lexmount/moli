@@ -107,11 +107,10 @@ pub(super) async fn run_open_session(
         {
             let sender = sender.clone();
             sending = Some(Box::pin(async move {
-                let receipt = sender
-                    .enqueue_frame(frame)
+                sender
+                    .send_frame(frame)
                     .await
                     .map_err(|error| error.to_string())?;
-                receipt.wait().await.map_err(|error| error.to_string())?;
                 Ok(next_flight)
             }));
         }
@@ -141,9 +140,9 @@ pub(super) async fn run_open_session(
                 }
             } => activity,
         };
-        // The owner publishes a frame's receipt before reading its echo. It
+        // The owner publishes a frame's completion before reading its echo. It
         // can finish between the select's send poll and its receive poll, so
-        // recheck the receipt before turning native input into browser events.
+        // recheck completion before turning native input into browser events.
         if matches!(activity, Activity::Native(_))
             && let Some(pending) = sending.as_mut()
         {
@@ -183,7 +182,7 @@ pub(super) async fn run_open_session(
             }
             Activity::Native(Some(CurlWebSocketEvent::Closed { result })) => {
                 // Closure can race the first poll above. Terminal delivery
-                // settles every receipt and closes admission before this await.
+                // settles the pending write and rejects new sends before this await.
                 if let Some(pending) = sending.take()
                     && let Ok(completed) = pending.await
                 {
