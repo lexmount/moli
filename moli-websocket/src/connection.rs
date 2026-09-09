@@ -5,8 +5,8 @@ use crate::{
     handle::HandshakeDecision,
     headers::header_map_entries,
     limits::{acquire_pending_websocket_handshake_slot, acquire_websocket_connection_slot},
-    request::build_websocket_request,
-    transport::open_websocket_stream,
+    request::prepare_websocket_request,
+    transport::{OpenedConnection, open_websocket_connection},
 };
 
 pub(crate) async fn run_websocket_connection(
@@ -28,7 +28,7 @@ pub(crate) async fn run_websocket_connection(
         return Ok(());
     };
 
-    let request = match build_websocket_request(&url, &protocols, &context) {
+    let request = match prepare_websocket_request(&url, &protocols, &context) {
         Ok(request) => request,
         Err(error) => {
             send_error_and_close(&event_tx, socket_id, error).await?;
@@ -45,9 +45,12 @@ pub(crate) async fn run_websocket_connection(
         .await?;
         return Ok(());
     };
-    let handshake = open_websocket_stream(request, &context);
+    let handshake = open_websocket_connection(request, &context);
     tokio::pin!(handshake);
-    let (stream, response, request_headers) = loop {
+    let OpenedConnection {
+        connection,
+        handshake,
+    } = loop {
         tokio::select! {
             biased;
             command = command_rx.recv() => {
@@ -100,8 +103,9 @@ pub(crate) async fn run_websocket_connection(
         }
     };
 
-    let mut response_status = response.status().as_u16();
-    let mut response_headers = header_map_entries(response.headers());
+    let request_headers = header_map_entries(&handshake.request_headers);
+    let mut response_status = handshake.response.status().as_u16();
+    let mut response_headers = header_map_entries(handshake.response.headers());
     if let Some(mut decision) = decision {
         send_event(
             &event_tx,
@@ -126,12 +130,12 @@ pub(crate) async fn run_websocket_connection(
                 command = command_rx.recv() => {
                     match command.map(|queued| queued.command) {
                         Some(Command::Fail(message)) => {
-                            drop(stream);
+                            drop(connection);
                             send_error_and_close(&event_tx, socket_id, message).await?;
                             return Ok(());
                         }
                         Some(Command::Close { .. }) => {
-                            drop(stream);
+                            drop(connection);
                             send_error_and_close(
                                 &event_tx, socket_id,
                                 "WebSocket connection closed before opening".to_owned(),
@@ -153,7 +157,7 @@ pub(crate) async fn run_websocket_connection(
                             break;
                         }
                         HandshakeDecision::Fail(message) => {
-                            drop(stream);
+                            drop(connection);
                             send_error_and_close(&event_tx, socket_id, message).await?;
                             return Ok(());
                         }
@@ -181,7 +185,7 @@ pub(crate) async fn run_websocket_connection(
     )
     .await?;
 
-    crate::session::run_open_session(socket_id, stream, command_rx, event_tx).await
+    crate::session::run_open_session(socket_id, connection, command_rx, event_tx).await
 }
 
 fn response_header<'a>(headers: &'a [(String, String)], name: &str) -> Option<&'a str> {

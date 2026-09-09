@@ -3,33 +3,33 @@ use url::Url;
 use crate::ConnectOptions;
 
 pub(crate) fn websocket_proxy_url(
-    uri: &http::Uri,
+    url: &Url,
     context: &ConnectOptions,
 ) -> Result<Option<Url>, String> {
-    websocket_proxy_url_with_env(uri, context, |name| std::env::var(name).ok())
+    websocket_proxy_url_with_env(url, context, |name| std::env::var(name).ok())
 }
 
 pub(crate) fn websocket_proxy_url_with_env(
-    uri: &http::Uri,
+    url: &Url,
     context: &ConnectOptions,
     mut env: impl FnMut(&str) -> Option<String>,
 ) -> Result<Option<Url>, String> {
     let proxy = match context.http_proxy.as_deref() {
         Some("") => return Ok(None),
         Some(proxy) => Some(proxy.to_owned()),
-        None => websocket_env_proxy_for_scheme(uri.scheme_str(), &mut env),
+        None => websocket_env_proxy_for_scheme(url.scheme(), &mut env),
     };
     let Some(proxy) = proxy.filter(|proxy| !proxy.is_empty()) else {
         return Ok(None);
     };
-    let host = uri
-        .host()
+    let host = url
+        .host_str()
         .ok_or_else(|| "WebSocket URL is missing host".to_owned())?;
     let no_proxy = match context.http_no_proxy.as_deref() {
         Some(no_proxy) => Some(no_proxy.to_owned()),
         None => websocket_env_no_proxy(&mut env),
     };
-    if no_proxy_matches(host, uri.port_u16(), no_proxy.as_deref()) {
+    if no_proxy_matches(host, url.port(), no_proxy.as_deref()) {
         return Ok(None);
     }
     let proxy_url = Url::parse(&proxy)
@@ -47,12 +47,12 @@ pub(crate) fn websocket_proxy_url_with_env(
 }
 
 fn websocket_env_proxy_for_scheme(
-    scheme: Option<&str>,
+    scheme: &str,
     env: &mut impl FnMut(&str) -> Option<String>,
 ) -> Option<String> {
     let mut names: &[&str] = match scheme {
-        Some("ws") => &["http_proxy"],
-        Some("wss") => &["https_proxy", "HTTPS_PROXY"],
+        "ws" => &["http_proxy"],
+        "wss" => &["https_proxy", "HTTPS_PROXY"],
         _ => &[],
     };
     for name in names {

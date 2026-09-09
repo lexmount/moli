@@ -7,7 +7,7 @@ use crate::{
         acquire_limited_websocket_slot,
     },
     proxy::{append_proxy_connect_header, no_proxy_matches},
-    request::build_websocket_request,
+    request::prepare_websocket_request,
     test_support::*,
 };
 use tokio::{
@@ -184,9 +184,9 @@ fn websocket_potentially_trustworthy_url_matches_loopback_policy() {
 }
 
 #[test]
-fn websocket_request_builder_rejects_invalid_subprotocol_defensively() {
+fn websocket_request_preparation_rejects_invalid_subprotocol_defensively() {
     let context = test_websocket_context();
-    let error = build_websocket_request(
+    let error = prepare_websocket_request(
         "ws://example.com/socket",
         &["chat".to_owned(), "CHAT".to_owned()],
         &context,
@@ -197,13 +197,13 @@ fn websocket_request_builder_rejects_invalid_subprotocol_defensively() {
 }
 
 #[test]
-fn websocket_request_builder_rejects_blocked_ports() {
+fn websocket_request_preparation_rejects_blocked_ports() {
     let context = test_websocket_context();
-    let error = build_websocket_request("ws://127.0.0.1:25/socket", &[], &context)
+    let error = prepare_websocket_request("ws://127.0.0.1:25/socket", &[], &context)
         .expect_err("blocked port should fail");
 
     assert!(error.contains("port `25` is blocked"));
-    assert!(build_websocket_request("ws://127.0.0.1:43210/socket", &[], &context).is_ok());
+    assert!(prepare_websocket_request("ws://127.0.0.1:43210/socket", &[], &context).is_ok());
 }
 
 #[test]
@@ -326,7 +326,7 @@ fn websocket_proxy_connect_header_rejects_newline_values() {
 }
 
 #[test]
-fn websocket_request_builder_applies_context_protocols_and_cookie() {
+fn websocket_request_preparation_applies_context_protocols_and_cookie() {
     let mut context = test_websocket_context();
     context.extra_headers = vec![
         ("X-Moli-Trace".to_owned(), "socket".to_owned()),
@@ -334,45 +334,45 @@ fn websocket_request_builder_applies_context_protocols_and_cookie() {
     ];
     context.cookie_header = Some("sid=server".to_owned());
 
-    let request = build_websocket_request(
+    let request = prepare_websocket_request(
         "ws://example.com/socket",
         &["chat".to_owned(), "superchat".to_owned()],
         &context,
     )
     .expect("websocket request should build");
 
-    assert_eq!(request.uri(), "ws://example.com/socket");
+    assert_eq!(request.url.as_str(), "ws://example.com/socket");
     assert_eq!(
         request
-            .headers()
+            .headers
             .get(http::header::ORIGIN)
             .and_then(|value| value.to_str().ok()),
         Some("https://example.com")
     );
     assert_eq!(
         request
-            .headers()
+            .headers
             .get(http::header::SEC_WEBSOCKET_PROTOCOL)
             .and_then(|value| value.to_str().ok()),
         Some("chat, superchat")
     );
     assert_eq!(
         request
-            .headers()
+            .headers
             .get(http::header::SEC_WEBSOCKET_VERSION)
             .and_then(|value| value.to_str().ok()),
-        Some("13")
+        None
     );
     assert_eq!(
         request
-            .headers()
+            .headers
             .get(http::header::COOKIE)
             .and_then(|value| value.to_str().ok()),
         Some("sid=server")
     );
     assert_eq!(
         request
-            .headers()
+            .headers
             .get("x-moli-trace")
             .and_then(|value| value.to_str().ok()),
         Some("socket")
@@ -380,15 +380,15 @@ fn websocket_request_builder_applies_context_protocols_and_cookie() {
 }
 
 #[test]
-fn websocket_request_builder_converts_url_userinfo_to_basic_auth() {
+fn websocket_request_preparation_converts_url_userinfo_to_basic_auth() {
     let context = test_websocket_context();
 
-    let request = build_websocket_request("ws://foo:bar@example.com/socket", &[], &context)
+    let request = prepare_websocket_request("ws://foo:bar@example.com/socket", &[], &context)
         .expect("websocket request should build");
 
     assert_eq!(
         request
-            .headers()
+            .headers
             .get(http::header::AUTHORIZATION)
             .and_then(|value| value.to_str().ok()),
         Some("Basic Zm9vOmJhcg==")
@@ -396,16 +396,16 @@ fn websocket_request_builder_converts_url_userinfo_to_basic_auth() {
 }
 
 #[test]
-fn websocket_request_builder_decodes_percent_encoded_userinfo_for_basic_auth() {
+fn websocket_request_preparation_decodes_percent_encoded_userinfo_for_basic_auth() {
     let context = test_websocket_context();
 
     let request =
-        build_websocket_request("ws://foo%20bar:p%40ss@example.com/socket", &[], &context)
+        prepare_websocket_request("ws://foo%20bar:p%40ss@example.com/socket", &[], &context)
             .expect("websocket request should build");
 
     assert_eq!(
         request
-            .headers()
+            .headers
             .get(http::header::AUTHORIZATION)
             .and_then(|value| value.to_str().ok()),
         Some("Basic Zm9vIGJhcjpwQHNz")
@@ -906,7 +906,7 @@ async fn websocket_transport_handshake_applies_context_headers_and_preserves_con
     let mut context = test_websocket_context();
     context.extra_headers = vec![
         ("X-Moli-Trace".to_owned(), "socket".to_owned()),
-        // Protocol control headers are generated by tungstenite and should not
+        // Protocol control headers are generated by libcurl and should not
         // be overridden by embedding-layer extra headers.
         ("Sec-WebSocket-Version".to_owned(), "999".to_owned()),
     ];
@@ -1427,4 +1427,68 @@ async fn websocket_queued_close_precedes_handshake_continuation() {
         .await
         .unwrap()
         .unwrap();
+}
+
+#[tokio::test]
+async fn websocket_native_handshake_generates_keys_and_reports_actual_headers() {
+    use base64::{Engine, engine::general_purpose::STANDARD};
+    let mut previous_key = None;
+    for socket_id in 98..100 {
+        let (url, captured, server) = spawn_header_capture_websocket_server().await;
+        let (events, mut receiver) = mpsc::channel(8);
+        let mut context = test_websocket_context();
+        context
+            .extra_headers
+            .push(("Sec-WebSocket-Key".to_owned(), "injected".to_owned()));
+        let prepared = prepare_websocket_request(&url, &[], &context).unwrap();
+        for header in [
+            "host",
+            "connection",
+            "upgrade",
+            "sec-websocket-version",
+            "sec-websocket-key",
+        ] {
+            assert!(
+                !prepared.headers.contains_key(header),
+                "{header} belongs to native handshake generation"
+            );
+        }
+        let connection = spawn_connection(socket_id, url, Vec::new(), context, events);
+        let actual = timeout(Duration::from_secs(3), captured)
+            .await
+            .unwrap()
+            .unwrap();
+        let key = header_value(&actual, "sec-websocket-key").unwrap();
+        assert_eq!(STANDARD.decode(&key).unwrap().len(), 16);
+        assert_ne!(previous_key.as_ref(), Some(&key));
+        previous_key = Some(key.clone());
+        match timeout(Duration::from_secs(3), receiver.recv())
+            .await
+            .unwrap()
+            .unwrap()
+        {
+            Event::Open {
+                request_headers, ..
+            } => {
+                assert_eq!(
+                    header_value(&request_headers, "sec-websocket-key"),
+                    Some(key)
+                );
+                assert_eq!(
+                    header_value(&request_headers, "host"),
+                    header_value(&actual, "host")
+                );
+                assert_eq!(
+                    header_value(&request_headers, "sec-websocket-version").as_deref(),
+                    Some("13")
+                );
+            }
+            event => panic!("expected Open with actual handshake headers, got {event:?}"),
+        }
+        let _ = connection.close(Some(1000), String::new());
+        timeout(Duration::from_secs(3), server)
+            .await
+            .unwrap()
+            .unwrap();
+    }
 }

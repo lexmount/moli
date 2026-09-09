@@ -55,7 +55,7 @@ pub(crate) fn parse_handshake_response(raw_headers: &[u8]) -> Result<HandshakeRe
 }
 
 pub(crate) fn validate_handshake_response(
-    request: &http::Request<()>,
+    request: &http::HeaderMap,
     response: &HandshakeResponse,
 ) -> Result<(), String> {
     if response.status() != http::StatusCode::SWITCHING_PROTOCOLS {
@@ -71,7 +71,6 @@ pub(crate) fn validate_handshake_response(
         return Err("WebSocket handshake response is missing `Connection: Upgrade`".to_owned());
     }
     let key = request
-        .headers()
         .get(http::header::SEC_WEBSOCKET_KEY)
         .and_then(|value| value.to_str().ok())
         .ok_or_else(|| "WebSocket request is missing Sec-WebSocket-Key".to_owned())?;
@@ -118,7 +117,7 @@ fn header_values_contain_token(
 }
 
 fn validate_response_subprotocol(
-    request: &http::Request<()>,
+    request: &http::HeaderMap,
     response: &HandshakeResponse,
 ) -> Result<(), String> {
     let selected_protocols = response
@@ -156,13 +155,9 @@ fn validate_response_subprotocol(
     }
 }
 
-fn requested_subprotocols(request: &http::Request<()>) -> Result<Vec<String>, String> {
+fn requested_subprotocols(request: &http::HeaderMap) -> Result<Vec<String>, String> {
     let mut protocols = Vec::new();
-    for value in request
-        .headers()
-        .get_all(http::header::SEC_WEBSOCKET_PROTOCOL)
-        .iter()
-    {
+    for value in request.get_all(http::header::SEC_WEBSOCKET_PROTOCOL).iter() {
         let value = value
             .to_str()
             .map_err(|error| format!("WebSocket request protocol is invalid: {error}"))?;

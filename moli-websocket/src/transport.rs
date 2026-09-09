@@ -3,6 +3,7 @@ use crate::{
     handshake::{HandshakeResponse, parse_handshake_response, validate_handshake_response},
     headers::header_map_entries,
     proxy::{append_proxy_connect_header, websocket_proxy_url},
+    request::PreparedWebSocketRequest,
 };
 use moli_curl::{
     CurlDnsResolution,
@@ -13,24 +14,23 @@ use moli_curl::{
 use moli_dns_resolver::DnsTarget;
 use std::sync::OnceLock;
 
-pub(crate) async fn open_websocket_stream(
-    mut request: http::Request<()>,
+pub(crate) struct HandshakeInfo {
+    pub request_headers: http::HeaderMap,
+    pub response: HandshakeResponse,
+}
+
+pub(crate) struct OpenedConnection {
+    pub connection: CurlWebSocketConnection,
+    pub handshake: HandshakeInfo,
+}
+
+pub(crate) async fn open_websocket_connection(
+    request: PreparedWebSocketRequest,
     context: &ConnectOptions,
-) -> Result<
-    (
-        CurlWebSocketConnection,
-        HandshakeResponse,
-        Vec<(String, String)>,
-    ),
-    String,
-> {
-    let proxy = websocket_proxy_url(request.uri(), context)?;
-    let mut native = CurlWebSocketRequest::new(request.uri().to_string());
-    native.headers = header_map_entries(request.headers());
-    // libcurl appends the Upgrade token itself for a native WS request.
-    native
-        .headers
-        .retain(|(name, _)| !name.eq_ignore_ascii_case("connection"));
+) -> Result<OpenedConnection, String> {
+    let proxy = websocket_proxy_url(&request.url, context)?;
+    let mut native = CurlWebSocketRequest::new(request.url.to_string());
+    native.headers = header_map_entries(&request.headers);
     native.proxy = proxy.map(|url| url.to_string());
     // WebSocket opening handshakes use credentials=include, including across
     // origins: https://websockets.spec.whatwg.org/#opening-handshake
@@ -49,7 +49,7 @@ pub(crate) async fn open_websocket_stream(
                 .push(("Proxy-Authorization".to_owned(), value));
         }
     } else {
-        let url = url::Url::parse(&native.url).map_err(|error| error.to_string())?;
+        let url = &request.url;
         if let Some(url::Host::Domain(host)) = url.host() {
             native.dns_resolution = CurlDnsResolution::resolve_origin(
                 DnsTarget::new(
@@ -79,11 +79,16 @@ pub(crate) async fn open_websocket_stream(
                     .unwrap_or_else(|| "WebSocket handshake response is empty".to_owned()));
             }
             let response = parse_handshake_response(&response)?;
-            *request.headers_mut() = actual_request_headers(&actual)?;
-            validate_handshake_response(&request, &response)?;
+            let request_headers = actual_request_headers(&actual)?;
+            validate_handshake_response(&request_headers, &response)?;
             result?;
-            let headers = header_map_entries(request.headers());
-            Ok((connection, response, headers))
+            Ok(OpenedConnection {
+                connection,
+                handshake: HandshakeInfo {
+                    request_headers,
+                    response,
+                },
+            })
         }
         Some(CurlWebSocketEvent::Closed { result }) => Err(result
             .err()

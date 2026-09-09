@@ -1,7 +1,7 @@
 use crate::ConnectOptions;
 
 pub(crate) fn apply_connect_context_headers(
-    request: &mut http::Request<()>,
+    headers: &mut http::HeaderMap,
     context: &ConnectOptions,
 ) -> Result<(), http::header::InvalidHeaderValue> {
     // Embedding-provided headers may intentionally override browser defaults
@@ -13,10 +13,10 @@ pub(crate) fn apply_connect_context_headers(
         let Ok(name) = http::header::HeaderName::from_bytes(name.as_bytes()) else {
             continue;
         };
-        request.headers_mut().insert(name, value.parse()?);
+        headers.insert(name, value.parse()?);
     }
-    insert_header_if_absent(request, http::header::ORIGIN, &context.origin)?;
-    insert_header_if_absent(request, http::header::USER_AGENT, &context.user_agent)?;
+    insert_header_if_absent(headers, http::header::ORIGIN, &context.origin)?;
+    insert_header_if_absent(headers, http::header::USER_AGENT, &context.user_agent)?;
     Ok(())
 }
 
@@ -33,12 +33,12 @@ pub(crate) fn header_map_entries(headers: &http::HeaderMap) -> Vec<(String, Stri
 }
 
 pub(crate) fn insert_header_if_absent(
-    request: &mut http::Request<()>,
+    headers: &mut http::HeaderMap,
     name: http::header::HeaderName,
     value: &str,
 ) -> Result<(), http::header::InvalidHeaderValue> {
-    if !request.headers().contains_key(&name) {
-        request.headers_mut().insert(name, value.parse()?);
+    if !headers.contains_key(&name) {
+        headers.insert(name, value.parse()?);
     }
     Ok(())
 }

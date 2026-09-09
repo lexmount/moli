@@ -44,11 +44,11 @@ pub fn test_websocket_context() -> ConnectOptions {
 }
 
 pub fn test_websocket_proxy_url_with_env(
-    uri: &http::Uri,
+    url: &url::Url,
     context: &ConnectOptions,
     env: &[(&str, &str)],
 ) -> Option<String> {
-    websocket_proxy_url_with_env(uri, context, |name| {
+    websocket_proxy_url_with_env(url, context, |name| {
         env.iter()
             .find_map(|(env_name, value)| (*env_name == name).then(|| (*value).to_owned()))
     })
