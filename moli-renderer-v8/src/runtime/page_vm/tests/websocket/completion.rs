@@ -125,7 +125,7 @@ __webSocketTaskBoundarySocket.onmessage = event => {{
 }
 
 #[tokio::test(flavor = "current_thread")]
-async fn websocket_message_body_leaves_reactions_for_selected_completion() {
+async fn websocket_message_body_cleans_up_listener_reactions() {
     run_page_vm_async_test(async move {
         let (url, opened_rx, message_tx, server) =
             spawn_triggered_text_websocket_server().await;
@@ -166,8 +166,8 @@ async fn websocket_message_body_leaves_reactions_for_selected_completion() {
                     page_vm
                         .vm_mut()
                         .eval("__webSocketTaskBoundary.join('|')")?,
-                    "callback:payload",
-                    "the WebSocket body must leave Promise reactions for selected-task completion"
+                    "callback:payload|microtask|runtime-script",
+                    "listener cleanup must drain reactions before the selected task completes"
                 );
                 Ok::<_, anyhow::Error>(())
             })
