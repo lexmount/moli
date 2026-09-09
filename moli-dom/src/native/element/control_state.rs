@@ -1,5 +1,5 @@
 use super::Attribute;
-use crate::forms::{input_type_has_value_sanitization, sanitize_input_value_for_type};
+use crate::forms::sanitize_input_value_for_type;
 use indexmap::IndexSet;
 use moli_html_input_type::InputType;
 
@@ -824,6 +824,7 @@ impl ElementControlState {
         namespace: &str,
         local_name: &str,
         input_type: InputType,
+        input_value_attribute: Option<&str>,
         attribute_name: &str,
         attribute_value: Option<&str>,
     ) {
@@ -843,9 +844,29 @@ impl ElementControlState {
                 }
             }
             ("input", "type") => {
-                if input_type_has_value_sanitization(input_type) {
-                    let current = self.input_value.as_deref().unwrap_or_default();
-                    self.input_value = Some(sanitize_input_value_for_type(input_type, current));
+                // A non-dirty input value continues to follow the `value`
+                // content attribute across type changes. Sanitization can
+                // make that default observable (for example, color exposes
+                // `#000000`), but it must not turn the sanitized result into
+                // the source for a later type change.
+                let source = if self.input_value_dirty {
+                    self.input_value.as_deref().unwrap_or_default()
+                } else {
+                    input_value_attribute.unwrap_or_default()
+                };
+                let value = sanitize_input_value_for_type(input_type, source);
+                self.input_value = Some(value);
+                self.input_bad_input = false;
+
+                // The default/on mode exposes "on" when an empty dirty value
+                // changes into a checkable state. The filename mode likewise
+                // starts with an empty, non-dirty value.
+                if (input_type.is_checkable()
+                    && self.input_value.as_deref().is_none_or(str::is_empty))
+                    || input_type == InputType::File
+                {
+                    self.input_value_dirty = false;
+                    self.input_value_user_edited = false;
                 }
             }
             ("input", "checked") => {
