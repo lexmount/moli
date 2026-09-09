@@ -2,6 +2,7 @@ use crate::{
     Command, ConnectOptions, Event,
     commands::CommandReceiver,
     events::{EventResult, EventSender, send_error_and_close, send_event},
+    handle::HandshakeDecision,
     headers::header_map_entries,
     limits::{acquire_pending_websocket_handshake_slot, acquire_websocket_connection_slot},
     request::build_websocket_request,
@@ -15,6 +16,7 @@ pub(crate) async fn run_websocket_connection(
     context: ConnectOptions,
     mut command_rx: CommandReceiver,
     event_tx: EventSender,
+    decision: Option<tokio::sync::oneshot::Receiver<HandshakeDecision>>,
 ) -> EventResult {
     let Some(_connection_slot) = acquire_websocket_connection_slot() else {
         send_error_and_close(
@@ -69,8 +71,7 @@ pub(crate) async fn run_websocket_connection(
                         // should only appear from direct crate users. Ignore them rather than
                         // queueing frames before the opening handshake has succeeded.
                     }
-                    Some(Command::ContinueOpen { .. }) => {}
-                    Some(Command::FailOpen(message)) => {
+                    Some(Command::Fail(message)) => {
                         drop(pending_handshake_slot);
                         send_error_and_close(&event_tx, socket_id, message).await?;
                         return Ok(());
@@ -101,7 +102,7 @@ pub(crate) async fn run_websocket_connection(
 
     let mut response_status = response.status().as_u16();
     let mut response_headers = header_map_entries(response.headers());
-    if context.pause_after_handshake {
+    if let Some(mut decision) = decision {
         send_event(
             &event_tx,
             Event::HandshakeResponse {
@@ -119,41 +120,45 @@ pub(crate) async fn run_websocket_connection(
         )
         .await?;
         loop {
-            match command_rx.recv().await.map(|queued| queued.command) {
-                Some(Command::ContinueOpen {
-                    response_status: override_status,
-                    response_headers: override_headers,
-                }) => {
-                    if let Some(override_status) = override_status {
-                        response_status = override_status;
+            tokio::select! {
+                // A Close already admitted while paused must precede Open.
+                biased;
+                command = command_rx.recv() => {
+                    match command.map(|queued| queued.command) {
+                        Some(Command::Fail(message)) => {
+                            drop(stream);
+                            send_error_and_close(&event_tx, socket_id, message).await?;
+                            return Ok(());
+                        }
+                        Some(Command::Close { .. }) => {
+                            drop(stream);
+                            send_error_and_close(
+                                &event_tx, socket_id,
+                                "WebSocket connection closed before opening".to_owned(),
+                            ).await?;
+                            return Ok(());
+                        }
+                        None => return Ok(()),
+                        // The browser rejects sends until the Open event.
+                        _ => {}
                     }
-                    if let Some(override_headers) = override_headers {
-                        response_headers = override_headers;
+                }
+                decision = &mut decision => {
+                    match decision.unwrap_or_else(|_| HandshakeDecision::Fail(
+                        "WebSocket handshake decision was dropped".to_owned(),
+                    )) {
+                        HandshakeDecision::Continue { response_status: status, response_headers: headers } => {
+                            if let Some(status) = status { response_status = status; }
+                            if let Some(headers) = headers { response_headers = headers; }
+                            break;
+                        }
+                        HandshakeDecision::Fail(message) => {
+                            drop(stream);
+                            send_error_and_close(&event_tx, socket_id, message).await?;
+                            return Ok(());
+                        }
                     }
-                    break;
                 }
-                Some(Command::FailOpen(message)) => {
-                    send_error_and_close(&event_tx, socket_id, message).await?;
-                    return Ok(());
-                }
-                Some(Command::Close { .. }) => {
-                    send_error_and_close(
-                        &event_tx,
-                        socket_id,
-                        "WebSocket connection closed before opening".to_owned(),
-                    )
-                    .await?;
-                    return Ok(());
-                }
-                Some(Command::SendText(_))
-                | Some(Command::SendBinary(_))
-                | Some(Command::ReceiveText(_))
-                | Some(Command::ReceiveBinary(_))
-                | Some(Command::ServerClose { .. }) => {
-                    // Browser-visible `send()` throws until the open event, so crate users
-                    // cannot enqueue application data while a response-stage pause is active.
-                }
-                None => return Ok(()),
             }
         }
     }

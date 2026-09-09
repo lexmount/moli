@@ -1,4 +1,4 @@
-use crate::{Command, Event, FrameOpcode, spawn_connection, test_support::*};
+use crate::{Event, FrameOpcode, spawn_connection, test_support::*};
 use futures_util::{SinkExt, StreamExt};
 use tokio::{
     io::AsyncWriteExt,
@@ -27,21 +27,14 @@ async fn native_send_accounting_does_not_require_a_server_echo() {
     let (tx, mut rx) = mpsc::channel(8);
     let handle = spawn_connection(70, url, Vec::new(), test_websocket_context(), tx);
     recv_open_event(&mut rx).await;
-    handle
-        .send(Command::SendText("without echo".to_owned()))
-        .unwrap();
+    handle.send_text("without echo".to_owned()).unwrap();
     assert_frame_sent(&mut rx, 70, FrameOpcode::Text, 12).await;
     assert_buffered_amount_consumed(&mut rx, 70, 12).await;
     timeout(Duration::from_secs(3), received_rx)
         .await
         .unwrap()
         .unwrap();
-    handle
-        .send(Command::Close {
-            code: Some(1000),
-            reason: String::new(),
-        })
-        .unwrap();
+    handle.close(Some(1000), String::new()).unwrap();
     assert_closing(&mut rx, 70).await;
     assert_close(&mut rx, 70, 1000, "", true).await;
     server.await.unwrap();
@@ -61,10 +54,7 @@ async fn native_local_close_without_peer_close_is_abnormal_once() {
     let handle = spawn_connection(71, url, Vec::new(), test_websocket_context(), tx);
     recv_open_event(&mut rx).await;
     handle
-        .send(Command::Close {
-            code: Some(3001),
-            reason: "not acknowledged".to_owned(),
-        })
+        .close(Some(3001), "not acknowledged".to_owned())
         .unwrap();
     assert_closing(&mut rx, 71).await;
     assert!(matches!(
@@ -118,12 +108,7 @@ async fn native_fragmented_utf8_and_ping_are_assembled_as_one_message() {
     recv_open_event(&mut rx).await;
     assert_text_message(&mut rx, 72, "🙂").await;
     assert_binary_message(&mut rx, 72, &[]).await;
-    handle
-        .send(Command::Close {
-            code: Some(1000),
-            reason: String::new(),
-        })
-        .unwrap();
+    handle.close(Some(1000), String::new()).unwrap();
     assert_closing(&mut rx, 72).await;
     assert_close(&mut rx, 72, 1000, "", true).await;
     server.await.unwrap();
@@ -184,12 +169,7 @@ async fn native_large_incoming_frame_keeps_chunk_offsets_and_utf8() {
     let handle = spawn_connection(74, url, Vec::new(), test_websocket_context(), tx);
     recv_open_event(&mut rx).await;
     assert_text_message(&mut rx, 74, &expected).await;
-    handle
-        .send(Command::Close {
-            code: Some(1000),
-            reason: String::new(),
-        })
-        .unwrap();
+    handle.close(Some(1000), String::new()).unwrap();
     assert_closing(&mut rx, 74).await;
     assert_close(&mut rx, 74, 1000, "", true).await;
     server.await.unwrap();
@@ -238,12 +218,7 @@ async fn native_close_handshake_finishes_while_message_sink_is_blocked() {
     timeout(Duration::from_secs(3), blocked.notified())
         .await
         .unwrap();
-    handle
-        .send(Command::Close {
-            code: Some(1000),
-            reason: String::new(),
-        })
-        .unwrap();
+    handle.close(Some(1000), String::new()).unwrap();
     timeout(Duration::from_secs(3), released_rx)
         .await
         .expect("physical close must not wait for the event sink or closing timeout")

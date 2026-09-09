@@ -22,9 +22,7 @@ async fn exercise_tls_connection(url: String, context: ConnectOptions, opens: bo
         return;
     }
     recv_open_event(&mut receiver).await;
-    connection
-        .send(Command::SendText("TLS echo".to_owned()))
-        .unwrap();
+    connection.send_text("TLS echo".to_owned()).unwrap();
     let mut echoed = false;
     loop {
         match timeout(Duration::from_secs(5), receiver.recv())
@@ -35,12 +33,7 @@ async fn exercise_tls_connection(url: String, context: ConnectOptions, opens: bo
             Event::TextMessage { data, .. } => {
                 assert_eq!(data, "TLS echo");
                 echoed = true;
-                connection
-                    .send(Command::Close {
-                        code: Some(1000),
-                        reason: "done".to_owned(),
-                    })
-                    .unwrap();
+                connection.close(Some(1000), "done".to_owned()).unwrap();
             }
             Event::Close {
                 code, was_clean, ..

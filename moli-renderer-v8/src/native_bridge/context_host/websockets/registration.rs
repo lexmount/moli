@@ -8,8 +8,9 @@ use crate::types::{
     SubresourceResponseBody,
 };
 use moli_websocket::{
-    Command as WebSocketCommand, ConnectOptions as WebSocketConnectOptions, spawn_connection,
-    spawn_failed_connection, spawn_synthetic_connection, websocket_cookie_url,
+    ConnectOptions as WebSocketConnectOptions, spawn_connection,
+    spawn_connection_with_handshake_pause, spawn_failed_connection, spawn_synthetic_connection,
+    websocket_cookie_url,
 };
 use url::Url;
 
@@ -62,26 +63,25 @@ impl JsContextHost {
                 .map(|loader| loader.tls_config().clone())
                 .unwrap_or_default(),
             cookie_header: cookie_header_for_context,
-            pause_after_handshake: false,
         };
         let dispatch_scope = owner.dispatch_scope();
         let csp_failure_message = csp_outcome.into_blocking_violation().map(|violation| {
             document_content_security_policy_error_message(&violation, "WebSocket")
         });
-        let (command_tx, fetch_internal_id) = if let Some(message) = csp_failure_message {
-            let command_tx = spawn_failed_connection(
+        let (connection, fetch_internal_id) = if let Some(message) = csp_failure_message {
+            let connection = spawn_failed_connection(
                 socket_id,
                 message,
                 self.page_websocket_sender().event_sender(),
             );
-            (Some(command_tx), None)
+            (Some(connection), None)
         } else if self.is_url_blocked(&url) {
-            let command_tx = spawn_failed_connection(
+            let connection = spawn_failed_connection(
                 socket_id,
                 BLOCKED_BY_CLIENT_ERROR_TEXT.to_owned(),
                 self.page_websocket_sender().event_sender(),
             );
-            (Some(command_tx), None)
+            (Some(connection), None)
         } else if cookie_header.is_ok()
             && self.should_intercept_subresource(SubresourceResourceType::WebSocket)
         {
@@ -111,7 +111,7 @@ impl JsContextHost {
             );
             (None, Some(internal_id))
         } else {
-            let command_tx = match cookie_header {
+            let connection = match cookie_header {
                 Ok(_) => spawn_connection(
                     socket_id,
                     url.to_string(),
@@ -125,7 +125,7 @@ impl JsContextHost {
                     self.page_websocket_sender().event_sender(),
                 ),
             };
-            (Some(command_tx), None)
+            (Some(connection), None)
         };
         self.websockets.insert(
             socket_id,
@@ -133,12 +133,13 @@ impl JsContextHost {
                 owner,
                 resource_loader,
                 wrapper: v8::Global::new(scope, wrapper),
-                command_tx,
+                connection,
                 url,
                 frame_id,
                 document_url,
                 opened: false,
-                synthetic: false,
+                synthetic_peer: None,
+                handshake_controller: None,
                 fetch_internal_id,
                 response_interception_pending: None,
             },
@@ -163,16 +164,30 @@ impl JsContextHost {
         if headers_overridden {
             context.cookie_header = None;
         }
-        context.pause_after_handshake = intercept_response;
-        let command_tx = spawn_connection(
-            pending.socket_id,
-            url.to_string(),
-            pending.protocols,
-            context,
-            event_sender,
-        );
+        let (connection, handshake_controller) = if intercept_response {
+            let (connection, controller) = spawn_connection_with_handshake_pause(
+                pending.socket_id,
+                url.to_string(),
+                pending.protocols,
+                context,
+                event_sender,
+            );
+            (connection, Some(controller))
+        } else {
+            (
+                spawn_connection(
+                    pending.socket_id,
+                    url.to_string(),
+                    pending.protocols,
+                    context,
+                    event_sender,
+                ),
+                None,
+            )
+        };
+        state.handshake_controller = handshake_controller;
         state.url = url;
-        state.command_tx = Some(command_tx);
+        state.connection = Some(connection);
         state.response_interception_pending =
             if intercept_response {
                 Some(state.fetch_internal_id.ok_or_else(|| {
@@ -193,8 +208,8 @@ impl JsContextHost {
         let Some(state) = self.websockets.get_mut(&pending.socket_id) else {
             return Err(format!("unknown pending WebSocket `{}`", pending.socket_id));
         };
-        let command_tx = spawn_failed_connection(pending.socket_id, error_text, event_sender);
-        state.command_tx = Some(command_tx);
+        let connection = spawn_failed_connection(pending.socket_id, error_text, event_sender);
+        state.connection = Some(connection);
         Ok(())
     }
 
@@ -210,7 +225,7 @@ impl JsContextHost {
         let Some(state) = self.websockets.get_mut(&pending.socket_id) else {
             return Err(format!("unknown pending WebSocket `{}`", pending.socket_id));
         };
-        let command_tx = spawn_synthetic_connection(
+        let (connection, peer) = spawn_synthetic_connection(
             pending.socket_id,
             request_headers,
             response_status,
@@ -218,8 +233,8 @@ impl JsContextHost {
             event_sender,
         );
         state.url = request_url;
-        state.command_tx = Some(command_tx);
-        state.synthetic = true;
+        state.connection = Some(connection);
+        state.synthetic_peer = Some(peer);
         Ok(())
     }
 
@@ -268,21 +283,18 @@ impl JsContextHost {
         response_status: Option<u16>,
         response_headers: Option<Vec<(String, String)>>,
     ) -> Result<(), String> {
-        let Some(state) = self.websockets.get(&pending.socket_id) else {
+        let Some(state) = self.websockets.get_mut(&pending.socket_id) else {
             return Err(format!("unknown pending WebSocket `{}`", pending.socket_id));
         };
-        let Some(command_tx) = state.command_tx.as_ref() else {
+        let Some(controller) = state.handshake_controller.take() else {
             return Err(format!(
-                "pending WebSocket `{}` has no command sender",
+                "pending WebSocket `{}` has no handshake controller",
                 pending.socket_id
             ));
         };
-        command_tx
-            .send(WebSocketCommand::ContinueOpen {
-                response_status,
-                response_headers,
-            })
-            .map_err(|_| format!("pending WebSocket `{}` is closed", pending.socket_id))
+        controller
+            .continue_open(response_status, response_headers)
+            .map_err(|error| format!("pending WebSocket `{}`: {error}", pending.socket_id))
     }
 
     pub(crate) fn fail_websocket_handshake_response(
@@ -290,18 +302,18 @@ impl JsContextHost {
         pending: PendingWebSocketResponseState,
         error_text: String,
     ) -> Result<(), String> {
-        let Some(state) = self.websockets.get(&pending.socket_id) else {
+        let Some(state) = self.websockets.get_mut(&pending.socket_id) else {
             return Err(format!("unknown pending WebSocket `{}`", pending.socket_id));
         };
-        let Some(command_tx) = state.command_tx.as_ref() else {
+        let Some(controller) = state.handshake_controller.take() else {
             return Err(format!(
-                "pending WebSocket `{}` has no command sender",
+                "pending WebSocket `{}` has no handshake controller",
                 pending.socket_id
             ));
         };
-        command_tx
-            .send(WebSocketCommand::FailOpen(error_text))
-            .map_err(|_| format!("pending WebSocket `{}` is closed", pending.socket_id))
+        controller
+            .fail(error_text)
+            .map_err(|error| format!("pending WebSocket `{}`: {error}", pending.socket_id))
     }
 }
 

@@ -1290,7 +1290,6 @@ pub(crate) fn register_worker_websocket<'s>(
             .map(ToOwned::to_owned),
         tls: loader.request_client().tls_config().clone(),
         cookie_header: cookie_header_for_context,
-        pause_after_handshake: false,
     };
 
     let csp_failure = csp_outcome.into_failure_message();
@@ -1307,7 +1306,7 @@ pub(crate) fn register_worker_websocket<'s>(
             .map(|error| format!("failed to build WebSocket cookie header: {error}"))
     };
     let network_recorded = failure_message.is_some();
-    let (command_tx, load) = if let Some(error_text) = failure_message {
+    let (connection, load) = if let Some(error_text) = failure_message {
         record_worker_websocket_subresource_failure(
             &state.borrow(),
             socket_id,
@@ -1326,25 +1325,25 @@ pub(crate) fn register_worker_websocket<'s>(
             ResourceLoadDisposition::Ordinary,
             None,
         )?;
-        let command_tx = spawn_connection(
+        let connection = spawn_connection(
             socket_id,
             url.to_string(),
             protocols,
             context,
             websocket_event_tx,
         );
-        let cancel_tx = command_tx.clone();
+        let cancel_tx = connection.clone();
         load.attach_consumer_cancel(move || {
             cancel_tx.cancel();
         });
-        (command_tx, Some(load))
+        (connection, Some(load))
     };
 
     state.borrow_mut().websockets.insert(
         socket_id,
         WorkerWebSocketState {
             wrapper: v8::Global::new(scope, wrapper),
-            command_tx,
+            connection,
             document_url,
             url,
             loader,
@@ -1362,13 +1361,13 @@ pub(crate) fn send_worker_websocket_text(
     text: String,
 ) -> Option<bool> {
     let state = get_worker_state(scope)?;
-    let command_tx = state
+    let connection = state
         .borrow()
         .websockets
         .get(&socket_id)?
-        .command_tx
+        .connection
         .clone();
-    Some(command_tx.send(WebSocketCommand::SendText(text)).is_ok())
+    Some(connection.send_text(text).is_ok())
 }
 
 pub(crate) fn send_worker_websocket_binary(
@@ -1377,13 +1376,13 @@ pub(crate) fn send_worker_websocket_binary(
     bytes: Vec<u8>,
 ) -> Option<bool> {
     let state = get_worker_state(scope)?;
-    let command_tx = state
+    let connection = state
         .borrow()
         .websockets
         .get(&socket_id)?
-        .command_tx
+        .connection
         .clone();
-    Some(command_tx.send(WebSocketCommand::SendBinary(bytes)).is_ok())
+    Some(connection.send_binary(bytes).is_ok())
 }
 
 pub(crate) fn close_worker_websocket(
@@ -1393,17 +1392,13 @@ pub(crate) fn close_worker_websocket(
     reason: String,
 ) -> Option<bool> {
     let state = get_worker_state(scope)?;
-    let command_tx = state
+    let connection = state
         .borrow()
         .websockets
         .get(&socket_id)?
-        .command_tx
+        .connection
         .clone();
-    Some(
-        command_tx
-            .send(WebSocketCommand::Close { code, reason })
-            .is_ok(),
-    )
+    Some(connection.close(code, reason).is_ok())
 }
 
 pub(in crate::worker) fn dispatch_worker_websocket_event(

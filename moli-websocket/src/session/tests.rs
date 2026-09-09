@@ -42,16 +42,9 @@ async fn native_close_waits_for_queued_data_before_starting_timeout() {
     let handle = spawn_connection(80, url, Vec::new(), test_websocket_context(), tx);
     recv_open_event(&mut rx).await;
     handle
-        .send(Command::SendBinary(
-            (0..MESSAGE_BYTES).map(|i| (i % 251) as u8).collect(),
-        ))
+        .send_binary((0..MESSAGE_BYTES).map(|i| (i % 251) as u8).collect())
         .unwrap();
-    handle
-        .send(Command::Close {
-            code: Some(1000),
-            reason: String::new(),
-        })
-        .unwrap();
+    handle.close(Some(1000), String::new()).unwrap();
     // Closing confirms the session has processed Close, while TCP backpressure
     // prevents the preceding message from completing. No handshake timer applies.
     assert_closing(&mut rx, 80).await;
@@ -87,12 +80,7 @@ async fn native_close_still_times_out_when_peer_never_answers_close() {
     let (tx, mut rx) = mpsc::channel(8);
     let handle = spawn_connection(81, url, Vec::new(), test_websocket_context(), tx);
     recv_open_event(&mut rx).await;
-    handle
-        .send(Command::Close {
-            code: Some(1000),
-            reason: String::new(),
-        })
-        .unwrap();
+    handle.close(Some(1000), String::new()).unwrap();
     assert_closing(&mut rx, 81).await;
     timeout(Duration::from_secs(3), close_rx)
         .await
@@ -169,9 +157,7 @@ async fn native_fragmented_sends_complete_while_incoming_sink_is_blocked() {
         .await
         .unwrap();
     for byte in [17, 29] {
-        handle
-            .send(Command::SendBinary(vec![byte; MESSAGE_BYTES]))
-            .unwrap();
+        handle.send_binary(vec![byte; MESSAGE_BYTES]).unwrap();
     }
     timeout(Duration::from_secs(3), received_rx)
         .await
@@ -182,12 +168,7 @@ async fn native_fragmented_sends_complete_while_incoming_sink_is_blocked() {
         assert_frame_sent(&mut rx, 82, FrameOpcode::Binary, MESSAGE_BYTES).await;
         assert_buffered_amount_consumed(&mut rx, 82, MESSAGE_BYTES).await;
     }
-    handle
-        .send(Command::Close {
-            code: Some(1000),
-            reason: String::new(),
-        })
-        .unwrap();
+    handle.close(Some(1000), String::new()).unwrap();
     assert_closing(&mut rx, 82).await;
     assert_close(&mut rx, 82, 1000, "", true).await;
     server.await.unwrap();

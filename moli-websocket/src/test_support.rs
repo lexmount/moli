@@ -40,7 +40,6 @@ pub fn test_websocket_context() -> ConnectOptions {
         proxy_bearer_token: None,
         tls: Default::default(),
         cookie_header: None,
-        pause_after_handshake: false,
     }
 }
 

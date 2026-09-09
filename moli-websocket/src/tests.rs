@@ -497,8 +497,8 @@ async fn websocket_rejected_handshake_or_open_event_releases_transport() {
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let url = format!("ws://{}/closed-sink", listener.local_addr().unwrap());
         let (command_tx, command_rx) = crate::commands::command_channel();
-        let mut context = test_websocket_context();
-        context.pause_after_handshake = pause_after_handshake;
+        let context = test_websocket_context();
+        let (_controller, decision) = tokio::sync::oneshot::channel();
         let server = async move {
             let (stream, _) = listener.accept().await.unwrap();
             let mut socket = tokio_tungstenite::accept_async(stream).await.unwrap();
@@ -512,6 +512,7 @@ async fn websocket_rejected_handshake_or_open_event_releases_transport() {
             context,
             command_rx,
             EventSender::closed(),
+            pause_after_handshake.then_some(decision),
         );
         let (result, ()) = timeout(Duration::from_secs(3), async {
             tokio::join!(client, server)
@@ -551,6 +552,7 @@ async fn websocket_rejected_message_event_releases_transport_and_writer() {
         test_websocket_context(),
         command_rx,
         sink,
+        None,
     );
     let (result, ()) = timeout(Duration::from_secs(3), async {
         tokio::join!(client, server)
@@ -637,7 +639,7 @@ async fn websocket_cancel_releases_blocked_sink_and_open_writer() {
     handle.cancel();
     handle.cancel();
     assert!(retained.is_closed());
-    assert!(retained.send(Command::SendBinary(vec![1])).is_err());
+    assert!(retained.send_binary(vec![1]).is_err());
     timeout(Duration::from_secs(3), dropped_rx.recv())
         .await
         .expect("cancellation must release the blocked event future")
@@ -664,7 +666,7 @@ async fn websocket_failed_and_synthetic_delivery_cancel_on_last_handle_drop() {
             }
         });
         let handle = if synthetic {
-            spawn_synthetic_connection(63, Vec::new(), 101, Vec::new(), sink)
+            spawn_synthetic_connection(63, Vec::new(), 101, Vec::new(), sink).0
         } else {
             spawn_failed_connection(63, "rejected".to_owned(), sink)
         };
@@ -682,7 +684,7 @@ async fn websocket_failed_and_synthetic_delivery_cancel_on_last_handle_drop() {
 #[tokio::test]
 async fn websocket_synthetic_connection_opens_accounts_send_and_closes_cleanly() {
     let (event_tx, mut event_rx) = mpsc::channel(32);
-    let command_tx = spawn_synthetic_connection(
+    let (command_tx, _peer) = spawn_synthetic_connection(
         92,
         vec![("Origin".to_owned(), "http://example.test".to_owned())],
         101,
@@ -709,7 +711,7 @@ async fn websocket_synthetic_connection_opens_accounts_send_and_closes_cleanly()
     }
 
     command_tx
-        .send(Command::SendText("hello".to_owned()))
+        .send_text("hello".to_owned())
         .expect("send synthetic websocket text");
     let event = timeout(Duration::from_secs(1), event_rx.recv())
         .await
@@ -740,10 +742,7 @@ async fn websocket_synthetic_connection_opens_accounts_send_and_closes_cleanly()
     }
 
     command_tx
-        .send(Command::Close {
-            code: Some(1000),
-            reason: "done".to_owned(),
-        })
+        .close(Some(1000), "done".to_owned())
         .expect("close synthetic websocket");
     let event = timeout(Duration::from_secs(1), event_rx.recv())
         .await
@@ -773,7 +772,7 @@ async fn websocket_synthetic_connection_opens_accounts_send_and_closes_cleanly()
 #[tokio::test]
 async fn websocket_synthetic_connection_can_receive_frames_and_server_close() {
     let (event_tx, mut event_rx) = mpsc::channel(32);
-    let command_tx = spawn_synthetic_connection(
+    let (_connection, peer) = spawn_synthetic_connection(
         93,
         vec![("Origin".to_owned(), "http://example.test".to_owned())],
         101,
@@ -789,8 +788,7 @@ async fn websocket_synthetic_connection_can_receive_frames_and_server_close() {
         Event::Open { socket_id: 93, .. }
     ));
 
-    command_tx
-        .send(Command::ReceiveText("server-text".to_owned()))
+    peer.send_text("server-text".to_owned())
         .expect("inject synthetic websocket text");
     match timeout(Duration::from_secs(1), event_rx.recv())
         .await
@@ -804,8 +802,7 @@ async fn websocket_synthetic_connection_can_receive_frames_and_server_close() {
         event => panic!("expected synthetic text message, got {event:?}"),
     }
 
-    command_tx
-        .send(Command::ReceiveBinary(vec![1, 2, 3, 4]))
+    peer.send_binary(vec![1, 2, 3, 4])
         .expect("inject synthetic websocket binary");
     match timeout(Duration::from_secs(1), event_rx.recv())
         .await
@@ -819,11 +816,7 @@ async fn websocket_synthetic_connection_can_receive_frames_and_server_close() {
         event => panic!("expected synthetic binary message, got {event:?}"),
     }
 
-    command_tx
-        .send(Command::ServerClose {
-            code: Some(1000),
-            reason: "server-done".to_owned(),
-        })
+    peer.close(Some(1000), "server-done".to_owned())
         .expect("inject synthetic websocket server close");
     match timeout(Duration::from_secs(1), event_rx.recv())
         .await
@@ -852,10 +845,7 @@ async fn websocket_transport_close_while_connecting_fails_before_open() {
     let command_tx = spawn_connection(91, url, Vec::new(), test_websocket_context(), event_tx);
 
     command_tx
-        .send(Command::Close {
-            code: None,
-            reason: String::new(),
-        })
+        .close(None, String::new())
         .expect("send connecting close command");
 
     let error = recv_handshake_failure_events(&mut event_rx).await;
@@ -868,9 +858,13 @@ async fn websocket_transport_close_while_connecting_fails_before_open() {
 async fn websocket_transport_can_pause_after_handshake_before_open() {
     let (url, server) = spawn_text_echo_websocket_server().await;
     let (event_tx, mut event_rx) = mpsc::channel(32);
-    let mut context = test_websocket_context();
-    context.pause_after_handshake = true;
-    let command_tx = spawn_connection(92, url, Vec::new(), context, event_tx);
+    let (command_tx, controller) = spawn_connection_with_handshake_pause(
+        92,
+        url,
+        Vec::new(),
+        test_websocket_context(),
+        event_tx,
+    );
 
     match timeout(Duration::from_secs(3), event_rx.recv())
         .await
@@ -891,21 +885,15 @@ async fn websocket_transport_can_pause_after_handshake_before_open() {
         timeout(Duration::from_millis(50), event_rx.recv())
             .await
             .is_err(),
-        "websocket open must wait for ContinueOpen"
+        "websocket open must wait for the handshake decision"
     );
 
-    command_tx
-        .send(Command::ContinueOpen {
-            response_status: None,
-            response_headers: None,
-        })
+    controller
+        .continue_open(None, None)
         .expect("continue paused websocket open");
     let open = recv_open_event(&mut event_rx).await;
     assert_eq!(open.socket_id, 92);
-    let _ = command_tx.send(Command::Close {
-        code: Some(1000),
-        reason: "done".to_owned(),
-    });
+    let _ = command_tx.close(Some(1000), "done".to_owned());
     server
         .await
         .expect("websocket pause-after-handshake server should finish");
@@ -930,10 +918,7 @@ async fn websocket_transport_handshake_applies_context_headers_and_preserves_con
         .expect("websocket headers should arrive")
         .expect("websocket header sender should stay alive");
     let open = recv_open_event(&mut event_rx).await;
-    let _ = command_tx.send(Command::Close {
-        code: Some(1000),
-        reason: "done".to_owned(),
-    });
+    let _ = command_tx.close(Some(1000), "done".to_owned());
     server.await.expect("websocket header server should finish");
 
     assert_eq!(open.socket_id, 1);
@@ -985,10 +970,7 @@ async fn websocket_transport_uses_explicit_http_proxy_connect_without_forwarding
         .expect("websocket headers should arrive")
         .expect("websocket header sender should stay alive");
     let open = recv_open_event(&mut event_rx).await;
-    let _ = command_tx.send(Command::Close {
-        code: Some(1000),
-        reason: "done".to_owned(),
-    });
+    let _ = command_tx.close(Some(1000), "done".to_owned());
     server.await.expect("websocket header server should finish");
     proxy.await.expect("websocket proxy should finish");
 
@@ -1060,10 +1042,7 @@ async fn websocket_transport_respects_disabled_tls_verify_for_self_signed_wss() 
         .expect("websocket TLS headers should arrive")
         .expect("websocket TLS header sender should stay alive");
     let open = recv_open_event(&mut event_rx).await;
-    let _ = command_tx.send(Command::Close {
-        code: Some(1000),
-        reason: "done".to_owned(),
-    });
+    let _ = command_tx.close(Some(1000), "done".to_owned());
     server
         .await
         .expect("websocket TLS header server should finish");
@@ -1228,10 +1207,7 @@ async fn websocket_transport_allows_server_to_omit_response_subprotocol() {
     assert_eq!(open.socket_id, 4);
     assert_eq!(open.protocol, "");
     command_tx
-        .send(Command::Close {
-            code: Some(1000),
-            reason: "no-protocol".to_owned(),
-        })
+        .close(Some(1000), "no-protocol".to_owned())
         .expect("send close command");
     assert_closing(&mut event_rx, 4).await;
     assert_close(&mut event_rx, 4, 1000, "no-protocol", true).await;
@@ -1250,24 +1226,21 @@ async fn websocket_transport_sends_text_binary_and_reports_buffered_amount_consu
     assert_eq!(open.socket_id, 4);
 
     command_tx
-        .send(Command::SendText("hello".to_owned()))
+        .send_text("hello".to_owned())
         .expect("send text command");
     assert_frame_sent(&mut event_rx, 4, FrameOpcode::Text, 5).await;
     assert_buffered_amount_consumed(&mut event_rx, 4, 5).await;
     assert_text_message(&mut event_rx, 4, "hello").await;
 
     command_tx
-        .send(Command::SendBinary(vec![1, 2, 3, 4]))
+        .send_binary(vec![1, 2, 3, 4])
         .expect("send binary command");
     assert_frame_sent(&mut event_rx, 4, FrameOpcode::Binary, 4).await;
     assert_buffered_amount_consumed(&mut event_rx, 4, 4).await;
     assert_binary_message(&mut event_rx, 4, &[1, 2, 3, 4]).await;
 
     command_tx
-        .send(Command::Close {
-            code: Some(1000),
-            reason: "done".to_owned(),
-        })
+        .close(Some(1000), "done".to_owned())
         .expect("send close command");
     assert_closing(&mut event_rx, 4).await;
     assert_close(&mut event_rx, 4, 1000, "done", true).await;
@@ -1285,7 +1258,7 @@ async fn websocket_transport_reads_while_sending_many_large_messages() {
 
     for _ in 0..50 {
         command_tx
-            .send(Command::SendBinary(vec![0; 65_536]))
+            .send_binary(vec![0; 65_536])
             .expect("send large binary command");
     }
 
@@ -1315,10 +1288,7 @@ async fn websocket_transport_reads_while_sending_many_large_messages() {
     }
 
     command_tx
-        .send(Command::Close {
-            code: Some(1000),
-            reason: "backpressure".to_owned(),
-        })
+        .close(Some(1000), "backpressure".to_owned())
         .expect("send close command");
     assert_closing(&mut event_rx, 40).await;
     assert_close(&mut event_rx, 40, 1000, "backpressure", true).await;
@@ -1358,4 +1328,103 @@ async fn websocket_transport_handles_close_frame_in_handshake_packet() {
     server
         .await
         .expect("websocket same-packet close server should finish");
+}
+
+#[tokio::test]
+async fn websocket_dropped_handshake_controller_fails_open_and_releases_transport() {
+    use futures_util::StreamExt;
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let url = format!("ws://{}/decision", listener.local_addr().unwrap());
+    let server = tokio::spawn(async move {
+        let (stream, _) = listener.accept().await.unwrap();
+        let mut socket = tokio_tungstenite::accept_async(stream).await.unwrap();
+        assert!(socket.next().await.unwrap().is_err());
+    });
+    let (events, mut receiver) = mpsc::channel(4);
+    let (_connection, controller) = spawn_connection_with_handshake_pause(
+        95,
+        url,
+        Vec::new(),
+        test_websocket_context(),
+        events,
+    );
+    assert!(matches!(
+        timeout(Duration::from_secs(3), receiver.recv())
+            .await
+            .unwrap(),
+        Some(Event::HandshakeResponse { .. })
+    ));
+    drop(controller);
+    assert_eq!(
+        recv_handshake_failure_events(&mut receiver).await,
+        "WebSocket handshake decision was dropped"
+    );
+    timeout(Duration::from_secs(3), server)
+        .await
+        .unwrap()
+        .unwrap();
+}
+
+#[tokio::test]
+async fn websocket_synthetic_peer_does_not_keep_client_alive() {
+    let (events, mut receiver) = mpsc::channel(4);
+    let (connection, peer) = spawn_synthetic_connection(96, Vec::new(), 101, Vec::new(), events);
+    recv_open_event(&mut receiver).await;
+    drop(connection);
+    assert_eq!(
+        peer.send_text("late message".to_owned()),
+        Err(SendError::Closed)
+    );
+    assert!(
+        timeout(Duration::from_secs(3), receiver.recv())
+            .await
+            .unwrap()
+            .is_none()
+    );
+}
+
+#[tokio::test]
+async fn websocket_queued_close_precedes_handshake_continuation() {
+    use futures_util::StreamExt;
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let url = format!("ws://{}/close-before-open", listener.local_addr().unwrap());
+    let server = tokio::spawn(async move {
+        let (stream, _) = listener.accept().await.unwrap();
+        let mut socket = tokio_tungstenite::accept_async(stream).await.unwrap();
+        assert!(socket.next().await.unwrap().is_err());
+    });
+    let release = Arc::new(tokio::sync::Notify::new());
+    let release_sink = release.clone();
+    let (events, mut receiver) = mpsc::channel(4);
+    let sink = EventSender::with_async_sink(move |event| {
+        let events = events.clone();
+        let release = release_sink.clone();
+        async move {
+            let paused = matches!(event, Event::HandshakeResponse { .. });
+            let accepted = events.send(event).await.is_ok();
+            if paused {
+                release.notified().await;
+            }
+            accepted
+        }
+    });
+    let (connection, controller) =
+        spawn_connection_with_handshake_pause(97, url, Vec::new(), test_websocket_context(), sink);
+    assert!(matches!(
+        timeout(Duration::from_secs(3), receiver.recv())
+            .await
+            .unwrap(),
+        Some(Event::HandshakeResponse { .. })
+    ));
+    connection.close(Some(1000), String::new()).unwrap();
+    controller.continue_open(None, None).unwrap();
+    release.notify_one();
+    assert_eq!(
+        recv_handshake_failure_events(&mut receiver).await,
+        "WebSocket connection closed before opening"
+    );
+    timeout(Duration::from_secs(3), server)
+        .await
+        .unwrap()
+        .unwrap();
 }

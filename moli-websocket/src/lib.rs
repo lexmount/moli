@@ -18,7 +18,7 @@ mod types;
 
 pub use cookie::websocket_cookie_url;
 pub use events::EventSender;
-pub use handle::{CommandSendError, ConnectionHandle};
+pub use handle::{ConnectionHandle, HandshakeController, SendError, SyntheticPeer};
 pub use protocol::{
     WebSocketCloseRequest, WebSocketCloseValidationError, WebSocketSubprotocolError,
     WebSocketUrlError, close_info_code_from_number, default_close_code_for_reason,
@@ -26,8 +26,12 @@ pub use protocol::{
     normalize_websocket_close_info, normalize_websocket_url, validate_subprotocols,
     validate_websocket_close_request, websocket_url_is_potentially_trustworthy,
 };
-pub use runtime::{spawn_connection, spawn_failed_connection, spawn_synthetic_connection};
-pub use types::{Command, CommandSender, ConnectOptions, Event, FrameOpcode};
+pub use runtime::{
+    spawn_connection, spawn_connection_with_handshake_pause, spawn_failed_connection,
+    spawn_synthetic_connection,
+};
+pub(crate) use types::Command;
+pub use types::{ConnectOptions, Event, FrameOpcode};
 
 #[cfg(any(test, feature = "test-support"))]
 pub mod test_support;

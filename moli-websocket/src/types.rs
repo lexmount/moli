@@ -8,7 +8,6 @@ pub struct ConnectOptions {
     pub proxy_bearer_token: Option<String>,
     pub tls: moli_curl::CurlTlsConfig,
     pub cookie_header: Option<String>,
-    pub pause_after_handshake: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -84,25 +83,12 @@ impl Event {
 }
 
 #[derive(Debug)]
-pub enum Command {
+pub(crate) enum Command {
     SendText(String),
     SendBinary(Vec<u8>),
     ReceiveText(String),
     ReceiveBinary(Vec<u8>),
-    ContinueOpen {
-        response_status: Option<u16>,
-        response_headers: Option<Vec<(String, String)>>,
-    },
-    FailOpen(String),
-    ServerClose {
-        code: Option<u16>,
-        reason: String,
-    },
-    Close {
-        code: Option<u16>,
-        reason: String,
-    },
+    Fail(String),
+    ServerClose { code: Option<u16>, reason: String },
+    Close { code: Option<u16>, reason: String },
 }
-
-/// Compatibility name for the connection's producer capability.
-pub type CommandSender = crate::ConnectionHandle;

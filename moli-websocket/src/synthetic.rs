@@ -117,8 +117,7 @@ pub(crate) async fn run_synthetic_websocket_connection(
                 .await?;
                 return Ok(());
             }
-            Command::ContinueOpen { .. } => {}
-            Command::FailOpen(message) => {
+            Command::Fail(message) => {
                 send_error_and_close(&event_tx, socket_id, message).await?;
                 return Ok(());
             }

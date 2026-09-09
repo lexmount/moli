@@ -235,7 +235,7 @@ impl Session {
                     Err(error) => self.fail(error),
                 }
             }
-            Command::FailOpen(message) => self.fail(message),
+            Command::Fail(message) => self.fail(message),
             _ => {}
         }
     }

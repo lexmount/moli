@@ -1,5 +1,4 @@
 use super::super::JsContextHost;
-use moli_websocket::Command as WebSocketCommand;
 
 impl JsContextHost {
     pub(crate) fn signal_websocket_stream_pull(&self, socket_id: u64) {
@@ -9,16 +8,16 @@ impl JsContextHost {
     pub(crate) fn send_websocket_text(&self, socket_id: u64, text: String) -> bool {
         self.websockets
             .get(&socket_id)
-            .and_then(|state| state.command_tx.as_ref())
-            .map(|command_tx| command_tx.send(WebSocketCommand::SendText(text)).is_ok())
+            .and_then(|state| state.connection.as_ref())
+            .map(|connection| connection.send_text(text).is_ok())
             .unwrap_or(false)
     }
 
     pub(crate) fn send_websocket_binary(&self, socket_id: u64, bytes: Vec<u8>) -> bool {
         self.websockets
             .get(&socket_id)
-            .and_then(|state| state.command_tx.as_ref())
-            .map(|command_tx| command_tx.send(WebSocketCommand::SendBinary(bytes)).is_ok())
+            .and_then(|state| state.connection.as_ref())
+            .map(|connection| connection.send_binary(bytes).is_ok())
             .unwrap_or(false)
     }
 
@@ -30,34 +29,24 @@ impl JsContextHost {
     ) -> bool {
         self.websockets
             .get(&socket_id)
-            .and_then(|state| state.command_tx.as_ref())
-            .map(|command_tx| {
-                command_tx
-                    .send(WebSocketCommand::Close { code, reason })
-                    .is_ok()
-            })
+            .and_then(|state| state.connection.as_ref())
+            .map(|connection| connection.close(code, reason).is_ok())
             .unwrap_or(false)
     }
 
     pub(crate) fn receive_synthetic_websocket_text(&self, socket_id: u64, data: String) -> bool {
         self.websockets
             .get(&socket_id)
-            .filter(|state| state.synthetic)
-            .and_then(|state| state.command_tx.as_ref())
-            .map(|command_tx| command_tx.send(WebSocketCommand::ReceiveText(data)).is_ok())
+            .and_then(|state| state.synthetic_peer.as_ref())
+            .map(|connection| connection.send_text(data).is_ok())
             .unwrap_or(false)
     }
 
     pub(crate) fn receive_synthetic_websocket_binary(&self, socket_id: u64, data: Vec<u8>) -> bool {
         self.websockets
             .get(&socket_id)
-            .filter(|state| state.synthetic)
-            .and_then(|state| state.command_tx.as_ref())
-            .map(|command_tx| {
-                command_tx
-                    .send(WebSocketCommand::ReceiveBinary(data))
-                    .is_ok()
-            })
+            .and_then(|state| state.synthetic_peer.as_ref())
+            .map(|connection| connection.send_binary(data).is_ok())
             .unwrap_or(false)
     }
 
@@ -69,13 +58,8 @@ impl JsContextHost {
     ) -> bool {
         self.websockets
             .get(&socket_id)
-            .filter(|state| state.synthetic)
-            .and_then(|state| state.command_tx.as_ref())
-            .map(|command_tx| {
-                command_tx
-                    .send(WebSocketCommand::ServerClose { code, reason })
-                    .is_ok()
-            })
+            .and_then(|state| state.synthetic_peer.as_ref())
+            .map(|connection| connection.close(code, reason).is_ok())
             .unwrap_or(false)
     }
 
@@ -139,8 +123,8 @@ impl JsContextHost {
         let Some(state) = self.websockets.remove(&socket_id) else {
             return false;
         };
-        if let Some(command_tx) = state.command_tx {
-            command_tx.cancel();
+        if let Some(connection) = state.connection {
+            connection.cancel();
         }
         let internal_ids = [state.fetch_internal_id, state.response_interception_pending]
             .into_iter()

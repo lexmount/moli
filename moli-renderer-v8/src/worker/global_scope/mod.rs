@@ -43,9 +43,8 @@ use moli_storage_key::MoliStorageKey;
 use moli_webapi_declare::{ObjectLiteralDeclaration, WebApiFunctionTemplate, WebApiObject};
 use moli_webidl_callback::WebIdlCallbackInterface;
 use moli_websocket::{
-    Command as WebSocketCommand, CommandSender as WebSocketCommandSender,
-    ConnectOptions as WebSocketConnectOptions, Event as WebSocketEvent, spawn_connection,
-    spawn_failed_connection, websocket_cookie_url,
+    ConnectOptions as WebSocketConnectOptions, ConnectionHandle as WebSocketConnectionHandle,
+    Event as WebSocketEvent, spawn_connection, spawn_failed_connection, websocket_cookie_url,
 };
 use tokio::sync::mpsc;
 use url::Url;
@@ -1275,7 +1274,7 @@ impl WorkerXhrResponse {
 
 pub(super) struct WorkerWebSocketState {
     pub(super) wrapper: v8::Global<v8::Object>,
-    pub(super) command_tx: WebSocketCommandSender,
+    pub(super) connection: WebSocketConnectionHandle,
     pub(super) document_url: Url,
     pub(super) url: Url,
     pub(super) loader: crate::network::context::WorkerResourceLoader,

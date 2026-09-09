@@ -1,6 +1,6 @@
 //! Bounded synchronous admission. Reservations live until native completion,
 //! rejection or cancellation, rather than being released at channel dequeue.
-use crate::{Command, CommandSendError};
+use crate::{Command, SendError};
 use std::sync::{
     Arc,
     atomic::{AtomicBool, Ordering},
@@ -9,7 +9,7 @@ use tokio::sync::{Notify, OwnedSemaphorePermit, Semaphore, mpsc};
 
 pub(crate) const MAX_QUEUED_BYTES: usize = 64 * 1024 * 1024;
 pub(crate) const MAX_QUEUED_MESSAGES: usize = 256;
-const MAX_CONTROL_BYTES: usize = 64 * 1024;
+pub(crate) const MAX_CONTROL_BYTES: usize = 64 * 1024;
 
 #[derive(Debug)]
 struct Admission {
@@ -67,9 +67,9 @@ pub(crate) fn command_channel() -> (CommandPort, CommandReceiver) {
 }
 
 impl CommandPort {
-    pub fn send(&self, command: Command) -> Result<(), CommandSendError> {
+    pub fn send(&self, command: Command) -> Result<(), SendError> {
         if self.is_closed() {
-            return Err(CommandSendError(command));
+            return Err(SendError::Closed);
         }
         if matches!(command, Command::Close { .. })
             && self.admission.close_queued.load(Ordering::Acquire)
@@ -81,7 +81,7 @@ impl CommandPort {
             None => {
                 self.admission.failed.store(true, Ordering::Release);
                 self.admission.failure.notify_one();
-                return Err(CommandSendError(command));
+                return Err(SendError::CapacityExceeded);
             }
         };
         if matches!(command, Command::Close { .. })
@@ -94,7 +94,7 @@ impl CommandPort {
                 command,
                 reservation,
             })
-            .map_err(|error| CommandSendError(error.0.command))
+            .map_err(|_| SendError::Closed)
     }
 
     pub fn is_closed(&self) -> bool {
@@ -124,19 +124,7 @@ impl CommandPort {
             let size = match command {
                 Command::Close { reason, .. }
                 | Command::ServerClose { reason, .. }
-                | Command::FailOpen(reason) => reason.len(),
-                Command::ContinueOpen {
-                    response_headers, ..
-                } => response_headers
-                    .as_ref()
-                    .map(|headers| {
-                        headers.iter().fold(0usize, |sum, (name, value)| {
-                            sum.saturating_add(name.len())
-                                .saturating_add(value.len())
-                                .saturating_add(4)
-                        })
-                    })
-                    .unwrap_or(0),
+                | Command::Fail(reason) => reason.len(),
                 _ => unreachable!(),
             };
             if size > MAX_CONTROL_BYTES {
@@ -157,7 +145,7 @@ impl CommandReceiver {
             if !self.failure_delivered && self.admission.failed.load(Ordering::Acquire) {
                 self.failure_delivered = true;
                 return Some(QueuedCommand {
-                    command: Command::FailOpen("WebSocket send queue capacity exceeded".to_owned()),
+                    command: Command::Fail("WebSocket send queue capacity exceeded".to_owned()),
                     reservation: Reservation {
                         _permits: Vec::new(),
                     },
@@ -184,11 +172,14 @@ mod tests {
         }
         let pending_native_send = receiver.recv().await.unwrap();
         assert!(
-            port.send(Command::SendText(String::new())).is_err(),
+            matches!(
+                port.send(Command::SendText(String::new())),
+                Err(SendError::CapacityExceeded)
+            ),
             "dequeue must not release the zero-length message count"
         );
         assert!(
-            matches!(receiver.recv().await.unwrap().command, Command::FailOpen(_)),
+            matches!(receiver.recv().await.unwrap().command, Command::Fail(_)),
             "overflow is delivered even when the data queue is full"
         );
         drop(pending_native_send);
