@@ -16,6 +16,10 @@
 !/vendor/xml5ever-0.39.0/**
 !/vendor/web-audio-api-1.7.0/
 !/vendor/web-audio-api-1.7.0/**
+!/vendor/usvg-0.48.1/
+!/vendor/usvg-0.48.1/**
+/vendor/usvg-0.48.1/target/
+/vendor/usvg-0.48.1/Cargo.lock
 /vendor/web-audio-api-1.7.0/target/
 /vendor/web-audio-api-1.7.0/Cargo.lock
 /.moli

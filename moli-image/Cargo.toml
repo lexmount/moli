@@ -5,6 +5,9 @@ edition = "2024"
 license = "MIT OR Apache-2.0"
 
 [dependencies]
+moli-svg = { path = "../moli-svg" }
+unicode-segmentation = "1.12"
+fontique = "=0.11.1"
 image = { version = "0.25.10", default-features = false, features = ["gif", "webp"] }
 jpeg-decoder = "0.3"
 jpeg-encoder = "0.6"
