@@ -1,6 +1,7 @@
 mod cookie_context;
 mod cookie_store;
 mod support;
+mod tls_credentials;
 
 use anyhow::{Context, Result};
 use curl::easy::Handler;

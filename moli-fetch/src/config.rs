@@ -151,8 +151,10 @@ impl FetchConfig {
         self.tls_verify_host = tls_verify_host;
     }
 
-    /// Configure TLS trust and mutual-TLS credentials for every request made
-    /// by this fetch runtime, including navigations and subresources.
+    /// Configure TLS trust and mutual-TLS credentials for this fetch runtime,
+    /// including navigations and subresources. Client identities are used only
+    /// when the request's credentials mode allows them for the current URL;
+    /// CA trust applies regardless of credentials mode.
     pub fn set_tls_credentials(
         &mut self,
         ca_cert: Option<PathBuf>,
