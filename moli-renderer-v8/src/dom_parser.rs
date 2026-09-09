@@ -141,7 +141,13 @@ pub(super) fn parse_detached_document_from_string<'s>(
     } else {
         materialize_xml_parser_error_document(parsed)
     };
-    build_detached_document(scope, parsed, DetachedDocumentKind::Xml, false)
+    build_detached_document_with_content_type(
+        scope,
+        parsed,
+        DetachedDocumentKind::Xml,
+        false,
+        Some(mime),
+    )
 }
 
 fn materialize_xml_parser_error_document(parsed: NativeDom) -> NativeDom {
@@ -351,11 +357,33 @@ fn build_detached_document<'s>(
     kind: DetachedDocumentKind,
     expose_declarative_shadow_roots: bool,
 ) -> Option<v8::Local<'s, v8::Object>> {
-    build_detached_document_from_dom_host(
+    build_detached_document_with_content_type(
         scope,
-        DomHost::from_dom(parsed),
+        parsed,
         kind,
         expose_declarative_shadow_roots,
+        None,
+    )
+}
+
+fn build_detached_document_with_content_type<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    parsed: NativeDom,
+    kind: DetachedDocumentKind,
+    expose_declarative_shadow_roots: bool,
+    content_type: Option<&str>,
+) -> Option<v8::Local<'s, v8::Object>> {
+    let _ = expose_declarative_shadow_roots;
+    let kind = match kind {
+        DetachedDocumentKind::Html => "html",
+        DetachedDocumentKind::Xml => "xml",
+    };
+    build_detached_document_object_from_dom_host_with_content_type(
+        scope,
+        kind,
+        DomHost::from_dom(parsed),
+        content_type,
+        None,
     )
 }
 
