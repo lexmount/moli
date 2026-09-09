@@ -30,6 +30,7 @@ html,body{margin:0}
 #fractional{width:100px;grid-template-columns:repeat(3,1fr)}
 #zoomed{zoom:2;width:100px;grid-template-columns:1fr 3fr}
 #vertical{writing-mode:vertical-rl;width:100px;height:300px;grid-template-columns:1fr 3fr}
+#rtl{direction:rtl;grid-template-columns:[start] 1fr [middle] 3fr [end]}
 </style>`;
 document.body.innerHTML = `
   <div class=grid id=intrinsic><div></div></div>
@@ -43,7 +44,8 @@ document.body.innerHTML = `
   <div class=grid id=area-repeat></div>
   <div class=grid id=fractional></div>
   <div class=grid id=zoomed></div>
-  <div class=grid id=vertical></div>`;
+  <div class=grid id=vertical></div>
+  <div class=grid id=rtl></div>`;
 'installed'
 "#,
         )?;
@@ -66,7 +68,8 @@ areas:getComputedStyle(document.getElementById('areas')).gridTemplateColumns,
 areaRepeat:getComputedStyle(document.getElementById('area-repeat')).gridTemplateColumns,
 fractional:getComputedStyle(document.getElementById('fractional')).gridTemplateColumns,
 zoomed:getComputedStyle(document.getElementById('zoomed')).gridTemplateColumns,
-vertical:getComputedStyle(document.getElementById('vertical')).gridTemplateColumns
+vertical:getComputedStyle(document.getElementById('vertical')).gridTemplateColumns,
+rtl:getComputedStyle(document.getElementById('rtl')).gridTemplateColumns
 })"#,
         )?;
         let values: serde_json::Value = serde_json::from_str(&values)?;
@@ -84,9 +87,10 @@ vertical:getComputedStyle(document.getElementById('vertical')).gridTemplateColum
                 "areaRepeat": "20px 20px 20px 20px 20px 0px 0px 0px",
                 "fractional": "33.3281px 33.3281px 33.3281px",
                 "zoomed": "25px 75px",
-                "vertical": "1fr 3fr",
+                "vertical": "75px 225px",
+                "rtl": "[start] 75px [middle] 225px [end]",
             }),
-            "resolved horizontal Grid longhands must expose used tracks while preserving expanded line names, without publishing physical-axis values for vertical Grid",
+            "resolved Grid tracks retain logical author order and expanded line names in horizontal, vertical and RTL flows",
         );
 
         page_vm

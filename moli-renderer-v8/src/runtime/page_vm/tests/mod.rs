@@ -127,6 +127,7 @@ mod file_system_directory_reader;
 mod flex_geometry;
 mod grid_item_box_generation;
 mod grid_item_paint_order;
+mod grid_logical_geometry;
 mod grid_resolved_track_values;
 mod hash_change_delivery;
 mod history_traversal;

@@ -7,7 +7,7 @@
 
 use std::{fmt::Debug, hash::Hash};
 
-use taffy::{Rect, ResolveOrZero, style_helpers};
+use taffy::{Direction, Rect, ResolveOrZero, style_helpers};
 
 use super::{TableCell, TableColumn, TableRow};
 use crate::{
@@ -71,6 +71,7 @@ pub(crate) struct CollapsedTableBorderSegment {
 /// Pass-owned conflict grid for one `border-collapse: collapse` table.
 #[derive(Clone, Debug)]
 pub(crate) struct CollapsedTableBorders {
+    direction: Direction,
     row_count: usize,
     column_count: usize,
     horizontal: Vec<EdgeSlot>,
@@ -79,8 +80,9 @@ pub(crate) struct CollapsedTableBorders {
 }
 
 impl CollapsedTableBorders {
-    fn new(row_count: usize, column_count: usize) -> Self {
+    fn new(row_count: usize, column_count: usize, direction: Direction) -> Self {
         Self {
+            direction,
             row_count,
             column_count,
             horizontal: vec![EdgeSlot::Empty; (row_count + 1).saturating_mul(column_count)],
@@ -153,14 +155,19 @@ impl CollapsedTableBorders {
                 }
             }
         }
-        if let Some(edge) = border_edge(style, PhysicalSide::Left, box_order) {
+        let (start_side, end_side) = if self.direction == Direction::Rtl {
+            (PhysicalSide::Right, PhysicalSide::Left)
+        } else {
+            (PhysicalSide::Left, PhysicalSide::Right)
+        };
+        if let Some(edge) = border_edge(style, start_side, box_order) {
             for current in row..row_end {
                 if let Some(index) = self.vertical_index(current, column) {
                     merge_edge(&mut self.vertical[index], edge);
                 }
             }
         }
-        if let Some(edge) = border_edge(style, PhysicalSide::Right, box_order) {
+        if let Some(edge) = border_edge(style, end_side, box_order) {
             for current in row..row_end {
                 if let Some(index) = self.vertical_index(current, column_end) {
                     merge_edge(&mut self.vertical[index], edge);
@@ -229,6 +236,10 @@ impl CollapsedTableBorders {
                     .and_then(|index| self.horizontal[index].winner()),
             ));
         }
+        // Conflict-grid columns are logical; consumers need physical struts.
+        if self.direction == Direction::Rtl {
+            std::mem::swap(&mut widths.left, &mut widths.right);
+        }
         half(widths)
     }
 
@@ -286,10 +297,16 @@ impl CollapsedTableBorders {
                     && let Some(edge) = self.horizontal_edge(row as isize, column as isize)
                     && edge.can_paint()
                 {
-                    let (start_width, start_wins) = self.horizontal_joint(row, column, true);
-                    let (end_width, end_wins) = self.horizontal_joint(row, column, false);
+                    let (mut start_width, mut start_wins) =
+                        self.horizontal_joint(row, column, true);
+                    let (mut end_width, mut end_wins) = self.horizontal_joint(row, column, false);
                     let mut start = columns[column];
                     let mut end = columns[column + 1];
+                    if self.direction == Direction::Rtl {
+                        std::mem::swap(&mut start, &mut end);
+                        std::mem::swap(&mut start_width, &mut end_width);
+                        std::mem::swap(&mut start_wins, &mut end_wins);
+                    }
                     if start_wins {
                         start -= start_width / 2.0;
                     } else {
@@ -368,7 +385,11 @@ where
         return;
     }
 
-    let mut borders = CollapsedTableBorders::new(context.rows.len(), context.column_count);
+    let mut borders = CollapsedTableBorders::new(
+        context.rows.len(),
+        context.column_count,
+        context.style.direction,
+    );
     let mut box_order = 0usize;
 
     // CSS Tables conflict precedence is established by merge order. Equal
@@ -702,7 +723,7 @@ mod tests {
 
     #[test]
     fn joint_geometry_extends_the_wider_winning_edge_without_gaps() {
-        let mut borders = CollapsedTableBorders::new(1, 1);
+        let mut borders = CollapsedTableBorders::new(1, 1, Direction::Ltr);
         borders.horizontal[0] = EdgeSlot::Winner(edge(4.0, PaintBorderStyle::Solid, RED, 1));
         borders.vertical[0] = EdgeSlot::Winner(edge(8.0, PaintBorderStyle::Solid, BLUE, 2));
         borders.set_geometry(&[10.0, 50.0], &[10.0, 30.0]);
@@ -719,5 +740,32 @@ mod tests {
             .expect("vertical edge");
         assert_eq!(horizontal.rect, LayoutRect::new(14.0, 8.0, 36.0, 4.0));
         assert_eq!(vertical.rect, LayoutRect::new(6.0, 8.0, 8.0, 22.0));
+    }
+
+    #[test]
+    fn rtl_border_joints_and_struts_follow_logical_column_order() {
+        let mut borders = CollapsedTableBorders::new(1, 1, Direction::Rtl);
+        borders.horizontal[0] = EdgeSlot::Winner(edge(4.0, PaintBorderStyle::Solid, RED, 1));
+        // Column zero is the physical right edge in an RTL table.
+        borders.vertical[0] = EdgeSlot::Winner(edge(8.0, PaintBorderStyle::Solid, BLUE, 2));
+        borders.set_geometry(&[50.0, 10.0], &[10.0, 30.0]);
+
+        let horizontal = borders
+            .segments()
+            .iter()
+            .find(|segment| segment.horizontal)
+            .unwrap();
+        let vertical = borders
+            .segments()
+            .iter()
+            .find(|segment| !segment.horizontal)
+            .unwrap();
+        assert_eq!(horizontal.rect, LayoutRect::new(10.0, 8.0, 36.0, 4.0));
+        assert_eq!(vertical.rect, LayoutRect::new(46.0, 8.0, 8.0, 22.0));
+        let strut = borders.table_strut();
+        assert_eq!(
+            (strut.left, strut.right, strut.top, strut.bottom),
+            (0.0, 4.0, 2.0, 0.0)
+        );
     }
 }

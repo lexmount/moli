@@ -1,0 +1,126 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>Grid tracks, placement and fragments in logical writing directions</title>
+<link rel="help" href="https://drafts.csswg.org/css-grid-2/#grid-concepts">
+<style>
+  html, body { margin: 0; padding: 0; }
+  html { overflow: hidden; }
+  .slot { position: absolute; width: 320px; height: 280px; }
+  .grid {
+    position: absolute; left: 60px; top: 50px; display: grid;
+    inline-size: 120px; block-size: 100px;
+    grid-template-columns: 40px 70px; grid-template-rows: 20px 30px;
+    place-items: start; font: 0/0 sans-serif;
+  }
+  .item { inline-size: 20px; block-size: 10px; background: rgb(31,127,63); }
+</style>
+<body>
+<script>
+  // All expected dimensions are authored constants, never measurements from
+  // the engine under test. Chromium checks the same fixture and expectations.
+  const scenarios = [
+    {id:'fixed', size:[120,100], tracks:['40px 70px','20px 30px'],
+     items:[[0,0,20,10],[40,0,20,10],[0,20,20,10],[40,20,20,10]]},
+    {id:'intrinsic', css:'inline-size:auto;block-size:auto',
+     size:[110,50], tracks:['40px 70px','20px 30px'],
+     items:[[0,0,20,10],[40,0,20,10],[0,20,20,10],[40,20,20,10]]},
+    {id:'percent-gap', css:'inline-size:160px;grid-template-columns:25% 1fr;grid-template-rows:50% 1fr;gap:15px 10px',
+     size:[160,100], tracks:['40px 110px','50px 35px'],
+     items:[[0,0,20,10],[50,0,20,10],[0,65,20,10],[50,65,20,10]]},
+    {id:'padding-border', css:'box-sizing:content-box;padding:5px 10px;border:2px solid black',
+     size:[120,100], tracks:['40px 70px','20px 30px'], insets:true,
+     items:[[0,0,20,10],[40,0,20,10],[0,20,20,10],[40,20,20,10]]},
+    {id:'dense-negative-implicit', css:'inline-size:160px;grid-auto-flow:row dense;grid-template-columns:30px 30px 30px;grid-template-rows:20px 20px;grid-auto-columns:20px;gap:5px',
+     size:[160,100], tracks:['20px 30px 30px 30px','20px 20px'],
+     // The next free row starts at the negative implicit track too.
+     items:[[25,0,20,10],[0,25,20,10],[95,0,20,10],[0,0,20,10]],
+     styles:['grid-column:span 2','grid-column:span 2','','grid-column:-5;grid-row:1']},
+    {id:'auto-fit', css:'inline-size:160px;grid-template-columns:repeat(auto-fit,30px);grid-template-rows:20px;column-gap:10px;justify-content:space-between',
+     size:[160,100], tracks:['30px 30px 0px 0px','20px'],
+     items:[[0,0,20,10],[130,0,20,10]]},
+    {id:'absolute-area', css:'inline-size:160px;grid-template-columns:30px 40px 50px;grid-template-rows:20px 30px;gap:5px 10px',
+     size:[160,100], tracks:['30px 40px 50px','20px 30px'],
+     items:[[80,45,20,10],[70,45,20,10]],
+     styles:['position:absolute;grid-column:2/4;grid-row:2/3;place-self:end center',
+             'position:absolute;place-self:center']},
+    // Scroll extents follow CSSOM View's inline-end/block-end directions.
+    // Chromium's non-scroll-container ScrollHeight() still has a writing-mode
+    // FIXME: it reports 100 rather than 150 for the four upward inline flows.
+    // Keep that differential visible; all rectangle/track/pixel expectations
+    // here agree with Chromium.
+    {id:'overflow', css:'inline-size:100px;block-size:60px;grid-template-columns:150px;grid-template-rows:100px',
+     size:[100,60], tracks:['150px','100px'], scroll:[150,100],
+     items:[[0,0,150,100]], styles:['inline-size:150px;block-size:100px']},
+    {id:'intrinsic-items', css:'inline-size:auto;block-size:auto;grid-template-columns:max-content max-content;grid-template-rows:auto',
+     size:[80,25], tracks:['35px 45px','25px'],
+     items:[[0,0,35,25],[35,0,45,15]],
+     styles:['inline-size:35px;block-size:25px','inline-size:45px;block-size:15px']},
+    {id:'first-last-baseline', css:'inline-size:100px;grid-template-columns:40px 40px;grid-template-rows:40px 40px',
+     size:[100,100], tracks:['40px 40px','40px 40px'],
+     items:[[0,20,20,10],[40,0,20,30],[0,70,20,10],[40,50,20,30]],
+     centralItems:[[0,10,20,10],[40,0,20,30],[0,60,20,10],[40,50,20,30]],
+     styles:['align-self:first baseline','block-size:30px;align-self:first baseline',
+             'align-self:last baseline','block-size:30px;align-self:last baseline']},
+  ];
+  const modes = ['horizontal-tb','vertical-rl','vertical-lr','sideways-rl','sideways-lr'];
+  const checks = [];
+  let index = 0;
+  for (const mode of modes) {
+    for (const direction of ['ltr','rtl']) {
+      const horizontal = mode === 'horizontal-tb';
+      const reverseInline = (direction === 'rtl') !== (mode === 'sideways-lr');
+      const reverseBlock = mode === 'vertical-rl' || mode === 'sideways-rl';
+      const physicalSize = ([inline,block]) => horizontal ? [inline,block] : [block,inline];
+      for (const scenario of scenarios) {
+        const slot = document.createElement('div');
+        slot.className = 'slot';
+        slot.style.left = (index % 4) * 320 + 'px';
+        slot.style.top = Math.floor(index / 4) * 280 + 'px';
+        const grid = document.createElement('div');
+        grid.className = 'grid';
+        grid.style.cssText = 'writing-mode:' + mode + ';direction:' + direction + ';' + (scenario.css || '');
+        grid.id = mode + '-' + direction + '-' + scenario.id;
+        const inset = scenario.insets ? (horizontal ? [12,7] : [7,12]) : [0,0];
+        const outer = scenario.size.map((value,axis) => value + 2 * inset[axis]);
+        checks.push({id:grid.id, element:grid, relative:slot,
+                     expected:[60,50,...physicalSize(outer)]});
+        const items = scenario.centralItems && mode.startsWith('vertical-') ? scenario.centralItems : scenario.items;
+        for (const [itemIndex,logical] of items.entries()) {
+          const item = document.createElement('div');
+          item.className = 'item';
+          item.style.cssText = scenario.styles?.[itemIndex] || '';
+          grid.append(item);
+          const [inline,block,inlineSize,blockSize] = logical;
+          const inlineOffset = reverseInline ? outer[0] - inset[0] - inline - inlineSize : inset[0] + inline;
+          const blockOffset = reverseBlock ? outer[1] - inset[1] - block - blockSize : inset[1] + block;
+          const [x,y] = physicalSize([inlineOffset,blockOffset]);
+          checks.push({id:grid.id + '-' + itemIndex, element:item, relative:grid,
+                       expected:[x,y,...physicalSize([inlineSize,blockSize])], paint:true});
+        }
+        checks.push({id:grid.id + '-tracks', element:grid, tracks:true, expected:scenario.tracks});
+        if (scenario.scroll) {
+          checks.push({id:grid.id + '-scroll', element:grid, scroll:true, expected:physicalSize(scenario.scroll)});
+        }
+        slot.append(grid);
+        document.body.append(slot);
+        index++;
+      }
+    }
+  }
+  function collectGeometryChecks() {
+    return checks.map(check => {
+      if (check.tracks) {
+        const style = getComputedStyle(check.element);
+        return {id:check.id, expected:check.expected, actual:[style.gridTemplateColumns,style.gridTemplateRows]};
+      }
+      if (check.scroll) {
+        return {id:check.id, expected:check.expected, actual:[check.element.scrollWidth,check.element.scrollHeight]};
+      }
+      const origin = check.relative.getBoundingClientRect();
+      const rect = check.element.getBoundingClientRect();
+      return {id:check.id, expected:check.expected,
+              actual:[rect.x-origin.x,rect.y-origin.y,rect.width,rect.height],
+              ...(check.paint ? {pixel:[origin.x+check.expected[0]+2,origin.y+check.expected[1]+2],color:[31,127,63,255]} : {})};
+    });
+  }
+</script>

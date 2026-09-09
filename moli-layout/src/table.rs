@@ -15,9 +15,10 @@ use style::Atom;
 use taffy::{
     AutoSizeBehavior, AvailableSpace, CacheTree, DetailedGridInfo, Dimension, Display,
     GridAutoFlow, IntrinsicSizeResult, Layout, LayoutGridContainer, LayoutInput, LayoutOutput,
-    LayoutPartialTree, Line, LogicalSize, MaybeResolve, NodeId, Point, Rect, RequestedAxis,
-    ResolveOrZero, RunMode, Size, SizingMode, SizingPurpose, Style, TraversePartialTree,
-    TraverseTree, WritingMode, compute_grid_layout, style_helpers,
+    LayoutPartialTree, Line, LogicalOffset, LogicalSize, MaybeResolve, NodeId, Point, Rect,
+    RequestedAxis, ResolveOrZero, RunMode, Size, SizingMode, SizingPurpose, Style,
+    TraversePartialTree, TraverseTree, WritingDirection, WritingMode, compute_grid_layout,
+    style_helpers,
 };
 
 use crate::{
@@ -275,12 +276,22 @@ where
     let mut context = build_table_context(world, root);
     context.collect_cell_inline_constraints(world);
     let grid_inputs = context.resolve_column_tracks(inputs);
-    let mut output = {
+    let (mut output, grid_flow) = {
         let mut wrapper = TableTreeWrapper {
             world,
             context: &mut context,
         };
-        compute_grid_layout(&mut wrapper, NodeId::from(0usize), grid_inputs)
+        let grid_root = NodeId::from(0usize);
+        // Structural parts consume the numeric grid's coordinate system,
+        // which is not necessarily the authored table writing mode.
+        let flow = WritingDirection::new(
+            wrapper.get_writing_mode(grid_root),
+            wrapper.context.style.direction,
+        );
+        (
+            compute_grid_layout(&mut wrapper, grid_root, grid_inputs),
+            flow,
+        )
     };
 
     if inputs.run_mode == RunMode::PerformLayout {
@@ -312,7 +323,7 @@ where
             top_height + output.size.height,
             caption_parent_writing_mode,
         );
-        apply_structural_layout(world, root, &context, top_height, output.size);
+        apply_structural_layout(world, root, &context, top_height, output.size, grid_flow);
         if let Some(first_baseline) = &mut output.first_baselines.y {
             *first_baseline += top_height;
         }
@@ -1147,6 +1158,7 @@ fn apply_structural_layout<N>(
     context: &TableContext,
     top_offset: f32,
     grid_size: Size<f32>,
+    grid_flow: WritingDirection,
 ) where
     N: Copy + Debug + Eq + Hash,
 {
@@ -1157,29 +1169,86 @@ fn apply_structural_layout<N>(
     let border = root_style
         .border
         .resolve_or_zero(Some(grid_size.width), resolve_stylo_calc_value);
-    let origin = Point {
-        x: border.left + padding.left,
-        y: top_offset + border.top + padding.top,
+    let insets = grid_flow.to_logical_box_strut(border + padding);
+    let origin = LogicalOffset {
+        inline_offset: insets.inline_start,
+        block_offset: insets.block_start,
     };
     let Some(detailed) = context.detailed.as_ref() else {
         return;
     };
-    let row_starts = track_starts(origin.y, &detailed.rows.sizes, &detailed.rows.gutters);
-    let column_starts = track_starts(origin.x, &detailed.columns.sizes, &detailed.columns.gutters);
+    let row_starts = track_starts(
+        origin.block_offset,
+        &detailed.rows.sizes,
+        &detailed.rows.gutters,
+    );
+    let column_starts = track_starts(
+        origin.inline_offset,
+        &detailed.columns.sizes,
+        &detailed.columns.gutters,
+    );
     let content_width = track_extent(&detailed.columns.sizes, &detailed.columns.gutters);
     let content_height = track_extent(&detailed.rows.sizes, &detailed.rows.gutters);
+    // Keep track indices and spans in logical order. Convert only the final
+    // border-box origin, just as Grid does for its cell fragments.
+    let publish_part = |world: &mut LayoutWorld<N>, id, inline, block, inline_size, block_size| {
+        let size = grid_flow.mode.to_physical(LogicalSize {
+            inline_size,
+            block_size,
+        });
+        let point = grid_flow.converter(grid_size).to_physical_point(
+            LogicalOffset {
+                inline_offset: inline,
+                block_offset: block,
+            },
+            size,
+        );
+        set_table_part_layout(
+            world,
+            id,
+            point.x,
+            point.y + top_offset,
+            size.width,
+            size.height,
+        );
+    };
     if context.collapsed_borders {
         let mut row_lines = row_starts.clone();
-        row_lines.push(origin.y + content_height);
+        row_lines.push(origin.block_offset + content_height);
         let mut column_lines = column_starts.clone();
-        column_lines.push(origin.x + content_width);
+        column_lines.push(origin.inline_offset + content_width);
+        for line in &mut column_lines {
+            *line = grid_flow
+                .converter(grid_size)
+                .to_physical_point(
+                    LogicalOffset {
+                        inline_offset: *line,
+                        block_offset: 0.0,
+                    },
+                    Size::ZERO,
+                )
+                .x;
+        }
+        for line in &mut row_lines {
+            *line += top_offset;
+        }
         set_collapsed_border_geometry(world, root, &column_lines, &row_lines);
     }
 
     for row in &context.rows {
-        let y = row_starts.get(row.index).copied().unwrap_or(origin.y);
+        let y = row_starts
+            .get(row.index)
+            .copied()
+            .unwrap_or(origin.block_offset);
         let height = detailed.rows.sizes.get(row.index).copied().unwrap_or(0.0);
-        set_table_part_layout(world, row.id, origin.x, y, content_width, height);
+        publish_part(
+            world,
+            row.id,
+            origin.inline_offset,
+            y,
+            content_width,
+            height,
+        );
     }
     let mut groups = context
         .rows
@@ -1197,21 +1266,34 @@ fn apply_structural_layout<N>(
             end = end.max(row.index + 1);
         }
         if start != usize::MAX {
-            let y = row_starts.get(start).copied().unwrap_or(origin.y);
+            let y = row_starts
+                .get(start)
+                .copied()
+                .unwrap_or(origin.block_offset);
             let height =
                 track_range_extent(&detailed.rows.sizes, &detailed.rows.gutters, start, end);
-            set_table_part_layout(world, group, origin.x, y, content_width, height);
+            publish_part(world, group, origin.inline_offset, y, content_width, height);
         }
     }
     for column in &context.columns {
-        let x = column_starts.get(column.start).copied().unwrap_or(origin.x);
+        let x = column_starts
+            .get(column.start)
+            .copied()
+            .unwrap_or(origin.inline_offset);
         let width = track_range_extent(
             &detailed.columns.sizes,
             &detailed.columns.gutters,
             column.start,
             column.start.saturating_add(column.span),
         );
-        set_table_part_layout(world, column.id, x, origin.y, width, content_height);
+        publish_part(
+            world,
+            column.id,
+            x,
+            origin.block_offset,
+            width,
+            content_height,
+        );
     }
     let mut column_groups = context
         .columns
@@ -1232,14 +1314,17 @@ fn apply_structural_layout<N>(
             end = end.max(column.start.saturating_add(column.span));
         }
         if start != usize::MAX {
-            let x = column_starts.get(start).copied().unwrap_or(origin.x);
+            let x = column_starts
+                .get(start)
+                .copied()
+                .unwrap_or(origin.inline_offset);
             let width = track_range_extent(
                 &detailed.columns.sizes,
                 &detailed.columns.gutters,
                 start,
                 end,
             );
-            set_table_part_layout(world, group, x, origin.y, width, content_height);
+            publish_part(world, group, x, origin.block_offset, width, content_height);
         }
     }
 

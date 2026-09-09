@@ -1,0 +1,67 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>Table parts consume used Grid tracks in logical column order</title>
+<style>
+  html, body { margin:0; }
+  table { table-layout:fixed; width:200px; border-spacing:0; margin:20px; }
+  td { padding:0; }
+</style>
+<body><script>
+  const cases = [
+    {id:'separate',css:'',width:200,height:50,left:0,right:0,top:0,gap:0,rows:[20,30]},
+    {id:'spaced',css:'width:246px;border-spacing:4px 6px;padding:3px 7px 5px 11px;border:solid black;border-width:2px 4px 6px 8px',
+     width:246,height:84,left:23,right:15,top:11,gap:4,rowGap:6,rows:[20,30]},
+    {id:'collapsed',css:'width:202px;border-collapse:collapse',width:202,height:56,left:1,right:1,top:1,gap:0,rows:[22,32]},
+    {id:'collapsed-asymmetric',css:'width:206px;border-collapse:collapse',width:206,height:64,left:4,right:2,top:1,gap:0,rows:[24,36]},
+  ];
+  const checks=[];
+  const green=[31,127,63,255], red=[255,0,0,255], blue=[0,0,255,255];
+  for (const direction of ['ltr','rtl']) {
+    for (const item of cases) {
+      const table=document.createElement('table');
+      table.style.cssText='direction:'+direction+';'+item.css;
+      table.innerHTML='<colgroup style="background:rgb(31,127,63)"><col style="width:40px"><col style="width:60px;background:blue"></colgroup><colgroup><col style="width:100px;background:red"></colgroup><tbody><tr><td style="height:20px"></td><td></td><td></td></tr><tr><td colspan="2" style="height:30px"></td><td></td></tr></tbody>';
+      if (item.id==='collapsed') table.querySelectorAll('td').forEach(cell=>cell.style.border='2px solid black');
+      if (item.id==='collapsed-asymmetric') table.querySelectorAll('td').forEach(cell=>{
+        cell.style.borderStyle='solid'; cell.style.borderWidth='2px 4px 6px 8px';
+        cell.style.borderColor='red blue green black';
+      });
+      document.body.append(table);
+      const id=direction+'-'+item.id;
+      const x=(start,width)=>direction==='ltr' ? item.left+start : item.width-item.right-start-width;
+      const starts=[0,40+item.gap,100+2*item.gap], widths=[40,60,100];
+      const contentHeight=item.rows[0]+(item.rowGap||0)+item.rows[1];
+      const add=(suffix,node,rect,color)=>checks.push({id:id+'-'+suffix,table,node,expected:rect,color});
+      add('table',table,[0,0,item.width,item.height]);
+      table.querySelectorAll('col').forEach((node,index)=>
+        add('col-'+index,node,[x(starts[index],widths[index]),item.top,widths[index],contentHeight],[green,blue,red][index]));
+      const groupWidth=100+item.gap;
+      add('colgroup',table.querySelector('colgroup'),[x(0,groupWidth),item.top,groupWidth,contentHeight]);
+      add('tbody',table.querySelector('tbody'),[item.left,item.top,200+2*item.gap,contentHeight]);
+      const rows=table.querySelectorAll('tr');
+      rows.forEach((row,index)=>add('row-'+index,row,[item.left,item.top+(index?item.rows[0]+(item.rowGap||0):0),200+2*item.gap,item.rows[index]]));
+      rows[0].querySelectorAll('td').forEach((node,index)=>
+        add('cell-'+index,node,[x(starts[index],widths[index]),item.top,widths[index],item.rows[0]]));
+      add('colspan',rows[1].firstElementChild,[x(0,groupWidth),item.top+item.rows[0]+(item.rowGap||0),groupWidth,item.rows[1]]);
+      if (item.id==='collapsed') {
+        checks.push({id:id+'-top-border',table,sample:[20,0],color:[0,0,0,255]});
+      }
+      if (item.id==='collapsed-asymmetric') {
+        for (const [name,sample,color] of [
+          ['top',[20,0],red],['left',[0,10],[0,0,0,255]],
+          ['right',[205,10],blue],['bottom',[20,63],[0,128,0,255]],
+        ]) checks.push({id:id+'-border-'+name,table,sample,color});
+      }
+    }
+  }
+  function collectGeometryChecks() {
+    return checks.map(check=>{
+      const origin=check.table.getBoundingClientRect();
+      if (check.sample) return {id:check.id,expected:[],actual:[],pixel:[origin.x+check.sample[0],origin.y+check.sample[1]],color:check.color};
+      const rect=check.node.getBoundingClientRect();
+      return {id:check.id,expected:check.expected,
+        actual:[rect.x-origin.x,rect.y-origin.y,rect.width,rect.height],
+        ...(check.color?{pixel:[origin.x+check.expected[0]+5,origin.y+check.expected[1]+5],color:check.color}:{})};
+    });
+  }
+</script>
