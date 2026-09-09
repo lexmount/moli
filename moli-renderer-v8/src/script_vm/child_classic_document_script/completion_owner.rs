@@ -7,7 +7,7 @@ use crate::frame_owner_model::{
     FrameDocumentClassicCompletionScriptEventAction,
     FrameDocumentClassicCompletionScriptEventFollowup, FrameDocumentClassicParserResumeApplication,
     FrameDocumentClassicScriptCompletionAction, FrameDocumentClassicScriptCompletionTarget,
-    FrameDocumentClassicScriptScheduling,
+    FrameDocumentClassicScriptScheduling, FrameDocumentScriptElementEventKind,
 };
 
 use super::super::{ScriptVm, child_document_script_owner_hooks::ChildDocumentScriptOwnerHooks};
@@ -80,15 +80,37 @@ impl<'vm> ChildClassicCompletionOwner<'vm> {
         let target = action.target();
         let event = action.event();
         let realm_id = target.realm_id();
-        let _parser_script_nesting = matches!(
+        let parser_blocking = matches!(
             target.scheduling(),
             FrameDocumentClassicScriptScheduling::ParserBlocking
-        )
-        .then(|| {
-            ChildDocumentScriptOwnerHooks::new(self.vm)
-                .enter_parser_script_nesting(target.child_handle(), target.task_owner())
-        })
-        .flatten();
+        );
+        // Fetch failures bypass script execution, which normally unblocks the
+        // tokenizer before invoking page code. The error handler still runs at
+        // that parser insertion point, including synchronous document.write().
+        // Do not resume again for load: the script may have installed a new
+        // nested parser blocker while executing.
+        if parser_blocking
+            && matches!(event.kind, FrameDocumentScriptElementEventKind::Error)
+            && !ChildDocumentScriptOwnerHooks::new(self.vm).resume_parser_for_classic_execution(
+                target.child_handle(),
+                target.task_owner(),
+                event.script_handle,
+            )
+        {
+            tracing::debug!(
+                ?target,
+                script_handle = ?event.script_handle,
+                "dropping child classic error event with a stale parser resume permit"
+            );
+            followup.note_script_event_dispatch_failed();
+            return;
+        }
+        let _parser_script_nesting = parser_blocking
+            .then(|| {
+                ChildDocumentScriptOwnerHooks::new(self.vm)
+                    .enter_parser_script_nesting(target.child_handle(), target.task_owner())
+            })
+            .flatten();
         let dispatch = ChildDocumentScriptOwnerHooks::new(self.vm)
             .dispatch_script_element_event_for_parts_selected_task_body(
                 target.task_owner(),
