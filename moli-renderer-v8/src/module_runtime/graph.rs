@@ -467,7 +467,7 @@ impl NativeModuleGraphFetchRequest {
                         crate::referrer_policy::response_referrer_policy_from_headers(
                             &response.headers,
                         );
-                    let (head, body, body_bytes) = response.into_parts();
+                    let (head, _body, body_bytes) = response.into_parts();
                     Ok(match kind {
                         ModuleKind::WebAssembly => ModuleGraphFetchedSource::new(
                             head.final_url,
@@ -481,7 +481,7 @@ impl NativeModuleGraphFetchRequest {
                         | ModuleKind::ModulePreloadText => ModuleGraphFetchedSource::new(
                             head.final_url,
                             head.redirected,
-                            ModuleSource::text(body),
+                            ModuleSource::text(moli_encoding::decode_utf8(&body_bytes)),
                         )
                         .with_response_referrer_policy(response_referrer_policy),
                     })

@@ -483,6 +483,12 @@ fn classic_script_bom_wins_over_labels() {
 }
 
 #[test]
+fn utf8_decode_removes_only_a_utf8_bom() {
+    assert_eq!(decode_utf8(b"\xef\xbb\xbfdiv {}"), "div {}");
+    assert_eq!(decode_utf8(b"\xff\xfed\0i\0v\0"), "��d\0i\0v\0");
+}
+
+#[test]
 fn url_query_encoder_uses_selected_legacy_encoding() {
     let encoded =
         encode_url_query_for_legacy_web("/search?q=家居&safe=a+b%20c#frag", encoding_rs::GBK);

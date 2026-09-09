@@ -2,6 +2,13 @@ use encoding_rs::Encoding;
 
 use crate::{encoding_for_label, encoding_from_response_headers};
 
+pub fn decode_utf8(bytes: &[u8]) -> String {
+    encoding_rs::UTF_8
+        .decode_with_bom_removal(bytes)
+        .0
+        .into_owned()
+}
+
 pub fn decode_classic_script_source(
     bytes: &[u8],
     headers: &[(String, String)],
