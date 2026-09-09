@@ -90,9 +90,10 @@ where
 
 #[tokio::test]
 async fn native_fragmented_utf8_and_ping_are_assembled_as_one_message() {
-    // UTF-8 U+1F642 spans continuation frames, with a Ping in between.
+    // UTF-8 U+1F642 spans fragments, with empty continuation and control frames.
     let frames = vec![
-        0x01, 2, 0xf0, 0x9f, 0x89, 2, b'h', b'i', 0x80, 2, 0x99, 0x82, 0x82, 0,
+        0x01, 2, 0xf0, 0x9f, 0x00, 0, 0x89, 2, b'h', b'i', 0x8a, 0, 0x80, 2, 0x99, 0x82, 0x81, 0,
+        0x82, 0,
     ];
     let (url, server) = frames_server(frames, async |mut socket| {
         assert_eq!(
@@ -107,6 +108,7 @@ async fn native_fragmented_utf8_and_ping_are_assembled_as_one_message() {
     let handle = spawn_connection(72, url, Vec::new(), test_websocket_context(), tx);
     recv_open_event(&mut rx).await;
     assert_text_message(&mut rx, 72, "🙂").await;
+    assert_text_message(&mut rx, 72, "").await;
     assert_binary_message(&mut rx, 72, &[]).await;
     handle.close(Some(1000), String::new()).unwrap();
     assert_closing(&mut rx, 72).await;
@@ -115,15 +117,38 @@ async fn native_fragmented_utf8_and_ping_are_assembled_as_one_message() {
 }
 
 #[tokio::test]
-async fn native_invalid_utf8_close_code_and_frame_size_fail_without_message_delivery() {
+async fn native_invalid_frames_and_messages_fail_before_delivery() {
     let cases = [
-        vec![0x81, 2, 0xc0, 0xaf],       // overlong UTF-8
-        vec![0x88, 2, 0x03, 0xee],       // reserved close code 1006
-        vec![0x88, 3, 0x03, 0xe8, 0xff], // invalid close reason
+        (vec![0x83, 0], "WebSocket receive failed:"),
+        // A native framing failure must also discard a partially assembled message.
+        (
+            vec![0x01, 1, b'a', 0x82, 1, b'b'],
+            "WebSocket receive failed:",
+        ),
+        (vec![0x81, 2, 0xc0, 0xaf], "text is not valid UTF-8"), // overlong
+        (vec![0x81, 1, 0xf0], "text is not valid UTF-8"),       // incomplete
+        (
+            vec![0x01, 1, 0xf0, 0x80, 1, b'a'],
+            "text is not valid UTF-8",
+        ),
+        (vec![0x88, 1, 0x03], "close payload has invalid length"),
+        (vec![0x88, 2, 0x03, 0xee], "invalid close code 1006"),
+        (
+            vec![0x88, 3, 0x03, 0xe8, 0xff],
+            "close reason is not valid UTF-8",
+        ),
         // A 16 MiB + 1 frame header followed by one byte is enough to reject it.
-        vec![0x82, 127, 0, 0, 0, 0, 1, 0, 0, 1, 7],
+        (
+            vec![0x82, 127, 0, 0, 0, 0, 1, 0, 0, 1, 7],
+            "frame exceeds size limit",
+        ),
+        // The largest legal wire length must also fail before buffering payload.
+        (
+            vec![0x82, 127, 127, 255, 255, 255, 255, 255, 255, 255, 7],
+            "frame exceeds size limit",
+        ),
     ];
-    for frames in cases {
+    for (frames, expected_error) in cases {
         let (url, server) = frames_server(frames, async |mut socket| {
             assert!(matches!(socket.next().await, None | Some(Err(_))));
         })
@@ -131,12 +156,81 @@ async fn native_invalid_utf8_close_code_and_frame_size_fail_without_message_deli
         let (tx, mut rx) = mpsc::channel(8);
         let _handle = spawn_connection(73, url, Vec::new(), test_websocket_context(), tx);
         recv_open_event(&mut rx).await;
-        assert!(matches!(
-            timeout(Duration::from_secs(3), rx.recv()).await.unwrap(),
-            Some(Event::Error { .. })
-        ));
+        match timeout(Duration::from_secs(3), rx.recv()).await.unwrap() {
+            Some(Event::Error { message, .. }) => {
+                assert!(
+                    message.contains(expected_error),
+                    "{message}: expected {expected_error}"
+                );
+            }
+            unexpected => panic!("expected {expected_error} before delivery, got {unexpected:?}"),
+        }
         assert_close(&mut rx, 73, 1006, "", false).await;
         server.await.unwrap();
+    }
+}
+
+#[tokio::test]
+async fn native_message_size_limit_counts_fragments_and_resets_after_delivery() {
+    const FRAME_BYTES: usize = 16 * 1024 * 1024;
+    for overflow in [false, true] {
+        let (url, server) = frames_server(Vec::new(), async move |mut socket| {
+            // Accept exactly 64 MiB; leave 1 MiB available in the rejection case.
+            let payload = vec![0xab; FRAME_BYTES];
+            for (index, first) in [0x02, 0x00, 0x00, 0x00].into_iter().enumerate() {
+                let size = if overflow && index == 3 {
+                    FRAME_BYTES - 1024 * 1024
+                } else {
+                    FRAME_BYTES
+                };
+                let mut header = vec![first, 127];
+                header.extend_from_slice(&(size as u64).to_be_bytes());
+                socket.get_mut().write_all(&header).await.unwrap();
+                socket.get_mut().write_all(&payload[..size]).await.unwrap();
+            }
+            if overflow {
+                // Only one byte arrives, but the declared 2 MiB final frame would
+                // exceed the message limit. Do not wait for its remaining payload.
+                socket
+                    .get_mut()
+                    .write_all(&[0x80, 127, 0, 0, 0, 0, 0, 0x20, 0, 0, 7])
+                    .await
+                    .unwrap();
+                assert!(matches!(socket.next().await, None | Some(Err(_))));
+            } else {
+                socket.get_mut().write_all(&[0x80, 0]).await.unwrap();
+                socket
+                    .send(Message::Text("next message".into()))
+                    .await
+                    .unwrap();
+                assert!(matches!(socket.next().await, Some(Ok(Message::Close(_)))));
+                let _ = socket.flush().await;
+            }
+        })
+        .await;
+        let (tx, mut rx) = mpsc::channel(8);
+        let handle = spawn_connection(76, url, Vec::new(), test_websocket_context(), tx);
+        recv_open_event(&mut rx).await;
+        let event = timeout(Duration::from_secs(10), rx.recv()).await.unwrap();
+        if overflow {
+            assert!(matches!(event, Some(Event::Error { message, .. })
+                if message == "WebSocket message exceeds size limit"));
+            assert_close(&mut rx, 76, 1006, "", false).await;
+        } else {
+            let Some(Event::BinaryMessage { data, .. }) = event else {
+                panic!("expected complete binary message, got {event:?}");
+            };
+            assert_eq!(data.len(), 4 * FRAME_BYTES);
+            assert!(data.iter().all(|byte| *byte == 0xab));
+            assert_text_message(&mut rx, 76, "next message").await;
+            handle.close(Some(1000), String::new()).unwrap();
+            assert_closing(&mut rx, 76).await;
+            assert_close(&mut rx, 76, 1000, "", true).await;
+        }
+        timeout(Duration::from_secs(3), server)
+            .await
+            .unwrap()
+            .unwrap();
     }
 }
 
@@ -157,7 +251,7 @@ async fn native_unsolicited_extensions_are_rejected_before_open() {
 
 #[tokio::test]
 async fn native_large_incoming_frame_keeps_chunk_offsets_and_utf8() {
-    let message = "🙂".repeat(20_000);
+    let message = format!("a{}", "🙂".repeat(20_000));
     let expected = message.clone();
     let (url, server) = frames_server(Vec::new(), async move |mut socket| {
         socket.send(Message::Text(message.into())).await.unwrap();

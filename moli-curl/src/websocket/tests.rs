@@ -110,6 +110,134 @@ async fn native_upgrade_retains_socket_and_same_packet_empty_frame() {
 }
 
 #[tokio::test]
+async fn native_decoder_rejects_invalid_framing_before_delivering_payload() {
+    let mut cases = Vec::new();
+    // Reserved opcodes/RSV, orphan continuations and fragmented control frames.
+    for first in [
+        0x83, 0x84, 0x85, 0x86, 0x87, 0x8b, 0x8c, 0x8d, 0x8e, 0x8f, 0xc1, 0xa1, 0x91, 0x00, 0x80,
+        0x08, 0x09, 0x0a,
+    ] {
+        cases.push((vec![first, 0], None));
+    }
+    cases.push((vec![0x81, 0x80, 0, 0, 0, 0], None)); // masked server frame
+    cases.push((vec![0x82, 127, 128, 0, 0, 0, 0, 0, 0, 0], None)); // >63-bit size
+    for first in [0x88, 0x89, 0x8a] {
+        cases.push((vec![first, 126, 0, 126], None)); // control payload >125
+    }
+    // A new message cannot interrupt a fragmented one, even with the same type.
+    for (first, kind) in [(0x01, WsFlags::TEXT), (0x02, WsFlags::BINARY)] {
+        for next in [0x01, 0x02, 0x81, 0x82] {
+            cases.push((vec![first, 1, b'x', next, 0], Some(kind | WsFlags::CONT)));
+        }
+    }
+    let runtime = CurlWebSocketRuntime::new().unwrap();
+    for (wire, prefix) in cases {
+        let description = format!("{wire:02x?}");
+        let (finish_tx, finish_rx) = std::sync::mpsc::channel();
+        let (url, task) = server(move |mut stream| {
+            upgrade(&mut stream, &wire);
+            // Keep TCP open so failure must come from decoding, not peer EOF.
+            finish_rx.recv_timeout(DEADLINE).unwrap();
+        });
+        let mut connection = runtime.connect(CurlWebSocketRequest::new(url)).unwrap();
+        opened(&mut connection).await;
+        connection.sender().set_reading(true);
+        if let Some(flags) = prefix {
+            assert!(
+                matches!(event(&mut connection).await,
+                CurlWebSocketEvent::Chunk { data, frame }
+                    if data == b"x" && frame.flags() == flags),
+                "{description}"
+            );
+        }
+        match event(&mut connection).await {
+            CurlWebSocketEvent::Closed { result } => {
+                let error = result.expect_err(&description);
+                assert!(
+                    error.starts_with("WebSocket receive failed:"),
+                    "{description}: {error}"
+                );
+            }
+            unexpected => {
+                panic!("{description}: invalid frame escaped the decoder: {unexpected:?}")
+            }
+        }
+        assert!(connection.recv().await.is_none());
+        finish_tx.send(()).unwrap();
+        task.join().unwrap();
+    }
+}
+
+#[tokio::test]
+async fn native_chunks_preserve_frame_boundaries_and_continuation_types() {
+    let frames = [
+        (
+            0x01,
+            WsFlags::TEXT | WsFlags::CONT,
+            vec![b'a'; 40 * 1024 + 1],
+        ),
+        (0x89, WsFlags::PING, vec![b'p'; 125]),
+        (0x00, WsFlags::TEXT | WsFlags::CONT, Vec::new()),
+        (0x8a, WsFlags::PONG, vec![b'q'; 125]),
+        (0x80, WsFlags::TEXT, vec![b'z'; 40 * 1024 + 3]),
+        (0x81, WsFlags::TEXT, Vec::new()),
+        (
+            0x02,
+            WsFlags::BINARY | WsFlags::CONT,
+            vec![0; 20 * 1024 + 1],
+        ),
+        (0x80, WsFlags::BINARY, vec![255; 20 * 1024 + 3]),
+        (0x82, WsFlags::BINARY, Vec::new()),
+        (0x88, WsFlags::CLOSE, vec![0x03, 0xe8]),
+    ];
+    let mut wire = Vec::new();
+    for (first, _, payload) in &frames {
+        wire.push(*first);
+        if payload.len() < 126 {
+            wire.push(payload.len() as u8);
+        } else {
+            wire.push(126);
+            wire.extend_from_slice(&(payload.len() as u16).to_be_bytes());
+        }
+        wire.extend_from_slice(payload);
+    }
+    let (url, task) = server(move |mut stream| {
+        upgrade(&mut stream, &wire);
+        assert_eq!(stream.read(&mut [0]).unwrap(), 0);
+    });
+    let runtime = CurlWebSocketRuntime::new().unwrap();
+    let mut connection = runtime.connect(CurlWebSocketRequest::new(url)).unwrap();
+    opened(&mut connection).await;
+    connection.sender().set_reading(true);
+    for (_, flags, expected) in frames {
+        let mut offset = 0;
+        let mut chunks = 0;
+        loop {
+            let CurlWebSocketEvent::Chunk { data, frame } = event(&mut connection).await else {
+                panic!("expected frame {flags:?} at offset {offset}");
+            };
+            assert_eq!(frame.flags(), flags);
+            assert_eq!(frame.offset(), offset as u64);
+            assert_eq!(frame.len(), data.len());
+            assert!(!data.is_empty() || expected.is_empty());
+            assert_eq!(data, expected[offset..offset + data.len()]);
+            offset += data.len();
+            chunks += 1;
+            assert_eq!(frame.bytes_left(), (expected.len() - offset) as u64);
+            if frame.bytes_left() == 0 {
+                break;
+            }
+        }
+        assert_eq!(offset, expected.len());
+        if expected.len() > 16 * 1024 {
+            assert!(chunks > 1, "exercise metadata across native reads");
+        }
+    }
+    drop(connection);
+    task.join().unwrap();
+}
+
+#[tokio::test]
 async fn native_fragmented_send_completes_without_echo() {
     let payload: Vec<_> = (0..MAX_SEND_FRAME_BYTES * 2)
         .map(|i| (i % 251) as u8)

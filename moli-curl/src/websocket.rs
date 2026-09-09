@@ -68,10 +68,14 @@ pub enum CurlWebSocketEvent {
         response: Vec<u8>,
         result: std::result::Result<(), String>,
     },
-    Chunk {
-        data: Vec<u8>,
-        frame: WsFrame,
-    },
+    /// Decoded payload from libcurl with raw mode and automatic Pong disabled.
+    /// Invalid opcodes/RSV, masking, fragmentation and control sizes fail at the
+    /// native decoder. Each chunk belongs to one frame: len equals data.len(),
+    /// offsets advance from zero, and bytes_left counts the remaining payload.
+    /// Empty frames yield an empty chunk. Continuations retain TEXT/BINARY;
+    /// CONT marks every non-final fragment, including empty ones.
+    /// UTF-8, Close contents and application size limits belong to the caller.
+    Chunk { data: Vec<u8>, frame: WsFrame },
     /// Emitted once, after all previously admitted events. Ok means TCP EOF;
     /// it does not assert that a WebSocket close handshake was completed.
     Closed {
