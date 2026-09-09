@@ -1,0 +1,36 @@
+[workspace]
+resolver = "2"
+members = [
+    "stylo_atoms",
+    "stylo_dom",
+    "malloc_size_of",
+    "rustfmt.toml",
+    "selectors",
+    "servo_arc",
+    "style",
+    "style_derive",
+    "stylo_static_prefs",
+    "style_traits",
+    "to_shmem",
+    "to_shmem_derive",
+]
+default-members = ["style"]
+
+[workspace.package]
+version = "0.20.0"
+
+[workspace.dependencies]
+# in-repo dependencies (separately versioned)
+servo_arc       = { version = "0.4.3",  path = "./servo_arc" }
+selectors       = { version = "0.40.0", path = "./selectors" }
+to_shmem        = { version = "0.5.0",  path = "./to_shmem", features = ["servo"] }
+to_shmem_derive = { version = "0.1.0",  path = "./to_shmem_derive" }
+
+# in-repo dependencies (main version)
+malloc_size_of  = { version = "0.20.0", path = "./malloc_size_of", package = "stylo_malloc_size_of", features = ["servo"] }
+static_prefs    = { version = "0.20.0", path = "./stylo_static_prefs", package = "stylo_static_prefs" }
+stylo_atoms     = { version = "0.20.0", path = "./stylo_atoms" }
+dom             = { version = "0.20.0", path = "./stylo_dom", package = "stylo_dom" }
+style_traits    = { version = "0.20.0", path = "./style_traits", features = ["servo"], package = "stylo_traits"}
+style_derive    = { version = "0.20.0", path = "./style_derive", package = "stylo_derive"}
+stylo           = { version = "0.20.0", path = "./style" }

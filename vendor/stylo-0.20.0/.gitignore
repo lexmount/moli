@@ -1,0 +1,5 @@
+/_cache/
+/_filtered/
+/target/
+/style/properties/__pycache__/
+Cargo.lock

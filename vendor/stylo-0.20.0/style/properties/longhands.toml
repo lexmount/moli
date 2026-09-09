@@ -1,0 +1,4201 @@
+# This Source Code Form is subject to the terms of the Mozilla Public
+# License, v. 2.0. If a copy of the MPL was not distributed with this
+# file, You can obtain one at http://mozilla.org/MPL/2.0/.
+
+# CSS Longhand Properties defined via predefined_type
+#
+# This file contains property definitions that are processed by the build system
+# to generate the property module code.
+#
+# Each section `[property-name]` defines a longhand property with the following fields:
+#
+# Required fields:
+#   type                - The Rust type name (e.g., "Display", "Color")
+#   struct              - Which style struct this belongs to ("box", "font", "position", etc.)
+#   engine              - If this property is specific to one engine, the engine that it applies to
+#   spec                - URL to the specification
+#   affects             - What does this property affect? ("layout", "overflow", "paint", "")
+#
+# Optional fields:
+#   initial                     - The computed initial value expression
+#   keyword                     - Description of the keyword.
+#   initial_specified_value     - Initial specified value (if different from initial)
+#   animation_type              - "none", "normal", or "discrete" (default: "normal")
+#   parse_method                - Parse method name (default: "parse")
+#   allow_quirks                - true/false (default: false)
+#   boxed                       - true/false - whether to box the value
+#   vector                      - A dictionary with:
+#     animation_type  - repeatable_list / with_zero / none
+#     simple_bindings - true/false
+#     need_index      - true/false
+#     separator       - "Comma" or "Space" (for vector properties, default comma)
+#   keyword                     - A dictionary with:
+#     values                 - Space separated list of valid values
+#     extra_gecko_values
+#     gecko_enum_prefix
+#     gecko_constant_prefix
+#     custom_consts - map with name -> enum mapping
+#     gecko_inexhaustive - Whether the gecko enum doesn't cover all keywords
+#   gecko_pref                  - Gecko preference name
+#   servo_pref                  - Servo preference name
+#   gecko_ffi_name              - Gecko FFI name (defaults to "m" + CamelCase)
+#   enabled_in                  - "content", "chrome", "ua", or ""
+#   logical                     - true/false - whether this is a logical property
+#   logical_group               - Logical property group name
+#   flags                       - Space-separated flags (e.g., "CAN_ANIMATE_ON_COMPOSITOR")
+#   aliases                     - Property aliases
+#   extra_gecko_aliases         - Additional property aliases for Gecko, not for Servo.
+#   extra_prefixes              - Vendor prefixes
+#   ignored_when_colors_disabled - true/false
+#   has_effect_on_gecko_scrollbars - true/false
+#   rule_types_allowed          - Which rule types allow this property
+#   servo_restyle_damage        - Valid values are "repaint", "rebuild_stacking_context", "recalculate_overflow", "rebuild_box".
+
+[-moz-box-flex]
+type = "NonNegativeNumber"
+initial = "From::from(0.)"
+struct = "xul"
+engine = "gecko"
+gecko_ffi_name = "mBoxFlex"
+aliases = ["-webkit-box-flex"]
+spec = "Nonstandard (https://developer.mozilla.org/en-US/docs/Web/CSS/box-flex)"
+affects = "layout"
+
+# NOTE(heycam): Odd that the initial value is 1 yet 0 is a valid value.
+[-moz-box-ordinal-group]
+type = "Integer"
+initial = "1"
+struct = "xul"
+engine = "gecko"
+parse_method = "parse_non_negative"
+aliases = ["-webkit-box-ordinal-group"]
+gecko_ffi_name = "mBoxOrdinal"
+animation_type = "discrete"
+spec = "Nonstandard (https://developer.mozilla.org/en-US/docs/Web/CSS/-moz-box-ordinal-group)"
+affects = "layout"
+
+[-moz-default-appearance]
+type = "Appearance"
+initial = "computed::Appearance::None"
+struct = "box"
+servo_pref = "layout.unimplemented"
+animation_type = "none"
+spec = "Internal (not web-exposed)"
+enabled_in = "chrome"
+gecko_ffi_name = "mDefaultAppearance"
+affects = "paint"
+
+[-moz-min-font-size-ratio]
+type = "Percentage"
+initial = "computed::Percentage::hundred()"
+struct = "font"
+servo_pref = "layout.unimplemented"
+animation_type = "none"
+gecko_ffi_name = "mMinFontSizeRatio"
+enabled_in = "ua"
+spec = "Nonstandard (Internal-only)"
+affects = "layout"
+
+[-webkit-line-clamp]
+type = "LineClamp"
+initial = "computed::LineClamp::none()"
+struct = "box"
+spec = "https://drafts.csswg.org/css-overflow-3/#line-clamp"
+affects = "layout"
+
+[-x-lang]
+type = "XLang"
+initial = "computed::XLang::get_initial_value()"
+struct = "font"
+animation_type = "none"
+enabled_in = ""
+has_effect_on_gecko_scrollbars = false
+spec = "Internal (not web-exposed)"
+affects = "layout"
+
+[-x-text-scale]
+type = "XTextScale"
+initial = "computed::XTextScale::All"
+struct = "font"
+servo_pref = "layout.unimplemented"
+animation_type = "none"
+enabled_in = ""
+has_effect_on_gecko_scrollbars = false
+spec = "Internal (not web-exposed)"
+affects = "layout"
+
+[accent-color]
+type = "ColorOrAuto"
+initial = "generics::color::ColorOrAuto::Auto"
+struct = "inherited_ui"
+spec = "https://drafts.csswg.org/css-ui-4/#widget-accent"
+ignored_when_colors_disabled = true
+affects = "paint"
+
+[align-content]
+type = "ContentDistribution"
+initial = "specified::ContentDistribution::normal()"
+struct = "position"
+parse_method = "parse_block"
+spec = "https://drafts.csswg.org/css-align/#propdef-align-content"
+extra_prefixes = ["webkit"]
+animation_type = "discrete"
+servo_restyle_damage = "rebuild_box"
+affects = "layout"
+
+[align-items]
+type = "ItemPlacement"
+initial = "specified::ItemPlacement::normal()"
+struct = "position"
+parse_method = "parse_block"
+spec = "https://drafts.csswg.org/css-align/#propdef-align-items"
+extra_prefixes = ["webkit"]
+animation_type = "discrete"
+servo_restyle_damage = "rebuild_box"
+affects = "layout"
+
+[align-self]
+type = "SelfAlignment"
+initial = "specified::SelfAlignment::auto()"
+struct = "position"
+parse_method = "parse_block"
+spec = "https://drafts.csswg.org/css-align/#align-self-property"
+extra_prefixes = ["webkit"]
+animation_type = "discrete"
+rule_types_allowed = ["style", "keyframe", "scope", "position-try"]
+affects = "layout"
+
+[alignment-baseline]
+type = "AlignmentBaseline"
+initial = "computed::AlignmentBaseline::Baseline"
+struct = "box"
+animation_type = "discrete"
+spec = "https://drafts.csswg.org/css-inline-3/#alignment-baseline"
+servo_restyle_damage = "rebuild_box"
+affects = "layout"
+
+[anchor-name]
+type = "AnchorName"
+initial = "computed::AnchorName::none()"
+struct = "box"
+animation_type = "discrete"
+gecko_pref = "layout.css.anchor-positioning.enabled"
+spec = "https://drafts.csswg.org/css-anchor-position-1/#propdef-anchor-name"
+affects = ""
+
+[anchor-scope]
+type = "ScopedName"
+initial = "computed::ScopedName::none()"
+struct = "box"
+animation_type = "discrete"
+gecko_pref = "layout.css.anchor-positioning.enabled"
+spec = "https://drafts.csswg.org/css-anchor-position-1/#propdef-scope"
+affects = ""
+
+[animation-delay]
+type = "Time"
+initial = "computed::Time::zero()"
+struct = "ui"
+vector = { need_index = true }
+animation_type = "none"
+extra_prefixes = ["moz:layout.css.prefixes.animations", "webkit"]
+spec = "https://drafts.csswg.org/css-animations/#propdef-animation-delay"
+rule_types_allowed = ["style", "scope"]
+affects = ""
+
+[animation-direction]
+type = "AnimationDirection"
+initial = "computed::AnimationDirection::Normal"
+struct = "ui"
+vector = { need_index = true }
+animation_type = "none"
+extra_prefixes = ["moz:layout.css.prefixes.animations", "webkit"]
+spec = "https://drafts.csswg.org/css-animations/#propdef-animation-direction"
+rule_types_allowed = ["style", "scope"]
+affects = ""
+
+[animation-duration]
+type = "AnimationDuration"
+initial = "computed::AnimationDuration::auto()"
+struct = "ui"
+vector = { need_index = true }
+animation_type = "none"
+extra_prefixes = ["moz:layout.css.prefixes.animations", "webkit"]
+spec = "https://drafts.csswg.org/css-animations-2/#animation-duration"
+affects = ""
+
+[animation-fill-mode]
+type = "AnimationFillMode"
+initial = "computed::AnimationFillMode::None"
+struct = "ui"
+vector = { need_index = true }
+animation_type = "none"
+extra_prefixes = ["moz:layout.css.prefixes.animations", "webkit"]
+spec = "https://drafts.csswg.org/css-animations/#propdef-animation-fill-mode"
+rule_types_allowed = ["style", "scope"]
+affects = ""
+
+[animation-iteration-count]
+type = "AnimationIterationCount"
+initial = "computed::AnimationIterationCount::one()"
+struct = "ui"
+vector = { need_index = true }
+animation_type = "none"
+extra_prefixes = ["moz:layout.css.prefixes.animations", "webkit"]
+rule_types_allowed = ["style", "scope"]
+spec = "https://drafts.csswg.org/css-animations/#propdef-animation-iteration-count"
+affects = ""
+
+[animation-name]
+type = "AnimationName"
+initial = "computed::AnimationName::none()"
+struct = "ui"
+vector = { need_index = true }
+animation_type = "none"
+extra_prefixes = ["moz:layout.css.prefixes.animations", "webkit"]
+rule_types_allowed = ["style", "scope"]
+spec = "https://drafts.csswg.org/css-animations/#propdef-animation-name"
+affects = ""
+
+[animation-play-state]
+type = "AnimationPlayState"
+initial = "computed::AnimationPlayState::Running"
+struct = "ui"
+vector = { need_index = true }
+animation_type = "none"
+extra_prefixes = ["moz:layout.css.prefixes.animations", "webkit"]
+spec = "https://drafts.csswg.org/css-animations/#propdef-animation-play-state"
+rule_types_allowed = ["style", "scope"]
+affects = ""
+
+[animation-range-end]
+type = "AnimationRangeEnd"
+initial = "computed::AnimationRangeEnd::normal()"
+struct = "ui"
+servo_pref = "layout.css.scroll-driven-animations.enabled"
+vector = { need_index = true }
+animation_type = "none"
+gecko_pref = "layout.css.scroll-driven-animations.enabled"
+spec = "https://drafts.csswg.org/scroll-animations-1/#animation-range-end"
+rule_types_allowed = ["style", "scope"]
+affects = ""
+
+[animation-range-start]
+type = "AnimationRangeStart"
+initial = "computed::AnimationRangeStart::normal()"
+struct = "ui"
+servo_pref = "layout.css.scroll-driven-animations.enabled"
+vector = { need_index = true }
+animation_type = "none"
+gecko_pref = "layout.css.scroll-driven-animations.enabled"
+spec = "https://drafts.csswg.org/scroll-animations-1/#animation-range-start"
+rule_types_allowed = ["style", "scope"]
+affects = ""
+
+[animation-timeline]
+type = "AnimationTimeline"
+initial = "computed::AnimationTimeline::auto()"
+struct = "ui"
+servo_pref = "layout.css.scroll-driven-animations.enabled"
+vector = { need_index = true }
+animation_type = "none"
+gecko_pref = "layout.css.scroll-driven-animations.enabled"
+spec = "https://drafts.csswg.org/css-animations-2/#propdef-animation-timeline"
+rule_types_allowed = ["style", "scope"]
+affects = ""
+
+[animation-timing-function]
+type = "TimingFunction"
+initial = "computed::TimingFunction::ease()"
+struct = "ui"
+vector = { need_index = true }
+animation_type = "none"
+extra_prefixes = ["moz:layout.css.prefixes.animations", "webkit"]
+spec = "https://drafts.csswg.org/css-transitions/#propdef-animation-timing-function"
+affects = ""
+
+[appearance]
+type = "Appearance"
+initial = "computed::Appearance::None"
+struct = "box"
+extra_prefixes = ["moz:layout.css.moz-appearance.enabled", "webkit"]
+spec = "https://drafts.csswg.org/css-ui-4/#propdef-appearance"
+animation_type = "discrete"
+gecko_ffi_name = "mAppearance"
+affects = "paint"
+
+[aspect-ratio]
+type = "AspectRatio"
+boxed = true
+initial = "computed::AspectRatio::auto()"
+struct = "position"
+spec = "https://drafts.csswg.org/css-sizing-4/#aspect-ratio"
+servo_restyle_damage = "rebuild_box"
+affects = "layout"
+
+[backdrop-filter]
+type = "Filter"
+struct = "effects"
+vector = { simple_bindings = true, separator = "Space", animation_type = "with_zero" }
+gecko_ffi_name = "mBackdropFilters"
+gecko_pref = "layout.css.backdrop-filter.enabled"
+servo_pref = "layout.unimplemented"
+spec = "https://drafts.fxtf.org/filter-effects-2/#propdef-backdrop-filter"
+affects = "overflow"
+
+[background-color]
+type = "Color"
+initial = "computed::Color::TRANSPARENT_BLACK"
+struct = "background"
+spec = "https://drafts.csswg.org/css-backgrounds/#background-color"
+ignored_when_colors_disabled = true
+allow_quirks = true
+flags = "CAN_ANIMATE_ON_COMPOSITOR"
+servo_restyle_damage = "repaint"
+affects = "paint"
+
+[background-image]
+type = "Image"
+initial = "computed::Image::None"
+struct = "background"
+spec = "https://drafts.csswg.org/css-backgrounds/#the-background-image"
+vector = {}
+animation_type = "discrete"
+ignored_when_colors_disabled = true
+servo_restyle_damage = "repaint"
+affects = "paint"
+
+[background-position-x]
+type = "position::HorizontalPosition"
+initial = "computed::LengthPercentage::zero_percent()"
+struct = "background"
+initial_specified_value = "SpecifiedValue::initial_specified_value()"
+spec = "https://drafts.csswg.org/css-backgrounds-4/#propdef-background-position-x"
+vector = { animation_type = "repeatable_list" }
+servo_restyle_damage = "repaint"
+affects = "paint"
+
+[background-position-y]
+type = "position::VerticalPosition"
+initial = "computed::LengthPercentage::zero_percent()"
+struct = "background"
+initial_specified_value = "SpecifiedValue::initial_specified_value()"
+spec = "https://drafts.csswg.org/css-backgrounds-4/#propdef-background-position-y"
+vector = { animation_type = "repeatable_list" }
+servo_restyle_damage = "repaint"
+affects = "paint"
+
+[background-repeat]
+type = "BackgroundRepeat"
+initial = "computed::BackgroundRepeat::repeat()"
+struct = "background"
+animation_type = "discrete"
+vector = {}
+spec = "https://drafts.csswg.org/css-backgrounds/#the-background-repeat"
+servo_restyle_damage = "repaint"
+affects = "paint"
+
+[background-size]
+type = "BackgroundSize"
+initial = "computed::BackgroundSize::auto()"
+struct = "background"
+spec = "https://drafts.csswg.org/css-backgrounds/#the-background-size"
+vector = { animation_type = "repeatable_list" }
+extra_prefixes = ["webkit"]
+servo_restyle_damage = "repaint"
+affects = "paint"
+
+[baseline-shift]
+type = "BaselineShift"
+initial = "computed::BaselineShift::zero()"
+struct = "box"
+spec = "https://drafts.csswg.org/css-inline-3/#baseline-shift"
+servo_restyle_damage = "rebuild_box"
+affects = "layout"
+
+[baseline-source]
+type = "BaselineSource"
+initial = "computed::BaselineSource::Auto"
+struct = "box"
+animation_type = "discrete"
+spec = "https://drafts.csswg.org/css-inline-3/#baseline-source"
+servo_restyle_damage = "rebuild_box"
+affects = "layout"
+
+[bookmark-level]
+type = "BookmarkLevel"
+initial = "computed::BookmarkLevel::None"
+struct = "box"
+animation_type = "discrete"
+spec = "https://drafts.csswg.org/css-gcpm/#propdef-bookmark-level"
+affects = "layout"
+
+[bookmark-state]
+type = "BookmarkState"
+initial = "computed::BookmarkState::Open"
+struct = "box"
+animation_type = "discrete"
+spec = "https://drafts.csswg.org/css-gcpm/#propdef-bookmark-state"
+affects = "layout"
+
+[block-size]
+type = "Size"
+initial = "computed::Size::auto()"
+struct = "position"
+logical = true
+logical_group = "size"
+parse_method = "parse_size_for_width_or_height"
+spec = "https://drafts.csswg.org/css-logical-props/#propdef-block-size"
+rule_types_allowed = ["style", "keyframe", "scope", "position-try"]
+servo_restyle_damage = "rebuild_box"
+affects = "layout"
+
+[border-spacing]
+type = "BorderSpacing"
+initial = "computed::BorderSpacing::zero()"
+struct = "inherited_table"
+spec = "https://drafts.csswg.org/css-tables/#propdef-border-spacing"
+servo_restyle_damage = "rebuild_box"
+affects = "layout"
+
+[bottom]
+type = "Inset"
+initial = "computed::Inset::auto()"
+struct = "position"
+spec = "https://www.w3.org/TR/CSS2/visuren.html#propdef-bottom"
+allow_quirks = true
+rule_types_allowed = ["style", "keyframe", "scope", "position-try"]
+gecko_ffi_name = "mOffset.2"
+servo_restyle_damage = "rebuild_box"
+logical_group = "inset"
+affects = "layout"
+
+[box-shadow]
+type = "BoxShadow"
+struct = "effects"
+vector = { simple_bindings = true, animation_type = "with_zero" }
+extra_prefixes = ["webkit"]
+ignored_when_colors_disabled = true
+spec = "https://drafts.csswg.org/css-backgrounds/#box-shadow"
+affects = "overflow"
+
+[break-after]
+type = "BreakBetween"
+initial = "computed::BreakBetween::Auto"
+struct = "box"
+spec = "https://drafts.csswg.org/css-break/#propdef-break-after"
+animation_type = "discrete"
+affects = "layout"
+
+[break-before]
+type = "BreakBetween"
+initial = "computed::BreakBetween::Auto"
+struct = "box"
+spec = "https://drafts.csswg.org/css-break/#propdef-break-before"
+animation_type = "discrete"
+affects = "layout"
+
+[break-inside]
+type = "BreakWithin"
+initial = "computed::BreakWithin::Auto"
+struct = "box"
+spec = "https://drafts.csswg.org/css-break/#propdef-break-inside"
+animation_type = "discrete"
+affects = "layout"
+
+[caption-side]
+type = "table::CaptionSide"
+initial = "computed::table::CaptionSide::Top"
+struct = "inherited_table"
+animation_type = "discrete"
+spec = "https://drafts.csswg.org/css-tables/#propdef-caption-side"
+servo_restyle_damage = "rebuild_box"
+affects = "layout"
+
+[caret-color]
+type = "color::CaretColor"
+initial = "generics::color::CaretColor::auto()"
+struct = "inherited_ui"
+spec = "https://drafts.csswg.org/css-ui/#caret-color"
+ignored_when_colors_disabled = true
+servo_restyle_damage = "repaint"
+affects = "paint"
+
+[clear]
+type = "Clear"
+initial = "computed::Clear::None"
+struct = "box"
+animation_type = "discrete"
+spec = "https://drafts.csswg.org/css2/#propdef-clear"
+servo_restyle_damage = "rebuild_box"
+affects = "layout"
+
+[clip]
+type = "ClipRectOrAuto"
+initial = "computed::ClipRectOrAuto::auto()"
+struct = "effects"
+boxed = true
+allow_quirks = true
+spec = "https://drafts.fxtf.org/css-masking/#clip-property"
+affects = "overflow"
+
+[clip-path]
+type = "basic_shape::ClipPath"
+initial = "generics::basic_shape::ClipPath::None"
+struct = "svg"
+extra_prefixes = ["webkit"]
+spec = "https://drafts.fxtf.org/css-masking-1/#propdef-clip-path"
+affects = "paint"
+servo_restyle_damage = "repaint"
+
+[clip-rule]
+type = "FillRule"
+initial = "Default::default()"
+struct = "inherited_svg"
+animation_type = "discrete"
+spec = "https://svgwg.org/svg2-draft/masking.html#ClipRuleProperty"
+affects = "paint"
+
+[color]
+type = "ColorPropertyValue"
+initial = "crate::color::AbsoluteColor::BLACK"
+struct = "inherited_text"
+ignored_when_colors_disabled = true
+spec = "https://drafts.csswg.org/css-color/#color"
+servo_restyle_damage = "repaint"
+affects = "paint"
+
+[color-scheme]
+type = "ColorScheme"
+initial = "specified::color::ColorScheme::normal()"
+struct = "inherited_ui"
+spec = "https://drafts.csswg.org/css-color-adjust/#color-scheme-prop"
+animation_type = "discrete"
+ignored_when_colors_disabled = true
+affects = "paint"
+
+[column-count]
+type = "ColumnCount"
+initial = "computed::ColumnCount::Auto"
+struct = "column"
+servo_pref = "layout.columns.enabled"
+spec = "https://drafts.csswg.org/css-multicol/#propdef-column-count"
+servo_restyle_damage = "rebuild_box"
+affects = "layout"
+
+[column-gap]
+type = "length::NonNegativeLengthPercentageOrNormal"
+initial = "computed::length::NonNegativeLengthPercentageOrNormal::normal()"
+struct = "position"
+aliases = ["grid-column-gap"]
+spec = "https://drafts.csswg.org/css-align-3/#propdef-column-gap"
+servo_restyle_damage = "rebuild_box"
+affects = "layout"
+
+[column-rule-color]
+type = "Color"
+initial = "computed_value::T::currentcolor()"
+struct = "column"
+ignored_when_colors_disabled = true
+spec = "https://drafts.csswg.org/css-multicol/#propdef-column-rule-color"
+affects = "paint"
+
+[column-rule-style]
+type = "BorderStyle"
+initial = "computed::BorderStyle::None"
+struct = "column"
+animation_type = "discrete"
+spec = "https://drafts.csswg.org/css-multicol/#propdef-column-rule-style"
+affects = "paint"
+
+[column-rule-width]
+type = "BorderSideWidth"
+initial = "computed::BorderSideWidth::medium()"
+struct = "column"
+initial_specified_value = "specified::BorderSideWidth::medium()"
+spec = "https://drafts.csswg.org/css-multicol/#propdef-column-rule-width"
+affects = "layout"
+
+[column-width]
+type = "length::NonNegativeLengthOrAuto"
+initial = "computed::length::NonNegativeLengthOrAuto::auto()"
+struct = "column"
+servo_pref = "layout.columns.enabled"
+spec = "https://drafts.csswg.org/css-multicol/#propdef-column-width"
+servo_restyle_damage = "rebuild_box"
+affects = "layout"
+
+[contain]
+type = "Contain"
+initial = "specified::Contain::empty()"
+struct = "box"
+servo_pref = "layout.unimplemented"
+animation_type = "none"
+spec = "https://drafts.csswg.org/css-contain/#contain-property"
+affects = "layout"
+
+[contain-intrinsic-block-size]
+type = "ContainIntrinsicSize"
+initial = "computed::ContainIntrinsicSize::None"
+struct = "position"
+logical_group = "contain-intrinsic-size"
+logical = true
+spec = "https://drafts.csswg.org/css-sizing-4/#intrinsic-size-override"
+affects = "layout"
+
+[contain-intrinsic-height]
+type = "ContainIntrinsicSize"
+initial = "computed::ContainIntrinsicSize::None"
+struct = "position"
+logical_group = "contain-intrinsic-size"
+spec = "https://drafts.csswg.org/css-sizing-4/#intrinsic-size-override"
+affects = "layout"
+
+[contain-intrinsic-inline-size]
+type = "ContainIntrinsicSize"
+initial = "computed::ContainIntrinsicSize::None"
+struct = "position"
+logical_group = "contain-intrinsic-size"
+logical = true
+spec = "https://drafts.csswg.org/css-sizing-4/#intrinsic-size-override"
+affects = "layout"
+
+[contain-intrinsic-width]
+type = "ContainIntrinsicSize"
+initial = "computed::ContainIntrinsicSize::None"
+struct = "position"
+logical_group = "contain-intrinsic-size"
+spec = "https://drafts.csswg.org/css-sizing-4/#intrinsic-size-override"
+affects = "layout"
+
+[container-name]
+type = "ContainerName"
+initial = "computed::ContainerName::none()"
+struct = "box"
+animation_type = "none"
+servo_pref = "layout.container-queries.enabled"
+spec = "https://drafts.csswg.org/css-contain-3/#container-name"
+affects = ""
+
+[container-type]
+type = "ContainerType"
+initial = "computed::ContainerType::NORMAL"
+struct = "box"
+animation_type = "none"
+servo_pref = "layout.container-queries.enabled"
+spec = "https://drafts.csswg.org/css-contain-3/#container-type"
+affects = "layout"
+
+[content]
+type = "Content"
+initial = "computed::Content::normal()"
+struct = "counters"
+animation_type = "discrete"
+spec = "https://drafts.csswg.org/css-content/#propdef-content"
+servo_restyle_damage = "rebuild_box"
+affects = "layout"
+
+[content-visibility]
+type = "ContentVisibility"
+initial = "computed::ContentVisibility::Visible"
+struct = "box"
+spec = "https://drafts.csswg.org/css-contain/#content-visibility"
+affects = "layout"
+
+[counter-increment]
+type = "CounterIncrement"
+initial = "Default::default()"
+struct = "counters"
+servo_pref = "layout.unimplemented"
+animation_type = "discrete"
+spec = "https://drafts.csswg.org/css-lists/#propdef-counter-increment"
+servo_restyle_damage = "rebuild_box"
+affects = "layout"
+
+[counter-reset]
+type = "CounterReset"
+initial = "Default::default()"
+struct = "counters"
+servo_pref = "layout.unimplemented"
+animation_type = "discrete"
+spec = "https://drafts.csswg.org/css-lists-3/#propdef-counter-reset"
+servo_restyle_damage = "rebuild_box"
+affects = "layout"
+
+[counter-set]
+type = "CounterSet"
+initial = "Default::default()"
+struct = "counters"
+animation_type = "discrete"
+spec = "https://drafts.csswg.org/css-lists-3/#propdef-counter-set"
+servo_restyle_damage = "rebuild_box"
+affects = "layout"
+
+[cursor]
+type = "Cursor"
+initial = "computed::Cursor::auto()"
+struct = "inherited_ui"
+animation_type = "discrete"
+spec = "https://drafts.csswg.org/css-ui/#cursor"
+servo_restyle_damage = "repaint"
+affects = "paint"
+
+[d]
+type = "DProperty"
+initial = "specified::DProperty::none()"
+struct = "svg"
+spec = "https://svgwg.org/svg2-draft/paths.html#TheDProperty"
+affects = "layout"
+
+[display]
+type = "Display"
+initial = "computed::Display::inline()"
+struct = "box"
+animation_type = "discrete"
+spec = "https://drafts.csswg.org/css-display/#propdef-display"
+servo_restyle_damage = "rebuild_box"
+affects = "layout"
+
+[fill]
+type = "SVGPaint"
+initial = "crate::values::computed::SVGPaint::BLACK"
+struct = "inherited_svg"
+boxed = true
+spec = "https://svgwg.org/svg2-draft/painting.html#SpecifyingFillPaint"
+affects = "paint"
+
+[fill-opacity]
+type = "SVGOpacity"
+initial = "Default::default()"
+struct = "inherited_svg"
+spec = "https://svgwg.org/svg2-draft/painting.html#FillOpacity"
+affects = "paint"
+
+[fill-rule]
+type = "FillRule"
+initial = "Default::default()"
+struct = "inherited_svg"
+animation_type = "discrete"
+spec = "https://svgwg.org/svg2-draft/painting.html#FillRuleProperty"
+affects = "paint"
+
+[filter]
+type = "Filter"
+struct = "effects"
+vector = { simple_bindings = true, separator = "Space", animation_type = "with_zero" }
+gecko_ffi_name = "mFilters"
+extra_prefixes = ["webkit"]
+spec = "https://drafts.fxtf.org/filters/#propdef-filter"
+affects = "overflow"
+servo_restyle_damage = "repaint"
+
+[flex-basis]
+type = "FlexBasis"
+initial = "computed::FlexBasis::auto()"
+struct = "position"
+spec = "https://drafts.csswg.org/css-flexbox/#flex-basis-property"
+extra_prefixes = ["webkit"]
+servo_restyle_damage = "rebuild_box"
+boxed = true
+affects = "layout"
+
+[flex-grow]
+type = "NonNegativeNumber"
+initial = "From::from(0.0)"
+struct = "position"
+spec = "https://drafts.csswg.org/css-flexbox/#flex-grow-property"
+extra_prefixes = ["webkit"]
+servo_restyle_damage = "rebuild_box"
+affects = "layout"
+
+[flex-shrink]
+type = "NonNegativeNumber"
+initial = "From::from(1.0)"
+struct = "position"
+spec = "https://drafts.csswg.org/css-flexbox/#flex-shrink-property"
+extra_prefixes = ["webkit"]
+servo_restyle_damage = "rebuild_box"
+affects = "layout"
+
+[float]
+type = "Float"
+initial = "computed::Float::None"
+struct = "box"
+animation_type = "discrete"
+spec = "https://drafts.csswg.org/css-box/#propdef-float"
+servo_restyle_damage = "rebuild_box"
+affects = "layout"
+
+[flood-color]
+type = "Color"
+initial = "computed::Color::BLACK"
+struct = "svg"
+spec = "https://drafts.fxtf.org/filter-effects-1/#FloodColorProperty"
+affects = "paint"
+
+[flood-opacity]
+type = "Opacity"
+initial = "1.0"
+struct = "svg"
+spec = "https://drafts.fxtf.org/filter-effects-1/#FloodOpacityProperty"
+affects = "paint"
+
+[font-family]
+type = "FontFamily"
+initial = "computed::FontFamily::serif()"
+struct = "font"
+animation_type = "discrete"
+spec = "https://drafts.csswg.org/css-fonts/#propdef-font-family"
+gecko_ffi_name = "mFont.family"
+servo_restyle_damage = "rebuild_box"
+affects = "layout"
+
+[font-feature-settings]
+type = "FontFeatureSettings"
+initial = "computed::FontFeatureSettings::normal()"
+struct = "font"
+extra_prefixes = ["moz:layout.css.prefixes.font-features", "webkit"]
+animation_type = "discrete"
+spec = "https://drafts.csswg.org/css-fonts/#propdef-font-feature-settings"
+affects = "layout"
+
+[font-language-override]
+type = "FontLanguageOverride"
+initial = "computed::FontLanguageOverride::normal()"
+struct = "font"
+animation_type = "discrete"
+gecko_ffi_name = "mFont.languageOverride"
+extra_prefixes = ["moz:layout.css.prefixes.font-features"]
+spec = "https://drafts.csswg.org/css-fonts-3/#propdef-font-language-override"
+affects = "layout"
+
+[font-palette]
+type = "FontPalette"
+initial = "computed::FontPalette::normal()"
+struct = "font"
+animation_type = "discrete"
+gecko_pref = "layout.css.font-palette.enabled"
+has_effect_on_gecko_scrollbars = false
+spec = "https://drafts.csswg.org/css-fonts/#font-palette-prop"
+affects = "layout"
+
+[font-size]
+type = "FontSize"
+initial = "computed::FontSize::medium()"
+struct = "font"
+initial_specified_value = "specified::FontSize::medium()"
+allow_quirks = true
+spec = "https://drafts.csswg.org/css-fonts/#propdef-font-size"
+servo_restyle_damage = "rebuild_box"
+affects = "layout"
+
+[font-size-adjust]
+type = "FontSizeAdjust"
+initial = "computed::FontSizeAdjust::None"
+struct = "font"
+servo_pref = "layout.unimplemented"
+spec = "https://drafts.csswg.org/css-fonts/#propdef-font-size-adjust"
+gecko_ffi_name = "mFont.sizeAdjust"
+affects = "layout"
+
+[font-stretch]
+type = "FontStretch"
+initial = "computed::FontStretch::hundred()"
+struct = "font"
+initial_specified_value = "specified::FontStretch::normal()"
+gecko_ffi_name = "mFont.stretch"
+spec = "https://drafts.csswg.org/css-fonts/#propdef-font-stretch"
+servo_restyle_damage = "rebuild_box"
+affects = "layout"
+
+[font-style]
+type = "FontStyle"
+initial = "computed::FontStyle::normal()"
+struct = "font"
+spec = "https://drafts.csswg.org/css-fonts/#propdef-font-style"
+gecko_ffi_name = "mFont.style"
+servo_restyle_damage = "rebuild_box"
+affects = "layout"
+
+[font-synthesis-position]
+type = "FontSynthesis"
+initial = "computed::FontSynthesis::Auto"
+struct = "font"
+engine = "gecko"
+gecko_ffi_name = "mFont.synthesisPosition"
+animation_type = "discrete"
+spec = "https://drafts.csswg.org/css-fonts-4/#font-synthesis-position"
+affects = "layout"
+
+[font-synthesis-small-caps]
+type = "FontSynthesis"
+initial = "computed::FontSynthesis::Auto"
+struct = "font"
+gecko_ffi_name = "mFont.synthesisSmallCaps"
+animation_type = "discrete"
+spec = "https://drafts.csswg.org/css-fonts-4/#font-synthesis-small-caps"
+affects = "layout"
+
+[font-synthesis-style]
+type = "FontSynthesisStyle"
+initial = "computed::FontSynthesisStyle::Auto"
+struct = "font"
+gecko_ffi_name = "mFont.synthesisStyle"
+animation_type = "discrete"
+spec = "https://drafts.csswg.org/css-fonts-4/#font-synthesis-style"
+affects = "layout"
+
+[font-synthesis-weight]
+type = "FontSynthesis"
+initial = "computed::FontSynthesis::Auto"
+struct = "font"
+gecko_ffi_name = "mFont.synthesisWeight"
+animation_type = "discrete"
+spec = "https://drafts.csswg.org/css-fonts-4/#font-synthesis-weight"
+affects = "layout"
+
+[font-variant-alternates]
+type = "FontVariantAlternates"
+initial = "computed::FontVariantAlternates::default()"
+struct = "font"
+animation_type = "discrete"
+spec = "https://drafts.csswg.org/css-fonts/#propdef-font-variant-alternates"
+gecko_ffi_name = "mFont.variantAlternates"
+affects = "layout"
+
+[font-variant-east-asian]
+type = "FontVariantEastAsian"
+initial = "computed::FontVariantEastAsian::empty()"
+struct = "font"
+animation_type = "discrete"
+gecko_ffi_name = "mFont.variantEastAsian"
+spec = "https://drafts.csswg.org/css-fonts/#propdef-font-variant-east-asian"
+affects = "layout"
+
+[font-variant-ligatures]
+type = "FontVariantLigatures"
+initial = "computed::FontVariantLigatures::empty()"
+struct = "font"
+animation_type = "discrete"
+gecko_ffi_name = "mFont.variantLigatures"
+spec = "https://drafts.csswg.org/css-fonts/#propdef-font-variant-ligatures"
+affects = "layout"
+
+[font-variant-numeric]
+type = "FontVariantNumeric"
+initial = "computed::FontVariantNumeric::empty()"
+struct = "font"
+animation_type = "discrete"
+gecko_ffi_name = "mFont.variantNumeric"
+spec = "https://drafts.csswg.org/css-fonts/#propdef-font-variant-numeric"
+affects = "layout"
+
+[font-variation-settings]
+type = "FontVariationSettings"
+initial = "computed::FontVariationSettings::normal()"
+struct = "font"
+servo_pref = "layout.variable_fonts.enabled"
+gecko_pref = "layout.css.font-variations.enabled"
+has_effect_on_gecko_scrollbars = false
+spec = "https://drafts.csswg.org/css-fonts-4/#propdef-font-variation-settings"
+affects = "layout"
+
+[font-weight]
+type = "FontWeight"
+initial = "computed::FontWeight::normal()"
+struct = "font"
+initial_specified_value = "specified::FontWeight::normal()"
+gecko_ffi_name = "mFont.weight"
+spec = "https://drafts.csswg.org/css-fonts/#propdef-font-weight"
+servo_restyle_damage = "rebuild_box"
+affects = "layout"
+
+[grid-auto-columns]
+type = "ImplicitGridTracks"
+initial = "Default::default()"
+struct = "position"
+servo_pref = "layout.grid.enabled"
+animation_type = "discrete"
+spec = "https://drafts.csswg.org/css-grid/#propdef-grid-auto-columns"
+affects = "layout"
+
+[grid-auto-flow]
+type = "GridAutoFlow"
+initial = "computed::GridAutoFlow::ROW"
+struct = "position"
+servo_pref = "layout.grid.enabled"
+animation_type = "discrete"
+spec = "https://drafts.csswg.org/css-grid/#propdef-grid-auto-flow"
+affects = "layout"
+
+[grid-auto-rows]
+type = "ImplicitGridTracks"
+initial = "Default::default()"
+struct = "position"
+servo_pref = "layout.grid.enabled"
+animation_type = "discrete"
+spec = "https://drafts.csswg.org/css-grid/#propdef-grid-auto-rows"
+affects = "layout"
+
+[grid-column-end]
+type = "GridLine"
+initial = "Default::default()"
+struct = "position"
+servo_pref = "layout.grid.enabled"
+animation_type = "discrete"
+spec = "https://drafts.csswg.org/css-grid/#propdef-grid-column-end"
+affects = "layout"
+
+[grid-column-start]
+type = "GridLine"
+initial = "Default::default()"
+struct = "position"
+servo_pref = "layout.grid.enabled"
+animation_type = "discrete"
+spec = "https://drafts.csswg.org/css-grid/#propdef-grid-column-start"
+affects = "layout"
+
+[grid-row-end]
+type = "GridLine"
+initial = "Default::default()"
+struct = "position"
+servo_pref = "layout.grid.enabled"
+animation_type = "discrete"
+spec = "https://drafts.csswg.org/css-grid/#propdef-grid-row-end"
+affects = "layout"
+
+[grid-row-start]
+type = "GridLine"
+initial = "Default::default()"
+struct = "position"
+servo_pref = "layout.grid.enabled"
+animation_type = "discrete"
+spec = "https://drafts.csswg.org/css-grid/#propdef-grid-row-start"
+affects = "layout"
+
+[grid-template-areas]
+type = "GridTemplateAreas"
+initial = "computed::GridTemplateAreas::none()"
+struct = "position"
+servo_pref = "layout.grid.enabled"
+animation_type = "discrete"
+spec = "https://drafts.csswg.org/css-grid/#propdef-grid-template-areas"
+affects = "layout"
+
+[grid-template-columns]
+type = "GridTemplateComponent"
+initial = "specified::GenericGridTemplateComponent::None"
+struct = "position"
+servo_pref = "layout.grid.enabled"
+spec = "https://drafts.csswg.org/css-grid/#propdef-grid-template-columns"
+affects = "layout"
+
+[grid-template-rows]
+type = "GridTemplateComponent"
+initial = "specified::GenericGridTemplateComponent::None"
+struct = "position"
+servo_pref = "layout.grid.enabled"
+spec = "https://drafts.csswg.org/css-grid/#propdef-grid-template-rows"
+affects = "layout"
+
+[height]
+type = "Size"
+initial = "computed::Size::auto()"
+struct = "position"
+logical_group = "size"
+allow_quirks = true
+parse_method = "parse_size_for_width_or_height"
+spec = "https://drafts.csswg.org/css-box/#propdef-height"
+rule_types_allowed = ["style", "keyframe", "scope", "position-try"]
+servo_restyle_damage = "rebuild_box"
+affects = "layout"
+
+[image-rendering]
+type = "ImageRendering"
+initial = "computed::ImageRendering::Auto"
+struct = "inherited_box"
+spec = "https://drafts.csswg.org/css-images/#propdef-image-rendering"
+animation_type = "discrete"
+affects = "paint"
+
+[-moz-image-decoding]
+type = "ImageDecoding"
+initial = "specified::ImageDecoding::Auto"
+struct = "inherited_box"
+engine = "gecko"
+gecko_ffi_name = "mImageDecoding"
+animation_type = "discrete"
+enabled_in = "chrome"
+spec = "Nonstandard, intended for interventions"
+affects = "paint"
+
+[inline-size]
+type = "Size"
+initial = "computed::Size::auto()"
+struct = "position"
+logical = true
+logical_group = "size"
+parse_method = "parse_size_for_width_or_height"
+spec = "https://drafts.csswg.org/css-logical-props/#propdef-inline-size"
+rule_types_allowed = ["style", "keyframe", "scope", "position-try"]
+servo_restyle_damage = "rebuild_box"
+affects = "layout"
+
+[inset-block-end]
+type = "Inset"
+initial = "computed::Inset::auto()"
+struct = "position"
+spec = "https://drafts.csswg.org/css-logical-props/#propdef-inset-block-end"
+rule_types_allowed = ["style", "keyframe", "scope", "position-try"]
+logical = true
+logical_group = "inset"
+affects = "layout"
+
+[inset-block-start]
+type = "Inset"
+initial = "computed::Inset::auto()"
+struct = "position"
+spec = "https://drafts.csswg.org/css-logical-props/#propdef-inset-block-start"
+rule_types_allowed = ["style", "keyframe", "scope", "position-try"]
+logical = true
+logical_group = "inset"
+affects = "layout"
+
+[inset-inline-end]
+type = "Inset"
+initial = "computed::Inset::auto()"
+struct = "position"
+spec = "https://drafts.csswg.org/css-logical-props/#propdef-inset-inline-end"
+rule_types_allowed = ["style", "keyframe", "scope", "position-try"]
+logical = true
+logical_group = "inset"
+affects = "layout"
+
+[inset-inline-start]
+type = "Inset"
+initial = "computed::Inset::auto()"
+struct = "position"
+spec = "https://drafts.csswg.org/css-logical-props/#propdef-inset-inline-start"
+rule_types_allowed = ["style", "keyframe", "scope", "position-try"]
+logical = true
+logical_group = "inset"
+affects = "layout"
+
+[justify-content]
+type = "ContentDistribution"
+initial = "specified::ContentDistribution::normal()"
+struct = "position"
+parse_method = "parse_inline"
+spec = "https://drafts.csswg.org/css-align/#propdef-justify-content"
+extra_prefixes = ["webkit"]
+animation_type = "discrete"
+servo_restyle_damage = "rebuild_box"
+affects = "layout"
+
+[justify-items]
+type = "JustifyItems"
+initial = "computed::JustifyItems::legacy()"
+struct = "position"
+spec = "https://drafts.csswg.org/css-align/#propdef-justify-items"
+animation_type = "discrete"
+affects = "layout"
+
+[justify-self]
+type = "SelfAlignment"
+initial = "specified::SelfAlignment::auto()"
+struct = "position"
+parse_method = "parse_inline"
+spec = "https://drafts.csswg.org/css-align/#justify-self-property"
+animation_type = "discrete"
+rule_types_allowed = ["style", "keyframe", "scope", "position-try"]
+affects = "layout"
+
+[left]
+type = "Inset"
+initial = "computed::Inset::auto()"
+struct = "position"
+spec = "https://www.w3.org/TR/CSS2/visuren.html#propdef-left"
+allow_quirks = true
+rule_types_allowed = ["style", "keyframe", "scope", "position-try"]
+gecko_ffi_name = "mOffset.3"
+servo_restyle_damage = "rebuild_box"
+logical_group = "inset"
+affects = "layout"
+
+[letter-spacing]
+type = "LetterSpacing"
+initial = "computed::LetterSpacing::normal()"
+struct = "inherited_text"
+spec = "https://drafts.csswg.org/css-text/#propdef-letter-spacing"
+servo_restyle_damage = "rebuild_box"
+affects = "layout"
+
+[lighting-color]
+type = "Color"
+initial = "computed::Color::WHITE"
+struct = "svg"
+spec = "https://drafts.fxtf.org/filter-effects-1#LightingColorProperty"
+affects = "paint"
+
+[line-height]
+type = "LineHeight"
+initial = "computed::LineHeight::normal()"
+struct = "font"
+spec = "https://drafts.csswg.org/css2/visudet.html#propdef-line-height"
+servo_restyle_damage = "rebuild_box"
+affects = "layout"
+
+[link-parameters]
+type = "LinkParameters"
+initial = "computed::LinkParameters::none()"
+struct = "ui"
+animation_type = "discrete"
+spec = "https://drafts.csswg.org/css-link-params-1/#propdef-link-parameters"
+affects = "paint"
+gecko_pref = "layout.css.link-parameters.enabled"
+
+[list-style-image]
+type = "Image"
+initial = "computed::Image::None"
+struct = "list"
+animation_type = "discrete"
+spec = "https://drafts.csswg.org/css-lists/#propdef-list-style-image"
+servo_restyle_damage = "rebuild_box"
+affects = "layout"
+
+[list-style-type]
+type = "ListStyleType"
+initial = "computed::ListStyleType::disc()"
+struct = "list"
+animation_type = "discrete"
+spec = "https://drafts.csswg.org/css-lists/#propdef-list-style-type"
+servo_restyle_damage = "rebuild_box"
+affects = "layout"
+
+[marker-end]
+type = "url::UrlOrNone"
+initial = "computed::url::UrlOrNone::none()"
+struct = "inherited_svg"
+animation_type = "discrete"
+spec = "https://svgwg.org/svg2-draft/painting.html#VertexMarkerProperties"
+affects = "layout"
+
+[marker-mid]
+type = "url::UrlOrNone"
+initial = "computed::url::UrlOrNone::none()"
+struct = "inherited_svg"
+animation_type = "discrete"
+spec = "https://svgwg.org/svg2-draft/painting.html#VertexMarkerProperties"
+affects = "layout"
+
+[marker-start]
+type = "url::UrlOrNone"
+initial = "computed::url::UrlOrNone::none()"
+struct = "inherited_svg"
+animation_type = "discrete"
+spec = "https://svgwg.org/svg2-draft/painting.html#VertexMarkerProperties"
+affects = "layout"
+
+[masonry-auto-flow]
+type = "MasonryAutoFlow"
+initial = "computed::MasonryAutoFlow::initial()"
+struct = "position"
+engine = "gecko"
+gecko_pref = "layout.css.grid-template-masonry-value.enabled"
+animation_type = "discrete"
+spec = "https://github.com/w3c/csswg-drafts/issues/4650"
+affects = "layout"
+
+[math-depth]
+type = "MathDepth"
+initial = "0"
+struct = "font"
+servo_pref = "layout.unimplemented"
+spec = "https://mathml-refresh.github.io/mathml-core/#the-math-script-level-property"
+affects = ""
+
+[max-block-size]
+type = "MaxSize"
+initial = "computed::MaxSize::none()"
+struct = "position"
+logical = true
+logical_group = "max-size"
+spec = "https://drafts.csswg.org/css-logical-props/#propdef-block-size"
+rule_types_allowed = ["style", "keyframe", "scope", "position-try"]
+servo_restyle_damage = "rebuild_box"
+affects = "layout"
+
+[max-height]
+type = "MaxSize"
+initial = "computed::MaxSize::none()"
+struct = "position"
+logical_group = "max-size"
+allow_quirks = true
+spec = "https://drafts.csswg.org/css-box/#propdef-height"
+rule_types_allowed = ["style", "keyframe", "scope", "position-try"]
+servo_restyle_damage = "rebuild_box"
+affects = "layout"
+
+[max-inline-size]
+type = "MaxSize"
+initial = "computed::MaxSize::none()"
+struct = "position"
+logical = true
+logical_group = "max-size"
+spec = "https://drafts.csswg.org/css-logical-props/#propdef-inline-size"
+rule_types_allowed = ["style", "keyframe", "scope", "position-try"]
+servo_restyle_damage = "rebuild_box"
+affects = "layout"
+
+[max-width]
+type = "MaxSize"
+initial = "computed::MaxSize::none()"
+struct = "position"
+logical_group = "max-size"
+allow_quirks = true
+spec = "https://drafts.csswg.org/css-box/#propdef-width"
+rule_types_allowed = ["style", "keyframe", "scope", "position-try"]
+servo_restyle_damage = "rebuild_box"
+affects = "layout"
+
+[min-block-size]
+type = "Size"
+initial = "computed::Size::auto()"
+struct = "position"
+logical = true
+logical_group = "min-size"
+spec = "https://drafts.csswg.org/css-logical-props/#propdef-block-size"
+rule_types_allowed = ["style", "keyframe", "scope", "position-try"]
+servo_restyle_damage = "rebuild_box"
+affects = "layout"
+
+[min-height]
+type = "Size"
+initial = "computed::Size::auto()"
+struct = "position"
+logical_group = "min-size"
+allow_quirks = true
+spec = "https://drafts.csswg.org/css-box/#propdef-height"
+rule_types_allowed = ["style", "keyframe", "scope", "position-try"]
+servo_restyle_damage = "rebuild_box"
+affects = "layout"
+
+[min-inline-size]
+type = "Size"
+initial = "computed::Size::auto()"
+struct = "position"
+logical = true
+logical_group = "min-size"
+spec = "https://drafts.csswg.org/css-logical-props/#propdef-inline-size"
+rule_types_allowed = ["style", "keyframe", "scope", "position-try"]
+servo_restyle_damage = "rebuild_box"
+affects = "layout"
+
+[min-width]
+type = "Size"
+initial = "computed::Size::auto()"
+struct = "position"
+logical_group = "min-size"
+allow_quirks = true
+spec = "https://drafts.csswg.org/css-box/#propdef-width"
+rule_types_allowed = ["style", "keyframe", "scope", "position-try"]
+servo_restyle_damage = "rebuild_box"
+affects = "layout"
+
+[object-position]
+type = "Position"
+initial = "computed::Position::center()"
+struct = "position"
+boxed = true
+spec = "https://drafts.csswg.org/css-images-3/#the-object-position"
+affects = "layout"
+
+[offset-anchor]
+type = "PositionOrAuto"
+initial = "computed::PositionOrAuto::auto()"
+struct = "box"
+flags = "CAN_ANIMATE_ON_COMPOSITOR"
+spec = "https://drafts.fxtf.org/motion-1/#offset-anchor-property"
+servo_restyle_damage = "rebuild_box"
+boxed = true
+affects = "overflow"
+
+[offset-distance]
+type = "LengthPercentage"
+initial = "computed::LengthPercentage::zero()"
+struct = "box"
+flags = "CAN_ANIMATE_ON_COMPOSITOR"
+spec = "https://drafts.fxtf.org/motion-1/#offset-distance-property"
+servo_restyle_damage = "rebuild_box"
+affects = "overflow"
+
+[offset-path]
+type = "OffsetPath"
+initial = "computed::OffsetPath::none()"
+struct = "box"
+flags = "CAN_ANIMATE_ON_COMPOSITOR"
+spec = "https://drafts.fxtf.org/motion-1/#offset-path-property"
+servo_restyle_damage = "rebuild_box"
+affects = "overflow"
+
+[offset-position]
+type = "OffsetPosition"
+initial = "computed::OffsetPosition::normal()"
+struct = "box"
+flags = "CAN_ANIMATE_ON_COMPOSITOR"
+spec = "https://drafts.fxtf.org/motion-1/#offset-position-property"
+servo_restyle_damage = "rebuild_box"
+boxed = true
+affects = "overflow"
+
+[offset-rotate]
+type = "OffsetRotate"
+initial = "computed::OffsetRotate::auto()"
+struct = "box"
+flags = "CAN_ANIMATE_ON_COMPOSITOR"
+spec = "https://drafts.fxtf.org/motion-1/#offset-rotate-property"
+servo_restyle_damage = "rebuild_box"
+affects = "overflow"
+
+[opacity]
+type = "Opacity"
+initial = "1.0"
+struct = "effects"
+flags = "CAN_ANIMATE_ON_COMPOSITOR"
+spec = "https://drafts.csswg.org/css-color/#transparency"
+servo_restyle_damage = "repaint"
+affects = "paint"
+
+[order]
+type = "Integer"
+initial = "0"
+struct = "position"
+extra_prefixes = ["webkit"]
+spec = "https://drafts.csswg.org/css-flexbox/#order-property"
+servo_restyle_damage = "rebuild_box"
+affects = "layout"
+
+[orphans]
+type = "Integer"
+initial = "2"
+struct = "inherited_box"
+parse_method = "parse_positive"
+spec = "https://drafts.csswg.org/css-break/#propdef-orphans"
+animation_type = "discrete"
+affects = "layout"
+
+[reading-flow]
+struct = "position"
+engine = "servo"
+spec = "https://drafts.csswg.org/css-display-4/#reading-flow"
+animation_type = "discrete"
+servo_restyle_damage = "rebuild_box"
+affects = "layout"
+keyword = { values = ["normal", "flex-visual", "flex-flow", "grid-rows", "grid-columns", "grid-order", "source-order"] }
+
+[reading-order]
+type = "Integer"
+initial = "0"
+struct = "position"
+engine = "servo"
+spec = "https://drafts.csswg.org/css-display-4/#reading-flow"
+servo_restyle_damage = "rebuild_box"
+affects = "layout"
+
+[outline-color]
+type = "Color"
+initial = "computed_value::T::currentcolor()"
+struct = "outline"
+ignored_when_colors_disabled = true
+spec = "https://drafts.csswg.org/css-ui/#propdef-outline-color"
+servo_restyle_damage = "repaint"
+affects = "paint"
+
+[outline-offset]
+type = "BorderSideOffset"
+initial = "app_units::Au(0)"
+struct = "outline"
+spec = "https://drafts.csswg.org/css-ui/#propdef-outline-offset"
+servo_restyle_damage = "repaint"
+affects = "overflow"
+
+[outline-style]
+type = "OutlineStyle"
+initial = "computed::OutlineStyle::none()"
+struct = "outline"
+animation_type = "discrete"
+spec = "https://drafts.csswg.org/css-ui/#propdef-outline-style"
+servo_restyle_damage = "repaint"
+affects = "overflow"
+
+[outline-width]
+type = "BorderSideWidth"
+initial = "computed::BorderSideWidth::medium()"
+struct = "outline"
+initial_specified_value = "specified::BorderSideWidth::medium()"
+spec = "https://drafts.csswg.org/css-ui/#propdef-outline-width"
+servo_restyle_damage = "repaint"
+affects = "overflow"
+
+[overflow-anchor]
+type = "OverflowAnchor"
+initial = "computed::OverflowAnchor::Auto"
+struct = "box"
+gecko_pref = "layout.css.scroll-anchoring.enabled"
+spec = "https://drafts.csswg.org/css-scroll-anchoring/#exclusion-api"
+animation_type = "discrete"
+affects = ""
+
+[overflow-block]
+type = "Overflow"
+initial = "computed::Overflow::Visible"
+struct = "box"
+logical_group = "overflow"
+logical = true
+animation_type = "discrete"
+spec = "https://drafts.csswg.org/css-overflow-3/#propdef-overflow-block"
+servo_restyle_damage = "rebuild_box"
+affects = "layout"
+
+[overflow-clip-margin]
+type = "OverflowClipMargin"
+initial = "computed::OverflowClipMargin::zero()"
+struct = "margin"
+spec = "https://drafts.csswg.org/css-overflow/#propdef-overflow-clip-margin"
+affects = "overflow"
+
+[overflow-inline]
+type = "Overflow"
+initial = "computed::Overflow::Visible"
+struct = "box"
+logical_group = "overflow"
+logical = true
+animation_type = "discrete"
+spec = "https://drafts.csswg.org/css-overflow-3/#propdef-overflow-inline"
+servo_restyle_damage = "rebuild_box"
+affects = "layout"
+
+[overflow-wrap]
+type = "OverflowWrap"
+initial = "computed::OverflowWrap::Normal"
+struct = "inherited_text"
+animation_type = "discrete"
+spec = "https://drafts.csswg.org/css-text/#propdef-overflow-wrap"
+aliases = ["word-wrap"]
+servo_restyle_damage = "rebuild_box"
+affects = "layout"
+
+[overflow-x]
+type = "Overflow"
+initial = "computed::Overflow::Visible"
+struct = "box"
+logical_group = "overflow"
+animation_type = "discrete"
+spec = "https://drafts.csswg.org/css-overflow-3/#propdef-overflow-x"
+servo_restyle_damage = "rebuild_box"
+affects = "layout"
+
+[overflow-y]
+type = "Overflow"
+initial = "computed::Overflow::Visible"
+struct = "box"
+logical_group = "overflow"
+animation_type = "discrete"
+spec = "https://drafts.csswg.org/css-overflow-3/#propdef-overflow-y"
+servo_restyle_damage = "rebuild_box"
+affects = "layout"
+
+[overscroll-behavior-block]
+type = "OverscrollBehavior"
+initial = "computed::OverscrollBehavior::Auto"
+struct = "box"
+logical_group = "overscroll-behavior"
+logical = true
+spec = "https://wicg.github.io/overscroll-behavior/#overscroll-behavior-properties"
+animation_type = "discrete"
+affects = "paint"
+
+[overscroll-behavior-inline]
+type = "OverscrollBehavior"
+initial = "computed::OverscrollBehavior::Auto"
+struct = "box"
+logical_group = "overscroll-behavior"
+logical = true
+spec = "https://wicg.github.io/overscroll-behavior/#overscroll-behavior-properties"
+animation_type = "discrete"
+affects = "paint"
+
+[overscroll-behavior-x]
+type = "OverscrollBehavior"
+initial = "computed::OverscrollBehavior::Auto"
+struct = "box"
+logical_group = "overscroll-behavior"
+spec = "https://wicg.github.io/overscroll-behavior/#overscroll-behavior-properties"
+animation_type = "discrete"
+affects = "paint"
+
+[overscroll-behavior-y]
+type = "OverscrollBehavior"
+initial = "computed::OverscrollBehavior::Auto"
+struct = "box"
+logical_group = "overscroll-behavior"
+spec = "https://wicg.github.io/overscroll-behavior/#overscroll-behavior-properties"
+animation_type = "discrete"
+affects = "paint"
+
+[page]
+type = "PageName"
+initial = "computed::PageName::auto()"
+struct = "page"
+spec = "https://drafts.csswg.org/css-page-3/#using-named-pages"
+animation_type = "discrete"
+affects = "layout"
+
+[page-orientation]
+type = "PageOrientation"
+initial = "computed::PageOrientation::Upright"
+struct = "page"
+spec = "https://drafts.csswg.org/css-page-3/#page-orientation-prop"
+animation_type = "none"
+rule_types_allowed = ["page"]
+affects = "layout"
+
+[paint-order]
+type = "SVGPaintOrder"
+initial = "computed::SVGPaintOrder::normal()"
+struct = "inherited_svg"
+animation_type = "discrete"
+spec = "https://svgwg.org/svg2-draft/painting.html#PaintOrder"
+affects = "paint"
+
+[-moz-context-properties]
+type = "MozContextProperties"
+initial = "computed::MozContextProperties::default()"
+struct = "inherited_svg"
+engine = "gecko"
+enabled_in = "chrome"
+gecko_pref = "svg.context-properties.content.enabled"
+has_effect_on_gecko_scrollbars = false
+animation_type = "none"
+spec = "Nonstandard (https://developer.mozilla.org/en-US/docs/Web/CSS/-moz-context-properties)"
+affects = "paint"
+
+[perspective]
+type = "Perspective"
+initial = "computed::Perspective::none()"
+struct = "box"
+gecko_ffi_name = "mChildPerspective"
+spec = "https://drafts.csswg.org/css-transforms/#perspective"
+extra_prefixes = ["moz:layout.css.prefixes.transforms"]
+servo_restyle_damage = "recalculate_overflow"
+affects = "overflow"
+
+[perspective-origin]
+type = "Position"
+initial = "computed::position::Position::center()"
+struct = "box"
+boxed = true
+extra_prefixes = ["moz:layout.css.prefixes.transforms", "webkit"]
+spec = "https://drafts.csswg.org/css-transforms-2/#perspective-origin-property"
+servo_restyle_damage = "recalculate_overflow"
+affects = "overflow"
+
+[pointer-events]
+type = "PointerEvents"
+initial = "specified::PointerEvents::Auto"
+struct = "inherited_ui"
+animation_type = "discrete"
+spec = "https://svgwg.org/svg2-draft/interact.html#PointerEventsProperty"
+servo_restyle_damage = "repaint"
+affects = "paint"
+
+[position]
+type = "PositionProperty"
+initial = "computed::PositionProperty::Static"
+struct = "box"
+animation_type = "discrete"
+spec = "https://drafts.csswg.org/css-position/#position-property"
+servo_restyle_damage = "rebuild_box"
+affects = "layout"
+
+[position-anchor]
+type = "PositionAnchor"
+initial = "computed::PositionAnchor::normal()"
+struct = "position"
+animation_type = "discrete"
+rule_types_allowed = ["style", "keyframe", "scope", "position-try"]
+gecko_pref = "layout.css.anchor-positioning.enabled"
+spec = "https://drafts.csswg.org/css-anchor-position-1/#propdef-position-anchor"
+affects = "layout"
+
+[position-area]
+type = "PositionArea"
+initial = "computed::PositionArea::none()"
+struct = "position"
+animation_type = "discrete"
+rule_types_allowed = ["style", "keyframe", "scope", "position-try"]
+gecko_pref = "layout.css.anchor-positioning.enabled"
+servo_pref = "layout.unimplemented"
+spec = "https://drafts.csswg.org/css-anchor-position-1/#typedef-position-area"
+affects = "layout"
+
+[position-try-fallbacks]
+type = "PositionTryFallbacks"
+initial = "computed::PositionTryFallbacks::none()"
+struct = "position"
+animation_type = "discrete"
+gecko_pref = "layout.css.anchor-positioning.enabled"
+spec = "https://drafts.csswg.org/css-anchor-position-1/#position-try-fallbacks"
+affects = "layout"
+
+[position-try-order]
+type = "PositionTryOrder"
+initial = "computed::PositionTryOrder::normal()"
+struct = "position"
+animation_type = "discrete"
+gecko_pref = "layout.css.anchor-positioning.position-try-order.enabled"
+spec = "https://drafts.csswg.org/css-anchor-position-1/#position-try-order-property"
+affects = "layout"
+
+[position-visibility]
+type = "PositionVisibility"
+initial = "computed::PositionVisibility::ANCHORS_VISIBLE"
+struct = "position"
+animation_type = "discrete"
+gecko_pref = "layout.css.anchor-positioning.enabled"
+spec = "https://drafts.csswg.org/css-anchor-position-1/#propdef-position-visibility"
+affects = "layout"
+
+[print-color-adjust]
+type = "PrintColorAdjust"
+initial = "computed::PrintColorAdjust::Economy"
+struct = "inherited_box"
+aliases = ["color-adjust"]
+spec = "https://drafts.csswg.org/css-color-adjust/#print-color-adjust"
+animation_type = "discrete"
+affects = "paint"
+
+[quotes]
+type = "Quotes"
+initial = "computed::Quotes::get_initial_value()"
+struct = "list"
+animation_type = "discrete"
+spec = "https://drafts.csswg.org/css-content/#propdef-quotes"
+servo_restyle_damage = "rebuild_box"
+affects = "layout"
+
+[resize]
+type = "Resize"
+initial = "computed::Resize::None"
+struct = "box"
+animation_type = "discrete"
+gecko_ffi_name = "mResize"
+spec = "https://drafts.csswg.org/css-ui/#propdef-resize"
+affects = "layout"
+
+[right]
+type = "Inset"
+initial = "computed::Inset::auto()"
+struct = "position"
+spec = "https://www.w3.org/TR/CSS2/visuren.html#propdef-right"
+allow_quirks = true
+rule_types_allowed = ["style", "keyframe", "scope", "position-try"]
+gecko_ffi_name = "mOffset.1"
+servo_restyle_damage = "rebuild_box"
+logical_group = "inset"
+affects = "layout"
+
+[rotate]
+type = "Rotate"
+initial = "generics::transform::Rotate::None"
+struct = "box"
+boxed = true
+flags = "CAN_ANIMATE_ON_COMPOSITOR"
+spec = "https://drafts.csswg.org/css-transforms-2/#individual-transforms"
+servo_restyle_damage = "recalculate_overflow"
+affects = "overflow"
+
+[row-gap]
+type = "length::NonNegativeLengthPercentageOrNormal"
+initial = "computed::length::NonNegativeLengthPercentageOrNormal::normal()"
+struct = "position"
+aliases = ["grid-row-gap"]
+spec = "https://drafts.csswg.org/css-align-3/#propdef-row-gap"
+servo_restyle_damage = "rebuild_box"
+affects = "layout"
+
+[scale]
+type = "Scale"
+initial = "generics::transform::Scale::None"
+struct = "box"
+boxed = true
+flags = "CAN_ANIMATE_ON_COMPOSITOR"
+spec = "https://drafts.csswg.org/css-transforms-2/#individual-transforms"
+servo_restyle_damage = "recalculate_overflow"
+affects = "overflow"
+
+[scroll-snap-align]
+type = "ScrollSnapAlign"
+initial = "computed::ScrollSnapAlign::none()"
+struct = "box"
+spec = "https://drafts.csswg.org/css-scroll-snap-1/#scroll-snap-align"
+animation_type = "discrete"
+affects = "paint"
+
+[scroll-snap-stop]
+type = "ScrollSnapStop"
+initial = "computed::ScrollSnapStop::Normal"
+struct = "box"
+spec = "https://drafts.csswg.org/css-scroll-snap-1/#scroll-snap-stop"
+animation_type = "discrete"
+affects = "paint"
+
+[scroll-snap-type]
+type = "ScrollSnapType"
+initial = "computed::ScrollSnapType::none()"
+struct = "box"
+spec = "https://drafts.csswg.org/css-scroll-snap-1/#scroll-snap-type"
+animation_type = "discrete"
+affects = "paint"
+
+[scrollbar-color]
+type = "ScrollbarColor"
+initial = "Default::default()"
+struct = "inherited_ui"
+spec = "https://drafts.csswg.org/css-scrollbars-1/#scrollbar-color"
+boxed = true
+ignored_when_colors_disabled = true
+affects = "paint"
+
+[-moz-inert]
+type = "Inert"
+initial = "specified::Inert::None"
+struct = "inherited_ui"
+engine = "gecko"
+gecko_ffi_name = "mInert"
+animation_type = "discrete"
+enabled_in = "ua"
+spec = "Nonstandard (https://html.spec.whatwg.org/multipage/#inert-subtrees)"
+affects = "paint"
+
+[-moz-user-focus]
+type = "UserFocus"
+initial = "specified::UserFocus::Normal"
+struct = "inherited_ui"
+engine = "gecko"
+gecko_ffi_name = "mUserFocus"
+animation_type = "discrete"
+spec = "Nonstandard (https://developer.mozilla.org/en-US/docs/Web/CSS/-moz-user-focus)"
+enabled_in = "chrome"
+affects = ""
+
+[-moz-theme]
+type = "MozTheme"
+initial = "specified::MozTheme::Auto"
+struct = "inherited_ui"
+engine = "gecko"
+enabled_in = "chrome"
+animation_type = "discrete"
+spec = "Internal"
+affects = "paint"
+
+[scrollbar-gutter]
+type = "ScrollbarGutter"
+initial = "computed::ScrollbarGutter::AUTO"
+struct = "box"
+animation_type = "discrete"
+spec = "https://drafts.csswg.org/css-overflow-3/#scrollbar-gutter-property"
+affects = "layout"
+
+[shape-image-threshold]
+type = "Opacity"
+initial = "0.0"
+struct = "box"
+spec = "https://drafts.csswg.org/css-shapes/#shape-image-threshold-property"
+affects = "layout"
+
+[shape-margin]
+type = "NonNegativeLengthPercentage"
+initial = "computed::NonNegativeLengthPercentage::zero()"
+struct = "box"
+spec = "https://drafts.csswg.org/css-shapes/#shape-margin-property"
+affects = "layout"
+
+[shape-outside]
+type = "basic_shape::ShapeOutside"
+initial = "generics::basic_shape::ShapeOutside::None"
+struct = "box"
+spec = "https://drafts.csswg.org/css-shapes/#shape-outside-property"
+affects = "layout"
+
+[size]
+type = "PageSize"
+initial = "computed::PageSize::auto()"
+struct = "page"
+spec = "https://drafts.csswg.org/css-page-3/#page-size-prop"
+animation_type = "none"
+rule_types_allowed = ["page"]
+affects = "layout"
+
+[stop-color]
+type = "Color"
+initial = "computed::Color::BLACK"
+struct = "svg"
+spec = "https://svgwg.org/svg2-draft/pservers.html#StopColorProperties"
+affects = "paint"
+
+[stop-opacity]
+type = "Opacity"
+initial = "1.0"
+struct = "svg"
+spec = "https://svgwg.org/svg2-draft/pservers.html#StopOpacityProperty"
+affects = "paint"
+
+[stroke]
+type = "SVGPaint"
+initial = "Default::default()"
+struct = "inherited_svg"
+boxed = true
+spec = "https://svgwg.org/svg2-draft/painting.html#SpecifyingStrokePaint"
+affects = "paint"
+
+[stroke-dasharray]
+type = "SVGStrokeDashArray"
+initial = "Default::default()"
+struct = "inherited_svg"
+spec = "https://svgwg.org/svg2-draft/painting.html#StrokeDashing"
+affects = "paint"
+
+[stroke-dashoffset]
+type = "SVGLength"
+initial = "computed::SVGLength::zero()"
+struct = "inherited_svg"
+spec = "https://svgwg.org/svg2-draft/painting.html#StrokeDashing"
+affects = "paint"
+
+[stroke-miterlimit]
+type = "NonNegativeNumber"
+initial = "From::from(4.0)"
+struct = "inherited_svg"
+spec = "https://svgwg.org/svg2-draft/painting.html#StrokeMiterlimitProperty"
+affects = "layout"
+
+[stroke-opacity]
+type = "SVGOpacity"
+initial = "Default::default()"
+struct = "inherited_svg"
+spec = "https://svgwg.org/svg2-draft/painting.html#StrokeOpacity"
+affects = "paint"
+
+[stroke-width]
+type = "SVGWidth"
+initial = "computed::SVGWidth::one()"
+struct = "inherited_svg"
+spec = "https://svgwg.org/svg2-draft/painting.html#StrokeWidth"
+affects = "layout"
+
+[text-align]
+type = "TextAlign"
+initial = "computed::TextAlign::Start"
+struct = "inherited_text"
+animation_type = "discrete"
+spec = "https://drafts.csswg.org/css-text/#propdef-text-align"
+servo_restyle_damage = "rebuild_box"
+affects = "layout"
+
+[text-align-last]
+type = "TextAlignLast"
+initial = "computed::text::TextAlignLast::Auto"
+struct = "inherited_text"
+animation_type = "discrete"
+spec = "https://drafts.csswg.org/css-text/#propdef-text-align-last"
+affects = "layout"
+
+[text-indent]
+type = "TextIndent"
+initial = "computed::TextIndent::zero()"
+struct = "inherited_text"
+spec = "https://drafts.csswg.org/css-text/#propdef-text-indent"
+servo_restyle_damage = "rebuild_box"
+affects = "layout"
+
+[text-justify]
+type = "TextJustify"
+initial = "computed::TextJustify::Auto"
+struct = "inherited_text"
+animation_type = "discrete"
+spec = "https://drafts.csswg.org/css-text/#propdef-text-justify"
+servo_restyle_damage = "rebuild_box"
+affects = "layout"
+
+[text-shadow]
+type = "SimpleShadow"
+struct = "inherited_text"
+vector = { simple_bindings = true, animation_type = "with_zero" }
+ignored_when_colors_disabled = true
+spec = "https://drafts.csswg.org/css-text-decor-3/#text-shadow-property"
+servo_restyle_damage = "repaint"
+affects = "overflow"
+
+[text-size-adjust]
+type = "TextSizeAdjust"
+initial = "computed::TextSizeAdjust::auto()"
+struct = "inherited_text"
+animation_type = "discrete"
+spec = "https://drafts.csswg.org/css-size-adjust/#adjustment-control"
+affects = "layout"
+
+[text-transform]
+type = "TextTransform"
+initial = "computed::TextTransform::none()"
+struct = "inherited_text"
+animation_type = "discrete"
+spec = "https://drafts.csswg.org/css-text/#propdef-text-transform"
+servo_restyle_damage = "rebuild_box"
+affects = "layout"
+
+[top]
+type = "Inset"
+initial = "computed::Inset::auto()"
+struct = "position"
+spec = "https://www.w3.org/TR/CSS2/visuren.html#propdef-top"
+allow_quirks = true
+rule_types_allowed = ["style", "keyframe", "scope", "position-try"]
+gecko_ffi_name = "mOffset.0"
+servo_restyle_damage = "rebuild_box"
+logical_group = "inset"
+affects = "layout"
+
+[touch-action]
+type = "TouchAction"
+initial = "computed::TouchAction::auto()"
+struct = "box"
+servo_pref = "layout.unimplemented"
+animation_type = "discrete"
+spec = "https://compat.spec.whatwg.org/#touch-action"
+affects = "paint"
+
+[transform]
+type = "Transform"
+initial = "generics::transform::Transform::none()"
+struct = "box"
+extra_prefixes = ["moz:layout.css.prefixes.transforms"]
+flags = "CAN_ANIMATE_ON_COMPOSITOR"
+spec = "https://drafts.csswg.org/css-transforms/#propdef-transform"
+servo_restyle_damage = "recalculate_overflow"
+affects = "overflow"
+
+[transform-box]
+type = "TransformBox"
+initial = "computed::TransformBox::ViewBox"
+struct = "box"
+spec = "https://drafts.csswg.org/css-transforms/#transform-box"
+animation_type = "discrete"
+affects = "overflow"
+
+[transform-origin]
+type = "TransformOrigin"
+initial = "computed::TransformOrigin::initial_value()"
+struct = "box"
+extra_prefixes = ["moz:layout.css.prefixes.transforms", "webkit"]
+gecko_ffi_name = "mTransformOrigin"
+boxed = true
+spec = "https://drafts.csswg.org/css-transforms/#transform-origin-property"
+servo_restyle_damage = "recalculate_overflow"
+affects = "overflow"
+
+[transform-style]
+type = "TransformStyle"
+initial = "computed::TransformStyle::Flat"
+struct = "box"
+spec = "https://drafts.csswg.org/css-transforms-2/#transform-style-property"
+extra_prefixes = ["moz:layout.css.prefixes.transforms", "webkit"]
+animation_type = "discrete"
+servo_restyle_damage = "recalculate_overflow"
+affects = "overflow"
+
+[transition-behavior]
+type = "TransitionBehavior"
+initial = "computed::TransitionBehavior::normal()"
+struct = "ui"
+vector = { need_index = true }
+animation_type = "none"
+spec = "https://drafts.csswg.org/css-transitions-2/#transition-behavior-property"
+affects = ""
+
+[transition-delay]
+type = "Time"
+initial = "computed::Time::zero()"
+struct = "ui"
+vector = { need_index = true }
+animation_type = "none"
+extra_prefixes = ["moz:layout.css.prefixes.transitions", "webkit"]
+spec = "https://drafts.csswg.org/css-transitions/#propdef-transition-delay"
+affects = ""
+
+[transition-duration]
+type = "Time"
+initial = "computed::Time::zero()"
+struct = "ui"
+parse_method = "parse_non_negative"
+vector = { need_index = true }
+animation_type = "none"
+extra_prefixes = ["moz:layout.css.prefixes.transitions", "webkit"]
+spec = "https://drafts.csswg.org/css-transitions/#propdef-transition-duration"
+affects = ""
+
+[transition-property]
+type = "TransitionProperty"
+initial = "computed::TransitionProperty::all()"
+struct = "ui"
+vector = { none_value = "computed::TransitionProperty::none()", need_index = true }
+animation_type = "none"
+extra_prefixes = ["moz:layout.css.prefixes.transitions", "webkit"]
+spec = "https://drafts.csswg.org/css-transitions/#propdef-transition-property"
+affects = ""
+
+[transition-timing-function]
+type = "TimingFunction"
+initial = "computed::TimingFunction::ease()"
+struct = "ui"
+vector = { need_index = true }
+animation_type = "none"
+extra_prefixes = ["moz:layout.css.prefixes.transitions", "webkit"]
+spec = "https://drafts.csswg.org/css-transitions/#propdef-transition-timing-function"
+affects = ""
+
+[translate]
+type = "Translate"
+initial = "generics::transform::Translate::None"
+struct = "box"
+boxed = true
+flags = "CAN_ANIMATE_ON_COMPOSITOR"
+spec = "https://drafts.csswg.org/css-transforms-2/#individual-transforms"
+servo_restyle_damage = "recalculate_overflow"
+affects = "overflow"
+
+[user-select]
+type = "UserSelect"
+initial = "computed::UserSelect::Auto"
+struct = "ui"
+animation_type = "discrete"
+spec = "https://drafts.csswg.org/css-ui-4/#propdef-user-select"
+affects = ""
+
+[-moz-force-broken-image-icon]
+type = "BoolInteger"
+initial = "computed::BoolInteger::zero()"
+struct = "ui"
+engine = "gecko"
+animation_type = "discrete"
+spec = "None (Nonstandard Firefox-only property)"
+affects = "layout"
+
+[-moz-subtree-hidden-only-visually]
+type = "BoolInteger"
+initial = "computed::BoolInteger::zero()"
+struct = "ui"
+engine = "gecko"
+animation_type = "discrete"
+spec = "None (Nonstandard internal property)"
+enabled_in = "chrome"
+affects = "paint"
+
+[-moz-window-input-region-margin]
+type = "Length"
+initial = "computed::Length::zero()"
+struct = "ui"
+engine = "gecko"
+spec = "None (Nonstandard internal property)"
+enabled_in = "chrome"
+affects = ""
+
+[-moz-window-opacity]
+type = "Opacity"
+initial = "1.0"
+struct = "ui"
+engine = "gecko"
+gecko_ffi_name = "mWindowOpacity"
+spec = "None (Nonstandard internal property)"
+enabled_in = "chrome"
+affects = "paint"
+
+[-moz-window-transform]
+type = "Transform"
+initial = "generics::transform::Transform::none()"
+struct = "ui"
+engine = "gecko"
+spec = "None (Nonstandard internal property)"
+enabled_in = "chrome"
+affects = "overflow"
+
+[animation-composition]
+type = "AnimationComposition"
+initial = "computed::AnimationComposition::Replace"
+struct = "ui"
+vector = { need_index = true }
+animation_type = "none"
+servo_pref = "layout.unimplemented"
+spec = "https://drafts.csswg.org/css-animations-2/#animation-composition"
+affects = ""
+
+[scroll-timeline-axis]
+type = "ScrollAxis"
+initial = "computed::ScrollAxis::default()"
+struct = "ui"
+vector = { need_index = true }
+animation_type = "none"
+gecko_pref = "layout.css.scroll-driven-animations.enabled"
+spec = "https://drafts.csswg.org/scroll-animations-1/#scroll-timeline-axis"
+rule_types_allowed = ["style", "scope"]
+affects = ""
+
+[scroll-timeline-name]
+type = "TimelineName"
+initial = "computed::TimelineName::none()"
+struct = "ui"
+vector = { need_index = true }
+animation_type = "none"
+gecko_pref = "layout.css.scroll-driven-animations.enabled"
+spec = "https://drafts.csswg.org/scroll-animations-1/#scroll-timeline-name"
+rule_types_allowed = ["style", "scope"]
+affects = ""
+
+[view-timeline-axis]
+type = "ScrollAxis"
+initial = "computed::ScrollAxis::default()"
+struct = "ui"
+vector = { need_index = true }
+animation_type = "none"
+gecko_pref = "layout.css.scroll-driven-animations.enabled"
+spec = "https://drafts.csswg.org/scroll-animations-1/#view-timeline-axis"
+rule_types_allowed = ["style", "scope"]
+affects = ""
+
+[view-timeline-inset]
+type = "ViewTimelineInset"
+initial = "computed::ViewTimelineInset::default()"
+struct = "ui"
+vector = { need_index = true }
+animation_type = "none"
+gecko_pref = "layout.css.scroll-driven-animations.enabled"
+spec = "https://drafts.csswg.org/scroll-animations-1/#view-timeline-axis"
+rule_types_allowed = ["style", "scope"]
+affects = ""
+
+[view-timeline-name]
+type = "TimelineName"
+initial = "computed::TimelineName::none()"
+struct = "ui"
+vector = { need_index = true }
+animation_type = "none"
+gecko_pref = "layout.css.scroll-driven-animations.enabled"
+spec = "https://drafts.csswg.org/scroll-animations-1/#view-timeline-name"
+rule_types_allowed = ["style", "scope"]
+affects = ""
+
+[view-transition-class]
+type = "ViewTransitionClass"
+initial = "computed::ViewTransitionClass::none()"
+struct = "ui"
+servo_pref = "layout.unimplemented"
+animation_type = "discrete"
+gecko_pref = "dom.viewTransitions.enabled"
+spec = "https://drafts.csswg.org/css-view-transitions-2/#view-transition-class-prop"
+affects = ""
+enabled_in = "ua"
+
+[view-transition-name]
+type = "ViewTransitionName"
+initial = "computed::ViewTransitionName::none()"
+struct = "ui"
+servo_pref = "layout.unimplemented"
+animation_type = "discrete"
+gecko_pref = "dom.viewTransitions.enabled"
+spec = "https://drafts.csswg.org/css-view-transitions-1/#view-transition-name-prop"
+affects = ""
+enabled_in = "ua"
+
+[vector-effect]
+type = "VectorEffect"
+initial = "computed::VectorEffect::none()"
+struct = "svg"
+animation_type = "discrete"
+spec = "https://svgwg.org/svg2-draft/coords.html#VectorEffects"
+affects = "layout"
+
+[cx]
+type = "LengthPercentage"
+initial = "computed::LengthPercentage::zero()"
+struct = "svg"
+spec = "https://svgwg.org/svg2-draft/geometry.html#CX"
+affects = "layout"
+
+[cy]
+type = "LengthPercentage"
+initial = "computed::LengthPercentage::zero()"
+struct = "svg"
+spec = "https://svgwg.org/svg2-draft/geometry.html#CY"
+affects = "layout"
+
+[mask-image]
+type = "Image"
+initial = "computed::Image::None"
+struct = "svg"
+servo_pref = "layout.unimplemented"
+parse_method = "parse_with_cors_anonymous"
+spec = "https://drafts.fxtf.org/css-masking-1/#propdef-mask-image"
+vector = {}
+extra_prefixes = ["webkit"]
+animation_type = "discrete"
+affects = "paint"
+
+[mask-position-x]
+type = "position::HorizontalPosition"
+initial = "computed::LengthPercentage::zero_percent()"
+struct = "svg"
+servo_pref = "layout.unimplemented"
+extra_prefixes = ["webkit"]
+spec = "https://drafts.fxtf.org/css-masking-1/#propdef-mask-position"
+vector = { animation_type = "repeatable_list" }
+affects = "paint"
+
+[mask-position-y]
+type = "position::VerticalPosition"
+initial = "computed::LengthPercentage::zero_percent()"
+struct = "svg"
+servo_pref = "layout.unimplemented"
+extra_prefixes = ["webkit"]
+spec = "https://drafts.fxtf.org/css-masking-1/#propdef-mask-position"
+vector = { animation_type = "repeatable_list" }
+affects = "paint"
+
+[mask-repeat]
+type = "BackgroundRepeat"
+initial = "computed::BackgroundRepeat::repeat()"
+struct = "svg"
+servo_pref = "layout.unimplemented"
+extra_prefixes = ["webkit"]
+animation_type = "discrete"
+spec = "https://drafts.fxtf.org/css-masking-1/#propdef-mask-repeat"
+vector = {}
+affects = "paint"
+
+[mask-size]
+type = "background::BackgroundSize"
+initial = "computed::BackgroundSize::auto()"
+struct = "svg"
+servo_pref = "layout.unimplemented"
+extra_prefixes = ["webkit"]
+spec = "https://drafts.fxtf.org/css-masking-1/#propdef-mask-size"
+vector = { animation_type = "repeatable_list" }
+affects = "paint"
+
+[r]
+type = "NonNegativeLengthPercentage"
+initial = "computed::NonNegativeLengthPercentage::zero()"
+struct = "svg"
+spec = "https://svgwg.org/svg2-draft/geometry.html#R"
+affects = "layout"
+
+[rx]
+type = "NonNegativeLengthPercentageOrAuto"
+initial = "computed::NonNegativeLengthPercentageOrAuto::auto()"
+struct = "svg"
+spec = "https://svgwg.org/svg2-draft/geometry.html#RX"
+affects = "layout"
+
+[ry]
+type = "NonNegativeLengthPercentageOrAuto"
+initial = "computed::NonNegativeLengthPercentageOrAuto::auto()"
+struct = "svg"
+spec = "https://svgwg.org/svg2-draft/geometry.html#RY"
+affects = "layout"
+
+[x]
+type = "LengthPercentage"
+initial = "computed::LengthPercentage::zero()"
+struct = "svg"
+spec = "https://svgwg.org/svg2-draft/geometry.html#X"
+affects = "layout"
+
+[y]
+type = "LengthPercentage"
+initial = "computed::LengthPercentage::zero()"
+struct = "svg"
+spec = "https://svgwg.org/svg2-draft/geometry.html#Y"
+affects = "layout"
+
+[width]
+type = "Size"
+initial = "computed::Size::auto()"
+struct = "position"
+logical_group = "size"
+allow_quirks = true
+parse_method = "parse_size_for_width_or_height"
+spec = "https://drafts.csswg.org/css-box/#propdef-width"
+rule_types_allowed = ["style", "keyframe", "scope", "position-try"]
+servo_restyle_damage = "rebuild_box"
+affects = "layout"
+
+[will-change]
+type = "WillChange"
+initial = "computed::WillChange::auto()"
+struct = "box"
+animation_type = "none"
+spec = "https://drafts.csswg.org/css-will-change/#will-change"
+affects = "layout"
+
+[word-break]
+type = "WordBreak"
+initial = "computed::WordBreak::Normal"
+struct = "inherited_text"
+animation_type = "discrete"
+spec = "https://drafts.csswg.org/css-text/#propdef-word-break"
+servo_restyle_damage = "rebuild_box"
+affects = "layout"
+
+[widows]
+type = "Integer"
+initial = "2"
+struct = "inherited_box"
+parse_method = "parse_positive"
+spec = "https://drafts.csswg.org/css-break/#propdef-widows"
+animation_type = "discrete"
+affects = "layout"
+
+[word-spacing]
+type = "WordSpacing"
+initial = "computed::WordSpacing::zero()"
+struct = "inherited_text"
+spec = "https://drafts.csswg.org/css-text/#propdef-word-spacing"
+servo_restyle_damage = "rebuild_box"
+affects = "layout"
+
+[-moz-control-character-visibility]
+type = "text::MozControlCharacterVisibility"
+initial = "Default::default()"
+struct = "inherited_text"
+engine = "gecko"
+enabled_in = "chrome"
+gecko_pref = "layout.css.moz-control-character-visibility.enabled"
+has_effect_on_gecko_scrollbars = false
+animation_type = "none"
+spec = "Nonstandard"
+affects = "layout"
+
+[-webkit-text-fill-color]
+type = "Color"
+initial = "computed_value::T::currentcolor()"
+struct = "inherited_text"
+ignored_when_colors_disabled = true
+spec = "https://compat.spec.whatwg.org/#the-webkit-text-fill-color"
+affects = "paint"
+
+[-webkit-text-stroke-color]
+type = "Color"
+initial = "computed_value::T::currentcolor()"
+struct = "inherited_text"
+ignored_when_colors_disabled = true
+spec = "https://compat.spec.whatwg.org/#the-webkit-text-stroke-color"
+affects = "paint"
+
+[-webkit-text-stroke-width]
+type = "LineWidth"
+initial = "app_units::Au(0)"
+struct = "inherited_text"
+spec = "https://compat.spec.whatwg.org/#the-webkit-text-stroke-width"
+animation_type = "discrete"
+affects = "overflow"
+
+[forced-color-adjust]
+type = "ForcedColorAdjust"
+initial = "computed::ForcedColorAdjust::Auto"
+struct = "inherited_text"
+animation_type = "discrete"
+spec = "https://drafts.csswg.org/css-color-adjust-1/#forced-color-adjust-prop"
+affects = "paint"
+
+[hyphenate-character]
+type = "HyphenateCharacter"
+initial = "computed::HyphenateCharacter::Auto"
+struct = "inherited_text"
+animation_type = "discrete"
+spec = "https://www.w3.org/TR/css-text-4/#hyphenate-character"
+affects = "layout"
+
+[hyphenate-limit-chars]
+type = "HyphenateLimitChars"
+initial = "computed::HyphenateLimitChars::auto()"
+struct = "inherited_text"
+spec = "https://drafts.csswg.org/css-text-4/#hyphenate-char-limits"
+affects = "layout"
+boxed = true
+
+[line-break]
+type = "LineBreak"
+initial = "computed::LineBreak::Auto"
+struct = "inherited_text"
+animation_type = "discrete"
+spec = "https://drafts.csswg.org/css-text-3/#line-break-property"
+affects = "layout"
+servo_restyle_damage = "rebuild_box"
+
+[ruby-position]
+type = "RubyPosition"
+initial = "computed::RubyPosition::AlternateOver"
+struct = "inherited_text"
+spec = "https://drafts.csswg.org/css-ruby/#ruby-position-property"
+animation_type = "discrete"
+affects = "layout"
+
+[tab-size]
+type = "NonNegativeLengthOrNumber"
+initial = "generics::length::LengthOrNumber::Number(From::from(8.0))"
+struct = "inherited_text"
+spec = "https://drafts.csswg.org/css-text-3/#tab-size-property"
+extra_gecko_aliases = ["-moz-tab-size"]
+affects = "layout"
+
+[text-autospace]
+type = "TextAutospace"
+initial = "computed::text::TextAutospace::NO_AUTOSPACE"
+struct = "inherited_text"
+animation_type = "discrete"
+gecko_pref = "layout.css.text-autospace.enabled"
+has_effect_on_gecko_scrollbars = false
+spec = "https://drafts.csswg.org/css-text-4/#text-autospace-property"
+affects = "layout"
+
+[text-box-edge]
+type = "TextBoxEdge"
+initial = "computed::TextBoxEdge::Auto"
+struct = "inherited_text"
+animation_type = "discrete"
+gecko_pref = "layout.css.text-box.enabled"
+has_effect_on_gecko_scrollbars = false
+spec = "https://drafts.csswg.org/css-inline/#text-box-edge"
+affects = "layout"
+
+[text-box-trim]
+type = "TextBoxTrim"
+initial = "computed::TextBoxTrim::none()"
+struct = "text"
+animation_type = "discrete"
+gecko_pref = "layout.css.text-box.enabled"
+has_effect_on_gecko_scrollbars = false
+spec = "https://drafts.csswg.org/css-inline/#text-box-trim"
+affects = "layout"
+
+[text-decoration-skip-ink]
+type = "TextDecorationSkipInk"
+initial = "computed::TextDecorationSkipInk::Auto"
+struct = "inherited_text"
+animation_type = "discrete"
+spec = "https://drafts.csswg.org/css-text-decor-4/#text-decoration-skip-ink-property"
+affects = "overflow"
+
+[text-emphasis-color]
+type = "Color"
+initial = "computed_value::T::currentcolor()"
+struct = "inherited_text"
+ignored_when_colors_disabled = true
+spec = "https://drafts.csswg.org/css-text-decor/#propdef-text-emphasis-color"
+affects = "paint"
+
+[text-emphasis-position]
+type = "TextEmphasisPosition"
+initial = "computed::TextEmphasisPosition::AUTO"
+struct = "inherited_text"
+animation_type = "discrete"
+spec = "https://drafts.csswg.org/css-text-decor/#propdef-text-emphasis-position"
+affects = "layout"
+
+[text-emphasis-style]
+type = "TextEmphasisStyle"
+initial = "computed::TextEmphasisStyle::None"
+struct = "inherited_text"
+animation_type = "discrete"
+spec = "https://drafts.csswg.org/css-text-decor/#propdef-text-emphasis-style"
+affects = "overflow"
+
+[text-underline-offset]
+type = "LengthPercentageOrAuto"
+initial = "computed::LengthPercentageOrAuto::auto()"
+struct = "inherited_text"
+spec = "https://drafts.csswg.org/css-text-decor-4/#underline-offset"
+servo_restyle_damage = "rebuild_stacking_context"
+affects = "overflow"
+
+[text-underline-position]
+type = "TextUnderlinePosition"
+initial = "computed::TextUnderlinePosition::AUTO"
+struct = "inherited_text"
+animation_type = "discrete"
+spec = "https://drafts.csswg.org/css-text-decor-3/#text-underline-position-property"
+servo_restyle_damage = "rebuild_stacking_context"
+affects = "overflow"
+
+[writing-mode]
+type = "WritingModeProperty"
+initial = "computed::WritingModeProperty::HorizontalTb"
+struct = "inherited_box"
+spec = "https://drafts.csswg.org/css-writing-modes/#propdef-writing-mode"
+servo_pref = "layout.writing-mode.enabled"
+animation_type = "none"
+servo_restyle_damage = "rebuild_box"
+affects = "layout"
+
+[z-index]
+type = "ZIndex"
+initial = "computed::ZIndex::auto()"
+struct = "position"
+spec = "https://www.w3.org/TR/CSS2/visuren.html#z-index"
+affects = "paint"
+servo_restyle_damage = "rebuild_stacking_context"
+
+[zoom]
+type = "Zoom"
+initial = "computed::box_::Zoom::ONE"
+struct = "box"
+spec = "Non-standard (https://github.com/atanassov/css-zoom/ is the closest)"
+gecko_pref = "layout.css.zoom.enabled"
+servo_pref = "layout.css.zoom.enabled"
+affects = "layout"
+
+[border-image-outset]
+type = "NonNegativeLengthOrNumberRect"
+initial = "generics::rect::Rect::all(computed::NonNegativeLengthOrNumber::zero())"
+struct = "border"
+spec = "https://drafts.csswg.org/css-backgrounds/#border-image-outset"
+boxed = true
+servo_restyle_damage = "repaint"
+affects = "paint"
+
+[border-image-repeat]
+type = "BorderImageRepeat"
+initial = "computed::BorderImageRepeat::stretch()"
+struct = "border"
+animation_type = "discrete"
+spec = "https://drafts.csswg.org/css-backgrounds/#the-border-image-repeat"
+servo_restyle_damage = "repaint"
+affects = "paint"
+
+[border-image-slice]
+type = "BorderImageSlice"
+initial = "computed::BorderImageSlice::hundred_percent()"
+struct = "border"
+spec = "https://drafts.csswg.org/css-backgrounds/#border-image-slice"
+boxed = true
+servo_restyle_damage = "repaint"
+affects = "paint"
+
+[border-image-source]
+type = "Image"
+initial = "computed::Image::None"
+struct = "border"
+animation_type = "discrete"
+ignored_when_colors_disabled = true
+servo_restyle_damage = "repaint"
+spec = "https://drafts.csswg.org/css-backgrounds/#the-background-image"
+affects = "paint"
+
+[border-image-width]
+type = "BorderImageWidth"
+initial = "computed::BorderImageWidth::all(computed::BorderImageSideWidth::one())"
+struct = "border"
+spec = "https://drafts.csswg.org/css-backgrounds/#border-image-width"
+boxed = true
+servo_restyle_damage = "repaint"
+affects = "paint"
+
+[text-overflow]
+type = "TextOverflow"
+initial = "computed::TextOverflow::get_initial_value()"
+struct = "text"
+servo_pref = "layout.unimplemented"
+animation_type = "discrete"
+boxed = true
+spec = "https://drafts.csswg.org/css-ui/#propdef-text-overflow"
+servo_restyle_damage = "rebuild_box"
+affects = "paint"
+
+[text-decoration-line]
+type = "TextDecorationLine"
+initial = "specified::TextDecorationLine::none()"
+struct = "text"
+animation_type = "discrete"
+spec = "https://drafts.csswg.org/css-text-decor/#propdef-text-decoration-line"
+servo_restyle_damage = "recalculate_overflow"
+affects = "overflow"
+
+[text-decoration-color]
+type = "Color"
+initial = "computed_value::T::currentcolor()"
+struct = "text"
+ignored_when_colors_disabled = true
+spec = "https://drafts.csswg.org/css-text-decor/#propdef-text-decoration-color"
+servo_restyle_damage = "recalculate_overflow"
+affects = "paint"
+
+[text-decoration-inset]
+type = "TextDecorationInset"
+initial = "computed::text::TextDecorationInset::get_initial_value()"
+struct = "text"
+boxed = true
+gecko_pref = "layout.css.text-decoration-inset.enabled"
+spec = "https://drafts.csswg.org/css-text-decor-4/#text-decoration-inset-property"
+servo_restyle_damage = "rebuild_stacking_context"
+affects = "overflow"
+
+[text-decoration-fill]
+type = "TextDecorationPaint"
+initial = "computed::TextDecorationPaint::match_text()"
+struct = "text"
+boxed = true
+animation_type = "discrete"
+spec = "https://drafts.fxtf.org/fill-stroke/#text-decor"
+affects = "paint"
+
+[text-decoration-stroke]
+type = "TextDecorationPaint"
+initial = "computed::TextDecorationPaint::match_text()"
+struct = "text"
+boxed = true
+animation_type = "discrete"
+spec = "https://drafts.fxtf.org/fill-stroke/#text-decor"
+affects = "paint"
+
+[text-decoration-skip-spaces]
+type = "TextDecorationSkipSpaces"
+initial = "computed::TextDecorationSkipSpaces::start_end()"
+struct = "text"
+animation_type = "discrete"
+spec = "https://drafts.csswg.org/css-text-decor-4/#text-decoration-skip-spaces-property"
+affects = "overflow"
+
+[initial-letter]
+type = "InitialLetter"
+initial = "computed::InitialLetter::normal()"
+struct = "text"
+animation_type = "discrete"
+gecko_pref = "layout.css.initial-letter.enabled"
+spec = "https://drafts.csswg.org/css-inline/#sizing-drop-initials"
+affects = "layout"
+
+[text-decoration-thickness]
+type = "TextDecorationLength"
+initial = "generics::text::GenericTextDecorationLength::Auto"
+struct = "text"
+spec = "https://drafts.csswg.org/css-text-decor-4/#text-decoration-width-property"
+servo_restyle_damage = "rebuild_stacking_context"
+affects = "overflow"
+
+[-x-span]
+type = "Integer"
+initial = "1"
+struct = "table"
+engine = "gecko"
+spec = "Internal-only (for `<col span>` pres attr)"
+animation_type = "none"
+enabled_in = ""
+affects = "layout"
+
+[border-top-color]
+type = "Color"
+initial = "computed_value::T::currentcolor()"
+struct = "border"
+spec = "https://drafts.csswg.org/css-backgrounds/#border-top-color"
+logical_group = "border-color"
+allow_quirks = true
+ignored_when_colors_disabled = true
+affects = "paint"
+
+[border-right-color]
+type = "Color"
+initial = "computed_value::T::currentcolor()"
+struct = "border"
+spec = "https://drafts.csswg.org/css-backgrounds/#border-right-color"
+logical_group = "border-color"
+allow_quirks = true
+ignored_when_colors_disabled = true
+affects = "paint"
+
+[border-bottom-color]
+type = "Color"
+initial = "computed_value::T::currentcolor()"
+struct = "border"
+spec = "https://drafts.csswg.org/css-backgrounds/#border-bottom-color"
+logical_group = "border-color"
+allow_quirks = true
+ignored_when_colors_disabled = true
+affects = "paint"
+
+[border-left-color]
+type = "Color"
+initial = "computed_value::T::currentcolor()"
+struct = "border"
+spec = "https://drafts.csswg.org/css-backgrounds/#border-left-color"
+logical_group = "border-color"
+allow_quirks = true
+ignored_when_colors_disabled = true
+affects = "paint"
+
+[border-block-start-color]
+type = "Color"
+initial = "computed_value::T::currentcolor()"
+struct = "border"
+spec = "https://drafts.csswg.org/css-logical-props/#propdef-border-block-start-color"
+logical = true
+logical_group = "border-color"
+ignored_when_colors_disabled = true
+affects = "paint"
+
+[border-block-end-color]
+type = "Color"
+initial = "computed_value::T::currentcolor()"
+struct = "border"
+spec = "https://drafts.csswg.org/css-logical-props/#propdef-border-block-end-color"
+logical = true
+logical_group = "border-color"
+ignored_when_colors_disabled = true
+affects = "paint"
+
+[border-inline-start-color]
+type = "Color"
+initial = "computed_value::T::currentcolor()"
+struct = "border"
+extra_gecko_aliases = ["-moz-border-start-color"]
+spec = "https://drafts.csswg.org/css-logical-props/#propdef-border-inline-start-color"
+logical = true
+logical_group = "border-color"
+ignored_when_colors_disabled = true
+affects = "paint"
+
+[border-inline-end-color]
+type = "Color"
+initial = "computed_value::T::currentcolor()"
+struct = "border"
+extra_gecko_aliases = ["-moz-border-end-color"]
+spec = "https://drafts.csswg.org/css-logical-props/#propdef-border-inline-end-color"
+logical = true
+logical_group = "border-color"
+ignored_when_colors_disabled = true
+affects = "paint"
+
+[border-top-style]
+type = "BorderStyle"
+initial = "specified::BorderStyle::None"
+struct = "border"
+spec = "https://drafts.csswg.org/css-backgrounds/#border-top-style"
+animation_type = "discrete"
+gecko_ffi_name = "mBorderStyle.0"
+logical_group = "border-style"
+affects = "layout"
+
+[border-right-style]
+type = "BorderStyle"
+initial = "specified::BorderStyle::None"
+struct = "border"
+spec = "https://drafts.csswg.org/css-backgrounds/#border-right-style"
+animation_type = "discrete"
+gecko_ffi_name = "mBorderStyle.1"
+logical_group = "border-style"
+affects = "layout"
+
+[border-bottom-style]
+type = "BorderStyle"
+initial = "specified::BorderStyle::None"
+struct = "border"
+spec = "https://drafts.csswg.org/css-backgrounds/#border-bottom-style"
+animation_type = "discrete"
+gecko_ffi_name = "mBorderStyle.2"
+logical_group = "border-style"
+affects = "layout"
+
+[border-left-style]
+type = "BorderStyle"
+initial = "specified::BorderStyle::None"
+struct = "border"
+spec = "https://drafts.csswg.org/css-backgrounds/#border-left-style"
+animation_type = "discrete"
+gecko_ffi_name = "mBorderStyle.3"
+logical_group = "border-style"
+affects = "layout"
+
+[border-block-start-style]
+type = "BorderStyle"
+initial = "specified::BorderStyle::None"
+struct = "border"
+spec = "https://drafts.csswg.org/css-logical-props/#propdef-border-block-start-style"
+animation_type = "none"
+gecko_ffi_name = "mBorderStyle.4"
+logical = true
+logical_group = "border-style"
+affects = "layout"
+
+[border-block-end-style]
+type = "BorderStyle"
+initial = "specified::BorderStyle::None"
+struct = "border"
+spec = "https://drafts.csswg.org/css-logical-props/#propdef-border-block-end-style"
+animation_type = "none"
+gecko_ffi_name = "mBorderStyle.5"
+logical = true
+logical_group = "border-style"
+affects = "layout"
+
+[border-inline-start-style]
+type = "BorderStyle"
+initial = "specified::BorderStyle::None"
+struct = "border"
+extra_gecko_aliases = ["-moz-border-start-style"]
+spec = "https://drafts.csswg.org/css-logical-props/#propdef-border-inline-start-style"
+animation_type = "none"
+gecko_ffi_name = "mBorderStyle.6"
+logical = true
+logical_group = "border-style"
+affects = "layout"
+
+[border-inline-end-style]
+type = "BorderStyle"
+initial = "specified::BorderStyle::None"
+struct = "border"
+extra_gecko_aliases = ["-moz-border-end-style"]
+spec = "https://drafts.csswg.org/css-logical-props/#propdef-border-inline-end-style"
+animation_type = "none"
+gecko_ffi_name = "mBorderStyle.7"
+logical = true
+logical_group = "border-style"
+affects = "layout"
+
+[border-top-width]
+type = "BorderSideWidth"
+initial = "computed::BorderSideWidth::medium()"
+struct = "border"
+spec = "https://drafts.csswg.org/css-backgrounds/#border-top-width"
+logical_group = "border-width"
+allow_quirks = true
+gecko_ffi_name = "mBorder.0"
+servo_restyle_damage = "rebuild_box"
+affects = "layout"
+
+[border-right-width]
+type = "BorderSideWidth"
+initial = "computed::BorderSideWidth::medium()"
+struct = "border"
+spec = "https://drafts.csswg.org/css-backgrounds/#border-right-width"
+logical_group = "border-width"
+allow_quirks = true
+gecko_ffi_name = "mBorder.1"
+servo_restyle_damage = "rebuild_box"
+affects = "layout"
+
+[border-bottom-width]
+type = "BorderSideWidth"
+initial = "computed::BorderSideWidth::medium()"
+struct = "border"
+spec = "https://drafts.csswg.org/css-backgrounds/#border-bottom-width"
+logical_group = "border-width"
+allow_quirks = true
+gecko_ffi_name = "mBorder.2"
+servo_restyle_damage = "rebuild_box"
+affects = "layout"
+
+[border-left-width]
+type = "BorderSideWidth"
+initial = "computed::BorderSideWidth::medium()"
+struct = "border"
+spec = "https://drafts.csswg.org/css-backgrounds/#border-left-width"
+logical_group = "border-width"
+allow_quirks = true
+gecko_ffi_name = "mBorder.3"
+servo_restyle_damage = "rebuild_box"
+affects = "layout"
+
+[border-block-start-width]
+type = "BorderSideWidth"
+initial = "computed::BorderSideWidth::medium()"
+struct = "border"
+spec = "https://drafts.csswg.org/css-logical-props/#propdef-border-block-start-width"
+logical = true
+logical_group = "border-width"
+gecko_ffi_name = "mBorder.4"
+servo_restyle_damage = "rebuild_box"
+affects = "layout"
+
+[border-block-end-width]
+type = "BorderSideWidth"
+initial = "computed::BorderSideWidth::medium()"
+struct = "border"
+spec = "https://drafts.csswg.org/css-logical-props/#propdef-border-block-end-width"
+logical = true
+logical_group = "border-width"
+gecko_ffi_name = "mBorder.5"
+servo_restyle_damage = "rebuild_box"
+affects = "layout"
+
+[border-inline-start-width]
+type = "BorderSideWidth"
+initial = "computed::BorderSideWidth::medium()"
+struct = "border"
+extra_gecko_aliases = ["-moz-border-start-width"]
+spec = "https://drafts.csswg.org/css-logical-props/#propdef-border-inline-start-width"
+logical = true
+logical_group = "border-width"
+gecko_ffi_name = "mBorder.6"
+servo_restyle_damage = "rebuild_box"
+affects = "layout"
+
+[border-inline-end-width]
+type = "BorderSideWidth"
+initial = "computed::BorderSideWidth::medium()"
+struct = "border"
+extra_gecko_aliases = ["-moz-border-end-width"]
+spec = "https://drafts.csswg.org/css-logical-props/#propdef-border-inline-end-width"
+logical = true
+logical_group = "border-width"
+gecko_ffi_name = "mBorder.7"
+servo_restyle_damage = "rebuild_box"
+affects = "layout"
+
+[border-top-left-radius]
+type = "BorderCornerRadius"
+initial = "computed::BorderCornerRadius::zero()"
+struct = "border"
+extra_prefixes = ["webkit"]
+spec = "https://drafts.csswg.org/css-backgrounds/#border-top-left-radius"
+gecko_ffi_name = "mBorderRadius.top_left"
+boxed = true
+logical_group = "border-radius"
+affects = "paint"
+
+[border-top-right-radius]
+type = "BorderCornerRadius"
+initial = "computed::BorderCornerRadius::zero()"
+struct = "border"
+extra_prefixes = ["webkit"]
+spec = "https://drafts.csswg.org/css-backgrounds/#border-top-right-radius"
+gecko_ffi_name = "mBorderRadius.top_right"
+boxed = true
+logical_group = "border-radius"
+affects = "paint"
+
+[border-bottom-right-radius]
+type = "BorderCornerRadius"
+initial = "computed::BorderCornerRadius::zero()"
+struct = "border"
+extra_prefixes = ["webkit"]
+spec = "https://drafts.csswg.org/css-backgrounds/#border-bottom-right-radius"
+gecko_ffi_name = "mBorderRadius.bottom_right"
+boxed = true
+logical_group = "border-radius"
+affects = "paint"
+
+[border-bottom-left-radius]
+type = "BorderCornerRadius"
+initial = "computed::BorderCornerRadius::zero()"
+struct = "border"
+extra_prefixes = ["webkit"]
+spec = "https://drafts.csswg.org/css-backgrounds/#border-bottom-left-radius"
+gecko_ffi_name = "mBorderRadius.bottom_left"
+boxed = true
+logical_group = "border-radius"
+affects = "paint"
+
+[border-start-start-radius]
+type = "BorderCornerRadius"
+initial = "computed::BorderCornerRadius::zero()"
+struct = "border"
+spec = "https://drafts.csswg.org/css-logical-props/#propdef-border-start-start-radius"
+gecko_ffi_name = "mBorderRadius.start_start"
+boxed = true
+logical_group = "border-radius"
+logical = true
+affects = "paint"
+
+[border-start-end-radius]
+type = "BorderCornerRadius"
+initial = "computed::BorderCornerRadius::zero()"
+struct = "border"
+spec = "https://drafts.csswg.org/css-logical-props/#propdef-border-start-end-radius"
+gecko_ffi_name = "mBorderRadius.start_end"
+boxed = true
+logical_group = "border-radius"
+logical = true
+affects = "paint"
+
+[border-end-start-radius]
+type = "BorderCornerRadius"
+initial = "computed::BorderCornerRadius::zero()"
+struct = "border"
+spec = "https://drafts.csswg.org/css-logical-props/#propdef-border-end-start-radius"
+gecko_ffi_name = "mBorderRadius.end_start"
+boxed = true
+logical_group = "border-radius"
+logical = true
+affects = "paint"
+
+[border-end-end-radius]
+type = "BorderCornerRadius"
+initial = "computed::BorderCornerRadius::zero()"
+struct = "border"
+spec = "https://drafts.csswg.org/css-logical-props/#propdef-border-end-end-radius"
+gecko_ffi_name = "mBorderRadius.end_end"
+boxed = true
+logical_group = "border-radius"
+logical = true
+affects = "paint"
+
+[corner-top-left-shape]
+type = "CornerShape"
+initial = "computed::CornerShape::round()"
+initial_specified_value = "specified::CornerShape::round()"
+struct = "border"
+gecko_pref = "layout.css.corner-shape.enabled"
+servo_pref = "layout.unimplemented"
+spec = "https://drafts.csswg.org/css-borders-4/#propdef-corner-top-left-shape"
+gecko_ffi_name = "mCornerShape.top_left"
+logical_group = "corner-shape"
+affects = "paint"
+
+[corner-top-right-shape]
+type = "CornerShape"
+initial = "computed::CornerShape::round()"
+initial_specified_value = "specified::CornerShape::round()"
+struct = "border"
+gecko_pref = "layout.css.corner-shape.enabled"
+servo_pref = "layout.unimplemented"
+spec = "https://drafts.csswg.org/css-borders-4/#propdef-corner-top-right-shape"
+gecko_ffi_name = "mCornerShape.top_right"
+logical_group = "corner-shape"
+affects = "paint"
+
+[corner-bottom-right-shape]
+type = "CornerShape"
+initial = "computed::CornerShape::round()"
+initial_specified_value = "specified::CornerShape::round()"
+struct = "border"
+gecko_pref = "layout.css.corner-shape.enabled"
+servo_pref = "layout.unimplemented"
+spec = "https://drafts.csswg.org/css-borders-4/#propdef-corner-bottom-right-shape"
+gecko_ffi_name = "mCornerShape.bottom_right"
+logical_group = "corner-shape"
+affects = "paint"
+
+[corner-bottom-left-shape]
+type = "CornerShape"
+initial = "computed::CornerShape::round()"
+initial_specified_value = "specified::CornerShape::round()"
+struct = "border"
+gecko_pref = "layout.css.corner-shape.enabled"
+servo_pref = "layout.unimplemented"
+spec = "https://drafts.csswg.org/css-borders-4/#propdef-corner-bottom-left-shape"
+gecko_ffi_name = "mCornerShape.bottom_left"
+logical_group = "corner-shape"
+affects = "paint"
+
+[corner-start-start-shape]
+type = "CornerShape"
+initial = "computed::CornerShape::round()"
+initial_specified_value = "specified::CornerShape::round()"
+struct = "border"
+gecko_pref = "layout.css.corner-shape.enabled"
+servo_pref = "layout.unimplemented"
+spec = "https://drafts.csswg.org/css-borders-4/#propdef-corner-start-start-shape"
+gecko_ffi_name = "mCornerShape.start_start"
+logical_group = "corner-shape"
+logical = true
+affects = "paint"
+
+[corner-start-end-shape]
+type = "CornerShape"
+initial = "computed::CornerShape::round()"
+initial_specified_value = "specified::CornerShape::round()"
+struct = "border"
+gecko_pref = "layout.css.corner-shape.enabled"
+servo_pref = "layout.unimplemented"
+spec = "https://drafts.csswg.org/css-borders-4/#propdef-corner-start-end-shape"
+gecko_ffi_name = "mCornerShape.start_end"
+logical_group = "corner-shape"
+logical = true
+affects = "paint"
+
+[corner-end-start-shape]
+type = "CornerShape"
+initial = "computed::CornerShape::round()"
+initial_specified_value = "specified::CornerShape::round()"
+struct = "border"
+gecko_pref = "layout.css.corner-shape.enabled"
+servo_pref = "layout.unimplemented"
+spec = "https://drafts.csswg.org/css-borders-4/#propdef-corner-end-start-shape"
+gecko_ffi_name = "mCornerShape.end_start"
+logical_group = "corner-shape"
+logical = true
+affects = "paint"
+
+[corner-end-end-shape]
+type = "CornerShape"
+initial = "computed::CornerShape::round()"
+initial_specified_value = "specified::CornerShape::round()"
+struct = "border"
+gecko_pref = "layout.css.corner-shape.enabled"
+servo_pref = "layout.unimplemented"
+spec = "https://drafts.csswg.org/css-borders-4/#propdef-corner-end-end-shape"
+gecko_ffi_name = "mCornerShape.end_end"
+logical_group = "corner-shape"
+logical = true
+affects = "paint"
+
+[margin-top]
+type = "Margin"
+initial = "computed::Margin::zero()"
+struct = "margin"
+allow_quirks = true
+logical_group = "margin"
+gecko_ffi_name = "mMargin.0"
+spec = "https://drafts.csswg.org/css-box/#propdef-margin-top"
+rule_types_allowed = ["style", "keyframe", "page", "scope", "position-try"]
+servo_restyle_damage = "rebuild_box"
+affects = "layout"
+
+[margin-right]
+type = "Margin"
+initial = "computed::Margin::zero()"
+struct = "margin"
+allow_quirks = true
+logical_group = "margin"
+gecko_ffi_name = "mMargin.1"
+spec = "https://drafts.csswg.org/css-box/#propdef-margin-right"
+rule_types_allowed = ["style", "keyframe", "page", "scope", "position-try"]
+servo_restyle_damage = "rebuild_box"
+affects = "layout"
+
+[margin-bottom]
+type = "Margin"
+initial = "computed::Margin::zero()"
+struct = "margin"
+allow_quirks = true
+logical_group = "margin"
+gecko_ffi_name = "mMargin.2"
+spec = "https://drafts.csswg.org/css-box/#propdef-margin-bottom"
+rule_types_allowed = ["style", "keyframe", "page", "scope", "position-try"]
+servo_restyle_damage = "rebuild_box"
+affects = "layout"
+
+[margin-left]
+type = "Margin"
+initial = "computed::Margin::zero()"
+struct = "margin"
+allow_quirks = true
+logical_group = "margin"
+gecko_ffi_name = "mMargin.3"
+spec = "https://drafts.csswg.org/css-box/#propdef-margin-left"
+rule_types_allowed = ["style", "keyframe", "page", "scope", "position-try"]
+servo_restyle_damage = "rebuild_box"
+affects = "layout"
+
+[margin-block-start]
+type = "Margin"
+initial = "computed::Margin::zero()"
+struct = "margin"
+logical = true
+logical_group = "margin"
+gecko_ffi_name = "mMargin.4"
+spec = "https://drafts.csswg.org/css-logical-props/#propdef-margin-block-start"
+rule_types_allowed = ["style", "keyframe", "scope", "position-try"]
+servo_restyle_damage = "rebuild_box"
+affects = "layout"
+
+[margin-block-end]
+type = "Margin"
+initial = "computed::Margin::zero()"
+struct = "margin"
+logical = true
+logical_group = "margin"
+gecko_ffi_name = "mMargin.5"
+spec = "https://drafts.csswg.org/css-logical-props/#propdef-margin-block-end"
+rule_types_allowed = ["style", "keyframe", "scope", "position-try"]
+servo_restyle_damage = "rebuild_box"
+affects = "layout"
+
+[margin-inline-start]
+type = "Margin"
+initial = "computed::Margin::zero()"
+struct = "margin"
+extra_gecko_aliases = ["-moz-margin-start"]
+logical = true
+logical_group = "margin"
+gecko_ffi_name = "mMargin.6"
+spec = "https://drafts.csswg.org/css-logical-props/#propdef-margin-inline-start"
+rule_types_allowed = ["style", "keyframe", "scope", "position-try"]
+servo_restyle_damage = "rebuild_box"
+affects = "layout"
+
+[margin-inline-end]
+type = "Margin"
+initial = "computed::Margin::zero()"
+struct = "margin"
+extra_gecko_aliases = ["-moz-margin-end"]
+logical = true
+logical_group = "margin"
+gecko_ffi_name = "mMargin.7"
+spec = "https://drafts.csswg.org/css-logical-props/#propdef-margin-inline-end"
+rule_types_allowed = ["style", "keyframe", "scope", "position-try"]
+servo_restyle_damage = "rebuild_box"
+affects = "layout"
+
+[scroll-margin-top]
+type = "Length"
+initial = "computed::Length::zero()"
+struct = "margin"
+logical_group = "scroll-margin"
+gecko_ffi_name = "mScrollMargin.0"
+spec = "https://drafts.csswg.org/css-scroll-snap-1/#propdef-scroll-margin-top"
+affects = ""
+
+[scroll-margin-right]
+type = "Length"
+initial = "computed::Length::zero()"
+struct = "margin"
+logical_group = "scroll-margin"
+gecko_ffi_name = "mScrollMargin.1"
+spec = "https://drafts.csswg.org/css-scroll-snap-1/#propdef-scroll-margin-right"
+affects = ""
+
+[scroll-margin-bottom]
+type = "Length"
+initial = "computed::Length::zero()"
+struct = "margin"
+logical_group = "scroll-margin"
+gecko_ffi_name = "mScrollMargin.2"
+spec = "https://drafts.csswg.org/css-scroll-snap-1/#propdef-scroll-margin-bottom"
+affects = ""
+
+[scroll-margin-left]
+type = "Length"
+initial = "computed::Length::zero()"
+struct = "margin"
+logical_group = "scroll-margin"
+gecko_ffi_name = "mScrollMargin.3"
+spec = "https://drafts.csswg.org/css-scroll-snap-1/#propdef-scroll-margin-left"
+affects = ""
+
+[scroll-margin-block-start]
+type = "Length"
+initial = "computed::Length::zero()"
+struct = "margin"
+logical = true
+logical_group = "scroll-margin"
+gecko_ffi_name = "mScrollMargin.4"
+spec = "https://drafts.csswg.org/css-scroll-snap-1/#propdef-scroll-margin-block-start"
+affects = ""
+
+[scroll-margin-block-end]
+type = "Length"
+initial = "computed::Length::zero()"
+struct = "margin"
+logical = true
+logical_group = "scroll-margin"
+gecko_ffi_name = "mScrollMargin.5"
+spec = "https://drafts.csswg.org/css-scroll-snap-1/#propdef-scroll-margin-block-end"
+affects = ""
+
+[scroll-margin-inline-start]
+type = "Length"
+initial = "computed::Length::zero()"
+struct = "margin"
+logical = true
+logical_group = "scroll-margin"
+gecko_ffi_name = "mScrollMargin.6"
+spec = "https://drafts.csswg.org/css-scroll-snap-1/#propdef-scroll-margin-inline-start"
+affects = ""
+
+[scroll-margin-inline-end]
+type = "Length"
+initial = "computed::Length::zero()"
+struct = "margin"
+logical = true
+logical_group = "scroll-margin"
+gecko_ffi_name = "mScrollMargin.7"
+spec = "https://drafts.csswg.org/css-scroll-snap-1/#propdef-scroll-margin-inline-end"
+affects = ""
+
+[padding-top]
+type = "NonNegativeLengthPercentage"
+initial = "computed::NonNegativeLengthPercentage::zero()"
+struct = "padding"
+logical_group = "padding"
+spec = "https://drafts.csswg.org/css-box/#propdef-padding-top"
+gecko_ffi_name = "mPadding.0"
+allow_quirks = true
+servo_restyle_damage = "rebuild_box"
+affects = "layout"
+
+[padding-right]
+type = "NonNegativeLengthPercentage"
+initial = "computed::NonNegativeLengthPercentage::zero()"
+struct = "padding"
+logical_group = "padding"
+spec = "https://drafts.csswg.org/css-box/#propdef-padding-right"
+gecko_ffi_name = "mPadding.1"
+allow_quirks = true
+servo_restyle_damage = "rebuild_box"
+affects = "layout"
+
+[padding-bottom]
+type = "NonNegativeLengthPercentage"
+initial = "computed::NonNegativeLengthPercentage::zero()"
+struct = "padding"
+logical_group = "padding"
+spec = "https://drafts.csswg.org/css-box/#propdef-padding-bottom"
+gecko_ffi_name = "mPadding.2"
+allow_quirks = true
+servo_restyle_damage = "rebuild_box"
+affects = "layout"
+
+[padding-left]
+type = "NonNegativeLengthPercentage"
+initial = "computed::NonNegativeLengthPercentage::zero()"
+struct = "padding"
+logical_group = "padding"
+spec = "https://drafts.csswg.org/css-box/#propdef-padding-left"
+gecko_ffi_name = "mPadding.3"
+allow_quirks = true
+servo_restyle_damage = "rebuild_box"
+affects = "layout"
+
+[padding-block-start]
+type = "NonNegativeLengthPercentage"
+initial = "computed::NonNegativeLengthPercentage::zero()"
+struct = "padding"
+logical = true
+logical_group = "padding"
+spec = "https://drafts.csswg.org/css-logical-props/#propdef-padding-block-start"
+gecko_ffi_name = "mPadding.4"
+servo_restyle_damage = "rebuild_box"
+affects = "layout"
+
+[padding-block-end]
+type = "NonNegativeLengthPercentage"
+initial = "computed::NonNegativeLengthPercentage::zero()"
+struct = "padding"
+logical = true
+logical_group = "padding"
+spec = "https://drafts.csswg.org/css-logical-props/#propdef-padding-block-end"
+gecko_ffi_name = "mPadding.5"
+servo_restyle_damage = "rebuild_box"
+affects = "layout"
+
+[padding-inline-start]
+type = "NonNegativeLengthPercentage"
+initial = "computed::NonNegativeLengthPercentage::zero()"
+struct = "padding"
+extra_gecko_aliases = ["-moz-padding-start"]
+logical = true
+logical_group = "padding"
+spec = "https://drafts.csswg.org/css-logical-props/#propdef-padding-inline-start"
+gecko_ffi_name = "mPadding.6"
+servo_restyle_damage = "rebuild_box"
+affects = "layout"
+
+[padding-inline-end]
+type = "NonNegativeLengthPercentage"
+initial = "computed::NonNegativeLengthPercentage::zero()"
+struct = "padding"
+extra_gecko_aliases = ["-moz-padding-end"]
+logical = true
+logical_group = "padding"
+spec = "https://drafts.csswg.org/css-logical-props/#propdef-padding-inline-end"
+gecko_ffi_name = "mPadding.7"
+servo_restyle_damage = "rebuild_box"
+affects = "layout"
+
+[scroll-padding-top]
+type = "NonNegativeLengthPercentageOrAuto"
+initial = "computed::NonNegativeLengthPercentageOrAuto::auto()"
+struct = "padding"
+logical_group = "scroll-padding"
+gecko_ffi_name = "mScrollPadding.0"
+spec = "https://drafts.csswg.org/css-scroll-snap-1/#propdef-scroll-padding-top"
+affects = ""
+
+[scroll-padding-right]
+type = "NonNegativeLengthPercentageOrAuto"
+initial = "computed::NonNegativeLengthPercentageOrAuto::auto()"
+struct = "padding"
+logical_group = "scroll-padding"
+gecko_ffi_name = "mScrollPadding.1"
+spec = "https://drafts.csswg.org/css-scroll-snap-1/#propdef-scroll-padding-right"
+affects = ""
+
+[scroll-padding-bottom]
+type = "NonNegativeLengthPercentageOrAuto"
+initial = "computed::NonNegativeLengthPercentageOrAuto::auto()"
+struct = "padding"
+logical_group = "scroll-padding"
+gecko_ffi_name = "mScrollPadding.2"
+spec = "https://drafts.csswg.org/css-scroll-snap-1/#propdef-scroll-padding-bottom"
+affects = ""
+
+[scroll-padding-left]
+type = "NonNegativeLengthPercentageOrAuto"
+initial = "computed::NonNegativeLengthPercentageOrAuto::auto()"
+struct = "padding"
+logical_group = "scroll-padding"
+gecko_ffi_name = "mScrollPadding.3"
+spec = "https://drafts.csswg.org/css-scroll-snap-1/#propdef-scroll-padding-left"
+affects = ""
+
+[scroll-padding-block-start]
+type = "NonNegativeLengthPercentageOrAuto"
+initial = "computed::NonNegativeLengthPercentageOrAuto::auto()"
+struct = "padding"
+logical = true
+logical_group = "scroll-padding"
+gecko_ffi_name = "mScrollPadding.4"
+spec = "https://drafts.csswg.org/css-scroll-snap-1/#propdef-scroll-padding-block-start"
+affects = ""
+
+[scroll-padding-block-end]
+type = "NonNegativeLengthPercentageOrAuto"
+initial = "computed::NonNegativeLengthPercentageOrAuto::auto()"
+struct = "padding"
+logical = true
+logical_group = "scroll-padding"
+gecko_ffi_name = "mScrollPadding.5"
+spec = "https://drafts.csswg.org/css-scroll-snap-1/#propdef-scroll-padding-block-end"
+affects = ""
+
+[scroll-padding-inline-start]
+type = "NonNegativeLengthPercentageOrAuto"
+initial = "computed::NonNegativeLengthPercentageOrAuto::auto()"
+struct = "padding"
+logical = true
+logical_group = "scroll-padding"
+gecko_ffi_name = "mScrollPadding.6"
+spec = "https://drafts.csswg.org/css-scroll-snap-1/#propdef-scroll-padding-inline-start"
+affects = ""
+
+[scroll-padding-inline-end]
+type = "NonNegativeLengthPercentageOrAuto"
+initial = "computed::NonNegativeLengthPercentageOrAuto::auto()"
+struct = "padding"
+logical = true
+logical_group = "scroll-padding"
+gecko_ffi_name = "mScrollPadding.7"
+spec = "https://drafts.csswg.org/css-scroll-snap-1/#propdef-scroll-padding-inline-end"
+affects = ""
+
+[background-attachment]
+struct = "background"
+spec = "https://drafts.csswg.org/css-backgrounds/#the-background-attachment"
+animation_type = "discrete"
+affects = "paint"
+servo_restyle_damage = "repaint"
+vector = {}
+keyword = { values = ["scroll", "fixed", "local"], gecko_enum_prefix = "StyleImageLayerAttachment" }
+
+[background-clip]
+type = "BackgroundClip"
+initial = "computed::BackgroundClip::BorderBox"
+parse_method = "parse_for_background"
+struct = "background"
+spec = "https://drafts.csswg.org/css-backgrounds/#the-background-clip"
+animation_type = "discrete"
+affects = "paint"
+extra_prefixes = ["webkit"]
+servo_restyle_damage = "repaint"
+vector = {}
+
+[background-origin]
+struct = "background"
+spec = "https://drafts.csswg.org/css-backgrounds/#the-background-origin"
+animation_type = "discrete"
+affects = "paint"
+extra_prefixes = ["webkit"]
+servo_restyle_damage = "repaint"
+vector = {}
+keyword = { values = ["padding-box", "border-box", "content-box"], gecko_enum_prefix = "StyleGeometryBox", gecko_inexhaustive = true }
+
+[background-blend-mode]
+struct = "background"
+vector = {}
+animation_type = "discrete"
+spec = "https://drafts.fxtf.org/compositing/#background-blend-mode"
+affects = "paint"
+servo_restyle_damage = "repaint"
+
+[background-blend-mode.keyword]
+values = [
+  "normal", "multiply", "screen", "overlay", "darken", "lighten",
+  "color-dodge", "color-burn", "hard-light", "soft-light", "difference",
+  "exclusion", "hue", "saturation", "color", "luminosity"
+]
+gecko_enum_prefix = "StyleBlend"
+gecko_inexhaustive = true
+
+[box-decoration-break]
+struct = "border"
+spec = "https://drafts.csswg.org/css-break/#propdef-box-decoration-break"
+animation_type = "discrete"
+affects = "layout"
+keyword = { values = ["slice", "clone"] }
+
+[-moz-float-edge]
+struct = "border"
+engine = "gecko"
+spec = "Nonstandard (https://developer.mozilla.org/en-US/docs/Web/CSS/-moz-float-edge)"
+animation_type = "discrete"
+affects = "layout"
+gecko_ffi_name = "mFloatEdge"
+keyword = { values = ["content-box", "margin-box"] }
+
+[-moz-top-layer]
+struct = "box"
+engine = "gecko"
+spec = "Internal (not web-exposed)"
+animation_type = "discrete"
+enabled_in = "ua"
+affects = "layout"
+gecko_ffi_name = "mTopLayer"
+keyword = { values = ["none", "auto"] }
+
+[-servo-top-layer]
+struct = "box"
+engine = "servo"
+spec = "Internal (not web-exposed)"
+animation_type = "none"
+enabled_in = "ua"
+affects = "layout"
+keyword = { values = ["none", "top"] }
+
+[scroll-behavior]
+struct = "box"
+servo_pref = "layout.unimplemented"
+spec = "https://drafts.csswg.org/cssom-view/#propdef-scroll-behavior"
+animation_type = "discrete"
+affects = ""
+keyword = { values = ["auto", "smooth"] }
+
+[isolation]
+struct = "box"
+spec = "https://drafts.fxtf.org/compositing/#isolation"
+animation_type = "discrete"
+affects = "paint"
+servo_restyle_damage = "repaint"
+keyword = { values = ["auto", "isolate"] }
+
+[backface-visibility]
+struct = "box"
+spec = "https://drafts.csswg.org/css-transforms/#backface-visibility-property"
+animation_type = "discrete"
+affects = "paint"
+extra_prefixes = ["moz:layout.css.prefixes.transforms", "webkit"]
+servo_restyle_damage = "repaint"
+keyword = { values = ["visible", "hidden"] }
+
+[-moz-orient]
+struct = "box"
+engine = "gecko"
+spec = "Nonstandard (https://developer.mozilla.org/en-US/docs/Web/CSS/-moz-orient)"
+animation_type = "discrete"
+affects = "layout"
+gecko_ffi_name = "mOrient"
+keyword = { values = ["inline", "block", "horizontal", "vertical"] }
+
+[column-fill]
+struct = "column"
+spec = "https://drafts.csswg.org/css-multicol/#propdef-column-fill"
+animation_type = "discrete"
+affects = "layout"
+keyword = { values = ["balance", "auto"] }
+
+[column-span]
+struct = "column"
+spec = "https://drafts.csswg.org/css-multicol/#propdef-column-span"
+animation_type = "discrete"
+affects = "layout"
+servo_pref = "layout.columns.enabled"
+keyword = { values = ["none", "all"] }
+
+[font-variant-caps]
+struct = "font"
+spec = "https://drafts.csswg.org/css-fonts/#propdef-font-variant-caps"
+animation_type = "discrete"
+affects = "layout"
+gecko_ffi_name = "mFont.variantCaps"
+servo_restyle_damage = "rebuild_box"
+
+[font-variant-caps.keyword]
+values = ["normal", "small-caps"]
+extra_gecko_values = ["all-small-caps", "petite-caps", "all-petite-caps", "unicase", "titling-caps"]
+gecko_constant_prefix = "NS_FONT_VARIANT_CAPS"
+
+[font-kerning]
+struct = "font"
+spec = "https://drafts.csswg.org/css-fonts/#propdef-font-kerning"
+animation_type = "discrete"
+affects = "layout"
+gecko_ffi_name = "mFont.kerning"
+keyword = { values = ["auto", "none", "normal"], gecko_constant_prefix = "NS_FONT_KERNING" }
+
+[font-variant-emoji]
+struct = "font"
+spec = "https://drafts.csswg.org/css-fonts/#propdef-font-variant-emoji"
+animation_type = "discrete"
+affects = "layout"
+gecko_ffi_name = "mFont.variantEmoji"
+gecko_pref = "layout.css.font-variant-emoji.enabled"
+has_effect_on_gecko_scrollbars = false
+keyword = { values = ["normal", "text", "emoji", "unicode"] }
+
+[font-variant-position]
+struct = "font"
+spec = "https://drafts.csswg.org/css-fonts/#propdef-font-variant-position"
+animation_type = "discrete"
+affects = "layout"
+gecko_ffi_name = "mFont.variantPosition"
+keyword = { values = ["normal", "sub", "super"], gecko_constant_prefix = "NS_FONT_VARIANT_POSITION" }
+
+[font-optical-sizing]
+struct = "font"
+spec = "https://www.w3.org/TR/css-fonts-4/#font-optical-sizing-def"
+animation_type = "discrete"
+affects = "layout"
+gecko_ffi_name = "mFont.opticalSizing"
+gecko_pref = "layout.css.font-variations.enabled"
+servo_pref = "layout.variable_fonts.enabled"
+has_effect_on_gecko_scrollbars = false
+keyword = { values = ["auto", "none"], gecko_constant_prefix = "NS_FONT_OPTICAL_SIZING" }
+
+[math-style]
+struct = "font"
+servo_pref = "layout.unimplemented"
+spec = "https://mathml-refresh.github.io/mathml-core/#the-math-style-property"
+animation_type = "discrete"
+affects = "layout"
+keyword = { values = ["normal", "compact"] }
+
+[math-shift]
+struct = "font"
+spec = "https://w3c.github.io/mathml-core/#the-math-shift"
+animation_type = "discrete"
+affects = "layout"
+keyword = { values = ["normal", "compact"] }
+
+[-moz-osx-font-smoothing]
+struct = "font"
+engine = "gecko"
+spec = "Nonstandard (https://developer.mozilla.org/en-US/docs/Web/CSS/font-smooth)"
+animation_type = "discrete"
+affects = "paint"
+gecko_ffi_name = "mFont.smoothing"
+aliases = ["-webkit-font-smoothing:layout.css.osx-font-smoothing.enabled"]
+gecko_pref = "layout.css.osx-font-smoothing.enabled"
+has_effect_on_gecko_scrollbars = false
+keyword = { values = ["auto", "grayscale", "subpixel-antialiased"], gecko_aliases = ["antialiased=grayscale"], gecko_constant_prefix = "NS_FONT_SMOOTHING" }
+
+[visibility]
+struct = "inherited_box"
+spec = "https://drafts.csswg.org/css-box/#propdef-visibility"
+affects = "paint"
+gecko_ffi_name = "mVisible"
+keyword = { values = ["visible", "hidden", "collapse"] }
+
+[direction]
+struct = "inherited_box"
+spec = "https://drafts.csswg.org/css-writing-modes/#propdef-direction"
+animation_type = "none"
+affects = "layout"
+servo_restyle_damage = "rebuild_box"
+keyword = { values = ["ltr", "rtl"] }
+
+[-moz-box-collapse]
+struct = "inherited_box"
+engine = "gecko"
+spec = "None (internal)"
+animation_type = "none"
+enabled_in = "chrome"
+affects = "layout"
+keyword = { values = ["flex", "legacy"] }
+
+[text-orientation]
+struct = "inherited_box"
+servo_pref = "layout.unimplemented"
+spec = "https://drafts.csswg.org/css-writing-modes/#propdef-text-orientation"
+animation_type = "none"
+affects = "layout"
+keyword = { values = ["mixed", "upright", "sideways"], gecko_aliases = ["sideways-right=sideways"] }
+
+[image-orientation]
+struct = "inherited_box"
+spec = "https://drafts.csswg.org/css-images/#propdef-image-orientation"
+animation_type = "discrete"
+affects = "layout"
+keyword = { values = ["from-image", "none"] }
+
+[text-anchor]
+struct = "inherited_svg"
+spec = "https://svgwg.org/svg2-draft/text.html#TextAnchorProperty"
+animation_type = "discrete"
+affects = "layout"
+keyword = { values = ["start", "middle", "end"] }
+
+[color-interpolation]
+struct = "inherited_svg"
+spec = "https://svgwg.org/svg2-draft/painting.html#ColorInterpolationProperty"
+animation_type = "discrete"
+affects = "paint"
+keyword = { values = ["srgb", "auto", "linearrgb"] }
+
+[color-interpolation-filters]
+struct = "inherited_svg"
+spec = "https://svgwg.org/svg2-draft/painting.html#ColorInterpolationFiltersProperty"
+animation_type = "discrete"
+affects = "paint"
+keyword = { values = ["linearrgb", "auto", "srgb"], gecko_enum_prefix = "StyleColorInterpolation" }
+
+[shape-rendering]
+struct = "inherited_svg"
+spec = "https://svgwg.org/svg2-draft/painting.html#ShapeRenderingProperty"
+animation_type = "discrete"
+affects = "paint"
+keyword = { values = ["auto", "optimizespeed", "crispedges", "geometricprecision"] }
+
+[stroke-linecap]
+struct = "inherited_svg"
+spec = "https://svgwg.org/svg2-draft/painting.html#StrokeLinecapProperty"
+animation_type = "discrete"
+affects = "layout"
+keyword = { values = ["butt", "round", "square"] }
+
+[stroke-linejoin]
+struct = "inherited_svg"
+spec = "https://svgwg.org/svg2-draft/painting.html#StrokeLinejoinProperty"
+animation_type = "discrete"
+affects = "layout"
+keyword = { values = ["miter", "round", "bevel"] }
+
+[border-collapse]
+struct = "inherited_table"
+spec = "https://drafts.csswg.org/css-tables/#propdef-border-collapse"
+animation_type = "discrete"
+affects = "layout"
+servo_restyle_damage = "rebuild_box"
+keyword = { values = ["separate", "collapse"] }
+
+[empty-cells]
+struct = "inherited_table"
+spec = "https://drafts.csswg.org/css-tables/#propdef-empty-cells"
+animation_type = "discrete"
+affects = "paint"
+servo_restyle_damage = "rebuild_box"
+keyword = { values = ["show", "hide"] }
+
+[hyphens]
+struct = "inherited_text"
+spec = "https://drafts.csswg.org/css-text/#propdef-hyphens"
+animation_type = "discrete"
+affects = "layout"
+extra_prefixes = ["moz"]
+keyword = { values = ["manual", "none", "auto"] }
+
+[-moz-text-size-adjust]
+struct = "inherited_text"
+engine = "gecko"
+spec = "https://drafts.csswg.org/css-size-adjust/#adjustment-control"
+animation_type = "discrete"
+affects = "layout"
+gecko_ffi_name = "mTextSizeAdjust"
+aliases = ["-webkit-text-size-adjust"]
+keyword = { values = ["auto", "none"] }
+
+[ruby-align]
+struct = "inherited_text"
+spec = "https://drafts.csswg.org/css-ruby/#ruby-align-property"
+animation_type = "discrete"
+affects = "layout"
+keyword = { values = ["space-around", "start", "center", "space-between"] }
+
+[text-combine-upright]
+struct = "inherited_text"
+spec = "https://drafts.csswg.org/css-writing-modes-3/#text-combine-upright"
+animation_type = "none"
+affects = "layout"
+keyword = { values = ["none", "all"] }
+
+[text-rendering]
+struct = "inherited_text"
+spec = "https://svgwg.org/svg2-draft/painting.html#TextRenderingProperty"
+animation_type = "discrete"
+affects = "layout"
+servo_restyle_damage = "rebuild_box"
+keyword = { values = ["auto", "optimizespeed", "optimizelegibility", "geometricprecision"] }
+
+[-webkit-text-security]
+struct = "inherited_text"
+spec = "https://drafts.csswg.org/css-text/#MISSING"
+animation_type = "discrete"
+affects = "layout"
+servo_restyle_damage = "rebuild_box"
+keyword = { values = ["none", "circle", "disc", "square"] }
+
+[text-wrap-mode]
+struct = "inherited_text"
+spec = "https://drafts.csswg.org/css-text-4/#propdef-text-wrap-mode"
+animation_type = "discrete"
+affects = "layout"
+servo_restyle_damage = "rebuild_box"
+keyword = { values = ["wrap", "nowrap"] }
+
+[text-wrap-style]
+struct = "inherited_text"
+spec = "https://drafts.csswg.org/css-text-4/#text-wrap-style"
+animation_type = "discrete"
+affects = "layout"
+keyword = { values = ["auto", "stable", "balance"] }
+
+[list-style-position]
+struct = "list"
+spec = "https://drafts.csswg.org/css-lists/#propdef-list-style-position"
+animation_type = "discrete"
+affects = "layout"
+servo_restyle_damage = "rebuild_box"
+keyword = { values = ["outside", "inside"] }
+
+[flex-direction]
+struct = "position"
+spec = "https://drafts.csswg.org/css-flexbox/#flex-direction-property"
+animation_type = "discrete"
+affects = "layout"
+extra_prefixes = ["webkit"]
+servo_restyle_damage = "rebuild_box"
+keyword = { values = ["row", "row-reverse", "column", "column-reverse"] }
+
+[flex-wrap]
+struct = "position"
+spec = "https://drafts.csswg.org/css-flexbox/#flex-wrap-property"
+animation_type = "discrete"
+affects = "layout"
+extra_prefixes = ["webkit"]
+servo_restyle_damage = "rebuild_box"
+keyword = { values = ["nowrap", "wrap", "wrap-reverse"] }
+
+[box-sizing]
+struct = "position"
+spec = "https://drafts.csswg.org/css-ui/#propdef-box-sizing"
+animation_type = "discrete"
+affects = "layout"
+extra_prefixes = ["moz:layout.css.prefixes.box-sizing", "webkit"]
+servo_restyle_damage = "rebuild_box"
+keyword = { values = ["content-box", "border-box"] }
+
+[object-fit]
+struct = "position"
+spec = "https://drafts.csswg.org/css-images/#propdef-object-fit"
+animation_type = "discrete"
+affects = "layout"
+keyword = { values = ["fill", "contain", "cover", "none", "scale-down"] }
+
+[mask-type]
+struct = "svg"
+servo_pref = "layout.unimplemented"
+spec = "https://drafts.fxtf.org/css-masking-1/#propdef-mask-type"
+animation_type = "discrete"
+affects = "paint"
+keyword = { values = ["luminance", "alpha"] }
+
+[mask-mode]
+struct = "svg"
+servo_pref = "layout.unimplemented"
+spec = "https://drafts.fxtf.org/css-masking-1/#propdef-mask-mode"
+animation_type = "discrete"
+affects = "paint"
+vector = {}
+keyword = { values = ["match-source", "alpha", "luminance"] }
+
+[mask-clip]
+type = "BackgroundClip"
+initial = "computed::BackgroundClip::BorderBox"
+parse_method = "parse_for_mask"
+struct = "svg"
+servo_pref = "layout.unimplemented"
+spec = "https://drafts.fxtf.org/css-masking-1/#propdef-mask-clip"
+animation_type = "discrete"
+affects = "paint"
+vector = {}
+extra_prefixes = ["webkit"]
+
+[mask-origin]
+struct = "svg"
+servo_pref = "layout.unimplemented"
+spec = "https://drafts.fxtf.org/css-masking-1/#propdef-mask-origin"
+animation_type = "discrete"
+affects = "paint"
+vector = {}
+extra_prefixes = ["webkit"]
+keyword = { values = ["border-box", "content-box", "padding-box"], extra_gecko_values = ["fill-box", "stroke-box", "view-box"], gecko_enum_prefix = "StyleGeometryBox", gecko_inexhaustive = true }
+
+[mask-composite]
+struct = "svg"
+servo_pref = "layout.unimplemented"
+spec = "https://drafts.fxtf.org/css-masking-1/#propdef-mask-composite"
+animation_type = "discrete"
+affects = "paint"
+vector = {}
+extra_prefixes = ["webkit"]
+keyword = { values = ["add", "subtract", "intersect", "exclude"] }
+
+[table-layout]
+struct = "table"
+spec = "https://drafts.csswg.org/css-tables/#propdef-table-layout"
+animation_type = "discrete"
+affects = "layout"
+gecko_ffi_name = "mLayoutStrategy"
+servo_restyle_damage = "rebuild_box"
+keyword = { values = ["auto", "fixed"] }
+
+[unicode-bidi]
+struct = "text"
+spec = "https://drafts.csswg.org/css-writing-modes/#propdef-unicode-bidi"
+animation_type = "none"
+affects = "layout"
+servo_restyle_damage = "rebuild_box"
+keyword = { values = ["normal", "embed", "isolate", "bidi-override", "isolate-override", "plaintext"] }
+
+[text-decoration-style]
+struct = "text"
+spec = "https://drafts.csswg.org/css-text-decor/#propdef-text-decoration-style"
+animation_type = "discrete"
+affects = "overflow"
+servo_restyle_damage = "recalculate_overflow"
+keyword = { values = ["solid", "double", "dotted", "dashed", "wavy", "-moz-none"] }
+
+[ime-mode]
+struct = "ui"
+engine = "gecko"
+spec = "https://drafts.csswg.org/css-ui/#input-method-editor"
+animation_type = "discrete"
+affects = ""
+gecko_ffi_name = "mIMEMode"
+keyword = { values = ["auto", "normal", "active", "disabled", "inactive"] }
+
+[scrollbar-width]
+struct = "ui"
+spec = "https://drafts.csswg.org/css-scrollbars-1/#scrollbar-width"
+animation_type = "discrete"
+affects = "layout"
+keyword = { values = ["auto", "thin", "none"] }
+
+[-moz-window-dragging]
+struct = "ui"
+engine = "gecko"
+spec = "None (Nonstandard Firefox-only property)"
+animation_type = "discrete"
+enabled_in = "chrome"
+affects = "paint"
+gecko_ffi_name = "mWindowDragging"
+keyword = { values = ["default", "drag", "no-drag"] }
+
+[-moz-window-shadow]
+struct = "ui"
+engine = "gecko"
+spec = "None (Nonstandard internal property)"
+animation_type = "discrete"
+enabled_in = "chrome"
+affects = "overflow"
+gecko_ffi_name = "mWindowShadow"
+keyword = { values = ["auto", "none"] }
+
+[field-sizing]
+struct = "ui"
+spec = "https://drafts.csswg.org/css-ui/#field-sizing"
+animation_type = "discrete"
+affects = "layout"
+gecko_pref = "layout.css.field-sizing.enabled"
+keyword = { values = ["fixed", "content"] }
+
+[-moz-box-align]
+struct = "xul"
+engine = "gecko"
+spec = "Nonstandard (https://developer.mozilla.org/en-US/docs/Web/CSS/box-align)"
+animation_type = "discrete"
+affects = "layout"
+gecko_ffi_name = "mBoxAlign"
+aliases = ["-webkit-box-align"]
+keyword = { values = ["stretch", "start", "center", "baseline", "end"] }
+
+[-moz-box-direction]
+struct = "xul"
+engine = "gecko"
+spec = "Nonstandard (https://developer.mozilla.org/en-US/docs/Web/CSS/box-direction)"
+animation_type = "discrete"
+affects = "layout"
+gecko_ffi_name = "mBoxDirection"
+aliases = ["-webkit-box-direction"]
+keyword = { values = ["normal", "reverse"] }
+
+[-moz-box-orient]
+struct = "xul"
+engine = "gecko"
+spec = "Nonstandard (https://developer.mozilla.org/en-US/docs/Web/CSS/box-orient)"
+animation_type = "discrete"
+affects = "layout"
+gecko_ffi_name = "mBoxOrient"
+aliases = ["-webkit-box-orient"]
+keyword = { values = ["horizontal", "vertical"], gecko_aliases = ["inline-axis=horizontal", "block-axis=vertical"] }
+
+[-moz-box-pack]
+struct = "xul"
+engine = "gecko"
+spec = "Nonstandard (https://developer.mozilla.org/en-US/docs/Web/CSS/box-pack)"
+animation_type = "discrete"
+affects = "layout"
+gecko_ffi_name = "mBoxPack"
+aliases = ["-webkit-box-pack"]
+keyword = { values = ["start", "center", "end", "justify"] }
+
+[mix-blend-mode]
+struct = "effects"
+spec = "https://drafts.fxtf.org/compositing/#propdef-mix-blend-mode"
+animation_type = "discrete"
+affects = "paint"
+servo_restyle_damage = "repaint"
+keyword = { values = ["normal", "multiply", "screen", "overlay", "darken", "lighten", "color-dodge", "color-burn", "hard-light", "soft-light", "difference", "exclusion", "hue", "saturation", "color", "luminosity", "plus-lighter"], gecko_enum_prefix = "StyleBlend" }
+
+[dominant-baseline]
+type = "DominantBaseline"
+initial = "computed::DominantBaseline::Auto"
+struct = "inherited_box"
+animation_type = "discrete"
+spec = "https://drafts.csswg.org/css-inline-3/#dominant-baseline-property"
+affects = "layout"
+
+[-moz-math-variant]
+struct = "font"
+engine = "gecko"
+spec = "Internal (not web-exposed)"
+animation_type = "none"
+enabled_in = ""
+has_effect_on_gecko_scrollbars = false
+affects = "layout"
+gecko_ffi_name = "mMathVariant"
+keyword = { values = ["none", "normal", "bold", "italic", "bold-italic", "script", "bold-script", "fraktur", "double-struck", "bold-fraktur", "sans-serif", "bold-sans-serif", "sans-serif-italic", "sans-serif-bold-italic", "monospace", "initial", "tailed", "looped", "stretched"] }
+
+[white-space-collapse]
+struct = "inherited_text"
+spec = "https://drafts.csswg.org/css-text-4/#propdef-white-space-collapse"
+animation_type = "discrete"
+affects = "layout"
+servo_restyle_damage = "rebuild_box"
+keyword = { values = ["collapse", "preserve", "preserve-breaks", "break-spaces"], extra_gecko_values = ["preserve-spaces"], gecko_aliases = ["-moz-pre-space=preserve-spaces"] }
+
+[timeline-scope]
+type = "ScopedName"
+initial = "computed::ScopedName::none()"
+struct = "ui"
+animation_type = "none"
+gecko_pref = "layout.css.scroll-driven-animations.enabled"
+spec = "https://drafts.csswg.org/scroll-animations-1/#timeline-scope"
+affects = ""

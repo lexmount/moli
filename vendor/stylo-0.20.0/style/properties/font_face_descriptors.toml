@@ -1,0 +1,50 @@
+# This Source Code Form is subject to the terms of the Mozilla Public
+# License, v. 2.0. If a copy of the MPL was not distributed with this
+# file, You can obtain one at http://mozilla.org/MPL/2.0/.
+
+# The descriptors of the @font-family rule.
+
+[font-family]
+type = "FamilyName"
+
+[src]
+type = "SourceList"
+
+[font-style]
+type = "FontStyleRange"
+
+[font-weight]
+type = "FontWeightRange"
+
+[font-stretch]
+type = "FontStretchRange"
+
+[font-display]
+type = "FontDisplay"
+
+[unicode-range]
+type = "Vec<cssparser::UnicodeRange>"
+
+[font-feature-settings]
+type = "FontFeatureSettings"
+parser = "parse_for_font_face_rule"
+
+[font-variation-settings]
+type = "FontVariationSettings"
+parser = "parse_for_font_face_rule"
+gecko_pref = "layout.css.font-variations.enabled"
+
+[font-language-override]
+type = "FontLanguageOverride"
+
+[ascent-override]
+type = "MetricsOverride"
+
+[descent-override]
+type = "MetricsOverride"
+
+[line-gap-override]
+type = "MetricsOverride"
+
+[size-adjust]
+type = "specified::NonNegativePercentage"

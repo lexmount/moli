@@ -3,6 +3,7 @@ use super::*;
 mod browser_font_preferences;
 mod child_list;
 mod image_presentation_hints;
+mod monospace_font_size;
 
 #[test]
 fn element_current_css_zoom_observes_fresh_effective_style_for_rendered_boxes() {

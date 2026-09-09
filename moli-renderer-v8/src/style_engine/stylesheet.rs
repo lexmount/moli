@@ -8,12 +8,11 @@ use euclid::{Scale, Size2D};
 use moli_selector::StyloSourceDependencySummary;
 use style::{
     context::QuirksMode,
-    device::{Device, servo::FontMetricsProvider},
+    device::Device,
     font_face::{
         FontFaceRule, FontFaceSourceFormat, FontFaceSourceFormatKeyword, Source, SourceList,
     },
-    font_metrics::FontMetrics,
-    properties::{ComputedValues, style_structs::Font},
+    properties::ComputedValues,
     servo::media_features::PointerCapabilities,
     servo_arc::Arc as ServoArc,
     shared_lock::{Locked, SharedRwLock, ToCssWithGuard},
@@ -22,13 +21,6 @@ use style::{
         StylesheetInDocument, UrlExtraData, scope_rule::ImplicitScopeRoot,
     },
     stylist::{CascadeData, Stylist},
-    values::{
-        computed::{
-            CSSPixelLength, Length,
-            font::{GenericFontFamily, SingleFontFamily},
-        },
-        specified::font::QueryFontMetricsFlags,
-    },
 };
 use style_traits::{CSSPixel, CssWriter, DevicePixel, ToCss};
 
@@ -37,6 +29,7 @@ use crate::{document_runtime::DomHandle, dom::native::DomHost};
 use super::{
     StyleViewport, StyloStyleEnvironment,
     active_stylesheets::{ActiveStylesheet, ActiveStylesheetCollection, ActiveWebFontResource},
+    font_metrics::BrowserFontMetricsProvider,
     media_list::parse_media_query_list_with_context,
     source::store::{StyleSourceMetadata, StyloStylesheetSource},
     source_id::{StyleSourceId, StyleSourceKind},
@@ -78,9 +71,6 @@ pub(crate) fn author_source_text_parse_count_for_test() -> usize {
 pub(super) fn moli_ua_stylesheet_base_url() -> &'static url::Url {
     &MOLI_UA_STYLESHEET_BASE_URL
 }
-
-#[derive(Debug)]
-struct HeadlessFontMetricsProvider;
 
 pub(super) fn install_active_stylesheets(
     host: &DomHost,
@@ -420,7 +410,7 @@ pub(super) fn new_style_device_with_viewport_bits(
         Size2D::<f32, CSSPixel>::new(width, height),
         Size2D::<f32, DevicePixel>::new(screen_width, screen_height),
         Scale::<f32, CSSPixel, DevicePixel>::new(1.0),
-        Box::new(HeadlessFontMetricsProvider),
+        Box::new(BrowserFontMetricsProvider),
         initial_style,
         environment.stylo_prefers_color_scheme(),
         PointerCapabilities::default(),
@@ -547,35 +537,4 @@ fn parse_stylesheet(
         quirks_mode,
         AllowImportRules::No,
     )
-}
-
-impl FontMetricsProvider for HeadlessFontMetricsProvider {
-    fn query_font_metrics(
-        &self,
-        _vertical: bool,
-        font: &Font,
-        base_size: CSSPixelLength,
-        _flags: QueryFontMetricsFlags,
-    ) -> FontMetrics {
-        let mut metrics = FontMetrics::default();
-        if font_family_list_starts_with_ahem(font) {
-            metrics.zero_advance_measure = Some(base_size);
-        }
-        metrics
-    }
-
-    fn base_size_for_generic(&self, _generic: GenericFontFamily) -> Length {
-        Length::new(16.0)
-    }
-}
-
-fn font_family_list_starts_with_ahem(font: &Font) -> bool {
-    font.clone_font_family()
-        .families
-        .iter()
-        .next()
-        .is_some_and(|family| match family {
-            SingleFontFamily::FamilyName(name) => name.name.as_ref().eq_ignore_ascii_case("Ahem"),
-            SingleFontFamily::Generic(_) => false,
-        })
 }

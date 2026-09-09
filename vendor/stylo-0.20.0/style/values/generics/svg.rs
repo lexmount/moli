@@ -1,0 +1,270 @@
+/* This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at https://mozilla.org/MPL/2.0/. */
+
+//! Generic types for CSS values in SVG
+
+use crate::derives::*;
+use crate::parser::{Parse, ParserContext};
+use cssparser::Parser;
+use style_traits::ParseError;
+
+/// The fallback of an SVG paint server value.
+#[derive(
+    Animate,
+    Clone,
+    ComputeSquaredDistance,
+    Debug,
+    MallocSizeOf,
+    PartialEq,
+    Parse,
+    SpecifiedValueInfo,
+    ToAnimatedValue,
+    ToAnimatedZero,
+    ToComputedValue,
+    ToCss,
+    ToResolvedValue,
+    ToShmem,
+)]
+#[repr(C, u8)]
+pub enum GenericSVGPaintFallback<C> {
+    /// The `none` keyword.
+    None,
+    /// A magic value that represents no fallback specified and serializes to
+    /// the empty string.
+    #[css(skip)]
+    Unset,
+    /// A color.
+    Color(C),
+}
+
+pub use self::GenericSVGPaintFallback as SVGPaintFallback;
+
+/// An SVG paint value
+///
+/// <https://www.w3.org/TR/SVG2/painting.html#SpecifyingPaint>
+#[derive(
+    Animate,
+    Clone,
+    ComputeSquaredDistance,
+    Debug,
+    MallocSizeOf,
+    PartialEq,
+    SpecifiedValueInfo,
+    ToAnimatedValue,
+    ToAnimatedZero,
+    ToComputedValue,
+    ToCss,
+    ToResolvedValue,
+    ToShmem,
+    ToTyped,
+)]
+#[animation(no_bound(Url))]
+#[repr(C)]
+#[typed(todo_derive_fields)]
+pub struct GenericSVGPaint<Color, Url> {
+    /// The paint source.
+    pub kind: GenericSVGPaintKind<Color, Url>,
+    /// The fallback color.
+    pub fallback: GenericSVGPaintFallback<Color>,
+}
+
+pub use self::GenericSVGPaint as SVGPaint;
+
+impl<C, U> Default for SVGPaint<C, U> {
+    fn default() -> Self {
+        Self {
+            kind: SVGPaintKind::None,
+            fallback: SVGPaintFallback::Unset,
+        }
+    }
+}
+
+/// Paint value for text decoration fill and stroke.
+///
+/// <https://drafts.fxtf.org/fill-stroke/#text-decor>
+#[derive(
+    Clone,
+    Debug,
+    MallocSizeOf,
+    PartialEq,
+    SpecifiedValueInfo,
+    ToComputedValue,
+    ToCss,
+    ToResolvedValue,
+    ToShmem,
+    ToTyped,
+)]
+#[repr(C, u8)]
+#[typed(todo_derive_fields)]
+pub enum GenericTextDecorationPaint<C, U> {
+    /// `match-text`
+    MatchText,
+    /// A CSS/SVG paint value.
+    Paint(SVGPaint<C, U>),
+}
+
+pub use self::GenericTextDecorationPaint as TextDecorationPaint;
+
+impl<C: Parse, U: Parse> Parse for TextDecorationPaint<C, U> {
+    fn parse<'i, 't>(
+        context: &ParserContext,
+        input: &mut Parser<'i, 't>,
+    ) -> Result<Self, ParseError<'i>> {
+        if input
+            .try_parse(|input| input.expect_ident_matching("match-text"))
+            .is_ok()
+        {
+            return Ok(Self::MatchText);
+        }
+        SVGPaint::parse(context, input).map(Self::Paint)
+    }
+}
+
+/// An SVG paint value without the fallback.
+///
+/// Whereas the spec only allows PaintServer to have a fallback, Gecko lets the
+/// context properties have a fallback as well.
+#[derive(
+    Animate,
+    Clone,
+    ComputeSquaredDistance,
+    Debug,
+    MallocSizeOf,
+    PartialEq,
+    Parse,
+    SpecifiedValueInfo,
+    ToAnimatedValue,
+    ToAnimatedZero,
+    ToComputedValue,
+    ToCss,
+    ToResolvedValue,
+    ToShmem,
+)]
+#[animation(no_bound(U))]
+#[repr(C, u8)]
+pub enum GenericSVGPaintKind<C, U> {
+    /// `none`
+    #[animation(error)]
+    None,
+    /// `<color>`
+    Color(C),
+    /// `url(...)`
+    #[animation(error)]
+    PaintServer(U),
+    /// `context-fill`
+    ContextFill,
+    /// `context-stroke`
+    ContextStroke,
+}
+
+pub use self::GenericSVGPaintKind as SVGPaintKind;
+
+impl<C: Parse, U: Parse> Parse for SVGPaint<C, U> {
+    fn parse<'i, 't>(
+        context: &ParserContext,
+        input: &mut Parser<'i, 't>,
+    ) -> Result<Self, ParseError<'i>> {
+        let kind = SVGPaintKind::parse(context, input)?;
+        if matches!(kind, SVGPaintKind::None | SVGPaintKind::Color(..)) {
+            return Ok(SVGPaint {
+                kind,
+                fallback: SVGPaintFallback::Unset,
+            });
+        }
+        let fallback = input
+            .try_parse(|i| SVGPaintFallback::parse(context, i))
+            .unwrap_or(SVGPaintFallback::Unset);
+        Ok(SVGPaint { kind, fallback })
+    }
+}
+
+/// An SVG length value supports `context-value` in addition to length.
+#[derive(
+    Animate,
+    Clone,
+    ComputeSquaredDistance,
+    Copy,
+    Debug,
+    MallocSizeOf,
+    PartialEq,
+    SpecifiedValueInfo,
+    ToAnimatedValue,
+    ToAnimatedZero,
+    ToComputedValue,
+    ToCss,
+    ToResolvedValue,
+    ToShmem,
+    ToTyped,
+)]
+#[repr(C, u8)]
+pub enum GenericSVGLength<L> {
+    /// `<length> | <percentage> | <number>`
+    LengthPercentage(L),
+    /// `context-value`
+    #[animation(error)]
+    ContextValue,
+}
+
+pub use self::GenericSVGLength as SVGLength;
+
+/// Generic value for stroke-dasharray.
+#[derive(
+    Clone,
+    Debug,
+    MallocSizeOf,
+    PartialEq,
+    SpecifiedValueInfo,
+    ToAnimatedValue,
+    ToAnimatedZero,
+    ToComputedValue,
+    ToCss,
+    ToResolvedValue,
+    ToShmem,
+    ToTyped,
+)]
+#[repr(C, u8)]
+pub enum GenericSVGStrokeDashArray<L> {
+    /// `[ <length> | <percentage> | <number> ]#`
+    #[css(comma)]
+    #[typed(no_multiple_values)]
+    Values(#[css(if_empty = "none", iterable)] crate::OwnedSlice<L>),
+    /// `context-value`
+    ContextValue,
+}
+
+pub use self::GenericSVGStrokeDashArray as SVGStrokeDashArray;
+
+/// An SVG opacity value accepts `context-{fill,stroke}-opacity` in
+/// addition to opacity value.
+#[derive(
+    Animate,
+    Clone,
+    ComputeSquaredDistance,
+    Copy,
+    Debug,
+    MallocSizeOf,
+    PartialEq,
+    Parse,
+    SpecifiedValueInfo,
+    ToAnimatedValue,
+    ToAnimatedZero,
+    ToComputedValue,
+    ToCss,
+    ToResolvedValue,
+    ToShmem,
+    ToTyped,
+)]
+#[repr(C, u8)]
+pub enum GenericSVGOpacity<OpacityType> {
+    /// `<opacity-value>`
+    Opacity(OpacityType),
+    /// `context-fill-opacity`
+    #[animation(error)]
+    ContextFillOpacity,
+    /// `context-stroke-opacity`
+    #[animation(error)]
+    ContextStrokeOpacity,
+}
+
+pub use self::GenericSVGOpacity as SVGOpacity;

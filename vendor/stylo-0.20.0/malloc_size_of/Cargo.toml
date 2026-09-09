@@ -1,0 +1,27 @@
+[package]
+name = "stylo_malloc_size_of"
+version.workspace = true
+authors = ["The Servo Project Developers"]
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/servo/stylo"
+description = "An allocator-agnostic crate for measuring the heap size of a value"
+edition = "2021"
+
+[lib]
+path = "lib.rs"
+
+[features]
+gecko = ["thin-vec/gecko-ffi"]
+servo = ["string_cache"]
+
+[dependencies]
+app_units = "0.7"
+cssparser = "0.37"
+euclid = "0.22"
+selectors = { workspace = true }
+servo_arc = { workspace = true }
+smallbitvec = "2.3.0"
+smallvec = "1.13"
+string_cache = { version = "0.9", optional = true }
+thin-vec = { version = "0.2.13" }
+void = "1.0.2"

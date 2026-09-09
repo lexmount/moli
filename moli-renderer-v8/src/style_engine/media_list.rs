@@ -1,26 +1,17 @@
 use cssparser::{Parser, ParserInput};
 use euclid::{Scale, Size2D};
-use std::fmt::Debug;
 use style::{
     context::QuirksMode,
-    device::{Device, servo::FontMetricsProvider},
-    font_metrics::FontMetrics,
+    device::Device,
     media_queries::MediaList,
     parser::ParserContext,
-    properties::{ComputedValues, style_structs::Font},
+    properties::ComputedValues,
     servo::media_features::PointerCapabilities,
     stylesheets::{CssRuleType, Origin, UrlExtraData},
-    values::{
-        computed::{
-            CSSPixelLength, Length,
-            font::{GenericFontFamily, SingleFontFamily},
-        },
-        specified::font::QueryFontMetricsFlags,
-    },
 };
 use style_traits::{CSSPixel, DevicePixel, ParsingMode, ToCss};
 
-use super::{StyleViewport, StyloStyleEnvironment};
+use super::{StyleViewport, StyloStyleEnvironment, font_metrics::BrowserFontMetricsProvider};
 use crate::style_engine::world_key::{DEFAULT_VIEWPORT_HEIGHT, DEFAULT_VIEWPORT_WIDTH};
 
 pub(crate) fn normalize_media_query_list(media_text: &str) -> String {
@@ -114,9 +105,6 @@ fn with_stylo_media_context<R>(f: impl FnOnce(&mut ParserContext) -> R) -> R {
     f(&mut context)
 }
 
-#[derive(Debug)]
-struct MediaQueryFontMetricsProvider;
-
 fn media_query_device(
     emulated_media: Option<&crate::protocol_types::EmulatedMediaOverrides>,
     viewport: StyleViewport,
@@ -136,7 +124,7 @@ fn media_query_device(
         Size2D::<f32, CSSPixel>::new(viewport_width, viewport_height),
         Size2D::<f32, DevicePixel>::new(screen_width, screen_height),
         Scale::<f32, CSSPixel, DevicePixel>::new(1.0),
-        Box::new(MediaQueryFontMetricsProvider),
+        Box::new(BrowserFontMetricsProvider),
         initial_style,
         environment.stylo_prefers_color_scheme(),
         PointerCapabilities::default(),
@@ -144,28 +132,6 @@ fn media_query_device(
     );
     device.set_media_feature_preferences(environment.stylo_media_feature_preferences());
     device
-}
-
-impl FontMetricsProvider for MediaQueryFontMetricsProvider {
-    fn query_font_metrics(
-        &self,
-        _vertical: bool,
-        font: &Font,
-        base_size: CSSPixelLength,
-        _flags: QueryFontMetricsFlags,
-    ) -> FontMetrics {
-        let mut metrics = FontMetrics::default();
-        if font.clone_font_family().families.iter().next().is_some_and(
-            |family| matches!(family, SingleFontFamily::FamilyName(name) if name.name.as_ref().eq_ignore_ascii_case("Ahem")),
-        ) {
-            metrics.zero_advance_measure = Some(base_size);
-        }
-        metrics
-    }
-
-    fn base_size_for_generic(&self, _generic: GenericFontFamily) -> Length {
-        Length::new(16.0)
-    }
 }
 
 #[cfg(test)]

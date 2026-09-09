@@ -1,0 +1,15 @@
+[package]
+name = "stylo_static_prefs"
+version.workspace = true
+authors = ["The Servo Project Developers"]
+documentation = "https://docs.rs/stylo_static_prefs/"
+description = "Configuration for Stylo"
+repository = "https://github.com/servo/stylo"
+keywords = ["css", "style"]
+license = "MPL-2.0"
+edition = "2021"
+readme = "../README.md"
+build = "build.rs"
+
+[build-dependencies]
+toml = { version = "1.1.2" }

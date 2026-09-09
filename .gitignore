@@ -8,6 +8,10 @@
 /node_modules
 /tmp
 /vendor/*
+!/vendor/stylo-0.20.0/
+!/vendor/stylo-0.20.0/**
+/vendor/stylo-0.20.0/target/
+/vendor/stylo-0.20.0/Cargo.lock
 !/vendor/parley-0.11.1/
 !/vendor/parley-0.11.1/**
 !/vendor/taffy-0.13.0/
