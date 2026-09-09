@@ -203,7 +203,7 @@ async fn native_full_delivery_queue_does_not_block_other_sessions_or_cancellatio
     timeout(DEADLINE, blocked.sender.control.read_blocked.notified())
         .await
         .unwrap();
-    assert_eq!(blocked.events.len(), EVENT_CAPACITY);
+    assert_eq!(blocked.events.len(), MAX_PENDING_EVENTS);
 
     let (other_url, other_task) = server(|mut stream| {
         upgrade(&mut stream, &[0x81, 2, b'o', b'k']);

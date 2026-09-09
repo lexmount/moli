@@ -30,7 +30,8 @@ pub use curl::easy::{WsFlags, WsFrame};
 
 /// Fragment large messages above this layer to bound native write residence.
 pub const MAX_SEND_FRAME_BYTES: usize = 64 * 1024;
-const EVENT_CAPACITY: usize = 8;
+/// Maximum native events queued per connection, including chunks and send receipts.
+pub const MAX_PENDING_EVENTS: usize = 8;
 const DATA_CAPACITY: usize = 8;
 const CONTROL_CAPACITY: usize = 4;
 const SESSION_CAPACITY: usize = 255;
@@ -168,6 +169,8 @@ impl CurlWebSocketSender {
     }
 
     /// Handshake delivery starts paused, so application data cannot outrun Open.
+    /// Pausing does not retract queued chunks or a read already in progress.
+    /// Keep receiving events while paused so send receipts can make progress.
     pub fn set_reading(&self, enabled: bool) {
         self.control.reading.store(enabled, Ordering::Release);
         self.control.wake();
@@ -309,7 +312,7 @@ impl CurlWebSocketRuntime {
             #[cfg(test)]
             write_blocked: tokio::sync::Notify::new(),
         });
-        let (event_tx, events) = mpsc::channel(EVENT_CAPACITY);
+        let (event_tx, events) = mpsc::channel(MAX_PENDING_EVENTS);
         let (data_tx, data) = mpsc::channel(DATA_CAPACITY);
         let (control_tx, control_frames) = mpsc::channel(CONTROL_CAPACITY);
         let io = SessionIo {

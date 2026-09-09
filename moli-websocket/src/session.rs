@@ -1,12 +1,15 @@
 //! Browser session state on top of the native frame transport.
 use crate::{
     Command, Event, FrameOpcode,
-    commands::{CommandReceiver, QueuedCommand, Reservation},
+    commands::{
+        CommandReceiver, MAX_QUEUED_BYTES, MAX_QUEUED_MESSAGES, QueuedCommand, Reservation,
+    },
     events::{EventResult, EventSender, send_event},
     frames::{Assembler, Received, close_payload},
 };
 use moli_curl::websocket::{
-    CurlWebSocketConnection, CurlWebSocketEvent, CurlWebSocketSend, MAX_SEND_FRAME_BYTES, WsFlags,
+    CurlWebSocketConnection, CurlWebSocketEvent, CurlWebSocketSend, MAX_PENDING_EVENTS,
+    MAX_SEND_FRAME_BYTES, WsFlags,
 };
 use std::{collections::VecDeque, future::Future, pin::Pin};
 use tokio::time::{Duration, Instant};
@@ -14,6 +17,8 @@ use tokio::time::{Duration, Instant};
 type Delivery = Pin<Box<dyn Future<Output = EventResult> + Send>>;
 type Sending = Pin<Box<dyn Future<Output = Result<(), String>> + Send>>;
 const CLOSE_TIMEOUT: Duration = Duration::from_secs(5);
+// A pause can race one native read in addition to the already queued events.
+const MAX_PENDING_INCOMING_MESSAGES: usize = MAX_PENDING_EVENTS + 1;
 
 #[cfg(test)]
 mod tests;
@@ -57,7 +62,8 @@ pub(super) async fn run_open_session(
     event_tx: EventSender,
 ) -> EventResult {
     let sender = connection.sender();
-    sender.set_reading(true);
+    let mut reading = true;
+    sender.set_reading(reading);
     let mut session = Session {
         socket_id,
         outbox: VecDeque::new(),
@@ -101,6 +107,15 @@ pub(super) async fn run_open_session(
             }));
             flight = Some(next_flight);
         }
+        // Apply application backpressure to socket reads, not to the shared
+        // event queue: Sent must remain consumable to finish outgoing messages.
+        let should_read = !session.terminal
+            && ((delivery.is_none() && session.outbox.is_empty())
+                || session.closing.requested.is_some());
+        if reading != should_read {
+            reading = should_read;
+            sender.set_reading(reading);
+        }
         let deadline = session
             .closing
             .deadline
@@ -120,7 +135,7 @@ pub(super) async fn run_open_session(
                 sending = None;
                 if let Err(error) = result { session.fail(error); }
             }
-            event = connection.recv(), if !session.terminal && ((delivery.is_none() && session.outbox.is_empty()) || session.closing.requested.is_some()) => {
+            event = connection.recv(), if !session.terminal => {
                 match event {
                     Some(CurlWebSocketEvent::Chunk { data, frame }) => match session.assembler.push(data, frame) {
                         Ok(Some(received)) => session.received(received),
@@ -203,6 +218,19 @@ impl Session {
             ));
         }
         if let Some(message) = self.outgoing.front() {
+            // Native completion releases the data reservation, but its browser
+            // notifications can still be blocked. Bound that separate residence
+            // at message boundaries so a fragmented message always finishes.
+            if message.offset == 0
+                && self
+                    .outbox
+                    .iter()
+                    .filter(|event| matches!(event, Event::FrameSent { .. }))
+                    .count()
+                    >= MAX_QUEUED_MESSAGES
+            {
+                return None;
+            }
             let end = (message.offset + MAX_SEND_FRAME_BYTES).min(message.data.len());
             let last = end == message.data.len();
             let mut flags = match message.opcode {
@@ -285,16 +313,16 @@ impl Session {
                 _ => None,
             }
         }
-        // Closing must still read control frames while an older delivery waits.
-        // Preserve arriving messages in order, with a separate finite residence.
+        // Preserve chunks already admitted when native reads paused. Closing
+        // also keeps reading control frames; its message backlog stays bounded.
         let (count, bytes) = self
             .outbox
             .iter()
             .filter_map(message_size)
             .fold((0, 0usize), |(count, bytes), len| (count + 1, bytes + len));
         let size = message_size(&event).expect("only message events use this queue");
-        if count >= 8 || bytes.saturating_add(size) > crate::commands::MAX_QUEUED_BYTES {
-            self.fail("WebSocket closing delivery queue capacity exceeded".to_owned());
+        if count >= MAX_PENDING_INCOMING_MESSAGES || bytes.saturating_add(size) > MAX_QUEUED_BYTES {
+            self.fail("WebSocket delivery queue capacity exceeded".to_owned());
         } else {
             self.outbox.push_back(event);
         }
