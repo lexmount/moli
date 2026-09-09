@@ -1,4 +1,8 @@
 use super::{OwnerDispatchScope, PageScriptHost};
+use crate::context_bootstrap::{
+    EVENT_DISPATCHING_SLOT, EVENT_STOP_IMMEDIATE_PROPAGATION_SLOT, EVENT_STOP_PROPAGATION_SLOT,
+    set_event_internal_flag,
+};
 use crate::{
     context_bootstrap::{error_event_handler_arguments, event_is_error_event},
     document_runtime::DomHandle,
@@ -491,6 +495,12 @@ impl PageScriptHost {
             v8str(scope, "currentTarget").into(),
             window.into(),
         );
+        let _ = crate::context_bootstrap::event_backing(scope, event).set(
+            scope,
+            v8str(scope, "eventPhase").into(),
+            v8::Integer::new(scope, 2).into(),
+        );
+        set_event_internal_flag(scope, event, EVENT_DISPATCHING_SLOT, true);
 
         if event_type == "load" {
             install_child_body_load_attribute_handler_if_needed(scope, self, handle);
@@ -539,6 +549,19 @@ impl PageScriptHost {
                 break;
             }
         }
+        let _ = crate::context_bootstrap::event_backing(scope, event).set(
+            scope,
+            v8str(scope, "eventPhase").into(),
+            v8::Integer::new(scope, 0).into(),
+        );
+        let _ = crate::context_bootstrap::event_backing(scope, event).set(
+            scope,
+            v8str(scope, "currentTarget").into(),
+            v8::null(scope).into(),
+        );
+        set_event_internal_flag(scope, event, EVENT_DISPATCHING_SLOT, false);
+        set_event_internal_flag(scope, event, EVENT_STOP_PROPAGATION_SLOT, false);
+        set_event_internal_flag(scope, event, EVENT_STOP_IMMEDIATE_PROPAGATION_SLOT, false);
         self.pop_child_subresource_request_scope();
         restore_child_window_event_dispatch(scope, previous_active_child_window);
     }
