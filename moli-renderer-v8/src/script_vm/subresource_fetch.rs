@@ -5912,7 +5912,7 @@ impl ScriptVm {
             }
         };
         self.apply_pending_child_document_owner_retirements();
-        let (application, body_activity) = application;
+        let (application, mut body_activity) = application;
         let Some(application) = application else {
             return Ok(CurrentChildDocumentLoadApplication::Applied { body_activity });
         };
@@ -5920,9 +5920,13 @@ impl ScriptVm {
         if let Some(transition) = owner_transition {
             self.apply_child_document_owner_transition(transition);
         }
-        if let Some(action) = parser_stop_action {
-            super::child_document_lifecycle::ChildDocumentLifecycleOwner::new(self)
-                .notify_parser_stop_action(action);
+        if let Some(action) = parser_stop_action
+            && super::child_document_lifecycle::ChildDocumentLifecycleOwner::new(self)
+                .notify_parser_stop_action(action)?
+                == crate::frame_owner_model::FrameDocumentLifecycleTaskEffect::EventDispatched
+        {
+            body_activity =
+                crate::native_bridge::ChildDocumentLoadBodyActivity::PageCodeOrEventDispatch;
         }
         if let Some(work) = work {
             super::child_document_script_scheduler::ChildDocumentScriptSchedulerOwner::new(self)

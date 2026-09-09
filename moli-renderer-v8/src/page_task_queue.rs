@@ -17,6 +17,7 @@ mod history_traversal;
 mod image_load_event;
 mod indexed_db_task;
 mod internal_loading;
+mod main_document_lifecycle;
 mod main_document_post_parse;
 mod main_document_runtime;
 mod main_document_task_owner;
@@ -218,12 +219,10 @@ pub(crate) use self::dedicated_worker_client_event::{
     RendererPageDedicatedWorkerClientEventProducer, RendererPageDedicatedWorkerClientEventSender,
     RendererPageDedicatedWorkerClientEventTask,
 };
-#[cfg(test)]
-pub(crate) use self::dom_manipulation::RendererPageDomManipulationOwner;
 pub(crate) use self::dom_manipulation::{
     PageDomManipulationTurnAction, PageDomManipulationTurnOutcome,
-    RendererPageDomManipulationRoute, RendererPageDomManipulationSender,
-    RendererPageDomManipulationTask,
+    RendererPageDomManipulationOwner, RendererPageDomManipulationRoute,
+    RendererPageDomManipulationSender, RendererPageDomManipulationTask,
 };
 pub(crate) use self::dynamic_import_owner_action::{
     PageDynamicImportOwnerActionDocumentEffect, PageDynamicImportOwnerActionTurnAction,
@@ -277,6 +276,11 @@ pub(crate) use self::internal_loading::{
     PageInternalLoadingTargetEffect, PageInternalLoadingTurnAction, PageInternalLoadingTurnOutcome,
     RendererPageInternalLoadingOwner, RendererPageInternalLoadingSender,
     RendererPageInternalLoadingTask,
+};
+pub(crate) use self::main_document_lifecycle::{
+    PageMainDocumentLifecycleTurnAction, PageMainDocumentLifecycleTurnOutcome,
+    RendererPageMainDocumentLifecycleCompletion, RendererPageMainDocumentLifecycleOwner,
+    RendererPageMainDocumentLifecycleSender, RendererPageMainDocumentLifecycleTask,
 };
 pub(crate) use self::main_document_post_parse::{
     MainDocumentCompletionRecheckEffect, MainDocumentPostParseCallbackExecution,
