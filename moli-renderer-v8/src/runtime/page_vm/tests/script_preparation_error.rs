@@ -25,6 +25,112 @@ fn queue_error(page_vm: &mut PageVm, element_id: &str) -> anyhow::Result<()> {
 }
 
 #[tokio::test(flavor = "current_thread")]
+async fn dynamic_script_preparation_errors_enter_dom_fifo_at_insertion() {
+    run_page_vm_async_test(async move {
+        let loader = crate::network::ResourceRequestClient::new(&FetchConfig::default())?;
+        for child in [false, true] {
+            let (mut page_vm, _, _) = page_vm_with_bound_task_sources_and_owner_wake(
+                &loader, Url::parse("https://example.com/dynamic-script-errors")?,
+            );
+            if child {
+                page_vm.vm_mut().eval(r#"
+                  globalThis.errorFrame = document.createElement('iframe');
+                  document.body.append(errorFrame);
+                  void errorFrame.contentWindow;
+                "#)?;
+                assert!(page_vm.run_exact_selected_page_task_for_test(
+                    PageSelectedTaskTestSelector::ChildRealmMaterialization, &loader,
+                ).await?);
+            }
+            page_vm.vm_mut().eval(r#"
+              globalThis.events = [];
+              globalThis.details = [];
+              globalThis.exceptions = [];
+              const target = globalThis.errorFrame?.contentWindow || window;
+              const targetDocument = target.document;
+              target.addEventListener('error', event => {
+                if (event.target === target) exceptions.push(event.message);
+              });
+              onunhandledrejection = event => {
+                events.push('rejection');
+                event.preventDefault();
+              };
+              globalThis.appendInvalid = (id, src, type = '', ordered = false, connected = false) => {
+                const element = targetDocument.createElement('script');
+                element.id = id;
+                element.type = type;
+                if (ordered) element.async = false;
+                element.onerror = event => {
+                  events.push(id);
+                  details.push([event instanceof target.Event, event instanceof target.ErrorEvent,
+                    event.isTrusted, event.bubbles, event.cancelable, event.composed,
+                    event.target === element, event.currentTarget === element]);
+                  Promise.resolve().then(() => events.push('microtask:' + id));
+                  // Preparation failure still consumes already-started, including in a child.
+                  element.src = 'http://[';
+                  element.remove();
+                  targetDocument.body.append(element);
+                };
+                if (connected) targetDocument.body.append(element);
+                element.src = src;
+                if (!connected) targetDocument.body.append(element);
+                return element;
+              };
+              appendInvalid('first', '').remove();
+              Promise.reject('sentinel');
+            "#)?;
+            page_vm.vm_mut().eval(r#"
+              appendInvalid('whitespace', '   ');
+              appendInvalid('invalid', 'http://[');
+              appendInvalid('module-empty', '', 'module');
+              appendInvalid('module-invalid', 'http://[', 'module');
+              appendInvalid('ordered', 'http://[', '', true);
+              appendInvalid('importmap', 'data:application/json,{}', 'importmap');
+              appendInvalid('connected', '', '', false, true);
+            "#)?;
+            assert_eq!(page_vm.vm_mut().eval("JSON.stringify(events)")?, "[]",
+                "insertion queues errors without dispatching them: child={child}");
+            let mut expected = Vec::new();
+            for id in ["first", "rejection", "whitespace", "invalid", "module-empty",
+                "module-invalid", "ordered", "importmap", "connected"] {
+                let family = if id == "rejection" {
+                    PageDomManipulationTestFamily::PromiseRejection
+                } else {
+                    PageDomManipulationTestFamily::ScriptPreparationError
+                };
+                assert!(page_vm.run_exact_selected_page_task_for_test(
+                    PageSelectedTaskTestSelector::DomManipulation(family), &loader,
+                ).await?, "expected DOM FIFO head {id}: child={child}");
+                expected.push(id.to_owned());
+                if id != "rejection" {
+                    expected.push(format!("microtask:{id}"));
+                }
+                assert_eq!(page_vm.vm_mut().eval("events.join('|')")?, expected.join("|"),
+                    "each task finishes its listeners and reactions: child={child}");
+            }
+            let details: serde_json::Value = serde_json::from_str(
+                &page_vm.vm_mut().eval("JSON.stringify(details)")?,
+            )?;
+            assert_eq!(details, serde_json::json!(vec![
+                [true, false, true, false, false, false, true, true]; 8
+            ]), "trusted plain Events belong to the element's realm: child={child}");
+            assert_eq!(page_vm.vm_mut().eval("JSON.stringify(exceptions)")?, "[]");
+            assert!(!page_vm.has_ready_dom_manipulation_task_for_test(),
+                "changing src and reinserting already-started failures must not queue more errors");
+            assert!(!page_vm.run_exact_selected_page_task_for_test(
+                PageSelectedTaskTestSelector::MainDocumentRuntime(
+                    PageMainDocumentRuntimeActionKind::RuntimeScriptAdmission,
+                ), &loader,
+            ).await?, "preparation failures must not enter runtime script admission");
+            assert!(!page_vm.run_exact_selected_page_task_for_test(
+                PageSelectedTaskTestSelector::ChildClassicScriptSourceLoad, &loader,
+            ).await?, "child preparation failures must not start a script fetch");
+        }
+        Ok::<_, anyhow::Error>(())
+    }).await.expect("dynamic script preparation error admission");
+}
+
+#[tokio::test(flavor = "current_thread")]
 async fn script_preparation_errors_share_dom_fifo_and_complete_listener_reactions() {
     run_page_vm_async_test(async move {
         let loader = crate::network::ResourceRequestClient::new(&FetchConfig::default())?;
