@@ -28,7 +28,7 @@ async fn child_script_error_write_probe(
         parent.childErrorObserved({text: document.body.textContent,
           currentScriptIsNull: document.currentScript === null,
           tailMissing: document.getElementById('tail') === null,
-          eventType: event.type,
+          readyState: document.readyState, eventType: event.type,
           nestedRan: globalThis.nestedRan === true});
       }`;
       frame.srcdoc = '<!doctype html><head><script>' + handler + '<' + '/script></head>' +
@@ -71,5 +71,12 @@ async fn child_parser_fetch_error_write_executes_nested_inline_scripts() -> Resu
     assert_eq!(result["during"]["nestedRan"], true, "{result}");
     assert_eq!(result["during"]["tailMissing"], true, "{result}");
     assert_eq!(result["nestedRan"], true, "{result}");
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn child_parser_fetch_error_handler_observes_loading_document() -> Result<()> {
+    let result = child_script_error_write_probe(false, false).await?;
+    assert_eq!(result["during"]["readyState"], "loading", "{result}");
     Ok(())
 }
