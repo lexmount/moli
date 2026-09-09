@@ -141,12 +141,13 @@ pub(super) struct PendingDocumentLifecycleTurn {
     /// can immediately take another owner turn without ordinary Page work.
     ///
     /// This is stable residence state, not a wake hint. It keeps a runnable
-    /// parser-finish chain (notably `interactive` -> DOMContentLoaded) from
-    /// being displaced by an older resource terminal that became ready while
-    /// the parser task was still executing.
+    /// parser preparation and lifecycle task admission contiguous. Once an
+    /// event is admitted to the DOM source, the resident waits for its receipt
+    /// and ordinary task arbitration owns event delivery.
     pub(super) owner_turn_is_runnable: bool,
     pub(super) driver: PostParseLifecycleDriver,
     pub(super) completed_task: Option<PostParsePageOwnedTask>,
+    pub(super) awaiting_dom_task: Option<PendingDocumentLifecycleDomTask>,
     pub(super) completion_action: Option<PostParseLifecycleCompletionAction>,
     /// Whether this exact resident owns a sealed main-parser defer/module
     /// continuation.
@@ -157,4 +158,11 @@ pub(super) struct PendingDocumentLifecycleTurn {
     /// inspecting unrelated stylesheet or event queues.
     pub(super) has_sealed_main_parser_script_queue: bool,
     pub(super) started: Instant,
+}
+
+pub(super) struct PendingDocumentLifecycleDomTask {
+    pub(super) task: PostParsePageOwnedTask,
+    pub(super) completion: tokio::sync::oneshot::Receiver<
+        crate::page_task_queue::RendererPageMainDocumentLifecycleCompletion,
+    >,
 }

@@ -249,6 +249,7 @@ impl PageVm {
             owner_turn_is_runnable: true,
             driver,
             completed_task: None,
+            awaiting_dom_task: None,
             completion_action: None,
             has_sealed_main_parser_script_queue,
             started,
@@ -372,6 +373,34 @@ impl PageVm {
             return Ok(settled);
         }
 
+        let pending = pending_document_lifecycle_turn
+            .as_mut()
+            .expect("post-parse lifecycle state should remain installed");
+        if let Some(waiting) = pending.awaiting_dom_task.as_mut() {
+            match waiting.completion.try_recv() {
+                Ok(crate::page_task_queue::RendererPageMainDocumentLifecycleCompletion::Executed) => {
+                    pending.completed_task = Some(pending.awaiting_dom_task.take().unwrap().task);
+                }
+                Ok(crate::page_task_queue::RendererPageMainDocumentLifecycleCompletion::LoadBlocked { owner }) => {
+                    // The attempt did not execute the load boundary. Its token
+                    // must never tell the driver that this stage was reached.
+                    pending.awaiting_dom_task = None;
+                    self.page_task_queue.enqueue_front_post_parse_work_preserving_order(vec![
+                        PostParsePageOwnedWork::main_document_window_load(owner),
+                    ]);
+                }
+                Err(tokio::sync::oneshot::error::TryRecvError::Empty) => {
+                    return Ok(DocumentLifecycleTurnOutcome::blocked(
+                        DocumentLifecycleTurnAction::None,
+                        document,
+                    ));
+                }
+                Err(tokio::sync::oneshot::error::TryRecvError::Closed) => {
+                    anyhow::bail!("current lifecycle DOM task disappeared before completion");
+                }
+            }
+        }
+
         // Feed the previous exact task result into the driver before other
         // page work is admitted. `AwaitProgress` parks immediately; a producer
         // wake returns to owner arbitration instead of waiting in this method.
@@ -411,17 +440,6 @@ impl PageVm {
                     task,
                 )
                 .await
-            }
-            PostParseLifecycleAdvance::TimerQueuedByClassicDeferBeforeDomContentLoaded => {
-                self.run_classic_defer_timer_before_domcontentloaded(&request_client)
-                    .await?;
-                self.outcome_after_exact_post_parse_action(
-                    pending_document_lifecycle_turn,
-                    document,
-                    stage,
-                    DocumentLifecycleTurnAction::Progressed,
-                    false,
-                )
             }
             PostParseLifecycleAdvance::NeedsContinuation => self
                 .outcome_after_exact_post_parse_action(
@@ -570,6 +588,7 @@ impl PageVm {
             owner_turn_is_runnable: true,
             driver,
             completed_task: None,
+            awaiting_dom_task: None,
             completion_action: None,
             has_sealed_main_parser_script_queue: false,
             started: Instant::now(),
@@ -598,6 +617,7 @@ impl PageVm {
             owner_turn_is_runnable: _,
             driver,
             completed_task,
+            awaiting_dom_task: _,
             completion_action,
             has_sealed_main_parser_script_queue: _,
             started: _,
@@ -620,6 +640,7 @@ impl PageVm {
             owner_turn_is_runnable: true,
             driver,
             completed_task,
+            awaiting_dom_task: None,
             completion_action,
             has_sealed_main_parser_script_queue,
             started: Instant::now(),
@@ -647,6 +668,7 @@ impl PageVm {
             owner_turn_is_runnable: true,
             driver,
             completed_task: None,
+            awaiting_dom_task: None,
             completion_action: None,
             has_sealed_main_parser_script_queue: self
                 .vm()

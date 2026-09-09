@@ -1246,7 +1246,7 @@ impl<'loader, 'state> ParserDriver<'loader, 'state> {
                     start_line,
                     start_column,
                     import_map,
-                );
+                )?;
                 Ok(ScriptHandoffOutcome::NoNavigation)
             }
             ParserScriptHandoff::NoExecution {
