@@ -5,7 +5,7 @@ use crate::{
     custom_elements,
     document_runtime::DomHandle,
     document_script_scheduler::FrameDocumentClassicScriptSchedulerWork,
-    dom::native::{Attribute, DomMutationEffects, Node},
+    dom::native::{Attribute, DocumentReadyState, DomMutationEffects, Node},
     frame_owner_model::{
         DocumentId, FrameClassicDocumentScriptExecutionStart,
         FrameDocumentClassicCompletionFinishAction, FrameDocumentClassicParserResumeApplication,
@@ -1229,10 +1229,11 @@ impl JsContextHost {
             self.child_browsing_context_scripting_enabled(child_handle),
         );
         self.child_document_parsers.replace(owner, parser);
-        let _ = self.set_dom_document_ready_state_for_handle(
-            document_handle,
-            crate::dom::native::DocumentReadyState::Loading,
-        );
+        // The document-open transaction has erased the old listeners, so its
+        // loading transition cannot invoke author callbacks. Reset the native
+        // state before any explicit or implicit-open write consumes input.
+        let _ = self
+            .set_dom_document_ready_state_for_handle(document_handle, DocumentReadyState::Loading);
     }
 
     pub(in crate::native_bridge::context_host) fn child_document_parser_is_active(
