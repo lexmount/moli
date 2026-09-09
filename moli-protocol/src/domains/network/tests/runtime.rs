@@ -404,21 +404,46 @@ async fn runtime_form_post_navigation_body_is_available_by_network_request_id() 
 
 #[tokio::test(flavor = "multi_thread")]
 async fn websocket_runtime_activity_emits_cdp_websocket_events_without_payload() {
+    assert_websocket_runtime_activity_events(axum::http::Version::HTTP_11).await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn http10_websocket_upgrade_emits_cdp_frames_and_closes_cleanly() {
+    assert_websocket_runtime_activity_events(axum::http::Version::HTTP_10).await;
+}
+
+async fn assert_websocket_runtime_activity_events(version: axum::http::Version) {
+    use futures_util::{SinkExt, StreamExt};
+    use tokio_tungstenite::tungstenite::{Message, handshake::server};
+
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
     let server = tokio::spawn(async move {
-        axum::serve(
-            listener,
-            Router::new()
-                .route("/page", get(plain_page))
-                .route("/socket", get(websocket_echo_handler)),
-        )
-        .await
-        .unwrap();
+        axum::serve(listener, Router::new().route("/page", get(plain_page)))
+            .await
+            .unwrap();
+    });
+    let websocket_listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let socket_url = format!("ws://{}/socket", websocket_listener.local_addr().unwrap());
+    let websocket_server = tokio::spawn(async move {
+        let (stream, _) = websocket_listener.accept().await.unwrap();
+        // tungstenite requires its unboxed HTTP error response in this callback.
+        #[allow(clippy::result_large_err)]
+        let response_version = move |_: &server::Request, mut response: server::Response| {
+            *response.version_mut() = version;
+            Ok(response)
+        };
+        let mut socket = tokio_tungstenite::accept_hdr_async(stream, response_version)
+            .await
+            .unwrap();
+        let message = socket.next().await.unwrap().unwrap();
+        assert_eq!(message, Message::Text("hello".into()));
+        socket.send(message).await.unwrap();
+        assert!(matches!(socket.next().await, Some(Ok(Message::Close(_)))));
+        socket.flush().await.unwrap();
     });
 
     let page_url = format!("http://{addr}/page");
-    let socket_url = format!("ws://{addr}/socket");
     let socket_literal = serde_json::to_string(&socket_url).unwrap();
     let mut ctx = TestContext::new();
     let mut bc = BrowserContext::new("BID-1".into());
@@ -441,6 +466,9 @@ async fn websocket_runtime_activity_emits_cdp_websocket_events_without_payload()
             "expression": format!(r#"(() => {{
                 globalThis.__lm_ws_done = false;
                 const socket = new WebSocket({socket_literal});
+                globalThis.__lm_ws_closed = new Promise(resolve => {{
+                    socket.addEventListener('close', event => resolve(event.wasClean));
+                }});
                 socket.addEventListener('open', () => socket.send('hello'));
                 socket.addEventListener('message', () => {{
                     globalThis.__lm_ws_done = true;
@@ -515,6 +543,23 @@ async fn websocket_runtime_activity_emits_cdp_websocket_events_without_payload()
             && message["params"]["response"]["payloadData"] == json!("")
             && message["params"]["response"]["payloadLength"] == json!(5)
     }));
+    assert!(ctx.sent.iter().all(|message| {
+        message["method"] != json!("Network.webSocketFrameError")
+            || message["params"]["requestId"] != json!(request_id)
+    }));
+
+    ctx.process_async(json!({
+        "id": 7_005,
+        "method": "Runtime.evaluate",
+        "sessionId": "SID-1",
+        "params": { "expression": "globalThis.__lm_ws_closed", "awaitPromise": true }
+    }))
+    .await;
+    ctx.expect_result(
+        7_005,
+        json!({ "result": { "type": "boolean", "value": true } }),
+        Some("SID-1"),
+    );
 
     ctx.sent.clear();
     ctx.process_async(json!({
@@ -549,6 +594,7 @@ async fn websocket_runtime_activity_emits_cdp_websocket_events_without_payload()
         ctx.sent
     );
 
+    websocket_server.await.unwrap();
     server.abort();
 }
 

@@ -846,7 +846,7 @@ dependencies = [
 [[package]]
 name = "curl"
 version = "0.4.49"
-source = "git+https://github.com/lexmount/curl-rust?branch=moli#4a0b555254ab4492fe7ab37b3b91ab0505d952da"
+source = "git+https://github.com/lexmount/curl-rust?branch=moli#5fb1cf42f88bab7944648e69ef5cd6956933874c"
 dependencies = [
  "curl-sys",
  "libc",
@@ -860,7 +860,7 @@ dependencies = [
 [[package]]
 name = "curl-sys"
 version = "0.4.87+curl-8.19.0"
-source = "git+https://github.com/lexmount/curl-rust?branch=moli#4a0b555254ab4492fe7ab37b3b91ab0505d952da"
+source = "git+https://github.com/lexmount/curl-rust?branch=moli#5fb1cf42f88bab7944648e69ef5cd6956933874c"
 dependencies = [
  "brotlic-sys",
  "cc",
@@ -2797,6 +2797,7 @@ dependencies = [
  "strum",
  "time",
  "tokio",
+ "tokio-tungstenite",
  "tracing",
  "url",
  "v8",
