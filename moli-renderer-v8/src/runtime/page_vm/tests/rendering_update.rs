@@ -1,5 +1,6 @@
 use super::*;
 
+mod image_dimensions;
 mod print;
 mod transform_precision;
 
