@@ -1,0 +1,113 @@
+# This Source Code Form is subject to the terms of the Mozilla Public
+# License, v. 2.0. If a copy of the MPL was not distributed with this
+# file, You can obtain one at http://mozilla.org/MPL/2.0/.
+
+# This file contains the list of anonymous boxes and some flags, much like
+# longhands.toml and pseudo_elements.toml.
+#
+# Each anon box has its own section, with the following keys:
+#   inherits - whether the anon box inherits from its parent or not. Defaults to true.
+#   wrapper - whether the anon box is a wrapper around other frames during
+#             frame tree fix-up (e.g. table anonymous boxes, ruby anonymous boxes, anonymous
+#             flex item blocks, etc). Defaults to false.
+#
+# When adding an anon box, you also need to add the relevant atom to
+# StaticAtoms.py, with the camel-case name of the anon box, in the same order as
+# this file.
+
+[-moz-oof-placeholder]
+inherits = false
+# Framesets
+[-moz-hframeset-border]
+inherits = false
+[-moz-vframeset-border]
+inherits = false
+[-moz-frameset-blank]
+inherits = false
+
+# Table
+[-moz-table-column-group]
+inherits = false
+[-moz-table-column]
+inherits = false
+
+[-moz-page]
+inherits = false
+[-moz-page-break]
+inherits = false
+[-moz-page-content]
+inherits = false
+[-moz-printed-sheet]
+inherits = false
+
+# Applies to blocks that wrap contiguous runs of "column-span: all" elements in
+# multi-column subtrees, or the wrappers themselves, all the way up to the
+# column set wrappers.
+[-moz-column-span-wrapper]
+inherits = false
+
+# ::-moz-text, ::-moz-oof-placeholder, and ::-moz-first-letter-continuation are
+# non-elements which no rule will match.
+[-moz-text]
+# nsFirstLetterFrames for content outside the ::first-letter.
+[-moz-first-letter-continuation]
+
+[-moz-block-inside-inline-wrapper]
+[-moz-mathml-anonymous-block]
+wrapper = true
+[-moz-line-frame]
+
+[-moz-cell-content]
+[-moz-fieldset-content]
+[-moz-html-canvas-content]
+
+[-moz-inline-table]
+wrapper = true
+[-moz-table]
+wrapper = true
+[-moz-table-cell]
+wrapper = true
+[-moz-table-wrapper]
+[-moz-table-row-group]
+wrapper = true
+[-moz-table-row]
+wrapper = true
+
+[-moz-canvas]
+inherits = false
+[-moz-page-sequence]
+[-moz-scrolled-content]
+
+# A column set is a set of columns inside of ColumnSetWrapperFrame, which
+# applies to nsColumnSetFrame. It doesn't contain any column-span elements.
+[-moz-column-set]
+[-moz-column-content]
+
+# The root (viewport) frame
+[-moz-viewport]
+inherits = false
+# The root scrollframe.
+[-moz-viewport-scroll]
+inherits = false
+
+# Inside a flex/grid/-moz-box container, a contiguous run of text gets wrapped
+# in an anonymous block, which is then treated as a flex item.
+[-moz-anonymous-item]
+wrapper = true
+
+[-moz-block-ruby-content]
+[-moz-ruby]
+wrapper = true
+[-moz-ruby-base]
+wrapper = true
+[-moz-ruby-base-container]
+wrapper = true
+[-moz-ruby-text]
+wrapper = true
+[-moz-ruby-text-container]
+wrapper = true
+
+[-moz-svg-marker-anon-child]
+[-moz-svg-outer-svg-anon-child]
+[-moz-svg-foreign-content]
+[-moz-svg-text]

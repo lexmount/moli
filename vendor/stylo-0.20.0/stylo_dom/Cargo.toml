@@ -1,0 +1,18 @@
+[package]
+name = "stylo_dom"
+version.workspace = true
+authors = ["The Servo Project Developers"]
+documentation = "https://docs.rs/stylo_dom/"
+description = "DOM state types for Stylo"
+repository = "https://github.com/servo/stylo"
+keywords = ["css", "style"]
+license = "MPL-2.0"
+edition = "2021"
+readme = "../README.md"
+
+[lib]
+path = "lib.rs"
+
+[dependencies]
+bitflags = "2"
+malloc_size_of = { workspace = true }

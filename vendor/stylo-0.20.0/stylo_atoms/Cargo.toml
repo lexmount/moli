@@ -1,0 +1,20 @@
+[package]
+name = "stylo_atoms"
+version.workspace = true
+authors = ["The Servo Project Developers"]
+documentation = "https://docs.rs/stylo_atoms/"
+description = "Interned string type for the Servo and Stylo projects"
+repository = "https://github.com/servo/stylo"
+license = "MPL-2.0"
+edition = "2018"
+build = "build.rs"
+readme = "../README.md"
+
+[lib]
+path = "lib.rs"
+
+[dependencies]
+string_cache = "0.9"
+
+[build-dependencies]
+string_cache_codegen = "0.6.1"

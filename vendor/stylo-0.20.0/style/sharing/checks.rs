@@ -1,0 +1,281 @@
+/* This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at https://mozilla.org/MPL/2.0/. */
+
+//! Different checks done during the style sharing process in order to determine
+//! quickly whether it's worth to share style, and whether two different
+//! elements can indeed share the same style.
+
+use crate::bloom::StyleBloom;
+use crate::context::SharedStyleContext;
+use crate::dom::{TElement, TShadowRoot};
+use crate::properties::ComputedValues;
+use crate::sharing::{StyleSharingCandidate, StyleSharingTarget};
+use crate::values::specified::TreeCountingFunction;
+use selectors::matching::SelectorCaches;
+
+/// Determines whether a target and a candidate have compatible parents for
+/// sharing.
+pub fn parents_allow_sharing<E>(
+    target: &mut StyleSharingTarget<E>,
+    candidate: &mut StyleSharingCandidate<E>,
+) -> bool
+where
+    E: TElement,
+{
+    // If the identity of the parent style isn't equal, we can't share. We check
+    // this first, because the result is cached.
+    if target.parent_style_identity() != candidate.parent_style_identity() {
+        return false;
+    }
+
+    // Siblings can always share.
+    let parent = target.inheritance_parent().unwrap();
+    let candidate_parent = candidate.element.inheritance_parent().unwrap();
+    if parent == candidate_parent {
+        return true;
+    }
+
+    // If a parent element was already styled and we traversed past it without
+    // restyling it, that may be because our clever invalidation logic was able
+    // to prove that the styles of that element would remain unchanged despite
+    // changes to the id or class attributes. However, style sharing relies in
+    // the strong guarantee that all the classes and ids up the respective parent
+    // chains are identical. As such, if we skipped styling for one (or both) of
+    // the parents on this traversal, we can't share styles across cousins.
+    //
+    // This is a somewhat conservative check. We could tighten it by having the
+    // invalidation logic explicitly flag elements for which it ellided styling.
+    let parent_data = parent.borrow_data().unwrap();
+    let candidate_parent_data = candidate_parent.borrow_data().unwrap();
+    if !parent_data.safe_for_cousin_sharing() || !candidate_parent_data.safe_for_cousin_sharing() {
+        return false;
+    }
+
+    true
+}
+
+/// Whether two elements have the same style attribute.
+///
+/// First checks pointer identity (fast path), then falls back to value comparison.
+pub fn have_same_style_attribute<E>(
+    target: &mut StyleSharingTarget<E>,
+    candidate: &mut StyleSharingCandidate<E>,
+    shared_context: &SharedStyleContext,
+) -> bool
+where
+    E: TElement,
+{
+    match (target.style_attribute(), candidate.style_attribute()) {
+        (None, None) => true,
+        (Some(_), None) | (None, Some(_)) => false,
+        (Some(a), Some(b)) => {
+            if std::ptr::eq(&*a, &*b) {
+                return true;
+            }
+            let guard = shared_context.guards.author;
+            *a.read_with(guard) == *b.read_with(guard)
+        },
+    }
+}
+
+/// Whether two elements have the same same presentational attributes.
+pub fn have_same_presentational_hints<E>(
+    target: &mut StyleSharingTarget<E>,
+    candidate: &mut StyleSharingCandidate<E>,
+) -> bool
+where
+    E: TElement,
+{
+    target.pres_hints() == candidate.pres_hints()
+}
+
+/// Whether a given element has the same class attribute as a given candidate.
+///
+/// We don't try to share style across elements with different class attributes.
+pub fn have_same_class<E>(
+    target: &mut StyleSharingTarget<E>,
+    candidate: &mut StyleSharingCandidate<E>,
+) -> bool
+where
+    E: TElement,
+{
+    target.class_list() == candidate.class_list()
+}
+
+/// Whether a given element has the same part attribute as a given candidate.
+///
+/// We don't try to share style across elements with different part attributes.
+pub fn have_same_parts<E>(
+    target: &mut StyleSharingTarget<E>,
+    candidate: &mut StyleSharingCandidate<E>,
+) -> bool
+where
+    E: TElement,
+{
+    target.part_list() == candidate.part_list()
+}
+
+/// Whether a given element and a candidate match the same set of "revalidation"
+/// selectors.
+///
+/// Revalidation selectors are those that depend on the DOM structure, like
+/// :first-child, etc, or on attributes that we don't check off-hand (pretty
+/// much every attribute selector except `id` and `class`.
+#[inline]
+pub fn revalidate<E>(
+    target: &mut StyleSharingTarget<E>,
+    candidate: &mut StyleSharingCandidate<E>,
+    shared_context: &SharedStyleContext,
+    bloom: &StyleBloom<E>,
+    selector_caches: &mut SelectorCaches,
+) -> bool
+where
+    E: TElement,
+{
+    let stylist = &shared_context.stylist;
+
+    let for_element = target.revalidation_match_results(stylist, bloom, selector_caches);
+
+    let for_candidate = candidate.revalidation_match_results(stylist, bloom, selector_caches);
+
+    for_element == for_candidate
+}
+
+/// Whether the given element and a candidate have the same values for the the
+/// attributes used in an `attr()` function.
+#[inline]
+pub fn have_same_referenced_attrs<E>(
+    target: &StyleSharingTarget<E>,
+    candidate: &StyleSharingCandidate<E>,
+) -> bool
+where
+    E: TElement,
+{
+    // The candidate must be styled in order to be in the cache.
+    let borrowed_data = candidate.element.borrow_data().unwrap();
+    let styles = &borrowed_data.styles;
+
+    let check_style = |style: &ComputedValues| {
+        let Some(ref attrs) = style.attribute_references else {
+            return true;
+        };
+        attrs.iter().all(|(name, namespaces)| {
+            namespaces.iter().all(|namespace| {
+                TElement::get_attr(&**target, name, namespace)
+                    == TElement::get_attr(&**candidate, name, namespace)
+            })
+        })
+    };
+
+    if !check_style(styles.primary()) {
+        return false;
+    }
+
+    for pseudo_styles in styles.pseudos.as_array() {
+        let Some(ref styles) = pseudo_styles else {
+            continue;
+        };
+        if !check_style(styles) {
+            return false;
+        }
+    }
+    true
+}
+
+/// Whether two elements have compatible tree-counting functions.
+pub fn have_shareable_tree_counting_functions<E>(
+    target: &StyleSharingTarget<E>,
+    candidate: &StyleSharingCandidate<E>,
+) -> bool
+where
+    E: TElement,
+{
+    let borrowed_data = candidate.element.borrow_data().unwrap();
+    let styles = &borrowed_data.styles;
+
+    if styles.uses_tree_counting_function(TreeCountingFunction::SiblingIndex) {
+        // Two elements with the same parent will always have a different index
+        return false;
+    }
+
+    if styles.uses_tree_counting_function(TreeCountingFunction::SiblingCount)
+        && target.parent_element() != candidate.parent_element()
+    {
+        return false;
+    }
+
+    true
+}
+
+/// Whether a given element and a candidate share a set of scope activations
+/// for revalidation.
+#[inline]
+pub fn revalidate_scope<E>(
+    target: &mut StyleSharingTarget<E>,
+    candidate: &mut StyleSharingCandidate<E>,
+    shared_context: &SharedStyleContext,
+    selector_caches: &mut SelectorCaches,
+) -> bool
+where
+    E: TElement,
+{
+    let stylist = &shared_context.stylist;
+    let for_element = target.scope_revalidation_results(stylist, selector_caches);
+    let for_candidate = candidate.scope_revalidation_results(stylist, selector_caches);
+
+    for_element == for_candidate
+}
+
+/// Checks whether we might have rules for either of the two ids.
+#[inline]
+pub fn may_match_different_id_rules<E>(
+    shared_context: &SharedStyleContext,
+    element: E,
+    candidate: E,
+) -> bool
+where
+    E: TElement,
+{
+    let element_id = element.id();
+    let candidate_id = candidate.id();
+
+    if element_id == candidate_id {
+        return false;
+    }
+
+    let stylist = &shared_context.stylist;
+
+    let may_have_rules_for_element = match element_id {
+        Some(id) => stylist.may_have_rules_for_id(id, element),
+        None => false,
+    };
+
+    if may_have_rules_for_element {
+        return true;
+    }
+
+    match candidate_id {
+        Some(id) => stylist.may_have_rules_for_id(id, candidate),
+        None => false,
+    }
+}
+
+/// Returns whether the cascade data of the given shadow roots is the same.
+#[inline]
+pub fn shadow_root_style_data_equals<S>(l: Option<S>, r: Option<S>) -> bool
+where
+    S: TShadowRoot,
+{
+    if l == r {
+        return true;
+    }
+    let (Some(l), Some(r)) = (l, r) else {
+        return false;
+    };
+    match (l.style_data(), r.style_data()) {
+        (Some(l), Some(r)) => std::ptr::eq(l, r),
+        (None, None) => true,
+        _ => false,
+    }
+}

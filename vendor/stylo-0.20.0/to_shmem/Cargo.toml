@@ -1,0 +1,31 @@
+[package]
+name = "to_shmem"
+version = "0.5.0"
+authors = ["The Servo Project Developers"]
+license = "MPL-2.0"
+repository = "https://github.com/servo/stylo"
+edition = "2021"
+description = "Trait to write to a contiguous chunk of shared memory"
+
+[lib]
+name = "to_shmem"
+path = "lib.rs"
+
+[features]
+servo = ["cssparser/serde", "cssparser", "servo_arc", "smallbitvec", "smallvec", "string_cache", "thin-vec"]
+gecko = ["thin-vec/gecko-ffi", "cssparser", "servo_arc", "smallbitvec", "smallvec", "thin-vec"]
+
+cssparser = ["dep:cssparser"]
+servo_arc = ["dep:servo_arc"]
+smallbitvec = ["dep:smallbitvec"]
+smallvec = ["dep:smallvec"]
+string_cache = ["dep:string_cache"]
+thin-vec = ["dep:thin-vec"]
+
+[dependencies]
+cssparser = { version = "0.37", optional = true }
+servo_arc = { workspace = true, optional = true }
+smallbitvec = { version = "2.3.0", optional = true }
+smallvec = { version = "1.13", optional = true }
+string_cache = { version = "0.9", optional = true }
+thin-vec = { version = "0.2.1", optional = true }

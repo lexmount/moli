@@ -1,0 +1,34 @@
+[package]
+name = "stylo_traits"
+version.workspace = true
+authors = ["The Servo Project Developers"]
+license = "MPL-2.0"
+repository = "https://github.com/servo/stylo"
+edition = "2021"
+description = "Types used by the Stylo CSS engine"
+readme = "../README.md"
+
+[lib]
+name = "style_traits"
+path = "lib.rs"
+
+[features]
+default = ["servo"]
+servo = ["stylo_atoms", "cssparser/serde", "url", "euclid/serde"]
+gecko = []
+
+[dependencies]
+app_units = "0.7"
+bitflags = "2"
+cssparser = "0.37"
+euclid = "0.22"
+malloc_size_of = { workspace = true}
+malloc_size_of_derive = "0.1"
+selectors = { workspace = true}
+serde = "1.0"
+servo_arc = { workspace = true}
+stylo_atoms = { workspace = true, optional = true }
+thin-vec = "0.2"
+to_shmem = { workspace = true}
+to_shmem_derive = { workspace = true}
+url = { version = "2.5", optional = true }
