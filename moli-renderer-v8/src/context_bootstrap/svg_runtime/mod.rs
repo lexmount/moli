@@ -24,7 +24,9 @@ mod builders;
 mod callbacks;
 mod filters;
 mod path_data;
+mod point;
 mod rect;
+mod text;
 
 const SVG_GRAPHICS_TRANSFORM_SLOT: &str = "__moliSvgGraphicsTransform";
 const SVG_GRAPHICS_REQUIRED_EXTENSIONS_SLOT: &str = "__moliSvgGraphicsRequiredExtensions";
@@ -1277,6 +1279,7 @@ pub(in crate::context_bootstrap) fn install_svg_template_bindings<'s>(
         "SVGLength" => bindings::install_svg_length_bindings(scope, template),
         "SVGAngle" => bindings::install_svg_angle_bindings(scope, template),
         "SVGNumber" => bindings::install_svg_number_bindings(scope, template),
+        "SVGPoint" => point::install_bindings(scope, template),
         "SVGRect" => rect::install_bindings(scope, template),
         "SVGAnimatedString" => bindings::install_svg_animated_string_bindings(scope, template),
         "SVGAnimatedBoolean" => bindings::install_svg_animated_boolean_bindings(scope, template),

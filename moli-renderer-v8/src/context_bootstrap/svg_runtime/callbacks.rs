@@ -1231,6 +1231,18 @@ pub(super) fn svg_animated_length_getter<'s>(
             return;
         }
     };
+    // Text length without an authored value is derived when accessing the
+    // animated length, as in Blink's SVGAnimatedTextLength::baseVal().
+    if let Some(base) = get_private_value(scope, args.this(), SVG_ANIMATED_LENGTH_BASE_VAL_SLOT)
+        .and_then(|value| v8::Local::<v8::Object>::try_from(value).ok())
+        && let Some(owner) = get_private_value(scope, base, SVG_LENGTH_OWNER_ELEMENT_SLOT)
+            .and_then(|value| v8::Local::<v8::Object>::try_from(value).ok())
+        && get_private_value(scope, base, SVG_LENGTH_OWNER_ATTRIBUTE_SLOT)
+            .and_then(|value| v8::Local::<v8::String>::try_from(value).ok())
+            .is_some_and(|value| value.to_rust_string_lossy(scope) == "textLength")
+    {
+        sync_svg_animated_length_from_owner_attribute(scope, args.this(), owner, "textLength", "0");
+    }
     rv.set(
         get_private_value(scope, args.this(), slot).unwrap_or_else(|| v8::undefined(scope).into()),
     );
@@ -3859,7 +3871,7 @@ pub(super) fn svg_graphics_get_bbox_callback<'s>(
         width: 0.0,
         height: 0.0,
     });
-    rv.set(build_dom_rect_like(scope, bbox.x, bbox.y, bbox.width, bbox.height).into());
+    rv.set(super::rect::build_svg_rect(scope, bbox).into());
 }
 
 pub(super) fn svg_graphics_get_ctm_callback<'s>(
@@ -3948,94 +3960,7 @@ pub(super) fn svg_geometry_get_point_at_length_callback<'s>(
         return;
     }
     let point = svg_geometry::point_at_length(&segments, f64::from(parsed.distance));
-    rv.set(build_dom_point_like(scope, point.x, point.y).into());
-}
-
-pub(super) fn svg_text_content_get_number_of_chars_callback<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    _args: v8::FunctionCallbackArguments<'s>,
-    mut rv: v8::ReturnValue<'_, v8::Value>,
-) {
-    rv.set(v8::Integer::new(scope, 0).into());
-}
-
-pub(super) fn svg_text_content_get_computed_text_length_callback<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    _args: v8::FunctionCallbackArguments<'s>,
-    mut rv: v8::ReturnValue<'_, v8::Value>,
-) {
-    rv.set(v8::Number::new(scope, 0.0).into());
-}
-
-pub(super) fn svg_text_content_get_substring_length_callback<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    args: v8::FunctionCallbackArguments<'s>,
-    mut rv: v8::ReturnValue<'_, v8::Value>,
-) {
-    let Some(parsed) = webidl::parse_args::<SvgTextSubstringArgs>(scope, &args) else {
-        return;
-    };
-    let _ = (parsed.charnum, parsed.nchars);
-    rv.set(v8::Number::new(scope, 0.0).into());
-}
-
-pub(super) fn svg_text_content_get_start_position_of_char_callback<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    args: v8::FunctionCallbackArguments<'s>,
-    mut rv: v8::ReturnValue<'_, v8::Value>,
-) {
-    let Some(parsed) = webidl::parse_args::<SvgTextCharacterIndexArgs>(scope, &args) else {
-        return;
-    };
-    let _ = parsed.charnum;
-    rv.set(build_dom_point_like(scope, 0.0, 0.0).into());
-}
-
-pub(super) fn svg_text_content_get_end_position_of_char_callback<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    args: v8::FunctionCallbackArguments<'s>,
-    mut rv: v8::ReturnValue<'_, v8::Value>,
-) {
-    let Some(parsed) = webidl::parse_args::<SvgTextCharacterIndexArgs>(scope, &args) else {
-        return;
-    };
-    let _ = parsed.charnum;
-    rv.set(build_dom_point_like(scope, 0.0, 0.0).into());
-}
-
-pub(super) fn svg_text_content_get_extent_of_char_callback<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    args: v8::FunctionCallbackArguments<'s>,
-    mut rv: v8::ReturnValue<'_, v8::Value>,
-) {
-    let Some(parsed) = webidl::parse_args::<SvgTextCharacterIndexArgs>(scope, &args) else {
-        return;
-    };
-    let _ = parsed.charnum;
-    rv.set(build_zero_dom_rect_like(scope).into());
-}
-
-pub(super) fn svg_text_content_get_rotation_of_char_callback<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    args: v8::FunctionCallbackArguments<'s>,
-    mut rv: v8::ReturnValue<'_, v8::Value>,
-) {
-    let Some(parsed) = webidl::parse_args::<SvgTextCharacterIndexArgs>(scope, &args) else {
-        return;
-    };
-    let _ = parsed.charnum;
-    rv.set(v8::Number::new(scope, 0.0).into());
-}
-
-pub(super) fn svg_text_content_get_char_num_at_position_callback<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    args: v8::FunctionCallbackArguments<'s>,
-    mut rv: v8::ReturnValue<'_, v8::Value>,
-) {
-    if webidl::parse_args::<SvgTextPointArgs>(scope, &args).is_none() {
-        return;
-    }
-    rv.set(v8::Integer::new(scope, -1).into());
+    rv.set(super::point::build(scope, point).into());
 }
 
 pub(super) fn svg_text_content_select_substring_callback<'s>(

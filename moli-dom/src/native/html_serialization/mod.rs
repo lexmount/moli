@@ -73,6 +73,26 @@ impl NativeDom {
         serialize_html_with_limit(self, node_id, max_bytes)
     }
 
+    /// Serializes a bounded derived subtree with per-element inline CSS overrides.
+    ///
+    /// A returned value replaces or adds an escaped style attribute within the
+    /// same byte budget. It never mutates the DOM or affects ordinary
+    /// outerHTML. A paint consumer can use this to carry computed styles into an
+    /// isolated SVG document without copying or modifying the live DOM.
+    pub fn outer_html_with_style_overrides(
+        &self,
+        node_id: NativeNodeId,
+        max_bytes: usize,
+        mut style_override: impl FnMut(NativeNodeId) -> Option<String>,
+    ) -> Result<Option<String>, HtmlSerializationLimitExceeded> {
+        engine::serialize_html_with_style_overrides(
+            self,
+            node_id,
+            max_bytes,
+            Some(&mut style_override),
+        )
+    }
+
     pub fn inner_html(&self, node_id: NativeNodeId) -> Option<String> {
         self.inner_html_with_scripting_enabled(node_id, true)
     }

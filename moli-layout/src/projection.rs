@@ -974,6 +974,7 @@ where
                         .get(&LayoutBoxId::from_index(geometry.id.index()))
                         .cloned();
                     FrozenLayoutBox {
+                        svg_text: layout_box.svg_text.clone(),
                         geometry,
                         scroll_extent,
                         coordinate_space,
