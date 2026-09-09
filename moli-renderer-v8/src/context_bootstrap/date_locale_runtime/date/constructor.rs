@@ -3,6 +3,7 @@ use crate::util::call_script_visible_function;
 use anyhow::{Result, anyhow};
 
 use super::super::overrides::current_date_locale_overrides;
+use super::parse_input::local_date_parse_input_as_utc;
 
 pub(super) fn install_date_parse_override<'s>(
     scope: &mut v8::PinScope<'s, '_>,
@@ -236,20 +237,9 @@ fn date_constructor_timezone_arguments<'s>(
         if !input.is_string() {
             return Ok(None);
         }
-        let input = input.to_rust_string_lossy(scope);
-        let Some(utc_input) = local_date_parse_input_as_utc(&input) else {
-            return Ok(None);
-        };
-        let utc_input = v8_string(scope, &utc_input).ok_or(())?;
-        let receiver = v8::undefined(scope);
-        call_script_visible_function(
-            scope,
-            date_parse,
-            receiver.into(),
-            &[utc_input.into()],
-            "parse a local Date constructor string as UTC fields",
-        )
-        .ok_or(())?
+        let input = v8::Local::<v8::String>::try_from(input).map_err(|_| ())?;
+        let epoch = parse_date_string(scope, date_parse, input, Some(timezone)).ok_or(())?;
+        return Ok(Some(v8::Array::new_with_elements(scope, &[epoch])));
     } else {
         return Ok(None);
     };
@@ -265,12 +255,16 @@ fn single_date_epoch_argument<'s>(
     wall_clock_utc_ms: Option<f64>,
     timezone: &str,
 ) -> v8::Local<'s, v8::Array> {
-    let epoch_ms = wall_clock_utc_ms
-        .filter(|value| value.is_finite())
-        .and_then(|value| moli_time::epoch_millis_for_local_wall_clock(value, timezone))
-        .unwrap_or(f64::NAN);
+    let epoch_ms = epoch_for_local_wall_clock(wall_clock_utc_ms, timezone);
     let epoch_ms = v8::Number::new(scope, epoch_ms);
     v8::Array::new_with_elements(scope, &[epoch_ms.into()])
+}
+
+fn epoch_for_local_wall_clock(wall_clock_utc_ms: Option<f64>, timezone: &str) -> f64 {
+    wall_clock_utc_ms
+        .filter(|value| value.is_finite())
+        .and_then(|value| moli_time::epoch_millis_for_local_wall_clock(value, timezone))
+        .unwrap_or(f64::NAN)
 }
 
 fn date_parse_callback<'s>(
@@ -289,87 +283,46 @@ fn date_parse_callback<'s>(
         return;
     };
     let (_, timezone_override) = current_date_locale_overrides(scope);
-    let utc_input = timezone_override
-        .as_deref()
-        .and_then(|_| local_date_parse_input_as_utc(&input.to_rust_string_lossy(scope)));
-    let parse_input: v8::Local<'s, v8::Value> = match utc_input.as_deref() {
-        Some(utc_input) => {
-            let Some(utc_input) = v8_string(scope, utc_input) else {
-                return;
-            };
-            utc_input.into()
-        }
-        None => input.into(),
-    };
+    if let Some(parsed) = parse_date_string(scope, original, input, timezone_override.as_deref()) {
+        rv.set(parsed);
+    }
+}
+
+fn parse_date_string<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    original: v8::Local<'s, v8::Function>,
+    input: v8::Local<'s, v8::String>,
+    timezone: Option<&str>,
+) -> Option<v8::Local<'s, v8::Value>> {
     let receiver = v8::undefined(scope);
-    let Some(parsed) = call_script_visible_function(
+    // V8 owns acceptance of both ISO and implementation-defined legacy input.
+    // Never turn an originally invalid string into a valid one by adding a
+    // suffix. The argument is already a String, so neither native parse invokes
+    // the page's ToPrimitive/ToString hooks a second time.
+    let parsed = call_script_visible_function(
         scope,
         original,
         receiver.into(),
-        &[parse_input],
+        &[input.into()],
         "Date.parse",
-    ) else {
-        return;
+    )?;
+    let Some(timezone) = timezone else {
+        return Some(parsed);
     };
-    let Some(timezone) = timezone_override.as_deref() else {
-        rv.set(parsed);
-        return;
+    if !parsed.number_value(scope)?.is_finite() {
+        return Some(parsed);
+    }
+    let Some(utc_input) = local_date_parse_input_as_utc(&input.to_rust_string_lossy(scope)) else {
+        return Some(parsed);
     };
-    if utc_input.is_none() {
-        rv.set(parsed);
-        return;
-    }
-    let epoch = single_date_epoch_argument(scope, parsed.number_value(scope), timezone);
-    if let Some(epoch) = epoch.get_index(scope, 0) {
-        rv.set(epoch);
-    }
-}
-
-fn local_date_parse_input_as_utc(input: &str) -> Option<String> {
-    let input = input.trim();
-    if input.is_empty() || iso_date_only_uses_utc(input) {
-        return None;
-    }
-    let lower = input.to_ascii_lowercase();
-    if lower.ends_with('z') || lower.contains("gmt") || lower.contains("utc") {
-        return None;
-    }
-    let time_start = input
-        .find(['T', 't'])
-        .or_else(|| input.find(':'))
-        .unwrap_or(input.len());
-    if input[time_start..].contains(['+', '-']) {
-        return None;
-    }
-    if input.contains(['T', 't']) {
-        Some(format!("{input}Z"))
-    } else {
-        // Legacy date grammars generally recognize a UTC suffix more reliably
-        // than a trailing ISO `Z`.
-        Some(format!("{input} UTC"))
-    }
-}
-
-fn iso_date_only_uses_utc(input: &str) -> bool {
-    let (year_len, rest) = match input.as_bytes().first() {
-        Some(b'+' | b'-') if input.len() >= 7 => (7, &input[7..]),
-        _ if input.len() >= 4 => (4, &input[4..]),
-        _ => return false,
-    };
-    if !input.as_bytes()[..year_len]
-        .iter()
-        .enumerate()
-        .all(|(index, byte)| (index == 0 && matches!(byte, b'+' | b'-')) || byte.is_ascii_digit())
-    {
-        return false;
-    }
-    rest.is_empty()
-        || (rest.len() == 3
-            && rest.as_bytes()[0] == b'-'
-            && rest.as_bytes()[1..3].iter().all(u8::is_ascii_digit))
-        || (rest.len() == 6
-            && rest.as_bytes()[0] == b'-'
-            && rest.as_bytes()[3] == b'-'
-            && rest.as_bytes()[1..3].iter().all(u8::is_ascii_digit)
-            && rest.as_bytes()[4..6].iter().all(u8::is_ascii_digit))
+    let utc_input = v8_string(scope, &utc_input)?;
+    let wall_clock = call_script_visible_function(
+        scope,
+        original,
+        receiver.into(),
+        &[utc_input.into()],
+        "read local Date string fields through native UTC parsing",
+    )?;
+    let epoch = epoch_for_local_wall_clock(wall_clock.number_value(scope), timezone);
+    Some(v8::Number::new(scope, epoch).into())
 }

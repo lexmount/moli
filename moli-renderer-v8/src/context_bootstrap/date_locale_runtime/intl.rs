@@ -302,15 +302,21 @@ pub(super) fn intl_datetime_options_with_default_timezone<'s>(
             // behalf.
             return Some(original);
         }
-        let target = original.to_object(scope)?;
+        let original = original.to_object(scope)?;
         // Do not inspect `timeZone` here. Reading it before V8 processes the
         // remaining options changes observable getter/Proxy ordering and can
         // read an explicit accessor twice. The transparent proxy supplies the
-        // default exactly when V8 performs its ordinary [[Get]].
+        // default exactly when V8 performs its ordinary [[Get]]. Do not use
+        // the page's object as the Proxy target: substituting a default for a
+        // frozen own `timeZone: undefined` would violate Proxy [[Get]]'s
+        // SameValue invariant. The empty target has no such own properties;
+        // callback data retains the original object only for forwarding reads.
+        let target = v8::Object::new(scope);
         let handler = v8::Object::new(scope);
         let timezone = v8_string(scope, timezone)?;
+        let data = v8::Array::new_with_elements(scope, &[original.into(), timezone.into()]);
         let get = v8::Function::builder(intl_datetime_options_get_callback)
-            .data(timezone.into())
+            .data(data.into())
             .length(3)
             .build(scope)?;
         let _ = handler.set(scope, v8str(scope, "get").into(), get.into());
@@ -327,7 +333,14 @@ fn intl_datetime_options_get_callback<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'s, v8::Value>,
 ) {
-    let Ok(target) = v8::Local::<v8::Object>::try_from(args.get(0)) else {
+    let Ok(data) = v8::Local::<v8::Array>::try_from(args.data()) else {
+        rv.set_undefined();
+        return;
+    };
+    let Some(target) = data
+        .get_index(scope, 0)
+        .and_then(|value| v8::Local::<v8::Object>::try_from(value).ok())
+    else {
         rv.set_undefined();
         return;
     };
@@ -339,7 +352,9 @@ fn intl_datetime_options_get_callback<'s>(
         return;
     };
     if key.strict_equals(v8str(scope, "timeZone").into()) && value.is_undefined() {
-        rv.set(args.data());
+        if let Some(timezone) = data.get_index(scope, 1) {
+            rv.set(timezone);
+        }
     } else {
         rv.set(value);
     }

@@ -4,6 +4,7 @@ use anyhow::{Result, anyhow};
 use moli_webapi_declare::WebApiObject;
 
 mod constructor;
+mod parse_input;
 mod prototype;
 
 use constructor::{install_date_constructor_proxy, install_date_parse_override};

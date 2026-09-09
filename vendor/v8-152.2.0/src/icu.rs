@@ -5,6 +5,13 @@ use std::ffi::CString;
 unsafe extern "C" {
   fn icu_get_default_locale(output: *mut char, output_len: usize) -> usize;
   fn icu_set_default_locale(locale: *const char);
+  fn uloc_toLanguageTag_78(
+    locale: *const char,
+    output: *mut char,
+    capacity: i32,
+    strict: i8,
+    error: *mut i32,
+  ) -> i32;
   fn icu_get_default_time_zone(output: *mut char, output_len: usize) -> usize;
   fn icu_set_default_time_zone(time_zone_id: *const char) -> bool;
   fn udata_setCommonData_78(this: *const u8, error_code: *mut i32);
@@ -70,6 +77,46 @@ pub fn set_default_locale(locale: &str) {
     let c_str = CString::new(locale).expect("Invalid locale");
     icu_set_default_locale(c_str.as_ptr());
   }
+}
+
+/// Converts an ICU locale ID (such as `en_US` or
+/// `de_DE@collation=phonebook`) into its BCP47 language tag without changing
+/// ICU's process-wide default. Uses the same ICU data as V8's Intl services.
+///
+/// Like `Locale::toLanguageTag`, conversion is non-strict: ICU omits fields
+/// that cannot be represented in BCP47. Interior NULs and ICU errors return
+/// `None`. The versioned ABI lives here alongside the other bundled-ICU APIs.
+pub fn language_tag_for_locale(locale: &str) -> Option<String> {
+  let locale = CString::new(locale).ok()?;
+  let mut error = 0;
+  // SAFETY: locale is NUL-terminated and remains live throughout the call.
+  // ICU explicitly supports a null, zero-capacity output for preflighting.
+  let required = unsafe {
+    uloc_toLanguageTag_78(locale.as_ptr(), std::ptr::null_mut(), 0, 0, &mut error)
+  };
+  const BUFFER_OVERFLOW_ERROR: i32 = 15;
+  if required < 0 || (error > 0 && error != BUFFER_OVERFLOW_ERROR) {
+    return None;
+  }
+  let capacity = required.checked_add(1)?;
+  let mut output = vec![0u8; usize::try_from(capacity).ok()?];
+  error = 0;
+  // SAFETY: output has `capacity` writable bytes, including the terminator.
+  // The input is immutable, so preflight and conversion see the same ID.
+  let written = unsafe {
+    uloc_toLanguageTag_78(
+      locale.as_ptr(),
+      output.as_mut_ptr().cast(),
+      capacity,
+      0,
+      &mut error,
+    )
+  };
+  if error > 0 || written != required {
+    return None;
+  }
+  output.truncate(usize::try_from(written).ok()?);
+  String::from_utf8(output).ok()
 }
 
 /// Returns the id of ICU's current default time zone, usually an IANA id such

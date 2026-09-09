@@ -39,6 +39,7 @@ from .groups.fetch_runtime_teardown import run_fetch_runtime_teardown_group
 from .groups.inspector_routing import run_inspector_routing_group
 from .groups.iframe_input import run_iframe_input_group
 from .groups.layout_screenshot import run_layout_screenshot_group
+from .groups.locale_timezone_inputs import run_locale_timezone_inputs_group
 from .groups.multi_client import run_multi_client_group
 from .groups.multi_context import run_multi_context_group
 from .groups.multi_page import run_multi_page_group
@@ -365,6 +366,12 @@ BROWSER_GROUPS: tuple[SmokeGroup, ...] = (
         "Viewport, storage, profile, and detailed locale/timezone override contracts.",
         "browser",
         run_emulation_storage_group,
+    ),
+    SmokeGroup(
+        "locale-timezone-inputs",
+        "Unicode and legacy Date input, ICU locale IDs, frozen Intl options and getter contracts.",
+        "browser",
+        run_locale_timezone_inputs_group,
     ),
     SmokeGroup(
         "multi-context",

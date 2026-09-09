@@ -11,6 +11,7 @@ mod crypto_subtle_hmac;
 mod crypto_subtle_jwk;
 mod crypto_subtle_other;
 mod crypto_subtle_x25519;
+mod date_locale;
 mod details;
 mod event_handlers;
 mod events_selection_storage;

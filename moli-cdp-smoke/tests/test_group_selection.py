@@ -32,6 +32,7 @@ class GroupSelectionTests(unittest.TestCase):
         self.assertIn("inspector-routing", DEFAULT_GROUP_NAMES)
         self.assertIn("navigation-outcomes", DEFAULT_GROUP_NAMES)
         self.assertIn("media-error", DEFAULT_GROUP_NAMES)
+        self.assertIn("locale-timezone-inputs", DEFAULT_GROUP_NAMES)
         self.assertIn("webgl-viewport", DEFAULT_GROUP_NAMES)
         self.assertIn("svg-rect", DEFAULT_GROUP_NAMES)
         self.assertIn("target-lifecycle", DEFAULT_GROUP_NAMES)

@@ -38,6 +38,18 @@ returns `InvalidParams` on initial admission, while its active override
 Moli additionally locks down the latter state-preservation case in a focused
 Rust protocol test.
 
+The default `locale-timezone-inputs` group adds input-boundary regressions for
+PR #369. It was calibrated on 2026-09-10 against `/usr/bin/chromium`
+145.0.7632.116 using the group unchanged: four timezone overrides cover Unicode
+and lone-surrogate rejection, explicit legacy timezone tokens, ISO date-only
+versus local parsing, weekday names and ignored comments, and frozen Intl
+options. Option getter order and receiver identity are compared with the
+same engine before emulation. Seven ICU locale IDs cover underscore/script
+forms, POSIX default normalization, and calendar/collation/numbering keywords;
+explicit page locales still use native BCP47 validation. Clearing overrides
+must restore the original defaults. The group has its own Moli process because
+the Unicode regression previously panicked in a native callback.
+
 For example, Chromium resolves Playwright
 `page.goto(..., wait_until="load")` after `Page.loadEventFired` but before the
 later `Page.frameStoppedLoading` delivery. A smoke scenario that starts a new

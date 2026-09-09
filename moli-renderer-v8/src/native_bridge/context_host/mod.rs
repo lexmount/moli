@@ -810,7 +810,21 @@ struct DateLocaleOverrides {
 
 impl DateLocaleRuntimeState {
     pub(crate) fn set_locale(&self, locale: Option<&str>) {
-        self.overrides.borrow_mut().locale = locale.map(str::to_owned);
+        // CDP accepts ICU locale IDs, while explicit Intl locale arguments
+        // require BCP47. Normalize once at the shared state boundary so every
+        // Window realm and Date locale method consumes the same language tag.
+        // Conversion errors fall back to native Intl validation of the input.
+        self.overrides.borrow_mut().locale = locale.map(|locale| {
+            let tag = v8::icu::language_tag_for_locale(locale).unwrap_or_else(|| locale.to_owned());
+            // V8's Isolate::DefaultLocale maps ICU's en_US_POSIX to en-US.
+            // Passing the otherwise valid POSIX tag explicitly would suppress
+            // number grouping, unlike Chromium's emulated default locale.
+            if tag == "en-US-u-va-posix" {
+                "en-US".to_owned()
+            } else {
+                tag
+            }
+        });
     }
 
     pub(crate) fn set_timezone(&self, timezone: Option<&str>) {
