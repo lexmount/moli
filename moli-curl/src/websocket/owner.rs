@@ -13,7 +13,7 @@ use curl::{
 };
 
 use super::{
-    CurlWebSocketEvent, CurlWebSocketSend, SessionIo, Submission,
+    CurlWebSocketEvent, QueuedSend, SessionIo, Submission,
     request::{self, Handshake},
 };
 use crate::{CurlDnsResolution, CurlTransferId, dns_adapter::CurlDnsOwnerResidence};
@@ -40,7 +40,7 @@ struct Session {
 }
 
 struct PendingSend {
-    frame: CurlWebSocketSend,
+    queued: QueuedSend,
     offset: usize,
 }
 
@@ -261,16 +261,6 @@ impl Session {
             if self.io.cancelled() {
                 return Err(Ok(()));
             }
-            // Reserve before native I/O so every completion has bounded residence.
-            let permit = match self.io.events.try_reserve() {
-                Ok(permit) => permit,
-                Err(tokio::sync::mpsc::error::TrySendError::Full(_)) => {
-                    #[cfg(test)]
-                    self.io.control.read_blocked.notify_one();
-                    break;
-                }
-                Err(tokio::sync::mpsc::error::TrySendError::Closed(_)) => return Err(Ok(())),
-            };
             if self.send.is_none() {
                 self.send = self
                     .io
@@ -278,25 +268,20 @@ impl Session {
                     .try_recv()
                     .or_else(|_| self.io.data.try_recv())
                     .ok()
-                    .map(|frame| PendingSend { frame, offset: 0 });
+                    .map(|queued| PendingSend { queued, offset: 0 });
             }
-            let mut permit = Some(permit);
             if let Some(send) = &mut self.send {
-                match self
-                    .handle
-                    .ws_send(&send.frame.data[send.offset..], 0, send.frame.flags)
-                {
+                match self.handle.ws_send(
+                    &send.queued.frame.data[send.offset..],
+                    0,
+                    send.queued.frame.flags,
+                ) {
                     Ok(count) => {
                         send.offset += count;
                         progressed = true;
-                        if send.offset == send.frame.data.len() {
-                            permit.take().expect("reserved completion slot").send(
-                                CurlWebSocketEvent::Sent {
-                                    token: send.frame.token,
-                                    payload_length: send.offset,
-                                },
-                            );
-                            self.send = None;
+                        if send.offset == send.queued.frame.data.len() {
+                            let send = self.send.take().expect("completed frame");
+                            let _ = send.queued.completed.send(send.offset);
                         }
                     }
                     Err(error) if error.is_again() => {
@@ -306,12 +291,17 @@ impl Session {
                     Err(error) => return Err(Err(format!("WebSocket send failed: {error}"))),
                 }
             }
-            drop(permit);
             if self.received_close || !self.io.control.reading.load(Ordering::Acquire) {
                 break;
             }
-            let Ok(permit) = self.io.events.try_reserve() else {
-                break;
+            let permit = match self.io.events.try_reserve() {
+                Ok(permit) => permit,
+                Err(tokio::sync::mpsc::error::TrySendError::Full(_)) => {
+                    #[cfg(test)]
+                    self.io.control.read_blocked.notify_one();
+                    break;
+                }
+                Err(tokio::sync::mpsc::error::TrySendError::Closed(_)) => return Err(Ok(())),
             };
             let mut data = vec![0; CHUNK_BYTES];
             match self.handle.ws_recv(&mut data) {
@@ -333,10 +323,12 @@ impl Session {
     }
 
     fn wait_fd(&self) -> Option<WaitFd> {
-        if !self.open || self.io.events.capacity() == 0 {
+        if !self.open {
             return None;
         }
-        let reading = !self.received_close && self.io.control.reading.load(Ordering::Acquire);
+        let reading = self.io.events.capacity() > 0
+            && !self.received_close
+            && self.io.control.reading.load(Ordering::Acquire);
         let writing =
             self.send.is_some() || !self.io.data.is_empty() || !self.io.control_frames.is_empty();
         if !reading && !writing {

@@ -129,55 +129,45 @@ async fn native_fragmented_send_completes_without_echo() {
     let mut connection = runtime.connect(CurlWebSocketRequest::new(url)).unwrap();
     opened(&mut connection).await;
     let sender = connection.sender();
+    let mut receipts = Vec::new();
     for (i, data) in payload.chunks(MAX_SEND_FRAME_BYTES).enumerate() {
+        receipts.push(
+            sender
+                .enqueue_frame(CurlWebSocketSend {
+                    data: data.to_vec(),
+                    flags: if i == 0 {
+                        WsFlags::BINARY | WsFlags::CONT
+                    } else {
+                        WsFlags::BINARY
+                    },
+                })
+                .await
+                .unwrap(),
+        );
+    }
+    receipts.push(
         sender
-            .send(CurlWebSocketSend {
-                token: i as u64,
-                data: data.to_vec(),
-                flags: if i == 0 {
-                    WsFlags::BINARY | WsFlags::CONT
-                } else {
-                    WsFlags::BINARY
-                },
+            .enqueue_frame(CurlWebSocketSend {
+                data: Vec::new(),
+                flags: WsFlags::TEXT,
             })
             .await
-            .unwrap();
+            .unwrap(),
+    );
+    for (i, receipt) in receipts.into_iter().enumerate() {
+        assert_eq!(
+            timeout(DEADLINE, receipt.wait()).await.unwrap().unwrap(),
+            if i == 2 { 0 } else { MAX_SEND_FRAME_BYTES }
+        );
     }
-    sender
-        .send(CurlWebSocketSend {
-            token: 2,
-            data: Vec::new(),
-            flags: WsFlags::TEXT,
-        })
-        .await
-        .unwrap();
-    for token in 0..3 {
-        match event(&mut connection).await {
-            CurlWebSocketEvent::Sent {
-                token: actual,
-                payload_length,
-            } => {
-                assert_eq!(actual, token);
-                assert_eq!(
-                    payload_length,
-                    if token == 2 { 0 } else { MAX_SEND_FRAME_BYTES }
-                );
-            }
-            unexpected => panic!("expected send completion, got {unexpected:?}"),
-        }
-    }
-    sender
-        .send(CurlWebSocketSend {
-            token: 3,
+    let close = sender
+        .enqueue_frame(CurlWebSocketSend {
             data: 1000u16.to_be_bytes().to_vec(),
             flags: WsFlags::CLOSE,
         })
         .await
         .unwrap();
-    assert!(matches!(
-        event(&mut connection).await,
-        CurlWebSocketEvent::Sent { token: 3, .. }
-    ));
+    assert_eq!(timeout(DEADLINE, close.wait()).await.unwrap().unwrap(), 2);
     sender.set_reading(true);
     assert!(
         matches!(event(&mut connection).await, CurlWebSocketEvent::Chunk { frame, .. } if frame.flags() == WsFlags::CLOSE)
@@ -308,55 +298,32 @@ async fn native_partial_write_retries_preserve_payload_and_control_boundaries() 
     let sender = connection.sender();
     let sends = async {
         for i in 0..FRAMES {
-            sender
-                .send(CurlWebSocketSend {
-                    token: i as u64,
+            let receipt = sender
+                .enqueue_frame(CurlWebSocketSend {
                     flags: WsFlags::BINARY,
                     data: vec![(i % 251) as u8; MAX_SEND_FRAME_BYTES],
                 })
                 .await
                 .unwrap();
-        }
-    };
-    let drain = async {
-        let mut sent = 0;
-        let mut ping_sent = false;
-        while sent < FRAMES || !ping_sent {
-            match event(&mut connection).await {
-                CurlWebSocketEvent::Sent {
-                    token: u64::MAX, ..
-                } => {
-                    assert!(!ping_sent);
-                    ping_sent = true;
-                }
-                CurlWebSocketEvent::Sent {
-                    token,
-                    payload_length,
-                } => {
-                    assert_eq!(payload_length, MAX_SEND_FRAME_BYTES);
-                    assert_eq!(token, sent as u64);
-                    sent += 1;
-                }
-                unexpected => panic!("expected completion, got {unexpected:?}"),
-            }
+            assert_eq!(receipt.wait().await.unwrap(), MAX_SEND_FRAME_BYTES);
         }
     };
     let resume = async {
         timeout(DEADLINE, sender.control.write_blocked.notified())
             .await
             .expect("server backpressure must reach native writer");
-        sender
-            .send(CurlWebSocketSend {
-                token: u64::MAX,
+        let receipt = sender
+            .enqueue_frame(CurlWebSocketSend {
                 flags: WsFlags::PING,
                 data: b"between frames".to_vec(),
             })
             .await
             .unwrap();
         resume_tx.send(()).unwrap();
+        assert_eq!(receipt.wait().await.unwrap(), b"between frames".len());
     };
     timeout(DEADLINE, async {
-        tokio::join!(sends, drain, resume);
+        tokio::join!(sends, resume);
     })
     .await
     .unwrap();
@@ -410,4 +377,166 @@ fn native_wss_configuration_validates_chain_and_hostname() {
         drop(easy);
         task.join().unwrap();
     }
+}
+
+#[tokio::test]
+async fn native_send_receipts_progress_with_full_receive_queue() {
+    let (url, task) = server(|mut stream| {
+        let tail: Vec<_> = (0..MAX_PENDING_EVENTS).flat_map(|_| [0x82, 1, 7]).collect();
+        upgrade(&mut stream, &tail);
+        let mut socket = tungstenite::WebSocket::from_raw_socket(
+            stream,
+            tungstenite::protocol::Role::Server,
+            None,
+        );
+        assert_eq!(
+            socket.read().unwrap(),
+            Message::Binary(vec![9; 2 * MAX_SEND_FRAME_BYTES].into())
+        );
+        assert!(matches!(
+            socket.read(),
+            Err(tungstenite::Error::Protocol(
+                tungstenite::error::ProtocolError::ResetWithoutClosingHandshake
+            ))
+        ));
+    });
+    let runtime = CurlWebSocketRuntime::new().unwrap();
+    let mut connection = runtime.connect(CurlWebSocketRequest::new(url)).unwrap();
+    opened(&mut connection).await;
+    let sender = connection.sender();
+    sender.set_reading(true);
+    timeout(DEADLINE, sender.control.read_blocked.notified())
+        .await
+        .unwrap();
+    assert_eq!(connection.events.len(), MAX_PENDING_EVENTS);
+    for flags in [WsFlags::BINARY | WsFlags::CONT, WsFlags::BINARY] {
+        let receipt = sender
+            .enqueue_frame(CurlWebSocketSend {
+                flags,
+                data: vec![9; MAX_SEND_FRAME_BYTES],
+            })
+            .await
+            .unwrap();
+        assert_eq!(
+            timeout(DEADLINE, receipt.wait()).await.unwrap().unwrap(),
+            MAX_SEND_FRAME_BYTES
+        );
+    }
+    assert_eq!(connection.events.len(), MAX_PENDING_EVENTS);
+    drop(connection);
+    task.join().unwrap();
+}
+
+#[tokio::test]
+async fn native_unconsumed_receipts_bound_admission_and_keep_control_capacity() {
+    let (received_tx, received_rx) = oneshot::channel();
+    let (url, task) = server(move |stream| {
+        let mut socket = tungstenite::accept(stream).unwrap();
+        for _ in 0..DATA_CAPACITY {
+            assert_eq!(socket.read().unwrap(), Message::Text("x".into()));
+        }
+        received_tx.send(()).unwrap();
+        assert_eq!(
+            socket.read().unwrap(),
+            Message::Ping(b"control".to_vec().into())
+        );
+        assert_eq!(socket.read().unwrap(), Message::Text("next".into()));
+        // A cancelled admission must not appear on the wire.
+        assert!(socket.read().is_err());
+    });
+    let runtime = CurlWebSocketRuntime::new().unwrap();
+    let mut connection = runtime.connect(CurlWebSocketRequest::new(url)).unwrap();
+    opened(&mut connection).await;
+    let sender = connection.sender();
+    let mut receipts = Vec::new();
+    for _ in 0..DATA_CAPACITY {
+        receipts.push(
+            sender
+                .enqueue_frame(CurlWebSocketSend {
+                    flags: WsFlags::TEXT,
+                    data: b"x".to_vec(),
+                })
+                .await
+                .unwrap(),
+        );
+    }
+    timeout(DEADLINE, received_rx).await.unwrap().unwrap();
+    let mut cancelled = Box::pin(sender.enqueue_frame(CurlWebSocketSend {
+        flags: WsFlags::TEXT,
+        data: b"cancelled".to_vec(),
+    }));
+    assert!(
+        std::future::poll_fn(|cx| std::task::Poll::Ready(
+            std::future::Future::poll(cancelled.as_mut(), cx).is_pending()
+        ))
+        .await
+    );
+    drop(cancelled);
+    let control = sender
+        .enqueue_frame(CurlWebSocketSend {
+            flags: WsFlags::PING,
+            data: b"control".to_vec(),
+        })
+        .await
+        .unwrap();
+    assert_eq!(timeout(DEADLINE, control.wait()).await.unwrap().unwrap(), 7);
+    assert_eq!(receipts.pop().unwrap().wait().await.unwrap(), 1);
+    let next = sender
+        .enqueue_frame(CurlWebSocketSend {
+            flags: WsFlags::TEXT,
+            data: b"next".to_vec(),
+        })
+        .await
+        .unwrap();
+    assert_eq!(timeout(DEADLINE, next.wait()).await.unwrap().unwrap(), 4);
+    drop(receipts);
+    drop(connection);
+    task.join().unwrap();
+}
+
+#[tokio::test]
+async fn native_cancel_settles_receipts_queued_during_handshake() {
+    let (accepted_tx, accepted_rx) = oneshot::channel();
+    let (url, task) = server(move |mut stream| {
+        read_request(&mut stream);
+        accepted_tx.send(()).unwrap();
+        assert_eq!(stream.read(&mut [0]).unwrap(), 0);
+    });
+    let runtime = CurlWebSocketRuntime::new().unwrap();
+    let connection = runtime.connect(CurlWebSocketRequest::new(url)).unwrap();
+    timeout(DEADLINE, accepted_rx).await.unwrap().unwrap();
+    let sender = connection.sender();
+    let abandoned = sender
+        .enqueue_frame(CurlWebSocketSend {
+            flags: WsFlags::TEXT,
+            data: b"abandoned receipt".to_vec(),
+        })
+        .await
+        .unwrap();
+    drop(abandoned);
+    assert_eq!(
+        sender.control.data_slots.available_permits(),
+        DATA_CAPACITY - 1,
+        "dropping the receipt must retain the still queued frame's slot"
+    );
+    let receipt = sender
+        .enqueue_frame(CurlWebSocketSend {
+            flags: WsFlags::TEXT,
+            data: b"pending".to_vec(),
+        })
+        .await
+        .unwrap();
+    sender.cancel();
+    assert!(timeout(DEADLINE, receipt.wait()).await.unwrap().is_err());
+    assert!(
+        sender
+            .enqueue_frame(CurlWebSocketSend {
+                flags: WsFlags::TEXT,
+                data: Vec::new(),
+            })
+            .await
+            .is_err()
+    );
+    drop(connection);
+    task.join().unwrap();
 }

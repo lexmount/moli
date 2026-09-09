@@ -21,7 +21,7 @@ use std::{
 use anyhow::{Context, Result, bail};
 use curl::multi::MultiWaker;
 use parking_lot::Mutex;
-use tokio::sync::{OwnedSemaphorePermit, Semaphore, mpsc};
+use tokio::sync::{OwnedSemaphorePermit, Semaphore, mpsc, oneshot};
 
 use crate::{
     CurlDnsResolution, CurlTlsConfig, CurlTransferId, runtime::identity::next_transfer_id,
@@ -30,8 +30,7 @@ pub use curl::easy::{WsFlags, WsFrame};
 
 /// Fragment large messages above this layer to bound native write residence.
 pub const MAX_SEND_FRAME_BYTES: usize = 64 * 1024;
-/// Maximum native events queued per connection, including chunks and send receipts.
-pub const MAX_PENDING_EVENTS: usize = 8;
+const MAX_PENDING_EVENTS: usize = 8;
 const DATA_CAPACITY: usize = 8;
 const CONTROL_CAPACITY: usize = 4;
 const SESSION_CAPACITY: usize = 255;
@@ -75,10 +74,6 @@ pub enum CurlWebSocketEvent {
         data: Vec<u8>,
         frame: WsFrame,
     },
-    Sent {
-        token: u64,
-        payload_length: usize,
-    },
     /// Emitted once, after all previously admitted events. Ok means TCP EOF;
     /// it does not assert that a WebSocket close handshake was completed.
     Closed {
@@ -88,7 +83,6 @@ pub enum CurlWebSocketEvent {
 
 #[derive(Debug)]
 pub struct CurlWebSocketSend {
-    pub token: u64,
     pub flags: WsFlags,
     pub data: Vec<u8>,
 }
@@ -120,6 +114,8 @@ struct Control {
     cancelled: AtomicBool,
     closed: AtomicBool,
     reading: AtomicBool,
+    data_slots: Arc<Semaphore>,
+    control_slots: Arc<Semaphore>,
     terminal: Mutex<Option<std::result::Result<(), String>>>,
     waker: MultiWaker,
     #[cfg(test)]
@@ -132,45 +128,99 @@ impl Control {
     fn wake(&self) {
         let _ = self.waker.wakeup();
     }
+    fn close_admission(&self) {
+        self.data_slots.close();
+        self.control_slots.close();
+    }
     fn cancel(&self) {
         self.cancelled.store(true, Ordering::Release);
+        self.close_admission();
         self.wake();
     }
+}
+
+/// Completion of one admitted frame, independent of the receive event queue.
+///
+/// A retained receipt holds one send slot until it is consumed or dropped.
+/// The native write retains the same slot until the frame completes or fails.
+#[derive(Debug)]
+pub struct CurlWebSocketSendReceipt {
+    completion: oneshot::Receiver<usize>,
+    _reservation: Arc<OwnedSemaphorePermit>,
+}
+
+impl CurlWebSocketSendReceipt {
+    /// Waits until libcurl consumes the full frame payload and returns its size.
+    /// Transport failure or cancellation before completion returns an error.
+    pub async fn wait(self) -> Result<usize> {
+        self.completion
+            .await
+            .context("WebSocket transport closed before frame completion")
+    }
+}
+
+#[derive(Debug)]
+struct QueuedSend {
+    frame: CurlWebSocketSend,
+    completed: oneshot::Sender<usize>,
+    _reservation: Arc<OwnedSemaphorePermit>,
 }
 
 /// Cloneable write/control capability; it does not keep a dropped receiver alive.
 #[derive(Clone, Debug)]
 pub struct CurlWebSocketSender {
-    data: mpsc::Sender<CurlWebSocketSend>,
-    control_frames: mpsc::Sender<CurlWebSocketSend>,
+    data: mpsc::Sender<QueuedSend>,
+    control_frames: mpsc::Sender<QueuedSend>,
     control: Arc<Control>,
 }
 
 impl CurlWebSocketSender {
-    /// Waits only for this connection's bounded queue. The native owner never waits.
-    pub async fn send(&self, frame: CurlWebSocketSend) -> Result<()> {
+    /// Admits one frame, returning a separate native completion receipt.
+    ///
+    /// Admission waits for a bounded slot covering queued frames, native writes
+    /// and unconsumed receipts. Cancelling this future before it returns does
+    /// not submit a frame. Dropping its receipt does not cancel an admitted frame.
+    pub async fn enqueue_frame(
+        &self,
+        frame: CurlWebSocketSend,
+    ) -> Result<CurlWebSocketSendReceipt> {
         frame.validate()?;
+        let (queue, slots) = if frame.is_control() {
+            (&self.control_frames, &self.control.control_slots)
+        } else {
+            (&self.data, &self.control.data_slots)
+        };
+        let reservation = Arc::new(
+            slots
+                .clone()
+                .acquire_owned()
+                .await
+                .context("WebSocket transport is closed")?,
+        );
         if self.control.closed.load(Ordering::Acquire)
             || self.control.cancelled.load(Ordering::Acquire)
         {
             bail!("WebSocket transport is closed");
         }
-        let queue = if frame.is_control() {
-            &self.control_frames
-        } else {
-            &self.data
-        };
+        let (completed, completion) = oneshot::channel();
+        // A slot also covers the queued frame, so the queue cannot be full here.
         queue
-            .send(frame)
-            .await
-            .context("WebSocket transport is closed")?;
+            .try_send(QueuedSend {
+                frame,
+                completed,
+                _reservation: reservation.clone(),
+            })
+            .context("WebSocket transport cannot accept a frame")?;
         self.control.wake();
-        Ok(())
+        Ok(CurlWebSocketSendReceipt {
+            completion,
+            _reservation: reservation,
+        })
     }
 
     /// Handshake delivery starts paused, so application data cannot outrun Open.
     /// Pausing does not retract queued chunks or a read already in progress.
-    /// Keep receiving events while paused so send receipts can make progress.
+    /// Send completions progress independently of reads and received events.
     pub fn set_reading(&self, enabled: bool) {
         self.control.reading.store(enabled, Ordering::Release);
         self.control.wake();
@@ -225,8 +275,8 @@ impl Drop for CurlWebSocketConnection {
 
 struct SessionIo {
     events: mpsc::Sender<CurlWebSocketEvent>,
-    data: mpsc::Receiver<CurlWebSocketSend>,
-    control_frames: mpsc::Receiver<CurlWebSocketSend>,
+    data: mpsc::Receiver<QueuedSend>,
+    control_frames: mpsc::Receiver<QueuedSend>,
     control: Arc<Control>,
     _slot: OwnedSemaphorePermit,
 }
@@ -243,6 +293,7 @@ impl SessionIo {
 impl Drop for SessionIo {
     fn drop(&mut self) {
         self.control.closed.store(true, Ordering::Release);
+        self.control.close_admission();
     }
 }
 
@@ -305,6 +356,8 @@ impl CurlWebSocketRuntime {
             cancelled: AtomicBool::new(false),
             closed: AtomicBool::new(false),
             reading: AtomicBool::new(false),
+            data_slots: Arc::new(Semaphore::new(DATA_CAPACITY)),
+            control_slots: Arc::new(Semaphore::new(CONTROL_CAPACITY)),
             terminal: Mutex::new(None),
             waker: self.inner.waker.clone(),
             #[cfg(test)]

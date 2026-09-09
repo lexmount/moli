@@ -8,17 +8,16 @@ use crate::{
     frames::{Assembler, Received, close_payload},
 };
 use moli_curl::websocket::{
-    CurlWebSocketConnection, CurlWebSocketEvent, CurlWebSocketSend, MAX_PENDING_EVENTS,
-    MAX_SEND_FRAME_BYTES, WsFlags,
+    CurlWebSocketConnection, CurlWebSocketEvent, CurlWebSocketSend, MAX_SEND_FRAME_BYTES, WsFlags,
 };
 use std::{collections::VecDeque, future::Future, pin::Pin};
 use tokio::time::{Duration, Instant};
 
 type Delivery = Pin<Box<dyn Future<Output = EventResult> + Send>>;
-type Sending = Pin<Box<dyn Future<Output = Result<(), String>> + Send>>;
+type Sending = Pin<Box<dyn Future<Output = Result<Flight, String>> + Send>>;
 const CLOSE_TIMEOUT: Duration = Duration::from_secs(5);
-// A pause can race one native read in addition to the already queued events.
-const MAX_PENDING_INCOMING_MESSAGES: usize = MAX_PENDING_EVENTS + 1;
+// Browser delivery budget, independent of native queue capacity.
+const MAX_PENDING_INCOMING_MESSAGES: usize = 9;
 
 #[cfg(test)]
 mod tests;
@@ -43,6 +42,14 @@ struct Closing {
     sent: bool,
     received: Option<(u16, String)>,
     deadline: Option<Instant>,
+}
+
+enum Activity {
+    Sent(Result<Flight, String>),
+    Delivered(EventResult),
+    Command(Option<QueuedCommand>),
+    Native(Option<CurlWebSocketEvent>),
+    CloseTimeout,
 }
 
 struct Session {
@@ -75,14 +82,12 @@ pub(super) async fn run_open_session(
     };
     let mut delivery: Option<Delivery> = None;
     let mut sending: Option<Sending> = None;
-    let mut flight: Option<Flight> = None;
     loop {
         if session.terminal {
             // Release physical transport and all reservations before awaiting a
             // potentially blocked final event. Drop/cancel also aborts delivery.
             sender.cancel();
             sending = None;
-            flight = None;
             session.outgoing.clear();
             session.pongs.clear();
             session.assembler = Assembler::default();
@@ -98,17 +103,19 @@ pub(super) async fn run_open_session(
         }
         if !session.terminal
             && sending.is_none()
-            && flight.is_none()
             && let Some((frame, next_flight)) = session.next_frame()
         {
             let sender = sender.clone();
             sending = Some(Box::pin(async move {
-                sender.send(frame).await.map_err(|error| error.to_string())
+                let receipt = sender
+                    .enqueue_frame(frame)
+                    .await
+                    .map_err(|error| error.to_string())?;
+                receipt.wait().await.map_err(|error| error.to_string())?;
+                Ok(next_flight)
             }));
-            flight = Some(next_flight);
         }
-        // Apply application backpressure to socket reads, not to the shared
-        // event queue: Sent must remain consumable to finish outgoing messages.
+        // Pause reads at the source while application delivery is backpressured.
         let should_read = !session.terminal
             && ((delivery.is_none() && session.outbox.is_empty())
                 || session.closing.requested.is_some());
@@ -120,42 +127,80 @@ pub(super) async fn run_open_session(
             .closing
             .deadline
             .unwrap_or_else(|| Instant::now() + CLOSE_TIMEOUT);
-        tokio::select! {
-            result = async { delivery.as_mut().expect("delivery exists").await }, if delivery.is_some() => {
+        let activity = tokio::select! {
+            // Already completed writes precede newly observed incoming messages.
+            // Other sources remain fair; completed message residence is bounded.
+            biased;
+            result = async { sending.as_mut().expect("send exists").await }, if sending.is_some() => Activity::Sent(result),
+            activity = async {
+                tokio::select! {
+                    result = async { delivery.as_mut().expect("delivery exists").await }, if delivery.is_some() => Activity::Delivered(result),
+                    command = commands.recv(), if !session.terminal => Activity::Command(command),
+                    event = connection.recv(), if should_read => Activity::Native(event),
+                    _ = tokio::time::sleep_until(deadline), if !session.terminal && session.closing.deadline.is_some() => Activity::CloseTimeout,
+                }
+            } => activity,
+        };
+        // The owner publishes a frame's receipt before reading its echo. It
+        // can finish between the select's send poll and its receive poll, so
+        // recheck the receipt before turning native input into browser events.
+        if matches!(activity, Activity::Native(_))
+            && let Some(pending) = sending.as_mut()
+        {
+            let completion =
+                std::future::poll_fn(|cx| std::task::Poll::Ready(pending.as_mut().poll(cx))).await;
+            if let std::task::Poll::Ready(result) = completion {
+                sending = None;
+                match result {
+                    Ok(completed) => session.sent(completed),
+                    Err(error) => session.fail(error),
+                }
+                if session.terminal {
+                    continue;
+                }
+            }
+        }
+        match activity {
+            Activity::Sent(result) => {
+                sending = None;
+                match result {
+                    Ok(completed) => session.sent(completed),
+                    Err(error) => session.fail(error),
+                }
+            }
+            Activity::Delivered(result) => {
                 delivery = None;
                 result?;
             }
-            command = commands.recv(), if !session.terminal => {
-                match command {
-                    Some(command) => session.command(command),
-                    None => return Ok(()),
+            Activity::Command(Some(command)) => session.command(command),
+            Activity::Command(None) => return Ok(()),
+            Activity::Native(Some(CurlWebSocketEvent::Chunk { data, frame })) => {
+                match session.assembler.push(data, frame) {
+                    Ok(Some(received)) => session.received(received),
+                    Ok(None) => {}
+                    Err(error) => session.fail(error),
                 }
             }
-            result = async { sending.as_mut().expect("send exists").await }, if sending.is_some() => {
-                sending = None;
-                if let Err(error) = result { session.fail(error); }
-            }
-            event = connection.recv(), if !session.terminal => {
-                match event {
-                    Some(CurlWebSocketEvent::Chunk { data, frame }) => match session.assembler.push(data, frame) {
-                        Ok(Some(received)) => session.received(received),
-                        Ok(None) => {}
-                        Err(error) => session.fail(error),
-                    },
-                    Some(CurlWebSocketEvent::Sent { .. }) => {
-                        // Completion can race the queue-admission future's next poll.
-                        sending = None;
-                        if let Some(completed) = flight.take() { session.sent(completed); }
-                    }
-                    Some(CurlWebSocketEvent::Closed { result }) => {
-                        session.fail(result.err().unwrap_or_else(|| "WebSocket closed without completing the closing handshake".to_owned()));
-                    }
-                    Some(CurlWebSocketEvent::Handshake { .. }) => session.fail("WebSocket received a duplicate handshake".to_owned()),
-                    None => session.fail("WebSocket transport stopped".to_owned()),
+            Activity::Native(Some(CurlWebSocketEvent::Closed { result })) => {
+                // Closure can race the first poll above. Terminal delivery
+                // settles every receipt and closes admission before this await.
+                if let Some(pending) = sending.take()
+                    && let Ok(completed) = pending.await
+                {
+                    session.sent(completed);
+                }
+                if !session.terminal {
+                    session.fail(result.err().unwrap_or_else(|| {
+                        "WebSocket closed without completing the closing handshake".to_owned()
+                    }));
                 }
             }
-            _ = tokio::time::sleep_until(deadline), if !session.terminal && session.closing.deadline.is_some() => {
-                session.fail("WebSocket closing handshake timed out".to_owned());
+            Activity::Native(Some(CurlWebSocketEvent::Handshake { .. })) => {
+                session.fail("WebSocket received a duplicate handshake".to_owned())
+            }
+            Activity::Native(None) => session.fail("WebSocket transport stopped".to_owned()),
+            Activity::CloseTimeout => {
+                session.fail("WebSocket closing handshake timed out".to_owned())
             }
         }
     }
@@ -210,7 +255,6 @@ impl Session {
         if let Some(data) = self.pongs.pop_front() {
             return Some((
                 CurlWebSocketSend {
-                    token: 0,
                     flags: WsFlags::PONG,
                     data,
                 },
@@ -242,11 +286,7 @@ impl Session {
             }
             let data = message.data[message.offset..end].to_vec();
             return Some((
-                CurlWebSocketSend {
-                    token: 0,
-                    flags,
-                    data,
-                },
+                CurlWebSocketSend { flags, data },
                 Flight::Data {
                     count: end - message.offset,
                     last,
@@ -263,7 +303,6 @@ impl Session {
                 .get_or_insert_with(|| Instant::now() + CLOSE_TIMEOUT);
             return Some((
                 CurlWebSocketSend {
-                    token: 0,
                     flags: WsFlags::CLOSE,
                     data,
                 },
