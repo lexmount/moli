@@ -93,7 +93,8 @@ pub use snapshot::{
 };
 pub use source::{
     LayoutElementCategory, LayoutElementMetadata, LayoutElementSemantics, LayoutFormControlData,
-    LayoutFormControlKind, LayoutHyperlink, LayoutImageResource, LayoutInputControlKind,
+    LayoutFormControlKind, LayoutHyperlink, LayoutImageFallback, LayoutImageResource,
+    LayoutInputControlKind,
     LayoutListData, LayoutListRole, LayoutNamespace, LayoutPseudo, LayoutReplacedKind,
     LayoutSource, LayoutSourceKind, LayoutStyleResolver, LayoutTableData, LayoutTableRole,
     LayoutTextSelection, ReplacedMetrics, ResolvedLayoutElementStyles, ResolvedLayoutPseudoStyle,
