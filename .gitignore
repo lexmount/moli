@@ -12,6 +12,10 @@
 !/vendor/v8-152.2.0/**
 !/vendor/deno_v8-0.3.0/
 !/vendor/deno_v8-0.3.0/**
+!/vendor/web-audio-api-1.7.0/
+!/vendor/web-audio-api-1.7.0/**
+/vendor/web-audio-api-1.7.0/target/
+/vendor/web-audio-api-1.7.0/Cargo.lock
 /.moli
 __pycache__
 *.pyc
