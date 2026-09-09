@@ -1702,6 +1702,37 @@ fn network_intercept_matches_auth_required(
 }
 
 impl TargetFetchOwner {
+    pub(crate) fn retire_navigation_command(
+        &mut self,
+        navigation: moli_core::browser::NavigationId,
+    ) -> bool {
+        let mut intercepted = false;
+        for (permit, state) in self
+            .pending
+            .pending_fetch_navigations
+            .values_mut()
+            .map(|pending| (pending.navigation_permit, &mut pending.navigation))
+            .chain(
+                self.pending
+                    .pending_fetch_auth_navigations
+                    .values_mut()
+                    .map(|pending| (pending.auth_permit, &mut pending.navigation)),
+            )
+            .chain(
+                self.pending
+                    .pending_fetch_response_navigations
+                    .values_mut()
+                    .map(|pending| (pending.permit, &mut pending.navigation)),
+            )
+        {
+            if permit.navigation() == navigation {
+                state.navigate_id = None;
+                intercepted = true;
+            }
+        }
+        intercepted
+    }
+
     pub(crate) fn pending_state(&self) -> &TargetFetchState {
         &self.pending
     }

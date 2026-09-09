@@ -24,6 +24,7 @@ async fn add_script_to_evaluate_on_new_document_injects_script_into_future_navig
                 "url": "data:text/html,<body><script>document.body.textContent = globalThis.__lm_preload || 'missing';</script></body>"
             }
         })).await;
+    wait_until_navigation_document_load(&mut ctx, 26, Some("SID-1")).await;
     let _ = ctx.take_all();
 
     let html = loaded_page_html_for_test(&mut ctx).await;
@@ -67,6 +68,7 @@ async fn add_script_to_evaluate_on_new_document_preserves_registration_order() {
                 "url": "data:text/html,<body><script>document.body.textContent = globalThis.__lm_order.join(',');</script></body>"
             }
         })).await;
+    wait_until_navigation_document_load(&mut ctx, 29, Some("SID-1")).await;
     let _ = ctx.take_all();
 
     let html = loaded_page_html_for_test(&mut ctx).await;
@@ -212,6 +214,7 @@ async fn add_script_to_evaluate_on_new_document_keeps_duplicate_registrations_di
                 "url": "data:text/html,<body><script>document.body.textContent = String(globalThis.__lm_duplicate_count || 0);</script></body>"
             }
         })).await;
+    wait_until_navigation_document_load(&mut ctx, 41, Some("SID-1")).await;
     let _ = ctx.take_all();
 
     let html = loaded_page_html_for_test(&mut ctx).await;
@@ -740,7 +743,10 @@ async fn create_isolated_world_requires_matching_frame_and_uses_fresh_initial_do
     .await;
     let created = take_response_by_id(&mut ctx, 41);
     assert_eq!(created["sessionId"], "SID-1");
-    assert!(created["result"]["executionContextId"].as_i64().is_some());
+    assert!(
+        created["result"]["executionContextId"].as_i64().is_some(),
+        "{created}"
+    );
     assert!(
         ctx.conn
             .browser_context
@@ -1673,6 +1679,7 @@ async fn create_isolated_world_does_not_persist_across_navigation() {
         "params": { "url": "data:text/html,<body>next</body>" }
     }))
     .await;
+    wait_until_navigation_document_load(&mut ctx, 47, Some("SID-1")).await;
 
     let sent = ctx.take_all();
     assert!(

@@ -465,6 +465,13 @@ async fn main_document_navigation_applies_extra_http_headers() {
         .expect("request id")
         .to_owned();
 
+    crate::testing::wait_until_scheduler_message(&mut ctx, "header test response body", |event| {
+        event["method"] == "Network.loadingFinished"
+            && event["sessionId"] == "SID-1"
+            && event["params"]["requestId"] == request_id
+    })
+    .await;
+
     let _ = ctx.take_all();
 
     ctx.process_async(json!({

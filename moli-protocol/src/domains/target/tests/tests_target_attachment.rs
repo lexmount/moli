@@ -2917,7 +2917,23 @@ async fn detach_from_target_neutrally_resumes_paused_request_stage_navigation() 
     .await;
     ctx.expect_result(42, json!({}), None);
 
-    assert!(ctx.take_response_by_id(41)["result"].is_object());
+    crate::testing::wait_until_scheduler_message(
+        &mut ctx,
+        "detached navigation reply",
+        |message| message["id"] == json!(41) && message["sessionId"] == json!("SID-1"),
+    )
+    .await;
+    let navigation = ctx.take_response_by_id(41);
+    assert!(navigation["result"].is_object());
+    crate::testing::wait_until_renderer_document_load(
+        &mut ctx,
+        None,
+        "TID-000000000A",
+        navigation["result"]["loaderId"]
+            .as_str()
+            .expect("navigation loader"),
+    )
+    .await;
     assert!(
         !ctx.sent.iter().any(|message| {
             message["method"] == json!("Network.loadingFailed")

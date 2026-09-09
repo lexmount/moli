@@ -766,6 +766,7 @@ async fn search_in_resource_uses_original_document_and_subresource_sources() {
         "params": { "url": empty_document_url }
     }))
     .await;
+    wait_until_navigation_document_load(&mut ctx, 10, Some("SID-RESOURCE-SEARCH")).await;
     take_response_by_id(&mut ctx, 10);
     ctx.process_async(json!({
         "id": 11,

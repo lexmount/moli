@@ -9,8 +9,7 @@ use crate::domains::network::{
     NetworkBacklogProjectionContext, NetworkPreparedOutputs, PendingSubresourceNetworkActivity,
     PendingSubresourceNetworkActivitySession, TargetNetworkBacklogRequestIdResolver,
     TargetNetworkOutputQueue, TargetSubresourcePlanOutput,
-    emit_pending_network_backlog_activity_background_events,
-    start_observed_main_document_navigation_progress_background_events,
+    emit_pending_network_backlog_activity_background_events, record_main_document_request_body,
 };
 
 use super::*;
@@ -528,13 +527,7 @@ async fn get_request_post_data_returns_main_document_navigation_post_body() {
         source_document_security: Default::default(),
     };
 
-    let mut events = Vec::new();
-    start_observed_main_document_navigation_progress_background_events(
-        &mut ctx.conn,
-        &mut events,
-        &navigation_state,
-        None,
-    );
+    record_main_document_request_body(&mut ctx.conn, &navigation_state);
 
     ctx.process_async(json!({
         "id": 7_290,
@@ -618,13 +611,7 @@ async fn get_request_post_data_uses_text_projection_while_bidi_collector_keeps_t
         source_document_security: Default::default(),
     };
 
-    let mut events = Vec::new();
-    start_observed_main_document_navigation_progress_background_events(
-        &mut ctx.conn,
-        &mut events,
-        &navigation_state,
-        None,
-    );
+    record_main_document_request_body(&mut ctx.conn, &navigation_state);
 
     ctx.process_async(json!({
         "id": 7_291,
@@ -693,8 +680,8 @@ async fn get_network_data_returns_bidi_response_body_bytes() {
         Ok(crate::devtools_runtime::DevToolsCommandResult::AddNetworkDataCollector(_))
     ));
 
-    let response_collector_ids = ctx.conn.network_data_collector_ids_for_session_owner_body(
-        Some("bidi-session-1"),
+    let response_collector_ids = ctx.conn.network_data_collector_ids_for_owner_body(
+        &crate::conn::CommandOwnerScope::capture(&ctx.conn, Some("bidi-session-1")),
         crate::devtools_runtime::DevToolsNetworkDataType::Response,
         "bidi body".len(),
     );
@@ -710,8 +697,8 @@ async fn get_network_data_returns_bidi_response_body_bytes() {
         );
 
     let binary_response = CapturedBody::from_bytes(vec![0x00, 0xff]);
-    let binary_response_collector_ids = ctx.conn.network_data_collector_ids_for_session_owner_body(
-        Some("bidi-session-1"),
+    let binary_response_collector_ids = ctx.conn.network_data_collector_ids_for_owner_body(
+        &crate::conn::CommandOwnerScope::capture(&ctx.conn, Some("bidi-session-1")),
         crate::devtools_runtime::DevToolsNetworkDataType::Response,
         binary_response.len(),
     );
@@ -726,12 +713,11 @@ async fn get_network_data_returns_bidi_response_body_bytes() {
             false,
         );
 
-    let primary_response_collector_ids =
-        ctx.conn.network_data_collector_ids_for_session_owner_body(
-            Some("bidi-session-1"),
-            crate::devtools_runtime::DevToolsNetworkDataType::Response,
-            "primary body".len(),
-        );
+    let primary_response_collector_ids = ctx.conn.network_data_collector_ids_for_owner_body(
+        &crate::conn::CommandOwnerScope::capture(&ctx.conn, Some("bidi-session-1")),
+        crate::devtools_runtime::DevToolsNetworkDataType::Response,
+        "primary body".len(),
+    );
     ctx.conn
         .runtime_session_owner_slot_mut(Some("bidi-session-1"))
         .expect("bidi session runtime slot")
@@ -743,8 +729,8 @@ async fn get_network_data_returns_bidi_response_body_bytes() {
             false,
         );
 
-    let request_collector_ids = ctx.conn.network_data_collector_ids_for_session_owner_body(
-        Some("bidi-session-1"),
+    let request_collector_ids = ctx.conn.network_data_collector_ids_for_owner_body(
+        &crate::conn::CommandOwnerScope::capture(&ctx.conn, Some("bidi-session-1")),
         crate::devtools_runtime::DevToolsNetworkDataType::Request,
         "bidi request body".len(),
     );
@@ -760,8 +746,8 @@ async fn get_network_data_returns_bidi_response_body_bytes() {
         );
 
     let binary_request = vec![0x00, 0xff, b'a'];
-    let binary_request_collector_ids = ctx.conn.network_data_collector_ids_for_session_owner_body(
-        Some("bidi-session-1"),
+    let binary_request_collector_ids = ctx.conn.network_data_collector_ids_for_owner_body(
+        &crate::conn::CommandOwnerScope::capture(&ctx.conn, Some("bidi-session-1")),
         crate::devtools_runtime::DevToolsNetworkDataType::Request,
         binary_request.len(),
     );
@@ -1046,8 +1032,8 @@ async fn network_data_collectors_gate_get_data_disown_and_remove() {
     }
 
     let body_text = "collector body";
-    let collector_ids = ctx.conn.network_data_collector_ids_for_session_owner_body(
-        Some("bidi-session-1"),
+    let collector_ids = ctx.conn.network_data_collector_ids_for_owner_body(
+        &crate::conn::CommandOwnerScope::capture(&ctx.conn, Some("bidi-session-1")),
         crate::devtools_runtime::DevToolsNetworkDataType::Response,
         body_text.len(),
     );
@@ -1343,8 +1329,8 @@ async fn network_data_collector_body_persists_after_target_artifact_cleanup() {
     let request_id = "REQ-persist";
     let data_type = crate::devtools_runtime::DevToolsNetworkDataType::Response;
     let body = CapturedBody::from_string("persistent collector body".to_owned());
-    let collector_ids = ctx.conn.network_data_collector_ids_for_session_owner_body(
-        Some("bidi-session-1"),
+    let collector_ids = ctx.conn.network_data_collector_ids_for_owner_body(
+        &crate::conn::CommandOwnerScope::capture(&ctx.conn, Some("bidi-session-1")),
         data_type,
         body.len(),
     );
@@ -1498,8 +1484,8 @@ async fn network_data_explicit_collector_prefers_collected_body_over_stale_targe
 
     let request_id = "REQ-shadow";
     let collected_body = CapturedBody::from_string("collector-owned body".to_owned());
-    let collector_ids = ctx.conn.network_data_collector_ids_for_session_owner_body(
-        Some("bidi-session-1"),
+    let collector_ids = ctx.conn.network_data_collector_ids_for_owner_body(
+        &crate::conn::CommandOwnerScope::capture(&ctx.conn, Some("bidi-session-1")),
         data_type,
         collected_body.len(),
     );
@@ -1732,8 +1718,8 @@ async fn network_data_collector_membership_uses_recorded_target_scope() {
     }
 
     let body_text = "scoped body";
-    let collector_ids = ctx.conn.network_data_collector_ids_for_session_owner_body(
-        Some("bidi-session-1"),
+    let collector_ids = ctx.conn.network_data_collector_ids_for_owner_body(
+        &crate::conn::CommandOwnerScope::capture(&ctx.conn, Some("bidi-session-1")),
         crate::devtools_runtime::DevToolsNetworkDataType::Response,
         body_text.len(),
     );
@@ -1838,8 +1824,8 @@ async fn network_data_collector_gated_body_without_match_is_not_readable() {
     let collection_was_gated = ctx
         .conn
         .network_data_collection_is_gated_for_body(data_type);
-    let collector_ids = ctx.conn.network_data_collector_ids_for_session_owner_body(
-        Some("bidi-session-1"),
+    let collector_ids = ctx.conn.network_data_collector_ids_for_owner_body(
+        &crate::conn::CommandOwnerScope::capture(&ctx.conn, Some("bidi-session-1")),
         data_type,
         body_text.len(),
     );

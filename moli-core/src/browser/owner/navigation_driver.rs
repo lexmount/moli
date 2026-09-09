@@ -9,7 +9,7 @@ use crate::browser::{
     NavigationResponseSnapshot, WebContentsHandle,
     web_contents::{
         DocumentBodySource, DocumentNavigationDestination, InheritedDocumentPolicy,
-        NavigationInterceptionPermit, PausedDocumentTransfer,
+        NavigationInterceptionPermit, NavigationRequestInterception, PausedDocumentTransfer,
     },
 };
 
@@ -23,7 +23,49 @@ use crate::runtime::{
     RendererReplyBoundary,
 };
 
+/// Observation of one admitted Browser task. Dropping it does not cancel the
+/// request; cancellation is an operation on the original WebContents/navigation.
+pub struct BrowserNavigationWaiter {
+    request: NavigationRequest,
+    completion: oneshot::Receiver<Result<BrowserNavigationOutcome, String>>,
+}
+
+pub enum BrowserNavigationOutcome {
+    Document(Box<crate::browser::web_contents::DocumentCommitSnapshot>),
+    Download { url: Url },
+}
+
+impl BrowserNavigationWaiter {
+    pub fn request(&self) -> NavigationRequest {
+        self.request
+    }
+
+    pub async fn wait(self) -> Result<BrowserNavigationOutcome, String> {
+        self.completion
+            .await
+            .map_err(|_| "Browser navigation task stopped".to_owned())?
+    }
+}
+
 impl BrowserContextHandle {
+    pub fn navigate_document(
+        &self,
+        contents: WebContentsHandle,
+        request: NavigationRequestInterception,
+    ) -> Result<BrowserNavigationWaiter, String> {
+        let context = self.id;
+        self.browser.execute(move |browser| {
+            browser.context(context)?.web_contents(contents)?;
+            let policy = browser.native_navigation_policy(contents)?;
+            browser.start_native_document_navigation(
+                contents,
+                request,
+                policy,
+                std::sync::Weak::new(),
+            )
+        })?
+    }
+
     /// Admit the requested URL once against the original WebContents' initial
     /// Document. The Browser owns all subsequent loading and decisions; an
     /// observer is optional and cannot replace this request with a Target URL.
@@ -47,8 +89,13 @@ impl BrowserContextHandle {
                 .web_contents_mut(contents)?
                 .mark_next_navigation_history_replace_initial_empty_document();
             browser
-                .start_native_document_navigation(contents, url, policy, std::sync::Weak::new())
-                .map(Some)
+                .start_native_document_navigation(
+                    contents,
+                    native_url_request(url),
+                    policy,
+                    std::sync::Weak::new(),
+                )
+                .map(|waiter| Some(waiter.request.navigation))
         })?
     }
 }
@@ -73,20 +120,20 @@ impl Browser {
         let policy = self.native_navigation_policy(contents)?;
         self.start_native_document_navigation(
             contents,
-            url,
+            native_url_request(url),
             policy,
             std::sync::Arc::downgrade(opening),
         )
-        .map(Some)
+        .map(|waiter| Some(waiter.request.navigation))
     }
 
     fn start_native_document_navigation(
         &mut self,
         contents: WebContentsHandle,
-        url: Url,
+        parameters: NavigationRequestInterception,
         policy: InheritedDocumentPolicy,
         opening: std::sync::Weak<crate::page::RendererPopupOpening>,
-    ) -> Result<NavigationId, String> {
+    ) -> Result<BrowserNavigationWaiter, String> {
         let navigation = self.start_navigation(contents)?;
         let initial = (|| {
             let context = self.context_mut(contents.context())?;
@@ -94,7 +141,15 @@ impl Browser {
                 .web_contents_mut(contents)?
                 .navigation_mut()
                 .set_native_initial_document(navigation, true)?;
-            self.start_initial_document(contents, policy)
+            // An auxiliary Window needs its initial Document even while its
+            // requested URL is paused. Ordinary cross-document admission may
+            // precede the first Document; it must not insert a separate blank
+            // navigation/history entry as a side effect of loading the URL.
+            if opening.strong_count() != 0 {
+                self.start_initial_document(contents, policy)
+            } else {
+                Ok(None)
+            }
         })();
         let initial = match initial {
             Ok(initial) => initial,
@@ -103,21 +158,76 @@ impl Browser {
                 return Err(error);
             }
         };
+        let decision = self.begin_navigation_decision(
+            contents,
+            navigation,
+            parameters.decision_stage(opening),
+        )?;
+        let request = self
+            .pending_navigation(contents)?
+            .expect("admitted native navigation");
+        let (completed, completion) = oneshot::channel();
         let owner = self.local_sender.clone();
+        let failed_url = parameters.requested_url.clone();
         tokio::task::spawn_local(async move {
-            if let Err(error) = navigate(&owner, contents, navigation, initial, url, opening).await
+            let mut completed = Some(completed);
+            if let Err(error) = navigate(
+                &owner,
+                contents,
+                navigation,
+                initial,
+                parameters,
+                decision,
+                &mut completed,
+            )
+            .await
             {
                 tracing::debug!(%error, "native document navigation did not commit");
-                let _ = owner.send(Box::new(move |browser| {
-                    let _ = browser.cancel_navigation(
+                let failure = error.clone();
+                let _ = on_owner(&owner, move |browser| {
+                    if browser.pending_navigation(contents)? != Some(request) {
+                        return Ok(());
+                    }
+                    let previous = browser
+                        .context(contents.context())?
+                        .web_contents(contents)?
+                        .navigation()
+                        .response_snapshots()
+                        .into_iter()
+                        .find(|response| response.request == request);
+                    if previous.is_some() {
+                        browser.complete_native_response(request, Err(failure.clone()))?;
+                    } else {
+                        browser.record_native_response(NavigationResponseSnapshot {
+                            request,
+                            response: Err(crate::browser::NavigationFetchFailure {
+                                error: std::sync::Arc::new(crate::browser::NavigationError {
+                                    unreachable_url: failed_url,
+                                    error_text: failure.clone(),
+                                }),
+                                request: None,
+                            }),
+                            observations: Default::default(),
+                            body: Some(Err(failure)),
+                        })?;
+                    }
+                    browser.cancel_navigation(
                         contents,
                         navigation,
                         NavigationFailureReason::Canceled,
-                    );
-                }));
+                    )?;
+                    Ok(())
+                })
+                .await;
+                if let Some(completed) = completed.take() {
+                    let _ = completed.send(Err(error));
+                }
             }
         });
-        Ok(navigation)
+        Ok(BrowserNavigationWaiter {
+            request,
+            completion,
+        })
     }
 
     fn begin_navigation_decision(
@@ -183,6 +293,69 @@ impl Browser {
             .ok_or("navigation WebContents engine unavailable")?;
         Ok(context.inherited_document_policy(config, &self.permission_defaults, &[], None))
     }
+
+    fn navigation_destination(
+        &self,
+        contents: WebContentsHandle,
+        url: Url,
+    ) -> Result<DocumentNavigationDestination, String> {
+        let context = self.context(contents.context())?;
+        let inherited = if moli_url::is_about_blank(&url) {
+            context
+                .document_handle(contents)?
+                .and_then(|document| context.document(document).ok())
+                .and_then(|host| host.commit.as_ref())
+                .and_then(|commit| commit.info.as_ref())
+                .map(|info| {
+                    (
+                        info.security_origin.clone(),
+                        info.secure_context_type.clone(),
+                    )
+                })
+                .or_else(|| {
+                    context
+                        .web_contents_initial_document_state(contents)
+                        .ok()
+                        .flatten()
+                        .and_then(|initial| {
+                            initial.creator().map(|creator| {
+                                (
+                                    creator.security_origin().to_owned(),
+                                    creator.secure_context_type().to_owned(),
+                                )
+                            })
+                        })
+                })
+        } else {
+            None
+        };
+        let (security_origin, secure_context_type) = inherited.unwrap_or_else(|| {
+            (
+                moli_url::origin_ascii_serialization(&url),
+                if moli_url::is_potentially_trustworthy_url(&url) {
+                    "Secure"
+                } else {
+                    "InsecureScheme"
+                }
+                .into(),
+            )
+        });
+        Ok(DocumentNavigationDestination::Document {
+            url,
+            security_origin,
+            secure_context_type,
+        })
+    }
+}
+
+fn native_url_request(url: Url) -> NavigationRequestInterception {
+    NavigationRequestInterception::new(
+        url,
+        "GET".into(),
+        None,
+        Vec::new(),
+        NavigationRequestLoadPolicy::DocumentInitiated,
+    )
 }
 
 async fn await_decision(
@@ -222,6 +395,7 @@ async fn await_decision(
     .await?;
     match decision {
         NavigationDecision::Cancel => Err("native navigation canceled by decision provider".into()),
+        NavigationDecision::Fail { error_text } => Err(error_text),
         decision => Ok(decision),
     }
 }
@@ -249,30 +423,21 @@ async fn navigate(
     contents: WebContentsHandle,
     navigation: NavigationId,
     initial: Option<super::BrowserInitialDocumentWaiter>,
-    mut requested_url: Url,
-    opening: std::sync::Weak<crate::page::RendererPopupOpening>,
+    parameters: NavigationRequestInterception,
+    decision: Option<PendingDecision>,
+    completed: &mut Option<oneshot::Sender<Result<BrowserNavigationOutcome, String>>>,
 ) -> Result<(), String> {
     if let Some(initial) = initial {
         initial.wait().await?;
     }
-    let request_url = requested_url.clone();
-    let decision = on_owner(owner, move |browser| {
-        browser.begin_navigation_decision(
-            contents,
-            navigation,
-            NavigationDecisionStage::Request {
-                url: request_url,
-                method: "GET".into(),
-                headers: Vec::new(),
-                opening,
-            },
-        )
-    })
-    .await?;
     let decision = await_decision(owner, contents, decision).await?;
-    let mut method = "GET".to_owned();
-    let mut request_body = None;
-    let mut request_headers = Vec::new();
+    let NavigationRequestInterception {
+        mut requested_url,
+        mut method,
+        body: mut request_body,
+        headers: mut request_headers,
+        policy: request_load_policy,
+    } = parameters;
     let synthetic = match decision {
         NavigationDecision::Request {
             url,
@@ -295,7 +460,9 @@ async fn navigate(
         NavigationDecision::Response { .. } | NavigationDecision::Authenticate { .. } => {
             return Err("response supplied for a request decision".into());
         }
-        NavigationDecision::Cancel => unreachable!("canceled decision returned as error"),
+        NavigationDecision::Cancel | NavigationDecision::Fail { .. } => {
+            unreachable!("canceled decision returned as error")
+        }
     };
     let mut load = on_owner(owner, move |browser| {
         browser
@@ -306,14 +473,24 @@ async fn navigate(
         let policy = browser.native_navigation_policy(contents)?;
         browser
             .context_mut(contents.context())?
-            .start_navigation_load(
-                contents,
-                navigation,
-                NavigationRequestLoadPolicy::DocumentInitiated,
-                policy,
-            )
+            .start_navigation_load(contents, navigation, request_load_policy, policy)
     })
     .await?;
+    let request = NavigationRequest {
+        web_contents: contents,
+        navigation,
+        document: load.document_id(),
+    };
+    let synthetic = synthetic.or_else(|| {
+        moli_url::is_about_blank(&requested_url).then(|| {
+            (
+                200,
+                vec![("Content-Type".into(), "text/html".into())],
+                b"<!doctype html><html><head></head><body></body></html>".to_vec(),
+            )
+        })
+    });
+    let mut store_response_headers = synthetic.is_some();
     let (mut response, body_source, mut source, mut service_worker_client, observations) =
         if let Some((status, headers, body)) = synthetic {
             let head = moli_fetch::ResponseHead {
@@ -351,7 +528,7 @@ async fn navigate(
                     {
                         // Keep Digest's existing buffered transport: libcurl
                         // consumes its intermediate challenges before returning.
-                        let fetched = load
+                        let fetched = match load
                             .fetch_intercepted_auth_response(
                                 &method,
                                 requested_url.as_str(),
@@ -360,7 +537,20 @@ async fn navigate(
                                 credentials.clone(),
                             )
                             .await
-                            .map_err(|error| error.to_string())?;
+                        {
+                            Ok(fetched) => fetched,
+                            Err(error) => {
+                                return commit_fetch_error(
+                                    owner,
+                                    request,
+                                    &mut load,
+                                    requested_url,
+                                    error,
+                                    completed,
+                                )
+                                .await;
+                            }
+                        };
                         let (response, observations) =
                             fetched.into_parts_with_observation_journal();
                         (
@@ -377,7 +567,7 @@ async fn navigate(
                             observations,
                         )
                     } else {
-                        let fetched = load
+                        let fetched = match load
                             .fetch_navigation_with_auth(
                                 &method,
                                 requested_url.as_str(),
@@ -386,7 +576,20 @@ async fn navigate(
                                 auth.clone(),
                             )
                             .await
-                            .map_err(|error| error.to_string())?;
+                        {
+                            Ok(fetched) => fetched,
+                            Err(error) => {
+                                return commit_fetch_error(
+                                    owner,
+                                    request,
+                                    &mut load,
+                                    requested_url,
+                                    error,
+                                    completed,
+                                )
+                                .await;
+                            }
+                        };
                         let (response, observations) =
                             fetched.fetch_result.into_parts_with_observation_journal();
                         (
@@ -429,10 +632,7 @@ async fn navigate(
                         contents,
                         navigation,
                         ResponseInterceptionStage::Auth,
-                        PausedDocumentTransfer::pending(
-                            NavigationRequestLoadPolicy::DocumentInitiated,
-                            body,
-                        ),
+                        PausedDocumentTransfer::pending(request_load_policy, body),
                     )
                     .await?;
                     match decision {
@@ -465,10 +665,7 @@ async fn navigate(
                 break (head, body, resource_source, reserved_client, prior);
             }
         };
-    let transfer = PausedDocumentTransfer::pending(
-        NavigationRequestLoadPolicy::DocumentInitiated,
-        body_source,
-    );
+    let transfer = PausedDocumentTransfer::pending(request_load_policy, body_source);
     let decision = decide_transfer(
         owner,
         contents,
@@ -488,6 +685,7 @@ async fn navigate(
             }
             if !headers.is_empty() {
                 response.headers = headers;
+                store_response_headers = true;
             }
             transfer
                 .finish_body_stream_async()
@@ -502,6 +700,7 @@ async fn navigate(
         } => {
             response.status = status;
             response.headers = headers;
+            store_response_headers = true;
             source = CommittedDocumentResourceSource::Synthetic;
             service_worker_client = None;
             DocumentBodySource::BufferedRaw {
@@ -514,22 +713,33 @@ async fn navigate(
         }
         _ => return Err("invalid native response decision".into()),
     };
-    let request = NavigationRequest {
-        web_contents: contents,
-        navigation,
-        document: load.document_id(),
-    };
-    let snapshot = NavigationResponseSnapshot {
+    if store_response_headers {
+        let url = response.final_url.clone();
+        let headers = response.headers.clone();
+        response.cookie_set_reports = on_owner(owner, move |browser| {
+            if browser.pending_navigation(contents)? != Some(request) {
+                return Err("stale native navigation response".into());
+            }
+            Ok(browser
+                .context(contents.context())?
+                .page_storage_handles(Some(contents))?
+                .cookie_store
+                .lock()
+                .store_response_headers_with_reports(&url, &headers))
+        })
+        .await?;
+    }
+    let mut snapshot = NavigationResponseSnapshot {
         request,
-        response: response.clone(),
+        response: Ok(response.clone()),
         observations: observations.clone(),
         body: None,
     };
-    on_owner(owner, move |browser| {
-        browser.record_native_response(snapshot)
-    })
-    .await?;
     if moli_web_mime::response_headers_indicate_attachment_download(&response.headers) {
+        on_owner(owner, move |browser| {
+            browser.record_native_response(snapshot)
+        })
+        .await?;
         let body = match body_source {
             DocumentBodySource::StreamingRaw { response, .. } => {
                 crate::browser::DownloadBody::Streaming(Box::new(response))
@@ -550,22 +760,76 @@ async fn navigate(
             }
         };
         let renderer = load.renderer_page();
-        return on_owner(owner, move |browser| {
+        let url = response.final_url.clone();
+        on_owner(owner, move |browser| {
             browser.download_navigation_response(request, renderer, response, body)
         })
-        .await;
-    }
-    let (body, capture) = stream_response_body(body_source)?;
-    let destination = DocumentNavigationDestination {
-        url: response.final_url.clone(),
-        security_origin: moli_url::origin_ascii_serialization(&response.final_url),
-        secure_context_type: if moli_url::is_potentially_trustworthy_url(&response.final_url) {
-            "Secure"
-        } else {
-            "InsecureScheme"
+        .await?;
+        if let Some(completed) = completed.take() {
+            let _ = completed.send(Ok(BrowserNavigationOutcome::Download { url }));
         }
-        .to_owned(),
+        return Ok(());
+    }
+    let PreparedNavigationBody::Document { body, capture } =
+        prepare_response_body(body_source, &response).await?
+    else {
+        let error = std::sync::Arc::new(crate::browser::NavigationError {
+            unreachable_url: response.final_url.clone(),
+            error_text: "net::ERR_HTTP_RESPONSE_CODE_FAILURE".into(),
+        });
+        snapshot.body = Some(Err(error.error_text.clone()));
+        on_owner(owner, move |browser| {
+            browser.record_native_response(snapshot)
+        })
+        .await?;
+        let html = http_error_page_html(&error.unreachable_url, response.status);
+        return commit_error_document(owner, request, &mut load, error, html, completed).await;
     };
+    on_owner(owner, move |browser| {
+        browser.record_native_response(snapshot)
+    })
+    .await?;
+    let final_url = response.final_url.clone();
+    let destination = on_owner(owner, move |browser| {
+        browser.navigation_destination(contents, final_url)
+    })
+    .await?;
+    let snapshot = commit_response_document(
+        owner,
+        request,
+        &mut load,
+        requested_url,
+        response,
+        body,
+        source,
+        service_worker_client,
+        destination,
+    )
+    .await?;
+    if let Some(completed) = completed.take() {
+        let _ = completed.send(Ok(BrowserNavigationOutcome::Document(Box::new(snapshot))));
+    }
+    let body = capture.finish().await;
+    on_owner(owner, move |browser| {
+        browser.complete_native_response(request, body)
+    })
+    .await?;
+    Ok(())
+}
+
+async fn commit_response_document(
+    owner: &BrowserLocalSender,
+    request: NavigationRequest,
+    load: &mut crate::browser::web_contents::AdmittedNavigationLoad,
+    requested_url: Url,
+    response: moli_fetch::ResponseHead,
+    body: ExternalRawDocumentBodyStream,
+    source: CommittedDocumentResourceSource,
+    service_worker_client: Option<crate::runtime::RendererReservedServiceWorkerClient>,
+    destination: DocumentNavigationDestination,
+) -> Result<crate::browser::web_contents::DocumentCommitSnapshot, String> {
+    let contents = request.web_contents;
+    let navigation = request.navigation;
     let preparation = load.prepare_document_response_async(
         requested_url,
         response.final_url.clone(),
@@ -609,20 +873,118 @@ async fn navigate(
         browser.commit_navigation(contents, built.page)
     })
     .await?;
+    // The physical commit is final, but the replacement parser must not
+    // outrun cancellation and terminal publication from the outgoing Document.
+    commit.retirement.close().await;
     if let Some(continuation) = commit.post_response_continuation {
         continuation.release();
     }
-    let body = capture.finish().await;
-    on_owner(owner, move |browser| {
-        browser.complete_native_response(request, body)
-    })
-    .await?;
-    Ok(())
+    Ok(commit.snapshot)
 }
 
 enum TransferAdmission {
     Unobserved(Box<PausedDocumentTransfer>),
     Paused(PendingDecision),
+}
+
+async fn commit_fetch_error(
+    owner: &BrowserLocalSender,
+    request: NavigationRequest,
+    load: &mut crate::browser::web_contents::AdmittedNavigationLoad,
+    requested_url: Url,
+    failure: anyhow::Error,
+    completed: &mut Option<oneshot::Sender<Result<BrowserNavigationOutcome, String>>>,
+) -> Result<(), String> {
+    let Some(failure) = failure.downcast_ref::<moli_fetch::NetworkFetchFailureContext>() else {
+        return Err(failure.to_string());
+    };
+    let error = std::sync::Arc::new(crate::browser::NavigationError {
+        unreachable_url: failure
+            .request_context()
+            .map(|request| request.current_url().clone())
+            .unwrap_or(requested_url),
+        error_text: failure.network_error_text().to_owned(),
+    });
+    let snapshot = NavigationResponseSnapshot {
+        request,
+        response: Err(crate::browser::NavigationFetchFailure {
+            error: error.clone(),
+            request: failure.request_context().cloned(),
+        }),
+        observations: failure.observation_journal().clone(),
+        body: None,
+    };
+    on_owner(owner, move |browser| {
+        browser.record_native_response(snapshot)
+    })
+    .await?;
+    let html = network_error_page_html(&error.unreachable_url, &error.error_text);
+    commit_error_document(owner, request, load, error, html, completed).await
+}
+
+async fn commit_error_document(
+    owner: &BrowserLocalSender,
+    request: NavigationRequest,
+    load: &mut crate::browser::web_contents::AdmittedNavigationLoad,
+    error: std::sync::Arc<crate::browser::NavigationError>,
+    html: String,
+    completed: &mut Option<oneshot::Sender<Result<BrowserNavigationOutcome, String>>>,
+) -> Result<(), String> {
+    let response = moli_fetch::ResponseHead {
+        final_url: Url::parse("chrome-error://chromewebdata/").expect("Browser error URL"),
+        status: 200,
+        headers: vec![("content-type".into(), "text/html; charset=utf-8".into())],
+        request_cookie_report: None,
+        cookie_set_reports: Vec::new(),
+        redirected: false,
+        redirect_chain: Vec::new(),
+        from_cache: false,
+        negotiated_http_version: None,
+    };
+    let snapshot = commit_response_document(
+        owner,
+        request,
+        load,
+        error.unreachable_url.clone(),
+        response,
+        ExternalRawDocumentBodyStream::from_bytes(html.into_bytes()),
+        CommittedDocumentResourceSource::Synthetic,
+        None,
+        DocumentNavigationDestination::Error(error.clone()),
+    )
+    .await?;
+    if let Some(completed) = completed.take() {
+        let _ = completed.send(Ok(BrowserNavigationOutcome::Document(Box::new(snapshot))));
+    }
+    on_owner(owner, move |browser| {
+        browser.complete_native_response(request, Err(error.error_text.clone()))
+    })
+    .await
+}
+
+fn escape_error_page_html(value: &str) -> String {
+    value
+        .replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
+        .replace('"', "&quot;")
+        .replace('\'', "&#39;")
+}
+
+fn network_error_page_html(url: &Url, error_text: &str) -> String {
+    let title = escape_error_page_html(url.host_str().unwrap_or(url.as_str()));
+    let url = escape_error_page_html(url.as_str());
+    let error_text = escape_error_page_html(error_text);
+    format!(
+        "<!doctype html><html><head><meta charset=\"utf-8\"><title>{title}</title></head><body><main><h1>This site can’t be reached</h1><p>The webpage at <strong>{url}</strong> could not be loaded.</p><div>{error_text}</div></main></body></html>"
+    )
+}
+
+fn http_error_page_html(url: &Url, status: u16) -> String {
+    let title = escape_error_page_html(url.host_str().unwrap_or(url.as_str()));
+    format!(
+        "<!doctype html><html><head><meta charset=\"utf-8\"><title>{title}</title></head><body><main><h1>This page isn't working</h1><p>If the problem continues, contact the site owner.</p><p>HTTP ERROR {status}</p></main></body></html>"
+    )
 }
 
 async fn decide_transfer(
@@ -682,49 +1044,108 @@ impl Drop for NativeBodyCapture {
     }
 }
 
-fn stream_response_body(
+enum PreparedNavigationBody {
+    Document {
+        body: ExternalRawDocumentBodyStream,
+        capture: NativeBodyCapture,
+    },
+    EmptyErrorResponse,
+}
+
+async fn prepare_response_body(
     source: DocumentBodySource,
-) -> Result<(ExternalRawDocumentBodyStream, NativeBodyCapture), String> {
-    match source {
+    head: &moli_fetch::ResponseHead,
+) -> Result<PreparedNavigationBody, String> {
+    let error_status = (400..600).contains(&head.status);
+    let xml = moli_web_mime::response_document_content_type(&head.headers)
+        .is_some_and(|mime| moli_web_mime::is_dom_parser_xml_mime(&mime));
+    let captured = match source {
+        DocumentBodySource::StreamingRaw { mut response, .. } => {
+            let mut first = None;
+            if error_status {
+                while let Some(chunk) = response.next_chunk().await {
+                    if !chunk.is_empty() {
+                        first = Some(chunk);
+                        break;
+                    }
+                }
+                if first.is_none() {
+                    response.finish().await.map_err(|error| error.to_string())?;
+                    return Ok(PreparedNavigationBody::EmptyErrorResponse);
+                }
+            }
+            if !xml {
+                let (body, capture) = stream_raw_response(response, first);
+                return Ok(PreparedNavigationBody::Document { body, capture });
+            }
+            // XML preparation has a single completed input, not the HTML
+            // parser's early commit boundary. Keep the capture bounded/spooled.
+            let mut writer = CapturedBodyWriter::default();
+            if let Some(first) = first {
+                writer.append(&first).map_err(|error| error.to_string())?;
+            }
+            while let Some(chunk) = response.next_chunk().await {
+                writer.append(&chunk).map_err(|error| error.to_string())?;
+            }
+            response.finish().await.map_err(|error| error.to_string())?;
+            writer.finish().map_err(|error| error.to_string())?
+        }
         DocumentBodySource::BufferedRaw { response, .. } => {
             let bytes = response
                 .into_body()
                 .1
                 .try_into_materialized_bytes()
                 .map_err(|_| "buffered native response has no materialized bytes".to_owned())?;
-            replay_captured_body(CapturedBody::from_bytes_spooled(bytes))
+            CapturedBody::from_bytes_spooled(bytes)
         }
-        DocumentBodySource::StreamingRaw { mut response, .. } => {
-            let (completion, completed) = oneshot::channel();
-            let (sender, body) = ExternalRawDocumentBodyStream::channel(completed);
-            let pump = tokio::task::spawn_local(async move {
-                let result = async {
-                    let mut writer = CapturedBodyWriter::default();
-                    let mut sender = Some(sender);
-                    while let Some(chunk) = response.next_chunk().await {
-                        writer.append(&chunk).map_err(|error| error.to_string())?;
-                        if let Some(output) = &sender
-                            && output.send(chunk).await.is_err()
-                        {
-                            sender = None;
-                        }
-                    }
-                    response.finish().await.map_err(|error| error.to_string())?;
-                    writer.finish().map_err(|error| error.to_string())
-                }
-                .await;
-                let _ = completion.send(
-                    result
-                        .as_ref()
-                        .map(|_| ())
-                        .map_err(|error: &String| anyhow::anyhow!(error.clone())),
-                );
-                result
-            });
-            Ok((body, NativeBodyCapture(Some(pump))))
-        }
-        DocumentBodySource::CapturedRaw { body, .. } => replay_captured_body(body),
+        DocumentBodySource::CapturedRaw { body, .. } => body,
+    };
+    if error_status && captured.is_empty() {
+        return Ok(PreparedNavigationBody::EmptyErrorResponse);
     }
+    let (body, capture) = replay_captured_body(captured)?;
+    Ok(PreparedNavigationBody::Document { body, capture })
+}
+
+fn stream_raw_response(
+    mut response: moli_fetch::StreamingRawResponse,
+    first: Option<Vec<u8>>,
+) -> (ExternalRawDocumentBodyStream, NativeBodyCapture) {
+    let (completion, completed) = oneshot::channel();
+    let (sender, body) = ExternalRawDocumentBodyStream::channel(completed);
+    let pump = tokio::task::spawn_local(async move {
+        let result = async {
+            let mut writer = CapturedBodyWriter::default();
+            let mut sender = Some(sender);
+            let mut first = first;
+            loop {
+                let chunk = match first.take() {
+                    Some(chunk) => Some(chunk),
+                    None => response.next_chunk().await,
+                };
+                let Some(chunk) = chunk else {
+                    break;
+                };
+                writer.append(&chunk).map_err(|error| error.to_string())?;
+                if let Some(output) = &sender
+                    && output.send(chunk).await.is_err()
+                {
+                    sender = None;
+                }
+            }
+            response.finish().await.map_err(|error| error.to_string())?;
+            writer.finish().map_err(|error| error.to_string())
+        }
+        .await;
+        let _ = completion.send(
+            result
+                .as_ref()
+                .map(|_| ())
+                .map_err(|error: &String| anyhow::anyhow!(error.clone())),
+        );
+        result
+    });
+    (body, NativeBodyCapture(Some(pump)))
 }
 
 fn replay_captured_body(

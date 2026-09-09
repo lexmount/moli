@@ -71,12 +71,26 @@ fn observation_transport_charge_bytes(observation: &RendererProtocolObservation)
         .into_iter()
         .map(string_charge)
         .sum(),
-        RendererProtocolObservation::MainDocumentCommit(commit) => [
-            commit.frame_id.as_str(),
-            commit.loader_id.as_str(),
-            commit.url.as_str(),
-            commit.security_origin.as_str(),
-            commit.secure_context_type.as_str(),
+        RendererProtocolObservation::MainDocumentCommit(
+            crate::runtime::RendererMainDocumentCommit::Browser,
+        ) => 0,
+        RendererProtocolObservation::MainDocumentCommit(
+            crate::runtime::RendererMainDocumentCommit::Frame {
+                frame_id,
+                loader_id,
+                url,
+                unreachable_url,
+                security_origin,
+                secure_context_type,
+                ..
+            },
+        ) => [
+            frame_id.as_str(),
+            loader_id.as_str(),
+            url.as_str(),
+            unreachable_url.as_deref().unwrap_or_default(),
+            security_origin.as_str(),
+            secure_context_type.as_str(),
         ]
         .into_iter()
         .map(string_charge)

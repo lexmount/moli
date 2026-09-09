@@ -39,10 +39,22 @@ impl DocumentNavigationIdentity {
     }
 }
 
-pub struct DocumentNavigationDestination {
-    pub url: Url,
-    pub security_origin: String,
-    pub secure_context_type: String,
+pub enum DocumentNavigationDestination {
+    Document {
+        url: Url,
+        security_origin: String,
+        secure_context_type: String,
+    },
+    Error(std::sync::Arc<crate::browser::NavigationError>),
+}
+
+impl DocumentNavigationDestination {
+    fn url(&self) -> &Url {
+        match self {
+            Self::Document { url, .. } => url,
+            Self::Error(error) => &error.unreachable_url,
+        }
+    }
 }
 
 /// An admitted operation owns the candidate, not a reusable permission to
@@ -94,6 +106,7 @@ pub struct CommittedDocumentInfo {
     pub title: String,
     pub security_origin: String,
     pub secure_context_type: String,
+    pub error_page: Option<std::sync::Arc<crate::browser::NavigationError>>,
 }
 
 impl PreparedDocumentNavigation {
@@ -143,17 +156,32 @@ impl PreparedDocumentNavigation {
         let lifecycle = DocumentLifecycle::from_creation_artifacts(artifacts)
             .ok_or("inconsistent navigation document lifecycle")?;
         let title = page.document_title();
+        let info = match destination {
+            DocumentNavigationDestination::Document {
+                url,
+                security_origin,
+                secure_context_type,
+            } => CommittedDocumentInfo {
+                url,
+                title,
+                security_origin,
+                secure_context_type,
+                error_page: None,
+            },
+            DocumentNavigationDestination::Error(error) => CommittedDocumentInfo {
+                url: error.unreachable_url.clone(),
+                title,
+                security_origin: "://".into(),
+                secure_context_type: "InsecureScheme".into(),
+                error_page: Some(error),
+            },
+        };
         Ok(Self {
             identity,
             page,
             lifecycle,
             creation_artifacts: artifacts.clone(),
-            info: CommittedDocumentInfo {
-                url: destination.url,
-                title,
-                security_origin: destination.security_origin,
-                secure_context_type: destination.secure_context_type,
-            },
+            info,
         })
     }
 }
@@ -284,7 +312,7 @@ impl WebContents {
         }
         // Reject stale/canceled work before changing this engine's resource
         // runtime. Policy and identity are frozen by the same Browser Start.
-        let policy = self.capture_document_policy(inherited, &destination.url)?;
+        let policy = self.capture_document_policy(inherited, destination.url())?;
         Ok(AdmittedDocumentMaterialization {
             identity,
             page,
@@ -394,7 +422,7 @@ mod tests {
             .start_loaded_document_navigation(
                 navigation,
                 page,
-                DocumentNavigationDestination {
+                DocumentNavigationDestination::Document {
                     url,
                     security_origin: "null".into(),
                     secure_context_type: "InsecureScheme".into(),
@@ -440,7 +468,7 @@ mod tests {
             .start_loaded_document_navigation(
                 navigation,
                 page,
-                DocumentNavigationDestination {
+                DocumentNavigationDestination::Document {
                     url,
                     security_origin: "null".into(),
                     secure_context_type: "InsecureScheme".into(),
@@ -643,7 +671,7 @@ mod tests {
                 .start_loaded_document_navigation(
                     navigation,
                     page,
-                    DocumentNavigationDestination {
+                    DocumentNavigationDestination::Document {
                         url,
                         security_origin: "null".into(),
                         secure_context_type: "InsecureScheme".into(),
@@ -698,7 +726,7 @@ mod tests {
             let navigation = contents.navigation.start_document_navigation();
             let mut page = browser.fetch("data:text/html,candidate").await.unwrap();
             let artifacts = page.take_page_creation_artifacts().unwrap();
-            let destination = DocumentNavigationDestination {
+            let destination = DocumentNavigationDestination::Document {
                 url: page.final_url().clone(),
                 security_origin: "null".into(),
                 secure_context_type: "InsecureScheme".into(),
@@ -784,7 +812,7 @@ mod tests {
                 .start_loaded_document_navigation(
                     navigation,
                     second,
-                    DocumentNavigationDestination {
+                    DocumentNavigationDestination::Document {
                         url,
                         security_origin: "null".into(),
                         secure_context_type: "InsecureScheme".into(),
@@ -803,7 +831,7 @@ mod tests {
                 .start_loaded_document_navigation(
                     navigation,
                     first,
-                    DocumentNavigationDestination {
+                    DocumentNavigationDestination::Document {
                         url,
                         security_origin: "null".into(),
                         secure_context_type: "InsecureScheme".into(),

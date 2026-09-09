@@ -21,6 +21,7 @@ mod initial_document;
 mod navigation;
 pub use initial_document::{BrowserCommittedInitialDocument, BrowserInitialDocumentWaiter};
 mod navigation_driver;
+pub use navigation_driver::{BrowserNavigationOutcome, BrowserNavigationWaiter};
 mod navigation_events;
 mod popup;
 pub use navigation::{

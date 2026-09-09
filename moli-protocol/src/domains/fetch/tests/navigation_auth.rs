@@ -128,6 +128,7 @@ async fn supersession_retires_browser_auth_work_before_late_protocol_decision() 
         }))
         .await;
         ctx.expect_result(105, json!({}), Some("SID-1"));
+        crate::testing::wait_until_navigation_document_load(&mut ctx, 103, Some("SID-1")).await;
         assert!(take_response_by_id(&mut ctx, 103).get("error").is_none());
         assert_eq!(
             ctx.conn
@@ -222,6 +223,7 @@ async fn continue_with_auth_retries_navigation_with_basic_credentials() {
     .await;
     ctx.expect_result(70, json!({}), Some("SID-1"));
 
+    wait_for_navigation_auth(&mut ctx, "SID-1", "INT-1").await;
     let auth_required = ctx.take_one();
     assert_eq!(auth_required["method"], "Fetch.authRequired");
     assert_eq!(auth_required["params"]["requestId"], "INT-1");
@@ -249,6 +251,7 @@ async fn continue_with_auth_retries_navigation_with_basic_credentials() {
     .await;
     ctx.expect_result(71, json!({}), Some("SID-1"));
 
+    wait_for_navigation_reply(&mut ctx, 69).await;
     ctx.expect_result(
         69,
         json!({ "frameId": "TID-1", "loaderId": LOADER_ID }),
@@ -346,6 +349,7 @@ async fn disable_uses_default_decision_for_paused_navigation_auth() {
     }))
     .await;
     ctx.expect_result(700, json!({}), Some("SID-1"));
+    wait_for_navigation_auth(&mut ctx, "SID-1", "INT-1").await;
     assert_eq!(ctx.take_one()["method"], "Fetch.authRequired");
 
     ctx.process_async(json!({
@@ -353,6 +357,7 @@ async fn disable_uses_default_decision_for_paused_navigation_auth() {
     }))
     .await;
     ctx.expect_result(710, json!({}), Some("SID-1"));
+    wait_for_navigation_reply(&mut ctx, 690).await;
     let navigation = ctx.take_response_by_id(690);
     assert_eq!(
         navigation["error"]["message"],
@@ -451,10 +456,16 @@ async fn devtools_continue_response_credentials_retries_auth_navigation() {
     .await;
     ctx.expect_result(73_003, json!({}), Some("SID-1"));
 
+    wait_for_navigation_auth(&mut ctx, "SID-1", "INT-1").await;
     let auth_required = ctx.take_one();
     assert_eq!(auth_required["method"], "Fetch.authRequired");
     assert_eq!(auth_required["params"]["requestId"], "INT-1");
 
+    let (contents, _) = ctx
+        .conn
+        .native_navigation_decision_for_target("TID-1")
+        .unwrap();
+    let (_, mut browser_events) = ctx.conn.subscribe_browser_events().unwrap();
     let outcome = ctx
         .conn
         .execute_devtools_command(DevToolsCommand::ContinueInterceptedResponse(
@@ -476,11 +487,41 @@ async fn devtools_continue_response_credentials_retries_auth_navigation() {
             },
         ))
         .await;
-    let (result, scheduler_events, events) = outcome.into_parts_with_protocol_events();
+    let (result, scheduler_events, mut events) = outcome.into_parts_with_protocol_events();
     assert_eq!(
         result.expect("continueResponse credentials should succeed"),
         crate::devtools_runtime::DevToolsCommandResult::Empty
     );
+    // The command acknowledges the decision. The response fact is produced by
+    // the exact Browser navigation later, independent of that command receipt.
+    tokio::time::timeout(std::time::Duration::from_secs(5), async {
+        loop {
+            events.extend(
+                ctx.conn
+                    .project_browser_navigation_decision(contents, None)
+                    .await,
+            );
+            events.extend(
+                ctx.conn
+                    .project_browser_navigation_responses(contents)
+                    .await,
+            );
+            if events.iter().any(|event| {
+                matches!(
+                    event.clone().into_parts().1,
+                    Some(AutomationEvent::NetworkResponseStarted(_))
+                )
+            }) {
+                break;
+            }
+            browser_events
+                .recv()
+                .await
+                .expect("native navigation event stream");
+        }
+    })
+    .await
+    .expect("typed native responseStarted after authentication");
     let event_parts = events
         .clone()
         .into_iter()
@@ -596,6 +637,7 @@ async fn continue_with_auth_and_intercept_response_pauses_before_authorized_body
     .await;
     ctx.expect_result(72_102, json!({}), Some("SID-1"));
 
+    wait_for_navigation_auth(&mut ctx, "SID-1", "INT-1").await;
     let auth_required = ctx.take_one();
     assert_eq!(auth_required["method"], "Fetch.authRequired");
     assert_eq!(auth_required["params"]["requestId"], "INT-1");
@@ -621,7 +663,7 @@ async fn continue_with_auth_and_intercept_response_pauses_before_authorized_body
     .expect("auth retry response-stage pause should not wait for body EOF");
     ctx.expect_result(72_103, json!({}), Some("SID-1"));
 
-    let response_paused = take_main_document_response_pause(&mut ctx);
+    let response_paused = take_main_document_response_pause(&mut ctx).await;
     assert_eq!(response_paused["method"], "Fetch.requestPaused");
     assert_eq!(response_paused["params"]["requestId"], "INT-1");
     assert_eq!(response_paused["params"]["networkId"], LOADER_ID);
@@ -643,6 +685,7 @@ async fn continue_with_auth_and_intercept_response_pauses_before_authorized_body
     }))
     .await;
     ctx.expect_result(72_104, json!({}), Some("SID-1"));
+    crate::testing::wait_until_navigation_document_load(&mut ctx, 72_101, Some("SID-1")).await;
     ctx.expect_result(
         72_101,
         json!({ "frameId": "TID-1", "loaderId": LOADER_ID }),
@@ -729,6 +772,7 @@ async fn continue_with_non_basic_auth_and_intercept_response_fails_explicitly_wi
     .await;
     ctx.expect_result(72_202, json!({}), Some("SID-1"));
 
+    wait_for_navigation_auth(&mut ctx, "SID-1", "INT-1").await;
     let auth_required = ctx.take_one();
     assert_eq!(auth_required["method"], "Fetch.authRequired");
     assert_eq!(auth_required["params"]["requestId"], "INT-1");
@@ -755,6 +799,7 @@ async fn continue_with_non_basic_auth_and_intercept_response_fails_explicitly_wi
     .await;
     ctx.expect_result(72_203, json!({}), Some("SID-1"));
 
+    wait_for_navigation_reply(&mut ctx, 72_201).await;
     let failed = ctx.take_one();
     assert_eq!(failed["method"], "Network.loadingFailed");
     assert_eq!(failed["params"]["requestId"], LOADER_ID);
@@ -857,6 +902,7 @@ async fn navigation_auth_required_includes_synthesized_cookie_header() {
     .await;
     ctx.expect_result(72_003, json!({}), Some("SID-1"));
 
+    wait_for_navigation_auth(&mut ctx, "SID-1", "INT-1").await;
     let auth_required = ctx.take_one();
     assert_eq!(auth_required["method"], "Fetch.authRequired");
     assert_eq!(
@@ -944,6 +990,7 @@ async fn continue_with_auth_prefers_supported_navigation_challenge_over_unsuppor
     .await;
     ctx.expect_result(683, json!({}), Some("SID-1"));
 
+    wait_for_navigation_auth(&mut ctx, "SID-1", "INT-1").await;
     let auth_required = ctx.take_one();
     assert_eq!(auth_required["method"], "Fetch.authRequired");
     assert_eq!(auth_required["params"]["authChallenge"]["source"], "Server");
@@ -969,6 +1016,7 @@ async fn continue_with_auth_prefers_supported_navigation_challenge_over_unsuppor
     .await;
     ctx.expect_result(684, json!({}), Some("SID-1"));
 
+    wait_for_navigation_reply(&mut ctx, 682).await;
     ctx.expect_result(
         682,
         json!({ "frameId": "TID-1", "loaderId": LOADER_ID }),
@@ -1183,6 +1231,7 @@ async fn run_navigation_cdp_fetch_then_bidi_network_auth_required_terminal(
     .await;
     ctx.expect_result(73_103, json!({}), Some("SID-fetch"));
 
+    wait_for_navigation_auth(&mut ctx, "SID-fetch", "INT-1").await;
     let cdp_auth = ctx.take_first_matching("CDP navigation authRequired pause", |message| {
         message["method"] == json!("Fetch.authRequired")
             && message["sessionId"] == json!("SID-fetch")
@@ -1306,6 +1355,7 @@ async fn run_navigation_cdp_fetch_then_bidi_network_auth_required_terminal(
     match terminal_command {
         NavigationMixedAuthTerminalCommand::ContinueWithAuth
         | NavigationMixedAuthTerminalCommand::ContinueResponseAuthCredentials => {
+            wait_for_navigation_reply(&mut ctx, 73_102).await;
             ctx.expect_result(
                 73_102,
                 json!({ "frameId": "TID-1", "loaderId": LOADER_ID }),
@@ -1319,6 +1369,7 @@ async fn run_navigation_cdp_fetch_then_bidi_network_auth_required_terminal(
             assert_eq!(response["params"]["response"]["status"], 200);
         }
         NavigationMixedAuthTerminalCommand::ContinueWithAuthCancel => {
+            wait_for_navigation_response_pause(&mut ctx, "SID-fetch", "INT-1").await;
             let response_pause = ctx.take_first_matching(
                 "navigation auth canceled response-stage pause",
                 |message| {
@@ -1360,6 +1411,7 @@ async fn run_navigation_cdp_fetch_then_bidi_network_auth_required_terminal(
             .await;
             ctx.expect_result(73_106, json!({}), Some("SID-fetch"));
 
+            wait_for_navigation_reply(&mut ctx, 73_102).await;
             ctx.expect_result(
                 73_102,
                 json!({ "frameId": "TID-1", "loaderId": LOADER_ID }),

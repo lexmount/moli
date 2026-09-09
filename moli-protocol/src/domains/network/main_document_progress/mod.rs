@@ -376,15 +376,14 @@ fn completed_document_body_progress_queue(
     state: &NavigationDispatchState,
     final_url: &Url,
 ) -> MainDocumentProgressQueueHandle {
-    let owner_session_id = state.session_id.as_deref();
-    let session_ids = main_document_network_event_session_ids(conn, owner_session_id);
-    let network_observed = main_document_network_observed(conn, owner_session_id);
+    let session_ids = conn.network_event_session_ids_for_owner(&state.owner);
+    let network_observed = main_document_network_observed(conn, &state.owner);
     let (body, body_progress_source) = transfer.into_parts();
     let encoded_data_length = match body {
         CompletedDocumentProgressBody::Captured { body, synthetic } => {
             let encoded_data_length = body.len();
-            let collector_ids = conn.network_data_collector_ids_for_session_owner_body(
-                owner_session_id,
+            let collector_ids = conn.network_data_collector_ids_for_owner_body(
+                &state.owner,
                 crate::devtools_runtime::DevToolsNetworkDataType::Response,
                 encoded_data_length,
             );
@@ -404,7 +403,7 @@ fn completed_document_body_progress_queue(
                 );
             }
             let _ = conn
-                .runtime_session_owner_slot_mut(owner_session_id)
+                .runtime_session_owner_slot_mut_for_owner(&state.owner)
                 .ok()
                 .and_then(|runtime_slot| {
                     record_main_document_response_body_for_network(
@@ -444,7 +443,7 @@ fn completed_download_body_progress_queue(
     state: &NavigationDispatchState,
     final_url: &Url,
 ) -> MainDocumentProgressQueueHandle {
-    let network_observed = main_document_network_observed(conn, state.session_id.as_deref());
+    let network_observed = main_document_network_observed(conn, &state.owner);
     let encoded_data_length = progress.len();
     completed_or_streaming_document_progress_queue(
         conn,
@@ -472,7 +471,7 @@ fn completed_or_streaming_document_progress_queue(
         );
     };
     let context = CompletedMainDocumentProgressContext::new(
-        main_document_network_event_session_ids(conn, state.session_id.as_deref()),
+        conn.network_event_session_ids_for_owner(&state.owner),
         completed_body_main_document_network_request_id(network_enabled, request_id),
         state.request_announced,
         state.requested_url.clone(),
@@ -853,28 +852,6 @@ impl MainDocumentLiveNetworkProgressSource {
         })
     }
 
-    pub(crate) fn emit_initial_request_will_be_sent(
-        &self,
-        url: &Url,
-        method: &str,
-        request_body: Option<&str>,
-        request_headers: &[(String, String)],
-        cookie_access_report: Option<&StoredCookieQueryReport>,
-    ) {
-        let events = vec![MainDocumentNavigationProgressEvent::RequestWillBeSent {
-            target: self.progress_target(),
-            url: url.clone(),
-            method: method.to_owned(),
-            request_body: request_body.map(str::to_owned),
-            request_headers: request_headers.to_vec(),
-            request_initiator_type: SubresourceRequestInitiatorType::Other,
-            redirect_response: Box::new(None),
-            redirect_has_extra_info: false,
-            cookie_access_report: cookie_access_report.cloned(),
-        }];
-        self.send_progress_events(MainDocumentProgressPhase::RequestStarted, events);
-    }
-
     pub(crate) fn emit_redirect_requests(
         &self,
         final_request_method: &str,
@@ -1233,8 +1210,7 @@ pub(crate) fn emit_fetch_navigation_initial_request_for_pause_background_events(
     cookie_access_report: Option<&StoredCookieQueryReport>,
     fetch_request_id: Option<&str>,
 ) -> bool {
-    let mut session_ids =
-        main_document_network_event_session_ids(conn, state.session_id.as_deref());
+    let mut session_ids = conn.network_event_session_ids_for_owner(&state.owner);
     if session_ids.is_empty() {
         session_ids.push(state.session_id.clone());
     }
@@ -1402,58 +1378,17 @@ fn record_child_document_response_body(
     }
 }
 
-pub(crate) fn start_observed_main_document_navigation_progress_background_events(
-    conn: &mut CdpConnection,
-    out: &mut Vec<BackgroundProtocolEvent>,
-    state: &NavigationDispatchState,
-    cookie_access_report: Option<&StoredCookieQueryReport>,
-) -> MainDocumentBodyProgressSource {
-    let session_ids = main_document_network_event_session_ids(conn, state.session_id.as_deref());
-    record_pending_main_document_response_body(conn, state, &session_ids);
-    record_main_document_request_body(conn, state);
-    if let Some(sender) = conn.background_event_sender()
-        && let Some(live_source) =
-            MainDocumentLiveNetworkProgressSource::from_navigation_dispatch_state(
-                Some(sender),
-                session_ids.clone(),
-                state,
-                cookie_access_report,
-            )
-    {
-        live_source.emit_initial_request_will_be_sent(
-            &state.requested_url,
-            &state.request_method,
-            state.request_body.as_deref(),
-            &state.request_headers,
-            cookie_access_report,
-        );
-        return MainDocumentBodyProgressSource::from_live_source(
-            Some(live_source),
-            MainDocumentResponseVisibility::Immediate,
-        );
-    }
-    let mut output = MainDocumentProgressOutputTarget::background_events(out);
-    emit_main_document_initial_request_will_be_sent_for_sessions_into(
-        &mut output,
-        &session_ids,
-        state,
-        cookie_access_report,
-        None,
-    );
-    MainDocumentBodyProgressSource::default()
-}
-
 pub(crate) fn response_stage_main_document_navigation_network_progress(
     conn: &CdpConnection,
     state: &NavigationDispatchState,
     initial_request_cookie_report: Option<&StoredCookieQueryReport>,
 ) -> MainDocumentBodyProgressSource {
-    if !main_document_network_observed(conn, state.session_id.as_deref()) {
+    if !main_document_network_observed(conn, &state.owner) {
         return MainDocumentBodyProgressSource::default();
     }
     let live_source = MainDocumentLiveNetworkProgressSource::from_navigation_dispatch_state(
         conn.background_event_sender(),
-        main_document_network_event_session_ids(conn, state.session_id.as_deref()),
+        conn.network_event_session_ids_for_owner(&state.owner),
         state,
         initial_request_cookie_report,
     );
@@ -1468,14 +1403,13 @@ fn observed_navigation_failure_event(
     state: &NavigationDispatchState,
     error_text: &str,
 ) -> Option<MainDocumentNavigationProgressEvent> {
-    if !conn.has_network_event_listeners_for_session_owner(state.session_id.as_deref()) {
+    if !main_document_network_observed(conn, &state.owner) {
         return None;
     }
     let request_id = state.request_id.clone()?;
     Some(MainDocumentNavigationProgressEvent::LoadingFailed {
         target: MainDocumentProgressEventTarget {
-            session_ids: conn
-                .network_event_session_ids_for_session_owner(state.session_id.as_deref()),
+            session_ids: conn.network_event_session_ids_for_owner(&state.owner),
             request_id,
             loader_id: state.loader_id.clone(),
             frame_id: state.frame_id.clone(),
@@ -1489,14 +1423,13 @@ fn observed_navigation_finished_event(
     conn: &CdpConnection,
     state: &NavigationDispatchState,
 ) -> Option<MainDocumentNavigationProgressEvent> {
-    if !conn.has_network_event_listeners_for_session_owner(state.session_id.as_deref()) {
+    if !main_document_network_observed(conn, &state.owner) {
         return None;
     }
     let request_id = state.request_id.clone()?;
     Some(MainDocumentNavigationProgressEvent::LoadingFinished {
         target: MainDocumentProgressEventTarget {
-            session_ids: conn
-                .network_event_session_ids_for_session_owner(state.session_id.as_deref()),
+            session_ids: conn.network_event_session_ids_for_owner(&state.owner),
             request_id,
             loader_id: state.loader_id.clone(),
             frame_id: state.frame_id.clone(),
@@ -1504,13 +1437,6 @@ fn observed_navigation_finished_event(
         },
         encoded_data_length: 0,
     })
-}
-
-fn main_document_network_event_session_ids(
-    conn: &CdpConnection,
-    trigger_session_id: Option<&str>,
-) -> Vec<Option<String>> {
-    conn.network_event_session_ids_for_session_owner(trigger_session_id)
 }
 
 struct CompletedMainDocumentProgressContext {
@@ -2140,21 +2066,21 @@ fn record_pending_main_document_response_body(
     state: &NavigationDispatchState,
     session_ids: &[Option<String>],
 ) {
-    if !main_document_network_observed(conn, state.session_id.as_deref()) {
+    if !main_document_network_observed(conn, &state.owner) {
         return;
     }
     let Some(request_id) = state.request_id.clone() else {
         return;
     };
-    let collector_ids = conn.network_data_collector_ids_for_session_owner_body(
-        state.session_id.as_deref(),
+    let collector_ids = conn.network_data_collector_ids_for_owner_body(
+        &state.owner,
         crate::devtools_runtime::DevToolsNetworkDataType::Response,
         0,
     );
     let collection_was_gated = conn.network_data_collection_is_gated_for_body(
         crate::devtools_runtime::DevToolsNetworkDataType::Response,
     );
-    if let Ok(runtime_slot) = conn.runtime_session_owner_slot_mut(state.session_id.as_deref()) {
+    if let Ok(runtime_slot) = conn.runtime_session_owner_slot_mut_for_owner(&state.owner) {
         runtime_slot.record_pending_response_body_with_collector_scope(
             request_id,
             session_ids.iter().cloned(),
@@ -2168,7 +2094,7 @@ pub(crate) fn record_main_document_request_body(
     conn: &mut CdpConnection,
     state: &NavigationDispatchState,
 ) {
-    if !main_document_network_observed(conn, state.session_id.as_deref()) {
+    if !main_document_network_observed(conn, &state.owner) {
         return;
     }
     let Some(request_id) = state.request_id.clone() else {
@@ -2177,10 +2103,10 @@ pub(crate) fn record_main_document_request_body(
     let Some(transport_bytes) = state.clone_request_body_bytes() else {
         return;
     };
-    let session_ids = main_document_network_event_session_ids(conn, state.session_id.as_deref());
+    let session_ids = conn.network_event_session_ids_for_owner(&state.owner);
     let data_type = crate::devtools_runtime::DevToolsNetworkDataType::Request;
-    let collector_ids = conn.network_data_collector_ids_for_session_owner_body(
-        state.session_id.as_deref(),
+    let collector_ids = conn.network_data_collector_ids_for_owner_body(
+        &state.owner,
         data_type,
         transport_bytes.len(),
     );
@@ -2194,7 +2120,7 @@ pub(crate) fn record_main_document_request_body(
         collector_ids.iter().cloned(),
         collection_was_gated,
     );
-    if let Ok(runtime_slot) = conn.runtime_session_owner_slot_mut(state.session_id.as_deref()) {
+    if let Ok(runtime_slot) = conn.runtime_session_owner_slot_mut_for_owner(&state.owner) {
         // CDP getRequestPostData uses the text projection that request events
         // and Fetch interception expose, which omits multipart file contents.
         // Never surface raw transport bytes through the CDP captured store.
@@ -2217,22 +2143,22 @@ pub(crate) fn record_failed_main_document_response_body(
     state: &NavigationDispatchState,
     error_text: String,
 ) {
-    if !main_document_network_observed(conn, state.session_id.as_deref()) {
+    if !main_document_network_observed(conn, &state.owner) {
         return;
     }
     let Some(request_id) = state.request_id.clone() else {
         return;
     };
-    let session_ids = main_document_network_event_session_ids(conn, state.session_id.as_deref());
-    let collector_ids = conn.network_data_collector_ids_for_session_owner_body(
-        state.session_id.as_deref(),
+    let session_ids = conn.network_event_session_ids_for_owner(&state.owner);
+    let collector_ids = conn.network_data_collector_ids_for_owner_body(
+        &state.owner,
         crate::devtools_runtime::DevToolsNetworkDataType::Response,
         0,
     );
     let collection_was_gated = conn.network_data_collection_is_gated_for_body(
         crate::devtools_runtime::DevToolsNetworkDataType::Response,
     );
-    if let Ok(runtime_slot) = conn.runtime_session_owner_slot_mut(state.session_id.as_deref()) {
+    if let Ok(runtime_slot) = conn.runtime_session_owner_slot_mut_for_owner(&state.owner) {
         runtime_slot.record_failed_response_body_with_collector_scope(
             request_id,
             error_text,
@@ -2249,10 +2175,10 @@ pub(crate) fn record_completed_main_document_response_body(
     synthetic: bool,
     response_body: &CapturedBody,
 ) {
-    let network_enabled = main_document_network_observed(conn, state.session_id.as_deref());
-    let session_ids = main_document_network_event_session_ids(conn, state.session_id.as_deref());
-    let collector_ids = conn.network_data_collector_ids_for_session_owner_body(
-        state.session_id.as_deref(),
+    let network_enabled = main_document_network_observed(conn, &state.owner);
+    let session_ids = conn.network_event_session_ids_for_owner(&state.owner);
+    let collector_ids = conn.network_data_collector_ids_for_owner_body(
+        &state.owner,
         crate::devtools_runtime::DevToolsNetworkDataType::Response,
         response_body.len(),
     );
@@ -2271,7 +2197,7 @@ pub(crate) fn record_completed_main_document_response_body(
             collection_was_gated,
         );
     }
-    if let Ok(runtime_slot) = conn.runtime_session_owner_slot_mut(state.session_id.as_deref()) {
+    if let Ok(runtime_slot) = conn.runtime_session_owner_slot_mut_for_owner(&state.owner) {
         let _ = record_main_document_response_body_for_network(
             runtime_slot,
             network_enabled,
@@ -2285,8 +2211,12 @@ pub(crate) fn record_completed_main_document_response_body(
     }
 }
 
-fn main_document_network_observed(conn: &CdpConnection, session_id: Option<&str>) -> bool {
-    conn.has_network_event_listeners_for_session_owner(session_id)
+fn main_document_network_observed(
+    conn: &CdpConnection,
+    owner: &crate::conn::CommandOwnerScope,
+) -> bool {
+    conn.runtime_session_owner_slot_for_owner(owner)
+        .is_ok_and(|slot| slot.has_network_event_listeners())
 }
 
 pub(crate) fn native_navigation_response_events(
@@ -2295,12 +2225,78 @@ pub(crate) fn native_navigation_response_events(
     response: &moli_core::browser::NavigationResponseSnapshot,
     emit_response: bool,
     metadata_emitted: bool,
+    command_reply: Vec<BackgroundProtocolEvent>,
 ) -> Vec<BackgroundProtocolEvent> {
     let mut out = Vec::new();
-    if !main_document_network_observed(conn, state.session_id.as_deref()) {
-        return out;
+    if !main_document_network_observed(conn, &state.owner) {
+        return command_reply;
     }
-    let head = &response.response;
+    let head = match &response.response {
+        Ok(head) => head,
+        Err(failure) => {
+            // The network failure is already terminal, even while Browser is
+            // constructing its error Document. Never synthesize a 200 response
+            // for that internal document on this original network request.
+            if emit_response {
+                if let Some(source) =
+                    MainDocumentLiveNetworkProgressSource::from_navigation_dispatch_state(
+                        None,
+                        conn.network_event_session_ids_for_owner(&state.owner),
+                        state,
+                        None,
+                    )
+                {
+                    let request = failure.request.as_ref();
+                    let redirects = request
+                        .map(|request| request.redirect_chain())
+                        .unwrap_or_default();
+                    let final_exchange = navigation_exchange_group(
+                        &response.observations,
+                        redirects.len(),
+                        redirects.len(),
+                    )
+                    .and_then(|group| group.last());
+                    let cookie_report =
+                        final_exchange.and_then(|exchange| exchange.request().cookie_report());
+                    let events = source.redirect_request_events(
+                        request
+                            .map(|request| request.request_method())
+                            .unwrap_or(&state.request_method),
+                        request
+                            .and_then(|request| request.request_body())
+                            .and_then(|body| std::str::from_utf8(body).ok())
+                            .or(state.request_body.as_deref()),
+                        request
+                            .map(|request| request.request_headers())
+                            .unwrap_or(&state.request_headers),
+                        cookie_report,
+                        redirects,
+                        &response.observations,
+                        final_exchange.is_some_and(|exchange| exchange.response().is_none()),
+                    );
+                    for event in events {
+                        event.emit_into(&mut MainDocumentProgressOutputTarget::background_events(
+                            &mut out,
+                        ));
+                    }
+                }
+                record_failed_main_document_response_body(
+                    conn,
+                    state,
+                    failure.error.error_text.clone(),
+                );
+                if let Some(event) =
+                    observed_navigation_failure_event(conn, state, &failure.error.error_text)
+                {
+                    event.emit_into(&mut MainDocumentProgressOutputTarget::background_events(
+                        &mut out,
+                    ));
+                }
+            }
+            out.extend(command_reply);
+            return out;
+        }
+    };
     let mut events = CompletedMainDocumentNetworkEvents::new(
         state.request_method.clone(),
         state.request_headers.clone(),
@@ -2320,7 +2316,7 @@ pub(crate) fn native_navigation_response_events(
     .with_network_observation_journal(response.observations.clone());
     events.response_stage_metadata_already_emitted = metadata_emitted;
     let context = CompletedMainDocumentProgressContext::new(
-        main_document_network_event_session_ids(conn, state.session_id.as_deref()),
+        conn.network_event_session_ids_for_owner(&state.owner),
         state.request_id.clone(),
         state.request_announced,
         state.requested_url.clone(),
@@ -2331,14 +2327,18 @@ pub(crate) fn native_navigation_response_events(
         state.frame_id.clone(),
         state.timestamp,
     );
-    let mut output = MainDocumentProgressOutputTarget::background_events(&mut out);
     if emit_response {
         record_pending_main_document_response_body(conn, state, &context.session_ids);
-        for event in context
-            .request_and_redirect_progress_events(&events)
-            .into_iter()
-            .chain(context.response_received_progress_events(&events, &head.final_url, 0))
-        {
+        for event in context.request_and_redirect_progress_events(&events) {
+            event.emit_into(&mut MainDocumentProgressOutputTarget::background_events(
+                &mut out,
+            ));
+        }
+    }
+    out.extend(command_reply);
+    let mut output = MainDocumentProgressOutputTarget::background_events(&mut out);
+    if emit_response {
+        for event in context.response_received_progress_events(&events, &head.final_url, 0) {
             event.emit_into(&mut output);
         }
     }
@@ -2371,5 +2371,32 @@ pub(crate) fn native_navigation_failure_events(
             &mut out,
         ));
     }
+    out
+}
+
+pub(crate) fn native_error_document_finished_events(
+    conn: &CdpConnection,
+    state: &NavigationDispatchState,
+) -> Vec<BackgroundProtocolEvent> {
+    if !main_document_network_observed(conn, &state.owner) {
+        return Vec::new();
+    }
+    let Some(request_id) = state.request_id.clone() else {
+        return Vec::new();
+    };
+    let mut out = Vec::new();
+    MainDocumentNavigationProgressEvent::LoadingFinished {
+        target: MainDocumentProgressEventTarget {
+            session_ids: conn.network_event_session_ids_for_owner(&state.owner),
+            request_id,
+            loader_id: state.loader_id.clone(),
+            frame_id: state.frame_id.clone(),
+            timestamp: state.timestamp,
+        },
+        encoded_data_length: 0,
+    }
+    .emit_into(&mut MainDocumentProgressOutputTarget::background_events(
+        &mut out,
+    ));
     out
 }

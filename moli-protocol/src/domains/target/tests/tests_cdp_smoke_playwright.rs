@@ -69,8 +69,8 @@ async fn created_target_url_is_a_native_decision_before_debugger_release() {
         .native_navigation_decision_for_target(&target)
         .expect("Browser must own the URL decision before debugger release");
     assert!(matches!(paused.stage,
-        moli_core::browser::NavigationDecisionStage::Request { url: requested, .. }
-        if requested.as_str() == url));
+        moli_core::browser::NavigationDecisionStage::Request { request, .. }
+        if request.requested_url.as_str() == url));
     arm_popup_route(&mut ctx, 100_010, &target, &session, &url).await;
     fulfill_popup_document_and_evaluate(
         &mut ctx,
@@ -438,6 +438,12 @@ async fn rust_cdp_playwright_route_fulfill_underlying_navigation_response_contra
     }))
     .await;
     ctx.expect_result(82_007, json!({}), Some(&attached.session_id));
+    crate::testing::wait_until_navigation_document_load(
+        &mut ctx,
+        82_006,
+        Some(&attached.session_id),
+    )
+    .await;
     let navigation = take_response_by_id(&mut ctx, 82_006);
     assert_eq!(
         navigation["result"],
@@ -491,6 +497,12 @@ async fn rust_cdp_playwright_route_continue_underlying_document_contract() {
     }))
     .await;
     ctx.expect_result(83_007, json!({}), Some(&attached.session_id));
+    crate::testing::wait_until_navigation_document_load(
+        &mut ctx,
+        83_006,
+        Some(&attached.session_id),
+    )
+    .await;
     let navigation = take_response_by_id(&mut ctx, 83_006);
     assert_eq!(navigation["result"]["frameId"], attached.target_id);
 
@@ -538,6 +550,14 @@ async fn rust_cdp_playwright_route_abort_underlying_navigation_contract() {
     }))
     .await;
     ctx.expect_result(84_007, json!({}), Some(&attached.session_id));
+    crate::testing::wait_until_scheduler_message(
+        &mut ctx,
+        "original navigation reply",
+        |message| {
+            message["id"] == json!(84_006) && message["sessionId"] == json!(&attached.session_id)
+        },
+    )
+    .await;
     let navigation = take_response_by_id(&mut ctx, 84_006);
     assert_eq!(navigation["error"]["message"], "net::ERR_BLOCKED_BY_CLIENT");
     assert!(ctx.sent.iter().any(|message| {

@@ -807,14 +807,19 @@ pub enum RendererServiceWorkerTargetEvent {
 /// protocol-neutral navigation identity needed to preserve the same boundary
 /// without making protocol splice events between two renderer cursors.
 #[derive(Clone, Debug, PartialEq)]
-pub struct RendererMainDocumentCommit {
-    pub frame_id: String,
-    pub loader_id: String,
-    pub url: String,
-    pub unreachable_url: Option<String>,
-    pub security_origin: String,
-    pub secure_context_type: String,
-    pub timestamp: f64,
+pub enum RendererMainDocumentCommit {
+    /// The stream identifies the physical Document. Its committed facts belong
+    /// to Browser; this record only supplies their position in the output FIFO.
+    Browser,
+    Frame {
+        frame_id: String,
+        loader_id: String,
+        url: String,
+        unreachable_url: Option<String>,
+        security_origin: String,
+        secure_context_type: String,
+        timestamp: f64,
+    },
 }
 
 #[derive(Debug, Clone, Default, PartialEq)]

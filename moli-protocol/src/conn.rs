@@ -98,7 +98,6 @@ pub(crate) use state::{
 };
 pub(crate) use state::{
     ClaimedNavigationRequest, InterceptedNavigationLoad, InterceptedNavigationResponse,
-    NavigationRequestInterception,
 };
 pub(crate) use state::{CompletedContextPermissionUpdate, PendingContextPermissionUpdate};
 mod target;
@@ -537,7 +536,6 @@ impl CommandDispatchContext {
 }
 
 pub(crate) use moli_protocol_cdp::{DEFAULT_LOADER_ID, monotonic_timestamp_seconds};
-pub(crate) use output::NavigationBackgroundEvent;
 pub use output::{
     BackgroundCommandResponsePayload, BackgroundEventSender, BackgroundProtocolEvent,
     PageScreencastFrameMetadata, RuntimeInspectorAsyncCompletionReceiver,
@@ -564,9 +562,8 @@ pub use runtime_eval::{
 };
 pub(crate) use runtime_load::decode_data_url_response;
 pub(crate) use runtime_load::{
-    BackgroundNavigationBodyCompletionSink, BackgroundNavigationEarlyResult,
-    BackgroundNavigationLoadJob, FailedInitialDocumentProjection, PausedResponsePreparedDocument,
-    PendingInitialDocumentProjection, ResponseCommitReady,
+    BackgroundNavigationBodyCompletionSink, FailedInitialDocumentProjection,
+    PausedResponsePreparedDocument, PendingInitialDocumentProjection, ResponseCommitReady,
 };
 use scheduler_hooks::CdpSchedulerHooks;
 use scheduler_state::CdpConnectionSchedulerState;
@@ -1531,6 +1528,7 @@ impl CdpConnection {
         delivery
     }
 
+    #[cfg(test)]
     pub(crate) fn start_document_navigation_for_owner(
         &mut self,
         owner: &CommandOwnerScope,
@@ -2419,56 +2417,6 @@ impl CdpConnection {
             Vec::new(),
             self.take_scheduler_events(),
         )
-    }
-
-    pub(crate) fn enqueue_navigation_background_event(&mut self, event: NavigationBackgroundEvent) {
-        self.scheduler_state.push_navigation_background_event(event);
-    }
-
-    pub(crate) fn enqueue_navigation_background_protocol_event(
-        &mut self,
-        token: NavigationId,
-        event: BackgroundProtocolEvent,
-    ) {
-        self.enqueue_navigation_background_event(NavigationBackgroundEvent::background_event(
-            token, event,
-        ));
-    }
-
-    pub(crate) fn send_navigation_background_protocol_event(
-        &mut self,
-        token: NavigationId,
-        event: BackgroundProtocolEvent,
-    ) {
-        self.enqueue_navigation_background_protocol_event(token, event);
-        self.flush_navigation_background_events_to_sender();
-    }
-
-    fn drain_navigation_background_protocol_events(&mut self) -> Vec<BackgroundProtocolEvent> {
-        let events = self.scheduler_state.take_navigation_background_events();
-        events
-            .into_iter()
-            .filter_map(|event| {
-                event.into_background_protocol_event_if_current(self.browser_contexts())
-            })
-            .collect()
-    }
-
-    #[cfg(test)]
-    pub(crate) fn drain_navigation_background_events(&mut self) -> Vec<serde_json::Value> {
-        self.drain_navigation_background_protocol_events()
-            .into_iter()
-            .map(BackgroundProtocolEvent::into_protocol_message)
-            .collect()
-    }
-
-    pub(crate) fn flush_navigation_background_events_to_sender(&mut self) {
-        let Some(sender) = self.scheduler_hooks.background_event_sender() else {
-            return;
-        };
-        for event in self.drain_navigation_background_protocol_events() {
-            let _ = sender.send(event);
-        }
     }
 
     pub(crate) async fn drain_materialized_navigation_completion_background_events(

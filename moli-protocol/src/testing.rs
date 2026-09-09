@@ -2319,15 +2319,52 @@ pub(crate) async fn wait_until_renderer_document_load(
     loader_id: &str,
 ) {
     let description = format!("renderer load for {frame_id}/{loader_id}");
+    let document = ctx
+        .conn
+        .browser_context_id_for_target(frame_id)
+        .and_then(|id| ctx.conn.browser_context_by_id(id))
+        .and_then(|context| {
+            context
+                .target_pending_document_id(frame_id)
+                .or_else(|| context.target_document_id(frame_id))
+        })
+        .expect("load observation requires an admitted or committed Document");
     ctx.wait_until_scheduler_state(&description, |conn| {
         conn.renderer_document_lifecycle_visible_state_for_session_owner(session_id)
             .is_some_and(|(binding, snapshot)| {
                 binding.frame_id == frame_id
                     && binding.loader_id == loader_id
+                    && binding.document_id == document
                     && snapshot.load.is_some()
             })
     })
     .await;
+}
+
+#[cfg(test)]
+pub(crate) async fn wait_until_navigation_document_load(
+    ctx: &mut TestContext,
+    command_id: u64,
+    session_id: Option<&str>,
+) {
+    wait_until_scheduler_message(ctx, "navigation reply before Document load", |message| {
+        message["id"] == json!(command_id) && message["sessionId"].as_str() == session_id
+    })
+    .await;
+    let response = ctx
+        .sent
+        .iter()
+        .find(|message| message["id"] == json!(command_id))
+        .unwrap();
+    let frame = response["result"]["frameId"]
+        .as_str()
+        .expect("successful cross-document navigation frame")
+        .to_owned();
+    let loader = response["result"]["loaderId"]
+        .as_str()
+        .expect("successful cross-document navigation loader")
+        .to_owned();
+    wait_until_renderer_document_load(ctx, session_id, &frame, &loader).await;
 }
 
 /// Build a result message, omitting sessionId when it is None.

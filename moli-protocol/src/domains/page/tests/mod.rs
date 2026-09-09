@@ -11,7 +11,8 @@ use crate::devtools_runtime::{
 };
 use crate::testing::{
     TestContext, wait_until_frame_stopped_loading, wait_until_message, wait_until_messages,
-    wait_until_renderer_document_load, wait_until_scheduler_message,
+    wait_until_navigation_document_load, wait_until_renderer_document_load,
+    wait_until_scheduler_message,
 };
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64_STANDARD};
 use moli_core::page::{

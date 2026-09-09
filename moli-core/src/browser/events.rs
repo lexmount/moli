@@ -100,9 +100,23 @@ pub struct NavigationRequest {
 #[derive(Clone, Debug)]
 pub struct NavigationResponseSnapshot {
     pub request: NavigationRequest,
-    pub response: moli_fetch::ResponseHead,
+    pub response: Result<moli_fetch::ResponseHead, NavigationFetchFailure>,
     pub observations: moli_fetch::NetworkObservationJournal,
     pub body: Option<Result<super::CapturedBody, String>>,
+}
+
+/// The failed URL remains the history/Target URL while the renderer displays
+/// the Browser-owned error document. Shared by the response and commit facts.
+#[derive(Clone, Debug)]
+pub struct NavigationError {
+    pub unreachable_url: url::Url,
+    pub error_text: String,
+}
+
+#[derive(Clone, Debug)]
+pub struct NavigationFetchFailure {
+    pub error: std::sync::Arc<NavigationError>,
+    pub request: Option<moli_fetch::NetworkFetchFailureRequestContext>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

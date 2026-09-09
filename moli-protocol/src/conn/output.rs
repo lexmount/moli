@@ -21,10 +21,7 @@ use moli_page_types::{
 use serde_json::{Value, json};
 use tokio::sync::mpsc::UnboundedSender;
 
-use super::{
-    CdpConnection, CommandOwnerScope, DevToolsDocumentLifecycleWaitKey,
-    state::{BrowserContext, NavigationId},
-};
+use super::{CdpConnection, CommandOwnerScope, DevToolsDocumentLifecycleWaitKey};
 
 mod delivery_route;
 use delivery_route::ProtocolDeliveryRoute;
@@ -4331,48 +4328,6 @@ fn strip_moli_private_protocol_fields(mut message: Value) -> Value {
     message
 }
 
-#[derive(Debug, Clone, PartialEq)]
-pub(crate) struct NavigationBackgroundEvent {
-    token: NavigationId,
-    event: BackgroundProtocolEvent,
-}
-
-impl NavigationBackgroundEvent {
-    #[cfg(test)]
-    pub(crate) fn protocol_message(token: NavigationId, message: Value) -> Self {
-        Self {
-            token,
-            event: BackgroundProtocolEvent::immediate(message),
-        }
-    }
-
-    pub(crate) fn background_event(token: NavigationId, event: BackgroundProtocolEvent) -> Self {
-        Self { token, event }
-    }
-
-    pub(crate) fn into_background_protocol_event_if_current<'a>(
-        self,
-        browser_contexts: impl IntoIterator<Item = &'a BrowserContext>,
-    ) -> Option<BackgroundProtocolEvent> {
-        let is_current = browser_contexts.into_iter().any(|browser_context| {
-            browser_context.accepts_pending_document_navigation_event(&self.token)
-        });
-        if !is_current {
-            return None;
-        }
-        Some(self.event)
-    }
-
-    #[cfg(test)]
-    pub(crate) fn into_protocol_message_if_current<'a>(
-        self,
-        browser_contexts: impl IntoIterator<Item = &'a BrowserContext>,
-    ) -> Option<Value> {
-        self.into_background_protocol_event_if_current(browser_contexts)
-            .map(BackgroundProtocolEvent::into_protocol_message)
-    }
-}
-
 pub fn build_event(method: &str, params: Value, session_id: Option<&str>) -> Value {
     let mut v = json!({ "method": method, "params": params });
     if let Some(sid) = session_id {
@@ -4396,10 +4351,9 @@ mod tests {
     use super::{
         BackgroundCommandResponsePayload, BackgroundProtocolEvent,
         BackgroundServiceWorkerErrorMessage, BackgroundServiceWorkerRegistration,
-        BackgroundServiceWorkerVersion, NavigationBackgroundEvent, PageScreencastFrameMetadata,
-        RuntimeInspectorResponseReady, build_event,
+        BackgroundServiceWorkerVersion, PageScreencastFrameMetadata, RuntimeInspectorResponseReady,
     };
-    use crate::conn::{BrowserContext, DevToolsDocumentLifecycleWaitKey};
+    use crate::conn::DevToolsDocumentLifecycleWaitKey;
     use moli_core::{
         PageId, RendererRuntimeInspectorAsyncCompletion,
         page::{
@@ -4561,74 +4515,6 @@ mod tests {
 
         assert!(output.matches_document_load_wait_key(&matching));
         assert!(!output.matches_document_load_wait_key(&restarted_epoch));
-    }
-
-    #[test]
-    fn navigation_background_event_materializes_only_for_current_token() {
-        let mut browser_context = BrowserContext::new("CTX-nav".to_owned());
-        browser_context.set_active_target_id("TID-nav");
-        browser_context.attach_active_session("SID-nav");
-        let token = browser_context
-            .start_document_navigation_for_active_target("LOADER-1".to_owned())
-            .expect("active target should produce navigation token");
-        let message = build_event(
-            "Page.frameStartedLoading",
-            json!({ "frameId": "TID-nav" }),
-            Some("SID-nav"),
-        );
-
-        let event = NavigationBackgroundEvent::protocol_message(token, message.clone());
-
-        assert_eq!(
-            event.into_protocol_message_if_current(std::iter::once(&browser_context)),
-            Some(message)
-        );
-    }
-
-    #[test]
-    fn navigation_background_event_preserves_typed_sidecar_for_current_token() {
-        let mut browser_context = BrowserContext::new("CTX-nav".to_owned());
-        browser_context.set_active_target_id("TID-nav");
-        browser_context.attach_active_session("SID-nav");
-        let token = browser_context
-            .start_document_navigation_for_active_target("LOADER-1".to_owned())
-            .expect("active target should produce navigation token");
-        let message = build_event(
-            "Page.frameStartedNavigating",
-            json!({
-                "frameId": "TID-nav",
-                "loaderId": "LOADER-1",
-                "url": "https://example.test/",
-                "navigationType": "differentDocument"
-            }),
-            Some("SID-nav"),
-        );
-        let automation_event = AutomationEvent::NavigationFrame(NavigationFrameEvent {
-            target_id: DevToolsTargetId::from("TID-nav"),
-            frame_id: DevToolsFrameId::from("TID-nav"),
-            parent_frame_id: None,
-            loader_id: Some(DevToolsLoaderId::from("LOADER-1")),
-            url: "https://example.test/".to_owned(),
-            kind: NavigationFrameEventKind::StartedNavigating,
-            frame_name: None,
-            security_origin: None,
-            secure_context_type: None,
-        });
-
-        let event = NavigationBackgroundEvent::background_event(
-            token,
-            BackgroundProtocolEvent::immediate_automation_event(
-                message.clone(),
-                automation_event.clone(),
-            ),
-        );
-        let background_event = event
-            .into_background_protocol_event_if_current(std::iter::once(&browser_context))
-            .expect("current navigation event should materialize");
-        let (actual_message, actual_automation_event) = background_event.into_parts();
-
-        assert_eq!(actual_message, message);
-        assert_eq!(actual_automation_event, Some(automation_event));
     }
 
     #[test]
@@ -5666,35 +5552,6 @@ mod tests {
         assert!(!fetch_request_paused.should_wait_for_background_navigation_completion());
         assert!(!fetch_auth_required.should_wait_for_background_navigation_completion());
         assert!(!protocol_without_type.should_wait_for_background_navigation_completion());
-    }
-
-    #[test]
-    fn navigation_background_event_drops_stale_token() {
-        let mut browser_context = BrowserContext::new("CTX-nav".to_owned());
-        browser_context.set_active_target_id("TID-nav");
-        let stale = browser_context
-            .start_document_navigation_for_active_target("LOADER-1".to_owned())
-            .expect("active target should produce stale token");
-        let current = browser_context
-            .start_document_navigation_for_active_target("LOADER-2".to_owned())
-            .expect("active target should produce current token");
-        let message = build_event(
-            "Page.frameStoppedLoading",
-            json!({ "frameId": "TID-nav" }),
-            None,
-        );
-
-        let stale_event = NavigationBackgroundEvent::protocol_message(stale, message.clone());
-        let current_event = NavigationBackgroundEvent::protocol_message(current, message.clone());
-
-        assert_eq!(
-            stale_event.into_protocol_message_if_current(std::iter::once(&browser_context)),
-            None
-        );
-        assert_eq!(
-            current_event.into_protocol_message_if_current(std::iter::once(&browser_context)),
-            Some(message)
-        );
     }
 
     #[test]

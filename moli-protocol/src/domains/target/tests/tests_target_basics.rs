@@ -1353,6 +1353,7 @@ async fn same_context_targets_replay_only_their_own_pre_document_binding_and_pre
         }
     }))
     .await;
+    crate::testing::wait_until_navigation_document_load(&mut ctx, 10397, Some("SID-active")).await;
     consume_main_document_navigation_start(&mut ctx);
     let first_navigation = take_response_by_id(&mut ctx, 10397);
     assert_eq!(
@@ -1417,6 +1418,8 @@ async fn same_context_targets_replay_only_their_own_pre_document_binding_and_pre
         }
     }))
     .await;
+    crate::testing::wait_until_navigation_document_load(&mut ctx, 10400, Some(&second_session_id))
+        .await;
     consume_main_document_navigation_start(&mut ctx);
     let second_navigation = take_response_by_id(&mut ctx, 10400);
     assert_eq!(

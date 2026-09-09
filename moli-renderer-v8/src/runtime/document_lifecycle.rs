@@ -365,6 +365,13 @@ pub(crate) enum RendererDocumentLifecycleTransition {
     RejectedDispatchMismatch,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum CreationLifecycleDelivery {
+    Inventory,
+    Source,
+    Complete,
+}
+
 #[derive(Debug)]
 pub(crate) struct RendererDocumentLifecycleJournal {
     frame: RendererFrameToken,
@@ -372,7 +379,7 @@ pub(crate) struct RendererDocumentLifecycleJournal {
     native_progress: tokio::sync::watch::Sender<RendererDocumentLifecycleSnapshot>,
     next_document_id: RendererLifecycleDocumentId,
     next_sequence: u64,
-    initial_handoff_complete: bool,
+    creation_delivery: CreationLifecycleDelivery,
     initial_events: VecDeque<RendererDocumentLifecycleEvent>,
     live_events: VecDeque<RendererDocumentLifecycleEvent>,
     active_dispatch: Option<MilestoneDispatch>,
@@ -402,7 +409,11 @@ impl RendererDocumentLifecycleJournalHandle {
         self.0.borrow().current_snapshot.into()
     }
 
-    pub(crate) fn bind_output_journal(&self, output_journal: super::RendererTurnOutputJournal) {
+    pub(crate) fn bind_output_journal(
+        &self,
+        output_journal: super::RendererTurnOutputJournal,
+        source_ordered_creation: bool,
+    ) {
         let mut journal = self.0.borrow_mut();
         if let Some(existing) = &journal.output_journal {
             assert_eq!(
@@ -411,6 +422,20 @@ impl RendererDocumentLifecycleJournalHandle {
                 "one lifecycle journal cannot change renderer output streams"
             );
             return;
+        }
+        // A prepared navigation's commit marker orders its creation prefix in
+        // this source. Initial empty Documents use only their creation handoff;
+        // creating a Target must not manufacture a renderer command predecessor.
+        if source_ordered_creation
+            && journal.creation_delivery == CreationLifecycleDelivery::Inventory
+        {
+            journal.creation_delivery = CreationLifecycleDelivery::Source;
+            for event in &journal.initial_events {
+                output_journal.append(super::PendingRendererOutputRecord::observation(
+                    None,
+                    super::RendererProtocolObservation::DocumentLifecycle(*event),
+                ));
+            }
         }
         journal.output_journal = Some(output_journal);
     }
@@ -654,7 +679,7 @@ impl RendererDocumentLifecycleJournal {
             native_progress: tokio::sync::watch::channel(snapshot).0,
             next_document_id: RendererLifecycleDocumentId::INITIAL.successor(),
             next_sequence: 2,
-            initial_handoff_complete: false,
+            creation_delivery: CreationLifecycleDelivery::Inventory,
             initial_events: VecDeque::from([event]),
             live_events: VecDeque::new(),
             active_dispatch: None,
@@ -678,7 +703,7 @@ impl RendererDocumentLifecycleJournal {
     }
 
     fn take_page_creation_artifacts(&mut self) -> RendererPageCreationArtifacts {
-        self.initial_handoff_complete = true;
+        self.creation_delivery = CreationLifecycleDelivery::Complete;
         RendererPageCreationArtifacts {
             active_document: self.current_snapshot.document,
             active_epoch: self.current_snapshot.epoch,
@@ -1164,21 +1189,21 @@ impl RendererDocumentLifecycleJournal {
     fn push_event(&mut self, event: RendererDocumentLifecycleEvent) {
         trace_lifecycle_transition(&event);
         self.native_progress.send_replace(self.current_snapshot);
-        if self.initial_handoff_complete {
-            if let Some(recorder) = &self.command_turn_output {
-                recorder.push_document_lifecycle_event(event);
-                return;
-            }
-            if let Some(output_journal) = &self.output_journal {
-                output_journal.append(super::PendingRendererOutputRecord::observation(
-                    None,
-                    super::RendererProtocolObservation::DocumentLifecycle(event),
-                ));
-                return;
-            }
-            self.live_events.push_back(event);
-        } else {
+        if self.creation_delivery != CreationLifecycleDelivery::Complete {
             self.initial_events.push_back(event);
+            if self.creation_delivery == CreationLifecycleDelivery::Inventory {
+                return;
+            }
+        }
+        if let Some(recorder) = &self.command_turn_output {
+            recorder.push_document_lifecycle_event(event);
+        } else if let Some(output_journal) = &self.output_journal {
+            output_journal.append(super::PendingRendererOutputRecord::observation(
+                None,
+                super::RendererProtocolObservation::DocumentLifecycle(event),
+            ));
+        } else if self.creation_delivery == CreationLifecycleDelivery::Complete {
+            self.live_events.push_back(event);
         }
     }
 }

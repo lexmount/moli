@@ -834,6 +834,7 @@ impl BrowserContext {
         self.start_document_navigation_for_target(&target_id, loader_id)
     }
 
+    #[cfg(any(test, feature = "test-support"))]
     pub(crate) fn start_document_navigation_for_target(
         &mut self,
         target_id: &str,

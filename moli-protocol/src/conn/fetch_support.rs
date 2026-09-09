@@ -487,10 +487,6 @@ impl ClaimedFetchNavigation {
         self.pending.navigation_permit.navigation()
     }
 
-    pub(crate) fn is_current(&self) -> bool {
-        self.request.is_some()
-    }
-
     pub(crate) fn apply_overrides(
         &mut self,
         requested_url: Option<Url>,

@@ -47,8 +47,18 @@ async fn rust_cdp_p0_page_same_document_navigation_emits_navigated_within_docume
     let page = CdpPageHarness::attach(&mut ctx, 131_000).await;
 
     page.enable_page(&mut ctx, 131_005).await;
-    page.navigate(&mut ctx, 131_006, fixture.url("/plain?same-doc"))
+    let navigation = page
+        .navigate(&mut ctx, 131_006, fixture.url("/plain?same-doc"))
         .await;
+    crate::testing::wait_until_renderer_document_load(
+        &mut ctx,
+        Some(&page.session_id),
+        &page.target_id,
+        navigation["result"]["loaderId"]
+            .as_str()
+            .expect("navigation loader"),
+    )
+    .await;
     ctx.sent.clear();
 
     let url = fixture.url("/plain?same-doc#hash");

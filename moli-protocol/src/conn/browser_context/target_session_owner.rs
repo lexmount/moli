@@ -79,7 +79,6 @@ pub(crate) struct TargetNavigationRequestPreflight {
     pub(crate) request_headers: Vec<(String, String)>,
     pub(crate) document_fetch_request_stage: Option<FetchRequestStage>,
     pub(crate) document_fetch_response_stage_candidate: bool,
-    pub(crate) document_auth_required: bool,
     pub(crate) document_auth_required_blocked_intercepts: Vec<DevToolsNetworkInterceptId>,
     pub(crate) document_loader_id: String,
     pub(crate) document_request_id: Option<String>,
@@ -925,7 +924,6 @@ impl<'a> TargetSessionOwnerMut<'a> {
                 request_headers,
                 document_fetch_request_stage,
                 document_fetch_response_stage_candidate,
-                document_auth_required,
                 document_auth_required_blocked_intercepts,
                 document_loader_id,
                 document_request_id,
@@ -2627,7 +2625,6 @@ mod tests {
             Some("LID-0000000001")
         );
         assert_eq!(preflight.fetch_navigation_request_id, None);
-        assert!(!preflight.document_auth_required);
         assert!(
             preflight
                 .document_auth_required_blocked_intercepts
@@ -2812,7 +2809,6 @@ mod tests {
             Some("LID-0000000001")
         );
         assert_eq!(preflight.fetch_navigation_request_id, None);
-        assert!(!preflight.document_auth_required);
         assert!(
             preflight
                 .document_auth_required_blocked_intercepts

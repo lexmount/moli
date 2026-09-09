@@ -64,7 +64,10 @@ pub(crate) struct CompletedDevToolsNavigationExecution {
 
 pub(crate) enum DevToolsNavigationCommandProgress {
     Complete(Box<DevToolsCommandExecution>),
-    Pending(Box<PendingDevToolsNavigationExecution>),
+    Pending {
+        pending: Box<PendingDevToolsNavigationExecution>,
+        protocol_output: ProtocolOutputSequence,
+    },
     PendingLifecycle {
         pending: Box<PendingDevToolsNavigationLifecycle>,
         protocol_output: ProtocolOutputSequence,
@@ -294,9 +297,12 @@ impl CdpScheduler {
             .await
         {
             DevToolsNavigationCommandProgress::Complete(execution) => execution.protocol_output,
-            DevToolsNavigationCommandProgress::Pending(pending) => {
+            DevToolsNavigationCommandProgress::Pending {
+                pending,
+                protocol_output,
+            } => {
                 self.retain_detached_navigation(DevToolsNavigationCommandWait::new(*pending));
-                ProtocolOutputSequence::empty()
+                protocol_output
             }
             DevToolsNavigationCommandProgress::PendingLifecycle {
                 pending,
@@ -358,12 +364,19 @@ impl CdpScheduler {
         match step {
             DevToolsNavigationCommandTaskStep::Pending(mut pending) => {
                 self.apply_scheduler_events(pending.take_scheduler_events());
-                DevToolsNavigationCommandProgress::Pending(Box::new(
-                    PendingDevToolsNavigationExecution {
+                state
+                    .output
+                    .append(self.route_background_events_around_inflight_navigation(
+                        pending.take_protocol_events(),
+                    ));
+                let protocol_output = std::mem::take(&mut state.output);
+                DevToolsNavigationCommandProgress::Pending {
+                    pending: Box::new(PendingDevToolsNavigationExecution {
                         state,
                         pending: *pending,
-                    },
-                ))
+                    }),
+                    protocol_output,
+                }
             }
             DevToolsNavigationCommandTaskStep::Complete(outcome) => {
                 let (mut result, scheduler_events, protocol_events, predecessor) =
@@ -397,19 +410,38 @@ impl CdpScheduler {
                     && let Some((loader_id, milestone)) =
                         super::devtools_navigation_result_loader_id(&result)
                             .zip(devtools_navigation_lifecycle_milestone(state.wait))
-                    && let Some(key) = self.conn.capture_devtools_document_lifecycle_wait_key(
+                {
+                    if let Some(key) = self.conn.capture_devtools_document_lifecycle_wait_key(
                         &state.context,
                         &loader_id,
                         milestone,
-                    )
-                {
-                    return self.advance_devtools_navigation_lifecycle(
-                        Box::new(PendingDevToolsNavigationLifecycle {
-                            context: state.context,
-                            key,
-                            result,
-                        }),
-                        state.output,
+                    ) {
+                        return self.advance_devtools_navigation_lifecycle(
+                            Box::new(PendingDevToolsNavigationLifecycle {
+                                context: state.context,
+                                key,
+                                result,
+                            }),
+                            state.output,
+                        );
+                    }
+                    // A closed/replaced Document can disappear between its
+                    // native commit and this frontend's wait registration.
+                    // Missing registration is not evidence of lifecycle success.
+                    let failure = match self
+                        .conn
+                        .devtools_context_document_navigation_state(&state.context)
+                    {
+                        moli_protocol::DevToolsDocumentNavigationState::Committed {
+                            loader_id: current,
+                        } if current != loader_id => {
+                            moli_protocol::DevToolsDocumentLifecycleWaitState::Superseded
+                        }
+                        _ => moli_protocol::DevToolsDocumentLifecycleWaitState::Unavailable,
+                    };
+                    result = Err(
+                        super::devtools_document_lifecycle_wait_error(failure, milestone)
+                            .expect("unavailable/superseded lifecycle is an error"),
                     );
                 }
                 DevToolsNavigationCommandProgress::Complete(Box::new(DevToolsCommandExecution {

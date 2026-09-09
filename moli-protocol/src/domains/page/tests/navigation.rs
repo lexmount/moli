@@ -3439,6 +3439,16 @@ async fn navigate_after_real_runtime_enable_resets_before_creating_default_conte
     }))
     .await;
 
+    wait_until_message(
+        &mut ctx,
+        Some("SID-1"),
+        "replacement Runtime context",
+        |message| {
+            message["method"] == json!("Runtime.executionContextCreated")
+                && message["params"]["context"]["auxData"]["frameId"] == json!("TID-1")
+        },
+    )
+    .await;
     let sent = ctx.take_all();
     assert_runtime_navigation_context_reset(&sent, "SID-1", "TID-1");
 }
@@ -3481,6 +3491,7 @@ async fn navigate_after_real_runtime_enable_fans_out_context_reset_to_attached_s
         "params": { "url": "data:text/html,<body>multi-session</body>" }
     }))
     .await;
+    wait_until_navigation_document_load(&mut ctx, 23, Some("SID-1")).await;
 
     let sent = ctx.take_all();
     for session_id in ["SID-1", "SID-attached"] {
@@ -3518,6 +3529,7 @@ async fn navigate_from_attached_session_keeps_primary_and_attached_runtime_event
         "params": { "url": "data:text/html,<body>aux-session-nav</body>" }
     }))
     .await;
+    wait_until_navigation_document_load(&mut ctx, 23, Some("SID-attached")).await;
 
     let sent = ctx.take_all();
     for session_id in ["SID-1", "SID-attached"] {
@@ -3567,6 +3579,7 @@ async fn navigate_after_attached_runtime_disable_keeps_primary_runtime_enabled()
         "params": { "url": "data:text/html,<body>aux-runtime-disabled</body>" }
     }))
     .await;
+    wait_until_navigation_document_load(&mut ctx, 24, Some("SID-attached")).await;
 
     let sent = ctx.take_all();
     assert_runtime_navigation_context_reset(&sent, "SID-1", "TID-1");
@@ -3611,6 +3624,7 @@ async fn navigate_with_staged_attached_runtime_enable_emits_context_created_for_
         "params": { "url": "data:text/html,<body>staged-multi-session</body>" }
     }))
     .await;
+    wait_until_navigation_document_load(&mut ctx, 24, Some("SID-1")).await;
 
     let sent = ctx.take_all();
     for session_id in ["SID-1", "SID-attached"] {
@@ -5080,18 +5094,28 @@ async fn navigate_failure_commits_error_document_with_visible_unreachable_url() 
     let mut ctx = TestContext::new();
     load_bc_with_session(&mut ctx, "BID-1", "TID-1", "SID-1", "about:blank");
     ctx.enable_page_events_for_test(Some("SID-1"));
+    ctx.process_async(json!({
+        "id": 230,
+        "method": "Page.navigate",
+        "sessionId": "SID-1",
+        "params": { "url": "data:text/html,<title>previous document</title>" }
+    }))
+    .await;
+    wait_until_message(
+        &mut ctx,
+        Some("SID-1"),
+        "previous Document stopped loading",
+        |message| message["method"] == json!("Page.frameStoppedLoading"),
+    )
+    .await;
+    let owner = crate::conn::CommandOwnerScope::capture(&ctx.conn, Some("SID-1"));
     let committed_document_token = ctx
         .conn
-        .browser_context
-        .as_mut()
+        .committed_renderer_document_binding_for_owner(&owner)
         .unwrap()
-        .start_document_navigation_for_active_target("LOADER-committed".to_owned())
-        .expect("active target should start committed document navigation");
-    ctx.conn
-        .browser_context
-        .as_mut()
-        .unwrap()
-        .commit_document_navigation_if_matches(&committed_document_token);
+        .navigation
+        .expect("real committed navigation");
+    ctx.take_all();
 
     let unreachable_url = format!("http://{addr}/missing");
     ctx.process_async(json!({
@@ -5376,6 +5400,7 @@ async fn continue_request_completes_paused_navigation_before_commit_events() {
         "params": { "requestId": request_id }
     }))
     .await;
+    wait_until_navigation_document_load(&mut ctx, 242, Some("SID-1")).await;
 
     let continue_index = ctx
         .sent
@@ -5700,6 +5725,12 @@ async fn stop_loading_aborts_paused_auth_navigation() {
     .await;
     ctx.expect_result(256, json!({}), Some("SID-1"));
 
+    wait_until_scheduler_message(&mut ctx, "navigation auth before stopLoading", |event| {
+        event["method"] == "Fetch.authRequired"
+            && event["sessionId"] == "SID-1"
+            && event["params"]["requestId"] == request_id
+    })
+    .await;
     let auth_required = ctx.take_one();
     assert_eq!(auth_required["method"], "Fetch.authRequired");
     assert_eq!(auth_required["params"]["requestId"], json!(request_id));
@@ -6251,6 +6282,7 @@ async fn repeated_protocol_navigate_to_same_url_does_not_inherit_referrer_or_rel
             "params": { "url": url.clone() }
         }))
         .await;
+        wait_until_navigation_document_load(&mut ctx, id, Some("SID-1")).await;
         let response = take_response_by_id(&mut ctx, id);
         loader_ids.push(
             response["result"]["loaderId"]
@@ -6322,6 +6354,7 @@ async fn repeated_http_navigation_after_runtime_enable_replaces_the_context_grou
         "params": { "url": url.clone() }
     }))
     .await;
+    wait_until_navigation_document_load(&mut ctx, 404, Some("SID-1")).await;
     let first_loader_id = take_response_by_id(&mut ctx, 404)["result"]["loaderId"]
         .as_str()
         .expect("first HTTP navigation should have a loader")
@@ -6392,6 +6425,7 @@ async fn repeated_http_navigation_after_runtime_enable_replaces_the_context_grou
         "params": { "url": url }
     }))
     .await;
+    wait_until_navigation_document_load(&mut ctx, 406, Some("SID-1")).await;
     let second_loader_id = take_response_by_id(&mut ctx, 406)["result"]["loaderId"]
         .as_str()
         .expect("second HTTP navigation should have a loader")
@@ -6435,6 +6469,12 @@ async fn reload_after_crash_emits_target_reloaded_after_crash() {
         "method": "Page.reload",
         "sessionId": "SID-1"
     }))
+    .await;
+    wait_until_scheduler_message(&mut ctx, "reloaded crash document commit", |event| {
+        event["method"] == "Page.frameNavigated"
+            && event["sessionId"] == "SID-1"
+            && event["params"]["frame"]["id"] == "TID-1"
+    })
     .await;
     let _ = take_response_by_id(&mut ctx, 248);
 
@@ -6484,6 +6524,7 @@ async fn navigate_after_crash_emits_target_reloaded_after_crash() {
         }
     }))
     .await;
+    wait_until_navigation_document_load(&mut ctx, 249, Some("SID-1")).await;
     let _ = take_response_by_id(&mut ctx, 249);
 
     let events = ctx.take_all();
@@ -6532,6 +6573,7 @@ async fn navigate_after_crash_without_inspector_enabled_clears_crash_without_eve
         }
     }))
     .await;
+    wait_until_navigation_document_load(&mut ctx, 250, Some("SID-1")).await;
     let _ = take_response_by_id(&mut ctx, 250);
 
     let events = ctx.take_all();

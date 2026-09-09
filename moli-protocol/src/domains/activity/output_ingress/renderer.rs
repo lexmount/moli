@@ -109,6 +109,14 @@ async fn ingest_renderer_output_publication(
 ) {
     let cursor = publication.cursor();
     let stream = publication.cursor().stream();
+    if let RendererPublicationOwner::PageTarget { page_owner, .. } = &owner {
+        // Construction can publish its first batch before the independent
+        // Browser owner installs the candidate. Keep that exact batch here
+        // until its native commit is observable; do not discard it as stale
+        // or route it through whichever Document currently occupies the Target.
+        let events = Box::pin(conn.project_native_commit_before_renderer_output(page_owner)).await;
+        command_context.protocol_events_mut().extend(events);
+    }
     let route = owner.resolve(conn, stream);
     if conn.scheduler_activity_trace_enabled() {
         conn.record_scheduler_activity_trace(json!({

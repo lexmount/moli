@@ -79,7 +79,13 @@ impl PreparedProtocolOutputs {
                 unreachable!("dialog projection must observe native admission first")
             }
             RendererProtocolObservation::MainDocumentCommit(commit) => {
+                let Some(renderer) =
+                    crate::conn::RendererPageResidenceIdentity::from_residence(source_residence)
+                else {
+                    return prepared;
+                };
                 crate::domains::page::append_renderer_main_document_commit_to_output_sink(
+                    renderer,
                     commit.clone(),
                     &mut prepared,
                 );

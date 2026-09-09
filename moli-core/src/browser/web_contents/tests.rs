@@ -95,7 +95,7 @@ impl BrowserFixture {
         self.contents.start_document_materialization(
             navigation,
             response,
-            DocumentNavigationDestination {
+            DocumentNavigationDestination::Document {
                 url: Url::parse("https://navigation.example/").unwrap(),
                 security_origin: "https://navigation.example".into(),
                 secure_context_type: "Secure".into(),

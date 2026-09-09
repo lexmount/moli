@@ -630,6 +630,17 @@ pub(super) async fn complete_fail_request_command_async(
             emit_devtools_empty_success(out);
             let token = Some(claimed.navigation_token());
             let (pending, request) = claimed.into_parts();
+            if request
+                .as_ref()
+                .is_some_and(|request| request.has_pending_decision())
+            {
+                conn.resolve_native_navigation_decision(
+                    pending.navigation.web_contents,
+                    pending.navigation_permit,
+                    moli_core::browser::NavigationDecision::Fail { error_text },
+                );
+                return;
+            }
             drop(request);
             let navigation_state = pending.navigation;
             let navigation = network::materialize_navigation_load_result(
@@ -688,7 +699,7 @@ pub(super) async fn complete_fail_request_command_async(
                 conn.resolve_native_navigation_decision(
                     pending.navigation.web_contents,
                     pending.permit,
-                    moli_core::browser::NavigationDecision::Cancel,
+                    moli_core::browser::NavigationDecision::Fail { error_text },
                 );
                 emit_devtools_empty_success(out);
                 return;

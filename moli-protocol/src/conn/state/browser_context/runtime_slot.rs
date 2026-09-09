@@ -164,6 +164,7 @@ impl TargetRuntimeSlot {
         self.javascript_dialog_scope.retire();
     }
 
+    #[cfg(any(test, feature = "test-support"))]
     pub(super) fn begin_document_projection(&mut self, navigation: NavigationId) {
         self.devtools_renderer_channel.reopen_after_target_crash();
         self.devtools_renderer_channel

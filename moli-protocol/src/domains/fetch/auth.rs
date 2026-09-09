@@ -323,7 +323,9 @@ pub(super) fn start_devtools_continue_with_auth_command_for_pending(
         )
     {
         let decision = match command.action {
-            DevToolsAuthChallengeAction::Default => moli_core::browser::NavigationDecision::Cancel,
+            DevToolsAuthChallengeAction::Default => moli_core::browser::NavigationDecision::Fail {
+                error_text: "Fetch auth challenge aborted".into(),
+            },
             DevToolsAuthChallengeAction::Cancel => moli_core::browser::NavigationDecision::Continue,
             DevToolsAuthChallengeAction::ProvideCredentials => {
                 let Some(credentials) = request_auth_for_challenge(
@@ -339,6 +341,25 @@ pub(super) fn start_devtools_continue_with_auth_command_for_pending(
                         "NotImplemented",
                     )));
                 };
+                if pending.intercept_response
+                    && !matches!(
+                        credentials.scheme,
+                        moli_core::page::SubresourceAuthScheme::Basic
+                            | moli_core::page::SubresourceAuthScheme::Digest
+                    )
+                {
+                    conn.resolve_native_navigation_decision(
+                        pending.navigation.web_contents,
+                        pending.auth_permit,
+                        moli_core::browser::NavigationDecision::Fail {
+                            error_text: format!(
+                                "Fetch response-stage interception after {:?} authentication is not supported for navigation without buffering",
+                                credentials.scheme
+                            ),
+                        },
+                    );
+                    return Some(FetchCommandTaskStep::Complete(CommandOutputPlan::success()));
+                }
                 let Some(response) = conn.take_navigation_response(pending.auth_permit) else {
                     return Some(FetchCommandTaskStep::Complete(CommandOutputPlan::error(
                         -32000,
@@ -532,7 +553,9 @@ pub(super) async fn default_navigation_auth_as_background_events_async(
         conn.resolve_native_navigation_decision(
             pending.navigation.web_contents,
             pending.auth_permit,
-            moli_core::browser::NavigationDecision::Cancel,
+            moli_core::browser::NavigationDecision::Fail {
+                error_text: "Fetch auth challenge aborted".into(),
+            },
         );
         return;
     }

@@ -43,6 +43,87 @@ fn start_load(
         .unwrap()
 }
 
+#[tokio::test]
+async fn native_navigation_transport_failure_commits_error_document_without_devtools() {
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let url = format!("http://{}/unreachable", listener.local_addr().unwrap());
+    drop(listener);
+    assert_native_error_document(
+        url,
+        "net::ERR_CONNECTION_REFUSED",
+        "This site can’t be reached",
+    )
+    .await;
+}
+
+#[tokio::test]
+async fn native_navigation_empty_http_error_commits_error_document_without_devtools() {
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let url = format!("http://{}/empty-error", listener.local_addr().unwrap());
+    let served = tokio::spawn(async move {
+        let (mut stream, _) = listener.accept().await.unwrap();
+        let mut request = Vec::new();
+        let mut byte = [0];
+        while !request.ends_with(b"\r\n\r\n") {
+            stream.read_exact(&mut byte).await.unwrap();
+            request.push(byte[0]);
+        }
+        stream.write_all(b"HTTP/1.1 404 Not Found\r\nContent-Type: text/html\r\nContent-Length: 0\r\nConnection: close\r\n\r\n").await.unwrap();
+    });
+    assert_native_error_document(url, "net::ERR_HTTP_RESPONSE_CODE_FAILURE", "HTTP ERROR 404")
+        .await;
+    served.await.unwrap();
+}
+
+async fn assert_native_error_document(url: String, error_text: &str, html_marker: &str) {
+    let service = BrowserService::start().unwrap();
+    let (context, _) = context_with_contents(&service);
+    let (contents, _) = context
+        .create_web_contents(WebContentsCreation::with_initial_document(
+            "about:blank".into(),
+            None,
+            None,
+        ))
+        .unwrap();
+    let waiter = context
+        .navigate_document(
+            contents,
+            crate::browser::web_contents::NavigationRequestInterception::new(
+                Url::parse(&url).unwrap(),
+                "GET".into(),
+                None,
+                Vec::new(),
+                NavigationRequestLoadPolicy::BrowserInitiated,
+            ),
+        )
+        .unwrap();
+    let request = waiter.request();
+    let crate::browser::BrowserNavigationOutcome::Document(committed) =
+        waiter.wait().await.unwrap()
+    else {
+        panic!("a failed document navigation must commit an error document, not a download");
+    };
+    assert_eq!(committed.document.id(), request.document);
+    assert_eq!(committed.metadata.navigation, Some(request.navigation));
+    let info = committed.metadata.info.as_ref().unwrap();
+    assert_eq!(info.url.as_str(), url);
+    let error = info.error_page.as_ref().unwrap();
+    assert_eq!(error.unreachable_url.as_str(), url);
+    assert_eq!(error.error_text, error_text);
+    let captured = context
+        .start_capture_document_snapshot(committed.document)
+        .unwrap()
+        .wait()
+        .await;
+    let captured = context.finish_capture_document_snapshot(captured).unwrap();
+    assert!(captured.html.contains(html_marker), "{}", captured.html);
+    assert_eq!(
+        context.document_handle(contents).unwrap(),
+        Some(committed.document)
+    );
+    service.shutdown();
+}
+
 #[test]
 fn native_navigation_start_and_cancellation_publish_owner_occurrences() {
     let service = BrowserService::start().unwrap();
@@ -212,7 +293,7 @@ async fn navigate(
         .into_materialized_raw_response()
         .await
         .unwrap();
-    let destination = DocumentNavigationDestination {
+    let destination = DocumentNavigationDestination::Document {
         url: response.final_url.clone(),
         security_origin: response.final_url.origin().ascii_serialization(),
         secure_context_type: "SecureLocalhost".to_owned(),
@@ -903,7 +984,10 @@ async fn assert_native_popup_download(context_override: bool) {
     let responses = context.navigation_responses(popup).unwrap();
     assert_eq!(responses.len(), 1);
     assert_eq!(responses[0].request, request);
-    assert_eq!(responses[0].response.final_url.as_str(), url);
+    assert_eq!(
+        responses[0].response.as_ref().unwrap().final_url.as_str(),
+        url
+    );
     assert!(matches!(&responses[0].body, Some(Err(error)) if error == "net::ERR_ABORTED"));
     let replacement = context.start_document_navigation(popup).unwrap();
     assert!(context.navigation_responses(popup).unwrap().is_empty());
@@ -1017,6 +1101,15 @@ async fn assert_native_popup_request_release(drop_claim: bool) {
     let committed = tokio::time::timeout(std::time::Duration::from_secs(5), async {
         loop {
             match events.recv().await.unwrap().event {
+                BrowserEvent::InitialDocumentAwaitingInspection { web_contents, key }
+                    if web_contents == popup =>
+                {
+                    drop(
+                        context
+                            .claim_initial_document_inspection(web_contents, key)
+                            .unwrap(),
+                    );
+                }
                 BrowserEvent::DocumentCommitted(document)
                     if document.web_contents() == popup
                         && context.document_url(document).unwrap().as_str() == url =>

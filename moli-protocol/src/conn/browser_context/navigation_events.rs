@@ -64,10 +64,9 @@ impl CdpConnection {
             let mut releases = Vec::new();
             let mut native_failures = Vec::new();
             for navigation in retired {
-                if let Some((pending, _, _)) =
-                    context.observe_native_navigation_response(&target_id, navigation, true)
+                if let Some(failure) = context.take_failed_native_navigation(&target_id, navigation)
                 {
-                    native_failures.push(pending.navigation);
+                    native_failures.push(failure);
                 }
                 context.discard_target_navigation_projection(&target_id, &navigation);
                 if let Ok(release) = context
@@ -82,28 +81,75 @@ impl CdpConnection {
             Some((owner, releases, native_failures))
         })();
         self.network_request_id_allocator = allocator;
-        let Some((Some(owner), releases, native_failures)) = prepared else {
+        let Some((owner, releases, native_failures)) = prepared else {
             return events;
         };
         let mut out = CommandOutputBuffer::default();
         let mut command_context = CommandDispatchContext::default();
-        for state in native_failures {
+        for (state, emit_network) in native_failures {
             out.extend_background_events_after_messages(
-                crate::domains::network::native_navigation_failure_events(self, &state),
+                self.native_navigation_retirement_events(&state, emit_network),
             );
         }
-        for release in releases {
-            page::release_document_projection_output_async(
-                self,
-                &mut out,
-                &mut command_context,
-                &owner,
-                release,
-            )
-            .await;
+        if let Some(owner) = owner {
+            for release in releases {
+                page::release_document_projection_output_async(
+                    self,
+                    &mut out,
+                    &mut command_context,
+                    &owner,
+                    release,
+                )
+                .await;
+            }
         }
         out.extend_background_events_after_messages(command_context.take_protocol_events());
         events.extend(out.into_plan().into_background_events(None, None));
+        events
+    }
+
+    pub(crate) fn native_navigation_retirement_events(
+        &mut self,
+        pending: &crate::conn::PendingFetchNavigation,
+        emit_network: bool,
+    ) -> Vec<BackgroundProtocolEvent> {
+        let state = &pending.navigation;
+        let mut events = if emit_network {
+            crate::domains::network::native_navigation_failure_events(self, state)
+        } else {
+            Vec::new()
+        };
+        if state.navigate_id.is_some() {
+            let mut output = CommandOutputBuffer::default();
+            let interrupted = self
+                .browser_context_by_browser_id_mut(state.web_contents.context())
+                .and_then(|context| {
+                    let target = context
+                        .page_targets
+                        .get_for_web_contents(state.web_contents.id())?
+                        .target_id()
+                        .to_owned();
+                    context.page_targets.get_mut(&target)
+                })
+                .is_some_and(|target| {
+                    target
+                        .fetch_owner
+                        .retire_navigation_command(pending.navigation_permit.navigation())
+                });
+            if interrupted {
+                output.push_error_after_messages(
+                    -32000,
+                    "renderer channel navigation was superseded by a newer navigation",
+                );
+            } else {
+                page::push_superseded_navigation_result(&mut output, state);
+            }
+            events.extend(
+                output
+                    .into_plan()
+                    .into_background_events(state.navigate_id, state.owner.session_id()),
+            );
+        }
         events
     }
 }

@@ -136,7 +136,7 @@ impl RendererMainDocumentCommitSeed {
         } else {
             "InsecureScheme".to_owned()
         };
-        RendererMainDocumentCommit {
+        RendererMainDocumentCommit::Frame {
             frame_id: self.frame_id.clone(),
             loader_id: self.loader_id.clone(),
             url: final_url.as_str().to_owned(),
@@ -309,6 +309,38 @@ pub struct NavigationDispatchState {
 }
 
 impl NavigationDispatchState {
+    pub(crate) fn native_result_payload(
+        &self,
+        url: &Url,
+        error: Option<&str>,
+        download: bool,
+    ) -> Result<Value, String> {
+        if let Some(error) = error
+            && self.result_projection.protocol() != DevToolsProtocol::Cdp
+        {
+            return Err(error.to_owned());
+        }
+        let mut result = self.result_projection.payload().clone();
+        if let Some(payload) = result.as_object_mut() {
+            if payload.contains_key("url") {
+                payload.insert("url".into(), Value::String(url.to_string()));
+            }
+            if let Some(error) = error {
+                payload.insert("errorText".into(), Value::String(error.to_owned()));
+                payload.insert("isDownload".into(), Value::Bool(false));
+            }
+            if download {
+                payload.remove("loaderId");
+                payload.insert(
+                    "errorText".into(),
+                    Value::String(moli_fetch::NET_ERR_ABORTED_ERROR_TEXT.into()),
+                );
+                payload.insert("isDownload".into(), Value::Bool(true));
+            }
+        }
+        Ok(result)
+    }
+
     #[cfg(test)]
     pub(crate) fn detached_web_contents_for_test() -> WebContentsHandle {
         WebContentsHandle::new(

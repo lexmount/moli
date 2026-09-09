@@ -2291,6 +2291,64 @@ async fn target_lifecycle_ensure_installs_initial_about_blank_page_for_active_ta
 }
 
 #[tokio::test]
+async fn admitted_navigation_survives_dropped_protocol_observer() {
+    use moli_core::browser::{BrowserEvent, NavigationAttempt};
+
+    let mut conn = crate::test_support::connection();
+    conn.install_default_browser_target();
+    let target = DevToolsTargetId::from(conn.default_target_id());
+    ensure_initial_document_for_target_id_for_test(&mut conn, &target).await;
+    let contents = conn
+        .browser_context
+        .as_ref()
+        .unwrap()
+        .web_contents_handle_for_target(target.as_str())
+        .unwrap();
+    let browser = conn.browser.clone();
+    let context = browser.context_handle(contents.context()).unwrap();
+    let original = context.document_handle(contents).unwrap().unwrap();
+    let (_, mut events) = browser.subscribe().unwrap();
+    let url = "data:text/html,<title>observer-independent navigation</title>";
+    let command = conn.start_command_dispatch(
+        &json!({"id": 1, "method": "Page.navigate", "params": {"url": url}}).to_string(),
+    );
+    let Some(NavigationAttempt::Started(request)) =
+        context.navigation_snapshot(contents).unwrap().attempt
+    else {
+        panic!("Page.navigate must admit the exact Browser navigation before waiting");
+    };
+    assert_ne!(request.document, original.id());
+    // The protocol task observes an already admitted operation. Neither dropping
+    // that observation nor disconnecting the optional inspector cancels it.
+    drop(command);
+    drop(conn);
+    let committed = tokio::time::timeout(std::time::Duration::from_secs(5), async {
+        loop {
+            if let BrowserEvent::DocumentCommitted(document) = events.recv().await.unwrap().event
+                && document.web_contents() == contents
+                && document.id() == request.document
+            {
+                break document;
+            }
+        }
+    })
+    .await;
+    let snapshot = context.document_handle(contents).unwrap();
+    let actual_url = snapshot.map(|document| context.document_url(document).unwrap().to_string());
+    context
+        .close_web_contents(contents)
+        .unwrap()
+        .close_async()
+        .await;
+    assert!(
+        committed.is_ok(),
+        "Browser must complete the admitted request after its protocol observer exits; current URL: {actual_url:?}"
+    );
+    assert_eq!(snapshot, committed.ok());
+    assert_eq!(actual_url.as_deref(), Some(url));
+}
+
+#[tokio::test]
 async fn joined_initial_document_projects_after_the_first_observer_is_dropped() {
     let mut conn = crate::test_support::connection();
     let mut context = DevToolsCommandContext {
@@ -8686,7 +8744,6 @@ async fn devtools_network_intercept_commands_route_to_fetch_owner() {
     let preflight = conn
         .prepare_navigation_request_for_owner(&owner, &auth_url, None, false)
         .expect("auth-only intercept should prepare navigation preflight");
-    assert!(preflight.document_auth_required);
     assert_eq!(
         preflight
             .document_auth_required_blocked_intercepts

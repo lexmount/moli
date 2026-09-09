@@ -52,13 +52,13 @@ impl NavigationInterceptionPermit {
 /// Browser-owned main-document request data while Fetch is deciding whether
 /// and how to resume it. It deliberately contains no Target, session, loader,
 /// protocol request id, or frontend result state.
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub struct NavigationRequestInterception {
-    requested_url: Url,
-    method: String,
-    body: Option<Vec<u8>>,
-    headers: Vec<(String, String)>,
-    policy: NavigationRequestLoadPolicy,
+    pub requested_url: Url,
+    pub method: String,
+    pub body: Option<Vec<u8>>,
+    pub headers: Vec<(String, String)>,
+    pub policy: NavigationRequestLoadPolicy,
 }
 
 impl NavigationRequestInterception {
@@ -67,9 +67,7 @@ impl NavigationRequestInterception {
         opening: std::sync::Weak<crate::page::RendererPopupOpening>,
     ) -> crate::browser::NavigationDecisionStage {
         crate::browser::NavigationDecisionStage::Request {
-            url: self.requested_url.clone(),
-            method: self.method.clone(),
-            headers: self.headers.clone(),
+            request: self.clone(),
             opening,
         }
     }
@@ -472,21 +470,8 @@ impl PausedNavigationInterception {
                 renderer,
                 inspection,
             },
-            NavigationDecisionStage::Request {
-                url,
-                method,
-                headers,
-                opening,
-            } => InterceptionState::Request {
-                request: InterceptionResource::Available(Box::new(
-                    super::NavigationRequestInterception::new(
-                        url,
-                        method,
-                        None,
-                        headers,
-                        NavigationRequestLoadPolicy::DocumentInitiated,
-                    ),
-                )),
+            NavigationDecisionStage::Request { request, opening } => InterceptionState::Request {
+                request: InterceptionResource::Available(Box::new(request)),
                 opening,
             },
             NavigationDecisionStage::Auth { .. } | NavigationDecisionStage::Response { .. } => {
@@ -663,7 +648,9 @@ impl PausedNavigationInterception {
                     self.state,
                     InterceptionState::Request { .. } | InterceptionState::Response(_)
                 ),
-                NavigationDecision::Continue | NavigationDecision::Cancel => true,
+                NavigationDecision::Continue
+                | NavigationDecision::Cancel
+                | NavigationDecision::Fail { .. } => true,
             }
     }
 

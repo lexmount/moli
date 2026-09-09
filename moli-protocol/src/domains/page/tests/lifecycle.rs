@@ -594,10 +594,10 @@ async fn enable_non_blank_initial_url_loads_through_pending_navigation_path() {
         .conn
         .try_start_pending_command_dispatch(&raw)
         .expect("non-about:blank Page.enable should start initial URL navigation");
-    let (messages, scheduler_events) =
+    let (mut messages, scheduler_events) =
         complete_pending_command_task_for_test(&mut ctx, pending).await;
     assert!(
-        scheduler_events.iter().any(|event| matches!(
+        !scheduler_events.iter().any(|event| matches!(
             event,
             CdpSchedulerEvent::ProtocolWorkPublished { work }
                 if work.kind()
@@ -605,8 +605,23 @@ async fn enable_non_blank_initial_url_loads_through_pending_navigation_path() {
                     && work.main_document_load_session_id()
                         == Some("SID-PAGE-ENABLE-DATA")
         )),
-        "Page.enable initial navigation should schedule load completion activity: {scheduler_events:?}"
+        "Browser-owned initial navigation must not schedule the retired Protocol load executor: {scheduler_events:?}"
     );
+    let prefix = ctx.sent.len();
+    let is_initial_commit = |event: &serde_json::Value| {
+        event["method"] == "Page.frameNavigated"
+            && event["sessionId"] == "SID-PAGE-ENABLE-DATA"
+            && event["params"]["frame"]["url"] == page_url
+    };
+    if !messages.iter().any(is_initial_commit) {
+        wait_until_scheduler_message(
+            &mut ctx,
+            "initial URL native frame commit",
+            is_initial_commit,
+        )
+        .await;
+    }
+    messages.extend(ctx.sent.drain(prefix..));
     let response = messages
         .iter()
         .find(|message| message["id"] == json!(122))
@@ -2366,6 +2381,7 @@ async fn bare_isolated_worlds_do_not_persist_across_navigation() {
         "params": { "url": "data:text/html,<body>next</body>" }
     }))
     .await;
+    wait_until_navigation_document_load(&mut ctx, 52, Some("SID-1")).await;
 
     let sent = ctx.take_all();
     assert!(
@@ -2427,6 +2443,7 @@ async fn network_navigations_use_unique_document_loader_ids() {
         "params": { "url": first_url }
     }))
     .await;
+    wait_until_navigation_document_load(&mut ctx, 30, Some("SID-1")).await;
     let first_messages = ctx.take_all();
 
     ctx.process_async(json!({
@@ -2436,6 +2453,7 @@ async fn network_navigations_use_unique_document_loader_ids() {
         "params": { "url": second_url }
     }))
     .await;
+    wait_until_navigation_document_load(&mut ctx, 31, Some("SID-1")).await;
     let second_messages = ctx.take_all();
 
     fn document_loader_for(messages: &[serde_json::Value], id: u64) -> String {
@@ -2503,6 +2521,7 @@ async fn navigations_without_network_domain_still_use_unique_loader_ids() {
         "params": { "url": first_url }
     }))
     .await;
+    wait_until_navigation_document_load(&mut ctx, 30, Some("SID-1")).await;
     let first_messages = ctx.take_all();
 
     ctx.process_async(json!({
@@ -2512,6 +2531,7 @@ async fn navigations_without_network_domain_still_use_unique_loader_ids() {
         "params": { "url": second_url }
     }))
     .await;
+    wait_until_navigation_document_load(&mut ctx, 31, Some("SID-1")).await;
     let second_messages = ctx.take_all();
 
     fn document_loader_for(messages: &[serde_json::Value], id: u64) -> String {
@@ -3318,6 +3338,12 @@ async fn close_aborts_paused_auth_navigation_and_clears_state() {
     .await;
     ctx.expect_result(261, json!({}), Some("SID-1"));
 
+    wait_until_scheduler_message(&mut ctx, "navigation auth before close", |event| {
+        event["method"] == "Fetch.authRequired"
+            && event["sessionId"] == "SID-1"
+            && event["params"]["requestId"] == request_id
+    })
+    .await;
     let auth_required = ctx.take_one();
     assert_eq!(auth_required["method"], "Fetch.authRequired");
     assert_eq!(auth_required["params"]["requestId"], json!(request_id));

@@ -13,19 +13,6 @@ impl BrowserContext {
             })
     }
 
-    pub(in crate::conn) fn pause_navigation_request_for_target(
-        &mut self,
-        target: &str,
-        navigation: moli_core::browser::NavigationId,
-        request: crate::conn::state::NavigationRequestInterception,
-    ) -> Result<crate::conn::state::NavigationInterceptionPermit, String> {
-        let handle = self
-            .web_contents_handle_for_target(target)
-            .ok_or("navigation WebContents unavailable")?;
-        self.browser_context
-            .pause_navigation_request(handle, navigation, request)
-    }
-
     pub(in crate::conn) fn take_navigation_request(
         &mut self,
         permit: crate::conn::state::NavigationInterceptionPermit,

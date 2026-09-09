@@ -94,6 +94,36 @@ fn take_response_by_id(ctx: &mut TestContext, id: u64) -> Value {
     ctx.sent.remove(pos)
 }
 
+async fn wait_for_navigation_reply(ctx: &mut TestContext, id: u64) {
+    wait_until_scheduler_message(ctx, "original navigation command reply", |message| {
+        message["id"] == json!(id)
+    })
+    .await;
+}
+
+async fn wait_for_navigation_auth(ctx: &mut TestContext, session_id: &str, request_id: &str) {
+    wait_until_scheduler_message(ctx, "navigation authentication decision", |message| {
+        message["method"] == json!("Fetch.authRequired")
+            && message["sessionId"] == json!(session_id)
+            && message["params"]["requestId"] == json!(request_id)
+    })
+    .await;
+}
+
+async fn wait_for_navigation_response_pause(
+    ctx: &mut TestContext,
+    session_id: &str,
+    request_id: &str,
+) {
+    wait_until_scheduler_message(ctx, "navigation response decision", |message| {
+        message["method"] == json!("Fetch.requestPaused")
+            && message["sessionId"] == json!(session_id)
+            && message["params"]["requestId"] == json!(request_id)
+            && message["params"]["responseStatusCode"].is_number()
+    })
+    .await;
+}
+
 fn network_request_announced_before_fetch_pause(
     ctx: &TestContext,
     paused: &Value,
@@ -236,7 +266,17 @@ async fn take_main_document_request_pause(ctx: &mut TestContext) -> Value {
     }
 }
 
-fn take_main_document_response_pause(ctx: &mut TestContext) -> Value {
+async fn take_main_document_response_pause(ctx: &mut TestContext) -> Value {
+    wait_until_scheduler_message(
+        ctx,
+        "main-document response-stage Fetch.requestPaused",
+        |message| {
+            message["method"] == json!("Fetch.requestPaused")
+                && message["params"]["resourceType"] == json!("Document")
+                && message["params"]["responseStatusCode"].is_number()
+        },
+    )
+    .await;
     loop {
         let message = ctx.take_one();
         match message["method"].as_str() {

@@ -253,9 +253,6 @@ enum PendingPageCommandKind {
     Navigate(Box<navigation::PendingNavigateLoadCommand>),
     TraverseSameDocumentHistory(Box<navigation::PendingSameDocumentHistoryTraversalCommand>),
     ChildFrameNavigate(Box<navigation::PendingChildFrameNavigateCommand>),
-    ContinueNavigationWithoutRequestPause(
-        Box<navigation::PendingContinueNavigationWithoutRequestPauseCommand>,
-    ),
     StopLoading {
         pending: Option<PendingDocumentLifecycleStop>,
     },
@@ -328,9 +325,6 @@ enum CompletedPageCommandKind {
     Navigate(Box<navigation::CompletedNavigateLoadCommand>),
     TraverseSameDocumentHistory(Box<navigation::CompletedSameDocumentHistoryTraversalCommand>),
     ChildFrameNavigate(Box<navigation::CompletedChildFrameNavigateCommand>),
-    ContinueNavigationWithoutRequestPause(
-        Box<navigation::CompletedContinueNavigationWithoutRequestPauseCommand>,
-    ),
     StopLoading {
         completed: Option<CompletedDocumentLifecycleStop>,
     },
@@ -381,7 +375,6 @@ impl CompletedPageCommandKind {
             Self::BringToFront { .. }
             | Self::AddScriptToEvaluateOnNewDocument(_)
             | Self::Navigate(_)
-            | Self::ContinueNavigationWithoutRequestPause(_)
             | Self::Crash { .. }
             | Self::Close { .. }
             // createIsolatedWorld may restart on a replacement renderer attachment. Its
@@ -427,7 +420,6 @@ impl PendingPageCommandDispatch {
             | PendingPageCommandKind::Navigate(_)
             | PendingPageCommandKind::TraverseSameDocumentHistory(_)
             | PendingPageCommandKind::ChildFrameNavigate(_)
-            | PendingPageCommandKind::ContinueNavigationWithoutRequestPause(_)
             | PendingPageCommandKind::StopLoading { .. }
             | PendingPageCommandKind::Crash { .. }
             | PendingPageCommandKind::Close { .. }
@@ -540,11 +532,6 @@ impl PendingPageCommandDispatch {
             }
             PendingPageCommandKind::ChildFrameNavigate(pending) => {
                 CompletedPageCommandKind::ChildFrameNavigate(Box::new(pending.wait().await))
-            }
-            PendingPageCommandKind::ContinueNavigationWithoutRequestPause(pending) => {
-                CompletedPageCommandKind::ContinueNavigationWithoutRequestPause(Box::new(
-                    pending.wait().await,
-                ))
             }
             PendingPageCommandKind::StopLoading { pending } => {
                 CompletedPageCommandKind::StopLoading {
@@ -7920,23 +7907,12 @@ pub(crate) async fn complete_pending_page_command(
             .await;
         }
         CompletedPageCommandKind::Navigate(completed) => {
-            return navigation::complete_pending_navigate_load_command(
-                conn,
-                *completed,
-                command_context,
-            )
-            .await;
+            return navigation::complete_pending_navigate_load_command(conn, *completed).await;
         }
         CompletedPageCommandKind::TraverseSameDocumentHistory(completed) => {
             return navigation::complete_pending_same_document_history_traversal_command(
                 conn, command_id, *completed,
             );
-        }
-        CompletedPageCommandKind::ContinueNavigationWithoutRequestPause(completed) => {
-            return navigation::complete_pending_continue_navigation_without_request_pause_command(
-                conn, *completed,
-            )
-            .await;
         }
         CompletedPageCommandKind::StopLoading { completed } => {
             return termination::complete_stop_loading_command_dispatch(

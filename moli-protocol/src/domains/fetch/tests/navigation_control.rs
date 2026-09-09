@@ -94,6 +94,7 @@ async fn assert_stale_fetch_completion_preserves_winning_navigation(method: &str
         }))
         .await;
         ctx.expect_result(104, json!({}), Some("SID-1"));
+        crate::testing::wait_until_navigation_document_load(&mut ctx, 102, Some("SID-1")).await;
         let response = take_response_by_id(&mut ctx, 102);
         assert!(response.get("error").is_none(), "{response}");
         assert_eq!(response["result"]["frameId"], "TID-1");
@@ -323,6 +324,7 @@ async fn request_paused_then_continue_request_resumes_main_document_navigation()
         0
     );
     ctx.sent = messages;
+    wait_for_navigation_reply(&mut ctx, 31).await;
     ctx.expect_result(
         31,
         json!({ "frameId": "TID-1", "loaderId": LOADER_ID }),
@@ -414,6 +416,7 @@ async fn fail_request_blocked_by_client_maps_main_document_navigation_to_net_err
     .await;
 
     ctx.expect_result(305, json!({}), Some("SID-1"));
+    wait_for_navigation_reply(&mut ctx, 304).await;
     let failed = ctx.take_one();
     assert_eq!(failed["method"], "Network.loadingFailed");
     assert_eq!(failed["sessionId"], "SID-1");
@@ -480,6 +483,7 @@ async fn request_paused_then_continue_request_fails_when_network_offline() {
     }))
     .await;
     ctx.expect_result(16634, json!({}), Some("SID-1"));
+    wait_for_navigation_reply(&mut ctx, 16632).await;
     let failed = ctx.take_one();
     assert_eq!(failed["method"], "Network.loadingFailed");
     assert_eq!(failed["sessionId"], "SID-1");
@@ -580,6 +584,10 @@ async fn response_stage_document_pattern_pauses_main_document_after_response() {
     .await;
 
     ctx.expect_result(35, json!({}), Some("SID-1"));
+    wait_until_scheduler_message(&mut ctx, "continued navigation 34 reply", |message| {
+        message["id"] == json!(34)
+    })
+    .await;
     let messages = ctx.take_all();
     let request_events = messages
         .iter()
@@ -602,6 +610,7 @@ async fn response_stage_document_pattern_pauses_main_document_after_response() {
         .collect::<Vec<_>>();
     assert_eq!(response_paused_events.len(), 0);
     ctx.sent = messages;
+    wait_for_navigation_reply(&mut ctx, 34).await;
     ctx.expect_result(
         34,
         json!({ "frameId": "TID-1", "loaderId": LOADER_ID }),
@@ -666,6 +675,7 @@ async fn disable_neutrally_resumes_paused_response_stage_navigation() {
     }))
     .await;
     ctx.expect_result(352, json!({}), Some("SID-1"));
+    crate::testing::wait_until_navigation_document_load(&mut ctx, 351, Some("SID-1")).await;
     assert!(ctx.take_response_by_id(351)["result"].is_object());
     assert!(!ctx.sent.iter().any(|message| {
         message["method"] == json!("Network.loadingFailed")
@@ -741,6 +751,7 @@ async fn document_url_pattern_only_pauses_matching_main_document() {
         "params": { "url": plain_url }
     }))
     .await;
+    wait_for_navigation_reply(&mut ctx, 395).await;
     let _ = take_response_by_id(&mut ctx, 395);
     assert!(
         !ctx.sent
@@ -832,6 +843,7 @@ async fn continue_request_with_post_data_marks_network_request_as_having_post_da
     .await;
     ctx.expect_result(342, json!({}), Some("SID-1"));
 
+    crate::testing::wait_until_navigation_document_load(&mut ctx, 341, Some("SID-1")).await;
     ctx.expect_result(
         341,
         json!({ "frameId": "TID-1", "loaderId": LOADER_ID }),
@@ -1061,6 +1073,7 @@ async fn continue_request_with_intercept_response_pauses_after_response_until_co
     }))
     .await;
     ctx.expect_result(322, json!({}), Some("SID-1"));
+    wait_for_navigation_response_pause(&mut ctx, "SID-1", "INT-1").await;
 
     assert!(
         !ctx.sent
@@ -1126,6 +1139,11 @@ async fn continue_request_with_intercept_response_pauses_after_response_until_co
     }))
     .await;
     ctx.expect_result(324, json!({}), Some("SID-1"));
+    wait_until_scheduler_message(&mut ctx, "continued navigation 321 reply", |message| {
+        message["id"] == json!(321)
+    })
+    .await;
+    wait_for_navigation_reply(&mut ctx, 321).await;
     ctx.expect_result(
         321,
         json!({ "frameId": "TID-1", "loaderId": LOADER_ID }),
@@ -1247,6 +1265,7 @@ async fn disable_failure_still_neutrally_settles_the_drained_navigation() {
             .is_some_and(|message| message.contains("failed to clear page fetch interception")),
         "{disable}"
     );
+    wait_for_navigation_reply(&mut ctx, 2).await;
     assert_eq!(
         ctx.sent
             .iter()
@@ -1334,6 +1353,7 @@ async fn disable_neutrally_resumes_paused_main_document_navigation() {
     .await;
     ctx.expect_result(80, json!({}), Some("SID-1"));
 
+    crate::testing::wait_until_navigation_document_load(&mut ctx, 79, Some("SID-1")).await;
     assert!(ctx.take_response_by_id(79)["result"].is_object());
     assert!(
         !ctx.sent.iter().any(|message| {

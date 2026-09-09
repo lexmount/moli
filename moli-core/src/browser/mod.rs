@@ -37,9 +37,9 @@ pub use emulation::{
 };
 pub use events::{
     BrowserEvent, BrowserEventReceiver, BrowserEventRecord, BrowserSnapshot,
-    DocumentLifecycleSnapshot, JavaScriptDialogOpened, NavigationAttempt, NavigationFailureReason,
-    NavigationRequest, NavigationResponseSnapshot, NavigationSnapshot, WebContentsSelection,
-    WebContentsSnapshot,
+    DocumentLifecycleSnapshot, JavaScriptDialogOpened, NavigationAttempt, NavigationError,
+    NavigationFailureReason, NavigationFetchFailure, NavigationRequest, NavigationResponseSnapshot,
+    NavigationSnapshot, WebContentsSelection, WebContentsSnapshot,
 };
 pub use navigation_decision::{
     DocumentDecisionProvider, NavigationDecision, NavigationDecisionSnapshot,
@@ -49,9 +49,9 @@ pub use owner::{
     BrowserCommittedInitialDocument, BrowserContextHandle, BrowserDocumentMaterialization,
     BrowserDocumentNavigationCommit, BrowserHandle, BrowserInitialDocumentWaiter,
     BrowserInterceptedNavigationLoad, BrowserInterceptedNavigationResponse, BrowserNavigationLoad,
-    BrowserPreparedDocumentNavigation, BrowserPreparedNavigationResponse, BrowserService,
-    PendingDocumentRetirement, PendingWebContentsActivation, PendingWebContentsClose,
-    WebContentsCreation,
+    BrowserNavigationOutcome, BrowserNavigationWaiter, BrowserPreparedDocumentNavigation,
+    BrowserPreparedNavigationResponse, BrowserService, PendingDocumentRetirement,
+    PendingWebContentsActivation, PendingWebContentsClose, WebContentsCreation,
 };
 pub use permissions::{PermissionDefaults, PermissionOverrides};
 pub use popup::{BrowserPopupAdmission, BrowserPopupCreation};

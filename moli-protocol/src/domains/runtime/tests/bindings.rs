@@ -753,6 +753,7 @@ async fn remove_binding_prevents_scoped_binding_replay_across_navigation() {
         "params": { "url": "data:text/html,<body>after</body>" }
     }))
     .await;
+    crate::testing::wait_until_navigation_document_load(&mut ctx, 509, Some("SID-1")).await;
     let navigation_messages = ctx.take_all();
     let replayed_context_id = navigation_messages
         .iter()

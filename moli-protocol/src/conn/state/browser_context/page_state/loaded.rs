@@ -4,7 +4,7 @@ use crate::conn::state::{DevToolsRendererChannelError, DocumentId, DocumentProje
 use crate::conn::{BrowserContext, PageAgentHost, TargetRuntimeSlot};
 use moli_core::browser::web_contents::DocumentNavigationDestination;
 use moli_core::browser::{
-    BrowserDocumentMaterialization, BrowserNavigationLoad, BrowserPreparedDocumentNavigation,
+    BrowserDocumentMaterialization, BrowserPreparedDocumentNavigation,
     BrowserPreparedNavigationResponse, PendingDocumentRetirement,
 };
 use moli_core::page::RendererPageCommandPostResponseContinuation;
@@ -323,6 +323,7 @@ impl BrowserContext {
         )
     }
 
+    #[cfg(test)]
     pub(in crate::conn) fn start_navigation_load_for_target(
         &mut self,
         target_id: &str,
@@ -330,7 +331,7 @@ impl BrowserContext {
         policy: moli_core::browser::NavigationRequestLoadPolicy,
         fetch_defaults: moli_fetch::FetchConfig,
         browser_globals: &crate::conn::BrowserGlobalOverrides,
-    ) -> Result<BrowserNavigationLoad, String> {
+    ) -> Result<moli_core::browser::BrowserNavigationLoad, String> {
         let inherited = self.browser_context.inherited_document_policy(
             fetch_defaults,
             &browser_globals.extra_headers,

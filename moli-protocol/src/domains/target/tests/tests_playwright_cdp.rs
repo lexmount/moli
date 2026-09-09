@@ -892,6 +892,7 @@ async fn playwright_connect_over_cdp_auto_attach_child_frame_utility_script_uses
         "params": { "url": warmup_url }
     }))
     .await;
+    crate::testing::wait_until_navigation_document_load(&mut ctx, 53_141, Some(&session_id)).await;
     let warmup_navigation = take_response_by_id(&mut ctx, 53_141);
     assert_eq!(warmup_navigation["sessionId"], json!(session_id));
     assert!(
@@ -944,6 +945,7 @@ async fn playwright_connect_over_cdp_auto_attach_child_frame_utility_script_uses
         "params": { "url": url }
     }))
     .await;
+    crate::testing::wait_until_navigation_document_load(&mut ctx, 5315, Some(&session_id)).await;
     let navigation = take_response_by_id(&mut ctx, 5315);
     assert_eq!(navigation["sessionId"], json!(session_id));
     assert!(
@@ -1852,6 +1854,7 @@ async fn playwright_over_cdp_navigation_multi_hop_redirect_preserves_history_hea
         }
     }))
     .await;
+    crate::testing::wait_until_navigation_document_load(&mut ctx, 2277, Some(&session_id)).await;
     let _ = take_response_by_id(&mut ctx, 2277);
     assert!(
         ctx.sent
@@ -2021,6 +2024,7 @@ async fn playwright_over_cdp_redirected_html_content_matches_final_document() {
         "params": { "url": start_url }
     }))
     .await;
+    crate::testing::wait_until_navigation_document_load(&mut ctx, 2284, Some(&session_id)).await;
     let _ = take_response_by_id(&mut ctx, 2284);
     assert!(
         ctx.sent
@@ -2157,6 +2161,7 @@ async fn playwright_over_cdp_response_factory_surfaces_redirect_history_html_and
         "params": { "url": start_url }
     }))
     .await;
+    crate::testing::wait_until_navigation_document_load(&mut ctx, 22865, Some(&session_id)).await;
     let _ = take_response_by_id(&mut ctx, 22865);
     assert!(
         ctx.sent

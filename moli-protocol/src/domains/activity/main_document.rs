@@ -1111,7 +1111,10 @@ mod tests {
             .enable_primary_network_events();
         conn.install_browser_context_fixture_for_test(browser_context);
 
-        let state = navigation_state();
+        let state = NavigationDispatchState {
+            owner: CommandOwnerScope::capture(&conn, Some("SID-page")),
+            ..navigation_state()
+        };
         let final_url = Url::parse("https://example.test/download").unwrap();
         let materialized = materialize_navigation_load_result(
             &mut conn,

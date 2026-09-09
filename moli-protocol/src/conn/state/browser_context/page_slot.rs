@@ -951,6 +951,7 @@ impl BrowserContext {
             .root_post_load_observation = None;
     }
 
+    #[cfg(any(test, feature = "test-support"))]
     pub(crate) fn begin_target_document_navigation(
         &mut self,
         target_id: &str,
@@ -1136,6 +1137,17 @@ impl BrowserContext {
                 .is_some_and(|binding| binding.renderer_page() == renderer_page)
     }
 
+    pub(in crate::conn) fn prepared_navigation_projection_matches(
+        &self,
+        target: &str,
+        navigation: NavigationId,
+        document: DocumentId,
+    ) -> bool {
+        matches!(self.page_slot_for_target(target).and_then(|slot| slot.pending_renderer_page.as_ref()),
+            Some(PendingRendererPageBinding::DocumentNavigation { navigation: prepared, document_id, .. })
+            if *prepared == navigation && *document_id == document)
+    }
+
     pub(crate) fn accepts_pending_document_navigation_event_for_target(
         &self,
         target_id: &str,
@@ -1171,6 +1183,7 @@ impl BrowserContext {
             })
     }
 
+    #[cfg(test)]
     pub(in crate::conn) fn pending_navigation_id_for_loader(
         &self,
         target_id: &str,
@@ -1331,7 +1344,9 @@ impl BrowserContext {
         {
             projection.loader_id = state.navigation.loader_id.clone();
             if let Some(native) = projection.native_dispatch.as_deref_mut() {
+                let navigate_id = native.request.navigation.navigate_id;
                 native.request = state;
+                native.request.navigation.navigate_id = navigate_id;
             } else {
                 projection.native_dispatch = Some(Box::new(NativeNavigationProjection {
                     request: state,
@@ -1394,6 +1409,27 @@ impl BrowserContext {
         true
     }
 
+    /// Command reply progress is consumed once independently of response/body
+    /// publication. Updating request metadata must not re-arm an emitted reply.
+    pub(in crate::conn) fn take_native_navigation_command(
+        &mut self,
+        target_id: &str,
+        navigation: NavigationId,
+    ) -> Option<crate::conn::NavigationDispatchState> {
+        let native = self
+            .page_slot_for_target_mut(target_id)?
+            .cdp_navigation_loaders
+            .iter_mut()
+            .find(|(id, _)| *id == navigation)?
+            .1
+            .native_dispatch
+            .as_deref_mut()?;
+        let id = native.request.navigation.navigate_id.take()?;
+        let mut state = native.request.navigation.clone();
+        state.navigate_id = Some(id);
+        Some(state)
+    }
+
     pub(in crate::conn) fn observe_native_navigation_response(
         &mut self,
         target_id: &str,
@@ -1439,6 +1475,36 @@ impl BrowserContext {
         {
             native.response_phase = NativeResponsePhase::Paused;
         }
+    }
+
+    pub(in crate::conn) fn take_failed_native_navigation(
+        &mut self,
+        target: &str,
+        navigation: NavigationId,
+    ) -> Option<(crate::conn::PendingFetchNavigation, bool)> {
+        let mut pending = self.native_navigation_dispatch(target, navigation)?.clone();
+        let command = self.take_native_navigation_command(target, navigation);
+        let emit_network = self
+            .observe_native_navigation_response(target, navigation, true)
+            .is_some();
+        pending.navigation.navigate_id = command.and_then(|state| state.navigate_id);
+        (emit_network || pending.navigation.navigate_id.is_some())
+            .then_some((pending, emit_network))
+    }
+
+    pub(in crate::conn) fn native_navigation_response_completed(
+        &self,
+        target_id: &str,
+        navigation: NavigationId,
+    ) -> bool {
+        self.page_slot_for_target(target_id)
+            .and_then(|slot| {
+                slot.cdp_navigation_loaders
+                    .iter()
+                    .find(|(id, _)| *id == navigation)
+            })
+            .and_then(|(_, projection)| projection.native_dispatch.as_deref())
+            .is_some_and(|native| native.response_phase == NativeResponsePhase::Complete)
     }
 
     pub(in crate::conn) fn observe_popup_navigation(
@@ -2224,7 +2290,7 @@ mod native_navigation_projection_tests {
                 interception_session_id: None,
                 navigation_permit: permit,
                 navigation: NavigationDispatchState {
-                    navigate_id: None,
+                    navigate_id: Some(41),
                     owner: CommandOwnerScope::for_session("SID-native"),
                     web_contents: contents,
                     result_projection: NavigationResultProjection::Cdp(serde_json::json!({})),
@@ -2252,6 +2318,13 @@ mod native_navigation_projection_tests {
                 PAGE_SLOT_TEST_TARGET,
                 navigation,
                 pending.clone(),
+            );
+            assert_eq!(
+                context
+                    .take_native_navigation_command(PAGE_SLOT_TEST_TARGET, navigation)
+                    .unwrap()
+                    .navigate_id,
+                Some(41)
             );
             assert!(context.observe_native_auth_decision(PAGE_SLOT_TEST_TARGET, permit));
             context.observe_popup_navigation(PAGE_SLOT_TEST_TARGET, navigation);
@@ -2288,6 +2361,12 @@ mod native_navigation_projection_tests {
                 pending.navigation.request_headers
             );
             assert!(!context.observe_native_auth_decision(PAGE_SLOT_TEST_TARGET, permit));
+            assert!(
+                context
+                    .take_native_navigation_command(PAGE_SLOT_TEST_TARGET, navigation)
+                    .is_none(),
+                "metadata updates must not re-arm a published command reply"
+            );
             assert!(context.popup_navigation_observed(PAGE_SLOT_TEST_TARGET, navigation));
             let completed =
                 context.observe_native_navigation_response(PAGE_SLOT_TEST_TARGET, navigation, true);

@@ -2532,15 +2532,22 @@ localStorage.getItem("prepared-commit")
 
 #[tokio::test]
 async fn prepared_response_inspection_projects_commit_before_execution_contexts() {
-    assert_prepared_response_inspection_order(false).await;
+    assert_prepared_response_inspection_order(false, false).await;
 }
 
 #[tokio::test]
 async fn prepared_response_inspection_reattaches_reset_before_commit_and_contexts() {
-    assert_prepared_response_inspection_order(true).await;
+    assert_prepared_response_inspection_order(true, false).await;
 }
 
-async fn assert_prepared_response_inspection_order(reattach: bool) {
+#[tokio::test]
+async fn prepared_response_inspection_native_commit_preserves_reset_and_context_order() {
+    for reattach in [false, true] {
+        assert_prepared_response_inspection_order(reattach, true).await;
+    }
+}
+
+async fn assert_prepared_response_inspection_order(reattach: bool, native: bool) {
     let runtime = JsRuntime::initialize();
     let loader = ResourceRequestClient::new(&Default::default()).unwrap();
     let v8_attach = if reattach {
@@ -2596,19 +2603,23 @@ async fn assert_prepared_response_inspection_order(reattach: bool) {
         .await_ready()
         .await
         .unwrap();
-    let commit = super::RendererMainDocumentCommit {
-        frame_id: "FRAME-projected-response".into(),
-        loader_id: "LOADER-projected-response".into(),
-        url: url.as_str().into(),
-        unreachable_url: None,
-        security_origin: "https://example.test".into(),
-        secure_context_type: "Secure".into(),
-        timestamp: 1.0,
+    let commit = if native {
+        super::RendererMainDocumentCommit::Browser
+    } else {
+        super::RendererMainDocumentCommit::Frame {
+            frame_id: "FRAME-projected-response".into(),
+            loader_id: "LOADER-projected-response".into(),
+            url: url.as_str().into(),
+            unreachable_url: None,
+            security_origin: "https://example.test".into(),
+            secure_context_type: "Secure".into(),
+            timestamp: 1.0,
+        }
     };
     let configured = prepared
         .inspection_configuration_endpoint()
         .start_configure(RendererPreparedDocumentInspectionConfiguration {
-            root_frame_projection_id: Some(commit.frame_id.clone()),
+            root_frame_projection_id: Some("FRAME-projected-response".into()),
             main_document_commit: Some(commit.clone()),
             runtime_inspector_session_restore_snapshots: vec![
                 RendererInspectorSessionRestoreSnapshot {
@@ -2649,7 +2660,7 @@ async fn assert_prepared_response_inspection_order(reattach: bool) {
                         Some("Runtime.executionContextCreated") => {
                             assert_eq!(
                                 message["params"]["context"]["auxData"]["frameId"],
-                                commit.frame_id
+                                "FRAME-projected-response"
                             );
                             ordered.push("context");
                         }

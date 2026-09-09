@@ -342,7 +342,8 @@ pub(crate) struct DevToolsRendererChannel {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum NavigationProjectionOwner {
-    CommandResponse,
+    #[cfg(any(test, feature = "test-support"))]
+    Fixture,
     BrowserObservation,
 }
 
@@ -442,6 +443,7 @@ impl DevToolsRendererChannel {
         Ok(())
     }
 
+    #[cfg(any(test, feature = "test-support"))]
     pub(crate) fn begin_document_projection(
         &mut self,
         navigation: NavigationId,
@@ -452,7 +454,7 @@ impl DevToolsRendererChannel {
             return Err(DevToolsRendererChannelError::DuplicateNavigation);
         }
         self.pending_document_navigations
-            .insert(navigation, NavigationProjectionOwner::CommandResponse);
+            .insert(navigation, NavigationProjectionOwner::Fixture);
         if !was_pending {
             self.held_attachment = self.current();
         }
@@ -765,6 +767,7 @@ impl DevToolsRendererChannel {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum DevToolsRendererChannelError {
     Closed,
+    #[cfg(any(test, feature = "test-support"))]
     DuplicateNavigation,
     ProjectionPending,
     StaleProjectionFence,
@@ -776,6 +779,7 @@ impl fmt::Display for DevToolsRendererChannelError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter.write_str(match self {
             Self::Closed => "renderer channel is closed",
+            #[cfg(any(test, feature = "test-support"))]
             Self::DuplicateNavigation => "renderer channel navigation is already in flight",
             Self::ProjectionPending => "renderer Document projection is still pending",
             Self::StaleProjectionFence => "renderer Document projection fence is stale",

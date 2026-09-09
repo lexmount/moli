@@ -4216,7 +4216,13 @@ impl PageVm {
         // prepared replacements and leave newly created Pages on the legacy
         // in-memory lifecycle queue.
         if let Some(environment) = runtime_hooks.renderer_page_script_environment.as_ref() {
-            document_lifecycle.bind_output_journal(environment.output_journal());
+            document_lifecycle.bind_output_journal(
+                environment.output_journal(),
+                matches!(
+                    env.main_document_commit,
+                    Some(super::RendererMainDocumentCommit::Browser)
+                ),
+            );
         }
         // Initial Page creation binds the stable owner-local producer routes
         // while reserving the document isolate above. Resolve every typed

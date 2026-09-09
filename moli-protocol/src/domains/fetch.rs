@@ -50,7 +50,6 @@ pub(crate) use helpers::{
 };
 #[cfg(test)]
 pub(crate) use moli_fetch::url_pattern_matches;
-pub(crate) use navigation::continue_navigation_without_request_pause_into_buffer_async;
 pub(crate) use navigation::prepare_navigation_response_stage;
 pub(crate) use navigation::register_navigation_auth_required_event_for_permit;
 use params::EnableParams;

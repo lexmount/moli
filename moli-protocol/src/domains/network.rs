@@ -110,10 +110,10 @@ pub(crate) use main_document_progress::{
     emit_child_document_navigation_network_background_events,
     emit_fetch_navigation_initial_request_for_pause_background_events,
     materialize_loaded_navigation_progress, materialize_navigation_load_result,
-    native_navigation_failure_events, native_navigation_response_events,
-    record_completed_main_document_response_body, record_failed_main_document_response_body,
-    record_main_document_request_body, response_stage_main_document_navigation_network_progress,
-    start_observed_main_document_navigation_progress_background_events,
+    native_error_document_finished_events, native_navigation_failure_events,
+    native_navigation_response_events, record_completed_main_document_response_body,
+    record_failed_main_document_response_body, record_main_document_request_body,
+    response_stage_main_document_navigation_network_progress,
 };
 pub(crate) use output::{
     TargetSubresourceFetchPauseNetworkOutput, TargetSubresourceFetchPauseOutput,

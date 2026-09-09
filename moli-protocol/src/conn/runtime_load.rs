@@ -11,7 +11,6 @@ use moli_fetch::{
     BrowserNavigationRequestKind, FetchConfig, NetworkFetchFailureContext, NetworkFetchResult,
     NetworkObservationJournal, RawResponse, ResponseHead, StreamingRawResponse,
 };
-use serde_json::Value;
 use std::sync::Arc;
 use tokio::sync::{mpsc, oneshot};
 use url::Url;
@@ -574,7 +573,6 @@ pub(crate) struct BackgroundNavigationLoadJob {
     load: AdmittedNavigationLoad,
     reply_boundary: RendererReplyBoundary,
     page_vm_init_stage: PageVmInitStage,
-    early_result: Option<BackgroundNavigationEarlyResult>,
     load_inputs: TargetNavigationLoadInputs,
     method: String,
     raw_url: String,
@@ -594,13 +592,6 @@ pub(crate) struct BackgroundStreamingResponseNavigationLoadJob {
     response_code: Option<u16>,
     response_headers_override: Vec<(String, String)>,
     body_progress_source: MainDocumentBodyProgressSource,
-}
-
-pub(crate) struct BackgroundNavigationEarlyResult {
-    sender: BackgroundEventSender,
-    navigate_id: u64,
-    session_id: Option<String>,
-    result_payload: Value,
 }
 
 pub(crate) struct BackgroundNavigationBodyCompletionSink {
@@ -648,61 +639,14 @@ impl BackgroundNavigationBodyCompletionSink {
     }
 }
 
-impl BackgroundNavigationEarlyResult {
-    pub(crate) fn new(
-        sender: BackgroundEventSender,
-        navigate_id: u64,
-        session_id: Option<String>,
-        result_payload: Value,
-    ) -> Self {
-        Self {
-            sender,
-            navigate_id,
-            session_id,
-            result_payload,
-        }
-    }
-
-    fn emit(self) -> bool {
-        let session_id = self.session_id;
-        self.sender
-            .send(BackgroundProtocolEvent::command_success(
-                Some(self.navigate_id),
-                session_id.as_deref(),
-                self.result_payload,
-            ))
-            .is_ok()
-    }
-}
-
 impl BackgroundNavigationLoadJob {
-    fn emit_early_result_for_successful_document(
-        early_result: &mut Option<BackgroundNavigationEarlyResult>,
-        navigation: &Result<NavigationLoadOutcome, String>,
-    ) -> bool {
-        let is_successful_document = match navigation {
-            Ok(NavigationLoadOutcome::ResponseCommitReady(navigation)) => {
-                navigation.network_error_page.is_none()
-            }
-            _ => false,
-        };
-        if !is_successful_document {
-            return false;
-        }
-        early_result
-            .take()
-            .is_some_and(BackgroundNavigationEarlyResult::emit)
-    }
-
     pub(crate) async fn run(
-        mut self,
+        self,
         body_completion_sink: Option<BackgroundNavigationBodyCompletionSink>,
-    ) -> (Result<NavigationLoadOutcome, String>, bool) {
+    ) -> Result<NavigationLoadOutcome, String> {
         let timing_started = moli_trace::cdp_nav_timing_enabled().then(std::time::Instant::now);
         let timing_url = self.raw_url.clone();
         let mut load = self.load;
-        let mut early_result = self.early_result.take();
-        let mut early_result_sent = false;
         let navigation = async {
             if let Some(navigation) = load_inline_html_navigation_with_load_async(
                 &mut load,
@@ -715,8 +659,6 @@ impl BackgroundNavigationLoadJob {
             )
             .await
             {
-                early_result_sent =
-                    Self::emit_early_result_for_successful_document(&mut early_result, &navigation);
                 return navigation;
             }
 
@@ -731,8 +673,6 @@ impl BackgroundNavigationLoadJob {
             )
             .await
             {
-                early_result_sent =
-                    Self::emit_early_result_for_successful_document(&mut early_result, &navigation);
                 return navigation;
             }
 
@@ -801,15 +741,7 @@ impl BackgroundNavigationLoadJob {
                 .into_parts_with_observation_journal();
             let reserved_service_worker_client = navigation_response.reserved_service_worker_client;
             let document_fetch_context_seed = navigation_response.document_fetch_context_seed;
-            let defer_early_result_for_http_error_body =
-                response_status_may_use_http_error_page(response.status);
-            if !super::downloads::response_headers_indicate_download(&response.headers)
-                && !defer_early_result_for_http_error_body
-                && let Some(early_result) = early_result.take()
-            {
-                early_result_sent = early_result.emit();
-            }
-            let navigation = build_navigation_from_streaming_raw_response_with_load_async(
+            build_navigation_from_streaming_raw_response_with_load_async(
                 &mut load,
                 &self.load_inputs,
                 requested_url,
@@ -826,12 +758,7 @@ impl BackgroundNavigationLoadJob {
                 self.reply_boundary,
                 self.page_vm_init_stage,
             )
-            .await;
-            if defer_early_result_for_http_error_body {
-                early_result_sent =
-                    Self::emit_early_result_for_successful_document(&mut early_result, &navigation);
-            }
-            navigation
+            .await
         }
         .await;
         if let Some(started) = timing_started {
@@ -842,7 +769,7 @@ impl BackgroundNavigationLoadJob {
                 elapsed_ms = started.elapsed().as_millis(),
             );
         }
-        (navigation, early_result_sent)
+        navigation
     }
 }
 
@@ -1414,6 +1341,7 @@ impl CdpConnection {
         Ok(load)
     }
 
+    #[cfg(test)]
     fn navigation_admission_identity(
         &self,
         navigation: &NavigationDispatchState,
@@ -1430,6 +1358,7 @@ impl CdpConnection {
         Ok((context_id, target_id, token))
     }
 
+    #[cfg(test)]
     fn admit_navigation_load(
         &mut self,
         navigation: &NavigationDispatchState,
@@ -1524,14 +1453,22 @@ impl CdpConnection {
             .main_document_commit
             .as_ref()
             .ok_or("loaded navigation is missing its frozen main Document commit identity")?;
-        let destination = DocumentNavigationDestination {
+        let RendererMainDocumentCommit::Frame {
+            security_origin,
+            secure_context_type,
+            ..
+        } = commit.as_ref()
+        else {
+            return Err("caller-driven navigation requires its frozen frame projection".to_owned());
+        };
+        let destination = DocumentNavigationDestination::Document {
             url: response
                 .network_error_page
                 .as_ref()
                 .map(|error| error.unreachable_url().clone())
                 .unwrap_or_else(|| response.final_url.clone()),
-            security_origin: commit.security_origin.clone(),
-            secure_context_type: commit.secure_context_type.clone(),
+            security_origin: security_origin.clone(),
+            secure_context_type: secure_context_type.clone(),
         };
         let page = response
             .prepared_page
@@ -2023,7 +1960,6 @@ impl CdpConnection {
             load,
             reply_boundary: RendererReplyBoundary::Stage,
             page_vm_init_stage: PageVmInitStage::DomContentLoaded,
-            early_result: None,
             load_inputs: self.navigation_load_inputs_for_navigation(navigation),
             method,
             raw_url: requested_url.to_string(),
@@ -2033,7 +1969,6 @@ impl CdpConnection {
         }
         .run(None)
         .await
-        .0
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -2053,7 +1988,6 @@ impl CdpConnection {
             load,
             reply_boundary: RendererReplyBoundary::Stage,
             page_vm_init_stage: PageVmInitStage::DomContentLoaded,
-            early_result: None,
             load_inputs,
             method: method.to_owned(),
             raw_url: raw_url.to_owned(),
@@ -2063,49 +1997,6 @@ impl CdpConnection {
         }
         .run(None)
         .await
-        .0
-    }
-
-    pub(crate) fn navigation_load_job_for_navigation(
-        &mut self,
-        token: &NavigationId,
-        navigation: &NavigationDispatchState,
-        body_progress_source: MainDocumentBodyProgressSource,
-        early_result: Option<BackgroundNavigationEarlyResult>,
-    ) -> Option<BackgroundNavigationLoadJob> {
-        if self.navigation_admission_identity(navigation).ok()?.2 != *token {
-            return None;
-        }
-        let load = self.admit_navigation_load(navigation).ok()?;
-        Some(BackgroundNavigationLoadJob {
-            load,
-            reply_boundary: RendererReplyBoundary::DocumentCommit,
-            page_vm_init_stage: PageVmInitStage::DomContentLoaded,
-            early_result,
-            load_inputs: self.navigation_load_inputs_for_navigation(navigation),
-            method: navigation.request_method.clone(),
-            raw_url: navigation.requested_url.to_string(),
-            body: navigation.clone_request_body_bytes(),
-            request_headers: navigation.request_headers.clone(),
-            body_progress_source,
-        })
-    }
-
-    pub(crate) fn background_navigation_load_job_for_navigation(
-        &mut self,
-        token: &NavigationId,
-        navigation: &NavigationDispatchState,
-        body_progress_source: MainDocumentBodyProgressSource,
-        early_result: Option<BackgroundNavigationEarlyResult>,
-    ) -> Option<BackgroundNavigationLoadJob> {
-        let job = self.navigation_load_job_for_navigation(
-            token,
-            navigation,
-            body_progress_source,
-            early_result,
-        )?;
-        self.arm_background_navigation_completion(token, None)
-            .then_some(job)
     }
 
     pub(crate) fn background_streaming_response_navigation_load_job_for_navigation(
@@ -2218,7 +2109,6 @@ impl CdpConnection {
             load,
             reply_boundary: RendererReplyBoundary::Stage,
             page_vm_init_stage: PageVmInitStage::Load,
-            early_result: None,
             load_inputs,
             method: "GET".to_owned(),
             raw_url: raw_url.to_owned(),
@@ -2227,8 +2117,7 @@ impl CdpConnection {
             body_progress_source: MainDocumentBodyProgressSource::default(),
         }
         .run(None)
-        .await
-        .0?;
+        .await?;
         match navigation {
             NavigationLoadOutcome::ResponseCommitReady(navigation) => {
                 self.start_response_document_materialization_for_owner(owner, token, *navigation)?
@@ -2966,11 +2855,9 @@ async fn prepare_captured_document_response_with_load_async(
 #[cfg(test)]
 mod tests {
     use super::{
-        BackgroundNavigationEarlyResult, decode_data_url_body, decode_data_url_response,
-        decode_text_html_data_url, decoded_data_url_navigation_response,
-        inline_html_navigation_source,
+        decode_data_url_body, decode_data_url_response, decode_text_html_data_url,
+        decoded_data_url_navigation_response, inline_html_navigation_source,
     };
-    use serde_json::json;
 
     #[test]
     fn decode_text_html_data_url_uses_data_url_processor() {
@@ -3062,35 +2949,5 @@ mod tests {
         assert!(navigation_response.response.cookie_set_reports.is_empty());
         assert!(!navigation_response.response.redirected);
         assert!(navigation_response.response.redirect_chain.is_empty());
-    }
-
-    #[test]
-    fn background_navigation_early_result_emits_typed_command_response() {
-        let (sender, mut receiver) = tokio::sync::mpsc::unbounded_channel();
-        let early_result = BackgroundNavigationEarlyResult::new(
-            sender,
-            42,
-            Some("SID-nav".to_owned()),
-            json!({ "frameId": "FRAME-1", "loaderId": "LOADER-1" }),
-        );
-
-        assert!(early_result.emit());
-        let event = receiver
-            .try_recv()
-            .expect("early navigation result should be sent");
-
-        assert_eq!(event.protocol_message_id(), Some(42));
-        assert!(
-            event.protocol_message().is_none(),
-            "early Page.navigate result should stay as a typed command response until wire projection"
-        );
-        assert_eq!(
-            event.into_protocol_message(),
-            json!({
-                "id": 42,
-                "result": { "frameId": "FRAME-1", "loaderId": "LOADER-1" },
-                "sessionId": "SID-nav",
-            })
-        );
     }
 }

@@ -3675,6 +3675,7 @@ async fn scoped_binding_persists_across_navigation_for_registered_named_world() 
         "params": { "url": "data:text/html,<body>after</body>" }
     }))
     .await;
+    crate::testing::wait_until_navigation_document_load(&mut ctx, 334, Some("SID-1")).await;
     let navigation_messages = ctx.take_all();
     let replayed_context_id = navigation_messages
         .iter()
@@ -6688,6 +6689,7 @@ async fn registered_named_world_object_handles_remain_callable_after_navigation(
         "params": { "url": "data:text/html,<body>after</body>" }
     }))
     .await;
+    crate::testing::wait_until_navigation_document_load(&mut ctx, 507, Some("SID-1")).await;
     let _ = take_response_by_id(&mut ctx, 507);
     let isolated_context_id = ctx
         .sent

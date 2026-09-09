@@ -3,7 +3,6 @@ use super::*;
 use crate::conn::OpenBodyStreamError;
 use crate::conn::state::{
     ClaimedNavigationRequest, InterceptedNavigationResponse, NavigationInterceptionPermit,
-    NavigationRequestInterception,
 };
 use crate::conn::state::{
     TargetFetchConfig, TargetFetchOwner, TargetFetchSubresourceInterceptionSnapshot,
@@ -21,20 +20,6 @@ use crate::devtools_runtime::{DevToolsNetworkInterceptId, DevToolsNetworkResourc
 use crate::domains::network::TargetIoStreamRead;
 
 impl CdpConnection {
-    pub(crate) fn pause_navigation_request_for_owner(
-        &mut self,
-        owner: &CommandOwnerScope,
-        navigation: crate::conn::NavigationId,
-        request: NavigationRequestInterception,
-    ) -> Result<NavigationInterceptionPermit, String> {
-        let (browser_context_id, target_id) = self
-            .resolved_page_owner_identity_for_owner(owner)
-            .ok_or("navigation WebContents unavailable")?;
-        self.browser_context_by_id_mut(&browser_context_id)
-            .ok_or("navigation BrowserContext unavailable")?
-            .pause_navigation_request_for_target(&target_id, navigation, request)
-    }
-
     pub(crate) fn take_navigation_request(
         &mut self,
         permit: NavigationInterceptionPermit,

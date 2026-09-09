@@ -25,7 +25,7 @@ mod target_state;
 mod tests;
 pub(in crate::conn) use moli_core::browser::web_contents::InitialDocumentBuildKey;
 pub(crate) use moli_core::browser::web_contents::{
-    ClaimedNavigationRequest, NavigationInterceptionPermit, NavigationRequestInterception,
+    ClaimedNavigationRequest, NavigationInterceptionPermit,
 };
 pub(crate) use moli_core::browser::{
     BrowserInterceptedNavigationLoad as InterceptedNavigationLoad,

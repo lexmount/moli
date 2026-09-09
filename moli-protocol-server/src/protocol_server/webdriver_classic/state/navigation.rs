@@ -155,14 +155,17 @@ fn apply_progress(
         DevToolsNavigationCommandProgress::Complete(execution) => {
             (execution.protocol_output, Some((reply, execution.result)))
         }
-        DevToolsNavigationCommandProgress::Pending(network) => {
+        DevToolsNavigationCommandProgress::Pending {
+            pending: network,
+            protocol_output,
+        } => {
             *pending = Some(ClassicPendingCommand::Navigation(
                 ClassicPendingNavigation {
                     reply,
                     wait: NavigationWait::Network(DevToolsNavigationCommandWait::new(*network)),
                 },
             ));
-            return ClassicSessionRuntimeRequestOutcome::Continue;
+            (protocol_output, None)
         }
         DevToolsNavigationCommandProgress::PendingLifecycle {
             pending: lifecycle,

@@ -1808,6 +1808,15 @@ async fn assert_bidi_document_interception_preserves_navigation(
     });
     let (addr, server) = spawn_test_protocol_server().await;
     let (mut socket, context) = bidi_session_with_context(addr).await;
+    let peer = send_bidi_command_response(
+        &mut socket,
+        8,
+        "browsingContext.create",
+        json!({"type": "tab", "background": true}),
+    )
+    .await;
+    assert_eq!(peer["type"], "success");
+    let peer_context = peer["result"]["context"].as_str().unwrap().to_owned();
     let event_method = format!("network.{phase}");
     let subscribed = send_bidi_command_response(
         &mut socket,
@@ -1862,6 +1871,28 @@ async fn assert_bidi_document_interception_preserves_navigation(
         status.iter().all(|message| message["id"] != 5),
         "navigate replied before continuation: {status:?}"
     );
+    socket
+        .send(WsMessage::Text(
+            json!({
+                "id": 9, "method": "script.evaluate",
+                "params": {
+                    "expression": "document.URL", "awaitPromise": false,
+                    "target": {"context": peer_context},
+                },
+            })
+            .to_string()
+            .into(),
+        ))
+        .await
+        .unwrap();
+    let evaluation = recv_until_id(&mut socket, 9).await;
+    assert!(
+        evaluation.iter().all(|message| message["id"] != 5),
+        "script access must not release the intercepted navigation: {evaluation:?}"
+    );
+    let evaluated = bidi_message_by_id(&evaluation, 9);
+    assert_eq!(evaluated["type"], "success", "{evaluation:?}");
+    assert_eq!(evaluated["result"]["result"]["value"], "about:blank");
     socket
         .send(WsMessage::Text(
             json!({"id": 7, "method": continue_method, "params": {"request": request}})

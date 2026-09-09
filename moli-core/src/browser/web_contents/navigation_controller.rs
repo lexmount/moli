@@ -556,18 +556,13 @@ impl NavigationController {
     }
 
     fn retain_native_responses(&mut self) {
-        // A download's terminal response remains observable with its latest
-        // attempt. Starting another navigation replaces it: still at most two
-        // records, with no download body duplicated in the Document cache.
+        // A terminal response remains observable with its latest attempt.
+        // Starting another navigation replaces it: still at most two records,
+        // with no download body duplicated in the Document cache.
         let pending = self
             .pending_document()
             .map(|(navigation, _)| navigation)
-            .or_else(|| {
-                self.failed_navigation.and_then(|(navigation, _, reason)| {
-                    (reason == crate::browser::NavigationFailureReason::Download)
-                        .then_some(navigation)
-                })
-            });
+            .or_else(|| self.failed_navigation.map(|(navigation, _, _)| navigation));
         let committed = self.committed_document_navigation;
         self.native_responses.retain(|response| {
             Some(response.request.navigation) == pending
@@ -1211,7 +1206,7 @@ mod tests {
                     navigation,
                     document,
                 },
-                response: moli_fetch::ResponseHead {
+                response: Ok(moli_fetch::ResponseHead {
                     final_url: url::Url::parse("https://native.example/").unwrap(),
                     status: 200,
                     headers: Vec::new(),
@@ -1221,7 +1216,7 @@ mod tests {
                     redirect_chain: Vec::new(),
                     from_cache: false,
                     negotiated_http_version: None,
-                },
+                }),
                 observations: Default::default(),
                 body: None,
             }
@@ -1266,9 +1261,13 @@ mod tests {
                 WebContentsId::allocate(),
                 navigation,
                 NavigationDecisionStage::Request {
-                    url: url::Url::parse("data:text/html,claim-drop").unwrap(),
-                    method: "GET".into(),
-                    headers: Vec::new(),
+                    request: crate::browser::web_contents::NavigationRequestInterception::new(
+                        url::Url::parse("data:text/html,claim-drop").unwrap(),
+                        "GET".into(),
+                        None,
+                        Vec::new(),
+                        crate::browser::NavigationRequestLoadPolicy::DocumentInitiated,
+                    ),
                     opening: std::sync::Weak::new(),
                 },
             )
@@ -1296,9 +1295,13 @@ mod tests {
                 WebContentsId::allocate(),
                 navigation,
                 NavigationDecisionStage::Request {
-                    url: url::Url::parse("data:text/html,obsolete-claim").unwrap(),
-                    method: "GET".into(),
-                    headers: Vec::new(),
+                    request: crate::browser::web_contents::NavigationRequestInterception::new(
+                        url::Url::parse("data:text/html,obsolete-claim").unwrap(),
+                        "GET".into(),
+                        None,
+                        Vec::new(),
+                        crate::browser::NavigationRequestLoadPolicy::DocumentInitiated,
+                    ),
                     opening: std::sync::Weak::new(),
                 },
             )

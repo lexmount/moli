@@ -17,9 +17,7 @@ pub struct DocumentDecisionProvider {
 #[derive(Clone)]
 pub enum NavigationDecisionStage {
     Request {
-        url: Url,
-        method: String,
-        headers: Vec<(String, String)>,
+        request: super::web_contents::NavigationRequestInterception,
         opening: std::sync::Weak<crate::page::RendererPopupOpening>,
     },
     Auth {
@@ -39,17 +37,7 @@ pub enum NavigationDecisionStage {
 impl std::fmt::Debug for NavigationDecisionStage {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::Request {
-                url,
-                method,
-                headers,
-                ..
-            } => f
-                .debug_struct("Request")
-                .field("url", url)
-                .field("method", method)
-                .field("headers", headers)
-                .finish(),
+            Self::Request { request, .. } => f.debug_tuple("Request").field(request).finish(),
             Self::Auth { response, .. } => f.debug_tuple("Auth").field(response).finish(),
             Self::Response { response, .. } => f.debug_tuple("Response").field(response).finish(),
             Self::PreparedDocument { renderer, .. } => f
@@ -90,6 +78,9 @@ pub enum NavigationDecision {
         headers: Vec<(String, String)>,
     },
     Cancel,
+    Fail {
+        error_text: String,
+    },
 }
 
 /// Admission chooses a resource-bearing variant; this tag is not retained as

@@ -1546,7 +1546,7 @@ async fn async_send_message_to_target_wraps_nested_page_navigation() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn send_message_to_target_preserves_nested_scheduler_events() {
+async fn send_message_to_target_observes_native_navigation_without_legacy_load_actions() {
     let mut ctx = TestContext::new();
     load_bc_with_target(&mut ctx, "BID-9", "TID-000000000A");
     ctx.conn
@@ -1598,14 +1598,30 @@ async fn send_message_to_target_preserves_nested_scheduler_events() {
         "nested Page.navigate result should be wrapped in a Target event: {messages:?}"
     );
     assert!(
-        scheduler_events.iter().any(|event| matches!(
+        !scheduler_events.iter().any(|event| matches!(
             event,
             crate::conn::CdpSchedulerEvent::ProtocolWorkPublished { work }
                 if work.kind()
                     == crate::domains::activity::ProtocolSchedulerWorkKind::MainDocumentLoadOwnerAction
         )),
-        "nested Page.navigate deferred scheduler event should be returned to the outer turn: {scheduler_events:?}"
+        "nested navigation must not recreate the old Protocol load executor: {scheduler_events:?}"
     );
+    let navigation = messages
+        .iter()
+        .filter_map(|message| {
+            serde_json::from_str::<serde_json::Value>(message["params"]["message"].as_str()?).ok()
+        })
+        .find(|message| message["id"] == json!(7702))
+        .expect("nested navigation response");
+    crate::testing::wait_until_renderer_document_load(
+        &mut ctx,
+        Some("SID-9"),
+        "TID-000000000A",
+        navigation["result"]["loaderId"]
+            .as_str()
+            .expect("native navigation loader"),
+    )
+    .await;
 }
 
 #[tokio::test(flavor = "multi_thread")]

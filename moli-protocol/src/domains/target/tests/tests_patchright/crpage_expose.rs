@@ -861,6 +861,12 @@ async fn patchright_over_cdp_main_and_utility_init_scripts_see_bindings_on_first
         }
     }))
     .await;
+    crate::testing::wait_until_navigation_document_load(
+        &mut ctx,
+        26657,
+        Some(&attached.session_id),
+    )
+    .await;
     let navigation = take_response_by_id(&mut ctx, 26657);
     assert_eq!(navigation["sessionId"], json!(attached.session_id));
     let main_binding_called = ctx
@@ -1144,6 +1150,7 @@ async fn patchright_over_cdp_auto_attach_sweep_init_scripts_see_same_named_bindi
             }
         }))
         .await;
+        crate::testing::wait_until_navigation_document_load(&mut ctx, id, Some(session_id)).await;
         let navigation = take_response_by_id(&mut ctx, id);
         assert_eq!(navigation["sessionId"], json!(session_id));
         let main_binding_called = ctx
