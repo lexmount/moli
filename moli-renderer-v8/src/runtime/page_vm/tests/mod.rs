@@ -3670,8 +3670,8 @@ async fn page_vm_child_parser_blocking_classic_waits_for_preceding_stylesheet() 
                     page_vm
                         .vm_mut()
                         .eval("__childParserStylesheetEvents.join('|')")?,
-                    "script:stylesheet-ready:complete",
-                    "stylesheet source must be installed before the parser-blocking script executes"
+                    "script:stylesheet-ready:loading",
+                    "stylesheet source must be installed before the parser-blocking script executes while the document is still loading"
                 );
                 followup_sources.push(
                     run_expected_child_frame_task_source_after_realm_prerequisite_for_wait(
@@ -3748,7 +3748,7 @@ async fn page_vm_child_parser_blocking_classic_waits_for_preceding_stylesheet() 
                 ChildFrameSemanticTurnKind::HostLoad,
             ]
         );
-        assert_eq!(final_events, "script:stylesheet-ready:complete|load");
+        assert_eq!(final_events, "script:stylesheet-ready:loading|load");
         server.await.expect("child parser stylesheet server should finish");
     })
     .await;

@@ -20,6 +20,9 @@ mod preparation_errors;
 #[path = "scripts/child_error_insertion.rs"]
 mod child_error_insertion;
 
+#[path = "scripts/child_readiness.rs"]
+mod child_readiness;
+
 fn diagnostic_global<'a>(
     page: &'a moli_core::page::Page,
     name: &str,
