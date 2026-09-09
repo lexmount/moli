@@ -1,6 +1,7 @@
 // Copyright 2021 the Parley Authors
 // SPDX-License-Identifier: Apache-2.0 OR MIT
 
+use super::text_advance::{TextAdvance, TextItemQuantization};
 use crate::inline_box::InlineBox;
 use crate::layout::{ContentWidths, Glyph, LineMetrics, RunMetrics, Style};
 use crate::style::Brush;
@@ -286,6 +287,9 @@ pub(crate) struct LayoutData<B: Brush> {
     pub(crate) items: Vec<LayoutItem>,
     pub(crate) clusters: Vec<ClusterData>,
     pub(crate) glyphs: Vec<Glyph>,
+    /// Optional caller-owned text item allocation boundaries. Font fallback
+    /// runs remain shaped together; this only affects layout allocation.
+    pub(crate) text_item_quantization: Option<TextItemQuantization>,
 
     // Output of line breaking
     /// The lines in the
@@ -332,6 +336,7 @@ impl<B: Brush> Default for LayoutData<B> {
             items: Vec::new(),
             clusters: Vec::new(),
             glyphs: Vec::new(),
+            text_item_quantization: None,
             lines: Vec::new(),
             line_items: Vec::new(),
             #[cfg(feature = "accesskit")]
@@ -361,6 +366,7 @@ impl<B: Brush> LayoutData<B> {
         self.items.clear();
         self.clusters.clear();
         self.glyphs.clear();
+        self.text_item_quantization = None;
         self.lines.clear();
         self.line_items.clear();
     }
@@ -561,8 +567,8 @@ impl<B: Brush> LayoutData<B> {
         let mut min_width = 0.0_f32;
         let mut max_width = 0.0_f32;
 
-        let mut running_min_width = 0.0;
-        let mut running_max_width = 0.0;
+        let mut running_min_width = TextAdvance::default();
+        let mut running_max_width = TextAdvance::default();
         let mut text_wrap_mode = TextWrapMode::Wrap;
         let mut prev_cluster: Option<&ClusterData> = None;
         let is_rtl = self.base_level & 1 == 1;
@@ -574,7 +580,7 @@ impl<B: Brush> LayoutData<B> {
                     if is_rtl {
                         prev_cluster = clusters.first();
                     }
-                    for cluster in clusters {
+                    for (offset, cluster) in clusters.iter().enumerate() {
                         let boundary = cluster.info.boundary();
                         let style = &self.styles[cluster.style_index as usize];
                         let prev_text_wrap_mode = text_wrap_mode;
@@ -585,44 +591,58 @@ impl<B: Brush> LayoutData<B> {
                                     || style.overflow_wrap == OverflowWrap::Anywhere))
                         {
                             let trailing_whitespace = whitespace_advance(prev_cluster);
-                            min_width = min_width.max(running_min_width - trailing_whitespace);
-                            running_min_width = 0.0;
+                            min_width = min_width
+                                .max(running_min_width.without_trailing_space(trailing_whitespace));
+                            running_min_width = TextAdvance::default();
                             if boundary == Boundary::Mandatory {
-                                max_width = max_width.max(running_max_width - trailing_whitespace);
-                                running_max_width = 0.0;
+                                max_width = max_width.max(
+                                    running_max_width.without_trailing_space(trailing_whitespace),
+                                );
+                                running_max_width = TextAdvance::default();
                             }
                         }
-                        running_min_width += cluster.advance;
-                        running_max_width += cluster.advance;
+                        let quantization = self
+                            .text_item_quantization
+                            .as_ref()
+                            .map(|policy| policy.cluster(run.cluster_range.start + offset));
+                        running_min_width =
+                            running_min_width.with_text(cluster.advance, quantization);
+                        running_max_width =
+                            running_max_width.with_text(cluster.advance, quantization);
                         if !is_rtl {
                             prev_cluster = Some(cluster);
                         }
                     }
                     let trailing_whitespace = whitespace_advance(prev_cluster);
-                    min_width = min_width.max(running_min_width - trailing_whitespace);
+                    min_width = min_width
+                        .max(running_min_width.without_trailing_space(trailing_whitespace));
                 }
                 LayoutItemKind::InlineBox => {
                     let ibox = &self.inline_boxes[item.index];
                     if ibox.kind == InlineBoxKind::InFlow {
-                        running_max_width += ibox.width;
+                        running_max_width =
+                            TextAdvance::from_width(running_max_width.value + ibox.width);
                         if text_wrap_mode == TextWrapMode::Wrap {
                             let trailing_whitespace = whitespace_advance(prev_cluster);
-                            min_width = min_width.max(running_min_width - trailing_whitespace);
+                            min_width = min_width
+                                .max(running_min_width.without_trailing_space(trailing_whitespace));
                             min_width = min_width.max(ibox.width);
-                            running_min_width = 0.0;
+                            running_min_width = TextAdvance::default();
                         } else {
-                            running_min_width += ibox.width;
+                            running_min_width =
+                                TextAdvance::from_width(running_min_width.value + ibox.width);
                         }
                     }
                     prev_cluster = None;
                 }
             }
             let trailing_whitespace = whitespace_advance(prev_cluster);
-            max_width = max_width.max(running_max_width - trailing_whitespace);
+            max_width =
+                max_width.max(running_max_width.without_trailing_space(trailing_whitespace));
         }
 
         let trailing_whitespace = whitespace_advance(prev_cluster);
-        min_width = min_width.max(running_min_width - trailing_whitespace);
+        min_width = min_width.max(running_min_width.without_trailing_space(trailing_whitespace));
 
         ContentWidths {
             min: min_width,
@@ -697,6 +717,12 @@ fn process_clusters<I: Iterator<Item = (usize, char)>>(
     //   `HarfRust` assignation:  3, 2, 0, 0
     //   Cluster count:           3
     //   `num_components`:        (4 - 3 =) 1, (3 - 2 =) 1, (2 - 0 =) 2
+    //
+    // The glyph's cluster ID is its first *logical* character, but an RTL
+    // component iterator starts at the last logical character. Source
+    // metadata must follow that iterator too: component i uses
+    // `cluster_id + num_components - 1 - i`. Otherwise word boundaries and
+    // styles end up on a different character from the recorded text offset.
     let num_components =
         |next_cluster: u32, current_cluster: u32, last_cluster: u32| match direction {
             Direction::Ltr => next_cluster - current_cluster,
@@ -737,7 +763,10 @@ fn process_clusters<I: Iterator<Item = (usize, char)>>(
 
             push_cluster(
                 clusters,
-                char_info,
+                match direction {
+                    Direction::Ltr => char_info,
+                    Direction::Rtl => char_infos[(cluster_id + num_components - 1) as usize],
+                },
                 cluster_start_char,
                 cluster_glyph_offset,
                 cluster_advance,
@@ -756,7 +785,9 @@ fn process_clusters<I: Iterator<Item = (usize, char)>>(
                     }
                     let char_info_ = match direction {
                         Direction::Ltr => char_infos[(cluster_id + i) as usize],
-                        Direction::Rtl => char_infos[(cluster_id + num_components - i) as usize],
+                        Direction::Rtl => {
+                            char_infos[(cluster_id + num_components - 1 - i) as usize]
+                        }
                     };
                     push_cluster(
                         clusters,
@@ -821,7 +852,10 @@ fn process_clusters<I: Iterator<Item = (usize, char)>>(
             let ligature_advance = cluster_advance / num_components as f32;
             push_cluster(
                 clusters,
-                char_info,
+                match direction {
+                    Direction::Ltr => char_info,
+                    Direction::Rtl => char_infos[(cluster_id + num_components - 1) as usize],
+                },
                 cluster_start_char,
                 cluster_glyph_offset,
                 ligature_advance,
@@ -839,7 +873,7 @@ fn process_clusters<I: Iterator<Item = (usize, char)>>(
                 }
                 let component_char_info = match direction {
                     Direction::Ltr => char_infos[(cluster_id + i) as usize],
-                    Direction::Rtl => char_infos[(cluster_id + num_components - i) as usize],
+                    Direction::Rtl => char_infos[(cluster_id + num_components - 1 - i) as usize],
                 };
                 push_cluster(
                     clusters,

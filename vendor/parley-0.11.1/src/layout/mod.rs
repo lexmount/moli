@@ -11,6 +11,7 @@ mod glyph;
 mod line;
 mod line_break;
 mod run;
+mod text_advance;
 
 // TODO - Add to allowed lint set?
 #[expect(
