@@ -85,16 +85,22 @@ test(function () {
 test(function () {
   const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
   const rect = document.createElementNS("http://www.w3.org/2000/svg", "rect");
+  rect.setAttribute("width", "10");
+  rect.setAttribute("height", "20");
   svg.appendChild(rect);
 
   const point = rect.getPointAtLength(0);
-  assert_true(point instanceof DOMPoint);
-  assert_equals(Object.prototype.toString.call(point), "[object DOMPoint]");
+  // Blink still returns the SVG 1.1 float-valued interface here.
+  assert_true(point instanceof SVGPoint);
+  assert_false(point instanceof DOMPoint);
+  assert_equals(Object.prototype.toString.call(point), "[object SVGPoint]");
   assert_equals(point.x, 0);
   assert_equals(point.y, 0);
-  assert_equals(point.z, 0);
-  assert_equals(point.w, 1);
-}, "SVGGeometryElement.getPointAtLength returns a DOMPoint branded object");
+  assert_false("z" in point);
+  assert_false("w" in point);
+  point.x = 1 / 3;
+  assert_equals(point.x, Math.fround(1 / 3));
+}, "SVGGeometryElement.getPointAtLength returns a float-valued SVGPoint object");
 
 test(function () {
   const matrix = new DOMMatrix();

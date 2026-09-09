@@ -54,6 +54,7 @@ fn build_native_layout_pass_recursive(
         runtime,
         root,
         request.requests_paint(),
+        request.viewport,
     );
     let mut styles =
         style_resolver::NativeLayoutStyleResolver::new(runtime, root, document, request.viewport);

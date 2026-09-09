@@ -75,7 +75,7 @@ impl<'a> NativeLayoutStyleResolver<'a> {
     }
 }
 
-fn layout_style_read_scope<'a>(
+pub(super) fn layout_style_read_scope<'a>(
     runtime: &'a JsContextHost,
     document: DomHandle,
     viewport: LayoutViewport,

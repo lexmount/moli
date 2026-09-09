@@ -17,7 +17,6 @@ use crate::util::{
 
 const LEGACY_WINDOW_INTERFACE_ALIASES: &[(&str, &str)] = &[
     ("webkitURL", "URL"),
-    ("SVGPoint", "DOMPoint"),
     ("webkitAudioContext", "AudioContext"),
     ("WebKitCSSMatrix", "DOMMatrix"),
 ];

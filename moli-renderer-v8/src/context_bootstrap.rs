@@ -269,7 +269,7 @@ pub(crate) use self::file_api::{
     flush_one_pending_file_reader, is_file_list_object, selected_file_from_object,
 };
 pub(crate) use self::form_data_runtime::form_data_request_body;
-use self::geometry_runtime::{build_dom_point_object, optional_dom_point_init_arg};
+use self::geometry_runtime::optional_dom_point_init_arg;
 pub(crate) use self::image_data::{
     ImageDataClonePayload, build_image_data_object_from_clone_payload,
     image_data_clone_payload_from_object,

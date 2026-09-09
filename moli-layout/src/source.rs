@@ -524,6 +524,17 @@ pub trait LayoutSource {
         None
     }
 
+    /// Freezes text geometry for an atomic SVG box, including layout-only
+    /// demands. Implementations may share the current pass's SVG parse with
+    /// painting, but return only numeric geometry and source provenance.
+    fn svg_text_layout(
+        &self,
+        _node: Self::NodeId,
+        _style: &ResolvedLayoutStyle,
+    ) -> Option<Arc<crate::LayoutSvgText<Self::NodeId>>> {
+        None
+    }
+
     /// Samples one renderer-owned CSS `url()` image into the current pass.
     ///
     /// The URL is already absolute according to Stylo's stylesheet base URL.
