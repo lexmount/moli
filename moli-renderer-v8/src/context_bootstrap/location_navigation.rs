@@ -73,8 +73,24 @@ pub(crate) fn navigate_location_object<'s>(
     kind: LocationNavigationKind,
     raw_target: Option<String>,
 ) {
+    let owner = runtime_window_owner(scope, location);
+    let replaces_unloaded_document = kind == LocationNavigationKind::Assign
+        && child_location_document_is_before_load_complete(scope, owner)
+        && !context_host_ptr_for_navigation_owner(scope, owner)
+            .is_some_and(|host| unsafe { &*host }.protocol_user_gesture_activation());
+    let kind = if replaces_unloaded_document {
+        LocationNavigationKind::Replace
+    } else {
+        kind
+    };
     navigate_location_object_with_source_element_and_child_navigate_event(
-        scope, location, kind, raw_target, None, false, false,
+        scope,
+        location,
+        kind,
+        raw_target,
+        None,
+        replaces_unloaded_document,
+        false,
     );
 }
 
@@ -972,6 +988,21 @@ pub(crate) fn dispatch_top_level_form_navigation_event<'s>(
     }
     cancel_pending_same_document_navigation_finishes(scope, navigation);
     !outcome.intercepted
+}
+
+fn child_location_document_is_before_load_complete<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    owner: v8::Local<'s, v8::Object>,
+) -> bool {
+    let Some(handle) = child_browsing_context_handle_for_runtime_owner(scope, owner) else {
+        return false;
+    };
+    let Some(host_ptr) = context_host_ptr_for_navigation_owner(scope, owner) else {
+        return false;
+    };
+    let host = unsafe { &*host_ptr };
+    host.child_browsing_context_document_handle(handle)
+        .is_some_and(|document| host.document_is_completely_loaded(document) == Some(false))
 }
 
 fn top_level_document_is_before_load_complete(scope: &mut v8::PinScope<'_, '_>) -> bool {
