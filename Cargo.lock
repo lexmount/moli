@@ -2935,6 +2935,7 @@ dependencies = [
  "moli-webidl",
  "moli-webidl-callback",
  "moli-websocket",
+ "moli-window-features",
  "moli-xpath",
  "parking_lot",
  "percent-encoding",
@@ -3249,6 +3250,14 @@ dependencies = [
  "tokio-tungstenite",
  "url",
  "webpki-roots",
+]
+
+[[package]]
+name = "moli-window-features"
+version = "0.1.0"
+dependencies = [
+ "indexmap",
+ "stylo",
 ]
 
 [[package]]

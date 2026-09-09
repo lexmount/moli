@@ -20,9 +20,8 @@ use crate::{
     util::{context_host_ptr_from_global_bridge, get_private_value},
     webidl,
 };
+use moli_window_features::WindowOpenFeatures;
 use url::Url;
-
-use super::window_features::WindowOpenFeatures;
 
 #[derive(webidl::WebIdlArgs)]
 #[webidl(prefix = "Window dialog")]

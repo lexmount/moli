@@ -8,7 +8,6 @@ mod obsolete;
 mod performance;
 mod service_worker;
 mod structured_clone;
-mod window_features;
 
 use moli_webapi_declare::WebApiObject;
 
