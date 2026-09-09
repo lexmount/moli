@@ -60,7 +60,7 @@ impl ScriptVm {
             self.apply_child_document_owner_transition(transition);
         }
         if let Some(action) = parser_stop_action {
-            ChildDocumentLifecycleOwner::new(self).notify_parser_stop_action(action);
+            ChildDocumentLifecycleOwner::new(self).notify_parser_stop_action(action)?;
         }
         let mut ready_owner = ChildDocumentScriptSchedulerOwner::new(self);
         for work in ready_work {
