@@ -172,6 +172,7 @@ pub(crate) use page_selected_task_test_harness::{
     ClaimedPageSelectedTaskForTest, PageSelectedTaskTestSelector,
 };
 pub(crate) use page_task_completion::{IntoPageTaskCompletion, PageTaskCompletion};
+mod page_bitmap_task;
 mod page_text_track_default_mode;
 mod page_text_track_default_mode_task_completion;
 mod page_text_track_load;
@@ -197,6 +198,7 @@ mod parser_owned_module_completion;
 mod parser_task_completion;
 mod selected_page_task;
 
+pub(crate) use page_bitmap_task::AuthorizedCurrentPageBitmapTask;
 pub(crate) use page_broadcast_channel_delivery::AuthorizedCurrentBroadcastChannelDelivery;
 pub(crate) use page_child_frame_task::{
     AuthorizedCurrentPageChildClassicScriptSourceLoad, AuthorizedCurrentPageChildDocumentLifecycle,

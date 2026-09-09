@@ -159,7 +159,7 @@ pub(super) use attributes::{
     node_toggle_attribute_callback,
 };
 pub(crate) use canvas::{
-    canvas_get_context_callback, canvas_to_data_url_callback,
+    canvas_dimension_value, canvas_get_context_callback, canvas_to_data_url_callback,
     canvas_transfer_control_to_offscreen_callback,
 };
 pub(crate) use canvas::{
