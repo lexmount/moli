@@ -18,6 +18,12 @@ impl PageVm {
         loader: &crate::network::ResourceRequestClient,
     ) -> Result<()> {
         let completion = match action {
+            PageDomManipulationTurnAction::ChildDocumentLifecycle(action) => {
+                action.into_page_task_completion()
+            }
+            PageDomManipulationTurnAction::MainDocumentLifecycle(action) => {
+                action.into_page_task_completion()
+            }
             PageDomManipulationTurnAction::BroadcastChannel(action) => {
                 action.into_page_task_completion()
             }

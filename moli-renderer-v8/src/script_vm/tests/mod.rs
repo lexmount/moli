@@ -901,11 +901,16 @@ async fn run_child_document_lifecycle_and_host_load_for_test(vm: &mut ScriptVm, 
         // Only consecutive materialization tasks at the stable family head
         // belong here. Never jump over an earlier DocumentScriptReady task.
     }
-    assert!(
-        vm.run_child_frame_task_source_once_for_test(ChildFrameSemanticTurnKind::DocumentLifecycle)
+    if matches!(vm._page_task_residence_for_executor_test.as_ref().expect("child fixture sources").task_sources().next_child_frame_task_target(), Some(crate::page_task_queue::RendererPageChildFrameTaskTarget::DocumentLifecycle(target)) if matches!(target.action(), crate::frame_owner_model::FrameDocumentLifecycleAction::Interactive(_)))
+    {
+        assert!(
+            vm.run_child_frame_task_source_once_for_test(
+                ChildFrameSemanticTurnKind::DocumentLifecycle
+            )
             .await,
-        "{message}: DocumentLifecycle should make the installed document interactive"
-    );
+            "{message}: a child without a parser realm must apply its queued interactive transition"
+        );
+    }
     assert!(
         vm.run_child_frame_task_source_once_for_test(ChildFrameSemanticTurnKind::DocumentLifecycle)
             .await,

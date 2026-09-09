@@ -285,8 +285,8 @@ async fn page_vm_child_modulepreload_terminal_event_does_not_delay_complete() {
                 .iter()
                 .filter(|source| **source == ChildFrameSemanticTurnKind::DocumentLifecycle)
                 .count()
-                >= 3,
-            "interactive, DOMContentLoaded, and complete must advance while the terminal link event remains queued: {lifecycle_turns:?}"
+                == 2,
+            "DOMContentLoaded and complete must each take a queued turn while the terminal link event remains queued: {lifecycle_turns:?}"
         );
         assert!(
             lifecycle_turns.contains(&ChildFrameSemanticTurnKind::HostLoad),
@@ -501,8 +501,8 @@ async fn page_vm_child_modulepreload_fetch_does_not_delay_iframe_load() {
                 .iter()
                 .filter(|source| **source == ChildFrameSemanticTurnKind::DocumentLifecycle)
                 .count()
-                >= 3,
-            "interactive, DOMContentLoaded and complete should run while modulepreload fetch is pending: {startup_sources:?}"
+                == 2,
+            "DOMContentLoaded and complete should each take a queued turn while modulepreload fetch is pending: {startup_sources:?}"
         );
         assert!(startup_sources.contains(&ChildFrameSemanticTurnKind::HostLoad));
         assert_eq!(

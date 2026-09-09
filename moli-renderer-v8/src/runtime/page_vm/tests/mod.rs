@@ -920,12 +920,20 @@ async fn run_child_interactive_domcontentloaded_then_host_load_for_wait(
     page_vm: &mut PageVm,
     label: &str,
 ) -> ChildFrameSemanticTurnKind {
-    run_expected_child_frame_task_source_after_realm_prerequisite_for_wait(
-        page_vm,
-        ChildFrameSemanticTurnKind::DocumentLifecycle,
-        &format!("{label} interactive transition"),
-    )
-    .await;
+    if page_vm.has_ready_child_frame_semantic_turn_for_test(
+        ChildFrameSemanticTurnKind::RealmMaterialization,
+    ) {
+        run_expected_child_realm_materialization_for_wait(page_vm, label).await;
+    }
+    if matches!(page_vm.page_task_executor_sources_for_test().next_child_frame_task_target(), Some(crate::page_task_queue::RendererPageChildFrameTaskTarget::DocumentLifecycle(target)) if matches!(target.action(), crate::frame_owner_model::FrameDocumentLifecycleAction::Interactive(_)))
+    {
+        run_expected_child_frame_task_source_after_realm_prerequisite_for_wait(
+            page_vm,
+            ChildFrameSemanticTurnKind::DocumentLifecycle,
+            &format!("{label} queued interactive transition"),
+        )
+        .await;
+    }
     run_child_domcontentloaded_then_host_load_for_wait(page_vm, label).await
 }
 

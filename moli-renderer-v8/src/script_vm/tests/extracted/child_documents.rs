@@ -1639,7 +1639,7 @@ async fn child_srcdoc_inline_classic_script_runs_as_frame_script_job() {
         "child:true|current:inline-classic",
         "DocumentScriptReady should execute the inline classic script without firing iframe load"
     );
-    for transition in ["interactive", "DOMContentLoaded", "complete"] {
+    for transition in ["DOMContentLoaded", "complete"] {
         assert!(
             vm.run_child_frame_task_source_once_for_test(
                 ChildFrameSemanticTurnKind::DocumentLifecycle
