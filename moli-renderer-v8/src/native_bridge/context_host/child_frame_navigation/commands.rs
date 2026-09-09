@@ -3,9 +3,80 @@ use super::super::{
     NavigationHistoryEntrySeed, PageScriptHost,
 };
 use crate::document_runtime::DomHandle;
+use moli_page_types::{NavigationHistoryMutation, cross_document_navigation_seed};
 use url::Url;
 
 impl PageScriptHost {
+    pub(crate) fn queue_deferred_child_form_navigation_request(
+        &mut self,
+        scope: &mut v8::PinScope<'_, '_>,
+        handle: DomHandle,
+        request: ChildBrowsingContextNavigationRequest,
+        entry_seed: Option<NavigationHistoryEntrySeed>,
+        mutation: NavigationHistoryMutation,
+    ) -> bool {
+        let Some(entry) = self.child_browsing_contexts.get(&handle) else {
+            return false;
+        };
+        if request.url.scheme() == "javascript" {
+            return self.queue_child_browsing_context_navigation_without_seed_update(
+                scope,
+                handle,
+                request.url.as_str(),
+                None,
+            );
+        }
+        let entry_seed = entry_seed.unwrap_or_else(|| {
+            // A named target need not have a Window wrapper yet. Use its
+            // committed history, never a previously planned form navigation.
+            let committed = entry.committed_navigation_entry_seed();
+            let index = committed
+                .entries
+                .iter()
+                .find(|entry| entry.history_index == committed.current_index)
+                .map_or(0, |entry| entry.index);
+            cross_document_navigation_seed(
+                committed.entries,
+                committed.current_index,
+                index,
+                &request.url,
+                mutation,
+            )
+        });
+        if request.method == "GET" {
+            return self.queue_deferred_child_browsing_context_navigation_from_entry_seed(
+                scope,
+                handle,
+                request.url.as_str(),
+                entry_seed,
+                None,
+            );
+        }
+        self.reject_replaced_service_worker_child_client_navigation(
+            handle,
+            "The navigation was canceled.".to_owned(),
+        );
+        if let Some(entry) = self.child_browsing_contexts.get_mut(&handle) {
+            entry.replace_navigation_entry_seed(entry_seed);
+        }
+        let url = request.url.clone();
+        if self
+            .set_child_browsing_context_pending_navigation(
+                handle,
+                ChildBrowsingContextBootstrap::Request(request),
+                None,
+                false,
+            )
+            .is_none()
+        {
+            return false;
+        }
+        let download_policy = self.capture_child_navigation_download_policy(scope, handle);
+        self.register_reserved_service_worker_child_client_for_navigation(handle, &url);
+        let queued = self.queue_child_browsing_context_navigation_commit(handle);
+        self.remember_child_navigation_download_policy(handle, download_policy, queued)
+    }
+
     pub(crate) fn navigate_child_browsing_context_to_url(
         &mut self,
         scope: &mut v8::PinScope<'_, '_>,
@@ -157,69 +228,6 @@ impl PageScriptHost {
                 entry.restore_navigation_entry_seed_from_committed();
             }
         }
-    }
-
-    pub(crate) fn queue_deferred_child_browsing_context_navigation_to_url(
-        &mut self,
-        scope: &mut v8::PinScope<'_, '_>,
-        handle: DomHandle,
-        resolved_url: &str,
-    ) -> bool {
-        let download_policy = self.capture_child_navigation_download_policy(scope, handle);
-        if !self.child_browsing_contexts.contains_key(&handle) {
-            return false;
-        }
-        let Some(url) = Url::parse(resolved_url).ok() else {
-            return false;
-        };
-        if let Some(entry) = self.child_browsing_contexts.get_mut(&handle) {
-            entry.apply_deferred_navigation_to_entry_seed(&url);
-        }
-        if self
-            .set_child_browsing_context_pending_navigation(
-                handle,
-                ChildBrowsingContextBootstrap::Url(url),
-                None,
-                false,
-            )
-            .is_none()
-        {
-            return false;
-        }
-        let queued = self.queue_child_browsing_context_navigation_commit(handle);
-        self.remember_child_navigation_download_policy(handle, download_policy, queued)
-    }
-
-    pub(crate) fn queue_deferred_child_browsing_context_navigation_request(
-        &mut self,
-        scope: &mut v8::PinScope<'_, '_>,
-        handle: DomHandle,
-        request: ChildBrowsingContextNavigationRequest,
-    ) -> bool {
-        let download_policy = self.capture_child_navigation_download_policy(scope, handle);
-        if !self.child_browsing_contexts.contains_key(&handle) {
-            return false;
-        }
-        self.reject_replaced_service_worker_child_client_navigation(
-            handle,
-            "The navigation was canceled.".to_owned(),
-        );
-        if let Some(entry) = self.child_browsing_contexts.get_mut(&handle) {
-            entry.apply_deferred_navigation_to_entry_seed(&request.url);
-        }
-        if self
-            .set_child_browsing_context_pending_navigation(
-                handle,
-                ChildBrowsingContextBootstrap::Request(request),
-                None,
-                false,
-            )
-            .is_none()
-        {
-            return false;
-        }
-        let queued = self.queue_child_browsing_context_navigation_commit(handle);
-        self.remember_child_navigation_download_policy(handle, download_policy, queued)
     }
 
     pub(crate) fn child_browsing_context_has_pending_cross_document_traversal(
