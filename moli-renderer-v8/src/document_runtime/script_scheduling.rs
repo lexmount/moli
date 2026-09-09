@@ -146,8 +146,17 @@ mod tests {
             Url::parse("https://example.com/").unwrap(),
             "<!doctype html><html><body></body></html>".to_owned(),
         );
-        let mut runtime = DocumentRuntime::new(&document);
         let mut task_queue = crate::page_task_queue::PageTaskQueueTestHarness::new();
+        let sender = task_queue.owner_attached_runtime_page_task_sender_for_test();
+        let (parser_boundary_tx, _parser_boundary_rx) = tokio::sync::mpsc::unbounded_channel();
+        let mut runtime = DocumentRuntime::from_main_frame_dom_host(
+            DomHost::from_dom(document),
+            main_document_owner(),
+            Some(sender.page_task_sender()),
+            parser_boundary_tx,
+            sender.stylesheet_task_sender(),
+            sender.main_parser_continuation_sender(),
+        );
         let mut report = ScriptExecutionReport::default();
         let detached_run = ScriptRun::skipped(
             NodeId::new(99),
@@ -188,10 +197,22 @@ mod tests {
             task_queue.post_parse_pop_front(),
             Some(work) if work.is_domcontentloaded_task()
         ));
-        assert!(matches!(
-            task_queue.post_parse_pop_front(),
-            Some(work) if work.is_async_phase_document_script()
-        ));
+        let async_task = task_queue
+            .task_sources()
+            .take_main_document_runtime_for_executor_test()
+            .expect("async work must enter the independent ready runtime source");
+        assert_eq!(async_task.owner().document_owner(), main_document_owner());
+        let crate::page_task_queue::RendererPageMainDocumentRuntimeAction::ExecuteReadyPostParseWork(
+            async_work,
+        ) = async_task.into_action()
+        else {
+            panic!("async work must retain its executable payload");
+        };
+        assert!(
+            async_work
+                .into_post_parse_work()
+                .is_async_phase_document_script()
+        );
         assert!(matches!(
             task_queue.post_parse_pop_front(),
             Some(work) if work.detached_run_count() == 1
