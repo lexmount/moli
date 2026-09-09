@@ -2960,9 +2960,6 @@ html/semantics/text-level-semantics/historical.html
 html/semantics/the-button-element/command-and-commandfor/on-dialog-behavior.html
 html/syntax/charset/xhr.html
 html/syntax/parsing/cdata-in-integration-point-fragment.html
-html/webappapis/dynamic-markup-insertion/document-write/module-delayed.html
-html/webappapis/dynamic-markup-insertion/document-write/module-static-import-delayed.html
-html/webappapis/dynamic-markup-insertion/document-write/module-tla-delayed.html
 html/webappapis/dynamic-markup-insertion/document-write/write-active-document.html
 html/webappapis/scripting/processing-model-2/integration-with-the-javascript-job-queue/promise-job-detached-iframe.html
 html/webappapis/scripting/processing-model-2/integration-with-the-javascript-job-queue/promise-job-incumbent.html

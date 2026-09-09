@@ -768,16 +768,11 @@ pub(super) fn select_page_scheduler_turn(
         document_lifecycle_owner_turn_is_runnable,
         has_ready_main_parser_script_continuation,
     );
-    let has_lifecycle_dom_task = entry
-        .page_vm()
-        .vm()
-        .current_main_document_task_owner()
-        .is_some_and(|owner| {
-            task_sources.has_queued_main_document_lifecycle_dom_task(
-                entry.page_vm().document_lifecycle.identity().document,
-                owner,
-            )
-        });
+    let has_lifecycle_dom_task = task_sources.has_queued_document_lifecycle_dom_task(|owner| {
+        entry
+            .page_vm()
+            .document_lifecycle_dom_owner_is_current(owner)
+    });
     if has_lifecycle_dom_task
         && !matches!(
             document_lifecycle,

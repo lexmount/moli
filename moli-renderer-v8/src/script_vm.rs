@@ -5328,6 +5328,23 @@ impl ScriptVm {
             },
         };
 
+        if expected == ChildFrameSemanticTurnKind::HostLoad {
+            return self
+                ._page_task_residence_for_executor_test
+                .as_ref()
+                .expect("semantic fixture must retain its sources")
+                .task_sources()
+                .has_scheduler_task_for_executor_test(|descriptor| {
+                    matches!(
+                        descriptor,
+                        RendererPageReadyDescriptor::DomManipulation {
+                            owner: RendererPageDomManipulationOwner::ChildHostLoad(_),
+                            ..
+                        }
+                    )
+                });
+        }
+
         if expected == ChildFrameSemanticTurnKind::DocumentLifecycle {
             return self._page_task_residence_for_executor_test.as_ref().expect("semantic fixture must retain its sources").task_sources().has_scheduler_task_for_executor_test(|descriptor| {
                 matches!(descriptor,

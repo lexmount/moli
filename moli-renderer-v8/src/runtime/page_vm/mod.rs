@@ -2130,6 +2130,20 @@ impl PageVm {
             },
         };
 
+        if expected == ChildFrameSemanticTurnKind::HostLoad {
+            return self
+                .page_task_executor_sources_for_test()
+                .has_scheduler_task_for_executor_test(|descriptor| {
+                    matches!(
+                        descriptor,
+                        RendererPageReadyDescriptor::DomManipulation {
+                            owner: RendererPageDomManipulationOwner::ChildHostLoad(_),
+                            ..
+                        }
+                    )
+                });
+        }
+
         if expected == ChildFrameSemanticTurnKind::DocumentLifecycle {
             return self.page_task_executor_sources_for_test().has_scheduler_task_for_executor_test(|descriptor| {
                 matches!(descriptor,

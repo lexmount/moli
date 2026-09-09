@@ -14476,6 +14476,25 @@ async fn moving_pending_child_image_rebinds_event_without_consuming_new_request(
         "moving the image should release complete on a later lifecycle turn",
     )
     .await;
+    assert!(
+        !vm.has_ready_child_frame_semantic_turn_for_test(ChildFrameSemanticTurnKind::HostLoad),
+        "the rebound image event must keep its earlier position in the shared DOM FIFO"
+    );
+    assert!(
+        vm.apply_next_image_load_event_body_for_test()
+            .expect("rebound image DOM task"),
+        "the new image request must deliver before the later HostLoad task"
+    );
+    assert_eq!(
+        vm.eval("__movedChildImageEvents.join('|')")
+            .expect("rebound image trace"),
+        "child-dcl|moved-image-load",
+        "the rebound image request must deliver once without running the later child load"
+    );
+    assert!(
+        vm.has_ready_child_frame_semantic_turn_for_test(ChildFrameSemanticTurnKind::HostLoad),
+        "the child load must now be at the DOM FIFO head"
+    );
     expect_child_frame_task_source_after_realm_prerequisite(
         &mut vm,
         ChildFrameSemanticTurnKind::HostLoad,
@@ -14483,20 +14502,14 @@ async fn moving_pending_child_image_rebinds_event_without_consuming_new_request(
     )
     .await;
     assert_eq!(
-        vm.eval("globalThis.__movedChildImageEvents.join('|')")
-            .expect("moved image child lifecycle should evaluate"),
-        "child-dcl|frame-load",
-        "moving the image must release the old child delay through a later lifecycle turn"
-    );
-
-    assert!(
-        drain_image_load_event_bodies_for_test(&mut vm) > 0,
-        "old and rebound image tasks should drain"
+        drain_image_load_event_bodies_for_test(&mut vm),
+        0,
+        "the old and rebound image tasks must both have been consumed exactly once"
     );
     assert_eq!(
         vm.eval("globalThis.__movedChildImageEvents.join('|')")
             .expect("moved image event result should evaluate"),
-        "child-dcl|frame-load|moved-image-load",
+        "child-dcl|moved-image-load|frame-load",
         "the stale child task must not consume or duplicate the rebound image request"
     );
 }
