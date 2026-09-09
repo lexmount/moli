@@ -19,7 +19,7 @@ use style::{
     stylesheets::{CssRuleType, Origin, UrlExtraData, layer_rule::LayerOrder},
     values::{
         generics::NonNegative,
-        specified::{LengthPercentage, NoCalcLength, NoCalcPercentage},
+        specified::{AspectRatio, LengthPercentage, NoCalcLength, NoCalcPercentage},
     },
 };
 use style_traits::{ParsingMode, ToCss};
@@ -167,6 +167,9 @@ impl QueryElement<'_> {
                 append_html_object_dimension_declarations(element, &mut block);
             }
             append_html_table_presentation_declarations(*self, &mut block);
+            if element.local_name() == "img" {
+                append_html_image_size_declarations(element, &mut block);
+            }
         }
 
         if !block.is_empty() {
@@ -181,6 +184,45 @@ impl QueryElement<'_> {
             self.handle(),
             self.shared_lock(),
             hints,
+        );
+    }
+}
+
+fn append_html_image_size_declarations(element: &Element, block: &mut PropertyDeclarationBlock) {
+    let dimensions = ["width", "height"].map(|attribute| {
+        element
+            .attribute(attribute)
+            .and_then(|value| parse_html_dimension(value, true, true))
+    });
+    // Both absolute dimension attributes also map to `aspect-ratio: auto w/h`.
+    // This survives an author width/height override, including height:auto,
+    // while an author aspect-ratio declaration can override the hint itself.
+    if let [
+        Some(LengthPercentage::Length(width)),
+        Some(LengthPercentage::Length(height)),
+    ] = &dimensions
+        && let Some(width) = width.to_px_if_absolute()
+        && let Some(height) = height.to_px_if_absolute()
+    {
+        block.push(
+            PropertyDeclaration::AspectRatio(Box::new(AspectRatio::from_mapped_ratio(
+                width, height,
+            ))),
+            Importance::Normal,
+        );
+    }
+    for (dimension, is_width) in dimensions.into_iter().zip([true, false]) {
+        let Some(size) = dimension else {
+            continue;
+        };
+        let size = style::values::generics::length::Size::LengthPercentage(NonNegative(size));
+        block.push(
+            if is_width {
+                PropertyDeclaration::Width(size)
+            } else {
+                PropertyDeclaration::Height(size)
+            },
+            Importance::Normal,
         );
     }
 }
@@ -328,7 +370,7 @@ fn append_parsed_presentation_declaration(
     }
 }
 
-/// Parses the legacy HTML dimension grammar used by table attributes.
+/// Parses the legacy HTML dimension grammar used by HTML presentation attributes.
 ///
 /// Blink accepts an initial run of ASCII digits, an optional fractional part,
 /// and then either `%` or arbitrary trailing garbage. Blink classifies an
