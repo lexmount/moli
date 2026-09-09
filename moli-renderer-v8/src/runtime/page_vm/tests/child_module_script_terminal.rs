@@ -119,30 +119,15 @@ fn page_vm_replacement_rejects_naturally_colliding_terminal_owner() {
     run_page_vm_large_stack_async_test(
         "child-module-terminal-page-vm-replacement-collision",
         || async move {
-            let (base_url, server) = spawn_path_response_http_server(vec![
-                (
-                    "/initial-terminal.js",
-                    "HTTP/1.1 200 OK",
-                    "export const initial = 1;".to_owned(),
-                    Duration::ZERO,
-                ),
-                (
-                    "/replacement.html",
-                    "HTTP/1.1 200 OK",
-                    "<!doctype html><html><body></body></html>".to_owned(),
-                    Duration::ZERO,
-                ),
-                (
-                    "/replacement-terminal.js",
-                    "HTTP/1.1 200 OK",
-                    "export const replacement = 2;".to_owned(),
-                    Duration::ZERO,
-                ),
-            ])
-            .await;
+            // This low-level fixture has no owner scheduler to resume a
+            // streamed main document. Supply a complete document and real
+            // module fetch inputs without depending on HTTP body arrival.
+            // The HTTP terminal producer is covered by the realm test above.
+            let replacement_url =
+                "data:text/html,<!doctype html><html><head></head><body></body></html>";
             let loader = crate::network::ResourceRequestClient::new(&FetchConfig::default())
                 .expect("loader");
-            let document_url = Url::parse(&format!("{base_url}/initial.html")).unwrap();
+            let document_url = Url::parse("https://example.com/initial.html").unwrap();
             let (mut page_vm, mut resource_source, mut owner_wake_rx) =
                 page_vm_with_bound_task_sources_and_owner_wake(&loader, document_url);
             let local_executor = page_vm.local_executor.clone();
@@ -154,12 +139,11 @@ fn page_vm_replacement_rejects_naturally_colliding_terminal_owner() {
                         &mut resource_source,
                         &mut owner_wake_rx,
                         "terminal-collision",
-                        &format!("{base_url}/initial-terminal.js"),
+                        "data:text/javascript,export const initial = 1;",
                     )
                     .await?;
                     let retired_root = page_vm.document_lifecycle.identity().document;
 
-                    let replacement_url = format!("{base_url}/replacement.html");
                     page_vm
                         .vm_mut()
                         .eval(&format!("location.href = {replacement_url:?}; 'queued'"))?;
@@ -185,7 +169,7 @@ fn page_vm_replacement_rejects_naturally_colliding_terminal_owner() {
                         &mut resource_source,
                         &mut owner_wake_rx,
                         "terminal-collision",
-                        &format!("{base_url}/replacement-terminal.js"),
+                        "data:text/javascript,export const replacement = 2;",
                     )
                     .await?;
                     assert_eq!(
@@ -215,9 +199,6 @@ fn page_vm_replacement_rejects_naturally_colliding_terminal_owner() {
                 })
                 .await
                 .expect("PageVm replacement terminals should use the exact owner arbiter");
-            server
-                .await
-                .expect("PageVm replacement terminal server should finish");
         },
     );
 }
