@@ -97,6 +97,9 @@ async fn child_stream_readiness_probe(operation: &str) -> Result<serde_json::Val
         document.body.append(frame);
       });
       frame.onload = null;
+      // The load promise resumes during callback cleanup. Start a fresh
+      // task so document.open() does not inherit the active load delivery.
+      await new Promise(resolve => setTimeout(resolve, 0));
       const doc = frame.contentDocument;
       const win = frame.contentWindow;
       const oldBody = doc.body;
