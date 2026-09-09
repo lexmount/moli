@@ -15,6 +15,9 @@ type Delivery = Pin<Box<dyn Future<Output = EventResult> + Send>>;
 type Sending = Pin<Box<dyn Future<Output = Result<(), String>> + Send>>;
 const CLOSE_TIMEOUT: Duration = Duration::from_secs(5);
 
+#[cfg(test)]
+mod tests;
+
 struct Outgoing {
     data: Vec<u8>,
     opcode: FrameOpcode,
@@ -180,7 +183,6 @@ impl Session {
     fn begin_close(&mut self, payload: Vec<u8>, publish_closing: bool) {
         if self.closing.requested.is_none() {
             self.closing.requested = Some(payload);
-            self.closing.deadline = Some(Instant::now() + CLOSE_TIMEOUT);
             if publish_closing {
                 self.outbox.push_back(Event::Closing {
                     socket_id: self.socket_id,
@@ -226,6 +228,11 @@ impl Session {
         if !self.closing.sent
             && let Some(data) = self.closing.requested.clone()
         {
+            // Local close waits for previously accepted data. Only submitting
+            // Close starts its handshake deadline, not draining that data.
+            self.closing
+                .deadline
+                .get_or_insert_with(|| Instant::now() + CLOSE_TIMEOUT);
             return Some((
                 CurlWebSocketSend {
                     token: 0,
@@ -256,6 +263,11 @@ impl Session {
                 payload,
             } => {
                 self.closing.received = Some((code, reason));
+                // A peer Close already starts the handshake, even if a data
+                // frame is still in flight. Do not extend an existing deadline.
+                self.closing
+                    .deadline
+                    .get_or_insert_with(|| Instant::now() + CLOSE_TIMEOUT);
                 self.outgoing.clear();
                 self.pongs.clear();
                 self.begin_close(payload, false);
