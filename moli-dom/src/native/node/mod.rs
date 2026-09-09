@@ -502,9 +502,14 @@ impl Node {
 
     pub fn direct_text_content(&self, dom: &NativeDom) -> String {
         self.child_ids(dom)
-            .filter_map(|child_id| dom.node(child_id).and_then(Node::as_text))
-            .fold(String::new(), |mut out, text| {
-                out.push_str(text.data());
+            .filter_map(|child_id| match dom.node(child_id)?.data() {
+                NodeData::Text(text) => Some(text.data()),
+                // CDATASection implements Text, including for child text content.
+                NodeData::CDataSection(cdata) => Some(cdata.data()),
+                _ => None,
+            })
+            .fold(String::new(), |mut out, data| {
+                out.push_str(data);
                 out
             })
     }

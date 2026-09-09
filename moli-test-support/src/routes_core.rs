@@ -149,6 +149,23 @@ pub(super) async fn static_page() -> Html<&'static str> {
     Html(STATIC_HTML)
 }
 
+pub(super) async fn child_dynamic_markup_document(
+    Query(params): Query<HashMap<String, String>>,
+) -> Response {
+    let content_type = match params.get("type").map(String::as_str) {
+        Some("text/xml") => "text/xml",
+        Some("application/xml") => "application/xml",
+        Some("application/xhtml+xml") => "application/xhtml+xml",
+        Some("image/svg+xml") => "image/svg+xml",
+        _ => "text/html",
+    };
+    (
+        [(CONTENT_TYPE, content_type)],
+        params.get("markup").cloned().unwrap_or_default(),
+    )
+        .into_response()
+}
+
 pub(super) async fn future_interval_done_page() -> Html<&'static str> {
     Html(FUTURE_INTERVAL_DONE_HTML)
 }
