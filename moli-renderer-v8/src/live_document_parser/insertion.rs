@@ -88,4 +88,14 @@ impl ParserInsertionHandle {
     pub(crate) fn take_discovery_signals(&self) -> LiveDocumentParserDiscoverySignals {
         std::mem::take(&mut *self.discovery_signals.borrow_mut())
     }
+
+    pub(crate) fn prepare_script(
+        &self,
+        request: super::ParserScriptPreparationRequest,
+        owner: &mut impl LiveDocumentParserOwner,
+    ) -> super::ParserScriptHandoff {
+        self.controller.with_parser_stream(|stream| {
+            stream.prepare_script_with_runtime_dom_consumer(request, owner)
+        })
+    }
 }
