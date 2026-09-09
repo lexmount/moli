@@ -80,13 +80,26 @@ pub(crate) fn navigate_location_object<'s>(
     kind: LocationNavigationKind,
     raw_target: Option<String>,
 ) {
+    let owner = runtime_window_owner(scope, location);
+    let replaces_unloaded_document = kind == LocationNavigationKind::Assign
+        && location_document_is_before_load_complete(scope, owner)
+        && !context_host_ptr_for_navigation_owner(scope, owner)
+            .is_some_and(|host| unsafe { &*host }.protocol_user_gesture_activation());
+    let kind = if replaces_unloaded_document {
+        LocationNavigationKind::Replace
+    } else {
+        kind
+    };
     navigate_location_object_with_source_element_and_child_navigate_event(
         scope,
         location,
         kind,
         raw_target,
         None,
-        LocationNavigationOptions::default(),
+        LocationNavigationOptions {
+            dispatch_child_navigate_event_for_all_kinds: replaces_unloaded_document,
+            ..LocationNavigationOptions::default()
+        },
     );
 }
 
@@ -368,17 +381,6 @@ fn navigate_location_object_with_source_element_and_child_navigate_event<'s>(
             }
             LocationNavigationKind::Assign if source_element.is_some() && exact_same_href => {
                 LocationNavigationKind::Replace
-            }
-            LocationNavigationKind::Assign
-                if source_element.is_none()
-                    && runtime_window_is_global(scope, owner)
-                    && top_level_document_is_before_load_complete(scope) =>
-            {
-                if force_exact_same_document_navigation {
-                    LocationNavigationKind::Assign
-                } else {
-                    LocationNavigationKind::Replace
-                }
             }
             _ => kind,
         };
@@ -880,11 +882,23 @@ pub(crate) fn dispatch_top_level_form_navigation_event<'s>(
     !outcome.intercepted
 }
 
-fn top_level_document_is_before_load_complete(scope: &mut v8::PinScope<'_, '_>) -> bool {
-    context_host_ptr_from_global_bridge(scope).is_some_and(|host_ptr| {
-        unsafe { &*host_ptr }.host_document().ready_state()
-            != crate::dom::native::DocumentReadyState::Complete
-    })
+fn location_document_is_before_load_complete<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    owner: v8::Local<'s, v8::Object>,
+) -> bool {
+    let Some(host_ptr) = context_host_ptr_for_navigation_owner(scope, owner) else {
+        return false;
+    };
+    let host = unsafe { &*host_ptr };
+    let document_handle = if runtime_window_is_global(scope, owner) {
+        Some(host.document_handle())
+    } else {
+        child_browsing_context_handle_for_runtime_owner(scope, owner)
+            .and_then(|handle| host.frame_owner_current_child_snapshot(handle))
+            .map(|snapshot| snapshot.document_handle)
+    };
+    document_handle
+        .is_some_and(|document| host.document_is_completely_loaded(document) == Some(false))
 }
 
 const LOCATION_INTERCEPT_SETTLEMENT_NAVIGATION_SLOT: &str = "__lmLocationInterceptNavigation";
