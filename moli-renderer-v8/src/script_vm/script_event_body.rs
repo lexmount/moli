@@ -105,6 +105,9 @@ fn dispatch_script_failure_error_body(
     filename: Option<&str>,
     error_value: Option<ScriptErrorValue>,
 ) -> Result<()> {
+    // Script-owned failures are reported inside the script or its rejection
+    // job, after V8 has already unwound the original JavaScript frames.
+    let _execution_scope = crate::script_cleanup::ScriptExecutionScope::enter(scope);
     let global = scope.get_current_context().global(scope);
     let message_value = v8_string(scope, message)
         .ok_or_else(|| anyhow!("failed to allocate reportError message"))?;

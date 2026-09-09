@@ -62,7 +62,7 @@ location.hash = "#trusted";
 }
 
 #[tokio::test(flavor = "current_thread")]
-async fn hashchange_body_leaves_reactions_for_selected_callback_completion() {
+async fn hashchange_body_cleans_up_callbacks_before_selected_completion() {
     run_page_vm_async_test(async move {
         let loader =
             crate::network::ResourceRequestClient::new(&FetchConfig::default()).expect("loader");
@@ -95,8 +95,8 @@ location.hash = "#body";
             page_vm
                 .vm_mut()
                 .eval("__hashChangeBodyBoundary.join('|')")?,
-            "callback:body",
-            "the body-only executor must leave Promise reactions pending"
+            "callback:body|microtask:body",
+            "listener cleanup must drain reactions before the selected task completes"
         );
 
         page_vm.finish_selected_page_callback_task(&loader).await?;
@@ -105,7 +105,7 @@ location.hash = "#body";
                 .vm_mut()
                 .eval("__hashChangeBodyBoundary.join('|')")?,
             "callback:body|microtask:body",
-            "the selected callback completion must own the single task checkpoint"
+            "selected task completion must not repeat callback reactions or their inline scripts"
         );
         Ok::<_, anyhow::Error>(())
     })

@@ -6,9 +6,10 @@ use crate::{
 };
 
 #[tokio::test(flavor = "current_thread")]
-async fn navigation_api_task_body_leaves_reaction_for_selected_completion() {
+async fn navigation_api_task_body_cleans_up_callbacks_before_selected_completion() {
     run_page_vm_async_test(async move {
-        let loader = crate::network::ResourceRequestClient::new(&FetchConfig::default()).expect("loader");
+        let loader =
+            crate::network::ResourceRequestClient::new(&FetchConfig::default()).expect("loader");
         let document_url =
             Url::parse("https://example.com/navigation-api-body-completion-boundary").unwrap();
         let (mut page_vm, _resource_source, _owner_wake_rx) =
@@ -45,8 +46,8 @@ navigation.navigate("#replacement");
                 .eval_without_microtask_checkpoint_for_test(
                     "globalThis.__navigationApiBodyBoundary.join('|')",
                 )?,
-            "success",
-            "the Navigation API task body must leave its Promise reaction for selected-task completion"
+            "success|microtask|runtime-script",
+            "listener cleanup must drain reactions before the selected task completes"
         );
         let completion = outcome.action.into_page_task_completion();
         assert!(matches!(completion, PageTaskCompletion::CallbackCompletion));
@@ -58,7 +59,7 @@ navigation.navigate("#replacement");
                 .vm_mut()
                 .eval("globalThis.__navigationApiBodyBoundary.join('|')")?,
             "success|microtask|runtime-script",
-            "selected callback completion must own the reaction and runtime-script follow-up"
+            "selected task completion must not repeat callback reactions or their inline scripts"
         );
         Ok::<_, anyhow::Error>(())
     })
