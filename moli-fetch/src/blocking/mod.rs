@@ -652,57 +652,12 @@ pub(crate) fn configure_easy<H: Handler>(
     easy.accept_encoding("")
         .context("failed to enable curl response decompression")?;
 
-    easy.ssl_verify_peer(config.tls_verify_host())
-        .context("failed to configure curl TLS peer verification")?;
-    easy.ssl_verify_host(config.tls_verify_host())
-        .context("failed to configure curl TLS host verification")?;
-    if let Some(ca_cert) = config.ca_cert() {
-        easy.cainfo(ca_cert).with_context(|| {
-            format!(
-                "failed to configure curl CA certificate `{}`",
-                ca_cert.display()
-            )
-        })?;
-    }
     // TLS client identities are Fetch credentials. Check each redirect target;
     // curl also uses the client certificate configuration to match reusable
     // connections, keeping authenticated and anonymous requests separate.
-    if request.allows_credentials_for_url(request_url) {
-        if let Some(client_cert) = config.client_cert() {
-            easy.ssl_cert(client_cert).with_context(|| {
-                format!(
-                    "failed to configure curl client certificate `{}`",
-                    client_cert.display()
-                )
-            })?;
-            let cert_type = match client_cert
-                .extension()
-                .and_then(|extension| extension.to_str())
-                .map(str::to_ascii_lowercase)
-                .as_deref()
-            {
-                Some("p12" | "pfx") => "P12",
-                Some("cer" | "der") => "DER",
-                _ => "PEM",
-            };
-            easy.ssl_cert_type(cert_type)
-                .context("failed to configure curl client certificate type")?;
-        }
-        if let Some(client_key) = config.client_key() {
-            easy.ssl_key(client_key).with_context(|| {
-                format!(
-                    "failed to configure curl client private key `{}`",
-                    client_key.display()
-                )
-            })?;
-            easy.ssl_key_type("PEM")
-                .context("failed to configure curl client private key type")?;
-        }
-        if let Some(password) = config.client_cert_password() {
-            easy.key_password(password)
-                .context("failed to configure curl client certificate password")?;
-        }
-    }
+    config
+        .tls_config()
+        .configure(easy, request.allows_credentials_for_url(request_url))?;
     easy.useragent(config.user_agent())
         .context("failed to set curl user-agent")?;
     easy.url(request_url.as_str())
