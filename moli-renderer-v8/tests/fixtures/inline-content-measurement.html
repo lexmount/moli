@@ -1,0 +1,63 @@
+<!doctype html><meta charset="utf-8">
+<title>Inline measurements consume content constraints and return content extents</title>
+<style>
+@font-face {font-family:MeasurementAhem;src:url("{{MOLI_AHEM_DATA_URL}}")}
+html,body {margin:0;padding:0;background:white} html {overflow:hidden}
+.frame {position:absolute;width:160px;height:160px;font:0/0 sans-serif}
+.subject {inline-size:40px;padding-inline:10px;border-inline:10px solid blue;
+  padding-block:6px;border-block:2px solid blue;font:20px/20px MeasurementAhem;
+  background:green;color:white;flex:none;align-self:start;justify-self:start}
+</style><body><script>
+const modes=['horizontal-tb','vertical-rl','vertical-lr','sideways-rl','sideways-lr'];
+const roles=['block','inline-block','float','absolute','flex-item','grid-item'];
+const cases=[];let phase='initial';
+for(const mode of modes) for(const direction of ['ltr','rtl'])
+for(const orthogonal of [false,true]) for(const role of roles) {
+  const index=cases.length,frame=document.createElement('div');frame.className='frame';
+  const parentMode=orthogonal?(mode==='horizontal-tb'?'vertical-rl':'horizontal-tb'):mode;
+  frame.style.cssText=`left:${index%7*175}px;top:${Math.floor(index/7)*175}px;writing-mode:${parentMode}`;
+  const subject=document.createElement('div');subject.className='subject';
+  subject.id=`${mode}-${direction}-${orthogonal?'orthogonal':'parallel'}-${role}`;
+  subject.style.writingMode=mode;subject.style.direction=direction;
+  if(role==='inline-block') subject.style.display='inline-block';
+  if(role==='float') subject.style.float='left';
+  if(role==='absolute') subject.style.position='absolute';
+  if(role==='flex-item') {frame.style.display='flex';frame.style.alignItems='start';}
+  if(role==='grid-item') {frame.style.display='grid';frame.style.alignItems='start';frame.style.justifyItems='start';}
+  subject.textContent='X X X X X X';frame.append(subject);document.body.append(frame);
+  cases.push({subject,mode,direction});
+}
+function setOverflowPhase(value) {
+  phase=value;
+  for(const c of cases) {
+    c.subject.style.boxSizing=value==='end'?'border-box':'content-box';
+    c.subject.style.inlineSize=value==='end'?'100px':'40px';
+    c.subject.style.direction=value==='start'?(c.direction==='ltr'?'rtl':'ltr'):c.direction;
+    c.subject.style.transform=value==='end'?'translate(2px,3px)':'';
+    c.subject.style.display=value==='hidden'?'none':c.subject.style.display;
+  }
+}
+function collectOverflowChecks() {
+  const checks=[];
+  for(const c of cases) {
+    const e=c.subject,id=e.id;
+    if(phase==='hidden') {checks.push({id,actual:[e.getClientRects().length],expected:[0]});continue;}
+    const contentInline=phase==='end'?60:40;
+    // MoliAhem has 600-unit advances: at 20px each glyph/space is 12px.
+    // Six glyphs wrap as 2/2/2 at 40px and 3/3 at 60px. The
+    // 40px inline border+padding must never become line-breaking space.
+    const contentBlock=phase==='end'?40:60;
+    const inline=contentInline+40,block=contentBlock+16;
+    const physical=(i,b)=>c.mode==='horizontal-tb'?[i,b]:[b,i];
+    const borderBox=physical(inline,block),client=physical(contentInline+20,contentBlock+12);
+    const rect=e.getBoundingClientRect();
+    const endPixel=c.mode==='horizontal-tb'?[inline/2,block-1]
+      :c.mode==='vertical-rl'||c.mode==='sideways-rl'?[0,inline/2]:[block-1,inline/2];
+    checks.push({id:id+':border-box',actual:[rect.width,rect.height],expected:borderBox,
+      pixel:[rect.x+endPixel[0],rect.y+endPixel[1]],color:[0,0,255,255]});
+    checks.push({id:id+':client-box',actual:[e.clientWidth,e.clientHeight],expected:client});
+    checks.push({id:id+':scroll-size',actual:[e.scrollWidth,e.scrollHeight],expected:client});
+  }
+  return checks;
+}
+</script>

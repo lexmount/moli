@@ -2,6 +2,16 @@ use super::*;
 use base64::Engine as _;
 
 #[tokio::test(flavor = "current_thread")]
+async fn screenshot_measures_inline_content_without_border_box_double_counting() {
+    assert_logical_inline_fixture(
+        include_str!("../../../../tests/fixtures/inline-content-measurement.html"),
+        360,
+        120,
+    )
+    .await;
+}
+
+#[tokio::test(flavor = "current_thread")]
 async fn screenshot_positions_final_fieldset_fragments_without_losing_parent_alignment() {
     assert_logical_inline_fixture(
         include_str!("../../../../tests/fixtures/logical-fieldset-positioning.html"),

@@ -2022,14 +2022,17 @@ where
             &style,
             context,
             resolve_stylo_calc_value,
-            |known_dimensions, available_space| {
+            |_, available_content_space| {
+                // The leaf adapter has already resolved known border-box
+                // dimensions into content space, including padding, borders
+                // and scrollbars. Parley must consume that same space during
+                // both intrinsic measurement and final layout.
                 let text_layout = text_layout
                     .get_or_insert_with(|| inline_context.laid_out.clone().unwrap_or_default());
                 let result = self.measure_inline_context(
                     id,
                     inputs,
-                    known_dimensions,
-                    available_space,
+                    available_content_space,
                     alignment,
                     &inline_context,
                     text_layout,
@@ -2167,7 +2170,6 @@ where
         &mut self,
         owner: LayoutBoxId,
         inputs: LayoutInput,
-        known_dimensions: Size<Option<f32>>,
         available_space: Size<AvailableSpace>,
         alignment: parley::Alignment,
         context: &InlineFormattingContext,
@@ -2210,7 +2212,6 @@ where
             ..child_inputs
         };
         let available_space = parent_writing_mode.to_logical(available_space);
-        let known_dimensions = parent_writing_mode.to_logical(known_dimensions);
         // CSS Sizing resolves cyclic percentages against zero while measuring
         // intrinsic contributions. Keeping the basis as `None` discards the
         // entire calc expression, including its absolute term (for example
@@ -2316,9 +2317,9 @@ where
             }
         }
 
-        let containing_width = known_dimensions
+        let containing_width = available_space
             .inline_size
-            .or_else(|| available_space.inline_size.into_option())
+            .into_option()
             .unwrap_or_default();
         let (indent, indent_options) = self.boxes[owner.index()]
             .style
@@ -2329,11 +2330,10 @@ where
         // can be shared by all intrinsic and final probes in this fresh pass.
         let content_widths =
             content_widths_memo.content_widths_for_probe(layout, indent, indent_options);
-        let has_definite_width = known_dimensions.inline_size.is_some()
-            || parent_writing_mode
-                .to_logical(inputs.known_dimensions)
-                .inline_size
-                .is_some()
+        let has_definite_width = parent_writing_mode
+            .to_logical(inputs.known_dimensions)
+            .inline_size
+            .is_some()
             || self.boxes[owner.index()]
                 .style
                 .taffy
@@ -2429,23 +2429,18 @@ where
                 float_max_width = float_max_width.max(left_band + right_band);
             }
         }
-        let width = known_dimensions.inline_size.unwrap_or_else(|| {
-            match available_space.inline_size {
-                AvailableSpace::MinContent => content_widths.min.max(float_min_width),
-                AvailableSpace::MaxContent => content_widths.max + float_max_width,
-                // Taffy has already resolved and clamped the content-box
-                // inline size before invoking the leaf measure function. A
-                // normal block IFC must lay out into that definite width;
-                // shrinking it to max-content here made RTL alignment and
-                // text-indent observe an unrelated inner width.
-                AvailableSpace::Definite(limit) if shrink_to_fit => (content_widths.max
-                    + float_max_width)
-                    .min(limit)
-                    .max(content_widths.min.max(float_min_width)),
-                AvailableSpace::Definite(limit) => limit,
-            }
-            .max(0.0)
-        });
+        let width = match available_space.inline_size {
+            AvailableSpace::MinContent => content_widths.min.max(float_min_width),
+            AvailableSpace::MaxContent => content_widths.max + float_max_width,
+            // A normal block IFC fills the resolved content constraint. Only
+            // a fit-content request clamps it to the intrinsic text widths.
+            AvailableSpace::Definite(limit) if shrink_to_fit => (content_widths.max
+                + float_max_width)
+                .min(limit)
+                .max(content_widths.min.max(float_min_width)),
+            AvailableSpace::Definite(limit) => limit,
+        }
+        .max(0.0);
         // Taffy may feed an intrinsic inline size back through a quantized
         // definite flex/grid constraint, while Parley's content-width and
         // line-breaking passes can accumulate the same glyph advances in a
@@ -2573,9 +2568,11 @@ where
         }
         let alignment_block_size = height.max(alignment_float_height);
         InlineMeasurement {
+            // Return content extents only. Taffy applies the owner's known
+            // sizes and box insets once when producing its outer layout.
             size: parent_writing_mode.to_physical(taffy::LogicalSize {
-                inline_size: known_dimensions.inline_size.unwrap_or(width),
-                block_size: known_dimensions.block_size.unwrap_or(height),
+                inline_size: width,
+                block_size: height,
             }),
             alignment_block_size,
             first_baseline: line_metrics.first_baseline,
