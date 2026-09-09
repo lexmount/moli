@@ -38,6 +38,7 @@ mod popup_close;
 mod popup_load_event;
 mod post_domcontentloaded_runtime;
 mod post_parse_owner_work;
+mod promise_rejection;
 mod ready_signal;
 mod rendering_update;
 mod resource_completions;
@@ -385,6 +386,12 @@ pub(crate) use self::popup_load_event::{
 pub(crate) use self::post_parse_owner_work::{
     PostParseLifecycleQueueStats, PostParseLifecycleWork, PostParsePageOwnedWork,
     post_parse_lifecycle_queue_stats,
+};
+pub(crate) use self::promise_rejection::{
+    PagePromiseRejectionTargetEffect, PagePromiseRejectionTurnAction,
+    PagePromiseRejectionTurnOutcome, RendererPagePromiseRejectionOwner,
+    RendererPagePromiseRejectionSender, RendererPagePromiseRejectionTask,
+    RendererPagePromiseRejectionTaskId, RendererPagePromiseRejectionTaskKind,
 };
 use self::ready_signal::RendererPageTaskReadySignal;
 #[cfg(test)]
