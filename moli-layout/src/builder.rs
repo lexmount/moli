@@ -1149,14 +1149,17 @@ where
         parent: LayoutBoxId,
         children: Vec<LayoutBoxId>,
     ) -> Result<(), LayoutError> {
-        let establishes_inline_context = children
+        // Floats do not switch a flow container to block children. Like Blink's
+        // LayoutBlockFlow, a float-only container still establishes an IFC.
+        let establishes_inline_context = children.iter().copied().any(|child| {
+            self.is_meaningful_inline_in_flow(world, child)
+                || world
+                    .box_by_id(child)
+                    .is_some_and(|layout_box| layout_box.style.taffy.float != taffy::Float::None)
+        }) && !children
             .iter()
             .copied()
-            .any(|child| self.is_meaningful_inline_in_flow(world, child))
-            && !children
-                .iter()
-                .copied()
-                .any(|child| self.is_block_in_flow(world, child));
+            .any(|child| self.is_block_in_flow(world, child));
         world.replace_children(parent, children)?;
         world
             .box_by_id_mut(parent)
