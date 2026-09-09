@@ -26,6 +26,9 @@ mod child_readiness;
 #[path = "scripts/child_markup_insertion.rs"]
 mod child_markup_insertion;
 
+#[path = "scripts/child_script_text.rs"]
+mod child_script_text;
+
 fn diagnostic_global<'a>(
     page: &'a moli_core::page::Page,
     name: &str,
