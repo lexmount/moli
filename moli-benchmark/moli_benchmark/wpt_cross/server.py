@@ -36,6 +36,8 @@ import threading
 import time
 import uuid
 from collections.abc import Mapping
+from email import policy
+from email.parser import BytesParser
 from html import escape as html_escape
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -74,6 +76,9 @@ FETCH_ABORT_RESOURCE_PATHS = {
 }
 BENCH_TIMEOUT_MULTIPLIER_QUERY = "__moli_bench_timeout_multiplier"
 FORM_ECHO_PATH = "/html/semantics/forms/form-submission-0/form-echo.py"
+FORM_SUBMISSION_PATH = (
+    "/html/semantics/forms/form-submission-0/resources/form-submission.py"
+)
 BENCH_REPORT_BRIDGE_SRC_RE = re.compile(
     rb"(?P<prefix>\bsrc\s*=\s*)(?P<quote>['\"])"
     rb"/resources/testharnessreport\.js(?P=quote)",
@@ -1111,6 +1116,52 @@ def _form_echo_response(body: bytes) -> bytes:
     return b" ".join(f"{byte:02x}".encode("ascii") for byte in body)
 
 
+def _form_submission_response(
+    query: str, content_type: str | None, body: bytes
+) -> bytes:
+    """Validate entity bodies like the upstream form-submission.py fixture."""
+    params = dict(parse_qsl(query))
+    if params.get("query") == "1":
+        if content_type == "application/x-www-form-urlencoded":
+            valid = body == b"foo=bara"
+        elif content_type == "text/plain":
+            valid = body == b"qux=baz\r\n"
+        else:
+            # The upstream fallback compares the first parsed foo field, not
+            # the raw body. MIME parsing must respect boundaries and headers;
+            # a matching value elsewhere in the payload is not sufficient.
+            form_content_type = content_type or "application/x-www-form-urlencoded"
+            message = BytesParser(policy=policy.HTTP).parsebytes(
+                f"Content-Type: {form_content_type}\r\n\r\n".encode("latin-1") + body
+            )
+            # WPT's FieldStorage dispatches on the case-sensitive media token.
+            media_type = form_content_type.partition(";")[0].strip()
+            valid = False
+            if media_type == "application/x-www-form-urlencoded":
+                fields = parse_qsl(body.decode("latin-1"), keep_blank_values=True)
+                valid = (
+                    next((value for name, value in fields if name == "foo"), None)
+                    == "bar"
+                )
+            elif (
+                media_type == "multipart/form-data"
+                and message.is_multipart()
+            ):
+                for part in message.iter_parts():
+                    if part.get_param("name", header="content-disposition") == "foo":
+                        # FieldStorage does not decode Content-Transfer-Encoding
+                        # for form fields, and uploaded files are not byte values.
+                        valid = (
+                            not part.get_filename() and part.get_payload() == "bar"
+                        )
+                        break
+    elif "expected_body" in params:
+        valid = body == params["expected_body"].encode("utf-8")
+    else:
+        valid = False
+    return b"OK" if valid else b"FAIL"
+
+
 def _redirect_fixture_response(query: str) -> tuple[int, str] | None:
     """Return the shared redirect response used by static WPT fixture handlers."""
 
@@ -1767,6 +1818,17 @@ def _make_handler(
             }:
                 self._serve_fetch_resource_method()
                 return
+            if path == FORM_SUBMISSION_PATH:
+                raw = self._read_content_length_request_body()
+                if raw is not None:
+                    self._send_bytes(
+                        "text/plain",
+                        _form_submission_response(
+                            parsed.query, self.headers.get("Content-Type"), raw
+                        ),
+                        emit_body=True,
+                    )
+                return
             if path == FORM_ECHO_PATH:
                 raw = self._read_content_length_request_body()
                 if raw is not None:
@@ -1990,6 +2052,15 @@ def _make_handler(
                 return
             if path == FORM_ECHO_PATH:
                 self._send_bytes("text/plain", b"", emit_body=emit_body)
+                return
+            if path == FORM_SUBMISSION_PATH:
+                self._send_bytes(
+                    "text/plain",
+                    _form_submission_response(
+                        parsed.query, self.headers.get("Content-Type"), b""
+                    ),
+                    emit_body=emit_body,
+                )
                 return
             if path == "/xhr/resources/delay.py":
                 self._serve_xhr_delay(parsed.query, emit_body=emit_body)
