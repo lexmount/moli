@@ -17,7 +17,7 @@ use super::{RendererOwnerWakeSender, RendererOwnerWakeSource, RendererPageTaskRe
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum RendererPageIndexedDbTaskKind {
     RuntimeQueue(IndexedDbTaskId),
-    DrainBlockedOpenRequests,
+    DrainConnectionRequests,
 }
 
 /// Exact Window/realm owner of a Page-side IndexedDB task.

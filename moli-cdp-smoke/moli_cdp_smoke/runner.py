@@ -66,6 +66,8 @@ from .groups.target_lifecycle import run_target_lifecycle_group
 from .groups.tracing import run_raw_tracing_group, run_tracing_group
 from .groups.url_policy import run_url_policy_group
 from .groups.webgl_viewport import run_webgl_viewport_group
+from .groups.font_face import run_font_face_payload_group
+from .groups.svg_indexeddb_startup import run_svg_indexeddb_startup_group
 from .groups.media_error import run_media_error_group
 from .groups.workers import run_workers_group
 from .groups.xhr_sync_semantics import run_xhr_sync_semantics_group
@@ -353,6 +355,18 @@ BROWSER_GROUPS: tuple[SmokeGroup, ...] = (
         "Detached SVGRect interface, float conversion, and SVG feature detection.",
         "browser",
         run_svg_rect_group,
+    ),
+    SmokeGroup(
+        "svg-indexeddb-startup",
+        "SVG feature detection plus database migration and application readiness.",
+        "browser",
+        run_svg_indexeddb_startup_group,
+    ),
+    SmokeGroup(
+        "font-face",
+        "FontFace malformed-payload rejection and valid payload control contracts.",
+        "browser",
+        run_font_face_payload_group,
     ),
     SmokeGroup(
         "media-error",

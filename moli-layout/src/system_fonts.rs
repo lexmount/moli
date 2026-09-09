@@ -14,6 +14,10 @@ pub(crate) struct SystemFontFamilyResolver {
 }
 
 impl SystemFontFamilyResolver {
+    pub(crate) fn invalidate_substitutions(&mut self) {
+        self.substitutions.clear();
+    }
+
     pub(crate) fn new(collection: &mut Collection) -> Self {
         let system_families = collection
             .family_names()
@@ -202,6 +206,22 @@ mod platform {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn font_arrival_clears_substitutions_but_preserves_the_platform_inventory() {
+        let mut resolver = SystemFontFamilyResolver {
+            system_families: HashMap::from([("fallback".to_owned(), "Fallback".to_owned())]),
+            substitutions: HashMap::from([
+                ("arriving".to_owned(), Some("Fallback".to_owned())),
+                ("missing".to_owned(), None),
+            ]),
+            family_lookup_count: 2,
+        };
+        resolver.invalidate_substitutions();
+        assert!(resolver.substitutions.is_empty());
+        assert_eq!(resolver.system_families["fallback"], "Fallback");
+        assert_eq!(resolver.family_lookup_count, 2);
+    }
 
     #[test]
     fn shared_fontconfig_defaults_are_not_treated_as_named_aliases() {
