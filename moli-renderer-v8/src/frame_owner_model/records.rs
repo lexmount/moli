@@ -515,6 +515,9 @@ pub(crate) struct DocumentLifecycleRecord {
     domcontentloaded_transition_token: Option<DocumentLoadDelayTokenId>,
     complete_transition_token: Option<DocumentLoadDelayTokenId>,
     readiness: Option<DocumentReadinessState>,
+    // Unlike readiness and load-event progress, this is retained by
+    // document.open(). It becomes true only after the loading algorithm ends.
+    completely_loaded: bool,
     load: DocumentLoadEventProgress,
     child_load_delivery_admission: Option<FrameDocumentLoadDeliveryAdmissionId>,
     unload: DocumentUnloadEventProgress,
@@ -535,6 +538,7 @@ impl DocumentLifecycleRecord {
             domcontentloaded_transition_token: Some(domcontentloaded_transition_token),
             complete_transition_token: None,
             readiness: Some(DocumentReadinessState::Loading),
+            completely_loaded: false,
             load: DocumentLoadEventProgress::Pending,
             child_load_delivery_admission: None,
             unload: DocumentUnloadEventProgress::Pending,
@@ -546,12 +550,14 @@ impl DocumentLifecycleRecord {
         parsing_delay_token: DocumentLoadDelayTokenId,
         domcontentloaded_transition_token: DocumentLoadDelayTokenId,
         continuation: Option<DocumentOpenLoadContinuation>,
+        completely_loaded: bool,
     ) -> Self {
         let mut lifecycle = Self::loading(
             load_delivery_kind,
             parsing_delay_token,
             domcontentloaded_transition_token,
         );
+        lifecycle.completely_loaded = completely_loaded;
         lifecycle.load = match (load_delivery_kind, continuation) {
             (_, None) => DocumentLoadEventProgress::Pending,
             (DocumentLoadDeliveryKind::Main, Some(DocumentOpenLoadContinuation::MainLoad)) => {
@@ -590,6 +596,10 @@ impl DocumentLifecycleRecord {
             }
             _ => None,
         }
+    }
+
+    pub(super) fn is_completely_loaded(&self) -> bool {
+        self.completely_loaded
     }
 
     pub(super) fn can_finish_parsing(&self) -> bool {
@@ -746,6 +756,12 @@ impl DocumentLifecycleRecord {
         self.complete_transition_token = None;
         self.readiness = Some(DocumentReadinessState::Complete);
         self.load = next_load;
+        if next_load == DocumentLoadEventProgress::Dispatched {
+            // document.open() inside a main load callback inherits that
+            // delivery instead of dispatching load again. Completing the
+            // replacement parser must also settle its loaded status.
+            self.completely_loaded = true;
+        }
         true
     }
 
@@ -768,6 +784,7 @@ impl DocumentLifecycleRecord {
         self.complete_transition_token = None;
         self.readiness = Some(DocumentReadinessState::Complete);
         self.load = DocumentLoadEventProgress::Suppressed;
+        self.completely_loaded = true;
         self.child_load_delivery_admission = None;
 
         Some(ready_state_changed)
@@ -796,6 +813,7 @@ impl DocumentLifecycleRecord {
         self.complete_transition_token = None;
         self.readiness = Some(DocumentReadinessState::Complete);
         self.load = DocumentLoadEventProgress::Ready;
+        self.completely_loaded = true;
         true
     }
 
@@ -877,6 +895,7 @@ impl DocumentLifecycleRecord {
             return Some(MainDocumentLoadCompletionState::WaitingForDescendants);
         }
         self.load = DocumentLoadEventProgress::Dispatched;
+        self.completely_loaded = true;
         Some(MainDocumentLoadCompletionState::Completed)
     }
 
@@ -890,6 +909,7 @@ impl DocumentLifecycleRecord {
             return Some(MainDocumentLoadCompletionState::WaitingForDescendants);
         }
         self.load = DocumentLoadEventProgress::Dispatched;
+        self.completely_loaded = true;
         Some(MainDocumentLoadCompletionState::Completed)
     }
 
@@ -986,6 +1006,9 @@ impl DocumentLifecycleRecord {
             }
         };
         self.load = next;
+        if finished {
+            self.completely_loaded = true;
+        }
         Some(finished)
     }
 

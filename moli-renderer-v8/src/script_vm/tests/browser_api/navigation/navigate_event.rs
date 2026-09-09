@@ -1644,6 +1644,8 @@ async fn location_href_double_intercept_cancels_first_settlement() {
     let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).expect("loader");
     let mut vm = new_storage_test_vm_with_loader("https://example.com/start", &loader);
 
+    // Both assignments occur before complete loading, so both intercepted
+    // navigations replace the entry while preserving their abort ordering.
     let setup = vm
         .eval(
             r##"
@@ -1697,7 +1699,7 @@ async fn location_href_double_intercept_cancels_first_settlement() {
         .expect("location double setup should evaluate");
     assert_eq!(
         setup,
-        "locationInterceptSpoof:false:spoof-location.js:https://example.com/start:null|navigate:https://example.com/start:null|currententrychange:https://example.com/common/blank.html#1:push|handler:https://example.com/common/blank.html#1:push|abort:AbortError:https://example.com/common/blank.html#1:push|navigateerror:AbortError:https://example.com/common/blank.html#1:push|navigate:https://example.com/common/blank.html#1:null|currententrychange:https://example.com/common/blank.html#2:replace|handler:https://example.com/common/blank.html#2:replace"
+        "locationInterceptSpoof:false:spoof-location.js:https://example.com/start:null|navigate:https://example.com/start:null|currententrychange:https://example.com/common/blank.html#1:replace|handler:https://example.com/common/blank.html#1:replace|abort:AbortError:https://example.com/common/blank.html#1:replace|navigateerror:AbortError:https://example.com/common/blank.html#1:replace|navigate:https://example.com/common/blank.html#1:null|currententrychange:https://example.com/common/blank.html#2:replace|handler:https://example.com/common/blank.html#2:replace"
     );
 
     vm.advance_timers_until_deadline_for_test(&loader)
@@ -1708,6 +1710,6 @@ async fn location_href_double_intercept_cancels_first_settlement() {
         .expect("location double log should evaluate");
     assert_eq!(
         settled,
-        "locationInterceptSpoof:false:spoof-location.js:https://example.com/start:null|navigate:https://example.com/start:null|currententrychange:https://example.com/common/blank.html#1:push|handler:https://example.com/common/blank.html#1:push|abort:AbortError:https://example.com/common/blank.html#1:push|navigateerror:AbortError:https://example.com/common/blank.html#1:push|navigate:https://example.com/common/blank.html#1:null|currententrychange:https://example.com/common/blank.html#2:replace|handler:https://example.com/common/blank.html#2:replace|transition-rejected:AbortError:https://example.com/common/blank.html#2:replace|microtask:https://example.com/common/blank.html#2:replace|handler-timeout:https://example.com/common/blank.html#2:replace|handler-timeout:https://example.com/common/blank.html#2:replace|navigatesuccess:https://example.com/common/blank.html#2:replace|transition-finished:https://example.com/common/blank.html#2:null"
+        "locationInterceptSpoof:false:spoof-location.js:https://example.com/start:null|navigate:https://example.com/start:null|currententrychange:https://example.com/common/blank.html#1:replace|handler:https://example.com/common/blank.html#1:replace|abort:AbortError:https://example.com/common/blank.html#1:replace|navigateerror:AbortError:https://example.com/common/blank.html#1:replace|navigate:https://example.com/common/blank.html#1:null|currententrychange:https://example.com/common/blank.html#2:replace|handler:https://example.com/common/blank.html#2:replace|transition-rejected:AbortError:https://example.com/common/blank.html#2:replace|microtask:https://example.com/common/blank.html#2:replace|handler-timeout:https://example.com/common/blank.html#2:replace|handler-timeout:https://example.com/common/blank.html#2:replace|navigatesuccess:https://example.com/common/blank.html#2:replace|transition-finished:https://example.com/common/blank.html#2:null"
     );
 }
