@@ -195,7 +195,6 @@ impl CallbackInvoker {
             log_level,
             callback_name,
             invocation,
-            false,
             |_scope, outcome| outcome,
         )
     }
@@ -209,26 +208,15 @@ impl CallbackInvoker {
         invocation: CallbackInvocation<'s, '_>,
         complete: impl FnOnce(&mut v8::PinScope<'s, '_>, CallbackInvocationOutcome) -> R,
     ) -> R {
-        let host_ptr = invocation.host_ptr;
-        let event_callback_scope = host_ptr
-            .map(|host_ptr| unsafe { &mut *host_ptr }.enter_event_callback_invocation_scope());
-        let defer_window_event_restore = event_callback_scope
-            .as_ref()
-            .is_some_and(|event_scope| event_scope.is_outermost())
-            && host_ptr
-                .is_some_and(|host_ptr| !unsafe { &*host_ptr }.explicit_event_dispatch_is_active());
-        let result = Self::invoke_with_completion(
+        Self::invoke_with_completion(
             scope,
             callback_kind,
             log_label,
             log_level,
             callback_name,
             invocation,
-            defer_window_event_restore,
             complete,
-        );
-        drop(event_callback_scope);
-        result
+        )
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -239,7 +227,6 @@ impl CallbackInvoker {
         log_level: CallbackExceptionLogLevel,
         callback_name: &str,
         invocation: CallbackInvocation<'s, '_>,
-        defer_window_event_restore: bool,
         complete: impl FnOnce(&mut v8::PinScope<'s, '_>, CallbackInvocationOutcome) -> R,
     ) -> R {
         if V8ExecutionWatchdog::callback_dispatch_has_timed_out(scope) {
@@ -283,96 +270,96 @@ impl CallbackInvoker {
             scope,
             invocation.resource_initiator.as_ref(),
         );
-        with_webidl_callback_contexts(
-            scope,
-            invocation.relevant_context,
-            invocation.incumbent_context,
-            |scope| {
-                let relevant_dispatch_scope = invocation
-                    .relevant_identity
-                    .map(WindowExecutionContextIdentity::dispatch_scope);
-                let previous_relevant_dispatch_scope =
-                    relevant_dispatch_scope.map(|dispatch_scope| dispatch_scope.enter(scope));
-                let relevant_context = invocation.relevant_context;
-                let previous_window_event =
-                    invocation
-                        .host_ptr
-                        .and(invocation.current_event)
-                        .map(|event| {
-                            let global = relevant_context.global(scope);
-                            let previous = get_private_value(scope, global, WINDOW_EVENT_SLOT)
-                                .unwrap_or_else(|| v8::undefined(scope).into());
-                            set_private_value(scope, global, WINDOW_EVENT_SLOT, event.into());
-                            previous
-                        });
-
-                let webidl_invocation = WebIdlCallbackInvocation::new(
-                    invocation.callback,
-                    invocation.callback_this,
-                    invocation.is_callable,
-                    invocation.operation_name,
-                    invocation.arguments,
-                );
-                let result = crate::resource_initiator::with_callback_anchor(
-                    scope,
-                    resource_initiator,
-                    |scope| {
-                        invoke_webidl_callback(
-                            scope,
-                            webidl_invocation,
-                            |scope, callback, receiver, arguments| {
-                                invoke_callback_with_report(
-                                    scope,
-                                    callback_kind,
-                                    log_label,
-                                    log_level,
-                                    callback_name,
-                                    callback,
-                                    receiver,
-                                    arguments,
-                                )
-                            },
-                            |scope, failure| {
-                                capture_callback_resolution_failure(
-                                    scope,
-                                    log_label,
-                                    log_level,
-                                    callback_name,
-                                    failure,
-                                )
-                            },
-                        )
-                    },
-                );
-
-                let outcome = match result {
-                    Ok(value) => CallbackInvocationOutcome::Returned(value),
-                    Err(report) => CallbackInvocationOutcome::Threw(report),
-                };
-                let completed = complete(scope, outcome);
-
-                if let Some(previous) = previous_window_event {
-                    if defer_window_event_restore && let Some(host_ptr) = invocation.host_ptr {
-                        crate::context_bootstrap::enqueue_window_event_restore_after_microtask_checkpoint(
-                            scope,
-                            host_ptr,
-                            invocation.relevant_identity,
-                            relevant_context,
-                            previous,
-                        );
-                    } else {
+        {
+            let scope = &mut v8::ContextScope::new(scope, invocation.relevant_context);
+            let relevant_dispatch_scope = invocation
+                .relevant_identity
+                .map(WindowExecutionContextIdentity::dispatch_scope);
+            let previous_relevant_dispatch_scope =
+                relevant_dispatch_scope.map(|dispatch_scope| dispatch_scope.enter(scope));
+            let relevant_context = invocation.relevant_context;
+            let previous_window_event =
+                invocation
+                    .host_ptr
+                    .and(invocation.current_event)
+                    .map(|event| {
                         let global = relevant_context.global(scope);
-                        set_private_value(scope, global, WINDOW_EVENT_SLOT, previous);
-                    }
-                }
-                if let (Some(dispatch_scope), Some(previous_dispatch_scope)) =
-                    (relevant_dispatch_scope, previous_relevant_dispatch_scope)
-                {
-                    dispatch_scope.restore(scope, previous_dispatch_scope);
-                }
-                completed
-            },
-        )
+                        let previous = get_private_value(scope, global, WINDOW_EVENT_SLOT)
+                            .unwrap_or_else(|| v8::undefined(scope).into());
+                        set_private_value(scope, global, WINDOW_EVENT_SLOT, event.into());
+                        previous
+                    });
+
+            let webidl_invocation = WebIdlCallbackInvocation::new(
+                invocation.callback,
+                invocation.callback_this,
+                invocation.is_callable,
+                invocation.operation_name,
+                invocation.arguments,
+            );
+            let execution_scope = crate::script_cleanup::ScriptExecutionScope::enter(scope);
+            let result = crate::resource_initiator::with_callback_anchor(
+                scope,
+                resource_initiator,
+                |scope| {
+                    with_webidl_callback_contexts(
+                        scope,
+                        invocation.relevant_context,
+                        invocation.incumbent_context,
+                        |scope| {
+                            invoke_webidl_callback(
+                                scope,
+                                webidl_invocation,
+                                |scope, callback, receiver, arguments| {
+                                    invoke_callback_with_report(
+                                        scope,
+                                        callback_kind,
+                                        log_label,
+                                        log_level,
+                                        callback_name,
+                                        callback,
+                                        receiver,
+                                        arguments,
+                                    )
+                                },
+                                |scope, failure| {
+                                    capture_callback_resolution_failure(
+                                        scope,
+                                        log_label,
+                                        log_level,
+                                        callback_name,
+                                        failure,
+                                    )
+                                },
+                            )
+                        },
+                    )
+                },
+            );
+            drop(execution_scope);
+            // Web IDL cleans up the callback and script before returning
+            // an abrupt completion to DOM's exception-reporting steps.
+            // Keep currentTarget, passive state, and window.event alive
+            // throughout that checkpoint.
+            crate::script_cleanup::perform_callback_cleanup_checkpoint(scope);
+
+            let outcome = match result {
+                Ok(value) => CallbackInvocationOutcome::Returned(value),
+                Err(report) => CallbackInvocationOutcome::Threw(report),
+            };
+            let completed = complete(scope, outcome);
+
+            if let Some(previous) = previous_window_event {
+                let global = relevant_context.global(scope);
+                set_private_value(scope, global, WINDOW_EVENT_SLOT, previous);
+            }
+            if let (Some(dispatch_scope), Some(previous_dispatch_scope)) =
+                (relevant_dispatch_scope, previous_relevant_dispatch_scope)
+            {
+                dispatch_scope.restore(scope, previous_dispatch_scope);
+            }
+            completed
+        }
     }
 }
 

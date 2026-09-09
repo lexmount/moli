@@ -17,7 +17,7 @@ fn take_next_element_toggle_task_for_test(
 }
 
 #[tokio::test(flavor = "current_thread")]
-async fn element_toggle_body_leaves_reactions_and_runtime_scripts_for_selected_completion() {
+async fn element_toggle_body_cleans_up_callbacks_before_selected_completion() {
     run_page_vm_async_test(async move {
         let loader =
             crate::network::ResourceRequestClient::new(&FetchConfig::default()).expect("loader");
@@ -52,15 +52,15 @@ details.open = true;
         );
         assert_eq!(
             page_vm.vm_mut().eval("__elementToggleBoundary.join('|')")?,
-            "callback",
-            "the body-only executor must leave Promise reactions pending"
+            "callback|microtask|runtime-script",
+            "listener cleanup must drain reactions before the selected task completes"
         );
 
         page_vm.finish_selected_page_callback_task(&loader).await?;
         assert_eq!(
             page_vm.vm_mut().eval("__elementToggleBoundary.join('|')")?,
             "callback|microtask|runtime-script",
-            "selected callback completion must own checkpoint and runtime-script follow-up"
+            "selected task completion must not repeat callback reactions or their inline scripts"
         );
         Ok::<_, anyhow::Error>(())
     })

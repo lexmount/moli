@@ -461,7 +461,6 @@ pub(crate) use self::message_ports::{
     new_disconnected_message_port_object,
 };
 pub(crate) use self::microtask_checkpoint::{
-    enqueue_window_event_restore_after_microtask_checkpoint,
     install_agent_microtask_checkpoint_tasks, run_end_of_microtask_checkpoint_tasks,
 };
 pub(crate) use self::navigation_bootstrap::{

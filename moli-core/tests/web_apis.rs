@@ -30,12 +30,17 @@ use tokio::time::Duration;
 
 #[path = "web_apis/abort_signal.rs"]
 mod abort_signal;
+#[path = "web_apis/callback_cleanup.rs"]
+mod callback_cleanup;
+#[path = "web_apis/event_dispatch.rs"]
+mod event_dispatch;
 #[path = "web_apis/fetch_body_native.rs"]
 mod fetch_body_native;
 #[path = "web_apis/fetch_body_realm.rs"]
 mod fetch_body_realm;
 #[path = "web_apis/request_stream.rs"]
 mod request_stream;
+
 fn diagnostic_global<'a>(
     page: &'a moli_core::page::Page,
     name: &str,
@@ -6402,6 +6407,3 @@ async fn window_host_globals_expose_aliases_performance_and_visual_viewport() ->
 
 #[path = "web_apis/keyboard_location.rs"]
 mod keyboard_location;
-
-#[path = "web_apis/event_dispatch.rs"]
-mod event_dispatch;

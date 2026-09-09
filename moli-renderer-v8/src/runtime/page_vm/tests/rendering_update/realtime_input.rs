@@ -59,9 +59,10 @@ fn realtime_input_wheels_finish_individually_and_honor_canceled_default_actions(
                 "each command returns after its handler, default action and microtasks"
             );
         }
+        // Listener cleanup runs its microtasks before the wheel's default action.
         assert_eq!(
             page.vm_mut().eval("events.join('|')").unwrap(),
-            "wheel:30:0|mutation|microtask:30|wheel:-20:30|mutation|microtask:30|wheel:60:30|mutation|microtask:90"
+            "wheel:30:0|mutation|microtask:0|wheel:-20:30|mutation|microtask:30|wheel:60:30|mutation|microtask:30"
         );
         assert_eq!(
             page.vm_mut().eval("String(scroller.scrollTop)").unwrap(),
@@ -79,7 +80,7 @@ fn realtime_input_wheels_finish_individually_and_honor_canceled_default_actions(
 }
 
 #[test]
-fn legacy_input_modes_keep_the_wheel_window_and_batch_checkpoint() {
+fn legacy_input_modes_keep_the_wheel_window_and_event_checkpoints() {
     run_page_vm_large_stack_async_test("legacy-input-window", || async move {
         for policy in [LayoutPolicy::Mock, LayoutPolicy::OnDemand] {
             let loader =
@@ -109,7 +110,7 @@ fn legacy_input_modes_keep_the_wheel_window_and_batch_checkpoint() {
                 .unwrap();
             assert_eq!(
                 page.vm_mut().eval("events.join('|')").unwrap(),
-                "wheel:30|wheel:-20|microtask:30|microtask:-20"
+                "wheel:30|microtask:30|wheel:-20|microtask:-20"
             );
             assert!(page.next_action_window_deadline().is_none());
             assert!(

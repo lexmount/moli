@@ -349,6 +349,10 @@ fn pending_worker_promise_rejection_matches<'s>(
 pub(super) fn perform_worker_microtask_checkpoint_and_report_pending_promise_rejections(
     scope: &mut v8::PinScope<'_, '_>,
 ) {
+    let Some(_checkpoint_scope) = crate::script_cleanup::MicrotaskCheckpointScope::enter(scope)
+    else {
+        return;
+    };
     scope.perform_microtask_checkpoint();
     queue_pending_worker_promise_rejection_task(scope);
     crate::context_bootstrap::run_end_of_microtask_checkpoint_tasks(scope);
@@ -3464,6 +3468,10 @@ pub(super) fn dispatch_worker_reported_error<'s>(
     if crate::worker::worker_termination_requested(scope) {
         return false;
     }
+    // A module bootstrap failure may arrive on a later evaluation task,
+    // after V8 has unwound the script or rejection job that owns its report.
+    let execution_scope = matches!(parent_phase, WorkerErrorPhase::Bootstrap)
+        .then(|| crate::script_cleanup::ScriptExecutionScope::enter(scope));
     let exception = if report.muted_errors {
         report.summary = "Script error.".to_owned();
         report.source = Some(String::new());
@@ -3522,6 +3530,10 @@ pub(super) fn dispatch_worker_reported_error<'s>(
     }
     if !handled {
         let _ = parent_tx.send(WorkerToParentMessage::Error(report));
+    }
+    drop(execution_scope);
+    if matches!(parent_phase, WorkerErrorPhase::Bootstrap) {
+        crate::script_cleanup::perform_callback_cleanup_checkpoint(scope);
     }
     handled
 }
