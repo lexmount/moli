@@ -3502,7 +3502,7 @@ async fn reentrant_runtime_admission_survives_page_task_claim_in_stable_authorit
 }
 
 #[test]
-fn script_terminal_event_body_defers_listener_reaction_to_task_completion() {
+fn script_terminal_event_body_cleans_up_listener_reactions_before_task_completion() {
     let _js_runtime = crate::JsRuntime::initialize();
     let document = HtmlParser::SCRIPTING_ENABLED.parse(
         Url::parse("https://example.com/").unwrap(),
@@ -3563,8 +3563,8 @@ fn script_terminal_event_body_defers_listener_reaction_to_task_completion() {
     assert_eq!(
         vm.eval_without_microtask_checkpoint_for_test("__runtimeTerminalOrder.join('|')")
             .expect("terminal body order should be readable without a checkpoint"),
-        "load",
-        "the terminal body must not perform the enclosing task-end checkpoint"
+        "load|load-microtask",
+        "terminal event callback cleanup must drain listener reactions before task completion"
     );
     vm.perform_script_task_checkpoint(None)
         .expect("selected task completion checkpoint should run");

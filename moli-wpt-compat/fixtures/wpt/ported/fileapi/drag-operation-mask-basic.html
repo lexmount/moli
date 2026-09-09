@@ -86,9 +86,6 @@ const complete = new Promise(function (resolve) {
         target.value,
     );
     expectedDrops += 1;
-    if (expectedDrops === 9) {
-      resolve();
-    }
   });
 
   target.addEventListener("input", function () {
@@ -101,6 +98,9 @@ const complete = new Promise(function (resolve) {
         ":" +
         target.selectionEnd,
     );
+    if (expectedDrops === 9) {
+      resolve();
+    }
   });
 });
 

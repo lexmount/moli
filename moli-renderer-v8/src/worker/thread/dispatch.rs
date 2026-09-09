@@ -9,7 +9,7 @@ use tokio::sync::mpsc;
 
 use moli_webapi_declare::WebApiObject;
 
-use crate::callback_invocation::{CallbackInvocationOutcome, CallbackInvoker};
+use crate::callback_invocation::{CallbackInvocation, CallbackInvocationOutcome, CallbackInvoker};
 use crate::context_bootstrap::{
     EVENT_DISPATCHING_SLOT, EVENT_STOP_IMMEDIATE_PROPAGATION_SLOT, EVENT_STOP_PROPAGATION_SLOT,
     EventHandlerType, SimpleObjectEventListenerSnapshot, apply_event_handler_return_value,
@@ -21,8 +21,7 @@ use crate::context_bootstrap::{
     structured_deserialize_value_for_message_event,
 };
 use crate::exception_reporting::{
-    CallbackExceptionLogLevel, V8ExceptionReport, invoke_callback_with_report,
-    log_unhandled_promise_rejection,
+    CallbackExceptionLogLevel, V8ExceptionReport, log_unhandled_promise_rejection,
 };
 use crate::network_host::{
     MaterializedResponseBody, MaterializedResponseHead,
@@ -470,9 +469,26 @@ fn pending_worker_promise_rejection_matches<'s>(
 pub(super) fn perform_worker_microtask_checkpoint_and_report_pending_promise_rejections(
     scope: &mut v8::PinScope<'_, '_>,
 ) {
+    let Some(_checkpoint_scope) = crate::script_cleanup::MicrotaskCheckpointScope::enter(scope)
+    else {
+        return;
+    };
     scope.perform_microtask_checkpoint();
     queue_pending_worker_promise_rejection_task(scope);
     crate::context_bootstrap::run_end_of_microtask_checkpoint_tasks(scope);
+}
+
+pub(crate) fn perform_callback_cleanup_checkpoint_if_worker(
+    scope: &mut v8::PinScope<'_, '_>,
+) -> bool {
+    if scope
+        .get_slot::<WorkerPromiseRejectDispatchSlot>()
+        .is_none()
+    {
+        return false;
+    }
+    perform_worker_microtask_checkpoint_and_report_pending_promise_rejections(scope);
+    true
 }
 
 fn queue_pending_worker_promise_rejection_task(scope: &mut v8::PinScope<'_, '_>) {
@@ -1057,23 +1073,33 @@ pub(super) fn dispatch_worker_error_event<'s>(
         .get(scope, v8str(scope, "onerror").into())
         .and_then(|value| v8::Local::<v8::Function>::try_from(value).ok())
     {
-        match invoke_callback_with_report(
+        let arguments = [
+            message.into(),
+            filename.into(),
+            lineno.into(),
+            colno.into(),
+            error_value,
+        ];
+        let context = scope.get_current_context();
+        let invocation = CallbackInvocation::new(
+            handler.into(),
+            global.into(),
+            context,
+            context,
+            true,
+            "handleEvent",
+            &arguments,
+            Some(event),
+        );
+        match CallbackInvoker::invoke(
             scope,
             "callback",
             "worker global onerror threw",
             crate::exception_reporting::CallbackExceptionLogLevel::Error,
             "WorkerGlobalScope.onerror",
-            handler,
-            global.into(),
-            &[
-                message.into(),
-                filename.into(),
-                lineno.into(),
-                colno.into(),
-                error_value,
-            ],
+            invocation,
         ) {
-            Ok(returned) => {
+            CallbackInvocationOutcome::Returned(returned) => {
                 apply_event_handler_return_value(
                     scope,
                     event,
@@ -1081,7 +1107,7 @@ pub(super) fn dispatch_worker_error_event<'s>(
                     EventHandlerType::OnErrorEventHandler,
                 );
             }
-            Err(nested_report) => {
+            CallbackInvocationOutcome::Threw(nested_report) => {
                 report_exception_to_parent(
                     &nested_report,
                     script_url,
@@ -1089,6 +1115,7 @@ pub(super) fn dispatch_worker_error_event<'s>(
                     parent_tx,
                 );
             }
+            CallbackInvocationOutcome::Retired => {}
         }
     }
 
@@ -4294,6 +4321,10 @@ pub(super) fn dispatch_worker_exception_with_phase_and_source<'s>(
     parent_tx: &mpsc::UnboundedSender<WorkerToParentMessage>,
     script_url: &str,
 ) -> bool {
+    // A module bootstrap failure may arrive on a later evaluation task,
+    // after V8 has unwound the script or rejection job that owns its report.
+    let execution_scope = matches!(parent_phase, WorkerErrorPhase::Bootstrap)
+        .then(|| crate::script_cleanup::ScriptExecutionScope::enter(scope));
     let exception = if report.muted_errors {
         report.summary = "Script error.".to_owned();
         report.source = Some(String::new());
@@ -4319,6 +4350,10 @@ pub(super) fn dispatch_worker_exception_with_phase_and_source<'s>(
             source,
             parent_tx,
         );
+    }
+    drop(execution_scope);
+    if matches!(parent_phase, WorkerErrorPhase::Bootstrap) {
+        crate::script_cleanup::perform_callback_cleanup_checkpoint(scope);
     }
     handled
 }

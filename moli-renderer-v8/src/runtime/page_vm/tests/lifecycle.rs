@@ -1584,7 +1584,7 @@ window.addEventListener("pageshow", () => {
 }
 
 #[test]
-fn ordinary_main_lifecycle_body_leaves_listener_reaction_for_its_typed_checkpoint() {
+fn ordinary_main_lifecycle_body_cleans_up_callbacks_before_its_typed_checkpoint() {
     run_page_vm_local_runtime_async_test(
         "page-vm-main-lifecycle-body-only-checkpoint",
         || async move {
@@ -1624,8 +1624,8 @@ document.addEventListener("readystatechange", () => {
                             .eval_without_microtask_checkpoint_for_test(
                                 "__mainLifecycleBodyBoundary.join('|')"
                             )?,
-                        "callback",
-                        "the lifecycle body must not perform its typed task-end checkpoint"
+                        "callback|microtask",
+                        "listener cleanup must run while the typed task-end checkpoint remains pending"
                     );
                     Ok::<_, anyhow::Error>(())
                 })

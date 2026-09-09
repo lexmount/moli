@@ -12966,7 +12966,7 @@ __lmActionWindowObserver.observe(document.getElementById("target"));
     assert_eq!(
         renderer_json_value(state),
         Some(serde_json::json!(
-            r#"{"scrollY":100,"wheelLog":["event:100","event:-100","event:100","microtask:100","microtask:-100","microtask:100"],"ioLog":[false,true]}"#
+            r#"{"scrollY":100,"wheelLog":["event:100","microtask:100","event:-100","microtask:-100","event:100","microtask:100"],"ioLog":[false,true]}"#
         ))
     );
 

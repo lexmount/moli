@@ -1236,7 +1236,7 @@ document.write('<!doctype html><html><head><link id="replacement-blocker" rel="s
 }
 
 #[tokio::test(flavor = "current_thread")]
-async fn connected_style_body_settles_its_lease_but_leaves_reactions_for_task_completion() {
+async fn connected_style_body_settles_its_lease_and_cleans_up_callbacks() {
     run_page_vm_async_test(async move {
         let loader =
             crate::network::ResourceRequestClient::new(&FetchConfig::default()).expect("loader");
@@ -1279,8 +1279,8 @@ document.head.appendChild(style);
             page_vm
                 .vm_mut()
                 .eval("__connectedStyleBoundary.join('|')")?,
-            "callback",
-            "the body must leave listener Promise reactions pending"
+            "callback|microtask|runtime-script",
+            "listener cleanup must drain reactions before the selected task completes"
         );
 
         page_vm
@@ -1294,7 +1294,7 @@ document.head.appendChild(style);
                 .vm_mut()
                 .eval("__connectedStyleBoundary.join('|')")?,
             "callback|microtask|runtime-script",
-            "selected completion must own the checkpoint and runtime-script follow-up"
+            "selected task completion must not repeat callback reactions or their inline scripts"
         );
         Ok::<_, anyhow::Error>(())
     })

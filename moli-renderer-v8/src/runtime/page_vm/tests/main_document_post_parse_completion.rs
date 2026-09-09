@@ -56,7 +56,7 @@ fn csp_violation_task(
 }
 
 #[tokio::test(flavor = "current_thread")]
-async fn post_parse_callback_body_retains_reactions_for_selected_completion() {
+async fn post_parse_callback_body_cleans_up_without_a_pre_task_checkpoint() {
     run_page_vm_async_test(async move {
         let loader = crate::network::ResourceRequestClient::new(&FetchConfig::default()).expect("loader");
         let mut page_vm = test_page_vm();
@@ -98,8 +98,8 @@ queueMicrotask(() => __postParseBodyOrder.push("preexisting"));
             page_vm.vm_mut().eval_without_microtask_checkpoint_for_test(
                 "__postParseBodyOrder.join('|')",
             )?,
-            "callback",
-            "body execution must neither run the old BeforeTask checkpoint nor end the selected task"
+            "callback|preexisting|callback:microtask",
+            "callback cleanup drains existing reactions after the callback, without a BeforeTask checkpoint"
         );
         Ok::<_, anyhow::Error>(())
     })

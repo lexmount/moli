@@ -2946,9 +2946,6 @@ html/semantics/scripting-1/the-script-element/execution-timing/125.html
 html/semantics/scripting-1/the-script-element/execution-timing/128.html
 html/semantics/scripting-1/the-script-element/execution-timing/137.html
 html/semantics/scripting-1/the-script-element/json-module/json-module-service-worker-test.https.html
-html/semantics/scripting-1/the-script-element/microtasks/checkpoint-after-window-onerror-module.html
-html/semantics/scripting-1/the-script-element/microtasks/checkpoint-after-window-onerror.html
-html/semantics/scripting-1/the-script-element/microtasks/checkpoint-after-workerglobalscope-onerror.html
 html/semantics/scripting-1/the-script-element/module/dynamic-import/code-cache-base-url.html
 html/semantics/scripting-1/the-script-element/module/inline-async-execorder.html
 html/semantics/scripting-1/the-script-element/moving-between-documents/ordering/delay-load-event-1.html

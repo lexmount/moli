@@ -374,8 +374,6 @@ impl JsContextHost {
             child_window_event_listeners: HashMap::new(),
             next_child_window_event_registration_id: 0,
             event_callbacks: Default::default(),
-            explicit_event_dispatch_depth: 0,
-            event_callback_invocation_depth: 0,
             active_window_error_report_owners: HashSet::new(),
             browser_context_runtime,
             top_level_navigation_handoff_tx,
