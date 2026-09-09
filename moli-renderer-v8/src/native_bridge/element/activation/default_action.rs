@@ -15,7 +15,9 @@ use crate::{
     RendererPendingFileChooserActivation, RendererPopupDisposition,
     document_runtime::{DomHandle, EventTargetHandle},
     frame_owner_model::DocumentId,
-    native_bridge::context_host::ChildBrowsingContextBootstrap,
+    native_bridge::context_host::{
+        ChildBrowsingContextBootstrap, ChildBrowsingContextNavigationRequest,
+    },
     native_bridge::{CurrentInputEvent, InputNavigationPolicy, navigation_policy_from_event},
     runtime::RendererDocumentLifecycleIdentity,
 };
@@ -2345,14 +2347,16 @@ pub(in crate::native_bridge) fn navigate_form_target_browsing_context(
             && !has_noopener
             && (has_opener || special_target != Some(SpecialBrowsingContextTarget::Blank))
     };
-    let target_document = {
-        let runtime = unsafe { &*runtime_ptr };
-        runtime
-            .dom_host()
-            .owner_document_handle(form_handle)
-            .and_then(|source| form_navigation_target_document(runtime, source, target_name))
-    };
+    let source_document = unsafe { &*runtime_ptr }
+        .dom_host()
+        .owner_document_handle(form_handle);
+    let target_document = source_document.and_then(|source| {
+        form_navigation_target_document(unsafe { &*runtime_ptr }, source, target_name)
+    });
     if let Some(document_handle) = target_document {
+        let Ok(url) = url::Url::parse(resolved_url) else {
+            return false;
+        };
         let runtime = unsafe { &*runtime_ptr };
         if document_handle != runtime.document_handle() {
             let Some(child_handle) =
@@ -2361,8 +2365,33 @@ pub(in crate::native_bridge) fn navigate_form_target_browsing_context(
                 return false;
             };
             let runtime = unsafe { &mut *runtime_ptr };
-            let navigated =
-                runtime.navigate_child_browsing_context_to_url(scope, child_handle, resolved_url);
+            let history = crate::context_bootstrap::FormNavigationHistory::capture(
+                scope,
+                runtime,
+                source_document,
+                Some(child_handle),
+                &url,
+                None,
+            );
+            let source_element = node_wrapper_from_handle(scope, form_handle);
+            if let Some(window) = runtime.existing_child_browsing_context_window_wrapper(scope, child_handle)
+                && !crate::context_bootstrap::dispatch_cross_document_navigation_navigate_event_for_window_with_type_and_form_data(
+                    scope, window, resolved_url, history.mutation.navigation_type(),
+                    source_element, false, None, None,
+                ) {
+                return true;
+            }
+            let navigated = runtime.queue_deferred_child_form_navigation_request(
+                child_handle,
+                ChildBrowsingContextNavigationRequest {
+                    url,
+                    method: "GET".to_owned(),
+                    body: None,
+                    request_headers: Vec::new(),
+                },
+                history.entry_seed,
+                history.mutation,
+            );
             if navigated {
                 crate::context_bootstrap::web_mcp::bind_child_navigation(
                     runtime,
@@ -2379,12 +2408,20 @@ pub(in crate::native_bridge) fn navigate_form_target_browsing_context(
         ) else {
             return false;
         };
+        let history = crate::context_bootstrap::FormNavigationHistory::capture(
+            scope,
+            unsafe { &mut *runtime_ptr },
+            source_document,
+            None,
+            &url,
+            None,
+        );
         let source_element = node_wrapper_from_handle(scope, form_handle);
         if !crate::context_bootstrap::dispatch_top_level_navigation_event_with_source_element(
             scope,
             window,
             resolved_url,
-            "replace",
+            history.mutation.navigation_type(),
             source_element,
             true,
             false,
@@ -2392,10 +2429,7 @@ pub(in crate::native_bridge) fn navigate_form_target_browsing_context(
         ) {
             return true;
         }
-        let Ok(url) = url::Url::parse(resolved_url) else {
-            return false;
-        };
-        unsafe { &mut *runtime_ptr }.record_pending_location_navigation(url, None);
+        unsafe { &mut *runtime_ptr }.record_pending_location_navigation(url, history.entry_seed);
         crate::context_bootstrap::web_mcp::bind_root_navigation(
             unsafe { &mut *runtime_ptr },
             form_handle,

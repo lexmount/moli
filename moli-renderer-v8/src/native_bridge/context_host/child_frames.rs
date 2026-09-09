@@ -814,10 +814,6 @@ impl ChildBrowsingContextEntry {
         }
     }
 
-    pub(super) fn apply_deferred_navigation_to_entry_seed(&mut self, url: &Url) {
-        self.apply_navigation_to_entry_seed(url);
-    }
-
     pub(super) fn clear_navigation_activation(&mut self) {
         self.navigation_entry_seed.activation = None;
     }
