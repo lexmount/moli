@@ -89,6 +89,15 @@ impl JsContextHost {
         };
 
         match prepared {
+            PreparedRuntimeScriptStartCommit::PreparationError { node } => {
+                debug_assert!(load_delay_binding.is_none());
+                if !self.queue_script_preparation_error(scope, node) {
+                    return Err(
+                        "script preparation error route rejected the element task".to_owned()
+                    );
+                }
+                Ok(None)
+            }
             PreparedRuntimeScriptStartCommit::Noop => {
                 if let Some(binding) = load_delay_binding {
                     let _ = self.release_main_document_script_load_delay(binding);
