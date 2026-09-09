@@ -6,7 +6,8 @@ use crate::document_script_scheduler::FrameDocumentClassicScriptSchedulerWork;
 use crate::dom::native::Node;
 use crate::dom_parser::DOM_PARSER_FOREIGN_NODE_SLOT;
 use crate::native_bridge::{
-    document::detached_native_handle_for_runtime, node::remove_child_to_current_reaction_queue,
+    document::{detached_native_handle_for_runtime, is_html_document},
+    node::remove_child_to_current_reaction_queue,
     throw_dom_exception,
 };
 use crate::util::{context_host_ptr_from_global_bridge, set_private_value, v8str};
@@ -286,7 +287,7 @@ fn child_document_open_callback<'s>(
         redirect_child_document_open_to_window_open(scope, handle, document, &args, &mut rv);
         return;
     }
-    if child_document_has_throw_on_dynamic_markup_insertion_counter(scope, document) {
+    if child_document_has_invalid_dynamic_markup_state(scope, document) {
         throw_dynamic_markup_invalid_state(scope, document);
         return;
     }
@@ -321,10 +322,6 @@ fn child_document_write_or_writeln_callback<'s>(
         return;
     };
     let document = args.this();
-    if child_document_has_throw_on_dynamic_markup_insertion_counter(scope, document) {
-        throw_dynamic_markup_invalid_state(scope, document);
-        return;
-    }
     let mut chunk = String::new();
     for index in 0..args.length() {
         let Some(value) = args.get(index).to_string(scope) else {
@@ -334,6 +331,11 @@ fn child_document_write_or_writeln_callback<'s>(
     }
     if append_newline {
         chunk.push('\n');
+    }
+    // Argument conversion precedes both the XML and parser-constructor guards.
+    if child_document_has_invalid_dynamic_markup_state(scope, document) {
+        throw_dynamic_markup_invalid_state(scope, document);
+        return;
     }
     let Some(host_ptr) = context_host_ptr_from_global_bridge(scope) else {
         rv.set_undefined();
@@ -391,7 +393,7 @@ fn child_document_close_callback<'s>(
         return;
     };
     let document = args.this();
-    if child_document_has_throw_on_dynamic_markup_insertion_counter(scope, document) {
+    if child_document_has_invalid_dynamic_markup_state(scope, document) {
         throw_dynamic_markup_invalid_state(scope, document);
         return;
     }
@@ -494,15 +496,17 @@ fn child_document_default_view<'s>(
         .and_then(|value| v8::Local::<v8::Object>::try_from(value).ok())
 }
 
-fn child_document_has_throw_on_dynamic_markup_insertion_counter<'s>(
+fn child_document_has_invalid_dynamic_markup_state<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     document: v8::Local<'s, v8::Object>,
 ) -> bool {
     context_host_ptr_from_global_bridge(scope)
         .and_then(|host_ptr| {
             let host = unsafe { &*host_ptr };
-            child_document_native_handle_for_runtime(scope, host_ptr, document)
-                .map(|document| host.has_throw_on_dynamic_markup_insertion_counter(document))
+            child_document_native_handle_for_runtime(scope, host_ptr, document).map(|document| {
+                !is_html_document(host, document)
+                    || host.has_throw_on_dynamic_markup_insertion_counter(document)
+            })
         })
         .unwrap_or(false)
 }

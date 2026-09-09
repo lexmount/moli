@@ -23,6 +23,9 @@ mod child_error_insertion;
 #[path = "scripts/child_readiness.rs"]
 mod child_readiness;
 
+#[path = "scripts/child_markup_insertion.rs"]
+mod child_markup_insertion;
+
 fn diagnostic_global<'a>(
     page: &'a moli_core::page::Page,
     name: &str,
