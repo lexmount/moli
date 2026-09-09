@@ -7067,6 +7067,7 @@ html/webappapis/scripting/processing-model-2/runtime-error-same-origin-with-hash
 html/webappapis/scripting/processing-model-2/runtime-error-same-origin.html
 html/webappapis/scripting/processing-model-2/runtime-error.html
 html/webappapis/scripting/processing-model-2/unhandled-promise-rejections/promise-rejection-event-constructor.html
+html/webappapis/scripting/processing-model-2/unhandled-promise-rejections/promise-rejection-event-during-parse.html
 html/webappapis/scripting/processing-model-2/unhandled-promise-rejections/promise-rejection-events-attached-in-event.html
 html/webappapis/scripting/processing-model-2/unhandled-promise-rejections/promise-rejection-events-iframe.html
 html/webappapis/scripting/processing-model-2/unhandled-promise-rejections/promise-rejection-events-onerror.html

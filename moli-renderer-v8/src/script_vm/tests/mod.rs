@@ -4707,11 +4707,16 @@ async fn run_child_document_lifecycle_and_host_load_for_test(vm: &mut ScriptVm, 
         // Only consecutive materialization tasks at the stable family head
         // belong here. Never jump over an earlier DocumentScriptReady task.
     }
-    assert!(
-        vm.run_child_frame_task_source_once_for_test(ChildFrameSemanticTurnKind::DocumentLifecycle)
+    if matches!(vm._page_task_residence_for_executor_test.as_ref().expect("child fixture sources").task_sources().next_child_frame_task_target(), Some(crate::page_task_queue::RendererPageChildFrameTaskTarget::DocumentLifecycle(target)) if matches!(target.action(), crate::frame_owner_model::FrameDocumentLifecycleAction::Interactive(_)))
+    {
+        assert!(
+            vm.run_child_frame_task_source_once_for_test(
+                ChildFrameSemanticTurnKind::DocumentLifecycle
+            )
             .await,
-        "{message}: DocumentLifecycle should make the installed document interactive"
-    );
+            "{message}: a child without a parser realm must apply its queued interactive transition"
+        );
+    }
     assert!(
         vm.run_child_frame_task_source_once_for_test(ChildFrameSemanticTurnKind::DocumentLifecycle)
             .await,
@@ -7165,7 +7170,7 @@ async fn child_srcdoc_inline_classic_script_runs_as_frame_script_job() {
         "child:true|current:inline-classic",
         "DocumentScriptReady should execute the inline classic script without firing iframe load"
     );
-    for transition in ["interactive", "DOMContentLoaded", "complete"] {
+    for transition in ["DOMContentLoaded", "complete"] {
         assert!(
             vm.run_child_frame_task_source_once_for_test(
                 ChildFrameSemanticTurnKind::DocumentLifecycle
@@ -7282,7 +7287,7 @@ async fn child_inline_classic_script_moved_from_original_document_is_skipped() {
         "after:after-stale-inline",
         "parser continuation should run the next inline classic script without firing iframe load"
     );
-    for transition in ["interactive", "DOMContentLoaded", "complete"] {
+    for transition in ["DOMContentLoaded", "complete"] {
         run_realm_prerequisite_then_expected_child_frame_semantic_turn_for_test(
             &mut vm,
             ChildFrameSemanticTurnKind::DocumentLifecycle,
@@ -7611,7 +7616,7 @@ async fn child_external_classic_script_load_executes_as_frame_script_job() {
         "external:true|external-current:external-classic|external-write:true|script-load|inline-current:after-external-classic|inline:73",
         "ignored document.open() must leave the parser owner alive for the following inline script"
     );
-    for transition in ["interactive", "DOMContentLoaded", "complete"] {
+    for transition in ["DOMContentLoaded", "complete"] {
         run_page_realm_prerequisite_then_expected_child_frame_semantic_turn(
             &mut vm,
             &loader,
@@ -8953,10 +8958,11 @@ async fn child_inline_parser_module_executes_from_registered_pending_script() {
         "parser should continue past the deferred inline module after graph start",
     )
     .await;
-    assert!(
-        vm.run_child_frame_task_source_once_for_test(ChildFrameSemanticTurnKind::DocumentLifecycle)
-            .await,
-        "parser EOF should make the child document interactive before defer execution"
+    assert_eq!(
+        vm.eval("document.querySelector('iframe').contentDocument.readyState")
+            .expect("child readiness"),
+        "interactive",
+        "parser EOF must apply interactive synchronously"
     );
     assert!(
         vm.run_child_frame_task_source_once_for_test(
@@ -9066,13 +9072,12 @@ async fn child_external_parser_module_executes_from_document_ready_lane() {
         "parser should continue past module-defer script from DocumentScriptReady after fetch start",
     )
     .await;
-    run_page_realm_prerequisite_then_expected_child_frame_semantic_turn(
-        &mut vm,
-        &loader,
-        ChildFrameSemanticTurnKind::DocumentLifecycle,
-        "child parser module should enter interactive before module-defer execution",
-    )
-    .await;
+    assert_eq!(
+        vm.eval("document.querySelector('iframe').contentDocument.readyState")
+            .expect("child readiness"),
+        "interactive",
+        "parser EOF must apply interactive synchronously"
+    );
     assert!(
         !vm.run_one_child_frame_task_executor_turn(ChildFrameSemanticTurnKind::HostLoad, &loader)
             .await
@@ -9212,7 +9217,7 @@ async fn child_dynamic_import_root_fetch_uses_child_import_map_and_initiator_url
             .expect("child dynamic import owner ready flag should evaluate"),
         "true"
     );
-    for transition in ["interactive", "DOMContentLoaded", "complete"] {
+    for transition in ["DOMContentLoaded", "complete"] {
         run_realm_prerequisite_then_expected_child_frame_semantic_turn_for_test(
             &mut vm,
             ChildFrameSemanticTurnKind::DocumentLifecycle,
@@ -9468,14 +9473,11 @@ async fn child_external_classic_source_error_dispatches_before_later_inline() {
         "script-error|after-inline",
         "parser continuation should execute the following inline script without firing iframe load"
     );
-    assert!(
-        vm.run_one_child_frame_task_executor_turn(
-            ChildFrameSemanticTurnKind::DocumentLifecycle,
-            &loader,
-        )
-        .await
-        .expect("child interactive task should use the selected-task dispatcher"),
-        "parser EOF should dispatch interactive before HostLoad"
+    assert_eq!(
+        vm.eval("document.querySelector('iframe').contentDocument.readyState")
+            .expect("child readiness"),
+        "interactive",
+        "parser EOF must apply interactive synchronously"
     );
     assert!(
         vm.run_one_child_frame_task_executor_turn(
@@ -9613,10 +9615,11 @@ async fn child_inline_classic_throw_reports_to_child_window_and_continues() {
         "child-error:Uncaught Error: child-boom:child-boom:true|after-inline:true",
         "parser continuation should run the following inline script without firing iframe load"
     );
-    assert!(
-        vm.run_child_frame_task_source_once_for_test(ChildFrameSemanticTurnKind::DocumentLifecycle)
-            .await,
-        "parser EOF should dispatch interactive before HostLoad"
+    assert_eq!(
+        vm.eval("document.querySelector('iframe').contentDocument.readyState")
+            .expect("child readiness"),
+        "interactive",
+        "parser EOF must apply interactive synchronously"
     );
     assert!(
         vm.run_child_frame_task_source_once_for_test(ChildFrameSemanticTurnKind::DocumentLifecycle)

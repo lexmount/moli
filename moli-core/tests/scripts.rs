@@ -38,6 +38,9 @@ mod parser_cleanup;
 #[path = "scripts/parser_preparation.rs"]
 mod parser_preparation;
 
+#[path = "scripts/lifecycle_task_order.rs"]
+mod lifecycle_task_order;
+
 fn diagnostic_global<'a>(
     page: &'a moli_core::page::Page,
     name: &str,

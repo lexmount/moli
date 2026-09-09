@@ -151,11 +151,10 @@ pub(crate) fn accept_parser_owned_import_map_handoff(
     start_line: u64,
     start_column: u64,
     import_map: PreparedImportMap,
-) {
+) -> anyhow::Result<()> {
     vm.document_runtime
         .note_parser_script_start_position(node_id, start_line, start_column);
-    let host_script_handle = vm
-        .document_runtime
+    vm.document_runtime
         .bind_parser_owned_script_handle_for_node(import_map.node_id);
     let _ = vm
         .document_runtime
@@ -169,7 +168,7 @@ pub(crate) fn accept_parser_owned_import_map_handoff(
             let Some(source) =
                 vm.inline_script_element_source_for_execution(node_id, &source, request)
             else {
-                return;
+                return Ok(());
             };
             if let Err(error) =
                 register_parser_owned_import_map_source(vm, &source, &import_map.base_url)
@@ -181,12 +180,10 @@ pub(crate) fn accept_parser_owned_import_map_handoff(
             }
         }
         PreparedImportMapSource::ExternalUnsupported => {
-            let _ = vm.document_runtime.enqueue_script_event_lifecycle_work(
-                crate::host::ScriptEventKind::Error,
-                &host_script_handle,
-            );
+            vm.queue_script_preparation_error(node_id)?;
         }
     }
+    Ok(())
 }
 
 pub(crate) fn resolve_module_specifier(

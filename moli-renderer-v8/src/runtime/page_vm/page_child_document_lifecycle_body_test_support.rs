@@ -22,14 +22,22 @@ impl PageVm {
                 matches!(
                     descriptor,
                     RendererPageReadyDescriptor::ChildFrameTask { owner, .. }
-                        if matches!(
+                    | RendererPageReadyDescriptor::DomManipulation {
+                        owner: crate::page_task_queue::RendererPageDomManipulationOwner::ChildDocumentLifecycle(owner), ..
+                    } if matches!(
                             owner.target(),
                             RendererPageChildFrameTaskTarget::DocumentLifecycle(_)
                         )
                 )
             })?;
-        let RendererPageSchedulerTask::ChildFrameTask(task) = task else {
-            unreachable!("DocumentLifecycle descriptor must dequeue a child-frame task")
+        let task = match task {
+            RendererPageSchedulerTask::ChildFrameTask(task)
+            | RendererPageSchedulerTask::DomManipulation(
+                crate::page_task_queue::RendererPageDomManipulationTask::ChildDocumentLifecycle(
+                    task,
+                ),
+            ) => task,
+            _ => unreachable!("DocumentLifecycle descriptor must dequeue its admitted task"),
         };
         Some(self.apply_selected_page_child_document_lifecycle_turn(task))
     }

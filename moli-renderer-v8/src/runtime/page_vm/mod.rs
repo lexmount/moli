@@ -105,6 +105,7 @@ mod page_image_load_event;
 mod page_indexed_db_task;
 mod page_internal_loading;
 mod page_internal_loading_task_completion;
+mod page_main_document_lifecycle;
 mod page_main_document_post_parse;
 mod page_main_document_runtime;
 mod page_main_native_module_task;
@@ -2123,8 +2124,22 @@ impl PageVm {
     ) -> bool {
         use crate::{
             frame_owner_model::ChildFrameSemanticTurnKind,
-            page_task_queue::RendererPageChildFrameTaskTarget,
+            page_task_queue::{
+                RendererPageChildFrameTaskTarget, RendererPageDomManipulationOwner,
+                RendererPageReadyDescriptor,
+            },
         };
+
+        if expected == ChildFrameSemanticTurnKind::DocumentLifecycle {
+            return self.page_task_executor_sources_for_test().has_scheduler_task_for_executor_test(|descriptor| {
+                matches!(descriptor,
+                    RendererPageReadyDescriptor::DomManipulation { owner: RendererPageDomManipulationOwner::ChildDocumentLifecycle(_), .. }
+                ) || matches!(descriptor,
+                    RendererPageReadyDescriptor::ChildFrameTask { owner, .. }
+                        if matches!(owner.target(), RendererPageChildFrameTaskTarget::DocumentLifecycle(_))
+                )
+            });
+        }
 
         let Some(target) = self
             .page_task_executor_sources_for_test()
@@ -2965,7 +2980,11 @@ impl PageVm {
         {
             return Some(ChildFrameSemanticTurnKind::NavigationCommit);
         }
-        if self
+        if matches!(
+            self.page_task_executor_sources_for_test()
+                .next_child_semantic_task_target(),
+            Some(crate::page_task_queue::RendererPageChildFrameTaskTarget::DocumentLifecycle(_))
+        ) && self
             .run_exact_selected_page_task_for_test(
                 PageSelectedTaskTestSelector::ChildDocumentLifecycle,
                 &loader,
@@ -3174,11 +3193,61 @@ impl PageVm {
         match advance {
             PostParseLifecycleAdvance::PageOwnedTask(mut task) => {
                 let request_client = self.request_client.clone();
-                self.execute_ordinary_post_parse_page_owned_task_on_named_owner_lane(
-                    &request_client,
-                    task.take_work_for_execution(),
-                )
-                .await?;
+                let work = task.take_work_for_execution();
+                if let PostParsePageOwnedWork::Lifecycle(lifecycle) = &work
+                    && matches!(
+                        **lifecycle,
+                        PostParseLifecycleWork::DispatchDomContentLoaded { .. }
+                            | PostParseLifecycleWork::DispatchWindowLoad { .. }
+                    )
+                {
+                    let body = crate::script_vm::MainDocumentLifecycleBody::from_post_parse_work(
+                        lifecycle,
+                    )
+                    .unwrap();
+                    let (sender, mut receiver) = tokio::sync::oneshot::channel();
+                    self.vm()
+                        .queue_main_document_lifecycle_dom_task(body, Some(sender))?;
+                    if matches!(
+                        body,
+                        crate::script_vm::MainDocumentLifecycleBody::DomContentLoaded { .. }
+                    ) {
+                        self.run_ready_classic_defer_timers_before_domcontentloaded(
+                            &request_client,
+                        )
+                        .await?;
+                    }
+                    loop {
+                        match receiver.try_recv() {
+                            Ok(crate::page_task_queue::RendererPageMainDocumentLifecycleCompletion::Executed) => break,
+                            Ok(crate::page_task_queue::RendererPageMainDocumentLifecycleCompletion::LoadBlocked { owner }) => {
+                                self.page_task_queue.enqueue_front_post_parse_work_preserving_order(vec![PostParsePageOwnedWork::main_document_window_load(owner)]);
+                                return Ok(PostParseLifecycleLoopAdvance::Continue(Box::new(None)));
+                            }
+                            Err(tokio::sync::oneshot::error::TryRecvError::Closed) => {
+                                anyhow::bail!(
+                                    "lifecycle DOM task disappeared before its fixture completion"
+                                );
+                            }
+                            Err(tokio::sync::oneshot::error::TryRecvError::Empty) => {
+                                anyhow::ensure!(
+                                    self.run_exact_selected_page_task_for_test(
+                                        PageSelectedTaskTestSelector::AnyDomManipulation,
+                                        &request_client,
+                                    )
+                                    .await?,
+                                    "queued lifecycle task must remain runnable"
+                                );
+                            }
+                        }
+                    }
+                } else {
+                    self.execute_ordinary_post_parse_page_owned_task_on_named_owner_lane(
+                        &request_client,
+                        work,
+                    )
+                    .await?;
+                }
                 if self.vm().has_pending_location_navigation() {
                     return Ok(PostParseLifecycleLoopAdvance::Complete(
                         PostParseLifecycleCompletionAction::TriggeredNavigation,
@@ -3187,12 +3256,6 @@ impl PageVm {
                 Ok(PostParseLifecycleLoopAdvance::Continue(Box::new(Some(
                     *task,
                 ))))
-            }
-            PostParseLifecycleAdvance::TimerQueuedByClassicDeferBeforeDomContentLoaded => {
-                let request_client = self.request_client.clone();
-                self.run_classic_defer_timer_before_domcontentloaded(&request_client)
-                    .await?;
-                Ok(PostParseLifecycleLoopAdvance::Continue(Box::new(None)))
             }
             PostParseLifecycleAdvance::NeedsContinuation => {
                 Ok(PostParseLifecycleLoopAdvance::Continue(Box::new(None)))

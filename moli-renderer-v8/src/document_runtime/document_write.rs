@@ -2164,10 +2164,7 @@ impl DocumentRuntime {
                 }
             }
             PreparedImportMapSource::ExternalUnsupported => {
-                let _ = self.enqueue_script_event_lifecycle_work(
-                    ScriptEventKind::Error,
-                    &host_script_handle,
-                );
+                unsafe { &mut *host_ptr }.queue_script_preparation_error(scope, node);
             }
         }
     }

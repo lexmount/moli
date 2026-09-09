@@ -768,6 +768,16 @@ impl JsContextHost {
             .promise_rejection()
     }
 
+    pub(crate) fn page_main_document_lifecycle_sender(
+        &self,
+    ) -> crate::page_task_queue::RendererPageMainDocumentLifecycleSender {
+        self.page_task_capabilities
+            .get()
+            .expect("a live Page Window must install its lifecycle task capability")
+            .dom_manipulation()
+            .main_document_lifecycle()
+    }
+
     pub(crate) fn page_file_reading_sender(
         &self,
     ) -> crate::page_task_queue::RendererPageFileReadingSender {

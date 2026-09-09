@@ -5322,8 +5322,22 @@ impl ScriptVm {
     ) -> bool {
         use crate::{
             frame_owner_model::ChildFrameSemanticTurnKind,
-            page_task_queue::RendererPageChildFrameTaskTarget,
+            page_task_queue::{
+                RendererPageChildFrameTaskTarget, RendererPageDomManipulationOwner,
+                RendererPageReadyDescriptor,
+            },
         };
+
+        if expected == ChildFrameSemanticTurnKind::DocumentLifecycle {
+            return self._page_task_residence_for_executor_test.as_ref().expect("semantic fixture must retain its sources").task_sources().has_scheduler_task_for_executor_test(|descriptor| {
+                matches!(descriptor,
+                    RendererPageReadyDescriptor::DomManipulation { owner: RendererPageDomManipulationOwner::ChildDocumentLifecycle(_), .. }
+                ) || matches!(descriptor,
+                    RendererPageReadyDescriptor::ChildFrameTask { owner, .. }
+                        if matches!(owner.target(), RendererPageChildFrameTaskTarget::DocumentLifecycle(_))
+                )
+            });
+        }
 
         let Some(target) = self
             ._page_task_residence_for_executor_test
@@ -5377,7 +5391,14 @@ impl ScriptVm {
         {
             return Some(ChildFrameSemanticTurnKind::NavigationCommit);
         }
-        if self
+        if matches!(
+            self._page_task_residence_for_executor_test
+                .as_ref()
+                .expect("child fixture must retain its sources")
+                .task_sources()
+                .next_child_semantic_task_target(),
+            Some(crate::page_task_queue::RendererPageChildFrameTaskTarget::DocumentLifecycle(_))
+        ) && self
             .run_child_document_lifecycle_body_for_test()
             .expect("typed child lifecycle executor turn should succeed")
             .is_some()
