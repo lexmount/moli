@@ -4122,6 +4122,47 @@ test(() => {}, "ok");
             ],
         )
 
+    def test_fixture_server_models_dynamic_import_redirect_without_cors(self) -> None:
+        with tempfile.TemporaryDirectory() as root:
+            root_path = Path(root)
+            (root_path / "resources").mkdir()
+            (root_path / "resources" / "testharness.js").write_text(
+                "// testharness", encoding="utf-8"
+            )
+            with WptFixtureServer(root_path) as server:
+                for method in ("GET", "HEAD"):
+                    for query, status, location in (
+                        ("location=%2Ftarget", 302, "/target"),
+                        (
+                            "status=307&location=https%3A%2F%2Fexample.test%2Fx",
+                            307,
+                            "https://example.test/x",
+                        ),
+                        ("status=invalid&location=%2Ftarget", 302, "/target"),
+                        (
+                            "status=302&status=307&location=%2Fa&location=%2Fb",
+                            302,
+                            "/a",
+                        ),
+                    ):
+                        with self.subTest(method=method, query=query):
+                            connection = HTTPConnection("127.0.0.1", server.port, timeout=2)
+                            try:
+                                connection.request(
+                                    method,
+                                    "/html/semantics/scripting-1/the-script-element/module/"
+                                    f"dynamic-import/beta/redirect.py?{query}",
+                                )
+                                response = connection.getresponse()
+                                self.assertEqual(response.status, status)
+                                self.assertEqual(response.headers.get("Location"), location)
+                                self.assertIsNone(
+                                    response.headers.get("Access-Control-Allow-Origin")
+                                )
+                                self.assertEqual(response.read(), b"")
+                            finally:
+                                connection.close()
+
     def test_fixture_server_models_common_redirect_opt_in_handler(self) -> None:
         with tempfile.TemporaryDirectory() as root:
             root_path = Path(root)
