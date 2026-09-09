@@ -3,11 +3,9 @@
 //! The exact lifecycle resident remains the sole ordinary DCL/load authority.
 //! This component only reconciles an already-claimed body: typed checkpoint
 //! continuations, milestone journal visibility, body settlement, and lifecycle
-//! priming stay in one auditable order. Parser completion may call this same
-//! component after claiming the exact DCL direct successor, but the parser
-//! continuation's own task-end checkpoint has already completed first. This
-//! preserves the observable task boundary without opening a scheduler round in
-//! which an ordinary Page task could overtake DCL.
+//! priming stay in one auditable order. DCL and load reach this coordinator
+//! through the shared DOM task source after parser completion has admitted
+//! them; interactive readiness remains part of parser completion.
 
 use anyhow::Result;
 use std::time::Instant;
@@ -40,17 +38,6 @@ pub(super) async fn execute_main_document_lifecycle_on_owner_local_task(
     body: MainDocumentLifecycleBody,
 ) -> Result<MainDocumentLifecycleTaskRun> {
     execute_main_document_lifecycle_body_on_owner_local_task(page_vm, body).await
-}
-
-pub(super) async fn execute_parser_exact_domcontentloaded_on_owner_local_task(
-    page_vm: &mut PageVm,
-    owner: crate::frame_owner_model::FrameDocumentTaskOwner,
-) -> Result<MainDocumentLifecycleTaskRun> {
-    execute_main_document_lifecycle_body_on_owner_local_task(
-        page_vm,
-        MainDocumentLifecycleBody::DomContentLoaded { owner },
-    )
-    .await
 }
 
 async fn execute_main_document_lifecycle_body_on_owner_local_task(

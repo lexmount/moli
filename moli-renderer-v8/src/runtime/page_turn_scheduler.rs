@@ -74,6 +74,8 @@ pub(super) enum PageTurnClass {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(super) enum DocumentLifecycleClassReadiness {
     Absent,
+    /// The DOM source owns the admitted event. Only its FIFO head may run.
+    QueuedDomTask,
     Available,
     RunnableContinuation,
     ReadyMainParserScriptContinuation,
@@ -103,7 +105,7 @@ impl DocumentLifecycleClassReadiness {
     }
 
     const fn is_available(self) -> bool {
-        !matches!(self, Self::Absent)
+        !matches!(self, Self::Absent | Self::QueuedDomTask)
     }
 }
 

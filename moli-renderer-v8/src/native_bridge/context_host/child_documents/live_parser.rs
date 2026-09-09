@@ -987,12 +987,11 @@ impl PageScriptHost {
                         }
                     }
                     PreparedImportMapSource::ExternalUnsupported => {
-                        tracing::debug!(
-                            child_handle = ?child_handle,
-                            document_handle = ?document_handle,
-                            script_handle = ?node_id,
-                            "child parser external import map is unsupported"
-                        );
+                        if !self.queue_script_preparation_error(scope, node_id) {
+                            return ScriptDisposition::AdmissionFailed {
+                                script_handle: node_id,
+                            };
+                        }
                     }
                 }
                 ScriptDisposition::Continue
@@ -1186,7 +1185,7 @@ impl PageScriptHost {
             document_handle,
             parser,
         ) {
-            self.queue_child_document_interactive_lifecycle_action(action);
+            self.finish_child_document_parser_stop(scope, action);
         }
     }
 
