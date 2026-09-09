@@ -750,6 +750,7 @@ mod subresource_fetch;
 #[cfg(any(test, feature = "devtools"))]
 pub(crate) use subresource_command_completion::AsyncSubresourceCommandExecution;
 pub(crate) use subresource_fetch::AsyncSubresourceFetchBodyActivity;
+mod bitmap_tasks;
 mod page_resource_completion_task_completion;
 mod text_search;
 mod text_track_default_mode;

@@ -4,8 +4,10 @@ use moli_v8_util::{
     set_private_value,
 };
 use moli_webapi_declare::{WebApiFunctionTemplate, WebApiObject};
-const IMAGE_BITMAP_WIDTH_SLOT: &str = "__moliImageBitmapWidth";
-const IMAGE_BITMAP_HEIGHT_SLOT: &str = "__moliImageBitmapHeight";
+pub const IMAGE_BITMAP_WIDTH_SLOT: &str = "__moliImageBitmapWidth";
+pub const IMAGE_BITMAP_HEIGHT_SLOT: &str = "__moliImageBitmapHeight";
+pub const IMAGE_BITMAP_PIXELS_SLOT: &str = "__moliImageBitmapPixels";
+pub const IMAGE_BITMAP_PREMULTIPLIED_SLOT: &str = "__moliImageBitmapPremultiplied";
 
 const IMAGE_BITMAP_DIMENSION_SLOTS: &[&str] = &[IMAGE_BITMAP_WIDTH_SLOT, IMAGE_BITMAP_HEIGHT_SLOT];
 
@@ -91,5 +93,11 @@ fn image_bitmap_close_callback<'s>(
     for slot in IMAGE_BITMAP_DIMENSION_SLOTS {
         set_private_value(scope, args.this(), slot, v8::Number::new(scope, 0.0).into());
     }
+    set_private_value(
+        scope,
+        args.this(),
+        IMAGE_BITMAP_PIXELS_SLOT,
+        v8::undefined(scope).into(),
+    );
     rv.set_undefined();
 }

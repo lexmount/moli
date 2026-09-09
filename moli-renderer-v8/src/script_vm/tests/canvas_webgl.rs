@@ -30,85 +30,6 @@ async fn run_one_canvas_image_load_event_task(
 }
 
 #[test]
-fn create_image_bitmap_matches_chromium_offscreen_canvas_and_close_contract() {
-    let mut vm = new_storage_test_vm("https://image-bitmap-surface.test/");
-
-    vm.exec(
-        r#"
-        (() => {
-          const caughtName = callback => {
-            try {
-              callback();
-              return "none";
-            } catch (error) {
-              return error.name;
-            }
-          };
-          const descriptor = Object.getOwnPropertyDescriptor(window, "createImageBitmap");
-          const blank = new OffscreenCanvas(16, 9);
-          const drawn = new OffscreenCanvas(16, 9);
-          drawn.getContext("2d").fillRect(0, 0, 1, 1);
-          globalThis.__imageBitmapProbe = {
-            functionShape: [
-              typeof createImageBitmap,
-              createImageBitmap.name,
-              createImageBitmap.length,
-              Object.prototype.hasOwnProperty.call(createImageBitmap, "prototype"),
-              descriptor.enumerable,
-              descriptor.configurable,
-              descriptor.writable,
-              caughtName(() => new createImageBitmap(drawn)),
-              caughtName(() => createImageBitmap()),
-            ],
-            constructorShape: [
-              typeof ImageBitmap,
-              ImageBitmap.name,
-              ImageBitmap.length,
-              Object.prototype.toString.call(ImageBitmap.prototype),
-              Object.getPrototypeOf(ImageBitmap.prototype) === Object.prototype,
-              caughtName(() => new ImageBitmap()),
-            ],
-            settled: false,
-          };
-          Promise.all([
-            createImageBitmap(blank).then(
-              () => "resolved",
-              error => `rejected:${error.name}`,
-            ),
-            createImageBitmap(drawn).then(bitmap => {
-              const before = [
-                Object.prototype.toString.call(bitmap),
-                bitmap instanceof ImageBitmap,
-                Object.getPrototypeOf(bitmap) === ImageBitmap.prototype,
-                Object.getOwnPropertyNames(bitmap).length,
-                bitmap.width,
-                bitmap.height,
-                typeof bitmap.close,
-              ];
-              const closeResult = bitmap.close();
-              return [before, typeof closeResult, bitmap.width, bitmap.height];
-            }),
-          ]).then(([blankOutcome, bitmapOutcome]) => {
-            __imageBitmapProbe.blankOutcome = blankOutcome;
-            __imageBitmapProbe.bitmapOutcome = bitmapOutcome;
-            __imageBitmapProbe.settled = true;
-          });
-        })()
-        "#,
-        None,
-    )
-    .expect("createImageBitmap probe should execute");
-
-    let result = vm
-        .eval("JSON.stringify(globalThis.__imageBitmapProbe)")
-        .expect("createImageBitmap probe should be readable");
-    assert_eq!(
-        result,
-        r#"{"functionShape":["function","createImageBitmap",1,false,true,true,true,"TypeError","TypeError"],"constructorShape":["function","ImageBitmap",0,"[object ImageBitmap]",true,"TypeError"],"settled":true,"blankOutcome":"rejected:InvalidStateError","bitmapOutcome":[["[object ImageBitmap]",true,true,0,16,9,"function"],"undefined",0,0]}"#
-    );
-}
-
-#[test]
 fn canvas_html_and_offscreen_draw_with_modern_fill_and_stroke_colors() {
     let mut vm = new_storage_test_vm("https://canvas-css-colors.test/");
     let result = vm
@@ -123,6 +44,8 @@ fn canvas_html_and_offscreen_draw_with_modern_fill_and_stroke_colors() {
     for (const [color, expected] of [
       ['oklch(0.5 0 0)', [99, 99, 99, 255]],
       ['hsl(120 100% 50%)', [0, 255, 0, 255]],
+      ['CanvasText', [0, 0, 0, 255]],
+      ['currentcolor', [0, 0, 0, 255]],
       ['color(srgb 1 0 0 / 0.5)', [255, 0, 0, 128]],
       ['color-mix(in srgb, red 50%, blue 50%)', [128, 0, 128, 255]],
     ]) {
@@ -132,8 +55,8 @@ fn canvas_html_and_offscreen_draw_with_modern_fill_and_stroke_colors() {
       ctx.strokeStyle = color;
       const style = ctx.fillStyle;
       if (ctx.strokeStyle !== style) throw new Error('stroke color differs');
-      for (const invalid of ['oklch(invalid)', 'CanvasText', 'light-dark(red, blue)',
-                             'currentcolor', 'rgb(1, 2, 3, 1, 0)', 'rgb(50%, 0, 0)']) {
+      for (const invalid of ['oklch(invalid)', 'light-dark(red, blue)',
+                             'rgb(1, 2, 3, 1, 0)', 'rgb(50%, 0, 0)']) {
         ctx.fillStyle = invalid;
         ctx.strokeStyle = invalid;
         if (ctx.fillStyle !== style || ctx.strokeStyle !== style) {

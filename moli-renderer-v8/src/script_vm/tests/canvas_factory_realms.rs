@@ -30,7 +30,7 @@ fn canvas_factories_keep_the_canvas_realm_across_borrowed_calls_and_adoption() {
 }
 
 #[test]
-fn canvas_2d_creation_samples_dimensions_only_for_its_backing_store() {
+fn canvas_2d_creation_uses_native_dimensions_without_author_getters() {
     let mut vm = new_parsed_test_vm(
         "https://canvas-factory-realms.test/",
         "<!doctype html><body></body>",
@@ -39,15 +39,24 @@ fn canvas_2d_creation_samples_dimensions_only_for_its_backing_store() {
         vm.eval(
             r#"(() => {
         const canvas=document.createElement('canvas');
+        canvas.setAttribute('width','4');
+        canvas.setAttribute('height','3');
         const reads=[];
-        Object.defineProperty(canvas,'width',{get(){reads.push('width');return 2;}});
-        Object.defineProperty(canvas,'height',{get(){reads.push('height');return 3;}});
+        for(const name of ['width','height'])Object.defineProperty(canvas,name,{get(){
+            reads.push(name);
+            throw Error('author '+name+' getter');
+        }});
         const context=canvas.getContext('2d');
         if(!(context instanceof CanvasRenderingContext2D))throw Error('context');
+        if(context.canvas!==canvas || canvas.getContext('2d')!==context)throw Error('context identity');
+        context.fillStyle='red';
+        context.fillRect(3,2,1,1);
+        if(String(context.getImageData(3,2,1,1).data)!=='255,0,0,255')throw Error('native bitmap dimensions');
+        if(String(context.getImageData(4,3,1,1).data)!=='0,0,0,0')throw Error('outside native bitmap');
         return JSON.stringify(reads);
     })()"#
         )
         .unwrap(),
-        r#"["width","height"]"#
+        "[]"
     );
 }

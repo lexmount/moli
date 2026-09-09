@@ -156,6 +156,7 @@ mod security_policy;
 mod selection_records;
 mod service_workers;
 pub(crate) use service_workers::ServiceWorkerWindowOwner;
+mod bitmap_tasks;
 mod document_execution_context;
 mod font_face_loads;
 mod shared_workers;
@@ -1007,7 +1008,10 @@ pub(crate) struct PageScriptHost {
     pending_image_decode_requests: HashMap<ImageDecodeRequestId, PendingImageDecodeRequest>,
     resource_timing_buffers: SharedResourceTimingBufferRegistry,
     pending_font_face_loads: HashMap<u64, font_face_loads::PendingFontFaceLoad>,
+    next_bitmap_task_id: crate::page_task_queue::RendererPageBitmapTaskId,
     next_webcrypto_task_id: crate::page_task_queue::RendererPageWebCryptoTaskId,
+    pending_bitmap_tasks:
+        HashMap<crate::page_task_queue::RendererPageBitmapTaskId, bitmap_tasks::PendingBitmapTask>,
     pending_webcrypto_tasks: HashMap<
         crate::page_task_queue::RendererPageWebCryptoTaskId,
         webcrypto_tasks::PendingWebCryptoTask,
