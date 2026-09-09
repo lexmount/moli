@@ -3,7 +3,8 @@ use super::history_runtime::{
     route_history_traversal_task,
 };
 use super::navigation_entry::{
-    history_entries, history_index, navigation_entry_key_value, navigation_entry_url_value,
+    history_entries, history_index, navigation_entry_initial_index, navigation_entry_key_value,
+    navigation_entry_url_value,
 };
 use super::navigation_events::{
     dispatch_beforeunload_for_runtime_owner, dispatch_navigation_traverse_event,
@@ -530,6 +531,21 @@ fn maybe_queue_joint_child_back_traversal<'s>(
             current_index: child_current_index,
             target_index: child_target_index,
         };
+        let child_entries = history_entries(scope, child_history);
+        let child_current_entry = child_entries
+            .and_then(|entries| entries.get_index(scope, child_current_index))
+            .and_then(|entry| v8::Local::<v8::Object>::try_from(entry).ok());
+        let child_target_entry = traversal_target_entry(scope, &child_target);
+        if child_current_entry
+            .and_then(|entry| navigation_entry_initial_index(scope, entry))
+            .zip(child_target_entry.and_then(|entry| navigation_entry_initial_index(scope, entry)))
+            .is_some_and(|(current, previous)| current == previous)
+        {
+            // The initial placeholder and the first committed child entry
+            // share one navigation index. Replacing that initial document
+            // does not add a joint-history step to traverse back through.
+            continue;
+        }
         if let Some((child_target_url, seed)) = history_entry_seed_for_traversal(
             scope,
             child_target.owner,
