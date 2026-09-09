@@ -339,6 +339,30 @@ impl Default for RendererBrowserContextRuntimeOwner {
 }
 
 impl RendererBrowserContextRuntime {
+    /// Resolves once, before the caller yields. The returned capability can
+    /// dispatch inspection only; it cannot control the Context or other workers.
+    pub fn worker_inspection_endpoint(
+        &self,
+        target: super::RendererWorkerInspectionTarget,
+    ) -> Option<super::RendererWorkerInspectionEndpoint> {
+        match target {
+            super::RendererWorkerInspectionTarget::Dedicated(instance_id) => {
+                self.dedicated_worker_inspection_endpoint(instance_id)
+            }
+            super::RendererWorkerInspectionTarget::Shared(instance_id) => self
+                .shared_worker_runtime_if_initialized()?
+                .inspection_endpoint(instance_id),
+            super::RendererWorkerInspectionTarget::Service { version_id, run } => self
+                .service_worker_runtime_for_existing_registration()?
+                .inspection_endpoint(
+                    crate::service_worker_runtime::ServiceWorkerVersionId::from_u64_for_binding(
+                        version_id,
+                    ),
+                    &run,
+                ),
+        }
+    }
+
     // A browser-context runtime is only valid while its thread-affine owner is
     // retained, so construction returns that owner rather than a bare handle.
     #[allow(clippy::new_ret_no_self)]

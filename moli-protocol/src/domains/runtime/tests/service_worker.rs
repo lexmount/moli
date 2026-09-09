@@ -623,8 +623,8 @@ async fn network_enable_on_service_worker_session_toggles_target_local_cursor() 
     );
 }
 
-#[tokio::test(flavor = "multi_thread")]
-async fn runtime_evaluate_on_real_service_worker_session_enters_worker_global() {
+async fn real_service_worker_session() -> (TestContext, String, String, tokio::task::JoinHandle<()>)
+{
     async fn page() -> impl IntoResponse {
         (
             [(CONTENT_TYPE.as_str(), "text/html")],
@@ -719,6 +719,17 @@ self.addEventListener("activate", event => {
         .expect("service worker session id")
         .to_owned();
 
+    (
+        ctx,
+        service_worker_session_id,
+        format!("http://{addr}/"),
+        server,
+    )
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn runtime_evaluate_on_real_service_worker_session_enters_worker_global() {
+    let (mut ctx, service_worker_session_id, scope, server) = real_service_worker_session().await;
     ctx.process_async(json!({
         "id": 86,
         "method": "Runtime.evaluate",
@@ -732,10 +743,153 @@ self.addEventListener("activate", event => {
     let probe_response = take_response_by_id(&mut ctx, 86);
     assert_eq!(
         probe_response["result"]["result"]["value"],
-        json!(format!("service:true:http://{addr}/"))
+        json!(format!("service:true:{scope}"))
     );
 
     server.abort();
+}
+
+async fn restart_service_worker_session(ctx: &mut TestContext, session_id: &str, scope: &str) {
+    let version_id = ctx
+        .conn
+        .service_worker_target_for_session(Some(session_id))
+        .expect("attached worker")
+        .renderer_version_id
+        .to_string();
+    ctx.process_async(json!({"id": 90, "method": "ServiceWorker.enable", "sessionId": "SID-page"}))
+        .await;
+    ctx.expect_result(90, json!({}), Some("SID-page"));
+    ctx.process_async(
+        json!({"id": 91, "method": "ServiceWorker.stopWorker", "sessionId": "SID-page",
+        "params": {"versionId": version_id}}),
+    )
+    .await;
+    ctx.expect_result(91, json!({}), Some("SID-page"));
+    wait_until_message(ctx, Some("SID-page"), "the exact worker stops", |message| {
+        message["method"] == "ServiceWorker.workerVersionUpdated"
+            && message["params"]["versions"]
+                .as_array()
+                .is_some_and(|versions| {
+                    versions.iter().any(|version| {
+                        version["versionId"] == version_id && version["runningStatus"] == "stopped"
+                    })
+                })
+    })
+    .await;
+    ctx.sent.clear();
+    ctx.process_async(
+        json!({"id": 92, "method": "ServiceWorker.startWorker", "sessionId": "SID-page",
+        "params": {"scopeURL": scope}}),
+    )
+    .await;
+    ctx.expect_result(92, json!({}), Some("SID-page"));
+    wait_until_message(
+        ctx,
+        Some("SID-page"),
+        "the same version starts a new run",
+        |message| {
+            message["method"] == "ServiceWorker.workerVersionUpdated"
+                && message["params"]["versions"]
+                    .as_array()
+                    .is_some_and(|versions| {
+                        versions.iter().any(|version| {
+                            version["versionId"] == version_id
+                                && version["runningStatus"] == "running"
+                        })
+                    })
+        },
+    )
+    .await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn pending_service_worker_inspection_never_dispatches_to_a_restarted_run() {
+    let (mut ctx, session_id, scope, server) = real_service_worker_session().await;
+    let old_target = ctx
+        .conn
+        .service_worker_target_for_session(Some(&session_id))
+        .expect("worker")
+        .inspection_target()
+        .expect("live run");
+    let old_endpoint = ctx
+        .conn
+        .worker_inspection_endpoint_for_session(Some(&session_id))
+        .expect("live inspection endpoint");
+    let disposal = ctx
+        .conn
+        .session_disposal_plan(&session_id)
+        .expect("disposal plan");
+    let disposal_endpoint =
+        crate::domains::runtime::worker_inspection_endpoint_for_disposal(&ctx.conn, &disposal)
+            .expect("capture the worker before async session cleanup");
+    let pending = ctx
+        .conn
+        .start_service_worker_runtime_protocol_message_for_session(
+            Some(&session_id),
+            json!({"id": 9001, "method": "Runtime.evaluate", "params": {
+                "expression": "globalThis.__staleWorkerDispatch = true", "returnByValue": true
+            }})
+            .to_string(),
+        )
+        .expect("capture the original worker before polling dispatch");
+
+    restart_service_worker_session(&mut ctx, &session_id, &scope).await;
+    assert!(
+        ctx.conn
+            .browser_context
+            .as_ref()
+            .expect("fixture context")
+            .worker_inspection_endpoint(old_target)
+            .is_none(),
+        "the old run identity must not bind the restarted version"
+    );
+    assert!(!old_endpoint.attach_session(Some(session_id.clone())));
+    assert!(!old_endpoint.detach_session(Some(session_id.clone())));
+    assert!(!disposal_endpoint.detach_session(Some(session_id.clone())));
+
+    let stale_dispatch = pending.wait().await;
+    ctx.process_async(json!({"id": 93, "method": "Runtime.evaluate", "sessionId": session_id,
+        "params": {"expression": "globalThis.__staleWorkerDispatch === undefined", "returnByValue": true}})).await;
+    let probe = take_response_by_id(&mut ctx, 93);
+    server.abort();
+    assert_eq!(
+        probe["result"]["result"]["value"], true,
+        "a captured inspection command must not mutate the replacement run: {probe}"
+    );
+    assert!(
+        stale_dispatch.is_err(),
+        "the retired endpoint must reject the captured command"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn pending_service_worker_frontend_inspection_never_dispatches_to_a_restarted_run() {
+    let (mut ctx, session_id, scope, server) = real_service_worker_session().await;
+    let raw = json!({"id": 9002, "method": "Runtime.evaluate", "sessionId": session_id,
+        "params": {"expression": "globalThis.__staleWorkerDispatch = true", "returnByValue": true}
+    })
+    .to_string();
+    let pending = ctx
+        .conn
+        .try_start_pending_command_dispatch(&raw)
+        .expect("capture a real frontend Worker command before polling");
+    restart_service_worker_session(&mut ctx, &session_id, &scope).await;
+    let completed = pending.wait().await;
+    assert!(
+        matches!(
+            ctx.conn.complete_pending_command_dispatch(completed).await,
+            CdpCommandTaskStep::Complete(_)
+        ),
+        "retired frontend inspection must complete without replay"
+    );
+    ctx.process_async(json!({"id": 94, "method": "Runtime.evaluate", "sessionId": session_id,
+        "params": {"expression": "globalThis.__staleWorkerDispatch === undefined", "returnByValue": true}})).await;
+    let probe = take_response_by_id(&mut ctx, 94);
+    server.abort();
+    assert_eq!(
+        probe["result"]["result"]["value"], true,
+        "the old frontend command must not mutate the replacement run: {probe}"
+    );
 }
 
 #[tokio::test]

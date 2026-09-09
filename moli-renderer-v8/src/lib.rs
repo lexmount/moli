@@ -315,6 +315,7 @@ pub use runtime::{
     RendererSharedWorkerTargetInfo, RendererStyleSheetHeader, RendererStyleSheetInventoryUpdate,
     RendererStyleSheetPayload, RendererSyntheticResponseBody, RendererTextSearchMatch,
     RendererTouchPoint, RendererVisualStateToken, RendererWindowDocumentSource,
+    RendererWorkerInspectionEndpoint, RendererWorkerInspectionTarget,
     RuntimeConsoleMessageSnapshot, renderer_output_transport_channel,
 };
 pub use service_worker_runtime::{

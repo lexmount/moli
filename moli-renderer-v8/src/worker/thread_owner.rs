@@ -283,7 +283,7 @@ mod tests {
                 .all(|thread| !thread.is_joined())
         );
         let (reply_tx, reply_rx) = tokio::sync::oneshot::channel();
-        assert!(peer_handle.dispatch_runtime_protocol_message(
+        assert!(peer_handle.devtools_handle().dispatch_runtime_protocol_message(
             None,
             r#"{"id":71,"method":"Runtime.evaluate","params":{"expression":"41 + 1","returnByValue":true}}"#.into(),
             None,

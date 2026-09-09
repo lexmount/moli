@@ -737,8 +737,11 @@ impl BrowserContext {
         // binding observable so normal target retirement can detach it, while
         // best-effort registering the live renderer session before the attach
         // event is published.
-        let _ =
-            self.attach_dedicated_worker_inspector_session(renderer_instance_id, Some(session_id));
+        if let Some(endpoint) = self.worker_inspection_endpoint(
+            moli_core::runtime::RendererWorkerInspectionTarget::Dedicated(renderer_instance_id),
+        ) {
+            endpoint.attach_session(Some(session_id));
+        }
         true
     }
 

@@ -816,21 +816,6 @@ impl WorkerHandle {
         self.thread.join();
     }
 
-    pub(crate) fn dispatch_runtime_protocol_message(
-        &self,
-        inspector_session_id: Option<String>,
-        raw_json: String,
-        deferred_response: Option<RendererRuntimeInspectorResponseSender>,
-        response_tx: oneshot::Sender<Result<Vec<RendererRuntimeInspectorMessage>, String>>,
-    ) -> bool {
-        self.thread.devtools.dispatch_runtime_protocol_message(
-            inspector_session_id,
-            raw_json,
-            deferred_response,
-            response_tx,
-        )
-    }
-
     #[cfg(test)]
     pub(crate) fn attach_runtime_inspector_session(
         &self,
@@ -839,15 +824,6 @@ impl WorkerHandle {
         self.thread
             .devtools
             .attach_runtime_inspector_session(inspector_session_id)
-    }
-
-    pub(crate) fn detach_runtime_inspector_session(
-        &self,
-        inspector_session_id: Option<String>,
-    ) -> bool {
-        self.thread
-            .devtools
-            .detach_runtime_inspector_session(inspector_session_id)
     }
 
     pub(crate) fn run_if_waiting_for_debugger_for_devtools(&self) -> bool {

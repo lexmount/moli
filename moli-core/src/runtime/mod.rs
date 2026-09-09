@@ -43,6 +43,7 @@ pub use moli_renderer_v8::{
     RendererLifecycleDecider, RendererLifecycleDecision, RendererLifecycleSnapshot,
     RendererPageReservationToken, RendererReservedServiceWorkerClient,
     RendererServiceWorkerMainResourceFetch, RendererSharedWorkerRuntimeDiagnostics,
+    RendererWorkerInspectionEndpoint, RendererWorkerInspectionTarget,
 };
 pub use navigation_engine::{
     BuiltDocumentPage, CommittedDocumentResourceSource, NavigationEngine,

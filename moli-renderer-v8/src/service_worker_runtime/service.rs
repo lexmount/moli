@@ -140,12 +140,12 @@ mod event_start;
 mod fetch_settlement;
 mod functional_requests;
 mod idle_scheduling;
+mod inspection;
 mod lifecycle_completion;
 mod lifecycle_requests;
 mod registration_jobs;
 mod registration_lookup;
 mod registration_store;
-mod runtime_protocol;
 mod service_lane_completions;
 mod worker_completion;
 use client_registry::{
@@ -371,28 +371,6 @@ impl ServiceWorkerRuntimeService {
                 .as_mut()
                 .expect("ServiceWorker test service must install a concrete output receiver"),
         )
-    }
-
-    pub(super) fn running_host_for_version(
-        &self,
-        version_id: ServiceWorkerVersionId,
-    ) -> Option<SharedRendererServiceWorkerHost> {
-        let state = self.inner.state.lock();
-        let version = state.versions.get(&version_id)?;
-        let ServiceWorkerVersionRunningState::Running { host } = &version.running_state else {
-            return None;
-        };
-        if !host.has_running_worker() {
-            return None;
-        }
-        Some(host.clone())
-    }
-
-    pub(super) fn target_output_journal(
-        &self,
-        version_id: ServiceWorkerVersionId,
-    ) -> Option<crate::runtime::RendererTurnOutputJournal> {
-        self.inner.state.lock().target_output_journal(version_id)
     }
 
     pub(super) fn enqueue_target_console_message(

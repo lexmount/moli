@@ -1,9 +1,24 @@
-use crate::{browser::ServiceWorkerCommand, runtime::RendererBrowserContextRuntime};
+use crate::{
+    browser::ServiceWorkerCommand,
+    runtime::{RendererWorkerInspectionEndpoint, RendererWorkerInspectionTarget},
+};
 use moli_shared_worker::SharedWorkerInstanceId;
 
 use super::BrowserContext;
 
 impl BrowserContext {
+    pub fn worker_inspection_endpoint(
+        &self,
+        target: RendererWorkerInspectionTarget,
+    ) -> Option<RendererWorkerInspectionEndpoint> {
+        self.renderer_runtime().worker_inspection_endpoint(target)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn worker_runtime_for_test(&self) -> crate::runtime::RendererBrowserContextRuntime {
+        self.renderer_runtime()
+    }
+
     pub fn execute_service_worker_command(
         &self,
         command: ServiceWorkerCommand,
@@ -122,42 +137,6 @@ impl BrowserContext {
             .close_dedicated_worker_for_devtools(instance_id)
     }
 
-    pub fn attach_dedicated_worker_inspector_session(
-        &self,
-        instance_id: u64,
-        session_id: Option<String>,
-    ) -> bool {
-        self.renderer_runtime()
-            .attach_dedicated_worker_runtime_inspector_session(instance_id, session_id)
-    }
-
-    pub fn detach_shared_worker_inspector_session(
-        &self,
-        instance_id: SharedWorkerInstanceId,
-        session_id: Option<String>,
-    ) -> bool {
-        self.renderer_runtime()
-            .detach_shared_worker_runtime_inspector_session(instance_id, session_id)
-    }
-
-    pub fn detach_dedicated_worker_inspector_session(
-        &self,
-        instance_id: u64,
-        session_id: Option<String>,
-    ) -> bool {
-        self.renderer_runtime()
-            .detach_dedicated_worker_runtime_inspector_session(instance_id, session_id)
-    }
-
-    pub fn detach_service_worker_inspector_session(
-        &self,
-        version_id: u64,
-        session_id: Option<String>,
-    ) -> bool {
-        self.renderer_runtime()
-            .detach_service_worker_runtime_inspector_session(version_id, session_id)
-    }
-
     pub fn run_dedicated_worker_if_waiting_for_debugger(&self, instance_id: u64) -> bool {
         self.renderer_runtime()
             .run_dedicated_worker_if_waiting_for_debugger_for_devtools(instance_id)
@@ -166,9 +145,5 @@ impl BrowserContext {
     pub fn run_service_worker_if_waiting_for_debugger(&self, version_id: u64) -> bool {
         self.renderer_runtime()
             .run_service_worker_if_waiting_for_debugger_for_devtools(version_id)
-    }
-
-    pub fn worker_runtime_inspection_endpoint(&self) -> RendererBrowserContextRuntime {
-        self.renderer_runtime()
     }
 }

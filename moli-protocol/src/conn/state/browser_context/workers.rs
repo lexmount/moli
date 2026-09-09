@@ -1,9 +1,19 @@
-use moli_core::{browser::ServiceWorkerCommand, runtime::RendererBrowserContextRuntime};
+use moli_core::{
+    browser::ServiceWorkerCommand,
+    runtime::{RendererWorkerInspectionEndpoint, RendererWorkerInspectionTarget},
+};
 use moli_shared_worker::SharedWorkerInstanceId;
 
 use super::BrowserContext;
 
 impl BrowserContext {
+    pub(crate) fn worker_inspection_endpoint(
+        &self,
+        target: RendererWorkerInspectionTarget,
+    ) -> Option<RendererWorkerInspectionEndpoint> {
+        self.browser_context.worker_inspection_endpoint(target)
+    }
+
     pub(in crate::conn) fn execute_service_worker_command(
         &self,
         command: ServiceWorkerCommand,
@@ -72,42 +82,6 @@ impl BrowserContext {
         self.browser_context.close_dedicated_worker(instance_id)
     }
 
-    pub(crate) fn attach_dedicated_worker_inspector_session(
-        &self,
-        instance_id: u64,
-        session_id: Option<String>,
-    ) -> bool {
-        self.browser_context
-            .attach_dedicated_worker_inspector_session(instance_id, session_id)
-    }
-
-    pub(crate) fn detach_shared_worker_inspector_session(
-        &self,
-        instance_id: SharedWorkerInstanceId,
-        session_id: Option<String>,
-    ) -> bool {
-        self.browser_context
-            .detach_shared_worker_inspector_session(instance_id, session_id)
-    }
-
-    pub(crate) fn detach_dedicated_worker_inspector_session(
-        &self,
-        instance_id: u64,
-        session_id: Option<String>,
-    ) -> bool {
-        self.browser_context
-            .detach_dedicated_worker_inspector_session(instance_id, session_id)
-    }
-
-    pub(crate) fn detach_service_worker_inspector_session(
-        &self,
-        version_id: u64,
-        session_id: Option<String>,
-    ) -> bool {
-        self.browser_context
-            .detach_service_worker_inspector_session(version_id, session_id)
-    }
-
     pub(in crate::conn) fn run_dedicated_worker_if_waiting_for_debugger(
         &self,
         instance_id: u64,
@@ -119,13 +93,5 @@ impl BrowserContext {
     pub(crate) fn run_service_worker_if_waiting_for_debugger(&self, version_id: u64) -> bool {
         self.browser_context
             .run_service_worker_if_waiting_for_debugger(version_id)
-    }
-
-    /// Layered DevTools inspection is the only Protocol path allowed to retain
-    /// the cloneable renderer endpoint while a worker command is in flight.
-    pub(in crate::conn) fn worker_runtime_inspection_endpoint(
-        &self,
-    ) -> RendererBrowserContextRuntime {
-        self.browser_context.worker_runtime_inspection_endpoint()
     }
 }

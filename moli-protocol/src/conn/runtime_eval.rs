@@ -12,7 +12,6 @@ use crate::devtools_runtime::{
 use moli_core::{
     RendererOutputFence, RendererRuntimeCommandCausalIdentity,
     RendererRuntimeInspectorResponseSender,
-    browser::BrowserContextId,
     page::{
         DocumentNodeObjectSnapshot, DocumentNodeRuntimeObjectResolution,
         MAX_INSPECTOR_PROTOCOL_VALUE_DEPTH, RendererAgentAttachmentId, RendererCommandTurnOutput,
@@ -20,6 +19,7 @@ use moli_core::{
         RendererInspectorCommandRoute, RendererRuntimeCommandOutput,
         RendererRuntimeInspectorMessage, RendererRuntimeRealmInfo,
     },
+    runtime::{RendererWorkerInspectionEndpoint, RendererWorkerInspectionTarget},
 };
 
 use crate::conn::state::{
@@ -206,24 +206,6 @@ enum RuntimeRemoteObjectOwnerIdentity {
     },
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
-struct SharedWorkerRuntimeTargetRoute {
-    browser_context: BrowserContextId,
-    worker: WorkerRuntimeTarget,
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-enum WorkerRuntimeTarget {
-    Shared(SharedWorkerInstanceId),
-    Dedicated(u64),
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-struct ServiceWorkerRuntimeTargetRoute {
-    browser_context: BrowserContextId,
-    version_id: u64,
-}
-
 enum BidiChannelListenerRoute {
     NotListener,
     Consumed,
@@ -346,13 +328,13 @@ impl RuntimeProtocolResponseRoute {
 
 pub struct PendingSharedWorkerRuntimeProtocolMessageDispatch {
     session_id: Option<String>,
-    pending: SharedWorkerRuntimeProtocolDispatchFuture,
+    pending: WorkerRuntimeProtocolDispatchFuture,
     response_route: RuntimeProtocolResponseRoute,
 }
 
 pub struct PendingServiceWorkerRuntimeProtocolMessageDispatch {
     session_id: Option<String>,
-    pending: ServiceWorkerRuntimeProtocolDispatchFuture,
+    pending: WorkerRuntimeProtocolDispatchFuture,
     response_route: RuntimeProtocolResponseRoute,
 }
 
@@ -506,10 +488,43 @@ pub struct CompletedRuntimeChildDefaultContextLookupDispatch {
     completion: moli_core::page::CompletedPageCommand,
 }
 
-type SharedWorkerRuntimeProtocolDispatchFuture =
+type WorkerRuntimeProtocolDispatchFuture =
     Pin<Box<dyn Future<Output = Result<CompletedWorkerRuntimeProtocolDispatch, String>>>>;
-type ServiceWorkerRuntimeProtocolDispatchFuture =
-    Pin<Box<dyn Future<Output = Result<CompletedWorkerRuntimeProtocolDispatch, String>>>>;
+
+fn worker_runtime_protocol_dispatch(
+    endpoint: Result<RendererWorkerInspectionEndpoint, String>,
+    session_id: Option<String>,
+    raw_json: String,
+    response: Option<RendererRuntimeInspectorResponseSender>,
+    delivery: RendererInspectorResponseDelivery,
+) -> WorkerRuntimeProtocolDispatchFuture {
+    // Freeze both the concrete worker and the response stream before yielding.
+    match (response, delivery) {
+        (response, RendererInspectorResponseDelivery::AdapterReply) => Box::pin(async move {
+            endpoint?
+                .dispatch_protocol_message(session_id, raw_json, response)
+                .await
+                .map(CompletedWorkerRuntimeProtocolDispatch::adapter_reply)
+        }),
+        (Some(response), RendererInspectorResponseDelivery::SessionSink) => {
+            let pending = endpoint.and_then(|endpoint| {
+                endpoint.dispatch_protocol_message_to_session(
+                    session_id.ok_or_else(|| "UnknownSession".to_owned())?,
+                    raw_json,
+                    response,
+                )
+            });
+            Box::pin(async move {
+                Ok(CompletedWorkerRuntimeProtocolDispatch::devtools_session(
+                    pending?.await,
+                ))
+            })
+        }
+        (None, RendererInspectorResponseDelivery::SessionSink) => {
+            Box::pin(async { Err("SessionResponseSenderMissing".to_owned()) })
+        }
+    }
+}
 
 #[derive(Clone, Debug)]
 struct RuntimeProtocolMessagePageRoute {
@@ -4352,91 +4367,86 @@ impl CdpConnection {
         }
     }
 
-    fn shared_worker_runtime_target_for_session(
-        &self,
-        session_id: Option<&str>,
-    ) -> Result<SharedWorkerRuntimeTargetRoute, String> {
-        let session_id = session_id.ok_or_else(|| "UnknownSession".to_owned())?;
-        let route = self
-            .session_route(Some(session_id))
-            .ok_or_else(|| "UnknownSession".to_owned())?;
-        match route {
-            CdpSessionRoute::SharedWorkerTarget {
-                browser_context_id,
-                target_id,
-            } => {
-                let context = self
-                    .browser_context_by_id(&browser_context_id)
-                    .ok_or_else(|| "UnknownSession".to_owned())?;
-                let target = context
-                    .shared_worker_target(&target_id)
-                    .ok_or_else(|| "UnknownSession".to_owned())?;
-                Ok(SharedWorkerRuntimeTargetRoute {
-                    browser_context: context.browser_context_id(),
-                    worker: WorkerRuntimeTarget::Shared(target.renderer_instance_id),
-                })
-            }
-            CdpSessionRoute::DedicatedWorkerTarget {
-                browser_context_id,
-                target_id,
-            } => {
-                let context = self
-                    .browser_context_by_id(&browser_context_id)
-                    .ok_or_else(|| "UnknownSession".to_owned())?;
-                let target = context
-                    .dedicated_worker_target(&target_id)
-                    .ok_or_else(|| "UnknownSession".to_owned())?;
-                Ok(SharedWorkerRuntimeTargetRoute {
-                    browser_context: context.browser_context_id(),
-                    worker: WorkerRuntimeTarget::Dedicated(target.renderer_instance_id),
-                })
-            }
-            _ => Err("UnknownSession".to_owned()),
-        }
-    }
-
     pub(crate) fn run_dedicated_worker_if_waiting_for_debugger_for_session(
         &mut self,
         session_id: Option<&str>,
     ) -> Result<bool, String> {
         let session_id = session_id.ok_or_else(|| "UnknownSession".to_owned())?;
-        let route = self.shared_worker_runtime_target_for_session(Some(session_id))?;
-        let WorkerRuntimeTarget::Dedicated(instance_id) = route.worker else {
-            return Ok(false);
-        };
-        if let Some(target) = self.dedicated_worker_target_for_session_mut(Some(session_id)) {
-            target.discard_main_script_network_replay_for(session_id);
-        }
-        let browser_context = self
-            .browser_context_by_browser_id(route.browser_context)
+        let route = self
+            .session_route(Some(session_id))
             .ok_or_else(|| "UnknownSession".to_owned())?;
-        Ok(browser_context.run_dedicated_worker_if_waiting_for_debugger(instance_id))
-    }
-
-    fn service_worker_runtime_target_for_session(
-        &self,
-        session_id: Option<&str>,
-    ) -> Result<ServiceWorkerRuntimeTargetRoute, String> {
-        let session_id = session_id.ok_or_else(|| "UnknownSession".to_owned())?;
-        let CdpSessionRoute::ServiceWorkerTarget {
+        let CdpSessionRoute::DedicatedWorkerTarget {
             browser_context_id,
             target_id,
-        } = self
-            .session_route(Some(session_id))
-            .ok_or_else(|| "UnknownSession".to_owned())?
+        } = route
         else {
-            return Err("UnknownSession".to_owned());
+            return if matches!(route, CdpSessionRoute::SharedWorkerTarget { .. }) {
+                Ok(false)
+            } else {
+                Err("UnknownSession".to_owned())
+            };
         };
         let context = self
-            .browser_context_by_id(&browser_context_id)
+            .browser_context_by_id_mut(&browser_context_id)
             .ok_or_else(|| "UnknownSession".to_owned())?;
         let target = context
-            .service_worker_target(&target_id)
+            .dedicated_worker_target_mut(&target_id)
             .ok_or_else(|| "UnknownSession".to_owned())?;
-        Ok(ServiceWorkerRuntimeTargetRoute {
-            browser_context: context.browser_context_id(),
-            version_id: target.renderer_version_id,
-        })
+        let instance_id = target.renderer_instance_id;
+        target.discard_main_script_network_replay_for(session_id);
+        Ok(context.run_dedicated_worker_if_waiting_for_debugger(instance_id))
+    }
+
+    pub(crate) fn worker_inspection_endpoint_for_session(
+        &self,
+        session_id: Option<&str>,
+    ) -> Result<RendererWorkerInspectionEndpoint, String> {
+        let route = self
+            .session_route(session_id)
+            .ok_or_else(|| "UnknownSession".to_owned())?;
+        let browser_context_id = match &route {
+            CdpSessionRoute::SharedWorkerTarget {
+                browser_context_id, ..
+            }
+            | CdpSessionRoute::DedicatedWorkerTarget {
+                browser_context_id, ..
+            }
+            | CdpSessionRoute::ServiceWorkerTarget {
+                browser_context_id, ..
+            } => browser_context_id,
+            _ => return Err("UnknownSession".to_owned()),
+        };
+        let context = self
+            .browser_context_by_id(browser_context_id)
+            .ok_or_else(|| "UnknownSession".to_owned())?;
+        let worker = match &route {
+            CdpSessionRoute::SharedWorkerTarget { target_id, .. } => {
+                RendererWorkerInspectionTarget::Shared(
+                    context
+                        .shared_worker_target(target_id)
+                        .ok_or_else(|| "UnknownSession".to_owned())?
+                        .renderer_instance_id,
+                )
+            }
+            CdpSessionRoute::DedicatedWorkerTarget { target_id, .. } => {
+                RendererWorkerInspectionTarget::Dedicated(
+                    context
+                        .dedicated_worker_target(target_id)
+                        .ok_or_else(|| "UnknownSession".to_owned())?
+                        .renderer_instance_id,
+                )
+            }
+            CdpSessionRoute::ServiceWorkerTarget { target_id, .. } => context
+                .service_worker_target(target_id)
+                .ok_or_else(|| "UnknownSession".to_owned())?
+                .inspection_target()
+                .ok_or_else(|| "ServiceWorkerRuntimeUnavailable".to_owned())?,
+            _ => unreachable!("validated worker route"),
+        };
+        let unavailable = worker.unavailable_message();
+        context
+            .worker_inspection_endpoint(worker)
+            .ok_or_else(|| unavailable.to_owned())
     }
 
     pub(crate) fn start_shared_worker_runtime_protocol_message_for_session(
@@ -4460,7 +4470,15 @@ impl CdpConnection {
         descriptor: RendererCommandDescriptor,
         command_id: u64,
     ) -> Result<PendingSharedWorkerRuntimeProtocolMessageDispatch, String> {
-        self.shared_worker_runtime_target_for_session(session_id)?;
+        if !matches!(
+            self.session_route(session_id),
+            Some(
+                CdpSessionRoute::SharedWorkerTarget { .. }
+                    | CdpSessionRoute::DedicatedWorkerTarget { .. }
+            )
+        ) {
+            return Err("UnknownSession".to_owned());
+        }
         let (_correlation, raw_json, response_sender, response_route) =
             self.prepare_renderer_call_for_session_owner(session_id, descriptor, command_id, None)?;
         self.start_shared_worker_runtime_protocol_message_for_session_with_optional_deferred_response(
@@ -4478,119 +4496,13 @@ impl CdpConnection {
         response_sender: Option<RendererRuntimeInspectorResponseSender>,
         response_route: RuntimeProtocolResponseRoute,
     ) -> Result<PendingSharedWorkerRuntimeProtocolMessageDispatch, String> {
-        let route = self.shared_worker_runtime_target_for_session(session_id)?;
-        let renderer_runtime = self
-            .browser_context_by_browser_id(route.browser_context)
-            .map(BrowserContext::worker_runtime_inspection_endpoint)
-            .ok_or_else(|| "UnknownSession".to_owned())?;
-        let worker = route.worker;
-        let inspector_session_id = session_id.map(str::to_owned);
-        let response_delivery = response_route.delivery();
-        let pending: SharedWorkerRuntimeProtocolDispatchFuture = match (
-            worker,
+        let pending = worker_runtime_protocol_dispatch(
+            self.worker_inspection_endpoint_for_session(session_id),
+            session_id.map(str::to_owned),
+            raw_json,
             response_sender,
-            response_delivery,
-        ) {
-            (
-                WorkerRuntimeTarget::Shared(instance_id),
-                Some(response),
-                RendererInspectorResponseDelivery::AdapterReply,
-            ) => Box::pin(async move {
-                renderer_runtime
-                    .dispatch_shared_worker_runtime_protocol_message_with_deferred_response(
-                        instance_id,
-                        inspector_session_id,
-                        raw_json,
-                        response,
-                    )
-                    .await
-                    .map(CompletedWorkerRuntimeProtocolDispatch::adapter_reply)
-            }),
-            (
-                WorkerRuntimeTarget::Shared(instance_id),
-                Some(response),
-                RendererInspectorResponseDelivery::SessionSink,
-            ) => {
-                let inspector_session_id =
-                    inspector_session_id.ok_or_else(|| "UnknownSession".to_owned())?;
-                Box::pin(async move {
-                    renderer_runtime
-                        .dispatch_shared_worker_runtime_protocol_message_with_devtools_session_response(
-                            instance_id,
-                            inspector_session_id,
-                            raw_json,
-                            response,
-                        )
-                        .await
-                        .map(CompletedWorkerRuntimeProtocolDispatch::devtools_session)
-                })
-            }
-            (
-                WorkerRuntimeTarget::Shared(instance_id),
-                None,
-                RendererInspectorResponseDelivery::AdapterReply,
-            ) => Box::pin(async move {
-                renderer_runtime
-                    .dispatch_shared_worker_runtime_protocol_message(
-                        instance_id,
-                        inspector_session_id,
-                        raw_json,
-                    )
-                    .await
-                    .map(CompletedWorkerRuntimeProtocolDispatch::adapter_reply)
-            }),
-            (
-                WorkerRuntimeTarget::Dedicated(instance_id),
-                Some(response),
-                RendererInspectorResponseDelivery::AdapterReply,
-            ) => Box::pin(async move {
-                renderer_runtime
-                    .dispatch_dedicated_worker_runtime_protocol_message_with_deferred_response(
-                        instance_id,
-                        inspector_session_id,
-                        raw_json,
-                        response,
-                    )
-                    .await
-                    .map(CompletedWorkerRuntimeProtocolDispatch::adapter_reply)
-            }),
-            (
-                WorkerRuntimeTarget::Dedicated(instance_id),
-                Some(response),
-                RendererInspectorResponseDelivery::SessionSink,
-            ) => {
-                let inspector_session_id =
-                    inspector_session_id.ok_or_else(|| "UnknownSession".to_owned())?;
-                Box::pin(async move {
-                    renderer_runtime
-                        .dispatch_dedicated_worker_runtime_protocol_message_with_devtools_session_response(
-                            instance_id,
-                            inspector_session_id,
-                            raw_json,
-                            response,
-                        )
-                        .await
-                        .map(CompletedWorkerRuntimeProtocolDispatch::devtools_session)
-                })
-            }
-            (
-                WorkerRuntimeTarget::Dedicated(instance_id),
-                None,
-                RendererInspectorResponseDelivery::AdapterReply,
-            ) => Box::pin(async move {
-                renderer_runtime
-                    .dispatch_dedicated_worker_runtime_protocol_message(
-                        instance_id,
-                        inspector_session_id,
-                        raw_json,
-                    )
-                    .await
-                    .map(CompletedWorkerRuntimeProtocolDispatch::adapter_reply)
-            }),
-            (_, None, RendererInspectorResponseDelivery::SessionSink) => {
-                return Err("SessionResponseSenderMissing".to_owned());
-            }
-        };
+            response_route.delivery(),
+        );
         Ok(PendingSharedWorkerRuntimeProtocolMessageDispatch {
             session_id: session_id.map(str::to_owned),
             pending,
@@ -4695,7 +4607,8 @@ impl CdpConnection {
         descriptor: RendererCommandDescriptor,
         command_id: u64,
     ) -> Result<PendingServiceWorkerRuntimeProtocolMessageDispatch, String> {
-        self.service_worker_runtime_target_for_session(session_id)?;
+        self.service_worker_target_for_session(session_id)
+            .ok_or_else(|| "UnknownSession".to_owned())?;
         let (_correlation, raw_json, response_sender, response_route) =
             self.prepare_renderer_call_for_session_owner(session_id, descriptor, command_id, None)?;
         self.start_service_worker_runtime_protocol_message_for_session_with_optional_deferred_response(
@@ -4713,53 +4626,13 @@ impl CdpConnection {
         response_sender: Option<RendererRuntimeInspectorResponseSender>,
         response_route: RuntimeProtocolResponseRoute,
     ) -> Result<PendingServiceWorkerRuntimeProtocolMessageDispatch, String> {
-        let route = self.service_worker_runtime_target_for_session(session_id)?;
-        let renderer_runtime = self
-            .browser_context_by_browser_id(route.browser_context)
-            .map(BrowserContext::worker_runtime_inspection_endpoint)
-            .ok_or_else(|| "UnknownSession".to_owned())?;
-        let version_id = route.version_id;
-        let inspector_session_id = session_id.map(str::to_owned);
-        let response_delivery = response_route.delivery();
-        let pending: ServiceWorkerRuntimeProtocolDispatchFuture = Box::pin(async move {
-            match (response_sender, response_delivery) {
-                (Some(response), RendererInspectorResponseDelivery::AdapterReply) => {
-                    renderer_runtime
-                        .dispatch_service_worker_runtime_protocol_message_with_deferred_response(
-                            version_id,
-                            inspector_session_id,
-                            raw_json,
-                            response,
-                        )
-                        .await
-                        .map(CompletedWorkerRuntimeProtocolDispatch::adapter_reply)
-                }
-                (Some(response), RendererInspectorResponseDelivery::SessionSink) => {
-                    let inspector_session_id =
-                        inspector_session_id.ok_or_else(|| "UnknownSession".to_owned())?;
-                    renderer_runtime
-                            .dispatch_service_worker_runtime_protocol_message_with_devtools_session_response(
-                                version_id,
-                                inspector_session_id,
-                                raw_json,
-                                response,
-                            )
-                            .await
-                            .map(CompletedWorkerRuntimeProtocolDispatch::devtools_session)
-                }
-                (None, RendererInspectorResponseDelivery::AdapterReply) => renderer_runtime
-                    .dispatch_service_worker_runtime_protocol_message(
-                        version_id,
-                        inspector_session_id,
-                        raw_json,
-                    )
-                    .await
-                    .map(CompletedWorkerRuntimeProtocolDispatch::adapter_reply),
-                (None, RendererInspectorResponseDelivery::SessionSink) => {
-                    Err("SessionResponseSenderMissing".to_owned())
-                }
-            }
-        });
+        let pending = worker_runtime_protocol_dispatch(
+            self.worker_inspection_endpoint_for_session(session_id),
+            session_id.map(str::to_owned),
+            raw_json,
+            response_sender,
+            response_route.delivery(),
+        );
         Ok(PendingServiceWorkerRuntimeProtocolMessageDispatch {
             session_id: session_id.map(str::to_owned),
             pending,

@@ -264,7 +264,7 @@ async fn worker_pause_evaluation_until_debugger_exposes_context_before_bootstrap
         })
         .to_string();
         assert!(
-            handle.dispatch_runtime_protocol_message(
+            handle.devtools_handle().dispatch_runtime_protocol_message(
                 Some("SID-worker-pause".to_owned()),
                 raw_json,
                 None,
@@ -445,7 +445,7 @@ async fn worker_inspector_interrupt_overtakes_js_running_command_during_active_j
             message["params"] = params;
         }
         assert!(
-            handle.dispatch_runtime_protocol_message(
+            handle.devtools_handle().dispatch_runtime_protocol_message(
                 Some("SID-worker-interrupt".to_owned()),
                 message.to_string(),
                 None,

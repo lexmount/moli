@@ -42,6 +42,8 @@ pub(crate) enum RendererPageStateCapturePolicy {
 
 mod access;
 mod browser_context_runtime;
+mod worker_inspection;
+pub use worker_inspection::{RendererWorkerInspectionEndpoint, RendererWorkerInspectionTarget};
 mod document_lifecycle;
 mod document_lifecycle_turn;
 mod javascript_dialog;

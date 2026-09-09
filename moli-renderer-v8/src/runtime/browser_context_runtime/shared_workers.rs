@@ -12,10 +12,7 @@ use moli_shared_worker::{
 use parking_lot::Mutex;
 
 use super::RendererBrowserContextRuntime;
-use crate::runtime::{
-    RendererOwnerLocalHostId, RendererRuntimeInspectorMessage,
-    RendererRuntimeInspectorResponseSender,
-};
+use crate::runtime::RendererOwnerLocalHostId;
 
 /// Defers the browser-context SharedWorker registry until the first actual
 /// `connect_shared_worker` call. ID allocation and owner routing do not require
@@ -147,7 +144,7 @@ impl LazySharedWorkerRuntime {
 }
 
 impl RendererBrowserContextRuntime {
-    fn shared_worker_runtime_if_initialized(
+    pub(super) fn shared_worker_runtime_if_initialized(
         &self,
     ) -> Option<crate::shared_worker_runtime::SharedWorkerRuntimeService> {
         self.inner.shared_worker_runtime.get()
@@ -445,71 +442,6 @@ impl RendererBrowserContextRuntime {
                     response_headers,
                     response_body,
                 )
-            })
-    }
-
-    pub async fn dispatch_shared_worker_runtime_protocol_message(
-        &self,
-        instance_id: SharedWorkerInstanceId,
-        inspector_session_id: Option<String>,
-        raw_json: String,
-    ) -> Result<Vec<RendererRuntimeInspectorMessage>, String> {
-        let Some(runtime) = self.shared_worker_runtime_if_initialized() else {
-            return Err("SharedWorkerRuntimeUnavailable".to_owned());
-        };
-        runtime
-            .dispatch_runtime_protocol_message(instance_id, inspector_session_id, raw_json)
-            .await
-    }
-
-    pub async fn dispatch_shared_worker_runtime_protocol_message_with_deferred_response(
-        &self,
-        instance_id: SharedWorkerInstanceId,
-        inspector_session_id: Option<String>,
-        raw_json: String,
-        deferred_response: RendererRuntimeInspectorResponseSender,
-    ) -> Result<Vec<RendererRuntimeInspectorMessage>, String> {
-        let Some(runtime) = self.shared_worker_runtime_if_initialized() else {
-            return Err("SharedWorkerRuntimeUnavailable".to_owned());
-        };
-        runtime
-            .dispatch_runtime_protocol_message_with_deferred_response(
-                instance_id,
-                inspector_session_id,
-                raw_json,
-                deferred_response,
-            )
-            .await
-    }
-
-    pub async fn dispatch_shared_worker_runtime_protocol_message_with_devtools_session_response(
-        &self,
-        instance_id: SharedWorkerInstanceId,
-        inspector_session_id: String,
-        raw_json: String,
-        response: RendererRuntimeInspectorResponseSender,
-    ) -> Result<crate::runtime::CompletedWorkerRuntimeInspectorCommandDispatch, String> {
-        let Some(runtime) = self.shared_worker_runtime_if_initialized() else {
-            return Err("SharedWorkerRuntimeUnavailable".to_owned());
-        };
-        runtime
-            .dispatch_runtime_protocol_message_with_devtools_session_response(
-                instance_id,
-                inspector_session_id,
-                raw_json,
-                response,
-            )
-            .await
-    }
-
-    pub fn detach_shared_worker_runtime_inspector_session(
-        &self,
-        instance_id: SharedWorkerInstanceId,
-        inspector_session_id: Option<String>,
-    ) -> bool {
-        self.shared_worker_runtime_if_initialized()
-            .is_some_and(|runtime| {
-                runtime.detach_runtime_inspector_session(instance_id, inspector_session_id)
             })
     }
 }

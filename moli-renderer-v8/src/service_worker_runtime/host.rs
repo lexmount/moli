@@ -6,12 +6,11 @@ use tokio::sync::mpsc;
 
 use crate::{
     runtime::{
-        RendererRuntimeInspectorMessage, RendererServiceWorkerRunIdentity, ServiceWorkerFetchEvent,
-        ServiceWorkerLifecycleEvent, ServiceWorkerMessageEvent,
-        ServiceWorkerNavigationPreloadFailure, ServiceWorkerNavigationPreloadResponseStarted,
-        ServiceWorkerNavigationPreloadStreamChunk, ServiceWorkerNavigationPreloadStreamFinished,
-        ServiceWorkerNotificationEvent, ServiceWorkerPeriodicSyncEvent, ServiceWorkerPushEvent,
-        ServiceWorkerSyncEvent,
+        RendererServiceWorkerRunIdentity, ServiceWorkerFetchEvent, ServiceWorkerLifecycleEvent,
+        ServiceWorkerMessageEvent, ServiceWorkerNavigationPreloadFailure,
+        ServiceWorkerNavigationPreloadResponseStarted, ServiceWorkerNavigationPreloadStreamChunk,
+        ServiceWorkerNavigationPreloadStreamFinished, ServiceWorkerNotificationEvent,
+        ServiceWorkerPeriodicSyncEvent, ServiceWorkerPushEvent, ServiceWorkerSyncEvent,
     },
     types::{NetworkBodySourceId, SubresourcePolicyContext},
     worker::{
@@ -134,71 +133,14 @@ impl RendererServiceWorkerHost {
         )
     }
 
-    pub(super) async fn dispatch_worker_runtime_protocol_message(
-        &self,
-        inspector_session_id: Option<String>,
-        raw_json: String,
-        deferred_response: Option<crate::runtime::RendererRuntimeInspectorResponseSender>,
-    ) -> Result<Vec<RendererRuntimeInspectorMessage>, String> {
-        let (response_tx, response_rx) = tokio::sync::oneshot::channel();
-        let dispatched = {
-            let state = self.state.lock();
-            let RendererServiceWorkerHostState::Running {
-                handle: Some(handle),
-            } = &*state
-            else {
-                return Err("ServiceWorkerRuntimeUnavailable".to_owned());
-            };
-            handle.dispatch_runtime_protocol_message(
-                inspector_session_id,
-                raw_json,
-                deferred_response,
-                response_tx,
-            )
-        };
-        if !dispatched {
-            return Err("ServiceWorkerRuntimeUnavailable".to_owned());
-        }
-        response_rx
-            .await
-            .map_err(|_| "ServiceWorkerRuntimeUnavailable".to_owned())?
-    }
-
-    pub(super) async fn dispatch_worker_runtime_protocol_message_with_deferred_response(
-        &self,
-        inspector_session_id: Option<String>,
-        raw_json: String,
-        deferred_response: crate::runtime::RendererRuntimeInspectorResponseSender,
-    ) -> Result<Vec<RendererRuntimeInspectorMessage>, String> {
-        self.dispatch_worker_runtime_protocol_message(
-            inspector_session_id,
-            raw_json,
-            Some(deferred_response),
-        )
-        .await
-    }
-
-    pub(super) async fn dispatch_worker_runtime_protocol_message_without_deferred_response(
-        &self,
-        inspector_session_id: Option<String>,
-        raw_json: String,
-    ) -> Result<Vec<RendererRuntimeInspectorMessage>, String> {
-        self.dispatch_worker_runtime_protocol_message(inspector_session_id, raw_json, None)
-            .await
-    }
-
-    pub(super) fn detach_worker_runtime_inspector_session(
-        &self,
-        inspector_session_id: Option<String>,
-    ) -> bool {
+    pub(super) fn inspection_handle(&self) -> Option<crate::worker::WorkerDevToolsHandle> {
         let state = self.state.lock();
-        let RendererServiceWorkerHostState::Running {
-            handle: Some(handle),
-        } = &*state
-        else {
-            return false;
-        };
-        handle.detach_runtime_inspector_session(inspector_session_id)
+        match &*state {
+            RendererServiceWorkerHostState::Running {
+                handle: Some(handle),
+            } => Some(handle.devtools_handle()),
+            _ => None,
+        }
     }
 
     pub(super) fn run_if_waiting_for_debugger_for_devtools(&self) -> bool {

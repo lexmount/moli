@@ -2100,7 +2100,7 @@ async fn browser_runtime_retirement_cancels_worker_graph_and_pending_fetches_wit
         context
             .finish_document_diagnostics_snapshot(snapshot)
             .unwrap();
-        let runtime = context.worker_runtime_inspection_endpoint();
+        let runtime = context.read_live(crate::browser::BrowserContext::worker_runtime_for_test);
         let active = runtime.moli_memory_diagnostics();
         assert_eq!(context.dedicated_worker_running_isolate_count(), 1);
         assert_eq!(active["sharedWorker"]["runningInstanceCount"], 1);

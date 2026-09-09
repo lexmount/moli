@@ -55,6 +55,8 @@ async fn dispose_live_session_domains_async(
     plan: &SessionDisposalPlan,
 ) -> anyhow::Result<Option<moli_core::RendererOutputFence>> {
     let is_page = matches!(plan.target(), SessionDisposalTarget::PageTarget { .. });
+    let worker_inspection =
+        crate::domains::runtime::worker_inspection_endpoint_for_disposal(conn, plan);
     let renderer_disposal = if is_page {
         crate::domains::runtime::fail_pending_session_calls(
             conn,
@@ -62,7 +64,9 @@ async fn dispose_live_session_domains_async(
             protocol_events,
             plan.session_id(),
         );
-        crate::domains::runtime::detach_session_inspector_async(conn, plan).await
+        conn.detach_runtime_inspector_session_for_session_owner(Some(plan.session_id()))
+            .await
+            .map_err(anyhow::Error::msg)
     } else {
         Ok(())
     };
@@ -78,8 +82,8 @@ async fn dispose_live_session_domains_async(
     if let Some(error) = disposal.first_error() {
         return Err(anyhow::anyhow!("{error:#}"));
     }
-    if !is_page {
-        crate::domains::runtime::detach_session_inspector_async(conn, plan).await?;
+    if let Some(endpoint) = worker_inspection {
+        endpoint.detach_session(Some(plan.session_id().to_owned()));
     }
     Ok(disposal.into_renderer_output_predecessor())
 }
