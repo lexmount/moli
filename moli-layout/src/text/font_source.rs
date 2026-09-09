@@ -10,7 +10,7 @@ use super::*;
 /// One decoded, validated SFNT face, ready for document registration.
 #[derive(Clone, Debug)]
 pub struct FontFaceData {
-    pub(super) bytes: Arc<[u8]>,
+    pub(super) bytes: Blob<u8>,
 }
 
 impl FontFaceData {
@@ -19,8 +19,8 @@ impl FontFaceData {
         Self::from_index(bytes, 0)
     }
 
-    fn from_index(bytes: Arc<[u8]>, index: u32) -> Result<Self, WebFontRegistrationError> {
-        let font = FontRef::from_index(&bytes, index)
+    fn from_index(bytes: Blob<u8>, index: u32) -> Result<Self, WebFontRegistrationError> {
+        let font = FontRef::from_index(bytes.as_ref(), index)
             .map_err(|_| WebFontRegistrationError::UnsupportedPayload)?;
         let bytes = if font.ttc_index().is_some() {
             standalone_face(&font).ok_or(WebFontRegistrationError::UnsupportedPayload)?
@@ -32,13 +32,13 @@ impl FontFaceData {
     }
 
     pub fn bytes(&self) -> &[u8] {
-        &self.bytes
+        self.bytes.as_ref()
     }
 }
 
 // Fontique registers every member of a collection. Extract the selected local
 // face first so a CSS alias cannot accidentally refer to another TTC member.
-fn standalone_face(font: &FontRef<'_>) -> Option<Arc<[u8]>> {
+fn standalone_face(font: &FontRef<'_>) -> Option<Blob<u8>> {
     let directory = font.table_directory();
     let mut records = directory.table_records().to_vec();
     records.retain(|record| record.tag() != read_fonts::types::Tag::new(b"DSIG"));
@@ -79,7 +79,7 @@ fn standalone_face(font: &FontRef<'_>) -> Option<Arc<[u8]>> {
     let head = head_offset?;
     let adjustment = 0xb1b0_afba_u32.wrapping_sub(sfnt_checksum(&bytes));
     bytes[head + 8..head + 12].copy_from_slice(&adjustment.to_be_bytes());
-    Some(Arc::from(bytes))
+    Some(Blob::new(Arc::new(bytes)))
 }
 
 fn sfnt_checksum(bytes: &[u8]) -> u32 {
@@ -153,7 +153,7 @@ impl LocalFontSources {
         }
         let info = self.names.as_ref()?.get(&name.to_lowercase())?;
         let data = info.load(Some(&mut self.cache))?;
-        FontFaceData::from_index(Arc::from(data.as_ref()), info.index()).ok()
+        FontFaceData::from_index(data, info.index()).ok()
     }
 }
 
@@ -237,7 +237,8 @@ mod tests {
         }
         for (index, original) in fonts.iter().enumerate() {
             let selected =
-                FontFaceData::from_index(Arc::from(collection.as_slice()), index as u32).unwrap();
+                FontFaceData::from_index(Blob::new(Arc::new(collection.clone())), index as u32)
+                    .unwrap();
             let font = FontRef::new(selected.bytes()).unwrap();
             assert!(font.ttc_index().is_none());
             assert_eq!(
