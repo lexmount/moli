@@ -6983,6 +6983,7 @@ html/webappapis/dynamic-markup-insertion/opening-the-input-stream/013.html
 html/webappapis/dynamic-markup-insertion/opening-the-input-stream/014.html
 html/webappapis/dynamic-markup-insertion/opening-the-input-stream/015.html
 html/webappapis/dynamic-markup-insertion/opening-the-input-stream/016.html
+html/webappapis/dynamic-markup-insertion/opening-the-input-stream/bailout-side-effects-synchronous-script.window.js?moli-wpt-script=window
 html/webappapis/dynamic-markup-insertion/opening-the-input-stream/document-open-cancels-javascript-url-navigation.html
 html/webappapis/dynamic-markup-insertion/opening-the-input-stream/document.open-02.html
 html/webappapis/dynamic-markup-insertion/opening-the-input-stream/document.open-03.html

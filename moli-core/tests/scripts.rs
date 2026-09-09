@@ -32,6 +32,9 @@ mod child_script_text;
 #[path = "scripts/module_document_write.rs"]
 mod module_document_write;
 
+#[path = "scripts/parser_cleanup.rs"]
+mod parser_cleanup;
+
 fn diagnostic_global<'a>(
     page: &'a moli_core::page::Page,
     name: &str,
