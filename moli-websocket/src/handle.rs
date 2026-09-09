@@ -3,7 +3,8 @@ use std::sync::{
     atomic::{AtomicBool, Ordering},
 };
 
-use tokio::{sync::mpsc, task::AbortHandle};
+use crate::commands::CommandPort;
+use tokio::task::AbortHandle;
 
 use crate::Command;
 
@@ -19,13 +20,13 @@ pub struct ConnectionHandle {
 
 #[derive(Debug)]
 struct ConnectionControl {
-    command_tx: mpsc::UnboundedSender<Command>,
+    command_tx: CommandPort,
     cancelled: AtomicBool,
     task: AbortOnDrop,
 }
 
 impl ConnectionHandle {
-    pub(crate) fn new(command_tx: mpsc::UnboundedSender<Command>, task: AbortHandle) -> Self {
+    pub(crate) fn new(command_tx: CommandPort, task: AbortHandle) -> Self {
         Self {
             inner: Arc::new(ConnectionControl {
                 command_tx,
@@ -40,10 +41,7 @@ impl ConnectionHandle {
         if self.inner.cancelled.load(Ordering::Acquire) {
             return Err(CommandSendError(command));
         }
-        self.inner
-            .command_tx
-            .send(command)
-            .map_err(|error| CommandSendError(error.0))
+        self.inner.command_tx.send(command)
     }
 
     /// Cancels all work owned by this connection, including blocked delivery.

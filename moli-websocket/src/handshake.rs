@@ -1,5 +1,11 @@
 //! Browser handshake validation, independent of the socket transport.
-use tokio_tungstenite::tungstenite::handshake::derive_accept_key;
+use base64::{Engine, engine::general_purpose::STANDARD};
+
+fn derive_accept_key(key: &[u8]) -> String {
+    let mut value = key.to_vec();
+    value.extend_from_slice(b"258EAFA5-E914-47DA-95CA-C5AB0DC85B11");
+    STANDARD.encode(moli_crypto::sha1_digest(&value))
+}
 
 pub(crate) type HandshakeResponse = http::Response<()>;
 
@@ -77,6 +83,21 @@ pub(crate) fn validate_handshake_response(
         .ok_or_else(|| "WebSocket handshake response is missing Sec-WebSocket-Accept".to_owned())?;
     if accept.trim() != expected_accept {
         return Err("WebSocket handshake response has invalid Sec-WebSocket-Accept".to_owned());
+    }
+    if response
+        .headers()
+        .get_all(http::header::SEC_WEBSOCKET_ACCEPT)
+        .iter()
+        .count()
+        != 1
+    {
+        return Err("WebSocket server returned multiple Sec-WebSocket-Accept values".to_owned());
+    }
+    if response
+        .headers()
+        .contains_key(http::header::SEC_WEBSOCKET_EXTENSIONS)
+    {
+        return Err("WebSocket server selected an unrequested extension".to_owned());
     }
     validate_response_subprotocol(request, response)
 }

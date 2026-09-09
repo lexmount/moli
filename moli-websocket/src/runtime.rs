@@ -1,6 +1,6 @@
 use std::sync::OnceLock;
 
-use tokio::sync::mpsc;
+use crate::commands::command_channel;
 
 use crate::{
     CommandSender, ConnectOptions, ConnectionHandle, connection::run_websocket_connection,
@@ -16,7 +16,7 @@ pub fn spawn_connection(
     event_tx: impl Into<EventSender>,
 ) -> CommandSender {
     let event_tx = event_tx.into();
-    let (command_tx, command_rx) = mpsc::unbounded_channel();
+    let (command_tx, command_rx) = command_channel();
     let task = websocket_runtime().spawn(async move {
         let _ = run_websocket_connection(socket_id, url, protocols, context, command_rx, event_tx)
             .await;
@@ -30,7 +30,7 @@ pub fn spawn_failed_connection(
     event_tx: impl Into<EventSender>,
 ) -> CommandSender {
     let event_tx = event_tx.into();
-    let (command_tx, _command_rx) = mpsc::unbounded_channel();
+    let (command_tx, _command_rx) = command_channel();
     let task = websocket_runtime().spawn(async move {
         let _ = send_error_and_close(&event_tx, socket_id, message).await;
     });
@@ -45,7 +45,7 @@ pub fn spawn_synthetic_connection(
     event_tx: impl Into<EventSender>,
 ) -> CommandSender {
     let event_tx = event_tx.into();
-    let (command_tx, command_rx) = mpsc::unbounded_channel();
+    let (command_tx, command_rx) = command_channel();
     let task = websocket_runtime().spawn(async move {
         let _ = run_synthetic_websocket_connection(
             socket_id,

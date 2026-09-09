@@ -7868,8 +7868,9 @@ async fn websocket_cdp_websocket_frame_events_are_emitted_without_followup_comma
                         sleep(Duration::from_millis(120)).await;
                         let _ = socket.send(Message::Text(text)).await;
                     }
-                    Message::Close(frame) => {
-                        let _ = socket.send(Message::Close(frame)).await;
+                    Message::Close(_frame) => {
+                        // recv already queued the Close reply; flush before releasing TCP.
+                        let _ = futures_util::SinkExt::flush(&mut socket).await;
                         break;
                     }
                     _ => {}
@@ -8057,8 +8058,9 @@ async fn websocket_cdp_pending_runtime_await_completes_after_websocket_dom_updat
                         sleep(Duration::from_millis(120)).await;
                         let _ = socket.send(Message::Text("OK".into())).await;
                     }
-                    Message::Close(frame) => {
-                        let _ = socket.send(Message::Close(frame)).await;
+                    Message::Close(_frame) => {
+                        // recv already queued the Close reply; flush before releasing TCP.
+                        let _ = futures_util::SinkExt::flush(&mut socket).await;
                         break;
                     }
                     _ => {}
@@ -8145,8 +8147,9 @@ async fn websocket_cdp_pending_runtime_await_completes_after_page_started_websoc
                         sleep(Duration::from_millis(120)).await;
                         let _ = socket.send(Message::Text("OK".into())).await;
                     }
-                    Message::Close(frame) => {
-                        let _ = socket.send(Message::Close(frame)).await;
+                    Message::Close(_frame) => {
+                        // recv already queued the Close reply; flush before releasing TCP.
+                        let _ = futures_util::SinkExt::flush(&mut socket).await;
                         break;
                     }
                     _ => {}
@@ -8294,8 +8297,9 @@ async fn websocket_cdp_network_and_websocket_outputs_are_session_isolated_withou
                         sleep(Duration::from_millis(120)).await;
                         let _ = socket.send(Message::Text(text)).await;
                     }
-                    Message::Close(frame) => {
-                        let _ = socket.send(Message::Close(frame)).await;
+                    Message::Close(_frame) => {
+                        // recv already queued the Close reply; flush before releasing TCP.
+                        let _ = futures_util::SinkExt::flush(&mut socket).await;
                         break;
                     }
                     _ => {}

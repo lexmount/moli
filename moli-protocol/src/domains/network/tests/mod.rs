@@ -120,8 +120,9 @@ async fn websocket_echo_handler(ws: WebSocketUpgrade) -> impl IntoResponse {
                 Message::Binary(bytes) => {
                     let _ = socket.send(Message::Binary(bytes)).await;
                 }
-                Message::Close(frame) => {
-                    let _ = socket.send(Message::Close(frame)).await;
+                Message::Close(_frame) => {
+                    // recv already queued the Close reply; flush before releasing TCP.
+                    let _ = futures_util::SinkExt::flush(&mut socket).await;
                     break;
                 }
                 Message::Ping(bytes) => {

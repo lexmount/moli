@@ -1,4 +1,4 @@
-use tokio::sync::mpsc;
+use crate::commands::CommandReceiver;
 
 use crate::{
     Command, Event, FrameOpcode,
@@ -8,7 +8,7 @@ use crate::{
 
 pub(crate) async fn run_synthetic_websocket_connection(
     socket_id: u64,
-    mut command_rx: mpsc::UnboundedReceiver<Command>,
+    mut command_rx: CommandReceiver,
     event_tx: EventSender,
     request_headers: Vec<(String, String)>,
     response_status: u16,
@@ -43,8 +43,9 @@ pub(crate) async fn run_synthetic_websocket_connection(
     )
     .await?;
 
-    while let Some(command) = command_rx.recv().await {
-        match command {
+    while let Some(queued) = command_rx.recv().await {
+        let _reservation = queued.reservation;
+        match queued.command {
             Command::SendText(text) => {
                 let amount = text.len();
                 send_event(

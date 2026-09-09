@@ -2761,6 +2761,7 @@ dependencies = [
  "base64 0.22.1",
  "chromiumoxide_cdp",
  "data-url",
+ "futures-util",
  "http",
  "indexmap",
  "moli-bounded-buffer",
@@ -3243,8 +3244,12 @@ dependencies = [
 name = "moli-websocket"
 version = "0.1.0"
 dependencies = [
+ "base64 0.22.1",
  "futures-util",
  "http",
+ "moli-crypto",
+ "moli-curl",
+ "moli-dns-resolver",
  "moli-url",
  "rcgen",
  "rustls",
@@ -3252,7 +3257,6 @@ dependencies = [
  "tokio-rustls",
  "tokio-tungstenite",
  "url",
- "webpki-roots",
 ]
 
 [[package]]
@@ -3269,6 +3273,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "axum",
+ "futures-util",
  "html5ever",
  "parking_lot",
  "rcgen",
@@ -5661,15 +5666,6 @@ dependencies = [
  "phf_codegen",
  "string_cache",
  "string_cache_codegen",
-]
-
-[[package]]
-name = "webpki-roots"
-version = "1.0.6"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "22cfaf3c063993ff62e73cb4311efde4db1efb31ab78a3e5c457939ad5cc0bed"
-dependencies = [
- "rustls-pki-types",
 ]
 
 [[package]]

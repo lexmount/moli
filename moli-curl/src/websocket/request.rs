@@ -9,6 +9,8 @@ const MAX_HEADERS: usize = 64 * 1024;
 pub(super) struct Handshake {
     pub request: Vec<u8>,
     pub response: Vec<u8>,
+    pub error: Option<String>,
+    proxy_connect: bool,
     header_bytes: usize,
 }
 
@@ -16,7 +18,22 @@ impl Handler for Handshake {
     fn header(&mut self, data: &[u8]) -> bool {
         self.header_bytes = self.header_bytes.saturating_add(data.len());
         if self.header_bytes > MAX_HEADERS {
+            self.error = Some("WebSocket handshake headers are too large".to_owned());
             return false;
+        }
+        if self.proxy_connect {
+            if data.starts_with(b"HTTP/") {
+                let line = String::from_utf8_lossy(data);
+                let status = line
+                    .split_whitespace()
+                    .nth(1)
+                    .and_then(|status| status.parse::<u16>().ok());
+                if status.is_some_and(|status| status > 200) {
+                    self.error = Some(format!("WebSocket proxy CONNECT failed: {}", line.trim()));
+                    return false;
+                }
+            }
+            return true;
         }
         if data.starts_with(b"HTTP/") {
             self.response.clear();
@@ -26,11 +43,11 @@ impl Handler for Handshake {
     }
 
     fn debug(&mut self, kind: InfoType, data: &[u8]) {
-        if matches!(kind, InfoType::HeaderOut)
-            && data.starts_with(b"GET ")
-            && data.len() <= MAX_HEADERS
-        {
-            self.request = data.to_vec();
+        if matches!(kind, InfoType::HeaderOut) {
+            self.proxy_connect = data.starts_with(b"CONNECT ");
+            if data.starts_with(b"GET ") && data.len() <= MAX_HEADERS {
+                self.request = data.to_vec();
+            }
         }
     }
 }

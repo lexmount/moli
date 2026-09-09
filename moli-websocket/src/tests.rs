@@ -494,7 +494,7 @@ async fn websocket_rejected_handshake_or_open_event_releases_transport() {
     for pause_after_handshake in [false, true] {
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let url = format!("ws://{}/closed-sink", listener.local_addr().unwrap());
-        let (command_tx, command_rx) = mpsc::unbounded_channel();
+        let (command_tx, command_rx) = crate::commands::command_channel();
         let mut context = test_websocket_context();
         context.pause_after_handshake = pause_after_handshake;
         let server = async move {
@@ -530,7 +530,7 @@ async fn websocket_rejected_message_event_releases_transport_and_writer() {
         "ws://{}/closed-message-sink",
         listener.local_addr().unwrap()
     );
-    let (command_tx, command_rx) = mpsc::unbounded_channel();
+    let (command_tx, command_rx) = crate::commands::command_channel();
     let sink =
         EventSender::with_async_sink(
             |event| async move { !matches!(event, Event::TextMessage { .. }) },
@@ -561,7 +561,7 @@ async fn websocket_rejected_message_event_releases_transport_and_writer() {
 
 #[tokio::test]
 async fn websocket_synthetic_delivery_stops_after_first_rejected_event() {
-    let (command_tx, command_rx) = mpsc::unbounded_channel();
+    let (command_tx, command_rx) = crate::commands::command_channel();
     command_tx
         .send(Command::SendText("hello".to_owned()))
         .unwrap();

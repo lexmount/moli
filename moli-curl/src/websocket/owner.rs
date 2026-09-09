@@ -130,8 +130,11 @@ pub(super) fn run(
             if session.open {
                 continue;
             }
-            let native_result = result.map_err(|error| error.to_string());
             let handshake = session.handle.get_mut();
+            let native_result = match handshake.error.take() {
+                Some(error) => Err(error),
+                None => result.map_err(|error| error.to_string()),
+            };
             let event = CurlWebSocketEvent::Handshake {
                 request: std::mem::take(&mut handshake.request),
                 response: std::mem::take(&mut handshake.response),

@@ -48,6 +48,7 @@ http = "1"
 sanitize-filename = "=0.6.0"
 
 [dev-dependencies]
+futures-util = { version = "0.3", default-features = false, features = ["sink", "std"] }
 axum = { version = "0.8.6", features = ["ws"] }
 moli-cookie-jar = { path = "../moli-cookie-jar", features = ["test-support"] }
 moli-image = { path = "../moli-image" }

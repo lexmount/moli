@@ -1,6 +1,8 @@
+mod commands;
 mod connection;
 mod cookie;
 mod events;
+mod frames;
 mod handle;
 mod handshake;
 mod headers;
@@ -9,9 +11,9 @@ mod protocol;
 mod proxy;
 mod request;
 mod runtime;
-mod stream;
+mod session;
 mod synthetic;
-mod tls;
+mod transport;
 mod types;
 
 pub use cookie::websocket_cookie_url;
@@ -31,3 +33,6 @@ pub use types::{Command, CommandSender, ConnectOptions, Event, FrameOpcode};
 pub mod test_support;
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+mod native_tests;

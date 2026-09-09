@@ -1,4 +1,4 @@
-use tokio_tungstenite::tungstenite::client::IntoClientRequest;
+use base64::{Engine, engine::general_purpose::STANDARD};
 use url::Url;
 
 use crate::{
@@ -13,9 +13,26 @@ pub(crate) fn build_websocket_request(
     context: &ConnectOptions,
 ) -> Result<http::Request<()>, String> {
     reject_blocked_websocket_port(url)?;
-    let mut request = url
-        .to_owned()
-        .into_client_request()
+    let mut parsed =
+        Url::parse(url).map_err(|error| format!("failed to parse WebSocket URL: {error}"))?;
+    if !matches!(parsed.scheme(), "ws" | "wss") || parsed.host_str().is_none() {
+        return Err("WebSocket URL must use ws or wss and include a host".to_owned());
+    }
+    let authority = parsed[url::Position::BeforeHost..url::Position::AfterPort].to_owned();
+    let _ = parsed.set_username("");
+    let _ = parsed.set_password(None);
+    parsed.set_fragment(None);
+    let mut nonce = [0; 16];
+    moli_crypto::fill_secure_random(&mut nonce)
+        .map_err(|error| format!("WebSocket nonce generation failed: {error}"))?;
+    let mut request = http::Request::builder()
+        .uri(parsed.as_str())
+        .header(http::header::HOST, authority)
+        .header(http::header::CONNECTION, "Upgrade")
+        .header(http::header::UPGRADE, "websocket")
+        .header(http::header::SEC_WEBSOCKET_VERSION, "13")
+        .header(http::header::SEC_WEBSOCKET_KEY, STANDARD.encode(nonce))
+        .body(())
         .map_err(|error| format!("failed to build WebSocket request: {error}"))?;
     apply_connect_context_headers(&mut request, context)
         .map_err(|error| format!("failed to build WebSocket handshake headers: {error}"))?;

@@ -423,15 +423,20 @@ pub async fn spawn_computed_accept_websocket_response_with_body_server(
         response.push_str("Sec-WebSocket-Accept: ");
         response.push_str(&accept);
         response.push_str("\r\n\r\n");
+        let mut packet = response.into_bytes();
+        packet.extend_from_slice(body);
         stream
-            .write_all(response.as_bytes())
+            .write_all(&packet)
             .await
-            .expect("write computed websocket body response headers");
-        if !body.is_empty() {
-            stream
-                .write_all(body)
-                .await
-                .expect("write computed websocket response body");
+            .expect("write computed handshake and frames");
+        if body.first().is_some_and(|opcode| opcode & 0x0f == 8) {
+            let mut socket = tokio_tungstenite::WebSocketStream::from_raw_socket(
+                stream,
+                tokio_tungstenite::tungstenite::protocol::Role::Server,
+                None,
+            )
+            .await;
+            assert!(matches!(socket.next().await, Some(Ok(Message::Close(_)))));
         }
     });
     (format!("ws://{addr}/{path}"), handle)
@@ -571,8 +576,9 @@ pub async fn spawn_text_binary_echo_websocket_server() -> (String, tokio::task::
                         .await
                         .expect("echo websocket binary");
                 }
-                Ok(Message::Close(frame)) => {
-                    let _ = socket.close(frame).await;
+                Ok(Message::Close(_frame)) => {
+                    // Reading Close has already queued the echo; flush it before dropping TCP.
+                    let _ = socket.flush().await;
                     break;
                 }
                 Ok(Message::Ping(payload)) => {
@@ -686,6 +692,7 @@ pub async fn spawn_server_close_websocket_server_with_frame(
             reason: reason.into(),
         });
         let _ = socket.send(Message::Close(frame)).await;
+        let _ = socket.next().await;
     });
     (format!("ws://{addr}/server-close"), handle)
 }
@@ -714,13 +721,21 @@ pub async fn spawn_close_after_goodbye_websocket_server() -> (String, tokio::tas
                             reason: "goodbye".into(),
                         })))
                         .await;
+                    // Keep reading until the client's reply, including a data
+                    // fragment that was already being sent when we closed.
+                    while let Some(message) = socket.next().await {
+                        if matches!(message, Ok(Message::Close(_)) | Err(_)) {
+                            break;
+                        }
+                    }
                     break;
                 }
                 Ok(Message::Ping(payload)) => {
                     let _ = socket.send(Message::Pong(payload)).await;
                 }
-                Ok(Message::Close(frame)) => {
-                    let _ = socket.close(frame).await;
+                Ok(Message::Close(_frame)) => {
+                    // Reading Close has already queued the echo; flush it before dropping TCP.
+                    let _ = socket.flush().await;
                     break;
                 }
                 Ok(Message::Text(_))
@@ -832,9 +847,10 @@ pub async fn spawn_delayed_passive_close_websocket_server() -> (String, tokio::t
         };
         while let Some(message) = socket.next().await {
             match message {
-                Ok(Message::Close(frame)) => {
+                Ok(Message::Close(_frame)) => {
                     tokio::time::sleep(Duration::from_millis(1000)).await;
-                    let _ = socket.close(frame).await;
+                    // Reading Close has already queued the echo; flush it before dropping TCP.
+                    let _ = socket.flush().await;
                     break;
                 }
                 Ok(Message::Ping(payload)) => {
@@ -880,8 +896,9 @@ pub async fn spawn_backpressure_websocket_server() -> (String, tokio::task::Join
                         .await
                         .expect("send websocket backpressure text ack");
                 }
-                Message::Close(frame) => {
-                    let _ = socket.close(frame).await;
+                Message::Close(_frame) => {
+                    // Reading Close has already queued the echo; flush it before dropping TCP.
+                    let _ = socket.flush().await;
                     break;
                 }
                 Message::Ping(payload) => {
@@ -915,8 +932,9 @@ pub async fn spawn_send_backpressure_websocket_server() -> (String, tokio::task:
                 Message::Binary(_) | Message::Text(_) => {
                     let _ = socket.close(None).await;
                 }
-                Message::Close(frame) => {
-                    let _ = socket.close(frame).await;
+                Message::Close(_frame) => {
+                    // Reading Close has already queued the echo; flush it before dropping TCP.
+                    let _ = socket.flush().await;
                 }
                 Message::Ping(payload) => {
                     let _ = socket.send(Message::Pong(payload)).await;

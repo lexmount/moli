@@ -1816,8 +1816,9 @@ async fn handle_wpt_echo_websocket(mut socket: WebSocket) {
             WebSocketMessage::Binary(bytes) => {
                 let _ = socket.send(WebSocketMessage::Binary(bytes)).await;
             }
-            WebSocketMessage::Close(frame) => {
-                let _ = socket.send(WebSocketMessage::Close(frame)).await;
+            WebSocketMessage::Close(_frame) => {
+                // recv already queued the Close reply; flush before releasing TCP.
+                let _ = futures_util::SinkExt::flush(&mut socket).await;
                 break;
             }
             WebSocketMessage::Ping(payload) => {

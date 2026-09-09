@@ -1,104 +1,6 @@
-use tokio::{
-    io::{AsyncReadExt, AsyncWriteExt},
-    net::TcpStream,
-};
 use url::Url;
 
 use crate::ConnectOptions;
-
-pub(crate) async fn connect_websocket_via_http_proxy_tunnel(
-    uri: &http::Uri,
-    proxy_url: &Url,
-    context: &ConnectOptions,
-) -> Result<TcpStream, String> {
-    let proxy_host = proxy_url
-        .host_str()
-        .ok_or_else(|| "WebSocket proxy URL is missing host".to_owned())?;
-    let proxy_port = proxy_url
-        .port_or_known_default()
-        .ok_or_else(|| "WebSocket proxy URL is missing port".to_owned())?;
-    let target_authority = websocket_target_authority(uri)?;
-    let mut socket = TcpStream::connect(format!("{proxy_host}:{proxy_port}"))
-        .await
-        .map_err(|error| format!("failed to connect WebSocket proxy: {error}"))?;
-    let mut connect_request = format!(
-        "CONNECT {target_authority} HTTP/1.1\r\n\
-         Host: {target_authority}\r\n\
-         Proxy-Connection: Keep-Alive\r\n"
-    );
-    append_proxy_connect_header(&mut connect_request, "User-Agent", &context.user_agent)?;
-    if let Some(token) = context.proxy_bearer_token.as_deref() {
-        append_proxy_connect_header(
-            &mut connect_request,
-            "Proxy-Authorization",
-            &format!("Bearer {token}"),
-        )?;
-    }
-    connect_request.push_str("\r\n");
-    socket
-        .write_all(connect_request.as_bytes())
-        .await
-        .map_err(|error| format!("failed to write WebSocket proxy CONNECT: {error}"))?;
-    socket
-        .flush()
-        .await
-        .map_err(|error| format!("failed to flush WebSocket proxy CONNECT: {error}"))?;
-    let response = read_proxy_connect_response(&mut socket).await?;
-    if !proxy_connect_response_is_200(&response) {
-        let status = response
-            .lines()
-            .next()
-            .unwrap_or("HTTP proxy CONNECT failed");
-        return Err(format!("WebSocket proxy CONNECT failed: {status}"));
-    }
-    Ok(socket)
-}
-
-fn proxy_connect_response_is_200(response: &str) -> bool {
-    response
-        .lines()
-        .next()
-        .and_then(|line| line.split_whitespace().nth(1))
-        == Some("200")
-}
-
-pub(crate) fn append_proxy_connect_header(
-    request: &mut String,
-    name: &str,
-    value: &str,
-) -> Result<(), String> {
-    if value.bytes().any(|byte| matches!(byte, b'\r' | b'\n')) {
-        return Err(format!(
-            "invalid WebSocket proxy CONNECT header `{name}` contains a newline"
-        ));
-    }
-    request.push_str(name);
-    request.push_str(": ");
-    request.push_str(value);
-    request.push_str("\r\n");
-    Ok(())
-}
-
-async fn read_proxy_connect_response(socket: &mut TcpStream) -> Result<String, String> {
-    let mut response = Vec::new();
-    let mut chunk = [0_u8; 512];
-    loop {
-        let count = socket
-            .read(&mut chunk)
-            .await
-            .map_err(|error| format!("failed to read WebSocket proxy CONNECT response: {error}"))?;
-        if count == 0 {
-            return Err("WebSocket proxy closed during CONNECT".to_owned());
-        }
-        response.extend_from_slice(&chunk[..count]);
-        if response.windows(4).any(|window| window == b"\r\n\r\n") {
-            return Ok(String::from_utf8_lossy(&response).into_owned());
-        }
-        if response.len() > 16 * 1024 {
-            return Err("WebSocket proxy CONNECT response is too large".to_owned());
-        }
-    }
-}
 
 pub(crate) fn websocket_proxy_url(
     uri: &http::Uri,
@@ -173,26 +75,6 @@ fn websocket_env_no_proxy(env: &mut impl FnMut(&str) -> Option<String>) -> Optio
         .or_else(|| env("NO_PROXY").filter(|value| !value.is_empty()))
 }
 
-pub(crate) fn websocket_target_authority(uri: &http::Uri) -> Result<String, String> {
-    let host = uri
-        .host()
-        .ok_or_else(|| "WebSocket URL is missing host".to_owned())?;
-    let port = uri
-        .port_u16()
-        .or_else(|| match uri.scheme_str() {
-            Some("wss") => Some(443),
-            Some("ws") => Some(80),
-            _ => None,
-        })
-        .ok_or_else(|| "WebSocket URL is missing port".to_owned())?;
-    let host = if host.contains(':') && !host.starts_with('[') {
-        format!("[{host}]")
-    } else {
-        host.to_owned()
-    };
-    Ok(format!("{host}:{port}"))
-}
-
 pub(crate) fn no_proxy_matches(host: &str, port: Option<u16>, no_proxy: Option<&str>) -> bool {
     let Some(no_proxy) = no_proxy else {
         return false;
@@ -232,4 +114,21 @@ fn split_no_proxy_host_port(token: &str) -> (&str, Option<u16>) {
         Ok(port) if !host.contains(':') => (host, Some(port)),
         _ => (token, None),
     }
+}
+
+pub(crate) fn append_proxy_connect_header(
+    request: &mut String,
+    name: &str,
+    value: &str,
+) -> Result<(), String> {
+    if value.bytes().any(|byte| matches!(byte, b'\r' | b'\n')) {
+        return Err(format!(
+            "invalid WebSocket proxy CONNECT header `{name}` contains a newline"
+        ));
+    }
+    request.push_str(name);
+    request.push_str(": ");
+    request.push_str(value);
+    request.push_str("\r\n");
+    Ok(())
 }
