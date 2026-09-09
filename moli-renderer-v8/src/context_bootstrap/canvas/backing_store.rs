@@ -159,6 +159,29 @@ pub(super) fn canvas_like_pixels_copy<'s>(
     Some((snapshot.rgba.clone(), snapshot.width, snapshot.height))
 }
 
+/// Reads a rectangular region from the canvas as straight RGBA8. Only the
+/// requested intersection is read, so a 1×1 read from a 2048×2048 canvas
+/// allocates only 4 bytes instead of 16 MiB. Out-of-canvas regions are filled
+/// transparent (matching `getImageData` semantics).
+pub(super) fn canvas_like_region_readback<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    canvas: v8::Local<'s, v8::Object>,
+    x: i32,
+    y: i32,
+    width: u32,
+    height: u32,
+) -> Option<Vec<u8>> {
+    flush_canvas_recording(scope, canvas);
+    let (canvas_width, canvas_height) = canvas_like_dimensions(scope, canvas)?;
+    let cell = canvas_surface_cell(scope, canvas);
+    if !materialize_surface(&cell, canvas_width, canvas_height) {
+        return None;
+    }
+    let surface = cell.borrow();
+    let surface = surface.as_ref()?;
+    Some(surface.readback_region(x, y, width, height))
+}
+
 /// Flushes any pending recording for `canvas` against its surface, then publishes
 /// the snapshot. This must be called before any pixel observation (getImageData,
 /// toDataURL, drawImage from canvas source, page painting, screencast).
@@ -171,22 +194,28 @@ pub(super) fn flush_canvas_recording<'s>(
     };
     let recording = super::recording_store::canvas_recording_state(scope, context);
     {
-        let mut rec = recording.borrow_mut();
+        let rec = recording.borrow();
         if rec.is_empty() {
             return;
         }
-        let (width, height) = match canvas_like_dimensions(scope, canvas) {
-            Some(dims) => dims,
-            None => {
-                rec.clear();
-                return;
-            }
-        };
-        let cell = canvas_surface_cell(scope, canvas);
-        if !materialize_surface(&cell, width, height) {
-            rec.clear();
+    }
+    // Release the recording borrow before calling canvas_like_dimensions() which
+    // may read JS properties and re-enter user code.  A width getter that calls
+    // ctx.fillRect() once would trigger "RefCell already borrowed" and abort.
+    let (width, height) = match canvas_like_dimensions(scope, canvas) {
+        Some(dims) => dims,
+        None => {
+            recording.borrow_mut().clear();
             return;
         }
+    };
+    let cell = canvas_surface_cell(scope, canvas);
+    if !materialize_surface(&cell, width, height) {
+        recording.borrow_mut().clear();
+        return;
+    }
+    {
+        let mut rec = recording.borrow_mut();
         let mut surface = cell.borrow_mut();
         let Some(surface) = surface.as_mut() else {
             rec.clear();

@@ -119,37 +119,43 @@ pub(crate) fn flush_all_recordings<'s>(scope: &mut v8::PinScope<'s, '_>) {
             };
             (context_obj, entry.recording.clone())
         };
-        let mut rec = recording.borrow_mut();
-        if rec.is_empty() {
-            continue;
+        // Check emptiness and release the recording borrow before calling
+        // canvas_like_dimensions(), which reads JS-visible width/height
+        // properties.  A width getter that calls ctx.fillRect() once would
+        // trigger "RefCell already borrowed" and abort.
+        {
+            let rec = recording.borrow();
+            if rec.is_empty() {
+                continue;
+            }
         }
         let Some(canvas) = super::backing_store::canvas_owner_from_context(scope, context_obj)
         else {
-            rec.clear();
+            recording.borrow_mut().clear();
             continue;
         };
         let (width, height) = match super::backing_store::canvas_like_dimensions(scope, canvas) {
             Some(dims) => dims,
             None => {
-                rec.clear();
+                recording.borrow_mut().clear();
                 continue;
             }
         };
         let cell = super::backing_store::canvas_surface_cell(scope, canvas);
         if !super::backing_store::materialize_surface(&cell, width, height) {
-            rec.clear();
+            recording.borrow_mut().clear();
             continue;
         }
         {
+            let mut rec = recording.borrow_mut();
             let mut surface = cell.borrow_mut();
             let Some(surface) = surface.as_mut() else {
                 rec.clear();
                 continue;
             };
             let _ = rec.execute(surface);
+            rec.clear();
         }
-        rec.clear();
-        drop(rec);
         super::backing_store::publish_canvas_snapshot(scope, canvas);
     }
 }

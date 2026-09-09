@@ -61,10 +61,8 @@ impl CanvasResourceStore {
         self.pixels_by_element.keys().copied()
     }
 
-    fn touch(&mut self, element: DomHandle) {
-        if self.pixels_by_element.contains_key(&element) {
-            self.visual_generation.bump();
-        }
+    fn touch(&mut self, _element: DomHandle) {
+        self.visual_generation.bump();
     }
 }
 
@@ -144,5 +142,18 @@ mod tests {
         assert!(store.remove(element));
         assert_eq!(store.retained_bytes, 0);
         assert!(!store.remove(element));
+    }
+
+    #[test]
+    fn touch_advances_generation_for_unseen_canvas() {
+        let mut store = CanvasResourceStore::default();
+        let before = store.visual_generation.current();
+        let element = DomHandle::new(99);
+        store.touch(element);
+        let after = store.visual_generation.current();
+        assert!(
+            after > before,
+            "touch() must bump generation even when canvas has no published snapshot"
+        );
     }
 }
