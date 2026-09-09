@@ -1,0 +1,99 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>Ratio-dependent inline size preserves the automatic content minimum</title>
+<link rel="help" href="https://drafts.csswg.org/css-sizing-4/#aspect-ratio-minimum">
+<style>
+  html, body { margin: 0; padding: 0; }
+  .slot { position: absolute; width: 240px; height: 180px; }
+  .ratio { box-sizing: content-box; block-size: 100px; background: rgb(31, 127, 63); }
+  .content { inline-size: 100px; block-size: 20px; }
+</style>
+<body>
+<script>
+  // Literal logical border-box sizes, independent of the observed geometry.
+  const cases = [
+    ['automatic', '', 100, 100],
+    ['min-zero', 'min-inline-size:0', 50, 100],
+    ['min-length', 'min-inline-size:40px', 50, 100],
+    ['min-larger', 'min-inline-size:120px', 120, 100],
+    ['authored-maximum', 'max-inline-size:75px', 75, 100],
+    ['transferred-maximum', 'block-size:200px;max-block-size:100px', 100, 100],
+    ['maximum-below-ratio', 'max-inline-size:25px', 25, 100],
+    ['minimum-wins', 'min-inline-size:80px;max-inline-size:75px', 80, 100],
+    ['specified-inline', 'inline-size:40px', 40, 100],
+    ['overflow-hidden', 'overflow:hidden', 50, 100],
+    ['overflow-clip', 'overflow:clip', 100, 100],
+    ['content-box-edges', 'padding:5px;border:2px solid black', 114, 114],
+    ['border-box-edges', 'box-sizing:border-box;padding:5px;border:2px solid black', 114, 100],
+    // Non-ratio controls: intrinsic keywords still obey authored numeric limits.
+    ['intrinsic-maximum', 'aspect-ratio:auto;inline-size:max-content;max-inline-size:75px', 75, 100],
+    ['intrinsic-minimum', 'aspect-ratio:auto;inline-size:min-content;min-inline-size:120px', 120, 100],
+    ['intrinsic-minimum-wins', 'aspect-ratio:auto;inline-size:fit-content;min-inline-size:80px;max-inline-size:75px', 80, 100],
+  ];
+  let index = 0;
+  for (const mode of ['horizontal-tb', 'vertical-rl', 'vertical-lr']) {
+    for (const display of ['block', 'flex', 'grid']) {
+      for (const [name, style, inline, block] of cases) {
+        const slot = document.createElement('div');
+        slot.className = 'slot';
+        slot.style.cssText = `left:${index % 5 * 240}px;top:${Math.floor(index / 5) * 180}px;writing-mode:${mode}`;
+        const ratio = document.createElement('div');
+        ratio.id = `${mode}-${display}-${name}`;
+        ratio.className = 'ratio';
+        ratio.style.cssText = `display:${display};aspect-ratio:${mode === 'horizontal-tb' ? '1/2' : '2/1'};${style}`;
+        ratio.dataset.expected = JSON.stringify(mode === 'horizontal-tb' ? [inline, block] : [block, inline]);
+        const content = document.createElement('div');
+        content.className = 'content';
+        ratio.append(content);
+        slot.append(ratio);
+        document.body.append(slot);
+        index++;
+      }
+    }
+  }
+  // The automatic floor is min-content, not max-content. The two atomic
+  // inlines can wrap at the intervening space: 100px minimum versus 180px max.
+  for (const mode of ['horizontal-tb', 'vertical-rl', 'vertical-lr']) {
+    const slot = document.createElement('div');
+    slot.className = 'slot';
+    slot.style.cssText = `left:${index % 5 * 240}px;top:${Math.floor(index / 5) * 180}px;writing-mode:${mode};font:0/0 sans-serif`;
+    const ratio = document.createElement('div');
+    ratio.id = `${mode}-min-not-max-content`;
+    ratio.className = 'ratio';
+    ratio.style.aspectRatio = mode === 'horizontal-tb' ? '1/2' : '2/1';
+    ratio.dataset.expected = '[100,100]';
+    ratio.innerHTML = '<span style="display:inline-block;inline-size:80px;block-size:20px"></span> <span style="display:inline-block;inline-size:100px;block-size:20px"></span>';
+    slot.append(ratio);
+    document.body.append(slot);
+    index++;
+  }
+  // WPT block-aspect-ratio-056: an intrinsic outer size must include the
+  // child's ratio-dependent automatic minimum, not just its preferred size.
+  for (const mode of ['horizontal-tb', 'vertical-rl', 'vertical-lr']) {
+    const slot = document.createElement('div');
+    slot.className = 'slot';
+    slot.style.cssText = `left:${index % 5 * 240}px;top:${Math.floor(index / 5) * 180}px;writing-mode:${mode}`;
+    const wrapper = document.createElement('div');
+    wrapper.id = `${mode}-intrinsic-wrapper`;
+    wrapper.style.inlineSize = 'fit-content';
+    wrapper.dataset.expected = '[100,100]';
+    const ratio = document.createElement('div');
+    ratio.id = `${mode}-intrinsic-child`;
+    ratio.className = 'ratio';
+    ratio.style.aspectRatio = mode === 'horizontal-tb' ? '1/2' : '2/1';
+    ratio.dataset.expected = '[100,100]';
+    const content = document.createElement('div');
+    content.className = 'content';
+    ratio.append(content);
+    wrapper.append(ratio);
+    slot.append(wrapper);
+    document.body.append(slot);
+    index++;
+  }
+  function collectRatioMinimumChecks() {
+    return Array.from(document.querySelectorAll('[data-expected]'), node => {
+      const rect = node.getBoundingClientRect();
+      return {id:node.id, actual:[rect.width, rect.height], expected:JSON.parse(node.dataset.expected)};
+    });
+  }
+</script>
