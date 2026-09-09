@@ -15,6 +15,7 @@ use crate::{
 mod atoms;
 mod invalidation;
 mod presentation;
+mod presentational_hints;
 mod query;
 mod selector_parse;
 mod style_traversal;

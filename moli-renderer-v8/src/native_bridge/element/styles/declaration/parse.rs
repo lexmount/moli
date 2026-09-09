@@ -3969,6 +3969,42 @@ mod tests {
     }
 
     #[test]
+    fn content_visibility_cssom_writes_use_stylo_pdb() {
+        for (value, expected) in [
+            ("hidden", "hidden"),
+            ("AUTO", "auto"),
+            ("inherit", "inherit"),
+        ] {
+            assert!(cssom_style_property_write_uses_pdb(
+                "content-visibility",
+                value
+            ));
+            let parsed = parse_style_property_entries_for_cssom_write(
+                "content-visibility",
+                value,
+                true,
+                None,
+            )
+            .expect("content-visibility should parse through Stylo PDB");
+            assert_eq!(parsed.entries.len(), 1);
+            assert_eq!(parsed.entries[0].name, "content-visibility");
+            assert_eq!(parsed.entries[0].value, expected);
+            assert!(parsed.entries[0].priority);
+            assert!(style_entry_is_pdb_safe(&parsed.entries[0]));
+        }
+
+        assert!(
+            parse_style_property_entries_for_cssom_write(
+                "content-visibility",
+                "bogus",
+                false,
+                None,
+            )
+            .is_none()
+        );
+    }
+
+    #[test]
     fn transition_pdb_parser_accepts_dynamic_numeric_longhands() {
         let shorthand = parse_style_property_entries_with_base(
             "transition",
