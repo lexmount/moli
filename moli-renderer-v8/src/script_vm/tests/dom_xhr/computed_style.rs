@@ -1,5 +1,6 @@
 use super::*;
 
+mod browser_font_preferences;
 mod child_list;
 
 fn inspector_active_child_window_scope_callback<'s>(
