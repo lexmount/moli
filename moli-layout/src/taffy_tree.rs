@@ -7,9 +7,9 @@ use inline_containing_block::InlineContainingBlocks;
 use parley::{AlignmentOptions, PositionedLayoutItem};
 use style::Atom;
 use taffy::{
-    AbsoluteAxis, AlignContent, AlignContentKeyword, AlignmentSafety, AutoSizeBehavior,
-    AvailableSpace, BlockContext, BlockFormattingContext, BoxSizing, CacheTree, DetailedGridInfo,
-    Dimension, Display, FlexDirection, Layout, LayoutBlockContainer, LayoutFlexboxContainer,
+    AlignContent, AlignContentKeyword, AlignmentSafety, AutoSizeBehavior, AvailableSpace,
+    BlockContext, BlockFormattingContext, BoxSizing, CacheTree, DetailedGridInfo, Dimension,
+    Display, FlexDirection, Layout, LayoutBlockContainer, LayoutFlexboxContainer,
     LayoutGridContainer, LayoutInput, LayoutOutput, LayoutPartialTree, LeafLayoutContext, Line,
     MaybeMath, MaybeResolve, NodeId, Point, ResolveOrZero, RoundTree, RunMode, Size, SizingMode,
     SizingPurpose, Style, TraversePartialTree, TraverseTree, compute_block_layout,
@@ -1202,221 +1202,71 @@ fn layout_deferred_absolute_child<N>(
 ) where
     N: Copy + Debug + Eq + Hash,
 {
-    let child_writing_mode = world.boxes[child.index()].style.writing_mode();
-    let style = world.boxes[child.index()].style.taffy.clone();
+    let style = &world.boxes[child.index()].style.taffy;
     if style.display == Display::None || style.position != taffy::Position::Absolute {
         return;
     }
 
-    let area_width = area.size.width;
-    let area_height = area.size.height;
-    let percentage_basis = area.writing_mode.to_logical(area.size).inline_size;
-    let aspect_ratio = style.aspect_ratio;
-    let margin = style
-        .margin
-        .map(|value| value.maybe_resolve(percentage_basis, resolve_stylo_calc_value));
-    let padding = style
-        .padding
-        .resolve_or_zero(Some(percentage_basis), resolve_stylo_calc_value);
-    let border = style
-        .border
-        .resolve_or_zero(Some(percentage_basis), resolve_stylo_calc_value);
-    let padding_border_sum = (padding + border).sum_axes();
-    let box_sizing_adjustment = if style.box_sizing == BoxSizing::ContentBox {
-        padding_border_sum
-    } else {
-        Size::ZERO
-    };
-    let left = style
-        .inset
-        .left
-        .maybe_resolve(area_width, resolve_stylo_calc_value);
-    let right = style
-        .inset
-        .right
-        .maybe_resolve(area_width, resolve_stylo_calc_value);
-    let top = style
-        .inset
-        .top
-        .maybe_resolve(area_height, resolve_stylo_calc_value);
-    let bottom = style
-        .inset
-        .bottom
-        .maybe_resolve(area_height, resolve_stylo_calc_value);
-    let block_auto_behavior = match child_writing_mode.block_axis() {
-        AbsoluteAxis::Horizontal if left.is_some() && right.is_some() => {
-            AutoSizeBehavior::StretchExplicit
-        }
-        AbsoluteAxis::Vertical if top.is_some() && bottom.is_some() => {
-            AutoSizeBehavior::StretchExplicit
-        }
-        _ => AutoSizeBehavior::FitContent,
-    };
-    let style_size = style
-        .size
-        .maybe_resolve(area.size, resolve_stylo_calc_value)
-        .maybe_apply_aspect_ratio(aspect_ratio)
-        .maybe_add(box_sizing_adjustment);
-    let min_size = style
-        .min_size
-        .maybe_resolve(area.size, resolve_stylo_calc_value)
-        .maybe_apply_aspect_ratio(aspect_ratio)
-        .maybe_add(box_sizing_adjustment)
-        .or(padding_border_sum.map(Some))
-        .maybe_max(padding_border_sum);
-    let max_size = style
-        .max_size
-        .maybe_resolve(area.size, resolve_stylo_calc_value)
-        .maybe_apply_aspect_ratio(aspect_ratio)
-        .maybe_add(box_sizing_adjustment);
-    let mut known_dimensions = style_size.maybe_clamp(min_size, max_size);
-
-    if let (None, Some(left), Some(right)) = (known_dimensions.width, left, right) {
-        known_dimensions.width = Some(
-            (area_width.maybe_sub(margin.left).maybe_sub(margin.right) - left - right).max(0.0),
-        );
-        known_dimensions = known_dimensions
-            .maybe_apply_aspect_ratio(aspect_ratio)
-            .maybe_clamp(min_size, max_size);
-    }
-    if let (None, Some(top), Some(bottom)) = (known_dimensions.height, top, bottom) {
-        known_dimensions.height = Some(
-            (area_height.maybe_sub(margin.top).maybe_sub(margin.bottom) - top - bottom).max(0.0),
-        );
-        known_dimensions = known_dimensions
-            .maybe_apply_aspect_ratio(aspect_ratio)
-            .maybe_clamp(min_size, max_size);
-    }
-
-    let available_space = Size {
-        width: AvailableSpace::Definite(area_width.maybe_clamp(min_size.width, max_size.width)),
-        height: AvailableSpace::Definite(area_height.maybe_clamp(min_size.height, max_size.height)),
-    };
-    if known_dimensions.width.is_none() {
-        // CSS 2.2 §10.3.7 resolves an auto-width absolute box with at least
-        // one auto horizontal inset as fit-content. Taffy's block/flex paths
-        // already implement this contract, but an IFC's Parley placeholder
-        // requires Moli to perform the same sizing at this custom seam.
-        let non_auto_margin_width = margin.left.unwrap_or(0.0) + margin.right.unwrap_or(0.0);
-        let available_width = match (left, right) {
-            (Some(left), None) => area_width - left,
-            (None, Some(right)) => area_width - right,
-            (None, None) => static_position.available_width(area_width),
-            (Some(_), Some(_)) => unreachable!("both insets already resolve auto width"),
-        } - non_auto_margin_width;
-        known_dimensions.width = Some(world.measure_fit_content_width(
-            child,
-            LayoutInput {
-                known_dimensions,
-                definite_dimensions: known_dimensions,
-                parent_size: area.size.map(Some),
-                parent_writing_mode: area.writing_mode,
-                available_space,
-                sizing_mode: SizingMode::ContentSize,
-                sizing_purpose: SizingPurpose::IntrinsicContribution,
-                run_mode: RunMode::ComputeSize,
-                axis: taffy::RequestedAxis::Horizontal,
-                block_auto_behavior,
-                block_margins_are_collapsible: Line::FALSE,
-            },
-            available_width,
-        ));
-        known_dimensions = known_dimensions
-            .maybe_apply_aspect_ratio(aspect_ratio)
-            .maybe_clamp(min_size, max_size);
-    }
-    let measured_size = world
-        .compute_child_layout(
-            child.to_taffy(),
-            LayoutInput {
-                known_dimensions,
-                definite_dimensions: known_dimensions,
-                parent_size: area.size.map(Some),
-                parent_writing_mode: area.writing_mode,
-                available_space,
-                sizing_mode: SizingMode::ContentSize,
-                sizing_purpose: SizingPurpose::Layout,
-                run_mode: RunMode::ComputeSize,
-                axis: taffy::RequestedAxis::Both,
-                block_auto_behavior,
-                block_margins_are_collapsible: Line::FALSE,
-            },
-        )
-        .size;
-    let final_size = known_dimensions
-        .unwrap_or(measured_size)
-        .maybe_clamp(min_size, max_size);
-    let output = world.compute_child_layout(
+    // Inline-containing-block geometry becomes available after the numeric
+    // traversal, but sizing uses the same absolute contract as block/flex/grid.
+    let computed = taffy::compute::compute_absolute_layout(
+        world,
         child.to_taffy(),
-        LayoutInput {
-            known_dimensions: final_size.map(Some),
-            definite_dimensions: known_dimensions,
-            parent_size: area.size.map(Some),
-            parent_writing_mode: area.writing_mode,
-            available_space,
-            sizing_mode: SizingMode::ContentSize,
-            sizing_purpose: SizingPurpose::Layout,
-            run_mode: RunMode::PerformLayout,
-            axis: taffy::RequestedAxis::Both,
-            block_auto_behavior,
-            block_margins_are_collapsible: Line::FALSE,
+        taffy::compute::AbsoluteConstraintSpace {
+            containing_block_size: area.size,
+            writing_direction: taffy::WritingDirection {
+                mode: area.writing_mode,
+                direction: area.direction,
+            },
+            static_available_space: static_position.available_size(area.size),
         },
     );
-
-    let resolved_margin = taffy::compute::resolve_absolute_margins(
-        margin,
-        taffy::Rect {
-            left,
-            right,
-            top,
-            bottom,
-        },
-        area.size,
-        final_size,
-        taffy::WritingDirection {
-            mode: area.writing_mode,
-            direction: area.direction,
-        },
-    );
+    let output = computed.output;
+    let size = output.size;
+    let margin = computed.margin;
+    let inset = computed.inset;
     let static_origin = static_position.border_box_origin(
-        final_size,
-        resolved_margin,
+        size,
+        margin,
         area.size,
         area.writing_mode,
         area.direction,
     );
-    let x = match (left, right) {
+    let x = match (inset.left, inset.right) {
         (Some(left), Some(right)) => {
             if area.direction == taffy::Direction::Rtl {
-                area_width - final_size.width - right - resolved_margin.right
+                area.size.width - size.width - right - margin.right
             } else {
-                left + resolved_margin.left
+                left + margin.left
             }
         }
-        (Some(left), None) => left + resolved_margin.left,
-        (None, Some(right)) => area_width - final_size.width - right - resolved_margin.right,
+        (Some(left), None) => left + margin.left,
+        (None, Some(right)) => area.size.width - size.width - right - margin.right,
         (None, None) => static_origin.x,
     };
-    let y = top
-        .map(|top| top + resolved_margin.top)
+    let y = inset
+        .top
+        .map(|top| top + margin.top)
         .or_else(|| {
-            bottom.map(|bottom| area_height - final_size.height - bottom - resolved_margin.bottom)
+            inset
+                .bottom
+                .map(|bottom| area.size.height - size.height - bottom - margin.bottom)
         })
         .unwrap_or(static_origin.y);
     let scrollbar_size = world.get_scrollbar_insets(child.to_taffy()).sum_axes();
     world.boxes[child.index()].unrounded_layout = Layout {
         order: 0,
         in_flow: None,
-        size: final_size,
+        size,
         content_size: output.content_size,
         scrollbar_size,
         location: Point {
             x: area.origin.x + x - numeric_parent_origin.x,
             y: area.origin.y + y - numeric_parent_origin.y,
         },
-        padding,
-        border,
-        margin: resolved_margin,
+        padding: computed.padding,
+        border: computed.border,
+        margin,
     };
 }
 

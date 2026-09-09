@@ -89,13 +89,18 @@ impl PhysicalStaticPosition {
         }
     }
 
-    /// Fit-content width available on the side(s) selected by the static
-    /// position. A center edge constrains both sides, unlike a start point.
-    pub(crate) fn available_width(self, containing_width: f32) -> f32 {
-        let bounds = self
-            .horizontal_axis()
-            .inset_modified_bounds(containing_width);
-        bounds.end - bounds.start
+    /// Fit-content space on both physical axes selected by the static edges.
+    /// The child chooses its inline axis from its own writing mode; a center
+    /// edge constrains both sides, unlike a start point.
+    pub(crate) fn available_size(self, containing_size: Size<f32>) -> Size<f32> {
+        let extent = |axis: StaticPositionAxis, size| {
+            let bounds = axis.inset_modified_bounds(size);
+            bounds.end - bounds.start
+        };
+        Size {
+            width: extent(self.horizontal_axis(), containing_size.width),
+            height: extent(self.vertical_axis(), containing_size.height),
+        }
     }
 
     fn horizontal_axis(self) -> StaticPositionAxis {
@@ -107,6 +112,18 @@ impl PhysicalStaticPosition {
                 HorizontalStaticEdge::Right => PhysicalAxisStaticEdge::Max,
             },
             safety: self.safety.width,
+        }
+    }
+
+    fn vertical_axis(self) -> StaticPositionAxis {
+        StaticPositionAxis {
+            offset: self.point.y,
+            edge: match self.vertical_edge {
+                VerticalStaticEdge::Top => PhysicalAxisStaticEdge::Min,
+                VerticalStaticEdge::Center => PhysicalAxisStaticEdge::Center,
+                VerticalStaticEdge::Bottom => PhysicalAxisStaticEdge::Max,
+            },
+            safety: self.safety.height,
         }
     }
 
@@ -122,15 +139,7 @@ impl PhysicalStaticPosition {
         containing_direction: Direction,
     ) -> Point<f32> {
         let horizontal = self.horizontal_axis();
-        let vertical = StaticPositionAxis {
-            offset: self.point.y,
-            edge: match self.vertical_edge {
-                VerticalStaticEdge::Top => PhysicalAxisStaticEdge::Min,
-                VerticalStaticEdge::Center => PhysicalAxisStaticEdge::Center,
-                VerticalStaticEdge::Bottom => PhysicalAxisStaticEdge::Max,
-            },
-            safety: self.safety.height,
-        };
+        let vertical = self.vertical_axis();
         Point {
             x: horizontal.border_box_start(
                 containing_size.width,
@@ -462,6 +471,25 @@ mod tests {
         mode: WritingMode::HorizontalTb,
         direction: Direction::Ltr,
     };
+
+    #[test]
+    fn static_position_constrains_both_physical_available_axes() {
+        let position = PhysicalStaticPosition::new(
+            Point { x: 40.0, y: 70.0 },
+            HorizontalStaticEdge::Center,
+            VerticalStaticEdge::Bottom,
+        );
+        assert_eq!(
+            position.available_size(Size {
+                width: 200.0,
+                height: 100.0
+            }),
+            Size {
+                width: 80.0,
+                height: 70.0
+            },
+        );
+    }
 
     #[test]
     fn centered_static_position_centers_the_margin_box() {

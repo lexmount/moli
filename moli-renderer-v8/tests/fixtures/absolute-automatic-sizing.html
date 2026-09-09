@@ -1,0 +1,115 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>Absolute automatic sizing across formatting and containing blocks</title>
+<link rel="help" href="https://drafts.csswg.org/css-position-3/#abspos-auto-size">
+<style>
+  html, body { margin:0; padding:0; }
+  html { overflow:hidden; }
+  .slot { position:absolute; inline-size:240px; block-size:300px; font:0/0 sans-serif; }
+  .owner { inline-size:240px; block-size:300px; }
+  .item { position:absolute; inset:0; box-sizing:content-box; background:rgb(31,127,63); }
+</style>
+<body>
+<script>
+  // Literal logical border-box dimensions. Empty and fixed-size content avoid
+  // font metrics and isolate the inset/alignment/ratio sizing contract.
+  const cases = [
+    ['inline-ratio-normal', 'inline-size:100px;aspect-ratio:1', null, [100,100]],
+    ['inline-ratio-stretch', 'inline-size:100px;aspect-ratio:1;align-self:stretch', null, [100,300]],
+    ['inline-ratio-start', 'inline-size:100px;aspect-ratio:1;align-self:start', null, [100,100]],
+    ['both-auto-normal', 'aspect-ratio:1', null, [240,240]],
+    ['both-auto-block-stretch', 'aspect-ratio:1;align-self:stretch', null, [300,300]],
+    ['both-auto-both-stretch', 'aspect-ratio:1;align-self:stretch;justify-self:stretch', null, [240,300]],
+    ['both-auto-inline-stretch', 'aspect-ratio:1;justify-self:stretch', null, [240,240]],
+    ['block-ratio-normal', 'block-size:100px;aspect-ratio:1/2', null, [50,100]],
+    ['block-ratio-inline-stretch', 'block-size:100px;aspect-ratio:1/2;justify-self:stretch', null, [240,100]],
+    ['block-content-minimum', 'inline-size:100px;aspect-ratio:2;inset-block-end:auto', [100,100], [100,100]],
+    ['block-min-zero', 'inline-size:100px;aspect-ratio:2;inset-block-end:auto;min-block-size:0', [100,100], [100,50]],
+    ['block-overflow-hidden', 'inline-size:100px;aspect-ratio:2;inset-block-end:auto;overflow:hidden', [100,100], [100,50]],
+    ['block-authored-maximum', 'inline-size:100px;aspect-ratio:2;inset-block-end:auto;max-block-size:75px', [100,100], [100,75]],
+    ['block-transferred-maximum', 'inline-size:200px;max-inline-size:100px;aspect-ratio:2;inset-block-end:auto', [100,100], [100,100]],
+    ['inline-content-minimum', 'block-size:100px;aspect-ratio:1/2;inset-inline-end:auto', [100,20], [100,100]],
+    ['inline-min-zero', 'block-size:100px;aspect-ratio:1/2;inset-inline-end:auto;min-inline-size:0', [100,20], [50,100]],
+    ['inline-overflow-hidden', 'block-size:100px;aspect-ratio:1/2;inset-inline-end:auto;overflow:hidden', [100,20], [50,100]],
+    ['inline-authored-maximum', 'block-size:100px;aspect-ratio:1/2;inset-inline-end:auto;max-inline-size:75px', [100,20], [75,100]],
+    ['inline-transferred-maximum', 'block-size:200px;max-block-size:100px;aspect-ratio:1/2;inset-inline-end:auto', [100,20], [100,100]],
+    ['no-ratio-stretch', '', null, [240,300]],
+    ['no-ratio-start', 'align-self:start;justify-self:start', [80,120], [80,120]],
+    ['auto-inset-overrides-stretch', 'inline-size:100px;aspect-ratio:1;align-self:stretch;inset-block-end:auto', null, [100,100]],
+    ['ratio-content-box-edges', 'inline-size:100px;aspect-ratio:1;padding:5px;border:2px solid black', null, [114,114]],
+    ['ratio-stretch-content-box-edges', 'inline-size:100px;aspect-ratio:1;align-self:stretch;padding:5px;border:2px solid black', null, [114,300]],
+    ['block-insets-determine-ratio', 'aspect-ratio:3;inset-inline:auto;inset-block-start:30%;inset-block-end:50%', null, [180,60]],
+    ['fit-content-cap-and-ratio-minimum', 'max-inline-size:50px;aspect-ratio:3;inset-inline-end:auto;inset-block-end:auto', 'wrappable', [50,90]],
+    ['content-block-is-indefinite', 'inline-size:100px;inset-block-end:auto', {offset:0}, [100,20]],
+    ['ratio-block-is-definite', 'inline-size:100px;aspect-ratio:1;inset-block-end:auto', {offset:100}, [100,100]],
+    ['stretch-block-is-definite', 'inline-size:100px', {offset:300}, [100,300]],
+  ];
+  let index = 0;
+  for (const mode of ['horizontal-tb','vertical-rl','vertical-lr']) {
+    for (const ownerType of ['block','flex','grid','inline']) {
+      for (const [name, style, contentSize, expected] of cases) {
+        const slot = document.createElement('div');
+        slot.className = 'slot';
+        slot.style.cssText = `left:${index%3*400}px;top:${Math.floor(index/3)*360}px;writing-mode:${mode}`;
+        const owner = document.createElement('div');
+        owner.className = 'owner';
+        owner.style.display = ownerType === 'inline' ? 'block' : ownerType;
+        if (ownerType !== 'inline') owner.style.position = 'relative';
+        const item = document.createElement('div');
+        item.className = 'item';
+        item.id = `${mode}-${ownerType}-${name}`;
+        item.style.cssText = style;
+        // aspect-ratio is physical width/height; the cases describe a logical
+        // inline/block ratio, so invert it for vertical writing modes.
+        if (mode !== 'horizontal-tb' && item.style.aspectRatio) {
+          const parts = item.style.aspectRatio.split('/').map(Number);
+          item.style.aspectRatio = `${parts[1] || 1}/${parts[0]}`;
+        }
+        item.dataset.expected = JSON.stringify(mode === 'horizontal-tb' ? expected : [expected[1],expected[0]]);
+        if (Array.isArray(contentSize)) {
+          const content = document.createElement('div');
+          content.style.cssText = `inline-size:${contentSize[0]}px;block-size:${contentSize[1]}px`;
+          item.append(content);
+        } else if (contentSize === 'wrappable') {
+          for (let i = 0; i < 9; i++) {
+            if (i) item.append(document.createTextNode(' '));
+            const word = document.createElement('span');
+            word.style.cssText = 'display:inline-block;inline-size:40px;block-size:10px;vertical-align:top';
+            item.append(word);
+          }
+        } else if (contentSize) {
+          const relative = document.createElement('div');
+          relative.style.cssText = 'inline-size:50px;block-size:20px;position:relative;inset-block-start:100%';
+          relative.dataset.offset = contentSize.offset;
+          relative.dataset.mode = mode;
+          item.append(relative);
+        }
+        owner.append(item);
+        if (ownerType === 'inline') {
+          const inline = document.createElement('span');
+          inline.style.position = 'relative';
+          inline.append(owner);
+          slot.append(inline);
+        } else {
+          slot.append(owner);
+        }
+        document.body.append(slot);
+        index++;
+      }
+    }
+  }
+  function collectAbsoluteAutoSizingChecks() {
+    const checks = Array.from(document.querySelectorAll('.item'), item => {
+      const rect = item.getBoundingClientRect();
+      return {id:item.id, actual:[rect.width,rect.height], expected:JSON.parse(item.dataset.expected)};
+    });
+    for (const child of document.querySelectorAll('[data-offset]')) {
+      const rect = child.getBoundingClientRect();
+      const parent = child.parentElement.getBoundingClientRect();
+      const offset = child.dataset.mode === 'horizontal-tb' ? rect.top-parent.top
+        : child.dataset.mode === 'vertical-rl' ? parent.right-rect.right : rect.left-parent.left;
+      checks.push({id:`${child.parentElement.id}-relative-offset`, actual:[offset], expected:[Number(child.dataset.offset)]});
+    }
+    return checks;
+  }
+</script>

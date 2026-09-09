@@ -18,26 +18,6 @@ impl<N> LayoutWorld<N>
 where
     N: Copy + Debug + Eq + Hash,
 {
-    /// Measure the border-box width selected by CSS fit-content sizing.
-    ///
-    /// Taffy's block and flex absolute-layout paths use the same two intrinsic
-    /// measurements internally. Moli also needs the operation at the
-    /// IFC seam, where an out-of-flow placeholder is owned by Parley and the
-    /// positioned box cannot remain a normal child of Taffy's numeric tree.
-    pub(crate) fn measure_fit_content_width(
-        &mut self,
-        child: LayoutBoxId,
-        inputs: LayoutInput,
-        available_width: f32,
-    ) -> f32 {
-        self.measure_fit_content_inline_size(
-            child,
-            inputs,
-            WritingMode::HorizontalTb,
-            available_width,
-        )
-    }
-
     pub(crate) fn measure_fit_content_inline_size(
         &mut self,
         child: LayoutBoxId,
