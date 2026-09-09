@@ -353,6 +353,28 @@ impl TransformSnapshot {
         }
     }
 
+    /// Choose the readable-cancel fulfillment outcome at the synchronous
+    /// cancel-algorithm boundary. An error started by the cancel callback
+    /// itself wins the shared finish residence. An error already in progress,
+    /// or one started after the callback returns, does not retroactively reject
+    /// the readable cancellation.
+    #[must_use]
+    pub const fn plan_source_cancel_fulfillment_after_algorithm(
+        self,
+        writable_state_before_algorithm: WritableState,
+    ) -> FinishSettlementPlan {
+        if matches!(writable_state_before_algorithm, WritableState::Writable)
+            && matches!(
+                self.writable_state,
+                WritableState::Erroring | WritableState::Errored
+            )
+        {
+            FinishSettlementPlan::RejectWithWritableStoredError
+        } else {
+            FinishSettlementPlan::ErrorWritableWithOriginalReasonAndResolve
+        }
+    }
+
     #[must_use]
     pub const fn plan_finish_setup_failure(
         self,
@@ -828,6 +850,47 @@ mod tests {
                 FinishOperation::ReadableCancel,
                 AlgorithmOutcome::Fulfilled,
             ),
+            FinishSettlementPlan::ErrorWritableWithOriginalReasonAndResolve
+        );
+    }
+
+    #[test]
+    fn source_cancel_fulfillment_freezes_reentrant_writable_errors() {
+        let readable_snapshot = readable(ReadableState::Closed, 0, false, 1.0, 0.0);
+        let writable = snapshot(
+            readable_snapshot,
+            WritableState::Writable,
+            TransformMode::Callback,
+        );
+        let erroring = snapshot(
+            readable_snapshot,
+            WritableState::Erroring,
+            TransformMode::Callback,
+        );
+        let errored = snapshot(
+            readable_snapshot,
+            WritableState::Errored,
+            TransformMode::Callback,
+        );
+
+        assert_eq!(
+            writable.plan_source_cancel_fulfillment_after_algorithm(WritableState::Writable),
+            FinishSettlementPlan::ErrorWritableWithOriginalReasonAndResolve
+        );
+        assert_eq!(
+            erroring.plan_source_cancel_fulfillment_after_algorithm(WritableState::Writable),
+            FinishSettlementPlan::RejectWithWritableStoredError
+        );
+        assert_eq!(
+            errored.plan_source_cancel_fulfillment_after_algorithm(WritableState::Writable),
+            FinishSettlementPlan::RejectWithWritableStoredError
+        );
+        assert_eq!(
+            erroring.plan_source_cancel_fulfillment_after_algorithm(WritableState::Erroring),
+            FinishSettlementPlan::ErrorWritableWithOriginalReasonAndResolve
+        );
+        assert_eq!(
+            errored.plan_source_cancel_fulfillment_after_algorithm(WritableState::Erroring),
             FinishSettlementPlan::ErrorWritableWithOriginalReasonAndResolve
         );
     }

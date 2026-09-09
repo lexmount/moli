@@ -3364,7 +3364,7 @@ fn transform_stream_writer_abort_reason_wins_over_following_readable_cancel() {
 }
 
 #[test]
-fn transform_stream_controller_error_after_readable_cancel_rejects_shared_finish_promise() {
+fn transform_stream_controller_error_after_readable_cancel_preserves_cancel_result() {
     let mut vm = stream_test_vm();
 
     vm.eval(
@@ -3402,7 +3402,7 @@ fn transform_stream_controller_error_after_readable_cancel_rejects_shared_finish
 
     assert_eq!(
         result,
-        r#"["cancel:controllerReason","closed:true:controllerReason"]"#
+        r#"["cancel:fulfilled","closed:true:controllerReason"]"#
     );
 }
 
