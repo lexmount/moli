@@ -2024,9 +2024,13 @@ img, canvas, iframe, svg { display: block; margin: 0; border: 0; padding: 0 }
                     .iter()
                     .filter(|diagnostic| diagnostic.code == "replaced-content-placeholder")
                     .count(),
-                1,
-                "the unavailable image must retain its placeholder while the live initial-empty iframe is composed"
+                0,
+                "the unavailable HTML image now has real fallback content instead of a placeholder"
             );
+            assert!(replaced.fragments.iter().any(|fragment| matches!(fragment,
+                moli_layout::PaintFragment::SvgImage(image)
+                    if image.destination.width == 16.0 && image.destination.height == 16.0)),
+                "the fallback retains the attribute ratio and paints its broken-image icon");
             assert_eq!(
                 replaced
                     .diagnostics

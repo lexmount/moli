@@ -152,6 +152,7 @@ pub enum LayoutAnonymousReason {
     MissingTableRow,
     MissingTableCell,
     FormControlContent,
+    ImageFallbackContent,
 }
 
 impl LayoutAnonymousReason {
@@ -166,6 +167,7 @@ impl LayoutAnonymousReason {
             Self::MissingTableRow => "missing-table-row",
             Self::MissingTableCell => "missing-table-cell",
             Self::FormControlContent => "form-control-content",
+            Self::ImageFallbackContent => "image-fallback-content",
         }
     }
 }

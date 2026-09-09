@@ -57,6 +57,9 @@ use crate::{
     PaintEdgeSizes, PaintFragment,
 };
 
+mod image_fallback;
+pub(crate) use image_fallback::ImageFallbackStyles;
+
 /// Marker families implemented by the Phase 4 list formatter.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum LayoutListMarkerType {
@@ -488,6 +491,7 @@ pub struct ResolvedLayoutStyle {
     display: LayoutDisplay,
     background_color: PaintColor,
     border_colors: PaintBorderColors,
+    border_styles: PaintBorderStyles,
     generated_content: GeneratedContent,
     font_size: f32,
     line_height: f32,
@@ -610,6 +614,13 @@ impl ResolvedLayoutStyle {
         let display = classify_display(&computed);
         let background_color = stylo_background_color(&computed);
         let border_colors = stylo_border_colors(&computed);
+        let border = computed.get_border();
+        let border_styles = PaintBorderStyles {
+            top: paint_border_style(border.border_top_style),
+            right: paint_border_style(border.border_right_style),
+            bottom: paint_border_style(border.border_bottom_style),
+            left: paint_border_style(border.border_left_style),
+        };
         let generated_content = stylo_generated_content(&computed);
         let (font_size, line_height) = stylo_font_metrics(&computed);
         let include_used_font_metrics = matches!(
@@ -871,6 +882,7 @@ impl ResolvedLayoutStyle {
             display,
             background_color,
             border_colors,
+            border_styles,
             generated_content,
             font_size,
             line_height,
@@ -948,6 +960,7 @@ impl ResolvedLayoutStyle {
             display,
             background_color,
             border_colors: PaintBorderColors::all(PaintColor::BLACK),
+            border_styles: PaintBorderStyles::all(PaintBorderStyle::Solid),
             generated_content: GeneratedContent::None,
             font_size: 16.0,
             line_height: 19.2,
@@ -1176,18 +1189,7 @@ impl ResolvedLayoutStyle {
     }
 
     pub(crate) fn border_styles(&self) -> PaintBorderStyles {
-        self.computed.as_ref().map_or_else(
-            || PaintBorderStyles::all(PaintBorderStyle::Solid),
-            |computed| {
-                let border = computed.get_border();
-                PaintBorderStyles {
-                    top: paint_border_style(border.border_top_style),
-                    right: paint_border_style(border.border_right_style),
-                    bottom: paint_border_style(border.border_bottom_style),
-                    left: paint_border_style(border.border_left_style),
-                }
-            },
-        )
+        self.border_styles
     }
 
     pub(crate) fn border_radii(&self, width: f32, height: f32) -> PaintCornerRadii {
@@ -1966,6 +1968,7 @@ impl ResolvedLayoutStyle {
             display: LayoutDisplay::Inline,
             background_color: PaintColor::TRANSPARENT,
             border_colors: PaintBorderColors::default(),
+            border_styles: parent.border_styles,
             generated_content: GeneratedContent::None,
             font_size: parent.font_size,
             line_height: parent.line_height,
@@ -2033,6 +2036,7 @@ impl ResolvedLayoutStyle {
             display,
             background_color: PaintColor::TRANSPARENT,
             border_colors: PaintBorderColors::default(),
+            border_styles: parent.border_styles,
             generated_content: GeneratedContent::None,
             font_size: parent.font_size,
             line_height: parent.line_height,

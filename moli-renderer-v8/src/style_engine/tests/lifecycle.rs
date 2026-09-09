@@ -2668,6 +2668,10 @@ fn style_attribute_impact_classifies_dom_and_stylesheet_inputs() {
     assert!(!StyleAttributeImpact::for_attribute_name("width").changes_computed_style());
     assert!(!StyleAttributeImpact::for_attribute_name("width").changes_stylesheet_linkage());
 
+    for attribute in ["alt", "title"] {
+        assert!(StyleAttributeImpact::for_attribute_name(attribute).affects_layout_metric());
+    }
+
     for attribute in ["fill", "stroke", "stroke-width", "paint-order"] {
         assert!(
             StyleAttributeImpact::for_attribute_name(attribute).affects_layout_metric(),

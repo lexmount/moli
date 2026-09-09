@@ -214,7 +214,7 @@ impl StyleAttributeImpact {
         match name.as_str() {
             "style" | "class" | "id" => Self::ComputedStyle,
             "hidden" | "width" | "height" | "cols" | "rows" | "size" | "value" | "border"
-            | "slot" | "align" => Self::LayoutMetric,
+            | "slot" | "align" | "alt" | "title" => Self::LayoutMetric,
             "cellpadding" => Self::DescendantComputedStyle,
             "href" | "rel" | "media" | "blocking" | "disabled" => Self::StylesheetLinkage,
             "type" => Self::LayoutMetricAndStylesheetLinkage,

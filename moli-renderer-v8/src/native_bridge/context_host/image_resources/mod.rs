@@ -304,6 +304,10 @@ impl super::JsContextHost {
         self.image_resources.is_ready(element)
     }
 
+    pub(crate) fn image_resource_is_potentially_available(&self, element: DomHandle) -> bool {
+        self.image_resources.is_potentially_available(element)
+    }
+
     pub(crate) fn has_ready_image_request(&self, request_key: &ImageRequestKey) -> bool {
         self.image_resources.has_ready_request(request_key)
     }
