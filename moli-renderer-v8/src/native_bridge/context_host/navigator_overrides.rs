@@ -18,6 +18,19 @@ impl JsContextHost {
         geolocation_changed
     }
 
+    pub(crate) fn init_window_touch_feature_detection(
+        &mut self,
+        owner: crate::frame_owner_model::FrameDocumentTaskOwner,
+    ) -> Option<bool> {
+        let max_touch_points = self
+            .navigator_overrides
+            .max_touch_points
+            .map(f64::from)
+            .unwrap_or(moli_browser_profile::DEFAULT_WINDOW_SURFACE_PROFILE.max_touch_points);
+        self.frame_owner_store
+            .init_window_touch_feature_detection(owner, max_touch_points > 0.0)
+    }
+
     pub(crate) fn register_geolocation_object<'s>(
         &mut self,
         scope: &mut v8::PinScope<'s, '_>,

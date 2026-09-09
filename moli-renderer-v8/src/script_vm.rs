@@ -2409,7 +2409,7 @@ impl ScriptVmDefaultWorldBootstrap {
             crate::service_worker_runtime::ServiceWorkerClientId,
         >,
     ) -> std::result::Result<Self, ScriptVmBootstrapError> {
-        ScriptVmPageRealmBootstrap::new_from_dom_host(
+        let bootstrap = ScriptVmPageRealmBootstrap::new_from_dom_host(
             bootstrap_dom_host,
             document_settings,
             page_task_tx,
@@ -2426,8 +2426,12 @@ impl ScriptVmDefaultWorldBootstrap {
             top_level_storage_key,
             reserved_service_worker_client_id,
             None,
-        )?
-        .bootstrap_default_world()
+        )?;
+        bootstrap
+            .context_host
+            .borrow_mut()
+            .set_navigator_overrides(&document_settings.navigator_overrides);
+        bootstrap.bootstrap_default_world()
     }
 
     fn attach_context_and_capture_baseline_globals(

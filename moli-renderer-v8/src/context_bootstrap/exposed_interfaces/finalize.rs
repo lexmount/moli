@@ -110,6 +110,11 @@ pub(super) fn finalize_materialized_interface<'s>(
     match finalizer {
         RealmDependentFinalizer::DocumentRealmBindings => {
             finalize_node_mixin_unscopables(scope, prototype)?;
+            crate::native_bridge::element::install_touch_event_handler_realm_bindings(
+                scope,
+                prototype,
+                crate::native_bridge::element::GlobalEventHandlerOwner::Document,
+            )?;
             crate::context_bootstrap::window_events::finalize_secure_global_event_handler_realm_bindings(
                 scope, prototype,
             )
@@ -124,6 +129,11 @@ pub(super) fn finalize_materialized_interface<'s>(
             finalize_navigator_credentials_realm_bindings(scope, prototype)
         }
         RealmDependentFinalizer::GlobalEventHandlersSecureContextSurface => {
+            crate::native_bridge::element::install_touch_event_handler_realm_bindings(
+                scope,
+                prototype,
+                crate::native_bridge::element::GlobalEventHandlerOwner::Element,
+            )?;
             crate::context_bootstrap::window_events::finalize_secure_global_event_handler_realm_bindings(
                 scope, prototype,
             )
