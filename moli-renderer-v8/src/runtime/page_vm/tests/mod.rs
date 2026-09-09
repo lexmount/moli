@@ -1,3 +1,4 @@
+mod bitmap;
 use std::{
     sync::Arc,
     time::{Duration, Instant},
