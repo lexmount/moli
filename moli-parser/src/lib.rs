@@ -29,7 +29,8 @@ pub use html::{
     ParserCustomElementConstructionHandoff, ParserFinishDiscoverySignals, ParserInputContext,
     ParserInputQueue, ParserInputSession, ParserPumpOutcome, ParserPumpStep,
     ParserScriptElementStateTransition, ParserScriptHandoff, ParserScriptNoExecutionOutcome,
-    ParserScriptPreparationFailure, ParserStreamDocumentSnapshot, ParserYield,
+    ParserScriptPreparationFailure, ParserScriptPreparationRequest, ParserStreamDocumentSnapshot,
+    ParserYield,
 };
 pub use live_target::{
     ParserDomMutation, ParserDomMutationConsumer, ParserDomReadConsumer,
