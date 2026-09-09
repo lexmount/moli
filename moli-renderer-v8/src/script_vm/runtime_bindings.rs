@@ -1,7 +1,8 @@
 use crate::{
     context_bootstrap::dispatch_window_promise_rejection_event,
     exception_reporting::log_unhandled_promise_rejection,
-    native_bridge::{JsContextHost, WindowExecutionContextBinding},
+    native_bridge::{JsContextHost, WindowDocumentTaskTarget, WindowExecutionContextBinding},
+    page_task_queue::RendererPagePromiseRejectionTaskKind,
     util::context_host_ptr_from_global_bridge,
 };
 use std::{
@@ -21,6 +22,12 @@ struct PendingPromiseRejection {
     // rejection. The strict binding restores both the V8 context and the
     // registry-backed LocalWindow/access-policy identity.
     realm: WindowExecutionContextBinding,
+}
+
+/// V8 handles stay on the creating Host. The Page queue carries only the
+/// exact Document owner and an id for this detached notification batch.
+pub(crate) struct PromiseRejectionTaskPayload {
+    rejections: Vec<PendingPromiseRejection>,
 }
 
 #[derive(Clone)]
@@ -59,14 +66,14 @@ fn queue_agent_promise_rejection_state(
     }
 }
 
-fn flush_agent_pending_promise_rejections(scope: &mut v8::PinScope<'_, '_>) -> usize {
+fn queue_agent_pending_promise_rejections(scope: &mut v8::PinScope<'_, '_>) -> usize {
     let pending = scope
         .get_slot_mut::<AgentPendingPromiseRejections>()
         .map(|pending| std::mem::take(&mut pending.0))
         .unwrap_or_default();
     pending
         .into_iter()
-        .map(|state| flush_promise_rejection_state(scope, state))
+        .map(queue_promise_rejection_state)
         .sum()
 }
 
@@ -134,19 +141,80 @@ fn remember_reported_promise_rejection(
     reported.push(rejection);
 }
 
-fn flush_promise_rejection_state(
-    scope: &mut v8::PinScope<'_, '_>,
-    state: PromiseRejectDispatchState,
-) -> usize {
+fn queue_promise_rejection_notification(
+    state: &PromiseRejectDispatchState,
+    kind: RendererPagePromiseRejectionTaskKind,
+    rejections: Vec<PendingPromiseRejection>,
+) {
+    let Some(first) = rejections.first() else {
+        return;
+    };
+    let host_ptr: *mut JsContextHost = (*state.host).as_ptr();
+    let host = unsafe { &mut *host_ptr };
+    if !first.realm.is_current(host) {
+        return;
+    }
+    let Some(target) =
+        host.current_window_document_task_target_for_dispatch_scope(first.realm.dispatch_scope())
+    else {
+        return;
+    };
+    if !host.queue_promise_rejection_task(target, kind, PromiseRejectionTaskPayload { rejections })
+    {
+        tracing::debug!("promise rejection task route closed");
+    }
+}
+
+fn queue_promise_rejection_state(state: PromiseRejectDispatchState) -> usize {
     let pending = std::mem::take(&mut *state.pending.borrow_mut());
     let pending_len = pending.len();
+    // HTML snapshots and empties each global's about-to-be-notified list at
+    // the checkpoint. Later rejections belong to a later task, even if this
+    // batch has not yet been selected by the event loop.
+    let mut batches = indexmap::IndexMap::<_, Vec<_>>::new();
+    for rejection in pending {
+        batches
+            .entry((
+                rejection.realm.owner(),
+                rejection.realm.dispatch_scope(),
+                rejection.realm.realm_token(),
+            ))
+            .or_default()
+            .push(rejection);
+    }
+    for (_, rejections) in batches {
+        queue_promise_rejection_notification(
+            &state,
+            RendererPagePromiseRejectionTaskKind::Unhandled,
+            rejections,
+        );
+    }
+    pending_len
+}
+
+pub(super) fn dispatch_promise_rejection_task(
+    scope: &mut v8::PinScope<'_, '_>,
+    target: WindowDocumentTaskTarget,
+    kind: RendererPagePromiseRejectionTaskKind,
+    payload: PromiseRejectionTaskPayload,
+) -> bool {
+    let Some(state) = promise_reject_dispatch_state(scope) else {
+        return false;
+    };
     let host_ptr: *mut JsContextHost = (*state.host).as_ptr();
     state
         .reported
         .borrow_mut()
         .retain(|rejection| rejection.realm.is_current(unsafe { &*host_ptr }));
 
-    for rejection in pending {
+    let mut dispatched = false;
+    for rejection in payload.rejections {
+        if unsafe { &*host_ptr }
+            .current_window_document_task_target_for_dispatch_scope(target.dispatch_scope())
+            != Some(target)
+        {
+            break;
+        }
         let _ = rejection
             .realm
             .with_current_scope(scope, host_ptr, |scope, dispatch_scope| {
@@ -154,7 +222,8 @@ fn flush_promise_rejection_state(
                 // HTML rechecks PromiseIsHandled immediately before notifying.
                 // The host, or an earlier notification in this detached batch,
                 // may have handled it since it was first queued.
-                if promise.has_handler() {
+                if kind == RendererPagePromiseRejectionTaskKind::Unhandled && promise.has_handler()
+                {
                     return;
                 }
                 let reason = rejection
@@ -165,7 +234,10 @@ fn flush_promise_rejection_state(
                     scope,
                     host_ptr,
                     dispatch_scope,
-                    "unhandledrejection",
+                    match kind {
+                        RendererPagePromiseRejectionTaskKind::Unhandled => "unhandledrejection",
+                        RendererPagePromiseRejectionTaskKind::Handled => "rejectionhandled",
+                    },
                     promise,
                     reason,
                 );
@@ -173,15 +245,19 @@ fn flush_promise_rejection_state(
                 // synchronously turn this notification into `rejectionhandled`.
                 // Only promises that remain unhandled after dispatch belong in
                 // the outstanding reported-rejection set.
-                if !promise.has_handler() {
+                dispatched |= outcome.is_ok();
+                if kind == RendererPagePromiseRejectionTaskKind::Unhandled && !promise.has_handler()
+                {
                     remember_reported_promise_rejection(&state.reported, rejection.clone());
                 }
-                if matches!(outcome, Ok(true)) {
+                if kind == RendererPagePromiseRejectionTaskKind::Unhandled
+                    && matches!(outcome, Ok(true))
+                {
                     log_unhandled_promise_rejection(scope, reason);
                 }
             });
     }
-    pending_len
+    dispatched
 }
 
 pub(crate) fn perform_microtask_checkpoint_and_report_pending_promise_rejections(
@@ -257,18 +333,18 @@ pub(crate) fn perform_microtask_checkpoint_and_report_pending_promise_rejections
             elapsed_us = %started.elapsed().as_micros(),
         );
     }
-    let flush_started = trace_enabled.then(Instant::now);
-    let pending_rejections = flush_agent_pending_promise_rejections(scope);
+    let queue_started = trace_enabled.then(Instant::now);
+    let pending_rejections = queue_agent_pending_promise_rejections(scope);
     crate::context_bootstrap::run_end_of_microtask_checkpoint_tasks(scope);
     if let Some(host) = context_host_ptr_from_global_bridge(scope)
         && let Some(environment) = unsafe { &*host }.page_script_environment()
     {
         environment.finish_related_page_turn_completions();
     }
-    if let Some(started) = flush_started {
+    if let Some(started) = queue_started {
         tracing::info!(
             target: "moli_cdp_runtime",
-            stage = "microtask_checkpoint_rejection_flush_done",
+            stage = "microtask_checkpoint_rejection_queue_done",
             pending_rejections,
             elapsed_us = %started.elapsed().as_micros(),
         );
@@ -350,7 +426,7 @@ pub(super) unsafe extern "C" fn promise_reject_callback(message: v8::PromiseReje
                 .iter()
                 .position(|rejection| pending_promise_rejection_matches(scope, rejection, promise))
             {
-                pending.swap_remove(index);
+                pending.remove(index);
                 return;
             }
             drop(pending);
@@ -367,23 +443,11 @@ pub(super) unsafe extern "C" fn promise_reject_callback(message: v8::PromiseReje
             let Some(rejection) = reported else {
                 return;
             };
-            let _ = rejection
-                .realm
-                .with_current_scope(scope, host_ptr, |scope, dispatch_scope| {
-                    let promise = v8::Local::new(scope, &rejection.promise);
-                    let reason = rejection
-                        .reason
-                        .as_ref()
-                        .map(|reason| v8::Local::new(scope, reason));
-                    let _ = dispatch_window_promise_rejection_event(
-                        scope,
-                        host_ptr,
-                        dispatch_scope,
-                        "rejectionhandled",
-                        promise,
-                        reason,
-                    );
-                });
+            queue_promise_rejection_notification(
+                &state,
+                RendererPagePromiseRejectionTaskKind::Handled,
+                vec![rejection],
+            );
         }
         _ => {}
     }

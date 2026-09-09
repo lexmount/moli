@@ -34,6 +34,9 @@ impl PageVm {
             PageDomManipulationTurnAction::ScriptPreparationError(action) => {
                 action.into_page_task_completion()
             }
+            PageDomManipulationTurnAction::PromiseRejection(action) => {
+                action.into_page_task_completion()
+            }
             PageDomManipulationTurnAction::ImageLoadEvent(action) => {
                 action.into_page_task_completion()
             }
