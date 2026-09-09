@@ -380,6 +380,13 @@ fn performance_entries_hide_backing_slots_and_ignore_spoofing() {
                 __moliPerformanceNavigationTimingType: "reload",
                 __moliPerformanceNavigationTimingLoadEventEnd: 99
               };
+              const getterResult = (getter, receiver) => {
+                try {
+                  return stringify(getter.call(receiver));
+                } catch (error) {
+                  return error.name;
+                }
+              };
               return JSON.stringify({
                 initialNavigationNames,
                 initialMarkNames,
@@ -427,10 +434,10 @@ fn performance_entries_hide_backing_slots_and_ignore_spoofing() {
                 navigationDuration: navigation.duration,
                 byRealMark: performance.getEntriesByName("real-mark", "mark").length,
                 bySpoofMark: performance.getEntriesByName("spoof", "resource").length,
-                fakeName: String(entryNameGetter.call(fake)),
+                fakeName: getterResult(entryNameGetter, fake),
                 fakeNavigationType: String(navTypeGetter.call(fake)),
                 fakeLoadEventEnd: String(navLoadGetter.call(fake)),
-                fakeResourceValues: resourceGetters.map(getter => getter.call({})).map(stringify).join("|")
+                fakeResourceValues: resourceGetters.map(getter => getterResult(getter, {})).join("|")
               });
             })()
             "#,
@@ -439,7 +446,155 @@ fn performance_entries_hide_backing_slots_and_ignore_spoofing() {
 
     assert_eq!(
         result,
-        r#"{"initialNavigationNames":[],"initialMarkNames":[],"initialMeasureNames":[],"markName":"real-mark","markEntryType":"mark","markStartSpoofIgnored":true,"markDuration":0,"markDetailNull":true,"measureDetail":"real","entryDescriptors":["name:true:function:get name:0:undefined:true:true:false","entryType:true:function:get entryType:0:undefined:true:true:false","startTime:true:function:get startTime:0:undefined:true:true:false","duration:true:function:get duration:0:undefined:true:true:false"],"detailDescriptors":["detail:true:function:get detail:0:undefined:true:true:false","detail:true:function:get detail:0:undefined:true:true:false"],"resourceDescriptors":["initiatorType:true:function:get initiatorType:0:undefined:true:true:false","nextHopProtocol:true:function:get nextHopProtocol:0:undefined:true:true:false","workerStart:true:function:get workerStart:0:undefined:true:true:false","redirectStart:true:function:get redirectStart:0:undefined:true:true:false","redirectEnd:true:function:get redirectEnd:0:undefined:true:true:false","fetchStart:true:function:get fetchStart:0:undefined:true:true:false","domainLookupStart:true:function:get domainLookupStart:0:undefined:true:true:false","domainLookupEnd:true:function:get domainLookupEnd:0:undefined:true:true:false","connectStart:true:function:get connectStart:0:undefined:true:true:false","connectEnd:true:function:get connectEnd:0:undefined:true:true:false","secureConnectionStart:true:function:get secureConnectionStart:0:undefined:true:true:false","requestStart:true:function:get requestStart:0:undefined:true:true:false","responseStart:true:function:get responseStart:0:undefined:true:true:false","responseEnd:true:function:get responseEnd:0:undefined:true:true:false","transferSize:true:function:get transferSize:0:undefined:true:true:false","encodedBodySize:true:function:get encodedBodySize:0:undefined:true:true:false","decodedBodySize:true:function:get decodedBodySize:0:undefined:true:true:false","renderBlockingStatus:true:function:get renderBlockingStatus:0:undefined:true:true:false","responseStatus:true:function:get responseStatus:0:undefined:true:true:false","contentType:true:function:get contentType:0:undefined:true:true:false"],"navigationType":"navigate","navigationLoadEventEnd":0,"navigationDuration":0,"byRealMark":1,"bySpoofMark":0,"fakeName":"undefined","fakeNavigationType":"undefined","fakeLoadEventEnd":"undefined","fakeResourceValues":"undefined|undefined|undefined|undefined|undefined|undefined|undefined|undefined|undefined|undefined|undefined|undefined|undefined|undefined|undefined|undefined|undefined|undefined|undefined|undefined"}"#
+        r#"{"initialNavigationNames":[],"initialMarkNames":[],"initialMeasureNames":[],"markName":"real-mark","markEntryType":"mark","markStartSpoofIgnored":true,"markDuration":0,"markDetailNull":true,"measureDetail":"real","entryDescriptors":["name:true:function:get name:0:undefined:true:true:false","entryType:true:function:get entryType:0:undefined:true:true:false","startTime:true:function:get startTime:0:undefined:true:true:false","duration:true:function:get duration:0:undefined:true:true:false"],"detailDescriptors":["detail:true:function:get detail:0:undefined:true:true:false","detail:true:function:get detail:0:undefined:true:true:false"],"resourceDescriptors":["initiatorType:true:function:get initiatorType:0:undefined:true:true:false","nextHopProtocol:true:function:get nextHopProtocol:0:undefined:true:true:false","workerStart:true:function:get workerStart:0:undefined:true:true:false","redirectStart:true:function:get redirectStart:0:undefined:true:true:false","redirectEnd:true:function:get redirectEnd:0:undefined:true:true:false","fetchStart:true:function:get fetchStart:0:undefined:true:true:false","domainLookupStart:true:function:get domainLookupStart:0:undefined:true:true:false","domainLookupEnd:true:function:get domainLookupEnd:0:undefined:true:true:false","connectStart:true:function:get connectStart:0:undefined:true:true:false","connectEnd:true:function:get connectEnd:0:undefined:true:true:false","secureConnectionStart:true:function:get secureConnectionStart:0:undefined:true:true:false","requestStart:true:function:get requestStart:0:undefined:true:true:false","responseStart:true:function:get responseStart:0:undefined:true:true:false","responseEnd:true:function:get responseEnd:0:undefined:true:true:false","transferSize:true:function:get transferSize:0:undefined:true:true:false","encodedBodySize:true:function:get encodedBodySize:0:undefined:true:true:false","decodedBodySize:true:function:get decodedBodySize:0:undefined:true:true:false","renderBlockingStatus:true:function:get renderBlockingStatus:0:undefined:true:true:false","responseStatus:true:function:get responseStatus:0:undefined:true:true:false","contentType:true:function:get contentType:0:undefined:true:true:false"],"navigationType":"navigate","navigationLoadEventEnd":0,"navigationDuration":0,"byRealMark":1,"bySpoofMark":0,"fakeName":"TypeError","fakeNavigationType":"undefined","fakeLoadEventEnd":"undefined","fakeResourceValues":"TypeError|TypeError|TypeError|TypeError|TypeError|TypeError|TypeError|TypeError|TypeError|TypeError|TypeError|TypeError|TypeError|TypeError|TypeError|TypeError|TypeError|TypeError|TypeError|TypeError"}"#
+    );
+}
+
+#[test]
+fn performance_user_timing_enforces_mark_and_measure_boundaries() {
+    let mut vm = new_storage_test_vm("https://performance-user-timing-boundaries.test/");
+
+    let result = vm
+        .eval(
+            r#"
+            (() => {
+              const capture = callback => {
+                try {
+                  callback();
+                  return "none";
+                } catch (error) {
+                  return `${error.name}:${error.code}`;
+                }
+              };
+              performance.mark("later", { startTime: 5 });
+              const sourceDetail = { value: 1 };
+              const cloned = performance.measure("cloned", {
+                start: 1,
+                duration: 2,
+                detail: sourceDetail
+              });
+              sourceDetail.value = 9;
+              const negative = performance.measure(
+                "negative-duration",
+                "later",
+                "navigationStart"
+              );
+              const legacyPendingNames = [
+                "unloadEventStart",
+                "unloadEventEnd",
+                "redirectStart",
+                "redirectEnd",
+                "secureConnectionStart",
+                "domInteractive",
+                "domContentLoadedEventStart",
+                "domContentLoadedEventEnd",
+                "domComplete",
+                "loadEventStart",
+                "loadEventEnd"
+              ];
+              return JSON.stringify({
+                reservedMark: capture(() => performance.mark("navigationStart")),
+                missingMark: capture(() => performance.measure("missing", "does-not-exist")),
+                numericLegacyMark: capture(() => performance.measure("number", 51.15, "later")),
+                unavailableTiming: capture(() => performance.measure("pending", "redirectStart")),
+                detailOnlyOptions: capture(() => performance.measure("detail-only", { detail: 1 })),
+                overSpecifiedOptions: capture(() => performance.measure("all", {
+                  start: 1,
+                  duration: 2,
+                  end: 3
+                })),
+                negativeMark: capture(() => performance.mark("bad-mark", { startTime: -1 })),
+                infiniteMark: capture(() => performance.mark("bad-infinite", { startTime: Infinity })),
+                negativeBoundary: capture(() => performance.measure("bad-boundary", { start: -1 })),
+                negativeDuration: negative.duration,
+                navigationStartTime: performance.measure("from-navigation", "navigationStart").startTime,
+                pendingTimingStartsAtZero: legacyPendingNames.every(name => performance.timing[name] === 0),
+                clonedDetail: `${cloned.detail.value}:${cloned.detail === sourceDetail}`,
+                navigationEntryIsNotMark: capture(() => performance.measure("entry-name", location.href))
+              });
+            })()
+            "#,
+        )
+        .expect("User Timing boundary probe should evaluate");
+
+    assert_eq!(
+        result,
+        r#"{"reservedMark":"SyntaxError:12","missingMark":"SyntaxError:12","numericLegacyMark":"SyntaxError:12","unavailableTiming":"InvalidAccessError:15","detailOnlyOptions":"TypeError:undefined","overSpecifiedOptions":"TypeError:undefined","negativeMark":"TypeError:undefined","infiniteMark":"TypeError:undefined","negativeBoundary":"TypeError:undefined","negativeDuration":-5,"navigationStartTime":0,"pendingTimingStartsAtZero":true,"clonedDetail":"1:false","navigationEntryIsNotMark":"SyntaxError:12"}"#
+    );
+}
+
+#[test]
+fn performance_mark_constructor_creates_detached_structured_entries() {
+    let mut vm = new_storage_test_vm("https://performance-mark-constructor.test/");
+
+    let result = vm
+        .eval(
+            r#"
+            (() => {
+              const capture = callback => {
+                try {
+                  callback();
+                  return "none";
+                } catch (error) {
+                  return `${error.name}:${error.code}`;
+                }
+              };
+              const sourceDetail = { state: "before" };
+              const entry = new PerformanceMark("detached", {
+                startTime: 2,
+                detail: sourceDetail
+              });
+              sourceDetail.state = "after";
+              class DerivedPerformanceMark extends PerformanceMark {}
+              const derived = new DerivedPerformanceMark("derived", { startTime: 3 });
+              return JSON.stringify({
+                shape: [
+                  entry instanceof PerformanceEntry,
+                  entry instanceof PerformanceMark,
+                  Object.prototype.toString.call(entry),
+                  entry.name,
+                  entry.entryType,
+                  entry.startTime,
+                  entry.duration
+                ].join(":"),
+                detail: `${entry.detail.state}:${entry.detail === entry.detail}:${entry.detail === sourceDetail}`,
+                timelineEntries: performance.getEntriesByName("detached", "mark").length,
+                derived: [
+                  derived instanceof DerivedPerformanceMark,
+                  derived instanceof PerformanceMark,
+                  Object.getPrototypeOf(derived) === DerivedPerformanceMark.prototype,
+                  derived.name,
+                  derived.startTime
+                ].join(":"),
+                constructorInheritance:
+                  Object.getPrototypeOf(PerformanceMark) === PerformanceEntry
+                  && Object.getPrototypeOf(PerformanceMeasure) === PerformanceEntry,
+                detailBrand: capture(() =>
+                  Object.getOwnPropertyDescriptor(PerformanceMark.prototype, "detail")
+                    .get.call(PerformanceMark.prototype)),
+                methodBrands: [
+                  performance.mark,
+                  performance.clearMarks,
+                  performance.measure,
+                  performance.clearMeasures
+                ].map(method => capture(() => method.call(null, "unbound"))).join("|"),
+                withoutNew: capture(() => PerformanceMark("call")),
+                missingName: capture(() => new PerformanceMark()),
+                negativeStart: capture(() => new PerformanceMark("negative", { startTime: -1 })),
+                infiniteStart: capture(() => new PerformanceMark("infinite", { startTime: Infinity })),
+                reservedName: capture(() => new PerformanceMark("navigationStart")),
+                cloneError: capture(() => new PerformanceMark("clone", {
+                  detail: { value: Symbol() }
+                }))
+              });
+            })()
+            "#,
+        )
+        .expect("PerformanceMark constructor probe should evaluate");
+
+    assert_eq!(
+        result,
+        r#"{"shape":"true:true:[object PerformanceMark]:detached:mark:2:0","detail":"before:true:false","timelineEntries":0,"derived":"true:true:true:derived:3","constructorInheritance":true,"detailBrand":"TypeError:undefined","methodBrands":"TypeError:undefined|TypeError:undefined|TypeError:undefined|TypeError:undefined","withoutNew":"TypeError:undefined","missingName":"TypeError:undefined","negativeStart":"TypeError:undefined","infiniteStart":"TypeError:undefined","reservedName":"SyntaxError:12","cloneError":"DataCloneError:25"}"#
     );
 }
 

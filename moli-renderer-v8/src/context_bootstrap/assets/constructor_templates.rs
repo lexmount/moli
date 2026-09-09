@@ -30,7 +30,9 @@ use super::super::{
     message_ports::{message_channel_constructor_callback, message_port_constructor_callback},
     navigator_runtime::clipboard_item_constructor_callback,
     notification_runtime::notification_constructor_callback,
-    performance_runtime::performance_observer_constructor_callback,
+    performance_runtime::{
+        performance_mark_constructor_callback, performance_observer_constructor_callback,
+    },
     range_surface::{
         build_abstract_range_template, build_range_constructor_template,
         build_static_range_constructor_template,
@@ -500,9 +502,13 @@ pub(in crate::context_bootstrap) fn build_constructor_template<'s>(
         ConstructorKind::PerformanceObserverEntryList => {
             v8::FunctionTemplate::builder(illegal_constructor_callback).build(scope)
         }
+        ConstructorKind::PerformanceMark => {
+            v8::FunctionTemplate::builder(performance_mark_constructor_callback)
+                .length(1)
+                .build(scope)
+        }
         ConstructorKind::PerformanceEntry
         | ConstructorKind::PerformanceNavigationTiming
-        | ConstructorKind::PerformanceMark
         | ConstructorKind::PerformanceMeasure
         | ConstructorKind::PerformanceResourceTiming
         | ConstructorKind::EventCounts

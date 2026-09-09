@@ -1017,6 +1017,13 @@ fn apply_lifecycle_to_navigation_entry<'s>(
     }
 }
 
+pub(super) fn is_window_performance<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    performance: v8::Local<'s, v8::Object>,
+) -> bool {
+    get_private_value(scope, performance, PERFORMANCE_NAVIGATION_TYPE_SEED_SLOT).is_some()
+}
+
 pub(super) fn performance_navigation_type_seed<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     performance: v8::Local<'s, v8::Object>,
@@ -1096,10 +1103,10 @@ impl PerformanceTimingSnapshot {
         let time_origin = legacy_timing_epoch_millis(time_origin);
         Self {
             navigation_start: time_origin,
-            unload_event_start: time_origin,
-            unload_event_end: time_origin,
-            redirect_start: time_origin,
-            redirect_end: time_origin,
+            unload_event_start: 0,
+            unload_event_end: 0,
+            redirect_start: 0,
+            redirect_end: 0,
             fetch_start: time_origin,
             domain_lookup_start: time_origin,
             domain_lookup_end: time_origin,
@@ -1110,12 +1117,12 @@ impl PerformanceTimingSnapshot {
             response_start: time_origin,
             response_end: time_origin,
             dom_loading: time_origin,
-            dom_interactive: time_origin,
-            dom_content_loaded_event_start: time_origin,
-            dom_content_loaded_event_end: time_origin,
-            dom_complete: time_origin,
-            load_event_start: time_origin,
-            load_event_end: time_origin,
+            dom_interactive: 0,
+            dom_content_loaded_event_start: 0,
+            dom_content_loaded_event_end: 0,
+            dom_complete: 0,
+            load_event_start: 0,
+            load_event_end: 0,
         }
     }
 }
@@ -1217,7 +1224,7 @@ const PERFORMANCE_ATTRIBUTE_SLOTS: &[&str] = &[
     PERFORMANCE_EVENT_COUNTS_SLOT,
 ];
 
-const PERFORMANCE_TIMING_JSON_KEYS: &[&str] = &[
+pub(super) const PERFORMANCE_TIMING_ATTRIBUTE_NAMES: &[&str] = &[
     "navigationStart",
     "unloadEventStart",
     "unloadEventEnd",
@@ -1566,8 +1573,9 @@ pub(in crate::context_bootstrap) fn performance_to_json_callback<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'_, v8::Value>,
 ) {
-    let timing = object_property_as_object(scope, args.this(), "timing")
-        .map(|timing| object_json_snapshot(scope, timing, PERFORMANCE_TIMING_JSON_KEYS).into());
+    let timing = object_property_as_object(scope, args.this(), "timing").map(|timing| {
+        object_json_snapshot(scope, timing, PERFORMANCE_TIMING_ATTRIBUTE_NAMES).into()
+    });
     let navigation =
         object_property_as_object(scope, args.this(), "navigation").map(|navigation| {
             object_json_snapshot(scope, navigation, PERFORMANCE_NAVIGATION_JSON_KEYS).into()
@@ -1587,7 +1595,7 @@ fn performance_timing_to_json_callback<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'_, v8::Value>,
 ) {
-    rv.set(object_json_snapshot(scope, args.this(), PERFORMANCE_TIMING_JSON_KEYS).into());
+    rv.set(object_json_snapshot(scope, args.this(), PERFORMANCE_TIMING_ATTRIBUTE_NAMES).into());
 }
 
 fn performance_navigation_to_json_callback<'s>(

@@ -118,7 +118,7 @@ pub(crate) use install::{
 };
 pub(super) use marks_measures::{
     performance_clear_marks_callback, performance_clear_measures_callback,
-    performance_mark_callback, performance_measure_callback,
+    performance_mark_callback, performance_mark_constructor_callback, performance_measure_callback,
 };
 pub(crate) use resource_buffer::run_resource_timing_buffer_full_task;
 pub(crate) use window_state::bind_window_performance_seed;
