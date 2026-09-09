@@ -6522,6 +6522,7 @@ html/semantics/scripting-1/the-script-element/script-crossorigin.html
 html/semantics/scripting-1/the-script-element/script-defer.html
 html/semantics/scripting-1/the-script-element/script-for-event.html
 html/semantics/scripting-1/the-script-element/script-not-executed-after-shutdown.html
+html/semantics/scripting-1/the-script-element/script-onerror-insertion-point-1.html
 html/semantics/scripting-1/the-script-element/script-onerror-insertion-point-2.html
 html/semantics/scripting-1/the-script-element/script-onload-insertion-point.html
 html/semantics/scripting-1/the-script-element/script-onload-string.html

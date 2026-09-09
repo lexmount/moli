@@ -2955,7 +2955,6 @@ html/semantics/scripting-1/the-script-element/moving-between-documents/ordering/
 html/semantics/scripting-1/the-script-element/moving-between-documents/ordering/delay-load-event-2.html
 html/semantics/scripting-1/the-script-element/moving-between-documents/ordering/in-order.html
 html/semantics/scripting-1/the-script-element/moving-between-documents/ordering/parser-blocking.html
-html/semantics/scripting-1/the-script-element/script-onerror-insertion-point-1.html
 html/semantics/scripting-1/the-script-element/text-module/cors-crossorigin-requests.html
 html/semantics/scripting-1/the-script-element/text-module/integrity.html
 html/semantics/scripting-1/the-script-element/text-module/module.html

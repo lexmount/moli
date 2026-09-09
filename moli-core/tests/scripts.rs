@@ -17,6 +17,9 @@ mod child_synthetic_modules;
 #[path = "scripts/preparation_errors.rs"]
 mod preparation_errors;
 
+#[path = "scripts/child_error_insertion.rs"]
+mod child_error_insertion;
+
 fn diagnostic_global<'a>(
     page: &'a moli_core::page::Page,
     name: &str,
