@@ -196,14 +196,7 @@ globalThis.__childClassicWaitValue = 91;
                     "external:true|current:external-classic|inline:91",
                     "second DocumentScriptReady should run parser continuation without iframe load"
                 );
-                followup_sources.push(
-                    run_expected_child_frame_task_source_after_realm_prerequisite_for_wait(
-                        &mut page_vm,
-                        ChildFrameSemanticTurnKind::DocumentLifecycle,
-                        "child classic parser EOF interactive transition",
-                    )
-                    .await,
-                );
+                assert_eq!(page_vm.vm_mut().eval("document.querySelector('iframe').contentDocument.readyState")?, "interactive", "parser EOF must apply interactive synchronously");
                 followup_sources.push(
                     run_expected_child_frame_task_source_after_realm_prerequisite_for_wait(
                         &mut page_vm,
@@ -292,10 +285,9 @@ globalThis.__childClassicWaitValue = 91;
                 ChildFrameSemanticTurnKind::DocumentScriptReady,
                 ChildFrameSemanticTurnKind::DocumentLifecycle,
                 ChildFrameSemanticTurnKind::DocumentLifecycle,
-                ChildFrameSemanticTurnKind::DocumentLifecycle,
                 ChildFrameSemanticTurnKind::HostLoad
             ],
-            "child classic completion should progress through script, parser continuation, interactive, DOMContentLoaded, complete, and HostLoad turns"
+            "child classic completion should progress through script, parser continuation, DOMContentLoaded, complete, and HostLoad turns"
         );
         assert_eq!(
             final_events,
@@ -435,14 +427,7 @@ async fn page_vm_child_parser_blocking_classic_waits_for_preceding_stylesheet() 
                     "script:stylesheet-ready:loading",
                     "stylesheet source must be installed before the parser-blocking script executes while the document is still loading"
                 );
-                followup_sources.push(
-                    run_expected_child_frame_task_source_after_realm_prerequisite_for_wait(
-                        &mut page_vm,
-                        ChildFrameSemanticTurnKind::DocumentLifecycle,
-                        "stylesheet-gated child interactive transition",
-                    )
-                    .await,
-                );
+                assert_eq!(page_vm.vm_mut().eval("document.querySelector('iframe').contentDocument.readyState")?, "interactive", "parser EOF must apply interactive synchronously");
                 followup_sources.push(
                     run_expected_child_frame_task_source_after_realm_prerequisite_for_wait(
                         &mut page_vm,
@@ -504,7 +489,6 @@ async fn page_vm_child_parser_blocking_classic_waits_for_preceding_stylesheet() 
             followup_sources,
             vec![
                 ChildFrameSemanticTurnKind::DocumentScriptReady,
-                ChildFrameSemanticTurnKind::DocumentLifecycle,
                 ChildFrameSemanticTurnKind::DocumentLifecycle,
                 ChildFrameSemanticTurnKind::DocumentLifecycle,
                 ChildFrameSemanticTurnKind::HostLoad,
@@ -610,8 +594,8 @@ async fn page_vm_child_parser_defer_preserves_cross_kind_document_order() {
                     "parser EOF must not execute any mixed parser-deferred script"
                 );
                 assert!(
-                    bootstrap_sources.contains(&ChildFrameSemanticTurnKind::DocumentLifecycle),
-                    "mixed parser-deferred document should reach interactive"
+                    page_vm.vm_mut().eval("document.querySelector('iframe').contentDocument.readyState")? == "interactive",
+                    "mixed parser-deferred document should become interactive at parser EOF"
                 );
                 assert_eq!(
                     bootstrap_sources
@@ -822,7 +806,7 @@ globalThis.__childDocumentLoadWaitValue = 42;
             first_followup_source,
             events_after_first_followup,
             lifecycle_ready_after_first_followup,
-            interactive_source,
+            interactive_state,
             host_load_source,
             final_events,
         ) = local_executor
@@ -901,12 +885,7 @@ globalThis.__childDocumentLoadWaitValue = 42;
                         ChildFrameSemanticTurnKind::DocumentLifecycle,
                     );
 
-                let interactive_source = run_expected_child_frame_task_source_after_realm_prerequisite_for_wait(
-                    &mut page_vm,
-                    ChildFrameSemanticTurnKind::DocumentLifecycle,
-                    "child document parser EOF interactive transition",
-                )
-                .await;
+                let interactive_state = page_vm.vm_mut().eval("document.querySelector('iframe').contentDocument.readyState")?;
                 let host_load_source = run_child_domcontentloaded_then_host_load_for_wait(
                     &mut page_vm,
                     "child document iframe load",
@@ -929,7 +908,7 @@ globalThis.__childDocumentLoadWaitValue = 42;
                     first_followup_source,
                     events_after_first_followup,
                     lifecycle_ready_after_first_followup,
-                    interactive_source,
+                    interactive_state,
                     host_load_source,
                     final_events,
                 ))
@@ -967,8 +946,8 @@ globalThis.__childDocumentLoadWaitValue = 42;
             "document-script ready should make the later lifecycle turn runnable"
         );
         assert_eq!(
-            interactive_source,
-            ChildFrameSemanticTurnKind::DocumentLifecycle,
+            interactive_state,
+            "interactive",
             "parser EOF should become interactive before HostLoad"
         );
         assert_eq!(
@@ -1141,8 +1120,6 @@ parent.__multiChildDocumentEvents.push("child-b-script:" + (globalThis === self)
                     page_vm.run_next_child_frame_task_source_for_semantic_test().await,
                     page_vm.run_next_child_frame_task_source_for_semantic_test().await,
                     page_vm.run_next_child_frame_task_source_for_semantic_test().await,
-                    page_vm.run_next_child_frame_task_source_for_semantic_test().await,
-                    page_vm.run_next_child_frame_task_source_for_semantic_test().await,
                 ];
                 let first_host_load_source = page_vm.run_next_child_frame_task_source_for_semantic_test().await;
                 let events_after_first_host_load = page_vm
@@ -1222,8 +1199,8 @@ parent.__multiChildDocumentEvents.push("child-b-script:" + (globalThis === self)
         );
         assert_eq!(
             lifecycle_sources,
-            vec![Some(ChildFrameSemanticTurnKind::DocumentLifecycle); 6],
-            "interactive, DOMContentLoaded and complete must each consume one lifecycle turn per child"
+            vec![Some(ChildFrameSemanticTurnKind::DocumentLifecycle); 4],
+            "DOMContentLoaded and complete must each consume one lifecycle turn per child"
         );
         assert_eq!(
             first_host_load_source,
@@ -1289,7 +1266,7 @@ parent.__childReadyHostLoadEvents.push("child-script:" + (globalThis === self));
             script_ready_source,
             events_after_script_ready,
             lifecycle_ready_after_script,
-            interactive_source,
+            interactive_state,
             host_load_source,
             events_after_host_load,
         ) = local_executor
@@ -1347,7 +1324,7 @@ parent.__childReadyHostLoadEvents.push("child-script:" + (globalThis === self));
                         ChildFrameSemanticTurnKind::DocumentLifecycle,
                     );
 
-                let interactive_source = page_vm.run_next_child_frame_task_source_for_semantic_test().await;
+                let interactive_state = page_vm.vm_mut().eval("document.querySelector('iframe').contentDocument.readyState")?;
                 let host_load_source = Some(
                     run_child_domcontentloaded_then_host_load_for_wait(
                         &mut page_vm,
@@ -1366,7 +1343,7 @@ parent.__childReadyHostLoadEvents.push("child-script:" + (globalThis === self));
                     script_ready_source,
                     events_after_script_ready,
                     lifecycle_ready_after_script,
-                    interactive_source,
+                    interactive_state,
                     host_load_source,
                     events_after_host_load,
                 ))
@@ -1401,8 +1378,8 @@ parent.__childReadyHostLoadEvents.push("child-script:" + (globalThis === self));
             "DocumentScriptReady should make the later lifecycle turn runnable"
         );
         assert_eq!(
-            interactive_source,
-            Some(ChildFrameSemanticTurnKind::DocumentLifecycle),
+            interactive_state,
+            "interactive",
             "parser EOF should dispatch interactive before HostLoad"
         );
         assert_eq!(
@@ -2201,7 +2178,7 @@ addEventListener("load", () => parent.__childLoadNavigationEvents.push("load-lis
             completion_source,
             script_ready_source,
             events_after_script_ready,
-            interactive_source,
+            interactive_state,
             host_load_source,
             events_after_host_load,
             pending_after_host_load,
@@ -2253,7 +2230,7 @@ addEventListener("load", () => parent.__childLoadNavigationEvents.push("load-lis
                     .vm_mut()
                     .eval("__childLoadNavigationEvents.join('|')")?;
 
-                let interactive_source = page_vm.run_next_child_frame_task_source_for_semantic_test().await;
+                let interactive_state = page_vm.vm_mut().eval("document.querySelector('iframe').contentDocument.readyState")?;
                 let host_load_source = Some(
                     run_child_domcontentloaded_then_host_load_for_wait(
                         &mut page_vm,
@@ -2303,7 +2280,7 @@ addEventListener("load", () => parent.__childLoadNavigationEvents.push("load-lis
                     completion_source,
                     script_ready_source,
                     events_after_script_ready,
-                    interactive_source,
+                    interactive_state,
                     host_load_source,
                     events_after_host_load,
                     pending_after_host_load,
@@ -2338,8 +2315,8 @@ addEventListener("load", () => parent.__childLoadNavigationEvents.push("load-lis
             "DocumentScriptReady should not dispatch child window load inline"
         );
         assert_eq!(
-            interactive_source,
-            Some(ChildFrameSemanticTurnKind::DocumentLifecycle),
+            interactive_state,
+            "interactive",
             "child document should become interactive before its window load"
         );
         assert_eq!(

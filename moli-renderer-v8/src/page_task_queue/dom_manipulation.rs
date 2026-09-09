@@ -78,6 +78,8 @@ pub(crate) enum RendererPageDomManipulationOwner {
     ScriptPreparationError(RendererPageScriptPreparationErrorOwner),
     PromiseRejection(RendererPagePromiseRejectionOwner),
     ImageLoadEvent(RendererPageImageLoadEventOwner),
+    MainDocumentLifecycle(super::RendererPageMainDocumentLifecycleOwner),
+    ChildDocumentLifecycle(super::RendererPageChildFrameTaskOwner),
     PopupLoadEvent(RendererPagePopupLoadEventOwner),
     PopupClose(RendererPagePopupCloseOwner),
     ConnectedStyleEvent(RendererPageStylesheetTaskOwner),
@@ -97,6 +99,8 @@ pub(crate) enum RendererPageDomManipulationTask {
     ScriptPreparationError(RendererPageScriptPreparationErrorTask),
     PromiseRejection(RendererPagePromiseRejectionTask),
     ImageLoadEvent(RendererPageImageLoadEventTask),
+    MainDocumentLifecycle(super::RendererPageMainDocumentLifecycleTask),
+    ChildDocumentLifecycle(super::RendererPageChildFrameTask),
     PopupLoadEvent(RendererPagePopupLoadEventTask),
     PopupClose(RendererPagePopupCloseTask),
     ConnectedStyleEvent(RendererPageConnectedStyleEventTask),
@@ -129,6 +133,12 @@ impl RendererPageDomManipulationTask {
             }
             Self::ImageLoadEvent(task) => {
                 RendererPageDomManipulationOwner::ImageLoadEvent(task.owner())
+            }
+            Self::MainDocumentLifecycle(task) => {
+                RendererPageDomManipulationOwner::MainDocumentLifecycle(task.owner)
+            }
+            Self::ChildDocumentLifecycle(task) => {
+                RendererPageDomManipulationOwner::ChildDocumentLifecycle(task.owner())
             }
             Self::PopupLoadEvent(task) => {
                 RendererPageDomManipulationOwner::PopupLoadEvent(task.owner())
@@ -169,6 +179,8 @@ pub(crate) enum PageDomManipulationTurnAction {
     ScriptPreparationError(super::PageScriptPreparationErrorTurnAction),
     PromiseRejection(super::PagePromiseRejectionTurnAction),
     ImageLoadEvent(super::PageImageLoadEventTurnAction),
+    MainDocumentLifecycle(super::PageMainDocumentLifecycleTurnAction),
+    ChildDocumentLifecycle(super::PageChildDocumentLifecycleTurnAction),
     PopupLoadEvent(super::PagePopupLoadEventTurnAction),
     PopupClose(super::PagePopupCloseTurnAction),
     ConnectedStyleEvent(PageConnectedStyleEventTurnAction),
@@ -234,6 +246,30 @@ impl RendererPageDomManipulationSender {
         RendererPageImageLoadEventSender::new(self.route.clone(), self.root_document)
     }
 
+    pub(crate) fn main_document_lifecycle(&self) -> super::RendererPageMainDocumentLifecycleSender {
+        super::RendererPageMainDocumentLifecycleSender::new(self.route.clone(), self.root_document)
+    }
+
+    pub(crate) fn send_child_document_lifecycle(
+        &self,
+        target: super::RendererPageChildDocumentLifecycleTarget,
+    ) -> Result<(), super::child_frame_task::RendererPageChildFrameTaskRouteClosed> {
+        debug_assert!(!matches!(
+            target.action(),
+            crate::frame_owner_model::FrameDocumentLifecycleAction::Interactive(_)
+        ));
+        self.route
+            .send(RendererPageDomManipulationTask::ChildDocumentLifecycle(
+                super::RendererPageChildFrameTask::new(
+                    super::RendererPageChildFrameTaskOwner::new(
+                        self.root_document,
+                        super::RendererPageChildFrameTaskTarget::DocumentLifecycle(target),
+                    ),
+                ),
+            ))
+            .map_err(|_| super::child_frame_task::RendererPageChildFrameTaskRouteClosed)
+    }
+
     pub(crate) fn popup_load_event(&self) -> RendererPagePopupLoadEventSender {
         RendererPagePopupLoadEventSender::new(self.route.clone(), self.root_document)
     }
@@ -292,6 +328,21 @@ pub(crate) struct RendererPageDomManipulationSource {
 }
 
 impl RendererPageDomManipulationSource {
+    pub(crate) fn has_main_document_lifecycle_task(
+        &mut self,
+        root_document: RendererDocumentToken,
+        document: crate::frame_owner_model::FrameDocumentTaskOwner,
+    ) -> bool {
+        self.source.has_matching_task(|ready| {
+            matches!(
+                ready.value(),
+                RendererPageDomManipulationTask::MainDocumentLifecycle(task)
+                    if task.owner.root_document == root_document
+                        && task.owner.body.owner() == document
+            )
+        })
+    }
+
     /// Remove cancelled task closures before they become scheduler-visible.
     ///
     /// Element toggle coalescing cancels and reposts at the tail, matching the

@@ -63,8 +63,21 @@ impl JsContextHost {
         action: FrameDocumentLifecycleAction,
         realm_id: FrameRealmId,
     ) -> bool {
+        if !matches!(action, FrameDocumentLifecycleAction::Interactive(_)) {
+            return self
+                .page_task_capabilities
+                .get()
+                .expect("a child Document must retain its Page task capabilities")
+                .dom_manipulation()
+                .send_child_document_lifecycle(
+                    crate::page_task_queue::RendererPageChildDocumentLifecycleTarget::new(
+                        action, realm_id,
+                    ),
+                )
+                .is_ok();
+        }
         self.page_child_frame_task_sender()
-            .send_document_lifecycle(
+            .send_interactive_lifecycle(
                 crate::page_task_queue::RendererPageChildDocumentLifecycleTarget::new(
                     action, realm_id,
                 ),
@@ -194,6 +207,35 @@ impl JsContextHost {
             return false;
         };
         self.route_child_document_lifecycle_action(action.into(), realm_request.realm_id())
+    }
+
+    /// Parser stop changes readiness synchronously. Only an unmaterialized
+    /// child realm needs an owner continuation before it can dispatch events.
+    pub(crate) fn finish_child_document_parser_stop(
+        &mut self,
+        scope: &mut v8::PinScope<'_, '_>,
+        action: FrameDocumentInteractiveLifecycleAction,
+    ) -> FrameDocumentLifecycleTaskEffect {
+        if !self.child_document_lifecycle_action_is_current(action.into()) {
+            return FrameDocumentLifecycleTaskEffect::NotApplied;
+        }
+        let dispatch_scope = super::super::OwnerDispatchScope::Child(action.child_handle());
+        let execution_owner = crate::native_bridge::WindowExecutionContextOwner::Frame(
+            action.owner().local_window_id,
+        );
+        let Some((_, context)) =
+            self.window_execution_context(scope, execution_owner, dispatch_scope)
+        else {
+            return if self.queue_child_document_interactive_lifecycle_action(action) {
+                FrameDocumentLifecycleTaskEffect::ConsumedWithoutEvent
+            } else {
+                FrameDocumentLifecycleTaskEffect::NotApplied
+            };
+        };
+        let context = v8::Global::new(scope, context);
+        let context = v8::Local::new(scope, &context);
+        let child_scope = &mut v8::ContextScope::new(scope, context);
+        self.run_child_document_lifecycle_action(child_scope, action.into())
     }
 
     pub(crate) fn queue_child_document_domcontentloaded_if_ready(
