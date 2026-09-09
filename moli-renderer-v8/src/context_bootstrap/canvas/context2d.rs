@@ -692,9 +692,9 @@ fn canvas_context_global_composite_operation_assign<'s>(
     value: v8::Local<'s, v8::Value>,
 ) {
     // Per HTML spec: setting an unrecognised value for globalCompositeOperation
-    // (legacy aliases like `darker`/`clear`/`highlight`, capitalised variants,
+    // (legacy aliases like `darker`/`highlight`, capitalised variants,
     // unknown strings) must leave the property unchanged. Only the canonical
-    // lowercase tokens listed in VALID_GLOBAL_COMPOSITE_OPERATIONS are accepted.
+    // lowercase tokens in the shared native compositor are accepted.
     let Some(string) = canvas_context_dom_string_value(
         scope,
         value,
@@ -1746,8 +1746,22 @@ pub(crate) fn canvas_context_draw_image_callback<'s>(
     let Ok(source) = v8::Local::<v8::Object>::try_from(args.get(0)) else {
         return;
     };
-    let Some((source_pixels, source_width, source_height)) =
-        html_image_pixels_copy(scope, source).or_else(|| canvas_like_pixels_copy(scope, source))
+    let bitmap_pixels = if super::image_bitmap::image_bitmap_receiver_branded(scope, source) {
+        let Some(pixels) = super::image_bitmap::image_bitmap_pixels_copy(scope, source) else {
+            crate::context_bootstrap::throw_dom_exception_value(
+                scope,
+                "The ImageBitmap is detached.",
+                "InvalidStateError",
+            );
+            return;
+        };
+        Some(pixels)
+    } else {
+        None
+    };
+    let Some((source_pixels, source_width, source_height)) = bitmap_pixels
+        .or_else(|| html_image_pixels_copy(scope, source))
+        .or_else(|| canvas_like_pixels_copy(scope, source))
     else {
         return;
     };

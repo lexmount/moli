@@ -131,20 +131,6 @@ pub(super) fn reset_canvas_state<'s>(
 }
 
 #[cfg(test)]
-pub(crate) fn try_append_canvas_path_rect_for_test<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    object: v8::Local<'s, v8::Object>,
-    [x, y, width, height]: [f64; 4],
-) -> bool {
-    let path = canvas_path_state(scope, object);
-    let Ok(mut path) = path.try_borrow_mut() else {
-        return false;
-    };
-    path.rect(x, y, width, height);
-    true
-}
-
-#[cfg(test)]
 mod tests {
     use super::*;
 

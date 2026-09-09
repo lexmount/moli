@@ -91,8 +91,6 @@ mod objects;
 mod offscreen;
 mod path;
 mod path2d;
-#[cfg(test)]
-pub(crate) use self::state::try_append_canvas_path_rect_for_test;
 mod state;
 mod transform;
 use moli_webapi::webgl;
@@ -139,7 +137,10 @@ pub(crate) use context2d::{
     canvas_path_move_to_callback, canvas_path_quadratic_curve_to_callback,
     canvas_path_rect_callback, install_canvas_rect_bindings, is_canvas_context_receiver,
 };
-pub(crate) use image_bitmap::window_create_image_bitmap_callback;
+pub(crate) use image_bitmap::{
+    BitmapRejection, BitmapTaskResult, settle_bitmap_task_result,
+    window_create_image_bitmap_callback,
+};
 pub(crate) use objects::{build_canvas_rendering_context_2d_object, build_offscreen_canvas_object};
 pub(crate) use offscreen::{
     offscreen_canvas_convert_to_blob_callback, offscreen_canvas_get_context_callback,

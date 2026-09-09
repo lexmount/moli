@@ -78,6 +78,7 @@ pub(crate) enum PageSelectedTaskTestSelector {
     StylesheetCompletion,
     TextTrackNetworking,
     UserInteraction,
+    BitmapTask,
     WebCryptoTask,
     WebSocket,
     WindowMessage,
@@ -292,6 +293,9 @@ impl PageSelectedTaskTestSelector {
             Self::FontLoading => {
                 matches!(descriptor, RendererPageReadyDescriptor::FontLoading { .. })
             }
+            Self::BitmapTask => {
+                matches!(descriptor, RendererPageReadyDescriptor::BitmapTask { .. })
+            }
             Self::WebCryptoTask => matches!(
                 descriptor,
                 RendererPageReadyDescriptor::WebCryptoTask { .. }
@@ -419,6 +423,7 @@ impl PageSelectedTaskTestSelector {
                 RendererPageSchedulerTask::SharedWorkerClientEvent(_),
             )
             | (Self::UserInteraction, RendererPageSchedulerTask::UserInteraction(_))
+            | (Self::BitmapTask, RendererPageSchedulerTask::BitmapTask(_))
             | (Self::WebCryptoTask, RendererPageSchedulerTask::WebCryptoTask(_))
             | (Self::WindowMessage, RendererPageSchedulerTask::WindowMessage(_)) => true,
             (Self::WebSocket, RendererPageSchedulerTask::WebSocket(_)) => true,

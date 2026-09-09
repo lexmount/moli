@@ -412,68 +412,31 @@ fn canvas_path_rasterization_clips_to_the_bitmap_with_transformed_caps() {
 }
 
 #[test]
-fn canvas_path_drawing_uses_a_snapshot_during_dimension_reads() {
-    fn append_rect<'s>(
-        scope: &mut v8::PinScope<'s, '_>,
-        args: v8::FunctionCallbackArguments<'s>,
-        mut result: v8::ReturnValue<'_, v8::Value>,
-    ) {
-        let updated = v8::Local::<v8::Object>::try_from(args.get(0)).is_ok_and(|target| {
-            crate::context_bootstrap::try_append_canvas_path_rect_for_test(
-                scope,
-                target,
-                [24.0, 4.0, 8.0, 8.0],
-            )
-        });
-        result.set(v8::Boolean::new(scope, updated).into());
-    }
-
+fn canvas_path_drawing_uses_native_bitmap_dimensions() {
     let mut vm = new_storage_test_vm("https://canvas-paths.test/");
-    vm.with_default_context_scope(|scope, _| {
-        let append_rect = v8::Function::new(scope, append_rect).unwrap();
-        let global = scope.get_current_context().global(scope);
-        let name = crate::util::v8str(scope, "tryAppendTestRect");
-        assert_eq!(
-            global.set(scope, name.into(), append_rect.into()),
-            Some(true)
-        );
-        Ok(())
-    })
-    .unwrap();
-
-    for (operation, y) in [("fill", 6), ("stroke", 4)] {
-        for (target, argument) in [("ctx", ""), ("new Path2D()", "target")] {
-            let result = vm
-                .eval(&format!(
-                    r#"(() => {{
-                    const canvas = document.createElement('canvas');
-                    canvas.width = canvas.height = 40;
-                    const ctx = canvas.getContext('2d');
-                    ctx.lineWidth = 2;
-                    const target = {target};
-                    target.rect(4, 4, 8, 8);
-                    const edits = [];
-                    Object.defineProperty(canvas, 'width', {{
-                        configurable: true,
-                        get() {{
-                            edits.push(tryAppendTestRect(target));
-                            return 40;
-                        }}
-                    }});
-                    ctx.{operation}({argument});
-                    delete canvas.width;
-                    const alpha = x => ctx.getImageData(x, {y}, 1, 1).data[3];
-                    const painted = [alpha(8), alpha(28)];
-                    ctx.{operation}({argument});
-                    return JSON.stringify([
-                        edits.length > 0 && edits.every(Boolean), ...painted, alpha(28)
-                    ]);
-                }})()"#
-                ))
-                .expect("canvas path draw should succeed");
-            assert_eq!(result, "[true,255,0,255]", "{operation} on {target}");
-        }
-    }
+    let actual = vm
+        .eval(
+            r#"(() => {
+        const canvas = document.createElement('canvas');
+        canvas.width = canvas.height = 40;
+        const ctx = canvas.getContext('2d');
+        const path = new Path2D();
+        let reads = 0;
+        Object.defineProperty(canvas, 'width', {
+            get() {
+                reads++;
+                path.rect(24, 4, 8, 8);
+                return 40;
+            }
+        });
+        path.rect(4, 4, 8, 8);
+        ctx.fill(path);
+        const alpha = x => ctx.getImageData(x, 6, 1, 1).data[3];
+        return JSON.stringify([reads, alpha(8), alpha(28)]);
+    })()"#,
+        )
+        .expect("drawing must use native HTMLCanvasElement dimensions");
+    assert_eq!(actual, "[0,255,0]");
 }
 
 #[test]

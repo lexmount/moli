@@ -17,6 +17,10 @@ use std::{cell::RefCell, rc::Rc};
 
 use super::{
     PageRuntimeWakeSignal, RendererOwnerWakeSender, RendererOwnerWakeSource,
+    bitmap_task::{
+        RendererPageBitmapTask, RendererPageBitmapTaskOwner, RendererPageBitmapTaskRoute,
+        RendererPageBitmapTaskSender, RendererPageBitmapTaskSource,
+    },
     child_frame_task::{
         RendererPageChildFrameTask, RendererPageChildFrameTaskOwner,
         RendererPageChildFrameTaskRoute, RendererPageChildFrameTaskSender,
@@ -188,6 +192,7 @@ pub(crate) struct RendererPageOwnedTaskSources {
     shared_worker_client_event: RendererPageSharedWorkerClientEventSource,
     service_worker_internal: RendererPageServiceWorkerInternalSource,
     service_worker_client_message: RendererPageServiceWorkerClientMessageSource,
+    bitmap_task: RendererPageBitmapTaskSource,
     webcrypto_task: RendererPageWebCryptoTaskSource,
     indexed_db_task: RendererPageIndexedDbTaskSource,
     opfs_task: RendererPageOpfsTaskSource,
@@ -226,6 +231,7 @@ pub(crate) struct RendererPageTaskProducerRoutes {
     shared_worker_client_event: RendererPageSharedWorkerClientEventRoute,
     service_worker_internal: RendererPageServiceWorkerInternalRoute,
     service_worker_client_message: RendererPageServiceWorkerClientMessageRoute,
+    bitmap_task: RendererPageBitmapTaskRoute,
     webcrypto_task: RendererPageWebCryptoTaskRoute,
     indexed_db_task: RendererPageIndexedDbTaskRoute,
     opfs_task: RendererPageOpfsTaskRoute,
@@ -312,6 +318,10 @@ pub(crate) enum RendererPageReadyDescriptor {
     ServiceWorkerClientMessage {
         ready: RendererPageTaskReadyMetadata,
         owner: RendererPageServiceWorkerClientMessageOwner,
+    },
+    BitmapTask {
+        ready: RendererPageTaskReadyMetadata,
+        owner: RendererPageBitmapTaskOwner,
     },
     WebCryptoTask {
         ready: RendererPageTaskReadyMetadata,
@@ -404,6 +414,7 @@ impl RendererPageReadyDescriptor {
             | Self::SharedWorkerClientEvent { ready, .. }
             | Self::ServiceWorkerInternal { ready, .. }
             | Self::ServiceWorkerClientMessage { ready, .. }
+            | Self::BitmapTask { ready, .. }
             | Self::WebCryptoTask { ready, .. }
             | Self::IndexedDbTask { ready, .. }
             | Self::OpfsTask { ready, .. }
@@ -450,6 +461,7 @@ impl RendererPageReadyDescriptor {
             Self::ServiceWorkerClientMessage { .. } => {
                 RendererPageTaskSourceKind::ServiceWorkerClientMessage
             }
+            Self::BitmapTask { .. } => RendererPageTaskSourceKind::BitmapTask,
             Self::WebCryptoTask { .. } => RendererPageTaskSourceKind::WebCryptoTask,
             Self::IndexedDbTask { .. } => RendererPageTaskSourceKind::IndexedDbTask,
             Self::OpfsTask { .. } => RendererPageTaskSourceKind::OpfsTask,
@@ -497,6 +509,7 @@ impl RendererPageReadyDescriptor {
             | Self::SharedWorkerClientEvent { ready, .. }
             | Self::ServiceWorkerInternal { ready, .. }
             | Self::ServiceWorkerClientMessage { ready, .. }
+            | Self::BitmapTask { ready, .. }
             | Self::WebCryptoTask { ready, .. }
             | Self::IndexedDbTask { ready, .. }
             | Self::OpfsTask { ready, .. }
@@ -545,6 +558,7 @@ pub(crate) enum RendererPageTaskSourceKind {
     SharedWorkerClientEvent,
     ServiceWorkerInternal,
     ServiceWorkerClientMessage,
+    BitmapTask,
     WebCryptoTask,
     IndexedDbTask,
     OpfsTask,
@@ -564,7 +578,7 @@ pub(crate) enum RendererPageTaskSourceKind {
 }
 
 impl RendererPageTaskSourceKind {
-    pub(crate) const ALL: [Self; 31] = [
+    pub(crate) const ALL: [Self; 32] = [
         Self::ActionWindow,
         Self::Timer,
         Self::DomManipulation,
@@ -580,6 +594,7 @@ impl RendererPageTaskSourceKind {
         Self::SharedWorkerClientEvent,
         Self::ServiceWorkerInternal,
         Self::ServiceWorkerClientMessage,
+        Self::BitmapTask,
         Self::WebCryptoTask,
         Self::IndexedDbTask,
         Self::OpfsTask,
@@ -622,6 +637,7 @@ pub(crate) enum RendererPageSchedulerTask {
     SharedWorkerClientEvent(RendererPageSharedWorkerClientEventTask),
     ServiceWorkerInternal(RendererPageServiceWorkerInternalTask),
     ServiceWorkerClientMessage(RendererPageServiceWorkerClientMessageTask),
+    BitmapTask(RendererPageBitmapTask),
     WebCryptoTask(RendererPageWebCryptoTask),
     IndexedDbTask(RendererPageIndexedDbTask),
     OpfsTask(RendererPageOpfsTask),
@@ -692,6 +708,7 @@ impl RendererPageOwnedTaskSources {
             RendererPageServiceWorkerInternalSource::new(owner_wake.clone());
         let service_worker_client_message =
             RendererPageServiceWorkerClientMessageSource::new(owner_wake.clone());
+        let bitmap_task = RendererPageBitmapTaskSource::new(owner_wake.clone());
         let webcrypto_task = RendererPageWebCryptoTaskSource::new(owner_wake.clone());
         let indexed_db_task = RendererPageIndexedDbTaskSource::new(owner_wake.clone());
         let opfs_task = RendererPageOpfsTaskSource::new(owner_wake.clone());
@@ -728,6 +745,7 @@ impl RendererPageOwnedTaskSources {
             shared_worker_client_event: shared_worker_client_event.route(),
             service_worker_internal: service_worker_internal.route(),
             service_worker_client_message: service_worker_client_message.route(),
+            bitmap_task: bitmap_task.route(),
             webcrypto_task: webcrypto_task.route(),
             indexed_db_task: indexed_db_task.route(),
             opfs_task: opfs_task.route(),
@@ -761,6 +779,7 @@ impl RendererPageOwnedTaskSources {
                 shared_worker_client_event,
                 service_worker_internal,
                 service_worker_client_message,
+                bitmap_task,
                 webcrypto_task,
                 indexed_db_task,
                 opfs_task,
@@ -818,6 +837,7 @@ impl RendererPageOwnedTaskSources {
             && self
                 .service_worker_client_message
                 .route_matches(&routes.service_worker_client_message)
+            && self.bitmap_task.route_matches(&routes.bitmap_task)
             && self.webcrypto_task.route_matches(&routes.webcrypto_task)
             && self.indexed_db_task.route_matches(&routes.indexed_db_task)
             && self.opfs_task.route_matches(&routes.opfs_task)
@@ -903,6 +923,7 @@ impl RendererPageOwnedTaskSources {
             shared_worker_client_event: self.shared_worker_client_event.route(),
             service_worker_internal: self.service_worker_internal.route(),
             service_worker_client_message: self.service_worker_client_message.route(),
+            bitmap_task: self.bitmap_task.route(),
             webcrypto_task: self.webcrypto_task.route(),
             indexed_db_task: self.indexed_db_task.route(),
             opfs_task: self.opfs_task.route(),
@@ -1032,6 +1053,15 @@ impl RendererPageOwnedTaskSources {
                             .expect("ready SharedWorker client event must retain its exact owner"),
                     },
                 );
+        let bitmap_task = self.bitmap_task.next_ready_metadata().map(|ready| {
+            RendererPageReadyDescriptor::BitmapTask {
+                ready,
+                owner: self
+                    .bitmap_task
+                    .next_ready_owner()
+                    .expect("ready Bitmap task must retain its exact owner"),
+            }
+        });
         let webcrypto_task = self.webcrypto_task.next_ready_metadata().map(|ready| {
             RendererPageReadyDescriptor::WebCryptoTask {
                 ready,
@@ -1237,6 +1267,7 @@ impl RendererPageOwnedTaskSources {
             shared_worker_client_event,
             service_worker_internal,
             service_worker_client_message,
+            bitmap_task,
             webcrypto_task,
             indexed_db_task,
             opfs_task,
@@ -1411,6 +1442,14 @@ impl RendererPageOwnedTaskSources {
                     "selected ServiceWorker client-message head changed before dequeue"
                 );
                 RendererPageSchedulerTask::ServiceWorkerClientMessage(task)
+            }
+            RendererPageReadyDescriptor::BitmapTask { ready, .. } => {
+                let (actual, task) = self
+                    .bitmap_task
+                    .pop_front()
+                    .expect("selected Bitmap task must remain queued");
+                assert_eq!(actual, ready, "selected Bitmap head changed before dequeue");
+                RendererPageSchedulerTask::BitmapTask(task)
             }
             RendererPageReadyDescriptor::WebCryptoTask { ready, .. } => {
                 let (actual, task) = self
@@ -1639,6 +1678,7 @@ impl RendererPageOwnedTaskSources {
             || self.shared_worker_client_event.has_ready_task()
             || self.service_worker_internal.has_ready_task()
             || self.service_worker_client_message.has_ready_task()
+            || self.bitmap_task.has_ready_task()
             || self.webcrypto_task.has_ready_task()
             || self.indexed_db_task.has_ready_task()
             || self.opfs_task.has_ready_task()
@@ -1685,6 +1725,7 @@ impl RendererPageOwnedTaskSources {
         self.shared_worker_client_event.clear();
         self.service_worker_internal.clear();
         self.service_worker_client_message.clear();
+        self.bitmap_task.clear();
         self.webcrypto_task.clear();
         self.indexed_db_task.clear();
         self.opfs_task.clear();
@@ -1812,6 +1853,12 @@ impl RendererPageTaskProducerRoutes {
         RendererWorkerHostBridgeEventSender::new(self.networking.clone(), root_document)
     }
 
+    pub(crate) fn bitmap_task_sender(
+        &self,
+        root_document: RendererDocumentToken,
+    ) -> RendererPageBitmapTaskSender {
+        self.bitmap_task.sender(root_document)
+    }
     pub(crate) fn webcrypto_task_sender(
         &self,
         root_document: RendererDocumentToken,
