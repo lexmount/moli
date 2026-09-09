@@ -1050,6 +1050,19 @@ def _wpt_delay_seconds(query: str) -> float | None:
     return delay_ms / 1_000.0
 
 
+def _workers_url_encoding_response(query: str) -> bytes:
+    """Model workers/semantics/encodings/003-1.py's UTF-8 query check."""
+    value = next(
+        (
+            value
+            for name, value in parse_qsl(query, keep_blank_values=True)
+            if name == "x"
+        ),
+        None,
+    )
+    return b"PASS" if value == "å" else b"FAIL"
+
+
 def _redirect_fixture_response(query: str) -> tuple[int, str] | None:
     """Return the shared redirect response used by static WPT fixture handlers."""
 
@@ -1752,6 +1765,13 @@ def _make_handler(
                 return
             if path == "/xhr/resources/delay.py":
                 self._serve_xhr_delay(parsed.query, emit_body=emit_body)
+                return
+            if path == "/workers/semantics/encodings/003-1.py":
+                self._send_bytes(
+                    "text/plain; charset=utf-8",
+                    _workers_url_encoding_response(parsed.query),
+                    emit_body=emit_body,
+                )
                 return
             if path == (
                 "/html/semantics/scripting-1/the-script-element/module/"
