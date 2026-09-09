@@ -25,6 +25,9 @@ mod child_error_insertion;
 #[path = "scripts/child_readiness.rs"]
 mod child_readiness;
 
+#[path = "scripts/module_document_write.rs"]
+mod module_document_write;
+
 fn diagnostic_global<'a>(
     page: &'a moli_core::page::Page,
     name: &str,
