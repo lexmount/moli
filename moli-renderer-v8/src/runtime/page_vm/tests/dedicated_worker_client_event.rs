@@ -5,7 +5,9 @@ use crate::page_task_queue::{
     RendererDedicatedWorkerClientEventKind, RendererDedicatedWorkerMessageEvent,
 };
 use crate::runtime::PageTaskCompletion;
-use crate::worker::WorkerRuntimeEvent;
+use crate::worker::{
+    WorkerErrorPhase, WorkerErrorSource, WorkerParentErrorEventKind, WorkerRuntimeEvent,
+};
 
 fn current_single_child_document_owner(
     page_vm: &PageVm,
@@ -203,6 +205,105 @@ async fn dedicated_worker_message_without_listener_is_checkpoint_only() {
     })
     .await
     .expect("DedicatedWorker no-listener completion test should run");
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn dedicated_worker_error_propagation_distinguishes_bootstrap_from_runtime() {
+    run_page_vm_async_test(async move {
+        let loader =
+            crate::network::ResourceRequestClient::new(&FetchConfig::default()).expect("loader");
+        let document_url =
+            Url::parse("https://example.com/dedicated-worker-bootstrap-error").unwrap();
+        let (mut page_vm, _resource_source, _owner_wake_rx) =
+            page_vm_with_bound_task_sources_and_owner_wake(&loader, document_url);
+
+        page_vm.vm_mut().eval(
+            r#"
+globalThis.__dedicatedWorkerErrorPhases = [];
+addEventListener("error", event => {
+  __dedicatedWorkerErrorPhases.push(
+    `window:${event.constructor.name}:${event.message}`
+  );
+  event.preventDefault();
+});
+globalThis.__dedicatedWorkerErrorPhaseWorker =
+  new Worker("data:text/javascript,onmessage = () => {}");
+__dedicatedWorkerErrorPhaseWorker.onerror = event => {
+  __dedicatedWorkerErrorPhases.push(
+    `worker:${event.constructor.name}:${event.message}:${event.cancelable}`
+  );
+};
+"ready"
+"#,
+        )?;
+        let (_worker_id, producer) = page_vm
+            .vm()
+            .only_dedicated_worker_client_event_producer_for_test()?;
+
+        producer
+            .send(RendererDedicatedWorkerClientEvent::Message(
+                RendererDedicatedWorkerMessageEvent::Error {
+                    message: "bootstrap syntax".to_owned(),
+                    filename: "https://example.com/bootstrap-worker.js".to_owned(),
+                    lineno: 1,
+                    colno: 1,
+                    event_kind: WorkerParentErrorEventKind::Event,
+                    phase: WorkerErrorPhase::Bootstrap,
+                    source: WorkerErrorSource::InitialScriptEvaluation,
+                },
+            ))
+            .expect("bootstrap Worker error should enter its typed source");
+        assert!(
+            page_vm
+                .run_exact_selected_page_task_for_test(
+                    PageSelectedTaskTestSelector::DedicatedWorkerClientEvent,
+                    &loader,
+                )
+                .await?,
+            "bootstrap Worker error should consume one selected Page task"
+        );
+        assert_eq!(
+            page_vm
+                .vm_mut()
+                .eval("__dedicatedWorkerErrorPhases.join('|')")?,
+            "worker:Event:bootstrap syntax:true",
+            "initial script errors must stop after the Worker error event"
+        );
+
+        producer
+            .send(RendererDedicatedWorkerClientEvent::Message(
+                RendererDedicatedWorkerMessageEvent::Error {
+                    message: "runtime boom".to_owned(),
+                    filename: "https://example.com/runtime-worker.js".to_owned(),
+                    lineno: 2,
+                    colno: 3,
+                    event_kind: WorkerParentErrorEventKind::ErrorEvent,
+                    phase: WorkerErrorPhase::Runtime,
+                    source: WorkerErrorSource::Runtime,
+                },
+            ))
+            .expect("runtime Worker error should enter its typed source");
+        assert!(
+            page_vm
+                .run_exact_selected_page_task_for_test(
+                    PageSelectedTaskTestSelector::DedicatedWorkerClientEvent,
+                    &loader,
+                )
+                .await?,
+            "runtime Worker error should consume one selected Page task"
+        );
+        assert_eq!(
+            page_vm
+                .vm_mut()
+                .eval("__dedicatedWorkerErrorPhases.join('|')")?,
+            "worker:Event:bootstrap syntax:true|worker:ErrorEvent:runtime boom:true|window:ErrorEvent:runtime boom",
+            "uncanceled runtime errors must retain their owning Window propagation"
+        );
+
+        Ok::<_, anyhow::Error>(())
+    })
+    .await
+    .expect("DedicatedWorker bootstrap/runtime error propagation test should run");
 }
 
 #[tokio::test(flavor = "current_thread")]

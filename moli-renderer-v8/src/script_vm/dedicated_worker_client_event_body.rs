@@ -218,18 +218,20 @@ impl ScriptVm {
                                     lineno,
                                     colno,
                                     event_kind,
+                                    phase,
                                     ..
                                 } => {
-                                    if let Err(error) = super::dedicated_worker_error_dispatch::dispatch_runtime_error_and_propagate(
+                                    if let Err(error) = super::dedicated_worker_error_dispatch::dispatch_error_and_maybe_propagate(
                                         scope,
                                         host_ptr,
                                         target.wrapper,
-                                        super::dedicated_worker_error_dispatch::DedicatedWorkerRuntimeError {
+                                        super::dedicated_worker_error_dispatch::DedicatedWorkerError {
                                             message,
                                             filename,
                                             lineno: *lineno,
                                             colno: *colno,
                                             event_kind: *event_kind,
+                                            phase: *phase,
                                         },
                                     )
                                     {
