@@ -131,6 +131,81 @@ async fn native_navigator_descriptors_survive_cdp_override_and_clear() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn native_touch_emulation_preserves_requested_count_and_rejects_invalid_updates() {
+    let mut ctx = setup().await;
+    for points in [1, 5, 16] {
+        expect_session_command_result(
+            &mut ctx,
+            88002,
+            "SID-1",
+            "Emulation.setTouchEmulationEnabled",
+            json!({"enabled": true, "maxTouchPoints": points}),
+        )
+        .await;
+        assert_eq!(
+            evaluate(&mut ctx, "navigator.maxTouchPoints").await,
+            json!(points)
+        );
+        assert_eq!(
+            ctx.conn
+                .browser_context
+                .as_ref()
+                .unwrap()
+                .active_navigator_overrides()
+                .max_touch_points,
+            Some(points)
+        );
+    }
+    for enabled in [true, false] {
+        for points in [json!(0), json!(-1), json!(17), json!(1.5)] {
+            ctx.process_async(json!({
+                "id": 88003, "sessionId": "SID-1",
+                "method": "Emulation.setTouchEmulationEnabled",
+                "params": {"enabled": enabled, "maxTouchPoints": points}
+            }))
+            .await;
+            let response = ctx.take_response_by_id(88003);
+            assert_eq!(response["error"]["code"], json!(-32602), "{response}");
+            assert_eq!(
+                evaluate(&mut ctx, "navigator.maxTouchPoints").await,
+                json!(16),
+                "invalid updates must leave the current surface unchanged"
+            );
+            assert_eq!(
+                ctx.conn
+                    .browser_context
+                    .as_ref()
+                    .unwrap()
+                    .active_navigator_overrides()
+                    .max_touch_points,
+                Some(16)
+            );
+        }
+    }
+    expect_session_command_result(
+        &mut ctx,
+        88004,
+        "SID-1",
+        "Emulation.setTouchEmulationEnabled",
+        json!({"enabled": false, "maxTouchPoints": 5}),
+    )
+    .await;
+    assert_eq!(
+        evaluate(&mut ctx, "navigator.maxTouchPoints").await,
+        json!(0)
+    );
+    assert_eq!(
+        ctx.conn
+            .browser_context
+            .as_ref()
+            .unwrap()
+            .active_navigator_overrides()
+            .max_touch_points,
+        None
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn native_geolocation_watch_tracks_unavailable_and_cleared_overrides() {
     use moli_page_types::{GeolocationOverride, GeolocationPositionOverride};
 
@@ -274,7 +349,7 @@ async fn native_navigator_overrides_are_installed_before_author_script() {
         88002,
         "SID-1",
         "Emulation.setTouchEmulationEnabled",
-        json!({"enabled": true}),
+        json!({"enabled": true, "maxTouchPoints": 5}),
     )
     .await;
     ctx.install_buffered_navigation_fixture_for_session_owner(
@@ -288,7 +363,7 @@ async fn native_navigator_overrides_are_installed_before_author_script() {
         Some("SID-1"),
     )
     .await;
-    assert_eq!(evaluate(&mut ctx, "initialTouch").await, json!(1));
+    assert_eq!(evaluate(&mut ctx, "initialTouch").await, json!(5));
     assert_eq!(evaluate(&mut ctx, "initialPosition").await, json!(1));
 }
 

@@ -276,12 +276,21 @@ fn start_touch_emulation_enabled_command(
             ));
         }
     };
+    let max_touch_points = params.max_touch_points.unwrap_or(1);
+    // Blink validates the count even when disabling emulation. Reject the
+    // entire command before updating either session or target state.
+    if !(1..=16).contains(&max_touch_points) {
+        return EmulationCommandTaskStep::Complete(CommandOutputPlan::error(
+            -32602,
+            "Touch points must be between 1 and 16",
+        ));
+    }
     if conn.browser_context.is_none() {
         return EmulationCommandTaskStep::Complete(CommandOutputPlan::result(json!({})));
     }
     if let Err(message) =
         page_session::update_page_emulation_state(conn, cmd.session_id, |mut state| {
-            state.set_touch_emulation_enabled(params.enabled);
+            state.set_touch_emulation(params.enabled.then_some(max_touch_points as u32));
         })
     {
         let code = if message == "BrowserContextNotLoaded" {

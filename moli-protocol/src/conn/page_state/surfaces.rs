@@ -12,7 +12,7 @@ struct SurfaceOverrideInputs {
     network_conditions: Option<EmulatedNetworkConditions>,
     geolocation_override: Option<EmulatedGeolocationOverrideState>,
     emulated_device_metrics: Option<EmulatedDeviceMetrics>,
-    touch_emulation_enabled: bool,
+    touch_emulation_max_points: Option<u32>,
     focus_emulation_enabled: bool,
     active_target_surface: bool,
     window_document_hidden: bool,
@@ -24,10 +24,10 @@ impl SurfaceOverrideInputs {
             network_conditions: browser_context.effective_active_network_conditions(),
             geolocation_override: browser_context.effective_active_geolocation_override(),
             emulated_device_metrics: browser_context.effective_active_emulated_device_metrics(),
-            touch_emulation_enabled: browser_context
+            touch_emulation_max_points: browser_context
                 .active_page_target()
                 .effective_emulation_state
-                .touch_emulation_enabled,
+                .touch_emulation_max_points,
             focus_emulation_enabled: browser_context
                 .active_page_target()
                 .effective_emulation_state
@@ -61,7 +61,7 @@ impl SurfaceOverrideInputs {
                 .emulated_device_metrics
                 .clone()
                 .or(default_emulated_device_metrics),
-            touch_emulation_enabled: state.effective_emulation_state.touch_emulation_enabled,
+            touch_emulation_max_points: state.effective_emulation_state.touch_emulation_max_points,
             focus_emulation_enabled: state.effective_emulation_state.focus_emulation_enabled,
             active_target_surface: false,
             window_document_hidden: false,
@@ -89,7 +89,7 @@ impl SurfaceOverrideInputs {
             online: self
                 .network_conditions
                 .map(|conditions| conditions.navigator_online()),
-            max_touch_points: self.touch_emulation_enabled.then_some(1),
+            max_touch_points: self.touch_emulation_max_points,
             geolocation: self.geolocation_override.clone(),
         }
     }
@@ -351,15 +351,10 @@ impl BrowserContext {
     }
 
     pub fn max_touch_points(&self) -> u32 {
-        if self
-            .active_page_target()
+        self.active_page_target()
             .effective_emulation_state
-            .touch_emulation_enabled
-        {
-            1
-        } else {
-            0
-        }
+            .touch_emulation_max_points
+            .unwrap_or(0)
     }
 
     pub fn document_has_focus(&self) -> bool {

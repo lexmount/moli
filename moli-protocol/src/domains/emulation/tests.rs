@@ -853,7 +853,8 @@ async fn pure_state_emulation_commands_complete_through_command_dispatch() {
         browser_context
             .active_page_target()
             .effective_emulation_state
-            .touch_emulation_enabled
+            .touch_emulation_max_points
+            .is_some()
     );
     assert!(
         browser_context
@@ -1545,7 +1546,8 @@ async fn async_emulation_device_state_updates_browser_context() {
             .unwrap()
             .active_page_target()
             .effective_emulation_state
-            .touch_emulation_enabled
+            .touch_emulation_max_points
+            .is_some()
     );
 
     ctx.process_async(json!({
