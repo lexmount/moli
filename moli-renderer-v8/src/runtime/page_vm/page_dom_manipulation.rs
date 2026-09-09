@@ -10,6 +10,9 @@ impl PageVm {
         task: RendererPageDomManipulationTask,
     ) -> anyhow::Result<PageDomManipulationTurnOutcome> {
         match task {
+            RendererPageDomManipulationTask::ChildHostLoad(task) => Ok(self
+                .apply_selected_page_child_host_load_turn(task)
+                .map_action(PageDomManipulationTurnAction::ChildHostLoad)),
             RendererPageDomManipulationTask::ChildDocumentLifecycle(task) => Ok(self
                 .apply_selected_page_child_document_lifecycle_turn(task)
                 .map_action(PageDomManipulationTurnAction::ChildDocumentLifecycle)),
