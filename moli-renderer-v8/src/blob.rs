@@ -295,7 +295,7 @@ pub(super) fn build_blob_object<'s>(
     Some(object)
 }
 
-fn blob_id_from_object<'s>(
+pub(crate) fn blob_id_from_object<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     object: v8::Local<'s, v8::Object>,
 ) -> Option<BlobId> {

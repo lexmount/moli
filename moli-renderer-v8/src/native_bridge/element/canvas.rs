@@ -125,7 +125,7 @@ fn set_canvas_dimension_attribute<'s>(
     true
 }
 
-fn canvas_dimension_value<'s>(
+pub(crate) fn canvas_dimension_value<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     object: v8::Local<'s, v8::Object>,
     name: &str,
