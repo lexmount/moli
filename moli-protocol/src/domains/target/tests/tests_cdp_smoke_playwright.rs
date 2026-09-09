@@ -753,7 +753,7 @@ async fn assert_native_popup_response(resolution: NativePopupResponseResolution)
         }
     });
     let mut ctx = TestContext::new();
-    ctx.enable_background_navigation_scheduler_for_test();
+    ctx.enable_background_event_ingress_for_test();
     let opener = attached_smoke_session(&mut ctx, 93_000).await;
     set_auto_attach_waiting_for_debugger(&mut ctx, 93_010).await;
     ctx.take_all();
@@ -1060,7 +1060,7 @@ async fn assert_native_popup_download(resolution: NativePopupDownloadResponse) {
     let fixture = SmokeFixtureServer::start().await;
     let url = fixture.url("/download");
     let mut ctx = TestContext::new();
-    ctx.enable_background_navigation_scheduler_for_test();
+    ctx.enable_background_event_ingress_for_test();
     let opener = attached_smoke_session(&mut ctx, 95_000).await;
     set_auto_attach_waiting_for_debugger(&mut ctx, 95_010).await;
     ctx.process_async(json!({"id": 95_011, "method": "Browser.setDownloadBehavior", "params": {
@@ -1257,7 +1257,7 @@ async fn assert_native_popup_authentication(action: &str, scheme: &str) {
     let fixture = SmokeFixtureServer::start().await;
     let url = fixture.url(&format!("/api-auth?realm=native-popup&scheme={scheme}"));
     let mut ctx = TestContext::new();
-    ctx.enable_background_navigation_scheduler_for_test();
+    ctx.enable_background_event_ingress_for_test();
     let opener = attached_smoke_session(&mut ctx, 94_000).await;
     set_auto_attach_waiting_for_debugger(&mut ctx, 94_010).await;
     ctx.take_all();
@@ -1442,7 +1442,7 @@ async fn assert_native_popup_authentication(action: &str, scheme: &str) {
 async fn rust_cdp_playwright_multi_context_popup_route_and_evaluate_contract() {
     let fixture = SmokeFixtureServer::start().await;
     let mut ctx = TestContext::new();
-    ctx.enable_background_navigation_scheduler_for_test();
+    ctx.enable_background_event_ingress_for_test();
     let first = attached_smoke_session(&mut ctx, 87_000).await;
     let second = attached_smoke_session(&mut ctx, 87_100).await;
     assert_ne!(first.browser_context_id, second.browser_context_id);
@@ -1509,7 +1509,7 @@ async fn rust_cdp_playwright_multi_context_popup_route_and_evaluate_contract() {
 async fn rust_cdp_playwright_concurrent_popup_routes_keep_their_navigation_owners() {
     let fixture = SmokeFixtureServer::start().await;
     let mut ctx = TestContext::new();
-    ctx.enable_background_navigation_scheduler_for_test();
+    ctx.enable_background_event_ingress_for_test();
     let opener = attached_smoke_session(&mut ctx, 88_000).await;
 
     set_auto_attach_waiting_for_debugger(&mut ctx, 88_100).await;
@@ -1565,7 +1565,7 @@ async fn rust_cdp_playwright_concurrent_popup_routes_keep_their_navigation_owner
 async fn rust_cdp_popup_waits_for_every_debugger_barrier_and_detach_releases_the_last() {
     let fixture = SmokeFixtureServer::start().await;
     let mut ctx = TestContext::new();
-    ctx.enable_background_navigation_scheduler_for_test();
+    ctx.enable_background_event_ingress_for_test();
     let opener = attached_smoke_session(&mut ctx, 89_000).await;
 
     set_auto_attach_waiting_for_debugger(&mut ctx, 89_100).await;

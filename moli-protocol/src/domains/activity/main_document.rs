@@ -3,9 +3,6 @@ use serde_json::Value;
 use serde_json::json;
 use url::Url;
 
-#[cfg(test)]
-use moli_fetch::NET_ERR_ABORTED_ERROR_TEXT;
-
 use crate::conn::{
     BackgroundProtocolEvent, CdpConnection, CommandDispatchContext, CommandOwnerScope,
     CommittedRendererDocumentBinding, DeferredMainDocumentLoadObservationId,
@@ -14,13 +11,13 @@ use crate::conn::{
 };
 use crate::devtools_runtime::DevToolsProtocol;
 use crate::domains::command_output::{BackgroundProtocolEventBuffer, CommandOutputBuffer};
+#[cfg(test)]
+use crate::domains::network;
 use crate::domains::network::{
     FailedNavigationResponseMode, MainDocumentProgressBackgroundEventBarrier,
     MainDocumentProgressGate,
 };
 use crate::domains::page;
-#[cfg(test)]
-use crate::{conn::CompletedDownloadBodyArtifact, domains::network};
 use moli_core::RendererDocumentLifecycleIdentity;
 #[cfg(test)]
 use moli_core::page::RendererDocumentLifecycleEvent;
@@ -39,12 +36,6 @@ pub(crate) struct MainDocumentFailedNavigationActivity {
     state: NavigationDispatchState,
     progress_gate: MainDocumentProgressGate,
     response_mode: FailedNavigationResponseMode,
-}
-
-#[cfg(test)]
-pub(crate) struct MainDocumentDownloadNavigationActivity {
-    navigation_activity: MainDocumentNavigationActivity,
-    body_artifact: CompletedDownloadBodyArtifact,
 }
 
 struct DeferredMainDocumentLoadCompletionState {
@@ -293,27 +284,6 @@ impl MainDocumentNavigationActivity {
     }
 
     #[cfg(test)]
-    async fn emit_download_navigation_commit_into_buffer_async(
-        &mut self,
-        conn: &mut CdpConnection,
-        out: &mut CommandOutputBuffer,
-        body_artifact: CompletedDownloadBodyArtifact,
-        command_context: &mut CommandDispatchContext,
-    ) {
-        self.emit_download_navigation_result_into_buffer(out);
-        let mut background_events = Vec::new();
-        self.emit_download_frame_stop_background_events(&mut background_events);
-        out.extend_background_events_after_messages(background_events);
-        self.emit_navigation_download_response_into_buffer_async(
-            conn,
-            out,
-            body_artifact,
-            command_context,
-        )
-        .await;
-    }
-
-    #[cfg(test)]
     fn emit_navigation_result_from_state_into_buffer(&mut self, out: &mut CommandOutputBuffer) {
         self.emit_navigation_result_into_buffer(
             out,
@@ -343,37 +313,6 @@ impl MainDocumentNavigationActivity {
                 out.push_error_after_messages(-32000, error_text);
             }
         }
-    }
-
-    #[cfg(test)]
-    fn emit_download_navigation_result_into_buffer(&mut self, out: &mut CommandOutputBuffer) {
-        let mut result_payload = self.state.result_projection.payload().clone();
-        if let Some(payload) = result_payload.as_object_mut() {
-            payload.remove("loaderId");
-            payload.insert("errorText".to_owned(), json!(NET_ERR_ABORTED_ERROR_TEXT));
-            payload.insert("isDownload".to_owned(), json!(true));
-        }
-        self.emit_navigation_result_into_buffer(out, result_payload);
-    }
-
-    #[cfg(test)]
-    fn emit_download_frame_stop_background_events(
-        &mut self,
-        out: &mut Vec<BackgroundProtocolEvent>,
-    ) {
-        let frame_id = self.state.frame_id.clone();
-        let loader_id = self.state.loader_id.clone();
-        let session_id = self.state.session_id.clone();
-        let mut output = MainDocumentProgressBackgroundEventBarrier::background_events(
-            out,
-            &mut self.progress_gate,
-        );
-        page::emit_navigation_frame_stop_after_download_background_events(
-            output.events_after_progress(),
-            session_id.as_deref(),
-            &frame_id,
-            &loader_id,
-        );
     }
 
     #[cfg(test)]
@@ -495,33 +434,6 @@ impl MainDocumentNavigationActivity {
             output.drain_progress();
         }
         out.extend_background_events(renderer_lifecycle_events);
-    }
-
-    #[cfg(test)]
-    async fn emit_navigation_download_response_into_buffer_async(
-        &mut self,
-        conn: &mut CdpConnection,
-        out: &mut CommandOutputBuffer,
-        body_artifact: CompletedDownloadBodyArtifact,
-        command_context: &mut CommandDispatchContext,
-    ) {
-        let mut background_events = Vec::new();
-        self.flush_body_complete_activity_background_events(&mut background_events);
-        let final_url = self.final_url.clone();
-        let error = conn
-            .handle_navigation_download_response_async(
-                &mut background_events,
-                self.state(),
-                final_url,
-                body_artifact,
-                command_context,
-            )
-            .await
-            .err();
-        out.extend_background_events_after_messages(background_events);
-        if let Some(message) = error {
-            self.emit_navigation_error_into_buffer(out, &message);
-        }
     }
 
     fn flush_body_complete_activity_background_events(
@@ -864,45 +776,12 @@ impl MainDocumentFailedNavigationActivity {
 }
 
 #[cfg(test)]
-impl MainDocumentDownloadNavigationActivity {
-    pub(crate) fn new(
-        navigation_activity: MainDocumentNavigationActivity,
-        body_artifact: CompletedDownloadBodyArtifact,
-    ) -> Self {
-        Self {
-            navigation_activity,
-            body_artifact,
-        }
-    }
-
-    pub(crate) async fn emit_commit_into_buffer_async(
-        mut self,
-        conn: &mut CdpConnection,
-        out: &mut CommandOutputBuffer,
-        command_context: &mut CommandDispatchContext,
-    ) {
-        self.navigation_activity
-            .emit_download_navigation_commit_into_buffer_async(
-                conn,
-                out,
-                self.body_artifact,
-                command_context,
-            )
-            .await;
-    }
-}
-
-#[cfg(test)]
 mod tests {
     use super::*;
-    use crate::conn::{
-        BrowserContext, DownloadNavigation, NavigationLoadOutcome, NavigationResultProjection,
-    };
+    use crate::conn::{BrowserContext, NavigationResultProjection};
     use crate::domains::activity::{ProtocolSchedulerWork, ProtocolSchedulerWorkKind};
     use crate::domains::network::{
-        CompletedDownloadProgressTransfer, CompletedMainDocumentNetworkEvents,
-        MaterializedNavigationLoadOutcome, empty_main_document_progress_gate_for_test,
-        materialize_navigation_load_result,
+        empty_main_document_progress_gate_for_test, failed_navigation_progress_gate,
     };
     use moli_core::page::{
         RendererDocumentLifecycleSnapshot, RendererDocumentTerminationReason,
@@ -1058,26 +937,6 @@ mod tests {
         work
     }
 
-    fn completed_download_progress() -> CompletedDownloadProgressTransfer {
-        CompletedDownloadProgressTransfer::new(
-            Vec::new(),
-            CompletedMainDocumentNetworkEvents::new(
-                "GET".to_owned(),
-                vec![("Accept".to_owned(), "text/html".to_owned())],
-                None,
-                200,
-                vec![(
-                    "Content-Type".to_owned(),
-                    "application/octet-stream".to_owned(),
-                )],
-                Vec::new(),
-                Vec::new(),
-                false,
-                false,
-            ),
-        )
-    }
-
     #[test]
     fn navigation_activity_error_drains_progress_before_error_response() {
         let mut conn = crate::test_support::connection();
@@ -1093,29 +952,18 @@ mod tests {
             owner: CommandOwnerScope::capture(&conn, Some("SID-page")),
             ..navigation_state()
         };
-        let final_url = Url::parse("https://example.test/download").unwrap();
-        let materialized = materialize_navigation_load_result(
-            &mut conn,
-            &state,
-            Ok(NavigationLoadOutcome::download(DownloadNavigation {
-                final_url,
-                progress_transfer: completed_download_progress(),
-            })),
-        );
-        let MaterializedNavigationLoadOutcome::Download(download) = materialized else {
-            panic!("expected download progress");
-        };
-
+        let progress_gate = failed_navigation_progress_gate(&conn, &state, "net::ERR_ABORTED");
         let mut activity = MainDocumentNavigationActivity::new(
             state,
-            download.final_url,
-            download.progress_gate,
+            Url::parse("https://example.test/download").unwrap(),
+            progress_gate,
             None,
         );
         let out = activity.navigation_error_messages_for_test("download activation failed");
 
         assert_eq!(out.len(), 2);
-        assert_eq!(out[0]["method"], json!("Network.requestWillBeSent"));
+        assert_eq!(out[0]["method"], json!("Network.loadingFailed"));
+        assert_eq!(out[0]["params"]["errorText"], json!("net::ERR_ABORTED"));
         assert_eq!(out[0]["params"]["requestId"], json!("REQ-1"));
         assert_eq!(out[1]["id"], json!(77));
         assert_eq!(

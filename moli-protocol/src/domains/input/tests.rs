@@ -211,7 +211,7 @@ async fn coordinate_mouse_release_acknowledges_real_link_navigation() {
     tokio::task::LocalSet::new()
         .run_until(async {
             let mut ctx = TestContext::new();
-            ctx.enable_background_navigation_scheduler_for_test();
+            ctx.enable_background_event_ingress_for_test();
             with_loaded_document(
                 &mut ctx,
                 r#"<html><body style='margin:0'>

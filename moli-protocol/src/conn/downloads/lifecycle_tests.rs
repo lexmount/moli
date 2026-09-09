@@ -390,27 +390,53 @@ async fn retiring_context_cancels_download_and_new_same_wire_context_cannot_read
     );
 }
 
-fn navigation_download_state(conn: &CdpConnection) -> NavigationDispatchState {
-    use crate::conn::{NavigationRequestLoadPolicy, NavigationResultProjection};
-
-    let owner = CommandOwnerScope::for_session("SID-source");
-    NavigationDispatchState {
-        navigate_id: None,
-        web_contents: conn.browser_web_contents_for_owner(&owner).unwrap(),
-        owner,
-        result_projection: NavigationResultProjection::Cdp(serde_json::json!({})),
-        frame_id: "TID-source".into(),
-        session_id: Some("SID-source".into()),
-        request_id: None,
-        loader_id: "LOADER-source".into(),
-        request_announced: false,
-        requested_url: Url::parse("https://source.test/report.txt").unwrap(),
-        request_method: "GET".into(),
-        request_body: None,
-        request_body_bytes: None,
-        request_headers: Vec::new(),
-        request_load_policy: NavigationRequestLoadPolicy::DocumentInitiated,
-        timestamp: 0.0,
+async fn pending_native_download(
+    conn: &mut CdpConnection,
+) -> (
+    moli_core::browser::BrowserContextHandle,
+    moli_core::browser::BrowserNavigationWaiter,
+    moli_core::browser::web_contents::NavigationInterceptionPermit,
+) {
+    use moli_core::browser::{
+        NavigationDecision, NavigationDecisionStage, web_contents::NavigationRequestInterception,
+    };
+    let waiter = conn
+        .start_native_navigation_fixture_for_test(
+            &CommandOwnerScope::for_session("SID-source"),
+            "LOADER-source",
+            NavigationRequestInterception::new(
+                Url::parse("https://source.test/report.txt").unwrap(),
+                "GET".into(),
+                None,
+                Vec::new(),
+                crate::conn::NavigationRequestLoadPolicy::DocumentInitiated,
+            ),
+            NavigationDecision::Fulfill {
+                status: 200,
+                headers: vec![(
+                    "Content-Disposition".into(),
+                    "attachment; filename=report.txt".into(),
+                )],
+                body: b"navigation".to_vec(),
+            },
+        )
+        .unwrap();
+    let request = waiter.request();
+    let native = conn
+        .browser
+        .context_handle(request.web_contents.context())
+        .unwrap();
+    let (_, mut events) = conn.browser.subscribe().unwrap();
+    loop {
+        if let Some(paused) = native.navigation_decision(request.web_contents).unwrap() {
+            assert_eq!(paused.permit.navigation(), request.navigation);
+            assert!(matches!(
+                paused.stage,
+                NavigationDecisionStage::Response { .. }
+            ));
+            return (native, waiter, paused.permit);
+        }
+        events.recv().await.expect("native response decision");
     }
 }
 
@@ -438,27 +464,47 @@ async fn replace_source_download_context(conn: &mut CdpConnection, directory: &T
 #[tokio::test]
 async fn navigation_download_uses_its_frozen_frame_after_session_detach_and_selection_change() {
     let (directory, mut conn) = fixture();
-    let state = navigation_download_state(&conn);
+    let (native, waiter, permit) = pending_native_download(&mut conn).await;
+    let contents = waiter.request().web_contents;
     conn.detach_known_session_event_plan("TID-source", "SID-source", None, None);
-    assert!(conn.target_owner_identity_for_owner(&state.owner).is_none());
+    assert!(
+        conn.target_owner_identity_for_owner(&CommandOwnerScope::for_session("SID-source"))
+            .is_none()
+    );
     let source = conn
         .browser_context
         .replace(BrowserContext::new("CTX-foreground".into()))
         .unwrap();
     conn.push_inactive_browser_context_fixture_for_test(source);
-    let mut out = Vec::new();
-    conn.handle_navigation_download_response_async(
-        &mut out,
-        &state,
-        state.requested_url.clone(),
-        CompletedDownloadBodyArtifact::from_body(
-            DownloadBody::Buffered(b"navigation".to_vec()),
-            Vec::new(),
-        ),
-        &mut CommandDispatchContext::default(),
-    )
-    .await
-    .unwrap();
+    assert!(
+        native
+            .resolve_navigation_decision(
+                contents,
+                permit,
+                moli_core::browser::NavigationDecision::Continue,
+            )
+            .unwrap()
+    );
+    assert!(
+        matches!(waiter.wait().await.unwrap(), moli_core::browser::BrowserNavigationOutcome::Download { url }
+        if url.as_str() == "https://source.test/report.txt")
+    );
+    let record = conn
+        .browser
+        .subscribe()
+        .unwrap()
+        .0
+        .downloads
+        .into_iter()
+        .find(|record| record.event.web_contents == contents)
+        .expect("Browser admitted the exact navigation download");
+    let mut monitor = record.observation.clone();
+    let mut out = conn.project_created_browser_download(record);
+    assert!(matches!(
+        terminal(&mut monitor).await.state,
+        DownloadState::Completed { .. }
+    ));
+    out.extend(conn.project_browser_download(monitor.event()));
     let begin = out
         .iter()
         .find_map(|event| {
@@ -486,25 +532,78 @@ async fn navigation_download_uses_its_frozen_frame_after_session_detach_and_sele
 #[tokio::test]
 async fn navigation_download_does_not_enter_a_replacement_with_the_same_wire_identity() {
     let (directory, mut conn) = fixture();
-    let state = navigation_download_state(&conn);
+    let (native, waiter, permit) = pending_native_download(&mut conn).await;
+    let contents = waiter.request().web_contents;
+    assert!(
+        native.remove().unwrap(),
+        "dispose the physical Browser Context"
+    );
     replace_source_download_context(&mut conn, &directory).await;
 
-    let mut out = Vec::new();
-    conn.handle_navigation_download_response_async(
-        &mut out,
-        &state,
-        state.requested_url.clone(),
-        CompletedDownloadBodyArtifact::from_body(
-            DownloadBody::Buffered(b"stale navigation".to_vec()),
-            Vec::new(),
-        ),
-        &mut CommandDispatchContext::default(),
-    )
-    .await
-    .unwrap();
+    native
+        .resolve_navigation_decision(
+            contents,
+            permit,
+            moli_core::browser::NavigationDecision::Continue,
+        )
+        .expect_err("the original native Context was disposed");
+    assert!(waiter.wait().await.is_err());
+    assert!(conn.browser.subscribe().unwrap().0.downloads.is_empty());
 
-    assert!(out.is_empty());
     assert_eq!(std::fs::read_dir(&directory.0).unwrap().count(), 0);
+}
+
+#[tokio::test]
+async fn retiring_only_the_download_projection_does_not_cancel_native_navigation() {
+    let (directory, mut conn) = fixture();
+    let (native, waiter, permit) = pending_native_download(&mut conn).await;
+    let contents = waiter.request().web_contents;
+    // Removing a DevTools projection does not dispose its Browser Context.
+    replace_source_download_context(&mut conn, &directory).await;
+    let replacement = conn
+        .browser_web_contents_for_owner(&CommandOwnerScope::for_session("SID-source"))
+        .unwrap();
+    assert_ne!(replacement.context(), contents.context());
+    assert!(
+        native
+            .resolve_navigation_decision(
+                contents,
+                permit,
+                moli_core::browser::NavigationDecision::Continue,
+            )
+            .unwrap()
+    );
+    assert!(matches!(
+        waiter.wait().await.unwrap(),
+        moli_core::browser::BrowserNavigationOutcome::Download { .. }
+    ));
+    let records = conn.browser.subscribe().unwrap().0.downloads;
+    assert!(
+        !records
+            .iter()
+            .any(|record| record.event.web_contents == replacement)
+    );
+    let record = records
+        .into_iter()
+        .find(|record| record.event.web_contents == contents)
+        .expect("the original Browser Context owns its download without a projection");
+    let mut monitor = record.observation.clone();
+    assert!(
+        conn.project_created_browser_download(record).is_empty(),
+        "the same wire identity must not receive the retired projection's event"
+    );
+    assert!(matches!(
+        terminal(&mut monitor).await.state,
+        DownloadState::Completed { .. }
+    ));
+    assert_eq!(
+        std::fs::read(directory.0.join(monitor.guid())).unwrap(),
+        b"navigation"
+    );
+    assert!(
+        conn.start_open_download_as_stream(monitor.guid()).is_err(),
+        "the replacement Context must not expose the old Context's artifact"
+    );
 }
 
 #[tokio::test]

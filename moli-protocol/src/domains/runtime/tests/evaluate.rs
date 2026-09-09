@@ -2228,7 +2228,7 @@ async fn page_navigate_empty_http_error_commits_browser_error_document() {
         .as_mut()
         .expect("browser context should exist")
         .set_target_url(first_url);
-    ctx.enable_background_navigation_scheduler_for_test();
+    ctx.enable_background_event_ingress_for_test();
     ctx.enable_page_events_for_test(Some("SID-1"));
     ctx.process_async(json!({
         "id": 40,
@@ -2311,18 +2311,21 @@ async fn page_navigate_network_failure_commits_error_document() {
         take_response_by_id(&mut ctx, 5_2)["result"]["result"]["value"],
         json!("old realm")
     );
+    let before_document = ctx
+        .conn
+        .resolve_browser_document_for_owner(&crate::conn::CommandOwnerScope::for_session("SID-1"))
+        .expect("old native Document");
     let old_document_token = ctx
         .conn
-        .browser_context
-        .as_mut()
-        .expect("browser context")
-        .start_document_navigation_for_active_target("LOADER-before-network-error".to_owned())
-        .expect("loaded document token");
-    ctx.conn
-        .browser_context
-        .as_mut()
-        .expect("browser context")
-        .commit_document_navigation_if_matches(&old_document_token);
+        .subscribe_browser_events()
+        .unwrap()
+        .0
+        .navigations
+        .into_iter()
+        .find(|snapshot| snapshot.web_contents == before_document.web_contents())
+        .and_then(|snapshot| snapshot.committed)
+        .expect("native navigation commit")
+        .navigation;
     let before_target_page = ctx
         .conn
         .target_page_residence_identity_for_session(Some("SID-1"))
@@ -2457,42 +2460,20 @@ async fn page_navigate_network_failure_commits_error_document() {
         )
         .expect("error Document loader id");
     let stale_request_id = "REQ-before-network-error";
-    let stale_body_completion = BackgroundNavigationCompletion::main_document_body(
-        old_document_token,
-        crate::conn::NavigationDispatchState {
-            navigate_id: None,
-            owner: crate::conn::CommandOwnerScope::for_session("SID-1"),
-            web_contents: crate::conn::NavigationDispatchState::detached_web_contents_for_test(),
-            result_projection: crate::conn::NavigationResultProjection::Cdp(json!({})),
-            frame_id: "TID-1".to_owned(),
-            session_id: Some("SID-1".to_owned()),
-            request_id: Some(stale_request_id.to_owned()),
-            loader_id: "LOADER-before-network-error".to_owned(),
-            request_announced: true,
-            requested_url: url::Url::parse("https://stale.example.test/old-body").unwrap(),
-            request_method: "GET".to_owned(),
-            request_body: None,
-            request_body_bytes: None,
-            request_headers: Vec::new(),
-            request_load_policy: crate::conn::NavigationRequestLoadPolicy::DocumentInitiated,
-            timestamp: 0.0,
-        },
-        Ok(crate::conn::CapturedBody::from_string(
-            "stale body".to_owned(),
-        )),
-        false,
-        crate::domains::network::MainDocumentBodyProgressSource::default(),
-        url::Url::parse("https://stale.example.test/old-body").unwrap(),
-        vec![("content-type".to_owned(), "text/plain".to_owned())],
-        false,
-    );
-    let (stale_completion_messages, stale_completion_scheduler_events) = ctx
+    // A late notification must query the exact retired Document, not replay a
+    // caller-owned body into the new error Document.
+    let stale_completion_messages = ctx
         .conn
-        .drain_background_navigation_completion_turn_async(stale_body_completion)
-        .await
-        .into_parts();
+        .project_native_document_network(before_document, true);
     assert!(stale_completion_messages.is_empty());
-    assert!(stale_completion_scheduler_events.is_empty());
+    assert!(
+        !ctx.conn
+            .subscribe_browser_events()
+            .unwrap()
+            .0
+            .documents
+            .contains(&before_document)
+    );
     assert_eq!(
         ctx.conn
             .target_session_owner_frame_tree_loader_id_for_owner(

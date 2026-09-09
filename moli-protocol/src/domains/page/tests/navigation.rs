@@ -1895,7 +1895,7 @@ async fn navigate_with_runtime_frontend_enabled_network_child_playwright_style_u
         .devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
         .runtime_session_state
         .runtime_frontend_enabled = true;
-    ctx.enable_background_navigation_scheduler_for_test();
+    ctx.enable_background_event_ingress_for_test();
 
     tokio::task::LocalSet::new()
         .run_until(async {
@@ -2153,7 +2153,7 @@ async fn parser_tail_dom_mutations_precede_the_dcl_binding_refresh() {
         assert_eq!(take_response_by_id(&mut ctx, id)["result"], json!({}));
     }
     ctx.sent.clear();
-    ctx.enable_background_navigation_scheduler_for_test();
+    ctx.enable_background_event_ingress_for_test();
 
     tokio::task::LocalSet::new()
         .run_until(async {
@@ -3346,7 +3346,7 @@ async fn navigate_with_legacy_runtime_frontend_projection_emits_context_creation
         .devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
         .runtime_session_state
         .runtime_frontend_enabled = true;
-    ctx.enable_background_navigation_scheduler_for_test();
+    ctx.enable_background_event_ingress_for_test();
 
     tokio::task::LocalSet::new()
         .run_until(async {
@@ -5302,7 +5302,7 @@ async fn navigate_with_runtime_and_lifecycle_enabled_replays_contexts_before_loa
     .await;
     ctx.expect_result(2402, json!({}), Some("SID-1"));
     ctx.sent.clear();
-    ctx.enable_background_navigation_scheduler_for_test();
+    ctx.enable_background_event_ingress_for_test();
 
     tokio::task::LocalSet::new()
         .run_until(async {

@@ -3184,25 +3184,9 @@ async fn drain_ready_bidi_background_navigation(
         Some(&*scheduler),
     );
     event_sources.extend_protocol_output(
-        scheduler
-            .drain_background_events_around_inflight_navigation(&mut receivers.background_event_rx),
+        scheduler.drain_current_background_events(&mut receivers.background_event_rx),
         Some(&*scheduler),
     );
-    while let Ok(completion) = receivers.background_navigation_completion_rx.try_recv() {
-        match scheduler
-            .drain_background_navigation_completion_with_progress_barrier(completion, receivers)
-            .await
-        {
-            Ok(output) => event_sources.extend_protocol_output(output, Some(&*scheduler)),
-            Err(failure) => {
-                return Err(BidiRendererOutputTransportFailure::from_renderer(
-                    event_sources,
-                    failure,
-                    scheduler,
-                ));
-            }
-        }
-    }
     Ok(event_sources)
 }
 

@@ -17,24 +17,20 @@ use serde_json::{Value, json};
 use url::Url;
 
 use crate::conn::{
-    BackgroundProtocolEvent, CapturedBody, CdpConnection, CdpSessionRoute, Cmd,
-    CommandDispatchContext, CommandOwnerScope, CompletedChildFrameNavigation,
-    CompletedNavigationHistoryReset, CompletedTopLevelHistoryTraversal,
-    CompletedTopLevelSameDocumentNavigation, NavigationDispatchState, NavigationId,
-    NavigationLoadOutcome, NavigationRequestLoadPolicy, NavigationResultProjection,
+    BackgroundProtocolEvent, CdpConnection, CdpSessionRoute, Cmd, CommandDispatchContext,
+    CommandOwnerScope, CompletedChildFrameNavigation, CompletedNavigationHistoryReset,
+    CompletedTopLevelHistoryTraversal, CompletedTopLevelSameDocumentNavigation,
+    NavigationDispatchState, NavigationId, NavigationRequestLoadPolicy, NavigationResultProjection,
     PendingChildFrameNavigation, PendingTopLevelHistoryTraversal,
     PendingTopLevelSameDocumentNavigation, monotonic_timestamp_seconds,
 };
 use moli_cookie_jar::{NetworkCookieRequestContext, StoredCookieQueryReport};
 
 use crate::domains::{
-    activity,
     command_output::{CommandOutputBuffer, CommandOutputPlan},
     network,
 };
 
-#[cfg(test)]
-use super::navigation_commit::commit_download_navigation_async;
 use super::{
     LOADER_ID, PageCommandTaskStep,
     child_frame_activity::{
@@ -311,205 +307,6 @@ impl DirectNavigationResult {
                 })
             }
         }
-    }
-}
-
-pub(crate) struct MaterializedNavigationCompletion {
-    token: NavigationId,
-    state: NavigationDispatchState,
-    navigation: network::MaterializedNavigationLoadOutcome,
-}
-
-impl MaterializedNavigationCompletion {
-    pub(crate) fn new(
-        token: NavigationId,
-        state: NavigationDispatchState,
-        navigation: network::MaterializedNavigationLoadOutcome,
-    ) -> Self {
-        Self {
-            token,
-            state,
-            navigation,
-        }
-    }
-
-    pub(crate) fn is_current_for_connection(&self, conn: &CdpConnection) -> bool {
-        conn.accepts_pending_document_navigation_for_owner(&self.state.owner, &self.token)
-    }
-
-    pub(crate) fn requested_url(&self) -> &str {
-        self.state.requested_url.as_str()
-    }
-
-    pub(crate) fn navigate_id(&self) -> Option<u64> {
-        self.state.navigate_id
-    }
-
-    pub(crate) fn navigate_session_id(&self) -> Option<&str> {
-        self.state.owner.session_id()
-    }
-
-    pub(crate) fn into_parts(
-        self,
-    ) -> (
-        NavigationId,
-        NavigationDispatchState,
-        network::MaterializedNavigationLoadOutcome,
-    ) {
-        (self.token, self.state, self.navigation)
-    }
-}
-
-pub struct BackgroundMainDocumentBodyCompletion {
-    token: NavigationId,
-    state: NavigationDispatchState,
-    body: Result<CapturedBody, String>,
-    synthetic: bool,
-    body_progress_source: network::MainDocumentBodyProgressSource,
-    final_url: Url,
-    response_headers: Vec<(String, String)>,
-    response_from_cache: bool,
-}
-
-impl BackgroundMainDocumentBodyCompletion {
-    #[cfg(test)]
-    pub(crate) fn new(
-        token: NavigationId,
-        state: NavigationDispatchState,
-        body: Result<CapturedBody, String>,
-        synthetic: bool,
-        body_progress_source: network::MainDocumentBodyProgressSource,
-        final_url: Url,
-        response_headers: Vec<(String, String)>,
-        response_from_cache: bool,
-    ) -> Self {
-        Self {
-            token,
-            state,
-            body,
-            synthetic,
-            body_progress_source,
-            final_url,
-            response_headers,
-            response_from_cache,
-        }
-    }
-
-    pub(crate) fn is_current_for_connection(&self, conn: &CdpConnection) -> bool {
-        conn.accepts_document_body_completion_for_owner(&self.state.owner, &self.token)
-    }
-
-    pub(crate) fn record_if_current(self, conn: &mut CdpConnection) {
-        if !self.is_current_for_connection(conn) {
-            return;
-        }
-        match self.body {
-            Ok(body) => {
-                let _ = conn.record_main_document_resource_body_for_owner(
-                    &self.state.owner,
-                    self.state.frame_id.clone(),
-                    self.state.loader_id.clone(),
-                    self.final_url,
-                    self.response_headers,
-                    self.response_from_cache,
-                    body.clone(),
-                );
-                let encoded_data_length = body.len();
-                network::record_completed_main_document_response_body(
-                    conn,
-                    &self.state,
-                    self.synthetic,
-                    &body,
-                );
-                self.body_progress_source
-                    .emit_body_finished(encoded_data_length);
-            }
-            Err(error) => {
-                tracing::debug!(
-                    ?error,
-                    "background main document body capture failed after lifecycle commit"
-                );
-                network::record_failed_main_document_response_body(conn, &self.state, error);
-            }
-        }
-    }
-}
-
-pub enum BackgroundNavigationCompletion {
-    Lifecycle(Box<BackgroundNavigationLifecycleCompletion>),
-    MainDocumentBody(Box<BackgroundMainDocumentBodyCompletion>),
-}
-
-impl BackgroundNavigationCompletion {
-    pub fn requested_url(&self) -> &str {
-        match self {
-            Self::Lifecycle(completion) => completion.state.requested_url.as_str(),
-            Self::MainDocumentBody(completion) => completion.state.requested_url.as_str(),
-        }
-    }
-
-    pub fn kind(&self) -> &'static str {
-        match self {
-            Self::Lifecycle(_) => "lifecycle",
-            Self::MainDocumentBody(_) => "main_document_body",
-        }
-    }
-}
-
-pub struct BackgroundNavigationLifecycleCompletion {
-    token: NavigationId,
-    state: NavigationDispatchState,
-    navigation: Result<NavigationLoadOutcome, String>,
-    ready_at: std::time::Instant,
-}
-
-impl BackgroundNavigationLifecycleCompletion {
-    pub(crate) fn navigation_token(&self) -> &NavigationId {
-        &self.token
-    }
-
-    pub(crate) fn requested_url(&self) -> &str {
-        self.state.requested_url.as_str()
-    }
-
-    pub(crate) fn ready_elapsed_ms(&self) -> u128 {
-        self.ready_at.elapsed().as_millis()
-    }
-
-    pub(crate) fn materialize(self, conn: &mut CdpConnection) -> MaterializedNavigationCompletion {
-        let Self {
-            token,
-            state,
-            navigation,
-            ready_at: _,
-        } = self;
-        let navigation = network::materialize_navigation_load_result(conn, &state, navigation);
-        MaterializedNavigationCompletion::new(token, state, navigation)
-    }
-}
-
-impl BackgroundNavigationCompletion {
-    #[cfg(test)]
-    pub(crate) fn main_document_body(
-        token: NavigationId,
-        state: NavigationDispatchState,
-        body: Result<CapturedBody, String>,
-        synthetic: bool,
-        body_progress_source: network::MainDocumentBodyProgressSource,
-        final_url: Url,
-        response_headers: Vec<(String, String)>,
-        response_from_cache: bool,
-    ) -> Self {
-        Self::MainDocumentBody(Box::new(BackgroundMainDocumentBodyCompletion::new(
-            token,
-            state,
-            body,
-            synthetic,
-            body_progress_source,
-            final_url,
-            response_headers,
-            response_from_cache,
-        )))
     }
 }
 
@@ -2807,71 +2604,6 @@ pub(super) async fn complete_pending_same_document_navigate_command(
     let mut plan = CommandOutputPlan::default();
     plan.push_result(result_payload);
     PageCommandTaskStep::Complete(plan)
-}
-
-pub(crate) async fn complete_materialized_navigation_into_buffer_async(
-    conn: &mut CdpConnection,
-    out: &mut CommandOutputBuffer,
-    token: NavigationId,
-    state: NavigationDispatchState,
-    navigation: network::MaterializedNavigationLoadOutcome,
-    command_context: &mut crate::conn::CommandDispatchContext,
-) {
-    complete_materialized_navigation_into_buffer_inner_async(
-        conn,
-        out,
-        token,
-        state,
-        navigation,
-        command_context,
-    )
-    .await;
-}
-
-async fn complete_materialized_navigation_into_buffer_inner_async(
-    conn: &mut CdpConnection,
-    out: &mut CommandOutputBuffer,
-    token: NavigationId,
-    state: NavigationDispatchState,
-    navigation: network::MaterializedNavigationLoadOutcome,
-    command_context: &mut crate::conn::CommandDispatchContext,
-) {
-    let navigation_owner = state.owner.clone();
-    let document_projection_release = match navigation {
-        #[cfg(test)]
-        network::MaterializedNavigationLoadOutcome::Download(navigation) => {
-            commit_download_navigation_async(conn, out, state, navigation, command_context).await;
-            None
-        }
-        network::MaterializedNavigationLoadOutcome::Failed(navigation) => {
-            let network::MaterializedFailedDocumentProgress {
-                error_text,
-                response_mode,
-                progress_gate,
-            } = navigation;
-            activity::MainDocumentFailedNavigationActivity::new(
-                state,
-                progress_gate,
-                response_mode,
-            )
-            .emit_navigation_error_into_buffer(out, &error_text);
-            None
-        }
-    };
-    let release = document_projection_release.or_else(|| {
-        conn.finish_navigation_without_document_projection_for_owner(&navigation_owner, &token)
-    });
-    if let Some(release) = release {
-        super::navigation_commit::release_document_projection_output_async(
-            conn,
-            out,
-            command_context,
-            &navigation_owner,
-            release,
-        )
-        .await;
-    }
-    conn.clear_pending_document_navigation_for_owner_if_matches(&navigation_owner, &token);
 }
 
 pub(super) fn emit_same_document_navigation_background_events(

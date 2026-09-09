@@ -366,9 +366,7 @@ impl CdpScheduler {
                 self.apply_scheduler_events(pending.take_scheduler_events());
                 state
                     .output
-                    .append(self.route_background_events_around_inflight_navigation(
-                        pending.take_protocol_events(),
-                    ));
+                    .append(self.route_current_background_events(pending.take_protocol_events()));
                 let protocol_output = std::mem::take(&mut state.output);
                 DevToolsNavigationCommandProgress::Pending {
                     pending: Box::new(PendingDevToolsNavigationExecution {
@@ -398,9 +396,9 @@ impl CdpScheduler {
                         }
                     }
                 }
-                state.output.append(
-                    self.route_background_events_around_inflight_navigation(protocol_events),
-                );
+                state
+                    .output
+                    .append(self.route_current_background_events(protocol_events));
                 state.output.append(
                     self.complete_ready_protocol_residences_after_command()
                         .await,

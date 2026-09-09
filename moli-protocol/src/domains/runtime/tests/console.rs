@@ -1176,7 +1176,7 @@ async fn runtime_timer_cross_document_navigation_with_history_api_emits_full_con
         .as_mut()
         .expect("browser context should exist")
         .set_target_url(start_url);
-    ctx.enable_background_navigation_scheduler_for_test();
+    ctx.enable_background_event_ingress_for_test();
     let _ = enable_runtime_and_take_execution_context_id_async(&mut ctx, 20_700).await;
     ctx.sent.clear();
 

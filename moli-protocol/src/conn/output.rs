@@ -2150,10 +2150,6 @@ impl ProtocolDeliveryEnvelope {
         self.route.ensure_wire_session_id(session_id);
     }
 
-    pub fn should_wait_for_background_navigation_completion(&self) -> bool {
-        self.is_non_document_network_event() && !self.is_fetch_interception_control_path_event()
-    }
-
     pub fn is_non_document_network_event(&self) -> bool {
         let Some(resource_type) = self.network_resource_type() else {
             return false;
@@ -2258,44 +2254,6 @@ impl ProtocolDeliveryEnvelope {
             request_id,
             url,
         ))
-    }
-
-    fn is_fetch_interception_control_path_event(&self) -> bool {
-        match self.protocol_method() {
-            Some("Fetch.requestPaused" | "Fetch.authRequired") => true,
-            Some(method) if method.starts_with("Network.") => self.has_blocked_intercepts(),
-            _ => false,
-        }
-    }
-
-    fn has_blocked_intercepts(&self) -> bool {
-        self.automation_event_has_blocked_intercepts()
-            || self.protocol_message_has_blocked_intercepts()
-    }
-
-    fn automation_event_has_blocked_intercepts(&self) -> bool {
-        let BackgroundProtocolEventPayload::Protocol(event) = &self.payload else {
-            return false;
-        };
-        match event.automation_event.as_deref() {
-            Some(
-                AutomationEvent::NetworkBeforeRequestSent(event)
-                | AutomationEvent::NetworkResponseStarted(event)
-                | AutomationEvent::NetworkResponseCompleted(event)
-                | AutomationEvent::NetworkFetchError(event)
-                | AutomationEvent::NetworkAuthRequired(event)
-                | AutomationEvent::RequestPaused(event),
-            ) => !event.blocked_intercepts.is_empty(),
-            _ => false,
-        }
-    }
-
-    fn protocol_message_has_blocked_intercepts(&self) -> bool {
-        self.protocol_message()
-            .and_then(|message| message.get("params"))
-            .and_then(|params| params.get("__moliBlockedInterceptors"))
-            .and_then(Value::as_array)
-            .is_some_and(|blocked_intercepts| !blocked_intercepts.is_empty())
     }
 
     fn network_resource_type(&self) -> Option<DevToolsNetworkResourceType> {
@@ -4340,8 +4298,7 @@ pub fn build_event(method: &str, params: Value, session_id: Option<&str>) -> Val
 mod tests {
     use crate::devtools_runtime::{
         AutomationEvent, DevToolsBrowserContextId, DevToolsFrameId, DevToolsLoaderId,
-        DevToolsNetworkResourceType, DevToolsSessionId, DevToolsTargetId, DevToolsTargetInfo,
-        DevToolsTargetKind, NavigationFrameEvent, NavigationFrameEventKind,
+        DevToolsSessionId, DevToolsTargetId, DevToolsTargetInfo, DevToolsTargetKind,
         NavigationLifecycleEvent, RuntimeExecutionContextEvent,
         RuntimeExecutionContextsClearedEvent, TargetAttachmentEvent, TargetDetachmentEvent,
         TargetLifecycleEvent, UserPromptClosedEvent,
@@ -5436,122 +5393,6 @@ mod tests {
         );
         assert_eq!(parts[2].0["params"]["filePath"], json!("/tmp/download.txt"));
         assert_eq!(parts[3].0["params"]["frameId"], json!("FRAME-dialog"));
-    }
-
-    #[test]
-    fn background_event_waits_for_navigation_completion_only_for_non_document_network() {
-        use crate::devtools_runtime::{DevToolsRequestId, NetworkRequestEvent};
-
-        let network_event = |resource_type: Option<DevToolsNetworkResourceType>| {
-            AutomationEvent::NetworkResponseStarted(NetworkRequestEvent {
-                target_id: DevToolsTargetId::from("TID-nav"),
-                frame_id: Some(DevToolsFrameId::from("TID-nav")),
-                request_id: DevToolsRequestId::from("REQ-nav"),
-                loader_id: Some(DevToolsLoaderId::from("LOADER-nav")),
-                url: "https://example.test/resource".to_owned(),
-                document_url: None,
-                method: None,
-                request_headers: Vec::new(),
-                request_body: None,
-                request_initiator_type: None,
-                bidi_request_initiator_type: None,
-                redirect_response: None,
-                redirect_has_extra_info: false,
-                request_cookie_report: None,
-                resource_type,
-                timestamp: Some(1.0),
-                wall_time: None,
-                status: Some(200),
-                status_text: None,
-                response_headers: Vec::new(),
-                response_mime_type: None,
-                response_protocol: None,
-                has_extra_info: false,
-                encoded_data_length: Some(0),
-                from_cache: false,
-                fetch_request_id: None,
-                error_text: None,
-                loading_failed_canceled: false,
-                blocked_intercepts: Vec::new(),
-                network_id: None,
-                auth_challenge: None,
-            })
-        };
-
-        let document = BackgroundProtocolEvent::immediate_automation_event(
-            json!({"method": "Network.responseReceived"}),
-            network_event(Some(DevToolsNetworkResourceType::Document)),
-        );
-        let script = BackgroundProtocolEvent::immediate_automation_event(
-            json!({"method": "Network.responseReceived"}),
-            network_event(Some(DevToolsNetworkResourceType::Script)),
-        );
-        let lifecycle = BackgroundProtocolEvent::immediate_automation_event(
-            json!({"method": "Page.frameStartedLoading"}),
-            AutomationEvent::NavigationFrame(NavigationFrameEvent {
-                target_id: DevToolsTargetId::from("TID-nav"),
-                frame_id: DevToolsFrameId::from("TID-nav"),
-                parent_frame_id: None,
-                loader_id: Some(DevToolsLoaderId::from("LOADER-nav")),
-                url: "https://example.test/".to_owned(),
-                kind: NavigationFrameEventKind::StartedLoading,
-                frame_name: None,
-                security_origin: None,
-                secure_context_type: None,
-            }),
-        );
-        let protocol_document = BackgroundProtocolEvent::immediate(json!({
-            "method": "Network.responseReceived",
-            "params": {
-                "requestId": "REQ-protocol-document",
-                "type": "Document"
-            }
-        }));
-        let protocol_script = BackgroundProtocolEvent::immediate(json!({
-            "method": "Network.responseReceived",
-            "params": {
-                "requestId": "REQ-protocol-script",
-                "type": "Script"
-            }
-        }));
-        let blocked_protocol_script = BackgroundProtocolEvent::immediate(json!({
-            "method": "Network.requestWillBeSent",
-            "params": {
-                "requestId": "REQ-protocol-script-blocked",
-                "type": "Script",
-                "__moliBlockedInterceptors": ["intercept-script"]
-            }
-        }));
-        let fetch_request_paused = BackgroundProtocolEvent::immediate(json!({
-            "method": "Fetch.requestPaused",
-            "params": {
-                "requestId": "INT-script",
-                "resourceType": "Script"
-            }
-        }));
-        let fetch_auth_required = BackgroundProtocolEvent::immediate(json!({
-            "method": "Fetch.authRequired",
-            "params": {
-                "requestId": "INT-auth",
-                "resourceType": "Script"
-            }
-        }));
-        let protocol_without_type = BackgroundProtocolEvent::immediate(json!({
-            "method": "Network.responseReceived",
-            "params": {
-                "requestId": "REQ-protocol-unknown"
-            }
-        }));
-
-        assert!(!document.should_wait_for_background_navigation_completion());
-        assert!(script.should_wait_for_background_navigation_completion());
-        assert!(!lifecycle.should_wait_for_background_navigation_completion());
-        assert!(!protocol_document.should_wait_for_background_navigation_completion());
-        assert!(protocol_script.should_wait_for_background_navigation_completion());
-        assert!(!blocked_protocol_script.should_wait_for_background_navigation_completion());
-        assert!(!fetch_request_paused.should_wait_for_background_navigation_completion());
-        assert!(!fetch_auth_required.should_wait_for_background_navigation_completion());
-        assert!(!protocol_without_type.should_wait_for_background_navigation_completion());
     }
 
     #[test]

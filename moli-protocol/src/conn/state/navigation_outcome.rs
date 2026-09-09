@@ -1,5 +1,3 @@
-#[cfg(test)]
-use moli_core::browser::DownloadBody;
 use moli_core::browser::WebContentsHandle;
 use serde::Serialize;
 use serde_json::Value;
@@ -7,55 +5,10 @@ use url::Url;
 
 use crate::conn::CommandOwnerScope;
 use crate::devtools_runtime::DevToolsProtocol;
-#[cfg(test)]
-use crate::domains::network::CompletedDownloadProgressTransfer;
 
 use super::browser_context::BrowserContext;
 
 pub(crate) const NETWORK_ERROR_PAGE_URL: &str = "chrome-error://chromewebdata/";
-
-#[derive(Debug)]
-#[cfg(test)]
-pub(crate) struct CompletedDownloadBodyArtifact {
-    body: DownloadBody,
-    response_headers: Vec<(String, String)>,
-}
-
-#[cfg(test)]
-impl CompletedDownloadBodyArtifact {
-    #[cfg(test)]
-    pub(crate) fn from_body(body: DownloadBody, response_headers: Vec<(String, String)>) -> Self {
-        Self {
-            body,
-            response_headers,
-        }
-    }
-
-    pub(crate) fn into_parts(self) -> (DownloadBody, Vec<(String, String)>) {
-        (self.body, self.response_headers)
-    }
-}
-
-#[derive(Debug)]
-#[cfg(test)]
-pub struct DownloadNavigation {
-    pub final_url: Url,
-    pub(crate) progress_transfer: CompletedDownloadProgressTransfer,
-}
-
-#[derive(Debug)]
-pub enum NavigationLoadOutcome {
-    #[cfg(test)]
-    Download(Box<DownloadNavigation>),
-    NetworkFailure(String),
-}
-
-impl NavigationLoadOutcome {
-    #[cfg(test)]
-    pub(crate) fn download(navigation: DownloadNavigation) -> Self {
-        Self::Download(Box::new(navigation))
-    }
-}
 
 #[derive(Debug, Clone)]
 pub(crate) enum NavigationResultProjection {

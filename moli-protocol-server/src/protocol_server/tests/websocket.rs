@@ -4487,11 +4487,11 @@ addEventListener('DOMContentLoaded', () => fetch('/stale-source-observed'));
 
     let defer_requested = Arc::new(tokio::sync::Notify::new());
     let release_defer = Arc::new(tokio::sync::Notify::new());
-    let defer_response_sent = Arc::new(tokio::sync::Notify::new());
+    let defer_response_produced = Arc::new(tokio::sync::Notify::new());
     let stale_source_observed = Arc::new(tokio::sync::Notify::new());
     let requested_for_route = Arc::clone(&defer_requested);
     let release_for_route = Arc::clone(&release_defer);
-    let response_sent_for_route = Arc::clone(&defer_response_sent);
+    let response_produced_for_route = Arc::clone(&defer_response_produced);
     let stale_for_route = Arc::clone(&stale_source_observed);
     let fixture_app = Router::new()
         .route("/source", get(source_page))
@@ -4501,15 +4501,22 @@ addEventListener('DOMContentLoaded', () => fetch('/stale-source-observed'));
             get(move || {
                 let requested_for_route = Arc::clone(&requested_for_route);
                 let release_for_route = Arc::clone(&release_for_route);
-                let response_sent_for_route = Arc::clone(&response_sent_for_route);
+                let response_produced_for_route = Arc::clone(&response_produced_for_route);
                 async move {
-                    requested_for_route.notify_one();
-                    release_for_route.notified().await;
-                    response_sent_for_route.notify_one();
-                    (
-                        [(axum::http::header::CONTENT_TYPE.as_str(), "text/javascript")],
-                        "fetch('/stale-source-observed');",
-                    )
+                    // Replacement may cancel HTTP and drop this handler. The
+                    // deliberately late producer must still observe release;
+                    // its completion is not proof of delivery to a closed socket.
+                    tokio::spawn(async move {
+                        requested_for_route.notify_one();
+                        release_for_route.notified().await;
+                        response_produced_for_route.notify_one();
+                        (
+                            [(axum::http::header::CONTENT_TYPE.as_str(), "text/javascript")],
+                            "fetch('/stale-source-observed');",
+                        )
+                    })
+                    .await
+                    .expect("produce the source defer response")
                 }
             }),
         )
@@ -4588,9 +4595,9 @@ addEventListener('DOMContentLoaded', () => fetch('/stale-source-observed'));
     );
 
     release_defer.notify_one();
-    timeout(Duration::from_secs(1), defer_response_sent.notified())
+    timeout(Duration::from_secs(1), defer_response_produced.notified())
         .await
-        .expect("stale defer response should leave the fixture server");
+        .expect("the source fixture should finish producing its stale defer response");
     assert!(
         timeout(Duration::from_millis(250), stale_source_observed.notified())
             .await

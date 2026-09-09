@@ -890,3 +890,105 @@ impl CdpConnection {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use url::Url;
+
+    #[tokio::test]
+    async fn retired_native_response_cannot_publish_into_replacement_error_document() {
+        let mut conn = crate::test_support::connection();
+        let mut projection = conn.new_page_target_fixture_for_test("CTX-response", "TID-response");
+        projection
+            .active_page_target_mut()
+            .runtime_slot
+            .enable_primary_network_events();
+        conn.install_browser_context_fixture_for_test(projection);
+        let original = conn
+            .install_buffered_navigation_fixture_for_test(
+                Url::parse("https://response.test/original").unwrap(),
+                "GET".into(),
+                Vec::new(),
+                200,
+                vec![("Content-Type".into(), "text/html".into())],
+                "<!doctype html><title>original</title><p>original body</p>".into(),
+            )
+            .await
+            .unwrap()
+            .document;
+        let response = conn
+            .wait_for_native_navigation_response_for_test(original)
+            .await
+            .unwrap();
+        assert_eq!(response.request.document, original.id());
+        assert!(matches!(response.body, Some(Ok(_))));
+
+        let replacement = conn
+            .install_buffered_navigation_fixture_for_test(
+                Url::parse("https://response.test/unavailable").unwrap(),
+                "GET".into(),
+                Vec::new(),
+                429,
+                vec![("Content-Type".into(), "text/html".into())],
+                String::new(),
+            )
+            .await
+            .unwrap();
+        assert_ne!(replacement.document, original);
+        assert!(
+            replacement
+                .metadata
+                .info
+                .as_ref()
+                .unwrap()
+                .error_page
+                .is_some()
+        );
+        let native = conn
+            .browser
+            .context_handle(original.web_contents().context())
+            .unwrap();
+        assert!(native.document_commit_snapshot(original).is_err());
+        let before = native.navigation_snapshot(original.web_contents()).unwrap();
+        let loader = conn.target_session_owner_frame_tree_loader_id_for_owner(
+            &crate::conn::CommandOwnerScope::capture(&conn, None),
+        );
+
+        // Deliver the genuine snapshot after its physical Document was retired.
+        // Both header and body observation must reject it, even though the wire
+        // Target, request origin and observer are still present.
+        assert!(
+            conn.project_native_navigation_network(&response, false)
+                .is_empty()
+        );
+        assert!(
+            conn.project_native_navigation_network(&response, true)
+                .is_empty()
+        );
+        assert!(
+            conn.project_native_document_network(original, true)
+                .is_empty()
+        );
+        assert_eq!(
+            native.navigation_snapshot(original.web_contents()).unwrap(),
+            before
+        );
+        assert_eq!(
+            native.document_handle(original.web_contents()).unwrap(),
+            Some(replacement.document)
+        );
+        assert_eq!(
+            conn.target_session_owner_frame_tree_loader_id_for_owner(
+                &crate::conn::CommandOwnerScope::capture(&conn, None)
+            ),
+            loader
+        );
+        assert!(
+            !native
+                .navigation_responses(original.web_contents())
+                .unwrap()
+                .iter()
+                .any(|current| current.request == response.request)
+        );
+    }
+}

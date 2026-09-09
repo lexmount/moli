@@ -529,29 +529,6 @@ impl CdpConnection {
             })
     }
 
-    pub(crate) fn record_main_document_resource_body_for_owner(
-        &mut self,
-        owner: &CommandOwnerScope,
-        frame_id: String,
-        loader_id: String,
-        url: url::Url,
-        response_headers: Vec<(String, String)>,
-        from_cache: bool,
-        body: crate::conn::CapturedBody,
-    ) -> bool {
-        self.with_target_owner_state_for_owner_mut(owner, |owner_state| {
-            owner_state.page_resource_store.record_main_document_body(
-                frame_id,
-                loader_id,
-                url,
-                response_headers,
-                from_cache,
-                body,
-            );
-        })
-        .is_some()
-    }
-
     pub(crate) fn commit_main_document_resource_for_owner(
         &mut self,
         owner: &crate::conn::CommandOwnerScope,

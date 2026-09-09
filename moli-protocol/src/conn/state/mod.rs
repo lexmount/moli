@@ -174,11 +174,5 @@ pub(crate) use target_state::{
     PendingBidiChannelListener, PendingInspectorAwait, TargetOwnerState,
 };
 
-#[cfg(test)]
-pub(crate) use navigation_outcome::CompletedDownloadBodyArtifact;
-#[cfg(test)]
-pub use navigation_outcome::DownloadNavigation;
 pub(crate) use navigation_outcome::{NETWORK_ERROR_PAGE_URL, NavigationResultProjection};
-pub use navigation_outcome::{
-    NavigationDispatchState, NavigationLoadOutcome, NavigationRequestLoadPolicy, TargetInfo,
-};
+pub use navigation_outcome::{NavigationDispatchState, NavigationRequestLoadPolicy, TargetInfo};

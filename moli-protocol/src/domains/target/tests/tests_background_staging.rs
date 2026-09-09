@@ -5376,7 +5376,7 @@ async fn same_context_named_popup_reuse_navigates_and_activates_loaded_owner() {
         1041949440,
     )
     .await;
-    ctx.enable_background_navigation_scheduler_for_test();
+    ctx.enable_background_event_ingress_for_test();
     let browser_context = ctx.conn.browser_context.as_mut().expect("browser context");
     let handle = browser_context
         .web_contents_handle_for_target(&owner.target_id)

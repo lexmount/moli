@@ -1,41 +1,5 @@
-#[cfg(test)]
-use crate::conn::NavigationDispatchState;
 use crate::conn::{CdpConnection, CommandDispatchContext};
-#[cfg(test)]
-use crate::domains::activity::{
-    MainDocumentDownloadNavigationActivity, MainDocumentNavigationActivity,
-};
 use crate::domains::command_output::CommandOutputBuffer;
-#[cfg(test)]
-use crate::domains::network::MaterializedDownloadDocumentProgress;
-
-#[cfg(test)]
-pub(super) async fn commit_download_navigation_async(
-    conn: &mut CdpConnection,
-    out: &mut CommandOutputBuffer,
-    state: NavigationDispatchState,
-    navigation: MaterializedDownloadDocumentProgress,
-    command_context: &mut CommandDispatchContext,
-) {
-    let MaterializedDownloadDocumentProgress {
-        final_url,
-        progress_gate,
-        body_artifact,
-    } = navigation;
-    let navigation_activity =
-        MainDocumentNavigationActivity::new(state, final_url, progress_gate, None);
-    let download_activity =
-        MainDocumentDownloadNavigationActivity::new(navigation_activity, body_artifact);
-
-    // Keep this boxed for the same reason as the loaded commit tail: the
-    // navigation completion future is otherwise large on small test stacks.
-    Box::pin(async move {
-        download_activity
-            .emit_commit_into_buffer_async(conn, out, command_context)
-            .await;
-    })
-    .await;
-}
 
 pub(crate) async fn release_document_projection_output_async(
     conn: &mut CdpConnection,

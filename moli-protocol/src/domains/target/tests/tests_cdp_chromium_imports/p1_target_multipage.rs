@@ -683,7 +683,7 @@ async fn rust_cdp_chromium_target_window_open_blank_creates_popup_target() {
 #[tokio::test(flavor = "multi_thread")]
 async fn rust_cdp_chromium_target_window_open_auto_attached_popup_materializes_initial_document() {
     let mut ctx = TestContext::new_with_target_discovery(false);
-    ctx.enable_background_navigation_scheduler_for_test();
+    ctx.enable_background_event_ingress_for_test();
     tokio::task::LocalSet::new()
         .run_until(async {
             load_bc_with_titled_page_async(
@@ -791,7 +791,7 @@ async fn rust_cdp_chromium_target_window_open_auto_attached_popup_materializes_i
 async fn rust_cdp_chromium_target_window_open_waiting_popup_routes_initial_document_after_resume() {
     let fixture = SmokeFixtureServer::start().await;
     let mut ctx = TestContext::new_with_target_discovery(false);
-    ctx.enable_background_navigation_scheduler_for_test();
+    ctx.enable_background_event_ingress_for_test();
     tokio::task::LocalSet::new()
         .run_until(run_waiting_popup_initial_document_after_resume(
             &mut ctx, &fixture,

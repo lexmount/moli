@@ -4,7 +4,9 @@ use std::sync::Arc;
 use crate::devtools_runtime::AutomationEvent;
 use serde_json::Value;
 
-use crate::conn::{BackgroundEventSender, BackgroundProtocolEvent, build_event};
+#[cfg(test)]
+use crate::conn::BackgroundEventSender;
+use crate::conn::{BackgroundProtocolEvent, build_event};
 
 use super::MainDocumentNavigationProgressEvent;
 #[cfg(test)]
@@ -50,6 +52,7 @@ pub(super) enum MainDocumentProgressOutputBoundary {
 
 pub(super) enum MainDocumentProgressOutputTarget<'a> {
     BackgroundEvents(&'a mut Vec<BackgroundProtocolEvent>),
+    #[cfg(test)]
     BackgroundSender(&'a BackgroundEventSender),
 }
 
@@ -193,12 +196,6 @@ impl<'a> MainDocumentProgressBackgroundEventBarrier<'a> {
 
     pub(crate) fn drain_progress(&mut self) {
         self.progress_gate.drain_into_background_events(self.out);
-    }
-
-    #[cfg(test)]
-    pub(crate) fn events_after_progress(&mut self) -> &mut Vec<BackgroundProtocolEvent> {
-        self.drain_progress();
-        self.out
     }
 }
 
@@ -419,6 +416,7 @@ impl<'a> MainDocumentProgressOutputTarget<'a> {
         Self::BackgroundEvents(out)
     }
 
+    #[cfg(test)]
     pub(super) fn background_sender(sender: &'a BackgroundEventSender) -> Self {
         Self::BackgroundSender(sender)
     }
@@ -442,6 +440,7 @@ impl<'a> MainDocumentProgressOutputTarget<'a> {
             Self::BackgroundEvents(out) => {
                 out.push(event);
             }
+            #[cfg(test)]
             Self::BackgroundSender(sender) => {
                 let _ = (*sender).send(event);
             }

@@ -7,16 +7,10 @@ use super::{
     BrowserContextFirstCookieRequest, BrowserContextReservedSiteDataOwnerState,
     BrowserContextSiteDataManagerOwnerState, BrowserContextStructuredCookieCommandVerdict,
     BrowserContextStructuredCookieWriteBackendStatus,
-    BrowserContextStructuredCookieWriteReadinessStatus, CdpConnection, CommandDispatchContext,
-    CommandResponseFlushContext, NavigationDispatchState, NavigationResultProjection,
+    BrowserContextStructuredCookieWriteReadinessStatus, CdpConnection, CommandResponseFlushContext,
     ServiceWorkerTargetState, SharedWorkerTargetState,
 };
 use crate::devtools_runtime::DevToolsTargetFilterEntry;
-use crate::domains::network::{
-    FailedNavigationResponseMode, MaterializedFailedDocumentProgress,
-    MaterializedNavigationLoadOutcome, empty_main_document_progress_gate_for_test,
-};
-use crate::domains::page::MaterializedNavigationCompletion;
 use crate::testing::TestContext;
 use moli_cookie_jar::{
     BrowserCookieFacadeContextOverrides, BrowserCookieFacadeOverrides, CookieSiteDataClearScope,
@@ -423,38 +417,6 @@ fn missing_command_response_flush_context_releases_immediately() {
 }
 
 #[test]
-fn background_navigation_completion_sender_routes_explicit_session_owners() {
-    let mut conn = crate::test_support::connection();
-    let mut active = conn.new_browser_context_fixture_for_test("BID-active".to_owned());
-    active.set_active_target_id("TID-active");
-    active.attach_active_session("SID-active");
-    conn.install_browser_context_fixture_for_test(active);
-
-    let mut inactive = conn.new_browser_context_fixture_for_test("BID-inactive".to_owned());
-    inactive.set_active_target_id("TID-inactive");
-    inactive.attach_active_session("SID-inactive");
-    conn.push_inactive_browser_context_fixture_for_test(inactive);
-
-    let (sender, _receiver) = tokio::sync::mpsc::unbounded_channel();
-    conn.set_background_navigation_completion_sender(sender);
-
-    assert!(
-        conn.background_navigation_completion_sender_for_owner(
-            &crate::conn::CommandOwnerScope::for_session("SID-active")
-        )
-        .is_some(),
-        "a command scoped to a concrete target owner can continue navigation work in the background"
-    );
-    assert!(
-        conn.background_navigation_completion_sender_for_owner(
-            &crate::conn::CommandOwnerScope::for_session("SID-inactive")
-        )
-        .is_some(),
-        "inactive-context target owners should also be routable by explicit session id"
-    );
-}
-
-#[test]
 fn navigation_gate_resolves_websocket_events_to_their_session_target() {
     let mut conn = crate::test_support::connection();
     let mut target_a = conn.new_browser_context_fixture_for_test("BID-A".to_owned());
@@ -480,7 +442,7 @@ fn navigation_gate_resolves_websocket_events_to_their_session_target() {
         }
     }));
 
-    assert!(target_b_websocket.should_wait_for_background_navigation_completion());
+    assert!(target_b_websocket.is_non_document_network_event());
     assert!(conn.has_inflight_background_navigation());
     assert_eq!(
         conn.background_navigation_target_id_for_event(&target_b_websocket)
@@ -1328,156 +1290,6 @@ async fn memory_diagnostics_splits_pending_inspector_await_counts_by_target_owne
         diagnostics["activeBrowserContext"]["targetHosts"]["pendingInspectorAwaitCount"],
         json!(3)
     );
-}
-
-#[tokio::test]
-async fn materialized_navigation_completion_drops_stale_token() {
-    let mut conn = crate::test_support::connection();
-    let mut browser_context = conn.new_browser_context_fixture_for_test("CTX-nav".to_owned());
-    browser_context.set_active_target_id("TID-nav");
-    let stale = browser_context
-        .start_document_navigation_for_active_target("LOADER-1".to_owned())
-        .expect("active target should produce stale token");
-    let _current = browser_context
-        .start_document_navigation_for_active_target("LOADER-2".to_owned())
-        .expect("active target should produce current token");
-    conn.install_browser_context_fixture_for_test(browser_context);
-    let state =
-        materialized_navigation_test_state(Some(7), "LOADER-1", "https://example.test/stale");
-    let navigation =
-        MaterializedNavigationLoadOutcome::Failed(MaterializedFailedDocumentProgress {
-            error_text: "stale navigation should not emit".to_owned(),
-            response_mode: FailedNavigationResponseMode::ProtocolError,
-            progress_gate: empty_main_document_progress_gate_for_test(),
-        });
-
-    let mut out = Vec::new();
-    let mut command_context = CommandDispatchContext::default();
-    conn.drain_materialized_navigation_completion_into(
-        &mut out,
-        MaterializedNavigationCompletion::new(stale, state, navigation),
-        &mut command_context,
-    )
-    .await;
-
-    assert_eq!(out.len(), 1, "stale completion must emit terminal reply");
-    let reply = &out[0];
-    assert_eq!(reply["id"], serde_json::json!(7));
-    assert!(
-        reply.get("error").is_none(),
-        "CDP reports a superseded Page.navigate as a successful command: {reply:#?}"
-    );
-    assert_eq!(
-        reply["result"],
-        serde_json::json!({
-            "frameId": "TID-nav",
-            "errorText": "net::ERR_ABORTED",
-            "isDownload": false
-        })
-    );
-    assert!(
-        reply.get("method").is_none(),
-        "stale completion must emit a command reply, not an event"
-    );
-}
-
-#[tokio::test]
-async fn materialized_navigation_completion_drops_stale_token_without_navigate_id() {
-    let mut conn = crate::test_support::connection();
-    let mut browser_context = conn.new_browser_context_fixture_for_test("CTX-nav-none".to_owned());
-    browser_context.set_active_target_id("TID-nav-none");
-    let stale = browser_context
-        .start_document_navigation_for_active_target("LOADER-1".to_owned())
-        .expect("active target should produce stale navigation token");
-    let _ = browser_context
-        .start_document_navigation_for_active_target("LOADER-2".to_owned())
-        .expect("active target should produce current navigation token");
-    conn.install_browser_context_fixture_for_test(browser_context);
-    let state =
-        materialized_navigation_test_state(None, "LOADER-1", "https://example.test/stale-no-id");
-    let navigation =
-        MaterializedNavigationLoadOutcome::Failed(MaterializedFailedDocumentProgress {
-            error_text: "stale navigation should not emit without a navigate id".to_owned(),
-            response_mode: FailedNavigationResponseMode::ProtocolError,
-            progress_gate: empty_main_document_progress_gate_for_test(),
-        });
-
-    let mut out = Vec::new();
-    let mut command_context = CommandDispatchContext::default();
-    conn.drain_materialized_navigation_completion_into(
-        &mut out,
-        MaterializedNavigationCompletion::new(stale, state, navigation),
-        &mut command_context,
-    )
-    .await;
-
-    assert!(
-        out.is_empty(),
-        "stale completion without navigate id must not emit protocol output"
-    );
-}
-
-#[tokio::test]
-async fn materialized_navigation_completion_drains_current_token() {
-    let mut conn = crate::test_support::connection();
-    let mut browser_context = conn.new_browser_context_fixture_for_test("CTX-nav".to_owned());
-    browser_context.set_active_target_id("TID-nav");
-    let current = browser_context
-        .start_document_navigation_for_active_target("LOADER-1".to_owned())
-        .expect("active target should produce current token");
-    conn.install_browser_context_fixture_for_test(browser_context);
-    let state =
-        materialized_navigation_test_state(Some(8), "LOADER-1", "https://example.test/current");
-    let navigation =
-        MaterializedNavigationLoadOutcome::Failed(MaterializedFailedDocumentProgress {
-            error_text: "current navigation should emit".to_owned(),
-            response_mode: FailedNavigationResponseMode::ProtocolError,
-            progress_gate: empty_main_document_progress_gate_for_test(),
-        });
-
-    let mut out = Vec::new();
-    let mut command_context = CommandDispatchContext::default();
-    conn.drain_materialized_navigation_completion_into(
-        &mut out,
-        MaterializedNavigationCompletion::new(current, state, navigation),
-        &mut command_context,
-    )
-    .await;
-
-    assert_eq!(out.len(), 1);
-    assert_eq!(out[0]["id"], json!(8));
-    assert_eq!(out[0]["error"]["code"], json!(-32000));
-    assert_eq!(
-        out[0]["error"]["message"],
-        json!("current navigation should emit")
-    );
-}
-
-fn materialized_navigation_test_state(
-    navigate_id: Option<u64>,
-    loader_id: &str,
-    requested_url: &str,
-) -> NavigationDispatchState {
-    NavigationDispatchState {
-        navigate_id,
-        owner: crate::conn::CommandOwnerScope::for_route(crate::conn::CdpSessionRoute::Browser),
-        web_contents: NavigationDispatchState::detached_web_contents_for_test(),
-        result_projection: NavigationResultProjection::Cdp(
-            json!({ "frameId": "TID-nav", "loaderId": loader_id }),
-        ),
-        frame_id: "TID-nav".to_owned(),
-        session_id: None,
-        request_id: Some(loader_id.to_owned()),
-        loader_id: loader_id.to_owned(),
-        request_announced: true,
-        requested_url: Url::parse(requested_url).unwrap(),
-        request_method: "GET".to_owned(),
-        request_body: None,
-        request_body_bytes: None,
-        request_headers: Vec::new(),
-        request_load_policy: crate::conn::NavigationRequestLoadPolicy::DocumentInitiated,
-        timestamp: 0.0,
-    }
 }
 
 fn site_summary(

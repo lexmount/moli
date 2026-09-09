@@ -269,7 +269,7 @@ async fn empty_http_error_response_stage_commits_browser_error_document_after_co
         .enable_primary_network_events();
     ctx.conn.install_browser_context_fixture_for_test(bc);
     ctx.enable_page_events_for_test(Some("SID-1"));
-    ctx.enable_background_navigation_scheduler_for_test();
+    ctx.enable_background_event_ingress_for_test();
     let url = format!("http://{addr}/empty-429");
 
     tokio::task::LocalSet::new()
@@ -1172,7 +1172,7 @@ async fn response_stage_continue_response_projects_browser_network_events_once()
         .runtime_slot
         .enable_primary_network_events();
     ctx.conn.install_browser_context_fixture_for_test(bc);
-    ctx.enable_background_navigation_scheduler_for_test();
+    ctx.enable_background_event_ingress_for_test();
     let url = format!("http://{addr}/page");
 
     ctx.process_async(json!({

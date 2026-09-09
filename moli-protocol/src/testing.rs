@@ -48,11 +48,7 @@ pub struct TestContext {
     renderer_publication_rx: moli_core::RendererOutputTransportReceiver,
     background_event_tx: tokio::sync::mpsc::UnboundedSender<BackgroundProtocolEvent>,
     background_event_rx: tokio::sync::mpsc::UnboundedReceiver<BackgroundProtocolEvent>,
-    background_navigation_completion_tx:
-        tokio::sync::mpsc::UnboundedSender<crate::domains::page::BackgroundNavigationCompletion>,
-    background_navigation_completion_rx:
-        tokio::sync::mpsc::UnboundedReceiver<crate::domains::page::BackgroundNavigationCompletion>,
-    background_navigation_scheduler_enabled: bool,
+    background_events_enabled: bool,
     browser_event_rx: Option<moli_core::browser::BrowserEventReceiver>,
 }
 
@@ -125,7 +121,6 @@ enum TestSchedulerWork {
     ProtocolEvents(Vec<BackgroundProtocolEvent>),
     SchedulerEvents(Vec<CdpSchedulerEvent>),
     BackgroundEvent(BackgroundProtocolEvent),
-    BackgroundNavigationCompletion(crate::domains::page::BackgroundNavigationCompletion),
     RuntimeDeferredReplyReady(RuntimeInspectorResponseReady),
     RendererPublication(RendererOutputTransportMessage),
     ReleaseRendererResponsePermit(RendererCommandResponsePermit),
@@ -147,7 +142,6 @@ enum TestSchedulerTurnOutcome {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum TestSchedulerInputKind {
     BackgroundEvent,
-    BackgroundNavigationCompletion,
     RuntimeDeferredReply,
     RendererPublication,
     NativeDownload,
@@ -280,8 +274,6 @@ impl TestContext {
             .bind_runtime_inspector_response_ready()
             .expect("test scheduler must own the connection's completion ingress");
         let (background_event_tx, background_event_rx) = tokio::sync::mpsc::unbounded_channel();
-        let (background_navigation_completion_tx, background_navigation_completion_rx) =
-            tokio::sync::mpsc::unbounded_channel();
         conn.set_renderer_publication_sender(renderer_publication_tx);
         let browser_event_rx = Some(conn.subscribe_browser_events().unwrap().1);
         Self {
@@ -294,31 +286,21 @@ impl TestContext {
             renderer_publication_rx,
             background_event_tx,
             background_event_rx,
-            background_navigation_completion_tx,
-            background_navigation_completion_rx,
-            background_navigation_scheduler_enabled: false,
+            background_events_enabled: false,
             browser_event_rx,
         }
     }
 
-    /// Enables the same asynchronous navigation channels used by the socket
-    /// scheduler.
-    ///
-    /// Most protocol unit tests intentionally dispatch a domain command to
-    /// completion without owning an actor. Chromium-ordering and lifecycle
-    /// tests must opt into this production boundary: Page.navigate emits its
-    /// start/early response first, while the later renderer Page commit arrives
-    /// independently and is joined by its exact concrete-output cursor.
-    pub(crate) fn enable_background_navigation_scheduler_for_test(&mut self) {
-        if self.background_navigation_scheduler_enabled {
+    /// Routes asynchronous protocol events through the socket scheduler's FIFO.
+    /// Native Browser work and renderer publication are always observed; this
+    /// opt-in controls only the background event sender used by domain tests.
+    pub(crate) fn enable_background_event_ingress_for_test(&mut self) {
+        if self.background_events_enabled {
             return;
         }
         self.conn
             .set_background_event_sender(self.background_event_tx.clone());
-        self.conn.set_background_navigation_completion_sender(
-            self.background_navigation_completion_tx.clone(),
-        );
-        self.background_navigation_scheduler_enabled = true;
+        self.background_events_enabled = true;
     }
 
     /// Loads and installs one production-shaped navigation fixture for the
@@ -1218,14 +1200,6 @@ impl TestContext {
                 TestSchedulerWork::BackgroundEvent(event) => {
                     Box::pin(self.route_protocol_events_like_scheduler(vec![event], work)).await;
                 }
-                TestSchedulerWork::BackgroundNavigationCompletion(completion) => {
-                    Box::pin(
-                        self.route_background_navigation_completion_like_scheduler(
-                            completion, work,
-                        ),
-                    )
-                    .await;
-                }
                 TestSchedulerWork::RuntimeDeferredReplyReady(response) => {
                     Box::pin(self.complete_runtime_response_ready_like_scheduler(
                         response,
@@ -1261,67 +1235,6 @@ impl TestContext {
             }
             self.route_ready_protocol_scheduler_work_for_test_context(work)
                 .await;
-        }
-    }
-
-    async fn route_background_navigation_completion_like_scheduler(
-        &mut self,
-        completion: crate::domains::page::BackgroundNavigationCompletion,
-        work: &mut VecDeque<TestSchedulerWork>,
-    ) {
-        // Match the production actor's three-part boundary:
-        //
-        //   already-produced navigation output
-        //   -> exact renderer Page cursor
-        //   -> navigation commit output
-        //
-        // The event and renderer transports are independent, so flattening
-        // them after the fact would allow the commit cursor to move the new
-        // realm in front of frameStartedNavigating/Page.navigate's response.
-        let mut prefix = Vec::new();
-        while let Ok(event) = self.background_event_rx.try_recv() {
-            prefix.push(event);
-        }
-        if !prefix.is_empty() {
-            Box::pin(self.route_protocol_events_like_scheduler(prefix, work)).await;
-        }
-
-        let outcome = self
-            .conn
-            .drain_background_navigation_completion_turn_async(completion)
-            .await;
-        let (
-            mut completion_prefix,
-            mut completion_suffix,
-            renderer_output_boundary,
-            mut post_response_events,
-            scheduler_events,
-            renderer_output_predecessor,
-        ) = outcome.into_renderer_owner_turn_parts();
-        assert!(
-            renderer_output_predecessor.is_none(),
-            "background navigation completion must use an insertion boundary"
-        );
-        if !completion_prefix.is_empty() {
-            Box::pin(self.route_protocol_events_like_scheduler(
-                std::mem::take(&mut completion_prefix),
-                work,
-            ))
-            .await;
-        }
-        if let Some(boundary) = renderer_output_boundary {
-            Box::pin(self.route_renderer_output_predecessor_before_command_response(boundary))
-                .await;
-        }
-        completion_suffix.append(&mut post_response_events);
-        while let Ok(event) = self.background_event_rx.try_recv() {
-            completion_suffix.push(event);
-        }
-        if !completion_suffix.is_empty() {
-            work.push_back(TestSchedulerWork::ProtocolEvents(completion_suffix));
-        }
-        if !scheduler_events.is_empty() {
-            work.push_back(TestSchedulerWork::SchedulerEvents(scheduler_events));
         }
     }
 
@@ -1401,14 +1314,7 @@ impl TestContext {
 
     async fn run_one_ready_test_scheduler_turn(&mut self) -> TestSchedulerTurnOutcome {
         let mut work = VecDeque::new();
-        let input_kind = if self.background_navigation_scheduler_enabled
-            && let Ok(completion) = self.background_navigation_completion_rx.try_recv()
-        {
-            work.push_back(TestSchedulerWork::BackgroundNavigationCompletion(
-                completion,
-            ));
-            TestSchedulerInputKind::BackgroundNavigationCompletion
-        } else if self.background_navigation_scheduler_enabled
+        let input_kind = if self.background_events_enabled
             && let Ok(event) = self.background_event_rx.try_recv()
         {
             work.push_back(TestSchedulerWork::BackgroundEvent(event));
@@ -1542,7 +1448,7 @@ impl TestContext {
         }
 
         let mut work = VecDeque::new();
-        let background_navigation_scheduler_enabled = self.background_navigation_scheduler_enabled;
+        let background_events_enabled = self.background_events_enabled;
         let input_kind = if !self.pending_runtime_deferred_replies.is_empty() {
             tokio::select! {
                 biased;
@@ -1554,14 +1460,7 @@ impl TestContext {
                     work.push_back(TestSchedulerWork::RuntimeDeferredReplyReady(response));
                     TestSchedulerInputKind::RuntimeDeferredReply
                 }
-                maybe_completion = self.background_navigation_completion_rx.recv(), if background_navigation_scheduler_enabled => {
-                    let Some(completion) = maybe_completion else {
-                        return std::ops::ControlFlow::Continue(TestSchedulerTurnOutcome::Idle);
-                    };
-                    work.push_back(TestSchedulerWork::BackgroundNavigationCompletion(completion));
-                    TestSchedulerInputKind::BackgroundNavigationCompletion
-                }
-                maybe_event = self.background_event_rx.recv(), if background_navigation_scheduler_enabled => {
+                maybe_event = self.background_event_rx.recv(), if background_events_enabled => {
                     let Some(event) = maybe_event else {
                         return std::ops::ControlFlow::Continue(TestSchedulerTurnOutcome::Idle);
                     };
@@ -1584,14 +1483,7 @@ impl TestContext {
             tokio::select! {
                 biased;
                 result = input => return std::ops::ControlFlow::Break(result),
-                maybe_completion = self.background_navigation_completion_rx.recv(), if background_navigation_scheduler_enabled => {
-                    let Some(completion) = maybe_completion else {
-                        return std::ops::ControlFlow::Continue(TestSchedulerTurnOutcome::Idle);
-                    };
-                    work.push_back(TestSchedulerWork::BackgroundNavigationCompletion(completion));
-                    TestSchedulerInputKind::BackgroundNavigationCompletion
-                }
-                maybe_event = self.background_event_rx.recv(), if background_navigation_scheduler_enabled => {
+                maybe_event = self.background_event_rx.recv(), if background_events_enabled => {
                     let Some(event) = maybe_event else {
                         return std::ops::ControlFlow::Continue(TestSchedulerTurnOutcome::Idle);
                     };
@@ -2424,8 +2316,6 @@ mod tests {
             .bind_runtime_inspector_response_ready()
             .expect("test scheduler must own the connection's completion ingress");
         let (background_event_tx, background_event_rx) = tokio::sync::mpsc::unbounded_channel();
-        let (background_navigation_completion_tx, background_navigation_completion_rx) =
-            tokio::sync::mpsc::unbounded_channel();
         conn.set_renderer_publication_sender(publication_tx.clone());
         let mut ctx = TestContext {
             conn,
@@ -2437,9 +2327,7 @@ mod tests {
             renderer_publication_rx: publication_rx,
             background_event_tx,
             background_event_rx,
-            background_navigation_completion_tx,
-            background_navigation_completion_rx,
-            background_navigation_scheduler_enabled: false,
+            background_events_enabled: false,
             browser_event_rx: None,
         };
         let opened = |page_id| {

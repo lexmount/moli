@@ -1069,15 +1069,12 @@ async fn renderer_stream_control_is_consumed_without_protocol_residence() {
 #[tokio::test]
 async fn closed_renderer_transport_fails_an_unprojected_command_fence() {
     let (_background_event_tx, background_event_rx) = tokio::sync::mpsc::unbounded_channel();
-    let (_navigation_tx, background_navigation_completion_rx) =
-        tokio::sync::mpsc::unbounded_channel();
     let (renderer_tx, renderer_publication_rx) = moli_core::renderer_output_transport_channel();
     let (_runtime_response_tx, runtime_inspector_response_ready_rx) =
         tokio::sync::mpsc::unbounded_channel();
     drop(renderer_tx);
     let mut receivers = super::CdpSchedulerEventReceivers {
         background_event_rx,
-        background_navigation_completion_rx,
         renderer_publication_rx,
         runtime_inspector_response_ready_rx,
     };
@@ -1317,44 +1314,39 @@ fn replacement_navigation_cancels_and_exactly_settles_the_target_owned_request()
 }
 
 #[test]
-fn scheduler_defers_subresource_network_events_until_background_navigation_gate_clears() {
+fn scheduler_routes_subresource_network_fifo_without_legacy_completion() {
     let mut conn = moli_protocol::test_support::connection();
     let navigation = arm_background_navigation_request(&mut conn, "LOADER-nav");
     let target_id = navigation.target_id().to_owned();
     let mut scheduler = CdpScheduler::new(conn);
 
-    let document_output = scheduler.route_background_event_around_inflight_navigation(
-        network_response_event_for_target(
+    let document_output =
+        scheduler.route_current_background_event(network_response_event_for_target(
             DevToolsNetworkResourceType::Document,
             "REQ-document",
             &target_id,
-        ),
-    );
+        ));
     assert_eq!(output_request_ids(document_output), ["REQ-document"]);
 
-    let script_output = scheduler.route_background_event_around_inflight_navigation(
-        network_response_event_for_target(
+    let script_output =
+        scheduler.route_current_background_event(network_response_event_for_target(
             DevToolsNetworkResourceType::Script,
             "REQ-script",
             &target_id,
-        ),
-    );
-    assert!(script_output.is_empty());
-    let script_terminal = scheduler.route_background_event_around_inflight_navigation(
-        network_finished_event_for_target(
+        ));
+    let mut released = script_output;
+    let script_terminal =
+        scheduler.route_current_background_event(network_finished_event_for_target(
             DevToolsNetworkResourceType::Script,
             "REQ-script",
             &target_id,
-        ),
-    );
-    assert!(script_terminal.is_empty());
-    assert_eq!(scheduler.pending_navigation_background_events.len(), 2);
+        ));
+    released.append(script_terminal);
 
     assert!(settle_background_navigation_request(
         &mut scheduler.conn,
         &navigation
     ));
-    let released = scheduler.drain_pending_navigation_background_events();
     let released = released
         .into_background_events()
         .into_iter()
@@ -1382,7 +1374,7 @@ fn scheduler_defers_subresource_network_events_until_background_navigation_gate_
 }
 
 #[tokio::test]
-async fn target_a_navigation_does_not_defer_target_b_network_events() {
+async fn concurrent_navigation_bodies_do_not_park_either_targets_network_events() {
     let mut conn = moli_protocol::test_support::connection();
     conn.install_default_browser_target();
     let context = DevToolsCommandContext {
@@ -1429,71 +1421,52 @@ async fn target_a_navigation_does_not_defer_target_b_network_events() {
     assert!(!conn.has_inflight_background_navigation_for_target(&target_b));
 
     let mut scheduler = CdpScheduler::new(conn);
-    let target_b_output = scheduler.route_background_event_around_inflight_navigation(
+    let target_b_output = scheduler.route_current_background_event(
         network_response_event_for_target(DevToolsNetworkResourceType::Xhr, "REQ-B", &target_b),
     );
     assert_eq!(output_request_ids(target_b_output), ["REQ-B"]);
 
     let navigation_b =
         arm_background_navigation_request_for_target(&mut scheduler.conn, &target_b, "LOADER-B");
-    let target_b_held = scheduler.route_background_event_around_inflight_navigation(
-        network_response_event_for_target(
+    let target_b_held =
+        scheduler.route_current_background_event(network_response_event_for_target(
             DevToolsNetworkResourceType::Xhr,
             "REQ-B-held",
             &target_b,
-        ),
-    );
-    assert!(target_b_held.is_empty());
-    let target_a_output = scheduler.route_background_event_around_inflight_navigation(
+        ));
+    assert_eq!(output_request_ids(target_b_held), ["REQ-B-held"]);
+    let target_a_output = scheduler.route_current_background_event(
         network_response_event_for_target(DevToolsNetworkResourceType::Xhr, "REQ-A", &target_a),
     );
-    assert!(target_a_output.is_empty());
-    assert_eq!(scheduler.pending_navigation_background_events.len(), 2);
+    assert_eq!(output_request_ids(target_a_output), ["REQ-A"]);
 
     assert!(settle_background_navigation_request(
         &mut scheduler.conn,
         &navigation
     ));
-    assert_eq!(
-        output_request_ids(scheduler.drain_pending_navigation_background_events()),
-        ["REQ-A"],
-        "settling target A must not release target B's held event"
-    );
-    assert_eq!(scheduler.pending_navigation_background_events.len(), 1);
     assert!(settle_background_navigation_request(
         &mut scheduler.conn,
         &navigation_b
     ));
-    assert_eq!(
-        output_request_ids(scheduler.drain_pending_navigation_background_events()),
-        ["REQ-B-held"]
-    );
 }
 
 #[test]
-fn navigation_gate_release_precedes_later_renderer_boundary_network_output() {
+fn network_request_precedes_later_renderer_boundary_without_legacy_completion() {
     let mut conn = moli_protocol::test_support::connection();
     let navigation = arm_background_navigation_request(&mut conn, "LOADER-nav");
     let target_id = navigation.target_id().to_owned();
     let mut scheduler = CdpScheduler::new(conn);
 
     let request_id = "REQ-boundary-race";
-    assert!(
-        scheduler
-            .route_background_event_around_inflight_navigation(network_request_event_for_target(
-                DevToolsNetworkResourceType::Xhr,
-                request_id,
-                &target_id,
-            ))
-            .is_empty()
-    );
-
+    let mut output = scheduler.route_current_background_event(network_request_event_for_target(
+        DevToolsNetworkResourceType::Xhr,
+        request_id,
+        &target_id,
+    ));
     assert!(settle_background_navigation_request(
         &mut scheduler.conn,
         &navigation
     ));
-    let mut output = ProtocolOutputSequence::empty();
-    scheduler.append_navigation_gate_release_before_renderer_boundary(&mut output);
     output.append(ProtocolOutputSequence::from_background_event(
         network_response_event_for_target(DevToolsNetworkResourceType::Xhr, request_id, &target_id),
     ));

@@ -40,11 +40,11 @@ pub use domains::activity::{
     RendererCommandResponseTerminal,
 };
 pub use domains::page::{
-    BackgroundNavigationCompletion, CompletedDevToolsNavigationCommandDispatch,
-    CompletedPageScreencastCapture, DevToolsNavigationCommandTaskStep,
-    PageScreencastCaptureCompletion, PageScreencastCaptureStart, PageScreencastRegistration,
-    PageScreencastSubscriptionStatus, PendingDevToolsNavigationCommandDispatch,
-    PendingPageScreencastCapture, build_default_raster_pdf,
+    CompletedDevToolsNavigationCommandDispatch, CompletedPageScreencastCapture,
+    DevToolsNavigationCommandTaskStep, PageScreencastCaptureCompletion, PageScreencastCaptureStart,
+    PageScreencastRegistration, PageScreencastSubscriptionStatus,
+    PendingDevToolsNavigationCommandDispatch, PendingPageScreencastCapture,
+    build_default_raster_pdf,
 };
 pub use domains::runtime::{
     CompletedDevToolsRuntimeCommandDispatch, DevToolsRuntimeCommandTaskStep,

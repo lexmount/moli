@@ -41,6 +41,7 @@ pub(crate) struct TargetPageResourceStore {
 }
 
 impl TargetPageResourceStore {
+    #[cfg(test)]
     pub(crate) fn record_main_document_body(
         &mut self,
         frame_id: String,

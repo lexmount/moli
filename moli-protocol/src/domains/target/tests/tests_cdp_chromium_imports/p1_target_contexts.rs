@@ -563,7 +563,7 @@ async fn rust_cdp_chromium_target_popup_target_keeps_opener_browser_context_id()
     // loading. Use the production scheduler boundary here: leaving this test
     // on TestContext's legacy inline-navigation mode makes an unrelated
     // example.com response part of the renderer-output cursor fence.
-    ctx.enable_background_navigation_scheduler_for_test();
+    ctx.enable_background_event_ingress_for_test();
     tokio::task::LocalSet::new()
         .run_until(async {
             load_bc_with_titled_page_async(

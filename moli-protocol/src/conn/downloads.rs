@@ -13,8 +13,6 @@ use super::{
     BackgroundProtocolEvent, CdpConnection, CommandDispatchContext, CommandOwnerScope,
     output::BackgroundEventSender,
 };
-#[cfg(test)]
-use super::{CompletedDownloadBodyArtifact, NavigationDispatchState};
 
 #[cfg(test)]
 #[path = "downloads/lifecycle_tests.rs"]
@@ -187,53 +185,6 @@ impl CdpConnection {
                 observation,
                 out,
                 allow_background_events,
-                command_context,
-            )
-            .await;
-        }
-        Ok(())
-    }
-
-    #[cfg(test)]
-    pub(crate) async fn handle_navigation_download_response_async(
-        &mut self,
-        out: &mut Vec<BackgroundProtocolEvent>,
-        state: &NavigationDispatchState,
-        final_url: Url,
-        body_artifact: CompletedDownloadBodyArtifact,
-        command_context: &mut CommandDispatchContext,
-    ) -> Result<(), String> {
-        let web_contents = state.web_contents;
-        let Some(context) = self.browser_context_by_browser_id(web_contents.context()) else {
-            return Ok(());
-        };
-        if context
-            .download_frame_id_for_web_contents(web_contents)
-            .is_none()
-        {
-            return Ok(());
-        }
-        let Some((policy, automation_events_enabled)) =
-            self.download_configuration_for_browser_context(web_contents.context())
-        else {
-            return Ok(());
-        };
-        let event_route = self.download_event_route(&state.owner, automation_events_enabled);
-        let (body, headers) = body_artifact.into_parts();
-        let observation = self
-            .browser_context_by_browser_id_mut(web_contents.context())
-            .expect("exact navigation download Context was resolved without yielding")
-            .start_download_response(web_contents, &policy, final_url, headers, body)?;
-        if let Some(observation) = observation {
-            self.observe_download(
-                DownloadProjection::new(
-                    state.frame_id.clone(),
-                    event_route,
-                    observation.guid().to_owned(),
-                ),
-                observation,
-                out,
-                true,
                 command_context,
             )
             .await;

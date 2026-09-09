@@ -7,7 +7,6 @@ use crate::conn::{
     BrowserContext, CdpCommandTaskStep, CdpSchedulerEvent, NETWORK_ERROR_PAGE_URL,
     PendingCdpCommandDispatch,
 };
-use crate::domains::page::BackgroundNavigationCompletion;
 use crate::testing::{
     TestContext, spawn_connection_drop_server, wait_until_message, wait_until_messages,
 };

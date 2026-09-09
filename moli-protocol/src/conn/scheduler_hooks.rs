@@ -7,9 +7,6 @@ use super::{
 #[derive(Default)]
 pub(super) struct CdpSchedulerHooks {
     background_event_sender: Option<BackgroundEventSender>,
-    background_navigation_completion_sender: Option<
-        tokio::sync::mpsc::UnboundedSender<crate::domains::page::BackgroundNavigationCompletion>,
-    >,
     renderer_publication_sender: Option<RendererOutputTransportSender>,
     runtime_inspector_response_ready_sender: Option<RuntimeInspectorResponseReadySender>,
 }
@@ -38,28 +35,6 @@ impl CdpSchedulerHooks {
         &self,
     ) -> Option<RuntimeInspectorResponseReadySender> {
         self.runtime_inspector_response_ready_sender.clone()
-    }
-
-    pub(super) fn set_background_navigation_completion_sender(
-        &mut self,
-        sender: tokio::sync::mpsc::UnboundedSender<
-            crate::domains::page::BackgroundNavigationCompletion,
-        >,
-    ) {
-        self.background_navigation_completion_sender = Some(sender);
-    }
-
-    #[cfg(test)]
-    pub(super) fn background_navigation_completion_sender(
-        &self,
-    ) -> Option<
-        tokio::sync::mpsc::UnboundedSender<crate::domains::page::BackgroundNavigationCompletion>,
-    > {
-        self.background_navigation_completion_sender.clone()
-    }
-
-    pub(super) fn has_background_navigation_completion_sender(&self) -> bool {
-        self.background_navigation_completion_sender.is_some()
     }
 
     pub(super) fn set_renderer_publication_sender(

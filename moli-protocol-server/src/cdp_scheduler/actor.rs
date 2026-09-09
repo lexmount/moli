@@ -5,8 +5,8 @@ use std::{
 
 use moli_core::{RendererOutputFence, RendererOutputTransportMessage};
 use moli_protocol::{
-    BackgroundNavigationCompletion, BackgroundProtocolEvent, CdpSchedulerEvent,
-    CommandDispatchContext, CompletedCdpCommandDispatch, CompletedPageScreencastCapture,
+    BackgroundProtocolEvent, CdpSchedulerEvent, CommandDispatchContext,
+    CompletedCdpCommandDispatch, CompletedPageScreencastCapture,
     DeferredMainDocumentLoadObservationId, ParsedCdpCommand, PendingCdpCommandDispatch,
     conn::RuntimeInspectorResponseReady,
 };
@@ -22,7 +22,6 @@ use crate::{
     protocol_server::webdriver_classic::ClassicServiceSessions,
 };
 
-use super::CdpBackgroundEventReceiver;
 use super::DevToolsFrontendOutput;
 use super::frontend_control::{CdpFrontendControlState, send_cookie_checkpoint};
 use super::{
@@ -82,7 +81,6 @@ fn page_javascript_owner_is_blocked(
 }
 
 enum SchedulerInput {
-    BackgroundNavigationCompletion(BackgroundNavigationCompletion),
     BackgroundEvent(BackgroundProtocolEvent),
     RendererPublication(RendererOutputTransportMessage),
     DeferredRuntimeInspectorResponse(Box<RuntimeInspectorResponseReady>),
@@ -111,14 +109,8 @@ impl SchedulerInputReceivers {
         // protocol events from their separate channels, then close the finite
         // batch with the response so a busy producer cannot starve it.
         //
-        // Renderer publications are deliberately not copied into this queue.
-        // A correlated response carries an exact concrete output cursor; the
-        // cursor fence below consumes only concrete stream traffic until that
-        // position is admitted.
-        while let Ok(completion) = self.events.background_navigation_completion_rx.try_recv() {
-            self.ready_background_inputs_before_runtime_response
-                .push_back(SchedulerInput::BackgroundNavigationCompletion(completion));
-        }
+        // Renderer publications stay on their concrete stream. The correlated
+        // response carries the exact cursor consumed by the fence below.
         while let Ok(event) = self.events.background_event_rx.try_recv() {
             self.ready_background_inputs_before_runtime_response
                 .push_back(SchedulerInput::BackgroundEvent(event));
@@ -162,9 +154,6 @@ impl SchedulerInputReceivers {
                     self.queue_ready_background_inputs_before_runtime_response(response);
                     self.ready_background_inputs_before_runtime_response.pop_front()
                 }
-                maybe_completion = self.events.background_navigation_completion_rx.recv() => {
-                    maybe_completion.map(SchedulerInput::BackgroundNavigationCompletion)
-                }
                 maybe_event = self.events.background_event_rx.recv() => {
                     maybe_event.map(SchedulerInput::BackgroundEvent)
                 }
@@ -178,9 +167,6 @@ impl SchedulerInputReceivers {
         } else {
             tokio::select! {
                 biased;
-                maybe_completion = self.events.background_navigation_completion_rx.recv() => {
-                    maybe_completion.map(SchedulerInput::BackgroundNavigationCompletion)
-                }
                 maybe_event = self.events.background_event_rx.recv() => {
                     maybe_event.map(SchedulerInput::BackgroundEvent)
                 }
@@ -322,7 +308,7 @@ async fn run_cdp_scheduler_actor(
         // Native Browser commits/cancellations can release a Document fence
         // without any legacy completion or later frontend command. Recheck
         // the existing waiters after publishing all ready projection output.
-        if !drain_blocked_commands_after_navigation_gate(
+        if !drain_commands_after_document_projection(
             &frontend_router,
             &mut scheduler,
             &mut scheduler_input_rx,
@@ -403,7 +389,7 @@ async fn run_cdp_scheduler_actor(
                         generation,
                         visual_state,
                     } = frame;
-                    let output = scheduler.route_background_event_around_inflight_navigation(event);
+                    let output = scheduler.route_current_background_event(event);
                     if !flush_protocol_output_with_runtime_deferred_reply_routing(
                         &frontend_router,
                         &mut scheduler,
@@ -500,10 +486,6 @@ async fn run_cdp_scheduler_actor(
                     &mut scheduler_input_rx,
                     &mut pending_runtime_deferred_replies,
                     &mut adapter_scheduler,
-                    &pending_command_completion_tx,
-                    &mut in_flight_commands,
-                    &mut blocked_commands,
-                    &mut next_in_flight_command_token,
                     input,
                 )
                 .await
@@ -533,10 +515,6 @@ async fn handle_scheduler_input(
     scheduler_input_rx: &mut SchedulerInputReceivers,
     pending_runtime_deferred_replies: &mut VecDeque<PendingRuntimeDeferredReplyState>,
     adapter_scheduler: &mut ProtocolAdapterScheduler,
-    pending_command_completion_tx: &mpsc::UnboundedSender<PendingCommandCompletion>,
-    in_flight_commands: &mut InFlightCommands,
-    blocked_commands: &mut VecDeque<BlockedCommandDispatch>,
-    next_in_flight_command_token: &mut u64,
     input: SchedulerInput,
 ) -> bool {
     let input_kind = scheduler_input_kind(&input);
@@ -549,34 +527,8 @@ async fn handle_scheduler_input(
         );
     }
     let ok = match input {
-        SchedulerInput::BackgroundNavigationCompletion(_) => {
-            if !flush_background_completion_input(
-                frontend_router,
-                scheduler,
-                scheduler_input_rx,
-                pending_runtime_deferred_replies,
-                adapter_scheduler,
-                input,
-            )
-            .await
-            {
-                return false;
-            }
-            drain_blocked_commands_after_navigation_gate(
-                frontend_router,
-                scheduler,
-                scheduler_input_rx,
-                pending_runtime_deferred_replies,
-                adapter_scheduler,
-                pending_command_completion_tx,
-                in_flight_commands,
-                blocked_commands,
-                next_in_flight_command_token,
-            )
-            .await
-        }
         SchedulerInput::BackgroundEvent(event) => {
-            let output = scheduler.route_background_event_around_inflight_navigation(event);
+            let output = scheduler.route_current_background_event(event);
             flush_protocol_output_with_runtime_deferred_reply_routing(
                 frontend_router,
                 scheduler,
@@ -688,69 +640,6 @@ async fn ingest_and_flush_renderer_publication(
         scheduler,
         pending_runtime_deferred_replies,
         output,
-    )
-    .await
-}
-
-async fn flush_background_completion_input(
-    frontend_router: &CdpFrontendRouter,
-    scheduler: &mut CdpScheduler,
-    scheduler_input_rx: &mut SchedulerInputReceivers,
-    pending_runtime_deferred_replies: &mut VecDeque<PendingRuntimeDeferredReplyState>,
-    adapter_scheduler: &mut ProtocolAdapterScheduler,
-    input: SchedulerInput,
-) -> bool {
-    let (prefix_output, mut completion_output, renderer_output_predecessor) = match input {
-        SchedulerInput::BackgroundNavigationCompletion(completion) => {
-            materialize_background_navigation_completion_output(
-                scheduler,
-                completion,
-                &mut scheduler_input_rx.events.background_event_rx,
-            )
-            .await
-        }
-        _ => unreachable!("only background completion inputs are routed here"),
-    };
-    // The prefix contains facts that predate the renderer Page commit,
-    // including frameStartedNavigating and an early Page.navigate response.
-    // Flush it before waiting on the independent renderer transport. Otherwise
-    // the exact commit cursor would incorrectly reorder new-realm output in
-    // front of the navigation that created that realm.
-    if !prefix_output.is_empty()
-        && !flush_protocol_output_with_runtime_deferred_reply_routing(
-            frontend_router,
-            scheduler,
-            pending_runtime_deferred_replies,
-            prefix_output,
-        )
-        .await
-    {
-        return false;
-    }
-    if !flush_renderer_publication_predecessor(
-        frontend_router,
-        scheduler,
-        scheduler_input_rx,
-        pending_runtime_deferred_replies,
-        adapter_scheduler,
-        renderer_output_predecessor.as_ref(),
-    )
-    .await
-    {
-        return false;
-    }
-    if let Some(predecessor) = renderer_output_predecessor {
-        let mut renderer_prefix = scheduler
-            .complete_renderer_output_predecessor_before_runtime_response(&predecessor)
-            .await;
-        renderer_prefix.append(completion_output);
-        completion_output = renderer_prefix;
-    }
-    flush_protocol_output_with_runtime_deferred_reply_routing(
-        frontend_router,
-        scheduler,
-        pending_runtime_deferred_replies,
-        completion_output,
     )
     .await
 }
@@ -1494,7 +1383,7 @@ async fn handle_client_command_with_interleaved_output(
     if let Some(method) = probe_method.as_deref() {
         tracing::info!(method, "CMD_PROBE_COMMAND_RECEIVED");
     }
-    if !blocked_commands.is_empty() && scheduler.command_waits_for_navigation_flush(&command) {
+    if !blocked_commands.is_empty() && scheduler.command_waits_for_document_projection(&command) {
         trace_command(
             &command,
             "command_queued_behind_background_navigation_blocked_command",
@@ -1503,7 +1392,7 @@ async fn handle_client_command_with_interleaved_output(
             None,
         );
         blocked_commands.push_back(BlockedCommandDispatch { command, metadata });
-        return drain_blocked_commands_after_navigation_gate(
+        return drain_commands_after_document_projection(
             frontend_router,
             scheduler,
             scheduler_input_rx,
@@ -1516,8 +1405,8 @@ async fn handle_client_command_with_interleaved_output(
         )
         .await;
     }
-    match scheduler.start_command_or_request_background_navigation_flush(&command) {
-        CommandStartAction::NeedsBackgroundNavigationFlush => {
+    match scheduler.start_command_or_wait_for_document_projection(&command) {
+        CommandStartAction::AwaitDocumentProjection => {
             trace_command(
                 &command,
                 "command_blocked_by_background_navigation",
@@ -1653,7 +1542,7 @@ async fn start_ready_command_dispatch(
     }
 }
 
-async fn drain_blocked_commands_after_navigation_gate(
+async fn drain_commands_after_document_projection(
     frontend_router: &CdpFrontendRouter,
     scheduler: &mut CdpScheduler,
     scheduler_input_rx: &mut SchedulerInputReceivers,
@@ -1668,7 +1557,7 @@ async fn drain_blocked_commands_after_navigation_gate(
         let Some(blocked) = blocked_commands.pop_front() else {
             return true;
         };
-        if scheduler.command_waits_for_navigation_flush(&blocked.command) {
+        if scheduler.command_waits_for_document_projection(&blocked.command) {
             trace_command(
                 &blocked.command,
                 "blocked_command_still_waiting_for_background_navigation",
@@ -1679,8 +1568,8 @@ async fn drain_blocked_commands_after_navigation_gate(
             blocked_commands.push_front(blocked);
             return true;
         }
-        match scheduler.start_command_or_request_background_navigation_flush(&blocked.command) {
-            CommandStartAction::NeedsBackgroundNavigationFlush => {
+        match scheduler.start_command_or_wait_for_document_projection(&blocked.command) {
+            CommandStartAction::AwaitDocumentProjection => {
                 trace_command(
                     &blocked.command,
                     "blocked_command_still_waiting_for_background_navigation",
@@ -2011,42 +1900,6 @@ async fn handle_pending_command_completion(
     }
 }
 
-async fn materialize_background_navigation_completion_output(
-    scheduler: &mut CdpScheduler,
-    completion: BackgroundNavigationCompletion,
-    background_event_rx: &mut CdpBackgroundEventReceiver,
-) -> (
-    ProtocolOutputSequence,
-    ProtocolOutputSequence,
-    Option<moli_core::RendererOutputFence>,
-) {
-    let timing_started = moli_trace::cdp_nav_timing_enabled().then(Instant::now);
-    if timing_started.is_some() {
-        tracing::info!(
-            target: "moli_cdp_nav_timing",
-            url = %completion.requested_url(),
-            kind = completion.kind(),
-            stage = "background_completion_actor_recv",
-        );
-    }
-    let (prefix, completion, renderer_output_predecessor) = scheduler
-        .materialize_background_navigation_completion_with_progress_barrier(
-            completion,
-            background_event_rx,
-        )
-        .await;
-    if let Some(started) = timing_started {
-        tracing::info!(
-            target: "moli_cdp_nav_timing",
-            stage = "background_completion_actor_materialized",
-            prefix_messages = prefix.len(),
-            completion_messages = completion.len(),
-            phase_ms = started.elapsed().as_millis(),
-        );
-    }
-    (prefix, completion, renderer_output_predecessor)
-}
-
 fn trace_scheduler_input(input: &SchedulerInput, stage: &'static str) {
     if !moli_trace::cdp_runtime_trace_enabled() {
         return;
@@ -2061,7 +1914,6 @@ fn trace_scheduler_input(input: &SchedulerInput, stage: &'static str) {
 
 fn scheduler_input_kind(input: &SchedulerInput) -> &'static str {
     match input {
-        SchedulerInput::BackgroundNavigationCompletion(_) => "background_navigation_completion",
         SchedulerInput::BackgroundEvent(_) => "background_event",
         SchedulerInput::DeferredRuntimeInspectorResponse(_) => {
             "deferred_runtime_inspector_response"
@@ -2132,14 +1984,11 @@ mod tests {
     #[tokio::test]
     async fn ready_background_events_precede_runtime_response_without_starving_it() {
         let (background_event_tx, background_event_rx) = mpsc::unbounded_channel();
-        let (_background_navigation_tx, background_navigation_completion_rx) =
-            mpsc::unbounded_channel();
         let (_renderer_publication_tx, renderer_publication_rx) =
             moli_core::renderer_output_transport_channel();
         let (runtime_response_tx, runtime_inspector_response_ready_rx) = mpsc::unbounded_channel();
         let mut receivers = SchedulerInputReceivers::new(CdpSchedulerEventReceivers {
             background_event_rx,
-            background_navigation_completion_rx,
             renderer_publication_rx,
             runtime_inspector_response_ready_rx,
         });

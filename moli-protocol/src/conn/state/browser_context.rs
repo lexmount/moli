@@ -880,6 +880,7 @@ impl BrowserContext {
             .arm_background_navigation_completion(token, additional_cancellation)
     }
 
+    #[cfg(any(test, feature = "test-support"))]
     pub(crate) fn settle_background_navigation_completion(&mut self, token: &NavigationId) -> bool {
         self.browser_context
             .settle_background_navigation_completion(token)

@@ -1118,7 +1118,7 @@ async fn window_open_hands_off_session_storage_snapshot_and_initial_storage_key(
     let opener_url = format!("http://{addr}/opener");
     ctx.install_navigation_fixture_for_session_owner(&opener_url, None)
         .await;
-    ctx.enable_background_navigation_scheduler_for_test();
+    ctx.enable_background_event_ingress_for_test();
 
     tokio::task::LocalSet::new().run_until(async {
     ctx.process_async(json!({
@@ -1761,7 +1761,7 @@ async fn window_open_named_target_reuses_existing_popup_target() {
     // `window.open()`, but fetching the selected target's URL is not. Mirror
     // the socket scheduler so this ownership test never joins the Runtime
     // response to external network completion.
-    ctx.enable_background_navigation_scheduler_for_test();
+    ctx.enable_background_event_ingress_for_test();
     tokio::task::LocalSet::new()
         .run_until(async {
             load_bc_with_titled_page_async(
@@ -2139,7 +2139,7 @@ async fn anchor_left_click_activates_blank_target_to_foreground() {
     const POPUP_HREF: &str = "data:text/html,%3Cmain%3Eforeground-popup%3C/main%3E";
     const POPUP_URL: &str = "data:text/html,<main>foreground-popup</main>";
     let mut ctx = TestContext::new();
-    ctx.enable_background_navigation_scheduler_for_test();
+    ctx.enable_background_event_ingress_for_test();
     tokio::task::LocalSet::new()
         .run_until(async {
             load_bc_with_titled_page_async(
@@ -2181,7 +2181,7 @@ async fn anchor_left_click_activates_popup_while_initial_navigation_waits_for_de
         "data:text/html,%3Cmain%3Edebugger-waiting-foreground-popup%3C/main%3E";
     const POPUP_URL: &str = "data:text/html,<main>debugger-waiting-foreground-popup</main>";
     let mut ctx = TestContext::new();
-    ctx.enable_background_navigation_scheduler_for_test();
+    ctx.enable_background_event_ingress_for_test();
     tokio::task::LocalSet::new()
         .run_until(async {
             load_bc_with_titled_page_async(
@@ -2262,7 +2262,7 @@ async fn anchor_platform_new_tab_click_keeps_blank_target_in_background() {
     const POPUP_HREF: &str = "data:text/html,%3Cmain%3Ebackground-popup%3C/main%3E";
     const POPUP_URL: &str = "data:text/html,<main>background-popup</main>";
     let mut ctx = TestContext::new();
-    ctx.enable_background_navigation_scheduler_for_test();
+    ctx.enable_background_event_ingress_for_test();
     tokio::task::LocalSet::new()
         .run_until(async {
             load_bc_with_titled_page_async(

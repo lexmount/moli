@@ -7,7 +7,7 @@ use crate::conn::{
 use crate::domains::{activity, network};
 use moli_core::RendererOutputFence;
 
-use super::{PageCommandTaskStep, complete_materialized_navigation_into_buffer_async};
+use super::PageCommandTaskStep;
 use crate::domains::command_output::{CommandOutputBuffer, CommandOutputPlan};
 
 #[derive(Debug)]
@@ -59,30 +59,23 @@ fn complete_success_with_background_events(
     PageCommandTaskStep::Complete(plan)
 }
 
-async fn complete_tokened_materialized_navigation_background_events_async(
+async fn fail_navigation_background_events_async(
     conn: &mut CdpConnection,
     out: &mut Vec<BackgroundProtocolEvent>,
-    token: Option<NavigationId>,
+    token: NavigationId,
     navigation_state: NavigationDispatchState,
-    navigation: network::MaterializedNavigationLoadOutcome,
+    error_text: &str,
 ) -> Option<RendererOutputFence> {
     let command_id = navigation_state.navigate_id;
     let command_session_id = navigation_state.owner.session_id().map(str::to_owned);
-    let Some(token) = token else {
-        out.extend(
-            CommandOutputPlan::error(-32000, "Navigation aborted")
-                .into_background_events(command_id, command_session_id.as_deref()),
-        );
-        return None;
-    };
     let mut output = CommandOutputBuffer::default();
     let mut command_context = crate::conn::CommandDispatchContext::default();
-    complete_materialized_navigation_into_buffer_async(
+    fail_navigation_into_buffer_async(
         conn,
         &mut output,
         token,
         navigation_state,
-        navigation,
+        error_text,
         &mut command_context,
     )
     .await;
@@ -92,6 +85,41 @@ async fn complete_tokened_materialized_navigation_background_events_async(
         .or_else(|| plan.take_renderer_output_predecessor());
     out.extend(plan.into_background_events(command_id, command_session_id.as_deref()));
     predecessor
+}
+
+async fn fail_navigation_into_buffer_async(
+    conn: &mut CdpConnection,
+    out: &mut CommandOutputBuffer,
+    token: NavigationId,
+    state: NavigationDispatchState,
+    error_text: &str,
+    command_context: &mut crate::conn::CommandDispatchContext,
+) {
+    if !conn.accepts_pending_document_navigation_for_owner(&state.owner, &token) {
+        super::push_superseded_navigation_result(out, &state);
+        return;
+    }
+    let owner = state.owner.clone();
+    let progress_gate = network::failed_navigation_progress_gate(conn, &state, error_text);
+    activity::MainDocumentFailedNavigationActivity::new(
+        state,
+        progress_gate,
+        network::FailedNavigationResponseMode::ProtocolError,
+    )
+    .emit_navigation_error_into_buffer(out, error_text);
+    if let Some(release) =
+        conn.finish_navigation_without_document_projection_for_owner(&owner, &token)
+    {
+        super::release_document_projection_output_async(
+            conn,
+            out,
+            command_context,
+            &owner,
+            release,
+        )
+        .await;
+    }
+    conn.clear_pending_document_navigation_for_owner_if_matches(&owner, &token);
 }
 
 fn merge_renderer_output_predecessor(
@@ -197,54 +225,47 @@ async fn fail_pending_fetch_state_for_owner_background_events_async(
     // Moli's pending navigation reply remains "Navigation stopped".
     let mut renderer_output_predecessor = None;
     for pending in pending_navigations {
-        let token = Some(pending.navigation_permit.navigation());
+        let token = pending.navigation_permit.navigation();
         let navigation_state = pending.navigation;
-        let navigation = network::materialize_navigation_load_result(
-            conn,
-            &navigation_state,
-            Err(navigation_error_text.to_owned()),
-        );
-        let predecessor = complete_tokened_materialized_navigation_background_events_async(
+        let predecessor = fail_navigation_background_events_async(
             conn,
             out,
             token,
             navigation_state,
-            navigation,
+            navigation_error_text,
         )
         .await;
         merge_renderer_output_predecessor(&mut renderer_output_predecessor, predecessor);
     }
     for pending in pending_auth_navigations {
-        let token = Some(pending.auth_permit.navigation());
+        let token = pending.auth_permit.navigation();
         let navigation_state = pending.navigation;
-        let navigation = network::materialize_navigation_load_result(
-            conn,
-            &navigation_state,
-            Err(navigation_error_text.to_owned()),
-        );
-        let predecessor = complete_tokened_materialized_navigation_background_events_async(
+        let predecessor = fail_navigation_background_events_async(
             conn,
             out,
             token,
             navigation_state,
-            navigation,
+            navigation_error_text,
         )
         .await;
         merge_renderer_output_predecessor(&mut renderer_output_predecessor, predecessor);
     }
     for pending in pending_response_navigations {
-        drop(conn.take_navigation_response(pending.permit));
-        let token = Some(pending.permit.navigation());
+        // Dropping a response claim cancels its native decision. Keep it alive
+        // through the exact-token check and terminal publication; otherwise
+        // Browser cancellation can win the race and suppress loadingFailed.
+        let response = conn.take_navigation_response(pending.permit);
+        let token = pending.permit.navigation();
         let navigation = pending.navigation;
-        let result = network::materialize_navigation_load_result(
+        let predecessor = fail_navigation_background_events_async(
             conn,
-            &navigation,
-            Err(navigation_error_text.to_owned()),
-        );
-        let predecessor = complete_tokened_materialized_navigation_background_events_async(
-            conn, out, token, navigation, result,
+            out,
+            token,
+            navigation,
+            navigation_error_text,
         )
         .await;
+        drop(response);
         merge_renderer_output_predecessor(&mut renderer_output_predecessor, predecessor);
     }
     for (_, pending) in pending_subresource_fetches {
@@ -734,4 +755,166 @@ pub(crate) async fn complete_page_target_termination_owner_action_async(
         .await,
     );
     crate::conn::CdpTurnOutcome::new_with_protocol_events(out, conn.take_scheduler_events())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::conn::{CommandDispatchContext, NavigationResultProjection};
+    use serde_json::json;
+    use url::Url;
+
+    #[tokio::test]
+    async fn navigation_failure_drops_stale_token() {
+        let mut conn = crate::test_support::connection();
+        let mut browser_context = conn.new_browser_context_fixture_for_test("CTX-nav".to_owned());
+        browser_context.set_active_target_id("TID-nav");
+        let stale = browser_context
+            .start_document_navigation_for_active_target("LOADER-1".to_owned())
+            .expect("active target should produce stale token");
+        let _current = browser_context
+            .start_document_navigation_for_active_target("LOADER-2".to_owned())
+            .expect("active target should produce current token");
+        conn.install_browser_context_fixture_for_test(browser_context);
+        let state =
+            navigation_failure_test_state(Some(7), "LOADER-1", "https://example.test/stale");
+        let error_text = "stale navigation should not emit";
+
+        let mut output = CommandOutputBuffer::default();
+        let mut command_context = CommandDispatchContext::default();
+        let command_id = state.navigate_id;
+        fail_navigation_into_buffer_async(
+            &mut conn,
+            &mut output,
+            stale,
+            state,
+            error_text,
+            &mut command_context,
+        )
+        .await;
+        let mut out = Vec::new();
+        output.into_plan().emit_into(&mut out, command_id, None);
+
+        assert_eq!(out.len(), 1, "stale completion must emit terminal reply");
+        let reply = &out[0];
+        assert_eq!(reply["id"], serde_json::json!(7));
+        assert!(
+            reply.get("error").is_none(),
+            "CDP reports a superseded Page.navigate as a successful command: {reply:#?}"
+        );
+        assert_eq!(
+            reply["result"],
+            serde_json::json!({
+                "frameId": "TID-nav",
+                "errorText": "net::ERR_ABORTED",
+                "isDownload": false
+            })
+        );
+        assert!(
+            reply.get("method").is_none(),
+            "stale completion must emit a command reply, not an event"
+        );
+    }
+
+    #[tokio::test]
+    async fn navigation_failure_drops_stale_token_without_navigate_id() {
+        let mut conn = crate::test_support::connection();
+        let mut browser_context =
+            conn.new_browser_context_fixture_for_test("CTX-nav-none".to_owned());
+        browser_context.set_active_target_id("TID-nav-none");
+        let stale = browser_context
+            .start_document_navigation_for_active_target("LOADER-1".to_owned())
+            .expect("active target should produce stale navigation token");
+        let _ = browser_context
+            .start_document_navigation_for_active_target("LOADER-2".to_owned())
+            .expect("active target should produce current navigation token");
+        conn.install_browser_context_fixture_for_test(browser_context);
+        let state =
+            navigation_failure_test_state(None, "LOADER-1", "https://example.test/stale-no-id");
+        let error_text = "stale navigation should not emit without a navigate id";
+
+        let mut output = CommandOutputBuffer::default();
+        let mut command_context = CommandDispatchContext::default();
+        let command_id = state.navigate_id;
+        fail_navigation_into_buffer_async(
+            &mut conn,
+            &mut output,
+            stale,
+            state,
+            error_text,
+            &mut command_context,
+        )
+        .await;
+        let mut out = Vec::new();
+        output.into_plan().emit_into(&mut out, command_id, None);
+
+        assert!(
+            out.is_empty(),
+            "stale completion without navigate id must not emit protocol output"
+        );
+    }
+
+    #[tokio::test]
+    async fn navigation_failure_drains_current_token() {
+        let mut conn = crate::test_support::connection();
+        let mut browser_context = conn.new_browser_context_fixture_for_test("CTX-nav".to_owned());
+        browser_context.set_active_target_id("TID-nav");
+        let current = browser_context
+            .start_document_navigation_for_active_target("LOADER-1".to_owned())
+            .expect("active target should produce current token");
+        conn.install_browser_context_fixture_for_test(browser_context);
+        let state =
+            navigation_failure_test_state(Some(8), "LOADER-1", "https://example.test/current");
+        let error_text = "current navigation should emit";
+
+        let mut output = CommandOutputBuffer::default();
+        let mut command_context = CommandDispatchContext::default();
+        let command_id = state.navigate_id;
+        fail_navigation_into_buffer_async(
+            &mut conn,
+            &mut output,
+            current,
+            state,
+            error_text,
+            &mut command_context,
+        )
+        .await;
+        let mut out = Vec::new();
+        output.into_plan().emit_into(&mut out, command_id, None);
+
+        assert_eq!(out.len(), 1);
+        assert_eq!(out[0]["id"], json!(8));
+        assert_eq!(out[0]["error"]["code"], json!(-32000));
+        assert_eq!(
+            out[0]["error"]["message"],
+            json!("current navigation should emit")
+        );
+    }
+
+    fn navigation_failure_test_state(
+        navigate_id: Option<u64>,
+        loader_id: &str,
+        requested_url: &str,
+    ) -> NavigationDispatchState {
+        NavigationDispatchState {
+            navigate_id,
+            owner: crate::conn::CommandOwnerScope::for_route(crate::conn::CdpSessionRoute::Browser),
+            web_contents: NavigationDispatchState::detached_web_contents_for_test(),
+            result_projection: NavigationResultProjection::Cdp(
+                json!({ "frameId": "TID-nav", "loaderId": loader_id }),
+            ),
+            frame_id: "TID-nav".to_owned(),
+            session_id: None,
+            request_id: Some(loader_id.to_owned()),
+            loader_id: loader_id.to_owned(),
+            request_announced: true,
+            requested_url: Url::parse(requested_url).unwrap(),
+            request_method: "GET".to_owned(),
+            request_body: None,
+            request_body_bytes: None,
+            request_headers: Vec::new(),
+            request_load_policy: crate::conn::NavigationRequestLoadPolicy::DocumentInitiated,
+            timestamp: 0.0,
+        }
+    }
 }

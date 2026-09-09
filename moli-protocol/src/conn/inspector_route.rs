@@ -297,15 +297,19 @@ mod tests {
             session_key: DevToolsSessionKey::Primary,
         });
         let record_candidate_body = |conn: &mut CdpConnection| {
-            assert!(conn.record_main_document_resource_body_for_owner(
-                &owner,
-                "TID-cleanup".to_owned(),
-                "LOADER-reused".to_owned(),
-                "https://example.test/".parse().unwrap(),
-                Vec::new(),
-                false,
-                crate::conn::CapturedBody::from_string("candidate".to_owned()),
-            ));
+            assert!(
+                conn.with_target_owner_state_for_owner_mut(&owner, |state| {
+                    state.page_resource_store.record_main_document_body(
+                        "TID-cleanup".to_owned(),
+                        "LOADER-reused".to_owned(),
+                        "https://example.test/".parse().unwrap(),
+                        Vec::new(),
+                        false,
+                        crate::conn::CapturedBody::from_string("candidate".to_owned()),
+                    );
+                })
+                .is_some()
+            );
         };
         let first = conn
             .start_document_navigation_for_owner(&owner, "LOADER-reused".to_owned())
