@@ -1,0 +1,19 @@
+[package]
+name = "to_shmem_derive"
+version = "0.1.0"
+authors = ["The Servo Project Developers"]
+license = "MPL-2.0"
+repository = "https://github.com/servo/stylo"
+edition = "2021"
+description = "Allows deriving the to_shmem trait."
+
+[lib]
+path = "lib.rs"
+proc-macro = true
+
+[dependencies]
+darling = { version = "0.20", default-features = false }
+proc-macro2 = "1"
+quote = "1"
+syn = { version = "2", default-features = false, features = ["derive", "parsing"] }
+synstructure = "0.13"

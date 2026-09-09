@@ -1,0 +1,73 @@
+/* This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at https://mozilla.org/MPL/2.0/. */
+
+//! Computed types for CSS values that are related to motion path.
+
+use crate::derives::*;
+use crate::values::computed::basic_shape::BasicShape;
+use crate::values::computed::url::ComputedUrl;
+use crate::values::computed::{Angle, LengthPercentage, Position};
+use crate::values::generics::motion::{
+    GenericOffsetPath, GenericOffsetPathFunction, GenericOffsetPosition, GenericRayFunction,
+};
+use crate::Zero;
+
+/// The computed value of ray() function.
+pub type RayFunction = GenericRayFunction<Angle, Position>;
+
+/// The computed value of <offset-path>.
+pub type OffsetPathFunction = GenericOffsetPathFunction<BasicShape, RayFunction, ComputedUrl>;
+
+/// The computed value of `offset-path`.
+pub type OffsetPath = GenericOffsetPath<OffsetPathFunction>;
+
+/// The computed value of `offset-position`.
+pub type OffsetPosition = GenericOffsetPosition<LengthPercentage, LengthPercentage>;
+
+#[inline]
+fn is_auto_zero_angle(auto: &bool, angle: &Angle) -> bool {
+    *auto && angle.is_zero()
+}
+
+/// A computed offset-rotate.
+#[derive(
+    Animate,
+    Clone,
+    ComputeSquaredDistance,
+    Copy,
+    Debug,
+    Deserialize,
+    MallocSizeOf,
+    PartialEq,
+    Serialize,
+    ToAnimatedValue,
+    ToAnimatedZero,
+    ToCss,
+    ToResolvedValue,
+    ToTyped,
+)]
+#[repr(C)]
+pub struct OffsetRotate {
+    /// If auto is false, this is a fixed angle which indicates a
+    /// constant clockwise rotation transformation applied to it by this
+    /// specified rotation angle. Otherwise, the angle will be added to
+    /// the angle of the direction in layout.
+    #[animation(constant)]
+    #[css(represents_keyword)]
+    pub auto: bool,
+    /// The angle value.
+    #[css(contextual_skip_if = "is_auto_zero_angle")]
+    pub angle: Angle,
+}
+
+impl OffsetRotate {
+    /// Returns "auto 0deg".
+    #[inline]
+    pub fn auto() -> Self {
+        OffsetRotate {
+            auto: true,
+            angle: Zero::zero(),
+        }
+    }
+}

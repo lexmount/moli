@@ -1,0 +1,18 @@
+# This Source Code Form is subject to the terms of the Mozilla Public
+# License, v. 2.0. If a copy of the MPL was not distributed with this
+# file, You can obtain one at http://mozilla.org/MPL/2.0/.
+
+# The descriptors of the @property rule.
+
+# https://drafts.css-houdini.org/css-properties-values-api-1/#the-syntax-descriptor
+[syntax]
+type = "SyntaxDescriptor"
+
+# https://drafts.css-houdini.org/css-properties-values-api-1/#inherits-descriptor
+[inherits]
+type = "Inherits"
+
+# https://drafts.css-houdini.org/css-properties-values-api-1/#initial-value-descriptor
+[initial-value]
+type = "InitialValue"
+ignore_malloc_size_of = "Arc"

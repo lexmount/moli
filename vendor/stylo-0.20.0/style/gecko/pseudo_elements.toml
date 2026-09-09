@@ -1,0 +1,206 @@
+# This Source Code Form is subject to the terms of the Mozilla Public
+# License, v. 2.0. If a copy of the MPL was not distributed with this
+# file, You can obtain one at http://mozilla.org/MPL/2.0/.
+#
+# This file contains the list of support CSS pseudo-elements and some flags.
+#
+# Each pseudo element has its own section, with the following keys:
+#
+#   enabled_in - Same semantics as longhands.toml
+#   is_css2 - Default false, whether this is a css2 pseudo-element, and can be
+#             parsed only with one colon.
+#   is_eager - Whether the pseudo-element is eagerly cascaded by the style
+#              system during traversal. This should generally only be used for
+#              pseudo-elements that apply to most elements.
+#   is_js_created_nac - True if this pseudo-element can be created by JS.
+#   is_flex_or_grid_item - True if display item fixup for flex / grid should
+#                          happen for this pseudo
+#   is_element_backed - whether this is an element-backed pseudo-element
+#                       https://drafts.csswg.org/css-pseudo-4/#element-like
+#   supports_user_action_state - true if this pseudo supports :hover etc.
+#   disabled_domains_pref - name of a pref (`DataMutexString`,
+#                           `mirror: always`, `rust: true`) listing domains
+#                           for which this pseudo-element should be treated
+#                           as disabled, even when it is otherwise enabled.
+#                           See `nsContentUtils::IsURIInList` for the value
+#                           format.
+#   argument - If provided, the argument this functional pseudo takes.
+#   pref - Same semantics as gecko_pref in longhands.toml
+#
+# When adding a pseudo-element, you also need to add the relevant atom to
+# StaticAtoms.py, with the camel-case name of the pseudo-element.
+[after]
+is_css2 = true
+is_eager = true
+is_flex_or_grid_item = true
+is_tree_abiding = true
+[before]
+is_css2 = true
+is_eager = true
+is_flex_or_grid_item = true
+is_tree_abiding = true
+[marker]
+is_tree_abiding = true
+[backdrop]
+[cue]
+is_js_created_nac = true
+[first-letter]
+is_css2 = true
+is_eager = true
+[first-line]
+is_css2 = true
+is_eager = true
+[highlight]
+argument = "AtomIdent"
+[selection]
+[target-text]
+[view-transition]
+enabled_in = "ua"
+pref = "dom.viewTransitions.enabled"
+[view-transition-group]
+enabled_in = "ua"
+pref = "dom.viewTransitions.enabled"
+argument = "PtNameAndClassSelector"
+is_element_backed = true
+[view-transition-image-pair]
+enabled_in = "ua"
+pref = "dom.viewTransitions.enabled"
+is_element_backed = true
+argument = "PtNameAndClassSelector"
+[view-transition-old]
+enabled_in = "ua"
+pref = "dom.viewTransitions.enabled"
+is_element_backed = true
+argument = "PtNameAndClassSelector"
+[view-transition-new]
+enabled_in = "ua"
+pref = "dom.viewTransitions.enabled"
+is_element_backed = true
+argument = "PtNameAndClassSelector"
+# The internal implementation usage for View transition to create the snapshot
+# containing block concept.
+[-moz-snapshot-containing-block]
+enabled_in = "ua"
+[picker]
+enabled_in = "ua"
+pref = "dom.select.customizable_select.enabled"
+argument = "AtomIdent"
+is_element_backed = true
+[checkmark]
+pref = "dom.select.customizable_select.enabled"
+is_tree_abiding = true
+
+# HTML5 Forms pseudo elements
+[-moz-number-spin-box]
+supports_user_action_state = true
+enabled_in = "chrome"
+[-moz-number-spin-down]
+supports_user_action_state = true
+enabled_in = "chrome"
+[-moz-number-spin-up]
+supports_user_action_state = true
+enabled_in = "chrome"
+[-moz-search-clear-button]
+supports_user_action_state = true
+enabled_in = "chrome"
+# The selected label of a <select>
+[-moz-select-content]
+enabled_in = "chrome"
+is_element_backed = true
+# The menulist button of a <select>
+[picker-icon]
+enabled_in = "chrome"
+pref = "dom.select.customizable_select.enabled"
+is_tree_abiding = true
+[-moz-progress-bar]
+supports_user_action_state = true
+[-moz-range-track]
+supports_user_action_state = true
+[-moz-range-progress]
+supports_user_action_state = true
+[-moz-range-thumb]
+supports_user_action_state = true
+[-moz-meter-bar]
+supports_user_action_state = true
+[placeholder]
+supports_user_action_state = true
+is_element_backed = true
+parses_as_element_backed = false
+[-moz-color-swatch]
+supports_user_action_state = true
+# The root of the text value anonymous content inside an <input> or <textarea>.
+[-moz-text-control-editing-root]
+enabled_in = "ua"
+is_element_backed = true
+# The element that shows the autofill value.
+[-moz-text-control-preview]
+enabled_in = "ua"
+is_element_backed = true
+# The Reveal Password button for <input type=password>.
+[-moz-reveal]
+supports_user_action_state = true
+enabled_in = "ua"
+# The button in an <input type=file>
+[file-selector-button]
+supports_user_action_state = true
+is_tree_abiding = true
+# The cropped label in a file input.
+[-moz-file-content]
+enabled_in = "chrome"
+# Standard progress/meter/range pseudo-elements.
+[slider-track]
+supports_user_action_state = true
+enabled_in = "chrome"
+pref = "layout.css.modern-range-pseudos.enabled"
+[slider-thumb]
+supports_user_action_state = true
+enabled_in = "chrome"
+pref = "layout.css.modern-range-pseudos.enabled"
+[slider-fill]
+supports_user_action_state = true
+enabled_in = "chrome"
+pref = "layout.css.modern-range-pseudos.enabled"
+# The content in a <details> element that is shown when the element is open.
+[details-content]
+supports_user_action_state = true
+enabled_in = "chrome"
+pref = "layout.css.details-content.enabled"
+is_element_backed = true
+[-webkit-scrollbar]
+pref = "layout.css.fake-webkit-scrollbar.enabled"
+disabled_domains_pref = "layout.css.fake-webkit-scrollbar.disabled-domains"
+
+# Tree pseudo-elements
+[-moz-tree-column]
+enabled_in = "chrome"
+argument = "AtomThinVec"
+[-moz-tree-row]
+enabled_in = "chrome"
+argument = "AtomThinVec"
+[-moz-tree-separator]
+enabled_in = "chrome"
+argument = "AtomThinVec"
+[-moz-tree-cell]
+enabled_in = "chrome"
+argument = "AtomThinVec"
+[-moz-tree-indentation]
+enabled_in = "chrome"
+argument = "AtomThinVec"
+[-moz-tree-line]
+enabled_in = "chrome"
+argument = "AtomThinVec"
+[-moz-tree-twisty]
+enabled_in = "chrome"
+argument = "AtomThinVec"
+[-moz-tree-image]
+enabled_in = "chrome"
+argument = "AtomThinVec"
+[-moz-tree-cell-text]
+enabled_in = "chrome"
+argument = "AtomThinVec"
+[-moz-tree-checkbox]
+enabled_in = "chrome"
+argument = "AtomThinVec"
+[-moz-tree-drop-feedback]
+enabled_in = "chrome"
+argument = "AtomThinVec"

@@ -1,0 +1,45 @@
+# This Source Code Form is subject to the terms of the Mozilla Public
+# License, v. 2.0. If a copy of the MPL was not distributed with this
+# file, You can obtain one at http://mozilla.org/MPL/2.0/.
+
+# The descriptors of the @counter-style rule.
+
+# https://drafts.csswg.org/css-counter-styles/#counter-style-system
+[system]
+type = "System"
+
+# https://drafts.csswg.org/css-counter-styles/#counter-style-negative
+[negative]
+type = "Negative"
+
+# https://drafts.csswg.org/css-counter-styles/#counter-style-negative
+[prefix]
+type = "Symbol"
+
+# https://drafts.csswg.org/css-counter-styles/#counter-style-suffix
+[suffix]
+type = "Symbol"
+
+# https://drafts.csswg.org/css-counter-styles/#counter-style-range
+[range]
+type = "CounterRanges"
+
+# https://drafts.csswg.org/css-counter-styles/#counter-style-pad
+[pad]
+type = "Pad"
+
+# https://drafts.csswg.org/css-counter-styles/#counter-style-fallback
+[fallback]
+type = "Fallback"
+
+# https://drafts.csswg.org/css-counter-styles/#descdef-counter-style-symbols
+[symbols]
+type = "Symbols"
+
+# https://drafts.csswg.org/css-counter-styles/#descdef-counter-style-additive-symbols
+[additive-symbols]
+type = "AdditiveSymbols"
+
+# https://drafts.csswg.org/css-counter-styles/#counter-style-speak-as
+[speak-as]
+type = "SpeakAs"
