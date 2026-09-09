@@ -2438,7 +2438,9 @@ fn web_audio_declared_objects_keep_brands_and_hidden_properties() {
     };
   };
   const rendering = ctx.startRendering();
-  osc.frequency.setValueAtTime(123, 0);
+  osc.frequency.value = 123;
+  // Scheduling does not synchronously replace the intrinsic value.
+  osc.frequency.setValueAtTime(246, 1);
   Object.assign(globalThis.__webAudioDeclaredProbe, {
     ctxTag: Object.prototype.toString.call(ctx),
     ctxCtor: ctx.constructor && ctx.constructor.name,
@@ -2478,7 +2480,7 @@ fn web_audio_declared_objects_keep_brands_and_hidden_properties() {
 
     assert_eq!(
         result,
-        r#"{"completion":{"tag":"[object Object]","ctor":"Object","type":"complete","renderedBufferTag":"[object AudioBuffer]","renderedBufferCtor":"AudioBuffer","renderedBufferLength":32,"renderedBufferSampleRate":8000,"renderedBufferDuration":0.004,"renderedBufferEnumerable":false,"targetIsContext":true,"currentTargetIsContext":true},"ctxTag":"[object OfflineAudioContext]","ctxCtor":"OfflineAudioContext","ctxLength":32,"ctxSampleRate":8000,"ctxState":"closed","lengthEnumerable":false,"destinationTag":"[object AudioDestinationNode]","destinationCtor":"AudioDestinationNode","destinationKeys":"","oscTag":"[object OscillatorNode]","oscCtor":"OscillatorNode","oscKeys":"","oscType":"sine","frequencyTag":"[object AudioParam]","frequencyCtor":"AudioParam","frequencyValue":123,"frequencyEnumerable":false,"setValueAtTimeType":"function","compTag":"[object DynamicsCompressorNode]","compCtor":"DynamicsCompressorNode","compKeys":"","thresholdTag":"[object AudioParam]","reduction":0,"reductionOwn":false,"promiseTag":"[object Promise]"}"#
+        r#"{"completion":{"tag":"[object Object]","ctor":"Object","type":"complete","renderedBufferTag":"[object AudioBuffer]","renderedBufferCtor":"AudioBuffer","renderedBufferLength":32,"renderedBufferSampleRate":8000,"renderedBufferDuration":0.004,"renderedBufferEnumerable":false,"targetIsContext":true,"currentTargetIsContext":true},"ctxTag":"[object OfflineAudioContext]","ctxCtor":"OfflineAudioContext","ctxLength":32,"ctxSampleRate":8000,"ctxState":"running","lengthEnumerable":false,"destinationTag":"[object AudioDestinationNode]","destinationCtor":"AudioDestinationNode","destinationKeys":"","oscTag":"[object OscillatorNode]","oscCtor":"OscillatorNode","oscKeys":"","oscType":"sine","frequencyTag":"[object AudioParam]","frequencyCtor":"AudioParam","frequencyValue":123,"frequencyEnumerable":false,"setValueAtTimeType":"function","compTag":"[object DynamicsCompressorNode]","compCtor":"DynamicsCompressorNode","compKeys":"","thresholdTag":"[object AudioParam]","reduction":0,"reductionOwn":false,"promiseTag":"[object Promise]"}"#
     );
 }
 
@@ -2853,6 +2855,8 @@ fn web_audio_numeric_entrypoints_parse_webidl_arguments() {
           record("setSymbol", () => osc.frequency.setValueAtTime(Symbol("value"), 0));
           osc.frequency.setValueAtTime("123.5", ctx.currentTime);
           results.frequency = osc.frequency.value;
+          osc.connect(ctx.destination);
+          osc.start();
 
           ctx.oncomplete = (event) => {
             const buffer = event.renderedBuffer;
@@ -2860,6 +2864,7 @@ fn web_audio_numeric_entrypoints_parse_webidl_arguments() {
             record("channelSymbol", () => buffer.getChannelData(Symbol("channel")));
             record("channelRange", () => buffer.getChannelData(1));
             results.channel0 = Object.prototype.toString.call(buffer.getChannelData("0.9"));
+            results.renderedFrequency = osc.frequency.value;
           };
           ctx.startRendering();
           globalThis.__audioWebIdlProbe = results;
@@ -2875,7 +2880,7 @@ fn web_audio_numeric_entrypoints_parse_webidl_arguments() {
 
     assert_eq!(
         result,
-        r#"{"ctorMissing":"TypeError","ctorSymbol":"TypeError","length":16,"sampleRate":44100,"setMissingTime":"TypeError","setSymbol":"TypeError","frequency":123.5,"channelMissing":"TypeError","channelSymbol":"TypeError","channelRange":"IndexSizeError","channel0":"[object Float32Array]"}"#
+        r#"{"ctorMissing":"TypeError","ctorSymbol":"TypeError","length":16,"sampleRate":44100,"setMissingTime":"TypeError","setSymbol":"TypeError","frequency":440,"channelMissing":"TypeError","channelSymbol":"TypeError","channelRange":"IndexSizeError","channel0":"[object Float32Array]","renderedFrequency":123.5}"#
     );
 }
 #[test]

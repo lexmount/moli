@@ -5,6 +5,7 @@
       globalThis.audioWorkletWasmDone = false;
       globalThis.audioWorkletWasmError = "";
       globalThis.audioWorkletWasmResult = "";
+      globalThis.audioWorkletWasmConnections = "";
 
       try {
         const audioContext = new AudioContext();
@@ -25,6 +26,18 @@
           );
         };
         audioNode.port.postMessage("");
+        const connected = audioNode.connect(audioContext.destination);
+        audioNode.disconnect(audioContext.destination);
+        let disconnectedError = "";
+        try {
+          audioNode.disconnect(audioContext.destination);
+        } catch (error) {
+          disconnectedError = error.name;
+        }
+        globalThis.audioWorkletWasmConnections = [
+          connected === audioContext.destination,
+          disconnectedError
+        ].join("|");
         audioNode.connect(audioContext.destination);
       } catch (error) {
         globalThis.audioWorkletWasmDone = true;
