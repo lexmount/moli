@@ -16,11 +16,13 @@ use crate::page_task_queue::{
     PageTaskSender, PostParseLifecycleWork, RendererPageMainDocumentRuntimeProducer,
     WindowScriptFailureReportTask,
 };
+#[cfg(test)]
+use crate::planning::ScriptSource;
 use crate::{
     dom::{NodeId, native::NativeNodeId},
     {
         module_runtime::ModuleOwnerState,
-        planning::{PreparedScript, ScriptSource},
+        planning::PreparedScript,
         types::{ScriptErrorValue, ScriptKind, ScriptMode, ScriptSourceKind},
     },
 };
@@ -41,6 +43,7 @@ pub(crate) use loader::*;
 pub(crate) use runtime::*;
 
 #[derive(Debug)]
+#[cfg_attr(not(test), derive(Default))]
 pub(crate) struct HostScriptScheduler {
     #[cfg(test)]
     pending_dynamic_in_order_scripts: VecDeque<PreparedScript>,
@@ -59,6 +62,7 @@ pub(crate) struct HostScriptScheduler {
     native_module_owner_event_turn_queued: bool,
     module_owner: ModuleOwnerState,
     script_handles: HashMap<String, ScriptHandleState>,
+    #[cfg(test)]
     next_virtual_script_node_index: usize,
     next_dynamic_script_position: usize,
 }
@@ -285,6 +289,7 @@ pub(crate) enum QueuedScriptFailureKind {
     ModuleTopLevelLoad,
 }
 
+#[cfg(test)]
 impl Default for HostScriptScheduler {
     fn default() -> Self {
         Self {
@@ -305,6 +310,7 @@ impl Default for HostScriptScheduler {
             native_module_owner_event_turn_queued: false,
             module_owner: ModuleOwnerState::default(),
             script_handles: HashMap::new(),
+            #[cfg(test)]
             next_virtual_script_node_index: 1_000_000,
             next_dynamic_script_position: 0,
         }
@@ -1324,6 +1330,7 @@ impl HostScriptScheduler {
         self.main_document_completion_recheck_turn_queued = false;
     }
 
+    #[cfg(test)]
     fn enqueue_script_event_lifecycle_work(&mut self, kind: ScriptEventKind, handle: &str) {
         if let Some(work) = self.plan_script_event_lifecycle_work(kind, handle) {
             self.enqueue_post_parse_lifecycle_work(work);
@@ -1555,6 +1562,7 @@ impl HostScriptScheduler {
         Ok(())
     }
 
+    #[cfg(test)]
     fn prepare_failed_dynamic_script(
         &mut self,
         preparation: &RuntimeScriptPreparationContext,
@@ -1611,6 +1619,7 @@ impl HostScriptScheduler {
         })
     }
 
+    #[cfg(test)]
     fn queued_script_failure_kind(
         kind: ScriptKind,
         source_kind: ScriptSourceKind,
@@ -1639,6 +1648,7 @@ impl HostScriptScheduler {
         }
     }
 
+    #[cfg(test)]
     fn next_virtual_node_id(&mut self) -> NodeId {
         let node_id = NodeId::new(self.next_virtual_script_node_index);
         self.next_virtual_script_node_index += 1;
