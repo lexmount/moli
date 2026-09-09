@@ -24,7 +24,8 @@ mod platform;
 /// Create the resolver before registering downloadable fonts: the initial
 /// snapshot limits native candidates to system families. Existing collection
 /// families take precedence over platform substitutions. Recreate the resolver
-/// when rebuilding the collection or changing fonts after a cached lookup.
+/// when rebuilding the collection; invalidate substitutions when adding fonts
+/// after a cached lookup.
 pub struct SystemFontFamilyResolver {
     system_families: HashMap<String, String>,
     substitutions: HashMap<String, Option<String>>,
@@ -33,6 +34,11 @@ pub struct SystemFontFamilyResolver {
 }
 
 impl SystemFontFamilyResolver {
+    /// Clears cached matches after font arrival without rescanning system families.
+    pub fn invalidate_substitutions(&mut self) {
+        self.substitutions.clear();
+    }
+
     /// Snapshots the collection's system family names without performing matching.
     pub fn new(collection: &mut Collection) -> Self {
         let system_families = collection
@@ -101,6 +107,22 @@ mod platform {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn font_arrival_clears_substitutions_but_preserves_the_platform_inventory() {
+        let mut resolver = SystemFontFamilyResolver {
+            system_families: HashMap::from([("fallback".to_owned(), "Fallback".to_owned())]),
+            substitutions: HashMap::from([
+                ("arriving".to_owned(), Some("Fallback".to_owned())),
+                ("missing".to_owned(), None),
+            ]),
+            family_lookup_count: 2,
+        };
+        resolver.invalidate_substitutions();
+        assert!(resolver.substitutions.is_empty());
+        assert_eq!(resolver.system_families["fallback"], "Fallback");
+        assert_eq!(resolver.family_lookup_count, 2);
+    }
 
     #[test]
     fn successful_family_lookup_is_cached() {
