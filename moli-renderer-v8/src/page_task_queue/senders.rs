@@ -17,6 +17,7 @@ use super::{
     resource_completions::RendererOwnerWakeSender,
 };
 use crate::page_resource_completion::RendererPageResourceCompletionSender;
+use crate::page_task_queue::RendererPageBitmapTaskSender;
 use crate::page_task_queue::RendererPageChildFrameTaskSender;
 use crate::page_task_queue::RendererPageChildModuleDependencyFetchStartSender;
 use crate::page_task_queue::RendererPageChildModuleScriptTerminalSender;
@@ -80,6 +81,7 @@ pub(crate) struct RendererPageJsContextTaskSenders {
     dedicated_worker_client_event: RendererPageDedicatedWorkerClientEventSender,
     shared_worker_client_event: RendererPageSharedWorkerClientEventSender,
     worker_host_bridge: RendererWorkerHostBridgeEventSender,
+    bitmap_task: RendererPageBitmapTaskSender,
     webcrypto_task: RendererPageWebCryptoTaskSender,
     indexed_db_task: RendererPageIndexedDbTaskSender,
     opfs_task: RendererPageOpfsTaskSender,
@@ -173,6 +175,9 @@ impl RendererPageJsContextTaskSenders {
         &self.worker_host_bridge
     }
 
+    pub(crate) fn bitmap_task(&self) -> &RendererPageBitmapTaskSender {
+        &self.bitmap_task
+    }
     pub(crate) fn webcrypto_task(&self) -> &RendererPageWebCryptoTaskSender {
         &self.webcrypto_task
     }
@@ -346,6 +351,7 @@ impl PageRuntimeTaskSource {
                     .dedicated_worker_client_event_sender(root_document),
                 shared_worker_client_event: routes.shared_worker_client_event_sender(root_document),
                 worker_host_bridge: routes.worker_host_bridge_event_sender(root_document),
+                bitmap_task: routes.bitmap_task_sender(root_document),
                 webcrypto_task: routes.webcrypto_task_sender(root_document),
                 indexed_db_task: routes.indexed_db_task_sender(root_document),
                 opfs_task: routes.opfs_task_sender(root_document),
