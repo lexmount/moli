@@ -198,6 +198,7 @@ fn execute_source_text_on_current_stack_with_completion(
     report_target: UncaughtScriptReportTarget,
     completion_mode: SourceTextScriptCompletionMode,
 ) -> RawScriptExecutionResult<SourceTextScriptCompletion> {
+    let execution_scope = crate::script_cleanup::ScriptExecutionScope::enter(scope);
     let result = run_source_text_on_current_stack_with_completion(
         scope,
         source,
@@ -207,6 +208,7 @@ fn execute_source_text_on_current_stack_with_completion(
         report_target,
         completion_mode,
     );
+    drop(execution_scope);
     // HTML's script cleanup also runs after an exception has been reported.
     // LogOnly callers report errors themselves before completing that cleanup.
     // Keep this checkpoint inside the caller's currentScript/parser-nesting
@@ -215,12 +217,7 @@ fn execute_source_text_on_current_stack_with_completion(
         && matches!(&result, Err(RawScriptExecutionError::Exception { .. }));
     if drain_microtasks
         && (result.is_ok() || exception_reported)
-        && !scope
-            .get_current_context()
-            .get_microtask_queue()
-            .is_some_and(v8::MicrotaskQueue::is_running_microtasks)
-        && v8::StackTrace::current_stack_trace(scope, 1)
-            .is_some_and(|stack| stack.get_frame_count() == 0)
+        && crate::script_cleanup::can_perform_script_cleanup_checkpoint(scope)
     {
         ScriptVm::perform_microtask_checkpoints(
             scope,
@@ -596,7 +593,7 @@ impl ScriptVm {
         )
     }
 
-    pub(super) fn perform_microtask_checkpoints(
+    pub(crate) fn perform_microtask_checkpoints(
         scope: &mut v8::PinScope<'_, '_>,
         script_url: Option<&Url>,
     ) -> Result<()> {

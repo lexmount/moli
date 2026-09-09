@@ -24,10 +24,10 @@ promise_test(async function () {
   const events = await close_peer_and_wait(function (port, events, resolve) {
     port.addEventListener("close", function (event) {
       events.push("listener:" + event.type + ":" + event.isTrusted);
-      resolve();
     });
     port.onclose = function (event) {
       events.push("onclose:" + event.type + ":" + event.isTrusted);
+      resolve();
     };
   });
 

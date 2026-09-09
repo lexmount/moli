@@ -22,6 +22,8 @@ mod script_mime;
 mod thread;
 mod timer_callback;
 
+pub(crate) use thread::perform_callback_cleanup_checkpoint_if_worker;
+
 pub(crate) use data_url::decode_data_url_script_source;
 pub(crate) use global_scope::{
     NestedWorkerContext, WORKER_STATE_SLOT, WorkerOpfsCompletion, WorkerWebCryptoCompletion,

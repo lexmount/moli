@@ -690,7 +690,7 @@ async fn runtime_blob_module_dependency_resolves_through_the_local_url_owner() {
 }
 
 #[tokio::test(flavor = "current_thread")]
-async fn runtime_module_failure_body_leaves_checkpoint_and_lifecycle_prime_to_task_end() {
+async fn runtime_module_failure_body_cleans_up_callbacks_but_leaves_lifecycle_prime_to_task_end() {
     run_page_vm_async_test(async move {
         let (base_url, server) = spawn_path_response_http_server(vec![(
             "/runtime-failure.mjs",
@@ -750,8 +750,8 @@ document.getElementById("runtime-module-failure").onerror = () => {
                 .eval_without_microtask_checkpoint_for_test(
                     "__runtimeModuleEvents.join('|')",
                 )?,
-            "error",
-            "the graph-terminal body may dispatch its error but must not run the outer task checkpoint"
+            "error|error-microtask",
+            "the graph-terminal body must clean up its error listener before returning lifecycle-unblock authority"
         );
         assert_eq!(
             page_vm
@@ -770,7 +770,7 @@ document.getElementById("runtime-module-failure").onerror = () => {
                 .page_task_queue
                 .post_parse_front()
                 .is_some_and(PostParsePageOwnedWork::is_window_load_task),
-            "the body must return lifecycle-unblock authority instead of priming load before the checkpoint"
+            "the body must return lifecycle-unblock authority for selected task completion"
         );
 
         server
