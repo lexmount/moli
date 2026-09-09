@@ -152,7 +152,6 @@ html/semantics/scripting-1/the-script-element/change-src-attr-prepare-a-script.h
 html/semantics/scripting-1/the-script-element/execution-timing/102.html
 html/semantics/scripting-1/the-script-element/microtasks/checkpoint-after-workerglobalscope-onerror-module.html
 html/semantics/text-level-semantics/the-a-element/a-type.historical.html
-html/webappapis/dynamic-markup-insertion/document-write/iframe_010.html
 html/webappapis/scripting/event-loops/new-scroll-event-dispatched-at-next-updating-rendering-time.html
 html/webappapis/scripting/events/compile-event-handler-settings-objects.html
 html/webappapis/scripting/events/onerroreventhandler.html

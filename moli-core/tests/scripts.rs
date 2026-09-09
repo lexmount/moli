@@ -32,6 +32,9 @@ mod child_script_text;
 #[path = "scripts/module_document_write.rs"]
 mod module_document_write;
 
+#[path = "scripts/document_close.rs"]
+mod document_close;
+
 #[path = "scripts/parser_cleanup.rs"]
 mod parser_cleanup;
 

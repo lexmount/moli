@@ -1203,12 +1203,16 @@ impl JsContextHost {
             return !close_requested;
         };
         let executing_parser_script =
-            chunk.is_some() && self.child_document_is_executing_parser_script(document_handle);
+            self.child_document_is_executing_parser_script(document_handle);
         let parser_insertion_only = chunk.is_some()
             && !close_requested
             && (entry.lifetime() == DocumentParserLifetime::Finite || executing_parser_script);
         let parser_ready_to_advance = if close_requested {
+            // The child frame tracks parser-script execution separately from
+            // the session. Record EOF even in that scope, but leave draining
+            // and finishing to its post-script parser continuation.
             entry.request_close() == DocumentParserCloseDisposition::DrainNow
+                && !executing_parser_script
         } else {
             entry.run_state() == DocumentParserRunState::Ready
         };
