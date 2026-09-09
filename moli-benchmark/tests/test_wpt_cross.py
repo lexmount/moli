@@ -123,6 +123,7 @@ from moli_benchmark.wpt_cross.server import (
     _host_header_hostname,
     _headers_include,
     _normalize_harness_case_key,
+    _nosniff_javascript_response,
     _needs_wpt_template_substitution,
     _legacy_wpt_resource_alias,
     _pipe_response_header_operations,
@@ -4029,6 +4030,55 @@ test(() => {}, "ok");
         self.assertIsNone(_wpt_delay_seconds("ms=invalid"))
         self.assertIsNone(_wpt_delay_seconds("ms=-1"))
         self.assertIsNone(_wpt_delay_seconds("ms=nan"))
+
+    def test_fixture_server_models_fetch_nosniff_javascript_handler(self) -> None:
+        self.assertEqual(
+            _nosniff_javascript_response(""),
+            (
+                None,
+                b"// nothing to see here\nlog('FAIL: Content-Type missing')",
+            ),
+        )
+        self.assertEqual(
+            _nosniff_javascript_response("type=text%2Fjavascript&outcome=p"),
+            ("text/javascript", b"// nothing to see here\np()"),
+        )
+
+        with tempfile.TemporaryDirectory() as root:
+            root_path = Path(root)
+            (root_path / "resources").mkdir()
+            (root_path / "resources" / "testharness.js").write_text(
+                "// testharness", encoding="utf-8"
+            )
+            with WptFixtureServer(root_path) as server:
+                base_url = f"{server.base_url}/fetch/nosniff/resources/js.py"
+                responses = []
+                for query in (
+                    "",
+                    "?type=",
+                    "?type=text%2Fjavascript&outcome=p",
+                ):
+                    with urlopen(base_url + query, timeout=2) as response:
+                        responses.append(
+                            (
+                                response.headers.get("Content-Type"),
+                                response.headers["X-Content-Type-Options"],
+                                response.read(),
+                            )
+                        )
+
+        self.assertEqual(
+            responses,
+            [
+                (
+                    None,
+                    "nosniff",
+                    b"// nothing to see here\nlog('FAIL: Content-Type missing')",
+                ),
+                ("", "nosniff", b"// nothing to see here\nlog('FAIL: ')"),
+                ("text/javascript", "nosniff", b"// nothing to see here\np()"),
+            ],
+        )
 
     def test_fixture_server_models_xhr_delay_py_methods(self) -> None:
         with tempfile.TemporaryDirectory() as root:

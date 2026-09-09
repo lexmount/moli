@@ -1088,6 +1088,24 @@ def _workers_modules_export_on_load_script_response() -> tuple[bytes, list[tuple
     )
 
 
+def _nosniff_javascript_response(query: str) -> tuple[str | None, bytes]:
+    """Model fetch/nosniff/resources/js.py's MIME-controlled script body."""
+
+    params = parse_qsl(query, keep_blank_values=True)
+    outcome = next(
+        (value for name, value in params if name == "outcome"),
+        "f",
+    )
+    content_type = next(
+        (value for name, value in params if name == "type"),
+        None,
+    )
+    type_label = content_type if content_type is not None else "Content-Type missing"
+    result_call = "log('FAIL: " + type_label + "')" if outcome == "f" else "p()"
+    body = ("// nothing to see here\n" + result_call).encode()
+    return content_type, body
+
+
 def _url_host_literal(hostname: str) -> str:
     if hostname.startswith("[") and hostname.endswith("]"):
         return hostname
@@ -1753,6 +1771,9 @@ def _make_handler(
             if path == "/xhr/resources/delay.py":
                 self._serve_xhr_delay(parsed.query, emit_body=emit_body)
                 return
+            if path == "/fetch/nosniff/resources/js.py":
+                self._serve_nosniff_javascript(parsed.query, emit_body=emit_body)
+                return
             if path == (
                 "/html/semantics/scripting-1/the-script-element/module/"
                 "resources/delayed-modulescript.py"
@@ -2194,6 +2215,20 @@ def _make_handler(
                 b"export let delayedLoaded = true;",
                 emit_body=emit_body,
             )
+
+        def _serve_nosniff_javascript(self, query: str, *, emit_body: bool) -> None:
+            content_type, body = _nosniff_javascript_response(query)
+            self.send_response(200)
+            self.send_header("X-Content-Type-Options", "nosniff")
+            self.send_header("Content-Length", str(len(body)))
+            if content_type is not None:
+                self.send_header("Content-Type", content_type)
+            self.end_headers()
+            if emit_body:
+                try:
+                    self.wfile.write(body)
+                except (BrokenPipeError, ConnectionResetError):
+                    return
 
         def _send_bytes(
             self,
