@@ -5963,6 +5963,7 @@ html/semantics/forms/form-submission-0/jsurl-navigation-then-form-submit.html
 html/semantics/forms/form-submission-0/newline-normalization.html
 html/semantics/forms/form-submission-0/reparent-form-during-planned-navigation-task.html
 html/semantics/forms/form-submission-0/request-submit-activation.html
+html/semantics/forms/form-submission-0/submit-entity-body.html
 html/semantics/forms/form-submission-0/url-encoded.html
 html/semantics/forms/historical.html
 html/semantics/forms/resetting-a-form/reset-event.html

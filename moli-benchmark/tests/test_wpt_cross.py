@@ -4211,6 +4211,98 @@ test(() => {}, "ok");
             ],
         )
 
+    def test_fixture_server_validates_form_submission_entity_bodies(self) -> None:
+        def multipart(*parts: bytes) -> bytes:
+            return (
+                b"--form-boundary\r\n"
+                + b"\r\n--form-boundary\r\n".join(parts)
+                + b"\r\n--form-boundary--\r\n"
+            )
+
+        foo = b'Content-Disposition: form-data; name="foo"\r\n\r\nbar'
+        wrong_foo = b'Content-Disposition: form-data; name="foo"\r\n\r\nwrong'
+        multipart_type = 'multipart/form-data; boundary="form-boundary"'
+        cases = [
+            ("query=1", "application/x-www-form-urlencoded", b"foo=bara", b"OK"),
+            ("query=1", "application/x-www-form-urlencoded", b"foo=bar", b"FAIL"),
+            ("query=1", "application/x-www-form-urlencoded", b"foo=ba%72a", b"FAIL"),
+            ("query=1", "application/x-www-form-urlencoded", b"foo=bara&extra=1", b"FAIL"),
+            ("query=1", "application/x-www-form-urlencoded; charset=UTF-8", b"foo=bar", b"OK"),
+            ("query=1", "text/plain", b"qux=baz\r\n", b"OK"),
+            ("query=1", "text/plain", b"qux=baz\n", b"FAIL"),
+            ("query=1", multipart_type, multipart(foo), b"OK"),
+            ("query=1", multipart_type, multipart(foo, wrong_foo), b"OK"),
+            ("query=1", multipart_type, multipart(wrong_foo, foo), b"FAIL"),
+            ("query=1", multipart_type, multipart(foo.replace(b'"foo"', b'"other"')), b"FAIL"),
+            (
+                "query=1",
+                multipart_type,
+                multipart(foo.replace(b'name="foo"', b'name="foo"; filename="field.txt"')),
+                b"FAIL",
+            ),
+            (
+                "query=1",
+                multipart_type,
+                multipart(b'Content-Disposition: form-data; name="foo"\r\nContent-Transfer-Encoding: base64\r\n\r\nYmFy'),
+                b"FAIL",
+            ),
+            ("query=1", "multipart/form-data; boundary=wrong", multipart(foo), b"FAIL"),
+            ("query=1", "multipart/form-data", multipart(foo), b"FAIL"),
+            ("query=1", "Multipart/Form-Data; boundary=form-boundary", multipart(foo), b"FAIL"),
+            (
+                "expected_body=foo.x%3D0%26foo.y%3D0",
+                "application/x-www-form-urlencoded",
+                b"foo.x=0&foo.y=0",
+                b"OK",
+            ),
+            (
+                "expected_body=foo.x%3D0%26foo.y%3D0",
+                "application/x-www-form-urlencoded",
+                b"foo.x=1&foo.y=0",
+                b"FAIL",
+            ),
+            ("expected_body=%E9%9B%AA", "text/plain", "雪".encode("utf-8"), b"OK"),
+            ("expected_body=wrong&expected_body=right", "text/plain", b"right", b"OK"),
+            (
+                "query=1&expected_body=wrong",
+                "application/x-www-form-urlencoded",
+                b"foo=bara",
+                b"OK",
+            ),
+            ("expected_body=", "text/plain", b"", b"FAIL"),
+            ("", "application/x-www-form-urlencoded", b"foo=bara", b"FAIL"),
+        ]
+        with tempfile.TemporaryDirectory() as root:
+            root_path = Path(root)
+            (root_path / "resources").mkdir()
+            (root_path / "resources" / "testharness.js").write_text("// testharness")
+            with WptFixtureServer(root_path) as server:
+                url = (
+                    f"{server.base_url}/html/semantics/forms/"
+                    "form-submission-0/resources/form-submission.py"
+                )
+                for query, content_type, body, expected in cases:
+                    with self.subTest(query=query, content_type=content_type, body=body):
+                        request = Request(
+                            f"{url}?{query}",
+                            data=body,
+                            headers={"Content-Type": content_type},
+                        )
+                        with urlopen(request, timeout=2) as response:
+                            self.assertEqual(response.status, 200)
+                            self.assertEqual(response.headers["Content-Type"], "text/plain")
+                            self.assertEqual(response.read(), expected)
+
+                for method in ("GET", "HEAD"):
+                    with self.subTest(method=method):
+                        with urlopen(Request(url, method=method), timeout=2) as response:
+                            self.assertEqual(response.status, 200)
+                            self.assertEqual(response.headers["Content-Type"], "text/plain")
+                            self.assertEqual(response.headers["Content-Length"], "4")
+                            self.assertEqual(
+                                response.read(), b"FAIL" if method == "GET" else b""
+                            )
+
     def test_fixture_server_models_fetch_inspect_headers_handler(self) -> None:
         self.assertEqual(
             _inspect_headers_response_headers(
