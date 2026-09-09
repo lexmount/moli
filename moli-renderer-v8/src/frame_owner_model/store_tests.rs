@@ -465,10 +465,34 @@ fn main_document_lifecycle_actions_are_owned_and_replacement_stale_drops_them() 
         .prepare_current_main_document_complete_transition(third_owner)
         .expect("third replacement should prepare complete");
     assert!(store.apply_current_main_document_complete_transition(third_complete));
+    assert_eq!(
+        store.current_document_is_completely_loaded(third_owner.document_owner()),
+        Some(false)
+    );
     assert!(store.begin_current_main_document_load_dispatch(third_owner));
+    assert_eq!(
+        store.current_document_is_completely_loaded(third_owner.document_owner()),
+        Some(false)
+    );
     assert_eq!(
         store.finish_current_main_document_load_dispatch(third_owner),
         Some(MainDocumentLoadCompletionState::Completed)
+    );
+    assert_eq!(
+        store.current_document_is_completely_loaded(third_owner.document_owner()),
+        Some(true)
+    );
+    let reopened = store
+        .replace_main_document(
+            handle(1),
+            url("https://example.test/reopened"),
+            url("https://example.test/reopened"),
+        )
+        .expect("completed main document can reopen");
+    assert_eq!(
+        store.current_document_is_completely_loaded(reopened.current_owner().document_owner()),
+        Some(true),
+        "a reopened main document must retain completely-loaded status"
     );
 }
 
@@ -3025,6 +3049,11 @@ fn child_document_open_during_owner_load_resumes_with_pageshow() {
     let replacement_owner = replacement
         .current_owner()
         .expect("document.open should install a replacement owner");
+    assert_eq!(
+        store.current_document_is_completely_loaded(replacement_owner.document_owner()),
+        Some(false),
+        "document.open during load must preserve the not-yet-completely-loaded state"
+    );
     assert!(
         store
             .finish_current_child_document_load_delivery(owner_element_load)
@@ -3067,6 +3096,65 @@ fn child_document_open_during_owner_load_resumes_with_pageshow() {
         store.finish_current_child_document_load_delivery(frame_finish),
         Some(FrameDocumentLoadDeliveryProgress::Finished(_))
     ));
+}
+
+#[test]
+fn child_completely_loaded_waits_for_delivery_and_survives_document_open() {
+    let mut store = FrameOwnerStore::default();
+    let child_handle = handle(500);
+    let document_handle = handle(501);
+    let owner = commit_test_child_document(
+        &mut store,
+        child_handle,
+        document_handle,
+        "completely-loaded",
+        Some("main"),
+    );
+    let task = prepare_test_child_load_delivery(&mut store, child_handle, owner);
+    for phase in [
+        FrameDocumentLoadDeliveryPhase::WindowLoad,
+        FrameDocumentLoadDeliveryPhase::OwnerElementLoad,
+        FrameDocumentLoadDeliveryPhase::PageShow,
+        FrameDocumentLoadDeliveryPhase::FrameFinish,
+    ] {
+        let action = store
+            .begin_current_child_document_load_delivery(task)
+            .unwrap();
+        assert_eq!(action.phase(), phase);
+        assert_eq!(
+            store.current_document_is_completely_loaded(owner.document_owner()),
+            Some(false),
+            "complete readiness must not stand in for complete load delivery"
+        );
+        assert!(
+            store
+                .finish_current_child_document_load_delivery(action)
+                .is_some()
+        );
+    }
+    assert_eq!(
+        store.current_document_is_completely_loaded(owner.document_owner()),
+        Some(true)
+    );
+    let plan = store
+        .plan_child_document_open_replacement(
+            child_handle,
+            document_handle,
+            url("https://completely-loaded.test/reopened"),
+            url("https://completely-loaded.test/reopened"),
+        )
+        .unwrap();
+    let replacement = store.commit_child_document_open_replacement(plan);
+    let replacement_owner = replacement.current_owner().unwrap();
+    assert_eq!(
+        store.current_document_is_completely_loaded(owner.document_owner()),
+        None
+    );
+    assert_eq!(
+        store.current_document_is_completely_loaded(replacement_owner.document_owner()),
+        Some(true),
+        "document.open changes readiness but retains completely-loaded status"
+    );
 }
 
 #[test]

@@ -5279,6 +5279,12 @@ html/browsers/browsing-the-web/navigating-across-documents/replace-before-load/f
 html/browsers/browsing-the-web/navigating-across-documents/replace-before-load/history-pushstate-during-load.html
 html/browsers/browsing-the-web/navigating-across-documents/replace-before-load/history-pushstate-during-pageshow.html
 html/browsers/browsing-the-web/navigating-across-documents/replace-before-load/history-pushstate.html
+html/browsers/browsing-the-web/navigating-across-documents/replace-before-load/location-assign-during-load.html
+html/browsers/browsing-the-web/navigating-across-documents/replace-before-load/location-assign-during-pageshow.html
+html/browsers/browsing-the-web/navigating-across-documents/replace-before-load/location-assign.html
+html/browsers/browsing-the-web/navigating-across-documents/replace-before-load/location-setter-during-load.html
+html/browsers/browsing-the-web/navigating-across-documents/replace-before-load/location-setter-during-pageshow.html
+html/browsers/browsing-the-web/navigating-across-documents/replace-before-load/location-setter.html
 html/browsers/browsing-the-web/navigating-across-documents/replace-before-load/window-open-popup-during-load.html
 html/browsers/browsing-the-web/navigating-across-documents/replace-before-load/window-open-popup.html
 html/browsers/browsing-the-web/navigating-across-documents/replace-before-load/window-open-self-during-load.html

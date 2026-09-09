@@ -92,6 +92,22 @@ pub(crate) enum PendingTopLevelNavigation {
 }
 
 impl JsContextHost {
+    pub(crate) fn document_is_completely_loaded(
+        &self,
+        document_handle: crate::document_runtime::DomHandle,
+    ) -> Option<bool> {
+        let owner = if document_handle == self.document_handle() {
+            self.current_main_document_task_owner()?.document_owner()
+        } else {
+            let child_handle =
+                self.child_browsing_context_host_for_document_handle(document_handle)?;
+            self.frame_owner_store
+                .current_child_document_owner(child_handle)?
+        };
+        self.frame_owner_store
+            .current_document_is_completely_loaded(owner)
+    }
+
     /// Replace the dynamically scoped Runtime command cause and return the
     /// previous scope for exact restoration after V8 dispatch.
     ///

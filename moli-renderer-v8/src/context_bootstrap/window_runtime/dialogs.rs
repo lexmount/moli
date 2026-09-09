@@ -1,5 +1,5 @@
 use super::super::{
-    location_navigation::{LocationNavigationKind, navigate_location_object},
+    location_navigation::{LocationNavigationKind, navigate_location_object_with_source_element},
     navigation_cancellation::inform_about_canceled_navigation_for_window,
 };
 use crate::{
@@ -480,11 +480,14 @@ fn navigate_window_open_self<'s>(
         rv.set(v8::null(scope).into());
         return;
     };
-    navigate_location_object(
+    // Window.open keeps its own history behavior while the target loads;
+    // it does not run the Location API's before-load replacement algorithm.
+    navigate_location_object_with_source_element(
         scope,
         location,
         LocationNavigationKind::Assign,
         Some(url.to_owned()),
+        None,
     );
     rv.set(receiver.into());
 }

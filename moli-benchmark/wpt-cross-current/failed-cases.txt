@@ -2725,12 +2725,7 @@ html/browsers/browsing-the-web/navigating-across-documents/replace-before-load/f
 html/browsers/browsing-the-web/navigating-across-documents/replace-before-load/form-submit.html
 html/browsers/browsing-the-web/navigating-across-documents/replace-before-load/iframe-src-during-load.html
 html/browsers/browsing-the-web/navigating-across-documents/replace-before-load/iframe-src-during-pageshow.html
-html/browsers/browsing-the-web/navigating-across-documents/replace-before-load/location-assign-during-load.html
-html/browsers/browsing-the-web/navigating-across-documents/replace-before-load/location-assign-during-pageshow.html
-html/browsers/browsing-the-web/navigating-across-documents/replace-before-load/location-assign.html
-html/browsers/browsing-the-web/navigating-across-documents/replace-before-load/location-setter-during-load.html
-html/browsers/browsing-the-web/navigating-across-documents/replace-before-load/location-setter-during-pageshow.html
-html/browsers/browsing-the-web/navigating-across-documents/replace-before-load/location-setter.html
+html/browsers/browsing-the-web/navigating-across-documents/replace-before-load/iframe-src.html
 html/browsers/browsing-the-web/overlapping-navigations-and-traversals/cross-document-nav-same-document-traversal.html
 html/browsers/browsing-the-web/overlapping-navigations-and-traversals/cross-document-traversal-cross-document-traversal.html
 html/browsers/browsing-the-web/overlapping-navigations-and-traversals/cross-document-traversal-same-document-traversal.html

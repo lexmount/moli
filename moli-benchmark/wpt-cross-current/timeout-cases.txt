@@ -76,7 +76,6 @@ html/browsers/browsing-the-web/navigating-across-documents/multiple-globals/cont
 html/browsers/browsing-the-web/navigating-across-documents/multiple-globals/context-for-location.html
 html/browsers/browsing-the-web/navigating-across-documents/multiple-globals/context-for-window-open.html
 html/browsers/browsing-the-web/navigating-across-documents/replace-before-load/form-submit-popup.html
-html/browsers/browsing-the-web/navigating-across-documents/replace-before-load/iframe-src.html
 html/browsers/browsing-the-web/navigating-across-documents/replace-before-load/window-open-popup-during-pageshow.html
 html/browsers/browsing-the-web/unloading-documents/002.html
 html/browsers/browsing-the-web/unloading-documents/004.html

@@ -1,6 +1,51 @@
 use super::*;
 
 #[test]
+fn location_assign_before_complete_load_respects_user_activation() {
+    for activated in [false, true] {
+        let mut vm = new_storage_test_vm("https://location-before-load.test/source");
+        if activated {
+            vm._context_host
+                .borrow_mut()
+                .begin_protocol_user_gesture_activation();
+        }
+        let navigation_type = vm
+            .eval(
+                r#"
+          window.observedNavigationType = null;
+          navigation.addEventListener('navigate', e => observedNavigationType = e.navigationType);
+          location.assign('/destination');
+          observedNavigationType
+        "#,
+            )
+            .expect("Location navigation must expose its resolved history behavior");
+        if activated {
+            vm._context_host
+                .borrow_mut()
+                .end_protocol_user_gesture_activation();
+        }
+        assert_eq!(navigation_type, if activated { "push" } else { "replace" });
+        let pending = vm.take_pending_location_navigation_with_seed().unwrap();
+        let seed = pending.entry_seed.unwrap();
+        let from = seed.activation.as_ref().unwrap().from.as_ref().unwrap();
+        assert_eq!(
+            seed.current_index,
+            from.history_index + u32::from(activated)
+        );
+        assert_eq!(
+            seed.entries
+                .iter()
+                .any(|entry| entry.url == "https://location-before-load.test/source"),
+            activated
+        );
+        assert_eq!(
+            seed.entries.last().unwrap().url,
+            "https://location-before-load.test/destination"
+        );
+    }
+}
+
+#[test]
 fn form_target_blank_reloads_rel_opener_policy_for_each_submission() {
     for (rel, expected_exposes_opener) in [
         ("", false),
@@ -3279,6 +3324,8 @@ async fn location_href_double_intercept_cancels_first_settlement() {
     let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).expect("loader");
     let mut vm = new_storage_test_vm_with_loader("https://example.com/start", &loader);
 
+    // Both assignments occur before complete loading, so both intercepted
+    // navigations replace the entry while preserving their abort ordering.
     let setup = vm
         .eval(
             r##"
@@ -3332,7 +3379,7 @@ async fn location_href_double_intercept_cancels_first_settlement() {
         .expect("location double setup should evaluate");
     assert_eq!(
         setup,
-        "locationInterceptSpoof:false:spoof-location.js:https://example.com/start:null|navigate:https://example.com/start:null|currententrychange:https://example.com/common/blank.html#1:push|handler:https://example.com/common/blank.html#1:push|abort:AbortError:https://example.com/common/blank.html#1:push|navigateerror:AbortError:https://example.com/common/blank.html#1:push|navigate:https://example.com/common/blank.html#1:null|currententrychange:https://example.com/common/blank.html#2:replace|handler:https://example.com/common/blank.html#2:replace"
+        "locationInterceptSpoof:false:spoof-location.js:https://example.com/start:null|navigate:https://example.com/start:null|currententrychange:https://example.com/common/blank.html#1:replace|handler:https://example.com/common/blank.html#1:replace|abort:AbortError:https://example.com/common/blank.html#1:replace|navigateerror:AbortError:https://example.com/common/blank.html#1:replace|navigate:https://example.com/common/blank.html#1:null|currententrychange:https://example.com/common/blank.html#2:replace|handler:https://example.com/common/blank.html#2:replace"
     );
 
     vm.advance_timers_until_deadline_for_test(&loader)
@@ -3343,7 +3390,7 @@ async fn location_href_double_intercept_cancels_first_settlement() {
         .expect("location double log should evaluate");
     assert_eq!(
         settled,
-        "locationInterceptSpoof:false:spoof-location.js:https://example.com/start:null|navigate:https://example.com/start:null|currententrychange:https://example.com/common/blank.html#1:push|handler:https://example.com/common/blank.html#1:push|abort:AbortError:https://example.com/common/blank.html#1:push|navigateerror:AbortError:https://example.com/common/blank.html#1:push|navigate:https://example.com/common/blank.html#1:null|currententrychange:https://example.com/common/blank.html#2:replace|handler:https://example.com/common/blank.html#2:replace|transition-rejected:AbortError:https://example.com/common/blank.html#2:replace|microtask:https://example.com/common/blank.html#2:replace|handler-timeout:https://example.com/common/blank.html#2:replace|handler-timeout:https://example.com/common/blank.html#2:replace|navigatesuccess:https://example.com/common/blank.html#2:replace|transition-finished:https://example.com/common/blank.html#2:null"
+        "locationInterceptSpoof:false:spoof-location.js:https://example.com/start:null|navigate:https://example.com/start:null|currententrychange:https://example.com/common/blank.html#1:replace|handler:https://example.com/common/blank.html#1:replace|abort:AbortError:https://example.com/common/blank.html#1:replace|navigateerror:AbortError:https://example.com/common/blank.html#1:replace|navigate:https://example.com/common/blank.html#1:null|currententrychange:https://example.com/common/blank.html#2:replace|handler:https://example.com/common/blank.html#2:replace|transition-rejected:AbortError:https://example.com/common/blank.html#2:replace|microtask:https://example.com/common/blank.html#2:replace|handler-timeout:https://example.com/common/blank.html#2:replace|handler-timeout:https://example.com/common/blank.html#2:replace|navigatesuccess:https://example.com/common/blank.html#2:replace|transition-finished:https://example.com/common/blank.html#2:null"
     );
 }
 #[test]
