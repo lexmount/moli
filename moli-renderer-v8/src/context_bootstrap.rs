@@ -58,6 +58,7 @@ pub(crate) use exposed_interfaces::{
     storage_interface_materialization_count as lazy_storage_constructor_materialization_count,
 };
 pub(crate) use indexed_db::dispatch_indexed_db_event_callback;
+mod form_navigation;
 mod location_history_storage;
 mod location_navigation;
 mod location_runtime;
@@ -164,6 +165,7 @@ pub(crate) use crypto::{
 pub(crate) use css_fontface_runtime::{
     new_font_face_set, rebuild_font_face_set_faces, settle_document_font_face_set_ready,
 };
+pub(crate) use form_navigation::FormNavigationHistory;
 pub(crate) use location_navigation::{
     LocationNavigationKind, dispatch_top_level_form_navigation_event,
     dispatch_top_level_navigation_event_with_source_element, is_native_location,
