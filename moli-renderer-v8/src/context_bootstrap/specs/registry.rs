@@ -1199,7 +1199,7 @@ const CONSTRUCTOR_SPECS_AFTER_STREAMS: &[ConstructorSpec] = &[
     ConstructorSpec {
         name: "DOMRectReadOnly",
         parent: None,
-        kind: ConstructorKind::Illegal,
+        kind: ConstructorKind::DomRectReadOnly,
     },
     ConstructorSpec {
         name: "DOMRect",

@@ -101,6 +101,7 @@ pub(in crate::context_bootstrap) enum ConstructorKind {
     SpeechSynthesisUtterance,
     WebSocketError,
     WebSocketStream,
+    DomRectReadOnly,
     DomRect,
     DomPoint,
     DomMatrix,
