@@ -147,8 +147,13 @@ impl PageScriptHost {
             return false;
         };
         let routed = self
-            .page_child_frame_task_sender()
-            .send_host_load(crate::page_task_queue::RendererPageChildHostLoadTarget::new(admission))
+            .page_task_capabilities
+            .get()
+            .expect("child load delivery must retain its Page task capabilities")
+            .dom_manipulation()
+            .send_child_host_load(
+                crate::page_task_queue::RendererPageChildHostLoadTarget::new(admission),
+            )
             .is_ok();
         if !routed {
             let _ = self
@@ -159,7 +164,7 @@ impl PageScriptHost {
         tracing::debug!(
             child_handle = ?task.child_handle,
             owner = ?task.owner,
-            "queued exact child load delivery on the stable child-frame source"
+            "queued exact child load delivery on the DOM manipulation source"
         );
         true
     }

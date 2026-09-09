@@ -108,7 +108,9 @@ impl PageSelectedTaskTestSelector {
             ),
             Self::ChildHostLoad => matches!(
                 descriptor,
-                RendererPageReadyDescriptor::ChildFrameTask { owner, .. }
+                RendererPageReadyDescriptor::DomManipulation {
+                    owner: crate::page_task_queue::RendererPageDomManipulationOwner::ChildHostLoad(owner), ..
+                }
                     if matches!(
                         owner.target(),
                         crate::page_task_queue::RendererPageChildFrameTaskTarget::HostLoad(_)
@@ -336,7 +338,12 @@ impl PageSelectedTaskTestSelector {
                     )
                 )
             }
-            (Self::ChildHostLoad, RendererPageSchedulerTask::ChildFrameTask(task)) => matches!(
+            (
+                Self::ChildHostLoad,
+                RendererPageSchedulerTask::DomManipulation(
+                    RendererPageDomManipulationTask::ChildHostLoad(task),
+                ),
+            ) => matches!(
                 task.owner().target(),
                 crate::page_task_queue::RendererPageChildFrameTaskTarget::HostLoad(_)
             ),
