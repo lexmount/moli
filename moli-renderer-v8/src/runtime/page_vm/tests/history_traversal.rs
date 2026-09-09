@@ -49,7 +49,7 @@ history.back();
 }
 
 #[tokio::test(flavor = "current_thread")]
-async fn history_traversal_body_leaves_reaction_for_selected_completion() {
+async fn history_traversal_body_cleans_up_callbacks_before_selected_completion() {
     run_page_vm_async_test(async move {
         let loader =
             crate::network::ResourceRequestClient::new(&FetchConfig::default()).expect("loader");
@@ -93,8 +93,8 @@ history.back();
                 .eval_without_microtask_checkpoint_for_test(
                     "globalThis.__historyBodyBoundary.join('|')",
                 )?,
-            "navigate",
-            "the traversal body must leave its Promise reaction for selected-task completion"
+            "navigate|microtask|runtime-script",
+            "listener cleanup must drain reactions before the selected task completes"
         );
         let completion = outcome.action.into_page_task_completion();
         assert!(matches!(completion, PageTaskCompletion::CallbackCompletion));
@@ -106,7 +106,7 @@ history.back();
                 .vm_mut()
                 .eval("globalThis.__historyBodyBoundary.join('|')")?,
             "navigate|microtask|runtime-script",
-            "central callback completion must own the reaction and its runtime-script follow-up"
+            "selected task completion must not repeat callback reactions or their inline scripts"
         );
         Ok::<_, anyhow::Error>(())
     })
