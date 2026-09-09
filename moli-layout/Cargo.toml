@@ -8,6 +8,7 @@ license.workspace = true
 euclid = "=0.22.14"
 kurbo = "=0.13.1"
 moli-image = { path = "../moli-image" }
+moli-svg = { path = "../moli-svg" }
 moli-system-fonts = { path = "../moli-system-fonts" }
 parley = "=0.11.1"
 read-fonts = "=0.41.0"

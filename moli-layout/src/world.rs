@@ -262,6 +262,7 @@ pub struct LayoutBox<N> {
     /// Pass-local natural sizing retained once at box construction.
     pub(crate) replaced_context: Option<ReplacedContext>,
     pub(crate) replaced_image: Option<crate::LayoutImageResource>,
+    pub(crate) svg_text: Option<std::sync::Arc<crate::LayoutSvgText<N>>>,
     pub(crate) css_images: crate::source::LayoutCssImageResources,
     /// Winning collapsed-table edges owned by the table wrapper for this pass.
     ///
@@ -1127,6 +1128,7 @@ where
             scroll_offset: LayoutPoint::ZERO,
             replaced_context: None,
             replaced_image: None,
+            svg_text: None,
             css_images: crate::source::LayoutCssImageResources::default(),
             collapsed_table_borders: None,
             collapsed_table_border_part: false,

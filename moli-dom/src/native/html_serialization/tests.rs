@@ -254,6 +254,75 @@ fn html_serializers_apply_attribute_serialized_name_rules() {
 }
 
 #[test]
+fn derived_style_overrides_are_escaped_and_do_not_mutate_the_dom() {
+    let mut dom = NativeDom::new_html(test_url());
+    let root = dom.create_element("div");
+    let child = dom.create_element("span");
+    assert!(dom.append_child(root, child));
+    assert!(dom.set_attribute(root, "style", "color:blue"));
+    let original = dom.outer_html(root).unwrap();
+    let mut visited = Vec::new();
+    let projected = dom
+        .outer_html_with_style_overrides(root, 512, |node| {
+            visited.push(node);
+            Some(
+                if node == root {
+                    "color:red"
+                } else {
+                    "font-family:\"A&B\""
+                }
+                .to_owned(),
+            )
+        })
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        projected,
+        "<div style=\"color:red\"><span style=\"font-family:&quot;A&amp;B&quot;\"></span></div>"
+    );
+    assert_eq!(visited, [root, child]);
+    assert_eq!(dom.outer_html(root).as_deref(), Some(original.as_str()));
+    assert_eq!(dom.get_attribute(child, "style"), None);
+    assert_eq!(
+        dom.outer_html_with_style_overrides(root, 512, |_| None)
+            .unwrap(),
+        Some(original)
+    );
+}
+
+#[test]
+fn derived_style_overrides_share_the_output_budget_and_stop_traversal() {
+    let mut dom = NativeDom::new_html(test_url());
+    let root = dom.create_element("div");
+    let child = dom.create_element("span");
+    assert!(dom.append_child(root, child));
+    let expected = "<div style=\"&quot;&amp;\"><span style=\"&quot;&amp;\"></span></div>";
+    assert_eq!(
+        dom.outer_html_with_style_overrides(root, expected.len(), |_| Some("\"&".into())),
+        Ok(Some(expected.to_owned()))
+    );
+    assert_eq!(
+        dom.outer_html_with_style_overrides(root, expected.len() - 1, |_| Some("\"&".into())),
+        Err(HtmlSerializationLimitExceeded {
+            max_bytes: expected.len() - 1
+        })
+    );
+    let mut visited = Vec::new();
+    assert_eq!(
+        dom.outer_html_with_style_overrides(root, 8, |node| {
+            visited.push(node);
+            Some("\"&".into())
+        }),
+        Err(HtmlSerializationLimitExceeded { max_bytes: 8 })
+    );
+    assert_eq!(
+        visited,
+        [root],
+        "budget failure must not resolve later nodes' styles"
+    );
+}
+
+#[test]
 fn html_serializers_escape_non_breaking_spaces_in_attribute_values() {
     let mut dom = NativeDom::new_html(test_url());
     let container = dom.create_element("span");

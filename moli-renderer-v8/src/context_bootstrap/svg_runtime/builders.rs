@@ -403,17 +403,6 @@ pub(super) fn build_svg_matrix<'s>(
     .expect("SVGMatrix declaration should bind")
 }
 
-pub(super) fn build_svg_animated_length<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    value: f64,
-) -> v8::Local<'s, v8::Object> {
-    let base_val = build_svg_length(scope, value);
-    let anim_val = build_svg_length(scope, value);
-    SvgAnimatedLengthObjectDeclaration::new(base_val, anim_val)
-        .bind(scope)
-        .expect("SVGAnimatedLength declaration should bind")
-}
-
 pub(super) fn build_svg_animated_length_for_attribute<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     owner: v8::Local<'s, v8::Object>,
@@ -465,22 +454,6 @@ pub(super) fn build_dom_point_like<'s>(
     y: f64,
 ) -> v8::Local<'s, v8::Object> {
     build_dom_point_object(scope, x, y, 0.0, 1.0)
-}
-
-pub(super) fn build_dom_rect_like<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    x: f64,
-    y: f64,
-    width: f64,
-    height: f64,
-) -> v8::Local<'s, v8::Object> {
-    build_dom_rect_object(scope, x, y, width, height)
-}
-
-pub(super) fn build_zero_dom_rect_like<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-) -> v8::Local<'s, v8::Object> {
-    build_dom_rect_like(scope, 0.0, 0.0, 0.0, 0.0)
 }
 
 pub(super) fn svg_geometry_segments<'s>(
@@ -654,8 +627,7 @@ fn svg_bbox_for_handle(
     }
 
     match local_name {
-        "text" => None,
-        "tspan" => svg_text_bounding_box(runtime, handle, transform),
+        "text" | "tspan" | "textPath" => svg_text_bounding_box(runtime, handle, transform),
         "image" => {
             let (width, height) = svg_image_dimensions(runtime, handle);
             let geometry = SvgGeometryElement::Rect {
@@ -743,140 +715,10 @@ fn svg_text_bounding_box(
     handle: crate::document_runtime::DomHandle,
     transform: SvgMatrixComponents,
 ) -> Option<SvgGeometryBox> {
-    let text_root = svg_text_root(runtime, handle)?;
-    let text = runtime.dom_host().text_content(handle)?;
-    let character_count = svg_rendered_text_character_count(&text);
-    if character_count == 0 {
-        return None;
-    }
-
-    let font_size = crate::native_bridge::element::computed_style_property_for_handle(
-        runtime,
-        handle,
-        "font-size",
-    );
-    let font_size = parse_svg_length_value(font_size.trim())
-        .map(|length| length.value)
-        .filter(|value| value.is_finite() && *value > 0.0)
-        .unwrap_or(16.0);
-    let font_family = crate::native_bridge::element::computed_style_property_for_handle(
-        runtime,
-        handle,
-        "font-family",
-    );
-    let is_ahem = font_family.split(',').any(|family| {
-        family
-            .trim_matches([' ', '\'', '"'])
-            .eq_ignore_ascii_case("Ahem")
-    });
-    let glyph_advance = if is_ahem { font_size } else { font_size * 0.6 };
-
-    let explicit_x = svg_geometry_optional_length_attribute_for_handle(runtime, handle, "x");
-    let preceding_characters = if handle == text_root || explicit_x.is_some() {
-        0
-    } else {
-        svg_text_characters_before(runtime, text_root, handle).unwrap_or(0)
-    };
-    let x = explicit_x
-        .or_else(|| svg_inherited_text_position(runtime, handle, text_root, "x"))
-        .unwrap_or(0.0)
-        + svg_geometry_optional_length_attribute_for_handle(runtime, handle, "dx")
-            .or_else(|| svg_inherited_text_position(runtime, handle, text_root, "dx"))
-            .unwrap_or(0.0)
-        + preceding_characters as f64 * glyph_advance;
-    let baseline = svg_geometry_optional_length_attribute_for_handle(runtime, handle, "y")
-        .or_else(|| svg_inherited_text_position(runtime, handle, text_root, "y"))
-        .unwrap_or(0.0)
-        + svg_geometry_optional_length_attribute_for_handle(runtime, handle, "dy")
-            .or_else(|| svg_inherited_text_position(runtime, handle, text_root, "dy"))
-            .unwrap_or(0.0);
-
-    let geometry = SvgGeometryElement::Rect {
-        x,
-        y: baseline - font_size * 0.8,
-        width: character_count as f64 * glyph_advance,
-        height: font_size,
-        rx: 0.0,
-        ry: 0.0,
-    };
-    svg_geometry::bounding_box_for_transformed_element(&geometry, transform)
-}
-
-fn svg_text_root(
-    runtime: &crate::native_bridge::JsContextHost,
-    handle: crate::document_runtime::DomHandle,
-) -> Option<crate::document_runtime::DomHandle> {
-    let mut current = Some(handle);
-    while let Some(candidate) = current {
-        let node = runtime.dom_host().node(candidate)?;
-        if node.local_name() == Some("text") {
-            return Some(candidate);
-        }
-        current = node.parent_node_id();
-    }
-    None
-}
-
-fn svg_inherited_text_position(
-    runtime: &crate::native_bridge::JsContextHost,
-    handle: crate::document_runtime::DomHandle,
-    text_root: crate::document_runtime::DomHandle,
-    attribute: &str,
-) -> Option<f64> {
-    let mut current = runtime.dom_host().node(handle)?.parent_node_id();
-    while let Some(candidate) = current {
-        if let Some(value) =
-            svg_geometry_optional_length_attribute_for_handle(runtime, candidate, attribute)
-        {
-            return Some(value);
-        }
-        if candidate == text_root {
-            break;
-        }
-        current = runtime.dom_host().node(candidate)?.parent_node_id();
-    }
-    None
-}
-
-fn svg_text_characters_before(
-    runtime: &crate::native_bridge::JsContextHost,
-    root: crate::document_runtime::DomHandle,
-    target: crate::document_runtime::DomHandle,
-) -> Option<usize> {
-    fn visit(
-        runtime: &crate::native_bridge::JsContextHost,
-        current: crate::document_runtime::DomHandle,
-        target: crate::document_runtime::DomHandle,
-        count: &mut usize,
-    ) -> bool {
-        for child in runtime.dom_host().child_handles(current) {
-            if child == target {
-                return true;
-            }
-            let Some(node) = runtime.dom_host().node(child) else {
-                continue;
-            };
-            if let Some(value) = node.data_value()
-                && node.is_text()
-            {
-                *count += svg_rendered_text_character_count(value);
-                continue;
-            }
-            if visit(runtime, child, target, count) {
-                return true;
-            }
-        }
-        false
-    }
-
-    let mut count = 0;
-    visit(runtime, root, target, &mut count).then_some(count)
-}
-
-fn svg_rendered_text_character_count(text: &str) -> usize {
-    text.split_whitespace()
-        .map(|chunk| chunk.chars().count())
-        .sum()
+    super::text::query_for_handle(runtime, handle, |text| {
+        text.transformed_bounding_box(transform)
+    })
+    .flatten()
 }
 
 fn svg_use_bounding_box(
@@ -1771,10 +1613,14 @@ pub(super) fn sync_svg_animated_length_from_owner_attribute<'s>(
     owner: v8::Local<'s, v8::Object>,
     attribute: &str,
 ) {
-    let parsed = svg_owner_attribute_value(scope, owner, attribute)
+    let attribute_value = svg_owner_attribute_value(scope, owner, attribute);
+    let mut parsed = attribute_value
         .as_deref()
         .and_then(parse_svg_length_value)
         .unwrap_or_default();
+    if attribute == "textLength" && attribute_value.is_none() {
+        parsed.value = f64::from(super::text::computed_text_length(scope, owner) as f32);
+    }
     if let Some(base_val) = get_private_value(scope, animated, SVG_ANIMATED_LENGTH_BASE_VAL_SLOT)
         .and_then(|value| v8::Local::<v8::Object>::try_from(value).ok())
     {

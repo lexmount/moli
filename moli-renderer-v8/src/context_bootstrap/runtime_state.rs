@@ -1693,6 +1693,7 @@ pub(crate) fn finish_context_bootstrap(
         ("SVGLength", "SVGLength"),
         ("SVGNumber", "SVGNumber"),
         ("SVGRect", "SVGRect"),
+        ("SVGPoint", "SVGPoint"),
         ("SVGAnimatedLength", "SVGAnimatedLength"),
         ("SVGLengthList", "SVGLengthList"),
         ("SVGAnimatedLengthList", "SVGAnimatedLengthList"),

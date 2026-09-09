@@ -1,6 +1,8 @@
 use super::*;
 
 mod image_dimensions;
+mod inline_svg_styles;
+mod svg_text_metrics;
 mod transform_precision;
 
 use base64::Engine as _;
