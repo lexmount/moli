@@ -139,7 +139,12 @@ const DIRECT_V8_CALL_ALLOWLIST: &[AllowedDirectCallFile] = &[
     ),
     allowed(
         "network_host/body_source.rs",
-        3,
+        1,
+        DirectCallOwner::BrowserAlgorithm,
+    ),
+    allowed(
+        "network_host/body_source/stream_consumer.rs",
+        1,
         DirectCallOwner::BrowserAlgorithm,
     ),
     allowed(
@@ -149,9 +154,7 @@ const DIRECT_V8_CALL_ALLOWLIST: &[AllowedDirectCallFile] = &[
     ),
     allowed(
         "network_host/fetch_surface.rs",
-        // Includes the Fetch bootstrap closure receiving native reader
-        // operations; the closure is compiled from browser-owned source.
-        2,
+        1,
         DirectCallOwner::BrowserAlgorithm,
     ),
     allowed(
