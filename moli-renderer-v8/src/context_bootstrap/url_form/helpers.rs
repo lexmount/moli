@@ -41,21 +41,16 @@ pub(super) fn resolve_url_constructor_input(
     input: &str,
     base: Option<&str>,
 ) -> std::result::Result<url::Url, url::ParseError> {
-    if let Ok(url) = url::Url::parse(input) {
-        return Ok(url);
+    // A supplied base must be validated even for an absolute input. It also
+    // participates in parsing same-scheme inputs such as `https:child`.
+    match base {
+        Some(base) => url::Url::parse(base)?.join(input),
+        None => url::Url::parse(input),
     }
-    let Some(base) = base else {
-        return Err(url::ParseError::RelativeUrlWithoutBase);
-    };
-    let base = url::Url::parse(base)?;
-    base.join(input)
 }
 
 pub(super) fn can_parse_url_input(input: &str, base: Option<&str>) -> bool {
-    match base {
-        Some(base) => url::Url::parse(base).is_ok_and(|base| base.join(input).is_ok()),
-        None => url::Url::parse(input).is_ok(),
-    }
+    resolve_url_constructor_input(input, base).is_ok()
 }
 
 pub(in crate::context_bootstrap) fn url_href_slot<'s>(
