@@ -1411,7 +1411,7 @@ fn document_is_hidden(runtime: &PageScriptHost, handle: DomHandle) -> bool {
             .dom_host()
             .node(handle)
             .and_then(Node::as_document)
-            .is_some_and(|document| document.visibility_hidden())
+            .is_none_or(|document| document.visibility_hidden())
         || !document_has_browsing_context(runtime, handle)
 }
 
