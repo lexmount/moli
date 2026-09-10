@@ -26,14 +26,11 @@ mod loading;
 mod matching;
 mod owner_wake;
 mod pump;
-mod resource_commands;
-mod resource_routing;
 mod routing;
 mod service;
 mod service_lane;
 mod shutdown;
 mod target_close;
-mod target_output_streams;
 #[cfg(test)]
 mod test_support;
 mod threads;

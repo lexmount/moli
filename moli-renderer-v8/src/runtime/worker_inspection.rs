@@ -1,33 +1,8 @@
-use moli_shared_worker::SharedWorkerInstanceId;
-
 use super::{
     CompletedWorkerRuntimeInspectorCommandDispatch, RendererRuntimeInspectorMessage,
-    RendererRuntimeInspectorResponseSender, RendererServiceWorkerRunIdentity,
-    RendererTurnOutputJournal,
+    RendererRuntimeInspectorResponseSender, RendererTurnOutputJournal,
 };
 use crate::worker::WorkerDevToolsHandle;
-
-/// Renderer identity used only to bind an inspection endpoint. A stable
-/// ServiceWorker version is insufficient: inspection must name its exact run.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub enum RendererWorkerInspectionTarget {
-    Shared(SharedWorkerInstanceId),
-    Dedicated(u64),
-    Service {
-        version_id: u64,
-        run: RendererServiceWorkerRunIdentity,
-    },
-}
-
-impl RendererWorkerInspectionTarget {
-    pub fn unavailable_message(&self) -> &'static str {
-        match self {
-            Self::Shared(_) => "SharedWorkerRuntimeUnavailable",
-            Self::Dedicated(_) => "DedicatedWorkerRuntimeUnavailable",
-            Self::Service { .. } => "ServiceWorkerRuntimeUnavailable",
-        }
-    }
-}
 
 /// Inspection-only capability for one concrete worker. It retains neither the
 /// Context registry nor a Worker owner/JoinHandle. Retirement disposes the

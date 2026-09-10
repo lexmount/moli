@@ -204,7 +204,7 @@ impl RendererSharedWorkerHost {
         self.publish_observation(RendererProtocolObservation::SharedWorker(event));
     }
 
-    fn publish_observation(&self, observation: RendererProtocolObservation) {
+    pub(super) fn publish_observation(&self, observation: RendererProtocolObservation) {
         self.target_output().publish_record(
             PendingRendererOutputRecord::observation(None, observation)
                 .resolve()

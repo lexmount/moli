@@ -33,11 +33,13 @@ impl RendererSharedWorkerHost {
     pub(super) fn worker_host_bridge_sender(
         &self,
     ) -> Option<crate::page_task_queue::RendererWorkerHostBridgeEventSender> {
+        // Keep the oldest live client's policy source stable. HashMap order
+        // must not switch an intercepted request to another Document.
         self.clients
             .lock()
-            .values()
-            .next()
-            .map(RendererSharedWorkerClient::worker_host_bridge_sender)
+            .iter()
+            .min_by_key(|(id, _)| *id)
+            .map(|(_, client)| client.worker_host_bridge_sender())
     }
 
     fn fail_client(

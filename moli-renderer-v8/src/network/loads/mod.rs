@@ -3,8 +3,8 @@ mod registry;
 
 pub(crate) use keepalive::{DetachedKeepaliveLoadDiagnostics, DetachedKeepaliveLoadRegistry};
 pub(crate) use registry::{
-    ResourceLoadDisposition, ResourceLoadId, ResourceLoadKind, ResourceLoadLease,
-    ResourceLoadRegistry, ResourceLoadRegistryDiagnostics,
+    ResourceLoadCancellationObserver, ResourceLoadDisposition, ResourceLoadId, ResourceLoadKind,
+    ResourceLoadLease, ResourceLoadRegistry, ResourceLoadRegistryDiagnostics,
 };
 
 #[cfg(test)]

@@ -69,13 +69,11 @@ use runtime_inspector::WorkerRuntimeInspector;
 use super::global_scope::{
     WorkerFetchEvent, WorkerGlobalState, WorkerIsolateTimerQueues, WorkerOpfsCompletion,
     WorkerWebCryptoCompletion, WorkerXhrCompletion, close_worker_owned_broadcast_channels,
-    close_worker_owned_message_ports, continue_pending_worker_csp_report,
-    continue_pending_worker_fetch, continue_pending_worker_fetch_response,
-    continue_pending_worker_xhr, continue_pending_worker_xhr_response,
-    dispatch_nested_worker_event, dispatch_worker_csp_violation_event,
-    dispatch_worker_websocket_event, drain_service_worker_client_focus_result,
-    drain_service_worker_client_navigate_result, drain_service_worker_client_query_result,
-    drain_service_worker_clients_open_window_result, drain_service_worker_get_notifications_result,
+    close_worker_owned_message_ports, dispatch_nested_worker_event,
+    dispatch_worker_csp_violation_event, dispatch_worker_websocket_event,
+    drain_service_worker_client_focus_result, drain_service_worker_client_navigate_result,
+    drain_service_worker_client_query_result, drain_service_worker_clients_open_window_result,
+    drain_service_worker_get_notifications_result,
     drain_service_worker_periodic_sync_get_tags_result,
     drain_service_worker_periodic_sync_registration_result,
     drain_service_worker_periodic_sync_unregistration_result,
@@ -83,12 +81,7 @@ use super::global_scope::{
     drain_service_worker_push_unsubscribe_result, drain_service_worker_show_notification_result,
     drain_service_worker_sync_get_tags_result, drain_service_worker_sync_registration_result,
     drain_worker_fetch_completion, drain_worker_opfs_completion, drain_worker_webcrypto_completion,
-    drain_worker_xhr_completion, fail_pending_worker_csp_report, fail_pending_worker_fetch,
-    fail_pending_worker_fetch_auth, fail_pending_worker_fetch_response, fail_pending_worker_xhr,
-    fail_pending_worker_xhr_auth, fail_pending_worker_xhr_response,
-    fulfill_pending_worker_csp_report, fulfill_pending_worker_fetch,
-    fulfill_pending_worker_fetch_response, fulfill_pending_worker_xhr,
-    fulfill_pending_worker_xhr_response, install_worker_global_scope,
+    drain_worker_xhr_completion, install_worker_global_scope,
     prepare_worker_global_scope_templates, service_worker_fetch_handler_type,
 };
 use super::handle::{
@@ -163,18 +156,58 @@ impl WorkerScriptSource {
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) enum WorkerGlobalKind {
-    Dedicated {
+    Dedicated(crate::runtime::RendererDedicatedWorkerHost),
+    #[cfg(test)]
+    UnobservedDedicated {
         name: String,
+        network: crate::runtime::RendererWorkerNetworkReporter,
     },
     Shared {
         name: String,
         storage_key: MoliStorageKey,
+        network: crate::runtime::RendererWorkerNetworkReporter,
     },
     Service {
         registration_id: crate::runtime::ServiceWorkerRegistrationId,
         version_id: crate::runtime::ServiceWorkerVersionId,
         scope_url: url::Url,
+        network: crate::runtime::RendererWorkerNetworkReporter,
     },
+}
+
+impl WorkerGlobalKind {
+    #[cfg(test)]
+    pub(crate) fn unobserved_dedicated(name: impl Into<String>) -> Self {
+        Self::UnobservedDedicated {
+            name: name.into(),
+            network: crate::runtime::RendererWorkerNetworkReporter::unobserved_for_test(),
+        }
+    }
+
+    pub(in crate::worker) fn dedicated_name(&self) -> Option<&str> {
+        match self {
+            Self::Dedicated(host) => Some(host.name()),
+            #[cfg(test)]
+            Self::UnobservedDedicated { name, .. } => Some(name),
+            Self::Shared { .. } | Self::Service { .. } => None,
+        }
+    }
+
+    pub(in crate::worker) fn network(&self) -> &crate::runtime::RendererWorkerNetworkReporter {
+        match self {
+            Self::Dedicated(host) => host.network(),
+            Self::Shared { network, .. } | Self::Service { network, .. } => network,
+            #[cfg(test)]
+            Self::UnobservedDedicated { network, .. } => network,
+        }
+    }
+
+    pub(in crate::worker) fn network_message(
+        &self,
+        record: moli_page_types::SubresourceNetworkRecord,
+    ) -> WorkerToParentMessage {
+        WorkerToParentMessage::Network(self.network().report(record))
+    }
 }
 
 pub(crate) struct WorkerSpawnOptions {
@@ -290,6 +323,7 @@ impl WorkerSpawnOptions {
         options
     }
 
+    #[cfg(test)]
     pub(crate) fn new_with_request_client(
         script_source: String,
         script_url: String,
@@ -302,10 +336,33 @@ impl WorkerSpawnOptions {
         )
     }
 
+    #[cfg(test)]
     pub(crate) fn with_source_and_request_client(
         script_source: WorkerScriptSource,
         script_url: String,
         request_client: ResourceRequestClient,
+    ) -> Self {
+        Self::for_worker_source(
+            script_source,
+            script_url,
+            request_client,
+            WorkerGlobalKind::UnobservedDedicated {
+                name: String::new(),
+                network: crate::runtime::RendererWorkerNetworkReporter::unobserved_for_test(),
+            },
+            RendererWorkerContextRuntime::new(
+                crate::message_port_runtime::new_message_port_registry(),
+                crate::broadcast_channel_runtime::new_broadcast_channel_registry(),
+            ),
+        )
+    }
+
+    pub(crate) fn for_worker_source(
+        script_source: WorkerScriptSource,
+        script_url: String,
+        request_client: ResourceRequestClient,
+        global_kind: WorkerGlobalKind,
+        worker_context_runtime: RendererWorkerContextRuntime,
     ) -> Self {
         Self {
             script_source,
@@ -322,13 +379,8 @@ impl WorkerSpawnOptions {
             ),
             network_policy: WorkerNetworkPolicy::default(),
             policy_context: Default::default(),
-            worker_context_runtime: RendererWorkerContextRuntime::new(
-                crate::message_port_runtime::new_message_port_registry(),
-                crate::broadcast_channel_runtime::new_broadcast_channel_registry(),
-            ),
-            global_kind: WorkerGlobalKind::Dedicated {
-                name: String::new(),
-            },
+            worker_context_runtime,
+            global_kind,
             api_storage_key: None,
             broadcast_channel_top_level_site: None,
             creator_storage_key: None,
@@ -426,6 +478,7 @@ impl WorkerSpawnOptions {
         self
     }
 
+    #[cfg(test)]
     pub(crate) fn with_worker_context_runtime(
         mut self,
         runtime: RendererWorkerContextRuntime,
@@ -434,6 +487,7 @@ impl WorkerSpawnOptions {
         self
     }
 
+    #[cfg(test)]
     pub(crate) fn with_global_kind(mut self, global_kind: WorkerGlobalKind) -> Self {
         self.global_kind = global_kind;
         self
@@ -1145,7 +1199,7 @@ fn worker_resource_owner_slot_diagnostics(
 
 fn forward_pending_worker_runtime_protocol_messages(
     inspector: &WorkerRuntimeInspector,
-    parent_tx: &mpsc::UnboundedSender<WorkerToParentMessage>,
+    parent_tx: &crate::worker::WorkerParentSender,
 ) {
     let messages = drain_worker_runtime_protocol_messages(inspector);
     if !messages.is_empty() {
@@ -1155,7 +1209,7 @@ fn forward_pending_worker_runtime_protocol_messages(
 
 fn forward_worker_script_loaded(
     inspector: &WorkerRuntimeInspector,
-    parent_tx: &mpsc::UnboundedSender<WorkerToParentMessage>,
+    parent_tx: &crate::worker::WorkerParentSender,
 ) {
     // Blink notifies each attached worker Inspector agent only after top-level
     // evaluation completes. Flush V8 notifications first so console and
@@ -1339,6 +1393,24 @@ pub(crate) fn spawn_test_worker_with_options(mut options: WorkerSpawnOptions) ->
 }
 
 pub(crate) fn spawn_worker_with_options(options: WorkerSpawnOptions) -> WorkerHandle {
+    spawn_worker_after_binding(options, || {})
+}
+
+pub(crate) fn spawn_dedicated_worker(
+    options: WorkerSpawnOptions,
+    script: crate::runtime::RendererDedicatedWorkerMainScript,
+) -> WorkerHandle {
+    let WorkerGlobalKind::Dedicated(host) = &options.global_kind else {
+        panic!("a Dedicated bootstrap must carry its physical host");
+    };
+    let host = host.clone();
+    spawn_worker_after_binding(options, move || host.script_completed(script))
+}
+
+fn spawn_worker_after_binding(
+    options: WorkerSpawnOptions,
+    after_binding: impl FnOnce(),
+) -> WorkerHandle {
     #[cfg(test)]
     assert!(
         options.test_request_client_owner.is_none(),
@@ -1375,11 +1447,19 @@ pub(crate) fn spawn_worker_with_options(options: WorkerSpawnOptions) -> WorkerHa
     let (parent_to_worker_tx, parent_to_worker_rx) = mpsc::unbounded_channel::<WorkerMessage>();
     let (worker_to_parent_tx, worker_to_parent_rx) =
         mpsc::unbounded_channel::<WorkerToParentMessage>();
+    let worker_to_parent_tx =
+        crate::worker::WorkerParentSender::new(worker_to_parent_tx, &global_kind);
     let worker_wake_tx = parent_to_worker_tx.clone();
     let isolate_handle = Arc::new(Mutex::new(None));
     let worker_isolate_handle = Arc::clone(&isolate_handle);
     let devtools =
         WorkerDevToolsHandle::new(parent_to_worker_tx.clone(), Arc::clone(&isolate_handle));
+    if let WorkerGlobalKind::Dedicated(host) = &global_kind {
+        host.bind_execution(devtools.clone());
+    }
+    // The main-script fact exposes an already-bound Inspector endpoint, but
+    // is published before execution can emit Console/Network or retire.
+    after_binding();
     let worker_inspector_tasks = devtools.inspector_tasks().clone();
     let termination_requested = Arc::new(AtomicBool::new(false));
     let worker_termination_requested = Arc::clone(&termination_requested);
@@ -1506,7 +1586,11 @@ fn resource_loader_for_worker_context(
     worker_request_client.set_network_offline(network_policy.network_offline);
     worker_request_client.set_blocked_url_patterns(&network_policy.blocked_url_patterns);
     let owner = match global_kind {
-        WorkerGlobalKind::Dedicated { name } => WorkerResourceOwner::Dedicated {
+        WorkerGlobalKind::Dedicated(host) => WorkerResourceOwner::Dedicated {
+            name: host.name().into(),
+        },
+        #[cfg(test)]
+        WorkerGlobalKind::UnobservedDedicated { name, .. } => WorkerResourceOwner::Dedicated {
             name: name.clone().into_boxed_str(),
         },
         WorkerGlobalKind::Shared { name, .. } => WorkerResourceOwner::Shared {
@@ -1552,11 +1636,21 @@ async fn worker_main(
     pause_evaluation_until_debugger: bool,
     worker_wake_tx: mpsc::UnboundedSender<WorkerMessage>,
     mut rx: mpsc::UnboundedReceiver<WorkerMessage>,
-    parent_tx: mpsc::UnboundedSender<WorkerToParentMessage>,
+    parent_tx: crate::worker::WorkerParentSender,
     isolate_handle: Arc<Mutex<Option<v8::IsolateHandle>>>,
     termination_requested: Arc<AtomicBool>,
     inspector_task_runner: WorkerInspectorTaskRunner,
 ) {
+    struct NetworkSourceGuard(WorkerGlobalKind);
+    impl Drop for NetworkSourceGuard {
+        fn drop(&mut self) {
+            match &self.0 {
+                WorkerGlobalKind::Dedicated(host) => host.retire(),
+                kind => kind.network().close_source(),
+            }
+        }
+    }
+    let _network_source = NetworkSourceGuard(global_kind.clone());
     debug!(url = %script_url, "worker started");
     let mut bootstrap_completion =
         WorkerBootstrapCompletionReporter::new(bootstrap_completion_target);
@@ -2804,150 +2898,8 @@ async fn worker_main(
                 state.fetch_subresource_interception_enabled = enabled;
                 state.fetch_subresource_interception_resource_type = resource_type;
             }
-            WorkerLoopWake::Message(Some(WorkerMessage::ContinuePendingFetch(request))) => {
-                continue_pending_worker_fetch(&state, request);
-            }
-            WorkerLoopWake::Message(Some(WorkerMessage::ContinuePendingXhr(request))) => {
-                continue_pending_worker_xhr(&state, request);
-            }
-            WorkerLoopWake::Message(Some(WorkerMessage::ContinuePendingCspReport(request))) => {
-                continue_pending_worker_csp_report(&state, request);
-            }
-            WorkerLoopWake::Message(Some(WorkerMessage::ContinuePendingFetchResponse {
-                request,
-                response_code,
-                response_headers,
-            })) => {
-                continue_pending_worker_fetch_response(
-                    &state,
-                    request,
-                    response_code,
-                    response_headers,
-                );
-            }
-            WorkerLoopWake::Message(Some(WorkerMessage::ContinuePendingXhrResponse {
-                request,
-                response_code,
-                response_headers,
-            })) => {
-                continue_pending_worker_xhr_response(
-                    &state,
-                    request,
-                    response_code,
-                    response_headers,
-                );
-            }
-            WorkerLoopWake::Message(Some(WorkerMessage::FailPendingFetch {
-                request,
-                error_text,
-            })) => {
-                fail_pending_worker_fetch(&state, request, error_text);
-            }
-            WorkerLoopWake::Message(Some(WorkerMessage::FailPendingXhr {
-                request,
-                error_text,
-            })) => {
-                fail_pending_worker_xhr(&state, request, error_text);
-            }
-            WorkerLoopWake::Message(Some(WorkerMessage::FailPendingCspReport {
-                request,
-                error_text,
-            })) => {
-                fail_pending_worker_csp_report(&state, request, error_text);
-            }
-            WorkerLoopWake::Message(Some(WorkerMessage::FailPendingFetchAuth {
-                request,
-                error_text,
-            })) => {
-                fail_pending_worker_fetch_auth(&state, request, error_text);
-            }
-            WorkerLoopWake::Message(Some(WorkerMessage::FailPendingXhrAuth {
-                request,
-                error_text,
-            })) => {
-                fail_pending_worker_xhr_auth(&state, request, error_text);
-            }
-            WorkerLoopWake::Message(Some(WorkerMessage::FailPendingFetchResponse {
-                request,
-                error_text,
-            })) => {
-                fail_pending_worker_fetch_response(&state, request, error_text);
-            }
-            WorkerLoopWake::Message(Some(WorkerMessage::FailPendingXhrResponse {
-                request,
-                error_text,
-            })) => {
-                fail_pending_worker_xhr_response(&state, request, error_text);
-            }
-            WorkerLoopWake::Message(Some(WorkerMessage::FulfillPendingFetch {
-                request,
-                response_code,
-                response_headers,
-                response_body,
-            })) => {
-                fulfill_pending_worker_fetch(
-                    &state,
-                    request,
-                    response_code,
-                    response_headers,
-                    response_body,
-                );
-            }
-            WorkerLoopWake::Message(Some(WorkerMessage::FulfillPendingXhr {
-                request,
-                response_code,
-                response_headers,
-                response_body,
-            })) => {
-                fulfill_pending_worker_xhr(
-                    &state,
-                    request,
-                    response_code,
-                    response_headers,
-                    response_body,
-                );
-            }
-            WorkerLoopWake::Message(Some(WorkerMessage::FulfillPendingCspReport {
-                request,
-                response_code,
-                response_headers,
-                response_body,
-            })) => {
-                fulfill_pending_worker_csp_report(
-                    &state,
-                    request,
-                    response_code,
-                    response_headers,
-                    response_body,
-                );
-            }
-            WorkerLoopWake::Message(Some(WorkerMessage::FulfillPendingFetchResponse {
-                request,
-                response_code,
-                response_headers,
-                response_body,
-            })) => {
-                fulfill_pending_worker_fetch_response(
-                    &state,
-                    request,
-                    response_code,
-                    response_headers,
-                    response_body,
-                );
-            }
-            WorkerLoopWake::Message(Some(WorkerMessage::FulfillPendingXhrResponse {
-                request,
-                response_code,
-                response_headers,
-                response_body,
-            })) => {
-                fulfill_pending_worker_xhr_response(
-                    &state,
-                    request,
-                    response_code,
-                    response_headers,
-                    response_body,
-                );
+            WorkerLoopWake::Message(Some(WorkerMessage::DecideInterceptedRequest(dispatch))) => {
+                super::global_scope::decide_intercepted_worker_request(&state, *dispatch);
             }
             WorkerLoopWake::Message(Some(WorkerMessage::Terminate)) => {
                 trace!(url = %script_url, "worker terminated by parent");
@@ -3375,6 +3327,10 @@ async fn worker_main(
     // routes are destroyed. Ordinary transports are cancelled here;
     // explicitly keepalive loads are reduced to browser-runtime network-only
     // records and therefore cannot retain this WorkerGlobalScope.
+    state.borrow_mut().nested_worker_wrappers.clear();
+    if let WorkerGlobalKind::Dedicated(host) = &state.borrow().global_kind {
+        host.retire();
+    }
     inspector_task_runner.dispose("Worker exited before Inspector task dispatch");
     let resource_loader = state.borrow().loader.clone();
     resource_loader.begin_detach();
@@ -3438,7 +3394,9 @@ fn register_service_worker_worker_client(
         return None;
     }
     let client_type = match global_kind {
-        WorkerGlobalKind::Dedicated { .. } => ServiceWorkerClientType::DedicatedWorker,
+        WorkerGlobalKind::Dedicated(_) => ServiceWorkerClientType::DedicatedWorker,
+        #[cfg(test)]
+        WorkerGlobalKind::UnobservedDedicated { .. } => ServiceWorkerClientType::DedicatedWorker,
         WorkerGlobalKind::Shared { .. } => ServiceWorkerClientType::SharedWorker,
         WorkerGlobalKind::Service { .. } => return None,
     };
@@ -3563,7 +3521,7 @@ impl WorkerBootstrapCompletionReporter {
     fn mark_success(
         &mut self,
         success: WorkerBootstrapSuccess,
-        parent: &mpsc::UnboundedSender<WorkerToParentMessage>,
+        parent: &crate::worker::WorkerParentSender,
     ) {
         self.send(WorkerBootstrapCompletion::success(success), parent);
     }
@@ -3572,7 +3530,7 @@ impl WorkerBootstrapCompletionReporter {
         &mut self,
         script_url: &str,
         message: String,
-        parent: &mpsc::UnboundedSender<WorkerToParentMessage>,
+        parent: &crate::worker::WorkerParentSender,
     ) {
         let failure = WorkerBootstrapFailure {
             message,
@@ -3589,7 +3547,7 @@ impl WorkerBootstrapCompletionReporter {
     fn send(
         &mut self,
         completion: WorkerBootstrapCompletion,
-        parent: &mpsc::UnboundedSender<WorkerToParentMessage>,
+        parent: &crate::worker::WorkerParentSender,
     ) {
         match self.target.take() {
             Some(WorkerBootstrapCompletionTarget::Parent) => {

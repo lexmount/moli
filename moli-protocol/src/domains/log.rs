@@ -397,7 +397,9 @@ mod tests {
                 .ingest_renderer_network_output_item_and_prepare_live_delivery_for_session_owner(
                     Some("SID-1"),
                     source_document,
-                    &ScriptNetworkOutputItem::SubresourceResponseStarted(Box::new(response)),
+                    &ScriptNetworkOutputItem::SubresourceResponseStarted(std::sync::Arc::new(
+                        response
+                    )),
                 )
                 .is_some()
         );
@@ -451,7 +453,9 @@ mod tests {
                 .ingest_renderer_network_output_item_and_prepare_live_delivery_for_session_owner(
                     Some("SID-1"),
                     source_document,
-                    &ScriptNetworkOutputItem::SubresourceResponseStarted(Box::new(response)),
+                    &ScriptNetworkOutputItem::SubresourceResponseStarted(std::sync::Arc::new(
+                        response
+                    )),
                 )
                 .is_some()
         );
@@ -511,7 +515,9 @@ mod tests {
                 .ingest_renderer_network_output_item_and_prepare_live_delivery_for_session_owner(
                     Some("SID-1"),
                     source_document,
-                    &ScriptNetworkOutputItem::SubresourceResponseStarted(Box::new(response)),
+                    &ScriptNetworkOutputItem::SubresourceResponseStarted(std::sync::Arc::new(
+                        response
+                    )),
                 )
                 .is_some()
         );

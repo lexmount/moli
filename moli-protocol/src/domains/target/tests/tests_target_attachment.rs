@@ -1305,7 +1305,6 @@ async fn session_route_finds_committed_browser_page_and_worker_sessions() {
         "SID-inactive-attached-background".to_owned()
     ));
     let mut inactive_shared_worker = crate::conn::SharedWorkerTargetState::new(
-        moli_core::RendererOwnerLocalHostId::new_for_testing(1),
         SharedWorkerInstanceId::from_u64(42),
         "TID-shared-inactive".to_owned(),
         None,

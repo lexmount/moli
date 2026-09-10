@@ -16,6 +16,7 @@ use crate::worker::{
         register_worker_inspector_executor, unregister_worker_inspector_executor,
     },
 };
+#[cfg(test)]
 use tokio::sync::mpsc;
 
 #[cfg(test)]
@@ -371,7 +372,7 @@ pub(super) struct WorkerRuntimeInspector {
     default_context: Rc<RefCell<Option<v8::Global<v8::Context>>>>,
     default_execution_context_id: Cell<Option<i64>>,
     task_runner: WorkerInspectorTaskRunner,
-    parent_tx: mpsc::UnboundedSender<WorkerToParentMessage>,
+    parent_tx: crate::worker::WorkerParentSender,
     shared_worker: bool,
 }
 
@@ -430,7 +431,7 @@ impl WorkerRuntimeInspector {
     pub(super) fn new(
         isolate: &mut v8::Isolate,
         task_runner: WorkerInspectorTaskRunner,
-        parent_tx: mpsc::UnboundedSender<WorkerToParentMessage>,
+        parent_tx: crate::worker::WorkerParentSender,
         shared_worker: bool,
     ) -> Rc<Self> {
         let isolate_ptr = unsafe { isolate.as_raw_isolate_ptr() };
@@ -476,7 +477,7 @@ impl WorkerRuntimeInspector {
         let isolate_handle =
             std::sync::Arc::new(parking_lot::Mutex::new(Some(isolate.thread_safe_handle())));
         let task_runner = WorkerInspectorTaskRunner::new(wake_tx, isolate_handle);
-        Self::new(isolate, task_runner, parent_tx, false)
+        Self::new(isolate, task_runner, parent_tx.into(), false)
     }
 
     pub(super) fn attach_context<'s>(
@@ -946,8 +947,12 @@ mod tests {
             wake_tx,
             std::sync::Arc::new(parking_lot::Mutex::new(Some(isolate.thread_safe_handle()))),
         );
-        let inspector =
-            WorkerRuntimeInspector::new(&mut isolate, task_runner.clone(), parent_tx, false);
+        let inspector = WorkerRuntimeInspector::new(
+            &mut isolate,
+            task_runner.clone(),
+            crate::worker::WorkerParentSender::Channel(parent_tx),
+            false,
+        );
         let registration = moli_v8_platform::V8PlatformIsolateRegistration::register(
             &mut isolate,
             moli_v8_platform::V8ForegroundTaskWake::queued(|_| {}),

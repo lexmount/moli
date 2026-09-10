@@ -29,7 +29,6 @@ pub(super) enum WorkerExecutionState {
         /// after navigation, but can never rebind to the then-current main
         /// Document.
         outside_settings_load: crate::network::loads::ResourceLoadLease,
-        name: String,
         module_credentials_mode: moli_fetch::RequestCredentialsMode,
         module_static_import_policy: Option<Box<WorkerModuleStaticImportPolicySnapshot>>,
         storage_key_top_level_site: String,
@@ -63,8 +62,7 @@ impl WorkerRelayTerminalState {
 }
 
 pub(super) struct WorkerConnectionState {
-    pub(super) renderer_instance_id: u64,
-    pub(super) target_created: bool,
+    pub(super) host: crate::runtime::RendererDedicatedWorkerHost,
     pub(super) wrapper: v8::Global<v8::Object>,
     pub(super) owner: super::WindowExecutionContextBinding,
     pub(super) client_event_producer:

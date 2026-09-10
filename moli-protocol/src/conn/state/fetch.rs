@@ -24,7 +24,8 @@ pub struct TargetFetchState {
     pending_fetch_response_navigations: HashMap<String, PendingFetchResponseNavigation>,
     pending_fetch_response_body_streams: HashMap<String, String>,
     pending_subresource_fetches: HashMap<String, PendingSubresourceFetchRequest>,
-    in_flight_subresource_fetches: HashMap<u64, InFlightSubresourceFetchRequest>,
+    in_flight_subresource_fetches:
+        HashMap<crate::conn::SubresourceFetchKey, InFlightSubresourceFetchRequest>,
     pending_subresource_fetch_auths: HashMap<String, PendingSubresourceFetchAuthRequest>,
     pending_subresource_fetch_responses: HashMap<String, PendingSubresourceFetchResponseRequest>,
 }
@@ -651,9 +652,10 @@ impl TargetFetchState {
 
     pub(crate) fn take_in_flight_subresource_fetch_request(
         &mut self,
-        internal_id: u64,
+        internal_id: impl Into<crate::conn::SubresourceFetchKey> + Copy,
     ) -> Option<InFlightSubresourceFetchRequest> {
-        self.in_flight_subresource_fetches.remove(&internal_id)
+        self.in_flight_subresource_fetches
+            .remove(&internal_id.into())
     }
 
     /// Atomically authorize and remove the protocol state correlated with one
@@ -668,19 +670,19 @@ impl TargetFetchState {
     pub(crate) fn claim_subresource_continue_request(
         &mut self,
         expected_page_owner: &super::TargetPageResidenceIdentity,
-        internal_id: u64,
+        internal_id: impl Into<crate::conn::SubresourceFetchKey> + Copy,
         session_id: Option<&str>,
         allow_pending_completion: bool,
     ) -> Option<ClaimedSubresourceContinueRequest> {
         let in_flight_matches = self
             .in_flight_subresource_fetches
-            .get(&internal_id)
-            .and_then(|in_flight| in_flight.pending.installed_page_owner())
+            .get(&internal_id.into())
+            .and_then(|in_flight| in_flight.pending.observer_page_owner())
             == Some(expected_page_owner);
         if in_flight_matches {
             return self
                 .in_flight_subresource_fetches
-                .remove(&internal_id)
+                .remove(&internal_id.into())
                 .map(ClaimedSubresourceContinueRequest::InFlight);
         }
         if !allow_pending_completion {
@@ -691,9 +693,9 @@ impl TargetFetchState {
             self.pending_subresource_fetches
                 .iter()
                 .find_map(|(request_id, pending)| {
-                    (pending.internal_id == internal_id
+                    (pending.continuation_key() == internal_id.into()
                         && Self::pending_action_matches(pending, session_id)
-                        && pending.installed_page_owner() == Some(expected_page_owner))
+                        && pending.observer_page_owner() == Some(expected_page_owner))
                     .then(|| request_id.clone())
                 })?;
         self.take_pending_subresource_fetch_request(&request_id, session_id)
@@ -702,7 +704,7 @@ impl TargetFetchState {
 
     pub(crate) fn in_flight_subresource_fetch_request_id(&self, internal_id: u64) -> Option<&str> {
         self.in_flight_subresource_fetches
-            .get(&internal_id)?
+            .get(&internal_id.into())?
             .request_id
             .as_deref()
     }
@@ -712,9 +714,9 @@ impl TargetFetchState {
         internal_id: u64,
     ) -> Option<&super::TargetPageResidenceIdentity> {
         self.in_flight_subresource_fetches
-            .get(&internal_id)?
+            .get(&internal_id.into())?
             .pending
-            .installed_page_owner()
+            .observer_page_owner()
     }
 
     pub(crate) fn register_pending_subresource_fetch_request(
@@ -775,7 +777,7 @@ impl TargetFetchState {
         response_stage_blocked_intercepts: Vec<DevToolsNetworkInterceptId>,
     ) {
         self.in_flight_subresource_fetches.insert(
-            pending.internal_id,
+            pending.continuation_key(),
             InFlightSubresourceFetchRequest {
                 request_id,
                 pending,
@@ -1737,6 +1739,71 @@ impl TargetFetchOwner {
         &self.pending
     }
 
+    pub(crate) fn observes_worker_pause(
+        &self,
+        pause: &moli_core::page::RendererWorkerFetchPause,
+    ) -> bool {
+        self.pending
+            .pending_subresource_fetches
+            .values()
+            .map(|pending| &pending.residence)
+            .chain(
+                self.pending
+                    .pending_subresource_fetch_auths
+                    .values()
+                    .map(|pending| &pending.residence),
+            )
+            .chain(
+                self.pending
+                    .pending_subresource_fetch_responses
+                    .values()
+                    .map(|pending| &pending.residence),
+            )
+            .chain(
+                self.pending
+                    .in_flight_subresource_fetches
+                    .values()
+                    .map(|pending| &pending.pending.residence),
+            )
+            .any(|residence| {
+                residence
+                    .worker()
+                    .is_some_and(|observed| observed.pause == *pause)
+            })
+    }
+
+    pub(crate) fn retire_worker_requests(
+        &mut self,
+        worker: &moli_core::page::RendererWorkerIdentity,
+        handle: Option<moli_core::page::SubresourceNetworkRequestHandle>,
+    ) {
+        let pending = &mut self.pending;
+        let mut retain =
+            |request_id: Option<&String>,
+             residence: &crate::conn::PendingSubresourceFetchResidence| {
+                let terminal = residence.worker().is_some_and(|pause| {
+                    pause.pause.worker() == worker
+                        && handle.is_none_or(|handle| pause.pause.handle() == handle)
+                });
+                if terminal && let Some(request_id) = request_id {
+                    pending.pending_fetch_request_ids.remove(request_id);
+                }
+                !terminal
+            };
+        pending
+            .in_flight_subresource_fetches
+            .retain(|_, request| retain(request.request_id.as_ref(), &request.pending.residence));
+        pending
+            .pending_subresource_fetches
+            .retain(|id, request| retain(Some(id), &request.residence));
+        pending
+            .pending_subresource_fetch_auths
+            .retain(|id, request| retain(Some(id), &request.residence));
+        pending
+            .pending_subresource_fetch_responses
+            .retain(|id, request| retain(Some(id), &request.residence));
+    }
+
     #[cfg(test)]
     pub(crate) fn pending_state_mut(&mut self) -> &mut TargetFetchState {
         &mut self.pending
@@ -1979,7 +2046,7 @@ impl TargetFetchOwner {
 
     pub(crate) fn take_in_flight_subresource_fetch_request(
         &mut self,
-        internal_id: u64,
+        internal_id: impl Into<crate::conn::SubresourceFetchKey> + Copy,
     ) -> Option<InFlightSubresourceFetchRequest> {
         self.pending
             .take_in_flight_subresource_fetch_request(internal_id)
@@ -1988,7 +2055,7 @@ impl TargetFetchOwner {
     pub(crate) fn claim_subresource_continue_request(
         &mut self,
         expected_page_owner: &super::TargetPageResidenceIdentity,
-        internal_id: u64,
+        internal_id: impl Into<crate::conn::SubresourceFetchKey> + Copy,
         session_id: Option<&str>,
         allow_pending_completion: bool,
     ) -> Option<ClaimedSubresourceContinueRequest> {
@@ -2281,7 +2348,9 @@ mod tests {
         owner_kind: PendingSubresourceFetchOwnerKind,
     ) -> PendingSubresourceFetchAuthRequest {
         PendingSubresourceFetchAuthRequest {
-            page_owner: test_page_owner(),
+            residence: crate::conn::PendingSubresourceFetchResidence::InstalledPage(
+                test_page_owner(),
+            ),
             owner_session_id: owner_session_id.map(str::to_owned),
             action_session_id: owner_session_id.map(str::to_owned),
             owner_kind,
@@ -2325,7 +2394,9 @@ mod tests {
         owner_kind: PendingSubresourceFetchOwnerKind,
     ) -> PendingSubresourceFetchResponseRequest {
         PendingSubresourceFetchResponseRequest {
-            page_owner: test_page_owner(),
+            residence: crate::conn::PendingSubresourceFetchResidence::InstalledPage(
+                test_page_owner(),
+            ),
             owner_session_id: owner_session_id.map(str::to_owned),
             action_session_id: owner_session_id.map(str::to_owned),
             owner_kind,

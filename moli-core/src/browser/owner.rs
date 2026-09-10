@@ -23,6 +23,7 @@ pub use initial_document::{BrowserCommittedInitialDocument, BrowserInitialDocume
 mod navigation_driver;
 pub use navigation_driver::{BrowserNavigationOutcome, BrowserNavigationWaiter};
 mod navigation_events;
+mod network;
 mod popup;
 mod workers;
 
@@ -134,6 +135,14 @@ impl Browser {
             if let Some(sender) = sender.upgrade() {
                 let _ = sender.send(BrowserOwnerMessage::Execute(Box::new(move |browser| {
                     browser.commit_worker_lifecycle(id, input);
+                })));
+            }
+        });
+        let sender = self.native_sender.clone();
+        context.install_network_handler(move |input| {
+            if let Some(sender) = sender.upgrade() {
+                let _ = sender.send(BrowserOwnerMessage::Execute(Box::new(move |browser| {
+                    browser.commit_network(id, input);
                 })));
             }
         });
@@ -515,6 +524,14 @@ impl BrowserHandle {
                     .contexts
                     .values()
                     .flat_map(BrowserContext::worker_snapshots),
+                browser
+                    .contexts
+                    .values()
+                    .flat_map(|context| context.network_requests.snapshots()),
+                browser
+                    .contexts
+                    .values()
+                    .flat_map(|context| context.network_requests.worker_pauses()),
             )
         })
     }
@@ -1299,7 +1316,6 @@ impl BrowserContextHandle {
     forward_context_read! {
         fn controlled_service_worker_window_client_ids(registration_id: u64, version_id: u64) -> Vec<u64>;
         fn set_service_worker_pause_on_start_for_version(version_id: u64, pause: bool) -> bool;
-        fn worker_inspection_endpoint(target: crate::runtime::RendererWorkerInspectionTarget) -> Option<crate::runtime::RendererWorkerInspectionEndpoint>;
         fn close_shared_worker(instance_id: moli_shared_worker::SharedWorkerInstanceId) -> bool;
         fn close_dedicated_worker(instance_id: u64) -> bool;
         fn run_dedicated_worker_if_waiting_for_debugger(instance_id: u64) -> bool;
@@ -1311,6 +1327,17 @@ impl BrowserContextHandle {
         fn clear_http_cache() -> Result<(), String>;
         fn snapshot_cookies() -> Vec<moli_cookie_jar::StoredCookie>;
         fn web_contents_for_renderer_owner(owner: crate::RendererOwnerLocalHostId) -> Option<WebContentsHandle>;
+    }
+
+    /// A queued observer can outlive Context shutdown before its projection
+    /// sees retirement. Absence is not a live-owner invariant violation.
+    pub fn worker_inspection_endpoint(
+        &self,
+        target: crate::runtime::RendererWorkerIdentity,
+    ) -> Option<crate::runtime::RendererWorkerInspectionEndpoint> {
+        self.read(move |context| context.worker_inspection_endpoint(target))
+            .ok()
+            .flatten()
     }
 
     /// Classify the partition and snapshot its cookies in one exact owner turn.
@@ -1756,7 +1783,12 @@ impl BrowserContextHandle {
         fn start_document_fetch_command(document: super::DocumentHandle, command: super::DocumentFetchCommand) -> super::PendingDocumentFetchCommand;
     }
 
+    forward_context_read! {
+        fn worker_fetch_pause(pause: crate::page::RendererWorkerFetchPause) -> Option<super::WorkerFetchPause>;
+    }
+
     forward_context_try_update! {
+        fn start_worker_fetch_decision(pause: super::WorkerFetchPause, decision: crate::page::WorkerFetchDecision) -> crate::page::PendingWorkerFetchDecision;
         fn start_web_contents_fetch_interception_update(web_contents: WebContentsHandle, enabled: bool, resource_type: Option<crate::page::SubresourceResourceType>, accept_stale_completion: bool) -> Option<super::PendingDocumentFetchCommand>;
         fn install_web_contents_fetch_interception_policy(web_contents: WebContentsHandle, enabled: bool, resource_type: Option<crate::page::SubresourceResourceType>) -> ();
         fn finish_document_fetch_command(completed: super::CompletedDocumentFetchCommand) -> super::DocumentFetchCommandOutcome;

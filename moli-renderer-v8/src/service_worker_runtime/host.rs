@@ -608,6 +608,7 @@ impl RendererServiceWorkerHost {
             handle: Some(handle),
         };
         drop(state);
+        service.record_worker_execution_ready(self.version_id(), self.run_identity());
         // No parent output may expose a run before its real host is installed.
         if let Err(error) =
             spawn_parent_message_pump(service.clone(), Arc::clone(self), receiver, script_resource)
@@ -640,6 +641,7 @@ fn spawn_parent_message_pump(
             let mut pending_script = Some(script_resource);
             while let Some(message) = receiver.blocking_recv() {
                 match message {
+                    WorkerToParentMessage::FetchInterception(pause) => pause.release(),
                     WorkerToParentMessage::ServiceWorkerBootstrapCompleted(completion) => {
                         if let Some(script) = pending_script.take() {
                             report_bootstrap_completion(
@@ -678,8 +680,10 @@ fn spawn_parent_message_pump(
                         service.enqueue_periodic_sync_event_completed(completion);
                     }
                     WorkerToParentMessage::ServiceWorkerShowNotification(request) => {
-                        service
-                            .enqueue_show_notification_requested(request, Arc::clone(&source_host));
+                        service.enqueue_show_notification_requested(
+                            *request,
+                            Arc::clone(&source_host),
+                        );
                     }
                     WorkerToParentMessage::ServiceWorkerGetNotifications(request) => {
                         service
@@ -797,6 +801,12 @@ fn spawn_parent_message_pump(
                             ServiceWorkerTargetOutput::Console(message),
                         );
                     }
+                    WorkerToParentMessage::Network(observation) => {
+                        service.enqueue_target_output(
+                            owner.clone(),
+                            ServiceWorkerTargetOutput::Network(observation),
+                        );
+                    }
                     WorkerToParentMessage::RuntimeInspectorMessages(messages) => {
                         service.enqueue_target_output(
                             owner.clone(),
@@ -811,10 +821,6 @@ fn spawn_parent_message_pump(
                     }
                     WorkerToParentMessage::Post(_)
                     | WorkerToParentMessage::SharedWorkerClosed
-                    | WorkerToParentMessage::SubresourceNetwork(_)
-                    | WorkerToParentMessage::PendingSubresourceFetch(_)
-                    | WorkerToParentMessage::PendingSubresourceFetchCanceled { .. }
-                    | WorkerToParentMessage::SubresourceContinue(_)
                     | WorkerToParentMessage::WebSocketSubresource(_)
                     | WorkerToParentMessage::WebSocketLifecycle(_)
                     | WorkerToParentMessage::WebSocketFrame(_) => {}
@@ -872,10 +878,22 @@ fn spawn_service_worker(
     let policy_context =
         service_worker_script_policy_context(&script.resource.final_url, &script.resource.headers);
     crate::worker::spawn_worker_with_options(
-        WorkerSpawnOptions::new_with_request_client(
-            script.source,
+        WorkerSpawnOptions::for_worker_source(
+            crate::worker::WorkerScriptSource::text(script.source),
             script.resource.final_url.to_string(),
             params.request_client.clone(),
+            crate::worker::WorkerGlobalKind::Service {
+                network: params.worker_context_runtime.network_for_worker(
+                    crate::runtime::RendererWorkerIdentity::Service {
+                        version: params.run_owner.version_id().as_u64(),
+                        run: params.run_owner.cloned_run_identity(),
+                    },
+                ),
+                registration_id: params.registration_id,
+                version_id: params.run_owner.version_id(),
+                scope_url: params.scope_url.clone(),
+            },
+            params.worker_context_runtime.clone(),
         )
         .with_script_kind(params.script_kind)
         .with_module_static_import_initiator_url(params.document_url.clone())
@@ -889,13 +907,7 @@ fn spawn_service_worker(
         )
         .with_network_policy(params.network_policy)
         .with_policy_context(policy_context)
-        .with_worker_context_runtime(params.worker_context_runtime)
         .with_service_worker_runtime(service)
-        .with_global_kind(crate::worker::WorkerGlobalKind::Service {
-            registration_id: params.registration_id,
-            version_id: params.run_owner.version_id(),
-            scope_url: params.scope_url.clone(),
-        })
         .with_api_storage_key(Some(storage_key))
         .with_broadcast_channel_top_level_site(params.broadcast_channel_top_level_site)
         .with_indexed_db_manager(params.indexed_db_manager)

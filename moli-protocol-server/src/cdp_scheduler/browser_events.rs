@@ -7,6 +7,9 @@ use super::{
 
 pub(super) type BrowserEventInput = Result<BrowserEventRecord, RecvError>;
 
+#[cfg(test)]
+mod worker_network_tests;
+
 pub(super) async fn recv_browser_event(
     receiver: &mut Option<BrowserEventReceiver>,
 ) -> BrowserEventInput {
@@ -96,6 +99,11 @@ impl CdpScheduler {
                         .await
                 }
                 BrowserEvent::WorkerCreated(_)
+                | BrowserEvent::WorkerFetchPaused(_)
+                | BrowserEvent::NetworkRequestStarted(_)
+                | BrowserEvent::NetworkRequestCompleted(_)
+                | BrowserEvent::NetworkActivity(_)
+                | BrowserEvent::NetworkSourceClosed { .. }
                 | BrowserEvent::WorkerUpdated(_)
                 | BrowserEvent::WorkerDestroyed(_)
                 | BrowserEvent::DocumentLifecycleChanged(_)
@@ -160,6 +168,435 @@ mod tests {
     use crate::config::DEFAULT_SCREENCAST_INTERVAL_MS;
     use moli_core::browser::BrowserService;
     use moli_protocol::CdpInitialStoragePartition;
+
+    #[tokio::test]
+    async fn native_network_lag_recovery_cannot_overtake_retained_renderer_fifo() {
+        tokio::task::LocalSet::new()
+            .run_until(async {
+                for (replace_document, recover) in
+                    [(false, false), (false, true), (true, false), (true, true)]
+                {
+                    assert_native_network_recovery_fifo(
+                        replace_document,
+                        recover,
+                        NetworkFixture::Resource,
+                    )
+                    .await;
+                }
+            })
+            .await;
+    }
+
+    #[tokio::test]
+    async fn native_child_network_lag_recovery_preserves_navigation_and_command_fifo() {
+        tokio::task::LocalSet::new()
+            .run_until(async {
+                for (replace_document, recover) in
+                    [(false, false), (false, true), (true, false), (true, true)]
+                {
+                    assert_native_network_recovery_fifo(
+                        replace_document,
+                        recover,
+                        NetworkFixture::ChildResponse,
+                    )
+                    .await;
+                }
+            })
+            .await;
+    }
+
+    #[tokio::test]
+    async fn native_child_network_failure_lag_recovery_preserves_source_and_command_fifo() {
+        tokio::task::LocalSet::new()
+            .run_until(async {
+                for (replace_document, recover) in
+                    [(false, false), (false, true), (true, false), (true, true)]
+                {
+                    assert_native_network_recovery_fifo(
+                        replace_document,
+                        recover,
+                        NetworkFixture::ChildFailure,
+                    )
+                    .await;
+                }
+            })
+            .await;
+    }
+
+    #[derive(Clone, Copy)]
+    enum NetworkFixture {
+        Resource,
+        ChildResponse,
+        ChildFailure,
+    }
+
+    async fn assert_native_network_recovery_fifo(
+        replace_document: bool,
+        recover: bool,
+        fixture: NetworkFixture,
+    ) {
+        use moli_core::browser::{
+            BrowserContextStoragePartitionHandles, BrowserNavigationOutcome,
+            NavigationRequestLoadPolicy, StoragePartitionKind,
+            web_contents::NavigationRequestInterception,
+        };
+        use moli_protocol::devtools_runtime::{
+            DevToolsCommand, DevToolsCommandContext, DevToolsCommandResult,
+            DevToolsNavigateCommand, DevToolsNavigationWait, DevToolsProtocol,
+        };
+        use serde_json::json;
+
+        let child_document = !matches!(fixture, NetworkFixture::Resource);
+        let failed = matches!(fixture, NetworkFixture::ChildFailure);
+        let terminal_method = if failed {
+            "Network.loadingFailed"
+        } else {
+            "Network.loadingFinished"
+        };
+
+        let service = BrowserService::start().unwrap();
+        let browser = service.handle();
+        let (mut scheduler, mut receivers) = CdpScheduler::new_with_initial_state_runtime_config(
+            browser.clone(),
+            CdpInitialStoragePartition::memory(),
+            Default::default(),
+        );
+        let initial = Box::pin(
+            scheduler.execute_devtools_command_with_external_load_wait_and_protocol_messages(
+                &mut receivers,
+                DevToolsCommand::Navigate(DevToolsNavigateCommand {
+                    context: DevToolsCommandContext {
+                        protocol: DevToolsProtocol::Cdp,
+                        session_id: None,
+                        target_id: Some(scheduler.conn.default_target_id().into()),
+                        browser_context_id: None,
+                    },
+                    url: "data:text/html,network recovery fixture".to_owned(),
+                    referrer: None,
+                    wait: DevToolsNavigationWait::DocumentInstalled,
+                }),
+            ),
+        )
+        .await;
+        let DevToolsCommandResult::Navigate(initial) = initial.result.unwrap() else {
+            panic!("expected native navigation");
+        };
+        assert!(initial.error_text.is_none(), "{initial:?}");
+        scheduler.drain_browser_events().await;
+        for (id, method) in [
+            (1, "Runtime.enable"),
+            (2, "Network.enable"),
+            (3, "Page.enable"),
+        ] {
+            let setup = scheduler
+                .execute_internal_protocol_message(
+                    &mut receivers,
+                    json!({"id": id, "method": method}),
+                )
+                .await
+                .unwrap_or_else(|failure| panic!("{:?}", failure.into_parts().1))
+                .into_messages();
+            assert!(
+                setup
+                    .iter()
+                    .any(|message| message["id"] == id && message.get("result").is_some()),
+                "{setup:?}"
+            );
+        }
+        let contents = scheduler.conn.projected_web_contents()[0];
+        let (_, mut native) = browser.subscribe().unwrap();
+        let (resource_url, child_server) = if child_document {
+            use tokio::io::{AsyncReadExt, AsyncWriteExt};
+            let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let url = format!("http://{}/native-child", listener.local_addr().unwrap());
+            let server = tokio::spawn(async move {
+                let (mut stream, _) = listener.accept().await.unwrap();
+                let mut request = Vec::new();
+                let mut byte = [0];
+                while !request.ends_with(b"\r\n\r\n") {
+                    stream.read_exact(&mut byte).await.unwrap();
+                    request.push(byte[0]);
+                }
+                assert!(String::from_utf8_lossy(&request).starts_with("GET /native-child "));
+                if failed {
+                    return;
+                }
+                let body = "<!doctype html><p>native child FIFO body</p>";
+                stream.write_all(format!("HTTP/1.1 200 OK\r\nContent-Type: text/html\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}", body.len()).as_bytes()).await.unwrap();
+            });
+            (url, Some(server))
+        } else {
+            ("data:text/plain,native-recovery-fifo".to_owned(), None)
+        };
+        let operation = if child_document {
+            format!(
+                "const frame = document.createElement('iframe'); frame.src = {resource_url:?}; document.body.appendChild(frame)"
+            )
+        } else {
+            format!("fetch({resource_url:?}).then(r => r.text())")
+        };
+        let expression = format!("console.log('before-network-recovery'); {operation}; 'started'");
+        // Execute real JavaScript but retain its real renderer publications.
+        // The Browser can finish the fetch before this observer drains them.
+        let mut messages = Vec::new();
+        let (command, navigation) = if replace_document {
+            let context = browser.context_handle(contents.context()).unwrap();
+            let navigation = context
+                .navigate_document(
+                    contents,
+                    NavigationRequestInterception::new(
+                        // This fixture appends a child to document.body. The
+                        // parser must create that body before the inline script.
+                        format!("data:text/html,<body><script>{expression}</script>")
+                            .parse()
+                            .unwrap(),
+                        "GET".into(),
+                        None,
+                        Vec::new().into(),
+                        NavigationRequestLoadPolicy::BrowserInitiated,
+                    ),
+                )
+                .unwrap();
+            (None, Some(navigation))
+        } else {
+            (
+                Some(
+                    scheduler
+                        .conn
+                        .process_message_with_turn_outcome_async(
+                            &json!({
+                                "id": 10, "method": "Runtime.evaluate", "params": {
+                                    "expression": expression, "returnByValue": true,
+                                },
+                            })
+                            .to_string(),
+                        )
+                        .await,
+                ),
+                None,
+            )
+        };
+        tokio::time::timeout(std::time::Duration::from_secs(5), async {
+            loop {
+                let record = native.recv().await.unwrap();
+                if let BrowserEvent::NetworkRequestCompleted(occurrence) = &record.event
+                    && matches!(occurrence.owner, moli_core::browser::NetworkOwner::Document(document) if document.web_contents() == contents)
+                {
+                    if let Some(navigation) = &navigation {
+                        assert_eq!(occurrence.owner, moli_core::browser::NetworkOwner::Document(moli_core::browser::DocumentHandle::new(contents, navigation.request().document)));
+                    }
+                    break;
+                }
+                // Configure the real reserved Document, but leave its
+                // commit and source publications for recovery/ingress.
+                if matches!(record.event, BrowserEvent::NavigationAwaitingDecision(_)) {
+                    messages.extend(
+                        scheduler
+                            .handle_browser_event(Ok(record))
+                            .await
+                            .into_messages(),
+                    );
+                }
+            }
+        })
+        .await
+        .unwrap_or_else(|error| panic!("the native resource completes without draining its source FIFO: replace_document={replace_document}, recover={recover}, child_document={child_document}: {error}"));
+        if let Some(navigation) = navigation {
+            assert!(matches!(
+                navigation.wait().await.unwrap(),
+                BrowserNavigationOutcome::Document(_)
+            ));
+        }
+        if recover {
+            for _ in 0..130 {
+                browser
+                    .create_context(
+                        BrowserContextStoragePartitionHandles::memory(),
+                        StoragePartitionKind::Ephemeral,
+                        None,
+                        None,
+                    )
+                    .unwrap()
+                    .remove()
+                    .unwrap();
+            }
+            let lag = match scheduler.browser_event_rx.as_mut().unwrap().try_recv() {
+                Err(TryRecvError::Lagged(count)) => Err(RecvError::Lagged(count)),
+                event => panic!("the real bounded subscription must lag: {event:?}"),
+            };
+            let recovered = scheduler.handle_browser_event(lag).await.into_messages();
+            assert!(
+                recovered
+                    .iter()
+                    .all(|message| message["params"]["request"]["url"] != resource_url),
+                "snapshot recovery must not publish Network ahead of the retained Console/source FIFO: {recovered:?}",
+            );
+            if !replace_document {
+                assert!(
+                    recovered.iter().all(|message| !message["method"]
+                        .as_str()
+                        .is_some_and(|method| method.starts_with("Network."))),
+                    "{recovered:?}"
+                );
+            }
+            messages.extend(recovered);
+        }
+        if let Some(command) = command {
+            messages.extend(
+                scheduler
+                    .apply_renderer_owner_turn_outcome(&mut receivers, command)
+                    .await
+                    .unwrap_or_else(|failure| panic!("{:?}", failure.into_parts().1))
+                    .into_messages(),
+            );
+        }
+        tokio::time::timeout(std::time::Duration::from_secs(5), async {
+            loop {
+                if let Some(request) = messages.iter().find(|message| {
+                    message["method"] == "Network.requestWillBeSent"
+                        && message["params"]["request"]["url"] == resource_url
+                }) && messages.iter().any(|message| {
+                    message["method"] == terminal_method
+                        && message["params"]["requestId"] == request["params"]["requestId"]
+                }) {
+                    break;
+                }
+                let publication = receivers.renderer_publication_rx.recv().await.unwrap();
+                messages.extend(
+                    scheduler
+                        .ingest_renderer_publication_now(publication)
+                        .await
+                        .into_messages(),
+                );
+            }
+        })
+        .await
+        .expect("recovery must leave the original FIFO deliverable");
+        // A real owner command freezes a predecessor after the resource
+        // completion. Consume that prefix before checking for duplicates.
+        messages.extend(
+            scheduler
+                .execute_internal_protocol_message(
+                    &mut receivers,
+                    json!({"id": 11, "method": "Runtime.evaluate", "params": {
+                        "expression": "'fifo-drained'", "returnByValue": true,
+                    }}),
+                )
+                .await
+                .unwrap_or_else(|failure| panic!("{:?}", failure.into_parts().1))
+                .into_messages(),
+        );
+        assert!(
+            messages.iter().any(|message| message["id"] == 11
+                && message["result"]["result"]["value"] == "fifo-drained"),
+            "{messages:?}"
+        );
+        let console = messages
+            .iter()
+            .position(|message| {
+                message["method"] == "Runtime.consoleAPICalled"
+                    && message["params"]["args"][0]["value"] == "before-network-recovery"
+            })
+            .expect("original Console occurrence");
+        let request = messages
+            .iter()
+            .position(|message| {
+                message["method"] == "Network.requestWillBeSent"
+                    && message["params"]["request"]["url"] == resource_url
+            })
+            .expect("original request occurrence");
+        assert!(
+            console < request,
+            "replace_document={replace_document}, recover={recover}: {messages:?}"
+        );
+        let request_id = &messages[request]["params"]["requestId"];
+        assert_eq!(
+            messages
+                .iter()
+                .filter(|message| message["method"] == terminal_method
+                    && &message["params"]["requestId"] == request_id)
+                .count(),
+            1,
+            "{messages:?}"
+        );
+        if failed {
+            assert!(!messages.iter().any(|message| matches!(
+                message["method"].as_str(),
+                Some("Network.responseReceived" | "Network.loadingFinished")
+            ) && &message["params"]["requestId"]
+                == request_id));
+            let body = scheduler.execute_internal_protocol_message(&mut receivers, json!({"id":12,"method":"Network.getResponseBody","params":{"requestId":request_id}})).await
+                .unwrap_or_else(|failure| panic!("{:?}", failure.into_parts().1)).into_messages();
+            assert!(
+                body.iter().any(|message| message["id"] == 12
+                    && message["error"]["message"]
+                        == "No data found for resource with given identifier"),
+                "{body:?}"
+            );
+        } else if child_document {
+            let frame = &messages[request]["params"]["frameId"];
+            assert_eq!(messages[request]["params"]["type"], "Document");
+            let start = messages
+                .iter()
+                .position(|message| {
+                    message["method"] == "Page.frameStartedNavigating"
+                        && &message["params"]["frameId"] == frame
+                })
+                .unwrap();
+            let finish = messages
+                .iter()
+                .position(|message| {
+                    message["method"] == "Network.loadingFinished"
+                        && &message["params"]["requestId"] == request_id
+                })
+                .unwrap();
+            let commit = messages
+                .iter()
+                .position(|message| {
+                    message["method"] == "Page.frameNavigated"
+                        && &message["params"]["frame"]["id"] == frame
+                })
+                .unwrap();
+            assert!(
+                start < request && request < finish && finish < commit,
+                "{messages:?}"
+            );
+            let body = scheduler.execute_internal_protocol_message(&mut receivers, json!({"id":12,"method":"Network.getResponseBody","params":{"requestId":request_id}})).await
+                .unwrap_or_else(|failure| panic!("{:?}", failure.into_parts().1)).into_messages();
+            assert!(
+                body.iter().any(|message| message["id"] == 12
+                    && message["result"]["body"]
+                        .as_str()
+                        .is_some_and(|body| body.contains("native child FIFO body"))),
+                "{body:?}"
+            );
+        }
+        if !replace_document {
+            let response = messages
+                .iter()
+                .position(|message| message["id"] == 10)
+                .expect("original command response");
+            assert_eq!(
+                messages[response]["result"]["result"]["value"], "started",
+                "{messages:?}"
+            );
+            assert!(
+                console < response,
+                "the command retains its concrete output predecessor: {messages:?}"
+            );
+            assert_eq!(
+                messages
+                    .iter()
+                    .filter(|message| message["id"] == 10)
+                    .count(),
+                1
+            );
+        }
+        if let Some(server) = child_server {
+            server.await.unwrap();
+        }
+        service.shutdown();
+    }
 
     #[tokio::test]
     async fn native_navigation_events_recover_projection_holds_after_real_stream_lag() {

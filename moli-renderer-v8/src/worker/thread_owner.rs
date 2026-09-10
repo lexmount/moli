@@ -206,14 +206,14 @@ mod tests {
             ResourceRequestClient::from_browser_resource_runtime(owner.browser_resource_runtime());
         let url = url::Url::parse("https://worker-owner.test/worker.js").unwrap();
         let kinds = [
-            WorkerGlobalKind::Dedicated {
-                name: String::new(),
-            },
+            WorkerGlobalKind::unobserved_dedicated(String::new()),
             WorkerGlobalKind::Shared {
+                network: crate::runtime::RendererWorkerNetworkReporter::unobserved_for_test(),
                 name: String::new(),
                 storage_key: moli_storage_key::MoliStorageKey::first_party_from_url(&url, None),
             },
             WorkerGlobalKind::Service {
+                network: crate::runtime::RendererWorkerNetworkReporter::unobserved_for_test(),
                 registration_id: ServiceWorkerRegistrationId::from_u64_for_test(1),
                 version_id: ServiceWorkerVersionId::from_u64_for_test(1),
                 scope_url: url.clone(),
@@ -221,7 +221,7 @@ mod tests {
         ];
         let mut handles = Vec::new();
         for kind in kinds {
-            let source = if matches!(kind, WorkerGlobalKind::Dedicated { .. }) {
+            let source = if matches!(kind, WorkerGlobalKind::UnobservedDedicated { .. }) {
                 r#"const child = new Worker('data:text/javascript,' + encodeURIComponent(
                     'postMessage("ready"); while (true) {}'));
                 child.onmessage = () => console.log('ready');"#

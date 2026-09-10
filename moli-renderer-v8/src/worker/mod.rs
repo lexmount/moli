@@ -17,6 +17,8 @@ mod handle;
 mod inspector_task_runner;
 mod module_mime;
 mod module_runtime;
+mod parent_output;
+pub(crate) use parent_output::WorkerParentSender;
 mod script_loading;
 mod script_mime;
 mod thread;
@@ -30,7 +32,7 @@ pub(crate) use global_scope::{
     dispatch_worker_trusted_types_sink_violation_event,
     ensure_worker_opfs_directory_iterator_registry, ensure_worker_opfs_handle_registry,
     forget_nested_worker_context, forget_worker_broadcast_channel_wrapper,
-    forget_worker_message_port_wrapper, get_worker_state,
+    forget_worker_message_port_wrapper, get_worker_state, install_nested_worker_handle, post_nested_worker_message,
     register_worker_broadcast_channel_wrapper, register_worker_message_port_wrapper,
     register_worker_opfs_iterator_task, register_worker_opfs_move_task, register_worker_opfs_task,
     register_worker_webcrypto_task, register_worker_websocket, reserve_nested_worker_context,
@@ -50,10 +52,10 @@ pub(crate) use handle::WorkerMessage;
 pub(crate) use handle::{
     WorkerBootstrapCompletion, WorkerBootstrapFailure, WorkerBootstrapSuccess,
     WorkerConsoleMessage, WorkerErrorPhase, WorkerErrorSource, WorkerFetchHandlerType,
-    WorkerParentErrorEventKind, WorkerPendingFetchContinue, WorkerPendingSubresourceFetch,
-    WorkerPendingXhrContinue, WorkerRuntimeEvent, WorkerRuntimeInspectorMessageBatch,
-    WorkerScriptResource, WorkerScriptResourceKind, WorkerToParentMessage,
-    WorkerWebSocketFrameEvent, WorkerWebSocketLifecycleEvent, worker_secure_context_for_script_url,
+    WorkerParentErrorEventKind, WorkerPendingFetchContinue, WorkerRuntimeEvent,
+    WorkerRuntimeInspectorMessageBatch, WorkerScriptResource, WorkerScriptResourceKind,
+    WorkerToParentMessage, WorkerWebSocketFrameEvent, WorkerWebSocketLifecycleEvent,
+    worker_secure_context_for_script_url,
 };
 pub(crate) use handle::{WorkerDevToolsHandle, WorkerHandle, WorkerNetworkPolicy};
 pub(crate) use module_mime::{
@@ -67,6 +69,6 @@ pub(crate) use script_mime::{
 };
 pub(crate) use thread::{
     WorkerGlobalKind, WorkerScriptKind, WorkerScriptSource, WorkerSpawnOptions,
-    dispatch_current_worker_callback_exception, spawn_worker_with_options,
+    dispatch_current_worker_callback_exception, spawn_dedicated_worker, spawn_worker_with_options,
 };
 pub(crate) use thread_owner::{WorkerThreadOwner, WorkerThreadRegistrar};

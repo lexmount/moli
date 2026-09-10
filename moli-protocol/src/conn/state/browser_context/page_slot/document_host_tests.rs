@@ -646,7 +646,7 @@ async fn old_network_ingress_survives_native_commit_before_projection() {
         .clone();
     let handle = SubresourceNetworkRequestHandle::new(7);
     let url = url::Url::parse("https://old.example/held-xhr").unwrap();
-    let started = ScriptNetworkOutputItem::SubresourceRequestStarted(Box::new(
+    let started = ScriptNetworkOutputItem::SubresourceRequestStarted(std::sync::Arc::new(
         SubresourceRequestStarted::new(
             handle,
             None,

@@ -77,7 +77,9 @@ impl PagePreparedChildFrameDocumentActivity {
                 .collect(),
             loads: loads
                 .into_iter()
-                .map(|load| PagePreparedChildFrameLoadActivity::from_snapshot(load, timestamp))
+                .map(|load| {
+                    PagePreparedChildFrameLoadActivity::from_snapshot(load, timestamp, None)
+                })
                 .collect(),
             security_origin,
             secure_context_type,
@@ -112,7 +114,11 @@ pub(super) struct PagePreparedChildFrameLoadActivity {
 }
 
 impl PagePreparedChildFrameLoadActivity {
-    fn from_snapshot(load: ChildFrameNavigationSnapshot, timestamp: f64) -> Self {
+    pub(super) fn from_snapshot(
+        load: ChildFrameNavigationSnapshot,
+        timestamp: f64,
+        network: Option<&ChildFrameDocumentNetworkActivitySnapshot>,
+    ) -> Self {
         let exact_loader_id = load.loader_id.clone();
         let loader_id = load.loader_id.unwrap_or_else(|| LOADER_ID.to_owned());
         let navigation_start = PagePreparedChildFrameNavigationStart {
@@ -120,14 +126,12 @@ impl PagePreparedChildFrameLoadActivity {
             loader_id: loader_id.clone(),
             url: load.url.clone(),
         };
-        let document_network =
-            load.document_network
-                .map(|snapshot| PagePreparedChildFrameDocumentNetwork {
-                    frame_id: load.frame_id.clone(),
-                    loader_id: loader_id.clone(),
-                    timestamp,
-                    snapshot,
-                });
+        let document_network = network.map(|network| PagePreparedChildFrameDocumentNetwork {
+            frame_id: network.frame_id.clone(),
+            loader_id: network.loader_id.clone(),
+            timestamp,
+            snapshot: network.snapshot.clone(),
+        });
         let navigation_commit = PagePreparedChildFrameNavigationCommit {
             frame_id: load.frame_id.clone(),
             parent_frame_id: load.parent_frame_id,

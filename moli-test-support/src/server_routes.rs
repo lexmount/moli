@@ -2,6 +2,15 @@ use super::*;
 
 pub(super) fn build_router() -> Router {
     routes_wait::add_wait_routes(Router::new())
+        .route("/native-worker-network/", get(|| async {
+            Html("<!doctype html><script>navigator.serviceWorker.register('worker.js')</script>")
+        }))
+        .route("/native-worker-network/worker.js", get(|| async {
+            ([(CONTENT_TYPE, "text/javascript")],
+                "console.log('before worker network'); const probe = fetch('probe').then(r => r.text()).then(() => console.log('after worker network')); oninstall = e => e.waitUntil(Promise.all([probe, skipWaiting()])); onactivate = e => e.waitUntil(clients.claim());"
+            )
+        }))
+        .route("/native-worker-network/probe", get(|| async { "native worker network body" }))
         .route("/native-service-worker/", get(|| async {
             Html("<!doctype html><script>navigator.serviceWorker.register('worker.js')</script>")
         }))

@@ -48,6 +48,7 @@ mod response_body;
 pub(crate) mod settings;
 #[cfg(test)]
 mod tests;
+mod worker;
 
 /// Removes one session's Network contributions, then applies the newly
 /// aggregated target policy before the session disappears.

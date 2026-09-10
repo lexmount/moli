@@ -1,9 +1,6 @@
 use std::collections::BTreeMap;
 
-use moli_core::{
-    RendererOwnerLocalHostId,
-    page::{RendererSharedWorkerConsoleMessage, RuntimeConsoleMessageSnapshot},
-};
+use moli_core::page::{RendererSharedWorkerConsoleMessage, RuntimeConsoleMessageSnapshot};
 use moli_shared_worker::SharedWorkerInstanceId;
 
 use crate::devtools_runtime::RuntimeExecutionContextEvent;
@@ -38,14 +35,14 @@ const SHARED_WORKER_SYNTHETIC_EXECUTION_CONTEXT_ID_BASE: i64 = -10_000_000;
 /// already been created by the renderer event stream.
 #[derive(Debug)]
 pub(crate) struct SharedWorkerTargetState {
-    pub(crate) renderer_owner_local_host_id: RendererOwnerLocalHostId,
+    pub(crate) network: crate::domains::network::TargetNetworkAgentState,
     pub(crate) renderer_instance_id: SharedWorkerInstanceId,
     pub(crate) target_id: String,
     owner_target_id: Option<String>,
     sessions: BTreeMap<String, SharedWorkerTargetSessionState>,
     pub(crate) url: String,
     pub(crate) name: String,
-    runtime_execution_context_id: Option<i64>,
+    runtime_execution_context: Option<RuntimeExecutionContextEvent>,
     console_messages: Vec<RuntimeConsoleMessageSnapshot>,
 }
 
@@ -66,7 +63,6 @@ impl Default for SharedWorkerTargetSessionState {
 
 impl SharedWorkerTargetState {
     pub(crate) fn new(
-        renderer_owner_local_host_id: RendererOwnerLocalHostId,
         renderer_instance_id: SharedWorkerInstanceId,
         target_id: String,
         owner_target_id: Option<String>,
@@ -74,20 +70,20 @@ impl SharedWorkerTargetState {
         name: String,
     ) -> Self {
         Self {
-            renderer_owner_local_host_id,
+            network: Default::default(),
             renderer_instance_id,
             target_id,
             owner_target_id,
             sessions: BTreeMap::new(),
             url,
             name,
-            runtime_execution_context_id: None,
+            runtime_execution_context: None,
             console_messages: Vec::new(),
         }
     }
 
     pub(crate) fn execution_context_id(&self) -> i64 {
-        if let Some(id) = self.runtime_execution_context_id {
+        if let Some(id) = self.real_runtime_execution_context_id() {
             return id;
         }
         let instance_id = i64::try_from(self.renderer_instance_id.as_u64()).unwrap_or(i64::MAX);
@@ -95,7 +91,11 @@ impl SharedWorkerTargetState {
     }
 
     pub(crate) fn real_runtime_execution_context_id(&self) -> Option<i64> {
-        self.runtime_execution_context_id
+        self.runtime_execution_context.as_ref()?.context_id
+    }
+
+    pub(crate) fn runtime_execution_context(&self) -> Option<&RuntimeExecutionContextEvent> {
+        self.runtime_execution_context.as_ref()
     }
 
     fn rebind_synthetic_runtime_snapshots(&mut self, synthetic_id: i64, real_id: i64) {
@@ -114,12 +114,16 @@ impl SharedWorkerTargetState {
             && let Some(id) = event.context_id
         {
             let previous_id = self.execution_context_id();
-            if self.runtime_execution_context_id.is_some()
-                && self.runtime_execution_context_id != Some(id)
+            if self
+                .runtime_execution_context
+                .as_ref()
+                .is_some_and(|previous| {
+                    previous.context_id != event.context_id || previous.realm_id != event.realm_id
+                })
             {
                 self.mark_all_runtime_bindings_pending_replay();
             }
-            self.runtime_execution_context_id = Some(id);
+            self.runtime_execution_context = Some(event.clone());
             if previous_id < 0 {
                 self.rebind_synthetic_runtime_snapshots(previous_id, id);
             }
@@ -130,14 +134,24 @@ impl SharedWorkerTargetState {
         &mut self,
         event: &RuntimeExecutionContextEvent,
     ) {
-        if event.context_id == self.runtime_execution_context_id {
-            self.runtime_execution_context_id = None;
+        if self
+            .runtime_execution_context
+            .as_ref()
+            .is_some_and(|current| {
+                current.context_id == event.context_id
+                    && event
+                        .realm_id
+                        .as_ref()
+                        .is_none_or(|id| current.realm_id.as_ref() == Some(id))
+            })
+        {
+            self.runtime_execution_context = None;
             self.mark_all_runtime_bindings_pending_replay();
         }
     }
 
     pub(crate) fn record_runtime_execution_contexts_cleared_event(&mut self) {
-        self.runtime_execution_context_id = None;
+        self.runtime_execution_context = None;
         self.mark_all_runtime_bindings_pending_replay();
     }
 
@@ -200,7 +214,7 @@ impl SharedWorkerTargetState {
         &self,
         session_id: &str,
     ) -> Vec<RuntimeBindingDefinition> {
-        if self.runtime_execution_context_id.is_none() {
+        if self.runtime_execution_context.is_none() {
             return Vec::new();
         }
         let Some(state) = self.session_state(session_id) else {
@@ -421,6 +435,7 @@ impl SharedWorkerTargetState {
     }
 
     pub(crate) fn detach_session(&mut self, session_id: &str) -> Option<String> {
+        self.set_network_enabled(session_id, false);
         self.sessions
             .remove(session_id)
             .map(|_| session_id.to_owned())
@@ -434,7 +449,6 @@ impl SharedWorkerTargetState {
         let session = self.sessions.get(session_id)?;
         Some(session.attachment_scope.bind(
             browser_context_id,
-            self.renderer_owner_local_host_id,
             self.renderer_instance_id,
             self.owner_target_id.clone(),
             self.target_id.clone(),
@@ -452,6 +466,7 @@ impl SharedWorkerTargetState {
         session_id: &str,
     ) -> Option<TargetSharedWorkerProtocolAttachmentRetirement> {
         let identity = self.protocol_attachment_identity(browser_context_id, session_id)?;
+        self.set_network_enabled(session_id, false);
         let session = self.sessions.remove(session_id)?;
         Some(session.attachment_scope.into_retirement(identity))
     }
@@ -491,9 +506,18 @@ impl SharedWorkerTargetState {
             return false;
         };
         if enabled {
+            let was_enabled = state.network_session_state.network_enabled;
             state.network_session_state.network_enabled = true;
+            if !was_enabled {
+                self.network
+                    .initialize_session_observation_cursor_at_output_tail(Some(session_id));
+            }
+            self.network.enable_attached_events(session_id);
         } else {
             state.network_session_state = Default::default();
+            self.network.remove_attached_session(session_id);
+            self.network
+                .remove_captured_response_body_visibility_for_session(Some(session_id));
         }
         true
     }
@@ -561,7 +585,7 @@ impl SharedWorkerTargetState {
         if !state.runtime_session_state.runtime_frontend_enabled {
             return &[];
         }
-        if self.runtime_execution_context_id.is_none() {
+        if self.runtime_execution_context.is_none() {
             return &[];
         }
         &self.console_messages[state
@@ -791,12 +815,11 @@ impl SharedWorkerTargetState {
 mod tests {
     use super::SharedWorkerTargetState;
     use crate::devtools_runtime::RuntimeExecutionContextEvent;
-    use moli_core::{RendererOwnerLocalHostId, page::RendererSharedWorkerConsoleMessage};
+    use moli_core::page::RendererSharedWorkerConsoleMessage;
     use moli_shared_worker::SharedWorkerInstanceId;
 
     fn shared_worker_target() -> SharedWorkerTargetState {
         SharedWorkerTargetState::new(
-            RendererOwnerLocalHostId::new_for_testing(1),
             SharedWorkerInstanceId::from_u64(91),
             "TID-shared-worker".to_owned(),
             None,
@@ -816,6 +839,33 @@ mod tests {
             is_default: None,
             context_type: Some("worker".to_owned()),
             grant_universal_access: None,
+        }
+    }
+
+    #[test]
+    fn shared_worker_network_retirement_removes_only_its_listener() {
+        for retire in [false, true] {
+            let mut target = shared_worker_target();
+            for session in ["SID-a", "SID-b"] {
+                target.attach_session(session.into());
+                assert!(target.set_network_enabled(session, true));
+            }
+            if retire {
+                assert!(
+                    target
+                        .take_protocol_attachment_retirement("BID-1", "SID-a")
+                        .is_some()
+                );
+            } else {
+                assert!(target.detach_session("SID-a").is_some());
+            }
+            assert_eq!(
+                target.network.event_session_ids(None, None),
+                vec![Some("SID-b".into())]
+            );
+            target.attach_session("SID-a".into());
+            assert!(!target.network_enabled("SID-a"));
+            assert!(!target.network.attached_events_enabled_for_session("SID-a"));
         }
     }
 

@@ -32,18 +32,18 @@ impl Browser {
         if !context.select_web_contents(selected.id()) {
             return Err("WebContents unavailable".into());
         }
-        let mut first_error = None;
         let mut updates = Vec::new();
         if previous != Some(selected) && !selected_has_dialog && !previous_has_dialog {
             for (handle, foreground) in
                 std::iter::once((selected, true)).chain(previous.map(|handle| (handle, false)))
             {
+                let Some(document) = context.document_handle(handle)? else {
+                    continue;
+                };
                 match context.start_web_contents_visibility_update(handle, foreground) {
-                    Ok(Some(update)) => updates.push(update),
+                    Ok(Some(update)) => updates.push(Ok(update)),
                     Ok(None) => {}
-                    Err(error) => {
-                        first_error.get_or_insert(error);
-                    }
+                    Err(error) => updates.push(Err((document, error))),
                 }
             }
         }
@@ -63,15 +63,32 @@ impl Browser {
         tokio::task::spawn_local(async move {
             let mut completed = Vec::with_capacity(updates.len());
             for update in updates {
-                completed.push(update.wait().await);
+                completed.push(match update {
+                    Ok(update) => Ok(update.wait().await),
+                    Err(error) => Err(error),
+                });
             }
             let _ = local_sender.send(Box::new(move |browser| {
                 let result = browser.context_mut(selected.context()).and_then(|context| {
                     // The current selection may already have changed again.
                     // Only finish the captured Document operations; never
                     // write selection or resolve a replacement Document here.
+                    let mut first_error = None;
                     for update in completed {
-                        if let Err(error) = context.finish_document_policy_update(update) {
+                        let (document, result) = match update {
+                            Ok(update) => (
+                                update.document(),
+                                context.finish_document_policy_update(update),
+                            ),
+                            Err((document, error)) => (document, Err(error)),
+                        };
+                        // Retirement ends this exact Document's visibility
+                        // obligation, not the committed WebContents activation.
+                        // Drain its reply above, but keep errors for live
+                        // Documents, including failed command admission.
+                        if context.document(document).is_ok()
+                            && let Err(error) = result
+                        {
                             first_error.get_or_insert(error);
                         }
                     }

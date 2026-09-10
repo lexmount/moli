@@ -42,8 +42,24 @@ pub(crate) enum RendererPageStateCapturePolicy {
 
 mod access;
 mod browser_context_runtime;
+mod network_observation;
+pub use network_observation::{
+    RendererChildDocumentNetworkObservation, RendererCommittedNetworkObservation,
+    RendererNetworkInput, RendererNetworkObservation, RendererNetworkOccurrence,
+    RendererNetworkOutputItem, RendererNetworkSource, RendererNetworkSourceIdentity,
+    RendererWorkerIdentity,
+};
+pub(crate) use network_observation::{RendererNetworkReporter, RendererWorkerNetworkReporter};
+mod worker_fetch;
+pub use worker_fetch::{
+    PendingWorkerFetchDecision, RendererWorkerFetchPause, RendererWorkerFetchStage,
+    WorkerFetchDecision,
+};
+pub(crate) use worker_fetch::{WorkerFetchDecisionDispatch, WorkerFetchPhase, WorkerFetchTarget};
 mod worker_inspection;
-pub use worker_inspection::{RendererWorkerInspectionEndpoint, RendererWorkerInspectionTarget};
+mod worker_output_streams;
+pub use worker_inspection::RendererWorkerInspectionEndpoint;
+pub(crate) use worker_output_streams::RendererWorkerOutputStreams;
 mod worker_lifecycle;
 pub(crate) use worker_lifecycle::RendererWorkerLifecycleReporter;
 pub use worker_lifecycle::{
@@ -263,8 +279,8 @@ use self::access::{
 };
 pub(crate) use self::browser_context_runtime::ServiceWorkerControlState;
 pub(crate) use self::browser_context_runtime::{
-    ClipboardPresentationStyle, ClipboardSnapshot, RendererStoragePartitionIdentity,
-    RendererWorkerContextRuntime,
+    ClipboardPresentationStyle, ClipboardSnapshot, RendererDedicatedWorkerHost,
+    RendererStoragePartitionIdentity, RendererWorkerContextRuntime,
 };
 pub use self::browser_context_runtime::{
     DetachedParserScriptFetchContinuation, RendererBrowserContextRuntime,
@@ -336,14 +352,15 @@ pub use self::page_surface::{
     RendererCapturedScreencastFrame, RendererCapturedScreenshot, RendererCommandTurnCompletion,
     RendererCommandTurnOutput, RendererCountEntry, RendererDedicatedWorkerMainScript,
     RendererDedicatedWorkerMainScriptOutcome, RendererDedicatedWorkerObservation,
-    RendererDedicatedWorkerTargetInfo, RendererDevToolsAgentToken, RendererDocumentBoxModel,
-    RendererDocumentChildNodeSnapshotEvent, RendererDocumentChildNodeSnapshotEvents,
-    RendererDocumentChildNodeSnapshots, RendererDocumentFrontendNodeIdsResolution,
-    RendererDocumentHitTestResult, RendererDocumentIsolateAccountingDiagnostics,
-    RendererDocumentNodeAttributesResolution, RendererDocumentNodeClientRect,
-    RendererDocumentNodeGeometry, RendererDocumentNodePropertyResolution,
-    RendererDocumentNodeReference, RendererDocumentNodeTextResolution,
-    RendererDocumentQuerySelectorNode, RendererDocumentQuerySelectorResolution,
+    RendererDedicatedWorkerOwner, RendererDedicatedWorkerTargetInfo, RendererDevToolsAgentToken,
+    RendererDocumentBoxModel, RendererDocumentChildNodeSnapshotEvent,
+    RendererDocumentChildNodeSnapshotEvents, RendererDocumentChildNodeSnapshots,
+    RendererDocumentFrontendNodeIdsResolution, RendererDocumentHitTestResult,
+    RendererDocumentIsolateAccountingDiagnostics, RendererDocumentNodeAttributesResolution,
+    RendererDocumentNodeClientRect, RendererDocumentNodeGeometry,
+    RendererDocumentNodePropertyResolution, RendererDocumentNodeReference,
+    RendererDocumentNodeTextResolution, RendererDocumentQuerySelectorNode,
+    RendererDocumentQuerySelectorResolution,
     RendererDocumentQuerySelectorWithChildNodeSnapshotEvents,
     RendererDocumentSourcedSameDocumentNavigation,
     RendererDocumentSourcedTopLevelLocationNavigation, RendererDomAttributeMutation,

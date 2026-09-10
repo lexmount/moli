@@ -4,10 +4,7 @@ use crate::frame_owner_model::{
     ChildDocumentNavigationFetchTarget, DocumentId, FrameDocumentTaskOwner, FrameRequestId,
     FrameSchedulerLaneId, LocalWindowId,
 };
-use crate::types::{
-    ChildDocumentLoadCompletion, ChildDocumentLoadNetworkAttribution, ChildDocumentLoadOutcome,
-    LoadedChildDocument,
-};
+use crate::types::{ChildDocumentLoadCompletion, ChildDocumentLoadOutcome, LoadedChildDocument};
 
 fn owner_attached_page_vm(
     loader: &crate::network::ResourceRequestClient,
@@ -231,6 +228,28 @@ async fn child_document_response_frame_ancestors_gates_commit() {
             "false",
             "blocked response script must never execute"
         );
+        let network = page_vm.take_completed_child_document_networks();
+        assert_eq!(
+            network.len(),
+            1,
+            "a policy-blocked response remains a network fact"
+        );
+        assert_eq!(network[0].snapshot.request_url, blocked_url);
+        assert_eq!(network[0].snapshot.response.as_ref().unwrap().status, 200);
+        assert!(
+            String::from_utf8_lossy(
+                &network[0]
+                    .snapshot
+                    .response
+                    .as_ref()
+                    .unwrap()
+                    .response_body
+                    .as_ref()
+                    .unwrap()
+                    .clone_body_bytes()
+            )
+            .contains("must-not-commit")
+        );
 
         server
             .await
@@ -243,7 +262,8 @@ async fn child_document_response_frame_ancestors_gates_commit() {
 
 #[tokio::test(flavor = "current_thread")]
 async fn failed_child_document_fetch_is_applied_only_to_its_exact_current_request() {
-    run_page_vm_async_test(async move {
+    for retirement in ["current", "replace", "remove"] {
+        run_page_vm_async_test(async move {
         let loader = crate::network::ResourceRequestClient::new(&dns_failure_fetch_config())
             .expect("loader");
         let (mut page_vm, mut queue, mut wake_rx) = owner_attached_page_vm(
@@ -267,28 +287,47 @@ async fn failed_child_document_fetch_is_applied_only_to_its_exact_current_reques
                 )
             )
         );
+        if retirement == "replace" {
+            page_vm.vm_mut().eval("document.getElementById('failed-child-frame').srcdoc = '<p id=survivor>replacement</p>'")?;
+            run_expected_child_frame_task_source_after_realm_prerequisite_for_wait(
+                &mut page_vm, ChildFrameSemanticTurnKind::NavigationCommit, "replacement before failed terminal",
+            ).await;
+        } else if retirement == "remove" {
+            page_vm.vm_mut().eval("document.getElementById('failed-child-frame').remove()")?;
+        }
+        let _ = page_vm.take_completed_child_frame_navigation_loads();
+        let activity_epoch = page_vm.vm().subresource_activity_epoch();
         let outcome = page_vm
             .apply_one_page_resource_terminal_owner_admission_for_test(&mut queue)?
             .expect("failed current child request should still consume one typed turn");
-        assert_eq!(
-            outcome.action.document_effect,
-            PageResourceCompletionDocumentEffect::AppliedToCurrentOwner
-        );
+        if retirement == "current" {
+            assert_eq!(outcome.action.document_effect, PageResourceCompletionDocumentEffect::AppliedToCurrentOwner);
+        } else {
+            assert!(matches!(outcome.action.document_effect, PageResourceCompletionDocumentEffect::DiscardedStaleOwner { .. }));
+            assert_eq!(page_vm.vm().subresource_activity_epoch(), activity_epoch);
+        }
+        if retirement == "replace" {
+            assert_eq!(page_vm.vm_mut().eval("document.getElementById('failed-child-frame').contentDocument.getElementById('survivor').textContent")?, "replacement");
+        }
         assert_eq!(
             page_vm
                 .vm()
                 .current_child_document_navigation_fetch_target(handle),
             None
         );
-        assert!(
-            page_vm.take_completed_child_document_networks().is_empty(),
-            "a transport error without a response must not invent a historical response fact"
-        );
+        let network = page_vm.take_completed_child_document_networks();
+        assert_eq!(network.len(), 1, "a transport error retains its actual failed request");
+        assert_eq!(network[0].snapshot.request_url, "http://127.0.0.1:1/unreachable.html");
+        assert_eq!(network[0].snapshot.request_method, "GET");
+        assert!(!network[0].snapshot.response.as_ref().unwrap_err().is_empty());
+        assert!(page_vm.take_completed_child_document_networks().is_empty());
+        assert!(page_vm.take_completed_child_frame_navigation_loads().is_empty(), "a failed request cannot fabricate a child commit or Load");
         assert!(!queue.has_ready_completion());
         Ok::<_, anyhow::Error>(())
     })
     .await
     .expect("failed typed child-document test should run");
+    }
 }
 
 #[tokio::test(flavor = "current_thread")]
@@ -601,14 +640,25 @@ document.getElementById("nested-owner-frame").contentDocument
 
 #[tokio::test(flavor = "current_thread")]
 async fn unload_navigation_supersedes_authorized_terminal_during_application() {
-    run_page_vm_async_test(async move {
-        let (base_url, server) = spawn_path_response_http_server(vec![(
-            "/unload-race.html",
-            "HTTP/1.1 200 OK",
-            "<!doctype html><p id='must-not-win'>old terminal</p>".to_owned(),
-            Duration::ZERO,
-        )])
-        .await;
+    for failed in [false, true] {
+        run_page_vm_async_test(async move {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let base_url = format!("http://{}", listener.local_addr().unwrap());
+        let server = tokio::spawn(async move {
+            let (mut stream, _) = listener.accept().await.unwrap();
+            let mut request = Vec::new();
+            let mut byte = [0];
+            while !request.ends_with(b"\r\n\r\n") {
+                stream.read_exact(&mut byte).await.unwrap();
+                request.push(byte[0]);
+            }
+            assert!(String::from_utf8_lossy(&request).starts_with("GET /unload-race.html "));
+            if !failed {
+                let body = "<!doctype html><p id='must-not-win'>old terminal</p>";
+                stream.write_all(format!("HTTP/1.1 200 OK\r\nContent-Type: text/html\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}", body.len()).as_bytes()).await.unwrap();
+            }
+        });
         let loader =
             crate::network::ResourceRequestClient::new(&FetchConfig::default()).expect("loader");
         let (mut page_vm, mut queue, mut wake_rx) = owner_attached_page_vm(
@@ -681,6 +731,8 @@ raceFrame.src = {target_url:?};
         let historical = page_vm.take_completed_child_document_networks();
         assert_eq!(historical.len(), 1);
         assert_eq!(historical[0].snapshot.request_url, target_url);
+        assert_eq!(historical[0].snapshot.response.is_err(), failed);
+        assert!(page_vm.take_completed_child_document_networks().is_empty());
 
         run_expected_child_frame_task_source_after_realm_prerequisite_for_wait(
             &mut page_vm,
@@ -710,6 +762,7 @@ raceFrame.src = {target_url:?};
     })
     .await
     .expect("unload reentrancy child-document test should run");
+    }
 }
 
 pub(super) fn stale_loaded_completion(
@@ -720,7 +773,7 @@ pub(super) fn stale_loaded_completion(
     let loader_id = format!("TEST-CHILD-LOADER-{}", target.load_id());
     ChildDocumentLoadCompletion::new(
         target,
-        ChildDocumentLoadNetworkAttribution::new(frame_id.to_owned(), None, loader_id),
+        loader_id.clone(),
         Ok(ChildDocumentLoadOutcome::Loaded(Box::new(
             LoadedChildDocument {
                 final_url: Url::parse(request_url).expect("final URL"),
@@ -728,17 +781,30 @@ pub(super) fn stale_loaded_completion(
                 content_type: Some("text/html".to_owned()),
                 character_set: "UTF-8".to_owned(),
                 markup: "<!doctype html>".to_owned(),
-                document_network: Some(crate::protocol_types::ChildFrameDocumentNetworkSnapshot {
-                    request_url: request_url.to_owned(),
-                    request_method: "GET".to_owned(),
-                    request_headers: Vec::new(),
-                    final_url: request_url.to_owned(),
-                    status: 200,
-                    response_headers: Vec::new(),
-                    encoded_data_length: 0,
-                    response_body: None,
-                    from_cache: false,
-                }),
+                document_network: Some(
+                    crate::runtime::RendererChildDocumentNetworkObservation::unobserved_for_test(
+                        crate::protocol_types::ChildFrameDocumentNetworkActivitySnapshot {
+                            frame_id: frame_id.to_owned(),
+                            parent_frame_id: None,
+                            loader_id,
+                            snapshot: crate::protocol_types::ChildFrameDocumentNetworkSnapshot {
+                                request_url: request_url.to_owned(),
+                                request_method: "GET".to_owned(),
+                                request_headers: Vec::new(),
+                                response: Ok(
+                                    crate::protocol_types::ChildFrameDocumentNetworkResponse {
+                                        final_url: request_url.to_owned(),
+                                        status: 200,
+                                        response_headers: Vec::new(),
+                                        encoded_data_length: 0,
+                                        response_body: None,
+                                        from_cache: false,
+                                    },
+                                ),
+                            },
+                        },
+                    ),
+                ),
             },
         ))),
     )

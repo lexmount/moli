@@ -4208,6 +4208,21 @@ fn check_blob_fetch_and_xhr_methods_in_window_and_worker(
         for worker in [false, true] {
             let mut page_vm = test_page_vm();
             let local_executor = page_vm.local_executor.clone();
+            let worker_output = std::sync::Arc::new(parking_lot::Mutex::new(Vec::new()));
+            let observed = worker_output.clone();
+            page_vm
+                .runtime_hooks
+                .browser_context_runtime
+                .install_network_handler(move |input| {
+                    if let crate::runtime::RendererNetworkInput::Observation(input) = input
+                        && matches!(
+                            input.occurrence.source,
+                            crate::runtime::RendererNetworkSource::Worker(_)
+                        )
+                    {
+                        observed.lock().push(input.occurrence.item.clone());
+                    }
+                });
             let probe = r#"(async () => {
                 const check = (value, message) => { if (!value) throw new Error(message); };
                 const blob = URL.createObjectURL(new Blob(['payload'], {type: 'text/plain'}));
@@ -4298,7 +4313,7 @@ fn check_blob_fetch_and_xhr_methods_in_window_and_worker(
                     "globalThis.__blobMethodResult = 'pending'; {probe}.then(() => {{ globalThis.__blobMethodResult = 'ok'; }}, error => {{ globalThis.__blobMethodResult = String(error); }})"
                 )
             };
-            let (result, pending_count, network_output) = local_executor
+            let (result, pending_count, mut network_output) = local_executor
                 .run(async move {
                     page_vm
                         .vm_mut()
@@ -4328,6 +4343,14 @@ fn check_blob_fetch_and_xhr_methods_in_window_and_worker(
                 pending_count, 0,
                 "local fetch and XHR must bypass interception; worker={worker}"
             );
+            for item in worker_output.lock().drain(..) {
+                let crate::runtime::RendererNetworkOutputItem::Resource(item) = item else {
+                    panic!(
+                        "local Worker requests must produce resource facts without interception"
+                    );
+                };
+                network_output.push_item(item.as_ref().clone());
+            }
             let (records, _, _) = split_network_output_items(network_output);
             let failures = records
                 .iter()

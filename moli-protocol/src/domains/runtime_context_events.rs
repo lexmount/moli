@@ -499,7 +499,7 @@ mod tests {
     use crate::conn::CommandOwnerScope;
     use crate::conn::{ServiceWorkerTargetState, SharedWorkerTargetState};
     use crate::devtools_runtime::AutomationEvent;
-    use moli_core::{RendererOwnerLocalHostId, page::RendererServiceWorkerVersionStatus};
+    use moli_core::page::RendererServiceWorkerVersionStatus;
     use moli_shared_worker::SharedWorkerInstanceId;
     use serde_json::json;
 
@@ -554,7 +554,6 @@ mod tests {
         let mut browser_context =
             conn.new_browser_context_fixture_for_test("BID-shared".to_owned());
         let mut target = SharedWorkerTargetState::new(
-            RendererOwnerLocalHostId::new_for_testing(1),
             SharedWorkerInstanceId::from_u64(9),
             "TID-shared-worker".to_owned(),
             None,
@@ -857,7 +856,6 @@ mod tests {
         let mut browser_context =
             conn.new_browser_context_fixture_for_test("BID-shared-runtime-context".to_owned());
         let mut target = SharedWorkerTargetState::new(
-            RendererOwnerLocalHostId::new_for_testing(7),
             SharedWorkerInstanceId::from_u64(11),
             "TID-shared-worker".to_owned(),
             None,

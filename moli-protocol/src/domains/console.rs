@@ -284,7 +284,6 @@ mod tests {
             .conn
             .new_browser_context_fixture_for_test("BID-shared".to_owned());
         let mut target = crate::conn::SharedWorkerTargetState::new(
-            moli_core::RendererOwnerLocalHostId::new_for_testing(1),
             SharedWorkerInstanceId::from_u64(91),
             "TID-shared-worker".to_owned(),
             None,

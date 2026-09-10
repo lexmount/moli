@@ -141,7 +141,9 @@ fn observation_transport_charge_bytes(observation: &RendererProtocolObservation)
         RendererProtocolObservation::SharedWorker(event) => {
             shared_worker_event_transport_charge_bytes(event)
         }
-        RendererProtocolObservation::Network { item, .. } => item.renderer_transport_charge_bytes(),
+        RendererProtocolObservation::Network(observation) => {
+            observation.item().renderer_transport_charge_bytes()
+        }
         RendererProtocolObservation::RuntimeBinding(call) => {
             string_charge(&call.name).saturating_add(string_charge(&call.payload))
         }
@@ -220,19 +222,7 @@ fn owner_action_transport_charge_bytes(action: &RendererOwnerAction) -> usize {
         .flatten()
         .map(string_charge)
         .sum(),
-        RendererOwnerAction::ChildFrameDocumentNetwork { event, .. } => {
-            string_charge(&event.frame_id)
-                .saturating_add(
-                    event
-                        .parent_frame_id
-                        .as_deref()
-                        .map(string_charge)
-                        .unwrap_or(0),
-                )
-                .saturating_add(string_charge(&event.loader_id))
-                .saturating_add(child_frame_document_network_charge(&event.snapshot))
-        }
-        RendererOwnerAction::ChildFrameLoad { event, .. } => [
+        RendererOwnerAction::ChildFrameLoad { event, network, .. } => [
             Some(event.frame_id.as_str()),
             event.parent_frame_id.as_deref(),
             event.loader_id.as_deref(),
@@ -244,10 +234,9 @@ fn owner_action_transport_charge_bytes(action: &RendererOwnerAction) -> usize {
         .map(string_charge)
         .sum::<usize>()
         .saturating_add(
-            event
-                .document_network
+            network
                 .as_ref()
-                .map(child_frame_document_network_charge)
+                .map(|network| network.activity().renderer_transport_charge_bytes())
                 .unwrap_or(0),
         ),
         RendererOwnerAction::SameDocumentNavigation(event) => {
@@ -294,28 +283,6 @@ fn headers_charge<V: AsRef<[u8]>>(headers: &[(String, V)]) -> usize {
                 .saturating_add(string_charge(name))
                 .saturating_add(value.as_ref().len().saturating_mul(2))
         },
-    )
-}
-
-fn child_frame_document_network_charge(
-    snapshot: &crate::protocol_types::ChildFrameDocumentNetworkSnapshot,
-) -> usize {
-    [
-        snapshot.request_url.as_str(),
-        snapshot.request_method.as_str(),
-        snapshot.final_url.as_str(),
-    ]
-    .into_iter()
-    .map(string_charge)
-    .sum::<usize>()
-    .saturating_add(headers_charge(&snapshot.request_headers))
-    .saturating_add(headers_charge(&snapshot.response_headers))
-    .saturating_add(
-        snapshot
-            .response_body
-            .as_ref()
-            .map(|body| body.renderer_transport_retained_memory_bytes())
-            .unwrap_or_default(),
     )
 }
 
@@ -514,6 +481,7 @@ fn service_worker_lifecycle_payload_bytes(
             string_charge(reason)
         }
         crate::runtime::RendererServiceWorkerLifecycle::Starting { .. }
+        | crate::runtime::RendererServiceWorkerLifecycle::ExecutionReady { .. }
         | crate::runtime::RendererServiceWorkerLifecycle::Started { .. }
         | crate::runtime::RendererServiceWorkerLifecycle::Destroyed { .. }
         | crate::runtime::RendererServiceWorkerLifecycle::VersionUpdated { .. } => 0,

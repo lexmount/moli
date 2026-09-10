@@ -70,12 +70,20 @@ async fn check_intercepted_header_bytes(script: &str, override_headers: bool, re
     }))
     .await;
     ctx.expect_result(70101, json!({}), Some("SID-1"));
+    if script == WORKER {
+        crate::testing::pause_new_dedicated_workers(&mut ctx, "SID-1", 70108).await;
+    }
     ctx.process_async(json!({
         "id": 70102, "sessionId": "SID-1", "method": "Runtime.evaluate",
         "params": {"expression": script.replace("/start", request_path)}
     }))
     .await;
     let _ = take_response_by_id(&mut ctx, 70102);
+    let network_session = if script == WORKER {
+        crate::testing::enable_network_on_new_dedicated_worker(&mut ctx, "SID-1", 70109).await
+    } else {
+        "SID-1".to_owned()
+    };
     wait_until_message(&mut ctx, "SID-1", "request pause", |message| {
         message["method"] == "Fetch.requestPaused"
     })
@@ -147,6 +155,7 @@ async fn check_intercepted_header_bytes(script: &str, override_headers: bool, re
         .iter()
         .filter(|message| {
             message["method"] == "Network.requestWillBeSent"
+                && message["sessionId"] == network_session
                 && message["params"]["requestId"] == network_id
         })
         .map(|message| message["params"]["request"]["url"].clone())

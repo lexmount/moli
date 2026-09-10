@@ -35,7 +35,11 @@ fn loading_worker_terminate_blocks_late_script_loaded_transition() {
                 wrapper,
                 top_level_site,
                 creator_storage_key,
-                String::new(),
+                host.prepare_dedicated_worker_host(
+                    "data:text/html,fixture".parse().unwrap(),
+                    "data:text/javascript,fixture".parse().unwrap(),
+                    String::new(),
+                ),
                 moli_fetch::RequestCredentialsMode::SameOrigin,
                 None,
                 outside_settings_load,
@@ -56,6 +60,12 @@ fn loading_worker_terminate_blocks_late_script_loaded_transition() {
                 crate::worker::WorkerScriptSource::text(
                     "postMessage('late'); self.close();".to_owned(),
                 ),
+                Box::new(crate::types::NavigationResponse::from_text_body(
+                    "https://example.com/worker.js".parse().unwrap(),
+                    200,
+                    Vec::new(),
+                    "postMessage('late'); self.close();".to_owned(),
+                )),
                 crate::worker::WorkerScriptKind::Classic,
                 true,
                 None,

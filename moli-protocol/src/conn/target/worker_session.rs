@@ -1,6 +1,5 @@
 use crate::conn::{
-    CdpConnection, DedicatedWorkerTargetState, RendererPageResidenceIdentity,
-    ServiceWorkerTargetState, SharedWorkerTargetState,
+    CdpConnection, ServiceWorkerTargetState, SharedWorkerTargetState,
     TargetServiceWorkerProtocolAttachmentIdentity, TargetSharedWorkerProtocolAttachmentIdentity,
 };
 use moli_core::RendererOutputResidenceIdentity;
@@ -79,15 +78,19 @@ impl CdpConnection {
                 browser_context_id,
                 target_id,
             } => {
-                let renderer_page = RendererPageResidenceIdentity::from_residence(residence)?;
+                let RendererOutputResidenceIdentity::DedicatedWorker {
+                    browser_context_runtime_id,
+                    instance_id,
+                } = residence
+                else {
+                    return None;
+                };
                 let browser_context = self.browser_context_by_id(&browser_context_id)?;
                 let target = browser_context.dedicated_worker_target(&target_id)?;
-                let owner_target_id = target.owner_page.target_id()?;
-                if !browser_context.routes_current_renderer_page_owner_for_target(
-                    owner_target_id,
-                    renderer_page,
-                    target.owner_page.document_id(),
-                ) {
+                if target.renderer_instance_id != instance_id
+                    || !browser_context
+                        .routes_renderer_browser_context_runtime(browser_context_runtime_id)
+                {
                     return None;
                 }
                 target
@@ -170,22 +173,6 @@ impl CdpConnection {
                 .map(|target| &mut target.inner),
             _ => None,
         }
-    }
-
-    pub(crate) fn dedicated_worker_target_for_session_mut(
-        &mut self,
-        session_id: Option<&str>,
-    ) -> Option<&mut DedicatedWorkerTargetState> {
-        let session_id = session_id?;
-        let CdpSessionRoute::DedicatedWorkerTarget {
-            browser_context_id,
-            target_id,
-        } = self.session_route(Some(session_id))?
-        else {
-            return None;
-        };
-        self.browser_context_by_id_mut(&browser_context_id)?
-            .dedicated_worker_target_mut(&target_id)
     }
 
     pub(crate) fn service_worker_target_for_session(

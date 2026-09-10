@@ -1,5 +1,4 @@
 use anyhow::{Result, anyhow, bail};
-use moli_shared_worker::SharedWorkerInstanceId;
 use std::cell::RefCell;
 use std::pin::pin;
 use std::rc::Rc;
@@ -23,92 +22,16 @@ use crate::types::{
     AsyncSubresourceFetchResponseFilter, AsyncSubresourceFetchResult,
     ChildBlockingStylesheetLoadCompletion, ChildClassicScriptLoadCompletion,
     ChildDocumentLoadCompletion, ChildModuleDependencyFetchCompletion,
-    ChildModulepreloadFetchCompletion, ChildParserModuleRootFetchCompletion, DedicatedWorkerId,
-    NetworkBodySourceId, PendingSubresourceAuthInfo, PendingSubresourceAuthState,
-    PendingSubresourceContinuation, PendingSubresourceContinueEvent,
-    PendingSubresourceContinueOutcome, PendingSubresourceFetchInfo, PendingSubresourceFetchState,
-    PendingSubresourceResponseInfo, PendingSubresourceResponseState,
-    PopupClassicScriptLoadCompletion, PopupDocumentLoadCompletion, RunningSubresourceFetchState,
-    StreamingSubresourceFetchState, SubresourceNetworkRecord, SubresourceNetworkRequestHandle,
+    ChildModulepreloadFetchCompletion, ChildParserModuleRootFetchCompletion, NetworkBodySourceId,
+    PendingSubresourceAuthInfo, PendingSubresourceAuthState, PendingSubresourceContinuation,
+    PendingSubresourceContinueEvent, PendingSubresourceContinueOutcome,
+    PendingSubresourceFetchInfo, PendingSubresourceFetchState, PendingSubresourceResponseInfo,
+    PendingSubresourceResponseState, PopupClassicScriptLoadCompletion, PopupDocumentLoadCompletion,
+    RunningSubresourceFetchState, StreamingSubresourceFetchState, SubresourceNetworkRequestHandle,
     SubresourceRequestInitiatorType, SubresourceResourceType, SubresourceResponseBody,
     SubresourceResponseBodyWriter,
 };
 use crate::util::v8_string;
-
-#[derive(Clone, Copy)]
-enum WorkerOwnedFetchTarget {
-    Dedicated {
-        worker_id: DedicatedWorkerId,
-        fetch_id: u32,
-    },
-    Shared {
-        instance_id: SharedWorkerInstanceId,
-        fetch_id: u32,
-    },
-}
-
-impl WorkerOwnedFetchTarget {
-    fn from_continuation(continuation: &PendingSubresourceContinuation) -> Option<Self> {
-        match continuation {
-            PendingSubresourceContinuation::WorkerFetch {
-                worker_id,
-                fetch_id,
-            } => Some(Self::Dedicated {
-                worker_id: *worker_id,
-                fetch_id: *fetch_id,
-            }),
-            PendingSubresourceContinuation::SharedWorkerFetch {
-                instance_id,
-                fetch_id,
-            } => Some(Self::Shared {
-                instance_id: *instance_id,
-                fetch_id: *fetch_id,
-            }),
-            _ => None,
-        }
-    }
-
-    fn fetch_id(self) -> u32 {
-        match self {
-            Self::Dedicated { fetch_id, .. } | Self::Shared { fetch_id, .. } => fetch_id,
-        }
-    }
-
-    fn continuation(self) -> PendingSubresourceContinuation {
-        match self {
-            Self::Dedicated {
-                worker_id,
-                fetch_id,
-            } => PendingSubresourceContinuation::WorkerFetch {
-                worker_id,
-                fetch_id,
-            },
-            Self::Shared {
-                instance_id,
-                fetch_id,
-            } => PendingSubresourceContinuation::SharedWorkerFetch {
-                instance_id,
-                fetch_id,
-            },
-        }
-    }
-
-    fn unavailable_message(self) -> String {
-        match self {
-            Self::Dedicated {
-                worker_id,
-                fetch_id,
-            } => format!("worker `{worker_id}` is not available for pending fetch `{fetch_id}`"),
-            Self::Shared {
-                instance_id,
-                fetch_id,
-            } => format!(
-                "shared worker `{}` is not available for pending fetch `{fetch_id}`",
-                instance_id.as_u64()
-            ),
-        }
-    }
-}
 
 fn document_connect_csp_redirect_failure_message<'s>(
     scope: &mut v8::PinScope<'s, '_>,
@@ -511,145 +434,6 @@ fn window_subresource_realm_is_current(
         && binding.is_current(&context_host.borrow())
 }
 
-#[derive(Clone, Copy)]
-enum WorkerOwnedXhrTarget {
-    Dedicated {
-        worker_id: DedicatedWorkerId,
-        xhr_id: u32,
-    },
-    Shared {
-        instance_id: SharedWorkerInstanceId,
-        xhr_id: u32,
-    },
-}
-
-impl WorkerOwnedXhrTarget {
-    fn from_continuation(continuation: &PendingSubresourceContinuation) -> Option<Self> {
-        match continuation {
-            PendingSubresourceContinuation::WorkerXhr { worker_id, xhr_id } => {
-                Some(Self::Dedicated {
-                    worker_id: *worker_id,
-                    xhr_id: *xhr_id,
-                })
-            }
-            PendingSubresourceContinuation::SharedWorkerXhr {
-                instance_id,
-                xhr_id,
-            } => Some(Self::Shared {
-                instance_id: *instance_id,
-                xhr_id: *xhr_id,
-            }),
-            _ => None,
-        }
-    }
-
-    fn xhr_id(self) -> u32 {
-        match self {
-            Self::Dedicated { xhr_id, .. } | Self::Shared { xhr_id, .. } => xhr_id,
-        }
-    }
-
-    fn continuation(self) -> PendingSubresourceContinuation {
-        match self {
-            Self::Dedicated { worker_id, xhr_id } => {
-                PendingSubresourceContinuation::WorkerXhr { worker_id, xhr_id }
-            }
-            Self::Shared {
-                instance_id,
-                xhr_id,
-            } => PendingSubresourceContinuation::SharedWorkerXhr {
-                instance_id,
-                xhr_id,
-            },
-        }
-    }
-
-    fn unavailable_message(self) -> String {
-        match self {
-            Self::Dedicated { worker_id, xhr_id } => {
-                format!("worker `{worker_id}` is not available for pending xhr `{xhr_id}`")
-            }
-            Self::Shared {
-                instance_id,
-                xhr_id,
-            } => format!(
-                "shared worker `{}` is not available for pending xhr `{xhr_id}`",
-                instance_id.as_u64()
-            ),
-        }
-    }
-}
-
-#[derive(Clone, Copy)]
-enum WorkerOwnedCspReportTarget {
-    Dedicated {
-        worker_id: DedicatedWorkerId,
-        report_id: u32,
-    },
-    Shared {
-        instance_id: SharedWorkerInstanceId,
-        report_id: u32,
-    },
-}
-
-impl WorkerOwnedCspReportTarget {
-    fn from_continuation(continuation: &PendingSubresourceContinuation) -> Option<Self> {
-        match continuation {
-            PendingSubresourceContinuation::WorkerCspReport {
-                worker_id,
-                report_id,
-            } => Some(Self::Dedicated {
-                worker_id: *worker_id,
-                report_id: *report_id,
-            }),
-            PendingSubresourceContinuation::SharedWorkerCspReport {
-                instance_id,
-                report_id,
-            } => Some(Self::Shared {
-                instance_id: *instance_id,
-                report_id: *report_id,
-            }),
-            _ => None,
-        }
-    }
-
-    fn report_id(self) -> u32 {
-        match self {
-            Self::Dedicated { report_id, .. } | Self::Shared { report_id, .. } => report_id,
-        }
-    }
-
-    fn unavailable_message(self) -> String {
-        match self {
-            Self::Dedicated {
-                worker_id,
-                report_id,
-            } => format!(
-                "worker `{worker_id}` is not available for pending CSP report `{report_id}`"
-            ),
-            Self::Shared {
-                instance_id,
-                report_id,
-            } => format!(
-                "shared worker `{}` is not available for pending CSP report `{report_id}`",
-                instance_id.as_u64()
-            ),
-        }
-    }
-}
-
-fn with_pending_subresource_record_identity(
-    record: SubresourceNetworkRecord,
-    request_body_bytes: Option<Vec<u8>>,
-    request_handle: Option<SubresourceNetworkRequestHandle>,
-) -> SubresourceNetworkRecord {
-    let mut record = record.with_request_body_bytes(request_body_bytes);
-    if let Some(handle) = request_handle {
-        record = record.with_request_handle(handle);
-    }
-    record
-}
-
 impl ScriptVm {
     pub(crate) fn should_intercept_parser_script_source_fetch(
         &self,
@@ -722,390 +506,6 @@ impl ScriptVm {
         load
     }
 
-    fn continue_worker_owned_fetch(
-        &self,
-        target: WorkerOwnedFetchTarget,
-        request: crate::worker::WorkerPendingFetchContinue,
-    ) -> bool {
-        match target {
-            WorkerOwnedFetchTarget::Dedicated { worker_id, .. } => self
-                ._context_host
-                .borrow_mut()
-                .continue_worker_fetch(worker_id, request),
-            WorkerOwnedFetchTarget::Shared { instance_id, .. } => self
-                ._context_host
-                .borrow_mut()
-                .continue_shared_worker_fetch(instance_id, request),
-        }
-    }
-
-    fn continue_worker_owned_xhr(
-        &self,
-        target: WorkerOwnedXhrTarget,
-        request: crate::worker::WorkerPendingXhrContinue,
-    ) -> bool {
-        match target {
-            WorkerOwnedXhrTarget::Dedicated { worker_id, .. } => self
-                ._context_host
-                .borrow_mut()
-                .continue_worker_xhr(worker_id, request),
-            WorkerOwnedXhrTarget::Shared { instance_id, .. } => self
-                ._context_host
-                .borrow_mut()
-                .continue_shared_worker_xhr(instance_id, request),
-        }
-    }
-
-    fn continue_worker_owned_csp_report(
-        &self,
-        target: WorkerOwnedCspReportTarget,
-        request: crate::worker::WorkerPendingFetchContinue,
-    ) -> bool {
-        match target {
-            WorkerOwnedCspReportTarget::Dedicated { worker_id, .. } => self
-                ._context_host
-                .borrow_mut()
-                .continue_worker_csp_report(worker_id, request),
-            WorkerOwnedCspReportTarget::Shared { instance_id, .. } => self
-                ._context_host
-                .borrow_mut()
-                .continue_shared_worker_csp_report(instance_id, request),
-        }
-    }
-
-    fn fail_worker_owned_fetch(
-        &self,
-        target: WorkerOwnedFetchTarget,
-        request: crate::worker::WorkerPendingFetchContinue,
-        error_text: String,
-    ) -> bool {
-        match target {
-            WorkerOwnedFetchTarget::Dedicated { worker_id, .. } => self
-                ._context_host
-                .borrow_mut()
-                .fail_worker_fetch(worker_id, request, error_text),
-            WorkerOwnedFetchTarget::Shared { instance_id, .. } => self
-                ._context_host
-                .borrow_mut()
-                .fail_shared_worker_fetch(instance_id, request, error_text),
-        }
-    }
-
-    fn fail_worker_owned_xhr(
-        &self,
-        target: WorkerOwnedXhrTarget,
-        request: crate::worker::WorkerPendingXhrContinue,
-        error_text: String,
-    ) -> bool {
-        match target {
-            WorkerOwnedXhrTarget::Dedicated { worker_id, .. } => self
-                ._context_host
-                .borrow_mut()
-                .fail_worker_xhr(worker_id, request, error_text),
-            WorkerOwnedXhrTarget::Shared { instance_id, .. } => self
-                ._context_host
-                .borrow_mut()
-                .fail_shared_worker_xhr(instance_id, request, error_text),
-        }
-    }
-
-    fn fail_worker_owned_csp_report(
-        &self,
-        target: WorkerOwnedCspReportTarget,
-        request: crate::worker::WorkerPendingFetchContinue,
-        error_text: String,
-    ) -> bool {
-        match target {
-            WorkerOwnedCspReportTarget::Dedicated { worker_id, .. } => self
-                ._context_host
-                .borrow_mut()
-                .fail_worker_csp_report(worker_id, request, error_text),
-            WorkerOwnedCspReportTarget::Shared { instance_id, .. } => self
-                ._context_host
-                .borrow_mut()
-                .fail_shared_worker_csp_report(instance_id, request, error_text),
-        }
-    }
-
-    fn fail_worker_owned_fetch_auth(
-        &self,
-        target: WorkerOwnedFetchTarget,
-        request: crate::worker::WorkerPendingFetchContinue,
-        error_text: String,
-    ) -> bool {
-        match target {
-            WorkerOwnedFetchTarget::Dedicated { worker_id, .. } => self
-                ._context_host
-                .borrow_mut()
-                .fail_worker_fetch_auth(worker_id, request, error_text),
-            WorkerOwnedFetchTarget::Shared { instance_id, .. } => self
-                ._context_host
-                .borrow_mut()
-                .fail_shared_worker_fetch_auth(instance_id, request, error_text),
-        }
-    }
-
-    fn fail_worker_owned_xhr_auth(
-        &self,
-        target: WorkerOwnedXhrTarget,
-        request: crate::worker::WorkerPendingXhrContinue,
-        error_text: String,
-    ) -> bool {
-        match target {
-            WorkerOwnedXhrTarget::Dedicated { worker_id, .. } => self
-                ._context_host
-                .borrow_mut()
-                .fail_worker_xhr_auth(worker_id, request, error_text),
-            WorkerOwnedXhrTarget::Shared { instance_id, .. } => self
-                ._context_host
-                .borrow_mut()
-                .fail_shared_worker_xhr_auth(instance_id, request, error_text),
-        }
-    }
-
-    fn continue_worker_owned_fetch_response(
-        &self,
-        target: WorkerOwnedFetchTarget,
-        request: crate::worker::WorkerPendingFetchContinue,
-        response_code: Option<u16>,
-        response_headers: Option<Vec<(String, Vec<u8>)>>,
-    ) -> bool {
-        match target {
-            WorkerOwnedFetchTarget::Dedicated { worker_id, .. } => self
-                ._context_host
-                .borrow_mut()
-                .continue_worker_fetch_response(
-                    worker_id,
-                    request,
-                    response_code,
-                    response_headers,
-                ),
-            WorkerOwnedFetchTarget::Shared { instance_id, .. } => self
-                ._context_host
-                .borrow_mut()
-                .continue_shared_worker_fetch_response(
-                    instance_id,
-                    request,
-                    response_code,
-                    response_headers,
-                ),
-        }
-    }
-
-    fn continue_worker_owned_xhr_response(
-        &self,
-        target: WorkerOwnedXhrTarget,
-        request: crate::worker::WorkerPendingXhrContinue,
-        response_code: Option<u16>,
-        response_headers: Option<Vec<(String, Vec<u8>)>>,
-    ) -> bool {
-        match target {
-            WorkerOwnedXhrTarget::Dedicated { worker_id, .. } => self
-                ._context_host
-                .borrow_mut()
-                .continue_worker_xhr_response(worker_id, request, response_code, response_headers),
-            WorkerOwnedXhrTarget::Shared { instance_id, .. } => self
-                ._context_host
-                .borrow_mut()
-                .continue_shared_worker_xhr_response(
-                    instance_id,
-                    request,
-                    response_code,
-                    response_headers,
-                ),
-        }
-    }
-
-    fn fail_worker_owned_fetch_response(
-        &self,
-        target: WorkerOwnedFetchTarget,
-        request: crate::worker::WorkerPendingFetchContinue,
-        error_text: String,
-    ) -> bool {
-        match target {
-            WorkerOwnedFetchTarget::Dedicated { worker_id, .. } => self
-                ._context_host
-                .borrow_mut()
-                .fail_worker_fetch_response(worker_id, request, error_text),
-            WorkerOwnedFetchTarget::Shared { instance_id, .. } => self
-                ._context_host
-                .borrow_mut()
-                .fail_shared_worker_fetch_response(instance_id, request, error_text),
-        }
-    }
-
-    fn fail_worker_owned_xhr_response(
-        &self,
-        target: WorkerOwnedXhrTarget,
-        request: crate::worker::WorkerPendingXhrContinue,
-        error_text: String,
-    ) -> bool {
-        match target {
-            WorkerOwnedXhrTarget::Dedicated { worker_id, .. } => self
-                ._context_host
-                .borrow_mut()
-                .fail_worker_xhr_response(worker_id, request, error_text),
-            WorkerOwnedXhrTarget::Shared { instance_id, .. } => self
-                ._context_host
-                .borrow_mut()
-                .fail_shared_worker_xhr_response(instance_id, request, error_text),
-        }
-    }
-
-    fn fulfill_worker_owned_fetch(
-        &self,
-        target: WorkerOwnedFetchTarget,
-        request: crate::worker::WorkerPendingFetchContinue,
-        response_code: u16,
-        response_headers: Vec<(String, Vec<u8>)>,
-        response_body: RendererSyntheticResponseBody,
-    ) -> bool {
-        match target {
-            WorkerOwnedFetchTarget::Dedicated { worker_id, .. } => {
-                self._context_host.borrow_mut().fulfill_worker_fetch(
-                    worker_id,
-                    request,
-                    response_code,
-                    response_headers,
-                    response_body,
-                )
-            }
-            WorkerOwnedFetchTarget::Shared { instance_id, .. } => {
-                self._context_host.borrow_mut().fulfill_shared_worker_fetch(
-                    instance_id,
-                    request,
-                    response_code,
-                    response_headers,
-                    response_body,
-                )
-            }
-        }
-    }
-
-    fn fulfill_worker_owned_xhr(
-        &self,
-        target: WorkerOwnedXhrTarget,
-        request: crate::worker::WorkerPendingXhrContinue,
-        response_code: u16,
-        response_headers: Vec<(String, Vec<u8>)>,
-        response_body: RendererSyntheticResponseBody,
-    ) -> bool {
-        match target {
-            WorkerOwnedXhrTarget::Dedicated { worker_id, .. } => {
-                self._context_host.borrow_mut().fulfill_worker_xhr(
-                    worker_id,
-                    request,
-                    response_code,
-                    response_headers,
-                    response_body,
-                )
-            }
-            WorkerOwnedXhrTarget::Shared { instance_id, .. } => {
-                self._context_host.borrow_mut().fulfill_shared_worker_xhr(
-                    instance_id,
-                    request,
-                    response_code,
-                    response_headers,
-                    response_body,
-                )
-            }
-        }
-    }
-
-    fn fulfill_worker_owned_csp_report(
-        &self,
-        target: WorkerOwnedCspReportTarget,
-        request: crate::worker::WorkerPendingFetchContinue,
-        response_code: u16,
-        response_headers: Vec<(String, Vec<u8>)>,
-        response_body: RendererSyntheticResponseBody,
-    ) -> bool {
-        match target {
-            WorkerOwnedCspReportTarget::Dedicated { worker_id, .. } => {
-                self._context_host.borrow_mut().fulfill_worker_csp_report(
-                    worker_id,
-                    request,
-                    response_code,
-                    response_headers,
-                    response_body,
-                )
-            }
-            WorkerOwnedCspReportTarget::Shared { instance_id, .. } => self
-                ._context_host
-                .borrow_mut()
-                .fulfill_shared_worker_csp_report(
-                    instance_id,
-                    request,
-                    response_code,
-                    response_headers,
-                    response_body,
-                ),
-        }
-    }
-
-    fn fulfill_worker_owned_fetch_response(
-        &self,
-        target: WorkerOwnedFetchTarget,
-        request: crate::worker::WorkerPendingFetchContinue,
-        response_code: u16,
-        response_headers: Vec<(String, Vec<u8>)>,
-        response_body: RendererSyntheticResponseBody,
-    ) -> bool {
-        match target {
-            WorkerOwnedFetchTarget::Dedicated { worker_id, .. } => self
-                ._context_host
-                .borrow_mut()
-                .fulfill_worker_fetch_response(
-                    worker_id,
-                    request,
-                    response_code,
-                    response_headers,
-                    response_body,
-                ),
-            WorkerOwnedFetchTarget::Shared { instance_id, .. } => self
-                ._context_host
-                .borrow_mut()
-                .fulfill_shared_worker_fetch_response(
-                    instance_id,
-                    request,
-                    response_code,
-                    response_headers,
-                    response_body,
-                ),
-        }
-    }
-
-    fn fulfill_worker_owned_xhr_response(
-        &self,
-        target: WorkerOwnedXhrTarget,
-        request: crate::worker::WorkerPendingXhrContinue,
-        response_code: u16,
-        response_headers: Vec<(String, Vec<u8>)>,
-        response_body: RendererSyntheticResponseBody,
-    ) -> bool {
-        match target {
-            WorkerOwnedXhrTarget::Dedicated { worker_id, .. } => {
-                self._context_host.borrow_mut().fulfill_worker_xhr_response(
-                    worker_id,
-                    request,
-                    response_code,
-                    response_headers,
-                    response_body,
-                )
-            }
-            WorkerOwnedXhrTarget::Shared { instance_id, .. } => self
-                ._context_host
-                .borrow_mut()
-                .fulfill_shared_worker_xhr_response(
-                    instance_id,
-                    request,
-                    response_code,
-                    response_headers,
-                    response_body,
-                ),
-        }
-    }
-
     pub(crate) fn continue_pending_subresource_fetch_body(
         &mut self,
         internal_id: u64,
@@ -1163,152 +563,6 @@ impl ScriptVm {
                         intercept_response,
                     )
                     .map_err(|error| anyhow!(error))?;
-                return Ok(AsyncSubresourceCommandExecution::without_window_realm(
-                    PendingSubresourceContinueOutcome::Started,
-                ));
-            }
-            continuation @ (PendingSubresourceContinuation::WorkerFetch { .. }
-            | PendingSubresourceContinuation::SharedWorkerFetch { .. }) => {
-                let target = WorkerOwnedFetchTarget::from_continuation(&continuation)
-                    .expect("fetch continuation target");
-                let fetch_id = target.fetch_id();
-                let request_url = url.unwrap_or_else(|| info.url.clone());
-                let request_method = method.unwrap_or_else(|| info.method.clone());
-                let request_body = body.unwrap_or_else(|| info.request_body.clone());
-                let request_headers = headers.unwrap_or_else(|| info.request_headers.clone());
-                let continued = self.continue_worker_owned_fetch(
-                    target,
-                    crate::worker::WorkerPendingFetchContinue {
-                        redirect_headers: redirect_headers.clone(),
-                        fetch_id,
-                        internal_id,
-                        network_request_handle: info.network_request_handle,
-                        url: request_url.clone(),
-                        method: request_method.clone(),
-                        body: request_body.clone(),
-                        headers: request_headers.clone(),
-                        intercept_response,
-                        handle_auth_requests,
-                        auth: None,
-                    },
-                );
-                if !continued {
-                    bail!(target.unavailable_message());
-                }
-                if intercept_response || handle_auth_requests {
-                    self._context_host
-                        .borrow_mut()
-                        .record_in_flight_worker_subresource_fetch(
-                            crate::types::InFlightWorkerSubresourceFetchState {
-                                pending: PendingSubresourceFetchState {
-                                    redirect_headers: redirect_headers.clone(),
-                                    request_origin,
-                                    info,
-                                    load,
-                                    execution_context,
-                                    credentials_mode,
-                                    request_mode,
-                                    network_partition_key: network_partition_key.clone(),
-                                    policy_context,
-                                    continuation: target.continuation(),
-                                    deferred_request_started,
-                                },
-                                request_url,
-                                request_method,
-                                request_headers,
-                                request_body,
-                            },
-                        );
-                }
-                return Ok(AsyncSubresourceCommandExecution::without_window_realm(
-                    PendingSubresourceContinueOutcome::Started,
-                ));
-            }
-            continuation @ (PendingSubresourceContinuation::WorkerXhr { .. }
-            | PendingSubresourceContinuation::SharedWorkerXhr { .. }) => {
-                let target = WorkerOwnedXhrTarget::from_continuation(&continuation)
-                    .expect("xhr continuation target");
-                let xhr_id = target.xhr_id();
-                let request_url = url.unwrap_or_else(|| info.url.clone());
-                let request_method = method.unwrap_or_else(|| info.method.clone());
-                let request_body = body.unwrap_or_else(|| info.request_body.clone());
-                let request_headers = headers.unwrap_or_else(|| info.request_headers.clone());
-                let continued = self.continue_worker_owned_xhr(
-                    target,
-                    crate::worker::WorkerPendingXhrContinue {
-                        redirect_headers: redirect_headers.clone(),
-                        xhr_id,
-                        internal_id,
-                        network_request_handle: info.network_request_handle,
-                        url: request_url.clone(),
-                        method: request_method.clone(),
-                        body: request_body.clone(),
-                        headers: request_headers.clone(),
-                        intercept_response,
-                        handle_auth_requests,
-                        auth: None,
-                    },
-                );
-                if !continued {
-                    bail!(target.unavailable_message());
-                }
-                if intercept_response || handle_auth_requests {
-                    self._context_host
-                        .borrow_mut()
-                        .record_in_flight_worker_subresource_fetch(
-                            crate::types::InFlightWorkerSubresourceFetchState {
-                                pending: PendingSubresourceFetchState {
-                                    redirect_headers: redirect_headers.clone(),
-                                    request_origin,
-                                    info,
-                                    load,
-                                    execution_context,
-                                    credentials_mode,
-                                    request_mode,
-                                    network_partition_key: network_partition_key.clone(),
-                                    policy_context,
-                                    continuation: target.continuation(),
-                                    deferred_request_started,
-                                },
-                                request_url,
-                                request_method,
-                                request_headers,
-                                request_body,
-                            },
-                        );
-                }
-                return Ok(AsyncSubresourceCommandExecution::without_window_realm(
-                    PendingSubresourceContinueOutcome::Started,
-                ));
-            }
-            continuation @ (PendingSubresourceContinuation::WorkerCspReport { .. }
-            | PendingSubresourceContinuation::SharedWorkerCspReport { .. }) => {
-                let target = WorkerOwnedCspReportTarget::from_continuation(&continuation)
-                    .expect("CSP report continuation target");
-                let report_id = target.report_id();
-                let request_url = url.unwrap_or_else(|| info.url.clone());
-                let request_method = method.unwrap_or_else(|| info.method.clone());
-                let request_body = body.unwrap_or_else(|| info.request_body.clone());
-                let request_headers = headers.unwrap_or_else(|| info.request_headers.clone());
-                let continued = self.continue_worker_owned_csp_report(
-                    target,
-                    crate::worker::WorkerPendingFetchContinue {
-                        redirect_headers: redirect_headers.clone(),
-                        fetch_id: report_id,
-                        internal_id,
-                        network_request_handle: info.network_request_handle,
-                        url: request_url,
-                        method: request_method,
-                        body: request_body,
-                        headers: request_headers,
-                        intercept_response: false,
-                        handle_auth_requests: false,
-                        auth: None,
-                    },
-                );
-                if !continued {
-                    bail!(target.unavailable_message());
-                }
                 return Ok(AsyncSubresourceCommandExecution::without_window_realm(
                     PendingSubresourceContinueOutcome::Started,
                 ));
@@ -1636,79 +890,6 @@ impl ScriptVm {
             initial_network_request_headers,
             response,
         } = pending;
-        if let Some(target) = WorkerOwnedFetchTarget::from_continuation(&pending_fetch.continuation)
-        {
-            let request_headers = original_request_headers;
-            let continued = self.continue_worker_owned_fetch(
-                target,
-                crate::worker::WorkerPendingFetchContinue {
-                    redirect_headers: pending_fetch.redirect_headers.clone(),
-                    fetch_id: target.fetch_id(),
-                    internal_id,
-                    network_request_handle: pending_fetch.info.network_request_handle,
-                    url: request_url.clone(),
-                    method: request_method.clone(),
-                    body: request_body.clone(),
-                    headers: request_headers.clone(),
-                    intercept_response,
-                    handle_auth_requests: true,
-                    auth: Some(auth),
-                },
-            );
-            if !continued {
-                bail!(target.unavailable_message());
-            }
-            self._context_host
-                .borrow_mut()
-                .record_in_flight_worker_subresource_fetch(
-                    crate::types::InFlightWorkerSubresourceFetchState {
-                        pending: pending_fetch,
-                        request_url,
-                        request_method,
-                        request_headers,
-                        request_body,
-                    },
-                );
-            return Ok(AsyncSubresourceCommandExecution::without_window_realm(
-                PendingSubresourceContinueOutcome::Started,
-            ));
-        }
-        if let Some(target) = WorkerOwnedXhrTarget::from_continuation(&pending_fetch.continuation) {
-            let request_headers = original_request_headers;
-            let continued = self.continue_worker_owned_xhr(
-                target,
-                crate::worker::WorkerPendingXhrContinue {
-                    redirect_headers: pending_fetch.redirect_headers.clone(),
-                    xhr_id: target.xhr_id(),
-                    internal_id,
-                    network_request_handle: pending_fetch.info.network_request_handle,
-                    url: request_url.clone(),
-                    method: request_method.clone(),
-                    body: request_body.clone(),
-                    headers: request_headers.clone(),
-                    intercept_response,
-                    handle_auth_requests: true,
-                    auth: Some(auth),
-                },
-            );
-            if !continued {
-                bail!(target.unavailable_message());
-            }
-            self._context_host
-                .borrow_mut()
-                .record_in_flight_worker_subresource_fetch(
-                    crate::types::InFlightWorkerSubresourceFetchState {
-                        pending: pending_fetch,
-                        request_url,
-                        request_method,
-                        request_headers,
-                        request_body,
-                    },
-                );
-            return Ok(AsyncSubresourceCommandExecution::without_window_realm(
-                PendingSubresourceContinueOutcome::Started,
-            ));
-        }
         let loader = pending_fetch.load.request_client();
         let mut request = moli_fetch::Request::new(
             &request_method,
@@ -1824,73 +1005,6 @@ impl ScriptVm {
             .borrow_mut()
             .take_pending_subresource_auth(internal_id)
             .ok_or_else(|| anyhow!("unknown pending subresource auth `{internal_id}`"))?;
-        if let Some(target) =
-            WorkerOwnedFetchTarget::from_continuation(&pending.pending.continuation)
-        {
-            let result = Err(error_text.clone());
-            self.record_subresource_fetch_network_result(
-                &pending.pending,
-                &pending.request_url,
-                &pending.request_method,
-                &pending.request_headers,
-                &pending.request_body,
-                &result,
-            );
-            let failed = self.fail_worker_owned_fetch_auth(
-                target,
-                crate::worker::WorkerPendingFetchContinue {
-                    redirect_headers: None,
-                    fetch_id: target.fetch_id(),
-                    internal_id,
-                    network_request_handle: pending.pending.info.network_request_handle,
-                    url: pending.request_url,
-                    method: pending.request_method,
-                    body: pending.request_body,
-                    headers: pending.request_headers,
-                    intercept_response: false,
-                    handle_auth_requests: false,
-                    auth: None,
-                },
-                error_text,
-            );
-            if !failed {
-                bail!(target.unavailable_message());
-            }
-            return Ok(AsyncSubresourceCommandExecution::without_window_realm(()));
-        }
-        if let Some(target) = WorkerOwnedXhrTarget::from_continuation(&pending.pending.continuation)
-        {
-            let result = Err(error_text.clone());
-            self.record_subresource_fetch_network_result(
-                &pending.pending,
-                &pending.request_url,
-                &pending.request_method,
-                &pending.request_headers,
-                &pending.request_body,
-                &result,
-            );
-            let failed = self.fail_worker_owned_xhr_auth(
-                target,
-                crate::worker::WorkerPendingXhrContinue {
-                    redirect_headers: None,
-                    xhr_id: target.xhr_id(),
-                    internal_id,
-                    network_request_handle: pending.pending.info.network_request_handle,
-                    url: pending.request_url,
-                    method: pending.request_method,
-                    body: pending.request_body,
-                    headers: pending.request_headers,
-                    intercept_response: false,
-                    handle_auth_requests: false,
-                    auth: None,
-                },
-                error_text,
-            );
-            if !failed {
-                bail!(target.unavailable_message());
-            }
-            return Ok(AsyncSubresourceCommandExecution::without_window_realm(()));
-        }
         let activity = self.resolve_pending_subresource_fetch_body(
             pending.pending,
             pending.request_url,
@@ -1998,141 +1112,6 @@ impl ScriptVm {
                     .map_err(|error| anyhow!(error))?;
                 return Ok(AsyncSubresourceCommandExecution::without_window_realm(()));
             }
-            continuation @ (PendingSubresourceContinuation::WorkerFetch { .. }
-            | PendingSubresourceContinuation::SharedWorkerFetch { .. }) => {
-                let target = WorkerOwnedFetchTarget::from_continuation(&continuation)
-                    .expect("fetch continuation target");
-                let failed = self.fail_worker_owned_fetch(
-                    target,
-                    crate::worker::WorkerPendingFetchContinue {
-                        redirect_headers: None,
-                        fetch_id: target.fetch_id(),
-                        internal_id: 0,
-                        network_request_handle: info.network_request_handle,
-                        url: info.url.clone(),
-                        method: info.method.clone(),
-                        body: info.request_body.clone(),
-                        headers: info.request_headers.clone(),
-                        intercept_response: false,
-                        handle_auth_requests: false,
-                        auth: None,
-                    },
-                    error_text.clone(),
-                );
-                if !failed {
-                    bail!(target.unavailable_message());
-                }
-                let request_body_bytes = info.request_body_bytes.clone();
-                let request_handle = info.network_request_handle;
-                let network_record = with_pending_subresource_record_identity(
-                    crate::types::SubresourceNetworkRecord::failure(
-                        info.frame_id,
-                        info.document_url,
-                        info.url,
-                        info.method,
-                        info.request_headers,
-                        info.request_body,
-                        info.resource_type,
-                        error_text,
-                    ),
-                    request_body_bytes,
-                    request_handle,
-                );
-                self._context_host
-                    .borrow_mut()
-                    .record_subresource_network(network_record);
-                return Ok(AsyncSubresourceCommandExecution::without_window_realm(()));
-            }
-            continuation @ (PendingSubresourceContinuation::WorkerXhr { .. }
-            | PendingSubresourceContinuation::SharedWorkerXhr { .. }) => {
-                let target = WorkerOwnedXhrTarget::from_continuation(&continuation)
-                    .expect("xhr continuation target");
-                let failed = self.fail_worker_owned_xhr(
-                    target,
-                    crate::worker::WorkerPendingXhrContinue {
-                        redirect_headers: None,
-                        xhr_id: target.xhr_id(),
-                        internal_id: 0,
-                        network_request_handle: info.network_request_handle,
-                        url: info.url.clone(),
-                        method: info.method.clone(),
-                        body: info.request_body.clone(),
-                        headers: info.request_headers.clone(),
-                        intercept_response: false,
-                        handle_auth_requests: false,
-                        auth: None,
-                    },
-                    error_text.clone(),
-                );
-                if !failed {
-                    bail!(target.unavailable_message());
-                }
-                let request_body_bytes = info.request_body_bytes.clone();
-                let request_handle = info.network_request_handle;
-                let network_record = with_pending_subresource_record_identity(
-                    crate::types::SubresourceNetworkRecord::failure(
-                        info.frame_id,
-                        info.document_url,
-                        info.url,
-                        info.method,
-                        info.request_headers,
-                        info.request_body,
-                        info.resource_type,
-                        error_text,
-                    ),
-                    request_body_bytes,
-                    request_handle,
-                );
-                self._context_host
-                    .borrow_mut()
-                    .record_subresource_network(network_record);
-                return Ok(AsyncSubresourceCommandExecution::without_window_realm(()));
-            }
-            continuation @ (PendingSubresourceContinuation::WorkerCspReport { .. }
-            | PendingSubresourceContinuation::SharedWorkerCspReport { .. }) => {
-                let target = WorkerOwnedCspReportTarget::from_continuation(&continuation)
-                    .expect("CSP report continuation target");
-                let failed = self.fail_worker_owned_csp_report(
-                    target,
-                    crate::worker::WorkerPendingFetchContinue {
-                        redirect_headers: None,
-                        fetch_id: target.report_id(),
-                        internal_id: 0,
-                        network_request_handle: info.network_request_handle,
-                        url: info.url.clone(),
-                        method: info.method.clone(),
-                        body: info.request_body.clone(),
-                        headers: info.request_headers.clone(),
-                        intercept_response: false,
-                        handle_auth_requests: false,
-                        auth: None,
-                    },
-                    error_text.clone(),
-                );
-                if !failed {
-                    bail!(target.unavailable_message());
-                }
-                let request_body_bytes = info.request_body_bytes.clone();
-                let request_handle = info.network_request_handle;
-                let network_record = with_pending_subresource_record_identity(
-                    crate::types::SubresourceNetworkRecord::failure(
-                        info.frame_id,
-                        info.document_url,
-                        info.url,
-                        info.method,
-                        info.request_headers,
-                        info.request_body,
-                        info.resource_type,
-                        error_text,
-                    ),
-                    request_body_bytes,
-                    request_handle,
-                );
-                self._context_host
-                    .borrow_mut()
-                    .record_subresource_network(network_record);
-                return Ok(AsyncSubresourceCommandExecution::without_window_realm(()));
-            }
             continuation => PendingSubresourceFetchState {
                 redirect_headers: None,
                 request_origin,
@@ -2230,281 +1209,6 @@ impl ScriptVm {
                 let _ = response_body;
                 return Ok(AsyncSubresourceCommandExecution::without_window_realm(()));
             }
-            continuation @ (PendingSubresourceContinuation::WorkerFetch { .. }
-            | PendingSubresourceContinuation::SharedWorkerFetch { .. }) => {
-                let target = WorkerOwnedFetchTarget::from_continuation(&continuation)
-                    .expect("fetch continuation target");
-                let request_url = info.url.clone();
-                let request_method = info.method.clone();
-                let request_headers = info.request_headers.clone();
-                let request_body = info.request_body.clone();
-                let validation = if request_mode == moli_fetch::RequestMode::NoCors {
-                    Ok(())
-                } else {
-                    crate::network_host::validate_cors_response_chain(
-                        &info.document_url,
-                        &head,
-                        credentials_mode,
-                    )
-                };
-                match validation {
-                    Ok(()) => {
-                        let fulfilled = self.fulfill_worker_owned_fetch(
-                            target,
-                            crate::worker::WorkerPendingFetchContinue {
-                                redirect_headers: None,
-                                fetch_id: target.fetch_id(),
-                                internal_id: 0,
-                                network_request_handle: info.network_request_handle,
-                                url: request_url.clone(),
-                                method: request_method.clone(),
-                                body: request_body.clone(),
-                                headers: request_headers.clone(),
-                                intercept_response: false,
-                                handle_auth_requests: false,
-                                auth: None,
-                            },
-                            response_code,
-                            response_headers.clone(),
-                            response_body.clone(),
-                        );
-                        if !fulfilled {
-                            bail!(target.unavailable_message());
-                        }
-                        let request_body_bytes = info.request_body_bytes.clone();
-                        let request_handle = info.network_request_handle;
-                        let network_record = with_pending_subresource_record_identity(
-                            crate::types::SubresourceNetworkRecord::success_with_body(
-                                info.frame_id,
-                                info.document_url,
-                                request_url,
-                                request_method,
-                                request_headers,
-                                request_body,
-                                info.resource_type,
-                                info.request_cookie_report,
-                                Vec::new(),
-                                info.url,
-                                response_code,
-                                response_headers,
-                                response_body.into_subresource_response_body(),
-                                Vec::new(),
-                            ),
-                            request_body_bytes,
-                            request_handle,
-                        );
-                        self._context_host
-                            .borrow_mut()
-                            .record_subresource_network(network_record);
-                    }
-                    Err(message) => {
-                        let failed = self.fail_worker_owned_fetch(
-                            target,
-                            crate::worker::WorkerPendingFetchContinue {
-                                redirect_headers: None,
-                                fetch_id: target.fetch_id(),
-                                internal_id: 0,
-                                network_request_handle: info.network_request_handle,
-                                url: request_url.clone(),
-                                method: request_method.clone(),
-                                body: request_body.clone(),
-                                headers: request_headers.clone(),
-                                intercept_response: false,
-                                handle_auth_requests: false,
-                                auth: None,
-                            },
-                            message.clone(),
-                        );
-                        if !failed {
-                            bail!(target.unavailable_message());
-                        }
-                        let request_body_bytes = info.request_body_bytes.clone();
-                        let request_handle = info.network_request_handle;
-                        let network_record = with_pending_subresource_record_identity(
-                            crate::types::SubresourceNetworkRecord::failure(
-                                info.frame_id,
-                                info.document_url,
-                                request_url,
-                                request_method,
-                                request_headers,
-                                request_body,
-                                info.resource_type,
-                                message,
-                            ),
-                            request_body_bytes,
-                            request_handle,
-                        );
-                        self._context_host
-                            .borrow_mut()
-                            .record_subresource_network(network_record);
-                    }
-                }
-                return Ok(AsyncSubresourceCommandExecution::without_window_realm(()));
-            }
-            continuation @ (PendingSubresourceContinuation::WorkerXhr { .. }
-            | PendingSubresourceContinuation::SharedWorkerXhr { .. }) => {
-                let target = WorkerOwnedXhrTarget::from_continuation(&continuation)
-                    .expect("xhr continuation target");
-                let request_url = info.url.clone();
-                let request_method = info.method.clone();
-                let request_headers = info.request_headers.clone();
-                let request_body = info.request_body.clone();
-                let validation = crate::network_host::validate_cors_response_chain(
-                    &info.document_url,
-                    &head,
-                    credentials_mode,
-                );
-                match validation {
-                    Ok(()) => {
-                        let fulfilled = self.fulfill_worker_owned_xhr(
-                            target,
-                            crate::worker::WorkerPendingXhrContinue {
-                                redirect_headers: None,
-                                xhr_id: target.xhr_id(),
-                                internal_id: 0,
-                                network_request_handle: info.network_request_handle,
-                                url: request_url.clone(),
-                                method: request_method.clone(),
-                                body: request_body.clone(),
-                                headers: request_headers.clone(),
-                                intercept_response: false,
-                                handle_auth_requests: false,
-                                auth: None,
-                            },
-                            response_code,
-                            response_headers.clone(),
-                            response_body.clone(),
-                        );
-                        if !fulfilled {
-                            bail!(target.unavailable_message());
-                        }
-                        let request_body_bytes = info.request_body_bytes.clone();
-                        let request_handle = info.network_request_handle;
-                        let network_record = with_pending_subresource_record_identity(
-                            crate::types::SubresourceNetworkRecord::success_with_body(
-                                info.frame_id,
-                                info.document_url,
-                                request_url,
-                                request_method,
-                                request_headers,
-                                request_body,
-                                info.resource_type,
-                                info.request_cookie_report,
-                                Vec::new(),
-                                info.url,
-                                response_code,
-                                response_headers,
-                                response_body.into_subresource_response_body(),
-                                Vec::new(),
-                            ),
-                            request_body_bytes,
-                            request_handle,
-                        );
-                        self._context_host
-                            .borrow_mut()
-                            .record_subresource_network(network_record);
-                    }
-                    Err(message) => {
-                        let failed = self.fail_worker_owned_xhr(
-                            target,
-                            crate::worker::WorkerPendingXhrContinue {
-                                redirect_headers: None,
-                                xhr_id: target.xhr_id(),
-                                internal_id: 0,
-                                network_request_handle: info.network_request_handle,
-                                url: request_url.clone(),
-                                method: request_method.clone(),
-                                body: request_body.clone(),
-                                headers: request_headers.clone(),
-                                intercept_response: false,
-                                handle_auth_requests: false,
-                                auth: None,
-                            },
-                            message.clone(),
-                        );
-                        if !failed {
-                            bail!(target.unavailable_message());
-                        }
-                        let request_body_bytes = info.request_body_bytes.clone();
-                        let request_handle = info.network_request_handle;
-                        let network_record = with_pending_subresource_record_identity(
-                            crate::types::SubresourceNetworkRecord::failure(
-                                info.frame_id,
-                                info.document_url,
-                                request_url,
-                                request_method,
-                                request_headers,
-                                request_body,
-                                info.resource_type,
-                                message,
-                            ),
-                            request_body_bytes,
-                            request_handle,
-                        );
-                        self._context_host
-                            .borrow_mut()
-                            .record_subresource_network(network_record);
-                    }
-                }
-                return Ok(AsyncSubresourceCommandExecution::without_window_realm(()));
-            }
-            continuation @ (PendingSubresourceContinuation::WorkerCspReport { .. }
-            | PendingSubresourceContinuation::SharedWorkerCspReport { .. }) => {
-                let target = WorkerOwnedCspReportTarget::from_continuation(&continuation)
-                    .expect("CSP report continuation target");
-                let request_url = info.url.clone();
-                let request_method = info.method.clone();
-                let request_headers = info.request_headers.clone();
-                let request_body = info.request_body.clone();
-                let fulfilled = self.fulfill_worker_owned_csp_report(
-                    target,
-                    crate::worker::WorkerPendingFetchContinue {
-                        redirect_headers: None,
-                        fetch_id: target.report_id(),
-                        internal_id: 0,
-                        network_request_handle: info.network_request_handle,
-                        url: request_url.clone(),
-                        method: request_method.clone(),
-                        body: request_body.clone(),
-                        headers: request_headers.clone(),
-                        intercept_response: false,
-                        handle_auth_requests: false,
-                        auth: None,
-                    },
-                    response_code,
-                    response_headers.clone(),
-                    response_body.clone(),
-                );
-                if !fulfilled {
-                    bail!(target.unavailable_message());
-                }
-                let request_body_bytes = info.request_body_bytes.clone();
-                let request_handle = info.network_request_handle;
-                let network_record = with_pending_subresource_record_identity(
-                    crate::types::SubresourceNetworkRecord::success_with_body(
-                        info.frame_id,
-                        info.document_url,
-                        request_url,
-                        request_method,
-                        request_headers,
-                        request_body,
-                        info.resource_type,
-                        info.request_cookie_report,
-                        Vec::new(),
-                        info.url,
-                        response_code,
-                        response_headers,
-                        response_body.into_subresource_response_body(),
-                        Vec::new(),
-                    ),
-                    request_body_bytes,
-                    request_handle,
-                );
-                self._context_host
-                    .borrow_mut()
-                    .record_subresource_network(network_record);
-                return Ok(AsyncSubresourceCommandExecution::without_window_realm(()));
-            }
             continuation => PendingSubresourceFetchState {
                 redirect_headers: None,
                 request_origin,
@@ -2533,80 +1237,6 @@ impl ScriptVm {
             Ok(response_body.into_navigation_response(head)),
         )?;
         Ok(AsyncSubresourceCommandExecution::after_body((), activity))
-    }
-
-    pub(super) fn record_subresource_fetch_network_result(
-        &mut self,
-        pending: &PendingSubresourceFetchState,
-        request_url: &Url,
-        request_method: &str,
-        request_headers: &moli_fetch::RequestHeaders,
-        request_body: &Option<String>,
-        result: &std::result::Result<crate::protocol_types::NavigationResponse, String>,
-    ) {
-        match result {
-            Ok(response) => {
-                let request_cookie_report = response
-                    .request_cookie_report
-                    .clone()
-                    .or_else(|| pending.info.request_cookie_report.clone());
-                let network_record = with_pending_subresource_record_identity(
-                    crate::types::SubresourceNetworkRecord::success_with_body(
-                        pending.info.frame_id.clone(),
-                        pending.info.document_url.clone(),
-                        request_url.clone(),
-                        request_method.to_owned(),
-                        request_headers.clone(),
-                        request_body.clone(),
-                        pending.info.resource_type,
-                        request_cookie_report,
-                        response.redirect_chain.clone().into_iter().collect(),
-                        response.final_url.clone(),
-                        response.status,
-                        response.headers.clone(),
-                        SubresourceResponseBody::from_navigation_response(response),
-                        response.cookie_set_reports.clone(),
-                    )
-                    .with_from_cache(response.from_cache)
-                    .with_negotiated_http_version(response.negotiated_http_version)
-                    .with_network_request_headers(
-                        response
-                            .network_request_headers()
-                            .map(|headers| headers.to_vec()),
-                    ),
-                    pending.info.request_body_bytes.clone(),
-                    pending.info.network_request_handle,
-                );
-                self._context_host
-                    .borrow_mut()
-                    .record_subresource_network(network_record);
-            }
-            Err(error_text) => {
-                let network_error_text =
-                    if crate::network_host::is_cors_policy_failure_message(error_text) {
-                        crate::network_host::FAILED_ERROR_TEXT.to_owned()
-                    } else {
-                        error_text.clone()
-                    };
-                let network_record = with_pending_subresource_record_identity(
-                    crate::types::SubresourceNetworkRecord::failure(
-                        pending.info.frame_id.clone(),
-                        pending.info.document_url.clone(),
-                        request_url.clone(),
-                        request_method.to_owned(),
-                        request_headers.clone(),
-                        request_body.clone(),
-                        pending.info.resource_type,
-                        network_error_text,
-                    ),
-                    pending.info.request_body_bytes.clone(),
-                    pending.info.network_request_handle,
-                );
-                self._context_host
-                    .borrow_mut()
-                    .record_subresource_network(network_record);
-            }
-        }
     }
 
     pub(crate) fn continue_pending_subresource_response_body(
@@ -2648,129 +1278,6 @@ impl ScriptVm {
             .borrow_mut()
             .take_pending_subresource_response(internal_id)
             .ok_or_else(|| anyhow!("unknown pending subresource response `{internal_id}`"))?;
-        if let Some(target) =
-            WorkerOwnedFetchTarget::from_continuation(&pending.pending.continuation)
-        {
-            let response = crate::protocol_types::NavigationResponse::with_status_headers_from(
-                &pending.response,
-                response_code.unwrap_or(pending.response.status),
-                response_headers
-                    .clone()
-                    .unwrap_or_else(|| pending.response.headers.clone()),
-            );
-            let result = if pending.pending.request_mode == moli_fetch::RequestMode::NoCors {
-                Ok(response)
-            } else {
-                crate::network_host::validate_cors_response_chain(
-                    &pending.pending.info.document_url,
-                    &response.head(),
-                    pending.pending.credentials_mode,
-                )
-                .map(|()| response)
-            };
-            self.record_subresource_fetch_network_result(
-                &pending.pending,
-                &pending.request_url,
-                &pending.request_method,
-                &pending.request_headers,
-                &pending.request_body,
-                &result,
-            );
-            let request = crate::worker::WorkerPendingFetchContinue {
-                redirect_headers: None,
-                fetch_id: target.fetch_id(),
-                internal_id,
-                network_request_handle: pending.pending.info.network_request_handle,
-                url: pending.request_url,
-                method: pending.request_method,
-                body: pending.request_body,
-                headers: pending.request_headers,
-                intercept_response: false,
-                handle_auth_requests: false,
-                auth: None,
-            };
-            match result {
-                Ok(_) => {
-                    let continued = self.continue_worker_owned_fetch_response(
-                        target,
-                        request,
-                        response_code,
-                        response_headers,
-                    );
-                    if !continued {
-                        bail!(target.unavailable_message());
-                    }
-                }
-                Err(message) => {
-                    let failed = self.fail_worker_owned_fetch_response(target, request, message);
-                    if !failed {
-                        bail!(target.unavailable_message());
-                    }
-                }
-            }
-            return Ok(AsyncSubresourceCommandExecution::without_window_realm(()));
-        }
-        if let Some(target) = WorkerOwnedXhrTarget::from_continuation(&pending.pending.continuation)
-        {
-            let response = crate::protocol_types::NavigationResponse::with_status_headers_from(
-                &pending.response,
-                response_code.unwrap_or(pending.response.status),
-                response_headers
-                    .clone()
-                    .unwrap_or_else(|| pending.response.headers.clone()),
-            );
-            let result = if pending.pending.request_mode == moli_fetch::RequestMode::NoCors {
-                Ok(response)
-            } else {
-                crate::network_host::validate_cors_response_chain(
-                    &pending.pending.info.document_url,
-                    &response.head(),
-                    pending.pending.credentials_mode,
-                )
-                .map(|()| response)
-            };
-            self.record_subresource_fetch_network_result(
-                &pending.pending,
-                &pending.request_url,
-                &pending.request_method,
-                &pending.request_headers,
-                &pending.request_body,
-                &result,
-            );
-            let request = crate::worker::WorkerPendingXhrContinue {
-                redirect_headers: None,
-                xhr_id: target.xhr_id(),
-                internal_id,
-                network_request_handle: pending.pending.info.network_request_handle,
-                url: pending.request_url,
-                method: pending.request_method,
-                body: pending.request_body,
-                headers: pending.request_headers,
-                intercept_response: false,
-                handle_auth_requests: false,
-                auth: None,
-            };
-            match result {
-                Ok(_) => {
-                    let continued = self.continue_worker_owned_xhr_response(
-                        target,
-                        request,
-                        response_code,
-                        response_headers,
-                    );
-                    if !continued {
-                        bail!(target.unavailable_message());
-                    }
-                }
-                Err(message) => {
-                    let failed = self.fail_worker_owned_xhr_response(target, request, message);
-                    if !failed {
-                        bail!(target.unavailable_message());
-                    }
-                }
-            }
-            return Ok(AsyncSubresourceCommandExecution::without_window_realm(()));
-        }
         let response = crate::protocol_types::NavigationResponse::with_status_headers_from(
             &pending.response,
             response_code.unwrap_or(pending.response.status),
@@ -2813,70 +1320,6 @@ impl ScriptVm {
             .borrow_mut()
             .take_pending_subresource_response(internal_id)
             .ok_or_else(|| anyhow!("unknown pending subresource response `{internal_id}`"))?;
-        if let Some(target) =
-            WorkerOwnedFetchTarget::from_continuation(&pending.pending.continuation)
-        {
-            let result = Err(error_text.clone());
-            self.record_subresource_fetch_network_result(
-                &pending.pending,
-                &pending.request_url,
-                &pending.request_method,
-                &pending.request_headers,
-                &pending.request_body,
-                &result,
-            );
-            let failed = self.fail_worker_owned_fetch_response(
-                target,
-                crate::worker::WorkerPendingFetchContinue {
-                    redirect_headers: None,
-                    fetch_id: target.fetch_id(),
-                    internal_id,
-                    network_request_handle: pending.pending.info.network_request_handle,
-                    url: pending.request_url,
-                    method: pending.request_method,
-                    body: pending.request_body,
-                    headers: pending.request_headers,
-                    intercept_response: false,
-                    handle_auth_requests: false,
-                    auth: None,
-                },
-                error_text,
-            );
-            if !failed {
-                bail!(target.unavailable_message());
-            }
-            return Ok(AsyncSubresourceCommandExecution::without_window_realm(()));
-        }
-        if let Some(target) = WorkerOwnedXhrTarget::from_continuation(&pending.pending.continuation)
-        {
-            let result = Err(error_text.clone());
-            self.record_subresource_fetch_network_result(
-                &pending.pending,
-                &pending.request_url,
-                &pending.request_method,
-                &pending.request_headers,
-                &pending.request_body,
-                &result,
-            );
-            let request = crate::worker::WorkerPendingXhrContinue {
-                redirect_headers: None,
-                xhr_id: target.xhr_id(),
-                internal_id,
-                network_request_handle: pending.pending.info.network_request_handle,
-                url: pending.request_url,
-                method: pending.request_method,
-                body: pending.request_body,
-                headers: pending.request_headers,
-                intercept_response: false,
-                handle_auth_requests: false,
-                auth: None,
-            };
-            let failed = self.fail_worker_owned_xhr_response(target, request, error_text);
-            if !failed {
-                bail!(target.unavailable_message());
-            }
-            return Ok(AsyncSubresourceCommandExecution::without_window_realm(()));
-        }
         let activity = self.resolve_pending_subresource_fetch_body(
             pending.pending,
             pending.request_url,
@@ -2935,133 +1378,6 @@ impl ScriptVm {
             .borrow_mut()
             .take_pending_subresource_response(internal_id)
             .ok_or_else(|| anyhow!("unknown pending subresource response `{internal_id}`"))?;
-        if let Some(target) =
-            WorkerOwnedFetchTarget::from_continuation(&pending.pending.continuation)
-        {
-            let response = response_body.clone_as_navigation_response(moli_fetch::ResponseHead {
-                final_url: pending.response.final_url.clone(),
-                status: response_code,
-                headers: response_headers.clone(),
-                request_cookie_report: pending.response.request_cookie_report.clone(),
-                cookie_set_reports: Vec::new(),
-                redirected: false,
-                redirect_chain: Vec::new(),
-                from_cache: pending.response.from_cache,
-                negotiated_http_version: pending.response.negotiated_http_version,
-            });
-            let result = if pending.pending.request_mode == moli_fetch::RequestMode::NoCors {
-                Ok(response)
-            } else {
-                crate::network_host::validate_cors_response_chain(
-                    &pending.pending.info.document_url,
-                    &response.head(),
-                    pending.pending.credentials_mode,
-                )
-                .map(|()| response)
-            };
-            self.record_subresource_fetch_network_result(
-                &pending.pending,
-                &pending.request_url,
-                &pending.request_method,
-                &pending.request_headers,
-                &pending.request_body,
-                &result,
-            );
-            let request = crate::worker::WorkerPendingFetchContinue {
-                redirect_headers: None,
-                fetch_id: target.fetch_id(),
-                internal_id,
-                network_request_handle: pending.pending.info.network_request_handle,
-                url: pending.request_url,
-                method: pending.request_method,
-                body: pending.request_body,
-                headers: pending.request_headers,
-                intercept_response: false,
-                handle_auth_requests: false,
-                auth: None,
-            };
-            if let Err(message) = result {
-                let failed = self.fail_worker_owned_fetch_response(target, request, message);
-                if !failed {
-                    bail!(target.unavailable_message());
-                }
-                return Ok(AsyncSubresourceCommandExecution::without_window_realm(()));
-            }
-            let fulfilled = self.fulfill_worker_owned_fetch_response(
-                target,
-                request,
-                response_code,
-                response_headers,
-                response_body,
-            );
-            if !fulfilled {
-                bail!(target.unavailable_message());
-            }
-            return Ok(AsyncSubresourceCommandExecution::without_window_realm(()));
-        }
-        if let Some(target) = WorkerOwnedXhrTarget::from_continuation(&pending.pending.continuation)
-        {
-            let response = response_body.clone_as_navigation_response(moli_fetch::ResponseHead {
-                final_url: pending.response.final_url.clone(),
-                status: response_code,
-                headers: response_headers.clone(),
-                request_cookie_report: pending.response.request_cookie_report.clone(),
-                cookie_set_reports: Vec::new(),
-                redirected: false,
-                redirect_chain: Vec::new(),
-                from_cache: pending.response.from_cache,
-                negotiated_http_version: pending.response.negotiated_http_version,
-            });
-            let result = if pending.pending.request_mode == moli_fetch::RequestMode::NoCors {
-                Ok(response)
-            } else {
-                crate::network_host::validate_cors_response_chain(
-                    &pending.pending.info.document_url,
-                    &response.head(),
-                    pending.pending.credentials_mode,
-                )
-                .map(|()| response)
-            };
-            self.record_subresource_fetch_network_result(
-                &pending.pending,
-                &pending.request_url,
-                &pending.request_method,
-                &pending.request_headers,
-                &pending.request_body,
-                &result,
-            );
-            let request = crate::worker::WorkerPendingXhrContinue {
-                redirect_headers: None,
-                xhr_id: target.xhr_id(),
-                internal_id,
-                network_request_handle: pending.pending.info.network_request_handle,
-                url: pending.request_url,
-                method: pending.request_method,
-                body: pending.request_body,
-                headers: pending.request_headers,
-                intercept_response: false,
-                handle_auth_requests: false,
-                auth: None,
-            };
-            if let Err(message) = result {
-                let failed = self.fail_worker_owned_xhr_response(target, request, message);
-                if !failed {
-                    bail!(target.unavailable_message());
-                }
-                return Ok(AsyncSubresourceCommandExecution::without_window_realm(()));
-            }
-            let fulfilled = self.fulfill_worker_owned_xhr_response(
-                target,
-                request,
-                response_code,
-                response_headers,
-                response_body,
-            );
-            if !fulfilled {
-                bail!(target.unavailable_message());
-            }
-            return Ok(AsyncSubresourceCommandExecution::without_window_realm(()));
-        }
         let activity = self.resolve_pending_subresource_fetch_body(
             pending.pending,
             pending.request_url,
@@ -3429,6 +1745,7 @@ impl ScriptVm {
                                             response.cookie_set_reports.clone(),
                                         )
                                         .with_status_text(response_status_text)
+                                        .with_request_cookie_report(head.request_cookie_report.clone())
                                         .with_from_cache(response.from_cache)
                                         .with_negotiated_http_version(
                                             response.negotiated_http_version,
@@ -3977,13 +2294,7 @@ impl ScriptVm {
                         PendingSubresourceContinuation::Beacon
                         | PendingSubresourceContinuation::CspReport { .. }
                         | PendingSubresourceContinuation::EventSource(_)
-                        | PendingSubresourceContinuation::WebSocket(_)
-                        | PendingSubresourceContinuation::WorkerFetch { .. }
-                        | PendingSubresourceContinuation::WorkerXhr { .. }
-                        | PendingSubresourceContinuation::WorkerCspReport { .. }
-                        | PendingSubresourceContinuation::SharedWorkerFetch { .. }
-                        | PendingSubresourceContinuation::SharedWorkerXhr { .. }
-                        | PendingSubresourceContinuation::SharedWorkerCspReport { .. } => {}
+                        | PendingSubresourceContinuation::WebSocket(_) => {}
                     }
                     trace_async_subresource_stage(
                         "async_subresource_continuation_delivered",
@@ -4095,13 +2406,7 @@ impl ScriptVm {
                         PendingSubresourceContinuation::Beacon
                         | PendingSubresourceContinuation::CspReport { .. }
                         | PendingSubresourceContinuation::EventSource(_)
-                        | PendingSubresourceContinuation::WebSocket(_)
-                        | PendingSubresourceContinuation::WorkerFetch { .. }
-                        | PendingSubresourceContinuation::WorkerXhr { .. }
-                        | PendingSubresourceContinuation::WorkerCspReport { .. }
-                        | PendingSubresourceContinuation::SharedWorkerFetch { .. }
-                        | PendingSubresourceContinuation::SharedWorkerXhr { .. }
-                        | PendingSubresourceContinuation::SharedWorkerCspReport { .. } => {}
+                        | PendingSubresourceContinuation::WebSocket(_) => {}
                     }
                     trace_async_subresource_stage(
                         "async_subresource_continuation_delivered",
@@ -4854,13 +3159,7 @@ impl ScriptVm {
                     }
                     PendingSubresourceContinuation::Beacon
                     | PendingSubresourceContinuation::CspReport { .. }
-                    | PendingSubresourceContinuation::WebSocket(_)
-                    | PendingSubresourceContinuation::WorkerFetch { .. }
-                    | PendingSubresourceContinuation::WorkerXhr { .. }
-                    | PendingSubresourceContinuation::WorkerCspReport { .. }
-                    | PendingSubresourceContinuation::SharedWorkerFetch { .. }
-                    | PendingSubresourceContinuation::SharedWorkerXhr { .. }
-                    | PendingSubresourceContinuation::SharedWorkerCspReport { .. } => {}
+                    | PendingSubresourceContinuation::WebSocket(_) => {}
                 }
                 defer_subresource_owner_async_scope(
                     &self._context_host,
@@ -4902,6 +3201,7 @@ impl ScriptVm {
                                 started.head.cookie_set_reports.clone(),
                             )
                             .with_from_cache(started.head.from_cache)
+                            .with_request_cookie_report(started.head.request_cookie_report.clone())
                             .with_negotiated_http_version(
                                 started.head.negotiated_http_version,
                             )
@@ -4953,7 +3253,7 @@ impl ScriptVm {
                 );
             }
 
-            if matches!(&pending.continuation, PendingSubresourceContinuation::Xhr(_))
+            if matches!(&pending.continuation, PendingSubresourceContinuation::Xhr(_) | PendingSubresourceContinuation::Fetch(_))
                 && let Some(handle) = pending.info.network_request_handle
             {
                 self._context_host
@@ -4974,6 +3274,7 @@ impl ScriptVm {
                             started.head.cookie_set_reports.clone(),
                         )
                         .with_from_cache(started.head.from_cache)
+                            .with_request_cookie_report(started.head.request_cookie_report.clone())
                         .with_negotiated_http_version(started.head.negotiated_http_version)
                         .with_network_request_headers(started.network_request_headers.clone()),
                     );
@@ -5107,6 +3408,7 @@ impl ScriptVm {
                                     started.head.cookie_set_reports.clone(),
                                 )
                                 .with_from_cache(started.head.from_cache)
+                            .with_request_cookie_report(started.head.request_cookie_report.clone())
                                 .with_negotiated_http_version(
                                     started.head.negotiated_http_version,
                                 )
@@ -5129,13 +3431,7 @@ impl ScriptVm {
                 PendingSubresourceContinuation::Beacon
                 | PendingSubresourceContinuation::CspReport { .. }
                 | PendingSubresourceContinuation::Xhr(_)
-                | PendingSubresourceContinuation::WebSocket(_)
-                | PendingSubresourceContinuation::WorkerFetch { .. }
-                | PendingSubresourceContinuation::WorkerXhr { .. }
-                | PendingSubresourceContinuation::WorkerCspReport { .. }
-                | PendingSubresourceContinuation::SharedWorkerFetch { .. }
-                | PendingSubresourceContinuation::SharedWorkerXhr { .. }
-                | PendingSubresourceContinuation::SharedWorkerCspReport { .. } => {}
+                | PendingSubresourceContinuation::WebSocket(_) => {}
             }
 
             let pending_owner = pending.execution_context.dispatch_scope();
@@ -5487,6 +3783,9 @@ impl ScriptVm {
                                 streaming.head.cookie_set_reports,
                             )
                             .with_from_cache(streaming.head.from_cache)
+                            .with_request_cookie_report(
+                                streaming.head.request_cookie_report.clone(),
+                            )
                             .with_negotiated_http_version(streaming.head.negotiated_http_version)
                             .with_network_request_headers(streaming.network_request_headers),
                         );
@@ -5918,6 +4217,7 @@ impl ScriptVm {
                             if !matches!(
                                 &streaming.pending.continuation,
                                 PendingSubresourceContinuation::Xhr(_)
+                                    | PendingSubresourceContinuation::Fetch(_)
                             ) {
                                 context_host
                                     .borrow_mut()
@@ -5937,6 +4237,9 @@ impl ScriptVm {
                                             streaming.head.cookie_set_reports.clone(),
                                         )
                                         .with_from_cache(streaming.head.from_cache)
+                                        .with_request_cookie_report(
+                                            streaming.head.request_cookie_report.clone(),
+                                        )
                                         .with_negotiated_http_version(
                                             streaming.head.negotiated_http_version,
                                         )
@@ -6436,12 +4739,6 @@ fn pending_subresource_continuation_kind(
         PendingSubresourceContinuation::CspReport { .. } => "csp_report",
         PendingSubresourceContinuation::Xhr(_) => "xhr",
         PendingSubresourceContinuation::WebSocket(_) => "websocket",
-        PendingSubresourceContinuation::WorkerFetch { .. } => "worker_fetch",
-        PendingSubresourceContinuation::WorkerXhr { .. } => "worker_xhr",
-        PendingSubresourceContinuation::WorkerCspReport { .. } => "worker_csp_report",
-        PendingSubresourceContinuation::SharedWorkerFetch { .. } => "shared_worker_fetch",
-        PendingSubresourceContinuation::SharedWorkerXhr { .. } => "shared_worker_xhr",
-        PendingSubresourceContinuation::SharedWorkerCspReport { .. } => "shared_worker_csp_report",
     }
 }
 

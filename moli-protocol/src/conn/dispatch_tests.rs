@@ -1617,15 +1617,8 @@ async fn devtools_runtime_command_uses_background_initial_document_without_resol
         ))
     };
     assert!(
-        background_load_inputs
-            .document_start_scripts
-            .iter()
-            .all(|script| {
-                !script
-                    .source
-                    .contains("defineGetter(document, 'hidden', () => true)")
-            }),
-        "background document surface must be applied through native state"
+        background_load_inputs.document_start_scripts.is_empty(),
+        "Browser initialization must not be carried by Protocol inspection scripts"
     );
     assert_eq!(
         background_load_inputs.document_activity,

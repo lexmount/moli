@@ -6,6 +6,51 @@ use moli_core::browser::{
     NavigationRequestLoadPolicy, StoragePartitionKind, WebContentsCreation, WorkerSnapshot,
 };
 
+mod dedicated_runtime_readiness;
+mod network;
+mod runtime_readiness;
+
+#[tokio::test]
+async fn dedicated_worker_creation_rejects_a_renderer_page_identity_mismatch() {
+    let fixture = NativeWorkers::start_named(&["native-owner"], true).await;
+    let mut snapshot = fixture.service.handle().subscribe().unwrap().0;
+    let info = snapshot
+        .workers
+        .iter()
+        .find_map(|worker| match worker {
+            WorkerSnapshot::Dedicated { worker, .. } => Some(worker.info.clone()),
+            _ => None,
+        })
+        .unwrap();
+    snapshot.workers.clear();
+    let mut conn = fixture.connection();
+    conn.project_browser_snapshot(snapshot).await;
+    let context_id = conn
+        .browser_context_by_browser_id(fixture.context.id())
+        .unwrap()
+        .id
+        .clone();
+    let mut foreign = info.clone();
+    let RendererDedicatedWorkerOwner::Document { page_id, .. } = &mut foreign.owner else {
+        panic!("fixture must create its Worker from a real Document");
+    };
+    *page_id = moli_core::PageId::new_for_testing(0);
+    assert!(
+        register_native_dedicated_worker_projection(&mut conn, &context_id, foreign).is_empty()
+    );
+    assert!(
+        conn.browser_context_by_id(&context_id)
+            .unwrap()
+            .dedicated_worker_targets
+            .is_empty()
+    );
+    assert!(
+        !register_native_dedicated_worker_projection(&mut conn, &context_id, info).is_empty(),
+        "the exact native creator, unlike the mismatched Page, must be admitted"
+    );
+    fixture.service.shutdown();
+}
+
 struct NativeWorkers {
     service: BrowserService,
     context: BrowserContextHandle,
@@ -65,6 +110,19 @@ impl NativeWorkers {
     }
 
     async fn start_named(names: &[&str], dedicated: bool) -> Self {
+        Self::start_script(
+            names,
+            dedicated,
+            if dedicated {
+                "onmessage = () => {}"
+            } else {
+                "onconnect = () => {}"
+            },
+        )
+        .await
+    }
+
+    async fn start_script(names: &[&str], dedicated: bool, script: &str) -> Self {
         let service = BrowserService::start().unwrap();
         let browser = service.handle();
         let context = browser
@@ -84,17 +142,18 @@ impl NativeWorkers {
             .create_web_contents(WebContentsCreation::default())
             .unwrap();
         let (_, mut events) = browser.subscribe().unwrap();
+        let script_url = serde_json::to_string(&format!("data:text/javascript,{script}")).unwrap();
         let script = names
             .iter()
             .map(|name| {
                 if dedicated {
                     format!(
-                        "new Worker('data:text/javascript,onmessage = () => {{}}', {})",
+                        "new Worker({script_url}, {})",
                         serde_json::json!({ "name": name })
                     )
                 } else {
                     format!(
-                        "new SharedWorker('data:text/javascript,onconnect = () => {{}}', {})",
+                        "new SharedWorker({script_url}, {})",
                         serde_json::to_string(name).unwrap()
                     )
                 }

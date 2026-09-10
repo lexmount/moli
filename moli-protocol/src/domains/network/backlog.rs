@@ -219,7 +219,7 @@ fn emit_complete_subresource_network_delivery_record(
     let record_document_url = output.document_url();
     let timestamp = base_timestamp + ((output.index() + 1) as f64 * 0.000_001);
     let resource_type = output.resource_type().into();
-    let Ok(runtime_slot) = conn.runtime_session_owner_slot_mut_for_owner(owner) else {
+    let Some(runtime_slot) = conn.network_agent_for_owner_mut(owner) else {
         return false;
     };
     let request_was_announced_by_fetch_pause =
@@ -745,10 +745,14 @@ pub(crate) fn emit_prepared_renderer_network_live_background_events(
     prepared: &mut TargetNetworkBacklogPreparedDelivery,
 ) {
     let Some((frame_id, snapshot)) = (|| {
-        let frame_id = conn.target_owner_identity_for_owner(owner)?.1?;
+        let frame_id = match owner.resolve_route(conn)? {
+            crate::conn::CdpSessionRoute::DedicatedWorkerTarget { .. }
+            | crate::conn::CdpSessionRoute::SharedWorkerTarget { .. }
+            | crate::conn::CdpSessionRoute::ServiceWorkerTarget { .. } => String::new(),
+            _ => conn.target_owner_identity_for_owner(owner)?.1?,
+        };
         let snapshot = conn
-            .runtime_session_owner_slot_mut_for_owner(owner)
-            .ok()?
+            .network_agent_for_owner_mut(owner)?
             .pending_network_backlog_delivery_snapshot_from_backlog(prepared)?;
         Some((frame_id, snapshot))
     })() else {
@@ -824,7 +828,7 @@ fn mark_network_backlog_delivery_snapshot_emitted(
     owner: &CommandOwnerScope,
     snapshot: &PendingNetworkBacklogDeliverySnapshot,
 ) {
-    let Ok(runtime_slot) = conn.runtime_session_owner_slot_mut_for_owner(owner) else {
+    let Some(runtime_slot) = conn.network_agent_for_owner_mut(owner) else {
         return;
     };
     runtime_slot.mark_network_backlog_delivery_snapshot_emitted(snapshot);
@@ -849,7 +853,7 @@ fn record_subresource_response_body_source(
         collector_ids.iter().cloned(),
         collection_was_gated,
     );
-    let Ok(runtime_slot) = conn.runtime_session_owner_slot_mut_for_owner(owner) else {
+    let Some(runtime_slot) = conn.network_agent_for_owner_mut(owner) else {
         return;
     };
     runtime_slot.record_captured_response_body_source_with_collector_scope(
@@ -882,7 +886,7 @@ fn record_subresource_request_body(
         collector_ids.iter().cloned(),
         collection_was_gated,
     );
-    let Ok(runtime_slot) = conn.runtime_session_owner_slot_mut_for_owner(owner) else {
+    let Some(runtime_slot) = conn.network_agent_for_owner_mut(owner) else {
         return;
     };
     runtime_slot.record_captured_request_body_with_collector_scope(
@@ -908,7 +912,7 @@ fn record_subresource_pending_response_body(
     let collection_was_gated = conn.network_data_collection_is_gated_for_body(
         crate::devtools_runtime::DevToolsNetworkDataType::Response,
     );
-    let Ok(runtime_slot) = conn.runtime_session_owner_slot_mut_for_owner(owner) else {
+    let Some(runtime_slot) = conn.network_agent_for_owner_mut(owner) else {
         return;
     };
     runtime_slot.record_pending_response_body_with_collector_scope(
@@ -934,7 +938,7 @@ fn record_subresource_failed_response_body(
     let collection_was_gated = conn.network_data_collection_is_gated_for_body(
         crate::devtools_runtime::DevToolsNetworkDataType::Response,
     );
-    let Ok(runtime_slot) = conn.runtime_session_owner_slot_mut_for_owner(owner) else {
+    let Some(runtime_slot) = conn.network_agent_for_owner_mut(owner) else {
         return;
     };
     runtime_slot.record_failed_response_body_with_collector_scope(
@@ -1201,9 +1205,9 @@ mod tests {
             SubresourceResponseBody::from_bytes(b"staged".to_vec()),
         );
         assert_xhr_terminal_retains_internal_resource_type(vec![
-            ScriptNetworkOutputItem::SubresourceRequestStarted(Box::new(request)),
-            ScriptNetworkOutputItem::SubresourceResponseStarted(Box::new(response)),
-            ScriptNetworkOutputItem::SubresourceBodyFinished(Box::new(body)),
+            ScriptNetworkOutputItem::SubresourceRequestStarted(std::sync::Arc::new(request)),
+            ScriptNetworkOutputItem::SubresourceResponseStarted(std::sync::Arc::new(response)),
+            ScriptNetworkOutputItem::SubresourceBodyFinished(std::sync::Arc::new(body)),
         ]);
     }
 }

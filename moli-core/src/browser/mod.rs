@@ -13,6 +13,10 @@ mod emulation;
 mod events;
 mod navigation_decision;
 mod navigation_error;
+mod network;
+pub use network::{
+    NetworkOccurrence, NetworkOwner, NetworkRequestSnapshot, NetworkRequestState, WorkerFetchPause,
+};
 mod owner;
 pub use navigation_error::{
     NavigationNetworkError, NavigationNetworkErrorKind, NavigationRequestBlocked,

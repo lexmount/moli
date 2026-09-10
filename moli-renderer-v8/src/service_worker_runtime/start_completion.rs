@@ -30,6 +30,7 @@ use crate::worker::WorkerScriptResource;
 /// It shares the existing service lane with bootstrap and lifecycle decisions.
 #[derive(Debug)]
 pub(super) enum ServiceWorkerTargetOutput {
+    Network(crate::runtime::RendererNetworkObservation),
     Console(crate::worker::WorkerConsoleMessage),
     Exception {
         message: String,

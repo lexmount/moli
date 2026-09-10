@@ -28,6 +28,38 @@ pub(crate) struct PreparedSubresourceContinueAction {
 }
 
 impl PreparedSubresourceContinueAction {
+    pub(crate) fn capture_worker(
+        conn: &mut CdpConnection,
+        command_owner: &CommandOwnerScope,
+        pause: moli_core::browser::WorkerFetchPause,
+        event: PendingSubresourceContinueEvent,
+    ) -> Option<Self> {
+        let owner = conn.target_page_residence_identity_for_owner(command_owner)?;
+        let request = conn.claim_subresource_continue_request_for_owner(
+            command_owner,
+            &owner,
+            crate::conn::SubresourceFetchKey::Worker(pause.pause.handle()),
+            false,
+        );
+        let in_flight = match request {
+            Some(ClaimedSubresourceContinueRequest::InFlight(in_flight)) => Some(in_flight),
+            _ => recover_worker_continue_request(conn, command_owner, &owner, &pause, &event),
+        };
+        let Some(mut in_flight) = in_flight else {
+            pause.pause.release();
+            return None;
+        };
+        in_flight.pending.residence = crate::conn::PendingSubresourceFetchResidence::Worker {
+            observer: owner.clone(),
+            pause,
+        };
+        Some(Self {
+            owner,
+            event,
+            request: Some(ClaimedSubresourceContinueRequest::InFlight(in_flight)),
+        })
+    }
+
     fn internal_id(event: &PendingSubresourceContinueEvent) -> u64 {
         match event {
             PendingSubresourceContinueEvent::Completed { internal_id } => *internal_id,
@@ -66,6 +98,67 @@ impl PreparedSubresourceContinueAction {
         let owner = conn.target_page_residence_identity_for_owner(&command_owner)?;
         Some(Self::capture(conn, &command_owner, owner, event))
     }
+}
+
+fn recover_worker_continue_request(
+    conn: &mut CdpConnection,
+    command_owner: &CommandOwnerScope,
+    observer: &TargetPageResidenceIdentity,
+    pause: &moli_core::browser::WorkerFetchPause,
+    event: &PendingSubresourceContinueEvent,
+) -> Option<crate::conn::InFlightSubresourceFetchRequest> {
+    let snapshot = conn.target_fetch_subresource_interception_snapshot_for_owner(command_owner)?;
+    let (resource_type, owner_kind) = match event {
+        PendingSubresourceContinueEvent::AuthRequired(info) => (
+            info.resource_type,
+            snapshot.auth_required_owner_kind(&info.url)?,
+        ),
+        PendingSubresourceContinueEvent::ResponsePaused(info) => (
+            info.resource_type,
+            snapshot.response_stage_owner_kind(info.resource_type.into(), &info.final_url)?,
+        ),
+        PendingSubresourceContinueEvent::Completed { .. } => return None,
+    };
+    let action_session_id = snapshot
+        .event_session_id(command_owner.session_id())
+        .map(str::to_owned);
+    let (frame_id, _, _, _) =
+        conn.target_session_owner_frame_tree_identity_for_owner(command_owner)?;
+    let (request_id, network_request_id) = conn
+        .allocate_pending_subresource_fetch_request_ids_for_owner(command_owner)
+        .ok()?;
+    if let Some((context_id, _)) = conn.target_owner_identity_for_owner(command_owner)
+        && let Some(worker_owner) =
+            conn.native_worker_network_owner(&context_id, pause.pause.worker())
+        && let Some(agent) = conn.network_agent_for_owner_mut(&worker_owner)
+    {
+        agent.record_subresource_request_id_for_handle_if_absent(
+            pause.pause.handle(),
+            network_request_id.clone(),
+        );
+    }
+    Some(crate::conn::InFlightSubresourceFetchRequest {
+        request_id: Some(request_id),
+        pending: PendingSubresourceFetchRequest {
+            residence: crate::conn::PendingSubresourceFetchResidence::Worker {
+                observer: observer.clone(),
+                pause: pause.clone(),
+            },
+            owner_session_id: action_session_id.clone(),
+            action_session_id,
+            owner_kind,
+            internal_id: pause.pause.handle().get(),
+            network_request_id,
+            network_request_handle: Some(pause.pause.handle()),
+            frame_id,
+            document_url: pause.pause.document_url().clone(),
+            resource_type,
+            websocket_socket_id: None,
+            request_stage_chain: None,
+        },
+        response_stage_url_match_policy: crate::conn::ResponseStageUrlMatchPolicy::AlreadyMatched,
+        response_stage_blocked_intercepts: Vec::new(),
+    })
 }
 
 pub(in crate::domains) fn prepare_subresource_continue_action_for_renderer_record(
@@ -147,11 +240,14 @@ async fn flush_prepared_subresource_continue_action_background_events_async(
             };
             let Some(request_id) = in_flight.request_id else {
                 let _ = conn
-                    .continue_pending_subresource_response_for_owner_async(
+                    .execute_subresource_fetch_command(
                         command_owner,
-                        response_info.internal_id,
-                        None,
-                        None,
+                        &in_flight.pending.residence,
+                        crate::conn::DocumentFetchCommand::ContinueResponse {
+                            internal_id: response_info.internal_id,
+                            response_code: None,
+                            response_headers: None,
+                        },
                     )
                     .await;
                 Box::pin(
@@ -178,11 +274,14 @@ async fn flush_prepared_subresource_continue_action_background_events_async(
                     })
             {
                 let _ = conn
-                    .continue_pending_subresource_response_for_owner_async(
+                    .execute_subresource_fetch_command(
                         command_owner,
-                        response_info.internal_id,
-                        None,
-                        None,
+                        &in_flight.pending.residence,
+                        crate::conn::DocumentFetchCommand::ContinueResponse {
+                            internal_id: response_info.internal_id,
+                            response_code: None,
+                            response_headers: None,
+                        },
                     )
                     .await;
                 Box::pin(
@@ -303,10 +402,13 @@ async fn flush_prepared_subresource_continue_action_background_events_async(
             };
             let Some(request_id) = in_flight.request_id else {
                 let _ = conn
-                    .fail_pending_subresource_auth_for_owner_async(
+                    .execute_subresource_fetch_command(
                         command_owner,
-                        auth_info.internal_id,
-                        "Fetch auth challenge has no DevTools request".to_owned(),
+                        &in_flight.pending.residence,
+                        crate::conn::DocumentFetchCommand::FailAuth {
+                            internal_id: auth_info.internal_id,
+                            error_text: "Fetch auth challenge has no DevTools request".to_owned(),
+                        },
                     )
                     .await;
                 Box::pin(
@@ -443,10 +545,7 @@ fn pending_auth_request(
     auth_info: &PendingSubresourceAuthInfo,
 ) -> PendingSubresourceFetchAuthRequest {
     PendingSubresourceFetchAuthRequest {
-        page_owner: pending
-            .installed_page_owner()
-            .expect("an in-flight auth continuation must belong to an installed Page")
-            .clone(),
+        residence: pending.residence.clone(),
         owner_session_id: pending.owner_session_id.clone(),
         action_session_id: pending.action_session_id.clone(),
         owner_kind: pending.owner_kind,
@@ -478,10 +577,7 @@ fn pending_response_request(
     response_info: &PendingSubresourceResponseInfo,
 ) -> PendingSubresourceFetchResponseRequest {
     PendingSubresourceFetchResponseRequest {
-        page_owner: pending
-            .installed_page_owner()
-            .expect("an in-flight response continuation must belong to an installed Page")
-            .clone(),
+        residence: pending.residence.clone(),
         owner_session_id: pending.owner_session_id.clone(),
         action_session_id: pending.action_session_id.clone(),
         owner_kind: pending.owner_kind,

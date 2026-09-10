@@ -1,4 +1,5 @@
 use super::*;
+use crate::testing::{enable_network_on_new_dedicated_worker, pause_new_dedicated_workers};
 
 async fn enable_network_domain(ctx: &mut TestContext, id: u64, session_id: Option<&str>) {
     let mut command = json!({"id": id, "method": "Network.enable"});
@@ -446,6 +447,7 @@ async fn set_blocked_urls_worker_fetch_emits_loading_failed() {
     .await;
     ctx.expect_result(2814, json!({}), Some("SID-1"));
     let _ = ctx.take_all();
+    pause_new_dedicated_workers(&mut ctx, "SID-1", 880_000).await;
 
     ctx.process_async(json!({
         "id": 2815,
@@ -480,6 +482,7 @@ async fn set_blocked_urls_worker_fetch_emits_loading_failed() {
         .find(|message| message["id"] == json!(2815))
         .cloned()
         .expect("runtime evaluate result");
+    let worker_session = enable_network_on_new_dedicated_worker(&mut ctx, "SID-1", 880_001).await;
     flush_until_subresource_failed(&mut ctx, "Fetch", "blocked worker fetch failure").await;
     let failed = ctx
         .sent
@@ -487,7 +490,7 @@ async fn set_blocked_urls_worker_fetch_emits_loading_failed() {
         .find(|message| message["method"] == json!("Network.loadingFailed"))
         .cloned()
         .expect("network loadingFailed event");
-    assert_eq!(failed["sessionId"], "SID-1");
+    assert_eq!(failed["sessionId"], worker_session);
     assert_eq!(failed["params"]["type"], "Fetch");
     assert_eq!(failed["params"]["errorText"], "net::ERR_BLOCKED_BY_CLIENT");
     let request_id = failed["params"]["requestId"]
@@ -590,6 +593,7 @@ async fn set_blocked_urls_worker_xhr_emits_loading_failed() {
     .await;
     ctx.expect_result(2819, json!({}), Some("SID-1"));
     let _ = ctx.take_all();
+    pause_new_dedicated_workers(&mut ctx, "SID-1", 880_000).await;
 
     ctx.process_async(json!({
         "id": 2820,
@@ -625,6 +629,7 @@ async fn set_blocked_urls_worker_xhr_emits_loading_failed() {
         .find(|message| message["id"] == json!(2820))
         .cloned()
         .expect("runtime evaluate result");
+    let worker_session = enable_network_on_new_dedicated_worker(&mut ctx, "SID-1", 880_001).await;
     flush_until_subresource_failed(&mut ctx, "XHR", "blocked worker xhr failure").await;
     let failed = ctx
         .sent
@@ -632,7 +637,7 @@ async fn set_blocked_urls_worker_xhr_emits_loading_failed() {
         .find(|message| message["method"] == json!("Network.loadingFailed"))
         .cloned()
         .expect("network loadingFailed event");
-    assert_eq!(failed["sessionId"], "SID-1");
+    assert_eq!(failed["sessionId"], worker_session);
     assert_eq!(failed["params"]["type"], "XHR");
     assert_eq!(failed["params"]["errorText"], "net::ERR_BLOCKED_BY_CLIENT");
     let request_id = failed["params"]["requestId"]
@@ -882,6 +887,7 @@ async fn emulate_network_conditions_offline_worker_fetch_emits_loading_failed() 
     .await;
     ctx.expect_result(2823, json!({}), Some("SID-1"));
     let _ = ctx.take_all();
+    pause_new_dedicated_workers(&mut ctx, "SID-1", 880_000).await;
 
     ctx.process_async(json!({
         "id": 2824,
@@ -916,6 +922,7 @@ async fn emulate_network_conditions_offline_worker_fetch_emits_loading_failed() 
         .find(|message| message["id"] == json!(2824))
         .cloned()
         .expect("runtime evaluate result");
+    let worker_session = enable_network_on_new_dedicated_worker(&mut ctx, "SID-1", 880_001).await;
     flush_until_subresource_failed(&mut ctx, "Fetch", "offline worker fetch failure").await;
     let failed = ctx
         .sent
@@ -923,7 +930,7 @@ async fn emulate_network_conditions_offline_worker_fetch_emits_loading_failed() 
         .find(|message| message["method"] == json!("Network.loadingFailed"))
         .cloned()
         .expect("network loadingFailed event");
-    assert_eq!(failed["sessionId"], "SID-1");
+    assert_eq!(failed["sessionId"], worker_session);
     assert_eq!(failed["params"]["type"], "Fetch");
     assert_eq!(failed["params"]["errorText"], "Network emulation offline");
     ctx.process_async(json!({
@@ -998,6 +1005,7 @@ async fn emulate_network_conditions_offline_worker_xhr_emits_loading_failed() {
     .await;
     ctx.expect_result(2828, json!({}), Some("SID-1"));
     let _ = ctx.take_all();
+    pause_new_dedicated_workers(&mut ctx, "SID-1", 880_000).await;
 
     ctx.process_async(json!({
         "id": 2829,
@@ -1033,6 +1041,7 @@ async fn emulate_network_conditions_offline_worker_xhr_emits_loading_failed() {
         .find(|message| message["id"] == json!(2829))
         .cloned()
         .expect("runtime evaluate result");
+    let worker_session = enable_network_on_new_dedicated_worker(&mut ctx, "SID-1", 880_001).await;
     flush_until_subresource_failed(&mut ctx, "XHR", "offline worker xhr failure").await;
     let failed = ctx
         .sent
@@ -1040,7 +1049,7 @@ async fn emulate_network_conditions_offline_worker_xhr_emits_loading_failed() {
         .find(|message| message["method"] == json!("Network.loadingFailed"))
         .cloned()
         .expect("network loadingFailed event");
-    assert_eq!(failed["sessionId"], "SID-1");
+    assert_eq!(failed["sessionId"], worker_session);
     assert_eq!(failed["params"]["type"], "XHR");
     assert_eq!(failed["params"]["errorText"], "Network emulation offline");
     ctx.process_async(json!({

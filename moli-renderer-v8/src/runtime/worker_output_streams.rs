@@ -1,64 +1,72 @@
 use std::collections::HashMap;
 
-use moli_shared_worker::SharedWorkerInstanceId;
 use parking_lot::Mutex;
 
 use crate::runtime::{
     RendererOutputStreamCloseReason, RendererOutputStreamIdentity,
-    RendererOutputTransportSenderSlot, RendererTurnOutputJournal,
+    RendererOutputTransportSenderSlot, RendererTurnOutputJournal, RendererWorkerIdentity,
 };
 
-/// Browser-context-owned registry of exact SharedWorker output streams.
+/// Browser-context-owned registry of exact Worker output streams.
 ///
 /// A host owns the producer handle while this registry owns transport binding
 /// and retirement. Keeping those responsibilities here lets a worker produce
 /// concrete facts before CDP installs its channel without falling back to a
 /// service-wide lifecycle queue.
-pub(super) struct SharedWorkerTargetOutputStreams {
-    pub(super) worker_lifecycle: crate::runtime::RendererWorkerLifecycleReporter,
+#[derive(Debug)]
+pub(crate) struct RendererWorkerOutputStreams {
+    pub(crate) worker_lifecycle: crate::runtime::RendererWorkerLifecycleReporter,
     transport: RendererOutputTransportSenderSlot,
-    state: Mutex<SharedWorkerTargetOutputStreamsState>,
+    state: Mutex<RendererWorkerOutputStreamsState>,
 }
 
-#[derive(Default)]
-struct SharedWorkerTargetOutputStreamsState {
-    live: HashMap<SharedWorkerInstanceId, RendererTurnOutputJournal>,
+#[derive(Debug, Default)]
+struct RendererWorkerOutputStreamsState {
+    live: HashMap<RendererWorkerIdentity, RendererTurnOutputJournal>,
     /// A short-lived worker can finish before CDP installs the BrowserContext
     /// transport. The registry, rather than an incidental host clone, owns its
     /// frozen Created/Destroyed prefix through the first transport binding.
     retired_before_transport: Vec<RendererTurnOutputJournal>,
 }
 
-impl SharedWorkerTargetOutputStreams {
-    pub(super) fn new(
+impl RendererWorkerOutputStreams {
+    pub(crate) fn new(
         worker_lifecycle: crate::runtime::RendererWorkerLifecycleReporter,
         transport: RendererOutputTransportSenderSlot,
     ) -> Self {
         Self {
             worker_lifecycle,
             transport,
-            state: Mutex::new(SharedWorkerTargetOutputStreamsState::default()),
+            state: Mutex::new(RendererWorkerOutputStreamsState::default()),
         }
     }
 
-    pub(super) fn open(&self, instance_id: SharedWorkerInstanceId) -> RendererTurnOutputJournal {
+    pub(crate) fn open(&self, worker: RendererWorkerIdentity) -> RendererTurnOutputJournal {
         let mut state = self.state.lock();
-        let stream = RendererOutputStreamIdentity::new_shared_worker(
-            self.worker_lifecycle.runtime(),
-            instance_id.as_u64(),
-        );
+        let runtime = self.worker_lifecycle.runtime();
+        let stream = match &worker {
+            RendererWorkerIdentity::Dedicated(instance) => {
+                RendererOutputStreamIdentity::new_dedicated_worker(runtime, *instance)
+            }
+            RendererWorkerIdentity::Shared(instance) => {
+                RendererOutputStreamIdentity::new_shared_worker(runtime, instance.as_u64())
+            }
+            RendererWorkerIdentity::Service { version, .. } => {
+                RendererOutputStreamIdentity::new_service_worker(runtime, *version)
+            }
+        };
         let journal = match self.transport.sender() {
             Some(transport) => RendererTurnOutputJournal::new_with_transport(stream, transport),
             None => RendererTurnOutputJournal::new(stream),
         };
         assert!(
-            state.live.insert(instance_id, journal.clone()).is_none(),
-            "SharedWorker output stream opened twice for one instance"
+            state.live.insert(worker, journal.clone()).is_none(),
+            "Worker output stream opened twice for one physical execution"
         );
         journal
     }
 
-    pub(super) fn bind_transport(&self, transport: crate::runtime::RendererOutputTransportSender) {
+    pub(crate) fn bind_transport(&self, transport: crate::runtime::RendererOutputTransportSender) {
         // Serialize transport installation with retirement. This prevents the
         // race where bind observes the live map just before retire removes a
         // journal, while retire still observes an empty transport slot.
@@ -72,12 +80,12 @@ impl SharedWorkerTargetOutputStreams {
         }
     }
 
-    pub(super) fn retire(&self, instance_id: SharedWorkerInstanceId) {
+    pub(crate) fn retire(&self, worker: &RendererWorkerIdentity) {
         let mut state = self.state.lock();
         let journal = state
             .live
-            .remove(&instance_id)
-            .expect("SharedWorker output stream must exist until host retirement");
+            .remove(worker)
+            .expect("Worker output stream must exist until host retirement");
         journal.retire(RendererOutputStreamCloseReason::ResidenceRetired);
         if !journal.transport_is_bound() {
             state.retired_before_transport.push(journal);
@@ -93,18 +101,20 @@ mod tests {
         PendingRendererOutputRecord, RendererOutputItem, RendererOutputStreamControl,
         RendererOutputTransportMessage, RendererProtocolObservation, RendererWorkerLifecycle,
     };
+    use moli_shared_worker::SharedWorkerInstanceId;
 
     #[test]
     fn retired_pre_transport_stream_is_delivered_once_when_transport_binds() {
         let transport_slot = RendererOutputTransportSenderSlot::default();
-        let streams = SharedWorkerTargetOutputStreams::new(
+        let streams = RendererWorkerOutputStreams::new(
             crate::runtime::RendererWorkerLifecycleReporter::new(
                 RendererBrowserContextRuntimeId::new_for_testing(31),
             ),
             transport_slot.clone(),
         );
         let instance_id = SharedWorkerInstanceId::from_u64(7);
-        let journal = streams.open(instance_id);
+        let worker = RendererWorkerIdentity::Shared(instance_id);
+        let journal = streams.open(worker.clone());
         let stream = journal.stream();
         journal.publish_record(
             PendingRendererOutputRecord::observation(
@@ -125,7 +135,7 @@ mod tests {
         // interval: slot presence alone must not be mistaken for a journal
         // which already delivered its stream.
         transport_slot.set(sender.clone());
-        streams.retire(instance_id);
+        streams.retire(&worker);
 
         streams.bind_transport(sender.clone());
         assert_eq!(

@@ -281,6 +281,7 @@ async fn shared_worker_importscripts_csp_block_dispatches_securitypolicyviolatio
             "https://app.test/shared-worker.js".into(),
         )
         .with_global_kind(super::super::WorkerGlobalKind::Shared {
+            network: crate::runtime::RendererWorkerNetworkReporter::unobserved_for_test(),
             name: "shared".to_owned(),
             storage_key,
         })
@@ -378,6 +379,7 @@ async fn shared_worker_importscripts_report_only_csp_dispatches_without_blocking
             "https://app.test/shared-worker.js".into(),
         )
         .with_global_kind(super::super::WorkerGlobalKind::Shared {
+            network: crate::runtime::RendererWorkerNetworkReporter::unobserved_for_test(),
             name: "shared".to_owned(),
             storage_key,
         })
@@ -2163,6 +2165,7 @@ async fn shared_worker_data_module_dynamic_import_allows_cors_dependency() {
             .with_request_client(loader)
             .with_script_kind(WorkerScriptKind::Module)
             .with_global_kind(super::super::WorkerGlobalKind::Shared {
+                network: crate::runtime::RendererWorkerNetworkReporter::unobserved_for_test(),
                 name: "shared".to_owned(),
                 storage_key,
             })
@@ -2219,6 +2222,7 @@ async fn shared_worker_data_module_dynamic_import_allows_data_dependency() {
         WorkerSpawnOptions::new(source.clone(), worker_data_url(&source))
             .with_script_kind(WorkerScriptKind::Module)
             .with_global_kind(super::super::WorkerGlobalKind::Shared {
+                network: crate::runtime::RendererWorkerNetworkReporter::unobserved_for_test(),
                 name: "shared".to_owned(),
                 storage_key,
             })
@@ -2284,6 +2288,7 @@ async fn shared_worker_dynamic_import_csp_block_dispatches_securitypolicyviolati
         )
         .with_request_client(loader)
         .with_global_kind(super::super::WorkerGlobalKind::Shared {
+            network: crate::runtime::RendererWorkerNetworkReporter::unobserved_for_test(),
             name: "shared".to_owned(),
             storage_key,
         })
@@ -2403,6 +2408,7 @@ fn service_worker_module_options(source: String, script_url: String) -> WorkerSp
     WorkerSpawnOptions::new(source, script_url)
         .with_script_kind(WorkerScriptKind::Module)
         .with_global_kind(super::super::WorkerGlobalKind::Service {
+            network: crate::runtime::RendererWorkerNetworkReporter::unobserved_for_test(),
             registration_id: ServiceWorkerRegistrationId::from_u64_for_test(1),
             version_id: ServiceWorkerVersionId::from_u64_for_test(1),
             scope_url,
@@ -5191,6 +5197,7 @@ async fn service_worker_importscripts_reports_imported_script_resource() {
         )
         .with_request_client(loader)
         .with_global_kind(super::super::WorkerGlobalKind::Service {
+            network: crate::runtime::RendererWorkerNetworkReporter::unobserved_for_test(),
             registration_id: ServiceWorkerRegistrationId::from_u64_for_test(7),
             version_id: ServiceWorkerVersionId::from_u64_for_test(9),
             scope_url: url::Url::parse(&format!("{base_url}/worker/")).unwrap(),
@@ -5283,6 +5290,7 @@ async fn service_worker_module_static_import_reports_imported_script_resource() 
         .with_request_client(loader)
         .with_script_kind(WorkerScriptKind::Module)
         .with_global_kind(super::super::WorkerGlobalKind::Service {
+            network: crate::runtime::RendererWorkerNetworkReporter::unobserved_for_test(),
             registration_id: ServiceWorkerRegistrationId::from_u64_for_test(7),
             version_id: ServiceWorkerVersionId::from_u64_for_test(9),
             scope_url: url::Url::parse(&format!("{base_url}/worker/")).unwrap(),
@@ -5374,6 +5382,7 @@ async fn service_worker_module_static_json_import_reports_json_resource_kind() {
         .with_request_client(loader)
         .with_script_kind(WorkerScriptKind::Module)
         .with_global_kind(super::super::WorkerGlobalKind::Service {
+            network: crate::runtime::RendererWorkerNetworkReporter::unobserved_for_test(),
             registration_id: ServiceWorkerRegistrationId::from_u64_for_test(11),
             version_id: ServiceWorkerVersionId::from_u64_for_test(13),
             scope_url: url::Url::parse(&format!("{base_url}/worker/")).unwrap(),
@@ -5451,6 +5460,7 @@ async fn service_worker_module_static_css_import_rejects_invalid_module_type() {
         )
         .with_script_kind(WorkerScriptKind::Module)
         .with_global_kind(super::super::WorkerGlobalKind::Service {
+            network: crate::runtime::RendererWorkerNetworkReporter::unobserved_for_test(),
             registration_id: ServiceWorkerRegistrationId::from_u64_for_test(15),
             version_id: ServiceWorkerVersionId::from_u64_for_test(17),
             scope_url: url::Url::parse("https://service-worker-module.invalid/scope/").unwrap(),
@@ -5487,6 +5497,7 @@ async fn service_worker_module_static_text_import_rejects_invalid_module_type() 
         )
         .with_script_kind(WorkerScriptKind::Module)
         .with_global_kind(super::super::WorkerGlobalKind::Service {
+            network: crate::runtime::RendererWorkerNetworkReporter::unobserved_for_test(),
             registration_id: ServiceWorkerRegistrationId::from_u64_for_test(19),
             version_id: ServiceWorkerVersionId::from_u64_for_test(21),
             scope_url: url::Url::parse("https://service-worker-module.invalid/scope/").unwrap(),

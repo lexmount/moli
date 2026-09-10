@@ -142,7 +142,7 @@ pub(crate) use fetch_support::{
     ClaimedFetchNavigation, ClaimedFetchResponseNavigation, ClaimedSubresourceContinueRequest,
     CompletedFetchResponseBodyStreamReadDispatch, PendingFetchResponseBodyStreamRead,
     PendingFetchResponseBodyStreamReadDispatch, PendingFetchResponseBodyStreamReadStart,
-    PendingFetchResponseNavigation, PendingSubresourceFetchResidence,
+    PendingFetchResponseNavigation, PendingSubresourceFetchResidence, SubresourceFetchKey,
 };
 pub use fetch_support::{
     FetchAuthChallenge, FetchInterceptionPattern, FetchRequestStage, FetchResourceTypeFilter,
@@ -557,12 +557,10 @@ pub(crate) use runtime_eval::{
 pub use runtime_eval::{
     CompletedMoliDiagnosticsDispatch, CompletedRuntimeBindingPageCommandDispatch,
     CompletedRuntimeChildDefaultContextLookupDispatch, CompletedRuntimeEnableEventsDispatch,
-    CompletedRuntimeProtocolMessageDispatch, CompletedServiceWorkerRuntimeProtocolMessageDispatch,
-    CompletedSharedWorkerRuntimeProtocolMessageDispatch, PendingMoliDiagnosticsDispatch,
-    PendingRuntimeBindingPageCommandDispatch, PendingRuntimeChildDefaultContextLookupDispatch,
-    PendingRuntimeEnableEventsDispatch, PendingRuntimeProtocolMessageDispatch,
-    PendingServiceWorkerRuntimeProtocolMessageDispatch,
-    PendingSharedWorkerRuntimeProtocolMessageDispatch,
+    CompletedRuntimeProtocolMessageDispatch, CompletedWorkerRuntimeProtocolMessageDispatch,
+    PendingMoliDiagnosticsDispatch, PendingRuntimeBindingPageCommandDispatch,
+    PendingRuntimeChildDefaultContextLookupDispatch, PendingRuntimeEnableEventsDispatch,
+    PendingRuntimeProtocolMessageDispatch, PendingWorkerRuntimeProtocolMessageDispatch,
 };
 pub(crate) use runtime_load::{FailedInitialDocumentProjection, PendingInitialDocumentProjection};
 use scheduler_hooks::CdpSchedulerHooks;
@@ -583,8 +581,8 @@ pub use state::{
 };
 pub(crate) use state::{
     BrowserContextPageStorageHandles, BrowserContextStoragePartitionHandles,
-    CommittedRendererDocumentBinding, ContextNetworkPolicy, DedicatedWorkerTargetState,
-    DevToolsBrowserIdentityOverride, DevToolsConsoleOutputSessionState,
+    CommittedRendererDocumentBinding, ContextNetworkPolicy, DedicatedWorkerOwner,
+    DedicatedWorkerTargetState, DevToolsBrowserIdentityOverride, DevToolsConsoleOutputSessionState,
     DevToolsLogViolationThreshold, DocumentId, DocumentProjectionOutputRelease,
     DuplicatePendingRendererCommand, EmulatedNetworkConditions, EmulatedViewportSurface,
     EmulationPolicyChange, InitialDocumentCreator, InspectorCommandDispatch,
@@ -1462,15 +1460,71 @@ impl CdpConnection {
         item: &moli_core::page::ScriptNetworkOutputItem,
     ) -> Option<crate::domains::network::TargetNetworkBacklogPreparedDelivery> {
         let owner = CommandOwnerScope::capture(self, session_id);
-        self.ingest_renderer_page_network_output_item_and_prepare_live_delivery_for_owner(
-            &owner,
-            None,
-            source_document,
+        self.project_network_output_item_for_owner(&owner, None, source_document, item)
+    }
+
+    pub(crate) fn ingest_browser_network_observation_for_owner(
+        &mut self,
+        owner: &CommandOwnerScope,
+        source_renderer_page: Option<RendererPageResidenceIdentity>,
+        committed: &moli_core::page::RendererCommittedNetworkObservation,
+    ) -> Option<crate::domains::network::TargetNetworkBacklogPreparedDelivery> {
+        if !self.accepts_browser_network_observation_for_owner(
+            owner,
+            source_renderer_page,
+            committed,
+        ) {
+            return None;
+        }
+        let occurrence = committed.occurrence();
+        let moli_core::page::RendererNetworkOutputItem::Resource(item) = &occurrence.item else {
+            return None;
+        };
+        self.project_network_output_item_for_owner(
+            owner,
+            source_renderer_page,
+            occurrence.source.document()?.1,
             item,
         )
     }
 
-    pub(crate) fn ingest_renderer_page_network_output_item_and_prepare_live_delivery_for_owner(
+    pub(crate) fn accepts_browser_network_observation_for_owner(
+        &self,
+        owner: &CommandOwnerScope,
+        source_renderer_page: Option<RendererPageResidenceIdentity>,
+        committed: &moli_core::page::RendererCommittedNetworkObservation,
+    ) -> bool {
+        let occurrence = committed.occurrence();
+        let Some((owner_local_host_id, document)) = occurrence.source.document() else {
+            return false;
+        };
+        let Some((context_id, target_id)) = self.resolved_page_owner_identity_for_owner(owner)
+        else {
+            return false;
+        };
+        let Some(context) = self.browser_context_by_id(&context_id) else {
+            return false;
+        };
+        context.routes_renderer_browser_context_runtime(occurrence.runtime)
+            && match &occurrence.item {
+                // An admitted resource may finish/cancel from a retired
+                // renderer. Its request-phase projection below owns that
+                // exact admission; current Page membership cannot revoke it.
+                moli_core::page::RendererNetworkOutputItem::Resource(_) => true,
+                moli_core::page::RendererNetworkOutputItem::WorkerFetch { .. } => false,
+                moli_core::page::RendererNetworkOutputItem::ChildDocument(_) => {
+                    context.target_renderer_page_residence_identity(&target_id)
+                        == source_renderer_page
+                }
+            }
+            && source_renderer_page
+                == Some(RendererPageResidenceIdentity::from_parts(
+                    owner_local_host_id,
+                    document.document.page_id,
+                ))
+    }
+
+    fn project_network_output_item_for_owner(
         &mut self,
         owner: &CommandOwnerScope,
         source_renderer_page: Option<RendererPageResidenceIdentity>,

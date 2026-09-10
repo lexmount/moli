@@ -56,6 +56,7 @@ impl Browser {
                         })
                     }
                     RendererServiceWorkerLifecycle::Starting { version_id, .. }
+                    | RendererServiceWorkerLifecycle::ExecutionReady { version_id, .. }
                     | RendererServiceWorkerLifecycle::Started { version_id, .. }
                     | RendererServiceWorkerLifecycle::Stopped { version_id, .. }
                     | RendererServiceWorkerLifecycle::VersionUpdated { version_id, .. } => {
@@ -69,8 +70,17 @@ impl Browser {
                                 }
                                 worker.execution = ServiceWorkerExecution::Starting(run.clone());
                             }
-                            RendererServiceWorkerLifecycle::Started { run, .. } => {
+                            RendererServiceWorkerLifecycle::ExecutionReady { run, .. } => {
                                 if worker.execution != ServiceWorkerExecution::Starting(run.clone())
+                                {
+                                    return;
+                                }
+                                worker.execution =
+                                    ServiceWorkerExecution::Bootstrapping(run.clone());
+                            }
+                            RendererServiceWorkerLifecycle::Started { run, .. } => {
+                                if worker.execution
+                                    != ServiceWorkerExecution::Bootstrapping(run.clone())
                                 {
                                     return;
                                 }
@@ -157,6 +167,11 @@ impl Browser {
                 })
             }
         };
+        if let BrowserEvent::WorkerDestroyed(worker) = &event {
+            // Registry retirement revokes decisions immediately, even when
+            // the physical thread has not yet emitted its SourceClosed tail.
+            context.network_requests.retire_worker_pauses(*worker);
+        }
         // Mutation, native occurrence and FIFO acknowledgement form one owner
         // turn. Protocol cannot invent or commit this lifecycle by draining output.
         let record = self.events.publish(event);

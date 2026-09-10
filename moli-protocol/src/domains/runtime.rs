@@ -61,18 +61,18 @@ pub(in crate::domains) fn worker_inspection_endpoint_for_disposal(
     conn: &CdpConnection,
     plan: &SessionDisposalPlan,
 ) -> Option<moli_core::runtime::RendererWorkerInspectionEndpoint> {
-    use moli_core::runtime::RendererWorkerInspectionTarget;
+    use moli_core::runtime::RendererWorkerIdentity;
     let context = conn.browser_context_by_id(plan.browser_context_id()?)?;
     let worker = match plan.target() {
         SessionDisposalTarget::SharedWorkerTarget { target_id, .. } => {
-            RendererWorkerInspectionTarget::Shared(
+            RendererWorkerIdentity::Shared(
                 context
                     .shared_worker_target(target_id)?
                     .renderer_instance_id,
             )
         }
         SessionDisposalTarget::DedicatedWorkerTarget { target_id, .. } => {
-            RendererWorkerInspectionTarget::Dedicated(
+            RendererWorkerIdentity::Dedicated(
                 context
                     .dedicated_worker_target(target_id)?
                     .renderer_instance_id,

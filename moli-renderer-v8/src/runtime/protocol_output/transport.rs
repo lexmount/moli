@@ -182,6 +182,7 @@ pub struct RendererOutputTransportDiagnostics {
     pub admitted_bytes: u64,
     pub admitted_page_messages: u64,
     pub admitted_shared_worker_messages: u64,
+    pub admitted_dedicated_worker_messages: u64,
     pub admitted_service_worker_messages: u64,
     pub admitted_observation_publications: u64,
     pub admitted_essential_messages: u64,
@@ -256,6 +257,12 @@ impl RendererOutputTransportBudgetState {
             .admitted_bytes
             .saturating_add(u64::try_from(bytes).unwrap_or(u64::MAX));
         match residence {
+            RendererOutputResidenceIdentity::DedicatedWorker { .. } => {
+                self.diagnostics.admitted_dedicated_worker_messages = self
+                    .diagnostics
+                    .admitted_dedicated_worker_messages
+                    .saturating_add(1);
+            }
             RendererOutputResidenceIdentity::Page { .. } => {
                 self.diagnostics.admitted_page_messages =
                     self.diagnostics.admitted_page_messages.saturating_add(1);

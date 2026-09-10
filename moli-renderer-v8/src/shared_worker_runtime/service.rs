@@ -12,7 +12,10 @@ use moli_shared_worker::{
 use parking_lot::Mutex;
 use tracing::trace;
 
-use crate::{runtime::RendererOwnerLocalHostId, worker_owner_wake::WorkerOwnerWakeRoutes};
+use crate::{
+    runtime::{RendererOwnerLocalHostId, RendererWorkerIdentity, RendererWorkerOutputStreams},
+    worker_owner_wake::WorkerOwnerWakeRoutes,
+};
 
 use super::{
     host::SharedRendererSharedWorkerHost,
@@ -20,7 +23,6 @@ use super::{
     matching::{SharedWorkerClientOwnerIdAllocator, SharedWorkerMatchingStore},
     owner_wake::{SharedWorkerRuntimeOwnerWake, SharedWorkerRuntimeOwnerWakeSender},
     service_lane::SharedWorkerServiceLane,
-    target_output_streams::SharedWorkerTargetOutputStreams,
 };
 
 pub(crate) fn new_shared_worker_runtime_service_with_client_owner_id_allocator(
@@ -53,7 +55,7 @@ struct SharedWorkerRuntimeInner {
     service_lane: Arc<SharedWorkerServiceLane>,
     owner_wake: Mutex<WorkerOwnerWakeRoutes<SharedWorkerRuntimeOwnerWake>>,
     owner_local_host_id: Mutex<Option<RendererOwnerLocalHostId>>,
-    target_output_streams: OnceLock<SharedWorkerTargetOutputStreams>,
+    target_output_streams: OnceLock<RendererWorkerOutputStreams>,
 }
 
 impl SharedWorkerRuntimeService {
@@ -68,7 +70,7 @@ impl SharedWorkerRuntimeService {
     ) {
         self.inner
             .target_output_streams
-            .set(SharedWorkerTargetOutputStreams::new(
+            .set(RendererWorkerOutputStreams::new(
                 worker_lifecycle,
                 transport,
             ))
@@ -88,7 +90,8 @@ impl SharedWorkerRuntimeService {
         &self,
         instance_id: SharedWorkerInstanceId,
     ) -> crate::runtime::RendererTurnOutputJournal {
-        self.target_output_streams().open(instance_id)
+        self.target_output_streams()
+            .open(RendererWorkerIdentity::Shared(instance_id))
     }
 
     pub(super) fn worker_lifecycle(&self) -> crate::runtime::RendererWorkerLifecycleReporter {
@@ -96,10 +99,11 @@ impl SharedWorkerRuntimeService {
     }
 
     pub(super) fn retire_target_output_stream(&self, instance_id: SharedWorkerInstanceId) {
-        self.target_output_streams().retire(instance_id);
+        self.target_output_streams()
+            .retire(&RendererWorkerIdentity::Shared(instance_id));
     }
 
-    fn target_output_streams(&self) -> &SharedWorkerTargetOutputStreams {
+    fn target_output_streams(&self) -> &RendererWorkerOutputStreams {
         self.inner
             .target_output_streams
             .get()
@@ -111,7 +115,7 @@ impl SharedWorkerRuntimeService {
         let _ = self
             .inner
             .target_output_streams
-            .set(SharedWorkerTargetOutputStreams::new(
+            .set(RendererWorkerOutputStreams::new(
                 crate::runtime::RendererWorkerLifecycleReporter::new(
                     crate::runtime::RendererBrowserContextRuntimeId::new_for_testing(0),
                 ),

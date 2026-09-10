@@ -10,11 +10,14 @@ use crate::{
         throw_range_error, throw_type_error,
     },
     worker::{
-        WorkerGlobalKind, WorkerHandle, WorkerNetworkPolicy, WorkerSpawnOptions,
-        spawn_worker_with_options, worker_secure_context_for_script_url,
+        WorkerGlobalKind, WorkerNetworkPolicy, WorkerSpawnOptions,
+        worker_secure_context_for_script_url,
     },
 };
 
+#[cfg(test)]
+use crate::worker::{WorkerHandle, spawn_worker_with_options};
+#[cfg(test)]
 const WORKER_HANDLE_SLOT: &str = "__moliWorkerHandle";
 const WORKER_ID_SLOT: &str = "__moliWorkerId";
 const WORKER_LISTENERS_SLOT: &str = "__moliWorkerListeners";

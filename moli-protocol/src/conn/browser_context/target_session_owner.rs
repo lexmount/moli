@@ -152,7 +152,6 @@ pub(crate) struct TargetNavigationLoadInputs {
 fn prepared_document_inspection(
     context: &BrowserContext,
     target_id: &str,
-    _browser_globals: &crate::conn::BrowserGlobalOverrides,
 ) -> moli_renderer_v8::RendererPreparedDocumentInspectionConfiguration {
     let target = context
         .page_target(target_id)
@@ -232,7 +231,7 @@ impl TargetNavigationLoadInputs {
         browser_globals: &crate::conn::BrowserGlobalOverrides,
     ) -> Self {
         #[cfg(test)]
-        let inspection = prepared_document_inspection(browser_context, target_id, browser_globals);
+        let inspection = prepared_document_inspection(browser_context, target_id);
 
         let effective_network_conditions = browser_context
             .target_emulation_policy(target_id)
@@ -924,11 +923,7 @@ impl CdpConnection {
         owner: &CommandOwnerScope,
     ) -> moli_renderer_v8::RendererPreparedDocumentInspectionConfiguration {
         match self.target_session_owner_ref_for_owner(owner) {
-            Some(owner) => prepared_document_inspection(
-                owner.browser_context,
-                &owner.target_id,
-                &self.browser_global_overrides,
-            ),
+            Some(owner) => prepared_document_inspection(owner.browser_context, &owner.target_id),
             None => moli_renderer_v8::RendererPreparedDocumentInspectionConfiguration {
                 document_start_scripts: self
                     .browser_context
@@ -2924,18 +2919,21 @@ mod tests {
             "https://peer.example/".to_owned(),
         );
         background.set_active_target_id("TID-peer");
-        let inspection =
-            prepared_document_inspection(&background, "TID-background", &Default::default());
+        let inspection = prepared_document_inspection(&background, "TID-background");
         assert_eq!(
             inspection.root_frame_projection_id.as_deref(),
             Some("TID-background")
+        );
+        assert!(
+            inspection.document_start_scripts.is_empty(),
+            "inspection must not carry Browser-owned initial surface policy"
         );
         let sessions = inspection.runtime_inspector_session_restore_snapshots;
         assert_eq!(sessions.len(), 1);
         assert!(sessions[0].protocol_configuration.runtime_frontend_enabled);
         assert_eq!(background.active_target_id(), Some("TID-peer"));
         assert!(
-            prepared_document_inspection(&background, "TID-peer", &Default::default())
+            prepared_document_inspection(&background, "TID-peer")
                 .runtime_inspector_session_restore_snapshots
                 .iter()
                 .all(|session| !session.protocol_configuration.runtime_frontend_enabled),

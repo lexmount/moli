@@ -269,7 +269,6 @@ enum PendingWindowFetchTestStage {
     Streaming,
     Auth,
     Response,
-    ServiceWorkerInFlight,
 }
 
 fn register_pending_window_fetch_for_test(
@@ -406,17 +405,6 @@ fn register_pending_window_fetch_for_test(
                             Vec::new(),
                             "pending response".to_owned(),
                         ),
-                    },
-                );
-            }
-            PendingWindowFetchTestStage::ServiceWorkerInFlight => {
-                host.record_in_flight_worker_subresource_fetch(
-                    crate::types::InFlightWorkerSubresourceFetchState {
-                        pending,
-                        request_url: url,
-                        request_method: "GET".to_owned(),
-                        request_headers: Vec::new().into(),
-                        request_body: None,
                     },
                 );
             }
@@ -2046,7 +2034,11 @@ fn isolated_realm_destruction_retires_dedicated_worker_without_retiring_local_wi
                 v8::Object::new(scope),
                 top_level_site,
                 creator_storage_key,
-                String::new(),
+                host.prepare_dedicated_worker_host(
+                    "data:text/html,fixture".parse().unwrap(),
+                    "data:text/javascript,fixture".parse().unwrap(),
+                    String::new(),
+                ),
                 moli_fetch::RequestCredentialsMode::SameOrigin,
                 None,
                 outside_settings_load,
@@ -2129,7 +2121,11 @@ async fn popup_replacement_retires_local_window_owned_dedicated_worker() {
             v8::Object::new(scope),
             top_level_site,
             creator_storage_key,
-            String::new(),
+            host.prepare_dedicated_worker_host(
+                "data:text/html,fixture".parse().unwrap(),
+                "data:text/javascript,fixture".parse().unwrap(),
+                String::new(),
+            ),
             moli_fetch::RequestCredentialsMode::SameOrigin,
             None,
             outside_settings_load,
@@ -2520,7 +2516,6 @@ fn window_fetch_retirement_covers_every_host_stage() {
         PendingWindowFetchTestStage::Streaming,
         PendingWindowFetchTestStage::Auth,
         PendingWindowFetchTestStage::Response,
-        PendingWindowFetchTestStage::ServiceWorkerInFlight,
     ];
     let mut ordinary = Vec::new();
     let mut keepalive = Vec::new();

@@ -103,6 +103,7 @@ impl BrowserFixture {
                 secure_context_type: "Secure".into(),
             },
             self.inherited(),
+            true,
         )
     }
 }

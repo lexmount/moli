@@ -5,7 +5,7 @@ use crate::{PageId, RendererOutputResidenceIdentity, RendererOwnerLocalHostId, p
 /// The owner and Page ids reject work from a replaced Page. Renderer document
 /// epochs remain separate: `document.open()` restarts the lifecycle inside the
 /// same physical Page rather than replacing this residence.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct RendererPageResidenceIdentity {
     owner_local_host_id: RendererOwnerLocalHostId,
     page_id: PageId,
@@ -40,7 +40,8 @@ impl RendererPageResidenceIdentity {
                 owner_local_host_id,
                 page_id,
             } => Some(Self::from_parts(owner_local_host_id, page_id)),
-            RendererOutputResidenceIdentity::SharedWorker { .. }
+            RendererOutputResidenceIdentity::DedicatedWorker { .. }
+            | RendererOutputResidenceIdentity::SharedWorker { .. }
             | RendererOutputResidenceIdentity::ServiceWorker { .. } => None,
         }
     }

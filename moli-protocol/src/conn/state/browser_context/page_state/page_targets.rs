@@ -337,7 +337,8 @@ impl BrowserContext {
     ) -> Vec<Option<String>> {
         self.active_page_target()
             .runtime_slot
-            .network_event_session_ids(trigger_session_id, self.active_session_id())
+            .network_agent
+            .event_session_ids(trigger_session_id, self.active_session_id())
     }
 
     pub(crate) fn active_target_identity(&self) -> Option<(String, Option<String>)> {
@@ -618,7 +619,14 @@ impl BrowserContext {
         &mut self,
         renderer_instance_id: moli_shared_worker::SharedWorkerInstanceId,
     ) -> Option<SharedWorkerTargetState> {
-        self.shared_worker_targets.remove(&renderer_instance_id)
+        let retired = self.shared_worker_targets.remove(&renderer_instance_id)?;
+        for target in self.page_targets.iter_mut() {
+            target.fetch_owner.retire_worker_requests(
+                &moli_core::page::RendererWorkerIdentity::Shared(renderer_instance_id),
+                None,
+            );
+        }
+        Some(retired)
     }
 
     pub(crate) fn assign_session_to_shared_worker_target(
@@ -706,7 +714,16 @@ impl BrowserContext {
         &mut self,
         renderer_instance_id: u64,
     ) -> Option<DedicatedWorkerTargetState> {
-        self.dedicated_worker_targets.remove(&renderer_instance_id)
+        let retired = self
+            .dedicated_worker_targets
+            .remove(&renderer_instance_id)?;
+        for target in self.page_targets.iter_mut() {
+            target.fetch_owner.retire_worker_requests(
+                &moli_core::page::RendererWorkerIdentity::Dedicated(renderer_instance_id),
+                None,
+            );
+        }
+        Some(retired)
     }
 
     pub(crate) fn assign_session_to_dedicated_worker_target(
@@ -728,7 +745,7 @@ impl BrowserContext {
         // best-effort registering the live renderer session before the attach
         // event is published.
         if let Some(endpoint) = self.worker_inspection_endpoint(
-            moli_core::runtime::RendererWorkerInspectionTarget::Dedicated(renderer_instance_id),
+            moli_core::runtime::RendererWorkerIdentity::Dedicated(renderer_instance_id),
         ) {
             endpoint.attach_session(Some(session_id));
         }
@@ -913,7 +930,7 @@ impl BrowserContext {
             title,
             url: target.url.clone(),
             attached: target.has_session(),
-            opener_id: target.owner_page.target_id().map(DevToolsTargetId::from),
+            opener_id: target.owner.target_id(self).map(DevToolsTargetId::from),
             opener_frame_id: None,
             can_access_opener: false,
             browser_context_id: Some(DevToolsBrowserContextId::from(self.id.as_str())),

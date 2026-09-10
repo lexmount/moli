@@ -1,6 +1,6 @@
 use moli_core::{
     browser::ServiceWorkerCommand,
-    runtime::{RendererWorkerInspectionEndpoint, RendererWorkerInspectionTarget},
+    runtime::{RendererWorkerIdentity, RendererWorkerInspectionEndpoint},
 };
 use moli_shared_worker::SharedWorkerInstanceId;
 
@@ -9,7 +9,7 @@ use super::BrowserContext;
 impl BrowserContext {
     pub(crate) fn worker_inspection_endpoint(
         &self,
-        target: RendererWorkerInspectionTarget,
+        target: RendererWorkerIdentity,
     ) -> Option<RendererWorkerInspectionEndpoint> {
         self.browser_context.worker_inspection_endpoint(target)
     }

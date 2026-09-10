@@ -18,6 +18,15 @@ impl RendererSharedWorkerHost {
         script_url: &str,
     ) {
         match message {
+            WorkerToParentMessage::FetchInterception(pause) => {
+                let Some(client) = self.worker_host_bridge_sender() else {
+                    pause.release();
+                    return;
+                };
+                self.publish_observation(crate::runtime::RendererProtocolObservation::Network(
+                    pause.report(Some(client.document_source())),
+                ));
+            }
             WorkerToParentMessage::Error {
                 message,
                 filename,
@@ -54,6 +63,11 @@ impl RendererSharedWorkerHost {
             }
             WorkerToParentMessage::RuntimeInspectorResponse(publication) => {
                 self.publish_runtime_inspector_response(publication);
+            }
+            WorkerToParentMessage::Network(observation) => {
+                self.publish_observation(crate::runtime::RendererProtocolObservation::Network(
+                    observation,
+                ));
             }
             WorkerToParentMessage::ServiceWorkerBootstrapCompleted(_)
             | WorkerToParentMessage::ServiceWorkerLifecycleCompleted(_) => {
@@ -147,11 +161,7 @@ impl RendererSharedWorkerHost {
             message if is_worker_host_bridge_message(&message) => {
                 self.send_host_bridge_message(message, script_url);
             }
-            WorkerToParentMessage::SubresourceNetwork(_)
-            | WorkerToParentMessage::PendingSubresourceFetch(_)
-            | WorkerToParentMessage::PendingSubresourceFetchCanceled { .. }
-            | WorkerToParentMessage::SubresourceContinue(_)
-            | WorkerToParentMessage::WebSocketSubresource(_)
+            WorkerToParentMessage::WebSocketSubresource(_)
             | WorkerToParentMessage::WebSocketLifecycle(_)
             | WorkerToParentMessage::WebSocketFrame(_)
             | WorkerToParentMessage::Post(_) => {

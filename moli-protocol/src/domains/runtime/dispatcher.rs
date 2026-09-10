@@ -28,18 +28,15 @@ use crate::conn::{
     Cmd, CommandOwnerScope, CompletedMoliDiagnosticsDispatch,
     CompletedRuntimeBindingPageCommandDispatch, CompletedRuntimeChildDefaultContextLookupDispatch,
     CompletedRuntimeEnableEventsDispatch, CompletedRuntimeProtocolMessageDispatch,
-    CompletedServiceWorkerRuntimeProtocolMessageDispatch,
-    CompletedSharedWorkerRuntimeProtocolMessageDispatch, DevToolsCommandDispatchOutcome,
+    CompletedWorkerRuntimeProtocolMessageDispatch, DevToolsCommandDispatchOutcome,
     DevToolsCommandExecutionOutput, DuplicatePendingRendererCommand, InspectorCommandDispatch,
     ParsedCdpCommand, PendingBidiChannelListener, PendingMoliDiagnosticsDispatch,
     PendingRuntimeBindingPageCommandDispatch, PendingRuntimeChildDefaultContextLookupDispatch,
     PendingRuntimeEnableEventsDispatch, PendingRuntimeProtocolMessageDispatch,
-    PendingServiceWorkerRuntimeProtocolMessageDispatch,
-    PendingSharedWorkerRuntimeProtocolMessageDispatch, ProfilerInspectorCommand,
+    PendingWorkerRuntimeProtocolMessageDispatch, ProfilerInspectorCommand,
     RendererCommandDescriptor, RendererDispatchLane, RuntimeBindingDefinition,
     RuntimeEnableReplayEvent, RuntimeInspectorAsyncCompletionReceiver,
-    RuntimeInspectorResponseReady, ServiceWorkerRuntimeExceptionSnapshot,
-    SessionOwnerRuntimeFrontendEnableResult, monotonic_timestamp_seconds,
+    RuntimeInspectorResponseReady, SessionOwnerRuntimeFrontendEnableResult,
     renderer_command_turn_frontend_protocol_response, runtime_remote_object_ids_in_map,
 };
 use crate::domains::actions::{ConsoleAction, HeapProfilerAction, RuntimeAction};
@@ -52,8 +49,7 @@ use crate::domains::console::{
 use crate::domains::observable_output::{
     advance_runtime_observable_cursors_to_current_for_owner,
     advance_runtime_observable_cursors_to_current_for_session_owner,
-    runtime_console_api_called_background_event, runtime_console_message_type_and_text,
-    runtime_exception_thrown_background_event,
+    runtime_console_api_called_events, runtime_exception_thrown_events,
 };
 use crate::domains::runtime_context_events::{
     RuntimeContextProtocolEvent, apply_runtime_context_protocol_event_side_effects_for_owner_typed,
@@ -259,11 +255,11 @@ enum PendingRuntimeCommandKind {
         claimed_await: Option<ClaimedPendingInspectorAwait>,
     },
     SharedWorkerInspector {
-        pending: PendingSharedWorkerRuntimeProtocolMessageDispatch,
+        pending: PendingWorkerRuntimeProtocolMessageDispatch,
         binding_effect: Option<SharedWorkerRuntimeBindingEffect>,
     },
     ServiceWorkerInspector {
-        pending: PendingServiceWorkerRuntimeProtocolMessageDispatch,
+        pending: PendingWorkerRuntimeProtocolMessageDispatch,
     },
     MoliDiagnostics(PendingMoliDiagnosticsDispatch),
     Enable(PendingRuntimeEnableEventsDispatch),
@@ -289,11 +285,11 @@ enum CompletedRuntimeCommandKind {
         routed_output: RuntimeInspectorRoutedOutput,
     },
     SharedWorkerInspector {
-        completed: Result<CompletedSharedWorkerRuntimeProtocolMessageDispatch, String>,
+        completed: Result<CompletedWorkerRuntimeProtocolMessageDispatch, String>,
         binding_effect: Option<SharedWorkerRuntimeBindingEffect>,
     },
     ServiceWorkerInspector {
-        completed: Result<CompletedServiceWorkerRuntimeProtocolMessageDispatch, String>,
+        completed: Result<CompletedWorkerRuntimeProtocolMessageDispatch, String>,
     },
     MoliDiagnostics(Result<CompletedMoliDiagnosticsDispatch, String>),
     Enable(Result<CompletedRuntimeEnableEventsDispatch, String>),
@@ -952,7 +948,7 @@ pub(crate) fn try_start_worker_emulation_command_dispatch(
         Some(
             CdpSessionRoute::DedicatedWorkerTarget { .. }
             | CdpSessionRoute::SharedWorkerTarget { .. },
-        ) => start_shared_worker_frontend_inspector_dispatch(
+        ) => start_worker_frontend_inspector_dispatch(
             conn,
             cmd,
             cmd.json.to_owned(),
@@ -963,7 +959,7 @@ pub(crate) fn try_start_worker_emulation_command_dispatch(
             binding_effect: None,
         }),
         Some(CdpSessionRoute::ServiceWorkerTarget { .. }) => {
-            start_service_worker_frontend_inspector_dispatch(
+            start_worker_frontend_inspector_dispatch(
                 conn,
                 cmd,
                 cmd.json.to_owned(),
@@ -1386,7 +1382,7 @@ fn start_heap_profiler_inspector_shared_worker_command_dispatch(
         ));
     }
 
-    let pending = match start_shared_worker_frontend_inspector_dispatch(
+    let pending = match start_worker_frontend_inspector_dispatch(
         conn,
         cmd,
         cmd.json.to_owned(),
@@ -1484,7 +1480,7 @@ fn start_profiler_inspector_shared_worker_command_dispatch(
     }
 
     let action = dispatch.protocol_method();
-    let pending = match start_shared_worker_frontend_inspector_dispatch(
+    let pending = match start_worker_frontend_inspector_dispatch(
         conn,
         cmd,
         dispatch.into_inspector_json(),
@@ -1611,7 +1607,7 @@ fn start_console_inspector_shared_worker_command_dispatch(
         ));
     }
 
-    let pending = match start_shared_worker_frontend_inspector_dispatch(
+    let pending = match start_worker_frontend_inspector_dispatch(
         conn,
         cmd,
         cmd.json.to_owned(),
@@ -1674,7 +1670,7 @@ fn start_console_inspector_service_worker_command_dispatch(
         ));
     }
 
-    let pending = match start_service_worker_frontend_inspector_dispatch(
+    let pending = match start_worker_frontend_inspector_dispatch(
         conn,
         cmd,
         cmd.json.to_owned(),
@@ -2079,53 +2075,25 @@ fn start_pending_runtime_inspector_dispatch_with_delivery(
     }
 }
 
-fn start_shared_worker_frontend_inspector_dispatch(
+fn start_worker_frontend_inspector_dispatch(
     conn: &mut CdpConnection,
     cmd: &Cmd<'_>,
     inspector_json: String,
     response_delivery: RendererInspectorResponseDelivery,
-) -> Result<PendingSharedWorkerRuntimeProtocolMessageDispatch, String> {
+) -> Result<PendingWorkerRuntimeProtocolMessageDispatch, String> {
     if let Some(command_id) = cmd.id {
         let descriptor = RendererCommandDescriptor::from_frontend_policy(
             inspector_json,
             cmd.renderer_policy(),
             response_delivery,
         );
-        conn.start_shared_worker_runtime_protocol_message_for_session_with_deferred_response(
+        conn.start_worker_runtime_protocol_message_for_session_with_deferred_response(
             cmd.session_id,
             descriptor,
             command_id,
         )
     } else {
-        conn.start_shared_worker_runtime_protocol_message_for_session(
-            cmd.session_id,
-            inspector_json,
-        )
-    }
-}
-
-fn start_service_worker_frontend_inspector_dispatch(
-    conn: &mut CdpConnection,
-    cmd: &Cmd<'_>,
-    inspector_json: String,
-    response_delivery: RendererInspectorResponseDelivery,
-) -> Result<PendingServiceWorkerRuntimeProtocolMessageDispatch, String> {
-    if let Some(command_id) = cmd.id {
-        let descriptor = RendererCommandDescriptor::from_frontend_policy(
-            inspector_json,
-            cmd.renderer_policy(),
-            response_delivery,
-        );
-        conn.start_service_worker_runtime_protocol_message_for_session_with_deferred_response(
-            cmd.session_id,
-            descriptor,
-            command_id,
-        )
-    } else {
-        conn.start_service_worker_runtime_protocol_message_for_session(
-            cmd.session_id,
-            inspector_json,
-        )
+        conn.start_worker_runtime_protocol_message_for_session(cmd.session_id, inspector_json)
     }
 }
 
@@ -7505,8 +7473,14 @@ async fn devtools_realms_for_route_async(
             .browser_context_by_id(browser_context_id)
             .and_then(|context| context.shared_worker_target(target_id))
             .ok_or_else(|| DevToolsError::new(DevToolsErrorKind::NoSuchTarget, "NoSuchTarget"))?;
-        return Ok(shared_worker_target_runtime_realm(target)
+        return Ok(target
+            .runtime_execution_context()
+            .cloned()
             .into_iter()
+            .map(|mut realm| {
+                realm.context_type = Some("shared-worker".to_owned());
+                realm
+            })
             .collect());
     }
     if let CdpSessionRoute::DedicatedWorkerTarget {
@@ -7518,7 +7492,9 @@ async fn devtools_realms_for_route_async(
             .browser_context_by_id(browser_context_id)
             .and_then(|context| context.dedicated_worker_target(target_id))
             .ok_or_else(|| DevToolsError::new(DevToolsErrorKind::NoSuchTarget, "NoSuchTarget"))?;
-        return Ok(dedicated_worker_target_runtime_realm(target)
+        return Ok(target
+            .runtime_execution_context()
+            .cloned()
             .into_iter()
             .collect());
     }
@@ -7531,7 +7507,9 @@ async fn devtools_realms_for_route_async(
             .browser_context_by_id(browser_context_id)
             .and_then(|context| context.service_worker_target(target_id))
             .ok_or_else(|| DevToolsError::new(DevToolsErrorKind::NoSuchTarget, "NoSuchTarget"))?;
-        return Ok(service_worker_target_runtime_realm(target)
+        return Ok(target
+            .runtime_execution_context()
+            .cloned()
             .into_iter()
             .collect());
     }
@@ -7539,66 +7517,6 @@ async fn devtools_realms_for_route_async(
     conn.runtime_realm_inventory_for_owner_async(&owner)
         .await
         .map_err(|message| DevToolsError::new(DevToolsErrorKind::Internal, message))
-}
-
-fn shared_worker_target_runtime_realm(
-    target: &crate::conn::SharedWorkerTargetState,
-) -> Option<RuntimeExecutionContextEvent> {
-    let context_id = target.real_runtime_execution_context_id()?;
-    let origin = url::Url::parse(&target.url)
-        .ok()
-        .map(|url| moli_url::origin_ascii_serialization(&url))
-        .unwrap_or_else(|| "null".to_owned());
-    Some(RuntimeExecutionContextEvent {
-        target_id: Some(DevToolsTargetId::from(target.target_id.as_str())),
-        context_id: Some(context_id),
-        realm_id: Some(DevToolsRealmId::from(format!(
-            "shared-worker-{}",
-            target.target_id
-        ))),
-        frame_id: None,
-        origin: Some(origin),
-        name: Some(target.name.clone()),
-        is_default: Some(true),
-        context_type: Some("shared-worker".to_owned()),
-        grant_universal_access: None,
-    })
-}
-
-fn dedicated_worker_target_runtime_realm(
-    target: &crate::conn::DedicatedWorkerTargetState,
-) -> Option<RuntimeExecutionContextEvent> {
-    let mut realm = shared_worker_target_runtime_realm(&target.inner)?;
-    realm.realm_id = Some(DevToolsRealmId::from(format!(
-        "dedicated-worker-{}",
-        target.target_id
-    )));
-    realm.context_type = Some("worker".to_owned());
-    Some(realm)
-}
-
-fn service_worker_target_runtime_realm(
-    target: &crate::conn::ServiceWorkerTargetState,
-) -> Option<RuntimeExecutionContextEvent> {
-    let context_id = target.real_runtime_execution_context_id()?;
-    let origin = url::Url::parse(&target.script_url)
-        .ok()
-        .map(|url| moli_url::origin_ascii_serialization(&url))
-        .unwrap_or_else(|| "null".to_owned());
-    Some(RuntimeExecutionContextEvent {
-        target_id: Some(DevToolsTargetId::from(target.target_id.as_str())),
-        context_id: Some(context_id),
-        realm_id: Some(DevToolsRealmId::from(format!(
-            "service-worker-{}",
-            target.target_id
-        ))),
-        frame_id: None,
-        origin: Some(origin),
-        name: Some(String::new()),
-        is_default: Some(true),
-        context_type: Some("service-worker".to_owned()),
-        grant_universal_access: None,
-    })
 }
 
 fn devtools_realm_type(context_type: Option<&str>) -> &'static str {
@@ -9347,7 +9265,7 @@ fn start_pending_shared_worker_runtime_inspector_command(
     )
     .map_err(|error| error.to_string())?;
     let response_delivery = cmd.terminal_response_delivery();
-    let pending = match start_shared_worker_frontend_inspector_dispatch(
+    let pending = match start_worker_frontend_inspector_dispatch(
         conn,
         cmd,
         inspector_json,
@@ -9415,7 +9333,7 @@ fn start_pending_service_worker_runtime_inspector_command(
     )
     .map_err(|error| error.to_string())?;
     let response_delivery = cmd.terminal_response_delivery();
-    let pending = match start_service_worker_frontend_inspector_dispatch(
+    let pending = match start_worker_frontend_inspector_dispatch(
         conn,
         cmd,
         inspector_json,
@@ -9458,7 +9376,7 @@ pub(in crate::domains) async fn replay_shared_worker_runtime_bindings_for_sessio
             .saturating_add(u64::try_from(index).unwrap_or(u64::MAX));
         let raw_json = shared_worker_runtime_binding_replay_json(command_id, &binding);
         match conn
-            .dispatch_shared_worker_runtime_helper_protocol_message_for_session_async(
+            .dispatch_worker_runtime_helper_protocol_message_for_session_async(
                 Some(session_id),
                 &raw_json,
                 command_id,
@@ -9569,7 +9487,7 @@ fn apply_shared_worker_runtime_binding_effect_after_success(
 async fn complete_pending_shared_worker_runtime_inspector_command(
     conn: &mut CdpConnection,
     completed: RuntimeCommandCompletionMeta,
-    completed_inspector: Result<CompletedSharedWorkerRuntimeProtocolMessageDispatch, String>,
+    completed_inspector: Result<CompletedWorkerRuntimeProtocolMessageDispatch, String>,
     binding_effect: Option<SharedWorkerRuntimeBindingEffect>,
     timing_started: Option<std::time::Instant>,
 ) -> RuntimeCommandTaskStep {
@@ -9586,14 +9504,13 @@ async fn complete_pending_shared_worker_runtime_inspector_command(
                 && !completed.await_promise
                 && let Err(message) = completed_protocol.wait_for_session_response().await
             {
-                return complete_shared_worker_runtime_inspector_error(conn, completed, message);
+                return complete_shared_worker_runtime_inspector_error(conn, completed, message)
+                    .await;
             }
             let session_response_predecessor = completed_protocol.session_response_predecessor();
             let session_response_succeeded = completed_protocol.session_response_succeeded();
             let renderer_response_rx = completed_protocol.take_deferred_response_receiver();
-            match conn
-                .complete_shared_worker_runtime_protocol_message_for_session(completed_protocol)
-            {
+            match conn.complete_worker_runtime_protocol_message_for_session(completed_protocol) {
                 Ok(messages) => (
                     messages,
                     renderer_response_rx,
@@ -9604,12 +9521,13 @@ async fn complete_pending_shared_worker_runtime_inspector_command(
                 Err(message) => {
                     return complete_shared_worker_runtime_inspector_error(
                         conn, completed, message,
-                    );
+                    )
+                    .await;
                 }
             }
         }
         Err(message) => {
-            return complete_shared_worker_runtime_inspector_error(conn, completed, message);
+            return complete_shared_worker_runtime_inspector_error(conn, completed, message).await;
         }
     };
 
@@ -9759,7 +9677,7 @@ async fn complete_pending_shared_worker_runtime_inspector_command(
 async fn complete_pending_service_worker_runtime_inspector_command(
     conn: &mut CdpConnection,
     completed: RuntimeCommandCompletionMeta,
-    completed_inspector: Result<CompletedServiceWorkerRuntimeProtocolMessageDispatch, String>,
+    completed_inspector: Result<CompletedWorkerRuntimeProtocolMessageDispatch, String>,
     timing_started: Option<std::time::Instant>,
 ) -> RuntimeCommandTaskStep {
     let (
@@ -9775,14 +9693,13 @@ async fn complete_pending_service_worker_runtime_inspector_command(
                 && !completed.await_promise
                 && let Err(message) = completed_protocol.wait_for_session_response().await
             {
-                return complete_service_worker_runtime_inspector_error(conn, completed, message);
+                return complete_service_worker_runtime_inspector_error(conn, completed, message)
+                    .await;
             }
             let session_response_predecessor = completed_protocol.session_response_predecessor();
             let session_response_succeeded = completed_protocol.session_response_succeeded();
             let renderer_response_rx = completed_protocol.take_deferred_response_receiver();
-            match conn
-                .complete_service_worker_runtime_protocol_message_for_session(completed_protocol)
-            {
+            match conn.complete_worker_runtime_protocol_message_for_session(completed_protocol) {
                 Ok(messages) => (
                     messages,
                     renderer_response_rx,
@@ -9793,12 +9710,13 @@ async fn complete_pending_service_worker_runtime_inspector_command(
                 Err(message) => {
                     return complete_service_worker_runtime_inspector_error(
                         conn, completed, message,
-                    );
+                    )
+                    .await;
                 }
             }
         }
         Err(message) => {
-            return complete_service_worker_runtime_inspector_error(conn, completed, message);
+            return complete_service_worker_runtime_inspector_error(conn, completed, message).await;
         }
     };
 
@@ -9970,7 +9888,7 @@ fn apply_shared_worker_runtime_disable_projection(
     }
 }
 
-fn complete_shared_worker_runtime_inspector_error(
+async fn complete_shared_worker_runtime_inspector_error(
     conn: &mut CdpConnection,
     completed: RuntimeCommandCompletionMeta,
     message: String,
@@ -9991,12 +9909,18 @@ fn complete_shared_worker_runtime_inspector_error(
     }
     match completed.action {
         "enable" if message == "NoDocumentLoaded" || worker_runtime_is_unavailable(&message) => {
-            RuntimeCommandTaskStep::Complete(
-                shared_worker_runtime_enable_command_output_plan_for_session(
+            let mut plan = shared_worker_runtime_enable_command_output_plan_for_session(
+                conn,
+                completed.session_id(),
+            );
+            plan.extend_background_events(
+                crate::domains::target::resume_worker_runtime_listener_for_session(
                     conn,
                     completed.session_id(),
-                ),
-            )
+                )
+                .await,
+            );
+            RuntimeCommandTaskStep::Complete(plan)
         }
         "disable" if message == "NoDocumentLoaded" || worker_runtime_is_unavailable(&message) => {
             apply_shared_worker_runtime_disable_projection(conn, completed.session_id());
@@ -10071,7 +9995,7 @@ fn apply_service_worker_runtime_disable_projection(
     target.set_runtime_frontend_enabled(owner_session_id, false);
 }
 
-fn complete_service_worker_runtime_inspector_error(
+async fn complete_service_worker_runtime_inspector_error(
     conn: &mut CdpConnection,
     completed: RuntimeCommandCompletionMeta,
     message: String,
@@ -10094,12 +10018,21 @@ fn complete_service_worker_runtime_inspector_error(
         "enable"
             if message == "NoDocumentLoaded" || message == "ServiceWorkerRuntimeUnavailable" =>
         {
-            RuntimeCommandTaskStep::Complete(
-                service_worker_runtime_enable_command_output_plan_for_session(
+            let mut plan = service_worker_runtime_enable_command_output_plan_for_session(
+                conn,
+                completed.session_id(),
+            );
+            // The native readiness occurrence may have been consumed while the
+            // unavailable dispatch was pending, before its logical enable took
+            // effect. Bind now if ready; otherwise that later occurrence binds it.
+            plan.extend_background_events(
+                crate::domains::target::resume_worker_runtime_listener_for_session(
                     conn,
                     completed.session_id(),
-                ),
-            )
+                )
+                .await,
+            );
+            RuntimeCommandTaskStep::Complete(plan)
         }
         "disable"
             if message == "NoDocumentLoaded" || message == "ServiceWorkerRuntimeUnavailable" =>
@@ -10178,20 +10111,11 @@ fn append_shared_worker_runtime_console_messages(
         target.mark_runtime_console_emitted(session_id, console_end);
     }
 
-    let base_timestamp = monotonic_timestamp_seconds();
-    for (index, message) in runtime_messages.iter().enumerate() {
-        let (console_type, text) = runtime_console_message_type_and_text(&message.message);
-        push_runtime_console_api_called_background_event(
-            plan,
-            Some(session_id),
-            console_type,
-            text,
-            &message.args,
-            message.stack.as_deref(),
-            message.execution_context_id,
-            base_timestamp + ((index + 1) as f64 * 0.000_001),
-        );
-    }
+    plan.extend_background_events(runtime_console_api_called_events(
+        session_id,
+        &target.target_id,
+        &runtime_messages,
+    ));
 }
 
 fn append_service_worker_runtime_console_messages(
@@ -10212,20 +10136,11 @@ fn append_service_worker_runtime_console_messages(
         target.mark_runtime_console_emitted(session_id, console_end);
     }
 
-    let base_timestamp = monotonic_timestamp_seconds();
-    for (index, message) in runtime_messages.iter().enumerate() {
-        let (console_type, text) = runtime_console_message_type_and_text(&message.message);
-        push_runtime_console_api_called_background_event(
-            plan,
-            Some(session_id),
-            console_type,
-            text,
-            &message.args,
-            message.stack.as_deref(),
-            message.execution_context_id,
-            base_timestamp + ((index + 1) as f64 * 0.000_001),
-        );
-    }
+    plan.extend_background_events(runtime_console_api_called_events(
+        session_id,
+        &target.target_id,
+        &runtime_messages,
+    ));
 }
 
 fn append_service_worker_runtime_exception_messages(
@@ -10251,12 +10166,12 @@ fn append_service_worker_runtime_exception_messages(
         target.mark_runtime_exception_emitted(session_id, exception_end);
     }
 
-    push_runtime_exception_thrown_protocol_messages(
-        plan,
+    plan.extend_background_events(runtime_exception_thrown_events(
         session_id,
+        &target.target_id,
         &exception_messages,
         exception_start,
-    );
+    ));
 }
 
 fn shared_worker_runtime_enable_command_output_plan_for_session(
@@ -10270,7 +10185,10 @@ fn shared_worker_runtime_enable_command_output_plan_for_session(
         return CommandOutputPlan::error(-32001, "Unknown sessionId");
     };
     target.set_runtime_frontend_enabled(session_id, true);
-    let execution_context_created = build_shared_worker_execution_context_created_event(target);
+    let execution_context_created = target
+        .runtime_execution_context()
+        .cloned()
+        .map(RuntimeContextProtocolEvent::Created);
     let has_runtime_context = target.real_runtime_execution_context_id().is_some();
     let runtime_messages = target.pending_runtime_console_messages(session_id).to_vec();
     let console_end = target.console_message_count();
@@ -10287,20 +10205,11 @@ fn shared_worker_runtime_enable_command_output_plan_for_session(
             session_id,
         );
     }
-    let base_timestamp = monotonic_timestamp_seconds();
-    for (index, message) in runtime_messages.iter().enumerate() {
-        let (console_type, text) = runtime_console_message_type_and_text(&message.message);
-        push_runtime_console_api_called_background_event(
-            &mut plan,
-            Some(session_id),
-            console_type,
-            text,
-            &message.args,
-            message.stack.as_deref(),
-            message.execution_context_id,
-            base_timestamp + ((index + 1) as f64 * 0.000_001),
-        );
-    }
+    plan.extend_background_events(runtime_console_api_called_events(
+        session_id,
+        &target.target_id,
+        &runtime_messages,
+    ));
     plan
 }
 
@@ -10315,7 +10224,10 @@ fn service_worker_runtime_enable_command_output_plan_for_session(
         return CommandOutputPlan::error(-32001, "Unknown sessionId");
     };
     target.set_runtime_frontend_enabled(session_id, true);
-    let execution_context_created = build_service_worker_execution_context_created_event(target);
+    let execution_context_created = target
+        .runtime_execution_context()
+        .cloned()
+        .map(RuntimeContextProtocolEvent::Created);
     let has_runtime_context = target.real_runtime_execution_context_id().is_some();
     let runtime_messages = target.pending_runtime_console_messages(session_id).to_vec();
     let console_end = target.console_message_count();
@@ -10342,26 +10254,17 @@ fn service_worker_runtime_enable_command_output_plan_for_session(
             session_id,
         );
     }
-    let base_timestamp = monotonic_timestamp_seconds();
-    for (index, message) in runtime_messages.iter().enumerate() {
-        let (console_type, text) = runtime_console_message_type_and_text(&message.message);
-        push_runtime_console_api_called_background_event(
-            &mut plan,
-            Some(session_id),
-            console_type,
-            text,
-            &message.args,
-            message.stack.as_deref(),
-            message.execution_context_id,
-            base_timestamp + ((index + 1) as f64 * 0.000_001),
-        );
-    }
-    push_runtime_exception_thrown_protocol_messages(
-        &mut plan,
+    plan.extend_background_events(runtime_console_api_called_events(
         session_id,
+        &target.target_id,
+        &runtime_messages,
+    ));
+    plan.extend_background_events(runtime_exception_thrown_events(
+        session_id,
+        &target.target_id,
         &exception_messages,
         exception_start,
-    );
+    ));
     plan
 }
 
@@ -10373,99 +10276,6 @@ fn push_execution_context_created_background_event(
     let mut events = Vec::new();
     emit_runtime_context_protocol_background_event_typed(&mut events, event, Some(session_id));
     plan.extend_background_events(events);
-}
-
-fn push_runtime_console_api_called_background_event(
-    plan: &mut CommandOutputPlan,
-    session_id: Option<&str>,
-    console_type: &str,
-    text: &str,
-    args: &[Value],
-    stack: Option<&str>,
-    execution_context_id: i64,
-    timestamp: f64,
-) {
-    plan.push_background_event(runtime_console_api_called_background_event(
-        session_id,
-        None,
-        console_type,
-        text,
-        args,
-        stack,
-        execution_context_id,
-        timestamp,
-    ));
-}
-
-fn push_runtime_exception_thrown_protocol_messages(
-    plan: &mut CommandOutputPlan,
-    session_id: &str,
-    messages: &[ServiceWorkerRuntimeExceptionSnapshot],
-    exception_start: usize,
-) {
-    let base_timestamp = monotonic_timestamp_seconds();
-    for (offset, message) in messages.iter().enumerate() {
-        let exception_index = exception_start + offset;
-        plan.push_background_event(runtime_exception_thrown_background_event(
-            Some(session_id),
-            None,
-            &message.message.message,
-            &message.message.filename,
-            message.execution_context_id,
-            exception_index,
-            base_timestamp + ((offset + 1) as f64 * 0.000_001),
-            Some(u64::from(message.message.lineno.saturating_sub(1))),
-            Some(u64::from(message.message.colno.saturating_sub(1))),
-        ));
-    }
-}
-
-fn build_shared_worker_execution_context_created_event(
-    target: &crate::conn::SharedWorkerTargetState,
-) -> Option<RuntimeContextProtocolEvent> {
-    let context_id = target.real_runtime_execution_context_id()?;
-    let realm_id = format!("shared-worker-{}", target.target_id);
-    let origin = url::Url::parse(&target.url)
-        .ok()
-        .map(|url| moli_url::origin_ascii_serialization(&url))
-        .unwrap_or_else(|| "null".to_owned());
-    Some(RuntimeContextProtocolEvent::Created(
-        RuntimeExecutionContextEvent {
-            target_id: None,
-            context_id: Some(context_id),
-            realm_id: Some(DevToolsRealmId::from(realm_id)),
-            frame_id: None,
-            origin: Some(origin),
-            name: Some(target.name.clone()),
-            is_default: Some(true),
-            context_type: Some("worker".to_owned()),
-            grant_universal_access: None,
-        },
-    ))
-}
-
-fn build_service_worker_execution_context_created_event(
-    target: &crate::conn::ServiceWorkerTargetState,
-) -> Option<RuntimeContextProtocolEvent> {
-    let context_id = target.real_runtime_execution_context_id()?;
-    let realm_id = format!("service-worker-{}", target.target_id);
-    let origin = url::Url::parse(&target.script_url)
-        .ok()
-        .map(|url| moli_url::origin_ascii_serialization(&url))
-        .unwrap_or_else(|| "null".to_owned());
-    Some(RuntimeContextProtocolEvent::Created(
-        RuntimeExecutionContextEvent {
-            target_id: None,
-            context_id: Some(context_id),
-            realm_id: Some(DevToolsRealmId::from(realm_id)),
-            frame_id: None,
-            origin: Some(origin),
-            name: Some(String::new()),
-            is_default: Some(true),
-            context_type: Some("service-worker".to_owned()),
-            grant_universal_access: None,
-        },
-    ))
 }
 
 fn disable_command_output_plan_sync_for_owner(
@@ -10664,7 +10474,6 @@ mod protocol_neutral_tests {
         DevToolsCallFunctionCommand, DevToolsCommand, DevToolsCommandContext, DevToolsProtocol,
         DevToolsResultOwnership, RuntimeExecutionContextEvent,
     };
-    use moli_core::RendererOwnerLocalHostId;
     use moli_core::page::{MAX_INSPECTOR_PROTOCOL_VALUE_DEPTH, RendererSharedWorkerConsoleMessage};
     use moli_page_types::RendererInspectorResponseDelivery;
     use moli_shared_worker::SharedWorkerInstanceId;
@@ -11788,7 +11597,6 @@ mod protocol_neutral_tests {
         let mut browser_context =
             conn.new_browser_context_fixture_for_test("BID-shared".to_owned());
         let mut target = SharedWorkerTargetState::new(
-            RendererOwnerLocalHostId::new_for_testing(1),
             SharedWorkerInstanceId::from_u64(91),
             "TID-shared-worker".to_owned(),
             None,

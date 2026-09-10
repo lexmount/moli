@@ -206,11 +206,11 @@ fn pending_auth(
 ) -> PendingSubresourceFetchAuthRequest {
     let pending = pending_request(page_owner, internal_id);
     let page_owner = pending
-        .installed_page_owner()
+        .observer_page_owner()
         .expect("test request should belong to an installed Page")
         .clone();
     PendingSubresourceFetchAuthRequest {
-        page_owner,
+        residence: crate::conn::PendingSubresourceFetchResidence::InstalledPage(page_owner),
         owner_session_id: pending.owner_session_id,
         action_session_id: pending.action_session_id,
         owner_kind: pending.owner_kind,
@@ -243,11 +243,11 @@ fn pending_response(
 ) -> PendingSubresourceFetchResponseRequest {
     let pending = pending_request(page_owner, internal_id);
     let page_owner = pending
-        .installed_page_owner()
+        .observer_page_owner()
         .expect("test request should belong to an installed Page")
         .clone();
     PendingSubresourceFetchResponseRequest {
-        page_owner,
+        residence: crate::conn::PendingSubresourceFetchResidence::InstalledPage(page_owner),
         owner_session_id: pending.owner_session_id,
         action_session_id: pending.action_session_id,
         owner_kind: pending.owner_kind,

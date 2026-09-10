@@ -37,9 +37,8 @@ use crate::{
         style_engine::MoliStyleEngine,
         text_codec::TextCodecStore,
         types::{
-            BroadcastChannelId, DedicatedWorkerId, ImageRequestKey,
-            InFlightWorkerSubresourceFetchState, MessagePortId, NetworkBodySourceId,
-            PendingSubresourceAuthState, PendingSubresourceFetchState,
+            BroadcastChannelId, DedicatedWorkerId, ImageRequestKey, MessagePortId,
+            NetworkBodySourceId, PendingSubresourceAuthState, PendingSubresourceFetchState,
             PendingSubresourceResponseState, PendingWebSocketResponseState,
             RunningSubresourceFetchState, ScriptErrorConstructorKind, ScriptNetworkOutputItem,
             StreamingSubresourceFetchState, SubresourceResourceType,
@@ -1042,7 +1041,6 @@ pub(crate) struct JsContextHost {
     javascript_dialog_handler_enabled: bool,
     pending_network_output: Vec<ScriptNetworkOutputItem>,
     focus_change_epoch: u64,
-    next_subresource_network_request_handle: u64,
     subresource_activity_epoch: u64,
     subresource_last_activity_at: std::time::Instant,
     fetch_subresource_interception_enabled: bool,
@@ -1057,7 +1055,6 @@ pub(crate) struct JsContextHost {
     pending_subresource_fetch_infos: Vec<PendingSubresourceFetchInfo>,
     running_subresource_fetches: HashMap<u64, RunningSubresourceFetchState>,
     streaming_subresource_fetches: HashMap<u64, StreamingSubresourceFetchState>,
-    in_flight_worker_subresource_fetches: HashMap<u64, InFlightWorkerSubresourceFetchState>,
     #[cfg(test)]
     pending_subresource_continue_events: Vec<PendingSubresourceContinueEvent>,
     pub(crate) pending_network_body_sources:
@@ -1254,6 +1251,19 @@ impl JsContextHost {
         self.close_owned_broadcast_channels();
         self.close_owned_message_ports();
         self.shutdown_workers();
+        // This shares the native reporter FIFO with the last teardown outputs.
+        // Closing an observation source does not claim that detached keepalive
+        // transports have completed or failed.
+        if let Some(document) = self.root_document_lifecycle_identity()
+            && let Some(journal) = self.output_journal.as_ref()
+            && let crate::runtime::RendererOutputResidenceIdentity::Page {
+                owner_local_host_id,
+                ..
+            } = journal.stream().residence()
+        {
+            self.browser_context_runtime
+                .close_network_source(owner_local_host_id, document.document.page_id);
+        }
     }
 }
 

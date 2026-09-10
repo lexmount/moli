@@ -1,11 +1,7 @@
 use std::rc::Rc;
 
-use tokio::sync::mpsc;
-
 use crate::v8_platform::{V8ForegroundTaskWake, V8PlatformIsolateRegistration};
-use crate::worker::{
-    handle::WorkerToParentMessage, inspector_task_runner::WorkerInspectorTaskRunner,
-};
+use crate::worker::inspector_task_runner::WorkerInspectorTaskRunner;
 
 use super::{
     super::module_runtime::{
@@ -28,7 +24,7 @@ impl WorkerIsolateState {
     pub(super) fn new(
         platform_wake: V8ForegroundTaskWake,
         inspector_task_runner: WorkerInspectorTaskRunner,
-        parent_tx: mpsc::UnboundedSender<WorkerToParentMessage>,
+        parent_tx: crate::worker::WorkerParentSender,
         shared_worker: bool,
     ) -> Self {
         let mut isolate = v8::Isolate::new(Default::default());

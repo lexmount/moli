@@ -20,6 +20,8 @@ use serde_json::{Value, json};
 use url::Url;
 
 mod dedicated_workers;
+pub(crate) use dedicated_workers::RendererDedicatedWorkerHost;
+use dedicated_workers::RendererDedicatedWorkerRegistry;
 mod service_worker_runtime;
 mod service_workers;
 mod shared_workers;
@@ -156,6 +158,7 @@ impl RendererProducerRegistrar {
 /// the SharedWorker constructor on Window.
 #[derive(Clone, Debug)]
 pub(crate) struct RendererWorkerContextRuntime {
+    dedicated_workers: Arc<RendererDedicatedWorkerRegistry>,
     message_port_registry: crate::message_port_runtime::SharedMessagePortRegistry,
     broadcast_channel_registry: crate::broadcast_channel_runtime::SharedBroadcastChannelRegistry,
     storage_partition_identity: RendererStoragePartitionIdentity,
@@ -202,6 +205,7 @@ struct RendererBrowserContextRuntimeInner {
     // V8 objects, so other pages can read a coherent snapshot in their own realm.
     clipboard_snapshot: Mutex<ClipboardSnapshot>,
     worker_lifecycle: super::RendererWorkerLifecycleReporter,
+    network: super::RendererNetworkReporter,
     message_port_registry: crate::message_port_runtime::SharedMessagePortRegistry,
     broadcast_channel_registry: crate::broadcast_channel_runtime::SharedBroadcastChannelRegistry,
     browser_resource_runtime: crate::network::BrowserResourceRuntimeBinding,
@@ -211,17 +215,9 @@ struct RendererBrowserContextRuntimeInner {
     worker_threads: crate::worker::WorkerThreadRegistrar,
     next_child_document_loader_id: AtomicU64,
     next_detached_parser_script_fetch_id: AtomicU64,
-    next_dedicated_worker_instance_id: AtomicU64,
-    dedicated_worker_devtools_targets: Mutex<HashMap<u64, DedicatedWorkerDevToolsTarget>>,
-    dedicated_worker_pause_on_start_for_devtools: AtomicBool,
+    dedicated_workers: Arc<RendererDedicatedWorkerRegistry>,
     javascript_dialog_handler_enabled: AtomicBool,
     renderer_output_transport_tx: RendererOutputTransportSenderSlot,
-}
-
-#[derive(Clone, Debug)]
-struct DedicatedWorkerDevToolsTarget {
-    handle: crate::worker::WorkerDevToolsHandle,
-    output_journal: Option<super::RendererTurnOutputJournal>,
 }
 
 #[derive(Debug)]
@@ -353,11 +349,7 @@ impl Drop for RendererBrowserContextRuntimeInner {
 }
 
 fn terminate_browser_context_resource_producers(inner: &RendererBrowserContextRuntimeInner) {
-    let dedicated_worker_targets =
-        std::mem::take(&mut *inner.dedicated_worker_devtools_targets.lock());
-    for target in dedicated_worker_targets.into_values() {
-        let _ = target.handle.terminate_for_devtools();
-    }
+    inner.dedicated_workers.shutdown();
     if let Some(shared_worker_runtime) = inner.shared_worker_runtime.get() {
         shared_worker_runtime.terminate_all_for_context_shutdown();
     }
@@ -395,20 +387,20 @@ impl RendererBrowserContextRuntime {
     /// dispatch inspection only; it cannot control the Context or other workers.
     pub fn worker_inspection_endpoint(
         &self,
-        target: super::RendererWorkerInspectionTarget,
+        target: super::RendererWorkerIdentity,
     ) -> Option<super::RendererWorkerInspectionEndpoint> {
         match target {
-            super::RendererWorkerInspectionTarget::Dedicated(instance_id) => {
+            super::RendererWorkerIdentity::Dedicated(instance_id) => {
                 self.dedicated_worker_inspection_endpoint(instance_id)
             }
-            super::RendererWorkerInspectionTarget::Shared(instance_id) => self
+            super::RendererWorkerIdentity::Shared(instance_id) => self
                 .shared_worker_runtime_if_initialized()?
                 .inspection_endpoint(instance_id),
-            super::RendererWorkerInspectionTarget::Service { version_id, run } => self
+            super::RendererWorkerIdentity::Service { version, run } => self
                 .service_worker_runtime_for_existing_registration()?
                 .inspection_endpoint(
                     crate::service_worker_runtime::ServiceWorkerVersionId::from_u64_for_binding(
-                        version_id,
+                        version,
                     ),
                     &run,
                 ),
@@ -584,11 +576,11 @@ impl RendererBrowserContextRuntime {
             service_worker_context_runtime.broadcast_channel_registry();
         let storage_partition_identity =
             service_worker_context_runtime.storage_partition_identity();
-        let id = super::RendererBrowserContextRuntimeId::new(
-            NEXT_RENDERER_BROWSER_CONTEXT_RUNTIME_ID.fetch_add(1, Ordering::Relaxed),
-        );
-        let renderer_output_transport_tx = RendererOutputTransportSenderSlot::default();
-        let worker_lifecycle = super::RendererWorkerLifecycleReporter::new(id);
+        let dedicated_workers = service_worker_context_runtime.dedicated_workers.clone();
+        let network = dedicated_workers.network.clone();
+        let id = network.runtime();
+        let renderer_output_transport_tx = dedicated_workers.transport.clone();
+        let worker_lifecycle = dedicated_workers.outputs.worker_lifecycle.clone();
         let shared_worker_runtime = match shared_worker_runtime {
             Some(service) => shared_workers::LazySharedWorkerRuntime::from_service(
                 service,
@@ -612,6 +604,7 @@ impl RendererBrowserContextRuntime {
                 id,
                 clipboard_snapshot: Mutex::new(ClipboardSnapshot::default()),
                 worker_lifecycle,
+                network,
                 message_port_registry,
                 broadcast_channel_registry,
                 browser_resource_runtime: browser_resource_runtime.clone(),
@@ -621,9 +614,7 @@ impl RendererBrowserContextRuntime {
                 worker_threads: worker_threads.registrar(),
                 next_child_document_loader_id: AtomicU64::default(),
                 next_detached_parser_script_fetch_id: AtomicU64::default(),
-                next_dedicated_worker_instance_id: AtomicU64::default(),
-                dedicated_worker_devtools_targets: Mutex::new(HashMap::new()),
-                dedicated_worker_pause_on_start_for_devtools: AtomicBool::new(false),
+                dedicated_workers,
                 javascript_dialog_handler_enabled: AtomicBool::new(false),
                 renderer_output_transport_tx,
             }),
@@ -658,11 +649,32 @@ impl RendererBrowserContextRuntime {
         self.inner.worker_lifecycle.install_handler(handler);
     }
 
-    pub(crate) fn report_worker_lifecycle(
+    /// Native input is installed independently of DevTools transport. This
+    /// callback must enqueue work and never block a renderer on Browser.
+    pub fn install_network_handler(
         &self,
-        lifecycle: super::RendererWorkerLifecycle,
-    ) -> super::RendererWorkerLifecycleObservation {
-        self.inner.worker_lifecycle.report(lifecycle)
+        handler: impl Fn(super::RendererNetworkInput) + Send + Sync + 'static,
+    ) {
+        self.inner.network.install_handler(handler);
+    }
+
+    pub(crate) fn report_network(
+        &self,
+        owner_local_host_id: super::RendererOwnerLocalHostId,
+        document: super::RendererDocumentLifecycleIdentity,
+        item: impl Into<super::RendererNetworkOutputItem>,
+    ) -> super::RendererNetworkObservation {
+        self.inner
+            .network
+            .report(owner_local_host_id, document, item)
+    }
+
+    pub(crate) fn close_network_source(
+        &self,
+        owner_local_host_id: super::RendererOwnerLocalHostId,
+        page: super::PageId,
+    ) {
+        self.inner.network.close_source(owner_local_host_id, page);
     }
 
     pub(crate) fn set_renderer_output_transport_sender(
@@ -670,6 +682,7 @@ impl RendererBrowserContextRuntime {
         sender: super::RendererOutputTransportSender,
     ) {
         self.inner.renderer_output_transport_tx.set(sender.clone());
+        self.inner.dedicated_workers.bind_transport(sender.clone());
         if let Some(shared_worker_runtime) = self.inner.shared_worker_runtime.get() {
             shared_worker_runtime.bind_target_output_transport(sender.clone());
         }
@@ -775,6 +788,7 @@ impl RendererBrowserContextRuntime {
 
     pub(crate) fn worker_context_runtime(&self) -> RendererWorkerContextRuntime {
         RendererWorkerContextRuntime {
+            dedicated_workers: self.inner.dedicated_workers.clone(),
             message_port_registry: self.message_port_registry(),
             broadcast_channel_registry: self.broadcast_channel_registry(),
             storage_partition_identity: self.storage_partition_identity(),
@@ -1009,6 +1023,25 @@ impl RendererStoragePartitionIdentity {
 }
 
 impl RendererWorkerContextRuntime {
+    pub(crate) fn create_dedicated_worker(
+        &self,
+        owner: super::RendererDedicatedWorkerOwner,
+        request_url: String,
+        document_url: String,
+        name: String,
+    ) -> RendererDedicatedWorkerHost {
+        self.dedicated_workers
+            .create(owner, request_url, document_url, name)
+    }
+
+    pub(crate) fn network_for_worker(
+        &self,
+        source: super::RendererWorkerIdentity,
+    ) -> super::RendererWorkerNetworkReporter {
+        super::RendererWorkerNetworkReporter::new(self.dedicated_workers.network.clone(), source)
+    }
+
+    #[cfg(test)]
     pub(crate) fn new(
         message_port_registry: crate::message_port_runtime::SharedMessagePortRegistry,
         broadcast_channel_registry: crate::broadcast_channel_runtime::SharedBroadcastChannelRegistry,
@@ -1026,6 +1059,11 @@ impl RendererWorkerContextRuntime {
         storage_partition_identity: RendererStoragePartitionIdentity,
     ) -> Self {
         Self {
+            dedicated_workers: Arc::new(RendererDedicatedWorkerRegistry::new(
+                super::RendererNetworkReporter::new(super::RendererBrowserContextRuntimeId::new(
+                    NEXT_RENDERER_BROWSER_CONTEXT_RUNTIME_ID.fetch_add(1, Ordering::Relaxed),
+                )),
+            )),
             message_port_registry,
             broadcast_channel_registry,
             storage_partition_identity,

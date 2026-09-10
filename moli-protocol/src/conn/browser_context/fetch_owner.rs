@@ -18,6 +18,15 @@ use crate::devtools_runtime::{DevToolsNetworkInterceptId, DevToolsNetworkResourc
 use crate::domains::network::TargetIoStreamRead;
 
 impl CdpConnection {
+    pub(crate) fn subresource_fetch_residence_is_current(
+        &self,
+        residence: &crate::conn::PendingSubresourceFetchResidence,
+    ) -> bool {
+        residence
+            .observer()
+            .is_none_or(|owner| self.target_page_residence_identity_is_current(owner))
+    }
+
     pub(crate) fn take_navigation_request(
         &mut self,
         permit: NavigationInterceptionPermit,
@@ -439,7 +448,7 @@ impl CdpConnection {
         pending: &PendingSubresourceFetchRequest,
     ) -> bool {
         pending
-            .installed_page_owner()
+            .observer_page_owner()
             .is_none_or(|owner| self.target_page_residence_identity_is_current(owner))
     }
 
@@ -448,7 +457,7 @@ impl CdpConnection {
         pending: &PendingSubresourceFetchRequest,
     ) -> bool {
         pending
-            .installed_page_owner()
+            .observer_page_owner()
             .is_some_and(|owner| self.target_page_residence_identity_is_current(owner))
     }
 
@@ -456,7 +465,7 @@ impl CdpConnection {
         &mut self,
         owner: &CommandOwnerScope,
         expected_page_owner: &crate::conn::TargetPageResidenceIdentity,
-        internal_id: u64,
+        internal_id: impl Into<crate::conn::SubresourceFetchKey> + Copy,
         allow_pending_completion: bool,
     ) -> Option<crate::conn::ClaimedSubresourceContinueRequest> {
         if !self.target_page_residence_identity_is_current(expected_page_owner) {
@@ -661,8 +670,15 @@ impl CdpConnection {
         action_session_id: Option<&str>,
         request_id: &str,
     ) -> Option<PendingSubresourceFetchResponseRequest> {
-        self.target_session_owner_mut_for_owner(owner)?
-            .pending_subresource_fetch_response_request(request_id, action_session_id)
+        let pending = self
+            .target_session_owner_mut_for_owner(owner)?
+            .pending_subresource_fetch_response_request(request_id, action_session_id)?;
+        (self.subresource_fetch_residence_is_current(&pending.residence)
+            && pending
+                .residence
+                .worker()
+                .is_none_or(|pause| pause.pause.is_available()))
+        .then_some(pending)
     }
 
     pub(crate) fn mark_pending_subresource_fetch_response_body_taken_as_stream_for_owner(
@@ -1066,7 +1082,7 @@ impl CdpConnection {
         let pending = self
             .target_session_owner_mut_for_owner(owner)?
             .take_pending_subresource_fetch_auth_request(request_id, action_session_id)?;
-        self.target_page_residence_identity_is_current(&pending.page_owner)
+        self.subresource_fetch_residence_is_current(&pending.residence)
             .then_some(pending)
     }
 
@@ -1079,14 +1095,14 @@ impl CdpConnection {
         let pending = self
             .target_session_owner_mut_for_owner(owner)?
             .take_pending_subresource_fetch_response_request(request_id, action_session_id)?;
-        self.target_page_residence_identity_is_current(&pending.page_owner)
+        self.subresource_fetch_residence_is_current(&pending.residence)
             .then_some(pending)
     }
 
     pub(crate) fn take_in_flight_subresource_fetch_request_for_owner(
         &mut self,
         owner: &CommandOwnerScope,
-        internal_id: u64,
+        internal_id: impl Into<crate::conn::SubresourceFetchKey> + Copy,
     ) -> Option<InFlightSubresourceFetchRequest> {
         let in_flight = self
             .target_session_owner_mut_for_owner(owner)?
@@ -1207,7 +1223,7 @@ impl CdpConnection {
         request_id: String,
         pending: PendingSubresourceFetchAuthRequest,
     ) -> bool {
-        if !self.target_page_residence_identity_is_current(&pending.page_owner) {
+        if !self.subresource_fetch_residence_is_current(&pending.residence) {
             return false;
         }
         self.record_pending_subresource_auth_network_request_identity_for_owner(owner, &pending);
@@ -1235,7 +1251,7 @@ impl CdpConnection {
         request_id: String,
         pending: PendingSubresourceFetchResponseRequest,
     ) -> bool {
-        if !self.target_page_residence_identity_is_current(&pending.page_owner) {
+        if !self.subresource_fetch_residence_is_current(&pending.residence) {
             return false;
         }
         self.record_pending_subresource_response_network_request_identity_for_owner(
@@ -1252,6 +1268,9 @@ impl CdpConnection {
         owner: &CommandOwnerScope,
         pending: &PendingSubresourceFetchRequest,
     ) {
+        if pending.residence.worker().is_some() {
+            return;
+        }
         let Some(handle) = pending.network_request_handle else {
             return;
         };
@@ -1268,6 +1287,9 @@ impl CdpConnection {
         owner: &CommandOwnerScope,
         pending: &PendingSubresourceFetchAuthRequest,
     ) {
+        if pending.residence.worker().is_some() {
+            return;
+        }
         let Some(handle) = pending.network_request_handle else {
             return;
         };
@@ -1284,6 +1306,9 @@ impl CdpConnection {
         owner: &CommandOwnerScope,
         pending: &PendingSubresourceFetchResponseRequest,
     ) {
+        if pending.residence.worker().is_some() {
+            return;
+        }
         let Some(handle) = pending.network_request_handle else {
             return;
         };
@@ -1637,7 +1662,7 @@ impl TargetSessionOwnerMut<'_> {
 
     fn take_in_flight_subresource_fetch_request(
         &mut self,
-        internal_id: u64,
+        internal_id: impl Into<crate::conn::SubresourceFetchKey> + Copy,
     ) -> Option<InFlightSubresourceFetchRequest> {
         self.pending_fetch_owner_mut()?
             .take_in_flight_subresource_fetch_request(internal_id)
@@ -1646,7 +1671,7 @@ impl TargetSessionOwnerMut<'_> {
     fn claim_subresource_continue_request(
         &mut self,
         expected_page_owner: &crate::conn::TargetPageResidenceIdentity,
-        internal_id: u64,
+        internal_id: impl Into<crate::conn::SubresourceFetchKey> + Copy,
         session_id: Option<&str>,
         allow_pending_completion: bool,
     ) -> Option<crate::conn::ClaimedSubresourceContinueRequest> {

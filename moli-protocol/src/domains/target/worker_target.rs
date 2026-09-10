@@ -8,15 +8,15 @@ use moli_core::{
     browser::ServiceWorkerCommand,
     page::{
         RendererDedicatedWorkerMainScript, RendererDedicatedWorkerMainScriptOutcome,
-        RendererDedicatedWorkerObservation, RendererDedicatedWorkerTargetInfo,
-        RendererRuntimeInspectorMessage, RendererServiceWorkerConsoleMessage,
-        RendererServiceWorkerExceptionMessage, RendererServiceWorkerFetchDiagnostic,
-        RendererServiceWorkerFetchDiagnosticResult, RendererServiceWorkerLifecycle,
-        RendererServiceWorkerObservation, RendererServiceWorkerRunIdentity,
-        RendererServiceWorkerTargetInfo, RendererServiceWorkerVersionStatus,
-        RendererSharedWorkerConsoleMessage, RendererSharedWorkerObservation,
-        RendererSharedWorkerTargetInfo, RendererWorkerLifecycle, RuntimeConsoleMessageSnapshot,
-        SubresourceRequestInitiatorType,
+        RendererDedicatedWorkerObservation, RendererDedicatedWorkerOwner,
+        RendererDedicatedWorkerTargetInfo, RendererRuntimeInspectorMessage,
+        RendererServiceWorkerConsoleMessage, RendererServiceWorkerExceptionMessage,
+        RendererServiceWorkerFetchDiagnostic, RendererServiceWorkerFetchDiagnosticResult,
+        RendererServiceWorkerLifecycle, RendererServiceWorkerObservation,
+        RendererServiceWorkerRunIdentity, RendererServiceWorkerTargetInfo,
+        RendererServiceWorkerVersionStatus, RendererSharedWorkerConsoleMessage,
+        RendererSharedWorkerObservation, RendererSharedWorkerTargetInfo, RendererWorkerLifecycle,
+        RuntimeConsoleMessageSnapshot, SubresourceRequestInitiatorType,
     },
 };
 use moli_shared_worker::SharedWorkerInstanceId;
@@ -31,7 +31,7 @@ use crate::devtools_runtime::{
 use crate::{
     conn::{
         BackgroundProtocolEvent, CdpConnection, CdpSessionRoute, CommandOwnerScope,
-        PreparedTargetAttach, PreparedTargetHostDelta, RendererPageResidenceIdentity,
+        DedicatedWorkerOwner, PreparedTargetAttach, PreparedTargetHostDelta,
         ServiceWorkerRuntimeExceptionSnapshot, ServiceWorkerTargetState, SharedWorkerTargetState,
         TargetAttachSessionCommit, TargetPageResidenceIdentity,
         TargetServiceWorkerProtocolAttachmentIdentity,
@@ -47,8 +47,7 @@ use crate::{
     },
     domains::observable_output::{
         console_message_added_background_event, console_message_level_and_text,
-        runtime_console_api_called_background_event, runtime_console_message_type_and_text,
-        runtime_exception_thrown_background_event,
+        runtime_console_api_called_events, runtime_exception_thrown_events,
     },
     domains::runtime::replay_shared_worker_runtime_bindings_for_session_async,
     domains::{network, service_worker},
@@ -75,10 +74,7 @@ enum WorkerTargetLifecycleOutput {
         events: Vec<crate::conn::BackgroundProtocolEvent>,
     },
     DedicatedWorkerConsoleMessages {
-        browser_context_id: String,
-        renderer_instance_id: u64,
-        target_id: String,
-        session_id: String,
+        attachment: TargetSharedWorkerProtocolAttachmentIdentity,
         console_messages: Vec<RuntimeConsoleMessageSnapshot>,
         runtime_messages: Vec<RuntimeConsoleMessageSnapshot>,
         console_end: usize,
@@ -115,6 +111,10 @@ enum WorkerTargetLifecycleOutput {
         attachment: TargetSharedWorkerProtocolAttachmentIdentity,
         events: Vec<crate::conn::BackgroundProtocolEvent>,
     },
+    DedicatedWorkerAttachmentEvents {
+        attachment: TargetSharedWorkerProtocolAttachmentIdentity,
+        events: Vec<crate::conn::BackgroundProtocolEvent>,
+    },
     SharedWorkerCreated {
         target_delta: PreparedTargetHostDelta,
     },
@@ -138,6 +138,7 @@ enum WorkerTargetLifecycleOutput {
         runtime: TargetServiceWorkerRuntimeAttachmentIdentity,
         events: Vec<crate::conn::BackgroundProtocolEvent>,
     },
+    RuntimeObserverReady(WorkerRuntimeObserver),
     ServiceWorkerCreated {
         version: TargetServiceWorkerVersionIdentity,
         target_delta: PreparedTargetHostDelta,
@@ -209,12 +210,34 @@ enum WorkerTargetLifecycleOutput {
         messages: Vec<RendererRuntimeInspectorMessage>,
     },
     DedicatedWorkerRuntimeInspectorMessages {
-        browser_context_id: String,
-        renderer_instance_id: u64,
-        target_id: String,
-        session_id: String,
+        attachment: TargetSharedWorkerProtocolAttachmentIdentity,
         messages: Vec<RendererRuntimeInspectorMessage>,
     },
+}
+
+/// Already-existing lifetime capabilities, not another readiness ledger.
+#[derive(Debug, PartialEq)]
+enum WorkerRuntimeObserver {
+    Dedicated(TargetSharedWorkerProtocolAttachmentIdentity),
+    Service(TargetServiceWorkerRuntimeAttachmentIdentity),
+}
+
+impl WorkerRuntimeObserver {
+    fn session_id(&self) -> &str {
+        match self {
+            Self::Dedicated(attachment) => attachment.session_id(),
+            Self::Service(runtime) => runtime.session_id(),
+        }
+    }
+
+    fn is_enabled(&self, conn: &mut CdpConnection) -> bool {
+        match self {
+            Self::Dedicated(attachment) => exact_dedicated_worker_target(conn, attachment)
+                .is_some_and(|target| target.runtime_frontend_enabled(attachment.session_id())),
+            Self::Service(runtime) => exact_service_worker_runtime_target_mut(conn, runtime)
+                .is_some_and(|target| target.runtime_frontend_enabled(runtime.session_id())),
+        }
+    }
 }
 
 #[derive(Clone, Copy)]
@@ -284,6 +307,118 @@ impl TargetPreparedOutputs {
             sink.push_prepared_payload(TargetPreparedOutputSlot::from_outputs(self).into());
         }
     }
+}
+
+pub(in crate::domains) fn worker_network_prepared_outputs(
+    conn: &mut CdpConnection,
+    owner: &CommandOwnerScope,
+    residence: moli_core::RendererOutputResidenceIdentity,
+    committed: &moli_core::page::RendererCommittedNetworkObservation,
+) -> TargetPreparedOutputs {
+    use moli_core::page::{
+        RendererNetworkOutputItem, RendererNetworkSource, RendererWorkerIdentity,
+    };
+    let mut outputs = TargetPreparedOutputs::default();
+    let occurrence = committed.occurrence();
+    let RendererNetworkSource::Worker(source) = &occurrence.source else {
+        return outputs;
+    };
+    let exact_source = match (source, residence) {
+        (
+            RendererWorkerIdentity::Dedicated(instance),
+            moli_core::RendererOutputResidenceIdentity::DedicatedWorker {
+                browser_context_runtime_id,
+                instance_id,
+            },
+        ) => browser_context_runtime_id == occurrence.runtime && *instance == instance_id,
+        (
+            RendererWorkerIdentity::Shared(instance),
+            moli_core::RendererOutputResidenceIdentity::SharedWorker {
+                browser_context_runtime_id,
+                instance_id,
+            },
+        ) => browser_context_runtime_id == occurrence.runtime && instance.as_u64() == instance_id,
+        (
+            RendererWorkerIdentity::Service { version, .. },
+            moli_core::RendererOutputResidenceIdentity::ServiceWorker {
+                browser_context_runtime_id,
+                version_id,
+            },
+        ) => browser_context_runtime_id == occurrence.runtime && *version == version_id,
+        _ => false,
+    };
+    let Some((context_id, _)) = conn.network_owner_identity_for_owner(owner) else {
+        return outputs;
+    };
+    if !exact_source
+        || !conn
+            .browser_context_by_id(&context_id)
+            .is_some_and(|context| {
+                context.routes_renderer_browser_context_runtime(occurrence.runtime)
+            })
+    {
+        return outputs;
+    }
+    let Some(network_owner) = conn.native_worker_network_owner(&context_id, source) else {
+        return outputs;
+    };
+    let RendererNetworkOutputItem::Resource(item) = &occurrence.item else {
+        return outputs;
+    };
+    let events = conn.project_native_worker_network_item(&network_owner, item);
+    let mut sessions = std::collections::BTreeMap::<String, Vec<BackgroundProtocolEvent>>::new();
+    for event in events {
+        if let Some(session) = event.protocol_session_id() {
+            sessions.entry(session.to_owned()).or_default().push(event);
+        }
+    }
+    let context = conn
+        .browser_context_by_id(&context_id)
+        .expect("synchronous Worker projection retains its Context");
+    for (session, events) in sessions {
+        match source {
+            RendererWorkerIdentity::Dedicated(instance) => {
+                if let Some(attachment) = context
+                    .dedicated_worker_targets
+                    .get(instance)
+                    .and_then(|target| target.protocol_attachment_identity(&context_id, &session))
+                {
+                    outputs.push(
+                        WorkerTargetLifecycleOutput::DedicatedWorkerAttachmentEvents {
+                            attachment,
+                            events,
+                        },
+                    );
+                }
+            }
+            RendererWorkerIdentity::Shared(instance) => {
+                if let Some(attachment) = context
+                    .shared_worker_targets
+                    .get(instance)
+                    .and_then(|target| target.protocol_attachment_identity(&context_id, &session))
+                {
+                    outputs.push(WorkerTargetLifecycleOutput::SharedWorkerAttachmentEvents {
+                        attachment,
+                        events,
+                    });
+                }
+            }
+            RendererWorkerIdentity::Service { version, run } => {
+                let Some(target) = context.service_worker_targets.get(version) else {
+                    continue;
+                };
+                let Some(run) = target.observe_worker_run(&context_id, run.clone()) else {
+                    continue;
+                };
+                if let Some(runtime) =
+                    target.runtime_attachment_identity_for_run(&context_id, &session, &run)
+                {
+                    push_service_worker_runtime_events(&mut outputs, runtime, events);
+                }
+            }
+        }
+    }
+    outputs
 }
 
 fn push_service_worker_version_events(
@@ -410,29 +545,44 @@ fn register_native_dedicated_worker_projection(
     browser_context_id: &str,
     info: RendererDedicatedWorkerTargetInfo,
 ) -> TargetPreparedOutputs {
-    let Some((owner_page, renderer)) = (|| {
+    let Some(owner) = (|| {
         let context = conn.browser_context_by_id(browser_context_id)?;
-        let target =
-            context.target_id_for_renderer_owner_local_host_id(info.owner_local_host_id)?;
-        let renderer = context.target_renderer_page_residence_identity(&target)?;
-        let document = context.target_document_id(&target)?;
-        Some((
-            TargetPageResidenceIdentity::new(browser_context_id.to_owned(), Some(target), document),
-            renderer,
-        ))
+        match &info.owner {
+            RendererDedicatedWorkerOwner::Document {
+                owner_local_host_id,
+                page_id,
+            } => {
+                let target =
+                    context.target_id_for_renderer_owner_local_host_id(*owner_local_host_id)?;
+                let renderer = context.target_renderer_page_residence_identity(&target)?;
+                if renderer.page_id() != *page_id {
+                    return None;
+                }
+                Some(DedicatedWorkerOwner::Document(
+                    TargetPageResidenceIdentity::new(
+                        browser_context_id.to_owned(),
+                        Some(target.clone()),
+                        context.target_document_id(&target)?,
+                    ),
+                ))
+            }
+            RendererDedicatedWorkerOwner::Worker(worker) => {
+                let owner = DedicatedWorkerOwner::Worker(worker.clone());
+                owner.target_id(context)?;
+                Some(owner)
+            }
+        }
     })() else {
         return TargetPreparedOutputs::default();
     };
-    let sessions = conn
-        .network_event_session_ids_for_owner(&CommandOwnerScope::for_page_residence(&owner_page));
-    register_dedicated_worker_target(
-        conn,
-        browser_context_id,
-        owner_page,
-        renderer,
-        sessions,
-        info,
-    )
+    let command_owner = match &owner {
+        DedicatedWorkerOwner::Document(page) => CommandOwnerScope::for_page_residence(page),
+        DedicatedWorkerOwner::Worker(worker) => conn
+            .native_worker_network_owner(browser_context_id, worker)
+            .expect("exact creator projection just resolved"),
+    };
+    let sessions = conn.network_event_session_ids_for_owner(&command_owner);
+    register_dedicated_worker_target(conn, browser_context_id, owner, sessions, info)
 }
 
 fn register_native_shared_worker_projection(
@@ -480,7 +630,7 @@ pub(in crate::domains) fn shared_worker_observation_prepared_outputs(
 impl CdpConnection {
     pub(crate) async fn project_browser_workers(
         &mut self,
-        workers: Vec<moli_core::browser::WorkerSnapshot>,
+        mut workers: Vec<moli_core::browser::WorkerSnapshot>,
         sequence: moli_core::browser::BrowserSequence,
     ) -> Vec<BackgroundProtocolEvent> {
         let mut outputs = TargetPreparedOutputs::default();
@@ -532,6 +682,15 @@ impl CdpConnection {
                 }
             });
         }
+        // Dedicated identities are minted before execution, so a nested
+        // Dedicated parent's identity precedes its child. Context-wide workers
+        // must be projected first when recovering an atomic snapshot.
+        workers.sort_by_key(|worker| match worker {
+            moli_core::browser::WorkerSnapshot::Dedicated { worker, .. } => {
+                (1, worker.info.instance_id)
+            }
+            _ => (0, 0),
+        });
         for worker in workers {
             match worker {
                 moli_core::browser::WorkerSnapshot::Service { context, worker } => {
@@ -589,11 +748,34 @@ impl CdpConnection {
 pub(in crate::domains) fn dedicated_worker_observation_prepared_outputs(
     conn: &mut CdpConnection,
     owner: &CommandOwnerScope,
+    residence: moli_core::RendererOutputResidenceIdentity,
     event: RendererDedicatedWorkerObservation,
 ) -> TargetPreparedOutputs {
     let Some((browser_context_id, _)) = conn.target_owner_identity_for_owner(owner) else {
         return TargetPreparedOutputs::default();
     };
+    let moli_core::RendererOutputResidenceIdentity::DedicatedWorker {
+        browser_context_runtime_id,
+        instance_id,
+    } = residence
+    else {
+        return TargetPreparedOutputs::default();
+    };
+    let event_instance = match &event {
+        RendererDedicatedWorkerObservation::Console { instance_id, .. }
+        | RendererDedicatedWorkerObservation::RuntimeInspectorMessages { instance_id, .. } => {
+            *instance_id
+        }
+    };
+    if event_instance != instance_id
+        || !conn
+            .browser_context_by_id(&browser_context_id)
+            .is_some_and(|context| {
+                context.routes_renderer_browser_context_runtime(browser_context_runtime_id)
+            })
+    {
+        return TargetPreparedOutputs::default();
+    }
     match event {
         RendererDedicatedWorkerObservation::Console {
             instance_id,
@@ -657,8 +839,18 @@ fn project_service_worker_snapshot(
             },
         ));
     }
-    if let moli_core::browser::ServiceWorkerExecution::Running(run) = worker.execution {
+    if let moli_core::browser::ServiceWorkerExecution::Running(run) = &worker.execution {
         outputs.extend(record_service_worker_target_started(
+            conn,
+            context,
+            version_id,
+            run.clone(),
+        ));
+    }
+    if let moli_core::browser::ServiceWorkerExecution::Bootstrapping(run)
+    | moli_core::browser::ServiceWorkerExecution::Running(run) = worker.execution
+    {
+        outputs.extend(service_worker_runtime_ready_outputs(
             conn, context, version_id, run,
         ));
     }
@@ -684,6 +876,9 @@ fn project_service_worker_lifecycle(
         }
         RendererServiceWorkerLifecycle::Started { version_id, run } => {
             record_service_worker_target_started(conn, browser_context_id, version_id, run)
+        }
+        RendererServiceWorkerLifecycle::ExecutionReady { version_id, run } => {
+            service_worker_runtime_ready_outputs(conn, browser_context_id, version_id, run)
         }
         RendererServiceWorkerLifecycle::Stopped {
             version_id,
@@ -817,25 +1012,18 @@ fn dedicated_worker_target_is_current(
         .dedicated_worker_targets
         .get(&renderer_instance_id)
         .is_some_and(|target| {
-            target.target_id == target_id
-                && context.target_page_residence_is_current(&target.owner_page)
+            target.target_id == target_id && target.owner.target_id(context).is_some()
         })
 }
 
 fn register_dedicated_worker_target(
     conn: &mut CdpConnection,
     browser_context_id: &str,
-    owner_page: TargetPageResidenceIdentity,
-    owner_renderer_page: RendererPageResidenceIdentity,
-    owner_page_network_sessions: Vec<Option<String>>,
+    owner: DedicatedWorkerOwner,
+    owner_network_sessions: Vec<Option<String>>,
     info: RendererDedicatedWorkerTargetInfo,
 ) -> TargetPreparedOutputs {
     let mut outputs = TargetPreparedOutputs::default();
-    if info.owner_local_host_id != owner_renderer_page.owner_local_host_id()
-        || info.page_id != owner_renderer_page.page_id()
-    {
-        return outputs;
-    }
     if conn
         .browser_context_by_id(browser_context_id)
         .and_then(|context| {
@@ -854,19 +1042,25 @@ fn register_dedicated_worker_target(
         Ok(url) => url,
         Err(_) => return outputs,
     };
-    let owner_target_id = owner_page.target_id().unwrap_or_default().to_owned();
+    let Some(owner_target_id) = conn
+        .browser_context_by_id(browser_context_id)
+        .and_then(|context| owner.target_id(context))
+        .map(str::to_owned)
+    else {
+        return outputs;
+    };
+    let creator_is_worker = matches!(owner, DedicatedWorkerOwner::Worker(_));
     let should_emit_created = conn.has_any_target_discovery();
     let created_snapshot = {
         let Some(context) = conn.browser_context_by_id_mut(browser_context_id) else {
             return TargetPreparedOutputs::default();
         };
         context.insert_dedicated_worker_target(crate::conn::DedicatedWorkerTargetState::new(
-            owner_page.clone(),
-            info.owner_local_host_id,
+            owner,
             info.instance_id,
             target_id.clone(),
             info.name,
-            owner_page_network_sessions.clone(),
+            owner_network_sessions.clone(),
         ));
         should_emit_created
             .then(|| context.devtools_target_info(&target_id))
@@ -880,7 +1074,7 @@ fn register_dedicated_worker_target(
         });
     }
     let timestamp = monotonic_timestamp_seconds();
-    for session_id in &owner_page_network_sessions {
+    for session_id in &owner_network_sessions {
         let mut events = Vec::new();
         network::emit_request_will_be_sent(
             &mut events,
@@ -901,6 +1095,11 @@ fn register_dedicated_worker_target(
             None,
             &[],
         );
+        if creator_is_worker {
+            for event in &mut events {
+                event.bind_network_to_worker_target(&owner_target_id);
+            }
+        }
         if !events.is_empty() {
             outputs.push(WorkerTargetLifecycleOutput::DedicatedWorkerEvents {
                 browser_context_id: browser_context_id.to_owned(),
@@ -924,11 +1123,16 @@ fn project_dedicated_worker_main_script(
         .browser_context_by_id(browser_context_id)
         .and_then(|context| context.dedicated_worker_targets.get(&renderer_instance_id))
         .filter(|target| target.main_script().is_none())
-        .map(|target| target.owner_page.clone())
+        .map(|target| target.owner.clone())
     else {
-        return outputs;
+        return dedicated_worker_runtime_ready_outputs(
+            conn,
+            browser_context_id,
+            renderer_instance_id,
+        );
     };
-    let auto_attach_owners = dedicated_worker_auto_attach_owner_sessions(conn, &owner_page);
+    let auto_attach_owners =
+        dedicated_worker_auto_attach_owner_sessions(conn, browser_context_id, &owner_page);
     let attached_sessions = auto_attach_owners
         .into_iter()
         .map(|owner| {
@@ -951,7 +1155,7 @@ fn project_dedicated_worker_main_script(
             return outputs;
         };
         let target_id = target.target_id.clone();
-        let owner_page_network_sessions = target.owner_page_network_sessions.clone();
+        let owner_page_network_sessions = target.owner_network_sessions.clone();
         let page_extra_events = dedicated_worker_main_script_page_extra_events(
             &target_id,
             &owner_page_network_sessions,
@@ -1067,20 +1271,72 @@ fn project_dedicated_worker_main_script(
             });
         }
     }
+    outputs.extend(dedicated_worker_runtime_ready_outputs(
+        conn,
+        browser_context_id,
+        renderer_instance_id,
+    ));
+    outputs
+}
+
+fn dedicated_worker_runtime_ready_outputs(
+    conn: &CdpConnection,
+    browser_context_id: &str,
+    instance: u64,
+) -> TargetPreparedOutputs {
+    let mut outputs = TargetPreparedOutputs::default();
+    let Some(target) = conn
+        .browser_context_by_id(browser_context_id)
+        .and_then(|context| context.dedicated_worker_targets.get(&instance))
+        .filter(|target| {
+            matches!(
+                target.main_script().map(|script| &script.outcome),
+                Some(RendererDedicatedWorkerMainScriptOutcome::Loaded(_))
+            )
+        })
+    else {
+        return outputs;
+    };
+    // Loaded is published after binding the physical endpoint, including while
+    // evaluation is debugger-paused. Recovery consumes the same native fact.
+    for session in target.session_ids() {
+        if target.runtime_frontend_enabled(&session)
+            && let Some(attachment) =
+                target.protocol_attachment_identity(browser_context_id, &session)
+        {
+            outputs.push(WorkerTargetLifecycleOutput::RuntimeObserverReady(
+                WorkerRuntimeObserver::Dedicated(attachment),
+            ));
+        }
+    }
     outputs
 }
 
 pub(super) fn dedicated_worker_auto_attach_owner_session_allowed(
     conn: &CdpConnection,
     owner_session_id: Option<&str>,
-    owner_page: &TargetPageResidenceIdentity,
+    browser_context_id: &str,
+    owner: &DedicatedWorkerOwner,
 ) -> bool {
     let Some(owner_session_id) = owner_session_id else {
         return false;
     };
-    conn.target_page_residence_identity_for_session(Some(owner_session_id))
-        .as_ref()
-        == Some(owner_page)
+    match owner {
+        DedicatedWorkerOwner::Document(page) => {
+            conn.target_page_residence_identity_for_session(Some(owner_session_id))
+                .as_ref()
+                == Some(page)
+        }
+        DedicatedWorkerOwner::Worker(worker) => conn
+            .browser_context_by_id(browser_context_id)
+            .is_some_and(|context| {
+                owner.target_id(context).is_some()
+                    && conn
+                        .native_worker_network_owner(browser_context_id, worker)
+                        .and_then(|scope| scope.resolve_route(conn))
+                        == conn.session_route(Some(owner_session_id))
+            }),
+    }
 }
 
 fn shared_worker_auto_attach_owner_sessions(conn: &CdpConnection) -> Vec<Option<String>> {
@@ -1109,7 +1365,8 @@ fn service_worker_auto_attach_owner_sessions(conn: &CdpConnection) -> Vec<Option
 
 fn dedicated_worker_auto_attach_owner_sessions(
     conn: &CdpConnection,
-    owner_page: &TargetPageResidenceIdentity,
+    browser_context_id: &str,
+    owner: &DedicatedWorkerOwner,
 ) -> Vec<Option<String>> {
     conn.auto_attach_owner_sessions_for_target_type("worker")
         .into_iter()
@@ -1117,7 +1374,8 @@ fn dedicated_worker_auto_attach_owner_sessions(
             dedicated_worker_auto_attach_owner_session_allowed(
                 conn,
                 owner_session_id.as_deref(),
-                owner_page,
+                browser_context_id,
+                owner,
             )
         })
         .collect()
@@ -1330,7 +1588,10 @@ pub(crate) async fn retire_dedicated_worker_targets_for_replaced_page_async(
                 .dedicated_worker_targets
                 .iter()
                 .filter_map(|(renderer_instance_id, target)| {
-                    (&target.owner_page == replaced_page_owner).then_some(*renderer_instance_id)
+                    target
+                        .owner
+                        .belongs_to_document(context, replaced_page_owner)
+                        .then_some(*renderer_instance_id)
                 })
                 .collect::<Vec<_>>()
         })
@@ -1509,7 +1770,6 @@ fn record_dedicated_worker_target_runtime_inspector_messages(
     else {
         return outputs;
     };
-    let target_id = target.target_id.clone();
     let session_ids = if let Some(session_id) = inspector_session_id {
         target
             .is_session(&session_id)
@@ -1519,12 +1779,13 @@ fn record_dedicated_worker_target_runtime_inspector_messages(
         target.session_ids()
     };
     for session_id in session_ids {
+        let Some(attachment) = target.protocol_attachment_identity(browser_context_id, &session_id)
+        else {
+            continue;
+        };
         outputs.push(
             WorkerTargetLifecycleOutput::DedicatedWorkerRuntimeInspectorMessages {
-                browser_context_id: browser_context_id.to_owned(),
-                renderer_instance_id,
-                target_id: target_id.clone(),
-                session_id,
+                attachment,
                 messages: messages.clone(),
             },
         );
@@ -1549,9 +1810,12 @@ fn record_dedicated_worker_target_console_message(
         return outputs;
     };
     target.record_console_message(message);
-    let target_id = target.target_id.clone();
     let console_end = target.console_message_count();
     for session_id in target.session_ids() {
+        let Some(attachment) = target.protocol_attachment_identity(browser_context_id, &session_id)
+        else {
+            continue;
+        };
         let console_messages = target.pending_console_domain_messages(&session_id).to_vec();
         let runtime_messages = target
             .pending_runtime_console_messages(&session_id)
@@ -1561,10 +1825,7 @@ fn record_dedicated_worker_target_console_message(
         }
         outputs.push(
             WorkerTargetLifecycleOutput::DedicatedWorkerConsoleMessages {
-                browser_context_id: browser_context_id.to_owned(),
-                renderer_instance_id,
-                target_id: target_id.clone(),
-                session_id,
+                attachment,
                 console_messages,
                 runtime_messages,
                 console_end,
@@ -1677,7 +1938,6 @@ fn register_shared_worker_target(
             return outputs;
         };
         context.insert_shared_worker_target(SharedWorkerTargetState::new(
-            info.owner_local_host_id,
             info.instance_id,
             target_id.clone(),
             owner_target_id,
@@ -1879,6 +2139,118 @@ fn register_service_worker_target(
     info: RendererServiceWorkerTargetInfo,
 ) -> TargetPreparedOutputs {
     register_service_worker_target_with_active_run(conn, browser_context_id, info, None)
+}
+
+fn service_worker_runtime_ready_outputs(
+    conn: &mut CdpConnection,
+    browser_context_id: &str,
+    version_id: u64,
+    renderer_run: RendererServiceWorkerRunIdentity,
+) -> TargetPreparedOutputs {
+    let mut outputs = TargetPreparedOutputs::default();
+    let Some(target) = conn
+        .browser_context_by_id_mut(browser_context_id)
+        .and_then(|context| context.service_worker_targets.get_mut(&version_id))
+    else {
+        return outputs;
+    };
+    let Some(run) = target.observe_worker_run(browser_context_id, renderer_run) else {
+        return outputs;
+    };
+    for session_id in target.session_ids() {
+        if target.runtime_frontend_enabled(&session_id)
+            && let Some(runtime) =
+                target.runtime_attachment_identity_for_run(browser_context_id, &session_id, &run)
+        {
+            outputs.push(WorkerTargetLifecycleOutput::RuntimeObserverReady(
+                WorkerRuntimeObserver::Service(runtime),
+            ));
+        }
+    }
+    outputs
+}
+
+pub(in crate::domains) async fn resume_worker_runtime_listener_for_session(
+    conn: &mut CdpConnection,
+    session_id: Option<&str>,
+) -> Vec<BackgroundProtocolEvent> {
+    let observer =
+        session_id.and_then(|session_id| match conn.session_route(Some(session_id))? {
+            CdpSessionRoute::ServiceWorkerTarget {
+                browser_context_id, ..
+            } => conn
+                .service_worker_target_for_session(Some(session_id))?
+                .runtime_attachment_identity_for_current_run(&browser_context_id, session_id)
+                .map(WorkerRuntimeObserver::Service),
+            CdpSessionRoute::DedicatedWorkerTarget {
+                browser_context_id, ..
+            } => conn
+                .shared_worker_target_for_session(Some(session_id))?
+                .protocol_attachment_identity(&browser_context_id, session_id)
+                .map(WorkerRuntimeObserver::Dedicated),
+            _ => None,
+        });
+    let Some(observer) = observer else {
+        return Vec::new();
+    };
+    let mut outputs = TargetPreparedOutputs::default();
+    outputs.push(WorkerTargetLifecycleOutput::RuntimeObserverReady(observer));
+    worker_target_background_events_async(conn, outputs).await
+}
+
+async fn resume_worker_runtime_observer(
+    conn: &mut CdpConnection,
+    observer: WorkerRuntimeObserver,
+) -> Option<WorkerTargetLifecycleOutput> {
+    let session_id = observer.session_id();
+    if !observer.is_enabled(conn) {
+        return None;
+    }
+    // This existing AdapterReply path freezes the physical endpoint before
+    // yielding. A FIFO consumer must not await a response in its own SessionSink.
+    // Physical frontend call ids are nonzero, leaving 0 for this local reply.
+    let pending = conn
+        .start_worker_runtime_protocol_message_for_session(
+            Some(session_id),
+            r#"{"id":0,"method":"Runtime.enable"}"#.into(),
+        )
+        .ok()?;
+    let completed = pending.wait().await.ok()?;
+    if !observer.is_enabled(conn) {
+        return None;
+    }
+    let mut messages = conn
+        .complete_worker_runtime_protocol_message_for_session(completed)
+        .ok()?;
+    // The enable acknowledgement is internal; real context notifications flow
+    // through the same exact-run projection and buffered-console cursors.
+    messages.retain(|message| {
+        !matches!(message, RendererRuntimeInspectorMessage::Protocol(message)
+            if message.value().get("id") == Some(&json!(0)))
+    });
+    match observer {
+        WorkerRuntimeObserver::Dedicated(attachment) => Some(
+            WorkerTargetLifecycleOutput::DedicatedWorkerRuntimeInspectorMessages {
+                attachment,
+                messages,
+            },
+        ),
+        WorkerRuntimeObserver::Service(runtime) => {
+            let target = exact_service_worker_runtime_target_mut(conn, &runtime)?;
+            let renderer_run = target.active_renderer_run()?.clone();
+            let version_id = target.renderer_version_id;
+            record_service_worker_target_runtime_inspector_messages(
+                conn,
+                runtime.attachment().browser_context_id(),
+                version_id,
+                renderer_run,
+                Some(runtime.session_id().to_owned()),
+                messages,
+            )
+            .worker_target_lifecycle_outputs
+            .pop()
+        }
+    }
 }
 
 fn record_service_worker_target_started(
@@ -2910,6 +3282,15 @@ async fn emit_target_lifecycle_events(
     };
     let mut side_effects = events::TargetProtocolSideEffects::default();
     for event in events {
+        let event = match event {
+            WorkerTargetLifecycleOutput::RuntimeObserverReady(observer) => {
+                let Some(event) = resume_worker_runtime_observer(conn, observer).await else {
+                    continue;
+                };
+                event
+            }
+            event => event,
+        };
         let event = match commit_dedicated_worker_retirement_output_async(conn, event).await {
             Ok(events) => {
                 side_effects.extend_background_events(events);
@@ -2918,6 +3299,9 @@ async fn emit_target_lifecycle_events(
             Err(event) => event,
         };
         match event {
+            WorkerTargetLifecycleOutput::RuntimeObserverReady(_) => {
+                unreachable!("readiness is resolved to exact inspector output above")
+            }
             WorkerTargetLifecycleOutput::DedicatedWorkerEvents {
                 browser_context_id,
                 renderer_instance_id,
@@ -2934,49 +3318,29 @@ async fn emit_target_lifecycle_events(
                 }
             }
             WorkerTargetLifecycleOutput::DedicatedWorkerConsoleMessages {
-                browser_context_id,
-                renderer_instance_id,
-                target_id,
-                session_id,
+                attachment,
                 console_messages,
                 runtime_messages,
                 console_end,
             } => {
-                if !dedicated_worker_target_is_current(
-                    conn,
-                    &browser_context_id,
-                    renderer_instance_id,
-                    &target_id,
-                ) || !conn
-                    .browser_context_by_id(&browser_context_id)
-                    .and_then(|context| context.dedicated_worker_targets.get(&renderer_instance_id))
-                    .is_some_and(|target| target.is_session(&session_id))
-                {
+                let Some(target) = exact_dedicated_worker_target_mut(conn, &attachment) else {
                     continue;
-                }
+                };
+                let session_id = attachment.session_id();
                 side_effects.extend_background_events(console_message_added_events(
-                    &session_id,
+                    session_id,
                     &console_messages,
                 ));
                 side_effects.extend_background_events(runtime_console_api_called_events(
-                    &session_id,
+                    session_id,
+                    attachment.target_id(),
                     &runtime_messages,
                 ));
-                if let Some(target) = conn
-                    .browser_context_by_id_mut(&browser_context_id)
-                    .and_then(|context| {
-                        context
-                            .dedicated_worker_targets
-                            .get_mut(&renderer_instance_id)
-                    })
-                    .filter(|target| target.target_id == target_id)
-                {
-                    if !console_messages.is_empty() {
-                        target.mark_console_domain_emitted(&session_id, console_end);
-                    }
-                    if !runtime_messages.is_empty() {
-                        target.mark_runtime_console_emitted(&session_id, console_end);
-                    }
+                if !console_messages.is_empty() {
+                    target.mark_console_domain_emitted(session_id, console_end);
+                }
+                if !runtime_messages.is_empty() {
+                    target.mark_runtime_console_emitted(session_id, console_end);
                 }
             }
             WorkerTargetLifecycleOutput::DedicatedWorkerCreated {
@@ -3035,7 +3399,8 @@ async fn emit_target_lifecycle_events(
             | WorkerTargetLifecycleOutput::DedicatedWorkerDestroyed { .. } => {
                 unreachable!("DedicatedWorker retirement outputs are committed before projection")
             }
-            WorkerTargetLifecycleOutput::SharedWorkerAttachmentEvents { attachment, events } => {
+            WorkerTargetLifecycleOutput::SharedWorkerAttachmentEvents { attachment, events }
+            | WorkerTargetLifecycleOutput::DedicatedWorkerAttachmentEvents { attachment, events } => {
                 if attachment.is_current() {
                     side_effects.extend_background_events(events);
                 }
@@ -3214,6 +3579,7 @@ async fn emit_target_lifecycle_events(
                 if runtime.is_current() {
                     side_effects.extend_background_events(runtime_console_api_called_events(
                         runtime.session_id(),
+                        runtime.target_id(),
                         &messages,
                     ));
                 }
@@ -3228,6 +3594,7 @@ async fn emit_target_lifecycle_events(
                 }
                 side_effects.extend_background_events(runtime_console_api_called_events(
                     attachment.session_id(),
+                    attachment.target_id(),
                     &messages,
                 ));
                 mark_exact_shared_worker_runtime_console_emitted(conn, &attachment, console_end);
@@ -3241,6 +3608,7 @@ async fn emit_target_lifecycle_events(
                 if runtime.is_current() {
                     side_effects.extend_background_events(runtime_exception_thrown_events(
                         runtime.session_id(),
+                        runtime.target_id(),
                         &messages,
                         exception_start,
                     ));
@@ -3280,7 +3648,9 @@ async fn emit_target_lifecycle_events(
                 side_effects.extend_background_events(response_events);
                 if let Some((messages, _console_end)) = pending_runtime_console {
                     side_effects.extend_background_events(runtime_console_api_called_events(
-                        session_id, &messages,
+                        session_id,
+                        runtime.target_id(),
+                        &messages,
                     ));
                 }
                 if let Some((messages, exception_start, _exception_end)) =
@@ -3288,6 +3658,7 @@ async fn emit_target_lifecycle_events(
                 {
                     side_effects.extend_background_events(runtime_exception_thrown_events(
                         session_id,
+                        runtime.target_id(),
                         &messages,
                         exception_start,
                     ));
@@ -3319,7 +3690,9 @@ async fn emit_target_lifecycle_events(
                 side_effects.extend_background_events(response_events);
                 if let Some((messages, console_end)) = pending_runtime_console {
                     side_effects.extend_background_events(runtime_console_api_called_events(
-                        session_id, &messages,
+                        session_id,
+                        attachment.target_id(),
+                        &messages,
                     ));
                     mark_exact_shared_worker_runtime_console_emitted(
                         conn,
@@ -3329,34 +3702,39 @@ async fn emit_target_lifecycle_events(
                 }
             }
             WorkerTargetLifecycleOutput::DedicatedWorkerRuntimeInspectorMessages {
-                browser_context_id,
-                renderer_instance_id,
-                target_id,
-                session_id,
+                attachment,
                 messages,
             } => {
-                if !dedicated_worker_target_is_current(
-                    conn,
-                    &browser_context_id,
-                    renderer_instance_id,
-                    &target_id,
-                ) {
+                if exact_dedicated_worker_target(conn, &attachment).is_none() {
                     continue;
                 }
+                let session_id = attachment.session_id();
                 let mut response_events = Vec::new();
                 let mut background_events = Vec::new();
                 let current_response_seen = route_worker_runtime_inspector_messages_into(
                     conn,
                     messages,
-                    &session_id,
+                    session_id,
                     &mut response_events,
                     &mut background_events,
                 );
                 debug_assert!(!current_response_seen);
                 side_effects.extend_background_events(background_events);
-                replay_shared_worker_runtime_bindings_for_session_async(conn, Some(&session_id))
+                replay_shared_worker_runtime_bindings_for_session_async(conn, Some(session_id))
                     .await;
                 side_effects.extend_background_events(response_events);
+                if let Some(target) = exact_dedicated_worker_target_mut(conn, &attachment)
+                    && !target
+                        .pending_runtime_console_messages(session_id)
+                        .is_empty()
+                {
+                    side_effects.extend_background_events(runtime_console_api_called_events(
+                        session_id,
+                        attachment.target_id(),
+                        target.pending_runtime_console_messages(session_id),
+                    ));
+                    target.mark_runtime_console_emitted(session_id, target.console_message_count());
+                }
             }
         }
     }
@@ -3391,56 +3769,6 @@ fn console_message_added_events(
         .map(|message| {
             let (level, text) = console_message_level_and_text(&message.message);
             console_message_added_background_event(Some(session_id), "console-api", level, text, "")
-        })
-        .collect()
-}
-
-fn runtime_console_api_called_events(
-    session_id: &str,
-    messages: &[RuntimeConsoleMessageSnapshot],
-) -> Vec<BackgroundProtocolEvent> {
-    let base_timestamp = monotonic_timestamp_seconds();
-    messages
-        .iter()
-        .enumerate()
-        .map(|(index, message)| {
-            let (console_type, text) = runtime_console_message_type_and_text(&message.message);
-            runtime_console_api_called_background_event(
-                Some(session_id),
-                None,
-                console_type,
-                text,
-                &message.args,
-                message.stack.as_deref(),
-                message.execution_context_id,
-                base_timestamp + ((index + 1) as f64 * 0.000_001),
-            )
-        })
-        .collect()
-}
-
-fn runtime_exception_thrown_events(
-    session_id: &str,
-    messages: &[ServiceWorkerRuntimeExceptionSnapshot],
-    exception_start: usize,
-) -> Vec<BackgroundProtocolEvent> {
-    let base_timestamp = monotonic_timestamp_seconds();
-    messages
-        .iter()
-        .enumerate()
-        .map(|(offset, message)| {
-            let exception_index = exception_start + offset;
-            runtime_exception_thrown_background_event(
-                Some(session_id),
-                None,
-                &message.message.message,
-                &message.message.filename,
-                message.execution_context_id,
-                exception_index,
-                base_timestamp + ((offset + 1) as f64 * 0.000_001),
-                Some(u64::from(message.message.lineno.saturating_sub(1))),
-                Some(u64::from(message.message.colno.saturating_sub(1))),
-            )
         })
         .collect()
 }
@@ -3688,6 +4016,36 @@ fn service_worker_fetch_diagnostic_resource_type(destination: &str) -> DevToolsN
     }
 }
 
+fn exact_dedicated_worker_target<'a>(
+    conn: &'a CdpConnection,
+    attachment: &TargetSharedWorkerProtocolAttachmentIdentity,
+) -> Option<&'a SharedWorkerTargetState> {
+    if !attachment.is_current() {
+        return None;
+    }
+    let context = conn.browser_context_by_id(attachment.browser_context_id())?;
+    let target = context
+        .dedicated_worker_targets
+        .get(&attachment.renderer_instance_id().as_u64())?;
+    target.owner.target_id(context)?;
+    (target
+        .protocol_attachment_identity(attachment.browser_context_id(), attachment.session_id())
+        .as_ref()
+        == Some(attachment))
+    .then_some(&target.inner)
+}
+
+fn exact_dedicated_worker_target_mut<'a>(
+    conn: &'a mut CdpConnection,
+    attachment: &TargetSharedWorkerProtocolAttachmentIdentity,
+) -> Option<&'a mut SharedWorkerTargetState> {
+    exact_dedicated_worker_target(conn, attachment)?;
+    conn.browser_context_by_id_mut(attachment.browser_context_id())?
+        .dedicated_worker_targets
+        .get_mut(&attachment.renderer_instance_id().as_u64())
+        .map(|target| &mut target.inner)
+}
+
 fn exact_shared_worker_target<'a>(
     conn: &'a CdpConnection,
     attachment: &TargetSharedWorkerProtocolAttachmentIdentity,
@@ -3698,8 +4056,7 @@ fn exact_shared_worker_target<'a>(
     let target = conn
         .browser_context_by_id(attachment.browser_context_id())?
         .shared_worker_target(attachment.target_id())?;
-    (target.renderer_owner_local_host_id == attachment.renderer_owner_local_host_id()
-        && target.renderer_instance_id == attachment.renderer_instance_id()
+    (target.renderer_instance_id == attachment.renderer_instance_id()
         && target.owner_target_id() == attachment.owner_target_id()
         && target.is_session(attachment.session_id()))
     .then_some(target)
@@ -3715,8 +4072,7 @@ fn exact_shared_worker_target_mut<'a>(
     let target = conn
         .browser_context_by_id_mut(attachment.browser_context_id())?
         .shared_worker_target_mut(attachment.target_id())?;
-    (target.renderer_owner_local_host_id == attachment.renderer_owner_local_host_id()
-        && target.renderer_instance_id == attachment.renderer_instance_id()
+    (target.renderer_instance_id == attachment.renderer_instance_id()
         && target.owner_target_id() == attachment.owner_target_id()
         && target.is_session(attachment.session_id()))
     .then_some(target)
@@ -3784,6 +4140,7 @@ mod tests {
     }
 
     use super::*;
+    use crate::conn::RendererPageResidenceIdentity;
     use crate::conn::{CdpTargetFilter, CdpTargetFilterEntry, DedicatedWorkerTargetState};
 
     fn runtime_inspector_messages(messages: Vec<Value>) -> Vec<RendererRuntimeInspectorMessage> {
@@ -3969,8 +4326,10 @@ mod tests {
         request_url: &str,
     ) -> RendererDedicatedWorkerTargetInfo {
         RendererDedicatedWorkerTargetInfo {
-            owner_local_host_id: owner_renderer_page.owner_local_host_id(),
-            page_id: owner_renderer_page.page_id(),
+            owner: RendererDedicatedWorkerOwner::Document {
+                owner_local_host_id: owner_renderer_page.owner_local_host_id(),
+                page_id: owner_renderer_page.page_id(),
+            },
             instance_id,
             request_url: request_url.to_owned(),
             document_url: "https://example.test/page.html".to_owned(),
@@ -4117,8 +4476,7 @@ mod tests {
         let outputs = register_dedicated_worker_target(
             &mut conn,
             "BID-1",
-            owner_page,
-            owner_renderer_page,
+            DedicatedWorkerOwner::Document(owner_page),
             vec![None],
             dedicated_worker_info(7, owner_renderer_page, "https://example.test/worker.js"),
         );
@@ -4169,33 +4527,6 @@ mod tests {
         );
     }
 
-    #[test]
-    fn dedicated_worker_creation_rejects_a_renderer_page_identity_mismatch() {
-        let (mut conn, owner_page, owner_renderer_page) = dedicated_worker_fixture();
-        let mut info =
-            dedicated_worker_info(8, owner_renderer_page, "https://example.test/worker.js");
-        info.page_id = moli_core::PageId::new_for_testing(24);
-
-        assert!(
-            register_dedicated_worker_target(
-                &mut conn,
-                "BID-1",
-                owner_page,
-                owner_renderer_page,
-                vec![None],
-                info,
-            )
-            .is_empty()
-        );
-        assert!(
-            conn.browser_context
-                .as_ref()
-                .unwrap()
-                .dedicated_worker_targets
-                .is_empty()
-        );
-    }
-
     #[tokio::test]
     async fn dedicated_worker_auto_attach_is_scoped_to_its_owner_page_session() {
         let (mut conn, owner_page, owner_renderer_page) = dedicated_worker_fixture();
@@ -4226,8 +4557,7 @@ mod tests {
         let created = register_dedicated_worker_target(
             &mut conn,
             "BID-1",
-            owner_page,
-            owner_renderer_page,
+            DedicatedWorkerOwner::Document(owner_page),
             vec![Some("SID-page-base".to_owned())],
             dedicated_worker_info(81, owner_renderer_page, "https://example.test/worker.js"),
         );
@@ -4274,8 +4604,7 @@ mod tests {
         let created = register_dedicated_worker_target(
             &mut conn,
             "BID-1",
-            owner_page,
-            owner_renderer_page,
+            DedicatedWorkerOwner::Document(owner_page),
             vec![None],
             dedicated_worker_info(9, owner_renderer_page, "https://example.test/worker.js"),
         );
@@ -4381,8 +4710,7 @@ mod tests {
         let created = register_dedicated_worker_target(
             &mut conn,
             "BID-1",
-            owner_page,
-            owner_renderer_page,
+            DedicatedWorkerOwner::Document(owner_page),
             vec![None],
             dedicated_worker_info(90, owner_renderer_page, "https://example.test/worker.js"),
         );
@@ -4416,8 +4744,7 @@ mod tests {
         let created = register_dedicated_worker_target(
             &mut conn,
             "BID-1",
-            owner_page,
-            owner_renderer_page,
+            DedicatedWorkerOwner::Document(owner_page),
             vec![None],
             dedicated_worker_info(91, owner_renderer_page, "https://example.test/worker.js"),
         );
@@ -4455,8 +4782,7 @@ mod tests {
         let _ = register_dedicated_worker_target(
             &mut conn,
             "BID-1",
-            owner_page,
-            owner_renderer_page,
+            DedicatedWorkerOwner::Document(owner_page),
             Vec::new(),
             dedicated_worker_info(92, owner_renderer_page, "https://example.test/worker.js"),
         );
@@ -4538,8 +4864,7 @@ mod tests {
             let created = register_dedicated_worker_target(
                 &mut conn,
                 "BID-1",
-                owner_page,
-                owner_renderer_page,
+                DedicatedWorkerOwner::Document(owner_page),
                 vec![None],
                 dedicated_worker_info(instance_id, owner_renderer_page, url),
             );
@@ -4588,8 +4913,7 @@ mod tests {
         let mut outputs = register_dedicated_worker_target(
             &mut conn,
             "BID-1",
-            owner_page,
-            owner_renderer_page,
+            DedicatedWorkerOwner::Document(owner_page),
             vec![None],
             dedicated_worker_info(13, owner_renderer_page, script_url),
         );
@@ -4665,8 +4989,7 @@ mod tests {
         let mut outputs = register_dedicated_worker_target(
             &mut conn,
             "BID-1",
-            owner_page,
-            owner_renderer_page,
+            DedicatedWorkerOwner::Document(owner_page),
             vec![None],
             dedicated_worker_info(14, owner_renderer_page, script_url),
         );
@@ -4709,7 +5032,7 @@ mod tests {
             Some(DevToolsTargetKind::Worker)
         );
 
-        conn.dedicated_worker_target_for_session_mut(Some(&session_id))
+        conn.shared_worker_target_for_session_mut(Some(&session_id))
             .expect("failed worker target session")
             .set_runtime_frontend_enabled(&session_id, true);
 
@@ -4780,8 +5103,7 @@ mod tests {
         let created = register_dedicated_worker_target(
             &mut conn,
             "BID-1",
-            owner_page,
-            owner_renderer_page,
+            DedicatedWorkerOwner::Document(owner_page),
             vec![None],
             dedicated_worker_info(
                 12,
@@ -4839,8 +5161,7 @@ mod tests {
         let outputs = register_dedicated_worker_target(
             &mut conn,
             "BID-1",
-            owner_page,
-            owner_renderer_page,
+            DedicatedWorkerOwner::Document(owner_page),
             Vec::new(),
             dedicated_worker_info(13, owner_renderer_page, "https://example.test/worker.js"),
         );
@@ -4884,8 +5205,7 @@ mod tests {
         let created = register_dedicated_worker_target(
             &mut conn,
             "BID-1",
-            owner_page.clone(),
-            owner_renderer_page,
+            DedicatedWorkerOwner::Document(owner_page.clone()),
             vec![Some("SID-page-base".to_owned())],
             dedicated_worker_info(14, owner_renderer_page, "https://example.test/worker.js"),
         );
@@ -4915,8 +5235,7 @@ mod tests {
             .as_mut()
             .unwrap()
             .insert_dedicated_worker_target(crate::conn::DedicatedWorkerTargetState::new(
-                retained_owner,
-                owner_renderer_page.owner_local_host_id(),
+                DedicatedWorkerOwner::Document(retained_owner),
                 15,
                 retained_target_id.clone(),
                 String::new(),
@@ -6265,7 +6584,7 @@ mod tests {
 
     #[test]
     fn shared_worker_registration_only_auto_attaches_browser_level_owners() {
-        let (mut conn, owner_page, owner_renderer_page) = dedicated_worker_fixture();
+        let (mut conn, owner_page, _) = dedicated_worker_fixture();
         let page_route = conn
             .prepare_auto_attached_page_session_binding("TID-page", "SID-page".to_owned())
             .expect("page session binding");
@@ -6277,8 +6596,7 @@ mod tests {
             .as_mut()
             .expect("browser context")
             .insert_dedicated_worker_target(DedicatedWorkerTargetState::new(
-                owner_page,
-                owner_renderer_page.owner_local_host_id(),
+                DedicatedWorkerOwner::Document(owner_page),
                 91,
                 "TID-dedicated-worker".to_owned(),
                 "https://example.test/worker.js".to_owned(),
@@ -6293,7 +6611,6 @@ mod tests {
         conn.register_session_route_for_test("SID-dedicated-worker", dedicated_worker_route);
 
         let mut owner_shared_worker = SharedWorkerTargetState::new(
-            moli_core::RendererOwnerLocalHostId::new_for_testing(2),
             SharedWorkerInstanceId::from_u64(92),
             "TID-owner-shared-worker".to_owned(),
             None,
@@ -6385,7 +6702,6 @@ mod tests {
         let mut browser_context = conn.new_browser_context_fixture_for_test("BID-1".to_owned());
         let instance_id = SharedWorkerInstanceId::from_u64(12);
         let mut target = SharedWorkerTargetState::new(
-            moli_core::RendererOwnerLocalHostId::new_for_testing(1),
             instance_id,
             "TID-shared-worker".to_owned(),
             None,
@@ -6578,7 +6894,7 @@ mod tests {
             },
         }];
 
-        let out = runtime_exception_thrown_events("SID-worker", &messages, 7);
+        let out = runtime_exception_thrown_events("SID-worker", "TID-worker", &messages, 7);
 
         assert_eq!(out.len(), 1);
         let (message, automation_event) = out.into_iter().next().unwrap().into_parts();
@@ -6600,6 +6916,10 @@ mod tests {
             panic!("expected ScriptException sidecar");
         };
         assert_eq!(event.exception.text, "Uncaught Error: boom");
+        assert_eq!(
+            event.target_id.as_ref().map(|id| id.as_str()),
+            Some("TID-worker")
+        );
         assert_eq!(event.exception.line_number, Some(2));
         assert_eq!(event.exception.column_number, Some(8));
     }
@@ -7202,7 +7522,6 @@ mod tests {
         let mut conn = crate::test_support::connection();
         conn.browser_context = Some(conn.new_browser_context_fixture_for_test("BID-1".to_owned()));
         let mut target = SharedWorkerTargetState::new(
-            moli_core::RendererOwnerLocalHostId::new_for_testing(1),
             SharedWorkerInstanceId::from_u64(17),
             "TID-shared-worker".to_owned(),
             None,

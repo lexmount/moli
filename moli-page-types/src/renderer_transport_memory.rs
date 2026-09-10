@@ -7,6 +7,43 @@
 
 use super::*;
 
+impl ChildFrameDocumentNetworkSnapshot {
+    #[doc(hidden)]
+    pub fn renderer_transport_charge_bytes(&self) -> usize {
+        [&self.request_url, &self.request_method]
+            .into_iter()
+            .map(|value| string_charge(value))
+            .sum::<usize>()
+            .saturating_add(headers_charge(&self.request_headers))
+            .saturating_add(match &self.response {
+                Ok(response) => string_charge(&response.final_url)
+                    .saturating_add(headers_charge(&response.response_headers))
+                    .saturating_add(
+                        response
+                            .response_body
+                            .as_ref()
+                            .map_or(0, |body| body.renderer_transport_retained_memory_bytes()),
+                    ),
+                Err(error) => string_charge(error),
+            })
+    }
+}
+
+impl ChildFrameDocumentNetworkActivitySnapshot {
+    #[doc(hidden)]
+    pub fn renderer_transport_charge_bytes(&self) -> usize {
+        string_charge(&self.frame_id)
+            .saturating_add(
+                self.parent_frame_id
+                    .as_deref()
+                    .map(string_charge)
+                    .unwrap_or(0),
+            )
+            .saturating_add(string_charge(&self.loader_id))
+            .saturating_add(self.snapshot.renderer_transport_charge_bytes())
+    }
+}
+
 impl DocumentNodeSnapshot {
     #[doc(hidden)]
     pub fn renderer_transport_charge_bytes(&self) -> usize {
@@ -103,6 +140,13 @@ impl ScriptNetworkOutputItem {
     }
 }
 
+impl SubresourceNetworkRecord {
+    #[doc(hidden)]
+    pub fn renderer_transport_charge_bytes(&self) -> usize {
+        network_record_charge(self)
+    }
+}
+
 impl InspectorIssueSnapshot {
     #[doc(hidden)]
     pub fn renderer_transport_charge_bytes(&self) -> usize {
@@ -161,48 +205,60 @@ impl PendingSubresourceFetchInfo {
     }
 }
 
+impl PendingSubresourceResponseInfo {
+    #[doc(hidden)]
+    pub fn renderer_transport_charge_bytes(&self) -> usize {
+        url_charge(&self.url)
+            .saturating_add(url_charge(&self.final_url))
+            .saturating_add(string_charge(&self.method))
+            .saturating_add(request_headers_charge(&self.request_headers))
+            .saturating_add(self.request_body.as_deref().map(string_charge).unwrap_or(0))
+            .saturating_add(
+                self.network_request_headers
+                    .as_deref()
+                    .map(headers_charge)
+                    .unwrap_or(0),
+            )
+            .saturating_add(headers_charge(&self.response_headers))
+            .saturating_add(
+                self.response_body
+                    .renderer_transport_retained_memory_bytes(),
+            )
+    }
+}
+
+impl PendingSubresourceAuthInfo {
+    #[doc(hidden)]
+    pub fn renderer_transport_charge_bytes(&self) -> usize {
+        url_charge(&self.url)
+            .saturating_add(string_charge(&self.method))
+            .saturating_add(request_headers_charge(&self.request_headers))
+            .saturating_add(self.request_body.as_deref().map(string_charge).unwrap_or(0))
+            .saturating_add(
+                self.network_request_headers
+                    .as_deref()
+                    .map(headers_charge)
+                    .unwrap_or(0),
+            )
+            .saturating_add(string_charge(&self.challenge.source))
+            .saturating_add(string_charge(&self.challenge.scheme))
+            .saturating_add(string_charge(&self.challenge.realm))
+            .saturating_add(url_charge(&self.response_final_url))
+            .saturating_add(headers_charge(&self.response_headers))
+            .saturating_add(
+                self.response_body
+                    .renderer_transport_retained_memory_bytes(),
+            )
+    }
+}
+
 impl PendingSubresourceContinueEvent {
     #[doc(hidden)]
     pub fn renderer_transport_charge_bytes(&self) -> usize {
         match self {
             Self::Completed { .. } => 0,
-            Self::ResponsePaused(response) => url_charge(&response.url)
-                .saturating_add(url_charge(&response.final_url))
-                .saturating_add(string_charge(&response.method))
-                .saturating_add(request_headers_charge(&response.request_headers))
-                .saturating_add(
-                    response
-                        .request_body
-                        .as_deref()
-                        .map(string_charge)
-                        .unwrap_or(0),
-                )
-                .saturating_add(
-                    response
-                        .network_request_headers
-                        .as_deref()
-                        .map(headers_charge)
-                        .unwrap_or(0),
-                )
-                .saturating_add(headers_charge(&response.response_headers))
-                .saturating_add(
-                    response
-                        .response_body
-                        .renderer_transport_retained_memory_bytes(),
-                ),
-            Self::AuthRequired(auth) => url_charge(&auth.url)
-                .saturating_add(string_charge(&auth.method))
-                .saturating_add(request_headers_charge(&auth.request_headers))
-                .saturating_add(auth.request_body.as_deref().map(string_charge).unwrap_or(0))
-                .saturating_add(
-                    auth.network_request_headers
-                        .as_deref()
-                        .map(headers_charge)
-                        .unwrap_or(0),
-                )
-                .saturating_add(string_charge(&auth.challenge.source))
-                .saturating_add(string_charge(&auth.challenge.scheme))
-                .saturating_add(string_charge(&auth.challenge.realm)),
+            Self::ResponsePaused(info) => info.renderer_transport_charge_bytes(),
+            Self::AuthRequired(info) => info.renderer_transport_charge_bytes(),
         }
     }
 }
@@ -312,6 +368,53 @@ fn response_started_charge(response: &SubresourceResponseStarted) -> usize {
                 .unwrap_or(0),
         )
         .saturating_add(response.cookie_set_reports.len().saturating_mul(256))
+        .saturating_add(
+            response
+                .request_cookie_report
+                .as_ref()
+                .map(cookie_query_report_charge)
+                .unwrap_or(0),
+        )
+}
+
+fn cookie_query_report_charge(report: &StoredCookieQueryReport) -> usize {
+    report
+        .included_cookies
+        .iter()
+        .chain(&report.excluded_cookies)
+        .fold(
+            std::mem::size_of_val(report)
+                .saturating_add(report.facade_exclusion_reasons.len().saturating_mul(32)),
+            |total, access| {
+                total
+                    .saturating_add(std::mem::size_of_val(access))
+                    .saturating_add(string_charge(&access.cookie.name))
+                    .saturating_add(string_charge(&access.cookie.value))
+                    .saturating_add(string_charge(&access.cookie.domain))
+                    .saturating_add(string_charge(&access.cookie.path))
+                    .saturating_add(
+                        access
+                            .site_for_cookies_url
+                            .as_ref()
+                            .map(url_charge)
+                            .unwrap_or(0),
+                    )
+                    .saturating_add(
+                        access
+                            .top_frame_origin_url
+                            .as_ref()
+                            .map(url_charge)
+                            .unwrap_or(0),
+                    )
+                    .saturating_add(
+                        access
+                            .exclusion_reasons
+                            .len()
+                            .saturating_add(access.warning_reasons.len())
+                            .saturating_mul(32),
+                    )
+            },
+        )
 }
 
 fn network_record_charge(record: &SubresourceNetworkRecord) -> usize {

@@ -2092,6 +2092,48 @@ pub(crate) async fn wait_until_message(
 }
 
 #[cfg(test)]
+pub(crate) async fn pause_new_dedicated_workers(ctx: &mut TestContext, parent: &str, id: u64) {
+    ctx.process_async(json!({
+        "id": id, "method": "Target.setAutoAttach", "sessionId": parent,
+        "params": { "autoAttach": true, "waitForDebuggerOnStart": true, "flatten": true,
+            "filter": [{ "type": "worker" }] }
+    }))
+    .await;
+    ctx.expect_result(id, json!({}), Some(parent));
+}
+
+/// Observe the actual Worker target before allowing its script to issue any
+/// requests. Page Network.enable does not subscribe to a Worker's output FIFO.
+#[cfg(test)]
+pub(crate) async fn enable_network_on_new_dedicated_worker(
+    ctx: &mut TestContext,
+    parent: &str,
+    id: u64,
+) -> String {
+    let matches_worker = |message: &Value| {
+        message["method"] == "Target.attachedToTarget"
+            && message["sessionId"] == parent
+            && message["params"]["targetInfo"]["type"] == "worker"
+    };
+    wait_until_scheduler_message(ctx, "paused DedicatedWorker attachment", matches_worker).await;
+    let attached = ctx.take_first_matching("DedicatedWorker attachment", matches_worker);
+    assert_eq!(attached["params"]["waitingForDebugger"], true);
+    let session = attached["params"]["sessionId"]
+        .as_str()
+        .expect("Worker session")
+        .to_owned();
+    ctx.process_async(json!({ "id": id, "method": "Network.enable", "sessionId": session }))
+        .await;
+    ctx.expect_result(id, json!({}), Some(session.as_str()));
+    ctx.process_async(
+        json!({ "id": id + 1, "method": "Runtime.runIfWaitingForDebugger", "sessionId": session }),
+    )
+    .await;
+    ctx.expect_result(id + 1, json!({}), Some(session.as_str()));
+    session
+}
+
+#[cfg(test)]
 pub(crate) async fn wait_until_messages(
     ctx: &mut TestContext,
     _session_id: impl TestSessionId<'_> + Copy,

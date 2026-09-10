@@ -367,9 +367,9 @@ async fn get_response_body_returns_partial_body_after_staged_loading_failed() {
         SubresourceResponseBody::from_bytes(b"partial body".to_vec()),
     );
     let items = vec![
-        ScriptNetworkOutputItem::SubresourceRequestStarted(Box::new(request)),
-        ScriptNetworkOutputItem::SubresourceResponseStarted(Box::new(response)),
-        ScriptNetworkOutputItem::SubresourceBodyFinished(Box::new(body)),
+        ScriptNetworkOutputItem::SubresourceRequestStarted(std::sync::Arc::new(request)),
+        ScriptNetworkOutputItem::SubresourceResponseStarted(std::sync::Arc::new(response)),
+        ScriptNetworkOutputItem::SubresourceBodyFinished(std::sync::Arc::new(body)),
     ];
     let mut output_queue = TargetNetworkOutputQueue::default();
     for item in &items {

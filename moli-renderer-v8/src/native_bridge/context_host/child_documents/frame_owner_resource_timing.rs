@@ -29,14 +29,14 @@ pub(in crate::native_bridge::context_host) struct CompletedFrameOwnerResourceTim
     request_url: String,
     initiator_type: &'static str,
     start_unix_millis_bits: u64,
-    network: crate::protocol_types::ChildFrameDocumentNetworkSnapshot,
+    network: crate::protocol_types::ChildFrameDocumentNetworkResponse,
 }
 
 impl PendingFrameOwnerResourceTiming {
     pub(in crate::native_bridge::context_host) fn complete(
         self,
         child_owner: FrameDocumentTaskOwner,
-        network: crate::protocol_types::ChildFrameDocumentNetworkSnapshot,
+        network: crate::protocol_types::ChildFrameDocumentNetworkResponse,
     ) -> CompletedFrameOwnerResourceTiming {
         CompletedFrameOwnerResourceTiming {
             child_owner,

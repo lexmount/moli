@@ -94,7 +94,11 @@ pub(crate) fn renderer_publication_owners(
             )
             .unwrap_or(RendererPublicationOwner::Unobserved),
         ],
-        RendererOutputResidenceIdentity::SharedWorker {
+        RendererOutputResidenceIdentity::DedicatedWorker {
+            browser_context_runtime_id,
+            ..
+        }
+        | RendererOutputResidenceIdentity::SharedWorker {
             browser_context_runtime_id,
             ..
         }
@@ -130,7 +134,11 @@ impl RendererPublicationOwner {
             Self::Unobserved => None,
             Self::BrowserContext { browser_context_id } => {
                 let runtime = match stream.residence() {
-                    RendererOutputResidenceIdentity::SharedWorker {
+                    RendererOutputResidenceIdentity::DedicatedWorker {
+                        browser_context_runtime_id,
+                        ..
+                    }
+                    | RendererOutputResidenceIdentity::SharedWorker {
                         browser_context_runtime_id,
                         ..
                     }

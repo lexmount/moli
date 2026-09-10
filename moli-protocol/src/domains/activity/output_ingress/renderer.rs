@@ -188,7 +188,7 @@ async fn project_renderer_output_records_for_owner(
                 RendererOutputItem::Observation(
                     moli_core::RendererProtocolObservation::DomMutations(_)
                     | moli_core::RendererProtocolObservation::RuntimeBinding(_)
-                    | moli_core::RendererProtocolObservation::Network { .. },
+                    | moli_core::RendererProtocolObservation::Network(_),
                 ) => {}
                 RendererOutputItem::Observation(
                     moli_core::RendererProtocolObservation::RuntimeInspector(batch),
@@ -205,9 +205,7 @@ async fn project_renderer_output_records_for_owner(
         if projection == RendererPublicationProjection::RetiringNetworkOnly
             && !matches!(
                 &item,
-                RendererOutputItem::Observation(
-                    moli_core::RendererProtocolObservation::Network { .. }
-                )
+                RendererOutputItem::Observation(moli_core::RendererProtocolObservation::Network(_))
             )
         {
             continue;
@@ -219,6 +217,25 @@ async fn project_renderer_output_records_for_owner(
                 let Some(committed) = observation.committed().await else {
                     continue;
                 };
+                if let moli_core::page::RendererWorkerLifecycle::DedicatedCreated(info) =
+                    committed.lifecycle()
+                    && let moli_core::page::RendererDedicatedWorkerOwner::Document {
+                        owner_local_host_id,
+                        page_id,
+                    } = info.owner
+                    && let Some(RendererPublicationOwner::PageTarget { page_owner, .. }) = conn
+                        .native_renderer_page_output_owner(
+                            crate::conn::RendererPageResidenceIdentity::from_parts(
+                                owner_local_host_id,
+                                page_id,
+                            ),
+                        )
+                {
+                    let events =
+                        Box::pin(conn.project_native_commit_before_renderer_output(&page_owner))
+                            .await;
+                    command_context.protocol_events_mut().extend(events);
+                }
                 let outputs =
                     PreparedProtocolOutputs::from_browser_worker_lifecycle(conn, committed);
                 order
@@ -271,6 +288,9 @@ async fn project_renderer_output_records_for_owner(
                     conn,
                     &action_owner,
                     action,
+                    crate::conn::RendererPageResidenceIdentity::from_residence(
+                        cursor.stream().residence(),
+                    ),
                 )
                 .await;
                 order
@@ -303,20 +323,65 @@ async fn project_renderer_output_records_for_owner(
                             continue;
                         };
                         PreparedProtocolOutputs::from_browser_document_lifecycle_event(lifecycle)
-                    } else if let moli_core::RendererProtocolObservation::Network {
-                        source_document,
-                        item,
-                    } = &observation
+                    } else if let moli_core::RendererProtocolObservation::Network(network) =
+                        &observation
                     {
+                        let Some(committed) = network.clone().committed().await else {
+                            continue;
+                        };
+                        if matches!(
+                            committed.occurrence().source,
+                            moli_core::page::RendererNetworkSource::Worker(_)
+                        ) {
+                            conn.retire_completed_worker_fetch(committed.occurrence());
+                            if let Some(pause) =
+                                conn.committed_worker_fetch_pause(committed.occurrence())
+                            {
+                                if let Some((observer, outputs)) =
+                                    crate::domains::fetch::native_worker_fetch_prepared_outputs(
+                                        conn, pause,
+                                    )
+                                    .await
+                                {
+                                    order
+                                        .route_publication_outputs(
+                                            conn,
+                                            &observer,
+                                            None,
+                                            Some(cursor),
+                                            PreparedProtocolOutputs::from_worker_fetch(outputs),
+                                            command_context,
+                                        )
+                                        .await;
+                                }
+                                continue;
+                            }
+                            let outputs = PreparedProtocolOutputs::from_browser_worker_network(
+                                conn,
+                                owner,
+                                cursor.stream().residence(),
+                                &committed,
+                            );
+                            order
+                                .route_publication_outputs(
+                                    conn,
+                                    owner,
+                                    renderer_cause.as_ref(),
+                                    Some(cursor),
+                                    outputs,
+                                    command_context,
+                                )
+                                .await;
+                            continue;
+                        }
                         let Some(outputs) =
-                            PreparedProtocolOutputs::from_renderer_network_observation(
+                            PreparedProtocolOutputs::from_browser_network_observation(
                                 conn,
                                 owner,
                                 crate::conn::RendererPageResidenceIdentity::from_residence(
                                     cursor.stream().residence(),
                                 ),
-                                *source_document,
-                                item,
+                                &committed,
                             )
                         else {
                             continue;

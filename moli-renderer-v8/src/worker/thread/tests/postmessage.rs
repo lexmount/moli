@@ -2009,6 +2009,7 @@ async fn shared_worker_message_port_handler_can_reply_with_performance_now() {
         )
         .with_worker_context_runtime(browser_context_runtime.worker_context_runtime())
         .with_global_kind(super::super::WorkerGlobalKind::Shared {
+            network: crate::runtime::RendererWorkerNetworkReporter::unobserved_for_test(),
             name: "shared".to_owned(),
             storage_key,
         }),
@@ -2088,6 +2089,7 @@ async fn shared_worker_navigator_exposes_canonical_user_agent_data() {
         .with_request_client(loader)
         .with_worker_context_runtime(browser_context_runtime.worker_context_runtime())
         .with_global_kind(super::super::WorkerGlobalKind::Shared {
+            network: crate::runtime::RendererWorkerNetworkReporter::unobserved_for_test(),
             name: "shared".to_owned(),
             storage_key,
         }),
@@ -2150,6 +2152,7 @@ async fn data_url_shared_workers_do_not_share_broadcast_channel_by_constructor_k
             .with_worker_context_runtime(browser_context_runtime.worker_context_runtime())
             .with_storage_key_top_level_site(Some("https://app.example".to_owned()))
             .with_global_kind(super::super::WorkerGlobalKind::Shared {
+                network: crate::runtime::RendererWorkerNetworkReporter::unobserved_for_test(),
                 name: "first".to_owned(),
                 storage_key: constructor_storage_key.clone(),
             }),
@@ -2159,6 +2162,7 @@ async fn data_url_shared_workers_do_not_share_broadcast_channel_by_constructor_k
             .with_worker_context_runtime(browser_context_runtime.worker_context_runtime())
             .with_storage_key_top_level_site(Some("https://app.example".to_owned()))
             .with_global_kind(super::super::WorkerGlobalKind::Shared {
+                network: crate::runtime::RendererWorkerNetworkReporter::unobserved_for_test(),
                 name: "second".to_owned(),
                 storage_key: constructor_storage_key,
             }),
@@ -2246,6 +2250,7 @@ async fn blob_url_shared_worker_broadcast_channel_uses_constructor_storage_key()
         .with_storage_key_top_level_site(Some("https://app.example".to_owned()))
         .with_creator_storage_key(constructor_storage_key.clone())
         .with_global_kind(super::super::WorkerGlobalKind::Shared {
+            network: crate::runtime::RendererWorkerNetworkReporter::unobserved_for_test(),
             name: "blob-shared".to_owned(),
             storage_key: constructor_storage_key,
         }),

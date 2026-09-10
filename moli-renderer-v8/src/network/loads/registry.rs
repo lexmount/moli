@@ -215,7 +215,7 @@ impl ResourceLoadRegistry {
                 detached_keepalive,
                 registry: Arc::downgrade(&self.inner),
             }),
-            cancelled: AtomicBool::new(false),
+            cancelled: Arc::new(AtomicBool::new(false)),
             finished: AtomicBool::new(false),
         })
     }
@@ -371,7 +371,7 @@ struct ResourceLoadRegistration {
     browser_runtime: BrowserResourceRuntime,
     task_runner: RendererResourceTaskRunner,
     lifecycle: Mutex<ResourceLoadLifecycle>,
-    cancelled: AtomicBool,
+    cancelled: Arc<AtomicBool>,
     finished: AtomicBool,
 }
 
@@ -458,6 +458,15 @@ impl Drop for ResourceLoadRegistration {
 #[derive(Clone)]
 pub(crate) struct ResourceLoadLease {
     registration: Arc<ResourceLoadRegistration>,
+}
+
+#[derive(Debug)]
+pub(crate) struct ResourceLoadCancellationObserver(Arc<AtomicBool>);
+
+impl ResourceLoadCancellationObserver {
+    pub(crate) fn is_cancelled(&self) -> bool {
+        self.0.load(Ordering::Acquire)
+    }
 }
 
 impl ResourceLoadLease {
@@ -561,6 +570,12 @@ impl ResourceLoadLease {
         self.registration.cancelled.load(Ordering::Acquire)
     }
 
+    /// A read-only lifecycle observer must not retain the request client,
+    /// resource task runner, or resource registration it is observing.
+    pub(crate) fn cancellation_observer(&self) -> ResourceLoadCancellationObserver {
+        ResourceLoadCancellationObserver(self.registration.cancelled.clone())
+    }
+
     pub(crate) fn response_completion_is_committed(&self) -> bool {
         self.registration
             .lifecycle
@@ -635,6 +650,27 @@ mod tests {
                 Some(cancel_handle),
             )
             .expect("active registry should accept loads")
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn cancellation_observer_does_not_retain_resource_authority() {
+        let registry = registry();
+        let load = lease(
+            &registry,
+            ResourceLoadDisposition::Ordinary,
+            FetchCancelHandle::new(),
+        );
+        let registration = Arc::downgrade(&load.registration);
+        let observer = load.cancellation_observer();
+        assert!(!observer.is_cancelled());
+        load.cancel();
+        assert!(observer.is_cancelled());
+        drop(load);
+        assert!(
+            registration.upgrade().is_none(),
+            "read-only observations cannot retain the resource registration"
+        );
+        assert!(observer.is_cancelled());
     }
 
     #[tokio::test(flavor = "current_thread")]

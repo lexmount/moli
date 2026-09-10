@@ -456,7 +456,6 @@ fn dedicated_worker_runtime_listener_session_id(target_id: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use moli_core::RendererOwnerLocalHostId;
     use moli_shared_worker::SharedWorkerInstanceId;
     use serde_json::json;
 
@@ -484,7 +483,6 @@ mod tests {
         let mut browser_context =
             conn.new_browser_context_fixture_for_test("BID-shared".to_owned());
         browser_context.insert_shared_worker_target(SharedWorkerTargetState::new(
-            RendererOwnerLocalHostId::new_for_testing(1),
             SharedWorkerInstanceId::from_u64(91),
             "TID-shared-worker".to_owned(),
             None,

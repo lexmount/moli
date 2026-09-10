@@ -14,9 +14,9 @@ use crate::{
     domains::{
         log_output_state::{TargetLogOutputQueueState, TargetNetworkLogEntry},
         network::{
-            CapturedRequestBody, CapturedResponseBody, NetworkBacklogPreferredRequestId,
-            PendingNetworkBacklogDeliverySnapshot, RetiringTargetNetworkAgentState,
-            TargetIoStreamRead, TargetNetworkAgentState, TargetNetworkBacklogPreparedDelivery,
+            NetworkBacklogPreferredRequestId, PendingNetworkBacklogDeliverySnapshot,
+            RetiringTargetNetworkAgentState, TargetIoStreamRead, TargetNetworkAgentState,
+            TargetNetworkBacklogPreparedDelivery,
         },
         observable_output::{
             TargetRuntimeObservableQueueState, TargetRuntimeObservableSourceOutput,
@@ -60,7 +60,7 @@ pub(crate) struct TargetRuntimeSlot {
     devtools_renderer_channel: DevToolsRendererChannel,
     pending_renderer_call_replacements: PreparedRendererCallReplacements,
     javascript_dialog_scope: TargetJavaScriptDialogScope,
-    network_agent: TargetNetworkAgentState,
+    pub(crate) network_agent: TargetNetworkAgentState,
     retiring_renderer_document_outputs: Vec<RetiringRendererDocumentOutput>,
     log_output_queue: TargetLogOutputQueueState,
     observable_queue: TargetRuntimeObservableQueueState,
@@ -377,11 +377,6 @@ impl TargetRuntimeSlot {
             .record_subresource_request_id_for_handle_if_absent(handle, request_id);
     }
 
-    pub(crate) fn record_fetch_pause_announced_request_id(&mut self, request_id: String) {
-        self.network_agent
-            .record_fetch_pause_announced_request_id(request_id);
-    }
-
     pub(crate) fn take_fetch_pause_announced_request_id(&mut self, request_id: &str) -> bool {
         self.network_agent
             .take_fetch_pause_announced_request_id(request_id)
@@ -508,15 +503,6 @@ impl TargetRuntimeSlot {
     pub(crate) fn attached_network_events_enabled_for_session(&self, session_id: &str) -> bool {
         self.network_agent
             .attached_events_enabled_for_session(session_id)
-    }
-
-    pub(crate) fn network_event_session_ids(
-        &self,
-        trigger_session_id: Option<&str>,
-        primary_session_id: Option<&str>,
-    ) -> Vec<Option<String>> {
-        self.network_agent
-            .event_session_ids(trigger_session_id, primary_session_id)
     }
 
     pub(crate) fn pending_network_backlog_delivery_snapshot(
@@ -682,14 +668,6 @@ impl TargetRuntimeSlot {
             .record_pending_response_body(request_id, session_ids);
     }
 
-    pub(crate) fn captured_response_body(&self, request_id: &str) -> Option<&CapturedResponseBody> {
-        self.network_agent.captured_response_body(request_id)
-    }
-
-    pub(crate) fn captured_request_body(&self, request_id: &str) -> Option<&CapturedRequestBody> {
-        self.network_agent.captured_request_body(request_id)
-    }
-
     pub(crate) fn collected_network_data_artifacts(
         &self,
     ) -> Vec<crate::domains::network::CollectedNetworkDataArtifact> {
@@ -756,14 +734,6 @@ impl TargetRuntimeSlot {
 
     pub(crate) fn reset_subresource_cursor(&mut self) {
         self.network_agent.reset_subresource_cursor();
-    }
-
-    pub(crate) fn mark_network_backlog_delivery_snapshot_emitted(
-        &mut self,
-        snapshot: &PendingNetworkBacklogDeliverySnapshot,
-    ) {
-        self.network_agent
-            .mark_network_backlog_delivery_snapshot_emitted(snapshot);
     }
 
     pub(crate) fn clear_websocket_request_ids(&mut self) {
@@ -1109,6 +1079,15 @@ impl BrowserContext {
             && binding.renderer_document_identity() == source_document
         {
             let loader_id = binding.loader_id.clone();
+            if self
+                .page_targets
+                .get(target_id)?
+                .runtime_slot
+                .network_agent
+                .has_observed_network_phase(item)
+            {
+                return None;
+            }
             self.page_targets
                 .get_mut(target_id)
                 .expect("resolved target projection must remain live")
@@ -1150,6 +1129,9 @@ impl BrowserContext {
                 entry.binding.renderer_document_identity() == source_document
                     && source_renderer_page.is_none_or(|page| entry.renderer_page == page)
             })?;
+        if retiring.network_agent.has_observed_network_phase(item) {
+            return None;
+        }
         Some(
             retiring
                 .network_agent
@@ -1295,7 +1277,7 @@ mod tests {
         let document_url = Url::parse("https://old.example/").expect("document URL should parse");
         let request_url =
             Url::parse("https://old.example/keepalive").expect("request URL should parse");
-        let started = ScriptNetworkOutputItem::SubresourceRequestStarted(Box::new(
+        let started = ScriptNetworkOutputItem::SubresourceRequestStarted(std::sync::Arc::new(
             SubresourceRequestStarted::new(
                 handle,
                 None,

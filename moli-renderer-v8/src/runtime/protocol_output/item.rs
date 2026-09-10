@@ -1,6 +1,5 @@
 use crate::protocol_types::{
-    ChildFrameDocumentNetworkActivitySnapshot, ChildFrameDocumentOpenedSnapshot,
-    ChildFrameNavigationSnapshot, ChildFrameTreeEventSnapshot,
+    ChildFrameDocumentOpenedSnapshot, ChildFrameNavigationSnapshot, ChildFrameTreeEventSnapshot,
 };
 use crate::runtime::{
     DetachedParserScriptFetchContinuation, RendererDedicatedWorkerObservation,
@@ -15,7 +14,6 @@ use crate::runtime::{
 };
 use moli_page_types::{
     PendingRuntimeBindingCall, PendingSubresourceContinueEvent, PendingSubresourceFetchInfo,
-    ScriptNetworkOutputItem,
 };
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -41,13 +39,10 @@ pub enum RendererOwnerAction {
         source_document: RendererDocumentLifecycleIdentity,
         event: ChildFrameDocumentOpenedSnapshot,
     },
-    ChildFrameDocumentNetwork {
-        source_document: RendererDocumentLifecycleIdentity,
-        event: ChildFrameDocumentNetworkActivitySnapshot,
-    },
     ChildFrameLoad {
         source_document: RendererDocumentLifecycleIdentity,
         event: ChildFrameNavigationSnapshot,
+        network: Option<crate::runtime::RendererChildDocumentNetworkObservation>,
     },
     SameDocumentNavigation(RendererDocumentSourcedSameDocumentNavigation),
     SessionHistoryUpdate {
@@ -87,10 +82,7 @@ pub enum RendererProtocolObservation {
     MainDocumentCommit(RendererMainDocumentCommit),
     DocumentTitleChanged(RendererDocumentTitleChanged),
     DocumentLifecycle(RendererDocumentLifecycleEvent),
-    Network {
-        source_document: RendererDocumentLifecycleIdentity,
-        item: ScriptNetworkOutputItem,
-    },
+    Network(crate::runtime::RendererNetworkObservation),
     RuntimeBinding(PendingRuntimeBindingCall),
     DomMutations(RendererDomMutationEventBatch),
     RuntimeInspector(RendererRuntimeInspectorMessageBatch),

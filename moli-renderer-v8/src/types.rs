@@ -91,30 +91,6 @@ pub(super) enum PendingSubresourceContinuation {
     },
     Xhr(v8::Global<v8::Object>),
     WebSocket(PendingWebSocketConnection),
-    WorkerFetch {
-        worker_id: DedicatedWorkerId,
-        fetch_id: u32,
-    },
-    WorkerXhr {
-        worker_id: DedicatedWorkerId,
-        xhr_id: u32,
-    },
-    WorkerCspReport {
-        worker_id: DedicatedWorkerId,
-        report_id: u32,
-    },
-    SharedWorkerFetch {
-        instance_id: moli_shared_worker::SharedWorkerInstanceId,
-        fetch_id: u32,
-    },
-    SharedWorkerXhr {
-        instance_id: moli_shared_worker::SharedWorkerInstanceId,
-        xhr_id: u32,
-    },
-    SharedWorkerCspReport {
-        instance_id: moli_shared_worker::SharedWorkerInstanceId,
-        report_id: u32,
-    },
 }
 
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
@@ -158,15 +134,6 @@ impl PendingSubresourceContinuation {
                 | Self::TextTrack { .. }
                 | Self::StylesheetSubresource { .. }
         )
-    }
-
-    pub(super) fn dedicated_worker_id(&self) -> Option<DedicatedWorkerId> {
-        match self {
-            Self::WorkerFetch { worker_id, .. }
-            | Self::WorkerXhr { worker_id, .. }
-            | Self::WorkerCspReport { worker_id, .. } => Some(*worker_id),
-            _ => None,
-        }
     }
 
     pub(super) fn stylesheet_subresource_owner(
@@ -575,14 +542,6 @@ pub(super) struct RunningSubresourceFetchState {
     pub(super) intercept_response: bool,
     pub(super) handle_auth_requests: bool,
     pub(super) initial_auth_network_request_headers: Option<Vec<(String, String)>>,
-}
-
-pub(super) struct InFlightWorkerSubresourceFetchState {
-    pub(super) pending: PendingSubresourceFetchState,
-    pub(super) request_url: Url,
-    pub(super) request_method: String,
-    pub(super) request_headers: moli_fetch::RequestHeaders,
-    pub(super) request_body: Option<String>,
 }
 
 #[derive(Debug)]
@@ -1509,70 +1468,37 @@ pub(super) struct LoadedChildDocument {
     pub(super) content_type: Option<String>,
     pub(super) character_set: String,
     pub(super) markup: String,
-    pub(super) document_network: Option<crate::protocol_types::ChildFrameDocumentNetworkSnapshot>,
+    pub(super) document_network: Option<crate::runtime::RendererChildDocumentNetworkObservation>,
 }
 
 #[derive(Debug)]
 pub(super) enum ChildDocumentLoadOutcome {
     Loaded(Box<LoadedChildDocument>),
-    IgnoredNavigation,
+    IgnoredNavigation(crate::runtime::RendererChildDocumentNetworkObservation),
 }
 
-/// Immutable frame/protocol attribution captured before a child-document
-/// navigation fetch starts.
-///
-/// This record is intentionally separate from the executable navigation
-/// target. It remains valid when the initiating Document is replaced, but none
-/// of its fields may authorize a commit into the then-current PageVm.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub(super) struct ChildDocumentLoadNetworkAttribution {
-    frame_id: String,
-    parent_frame_id: Option<String>,
-    loader_id: String,
-}
-
-impl ChildDocumentLoadNetworkAttribution {
-    pub(super) fn new(
-        frame_id: String,
-        parent_frame_id: Option<String>,
-        loader_id: String,
-    ) -> Self {
-        Self {
-            frame_id,
-            parent_frame_id,
-            loader_id,
-        }
-    }
-
-    pub(super) fn frame_id(&self) -> &str {
-        &self.frame_id
-    }
-
-    pub(super) fn parent_frame_id(&self) -> Option<&str> {
-        self.parent_frame_id.as_deref()
-    }
-
-    pub(super) fn loader_id(&self) -> &str {
-        &self.loader_id
-    }
+#[derive(Debug)]
+pub(super) enum ChildDocumentLoadFailure {
+    Network(crate::runtime::RendererChildDocumentNetworkObservation),
+    Document(String),
 }
 
 #[derive(Debug)]
 pub(super) struct ChildDocumentLoadCompletion {
     target: crate::frame_owner_model::ChildDocumentNavigationFetchTarget,
-    network_attribution: ChildDocumentLoadNetworkAttribution,
-    result: std::result::Result<ChildDocumentLoadOutcome, String>,
+    loader_id: String,
+    result: std::result::Result<ChildDocumentLoadOutcome, ChildDocumentLoadFailure>,
 }
 
 impl ChildDocumentLoadCompletion {
     pub(super) fn new(
         target: crate::frame_owner_model::ChildDocumentNavigationFetchTarget,
-        network_attribution: ChildDocumentLoadNetworkAttribution,
-        result: std::result::Result<ChildDocumentLoadOutcome, String>,
+        loader_id: String,
+        result: std::result::Result<ChildDocumentLoadOutcome, ChildDocumentLoadFailure>,
     ) -> Self {
         Self {
             target,
-            network_attribution,
+            loader_id,
             result,
         }
     }
@@ -1586,16 +1512,14 @@ impl ChildDocumentLoadCompletion {
         self.target.load_id()
     }
 
-    pub(super) fn network_attribution(&self) -> &ChildDocumentLoadNetworkAttribution {
-        &self.network_attribution
-    }
-
     pub(super) fn document_network(
         &self,
-    ) -> Option<&crate::protocol_types::ChildFrameDocumentNetworkSnapshot> {
+    ) -> Option<&crate::runtime::RendererChildDocumentNetworkObservation> {
         match &self.result {
             Ok(ChildDocumentLoadOutcome::Loaded(loaded)) => loaded.document_network.as_ref(),
-            Ok(ChildDocumentLoadOutcome::IgnoredNavigation) | Err(_) => None,
+            Ok(ChildDocumentLoadOutcome::IgnoredNavigation(network))
+            | Err(ChildDocumentLoadFailure::Network(network)) => Some(network),
+            Err(ChildDocumentLoadFailure::Document(_)) => None,
         }
     }
 
@@ -1603,10 +1527,10 @@ impl ChildDocumentLoadCompletion {
         self,
     ) -> (
         crate::frame_owner_model::ChildDocumentNavigationFetchTarget,
-        ChildDocumentLoadNetworkAttribution,
-        std::result::Result<ChildDocumentLoadOutcome, String>,
+        String,
+        std::result::Result<ChildDocumentLoadOutcome, ChildDocumentLoadFailure>,
     ) {
-        (self.target, self.network_attribution, self.result)
+        (self.target, self.loader_id, self.result)
     }
 
     #[cfg(test)]
@@ -1632,12 +1556,8 @@ impl ChildDocumentLoadCompletion {
         );
         Self::new(
             target,
-            ChildDocumentLoadNetworkAttribution::new(
-                format!("TEST-CHILD-FRAME-{load_id}"),
-                None,
-                format!("TEST-CHILD-LOADER-{load_id}"),
-            ),
-            result,
+            format!("TEST-CHILD-LOADER-{load_id}"),
+            result.map_err(ChildDocumentLoadFailure::Document),
         )
     }
 }

@@ -26,6 +26,38 @@ pub(in crate::domains::activity) struct PreparedProtocolOutputs {
 }
 
 impl PreparedProtocolOutputs {
+    pub(in crate::domains::activity) fn from_worker_fetch(
+        outputs: crate::domains::network::NetworkPreparedOutputs,
+    ) -> Self {
+        let mut prepared = Self::empty();
+        outputs.append_to_output_sink(&mut prepared);
+        prepared
+    }
+
+    pub(in crate::domains::activity) fn from_browser_worker_network(
+        conn: &mut CdpConnection,
+        owner: &CommandOwnerScope,
+        residence: moli_core::RendererOutputResidenceIdentity,
+        committed: &moli_core::page::RendererCommittedNetworkObservation,
+    ) -> Self {
+        let mut prepared = Self::empty();
+        let slot = match residence {
+            moli_core::RendererOutputResidenceIdentity::DedicatedWorker { .. } => {
+                ProtocolOutputSlot::DedicatedWorkerTargetLifecycle
+            }
+            moli_core::RendererOutputResidenceIdentity::SharedWorker { .. } => {
+                ProtocolOutputSlot::SharedWorkerTargetLifecycle
+            }
+            moli_core::RendererOutputResidenceIdentity::ServiceWorker { .. } => {
+                ProtocolOutputSlot::ServiceWorkerTargetLifecycle
+            }
+            moli_core::RendererOutputResidenceIdentity::Page { .. } => return prepared,
+        };
+        crate::domains::target::worker_network_prepared_outputs(conn, owner, residence, committed)
+            .append_to_target_lifecycle_output_sink_for_slots(&mut prepared, &[slot]);
+        prepared
+    }
+
     pub(in crate::domains::activity) fn empty() -> Self {
         Self {
             ordered_slots: Vec::new(),
@@ -40,20 +72,31 @@ impl PreparedProtocolOutputs {
     /// The resulting prepared tokens are move-owned by this publication.
     /// Projection cannot later scan the target backlog, while `Network.enable`
     /// and `Log.enable` retain their independent Chromium-compatible policies.
-    pub(in crate::domains::activity) fn from_renderer_network_observation(
+    pub(in crate::domains::activity) fn from_browser_network_observation(
         conn: &mut CdpConnection,
         owner: &CommandOwnerScope,
         source_renderer_page: Option<crate::conn::RendererPageResidenceIdentity>,
-        source_document: moli_core::RendererDocumentLifecycleIdentity,
-        item: &moli_core::page::ScriptNetworkOutputItem,
+        committed: &moli_core::page::RendererCommittedNetworkObservation,
     ) -> Option<Self> {
-        let renderer_live = conn
-            .ingest_renderer_page_network_output_item_and_prepare_live_delivery_for_owner(
+        if matches!(
+            committed.occurrence().item,
+            moli_core::page::RendererNetworkOutputItem::ChildDocument(_)
+        ) {
+            let mut prepared = Self::empty();
+            crate::domains::page::PagePreparedOutputs::from_browser_child_document_network(
+                conn,
                 owner,
                 source_renderer_page,
-                source_document,
-                item,
-            )?;
+                committed,
+            )
+            .append_to_child_frame_output_sink(&mut prepared);
+            return Some(prepared);
+        }
+        let renderer_live = conn.ingest_browser_network_observation_for_owner(
+            owner,
+            source_renderer_page,
+            committed,
+        )?;
 
         let mut prepared = Self::empty();
         crate::domains::observable_output::live_log_prepared_outputs_for_renderer_network_fact(
@@ -106,6 +149,7 @@ impl PreparedProtocolOutputs {
                 crate::domains::target::dedicated_worker_observation_prepared_outputs(
                     conn,
                     owner,
+                    source_residence,
                     event.clone(),
                 )
                 .append_to_dedicated_worker_target_lifecycle_output_sink(&mut prepared);
@@ -154,7 +198,7 @@ impl PreparedProtocolOutputs {
             RendererProtocolObservation::DocumentLifecycle(_) => unreachable!(
                 "renderer lifecycle must be admitted by the Browser before preparing projection"
             ),
-            RendererProtocolObservation::Network { .. } => unreachable!(
+            RendererProtocolObservation::Network(_) => unreachable!(
                 "renderer Network facts require the ingress-bound live projection constructor"
             ),
             RendererProtocolObservation::RuntimeBinding(call) => {
@@ -174,18 +218,10 @@ impl PreparedProtocolOutputs {
             }
             RendererProtocolObservation::RuntimeInspector(batch) => {
                 let worker_output = match source_residence {
-                    moli_core::RendererOutputResidenceIdentity::SharedWorker { .. }
+                    moli_core::RendererOutputResidenceIdentity::DedicatedWorker { .. }
+                    | moli_core::RendererOutputResidenceIdentity::SharedWorker { .. }
                     | moli_core::RendererOutputResidenceIdentity::ServiceWorker { .. } => true,
-                    moli_core::RendererOutputResidenceIdentity::Page { .. } => batch
-                        .session
-                        .wire_session_id()
-                        .and_then(|session_id| conn.session_route(Some(session_id)))
-                        .is_some_and(|route| {
-                            matches!(
-                                route,
-                                crate::conn::CdpSessionRoute::DedicatedWorkerTarget { .. }
-                            )
-                        }),
+                    moli_core::RendererOutputResidenceIdentity::Page { .. } => false,
                 };
                 if worker_output {
                     crate::domains::runtime::RuntimePreparedOutputs::
@@ -286,6 +322,7 @@ impl PreparedProtocolOutputs {
         conn: &mut CdpConnection,
         owner: &CommandOwnerScope,
         action: RendererOwnerAction,
+        source_renderer_page: Option<crate::conn::RendererPageResidenceIdentity>,
     ) -> Self {
         let mut prepared = Self::empty();
         match action {
@@ -326,28 +363,22 @@ impl PreparedProtocolOutputs {
                     )
                     .append_to_child_frame_output_sink(&mut prepared);
             }
-            RendererOwnerAction::ChildFrameDocumentNetwork {
-                source_document,
-                event,
-            } => {
-                crate::domains::page::PagePreparedOutputs::
-                    from_renderer_child_frame_document_network(
-                        conn,
-                        owner,
-                        source_document,
-                        event,
-                    )
-                    .append_to_child_frame_output_sink(&mut prepared);
-            }
             RendererOwnerAction::ChildFrameLoad {
                 source_document,
                 event,
+                network,
             } => {
+                let network = match network {
+                    Some(network) => network.committed().await,
+                    None => None,
+                };
                 crate::domains::page::PagePreparedOutputs::from_renderer_child_frame_load(
                     conn,
                     owner,
                     source_document,
                     event,
+                    source_renderer_page,
+                    network.as_ref(),
                 )
                 .append_to_child_frame_output_sink(&mut prepared);
             }

@@ -11,6 +11,7 @@ mod lifecycle;
 mod lookup;
 mod navigation_decisions;
 mod navigation_events;
+mod network_events;
 mod network_owner;
 mod page_owner;
 mod runtime_owner;

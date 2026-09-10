@@ -92,17 +92,17 @@ impl WebContents {
         &mut self,
         inherited: InheritedDocumentPolicy,
         final_url: &Url,
+        foreground: bool,
     ) -> Result<PreparedDocumentPagePolicy, String> {
         let (navigator_identity, extra_http_headers, network_offline) =
             self.configure_navigation_resources(&inherited)?;
         let mut surface = self.page_surface(
-            inherited.selected_web_contents == Some(self.id()),
+            foreground,
             inherited.emulation.network_conditions,
             inherited.emulation.geolocation.as_ref(),
             inherited.emulation.device_metrics.as_ref(),
         );
         surface.navigator_queries = inherited.navigator_queries;
-        let navigator_overrides = surface.navigator_overrides();
         // Contexts share a renderer runtime, not a Page transport identity.
         // Never copy the resource runtime most recently registered by a peer.
         let browser_resource_runtime = self
@@ -128,7 +128,7 @@ impl WebContents {
             bypass_content_security_policy: self.bypass_content_security_policy,
             emulated_media: (&self.emulation_policy.emulated_media).into(),
             idle_override,
-            navigator_overrides,
+            navigator_overrides: surface.navigator_overrides(),
             viewport_surface: self
                 .emulation_policy
                 .emulated_device_metrics

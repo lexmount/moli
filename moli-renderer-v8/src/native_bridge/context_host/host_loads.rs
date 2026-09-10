@@ -40,8 +40,8 @@ pub(crate) struct ChildFrameNavigationSnapshot {
     pub(crate) security_origin_inherited: bool,
     #[serde(default)]
     pub(crate) security_origin_opaque: bool,
-    #[serde(default)]
-    pub(crate) document_network: Option<crate::protocol_types::ChildFrameDocumentNetworkSnapshot>,
+    #[serde(skip)]
+    pub(crate) document_network: Option<crate::runtime::RendererChildDocumentNetworkObservation>,
 }
 
 impl ChildFrameNavigationSnapshot {
@@ -55,7 +55,6 @@ impl ChildFrameNavigationSnapshot {
             document_open_replacement: self.document_open_replacement,
             security_origin_inherited: self.security_origin_inherited,
             security_origin_opaque: self.security_origin_opaque,
-            document_network: self.document_network,
         }
     }
 }
@@ -511,12 +510,14 @@ impl JsContextHost {
             projected_frame_client_output = navigation_snapshot.is_some(),
             "published typed child frame load finish output"
         );
-        if let Some(navigation_snapshot) = navigation_snapshot {
+        if let Some(mut navigation_snapshot) = navigation_snapshot {
+            let network = navigation_snapshot.document_network.take();
             if let Some(source_document) = self.root_document_lifecycle_identity()
                 && self.append_live_turn_owner_action(
                     crate::runtime::RendererOwnerAction::ChildFrameLoad {
                         source_document,
                         event: navigation_snapshot.clone().into_protocol_snapshot(),
+                        network: network.clone(),
                     },
                 )
             {
@@ -524,8 +525,11 @@ impl JsContextHost {
                 // protocol projection.
             } else {
                 #[cfg(test)]
-                self.completed_child_browsing_context_loads
-                    .push(navigation_snapshot);
+                {
+                    navigation_snapshot.document_network = network;
+                    self.completed_child_browsing_context_loads
+                        .push(navigation_snapshot);
+                }
                 #[cfg(not(test))]
                 {
                     let _ = navigation_snapshot;

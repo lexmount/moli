@@ -316,10 +316,15 @@ async fn construct(
     })
     .await?;
     await_inspection(owner, contents, key, inspection).await?;
-    let built = build
-        .materialize()
-        .await
-        .map_err(|error| error.to_string())?;
+    let materialize = on_owner(owner, move |browser| {
+        let context = browser.context_mut(contents.context())?;
+        let foreground = context.selected_web_contents_handle() == Some(contents);
+        context
+            .web_contents_mut(contents)?
+            .start_initial_document_materialization(build, foreground)
+    })
+    .await?;
+    let built = materialize.await.map_err(|error| error.to_string())?;
     on_owner(owner, move |browser| {
         let committed = match browser.context_mut(contents.context()) {
             Ok(context) => context.commit_initial_document(built),

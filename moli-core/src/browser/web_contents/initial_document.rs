@@ -4,7 +4,7 @@ use crate::{
         BrowserSequence, DocumentId, DocumentLifecycle, MainFrameSlotId,
         RendererPageResidenceIdentity, WebContentsId,
     },
-    runtime::{BuiltDocumentPage, PendingPreparedDocumentPage, PreparedDocumentPagePolicy},
+    runtime::{BuiltDocumentPage, PendingPreparedDocumentPage},
 };
 use std::sync::Arc;
 use tokio::sync::{oneshot, watch};
@@ -238,7 +238,7 @@ pub struct AdmittedInitialDocumentBuild {
     key: InitialDocumentBuildKey,
     completion: InitialDocumentBuildCompletion,
     page: PendingPreparedDocumentPage,
-    policy: PreparedDocumentPagePolicy,
+    inherited: InheritedDocumentPolicy,
 }
 
 pub enum InitialDocumentAdmission {
@@ -262,35 +262,6 @@ impl AdmittedInitialDocumentBuild {
         &self,
     ) -> moli_renderer_v8::RendererPreparedDocumentInspectionEndpoint {
         self.page.inspection_configuration_endpoint()
-    }
-    pub async fn materialize(self) -> anyhow::Result<BuiltInitialDocument> {
-        let Self {
-            key,
-            completion,
-            page,
-            policy,
-        } = self;
-        anyhow::ensure!(completion.pending(), "InitialDocumentPageBuildCancelled");
-        let built = match page.materialize(policy).await {
-            Ok(built) => built,
-            Err(error) => {
-                completion.finish(Err(error.to_string()));
-                return Err(error);
-            }
-        };
-        anyhow::ensure!(completion.pending(), "InitialDocumentPageBuildCancelled");
-        anyhow::ensure!(
-            key.renderer == RendererPageResidenceIdentity::from_page(&built.page),
-            "initial document renderer identity changed"
-        );
-        let lifecycle = DocumentLifecycle::from_creation_artifacts(&built.page_creation_artifacts)
-            .ok_or_else(|| anyhow::anyhow!("inconsistent initial document lifecycle"))?;
-        Ok(BuiltInitialDocument {
-            key,
-            completion,
-            built,
-            lifecycle,
-        })
     }
 }
 
@@ -369,7 +340,7 @@ impl WebContents {
             .storage
             .page_storage_handles(self.session_storage.store().clone())
             .into_navigation_storage();
-        let policy = self.capture_document_policy(inherited, &url)?;
+        self.configure_navigation_resources(&inherited)?;
         let page = self
             .navigation_engine
             .as_mut()
@@ -396,9 +367,71 @@ impl WebContents {
                 key,
                 completion,
                 page,
-                policy,
+                inherited,
             },
         )))
+    }
+
+    pub(in crate::browser) fn start_initial_document_materialization(
+        &mut self,
+        build: AdmittedInitialDocumentBuild,
+        foreground: bool,
+    ) -> Result<
+        impl std::future::Future<Output = anyhow::Result<BuiltInitialDocument>> + use<>,
+        String,
+    > {
+        if self.main_frame.current_document.is_some()
+            || self.id() != build.key.web_contents
+            || self.main_frame.id() != build.key.frame_slot
+            || !self
+                .navigation
+                .can_install_current_initial_empty_document_page()
+            || !build.completion.pending()
+            || !self
+                .navigation
+                .initial_document_build()
+                .is_some_and(|current| current.key == build.key)
+        {
+            return Err("InitialDocumentPageBuildCancelled".into());
+        }
+        let url = self
+            .navigation
+            .initial_empty_document_url_if_current()
+            .and_then(|url| url::Url::parse(url).ok())
+            .unwrap_or_else(|| url::Url::parse("about:blank").expect("valid initial URL"));
+        let AdmittedInitialDocumentBuild {
+            key,
+            completion,
+            page,
+            inherited,
+        } = build;
+        // Keep Context inheritance frozen at admission. Selection and the
+        // WebContents' own policy may change while inspection suspends the build.
+        let policy = self.capture_document_policy(inherited, &url, foreground)?;
+        Ok(async move {
+            anyhow::ensure!(completion.pending(), "InitialDocumentPageBuildCancelled");
+            let built = match page.materialize(policy).await {
+                Ok(built) => built,
+                Err(error) => {
+                    completion.finish(Err(error.to_string()));
+                    return Err(error);
+                }
+            };
+            anyhow::ensure!(completion.pending(), "InitialDocumentPageBuildCancelled");
+            anyhow::ensure!(
+                key.renderer == RendererPageResidenceIdentity::from_page(&built.page),
+                "initial document renderer identity changed"
+            );
+            let lifecycle =
+                DocumentLifecycle::from_creation_artifacts(&built.page_creation_artifacts)
+                    .ok_or_else(|| anyhow::anyhow!("inconsistent initial document lifecycle"))?;
+            Ok(BuiltInitialDocument {
+                key,
+                completion,
+                built,
+                lifecycle,
+            })
+        })
     }
 
     pub fn commit_initial_document(
