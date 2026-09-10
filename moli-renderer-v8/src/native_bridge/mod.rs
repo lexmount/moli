@@ -49,9 +49,7 @@ pub(crate) use active_child_window::{
     restore_deferred_active_child_window_scope_if_present,
 };
 pub(crate) use child_window_surface::CALLBACK_ERROR_WINDOW_HANDLE_SLOT;
-pub(crate) use collections::{
-    blob_parts_platform_collection_kind, install_collection_template_bindings,
-};
+pub(crate) use collections::install_collection_template_bindings;
 pub(crate) use context_host::{
     DetachedChildBrowsingContextDocumentSnapshot, ImageDecodeRequestId,
     RuntimeObservableContextToken, cross_origin_lightweight_popup_id,

@@ -26,7 +26,7 @@ struct ResizeObserverObjectDeclaration<'s> {
 }
 
 #[derive(WebApiObject)]
-#[webapi(interface = "Object")]
+#[webapi(interface = "ResizeObserverEntry", prototype = "Object")]
 struct ResizeObserverEntryDeclaration<'scope> {
     #[webapi(data_property, enumerable)]
     target: v8::Local<'scope, v8::Value>,
@@ -50,7 +50,7 @@ struct ResizeObserverObservedRecordDeclaration<'scope> {
 }
 
 #[derive(WebApiObject)]
-#[webapi(interface = "Object")]
+#[webapi(interface = "ResizeObserverSize", prototype = "Object")]
 struct ResizeObserverSizeDeclaration {
     #[webapi(data_property, enumerable)]
     inline_size: f64,

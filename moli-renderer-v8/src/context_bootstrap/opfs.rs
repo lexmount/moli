@@ -803,7 +803,8 @@ struct FileSystemWritableFileStreamPrototypeDeclaration {
 }
 
 #[derive(WebApiObject)]
-#[webapi(prototype = "Object", interface = "FileSystemWritableSink")]
+// An internal UnderlyingSink record, not a Web IDL interface instance.
+#[webapi(interface = "Object")]
 struct FileSystemWritableSinkObjectDeclaration {
     #[webapi(slot = FILE_SYSTEM_WRITABLE_SINK_STATE_SLOT)]
     state_json: String,
@@ -3168,9 +3169,8 @@ fn writable_sink_state<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     sink: v8::Local<'s, v8::Object>,
 ) -> Option<FileSystemWritableSinkState> {
-    if !moli_webapi_declare::implements_interface(scope, sink, "FileSystemWritableSink") {
-        return None;
-    }
+    // The sink is an internal record; its private payload carries the writer
+    // capability and is not a platform interface brand.
     let json = get_private_value(scope, sink, FILE_SYSTEM_WRITABLE_SINK_STATE_SLOT)?
         .to_string(scope)?
         .to_rust_string_lossy(scope);

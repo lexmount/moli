@@ -971,7 +971,7 @@ pub(super) fn svg_transform_value_or_throw<'s>(
 ) -> Option<v8::Local<'s, v8::Object>> {
     let object = v8::Local::<v8::Object>::try_from(value).ok();
     if let Some(object) = object
-        && get_private_value(scope, object, SVG_TRANSFORM_MATRIX_SLOT).is_some()
+        && moli_webapi_declare::implements_interface(scope, object, "SVGTransform")
     {
         return Some(object);
     }
@@ -1003,7 +1003,7 @@ pub(super) fn svg_matrix_value_or_throw<'s>(
 ) -> Option<v8::Local<'s, v8::Object>> {
     let object = v8::Local::<v8::Object>::try_from(value).ok();
     if let Some(object) = object
-        && get_private_value(scope, object, SVG_MATRIX_A_SLOT).is_some()
+        && moli_webapi_declare::implements_interface(scope, object, "SVGMatrix")
     {
         return Some(object);
     }

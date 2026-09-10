@@ -222,15 +222,13 @@ pub(crate) fn selected_file_from_object<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     object: v8::Local<'s, v8::Object>,
 ) -> Option<SelectedFile> {
-    let bytes = blob::blob_bytes_from_object(scope, object)?;
-    let mime_type = blob::blob_mime_type_from_object(scope, object).unwrap_or_default();
-    let name_value = object.get(scope, v8str(scope, "name").into())?;
-    if name_value.is_null_or_undefined() {
+    if !moli_webapi_declare::implements_interface(scope, object, "File") {
         return None;
     }
-    let name = name_value.to_string(scope)?.to_rust_string_lossy(scope);
-    let last_modified = object
-        .get(scope, v8str(scope, "lastModified").into())
+    let bytes = blob::blob_bytes_from_object(scope, object)?;
+    let mime_type = blob::blob_mime_type_from_object(scope, object).unwrap_or_default();
+    let name = file_name_from_object(scope, object)?;
+    let last_modified = get_private_value(scope, object, FILE_LAST_MODIFIED_SLOT)
         .and_then(|value| value.number_value(scope))
         .filter(|value| value.is_finite())
         .unwrap_or_else(unix_epoch_millis);

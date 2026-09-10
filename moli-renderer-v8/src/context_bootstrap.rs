@@ -421,7 +421,6 @@ pub(crate) use self::streams::{
     build_readable_stream_clone_shell, build_transform_stream_clone_shell,
     build_writable_stream_clone_shell, initialize_readable_stream_clone_shell,
     initialize_transform_stream_clone_shell, initialize_writable_stream_clone_shell,
-    is_readable_stream_object, is_transform_stream_object, is_writable_stream_object,
     new_readable_stream_from_array_buffer, new_readable_stream_from_source,
     prepare_readable_stream_transfer, prepare_transform_stream_transfer,
     prepare_writable_stream_transfer,

@@ -2,7 +2,7 @@ use super::*;
 use moli_webapi_declare::WebApiObject;
 
 #[derive(WebApiObject)]
-#[webapi(interface = "Object")]
+#[webapi(interface = "Event", prototype = "Object")]
 struct WebSocketSimpleEventFallbackDeclaration {
     #[webapi(data_property, enumerable)]
     r#type: String,

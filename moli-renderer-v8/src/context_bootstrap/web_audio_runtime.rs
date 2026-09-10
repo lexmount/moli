@@ -253,7 +253,11 @@ struct OfflineAudioCompletePayloadDeclaration<'scope> {
 }
 
 #[derive(WebApiObject)]
-#[webapi(interface = "Object")]
+#[webapi(
+    interface = "OfflineAudioCompletionEvent",
+    prototype = "Object",
+    parent = "Event"
+)]
 struct OfflineAudioCompletionEventDeclaration<'scope> {
     #[webapi(data_property = "type")]
     event_type: &'static str,

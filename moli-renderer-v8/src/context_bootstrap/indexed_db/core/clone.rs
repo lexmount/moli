@@ -48,52 +48,61 @@ impl v8::ValueSerializerImpl for IndexedDbStructuredCloneSerializer {
         object: v8::Local<'s, v8::Object>,
         serializer: &dyn v8::ValueSerializerHelper,
     ) -> Option<bool> {
-        if write_crypto_key_payload(scope, object, serializer).is_some() {
-            return Some(true);
-        }
-        if let Some(payload) = blob_clone_payload_from_object(scope, object) {
-            let mut external_objects = self.external_objects.borrow_mut();
-            let Ok(index) = u32::try_from(external_objects.len()) else {
-                drop(external_objects);
-                let exception = dom_exception_value(
-                    scope,
-                    "Too many external objects in IndexedDB structured clone.",
-                    "DataCloneError",
-                );
-                scope.throw_exception(exception);
-                return None;
-            };
-            external_objects.push(indexed_db_external_object_from_blob_payload(payload));
-            serializer.write_uint32(HOST_OBJECT_TAG_BLOB);
-            serializer.write_uint32(index);
-            return Some(true);
-        }
-        if file_system_handle_clone_payload_from_object(scope, object).is_some() {
-            let Some(payload) = file_system_handle_durable_payload_from_object(scope, object)
-            else {
-                let exception = dom_exception_value(
-                    scope,
-                    "FileSystemHandle is not authorized for this IndexedDB storage scope.",
-                    "DataCloneError",
-                );
-                scope.throw_exception(exception);
-                return None;
-            };
-            let mut external_objects = self.external_objects.borrow_mut();
-            let Ok(index) = u32::try_from(external_objects.len()) else {
-                drop(external_objects);
-                let exception = dom_exception_value(
-                    scope,
-                    "Too many external objects in IndexedDB structured clone.",
-                    "DataCloneError",
-                );
-                scope.throw_exception(exception);
-                return None;
-            };
-            external_objects.push(indexed_db_external_object_from_file_system_handle(payload));
-            serializer.write_uint32(HOST_OBJECT_TAG_FILE_SYSTEM_HANDLE);
-            serializer.write_uint32(index);
-            return Some(true);
+        match moli_webapi_declare::web_api_object_type(scope, object).map(|kind| kind.name()) {
+            Some("CryptoKey") => {
+                if write_crypto_key_payload(scope, object, serializer).is_some() {
+                    return Some(true);
+                }
+            }
+            Some("Blob" | "File") => {
+                if let Some(payload) = blob_clone_payload_from_object(scope, object) {
+                    let mut external_objects = self.external_objects.borrow_mut();
+                    let Ok(index) = u32::try_from(external_objects.len()) else {
+                        drop(external_objects);
+                        let exception = dom_exception_value(
+                            scope,
+                            "Too many external objects in IndexedDB structured clone.",
+                            "DataCloneError",
+                        );
+                        scope.throw_exception(exception);
+                        return None;
+                    };
+                    external_objects.push(indexed_db_external_object_from_blob_payload(payload));
+                    serializer.write_uint32(HOST_OBJECT_TAG_BLOB);
+                    serializer.write_uint32(index);
+                    return Some(true);
+                }
+            }
+            Some("FileSystemFileHandle" | "FileSystemDirectoryHandle")
+                if file_system_handle_clone_payload_from_object(scope, object).is_some() =>
+            {
+                let Some(payload) = file_system_handle_durable_payload_from_object(scope, object)
+                else {
+                    let exception = dom_exception_value(
+                        scope,
+                        "FileSystemHandle is not authorized for this IndexedDB storage scope.",
+                        "DataCloneError",
+                    );
+                    scope.throw_exception(exception);
+                    return None;
+                };
+                let mut external_objects = self.external_objects.borrow_mut();
+                let Ok(index) = u32::try_from(external_objects.len()) else {
+                    drop(external_objects);
+                    let exception = dom_exception_value(
+                        scope,
+                        "Too many external objects in IndexedDB structured clone.",
+                        "DataCloneError",
+                    );
+                    scope.throw_exception(exception);
+                    return None;
+                };
+                external_objects.push(indexed_db_external_object_from_file_system_handle(payload));
+                serializer.write_uint32(HOST_OBJECT_TAG_FILE_SYSTEM_HANDLE);
+                serializer.write_uint32(index);
+                return Some(true);
+            }
+            _ => {}
         }
         let exception = dom_exception_value(
             scope,

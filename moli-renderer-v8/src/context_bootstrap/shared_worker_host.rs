@@ -94,7 +94,7 @@ struct SharedWorkerHostEventInitDeclaration {
 }
 
 #[derive(WebApiObject)]
-#[webapi(interface = "Object")]
+#[webapi(interface = "Event", prototype = "Object")]
 struct SharedWorkerHostEventFallbackDeclaration {
     #[webapi(data_property, enumerable)]
     r#type: String,
@@ -120,7 +120,7 @@ struct SharedWorkerHostErrorEventInitDeclaration<'scope> {
 }
 
 #[derive(WebApiObject)]
-#[webapi(interface = "Object", scope_lifetime = 'scope)]
+#[webapi(interface = "ErrorEvent", prototype = "Object", scope_lifetime = 'scope)]
 struct SharedWorkerHostErrorEventFallbackDeclaration<'scope, 'text> {
     #[webapi(data_property, enumerable)]
     r#type: &'static str,

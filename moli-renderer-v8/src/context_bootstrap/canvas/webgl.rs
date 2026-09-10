@@ -788,7 +788,12 @@ pub(crate) fn webgl_get_shader_precision_format_callback(
 }
 
 #[derive(WebApiObject)]
-#[webapi(interface = "Object", data_properties, enumerable)]
+#[webapi(
+    interface = "WebGLShaderPrecisionFormat",
+    prototype = "Object",
+    data_properties,
+    enumerable
+)]
 struct WebGlShaderPrecisionFormat {
     precision: i32,
     #[webapi(data_property = "rangeMin")]

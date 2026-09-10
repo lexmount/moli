@@ -1,22 +1,12 @@
 use super::super::*;
-use crate::util::global_constructor_object;
 
 fn value_is_document_type<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     value: v8::Local<'s, v8::Value>,
 ) -> bool {
-    if let Ok(object) = v8::Local::<v8::Object>::try_from(value)
-        && detached_state_object(scope, object)
-            .and_then(|state| state.get(scope, v8str(scope, "nodeType").into()))
-            .and_then(|node_type| node_type.uint32_value(scope))
-            == Some(10)
-    {
-        return true;
-    }
-    let Some(constructor) = global_constructor_object(scope, "DocumentType") else {
-        return false;
-    };
-    value.instance_of(scope, constructor).unwrap_or(false)
+    v8::Local::<v8::Object>::try_from(value).is_ok_and(|object| {
+        moli_webapi_declare::implements_interface(scope, object, "DocumentType")
+    })
 }
 
 pub(in crate::native_bridge) fn bridge_create_detached_document_callback<'a>(

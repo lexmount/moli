@@ -92,10 +92,21 @@ pub fn register_web_api_interfaces<C>(
     v8::scope!(let scope, scope.as_mut());
     let registry = registry(scope);
     let mut registry = registry.borrow_mut();
+    // Object declarations can register their parent on every construction.
+    // Repeated metadata needs no copies or cycle validation of the whole graph.
+    let mut changes = interfaces.into_iter().filter(|(name, parent)| {
+        !registry.names.get(name).is_some_and(|id| {
+            let entry = &registry.entries[*id];
+            entry.declared && entry.parent.map(|id| registry.entries[id].name) == *parent
+        })
+    });
+    let Some(first) = changes.next() else {
+        return Ok(());
+    };
     // Validate the whole batch before publishing any inheritance changes.
     let mut entries = registry.entries.clone();
     let mut names = registry.names.clone();
-    for (name, parent) in interfaces {
+    for (name, parent) in std::iter::once(first).chain(changes) {
         if name == "Object" || parent == Some("Object") {
             return Err(BindError::new("Object is not a Web IDL interface"));
         }
@@ -149,13 +160,14 @@ fn object_type_id<'s>(
     (id < registry.borrow().entries.len()).then_some(id)
 }
 
-/// Reads only the object's own native identity. Prototype inheritance and
-/// JavaScript properties (including symbols) cannot supply this identity.
+/// Reads the object's own native identity, or the target identity of an
+/// explicitly registered native Proxy. Prototype inheritance and JavaScript
+/// properties (including symbols) cannot supply identity or invoke author code.
 pub fn web_api_object_type<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     object: v8::Local<'s, v8::Object>,
 ) -> Option<WebApiType> {
-    let registry = registry(scope);
+    let registry = scope.get_slot::<Rc<RefCell<TypeRegistry>>>()?.clone();
     let id = object_type_id(scope, object, &registry)?;
     Some(WebApiType {
         name: registry.borrow().entries[id].name,
@@ -167,7 +179,9 @@ pub fn implements_interface<'s>(
     object: v8::Local<'s, v8::Object>,
     expected: &str,
 ) -> bool {
-    let registry = registry(scope);
+    let Some(registry) = scope.get_slot::<Rc<RefCell<TypeRegistry>>>().cloned() else {
+        return false;
+    };
     let Some(id) = object_type_id(scope, object, &registry) else {
         return false;
     };

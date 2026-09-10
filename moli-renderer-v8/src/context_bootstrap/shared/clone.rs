@@ -1,9 +1,6 @@
 use crate::{
     context_bootstrap::{
         current_child_browsing_context_handle_for_runtime_scope, current_worker_script_url,
-    },
-    context_bootstrap::{
-        is_readable_stream_object, is_transform_stream_object, is_writable_stream_object,
         message_port_id_from_object,
     },
     structured_clone::{
@@ -448,40 +445,39 @@ fn parse_transfer_values<'s>(
             array_buffers.push(buffer);
             continue;
         }
-        if let Ok(port) = v8::Local::<v8::Object>::try_from(candidate)
-            && let Some(port_id) = message_port_id_from_object(scope, port)
-        {
-            if Some(port_id) == source_port_id {
-                operation.throw_data_clone_error(
-                    scope,
-                    "transfer list contains the source MessagePort.",
-                );
-                return None;
+        if let Ok(object) = v8::Local::<v8::Object>::try_from(candidate) {
+            match moli_webapi_declare::web_api_object_type(scope, object).map(|kind| kind.name()) {
+                Some("MessagePort") => {
+                    if let Some(port_id) = message_port_id_from_object(scope, object) {
+                        if Some(port_id) == source_port_id {
+                            operation.throw_data_clone_error(
+                                scope,
+                                "transfer list contains the source MessagePort.",
+                            );
+                            return None;
+                        }
+                        seen.push(object.into());
+                        message_ports.push(object);
+                        continue;
+                    }
+                }
+                Some("ReadableStream") => {
+                    seen.push(object.into());
+                    readable_streams.push(object);
+                    continue;
+                }
+                Some("WritableStream") => {
+                    seen.push(object.into());
+                    writable_streams.push(object);
+                    continue;
+                }
+                Some("TransformStream") => {
+                    seen.push(object.into());
+                    transform_streams.push(object);
+                    continue;
+                }
+                _ => {}
             }
-            seen.push(port.into());
-            message_ports.push(port);
-            continue;
-        }
-        if let Ok(stream) = v8::Local::<v8::Object>::try_from(candidate)
-            && is_readable_stream_object(scope, stream)
-        {
-            seen.push(stream.into());
-            readable_streams.push(stream);
-            continue;
-        }
-        if let Ok(stream) = v8::Local::<v8::Object>::try_from(candidate)
-            && is_writable_stream_object(scope, stream)
-        {
-            seen.push(stream.into());
-            writable_streams.push(stream);
-            continue;
-        }
-        if let Ok(stream) = v8::Local::<v8::Object>::try_from(candidate)
-            && is_transform_stream_object(scope, stream)
-        {
-            seen.push(stream.into());
-            transform_streams.push(stream);
-            continue;
         }
         operation
             .throw_data_clone_error(scope, "transfer list contains a non-transferable object.");

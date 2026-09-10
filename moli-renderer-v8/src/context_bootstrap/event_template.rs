@@ -280,7 +280,7 @@ struct PointerEventTemplateMethodsDeclaration {
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(name = "EventTarget", enumerable)]
+#[webapi(name = "EventTarget", enumerable, receiver = "EventTarget")]
 struct EventTargetTemplateMethodsDeclaration {
     #[webapi(
         method = "addEventListener",

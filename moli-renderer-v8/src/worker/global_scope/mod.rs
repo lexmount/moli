@@ -542,7 +542,7 @@ struct ServiceWorkerGlobalEventHandlerStateDeclaration {
 }
 
 #[derive(Default, WebApiObject)]
-#[webapi(interface = "Object")]
+#[webapi(interface = "Clients", prototype = "Object")]
 struct ServiceWorkerClientsDeclaration {
     #[webapi(method, callback = service_worker_clients_claim_callback, length = 0)]
     claim: (),
@@ -839,7 +839,7 @@ struct ServiceWorkerPushSubscriptionDeclaration<'scope> {
 }
 
 #[derive(WebApiObject)]
-#[webapi(interface = "Object")]
+#[webapi(interface = "PushSubscriptionOptions", prototype = "Object")]
 struct ServiceWorkerPushSubscriptionOptionsDeclaration<'scope> {
     #[webapi(data_property = "userVisibleOnly", readonly)]
     user_visible_only: bool,

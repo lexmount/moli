@@ -511,8 +511,8 @@ fn structured_clone_rejects_platform_objects_in_nested_graphs_without_running_th
           new URL('https://example.test/'), new URLSearchParams('a=b'), new Headers(),
           new Request('https://example.test/'), new Response('body'), new Response().headers, new FormData(),
           new Event('event'), new EventTarget(), new AbortController(), new AbortController().signal,
-          navigator, performance, history, localStorage, new Highlight(), CSS.highlights,
-          document, document.implementation, new XMLHttpRequest().upload, document.createElement('select'), document.createTextNode('text'),
+          navigator, performance, history, localStorage, new Highlight(), CSS.highlights, customElements, new CustomElementRegistry(),
+          document, document.implementation, document.childNodes, document.children, document.querySelectorAll('*'), document.createElement('div').attributes, new XMLHttpRequest().upload, document.createElement('select'), document.createTextNode('text'),
           document.implementation.createHTMLDocument('detached').body,
           new TextEncoder(), new TextDecoder(), new TextEncoderStream(), new TextDecoderStream(),
           new CompressionStream('gzip'), new DecompressionStream('gzip'),
@@ -565,6 +565,88 @@ fn encoding_stream_wrappers_do_not_inherit_transform_transferability() {
         .map(stream => { try { structuredClone(stream, {transfer: [stream]}); return 'accepted'; }
           catch (error) { return error.name; } }).join('|')
     "#).expect("only actual transferable stream interfaces should be accepted");
+    assert_eq!(
+        result,
+        "DataCloneError|DataCloneError|DataCloneError|DataCloneError"
+    );
+}
+
+#[test]
+fn shared_array_buffers_fail_consistently_at_root_and_inside_message_graphs() {
+    let mut vm = new_storage_test_vm("https://shared-buffer-clone.test/");
+    let result = vm.eval(r#"
+      (() => {
+        const shared = new SharedArrayBuffer(8);
+        const channel = new MessageChannel();
+        const probe = fn => { try { fn(); return 'accepted'; } catch (error) { return error.name; } };
+        return [
+          probe(() => structuredClone(shared)),
+          probe(() => structuredClone({nested: new Map([['shared', shared]])})),
+          probe(() => channel.port1.postMessage({shared})),
+          probe(() => window.postMessage({shared}, '*')),
+          shared.byteLength
+        ].join('|');
+      })()
+    "#).expect("unsupported shared buffers must report DataCloneError at every depth");
+    assert_eq!(
+        result,
+        "DataCloneError|DataCloneError|DataCloneError|DataCloneError|8"
+    );
+}
+
+#[test]
+fn supported_platform_codecs_preserve_payloads_after_prototype_changes() {
+    let mut vm = new_storage_test_vm("https://supported-platform-codecs.test/");
+    let result = vm.eval(r#"
+      (() => {
+        const blob = new (class extends Blob {})(['abc'], {type: 'text/plain'});
+        const file = new File(['def'], 'note.txt', {type: 'text/plain', lastModified: 17});
+        const pixels = new ImageData(new Uint8ClampedArray([1, 2, 3, 4]), 1, 1);
+        const exception = new DOMException('message', 'AbortError');
+        let getterCalls = 0;
+        for (const object of [blob, file, pixels, exception]) {
+          Object.setPrototypeOf(object, null);
+          Object.defineProperty(object, 'expando', {enumerable: true, get() { getterCalls++; return 1; }});
+        }
+        const clone = structuredClone({blob, file, pixels, exception, again: blob});
+        return [clone.blob instanceof Blob, clone.blob.size, clone.blob.type, clone.blob === clone.again,
+          clone.file instanceof File, clone.file.name, clone.file.lastModified,
+          clone.pixels instanceof ImageData, Array.from(clone.pixels.data).join(','),
+          clone.exception instanceof DOMException, clone.exception.name, clone.exception.message,
+          getterCalls, clone.blob.expando === undefined].join('|');
+      })()
+    "#).expect("native codecs should ignore mutable prototypes and author expandos");
+    assert_eq!(
+        result,
+        "true|3|text/plain|true|true|note.txt|17|true|1,2,3,4|true|AbortError|message|0|true"
+    );
+}
+
+#[test]
+fn observer_and_webgl_factory_results_have_native_identity() {
+    let mut vm = new_storage_test_vm("https://factory-result-identity.test/");
+    let result = vm
+        .eval(
+            r#"
+      (() => {
+        const target = document.createElement('div');
+        target.style.cssText = 'width: 41px; height: 23px';
+        const html = document.documentElement || document.appendChild(document.createElement('html'));
+        const body = document.body || html.appendChild(document.createElement('body'));
+        body.appendChild(target);
+        const observer = new ResizeObserver(() => {});
+        observer.observe(target);
+        const entry = observer.takeRecords()[0];
+        const gl = document.createElement('canvas').getContext('webgl');
+        const precision = gl.getShaderPrecisionFormat(gl.VERTEX_SHADER, gl.HIGH_FLOAT);
+        return [entry, entry.contentBoxSize[0], entry.borderBoxSize[0], precision].map(value => {
+          try { structuredClone({value}); return 'accepted'; }
+          catch (error) { return error.name; }
+        }).join('|');
+      })()
+    "#,
+        )
+        .expect("factory results must be identified before structured clone");
     assert_eq!(
         result,
         "DataCloneError|DataCloneError|DataCloneError|DataCloneError"

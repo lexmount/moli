@@ -142,13 +142,13 @@ struct LightweightPopupDocumentStreamMethodsDeclaration<'scope> {
 }
 
 #[derive(WebApiObject)]
-#[webapi(interface = "Object", data_properties, enumerable)]
+#[webapi(interface = "Event", prototype = "Object", data_properties, enumerable)]
 struct LightweightPopupEventDeclaration<'scope> {
     r#type: v8::Local<'scope, v8::String>,
 }
 
 #[derive(WebApiObject)]
-#[webapi(interface = "Object")]
+#[webapi(interface = "PopStateEvent", prototype = "Object")]
 struct LightweightPopupPopStateEventDeclaration<'scope> {
     #[webapi(data_property)]
     state: v8::Local<'scope, v8::Value>,

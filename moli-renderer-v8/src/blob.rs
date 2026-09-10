@@ -6,7 +6,6 @@ use moli_webapi_declare::{WebApiFunctionTemplate, WebApiObject};
 use std::sync::{Arc, OnceLock};
 
 use super::{
-    native_bridge,
     resource_owner::{ResourceOwnerId, current_resource_owner_id},
     runtime::RendererStoragePartitionIdentity,
     util::{get_private_value, set_private_value, throw_type_error, v8_string},
@@ -740,22 +739,7 @@ fn blob_platform_indexed_object_kind<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     object: v8::Local<'s, v8::Object>,
 ) -> Option<BlobPlatformIndexedObjectKind> {
-    if native_bridge::blob_parts_platform_collection_kind(scope, object).is_some() {
-        return Some(BlobPlatformIndexedObjectKind::Collection);
-    }
-    if let Ok((runtime_ptr, handle)) =
-        native_bridge::node_runtime_and_handle_from_object(scope, object)
-        && unsafe { &*runtime_ptr }
-            .dom_host()
-            .is_html_element_named(handle, "select")
-    {
-        return Some(BlobPlatformIndexedObjectKind::HtmlSelectElement);
-    }
-    match object
-        .get_constructor_name()
-        .to_rust_string_lossy(scope)
-        .as_str()
-    {
+    match moli_webapi_declare::web_api_object_type(scope, object)?.name() {
         "NamedNodeMap" => Some(BlobPlatformIndexedObjectKind::NamedNodeMap),
         "FileList" => Some(BlobPlatformIndexedObjectKind::FileList),
         "DOMStringList" => Some(BlobPlatformIndexedObjectKind::DomStringList),

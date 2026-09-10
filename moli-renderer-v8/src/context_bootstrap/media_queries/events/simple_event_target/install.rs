@@ -3,7 +3,12 @@ use crate::util::set_private_value;
 use moli_webapi_declare::WebApiObject;
 
 #[derive(WebApiObject)]
-#[webapi(interface = "EventTarget", prototype = "Object", enumerable)]
+#[webapi(
+    interface = "EventTarget",
+    prototype = "Object",
+    enumerable,
+    receiver = "EventTarget"
+)]
 struct SimpleEventTargetMethodsDeclaration<'scope> {
     #[webapi(method, length = 2, callback = simple_event_target_add_event_listener_callback)]
     add_event_listener: (),

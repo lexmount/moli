@@ -20,8 +20,7 @@ use crate::{
         ensure_message_port_wrapper_for_id, file_system_file_snapshot_clone_payload_from_object,
         file_system_handle_clone_payload_from_object, image_data_clone_payload_from_object,
         initialize_readable_stream_clone_shell, initialize_transform_stream_clone_shell,
-        initialize_writable_stream_clone_shell, is_readable_stream_object,
-        is_transform_stream_object, is_writable_stream_object, message_port_id_from_object,
+        initialize_writable_stream_clone_shell, message_port_id_from_object,
         new_dom_exception_value, new_quota_exceeded_error_value, prepare_readable_stream_transfer,
         prepare_transform_stream_transfer, prepare_writable_stream_transfer,
         quota_exceeded_error_clone_fields, require_internal_stream_value,
@@ -315,131 +314,152 @@ impl v8::ValueSerializerImpl for WireSerializer {
         object: v8::Local<'s, v8::Object>,
         serializer: &dyn v8::ValueSerializerHelper,
     ) -> Option<bool> {
-        if let Some(port_id) = message_port_id_from_object(scope, object) {
-            if !self.allowed_message_port_ids.contains(&port_id) {
-                throw_data_clone_exception(
-                    scope,
-                    "MessagePort must be listed in the postMessage transfer list.",
-                );
-                return None;
+        match moli_webapi_declare::web_api_object_type(scope, object).map(|kind| kind.name()) {
+            Some("MessagePort") => {
+                if let Some(port_id) = message_port_id_from_object(scope, object) {
+                    if !self.allowed_message_port_ids.contains(&port_id) {
+                        throw_data_clone_exception(
+                            scope,
+                            "MessagePort must be listed in the postMessage transfer list.",
+                        );
+                        return None;
+                    }
+                    serializer.write_uint32(HOST_OBJECT_TAG_MESSAGE_PORT);
+                    serializer.write_uint64(port_id);
+                    return Some(true);
+                }
             }
-            serializer.write_uint32(HOST_OBJECT_TAG_MESSAGE_PORT);
-            serializer.write_uint64(port_id);
-            return Some(true);
-        }
-        if let Some(payload) = image_data_clone_payload_from_object(scope, object) {
-            write_image_data_payload(serializer, payload);
-            return Some(true);
-        }
-        if write_crypto_key_payload(scope, object, serializer).is_some() {
-            return Some(true);
-        }
-        if is_readable_stream_object(scope, object) {
-            let Some(index) = self
-                .allowed_readable_streams
-                .iter()
-                .position(|allowed| v8::Local::new(scope, allowed).strict_equals(object.into()))
-            else {
-                throw_data_clone_exception(
-                    scope,
-                    "ReadableStream must be listed in the postMessage transfer list.",
-                );
-                return None;
-            };
-            let Ok(clone_id) = u32::try_from(index) else {
-                throw_data_clone_exception(scope, "Too many ReadableStreams in structured clone.");
-                return None;
-            };
-            serializer.write_uint32(HOST_OBJECT_TAG_READABLE_STREAM);
-            serializer.write_uint32(clone_id);
-            return Some(true);
-        }
-        if is_writable_stream_object(scope, object) {
-            let Some(index) = self
-                .allowed_writable_streams
-                .iter()
-                .position(|allowed| v8::Local::new(scope, allowed).strict_equals(object.into()))
-            else {
-                throw_data_clone_exception(
-                    scope,
-                    "WritableStream must be listed in the postMessage transfer list.",
-                );
-                return None;
-            };
-            let Ok(clone_id) = u32::try_from(index) else {
-                throw_data_clone_exception(scope, "Too many WritableStreams in structured clone.");
-                return None;
-            };
-            serializer.write_uint32(HOST_OBJECT_TAG_WRITABLE_STREAM);
-            serializer.write_uint32(clone_id);
-            return Some(true);
-        }
-        if is_transform_stream_object(scope, object) {
-            let Some(index) = self
-                .allowed_transform_streams
-                .iter()
-                .position(|allowed| v8::Local::new(scope, allowed).strict_equals(object.into()))
-            else {
-                throw_data_clone_exception(
-                    scope,
-                    "TransformStream must be listed in the postMessage transfer list.",
-                );
-                return None;
-            };
-            let Ok(clone_id) = u32::try_from(index) else {
-                throw_data_clone_exception(scope, "Too many TransformStreams in structured clone.");
-                return None;
-            };
-            serializer.write_uint32(HOST_OBJECT_TAG_TRANSFORM_STREAM);
-            serializer.write_uint32(clone_id);
-            return Some(true);
-        }
-        if let Some(payload) = blob_clone_payload_from_object(scope, object) {
-            let mut store = self.blobs.borrow_mut();
-            let clone_id = store.next_id;
-            let Some(next_id) = store.next_id.checked_add(1) else {
-                drop(store);
-                throw_data_clone_exception(scope, "Too many Blobs in structured clone.");
-                return None;
-            };
-            store.next_id = next_id;
-            store.blobs.push(ClonedBlob { clone_id, payload });
-            serializer.write_uint32(HOST_OBJECT_TAG_BLOB);
-            serializer.write_uint32(clone_id);
-            return Some(true);
-        }
-        if let Some(payload) = file_system_handle_clone_payload_from_object(scope, object) {
-            let mut store = self.file_system_handles.borrow_mut();
-            let clone_id = store.next_id;
-            let Some(next_id) = store.next_id.checked_add(1) else {
-                drop(store);
-                throw_data_clone_exception(
-                    scope,
-                    "Too many FileSystemHandles in structured clone.",
-                );
-                return None;
-            };
-            store.next_id = next_id;
-            store
-                .handles
-                .push(ClonedFileSystemHandle { clone_id, payload });
-            serializer.write_uint32(HOST_OBJECT_TAG_FILE_SYSTEM_HANDLE);
-            serializer.write_uint32(clone_id);
-            return Some(true);
-        }
-        if let Some((message, quota, requested)) = quota_exceeded_error_clone_fields(scope, object)
-        {
-            serializer.write_uint32(HOST_OBJECT_TAG_QUOTA_EXCEEDED_ERROR);
-            write_string(serializer, &message);
-            write_optional_double(serializer, quota);
-            write_optional_double(serializer, requested);
-            return Some(true);
-        }
-        if let Some((message, name)) = dom_exception_clone_fields(scope, object) {
-            serializer.write_uint32(HOST_OBJECT_TAG_DOM_EXCEPTION);
-            write_string(serializer, &message);
-            write_string(serializer, &name);
-            return Some(true);
+            Some("ImageData") => {
+                if let Some(payload) = image_data_clone_payload_from_object(scope, object) {
+                    write_image_data_payload(serializer, payload);
+                    return Some(true);
+                }
+            }
+            Some("CryptoKey") => {
+                if write_crypto_key_payload(scope, object, serializer).is_some() {
+                    return Some(true);
+                }
+            }
+            Some("ReadableStream") => {
+                let Some(index) = self.allowed_readable_streams.iter().position(|allowed| {
+                    v8::Local::new(scope, allowed).strict_equals(object.into())
+                }) else {
+                    throw_data_clone_exception(
+                        scope,
+                        "ReadableStream must be listed in the postMessage transfer list.",
+                    );
+                    return None;
+                };
+                let Ok(clone_id) = u32::try_from(index) else {
+                    throw_data_clone_exception(
+                        scope,
+                        "Too many ReadableStreams in structured clone.",
+                    );
+                    return None;
+                };
+                serializer.write_uint32(HOST_OBJECT_TAG_READABLE_STREAM);
+                serializer.write_uint32(clone_id);
+                return Some(true);
+            }
+            Some("WritableStream") => {
+                let Some(index) = self.allowed_writable_streams.iter().position(|allowed| {
+                    v8::Local::new(scope, allowed).strict_equals(object.into())
+                }) else {
+                    throw_data_clone_exception(
+                        scope,
+                        "WritableStream must be listed in the postMessage transfer list.",
+                    );
+                    return None;
+                };
+                let Ok(clone_id) = u32::try_from(index) else {
+                    throw_data_clone_exception(
+                        scope,
+                        "Too many WritableStreams in structured clone.",
+                    );
+                    return None;
+                };
+                serializer.write_uint32(HOST_OBJECT_TAG_WRITABLE_STREAM);
+                serializer.write_uint32(clone_id);
+                return Some(true);
+            }
+            Some("TransformStream") => {
+                let Some(index) = self.allowed_transform_streams.iter().position(|allowed| {
+                    v8::Local::new(scope, allowed).strict_equals(object.into())
+                }) else {
+                    throw_data_clone_exception(
+                        scope,
+                        "TransformStream must be listed in the postMessage transfer list.",
+                    );
+                    return None;
+                };
+                let Ok(clone_id) = u32::try_from(index) else {
+                    throw_data_clone_exception(
+                        scope,
+                        "Too many TransformStreams in structured clone.",
+                    );
+                    return None;
+                };
+                serializer.write_uint32(HOST_OBJECT_TAG_TRANSFORM_STREAM);
+                serializer.write_uint32(clone_id);
+                return Some(true);
+            }
+            Some("Blob" | "File") => {
+                if let Some(payload) = blob_clone_payload_from_object(scope, object) {
+                    let mut store = self.blobs.borrow_mut();
+                    let clone_id = store.next_id;
+                    let Some(next_id) = store.next_id.checked_add(1) else {
+                        drop(store);
+                        throw_data_clone_exception(scope, "Too many Blobs in structured clone.");
+                        return None;
+                    };
+                    store.next_id = next_id;
+                    store.blobs.push(ClonedBlob { clone_id, payload });
+                    serializer.write_uint32(HOST_OBJECT_TAG_BLOB);
+                    serializer.write_uint32(clone_id);
+                    return Some(true);
+                }
+            }
+            Some("FileSystemFileHandle" | "FileSystemDirectoryHandle") => {
+                if let Some(payload) = file_system_handle_clone_payload_from_object(scope, object) {
+                    let mut store = self.file_system_handles.borrow_mut();
+                    let clone_id = store.next_id;
+                    let Some(next_id) = store.next_id.checked_add(1) else {
+                        drop(store);
+                        throw_data_clone_exception(
+                            scope,
+                            "Too many FileSystemHandles in structured clone.",
+                        );
+                        return None;
+                    };
+                    store.next_id = next_id;
+                    store
+                        .handles
+                        .push(ClonedFileSystemHandle { clone_id, payload });
+                    serializer.write_uint32(HOST_OBJECT_TAG_FILE_SYSTEM_HANDLE);
+                    serializer.write_uint32(clone_id);
+                    return Some(true);
+                }
+            }
+            Some("QuotaExceededError") => {
+                if let Some((message, quota, requested)) =
+                    quota_exceeded_error_clone_fields(scope, object)
+                {
+                    serializer.write_uint32(HOST_OBJECT_TAG_QUOTA_EXCEEDED_ERROR);
+                    write_string(serializer, &message);
+                    write_optional_double(serializer, quota);
+                    write_optional_double(serializer, requested);
+                    return Some(true);
+                }
+            }
+            Some("DOMException") => {
+                if let Some((message, name)) = dom_exception_clone_fields(scope, object) {
+                    serializer.write_uint32(HOST_OBJECT_TAG_DOM_EXCEPTION);
+                    write_string(serializer, &message);
+                    write_string(serializer, &name);
+                    return Some(true);
+                }
+            }
+            _ => {}
         }
         throw_data_clone_exception(scope, "Unsupported host object during structured clone.");
         None

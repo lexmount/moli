@@ -3,7 +3,7 @@ use moli_webapi_declare::WebApiObject;
 
 #[derive(WebApiObject)]
 #[webapi(
-    interface = "Object",
+    interface = "ProgressEvent", prototype = "Object",
     scope_lifetime = 'scope,
     data_properties,
     enumerable

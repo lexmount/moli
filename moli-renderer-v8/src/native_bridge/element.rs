@@ -1410,7 +1410,7 @@ struct ElementStylePrototypeDeclaration {
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(name = "HTMLElement")]
+#[webapi(name = "HTMLElement", receiver = "HTMLElement")]
 struct HtmlElementStandardPrototypeDeclaration {
     #[webapi(
         accessor_property,

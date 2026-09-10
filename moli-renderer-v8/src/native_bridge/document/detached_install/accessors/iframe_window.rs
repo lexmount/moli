@@ -9,7 +9,11 @@ use super::iframe_style::install_detached_iframe_get_computed_style;
 use super::iframe_window_messaging::install_detached_iframe_window_messaging;
 
 #[derive(WebApiObject)]
-#[webapi(interface = "Object", own_to_string_tag = "Window")]
+#[webapi(
+    interface = "Window",
+    prototype = "Object",
+    own_to_string_tag = "Window"
+)]
 struct DetachedIframeWindowDeclaration<'scope> {
     #[webapi(data_property = "self", value = object)]
     self_value: (),

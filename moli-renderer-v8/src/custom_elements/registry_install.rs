@@ -8,7 +8,7 @@ use anyhow::Result;
 use moli_webapi_declare::WebApiObject;
 
 #[derive(WebApiObject)]
-#[webapi(interface = "Object")]
+#[webapi(interface = "CustomElementRegistry", prototype = "Object")]
 struct CustomElementsRegistryDeclaration<'scope> {
     #[webapi(prototype)]
     prototype: v8::Local<'scope, v8::Object>,

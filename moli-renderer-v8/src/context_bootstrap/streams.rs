@@ -352,13 +352,6 @@ pub(crate) fn is_writable_stream_object<'s>(
     moli_webapi_declare::implements_interface(scope, object, "WritableStream")
 }
 
-pub(crate) fn is_transform_stream_object<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    object: v8::Local<'s, v8::Object>,
-) -> bool {
-    moli_webapi_declare::implements_interface(scope, object, "TransformStream")
-}
-
 pub(super) fn install_stream_template_bindings<'s>(
     scope: &mut v8::PinScope<'s, '_, ()>,
     template: v8::Local<'s, v8::FunctionTemplate>,

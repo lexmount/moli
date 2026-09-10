@@ -2,7 +2,7 @@ use super::{CustomElementRegistryAssociation, CustomElementRegistryKey};
 use crate::{
     document_runtime::DomHandle,
     native_bridge::JsContextHost,
-    util::{get_private_value, global_constructor_object, set_private_value, v8str},
+    util::{get_private_value, set_private_value, v8str},
 };
 
 pub(super) const CUSTOM_ELEMENTS_REGISTRY_CHILD_HANDLE_SLOT: &str =
@@ -49,15 +49,7 @@ pub(crate) fn registry_association_from_value<'s>(
         return Some(CustomElementRegistryAssociation::Null);
     }
     let registry = v8::Local::<v8::Object>::try_from(value).ok()?;
-    if registry_u64_private_slot(scope, registry, CUSTOM_ELEMENTS_REGISTRY_SCOPED_ID_SLOT).is_some()
-        || registry_child_window_handle(scope, registry).is_some()
-    {
-        return Some(CustomElementRegistryAssociation::Registry(
-            registry_store_key(scope, registry),
-        ));
-    }
-    let constructor = global_constructor_object(scope, "CustomElementRegistry")?;
-    if !value.instance_of(scope, constructor).unwrap_or(false) {
+    if !moli_webapi_declare::implements_interface(scope, registry, "CustomElementRegistry") {
         return None;
     }
     Some(CustomElementRegistryAssociation::Registry(

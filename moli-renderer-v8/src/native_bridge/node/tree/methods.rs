@@ -119,21 +119,11 @@ pub(in crate::native_bridge) fn node_compare_document_position_callback<'s>(
         return;
     }
 
-    // Spec compatibility: argument may still be a Node — just from a foreign
-    // realm / detached document we can't pair with the live tree. Per DOM
-    // spec, cross-tree comparison must return DISCONNECTED |
-    // IMPLEMENTATION_SPECIFIC | (PRECEDING or FOLLOWING) rather than throwing.
-    //
-    // We must NOT take this branch for arbitrary JS objects (`{}`, Arrays,
-    // etc.) — WebIDL requires throwing TypeError when the argument isn't a
-    // Node. is_node_like_object below is the discriminator: it accepts
-    // either a live Node wrapper (one internal reflector-id field) or a
-    // detached-doc node wrapper (has the
-    // __moliDetachedState private slot, which only detached node
-    // builders set).
+    // A native Node from another realm or detached document still compares as
+    // disconnected even when this runtime cannot resolve its live tree handle.
     let other_value = args.get(0);
     if let Ok(other_object) = v8::Local::<v8::Object>::try_from(other_value)
-        && is_node_like_object(scope, other_object)
+        && moli_webapi_declare::implements_interface(scope, other_object, "Node")
     {
         let order_bit = disconnected_order_bit(args.this(), other_object);
         rv.set(
@@ -154,32 +144,6 @@ pub(in crate::native_bridge) fn node_compare_document_position_callback<'s>(
         "Failed to execute 'compareDocumentPosition' on 'Node': parameter 1 is not of type 'Node'.",
     );
     scope.throw_exception(v8::Exception::type_error(scope, message));
-}
-
-/// Returns true if `object` carries the wrapper shape of a Node, including
-/// foreign-realm / detached-document nodes that aren't paired with a live
-/// DomHandle in this runtime.
-fn is_node_like_object<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    object: v8::Local<'s, v8::Object>,
-) -> bool {
-    use crate::util::get_private_object;
-    // Live wrapper: its sole internal field is a reflector identity. The
-    // existing helper distinguishes Node wrappers from Window / ClassList /
-    // Style / etc., so we only need to know that it succeeds.
-    if node_runtime_and_handle_from_object(scope, object).is_ok() {
-        return true;
-    }
-    // Detached / foreign-document Node wrapper: every builder under
-    // native_bridge/document/detached_objects/builders stores its state
-    // object under this private slot. Plain JS objects, Arrays, function
-    // returns etc. never carry this slot.
-    get_private_object(
-        scope,
-        object,
-        crate::native_bridge::document::DETACHED_STATE_SLOT,
-    )
-    .is_some()
 }
 
 /// Stable PRECEDING/FOLLOWING choice for two disconnected nodes.

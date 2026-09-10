@@ -116,7 +116,7 @@ struct ServiceWorkerNavigationPreloadStateDeclaration {
 }
 
 #[derive(WebApiObject)]
-#[webapi(interface = "Object")]
+#[webapi(interface = "PushSubscriptionOptions", prototype = "Object")]
 struct ServiceWorkerPushSubscriptionOptionsDeclaration<'scope> {
     #[webapi(data_property = "userVisibleOnly", readonly)]
     user_visible_only: bool,
@@ -296,7 +296,7 @@ struct ServiceWorkerMessageEventInitDeclaration<'scope> {
 }
 
 #[derive(WebApiObject)]
-#[webapi(interface = "Object")]
+#[webapi(interface = "Event", prototype = "Object")]
 struct ServiceWorkerSimpleEventDeclaration<'scope> {
     #[webapi(data_property = "type", enumerable)]
     event_type: v8::Local<'scope, v8::String>,

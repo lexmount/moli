@@ -21,7 +21,7 @@ struct WorkerHostEventInitDeclaration {
 }
 
 #[derive(WebApiObject)]
-#[webapi(interface = "Object")]
+#[webapi(interface = "Event", prototype = "Object")]
 struct WorkerHostEventFallbackDeclaration {
     #[webapi(data_property, enumerable)]
     r#type: String,
@@ -39,7 +39,7 @@ struct WorkerHostMessageEventInitDeclaration<'scope> {
 }
 
 #[derive(WebApiObject)]
-#[webapi(interface = "Object", scope_lifetime = 'scope)]
+#[webapi(interface = "MessageEvent", prototype = "Object", scope_lifetime = 'scope)]
 struct WorkerHostMessageEventFallbackDeclaration<'scope, 'event> {
     #[webapi(data_property, enumerable)]
     data: v8::Local<'scope, v8::Value>,
@@ -67,7 +67,7 @@ struct WorkerHostErrorEventInitDeclaration<'scope> {
 }
 
 #[derive(WebApiObject)]
-#[webapi(interface = "Object", scope_lifetime = 'scope)]
+#[webapi(interface = "ErrorEvent", prototype = "Object", scope_lifetime = 'scope)]
 struct WorkerHostErrorEventFallbackDeclaration<'scope, 'text> {
     #[webapi(data_property, enumerable)]
     r#type: &'static str,

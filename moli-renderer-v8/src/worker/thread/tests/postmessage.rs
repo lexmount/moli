@@ -2805,3 +2805,31 @@ async fn worker_postmessage_workernavigator_throws_datacloneerror() {
         .expect("channel closed");
     assert_eq!(expect_post_json(msg), r#""DataCloneError""#);
 }
+
+#[tokio::test]
+async fn worker_fallback_message_events_are_native_platform_objects() {
+    ensure_v8();
+    let mut handle = spawn_worker(
+        r#"
+        MessageEvent = undefined;
+        onmessage = event => {
+          let cloneResult = 'accepted';
+          try { structuredClone({event}); }
+          catch (error) { cloneResult = error.name; }
+          postMessage({data: event.data, cloneResult});
+          close();
+        };
+        postMessage('ready');
+        "#
+        .into(),
+        "https://worker-fallback-identity.test/worker.js".into(),
+    );
+    let ready = timeout(TIMEOUT, handle.recv()).await.unwrap().unwrap();
+    assert_eq!(expect_post_json(ready), r#""ready""#);
+    handle.post_message(serialize_test_string("ping"));
+    let result = timeout(TIMEOUT, handle.recv()).await.unwrap().unwrap();
+    assert_eq!(
+        expect_post_json(result),
+        r#"{"data":"ping","cloneResult":"DataCloneError"}"#
+    );
+}

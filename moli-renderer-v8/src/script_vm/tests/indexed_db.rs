@@ -3248,6 +3248,30 @@ fn indexed_db_put_rejects_performance_entries_without_rejecting_plain_objects() 
 }
 
 #[test]
+fn indexed_db_rejects_shared_buffers_at_any_depth() {
+    let mut vm = new_storage_page_task_executor_test_vm("https://indexeddb-shared-buffer.test/");
+    vm.eval(
+        r#"
+      globalThis.sharedStored = 'pending';
+      const open = indexedDB.open('shared-buffers', 1);
+      open.onupgradeneeded = () => {
+        const store = open.result.createObjectStore('values');
+        const shared = new SharedArrayBuffer(8);
+        sharedStored = [shared, {nested: shared}].map((value, key) => {
+          try { store.put(value, key); return 'accepted'; }
+          catch (error) { return error.name; }
+        }).join('|');
+      };
+    "#,
+    )
+    .expect("schedule SharedArrayBuffer storage checks");
+    assert_eq!(
+        vm.eval_after_selected_page_tasks("sharedStored").unwrap(),
+        "DataCloneError|DataCloneError"
+    );
+}
+
+#[test]
 fn indexed_db_put_webassembly_module_throws_data_clone_error_for_storage() {
     let mut vm = new_storage_page_task_executor_test_vm("https://indexeddb-wasm-dataclone.test/");
 

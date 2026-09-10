@@ -72,7 +72,7 @@ pub(crate) fn is_readable_stream_object<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     object: v8::Local<'s, v8::Object>,
 ) -> bool {
-    has_readable_stream_brand(scope, object)
+    moli_webapi_declare::implements_interface(scope, object, "ReadableStream")
 }
 
 pub(crate) fn new_readable_stream_from_array_buffer<'s>(
@@ -277,7 +277,7 @@ fn readable_writable_pair_readable<'s>(
         );
         return None;
     };
-    if !has_readable_stream_brand(scope, readable) {
+    if !is_readable_stream_object(scope, readable) {
         throw_type_error(
             scope,
             "ReadableWritablePair.readable must be a ReadableStream",
@@ -307,13 +307,6 @@ fn readable_writable_pair_writable<'s>(
         return None;
     }
     Some(writable)
-}
-
-fn has_readable_stream_brand<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    object: v8::Local<'s, v8::Object>,
-) -> bool {
-    moli_webapi_declare::implements_interface(scope, object, "ReadableStream")
 }
 
 fn parse_stream_pipe_options<'s>(
@@ -447,7 +440,7 @@ pub(in crate::context_bootstrap) fn readable_stream_pipe_to_callback<'s>(
     mut rv: v8::ReturnValue<'_, v8::Value>,
 ) {
     let stream = args.this();
-    if !has_readable_stream_brand(scope, stream) {
+    if !is_readable_stream_object(scope, stream) {
         set_rejected_pipe_to_type_error(scope, &mut rv, "Cannot pipe an invalid ReadableStream");
         return;
     }

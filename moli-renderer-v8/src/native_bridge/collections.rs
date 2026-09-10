@@ -64,13 +64,6 @@ pub(super) use templates::{
     build_static_handle_node_list_wrapper_template,
 };
 
-pub(crate) fn blob_parts_platform_collection_kind<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    object: v8::Local<'s, v8::Object>,
-) -> Option<&'static str> {
-    collection_kind_from_object(scope, object).map(collection_interface_name)
-}
-
 pub(in crate::native_bridge::collections) fn collection_kind_from_object<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     object: v8::Local<'s, v8::Object>,
