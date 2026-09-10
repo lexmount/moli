@@ -1227,16 +1227,6 @@ pub(in crate::network_host) fn consume_network_body_value_from_object_with_chunk
     consume_network_body_value_from_object_inner(scope, object, kind, Some(chunk_callback))
 }
 
-pub(in crate::network_host) fn network_body_value_is_pending_stream<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    object: v8::Local<'s, v8::Object>,
-) -> bool {
-    network_body_source_from_object(scope, object)
-        .and_then(|source| network_body_source_kind(scope, source))
-        .as_deref()
-        == Some(BODY_SOURCE_KIND_PENDING_STREAM)
-}
-
 pub(in crate::network_host) fn consume_filtered_response_internal_body_value_from_object<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     object: v8::Local<'s, v8::Object>,
@@ -1298,7 +1288,19 @@ fn consume_network_body_value_from_source_inner<'s>(
     chunk_callback: Option<v8::Local<'s, v8::Function>>,
 ) -> (NetworkBodyConsumption<'s>, Option<v8::Global<v8::Object>>) {
     let source = explicit_source.unwrap_or(object);
-    if network_body_source_kind(scope, source).as_deref() == Some(BODY_SOURCE_KIND_PENDING_STREAM) {
+    let pending_stream =
+        network_body_source_kind(scope, source).as_deref() == Some(BODY_SOURCE_KIND_PENDING_STREAM);
+    // Native storage consumers bypass a JS reader. Public body streams still
+    // acquire the same permanent lock and disturbed state as fully reading.
+    let uses_reader = explicit_source.is_none() || pending_stream && chunk_callback.is_some();
+    if !uses_reader
+        && let Some(stream) = body_stream_object(scope, object)
+        && !crate::context_bootstrap::begin_readable_stream_body_consumption(scope, stream)
+    {
+        let error = v8::Exception::type_error(scope, v8str(scope, "Body stream is locked"));
+        return (NetworkBodyConsumption::Rejected(error), None);
+    }
+    if pending_stream {
         if let Some(chunk_callback) = chunk_callback
             && let Some(stream) = readable_body_stream_from_object(scope, object)
         {
@@ -1851,10 +1853,15 @@ fn body_materialization_value<'s>(
             .ok_or_else(|| v8::undefined(scope).into()),
         PendingBodyMaterializationKind::Json => {
             let text = String::from_utf8_lossy(bytes).into_owned();
-            v8_json_parse(scope, &text).ok_or_else(|| {
-                v8_string(scope, "SyntaxError: JSON parse error")
-                    .map(|message| v8::Exception::syntax_error(scope, message))
-                    .unwrap_or_else(|| v8::undefined(scope).into())
+            let Some(text) = v8_string(scope, &text) else {
+                return Err(v8::undefined(scope).into());
+            };
+            let try_catch = std::pin::pin!(v8::TryCatch::new(scope));
+            let scope = try_catch.init();
+            v8::json::parse(&scope, text).ok_or_else(|| {
+                scope
+                    .exception()
+                    .unwrap_or_else(|| v8::undefined(&scope).into())
             })
         }
         PendingBodyMaterializationKind::ArrayBuffer => {
