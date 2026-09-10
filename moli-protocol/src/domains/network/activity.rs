@@ -245,6 +245,7 @@ impl NetworkPreparedOutputs {
         });
         Self::from_subresource_fetch_pauses(vec![TargetSubresourceFetchPauseOutput::new(
             network_output,
+            None,
             Some("FETCH-SID".to_owned()),
             "FETCH-1".to_owned(),
             pending,

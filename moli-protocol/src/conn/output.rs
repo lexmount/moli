@@ -918,12 +918,16 @@ impl ProtocolDeliveryEnvelope {
         };
         network.target_id = target_id.into();
         network.frame_id = None;
+        network.loader_id = None;
         if let Some(params) = event
             .message
             .get_mut("params")
             .and_then(Value::as_object_mut)
         {
             params.remove("frameId");
+            if params.contains_key("loaderId") {
+                params.insert("loaderId".into(), Value::String(String::new()));
+            }
         }
     }
 

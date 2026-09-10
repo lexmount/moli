@@ -33,7 +33,7 @@ use moli_fetch::{
 
 use super::{
     PendingWorkerCspReport, WORKER_GLOBAL_LISTENERS_SLOT, WorkerGlobalState, next_fetch_id,
-    record_worker_subresource_failure_with_handle, request_body_text,
+    record_worker_subresource_failure_with_handle, request_body_text, worker_response_from_body,
 };
 
 pub(super) fn dispatch_worker_content_security_policy_violation_event<'s>(
@@ -165,7 +165,6 @@ fn send_worker_content_security_policy_report_for_state(
             None,
             document_url,
             request,
-            request_body,
             "csp report: worker global is shutting down".to_owned(),
         );
         return;
@@ -179,7 +178,6 @@ fn send_worker_content_security_policy_report_for_state(
             None,
             document_url,
             request,
-            request_body,
             message,
         );
         return;
@@ -191,7 +189,6 @@ fn send_worker_content_security_policy_report_for_state(
             None,
             document_url,
             request,
-            request_body,
             crate::network_host::BLOCKED_BY_CLIENT_ERROR_TEXT.to_owned(),
         );
         return;
@@ -218,7 +215,6 @@ fn send_worker_content_security_policy_report_for_state(
             None,
             document_url,
             request,
-            request_body,
             "Network emulation offline".to_owned(),
         );
         return;
@@ -305,7 +301,6 @@ fn pause_worker_content_security_policy_report_for_fetch_interception(
             load: load.clone(),
             document_url,
             request,
-            request_body,
             policy_context,
             service_worker_runtime,
             service_worker_client_id,
@@ -552,8 +547,8 @@ pub(in crate::worker) fn continue_pending_worker_csp_report(
     else {
         return;
     };
-    let request_body = continuation.body.clone();
-    let request = match Request::new(
+    let request_body = request_body_text(&continuation.body);
+    let request = match Request::new_bytes(
         &continuation.method,
         continuation.url.as_str(),
         continuation.body.clone(),
@@ -574,7 +569,6 @@ pub(in crate::worker) fn continue_pending_worker_csp_report(
                 Some(continuation.internal_id),
                 pending.document_url,
                 pending.request,
-                pending.request_body,
                 format!("csp report: {error}"),
             );
             return;
@@ -597,7 +591,6 @@ pub(in crate::worker) fn continue_pending_worker_csp_report(
             Some(continuation.internal_id),
             document_url,
             request,
-            request_body,
             message,
         );
         return;
@@ -609,7 +602,6 @@ pub(in crate::worker) fn continue_pending_worker_csp_report(
             Some(continuation.internal_id),
             document_url,
             request,
-            request_body,
             crate::network_host::BLOCKED_BY_CLIENT_ERROR_TEXT.to_owned(),
         );
         return;
@@ -621,7 +613,6 @@ pub(in crate::worker) fn continue_pending_worker_csp_report(
             Some(continuation.internal_id),
             document_url,
             request,
-            request_body,
             "Network emulation offline".to_owned(),
         );
         return;
@@ -663,25 +654,60 @@ pub(in crate::worker) fn continue_pending_worker_csp_report(
 pub(in crate::worker) fn fail_pending_worker_csp_report(
     state: &Rc<RefCell<WorkerGlobalState>>,
     continuation: WorkerPendingFetchContinue,
-    _error_text: String,
+    error_text: String,
 ) {
-    state
+    let Some(pending) = state
         .borrow_mut()
         .pending_csp_reports
-        .remove(&continuation.fetch_id);
+        .remove(&continuation.fetch_id)
+    else {
+        return;
+    };
+    pending.load.finish();
+    record_worker_content_security_policy_report_failure(
+        state,
+        continuation.network_request_handle,
+        Some(continuation.internal_id),
+        pending.document_url,
+        pending.request,
+        error_text,
+    );
 }
 
 pub(in crate::worker) fn fulfill_pending_worker_csp_report(
     state: &Rc<RefCell<WorkerGlobalState>>,
     continuation: WorkerPendingFetchContinue,
-    _response_code: u16,
-    _response_headers: Vec<(String, String)>,
-    _response_body: RendererSyntheticResponseBody,
+    response_code: u16,
+    response_headers: Vec<(String, String)>,
+    response_body: RendererSyntheticResponseBody,
 ) {
-    state
+    let Some(pending) = state
         .borrow_mut()
         .pending_csp_reports
-        .remove(&continuation.fetch_id);
+        .remove(&continuation.fetch_id)
+    else {
+        return;
+    };
+    pending.load.finish();
+    let response = worker_response_from_body(
+        continuation.url,
+        response_code,
+        response_headers,
+        response_body,
+    );
+    let state = state.borrow();
+    let request_body = request_body_text(&pending.request.body);
+    send_worker_content_security_policy_report_success(
+        state.parent_tx.clone(),
+        state.global_kind.clone(),
+        continuation.network_request_handle,
+        Some(continuation.internal_id),
+        pending.document_url,
+        pending.request,
+        request_body,
+        response.head(),
+        SubresourceResponseBody::from_fetch_response(&response),
+    );
 }
 
 fn record_worker_content_security_policy_report_failure(
@@ -690,7 +716,6 @@ fn record_worker_content_security_policy_report_failure(
     continue_internal_id: Option<u64>,
     document_url: Url,
     request: Request,
-    request_body: Option<String>,
     message: String,
 ) {
     let state = state.borrow();
@@ -701,7 +726,7 @@ fn record_worker_content_security_policy_report_failure(
         request.url,
         request.method,
         request.request_headers,
-        request_body,
+        request.body,
         SubresourceResourceType::CspReport,
         message,
     );

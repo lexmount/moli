@@ -3695,6 +3695,8 @@ xhr.send();
     ctx.expect_result(37_081, json!({}), Some("SID-1"));
     enable_runtime_async(&mut ctx, "SID-1", 37_082).await;
 
+    pause_new_dedicated_workers(&mut ctx, "SID-1", 880_000).await;
+
     ctx.process_async(json!({
         "id": 37_083,
         "method": "Runtime.evaluate",
@@ -3712,6 +3714,7 @@ xhr.send();
     }))
     .await;
     let _ = take_response_by_id(&mut ctx, 37_083);
+    let worker_session = enable_network_on_new_dedicated_worker(&mut ctx, "SID-1", 880_001).await;
 
     let paused = wait_for_request_paused(&mut ctx, &api_url, "worker xhr abort pause").await;
     let request_id = paused["params"]["requestId"]
@@ -3742,6 +3745,7 @@ xhr.send();
         |messages| {
             messages.iter().any(|message| {
                 message["method"] == json!("Network.loadingFailed")
+                    && message["sessionId"] == worker_session
                     && message["params"]["requestId"] == json!(network_id)
                     && message["params"]["errorText"] == json!("net::ERR_ABORTED")
             })
@@ -3835,6 +3839,8 @@ fetch('/worker-api')
     ctx.expect_result(37_101, json!({}), Some("SID-1"));
     enable_runtime_async(&mut ctx, "SID-1", 37_102).await;
 
+    pause_new_dedicated_workers(&mut ctx, "SID-1", 880_000).await;
+
     ctx.process_async(json!({
         "id": 37_103,
         "method": "Runtime.evaluate",
@@ -3850,6 +3856,7 @@ fetch('/worker-api')
     }))
     .await;
     let _ = take_response_by_id(&mut ctx, 37_103);
+    let worker_session = enable_network_on_new_dedicated_worker(&mut ctx, "SID-1", 880_001).await;
 
     let paused = wait_for_request_paused(&mut ctx, &api_url, "worker fetch fulfill pause").await;
     let request_id = paused["params"]["requestId"]
@@ -3885,6 +3892,7 @@ fetch('/worker-api')
         |messages| {
             messages.iter().any(|message| {
                 message["method"] == json!("Network.loadingFinished")
+                    && message["sessionId"] == worker_session
                     && message["params"]["requestId"] == json!(network_id)
             })
         },
@@ -3966,6 +3974,8 @@ fetch('/worker-api')
     ctx.expect_result(37_201, json!({}), Some("SID-1"));
     enable_runtime_async(&mut ctx, "SID-1", 37_202).await;
 
+    pause_new_dedicated_workers(&mut ctx, "SID-1", 880_000).await;
+
     ctx.process_async(json!({
         "id": 37_203,
         "method": "Runtime.evaluate",
@@ -3981,6 +3991,7 @@ fetch('/worker-api')
     }))
     .await;
     let _ = take_response_by_id(&mut ctx, 37_203);
+    let worker_session = enable_network_on_new_dedicated_worker(&mut ctx, "SID-1", 880_001).await;
 
     let paused = wait_for_request_paused(&mut ctx, &api_url, "worker fetch fail pause").await;
     let request_id = paused["params"]["requestId"]
@@ -4012,6 +4023,7 @@ fetch('/worker-api')
         |messages| {
             messages.iter().any(|message| {
                 message["method"] == json!("Network.loadingFailed")
+                    && message["sessionId"] == worker_session
                     && message["params"]["requestId"] == json!(network_id)
                     && message["params"]["errorText"] == json!("Aborted")
             })
@@ -4110,6 +4122,8 @@ onmessage = event => {
     ctx.expect_result(37_301, json!({}), Some("SID-1"));
     enable_runtime_async(&mut ctx, "SID-1", 37_302).await;
 
+    pause_new_dedicated_workers(&mut ctx, "SID-1", 880_000).await;
+
     ctx.process_async(json!({
         "id": 37_303,
         "method": "Runtime.evaluate",
@@ -4127,6 +4141,7 @@ onmessage = event => {
     }))
     .await;
     let _ = take_response_by_id(&mut ctx, 37_303);
+    let worker_session = enable_network_on_new_dedicated_worker(&mut ctx, "SID-1", 880_001).await;
 
     let paused = wait_for_request_paused(&mut ctx, &api_url, "worker fetch abort pause").await;
     let request_id = paused["params"]["requestId"]
@@ -4157,6 +4172,7 @@ onmessage = event => {
         |messages| {
             messages.iter().any(|message| {
                 message["method"] == json!("Network.loadingFailed")
+                    && message["sessionId"] == worker_session
                     && message["params"]["requestId"] == json!(network_id)
                     && message["params"]["errorText"] == json!("net::ERR_ABORTED")
             })
@@ -4455,6 +4471,8 @@ fetch('/worker-auth')
     ctx.expect_result(37_721, json!({}), Some("SID-1"));
     enable_runtime_async(&mut ctx, "SID-1", 37_722).await;
 
+    pause_new_dedicated_workers(&mut ctx, "SID-1", 880_000).await;
+
     ctx.process_async(json!({
         "id": 37_723,
         "method": "Runtime.evaluate",
@@ -4470,6 +4488,7 @@ fetch('/worker-auth')
     }))
     .await;
     let _ = take_response_by_id(&mut ctx, 37_723);
+    let worker_session = enable_network_on_new_dedicated_worker(&mut ctx, "SID-1", 880_001).await;
 
     let paused =
         wait_for_request_paused(&mut ctx, &api_url, "worker fetch auth cancel pause").await;
@@ -4566,6 +4585,7 @@ fetch('/worker-auth')
         |messages| {
             messages.iter().any(|message| {
                 message["method"] == json!("Network.loadingFinished")
+                    && message["sessionId"] == worker_session
                     && message["params"]["requestId"] == json!(network_id)
             })
         },
@@ -4580,6 +4600,7 @@ fetch('/worker-auth')
     assert!(
         !ctx.sent.iter().any(|message| {
             message["method"] == json!("Network.loadingFailed")
+                && message["sessionId"] == worker_session
                 && message["params"]["requestId"] == json!(network_id)
         }),
         "CancelAuth must expose the challenged response instead of failing the request"
@@ -4942,6 +4963,8 @@ fetch('/worker-api')
     ctx.expect_result(37_401, json!({}), Some("SID-1"));
     enable_runtime_async(&mut ctx, "SID-1", 37_402).await;
 
+    pause_new_dedicated_workers(&mut ctx, "SID-1", 880_000).await;
+
     ctx.process_async(json!({
         "id": 37_403,
         "method": "Runtime.evaluate",
@@ -4957,6 +4980,7 @@ fetch('/worker-api')
     }))
     .await;
     let _ = take_response_by_id(&mut ctx, 37_403);
+    let worker_session = enable_network_on_new_dedicated_worker(&mut ctx, "SID-1", 880_001).await;
 
     wait_until_message(
         &mut ctx,
@@ -5027,6 +5051,7 @@ fetch('/worker-api')
         |messages| {
             messages.iter().any(|message| {
                 message["method"] == json!("Network.loadingFinished")
+                    && message["sessionId"] == worker_session
                     && message["params"]["requestId"] == json!(network_id)
             })
         },
@@ -5253,6 +5278,8 @@ fetch('/worker-api')
     ctx.expect_result(37_501, json!({}), Some("SID-1"));
     enable_runtime_async(&mut ctx, "SID-1", 37_502).await;
 
+    pause_new_dedicated_workers(&mut ctx, "SID-1", 880_000).await;
+
     ctx.process_async(json!({
         "id": 37_503,
         "method": "Runtime.evaluate",
@@ -5268,6 +5295,7 @@ fetch('/worker-api')
     }))
     .await;
     let _ = take_response_by_id(&mut ctx, 37_503);
+    let worker_session = enable_network_on_new_dedicated_worker(&mut ctx, "SID-1", 880_001).await;
 
     wait_until_message(
         &mut ctx,
@@ -5324,6 +5352,7 @@ fetch('/worker-api')
         |messages| {
             messages.iter().any(|message| {
                 message["method"] == json!("Network.loadingFinished")
+                    && message["sessionId"] == worker_session
                     && message["params"]["requestId"] == json!(network_id)
             })
         },
@@ -5343,7 +5372,7 @@ fetch('/worker-api')
     ctx.process_async(json!({
         "id": 37_506,
         "method": "Network.getResponseBody",
-        "sessionId": "SID-1",
+        "sessionId": worker_session,
         "params": { "requestId": network_id }
     }))
     .await;
@@ -5353,7 +5382,7 @@ fetch('/worker-api')
             "body": "worker-response-synthetic",
             "base64Encoded": false
         }),
-        Some("SID-1"),
+        Some(&worker_session),
     );
 
     server.abort();
@@ -5426,6 +5455,8 @@ fetch('/worker-api')
     ctx.expect_result(37_601, json!({}), Some("SID-1"));
     enable_runtime_async(&mut ctx, "SID-1", 37_602).await;
 
+    pause_new_dedicated_workers(&mut ctx, "SID-1", 880_000).await;
+
     ctx.process_async(json!({
         "id": 37_603,
         "method": "Runtime.evaluate",
@@ -5441,6 +5472,7 @@ fetch('/worker-api')
     }))
     .await;
     let _ = take_response_by_id(&mut ctx, 37_603);
+    let worker_session = enable_network_on_new_dedicated_worker(&mut ctx, "SID-1", 880_001).await;
 
     wait_until_message(
         &mut ctx,
@@ -5492,6 +5524,7 @@ fetch('/worker-api')
         |messages| {
             messages.iter().any(|message| {
                 message["method"] == json!("Network.loadingFailed")
+                    && message["sessionId"] == worker_session
                     && message["params"]["requestId"] == json!(network_id)
                     && message["params"]["errorText"] == json!("Aborted")
             })

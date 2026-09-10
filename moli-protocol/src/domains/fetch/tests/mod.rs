@@ -364,3 +364,4 @@ mod runtime_auth_response;
 mod runtime_fetch;
 mod runtime_websocket;
 mod runtime_xhr;
+mod worker_network;

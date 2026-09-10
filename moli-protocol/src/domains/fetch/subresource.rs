@@ -52,6 +52,7 @@ fn subresource_request_paused_payload(
 
 struct PendingSubresourceFetchPauseSource {
     info: moli_core::page::PendingSubresourceFetchInfo,
+    worker: Option<moli_core::page::RendererWorkerIdentity>,
     detached_parser_script_fetch_continuation: Option<DetachedParserScriptFetchContinuation>,
 }
 
@@ -59,6 +60,7 @@ pub(crate) async fn subresource_fetch_pause_prepared_outputs_for_renderer_record
     conn: &mut CdpConnection,
     owner: &CommandOwnerScope,
     source_document: moli_core::RendererDocumentLifecycleIdentity,
+    worker: Option<moli_core::page::RendererWorkerIdentity>,
     info: moli_core::page::PendingSubresourceFetchInfo,
 ) -> network::NetworkPreparedOutputs {
     if conn.target_root_document_lifecycle_identity_for_owner(owner) != Some(source_document) {
@@ -72,6 +74,7 @@ pub(crate) async fn subresource_fetch_pause_prepared_outputs_for_renderer_record
             None,
             vec![PendingSubresourceFetchPauseSource {
                 info,
+                worker,
                 detached_parser_script_fetch_continuation: None,
             }],
         )
@@ -97,6 +100,7 @@ pub(crate) async fn detached_parser_script_fetch_pause_prepared_outputs_for_rend
             None,
             vec![PendingSubresourceFetchPauseSource {
                 info,
+                worker: None,
                 detached_parser_script_fetch_continuation: Some(continuation),
             }],
         )
@@ -132,6 +136,7 @@ async fn prepare_subresource_fetch_pause_sources_async(
     for source in sources {
         let PendingSubresourceFetchPauseSource {
             info,
+            worker,
             detached_parser_script_fetch_continuation,
         } = source;
         let Ok((request_id, network_request_id)) =
@@ -139,6 +144,17 @@ async fn prepare_subresource_fetch_pause_sources_async(
         else {
             return outputs;
         };
+        if let Some(worker) = &worker
+            && let Some(handle) = info.network_request_handle
+            && let Some((context_id, _)) = conn.target_owner_identity_for_owner(owner)
+            && let Some(worker_owner) = conn.native_worker_network_owner(&context_id, worker)
+            && let Some(agent) = conn.network_agent_for_owner_mut(&worker_owner)
+        {
+            agent.record_subresource_request_id_for_handle_if_absent(
+                handle,
+                network_request_id.clone(),
+            );
+        }
         let document_url = document_url
             .cloned()
             .unwrap_or_else(|| info.document_url.clone());
@@ -344,6 +360,7 @@ async fn prepare_subresource_fetch_pause_sources_async(
         );
         outputs.push(network::TargetSubresourceFetchPauseOutput::new(
             network_output,
+            worker,
             first_pause_session.session_id,
             request_id,
             pending,
@@ -362,7 +379,18 @@ pub(crate) fn emit_subresource_fetch_pause_outputs(
 ) {
     for output in outputs {
         let network_request_id = output.network_output().network_request_id().to_owned();
-        let network_events = network_session_ids
+        let worker_owner = output.network_worker().and_then(|worker| {
+            let (context_id, _) = conn.target_owner_identity_for_owner(owner)?;
+            conn.native_worker_network_owner(&context_id, worker)
+        });
+        let worker_network_sessions = output.network_worker().map(|_| {
+            worker_owner.as_ref().map_or_else(Vec::new, |worker_owner| {
+                conn.network_event_session_ids_for_owner(worker_owner)
+            })
+        });
+        let mut network_events = worker_network_sessions
+            .as_deref()
+            .unwrap_or(network_session_ids)
             .iter()
             .flat_map(|session_id| {
                 network::fetch_subresource_initial_request_network_events(
@@ -371,6 +399,18 @@ pub(crate) fn emit_subresource_fetch_pause_outputs(
                 )
             })
             .collect::<Vec<_>>();
+        if let Some(worker_owner) = &worker_owner
+            && let Some((_, Some(target_id))) = conn.network_owner_identity_for_owner(worker_owner)
+        {
+            for event in &mut network_events {
+                event.bind_network_to_worker_target(&target_id);
+            }
+        }
+        let network_owner = if output.network_worker().is_some() {
+            worker_owner
+        } else {
+            Some(owner.clone())
+        };
         let (event_session_id, request_id, mut pending, payload) = output.into_fetch_event_parts();
         let pending_owner_session_id = event_session_id
             .as_deref()
@@ -395,11 +435,14 @@ pub(crate) fn emit_subresource_fetch_pause_outputs(
         ) {
             return;
         }
-        if let Ok(runtime_slot) = conn.runtime_session_owner_slot_mut_for_owner(&pending_owner) {
+        if let Some(agent) = network_owner
+            .as_ref()
+            .and_then(|owner| conn.network_agent_for_owner_mut(owner))
+        {
             // Chromium publishes Network.requestWillBeSent before the Fetch pause.
             // The renderer's later transport start belongs to the same lifecycle
             // and must not publish a second initial Network event.
-            runtime_slot.record_fetch_pause_announced_request_id(network_request_id);
+            agent.record_fetch_pause_announced_request_id(network_request_id);
         }
         out.extend(network_events);
         out.push(fetch_event);
@@ -685,6 +728,7 @@ mod tests {
         });
         TargetSubresourceFetchPauseOutput::new(
             network_output,
+            None,
             Some("FETCH-SID".to_owned()),
             cdp_request_id.to_owned(),
             pending,

@@ -38,7 +38,6 @@ Promise.resolve().then(() => {
                 instance_id: moli_shared_worker::SharedWorkerInstanceId::from_u64(1),
                 message: Box::new(WorkerToParentMessage::PendingSubresourceFetchCanceled {
                     fetch_id: 7,
-                    error_text: "canceled".to_owned(),
                 }),
             })
             .expect("SharedWorker host record should enter the stable Networking source");
@@ -111,7 +110,6 @@ Promise.resolve().then(() => {
                 instance_id: moli_shared_worker::SharedWorkerInstanceId::from_u64(1),
                 message: Box::new(WorkerToParentMessage::PendingSubresourceFetchCanceled {
                     fetch_id: 8,
-                    error_text: "canceled-again".to_owned(),
                 }),
             })
             .expect("a second host record should enter the same stable source");
@@ -154,7 +152,6 @@ Promise.resolve().then(() => {
                 worker_id,
                 message: Box::new(WorkerToParentMessage::PendingSubresourceFetchCanceled {
                     fetch_id: 9,
-                    error_text: "dedicated-canceled".to_owned(),
                 }),
             })
             .expect("a DedicatedWorker host record should enter the stable source");

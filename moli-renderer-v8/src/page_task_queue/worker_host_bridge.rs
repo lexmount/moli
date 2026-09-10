@@ -268,7 +268,6 @@ mod tests {
                     worker_id,
                     message: Box::new(WorkerToParentMessage::PendingSubresourceFetchCanceled {
                         fetch_id,
-                        error_text: "closed".to_owned(),
                     }),
                 })
                 .expect("DedicatedWorker host record should send");
@@ -312,7 +311,6 @@ mod tests {
                 instance_id,
                 message: Box::new(WorkerToParentMessage::PendingSubresourceFetchCanceled {
                     fetch_id: 99,
-                    error_text: "blocked".to_owned(),
                 }),
             })
             .expect("SharedWorker host record should send");

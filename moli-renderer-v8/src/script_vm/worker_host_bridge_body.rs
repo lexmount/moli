@@ -148,26 +148,17 @@ impl WorkerHostRecordOwner {
         }
     }
 
-    fn cancel_pending_fetch(
-        self,
-        context_host: &Rc<RefCell<JsContextHost>>,
-        fetch_id: u32,
-        error_text: String,
-    ) {
+    fn cancel_pending_fetch(self, context_host: &Rc<RefCell<JsContextHost>>, fetch_id: u32) {
         match self {
             Self::Dedicated(worker_id) => {
                 context_host
                     .borrow_mut()
-                    .cancel_pending_worker_subresource_fetch(worker_id, fetch_id, error_text);
+                    .cancel_pending_worker_subresource_fetch(worker_id, fetch_id);
             }
             Self::Shared(instance_id) => {
                 context_host
                     .borrow_mut()
-                    .cancel_pending_shared_worker_subresource_fetch(
-                        instance_id,
-                        fetch_id,
-                        error_text,
-                    );
+                    .cancel_pending_shared_worker_subresource_fetch(instance_id, fetch_id);
             }
         }
     }
@@ -360,11 +351,8 @@ impl ScriptVm {
             WorkerToParentMessage::PendingSubresourceFetch(pending) => {
                 owner.record_pending_fetch(scope, context_host, pending);
             }
-            WorkerToParentMessage::PendingSubresourceFetchCanceled {
-                fetch_id,
-                error_text,
-            } => {
-                owner.cancel_pending_fetch(context_host, fetch_id, error_text);
+            WorkerToParentMessage::PendingSubresourceFetchCanceled { fetch_id } => {
+                owner.cancel_pending_fetch(context_host, fetch_id);
             }
             WorkerToParentMessage::SubresourceContinue(event) => match event {
                 PendingSubresourceContinueEvent::ResponsePaused(info) => {

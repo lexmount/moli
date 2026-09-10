@@ -837,10 +837,6 @@ async fn dispatch_service_worker_periodic_sync_event_for_test(
     }
 }
 
-fn owner_assigned_request_handle(internal_id: u64) -> SubresourceNetworkRequestHandle {
-    SubresourceNetworkRequestHandle::new(10_000 + internal_id)
-}
-
 fn pending_worker_fetch_continue(
     fetch_id: u32,
     internal_id: u64,
@@ -850,10 +846,13 @@ fn pending_worker_fetch_continue(
     WorkerPendingFetchContinue {
         fetch_id,
         internal_id,
-        network_request_handle: Some(owner_assigned_request_handle(internal_id)),
+        network_request_handle: Some(
+            info.network_request_handle
+                .unwrap_or_else(SubresourceNetworkRequestHandle::allocate),
+        ),
         url: info.url.clone(),
         method: info.method.clone(),
-        body: info.request_body.clone(),
+        body: info.request_body_bytes.clone(),
         headers: info.request_headers.clone(),
         intercept_response,
         handle_auth_requests: false,
@@ -870,10 +869,13 @@ fn pending_worker_xhr_continue(
     WorkerPendingXhrContinue {
         xhr_id,
         internal_id,
-        network_request_handle: Some(owner_assigned_request_handle(internal_id)),
+        network_request_handle: Some(
+            info.network_request_handle
+                .unwrap_or_else(SubresourceNetworkRequestHandle::allocate),
+        ),
         url: info.url.clone(),
         method: info.method.clone(),
-        body: info.request_body.clone(),
+        body: info.request_body_bytes.clone(),
         headers: info.request_headers.clone(),
         intercept_response,
         handle_auth_requests: false,

@@ -13,12 +13,8 @@ impl CdpConnection {
         let Some((_, Some(target_id))) = self.network_owner_identity_for_owner(owner) else {
             return Vec::new();
         };
-        let fetch_request_id = self.dedicated_worker_fetch_network_id(owner, item);
         let mut allocator = std::mem::take(&mut self.network_request_id_allocator);
         let delivery = self.network_agent_for_owner_mut(owner).map(|agent| {
-            if let Some((handle, request_id)) = fetch_request_id {
-                agent.record_subresource_request_id_for_handle_if_absent(handle, request_id);
-            }
             agent.ingest_renderer_output_item_and_prepare_live_delivery(
                 item,
                 "",

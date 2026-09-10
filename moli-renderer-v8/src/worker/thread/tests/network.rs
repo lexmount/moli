@@ -2908,7 +2908,7 @@ async fn worker_xhr_request_stage_interception_can_fulfill_synthetic_response() 
     let WorkerToParentMessage::PendingSubresourceFetch(pending) = pending else {
         panic!("expected worker xhr pause, got {pending:?}");
     };
-    assert!(pending.info.network_request_handle.is_none());
+    assert!(pending.info.network_request_handle.is_some());
     assert_eq!(pending.info.resource_type, SubresourceResourceType::Xhr);
     assert_eq!(
         pending.info.url.as_str(),
@@ -3911,7 +3911,7 @@ async fn worker_fetch_request_stage_interception_can_fulfill_synthetic_response(
     let WorkerToParentMessage::PendingSubresourceFetch(pending) = pending else {
         panic!("expected worker fetch pause, got {pending:?}");
     };
-    assert!(pending.info.network_request_handle.is_none());
+    assert!(pending.info.network_request_handle.is_some());
     assert_eq!(pending.info.resource_type, SubresourceResourceType::Fetch);
     assert_eq!(
         pending.info.url.as_str(),
@@ -3989,12 +3989,12 @@ async fn worker_subresource_request_handles_are_owner_unique() {
     };
 
     assert!(
-        first_pending.info.network_request_handle.is_none(),
-        "worker pause should not allocate a local request handle"
+        first_pending.info.network_request_handle.is_some(),
+        "the physical Worker allocates before publishing its pause"
     );
     assert!(
-        second_pending.info.network_request_handle.is_none(),
-        "worker pause should not allocate a local request handle"
+        second_pending.info.network_request_handle.is_some(),
+        "the physical Worker allocates before publishing its pause"
     );
 
     let first_request =
@@ -4007,6 +4007,14 @@ async fn worker_subresource_request_handles_are_owner_unique() {
     let second_handle = second_request
         .network_request_handle
         .expect("second owner-assigned worker fetch handle");
+    assert_eq!(
+        Some(first_handle),
+        first_pending.info.network_request_handle
+    );
+    assert_eq!(
+        Some(second_handle),
+        second_pending.info.network_request_handle
+    );
     assert_ne!(
         first_handle, second_handle,
         "worker-owned request handles must carry owner identity"
@@ -4350,7 +4358,7 @@ async fn worker_fetch_auth_required_then_continue_with_auth_resolves() {
     assert!(!info.intercept_response);
     assert_initial_worker_auth_network_headers(info.network_request_headers.as_deref());
 
-    let expected_request_handle = Some(owner_assigned_request_handle(47));
+    let expected_request_handle = request.network_request_handle;
     request.auth = Some(server_basic_auth_credentials());
     handle.continue_pending_fetch(request);
 
@@ -4430,7 +4438,7 @@ async fn worker_fetch_auth_required_then_fail_rejects_without_exposing_challenge
     assert_eq!(info.internal_id, 53);
     assert_eq!(info.challenge.realm, "worker-fetch-area");
 
-    let expected_request_handle = Some(owner_assigned_request_handle(53));
+    let expected_request_handle = request.network_request_handle;
     handle.fail_pending_fetch_auth(request, "worker fetch auth aborted".to_owned());
 
     let network = timeout(TIMEOUT, handle.recv())

@@ -203,31 +203,15 @@ pub(in crate::worker) fn worker_xhr_timeout_callback(
     let pending = state.borrow_mut().pending_xhrs.remove(&scheduled_xhr_id);
     if let Some(pending) = pending {
         pending.load.cancel();
-        if let Some(record) = pending.network_record {
-            let state = state.borrow();
-            record_worker_subresource_failure_with_handle(
-                &state,
-                pending.network_request_handle,
-                pending.document_url,
-                record.url,
-                record.method,
-                record.request_headers,
-                record.request_body,
-                SubresourceResourceType::Xhr,
-                WORKER_XHR_TIMEOUT_ERROR_TEXT.to_owned(),
-            );
-            let _ = state
-                .parent_tx
-                .send(WorkerToParentMessage::SubresourceContinue(
-                    PendingSubresourceContinueEvent::Completed {
-                        internal_id: record.internal_id,
-                    },
-                ));
-        } else if pending.request_paused {
+        record_worker_xhr_failure(
+            &state.borrow(),
+            &pending,
+            WORKER_XHR_TIMEOUT_ERROR_TEXT.to_owned(),
+        );
+        if pending.request_paused {
             let _ = state.borrow().parent_tx.send(
                 WorkerToParentMessage::PendingSubresourceFetchCanceled {
                     fetch_id: scheduled_xhr_id,
-                    error_text: WORKER_XHR_TIMEOUT_ERROR_TEXT.to_owned(),
                 },
             );
         }
@@ -460,10 +444,11 @@ pub(crate) fn try_worker_xhr_send_callback<'s>(
         return true;
     };
 
+    let network_request_handle = Some(SubresourceNetworkRequestHandle::allocate());
     let xhr_id = {
         let mut state = state.borrow_mut();
         let xhr_id = next_xhr_id(&mut state);
-        let request_body = request_body_text(&prepared.send_body);
+        let request_body = prepared.send_body.clone();
         state.pending_xhrs.insert(
             xhr_id,
             PendingWorkerXhr {
@@ -476,7 +461,7 @@ pub(crate) fn try_worker_xhr_send_callback<'s>(
                 request_method: prepared.method.clone(),
                 request_headers: prepared.request_headers.clone(),
                 request_body,
-                network_request_handle: None,
+                network_request_handle,
                 network_record: None,
                 paused_response: None,
             },
@@ -489,7 +474,7 @@ pub(crate) fn try_worker_xhr_send_callback<'s>(
     if intercept_request_stage {
         let info = PendingSubresourceFetchInfo {
             internal_id: 0,
-            network_request_handle: None,
+            network_request_handle,
             frame_id: None,
             document_url: prepared.document_url,
             url: prepared.resolved_url,
@@ -825,31 +810,11 @@ pub(crate) fn try_worker_xhr_abort_callback(
     };
     if let Some(pending) = pending {
         pending.load.cancel();
-        if let Some(record) = pending.network_record {
-            let state = state.borrow();
-            record_worker_subresource_failure_with_handle(
-                &state,
-                pending.network_request_handle,
-                pending.document_url,
-                record.url,
-                record.method,
-                record.request_headers,
-                record.request_body,
-                SubresourceResourceType::Xhr,
-                ABORTED_ERROR_TEXT.to_owned(),
-            );
-            let _ = state
-                .parent_tx
-                .send(WorkerToParentMessage::SubresourceContinue(
-                    PendingSubresourceContinueEvent::Completed {
-                        internal_id: record.internal_id,
-                    },
-                ));
-        } else if pending.request_paused {
+        record_worker_xhr_failure(&state.borrow(), &pending, ABORTED_ERROR_TEXT.to_owned());
+        if pending.request_paused {
             let _ = state.borrow().parent_tx.send(
                 WorkerToParentMessage::PendingSubresourceFetchCanceled {
                     fetch_id: internal_id,
-                    error_text: ABORTED_ERROR_TEXT.to_owned(),
                 },
             );
         }
@@ -1011,7 +976,7 @@ pub(in crate::worker) fn drain_worker_xhr_completion(
                         url: record.url.clone(),
                         method: record.method.clone(),
                         request_headers: record.request_headers.clone(),
-                        request_body: record.request_body.clone(),
+                        request_body: request_body_text(&record.request_body),
                         resource_type: SubresourceResourceType::Xhr,
                         request_cookie_report: response_head.request_cookie_report.clone(),
                         network_request_headers: record.initial_network_request_headers.clone(),
@@ -1049,7 +1014,7 @@ pub(in crate::worker) fn drain_worker_xhr_completion(
                         final_url: response_head.final_url.clone(),
                         method: record.method.clone(),
                         request_headers: record.request_headers.clone(),
-                        request_body: record.request_body.clone(),
+                        request_body: request_body_text(&record.request_body),
                         resource_type: SubresourceResourceType::Xhr,
                         request_cookie_report: response_head.request_cookie_report.clone(),
                         network_request_headers: record.initial_network_request_headers.clone(),

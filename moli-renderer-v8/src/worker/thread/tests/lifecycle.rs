@@ -7602,12 +7602,18 @@ async fn worker_xmlhttprequest_abort_cancels_inflight_request_and_ignores_late_c
         loader,
     );
 
-    let msg = timeout(TIMEOUT, handle.recv())
+    let network = timeout(TIMEOUT, handle.recv())
         .await
-        .expect("timed out")
-        .expect("channel closed");
+        .expect("native cancellation result")
+        .expect("Worker channel");
+    let record = expect_subresource_network_record(network);
+    assert_eq!(record.url().as_str(), format!("{base_url}/assets/data.txt"));
+    assert!(record.request_handle().is_some());
+    assert!(
+        matches!(record.outcome(), SubresourceNetworkOutcome::Failure { error_text } if error_text == "net::ERR_ABORTED")
+    );
     assert_eq!(
-        expect_post_json(msg),
+        recv_post_json(&mut handle).await,
         r#"{"readyState":0,"status":0,"responseURL":"","events":["abort","loadend:4:0"]}"#
     );
     server.abort();
@@ -7663,12 +7669,18 @@ async fn worker_xmlhttprequest_timeout_cancels_inflight_request_and_ignores_late
         loader,
     );
 
-    let msg = timeout(TIMEOUT, handle.recv())
+    let network = timeout(TIMEOUT, handle.recv())
         .await
-        .expect("timed out")
-        .expect("channel closed");
+        .expect("native cancellation result")
+        .expect("Worker channel");
+    let record = expect_subresource_network_record(network);
+    assert_eq!(record.url().as_str(), format!("{base_url}/assets/data.txt"));
+    assert!(record.request_handle().is_some());
+    assert!(
+        matches!(record.outcome(), SubresourceNetworkOutcome::Failure { error_text } if error_text == "XMLHttpRequest timeout")
+    );
     assert_eq!(
-        expect_post_json(msg),
+        recv_post_json(&mut handle).await,
         r#"{"readyState":4,"status":0,"statusText":"","responseText":"","responseURL":"","contentType":null,"allHeaders":"","events":["readystatechange:1","readystatechange:4","timeout","loadend:4:0"]}"#
     );
     server.abort();

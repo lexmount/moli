@@ -396,6 +396,7 @@ impl PreparedProtocolOutputs {
             }
             RendererOwnerAction::SubresourceFetchPause {
                 source_document,
+                worker,
                 info,
             } => {
                 crate::domains::fetch::
@@ -403,6 +404,7 @@ impl PreparedProtocolOutputs {
                         conn,
                         owner,
                         source_document,
+                        worker,
                         *info,
                     )
                     .await

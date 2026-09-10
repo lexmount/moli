@@ -369,13 +369,12 @@ pub(crate) enum WorkerToParentMessage {
     },
     /// Deferred CDP Runtime inspector messages produced by later worker tasks.
     RuntimeInspectorMessages(Vec<WorkerRuntimeInspectorMessageBatch>),
-    /// Worker-owned subresource activity that should be surfaced through the page/CDP host.
-    /// Browser-owned Shared/Service Worker fact, retained in the target's source FIFO.
+    /// Browser-owned Worker fact, retained in the physical Worker's source FIFO.
     Network(crate::runtime::RendererNetworkObservation),
     /// Worker-owned fetch/XHR that should be paused by the page/CDP Fetch domain.
     PendingSubresourceFetch(WorkerPendingSubresourceFetch),
     /// Worker-owned fetch/XHR was canceled before CDP made a Fetch-domain decision.
-    PendingSubresourceFetchCanceled { fetch_id: u32, error_text: String },
+    PendingSubresourceFetchCanceled { fetch_id: u32 },
     /// Completion signal for a worker-owned fetch/XHR that was continued after interception.
     SubresourceContinue(PendingSubresourceContinueEvent),
     /// Worker-owned WebSocket handshake activity. The embedded socket id is worker-local; the
@@ -567,7 +566,7 @@ pub(crate) struct WorkerPendingFetchContinue {
     pub(crate) network_request_handle: Option<SubresourceNetworkRequestHandle>,
     pub(crate) url: Url,
     pub(crate) method: String,
-    pub(crate) body: Option<String>,
+    pub(crate) body: Option<Vec<u8>>,
     pub(crate) headers: Vec<(String, String)>,
     pub(crate) intercept_response: bool,
     pub(crate) handle_auth_requests: bool,
@@ -581,7 +580,7 @@ pub(crate) struct WorkerPendingXhrContinue {
     pub(crate) network_request_handle: Option<SubresourceNetworkRequestHandle>,
     pub(crate) url: Url,
     pub(crate) method: String,
-    pub(crate) body: Option<String>,
+    pub(crate) body: Option<Vec<u8>>,
     pub(crate) headers: Vec<(String, String)>,
     pub(crate) intercept_response: bool,
     pub(crate) handle_auth_requests: bool,

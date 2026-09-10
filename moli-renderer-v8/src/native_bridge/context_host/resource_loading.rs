@@ -47,11 +47,16 @@ impl JsContextHost {
             .any(|pending| pending.continuation.delays_document_load_event())
     }
 
-    fn push_pending_subresource_fetch_info(&mut self, info: PendingSubresourceFetchInfo) {
+    fn push_pending_subresource_fetch_info(
+        &mut self,
+        info: PendingSubresourceFetchInfo,
+        worker: Option<crate::runtime::RendererWorkerIdentity>,
+    ) {
         if let Some(source_document) = self.root_document_lifecycle_identity()
             && self.append_live_turn_owner_action(
                 crate::runtime::RendererOwnerAction::SubresourceFetchPause {
                     source_document,
+                    worker,
                     info: Box::new(info.clone()),
                 },
             )
@@ -597,7 +602,7 @@ impl JsContextHost {
             disposition,
             None,
         );
-        self.push_pending_subresource_fetch_info(info.clone());
+        self.push_pending_subresource_fetch_info(info.clone(), None);
         self.pending_subresource_fetches.insert(
             info.internal_id,
             PendingSubresourceFetchState {
@@ -633,8 +638,12 @@ impl JsContextHost {
         network_partition_key: Option<String>,
         mut info: PendingSubresourceFetchInfo,
     ) {
+        let Some(worker) = self.workers.get(&worker_id) else {
+            return;
+        };
+        let identity = worker.host.network().identity().clone();
         self.assign_pending_subresource_fetch_identity(&mut info);
-        self.push_pending_subresource_fetch_info(info.clone());
+        self.push_pending_subresource_fetch_info(info.clone(), Some(identity));
         self.pending_subresource_fetches.insert(
             info.internal_id,
             PendingSubresourceFetchState {
@@ -668,8 +677,12 @@ impl JsContextHost {
         network_partition_key: Option<String>,
         mut info: PendingSubresourceFetchInfo,
     ) {
+        let Some(worker) = self.workers.get(&worker_id) else {
+            return;
+        };
+        let identity = worker.host.network().identity().clone();
         self.assign_pending_subresource_fetch_identity(&mut info);
-        self.push_pending_subresource_fetch_info(info.clone());
+        self.push_pending_subresource_fetch_info(info.clone(), Some(identity));
         self.pending_subresource_fetches.insert(
             info.internal_id,
             PendingSubresourceFetchState {
@@ -701,8 +714,12 @@ impl JsContextHost {
         network_partition_key: Option<String>,
         mut info: PendingSubresourceFetchInfo,
     ) {
+        let Some(worker) = self.workers.get(&worker_id) else {
+            return;
+        };
+        let identity = worker.host.network().identity().clone();
         self.assign_pending_subresource_fetch_identity(&mut info);
-        self.push_pending_subresource_fetch_info(info.clone());
+        self.push_pending_subresource_fetch_info(info.clone(), Some(identity));
         self.pending_subresource_fetches.insert(
             info.internal_id,
             PendingSubresourceFetchState {
@@ -738,7 +755,10 @@ impl JsContextHost {
         mut info: PendingSubresourceFetchInfo,
     ) {
         self.assign_pending_subresource_fetch_identity(&mut info);
-        self.push_pending_subresource_fetch_info(info.clone());
+        self.push_pending_subresource_fetch_info(
+            info.clone(),
+            Some(crate::runtime::RendererWorkerIdentity::Shared(instance_id)),
+        );
         self.pending_subresource_fetches.insert(
             info.internal_id,
             PendingSubresourceFetchState {
@@ -773,7 +793,10 @@ impl JsContextHost {
         mut info: PendingSubresourceFetchInfo,
     ) {
         self.assign_pending_subresource_fetch_identity(&mut info);
-        self.push_pending_subresource_fetch_info(info.clone());
+        self.push_pending_subresource_fetch_info(
+            info.clone(),
+            Some(crate::runtime::RendererWorkerIdentity::Shared(instance_id)),
+        );
         self.pending_subresource_fetches.insert(
             info.internal_id,
             PendingSubresourceFetchState {
@@ -809,7 +832,10 @@ impl JsContextHost {
         mut info: PendingSubresourceFetchInfo,
     ) {
         self.assign_pending_subresource_fetch_identity(&mut info);
-        self.push_pending_subresource_fetch_info(info.clone());
+        self.push_pending_subresource_fetch_info(
+            info.clone(),
+            Some(crate::runtime::RendererWorkerIdentity::Shared(instance_id)),
+        );
         self.pending_subresource_fetches.insert(
             info.internal_id,
             PendingSubresourceFetchState {
@@ -914,7 +940,7 @@ impl JsContextHost {
         if request_started {
             self.record_pending_subresource_request_started(&info, load.disposition());
         } else {
-            self.push_pending_subresource_fetch_info(info.clone());
+            self.push_pending_subresource_fetch_info(info.clone(), None);
         }
         self.pending_subresource_fetches.insert(
             internal_id,
@@ -1027,7 +1053,7 @@ impl JsContextHost {
         );
         match registration {
             ImageSubresourceFetchRegistration::Intercepted => {
-                self.push_pending_subresource_fetch_info(info.clone());
+                self.push_pending_subresource_fetch_info(info.clone(), None);
             }
             ImageSubresourceFetchRegistration::Dispatched(_) => {
                 self.record_pending_subresource_request_started_with_initiator(
@@ -1315,7 +1341,7 @@ impl JsContextHost {
             ResourceLoadDisposition::Keepalive,
             None,
         );
-        self.push_pending_subresource_fetch_info(info.clone());
+        self.push_pending_subresource_fetch_info(info.clone(), None);
         self.pending_subresource_fetches.insert(
             internal_id,
             PendingSubresourceFetchState {
@@ -1352,7 +1378,7 @@ impl JsContextHost {
             crate::network::loads::ResourceLoadKind::CspReport
         );
         debug_assert_eq!(load.disposition(), ResourceLoadDisposition::Keepalive);
-        self.push_pending_subresource_fetch_info(info.clone());
+        self.push_pending_subresource_fetch_info(info.clone(), None);
         self.pending_subresource_fetches.insert(
             internal_id,
             PendingSubresourceFetchState {
@@ -1390,7 +1416,7 @@ impl JsContextHost {
             ResourceLoadDisposition::Ordinary,
             None,
         );
-        self.push_pending_subresource_fetch_info(info.clone());
+        self.push_pending_subresource_fetch_info(info.clone(), None);
         self.pending_subresource_fetches.insert(
             internal_id,
             PendingSubresourceFetchState {
@@ -1424,7 +1450,7 @@ impl JsContextHost {
             ResourceLoadDisposition::Ordinary,
             None,
         );
-        self.push_pending_subresource_fetch_info(info.clone());
+        self.push_pending_subresource_fetch_info(info.clone(), None);
         self.pending_subresource_fetches.insert(
             info.internal_id,
             PendingSubresourceFetchState {
@@ -1558,7 +1584,6 @@ impl JsContextHost {
         &mut self,
         worker_id: DedicatedWorkerId,
         fetch_id: u32,
-        error_text: String,
     ) -> bool {
         let Some(internal_id) = self.pending_subresource_fetches.iter().find_map(
             |(internal_id, pending)| match &pending.continuation {
@@ -1585,13 +1610,16 @@ impl JsContextHost {
         ) else {
             return false;
         };
-        let Some(pending) = self.pending_subresource_fetches.remove(&internal_id) else {
+        if self
+            .pending_subresource_fetches
+            .remove(&internal_id)
+            .is_none()
+        {
             return false;
-        };
+        }
         #[cfg(test)]
         self.pending_subresource_fetch_infos
             .retain(|info| info.internal_id != internal_id);
-        self.record_pending_subresource_failure(&pending.info, error_text);
         self.record_pending_subresource_continue_event(
             PendingSubresourceContinueEvent::Completed { internal_id },
         );
@@ -1602,7 +1630,6 @@ impl JsContextHost {
         &mut self,
         instance_id: SharedWorkerInstanceId,
         fetch_id: u32,
-        error_text: String,
     ) -> bool {
         let Some(internal_id) = self.pending_subresource_fetches.iter().find_map(
             |(internal_id, pending)| match &pending.continuation {
@@ -1629,39 +1656,20 @@ impl JsContextHost {
         ) else {
             return false;
         };
-        let Some(pending) = self.pending_subresource_fetches.remove(&internal_id) else {
+        if self
+            .pending_subresource_fetches
+            .remove(&internal_id)
+            .is_none()
+        {
             return false;
-        };
+        }
         #[cfg(test)]
         self.pending_subresource_fetch_infos
             .retain(|info| info.internal_id != internal_id);
-        self.record_pending_subresource_failure(&pending.info, error_text);
         self.record_pending_subresource_continue_event(
             PendingSubresourceContinueEvent::Completed { internal_id },
         );
         true
-    }
-
-    fn record_pending_subresource_failure(
-        &mut self,
-        info: &PendingSubresourceFetchInfo,
-        error_text: String,
-    ) {
-        let mut record = SubresourceNetworkRecord::failure(
-            info.frame_id.clone(),
-            info.document_url.clone(),
-            info.url.clone(),
-            info.method.clone(),
-            info.request_headers.clone(),
-            info.request_body.clone(),
-            info.resource_type,
-            error_text,
-        )
-        .with_request_body_bytes(info.request_body_bytes.clone());
-        if let Some(handle) = info.network_request_handle {
-            record = record.with_request_handle(handle);
-        }
-        self.record_subresource_network(record);
     }
 
     pub(crate) fn record_running_subresource_fetch(&mut self, state: RunningSubresourceFetchState) {

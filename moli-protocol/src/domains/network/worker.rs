@@ -5,41 +5,6 @@ use crate::conn::{CdpConnection, CdpSessionRoute, CommandOwnerScope};
 use super::TargetNetworkAgentState;
 
 impl CdpConnection {
-    /// A document-owned Fetch pause has already allocated the wire network ID
-    /// before continuing this request into its physical Worker. Preserve that
-    /// correlation, not the Page's Network listeners, body or decision rights.
-    /// Handles are allocated before the thread boundary; never search another
-    /// Page (including a replacement document) for a matching local integer.
-    pub(crate) fn dedicated_worker_fetch_network_id(
-        &self,
-        owner: &CommandOwnerScope,
-        item: &moli_core::page::ScriptNetworkOutputItem,
-    ) -> Option<(moli_core::page::SubresourceNetworkRequestHandle, String)> {
-        let moli_core::page::ScriptNetworkOutputItem::SubresourceNetworkRecord(record) = item
-        else {
-            return None;
-        };
-        let handle = record.request_handle()?;
-        let CdpSessionRoute::DedicatedWorkerTarget {
-            browser_context_id,
-            target_id,
-        } = owner.resolve_route(self)?
-        else {
-            return None;
-        };
-        let context = self.browser_context_by_id(&browser_context_id)?;
-        let worker = context.dedicated_worker_target(&target_id)?;
-        let crate::conn::DedicatedWorkerOwner::Document(_) = &worker.owner else {
-            return None;
-        };
-        let creator = context.page_target(worker.owner.target_id(context)?)?;
-        let request_id = creator
-            .runtime_slot
-            .network_agent
-            .subresource_request_id_for_handle(handle)?;
-        Some((handle, request_id.to_owned()))
-    }
-
     pub(crate) fn network_owner_identity_for_owner(
         &self,
         owner: &CommandOwnerScope,
