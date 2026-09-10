@@ -18,6 +18,7 @@ pub(super) struct ParsedWindowFetchInput {
     pub(super) keepalive: bool,
     pub(super) signal: Option<v8::Global<v8::Object>>,
     pub(super) request_body_owner: Option<v8::Global<v8::Object>>,
+    pub(super) init_validation: super::super::request::RequestInitValidation,
 }
 
 pub(super) fn parse_window_fetch_input<'s>(
@@ -59,7 +60,8 @@ pub(super) fn parse_window_fetch_input<'s>(
         }
         let inherited_credentials = request_object_credentials_mode(scope, req_obj)?;
         let request_mode = init
-            .request_mode
+            .validation
+            .mode
             .or_else(|| moli_fetch::RequestMode::from_str(&inherited.mode).ok())
             .unwrap_or(moli_fetch::RequestMode::Cors);
         validate_no_cors_method(request_mode, &method)?;
@@ -100,16 +102,17 @@ pub(super) fn parse_window_fetch_input<'s>(
             redirect_mode,
             priority,
             cache: init.cache.unwrap_or(inherited.cache),
-            referrer: init.referrer.unwrap_or(inherited.referrer),
+            referrer: inherited.referrer,
             referrer_policy: init.referrer_policy.unwrap_or(inherited.referrer_policy),
             integrity: init.integrity.unwrap_or(inherited.integrity),
             keepalive: init.keepalive.unwrap_or(inherited.keepalive),
             signal,
             request_body_owner,
+            init_validation: init.validation,
         })
     } else {
         let init = parse_fetch_init(scope, args.init)?;
-        let request_mode = init.request_mode.unwrap_or(moli_fetch::RequestMode::Cors);
+        let request_mode = init.validation.mode.unwrap_or(moli_fetch::RequestMode::Cors);
         validate_no_cors_method(request_mode, &init.method)?;
         crate::network_host::validate_request_method_body(&init.method, init.body.as_ref())?;
         let headers = if request_mode == moli_fetch::RequestMode::NoCors {
@@ -133,12 +136,13 @@ pub(super) fn parse_window_fetch_input<'s>(
             redirect_mode,
             priority: init.priority,
             cache: init.cache.unwrap_or_else(|| "default".to_owned()),
-            referrer: init.referrer.unwrap_or_else(|| "about:client".to_owned()),
+            referrer: "about:client".to_owned(),
             referrer_policy: init.referrer_policy.unwrap_or_default(),
             integrity: init.integrity.unwrap_or_default(),
             keepalive: init.keepalive.unwrap_or(false),
             signal: init.signal.flatten(),
             request_body_owner: None,
+            init_validation: init.validation,
         })
     }
 }
