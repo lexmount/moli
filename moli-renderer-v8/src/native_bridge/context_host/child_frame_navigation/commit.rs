@@ -679,7 +679,7 @@ impl JsContextHost {
             self.child_document_credentialless_storage_nonce(document_credentialless);
 
         self.clear_pending_child_document_loads_for_handle(handle);
-        self.dispatch_child_browsing_context_unload_lifecycle_if_needed(scope, handle);
+        Self::dispatch_child_javascript_url_unload_lifecycle(scope, self, handle);
         if !self.child_document_window_commit_preflight_is_current(handle, &window_commit_preflight)
         {
             let _ = self.finish_child_frame_navigation_without_load_dispatch(
