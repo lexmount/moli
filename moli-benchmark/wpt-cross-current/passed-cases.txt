@@ -5160,6 +5160,8 @@ event-timing/supported-types-consistent-with-self.html
 fetch/api/abort/destroyed-context.html
 fetch/api/basic/response-null-body.any.js?moli-wpt-any=dedicatedworker
 fetch/api/basic/response-null-body.any.js?moli-wpt-any=window
+fetch/api/basic/text-utf8.any.js?moli-wpt-any=dedicatedworker
+fetch/api/basic/text-utf8.any.js?moli-wpt-any=window
 fetch/api/cors/data-url-iframe.html
 fetch/api/cors/data-url-shared-worker.html
 fetch/api/cors/data-url-worker.html
@@ -5177,6 +5179,8 @@ fetch/api/request/request-error.any.js?moli-wpt-any=window
 fetch/api/request/request-init-stream.any.js?moli-wpt-any=dedicatedworker
 fetch/api/request/request-init-stream.any.js?moli-wpt-any=window
 fetch/api/request/url-encoding.html
+fetch/api/response/json.any.js?moli-wpt-any=dedicatedworker
+fetch/api/response/json.any.js?moli-wpt-any=window
 fetch/api/response/multi-globals/url-parsing.html
 fetch/api/response/response-body-read-task-handling.html
 fetch/api/response/response-error-from-stream.any.js?moli-wpt-any=dedicatedworker
