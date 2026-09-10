@@ -112,14 +112,12 @@ pub(crate) fn abort_signal_any_callback<'s>(
         return;
     }
 
-    for source_signal in signals {
-        let Some(source_signal_id) = AbortStore::signal_id_from_object(scope, source_signal) else {
-            continue;
-        };
-        host.native_bridge_mut()
-            .abort
-            .link_dependent_signal(source_signal_id, composite_signal_id);
-    }
+    host.native_bridge_mut().abort.set_signal_sources(
+        composite_signal_id,
+        signals
+            .into_iter()
+            .filter_map(|signal| AbortStore::signal_id_from_object(scope, signal)),
+    );
 
     rv.set(signal.into());
 }
