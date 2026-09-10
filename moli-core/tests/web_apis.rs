@@ -18,6 +18,8 @@ mod body_state;
 mod callback_cleanup;
 #[path = "web_apis/event_dispatch.rs"]
 mod event_dispatch;
+#[path = "web_apis/pipe_disturbed.rs"]
+mod pipe_disturbed;
 #[path = "web_apis/request_init.rs"]
 mod request_init;
 #[path = "web_apis/request_stream.rs"]
