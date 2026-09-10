@@ -1472,24 +1472,55 @@ impl CdpConnection {
         source_renderer_page: Option<RendererPageResidenceIdentity>,
         committed: &moli_core::page::RendererCommittedNetworkObservation,
     ) -> Option<crate::domains::network::TargetNetworkBacklogPreparedDelivery> {
-        let occurrence = committed.occurrence();
-        let (context_id, _) = self.resolved_page_owner_identity_for_owner(owner)?;
-        let context = self.browser_context_by_id(&context_id)?;
-        if !context.routes_renderer_browser_context_runtime(occurrence.runtime)
-            || source_renderer_page
-                != Some(RendererPageResidenceIdentity::from_parts(
-                    occurrence.owner_local_host_id,
-                    occurrence.document.document.page_id,
-                ))
-        {
+        if !self.accepts_browser_network_observation_for_owner(
+            owner,
+            source_renderer_page,
+            committed,
+        ) {
             return None;
         }
+        let occurrence = committed.occurrence();
+        let moli_core::page::RendererNetworkOutputItem::Resource(item) = &occurrence.item else {
+            return None;
+        };
         self.project_network_output_item_for_owner(
             owner,
             source_renderer_page,
             occurrence.document,
-            &occurrence.item,
+            item,
         )
+    }
+
+    pub(crate) fn accepts_browser_network_observation_for_owner(
+        &self,
+        owner: &CommandOwnerScope,
+        source_renderer_page: Option<RendererPageResidenceIdentity>,
+        committed: &moli_core::page::RendererCommittedNetworkObservation,
+    ) -> bool {
+        let occurrence = committed.occurrence();
+        let Some((context_id, target_id)) = self.resolved_page_owner_identity_for_owner(owner)
+        else {
+            return false;
+        };
+        let Some(context) = self.browser_context_by_id(&context_id) else {
+            return false;
+        };
+        context.routes_renderer_browser_context_runtime(occurrence.runtime)
+            && match &occurrence.item {
+                // An admitted resource may finish/cancel from a retired
+                // renderer. Its request-phase projection below owns that
+                // exact admission; current Page membership cannot revoke it.
+                moli_core::page::RendererNetworkOutputItem::Resource(_) => true,
+                moli_core::page::RendererNetworkOutputItem::ChildDocument(_) => {
+                    context.target_renderer_page_residence_identity(&target_id)
+                        == source_renderer_page
+                }
+            }
+            && source_renderer_page
+                == Some(RendererPageResidenceIdentity::from_parts(
+                    occurrence.owner_local_host_id,
+                    occurrence.document.document.page_id,
+                ))
     }
 
     fn project_network_output_item_for_owner(

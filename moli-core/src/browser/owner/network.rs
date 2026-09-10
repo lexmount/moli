@@ -1,6 +1,6 @@
 use super::Browser;
 use crate::browser::{BrowserContextId, BrowserEvent, BrowserSequence, NetworkOccurrence};
-use crate::page::{RendererNetworkInput, ScriptNetworkOutputItem};
+use crate::page::{RendererNetworkInput, RendererNetworkOutputItem, ScriptNetworkOutputItem};
 
 impl Browser {
     pub(super) fn commit_network(&mut self, id: BrowserContextId, input: RendererNetworkInput) {
@@ -33,6 +33,7 @@ impl Browser {
             return;
         }
         let admitted = crate::browser::network::request_key(occurrence)
+            .as_ref()
             .and_then(|key| context.network_requests.get(key));
         let renderer_document =
             admitted.map_or(occurrence.document, |entry| entry.renderer_document);
@@ -59,15 +60,20 @@ impl Browser {
             std::sync::Arc::make_mut(&mut renderer).document = renderer_document;
         }
         let event = NetworkOccurrence { document, renderer };
-        let event = match occurrence.item.as_ref() {
-            ScriptNetworkOutputItem::SubresourceRequestStarted(_) => {
-                BrowserEvent::NetworkRequestStarted(event)
-            }
-            ScriptNetworkOutputItem::SubresourceNetworkRecord(_)
-            | ScriptNetworkOutputItem::SubresourceBodyFinished(_) => {
+        let event = match &occurrence.item {
+            RendererNetworkOutputItem::ChildDocument(_) => {
                 BrowserEvent::NetworkRequestCompleted(event)
             }
-            _ => BrowserEvent::NetworkActivity(event),
+            RendererNetworkOutputItem::Resource(item) => match item.as_ref() {
+                ScriptNetworkOutputItem::SubresourceRequestStarted(_) => {
+                    BrowserEvent::NetworkRequestStarted(event)
+                }
+                ScriptNetworkOutputItem::SubresourceNetworkRecord(_)
+                | ScriptNetworkOutputItem::SubresourceBodyFinished(_) => {
+                    BrowserEvent::NetworkRequestCompleted(event)
+                }
+                _ => BrowserEvent::NetworkActivity(event),
+            },
         };
         // State, semantic event and the concrete FIFO's receipt are committed in
         // this one owner turn. Draining Protocol can only observe the result.

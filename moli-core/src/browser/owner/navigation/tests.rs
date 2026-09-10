@@ -31,6 +31,193 @@ fn context_with_contents(service: &BrowserService) -> (BrowserContextHandle, Web
 }
 
 #[tokio::test]
+async fn native_child_document_network_completes_without_devtools() {
+    let server = FixtureServer::spawn().await.unwrap();
+    let service = BrowserService::start().unwrap();
+    let browser = service.handle();
+    let (context, contents) = context_with_contents(&service);
+    let (_, mut events) = browser.subscribe().unwrap();
+    let document = navigate(
+        &context,
+        contents,
+        &format!(
+            "data:text/html,<iframe src='{}'></iframe>",
+            server.url("/static")
+        ),
+    )
+    .await;
+    let mut completed = Vec::new();
+    tokio::time::timeout(std::time::Duration::from_secs(5), async {
+        loop {
+            let record = events.recv().await.unwrap();
+            match record.event {
+                BrowserEvent::NetworkRequestCompleted(occurrence)
+                    if occurrence.document == document =>
+                {
+                    completed.push(occurrence);
+                }
+                BrowserEvent::DocumentLifecycleChanged(snapshot)
+                    if snapshot.document == document && snapshot.lifecycle.load.is_some() =>
+                {
+                    break;
+                }
+                _ => {}
+            }
+        }
+    })
+    .await
+    .expect("the native child and its parent must finish without a Protocol observer");
+    assert_eq!(
+        completed.len(),
+        1,
+        "the child's completed network fact must precede the parent's native Load"
+    );
+    let snapshot = browser.subscribe().unwrap().0;
+    let requests = snapshot
+        .network_requests
+        .iter()
+        .filter(|request| request.document == document)
+        .collect::<Vec<_>>();
+    assert_eq!(
+        requests.len(),
+        1,
+        "native recovery retains the child response"
+    );
+    let crate::browser::NetworkRequestState::ChildDocument(response) = &requests[0].state else {
+        panic!("the recovery record must identify a child Document response");
+    };
+    assert_eq!(response.snapshot.request_url, server.url("/static"));
+    assert_eq!(response.snapshot.status, 200);
+    assert!(
+        String::from_utf8_lossy(
+            &response
+                .snapshot
+                .response_body
+                .as_ref()
+                .unwrap()
+                .clone_body_bytes()
+        )
+        .contains("fixture static")
+    );
+    let crate::page::RendererNetworkOutputItem::ChildDocument(occurred) =
+        &completed[0].renderer.item
+    else {
+        panic!("the native occurrence must retain the same child response");
+    };
+    assert!(std::sync::Arc::ptr_eq(response, occurred));
+    browser
+        .close_web_contents(contents)
+        .unwrap()
+        .close_async()
+        .await;
+    service.shutdown();
+    server.shutdown().await;
+}
+
+#[tokio::test]
+async fn native_child_document_network_precedes_held_child_script_and_load() {
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let child_url = format!("http://{}/child", listener.local_addr().unwrap());
+    let (script_started, script_request) = oneshot::channel();
+    let (release_script, script_release) = oneshot::channel();
+    let server = tokio::spawn(async move {
+        for path in ["/child", "/held.js"] {
+            let (mut stream, _) = listener.accept().await.unwrap();
+            let mut request = Vec::new();
+            let mut byte = [0];
+            while !request.ends_with(b"\r\n\r\n") {
+                stream.read_exact(&mut byte).await.unwrap();
+                request.push(byte[0]);
+            }
+            assert!(String::from_utf8_lossy(&request).starts_with(&format!("GET {path} ")));
+            if path == "/child" {
+                let body = "<!doctype html><script src='/held.js'></script><p>child body</p>";
+                stream.write_all(format!("HTTP/1.1 200 OK\r\nContent-Type: text/html\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}", body.len()).as_bytes()).await.unwrap();
+            } else {
+                script_started.send(()).unwrap();
+                script_release.await.unwrap();
+                stream.write_all(b"HTTP/1.1 200 OK\r\nContent-Type: text/javascript\r\nContent-Length: 0\r\nConnection: close\r\n\r\n").await.unwrap();
+                break;
+            }
+        }
+    });
+    let service = BrowserService::start().unwrap();
+    let browser = service.handle();
+    let (context, contents) = context_with_contents(&service);
+    let (_, mut events) = browser.subscribe().unwrap();
+    let document = navigate(
+        &context,
+        contents,
+        &format!("data:text/html,<iframe src='{child_url}'></iframe>"),
+    )
+    .await;
+    tokio::time::timeout(std::time::Duration::from_secs(5), script_request)
+        .await
+        .unwrap()
+        .unwrap();
+    let completed = tokio::time::timeout(std::time::Duration::from_secs(5), async {
+        loop {
+            if let BrowserEvent::NetworkRequestCompleted(occurrence) = events.recv().await.unwrap().event
+                && occurrence.document == document
+                && matches!(&occurrence.renderer.item, crate::page::RendererNetworkOutputItem::ChildDocument(response) if response.snapshot.request_url == child_url) {
+                break occurrence;
+            }
+        }
+    }).await.expect("the child response commits before its held script can finish");
+    assert!(
+        context
+            .document_lifecycle_snapshot(document)
+            .unwrap()
+            .unwrap()
+            .load
+            .is_none()
+    );
+    let snapshot = browser.subscribe().unwrap().0;
+    let request = snapshot.network_requests.iter().find(|request| request.document == document
+        && matches!(&request.state, crate::browser::NetworkRequestState::ChildDocument(response) if response.snapshot.request_url == child_url)).unwrap();
+    let crate::browser::NetworkRequestState::ChildDocument(response) = &request.state else {
+        unreachable!()
+    };
+    let crate::page::RendererNetworkOutputItem::ChildDocument(occurred) = &completed.renderer.item
+    else {
+        unreachable!()
+    };
+    assert!(std::sync::Arc::ptr_eq(response, occurred));
+    assert!(
+        String::from_utf8_lossy(
+            &response
+                .snapshot
+                .response_body
+                .as_ref()
+                .unwrap()
+                .clone_body_bytes()
+        )
+        .contains("child body")
+    );
+    release_script.send(()).unwrap();
+    tokio::time::timeout(std::time::Duration::from_secs(5), async {
+        loop {
+            if let BrowserEvent::DocumentLifecycleChanged(snapshot) =
+                events.recv().await.unwrap().event
+                && snapshot.document == document
+                && snapshot.lifecycle.load.is_some()
+            {
+                break;
+            }
+        }
+    })
+    .await
+    .expect("releasing the exact script must finish the parent Load");
+    server.await.unwrap();
+    browser
+        .close_web_contents(contents)
+        .unwrap()
+        .close_async()
+        .await;
+    service.shutdown();
+}
+
+#[tokio::test]
 async fn native_network_commits_request_response_and_body_without_devtools() {
     use crate::browser::NetworkRequestState;
     use crate::page::{ScriptNetworkOutputItem, SubresourceNetworkOutcome};
@@ -66,8 +253,9 @@ async fn native_network_commits_request_response_and_body_without_devtools() {
             let event = events.recv().await.unwrap();
             if let BrowserEvent::NetworkRequestStarted(occurrence) = event.event
                 && occurrence.document == document
-                && let ScriptNetworkOutputItem::SubresourceRequestStarted(request) =
-                    occurrence.renderer.item.as_ref()
+                && let crate::page::RendererNetworkOutputItem::Resource(item) =
+                    &occurrence.renderer.item
+                && let ScriptNetworkOutputItem::SubresourceRequestStarted(request) = item.as_ref()
                 && request.url().as_str() == url
             {
                 break (request.handle(), event.sequence);
@@ -85,8 +273,9 @@ async fn native_network_commits_request_response_and_body_without_devtools() {
             let event = events.recv().await.unwrap();
             if let BrowserEvent::NetworkActivity(occurrence) = event.event
                 && occurrence.document == document
-                && let ScriptNetworkOutputItem::SubresourceResponseStarted(response) =
-                    occurrence.renderer.item.as_ref()
+                && let crate::page::RendererNetworkOutputItem::Resource(item) =
+                    &occurrence.renderer.item
+                && let ScriptNetworkOutputItem::SubresourceResponseStarted(response) = item.as_ref()
                 && response.handle() == handle
             {
                 break event.sequence;
@@ -104,8 +293,9 @@ async fn native_network_commits_request_response_and_body_without_devtools() {
             let event = events.recv().await.unwrap();
             if let BrowserEvent::NetworkRequestCompleted(occurrence) = event.event
                 && occurrence.document == document
-                && crate::browser::network::request_key(&occurrence.renderer)
-                    .is_some_and(|key| key.1 == handle.get())
+                && crate::browser::network::request_key(&occurrence.renderer).is_some_and(|key| {
+                    key.1 == crate::browser::network::NetworkRequestIdentity::Resource(handle.get())
+                })
             {
                 break event.sequence;
             }

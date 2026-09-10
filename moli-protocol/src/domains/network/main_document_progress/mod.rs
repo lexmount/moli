@@ -699,6 +699,15 @@ pub(crate) fn emit_child_document_navigation_network_background_events(
     if session_ids.is_empty() {
         return;
     }
+    // The same committed response may be reconstructed by a snapshot-only
+    // observer before its original source FIFO is consumed. Use the existing
+    // request publication claim, not a second child-network cursor.
+    if !conn
+        .runtime_session_owner_slot_mut_for_owner(owner)
+        .is_ok_and(|slot| slot.claim_completed_subresource_request_id(request_id))
+    {
+        return;
+    }
     let target = MainDocumentProgressEventTarget {
         session_ids: session_ids.clone(),
         request_id: request_id.to_owned(),

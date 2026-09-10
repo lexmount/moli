@@ -17,8 +17,8 @@ use crate::{
         FrameDocumentInteractiveLifecycleAction, FrameRequestKind,
     },
     types::{
-        ChildDocumentLoadCompletion, ChildDocumentLoadNetworkAttribution, ChildDocumentLoadOutcome,
-        LoadedChildDocument, SubresourceResponseBody,
+        ChildDocumentLoadCompletion, ChildDocumentLoadOutcome, LoadedChildDocument,
+        SubresourceResponseBody,
     },
 };
 use moli_encoding::decode_html_document_with_fallback;
@@ -153,8 +153,6 @@ impl JsContextHost {
             owner_request_id,
         );
         let loader_id = self.allocate_child_document_loader_id();
-        let network_attribution =
-            ChildDocumentLoadNetworkAttribution::new(frame_id, parent_frame_id, loader_id);
         self.note_child_frame_load_started_for_parent(handle);
         let owner_credentialless = self
             .child_browsing_contexts
@@ -170,6 +168,9 @@ impl JsContextHost {
             credentialless_storage_nonce,
         );
         let browser_context_runtime = self.browser_context_runtime();
+        // Freeze the physical source before the external fetch. A later Page
+        // or document.open replacement cannot donate its identity to this body.
+        let network_source = self.renderer_network_source();
         let service_worker_client_id = self
             .child_browsing_contexts
             .get(&handle)
@@ -196,6 +197,23 @@ impl JsContextHost {
         let parent_character_set = self.document_character_set().to_owned();
         let task_resource_loader = resource_loader.clone();
         resource_loader.spawn_resource_task(async move {
+            let record_network = |snapshot| {
+                let response = crate::protocol_types::ChildFrameDocumentNetworkActivitySnapshot {
+                    frame_id: frame_id.clone(),
+                    parent_frame_id: parent_frame_id.clone(),
+                    loader_id: loader_id.clone(), snapshot,
+                };
+                if let Some(source) = network_source {
+                    crate::runtime::RendererChildDocumentNetworkObservation::new(
+                        &browser_context_runtime, source, response,
+                    )
+                } else {
+                    #[cfg(test)]
+                    { crate::runtime::RendererChildDocumentNetworkObservation::unobserved_for_test(response) }
+                    #[cfg(not(test))]
+                    { panic!("a child network response needs its captured physical renderer source") }
+                }
+            };
             let result = async {
                 let request = configure_child_document_navigation_request(
                     child_document_load_request(bootstrap).ok_or_else(|| {
@@ -232,6 +250,7 @@ impl JsContextHost {
                         head,
                         body,
                         &parent_character_set,
+                        record_network,
                     );
                 }
                 let response = task_resource_loader
@@ -246,12 +265,13 @@ impl JsContextHost {
                     head,
                     body,
                     &parent_character_set,
+                    record_network,
                 )
             }
             .await;
             let _ = completion_tx.send_child_document(ChildDocumentLoadCompletion::new(
                 target,
-                network_attribution,
+                loader_id,
                 result,
             ));
         });
@@ -317,34 +337,31 @@ impl JsContextHost {
         &mut self,
         completion: &ChildDocumentLoadCompletion,
     ) -> bool {
-        let Some(snapshot) = completion.document_network().cloned() else {
+        let Some(network) = completion.document_network().cloned() else {
             return false;
         };
-        let attribution = completion.network_attribution();
-        let event = crate::protocol_types::ChildFrameDocumentNetworkActivitySnapshot {
-            frame_id: attribution.frame_id().to_owned(),
-            parent_frame_id: attribution.parent_frame_id().map(ToOwned::to_owned),
-            loader_id: attribution.loader_id().to_owned(),
-            snapshot,
-        };
-        if let Some(source_document) = self.root_document_lifecycle_identity()
-            && self.append_live_turn_owner_action(
-                crate::runtime::RendererOwnerAction::ChildFrameDocumentNetwork {
-                    source_document,
-                    event: event.clone(),
-                },
-            )
-        {
-            return true;
+        self.publish_child_document_network(network);
+        true
+    }
+
+    fn publish_child_document_network(
+        &mut self,
+        network: crate::runtime::RendererChildDocumentNetworkObservation,
+    ) {
+        if self.output_journal.is_some() {
+            self.append_live_turn_observation(
+                crate::runtime::RendererProtocolObservation::Network(network.into_observation()),
+            );
+            return;
         }
         #[cfg(test)]
         {
-            self.completed_child_document_networks.push(event);
-            true
+            self.completed_child_document_networks
+                .push(network.response().clone());
         }
         #[cfg(not(test))]
         {
-            let _ = event;
+            let _ = network;
             panic!(
                 "a production child Document network event must have a concrete renderer output sink"
             );
@@ -385,8 +402,7 @@ impl JsContextHost {
         scope: &mut v8::PinScope<'_, '_>,
         completion: ChildDocumentLoadCompletion,
     ) -> ChildDocumentLoadApplication {
-        let (target, network_attribution, result) = completion.into_application_parts();
-        let loader_id = network_attribution.loader_id().to_owned();
+        let (target, loader_id, result) = completion.into_application_parts();
         let mut pending = self
             .pending_child_document_navigations
             .remove(&target.load_id())
@@ -436,6 +452,9 @@ impl JsContextHost {
                     );
                 }
                 if let Some(violation) = enforced_violation {
+                    if let Some(network) = loaded.document_network.take() {
+                        self.publish_child_document_network(network);
+                    }
                     Err(format!(
                         "child document response blocked by Content Security Policy `{}` for `{}`",
                         violation.effective_directive, violation.blocked_uri
@@ -459,7 +478,8 @@ impl JsContextHost {
         let mut completed_document_network = None;
         let mut body_activity = ChildDocumentLoadBodyActivity::NoPageCodeOrEventDispatch;
         let snapshot_to_install = match result {
-            Ok(ChildDocumentLoadOutcome::IgnoredNavigation) => {
+            Ok(ChildDocumentLoadOutcome::IgnoredNavigation(network)) => {
+                self.publish_child_document_network(network);
                 self.clear_child_browsing_context_pending_navigation(handle);
                 if let Some(entry) = self.child_browsing_contexts.get_mut(&handle) {
                     entry.restore_navigation_entry_seed_from_committed();
@@ -500,7 +520,7 @@ impl JsContextHost {
                     return ChildDocumentLoadApplication::SupersededDuringApplication {
                         completion: ChildDocumentLoadCompletion::new(
                             target,
-                            network_attribution,
+                            loader_id,
                             Ok(ChildDocumentLoadOutcome::Loaded(Box::new(loaded))),
                         ),
                         body_activity,
@@ -526,7 +546,7 @@ impl JsContextHost {
                     return ChildDocumentLoadApplication::SupersededDuringApplication {
                         completion: ChildDocumentLoadCompletion::new(
                             target,
-                            network_attribution,
+                            loader_id,
                             Ok(ChildDocumentLoadOutcome::Loaded(Box::new(loaded))),
                         ),
                         body_activity,
@@ -542,7 +562,7 @@ impl JsContextHost {
                 let resource_was_cached = loaded
                     .document_network
                     .as_ref()
-                    .is_some_and(|network| network.from_cache);
+                    .is_some_and(|network| network.response().snapshot.from_cache);
                 completed_document_network = loaded.document_network;
                 let snapshot = super::super::ChildBrowsingContextSnapshot::with_character_set(
                     final_url,
@@ -571,11 +591,7 @@ impl JsContextHost {
                         target.navigation_load(),
                     );
                     return ChildDocumentLoadApplication::SupersededDuringApplication {
-                        completion: ChildDocumentLoadCompletion::new(
-                            target,
-                            network_attribution,
-                            Err(error),
-                        ),
+                        completion: ChildDocumentLoadCompletion::new(target, loader_id, Err(error)),
                         body_activity,
                     };
                 }
@@ -596,11 +612,7 @@ impl JsContextHost {
                         target.navigation_load(),
                     );
                     return ChildDocumentLoadApplication::SupersededDuringApplication {
-                        completion: ChildDocumentLoadCompletion::new(
-                            target,
-                            network_attribution,
-                            Err(error),
-                        ),
+                        completion: ChildDocumentLoadCompletion::new(target, loader_id, Err(error)),
                         body_activity,
                     };
                 };
@@ -651,7 +663,9 @@ impl JsContextHost {
                     .frame_owner_resource_timing
                     .take()
                     .zip(completed_document_network.clone())
-                    .map(|(timing, network)| timing.complete(current_owner, network));
+                    .map(|(timing, network)| {
+                        timing.complete(current_owner, network.response().snapshot.clone())
+                    });
                 entry.bind_completed_frame_owner_resource_timing(frame_owner_resource_timing);
                 entry.bind_completed_document_network(current_owner, completed_document_network);
             }
@@ -739,15 +753,30 @@ fn child_document_load_outcome_from_response(
     head: moli_fetch::ResponseHead,
     body: moli_fetch::ResponseBody,
     parent_character_set: &str,
+    record_network: impl FnOnce(
+        crate::protocol_types::ChildFrameDocumentNetworkSnapshot,
+    ) -> crate::runtime::RendererChildDocumentNetworkObservation,
 ) -> Result<ChildDocumentLoadOutcome, String> {
-    if child_document_response_should_ignore_navigation(head.status, &head.headers) {
-        return Ok(ChildDocumentLoadOutcome::IgnoredNavigation);
-    }
     let response_body = SubresourceResponseBody::from_bytes(
         body.try_into_materialized_bytes()
             .map_err(|_| "child document response body should remain materialized".to_owned())?,
     );
-    let encoded_data_length = response_body.len();
+    let network = record_network(crate::protocol_types::ChildFrameDocumentNetworkSnapshot {
+        request_url,
+        request_method,
+        request_headers,
+        final_url: head.final_url.as_str().to_owned(),
+        status: head.status,
+        response_headers: head.headers.clone(),
+        encoded_data_length: response_body.len(),
+        response_body: Some(response_body.clone()),
+        from_cache: head.from_cache,
+    });
+    // Receiving a response is a native fact even when it cannot commit a
+    // Document. Parsing, policy checks and Load must not own its publication.
+    if child_document_response_should_ignore_navigation(head.status, &head.headers) {
+        return Ok(ChildDocumentLoadOutcome::IgnoredNavigation(network));
+    }
     let content_type = child_document_content_type_from_headers(&head.headers)
         .or_else(|| child_document_content_type_for_url(&head.final_url));
     let fallback =
@@ -769,17 +798,7 @@ fn child_document_load_outcome_from_response(
             content_type,
             character_set,
             markup,
-            document_network: Some(crate::protocol_types::ChildFrameDocumentNetworkSnapshot {
-                request_url,
-                request_method,
-                request_headers,
-                final_url: head.final_url.as_str().to_owned(),
-                status: head.status,
-                response_headers: head.headers.clone(),
-                encoded_data_length,
-                response_body: Some(response_body),
-                from_cache: head.from_cache,
-            }),
+            document_network: Some(network),
         },
     )))
 }
@@ -850,6 +869,16 @@ mod tests {
             },
             moli_fetch::ResponseBody::materialized_bytes(body_bytes.clone()),
             "UTF-8",
+            |snapshot| {
+                crate::runtime::RendererChildDocumentNetworkObservation::unobserved_for_test(
+                    crate::protocol_types::ChildFrameDocumentNetworkActivitySnapshot {
+                        frame_id: "child".into(),
+                        parent_frame_id: None,
+                        loader_id: "loader".into(),
+                        snapshot,
+                    },
+                )
+            },
         )
         .expect("child document response should load");
         let ChildDocumentLoadOutcome::Loaded(document) = outcome else {
@@ -859,6 +888,7 @@ mod tests {
             .document_network
             .as_ref()
             .expect("loaded child document should retain Network metadata");
+        let network = &network.response().snapshot;
         assert_eq!(network.encoded_data_length, body_bytes.len());
         assert_eq!(
             network

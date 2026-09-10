@@ -3199,8 +3199,6 @@ pub struct ChildFrameNavigationSnapshot {
     pub security_origin_inherited: bool,
     #[serde(default)]
     pub security_origin_opaque: bool,
-    #[serde(default)]
-    pub document_network: Option<ChildFrameDocumentNetworkSnapshot>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]

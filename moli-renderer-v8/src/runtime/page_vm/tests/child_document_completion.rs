@@ -4,10 +4,7 @@ use crate::frame_owner_model::{
     ChildDocumentNavigationFetchTarget, DocumentId, FrameDocumentTaskOwner, FrameRequestId,
     FrameSchedulerLaneId, LocalWindowId,
 };
-use crate::types::{
-    ChildDocumentLoadCompletion, ChildDocumentLoadNetworkAttribution, ChildDocumentLoadOutcome,
-    LoadedChildDocument,
-};
+use crate::types::{ChildDocumentLoadCompletion, ChildDocumentLoadOutcome, LoadedChildDocument};
 
 fn owner_attached_page_vm(
     loader: &crate::network::ResourceRequestClient,
@@ -230,6 +227,25 @@ async fn child_document_response_frame_ancestors_gates_commit() {
                 .eval("String(globalThis.__blockedChildExecuted)")?,
             "false",
             "blocked response script must never execute"
+        );
+        let network = page_vm.take_completed_child_document_networks();
+        assert_eq!(
+            network.len(),
+            1,
+            "a policy-blocked response remains a network fact"
+        );
+        assert_eq!(network[0].snapshot.request_url, blocked_url);
+        assert_eq!(network[0].snapshot.status, 200);
+        assert!(
+            String::from_utf8_lossy(
+                &network[0]
+                    .snapshot
+                    .response_body
+                    .as_ref()
+                    .unwrap()
+                    .clone_body_bytes()
+            )
+            .contains("must-not-commit")
         );
 
         server
@@ -720,7 +736,7 @@ pub(super) fn stale_loaded_completion(
     let loader_id = format!("TEST-CHILD-LOADER-{}", target.load_id());
     ChildDocumentLoadCompletion::new(
         target,
-        ChildDocumentLoadNetworkAttribution::new(frame_id.to_owned(), None, loader_id),
+        loader_id.clone(),
         Ok(ChildDocumentLoadOutcome::Loaded(Box::new(
             LoadedChildDocument {
                 final_url: Url::parse(request_url).expect("final URL"),
@@ -728,17 +744,26 @@ pub(super) fn stale_loaded_completion(
                 content_type: Some("text/html".to_owned()),
                 character_set: "UTF-8".to_owned(),
                 markup: "<!doctype html>".to_owned(),
-                document_network: Some(crate::protocol_types::ChildFrameDocumentNetworkSnapshot {
-                    request_url: request_url.to_owned(),
-                    request_method: "GET".to_owned(),
-                    request_headers: Vec::new(),
-                    final_url: request_url.to_owned(),
-                    status: 200,
-                    response_headers: Vec::new(),
-                    encoded_data_length: 0,
-                    response_body: None,
-                    from_cache: false,
-                }),
+                document_network: Some(
+                    crate::runtime::RendererChildDocumentNetworkObservation::unobserved_for_test(
+                        crate::protocol_types::ChildFrameDocumentNetworkActivitySnapshot {
+                            frame_id: frame_id.to_owned(),
+                            parent_frame_id: None,
+                            loader_id,
+                            snapshot: crate::protocol_types::ChildFrameDocumentNetworkSnapshot {
+                                request_url: request_url.to_owned(),
+                                request_method: "GET".to_owned(),
+                                request_headers: Vec::new(),
+                                final_url: request_url.to_owned(),
+                                status: 200,
+                                response_headers: Vec::new(),
+                                encoded_data_length: 0,
+                                response_body: None,
+                                from_cache: false,
+                            },
+                        },
+                    ),
+                ),
             },
         ))),
     )

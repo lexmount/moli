@@ -7092,7 +7092,6 @@ impl ScriptVm {
                     document_open_replacement: snapshot.document_open_replacement,
                     security_origin_inherited: snapshot.security_origin_inherited,
                     security_origin_opaque: snapshot.security_origin_opaque,
-                    document_network: snapshot.document_network,
                 },
             )
             .collect()

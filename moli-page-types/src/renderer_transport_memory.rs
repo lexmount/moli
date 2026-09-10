@@ -7,6 +7,39 @@
 
 use super::*;
 
+impl ChildFrameDocumentNetworkSnapshot {
+    #[doc(hidden)]
+    pub fn renderer_transport_charge_bytes(&self) -> usize {
+        [&self.request_url, &self.request_method, &self.final_url]
+            .into_iter()
+            .map(|value| string_charge(value))
+            .sum::<usize>()
+            .saturating_add(headers_charge(&self.request_headers))
+            .saturating_add(headers_charge(&self.response_headers))
+            .saturating_add(
+                self.response_body
+                    .as_ref()
+                    .map(|body| body.renderer_transport_retained_memory_bytes())
+                    .unwrap_or(0),
+            )
+    }
+}
+
+impl ChildFrameDocumentNetworkActivitySnapshot {
+    #[doc(hidden)]
+    pub fn renderer_transport_charge_bytes(&self) -> usize {
+        string_charge(&self.frame_id)
+            .saturating_add(
+                self.parent_frame_id
+                    .as_deref()
+                    .map(string_charge)
+                    .unwrap_or(0),
+            )
+            .saturating_add(string_charge(&self.loader_id))
+            .saturating_add(self.snapshot.renderer_transport_charge_bytes())
+    }
+}
+
 impl DocumentNodeSnapshot {
     #[doc(hidden)]
     pub fn renderer_transport_charge_bytes(&self) -> usize {

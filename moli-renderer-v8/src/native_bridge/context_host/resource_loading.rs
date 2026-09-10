@@ -253,13 +253,7 @@ impl JsContextHost {
                 .clone()
                 .with_request_handle(self.next_subresource_network_request_handle());
         }
-        if let Some(source_document) = self.root_document_lifecycle_identity()
-            && let Some(journal) = self.output_journal.as_ref()
-            && let crate::runtime::RendererOutputResidenceIdentity::Page {
-                owner_local_host_id,
-                ..
-            } = journal.stream().residence()
-        {
+        if let Some((owner_local_host_id, source_document)) = self.renderer_network_source() {
             let observation = self.browser_context_runtime.report_network(
                 owner_local_host_id,
                 source_document,
@@ -274,6 +268,23 @@ impl JsContextHost {
         // the concrete output record above and no longer rediscovers this
         // item from the accumulated report.
         self.pending_network_output.push(item);
+    }
+
+    pub(crate) fn renderer_network_source(
+        &self,
+    ) -> Option<(
+        crate::runtime::RendererOwnerLocalHostId,
+        crate::runtime::RendererDocumentLifecycleIdentity,
+    )> {
+        let document = self.root_document_lifecycle_identity()?;
+        let crate::runtime::RendererOutputResidenceIdentity::Page {
+            owner_local_host_id,
+            ..
+        } = self.output_journal.as_ref()?.stream().residence()
+        else {
+            return None;
+        };
+        Some((owner_local_host_id, document))
     }
 
     pub(crate) fn record_get_subresource_network_result(

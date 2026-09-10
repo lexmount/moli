@@ -589,6 +589,7 @@ mod tests {
                         },
                     ),
                 ),
+                None,
             )
             .await;
         let renderer_cause = permit.map(|permit| renderer_cause_for_permit(conn, permit));

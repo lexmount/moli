@@ -1,6 +1,5 @@
 use crate::protocol_types::{
-    ChildFrameDocumentNetworkActivitySnapshot, ChildFrameDocumentOpenedSnapshot,
-    ChildFrameNavigationSnapshot, ChildFrameTreeEventSnapshot,
+    ChildFrameDocumentOpenedSnapshot, ChildFrameNavigationSnapshot, ChildFrameTreeEventSnapshot,
 };
 use crate::runtime::{
     DetachedParserScriptFetchContinuation, RendererDedicatedWorkerObservation,
@@ -40,13 +39,10 @@ pub enum RendererOwnerAction {
         source_document: RendererDocumentLifecycleIdentity,
         event: ChildFrameDocumentOpenedSnapshot,
     },
-    ChildFrameDocumentNetwork {
-        source_document: RendererDocumentLifecycleIdentity,
-        event: ChildFrameDocumentNetworkActivitySnapshot,
-    },
     ChildFrameLoad {
         source_document: RendererDocumentLifecycleIdentity,
         event: ChildFrameNavigationSnapshot,
+        network: Option<crate::runtime::RendererChildDocumentNetworkObservation>,
     },
     SameDocumentNavigation(RendererDocumentSourcedSameDocumentNavigation),
     TopLevelLocationNavigation(RendererDocumentSourcedTopLevelLocationNavigation),

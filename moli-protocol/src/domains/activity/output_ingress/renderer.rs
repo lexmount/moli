@@ -269,6 +269,9 @@ async fn project_renderer_output_records_for_owner(
                     conn,
                     &action_owner,
                     action,
+                    crate::conn::RendererPageResidenceIdentity::from_residence(
+                        cursor.stream().residence(),
+                    ),
                 )
                 .await;
                 order

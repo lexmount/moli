@@ -38,18 +38,40 @@ impl CdpConnection {
                 request.document.id(),
             ));
             for item in request.output_items() {
-                if let Some(mut delivery) = self.project_network_output_item_for_owner(
-                    &owner,
-                    None,
-                    request.renderer_document,
-                    &item,
-                ) {
-                    crate::domains::network::emit_prepared_renderer_network_live_background_events(
+                match item {
+                    moli_core::page::RendererNetworkOutputItem::ChildDocument(response) => {
+                        let Some(binding) = self
+                            .target_root_document_protocol_attachment_identity_for_owner(
+                                &owner,
+                                request.renderer_document,
+                            )
+                        else {
+                            continue;
+                        };
+                        let mut recovered = Vec::new();
+                        crate::domains::network::emit_child_document_navigation_network_background_events(
+                            self, &mut recovered, &owner, &response.frame_id, &response.loader_id,
+                            &response.loader_id, crate::conn::monotonic_timestamp_seconds(), &response.snapshot,
+                        );
+                        events.extend(recovered.into_iter().filter_map(|event| {
+                            event.bind_to_root_document_route(self, &owner, binding.root_document())
+                        }));
+                    }
+                    moli_core::page::RendererNetworkOutputItem::Resource(item) => {
+                        if let Some(mut delivery) = self.project_network_output_item_for_owner(
+                            &owner,
+                            None,
+                            request.renderer_document,
+                            &item,
+                        ) {
+                            crate::domains::network::emit_prepared_renderer_network_live_background_events(
                         self,
                         &mut events,
                         &owner,
                         &mut delivery,
                     );
+                        }
+                    }
                 }
             }
         }
@@ -111,7 +133,8 @@ mod tests {
                 for record in publication.into_records() {
                     if let moli_core::RendererOutputItem::Observation(moli_core::RendererProtocolObservation::Network(observation)) = record.into_parts().1 {
                         let committed = observation.committed().await.unwrap();
-                        if matches!(committed.occurrence().item.as_ref(), moli_core::page::ScriptNetworkOutputItem::SubresourceNetworkRecord(record) if record.url().as_str() == "data:text/plain,native-recovery") {
+                        if let moli_core::page::RendererNetworkOutputItem::Resource(item) = &committed.occurrence().item
+                            && matches!(item.as_ref(), moli_core::page::ScriptNetworkOutputItem::SubresourceNetworkRecord(record) if record.url().as_str() == "data:text/plain,native-recovery") {
                             return committed;
                         }
                     }

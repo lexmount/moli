@@ -16,13 +16,13 @@ use chromiumoxide_cdp::cdp::browser_protocol::page::{
     SetInterceptFileChooserDialogParams, SetLifecycleEventsEnabledParams as LifecycleParams,
 };
 use moli_core::page::{
-    ChildFrameDocumentNetworkActivitySnapshot, ChildFrameDocumentOpenedSnapshot,
-    ChildFrameNavigationSnapshot, ChildFrameTreeEventSnapshot, ChildFrameTreeSnapshot,
-    CompletedPageCommand, PendingPageCommand, RendererCaptureScreencastFrameReply,
-    RendererCaptureScreencastFrameRequest, RendererCaptureScreenshotReply,
-    RendererCaptureScreenshotRequest, RendererDocumentLifecycleIdentity,
-    RendererDocumentLifecycleMilestone, RendererDocumentLifecycleWaitOutcome,
-    RendererDocumentLifecycleWaiter, RendererDocumentSourcedSameDocumentNavigation,
+    ChildFrameDocumentOpenedSnapshot, ChildFrameNavigationSnapshot, ChildFrameTreeEventSnapshot,
+    ChildFrameTreeSnapshot, CompletedPageCommand, PendingPageCommand,
+    RendererCaptureScreencastFrameReply, RendererCaptureScreencastFrameRequest,
+    RendererCaptureScreenshotReply, RendererCaptureScreenshotRequest,
+    RendererDocumentLifecycleIdentity, RendererDocumentLifecycleMilestone,
+    RendererDocumentLifecycleWaitOutcome, RendererDocumentLifecycleWaiter,
+    RendererDocumentSourcedSameDocumentNavigation,
     RendererDocumentSourcedTopLevelLocationNavigation, RendererInspectorCommandRoute,
     RendererLayoutMetrics, RendererPendingTopLevelHistoryTraversal, RendererPendingWindowOpenEvent,
     RendererScreenshotClip, RendererScreenshotFormat, RendererScreenshotPurpose,
@@ -58,6 +58,8 @@ mod child_frame_activity;
 mod javascript_dialog;
 mod lifecycle;
 mod main_document_commit;
+#[cfg(test)]
+mod native_child_network_tests;
 mod navigation;
 mod navigation_commit;
 mod pdf;
@@ -773,15 +775,28 @@ impl PagePreparedOutputs {
         }
     }
 
-    pub(crate) fn from_renderer_child_frame_document_network(
+    pub(crate) fn from_browser_child_document_network(
         conn: &CdpConnection,
         owner: &CommandOwnerScope,
-        source_document: RendererDocumentLifecycleIdentity,
-        event: ChildFrameDocumentNetworkActivitySnapshot,
+        source_renderer_page: Option<crate::conn::RendererPageResidenceIdentity>,
+        committed: &moli_core::page::RendererCommittedNetworkObservation,
     ) -> Self {
-        let Some(binding) = conn
-            .target_root_document_protocol_attachment_identity_for_owner(owner, source_document)
+        if !conn.accepts_browser_network_observation_for_owner(
+            owner,
+            source_renderer_page,
+            committed,
+        ) {
+            return Self::default();
+        }
+        let occurrence = committed.occurrence();
+        let moli_core::page::RendererNetworkOutputItem::ChildDocument(event) = &occurrence.item
         else {
+            return Self::default();
+        };
+        let Some(binding) = conn.target_root_document_protocol_attachment_identity_for_owner(
+            owner,
+            occurrence.document,
+        ) else {
             return Self::default();
         };
         let Some((_, _, security_origin, secure_context_type)) =
@@ -793,7 +808,7 @@ impl PagePreparedOutputs {
             monotonic_timestamp_seconds(),
             Vec::new(),
             Vec::new(),
-            vec![event],
+            vec![(**event).clone()],
             Vec::new(),
             security_origin,
             secure_context_type,
@@ -811,6 +826,8 @@ impl PagePreparedOutputs {
         owner: &CommandOwnerScope,
         source_document: RendererDocumentLifecycleIdentity,
         mut event: ChildFrameNavigationSnapshot,
+        source_renderer_page: Option<crate::conn::RendererPageResidenceIdentity>,
+        network: Option<&moli_core::page::RendererCommittedNetworkObservation>,
     ) -> Self {
         let Some(binding) = conn
             .target_root_document_protocol_attachment_identity_for_owner(owner, source_document)
@@ -825,14 +842,37 @@ impl PagePreparedOutputs {
         if event.parent_frame_id.is_none() {
             event.parent_frame_id = Some(root_frame_id);
         }
-        let document = PagePreparedChildFrameDocumentActivity::from_parts(
-            monotonic_timestamp_seconds(),
+        let timestamp = monotonic_timestamp_seconds();
+        let network = network
+            .filter(|committed| {
+                conn.accepts_browser_network_observation_for_owner(
+                    owner,
+                    source_renderer_page,
+                    committed,
+                ) && committed.occurrence().document == source_document
+            })
+            .and_then(|committed| match &committed.occurrence().item {
+                moli_core::page::RendererNetworkOutputItem::ChildDocument(response)
+                    if response.frame_id == event.frame_id
+                        && event.loader_id.as_deref() == Some(response.loader_id.as_str()) =>
+                {
+                    Some(response.as_ref())
+                }
+                _ => None,
+            });
+        let mut document = PagePreparedChildFrameDocumentActivity::from_parts(
+            timestamp,
             Vec::new(),
             Vec::new(),
             Vec::new(),
-            vec![event],
+            Vec::new(),
             security_origin,
             secure_context_type,
+        );
+        document.loads.push(
+            child_frame_activity::PagePreparedChildFrameLoadActivity::from_snapshot(
+                event, timestamp, network,
+            ),
         );
         Self {
             child_frame_activities: vec![PagePreparedChildFrameActivity::from_document(
@@ -1032,7 +1072,6 @@ impl PagePreparedOutputs {
                 document_open_replacement: false,
                 security_origin_inherited: false,
                 security_origin_opaque: false,
-                document_network: None,
             }],
             "https://example.test".to_owned(),
             "Secure".to_owned(),
@@ -4000,7 +4039,6 @@ mod producer_tests {
                 document_open_replacement: false,
                 security_origin_inherited: true,
                 security_origin_opaque: true,
-                document_network: None,
             }],
             "https://top.example".to_owned(),
             "Secure".to_owned(),
@@ -4047,7 +4085,7 @@ mod producer_tests {
         let source_document = renderer_document_identity_for_test(1, 1);
         bind_renderer_document_for_test(&mut conn, "SID-1", "TID-1", source_document);
         let mut background_events = Vec::new();
-        let document = super::PagePreparedChildFrameDocumentActivity::from_parts(
+        let mut document = super::PagePreparedChildFrameDocumentActivity::from_parts(
             12.5,
             vec![super::PagePreparedChildFrameTreeEvent::Attached {
                 frame_id: "CHILD-FRAME-1".to_owned(),
@@ -4055,31 +4093,42 @@ mod producer_tests {
             }],
             Vec::new(),
             Vec::new(),
-            vec![ChildFrameNavigationSnapshot {
-                frame_id: "CHILD-FRAME-1".to_owned(),
-                parent_frame_id: Some("TID-1".to_owned()),
-                loader_id: Some("LID-CHILD-1".to_owned()),
-                name: Some("child-frame".to_owned()),
-                url: "https://example.test/child".to_owned(),
-                document_open_replacement: false,
-                security_origin_inherited: false,
-                security_origin_opaque: false,
-                document_network: Some(ChildFrameDocumentNetworkSnapshot {
-                    request_url: "https://example.test/child".to_owned(),
-                    request_method: "GET".to_owned(),
-                    request_headers: vec![("Accept".to_owned(), "text/html".to_owned())],
-                    final_url: "https://example.test/child".to_owned(),
-                    status: 200,
-                    response_headers: vec![("Content-Type".to_owned(), "text/html".to_owned())],
-                    encoded_data_length: 3,
-                    response_body: Some(SubresourceResponseBody::from_bytes(vec![
-                        0x00, 0xff, b'a',
-                    ])),
-                    from_cache: true,
-                }),
-            }],
+            Vec::new(),
             "https://example.test".to_owned(),
             "Secure".to_owned(),
+        );
+        document.loads.push(
+            super::child_frame_activity::PagePreparedChildFrameLoadActivity::from_snapshot(
+                ChildFrameNavigationSnapshot {
+                    frame_id: "CHILD-FRAME-1".to_owned(),
+                    parent_frame_id: Some("TID-1".to_owned()),
+                    loader_id: Some("LID-CHILD-1".to_owned()),
+                    name: Some("child-frame".to_owned()),
+                    url: "https://example.test/child".to_owned(),
+                    document_open_replacement: false,
+                    security_origin_inherited: false,
+                    security_origin_opaque: false,
+                },
+                12.5,
+                Some(&ChildFrameDocumentNetworkActivitySnapshot {
+                    frame_id: "CHILD-FRAME-1".into(),
+                    parent_frame_id: Some("TID-1".into()),
+                    loader_id: "LID-CHILD-1".into(),
+                    snapshot: ChildFrameDocumentNetworkSnapshot {
+                        request_url: "https://example.test/child".to_owned(),
+                        request_method: "GET".to_owned(),
+                        request_headers: vec![("Accept".to_owned(), "text/html".to_owned())],
+                        final_url: "https://example.test/child".to_owned(),
+                        status: 200,
+                        response_headers: vec![("Content-Type".to_owned(), "text/html".to_owned())],
+                        encoded_data_length: 3,
+                        response_body: Some(SubresourceResponseBody::from_bytes(vec![
+                            0x00, 0xff, b'a',
+                        ])),
+                        from_cache: true,
+                    },
+                }),
+            ),
         );
         let activity =
             prepared_child_frame_activity_for_test(&conn, "SID-1", source_document, document);

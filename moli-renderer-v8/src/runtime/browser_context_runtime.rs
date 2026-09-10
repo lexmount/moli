@@ -629,7 +629,7 @@ impl RendererBrowserContextRuntime {
         &self,
         owner_local_host_id: super::RendererOwnerLocalHostId,
         document: super::RendererDocumentLifecycleIdentity,
-        item: moli_page_types::ScriptNetworkOutputItem,
+        item: impl Into<super::RendererNetworkOutputItem>,
     ) -> super::RendererNetworkObservation {
         self.inner
             .network

@@ -11,7 +11,6 @@ use crate::{
         ChildFrameOwnerSnapshot, FrameDocumentTaskOwner, FrameId, FrameRealmId, FrameScriptJob,
         FrameScriptJobKind,
     },
-    protocol_types::ChildFrameDocumentNetworkSnapshot,
     service_worker_runtime::ServiceWorkerClientId,
     types::ServiceWorkerClientNavigateContinuation,
 };
@@ -69,7 +68,7 @@ pub(super) struct ChildBrowsingContextEntry {
 #[derive(Debug, Clone)]
 struct CompletedChildDocumentNetwork {
     owner: FrameDocumentTaskOwner,
-    snapshot: ChildFrameDocumentNetworkSnapshot,
+    observation: crate::runtime::RendererChildDocumentNetworkObservation,
 }
 
 pub(super) type ChildDocumentPolicyContainer = DocumentPolicyContainer;
@@ -528,10 +527,10 @@ impl ChildBrowsingContextEntry {
     pub(super) fn bind_completed_document_network(
         &mut self,
         owner: FrameDocumentTaskOwner,
-        network: Option<ChildFrameDocumentNetworkSnapshot>,
+        network: Option<crate::runtime::RendererChildDocumentNetworkObservation>,
     ) {
         self.completed_document_network =
-            network.map(|snapshot| CompletedChildDocumentNetwork { owner, snapshot });
+            network.map(|observation| CompletedChildDocumentNetwork { owner, observation });
     }
 
     pub(super) fn clear_completed_document_network(&mut self) {
@@ -541,11 +540,11 @@ impl ChildBrowsingContextEntry {
     pub(super) fn take_completed_document_network_for_owner(
         &mut self,
         owner: FrameDocumentTaskOwner,
-    ) -> Option<ChildFrameDocumentNetworkSnapshot> {
+    ) -> Option<crate::runtime::RendererChildDocumentNetworkObservation> {
         self.completed_document_network
             .take()
             .filter(|network| network.owner == owner)
-            .map(|network| network.snapshot)
+            .map(|network| network.observation)
     }
 
     fn completed_frame_owner_resource_timing_for_refresh(

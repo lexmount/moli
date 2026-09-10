@@ -1,10 +1,31 @@
 use std::sync::Arc;
 
-use moli_page_types::ScriptNetworkOutputItem;
+use moli_page_types::{ChildFrameDocumentNetworkActivitySnapshot, ScriptNetworkOutputItem};
 use parking_lot::Mutex;
 use tokio::sync::watch;
 
 use super::{RendererBrowserContextRuntimeId, RendererDocumentLifecycleIdentity};
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum RendererNetworkOutputItem {
+    Resource(Arc<ScriptNetworkOutputItem>),
+    ChildDocument(Arc<ChildFrameDocumentNetworkActivitySnapshot>),
+}
+
+impl From<ScriptNetworkOutputItem> for RendererNetworkOutputItem {
+    fn from(item: ScriptNetworkOutputItem) -> Self {
+        Self::Resource(Arc::new(item))
+    }
+}
+
+impl RendererNetworkOutputItem {
+    pub fn renderer_transport_charge_bytes(&self) -> usize {
+        match self {
+            Self::Resource(item) => item.renderer_transport_charge_bytes(),
+            Self::ChildDocument(item) => item.renderer_transport_charge_bytes(),
+        }
+    }
+}
 
 /// One physical producer occurrence, shared by native input and source FIFO.
 /// A complete-only diagnostic remains complete-only; it does not invent a start.
@@ -13,7 +34,7 @@ pub struct RendererNetworkOccurrence {
     pub runtime: RendererBrowserContextRuntimeId,
     pub owner_local_host_id: super::RendererOwnerLocalHostId,
     pub document: RendererDocumentLifecycleIdentity,
-    pub item: Arc<ScriptNetworkOutputItem>,
+    pub item: RendererNetworkOutputItem,
 }
 
 #[cfg(test)]
@@ -58,7 +79,7 @@ mod tests {
         for observation in [accepted, clone] {
             let committed = observation.committed().await.unwrap();
             assert_eq!(committed.browser_sequence(), 47);
-            assert_eq!(committed.occurrence().item.as_ref(), &item);
+            assert_eq!(committed.occurrence().item, item.clone().into());
         }
         assert!(
             matches!(inputs.lock().pop_front(), Some(RendererNetworkInput::SourceClosed { runtime: actual, owner_local_host_id, page }) if actual == runtime && owner_local_host_id == owner && page == document.document.page_id)
@@ -111,8 +132,60 @@ impl RendererNetworkObservation {
         }
     }
 
-    pub(crate) fn item(&self) -> &ScriptNetworkOutputItem {
+    pub(crate) fn item(&self) -> &RendererNetworkOutputItem {
         &self.occurrence.item
+    }
+}
+
+/// The response and its native receipt travel together through child parsing
+/// and load delivery. The renderer never stores a second raw protocol response.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct RendererChildDocumentNetworkObservation(RendererNetworkObservation);
+
+impl RendererChildDocumentNetworkObservation {
+    pub(crate) fn new(
+        runtime: &super::RendererBrowserContextRuntime,
+        source: (
+            super::RendererOwnerLocalHostId,
+            RendererDocumentLifecycleIdentity,
+        ),
+        response: ChildFrameDocumentNetworkActivitySnapshot,
+    ) -> Self {
+        Self(runtime.report_network(
+            source.0,
+            source.1,
+            RendererNetworkOutputItem::ChildDocument(Arc::new(response)),
+        ))
+    }
+
+    pub(crate) fn response(&self) -> &ChildFrameDocumentNetworkActivitySnapshot {
+        let RendererNetworkOutputItem::ChildDocument(response) = self.0.item() else {
+            unreachable!("child response constructor fixes its payload kind");
+        };
+        response
+    }
+
+    pub(crate) fn into_observation(self) -> RendererNetworkObservation {
+        self.0
+    }
+
+    pub async fn committed(self) -> Option<RendererCommittedNetworkObservation> {
+        self.0.committed().await
+    }
+
+    #[cfg(test)]
+    pub(crate) fn unobserved_for_test(response: ChildFrameDocumentNetworkActivitySnapshot) -> Self {
+        let reporter =
+            RendererNetworkReporter::new(RendererBrowserContextRuntimeId::new_for_testing(1));
+        let document = super::RendererDocumentLifecycleJournalHandle::new_initial(
+            super::PageId::new_for_testing(1),
+        )
+        .identity();
+        Self(reporter.report(
+            super::RendererOwnerLocalHostId::new_for_testing(1),
+            document,
+            RendererNetworkOutputItem::ChildDocument(Arc::new(response)),
+        ))
     }
 }
 
@@ -177,13 +250,13 @@ impl RendererNetworkReporter {
         &self,
         owner_local_host_id: super::RendererOwnerLocalHostId,
         document: RendererDocumentLifecycleIdentity,
-        item: ScriptNetworkOutputItem,
+        item: impl Into<RendererNetworkOutputItem>,
     ) -> RendererNetworkObservation {
         let occurrence = Arc::new(RendererNetworkOccurrence {
             runtime: self.runtime,
             owner_local_host_id,
             document,
-            item: Arc::new(item),
+            item: item.into(),
         });
         let (committed, observation) = watch::channel(None);
         let input = RendererNetworkInput::Observation(RendererNetworkCommit {

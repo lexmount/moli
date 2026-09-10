@@ -1390,70 +1390,31 @@ pub(super) struct LoadedChildDocument {
     pub(super) content_type: Option<String>,
     pub(super) character_set: String,
     pub(super) markup: String,
-    pub(super) document_network: Option<crate::protocol_types::ChildFrameDocumentNetworkSnapshot>,
+    pub(super) document_network: Option<crate::runtime::RendererChildDocumentNetworkObservation>,
 }
 
 #[derive(Debug)]
 pub(super) enum ChildDocumentLoadOutcome {
     Loaded(Box<LoadedChildDocument>),
-    IgnoredNavigation,
-}
-
-/// Immutable frame/protocol attribution captured before a child-document
-/// navigation fetch starts.
-///
-/// This record is intentionally separate from the executable navigation
-/// target. It remains valid when the initiating Document is replaced, but none
-/// of its fields may authorize a commit into the then-current PageVm.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub(super) struct ChildDocumentLoadNetworkAttribution {
-    frame_id: String,
-    parent_frame_id: Option<String>,
-    loader_id: String,
-}
-
-impl ChildDocumentLoadNetworkAttribution {
-    pub(super) fn new(
-        frame_id: String,
-        parent_frame_id: Option<String>,
-        loader_id: String,
-    ) -> Self {
-        Self {
-            frame_id,
-            parent_frame_id,
-            loader_id,
-        }
-    }
-
-    pub(super) fn frame_id(&self) -> &str {
-        &self.frame_id
-    }
-
-    pub(super) fn parent_frame_id(&self) -> Option<&str> {
-        self.parent_frame_id.as_deref()
-    }
-
-    pub(super) fn loader_id(&self) -> &str {
-        &self.loader_id
-    }
+    IgnoredNavigation(crate::runtime::RendererChildDocumentNetworkObservation),
 }
 
 #[derive(Debug)]
 pub(super) struct ChildDocumentLoadCompletion {
     target: crate::frame_owner_model::ChildDocumentNavigationFetchTarget,
-    network_attribution: ChildDocumentLoadNetworkAttribution,
+    loader_id: String,
     result: std::result::Result<ChildDocumentLoadOutcome, String>,
 }
 
 impl ChildDocumentLoadCompletion {
     pub(super) fn new(
         target: crate::frame_owner_model::ChildDocumentNavigationFetchTarget,
-        network_attribution: ChildDocumentLoadNetworkAttribution,
+        loader_id: String,
         result: std::result::Result<ChildDocumentLoadOutcome, String>,
     ) -> Self {
         Self {
             target,
-            network_attribution,
+            loader_id,
             result,
         }
     }
@@ -1467,16 +1428,13 @@ impl ChildDocumentLoadCompletion {
         self.target.load_id()
     }
 
-    pub(super) fn network_attribution(&self) -> &ChildDocumentLoadNetworkAttribution {
-        &self.network_attribution
-    }
-
     pub(super) fn document_network(
         &self,
-    ) -> Option<&crate::protocol_types::ChildFrameDocumentNetworkSnapshot> {
+    ) -> Option<&crate::runtime::RendererChildDocumentNetworkObservation> {
         match &self.result {
             Ok(ChildDocumentLoadOutcome::Loaded(loaded)) => loaded.document_network.as_ref(),
-            Ok(ChildDocumentLoadOutcome::IgnoredNavigation) | Err(_) => None,
+            Ok(ChildDocumentLoadOutcome::IgnoredNavigation(network)) => Some(network),
+            Err(_) => None,
         }
     }
 
@@ -1484,10 +1442,10 @@ impl ChildDocumentLoadCompletion {
         self,
     ) -> (
         crate::frame_owner_model::ChildDocumentNavigationFetchTarget,
-        ChildDocumentLoadNetworkAttribution,
+        String,
         std::result::Result<ChildDocumentLoadOutcome, String>,
     ) {
-        (self.target, self.network_attribution, self.result)
+        (self.target, self.loader_id, self.result)
     }
 
     #[cfg(test)]
@@ -1511,15 +1469,7 @@ impl ChildDocumentLoadCompletion {
             load_id,
             FrameRequestId(load_id),
         );
-        Self::new(
-            target,
-            ChildDocumentLoadNetworkAttribution::new(
-                format!("TEST-CHILD-FRAME-{load_id}"),
-                None,
-                format!("TEST-CHILD-LOADER-{load_id}"),
-            ),
-            result,
-        )
+        Self::new(target, format!("TEST-CHILD-LOADER-{load_id}"), result)
     }
 }
 

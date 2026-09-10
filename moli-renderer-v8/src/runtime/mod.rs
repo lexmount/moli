@@ -45,8 +45,9 @@ mod browser_context_runtime;
 mod network_observation;
 pub(crate) use network_observation::RendererNetworkReporter;
 pub use network_observation::{
-    RendererCommittedNetworkObservation, RendererNetworkInput, RendererNetworkObservation,
-    RendererNetworkOccurrence,
+    RendererChildDocumentNetworkObservation, RendererCommittedNetworkObservation,
+    RendererNetworkInput, RendererNetworkObservation, RendererNetworkOccurrence,
+    RendererNetworkOutputItem,
 };
 mod worker_inspection;
 pub use worker_inspection::{RendererWorkerInspectionEndpoint, RendererWorkerInspectionTarget};

@@ -171,13 +171,30 @@ mod tests {
                 for (replace_document, recover) in
                     [(false, false), (false, true), (true, false), (true, true)]
                 {
-                    assert_native_network_recovery_fifo(replace_document, recover).await;
+                    assert_native_network_recovery_fifo(replace_document, recover, false).await;
                 }
             })
             .await;
     }
 
-    async fn assert_native_network_recovery_fifo(replace_document: bool, recover: bool) {
+    #[tokio::test]
+    async fn native_child_network_lag_recovery_preserves_navigation_and_command_fifo() {
+        tokio::task::LocalSet::new()
+            .run_until(async {
+                for (replace_document, recover) in
+                    [(false, false), (false, true), (true, false), (true, true)]
+                {
+                    assert_native_network_recovery_fifo(replace_document, recover, true).await;
+                }
+            })
+            .await;
+    }
+
+    async fn assert_native_network_recovery_fifo(
+        replace_document: bool,
+        recover: bool,
+        child_document: bool,
+    ) {
         use moli_core::browser::{
             BrowserContextStoragePartitionHandles, BrowserNavigationOutcome,
             NavigationRequestLoadPolicy, StoragePartitionKind,
@@ -218,7 +235,11 @@ mod tests {
         };
         assert!(initial.error_text.is_none(), "{initial:?}");
         scheduler.drain_browser_events().await;
-        for (id, method) in [(1, "Runtime.enable"), (2, "Network.enable")] {
+        for (id, method) in [
+            (1, "Runtime.enable"),
+            (2, "Network.enable"),
+            (3, "Page.enable"),
+        ] {
             let setup = scheduler
                 .execute_internal_protocol_message(
                     &mut receivers,
@@ -236,7 +257,33 @@ mod tests {
         }
         let contents = scheduler.conn.projected_web_contents()[0];
         let (_, mut native) = browser.subscribe().unwrap();
-        let expression = "console.log('before-network-recovery'); fetch('data:text/plain,native-recovery-fifo').then(r => r.text()); 'started'";
+        let (resource_url, child_server) = if child_document {
+            use tokio::io::{AsyncReadExt, AsyncWriteExt};
+            let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let url = format!("http://{}/native-child", listener.local_addr().unwrap());
+            let server = tokio::spawn(async move {
+                let (mut stream, _) = listener.accept().await.unwrap();
+                let mut request = Vec::new();
+                let mut byte = [0];
+                while !request.ends_with(b"\r\n\r\n") {
+                    stream.read_exact(&mut byte).await.unwrap();
+                    request.push(byte[0]);
+                }
+                let body = "<!doctype html><p>native child FIFO body</p>";
+                stream.write_all(format!("HTTP/1.1 200 OK\r\nContent-Type: text/html\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}", body.len()).as_bytes()).await.unwrap();
+            });
+            (url, Some(server))
+        } else {
+            ("data:text/plain,native-recovery-fifo".to_owned(), None)
+        };
+        let operation = if child_document {
+            format!(
+                "const frame = document.createElement('iframe'); frame.src = {resource_url:?}; document.body.appendChild(frame)"
+            )
+        } else {
+            format!("fetch({resource_url:?}).then(r => r.text())")
+        };
+        let expression = format!("console.log('before-network-recovery'); {operation}; 'started'");
         // Execute real JavaScript but retain its real renderer publications.
         // The Browser can finish the fetch before this observer drains them.
         let mut messages = Vec::new();
@@ -246,7 +293,9 @@ mod tests {
                 .navigate_document(
                     contents,
                     NavigationRequestInterception::new(
-                        format!("data:text/html,<script>{expression}</script>")
+                        // This fixture appends a child to document.body. The
+                        // parser must create that body before the inline script.
+                        format!("data:text/html,<body><script>{expression}</script>")
                             .parse()
                             .unwrap(),
                         "GET".into(),
@@ -299,7 +348,7 @@ mod tests {
             }
         })
         .await
-        .expect("the native resource completes without draining its source FIFO");
+        .unwrap_or_else(|error| panic!("the native resource completes without draining its source FIFO: replace_document={replace_document}, recover={recover}, child_document={child_document}: {error}"));
         if let Some(navigation) = navigation {
             assert!(matches!(
                 navigation.wait().await.unwrap(),
@@ -327,8 +376,7 @@ mod tests {
             assert!(
                 recovered
                     .iter()
-                    .all(|message| message["params"]["request"]["url"]
-                        != "data:text/plain,native-recovery-fifo"),
+                    .all(|message| message["params"]["request"]["url"] != resource_url),
                 "snapshot recovery must not publish Network ahead of the retained Console/source FIFO: {recovered:?}",
             );
             if !replace_document {
@@ -354,8 +402,7 @@ mod tests {
             loop {
                 if let Some(request) = messages.iter().find(|message| {
                     message["method"] == "Network.requestWillBeSent"
-                        && message["params"]["request"]["url"]
-                            == "data:text/plain,native-recovery-fifo"
+                        && message["params"]["request"]["url"] == resource_url
                 }) && messages.iter().any(|message| {
                     message["method"] == "Network.loadingFinished"
                         && message["params"]["requestId"] == request["params"]["requestId"]
@@ -403,7 +450,7 @@ mod tests {
             .iter()
             .position(|message| {
                 message["method"] == "Network.requestWillBeSent"
-                    && message["params"]["request"]["url"] == "data:text/plain,native-recovery-fifo"
+                    && message["params"]["request"]["url"] == resource_url
             })
             .expect("original request occurrence");
         assert!(
@@ -420,6 +467,44 @@ mod tests {
             1,
             "{messages:?}"
         );
+        if child_document {
+            let frame = &messages[request]["params"]["frameId"];
+            assert_eq!(messages[request]["params"]["type"], "Document");
+            let start = messages
+                .iter()
+                .position(|message| {
+                    message["method"] == "Page.frameStartedNavigating"
+                        && &message["params"]["frameId"] == frame
+                })
+                .unwrap();
+            let finish = messages
+                .iter()
+                .position(|message| {
+                    message["method"] == "Network.loadingFinished"
+                        && &message["params"]["requestId"] == request_id
+                })
+                .unwrap();
+            let commit = messages
+                .iter()
+                .position(|message| {
+                    message["method"] == "Page.frameNavigated"
+                        && &message["params"]["frame"]["id"] == frame
+                })
+                .unwrap();
+            assert!(
+                start < request && request < finish && finish < commit,
+                "{messages:?}"
+            );
+            let body = scheduler.execute_internal_protocol_message(&mut receivers, json!({"id":12,"method":"Network.getResponseBody","params":{"requestId":request_id}})).await
+                .unwrap_or_else(|failure| panic!("{:?}", failure.into_parts().1)).into_messages();
+            assert!(
+                body.iter().any(|message| message["id"] == 12
+                    && message["result"]["body"]
+                        .as_str()
+                        .is_some_and(|body| body.contains("native child FIFO body"))),
+                "{body:?}"
+            );
+        }
         if !replace_document {
             let response = messages
                 .iter()
@@ -440,6 +525,9 @@ mod tests {
                     .count(),
                 1
             );
+        }
+        if let Some(server) = child_server {
+            server.await.unwrap();
         }
         service.shutdown();
     }
