@@ -70,13 +70,8 @@ pub(super) fn prepare_xhr_send_request<'s>(
     let network_partition_key = active_subresource_network_partition_key(host, owner);
     let resolved_url =
         resolve_context_url(&document_url, &url_str, None).map_err(XhrSendPrepareError::Url)?;
-    let (request_headers, cors_preflight_request_headers) = xhr_request_headers(
-        scope,
-        host,
-        xhr,
-        prepared_body.default_content_type,
-        prepared_body.suppress_default_content_type,
-    );
+    let (request_headers, cors_preflight_request_headers) =
+        xhr_request_headers(scope, host, xhr, prepared_body.default_content_type);
     let credentials_mode =
         if xhr_state_bool_property(scope, xhr, XHR_WITH_CREDENTIALS_SLOT).unwrap_or(false) {
             moli_fetch::RequestCredentialsMode::Include
@@ -104,7 +99,6 @@ pub(super) fn prepare_xhr_send_request<'s>(
 pub(crate) struct PreparedXhrSendBody {
     pub(crate) body: Option<Vec<u8>>,
     pub(crate) default_content_type: Option<String>,
-    pub(crate) suppress_default_content_type: bool,
 }
 
 impl PreparedXhrSendBody {
@@ -112,16 +106,13 @@ impl PreparedXhrSendBody {
         Self {
             body: None,
             default_content_type: None,
-            suppress_default_content_type: false,
         }
     }
 
     fn new(body: Vec<u8>, default_content_type: Option<String>) -> Self {
-        let suppress_default_content_type = default_content_type.is_none();
         Self {
             body: Some(body),
             default_content_type,
-            suppress_default_content_type,
         }
     }
 }
@@ -189,14 +180,8 @@ fn xhr_request_headers(
     host: &JsContextHost,
     xhr: v8::Local<'_, v8::Object>,
     default_content_type: Option<String>,
-    suppress_default_content_type: bool,
 ) -> (Vec<(String, String)>, Vec<(String, String)>) {
-    let author_headers = xhr_author_request_headers(
-        scope,
-        xhr,
-        default_content_type,
-        suppress_default_content_type,
-    );
+    let author_headers = xhr_author_request_headers(scope, xhr, default_content_type);
     let merged = merge_subresource_request_headers(host.extra_http_headers(), &author_headers);
     (merged, author_headers)
 }
@@ -205,7 +190,6 @@ pub(crate) fn xhr_author_request_headers(
     scope: &mut v8::PinScope<'_, '_>,
     xhr: v8::Local<'_, v8::Object>,
     default_content_type: Option<String>,
-    suppress_default_content_type: bool,
 ) -> Vec<(String, String)> {
     let headers_json = xhr_state_string_property(scope, xhr, XHR_REQUEST_HEADERS_SLOT)
         .unwrap_or_else(|| "[]".to_owned());
@@ -218,10 +202,6 @@ pub(crate) fn xhr_author_request_headers(
         && !has_header(&author_headers, CONTENT_TYPE_HEADER)
     {
         author_headers.push((CONTENT_TYPE_HEADER.to_owned(), default_content_type));
-    } else if suppress_default_content_type && !has_header(&author_headers, CONTENT_TYPE_HEADER) {
-        // An empty header value is intentional: the fetch transport serializes this
-        // as `Content-Type:` so the HTTP stack does not synthesize its own upload default.
-        author_headers.push((CONTENT_TYPE_HEADER.to_owned(), String::new()));
     }
     author_headers
 }

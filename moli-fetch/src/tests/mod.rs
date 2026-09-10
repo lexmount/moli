@@ -1510,6 +1510,88 @@ async fn fetch_raw_stream_finishes_null_body_status_without_connection_close() -
 }
 
 #[tokio::test]
+async fn request_headers_distinguish_empty_values_from_absent_upload_content_type() -> Result<()> {
+    let mut cases = Vec::new();
+    for buffered in [false, true] {
+        for method in [
+            "GET", "HEAD", "POST", "PUT", "PATCH", "DELETE", "OPTIONS", "YO",
+        ] {
+            for body in [None, Some(Vec::new()), Some(b"payload".to_vec())] {
+                if matches!(method, "GET" | "HEAD") && body.is_some() {
+                    continue;
+                }
+                for content_type in [None, Some(""), Some("application/example")] {
+                    cases.push((buffered, method, body.clone(), content_type));
+                }
+            }
+        }
+    }
+    // Digest can probe with an empty upload before sending the body, even when
+    // the fixture accepts the first request. Inspect both requests on the wire.
+    let server = ScriptedHttps11Server::spawn(vec![ScriptedResponse::ok(""); cases.len() * 2]);
+    let mut config = FetchConfig::default();
+    config.set_tls_verify_host(false);
+    config.set_default_request_headers(vec![("X-Default-Empty".to_owned(), String::new())]);
+    let client = FetchClient::new(&config, new_shared_browser_cookie_store());
+
+    for (index, (buffered, method, body, content_type)) in cases.iter().enumerate() {
+        let mut headers = vec![("X-Empty".to_owned(), String::new())];
+        if let Some(content_type) = content_type {
+            headers.push(("Content-Type".to_owned(), (*content_type).to_owned()));
+        }
+        let mut request = Request::new_bytes(
+            method,
+            &server.url_path(&format!("/empty-headers/{index}")),
+            body.clone(),
+            headers,
+        )?;
+        if *buffered {
+            request = request.with_auth(RequestAuth {
+                target: RequestAuthTarget::Server,
+                scheme: RequestAuthScheme::Digest,
+                username: "user".to_owned(),
+                password: "pass".to_owned(),
+            });
+        }
+        assert_eq!(request.auth_requires_buffered_transport(), *buffered);
+        assert_eq!(client.fetch_raw(request).await?.status, 200);
+    }
+
+    let requests = server.request_heads();
+    server.shutdown();
+    let mut seen = BTreeSet::new();
+    for request in &requests {
+        let index = request_path(request)
+            .strip_prefix("/empty-headers/")
+            .expect("fixture request path")
+            .parse::<usize>()?;
+        seen.insert(index);
+        let case = &cases[index];
+        let (_, method, _, content_type) = case;
+        assert!(request.starts_with(&format!("{method} /empty-headers/{index} HTTP/1.1\r\n")));
+        let values = |name: &str| {
+            request
+                .split("\r\n")
+                .skip(1)
+                .take_while(|line| !line.is_empty())
+                .filter_map(|line| line.split_once(':'))
+                .filter(|(key, _)| key.eq_ignore_ascii_case(name))
+                .map(|(_, value)| value.trim())
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(values("x-empty"), [""], "{case:?}: {request}");
+        assert_eq!(values("x-default-empty"), [""], "{case:?}: {request}");
+        assert_eq!(
+            values("content-type"),
+            content_type.iter().copied().collect::<Vec<_>>(),
+            "{case:?}: {request}"
+        );
+    }
+    assert_eq!(seen, (0..cases.len()).collect());
+    Ok(())
+}
+
+#[tokio::test]
 async fn fetch_redirect_303_rewrites_post_to_get_and_drops_body_headers() -> Result<()> {
     let server = ScriptedHttpServer::spawn(vec![
         ScriptedResponse::status(303, "See Other").with_header("Location", "/final"),

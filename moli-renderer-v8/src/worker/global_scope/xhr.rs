@@ -1168,12 +1168,8 @@ pub(in crate::worker) fn prepare_worker_xhr_send_request<'s>(
     })?;
     let resolved_url = resolve_context_url(&document_url, &url_str, None)
         .map_err(WorkerXhrSendPrepareError::Request)?;
-    let request_headers = xhr_author_request_headers(
-        scope,
-        xhr,
-        prepared_body.default_content_type,
-        prepared_body.suppress_default_content_type,
-    );
+    let request_headers =
+        xhr_author_request_headers(scope, xhr, prepared_body.default_content_type);
     let credentials_mode =
         if xhr_state_bool_property(scope, xhr, XHR_WITH_CREDENTIALS_SLOT).unwrap_or(false) {
             RequestCredentialsMode::Include

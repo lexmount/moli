@@ -150,14 +150,13 @@ pub(in crate::worker) fn spawn_worker_fetch_network(
     resolved_url: Url,
     method: String,
     body: Option<Vec<u8>>,
-    mut headers: Vec<(String, String)>,
+    headers: Vec<(String, String)>,
     request_mode: RequestMode,
     credentials_mode: RequestCredentialsMode,
     redirect_mode: RequestRedirectMode,
     priority: Option<moli_fetch::FetchPriorityHint>,
     request_metadata: ServiceWorkerFetchRequestMetadata,
     auth: Option<crate::protocol_types::SubresourceAuthCredentials>,
-    suppress_default_content_type: bool,
     allow_headers_first: bool,
 ) {
     tokio::task::spawn_local(async move {
@@ -172,11 +171,6 @@ pub(in crate::worker) fn spawn_worker_fetch_network(
             )
         } else {
             let cors_preflight_request_headers = headers.clone();
-            if suppress_default_content_type {
-                // An empty header value is intentional: the fetch transport serializes this
-                // as `Content-Type:` so the HTTP stack does not synthesize its own upload default.
-                headers.push(("Content-Type".to_owned(), String::new()));
-            }
             match Request::new_bytes(&method, resolved_url.as_str(), body, headers) {
                 Ok(request) => {
                     let mut request = request
@@ -384,7 +378,6 @@ fn spawn_worker_fetch_service_worker(
     redirect_mode: RequestRedirectMode,
     priority: Option<moli_fetch::FetchPriorityHint>,
     request_metadata: ServiceWorkerFetchRequestMetadata,
-    suppress_default_content_type: bool,
 ) {
     let (direct_completion_tx, direct_completion_rx) = tokio::sync::oneshot::channel();
     let request_body_text = request_body_text(&body);
@@ -453,7 +446,6 @@ fn spawn_worker_fetch_service_worker(
                 priority,
                 request_metadata,
                 None,
-                suppress_default_content_type,
                 true,
             ),
             Ok(ServiceWorkerDirectFetchResult::Response(response)) => {
@@ -680,7 +672,6 @@ pub(in crate::worker) fn continue_pending_worker_fetch(
         priority,
         request_metadata,
         auth,
-        false,
         allow_headers_first,
     );
 }
@@ -1739,7 +1730,6 @@ pub(in crate::worker) struct ResolvedWorkerFetchInput<'s> {
     body: Option<Vec<u8>>,
     body_stream: Option<v8::Global<v8::Object>>,
     headers: Vec<(String, String)>,
-    suppress_default_content_type: bool,
     request_mode: moli_fetch::RequestMode,
     credentials_mode: RequestCredentialsMode,
     redirect_mode: RequestRedirectMode,
@@ -1770,7 +1760,6 @@ pub(in crate::worker) fn resolve_worker_fetch_input<'s>(
         method,
         body,
         headers,
-        suppress_default_content_type,
         request_mode,
         credentials_mode,
         redirect_mode,
@@ -1807,17 +1796,9 @@ pub(in crate::worker) fn resolve_worker_fetch_input<'s>(
         } else {
             inherited.headers.clone()
         };
-        let suppress_default_content_type = if init.body_present {
-            if !init.headers_present {
-                append_default_body_content_type(&mut headers, init.body_content_type.as_deref());
-            }
-            init.suppress_default_content_type
-                || (body.is_some()
-                    && init.body_content_type.is_none()
-                    && !has_header(&headers, "content-type"))
-        } else {
-            body.is_some() && !has_header(&headers, "content-type")
-        };
+        if init.body_present && !init.headers_present {
+            append_default_body_content_type(&mut headers, init.body_content_type.as_deref());
+        }
         let inherited_credentials = request_object_credentials_mode(scope, req_obj)?;
         let request_mode = init
             .validation
@@ -1855,7 +1836,6 @@ pub(in crate::worker) fn resolve_worker_fetch_input<'s>(
             method,
             body,
             headers,
-            suppress_default_content_type,
             request_mode,
             credentials_mode,
             redirect_mode,
@@ -1901,7 +1881,6 @@ pub(in crate::worker) fn resolve_worker_fetch_input<'s>(
             init.method,
             init.body,
             headers,
-            init.suppress_default_content_type,
             request_mode,
             credentials_mode,
             redirect_mode,
@@ -1933,7 +1912,6 @@ pub(in crate::worker) fn resolve_worker_fetch_input<'s>(
         body,
         body_stream,
         headers,
-        suppress_default_content_type,
         request_mode,
         credentials_mode,
         redirect_mode,
@@ -1998,7 +1976,6 @@ pub(in crate::worker) fn worker_fetch_callback<'s>(
         body,
         body_stream,
         headers: request_headers,
-        suppress_default_content_type,
         request_mode,
         credentials_mode,
         redirect_mode,
@@ -2294,7 +2271,6 @@ pub(in crate::worker) fn worker_fetch_callback<'s>(
                 redirect_mode,
                 priority,
                 request_metadata,
-                suppress_default_content_type,
             );
         } else {
             spawn_worker_fetch_network(
@@ -2315,7 +2291,6 @@ pub(in crate::worker) fn worker_fetch_callback<'s>(
                 priority,
                 request_metadata,
                 None,
-                suppress_default_content_type,
                 true,
             );
         }

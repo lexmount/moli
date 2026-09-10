@@ -41,7 +41,7 @@ pub(super) fn prepare_window_fetch_request<'s>(
     fetch_context: crate::native_bridge::WindowFetchContext,
     host: &JsContextHost,
 ) -> Result<PreparedWindowFetchRequest, String> {
-    let mut request_headers = parsed.headers;
+    let request_headers = parsed.headers;
     // Receiver capture and WebIDL conversion are complete before this pure
     // preparation stage. Never inspect `args.this()` here: doing so could bind
     // the operation to a replacement LocalWindow after an author getter
@@ -68,9 +68,6 @@ pub(super) fn prepare_window_fetch_request<'s>(
     let policy_context = effective_subresource_policy_context(scope, host, request_scope);
     let network_partition_key = active_subresource_network_partition_key(host, request_scope);
     let cors_preflight_request_headers = request_headers.clone();
-    if parsed.suppress_default_content_type {
-        request_headers.push(("Content-Type".to_owned(), String::new()));
-    }
     let request_headers =
         merge_subresource_request_headers(host.extra_http_headers(), &request_headers);
     let resolved_url = resolve_context_url(&document_url, &parsed.url, None)?;

@@ -83,7 +83,7 @@ use crate::network_host::{
     extract_subresource_auth_challenge,
     fetch_browser_subresource_raw_stream_with_preflight_headers_and_network_metadata,
     fetch_browser_subresource_with_preflight_headers_and_network_metadata,
-    filter_cors_exposed_response_headers_for_origin, filter_headers_for_guard, has_header,
+    filter_cors_exposed_response_headers_for_origin, filter_headers_for_guard,
     is_cors_policy_failure_message, local_url_response, parse_fetch_init,
     prepare_xhr_send_body_from_args, request_input_snapshot, request_object_credentials_mode,
     reset_xhr_response_for_request_error, resolve_context_url, set_xhr_state_bool,

@@ -687,6 +687,7 @@ pub(crate) fn configure_easy<H: Handler>(
     easy.url(request_url.as_str())
         .with_context(|| anyhow!("failed to set curl request url to {}", request_url))?;
 
+    let mut uses_post_fields = false;
     match request.method.as_str() {
         "GET" => easy.get(true).context("failed to configure GET request")?,
         "HEAD" => easy
@@ -698,6 +699,7 @@ pub(crate) fn configure_easy<H: Handler>(
             let body_bytes = request.body.as_deref().unwrap_or(&[]);
             easy.post_fields_copy(body_bytes)
                 .context("failed to set POST body")?;
+            uses_post_fields = true;
         }
         method => {
             easy.custom_request(method)
@@ -705,6 +707,7 @@ pub(crate) fn configure_easy<H: Handler>(
             if let Some(ref body) = request.body {
                 easy.post_fields_copy(body)
                     .context("failed to set custom request body")?;
+                uses_post_fields = true;
             }
         }
     }
@@ -744,10 +747,14 @@ pub(crate) fn configure_easy<H: Handler>(
     let mut has_headers = false;
 
     let mut has_content_type_header = false;
-    for (name, value) in &outgoing_headers {
+    for (name, value) in outgoing_headers
+        .iter()
+        .chain(validation_headers.iter().flatten())
+    {
         has_content_type_header |= name.eq_ignore_ascii_case("content-type");
         let header_line = if value.is_empty() {
-            format!("{name}:")
+            // libcurl's semicolon form sends an empty value; `Name:` suppresses it.
+            format!("{name};")
         } else {
             format!("{name}: {value}")
         };
@@ -756,22 +763,13 @@ pub(crate) fn configure_easy<H: Handler>(
             .context("failed to build request header")?;
         has_headers = true;
     }
-    if let Some(validation_headers) = validation_headers {
-        for (name, value) in validation_headers {
-            has_content_type_header |= name.eq_ignore_ascii_case("content-type");
-            headers
-                .append(&format!("{name}: {value}"))
-                .context("failed to build cache validation request header")?;
-            has_headers = true;
-        }
-    }
-    if request.method.eq_ignore_ascii_case("POST") && !has_content_type_header {
+    if uses_post_fields && !has_content_type_header {
         // libcurl otherwise synthesizes `Content-Type: application/x-www-form-urlencoded`
-        // for POST bodies. Browser fetch/sendBeacon only send Content-Type when
-        // BodyInit or caller headers produce one, so suppress curl's transport default.
+        // when using post_fields_copy, including uploads with custom methods.
+        // Keep this transport-only suppression separate from explicit empty headers.
         headers
             .append("Content-Type:")
-            .context("failed to suppress curl default POST content-type")?;
+            .context("failed to suppress curl default upload content-type")?;
         has_headers = true;
     }
 
