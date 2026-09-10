@@ -186,6 +186,25 @@ fn date_locale_methods_forward_explicit_locales_and_options_without_emulation_ov
       return error;
     }
   };
+  const numericDate = { year: "numeric", month: "numeric", day: "numeric" };
+  const numericTime = { hour: "numeric", minute: "numeric", second: "numeric" };
+  const expected = {
+    caDefault: new Intl.DateTimeFormat("en-CA", {
+      ...numericDate, ...numericTime, timeZone: "UTC"
+    }).format(date),
+    caShort: new Intl.DateTimeFormat("en-CA", {
+      dateStyle: "short", timeZone: "UTC"
+    }).format(date),
+    svDate: new Intl.DateTimeFormat("sv-SE", {
+      ...numericDate, timeZone: "UTC"
+    }).format(date),
+    usTime: new Intl.DateTimeFormat("en-US", {
+      ...numericTime, hour12: false, timeZone: "UTC"
+    }).format(date),
+    localeError: true,
+    optionsError: true
+  };
+  expected.afterDateTamper = expected.caShort;
 
   const values = {
     caDefault: toLocaleString.call(date, "en-CA", { timeZone: "UTC" }),
@@ -207,16 +226,15 @@ fn date_locale_methods_forward_explicit_locales_and_options_without_emulation_ov
     dateStyle: "short",
     timeZone: "UTC"
   });
-  return JSON.stringify(values);
+  return JSON.stringify(Object.keys(expected)
+    .filter(key => values[key] !== expected[key])
+    .map(key => ({key, actual: values[key], expected: expected[key]})));
 })()
 "#,
         )
         .expect("Date locale methods should forward standard arguments to V8");
 
-    assert_eq!(
-        result,
-        r#"{"caDefault":"2022-03-31, 11:59:42 p.m.","caShort":"2022-03-31","svDate":"2022-03-31","usTime":"23:59:42","localeError":true,"optionsError":true,"afterDateTamper":"2022-03-31"}"#
-    );
+    assert_eq!(result, "[]");
 }
 
 #[test]
