@@ -5544,6 +5544,8 @@ fetch/api/policies/referrer-origin.html
 fetch/api/policies/referrer-unsafe-url-worker.html
 fetch/api/policies/referrer-unsafe-url.html
 fetch/api/request/multi-globals/url-parsing.html
+fetch/api/request/request-error.any.js?moli-wpt-any=dedicatedworker
+fetch/api/request/request-error.any.js?moli-wpt-any=window
 fetch/api/request/url-encoding.html
 fetch/api/response/many-empty-chunks-crash.html
 fetch/api/response/multi-globals/url-parsing.html
