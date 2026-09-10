@@ -578,6 +578,15 @@ pub(in crate::context_bootstrap) fn performance_entry_slot_value<'s>(
     get_private_value(scope, object, slot)
 }
 
+pub(crate) fn is_performance_entry_object<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    object: v8::Local<'s, v8::Object>,
+) -> bool {
+    PERFORMANCE_ENTRY_BASE_ATTRIBUTE_SLOTS
+        .iter()
+        .all(|slot| get_private_value(scope, object, slot).is_some())
+}
+
 pub(in crate::context_bootstrap) fn performance_entry_slot_string<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     object: v8::Local<'s, v8::Object>,

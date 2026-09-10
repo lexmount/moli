@@ -21,11 +21,12 @@ use crate::{
         file_system_handle_clone_payload_from_object, image_data_clone_payload_from_object,
         initialize_readable_stream_clone_shell, initialize_transform_stream_clone_shell,
         initialize_writable_stream_clone_shell, is_crypto_key_object, is_image_data_object,
-        is_readable_stream_object, is_transform_stream_object, is_writable_stream_object,
-        message_port_id_from_object, new_dom_exception_value, new_quota_exceeded_error_value,
-        prepare_readable_stream_transfer, prepare_transform_stream_transfer,
-        prepare_writable_stream_transfer, quota_exceeded_error_clone_fields,
-        require_internal_stream_value, selected_file_from_object,
+        is_performance_entry_object, is_readable_stream_object, is_transform_stream_object,
+        is_writable_stream_object, message_port_id_from_object, new_dom_exception_value,
+        new_quota_exceeded_error_value, prepare_readable_stream_transfer,
+        prepare_transform_stream_transfer, prepare_writable_stream_transfer,
+        quota_exceeded_error_clone_fields, require_internal_stream_value,
+        selected_file_from_object,
     },
     dom::native::SelectedFile,
     types::MessagePortId,
@@ -310,6 +311,7 @@ impl v8::ValueSerializerImpl for WireSerializer {
             message_port_id_from_object(scope, object).is_some()
                 || is_image_data_object(scope, object)
                 || is_crypto_key_object(scope, object)
+                || is_performance_entry_object(scope, object)
                 || is_readable_stream_object(scope, object)
                 || is_writable_stream_object(scope, object)
                 || is_transform_stream_object(scope, object)

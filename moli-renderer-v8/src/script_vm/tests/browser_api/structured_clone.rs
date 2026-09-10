@@ -62,6 +62,58 @@ fn structured_clone_rejects_native_dom_nodes() {
 }
 
 #[test]
+fn structured_clone_rejects_real_performance_entries_without_prototype_spoofing() {
+    let mut vm = new_storage_test_vm("https://performance-entry-clone.test/");
+
+    let result = vm
+        .eval(
+            r#"
+            (() => {
+              const probe = callback => {
+                try {
+                  callback();
+                  return "ok";
+                } catch (error) {
+                  return error && error.name;
+                }
+              };
+              const navigation = performance.getEntriesByType("navigation")[0];
+              performance.mark("clone-mark");
+              const mark = performance.getEntriesByName("clone-mark")[0];
+              performance.measure("clone-measure");
+              const measure = performance.getEntriesByName("clone-measure")[0];
+              navigation.expando = "still not clonable";
+
+              const fake = Object.create(PerformanceEntry.prototype);
+              fake.value = 7;
+              const fakeClone = structuredClone(fake);
+              const plainClone = structuredClone({
+                name: navigation.name,
+                entryType: navigation.entryType,
+                startTime: navigation.startTime,
+                duration: navigation.duration
+              });
+
+              return JSON.stringify({
+                navigation: probe(() => structuredClone(navigation)),
+                mark: probe(() => structuredClone(mark)),
+                measure: probe(() => structuredClone(measure)),
+                postMessage: probe(() => window.postMessage(navigation, "*")),
+                fake: [fakeClone.value, fakeClone instanceof PerformanceEntry],
+                plain: [plainClone.entryType, typeof plainClone.startTime]
+              });
+            })()
+            "#,
+        )
+        .expect("PerformanceEntry structured clone probe should evaluate");
+
+    assert_eq!(
+        result,
+        r#"{"navigation":"DataCloneError","mark":"DataCloneError","measure":"DataCloneError","postMessage":"DataCloneError","fake":[7,false],"plain":["navigation","number"]}"#
+    );
+}
+
+#[test]
 fn structured_clone_preserves_dom_exception_fields_and_brand() {
     let mut vm = new_storage_test_vm("https://dom-exception-clone.test/");
 
