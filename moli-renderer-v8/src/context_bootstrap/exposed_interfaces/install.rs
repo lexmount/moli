@@ -16,6 +16,11 @@ use crate::util::{
     registered_public_interface_object, v8str,
 };
 
+const LEGACY_WINDOW_INTERFACE_ALIASES: &[(&str, &str)] = &[
+    ("webkitAudioContext", "AudioContext"),
+    ("WebKitCSSMatrix", "DOMMatrix"),
+];
+
 pub(in crate::context_bootstrap) fn install_window_exposed_interfaces<'s>(
     scope: &mut v8::PinScope<'s, '_, ()>,
     global_template: v8::Local<'s, v8::ObjectTemplate>,
@@ -36,10 +41,13 @@ pub(in crate::context_bootstrap) fn install_window_exposed_interfaces<'s>(
                 .getter_side_effect_type(v8::SideEffectType::HasNoSideEffect),
         );
     }
-    if let Some(audio_context_id) = registry.id_by_name("AudioContext") {
-        let data = v8::Integer::new_from_unsigned(scope, audio_context_id.callback_data());
+    for &(alias, interface) in LEGACY_WINDOW_INTERFACE_ALIASES {
+        let Some(interface_id) = registry.id_by_name(interface) else {
+            continue;
+        };
+        let data = v8::Integer::new_from_unsigned(scope, interface_id.callback_data());
         global_template.set_lazy_data_property_with_configuration(
-            v8str(scope, "webkitAudioContext").into(),
+            v8str(scope, alias).into(),
             v8::LazyDataPropertyConfiguration::new(exposed_interface_lazy_getter)
                 .data(data.into())
                 .property_attribute(v8::PropertyAttribute::DONT_ENUM)

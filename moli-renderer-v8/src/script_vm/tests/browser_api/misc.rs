@@ -28014,3 +28014,29 @@ fn quota_exceeded_error_is_dom_exception_subclass_with_readonly_slots() {
         "QuotaExceededError|full|22|7|11|true|true|true|true|false|function|get requested|0|true|true|true|function|get quota|0|true|true|true|true|true|true|true|true|false|QuotaExceededError|22"
     );
 }
+
+#[test]
+fn dom_matrix_exposes_webkit_css_matrix_alias() {
+    let mut vm = new_storage_test_vm("https://dommatrix-webkit-alias.test/");
+
+    let result = vm
+        .eval(
+            r#"
+(() => {
+  const webkitDescriptor = Object.getOwnPropertyDescriptor(globalThis, "WebKitCSSMatrix");
+  const matrix = new WebKitCSSMatrix();
+  return [
+    WebKitCSSMatrix === DOMMatrix,
+    WebKitCSSMatrix.prototype === DOMMatrix.prototype,
+    WebKitCSSMatrix.name,
+    matrix instanceof DOMMatrix,
+    matrix instanceof DOMMatrixReadOnly,
+    [webkitDescriptor.writable, webkitDescriptor.enumerable, webkitDescriptor.configurable].join(",")
+  ].join("|");
+})()
+"#,
+        )
+        .expect("DOMMatrix legacy Window aliases should evaluate");
+
+    assert_eq!(result, "true|true|DOMMatrix|true|true|true,false,true");
+}
