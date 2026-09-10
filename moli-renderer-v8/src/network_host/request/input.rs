@@ -3,6 +3,34 @@ use super::*;
 use crate::web_api_interfaces;
 use crate::webidl;
 
+pub(super) fn normalize_fetch_request_method(method: &str) -> Result<String, &'static str> {
+    if method.is_empty()
+        || !method.bytes().all(|byte| {
+            byte.is_ascii_alphanumeric()
+                || matches!(
+                    byte,
+                    b'!' | b'#'
+                        | b'$'
+                        | b'%'
+                        | b'&'
+                        | b'\''
+                        | b'*'
+                        | b'+'
+                        | b'-'
+                        | b'.'
+                        | b'^'
+                        | b'_'
+                        | b'`'
+                        | b'|'
+                        | b'~'
+                )
+        })
+    {
+        return Err("Request method is not a valid HTTP token");
+    }
+    normalize_request_method(method)
+}
+
 pub(in crate::network_host) fn normalize_request_method(
     method: &str,
 ) -> Result<String, &'static str> {
@@ -107,7 +135,7 @@ fn request_input_snapshot_inner<'s>(
     };
     let method = defined_object_string_property(scope, object, "method")
         .map(|value| {
-            normalize_request_method(&value)
+            normalize_fetch_request_method(&value)
                 .map_err(|_| webidl::WebIdlError::custom_message("Request method is forbidden"))
         })
         .transpose()?
@@ -171,7 +199,7 @@ fn request_input_snapshot_from_private_slots<'s>(
     let url = request_slot_string(scope, object, REQUEST_URL_SLOT).unwrap_or_default();
     let method = request_slot_string(scope, object, REQUEST_METHOD_SLOT)
         .map(|value| {
-            normalize_request_method(&value)
+            normalize_fetch_request_method(&value)
                 .map_err(|_| webidl::WebIdlError::custom_message("Request method is forbidden"))
         })
         .transpose()?
@@ -316,11 +344,11 @@ fn object_bool_property(
         .map(|value| value.boolean_value(scope))
 }
 
-pub(super) fn resolve_request_constructor_url(
-    scope: &mut v8::PinScope<'_, '_>,
-    input: &str,
-) -> String {
-    try_resolve_request_constructor_url(scope, input).unwrap_or_else(|_| input.to_owned())
+pub(crate) fn validate_request_url_credentials(url: &url::Url) -> Result<(), &'static str> {
+    if !url.username().is_empty() || url.password().is_some_and(|value| !value.is_empty()) {
+        return Err("Request URL must not include credentials");
+    }
+    Ok(())
 }
 
 pub(crate) fn try_resolve_request_constructor_url(
@@ -380,19 +408,22 @@ pub(crate) fn try_resolve_request_constructor_url_for_scope(
     }
 }
 
-pub(super) fn normalize_request_referrer(scope: &mut v8::PinScope<'_, '_>, input: &str) -> String {
+pub(super) fn normalize_request_referrer(
+    scope: &mut v8::PinScope<'_, '_>,
+    input: &str,
+) -> Result<String, String> {
     if input.is_empty() || input == "about:client" {
-        return input.to_owned();
+        return Ok(input.to_owned());
     }
 
-    let resolved = resolve_request_constructor_url(scope, input);
+    let resolved = try_resolve_request_constructor_url(scope, input)?;
     let Some(context_url) = current_request_context_url(scope) else {
-        return resolved;
+        return Ok(resolved);
     };
     if moli_url::parsed_same_origin(&resolved, &context_url) {
-        resolved
+        Ok(resolved)
     } else {
-        "about:client".to_owned()
+        Ok("about:client".to_owned())
     }
 }
 
