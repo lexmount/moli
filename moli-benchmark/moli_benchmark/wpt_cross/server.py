@@ -1694,6 +1694,30 @@ class _Ipv6ThreadingHTTPServer(_FixtureThreadingHTTPServer):
     address_family = socket.AF_INET6
 
 
+class FetchStash:
+    """Write-once, read-once stash scoped to /fetch/api/resources/.
+
+    Every origin of one fixture server shares this namespace. UUID
+    normalization matches wptserve, including equivalent key spellings.
+    """
+
+    def __init__(self) -> None:
+        self._lock = threading.Lock()
+        self._values: dict[uuid.UUID, str] = {}
+
+    def put(self, key: str, value: str, *, overwrite: bool = False) -> None:
+        parsed_key = uuid.UUID(key)
+        with self._lock:
+            if not overwrite and parsed_key in self._values:
+                raise ValueError("Tried to overwrite existing shared stash value")
+            self._values[parsed_key] = value
+
+    def take(self, key: str) -> str | None:
+        parsed_key = uuid.UUID(key)
+        with self._lock:
+            return self._values.pop(parsed_key, None)
+
+
 class CspReportStore:
     """Thread-safe subset of WPT reporting stash used by CSP report checks."""
 
@@ -2088,6 +2112,9 @@ def _make_handler(
                 return
             if path == "/fetch/api/resources/trickle.py":
                 self._serve_fetch_trickle(parsed.query, emit_body=emit_body)
+                return
+            if path in FETCH_ABORT_RESOURCE_PATHS:
+                self._serve_fetch_abort_resource(path, parsed.query, emit_body=emit_body)
                 return
             if path == "/fetch/api/resources/inspect-headers.py":
                 self._send_bytes(
@@ -2747,6 +2774,91 @@ def _make_handler(
                     self.wfile.write(body)
                 except (BrokenPipeError, ConnectionResetError):
                     return
+
+        def _serve_fetch_abort_resource(
+            self, path: str, query: str, *, emit_body: bool
+        ) -> None:
+            if not self._consume_request_body():
+                return
+            if path.endswith("/infinite-slow-response.py"):
+                self._serve_fetch_infinite_response(query, emit_body=emit_body)
+                return
+            params = parse_qs(query, keep_blank_values=True, encoding="latin-1")
+            headers = [("Access-Control-Allow-Origin", "*")]
+            try:
+                if path.endswith("/stash-take.py"):
+                    body = json.dumps(fetch_stash.take(params["key"][0])).encode("ascii")
+                    headers.append(("Content-Type", "application/json"))
+                elif self.command == "OPTIONS":
+                    headers.extend([
+                        ("Access-Control-Allow-Methods", "*"),
+                        ("Access-Control-Allow-Headers", "*"),
+                    ])
+                    body = b"done"
+                else:
+                    allowed = True
+                    if "disallow_cross_origin" in params:
+                        headers = []
+                        if params["mode"][0] != "no-cors":
+                            # Preserve the upstream handler's required query
+                            # fields, including its trailing-space guard.
+                            if "frame_origin " not in params:
+                                raise ValueError("Missing frame_origin guard")
+                            frame_origin = (
+                                params["frame_origin"][0].encode("latin-1").decode("utf-8")
+                            )
+                            host_origin = f"http://{self.headers.get('Host', '')}"
+                            allowed = frame_origin == host_origin
+                    if allowed:
+                        fetch_stash.put(params["key"][0], params["value"][0])
+                    body = b"done" if allowed else b"not stashing for cors request"
+            except (KeyError, ValueError):
+                self.send_error(500)
+                return
+            self.send_response(200)
+            for name, value in headers:
+                self.send_header(name, value)
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            if emit_body:
+                self.wfile.write(body)
+
+        def _serve_fetch_infinite_response(self, query: str, *, emit_body: bool) -> None:
+            params = parse_qs(query, keep_blank_values=True)
+            state_key = params.get("stateKey", [""])[0]
+            abort_key = params.get("abortKey", [""])[0]
+            try:
+                for key in (state_key, abort_key):
+                    if key:
+                        uuid.UUID(key)
+            except ValueError:
+                self.send_error(500)
+                return
+            if state_key:
+                fetch_stash.put(state_key, "open", overwrite=True)
+            self.close_connection = True
+            try:
+                self.send_response(200)
+                self.send_header("Content-Type", "text/plain")
+                self.send_header("Connection", "close")
+                self.end_headers()
+                self.wfile.flush()
+                if not emit_body:
+                    return
+                self.wfile.write(b"." * 2048)
+                self.wfile.flush()
+                while not stopping.is_set():
+                    self.wfile.write(b".")
+                    self.wfile.flush()
+                    if abort_key and fetch_stash.take(abort_key):
+                        break
+                    stopping.wait(0.01)
+            except OSError:
+                # The state changes when the actual streaming write fails.
+                pass
+            finally:
+                if state_key:
+                    fetch_stash.put(state_key, "closed", overwrite=True)
 
         def _serve_fetch_trickle(self, query: str, *, emit_body: bool) -> None:
             params = parse_qs(query, keep_blank_values=True)
