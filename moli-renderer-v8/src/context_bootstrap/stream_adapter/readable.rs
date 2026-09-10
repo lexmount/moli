@@ -1,5 +1,18 @@
 use super::*;
 
+/// Installs an internal read request without materializing a JavaScript read
+/// result. The caller runs `maybe_pull_stream` after its synchronous read loop.
+pub(crate) fn prepare_readable_stream_read_with_steps<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    stream: v8::Local<'s, v8::Object>,
+    chunk_steps: v8::Local<'s, v8::Function>,
+    close_steps: v8::Local<'s, v8::Function>,
+    error_steps: v8::Local<'s, v8::Function>,
+) -> bool {
+    let request = new_internal_read_request(scope, chunk_steps, close_steps, error_steps);
+    perform_read_from_stream(scope, stream, request)
+}
+
 pub(in crate::context_bootstrap) fn read_from_stream_as_promise<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     stream: v8::Local<'s, v8::Object>,
@@ -136,7 +149,7 @@ fn error_read_request_for_queue_error<'s>(
     error_read_request(scope, request, error);
 }
 
-pub(in crate::context_bootstrap) fn maybe_pull_stream<'s>(
+pub(crate) fn maybe_pull_stream<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     stream: v8::Local<'s, v8::Object>,
 ) {
