@@ -84,7 +84,8 @@ pub(super) use readable::{
     readable_stream_closed_promise,
 };
 pub(crate) use readable::{
-    cancel_readable_stream, maybe_pull_stream, prepare_readable_stream_read_with_steps,
+    cancel_readable_stream, cancel_readable_stream_for_fetch, maybe_pull_stream,
+    prepare_readable_stream_read_with_steps,
 };
 pub(crate) use readable_byte::enqueue_byte_chunk;
 pub(in crate::context_bootstrap) use readable_byte::{
