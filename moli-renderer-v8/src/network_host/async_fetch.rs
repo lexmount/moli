@@ -577,8 +577,7 @@ pub(crate) fn spawn_async_subresource_fetch(
                     | BrowserRequestMetadata::StyleModule
                     | BrowserRequestMetadata::Xhr,
             )
-        ) && request.follow_redirects
-            && request.request_mode != RequestMode::NoCors;
+        ) && request.follow_redirects;
         if moli_trace::cdp_runtime_trace_enabled() {
             tracing::info!(
                 target: "moli_cdp_nav_timing",
