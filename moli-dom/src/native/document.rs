@@ -50,6 +50,8 @@ pub struct Document {
     content_type: Box<str>,
     character_set: Box<str>,
     ready_state: DocumentReadyState,
+    // Retained with the Document when its Window is replaced during navigation.
+    visibility_hidden: bool,
     quirks_mode: QuirksMode,
     kind: DocumentKind,
     design_mode_enabled: bool,
@@ -79,6 +81,7 @@ impl Document {
             content_type: "text/html".into(),
             character_set: "UTF-8".into(),
             ready_state: DocumentReadyState::Complete,
+            visibility_hidden: false,
             quirks_mode: QuirksMode::NoQuirks,
             kind: DocumentKind::Html,
             design_mode_enabled: false,
@@ -96,6 +99,7 @@ impl Document {
             content_type: "application/xml".into(),
             character_set: "UTF-8".into(),
             ready_state: DocumentReadyState::Complete,
+            visibility_hidden: false,
             quirks_mode: QuirksMode::NoQuirks,
             kind: DocumentKind::Xml,
             design_mode_enabled: false,
@@ -128,6 +132,10 @@ impl Document {
 
     pub fn ready_state(&self) -> DocumentReadyState {
         self.ready_state
+    }
+
+    pub fn visibility_hidden(&self) -> bool {
+        self.visibility_hidden
     }
 
     pub fn default_language(&self) -> Option<&str> {
@@ -214,6 +222,10 @@ impl Document {
 
     pub fn set_ready_state(&mut self, ready_state: DocumentReadyState) {
         self.ready_state = ready_state;
+    }
+
+    pub fn set_visibility_hidden(&mut self, hidden: bool) {
+        self.visibility_hidden = hidden;
     }
 
     pub fn set_default_language(&mut self, language: Option<String>) {
