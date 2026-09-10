@@ -96,6 +96,10 @@ impl CdpScheduler {
                         .await
                 }
                 BrowserEvent::WorkerCreated(_)
+                | BrowserEvent::NetworkRequestStarted(_)
+                | BrowserEvent::NetworkRequestCompleted(_)
+                | BrowserEvent::NetworkActivity(_)
+                | BrowserEvent::NetworkSourceClosed(_)
                 | BrowserEvent::WorkerUpdated(_)
                 | BrowserEvent::WorkerDestroyed(_)
                 | BrowserEvent::DocumentLifecycleChanged(_)

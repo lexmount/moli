@@ -3357,6 +3357,7 @@ impl ScriptVm {
                                             response.cookie_set_reports.clone(),
                                         )
                                         .with_status_text(response_status_text)
+                                        .with_request_cookie_report(head.request_cookie_report.clone())
                                         .with_from_cache(response.from_cache)
                                         .with_negotiated_http_version(
                                             response.negotiated_http_version,
@@ -4727,6 +4728,7 @@ impl ScriptVm {
                                 started.head.cookie_set_reports.clone(),
                             )
                             .with_from_cache(started.head.from_cache)
+                            .with_request_cookie_report(started.head.request_cookie_report.clone())
                             .with_negotiated_http_version(
                                 started.head.negotiated_http_version,
                             )
@@ -4779,7 +4781,7 @@ impl ScriptVm {
                 );
             }
 
-            if matches!(&pending.continuation, PendingSubresourceContinuation::Xhr(_))
+            if matches!(&pending.continuation, PendingSubresourceContinuation::Xhr(_) | PendingSubresourceContinuation::Fetch(_))
                 && let Some(handle) = pending.info.network_request_handle
             {
                 self._context_host
@@ -4800,6 +4802,7 @@ impl ScriptVm {
                             started.head.cookie_set_reports.clone(),
                         )
                         .with_from_cache(started.head.from_cache)
+                            .with_request_cookie_report(started.head.request_cookie_report.clone())
                         .with_negotiated_http_version(started.head.negotiated_http_version)
                         .with_network_request_headers(started.network_request_headers.clone()),
                     );
@@ -4930,6 +4933,7 @@ impl ScriptVm {
                                     started.head.cookie_set_reports.clone(),
                                 )
                                 .with_from_cache(started.head.from_cache)
+                            .with_request_cookie_report(started.head.request_cookie_report.clone())
                                 .with_negotiated_http_version(
                                     started.head.negotiated_http_version,
                                 )
@@ -5308,6 +5312,9 @@ impl ScriptVm {
                                 streaming.head.cookie_set_reports,
                             )
                             .with_from_cache(streaming.head.from_cache)
+                            .with_request_cookie_report(
+                                streaming.head.request_cookie_report.clone(),
+                            )
                             .with_negotiated_http_version(streaming.head.negotiated_http_version)
                             .with_network_request_headers(streaming.network_request_headers),
                         );
@@ -5724,6 +5731,7 @@ impl ScriptVm {
                             if !matches!(
                                 &streaming.pending.continuation,
                                 PendingSubresourceContinuation::Xhr(_)
+                                    | PendingSubresourceContinuation::Fetch(_)
                             ) {
                                 context_host
                                     .borrow_mut()
@@ -5743,6 +5751,9 @@ impl ScriptVm {
                                             streaming.head.cookie_set_reports.clone(),
                                         )
                                         .with_from_cache(streaming.head.from_cache)
+                                        .with_request_cookie_report(
+                                            streaming.head.request_cookie_report.clone(),
+                                        )
                                         .with_negotiated_http_version(
                                             streaming.head.negotiated_http_version,
                                         )

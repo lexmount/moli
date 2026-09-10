@@ -673,6 +673,30 @@ impl NavigationController {
             })
     }
 
+    pub(in crate::browser) fn reserved_document_for_renderer(
+        &self,
+        renderer: crate::browser::RendererPageResidenceIdentity,
+    ) -> Option<DocumentId> {
+        if let Some(build) = self.initial_document_build()
+            && build.completion.pending()
+            && build.key.renderer() == renderer
+        {
+            return Some(build.key.document());
+        }
+        self.pending_navigation_request
+            .as_ref()
+            .filter(|pending| {
+                !pending.committed
+                    && !pending.cancellation_handle().is_cancelled()
+                    && pending.document_preparation.as_ref().is_some_and(
+                        |(current, cancellation)| {
+                            *current == renderer && !cancellation.is_cancelled()
+                        },
+                    )
+            })
+            .map(|pending| pending.document_id)
+    }
+
     pub(super) fn arm_background_navigation_completion(
         &mut self,
         token: &NavigationId,

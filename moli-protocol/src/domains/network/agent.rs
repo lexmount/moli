@@ -177,6 +177,9 @@ impl NetworkBacklogPreferredRequestIdBudget {
 }
 
 impl TargetNetworkAgentState {
+    pub(crate) fn has_observed_network_phase(&self, item: &ScriptNetworkOutputItem) -> bool {
+        self.output_queue.has_observed_network_phase(item)
+    }
     /// Moves the Document-owned live queue and request correlations into a
     /// short-lived predecessor state while retaining target/session policy and
     /// target-scoped body/stream artifacts for the replacement Document.
@@ -975,6 +978,9 @@ pub(crate) struct RetiringTargetNetworkAgentState {
 }
 
 impl RetiringTargetNetworkAgentState {
+    pub(crate) fn has_observed_network_phase(&self, item: &ScriptNetworkOutputItem) -> bool {
+        self.output_queue.has_observed_network_phase(item)
+    }
     pub(crate) fn ingest_renderer_output_item_and_prepare_live_delivery(
         &mut self,
         item: &ScriptNetworkOutputItem,
@@ -2133,7 +2139,7 @@ mod tests {
         let document_url = Url::parse("https://example.com/").expect("document URL should parse");
         let request_url =
             Url::parse("https://example.com/late-xhr").expect("request URL should parse");
-        let started = ScriptNetworkOutputItem::SubresourceRequestStarted(Box::new(
+        let started = ScriptNetworkOutputItem::SubresourceRequestStarted(std::sync::Arc::new(
             SubresourceRequestStarted::new(
                 handle,
                 None,
@@ -2167,7 +2173,7 @@ mod tests {
             handle: SubresourceNetworkRequestHandle,
             keepalive: bool,
         ) -> ScriptNetworkOutputItem {
-            ScriptNetworkOutputItem::SubresourceRequestStarted(Box::new(
+            ScriptNetworkOutputItem::SubresourceRequestStarted(std::sync::Arc::new(
                 SubresourceRequestStarted::new(
                     handle,
                     None,

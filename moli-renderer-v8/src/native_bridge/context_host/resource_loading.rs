@@ -202,7 +202,7 @@ impl JsContextHost {
         request: SubresourceRequestStarted,
     ) {
         self.push_network_output_item(ScriptNetworkOutputItem::SubresourceRequestStarted(
-            Box::new(request),
+            std::sync::Arc::new(request),
         ));
         self.note_subresource_activity();
     }
@@ -212,7 +212,7 @@ impl JsContextHost {
         response: SubresourceResponseStarted,
     ) {
         self.push_network_output_item(ScriptNetworkOutputItem::SubresourceResponseStarted(
-            Box::new(response),
+            std::sync::Arc::new(response),
         ));
         self.note_subresource_activity();
     }
@@ -236,19 +236,37 @@ impl JsContextHost {
     }
 
     pub(crate) fn record_subresource_body_finished(&mut self, body: SubresourceBodyFinished) {
-        self.push_network_output_item(ScriptNetworkOutputItem::SubresourceBodyFinished(Box::new(
-            body,
-        )));
+        self.push_network_output_item(ScriptNetworkOutputItem::SubresourceBodyFinished(
+            std::sync::Arc::new(body),
+        ));
         self.note_subresource_activity();
     }
 
-    pub(crate) fn push_network_output_item(&mut self, item: ScriptNetworkOutputItem) {
-        if let Some(source_document) = self.root_document_lifecycle_identity() {
+    pub(crate) fn push_network_output_item(&mut self, mut item: ScriptNetworkOutputItem) {
+        // Complete-only producers still need an exact occurrence identity. Do
+        // not synthesize a request-start event at the time completion arrives.
+        if let ScriptNetworkOutputItem::SubresourceNetworkRecord(record) = &mut item
+            && record.request_handle().is_none()
+        {
+            **record = record
+                .as_ref()
+                .clone()
+                .with_request_handle(self.next_subresource_network_request_handle());
+        }
+        if let Some(source_document) = self.root_document_lifecycle_identity()
+            && let Some(journal) = self.output_journal.as_ref()
+            && let crate::runtime::RendererOutputResidenceIdentity::Page {
+                owner_local_host_id,
+                ..
+            } = journal.stream().residence()
+        {
+            let observation = self.browser_context_runtime.report_network(
+                owner_local_host_id,
+                source_document,
+                item.clone(),
+            );
             self.append_live_turn_observation(
-                crate::runtime::RendererProtocolObservation::Network {
-                    source_document,
-                    item: item.clone(),
-                },
+                crate::runtime::RendererProtocolObservation::Network(observation),
             );
         }
         // The page report remains authoritative diagnostic state used by CLI

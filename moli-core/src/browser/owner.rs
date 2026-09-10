@@ -23,6 +23,7 @@ pub use initial_document::{BrowserCommittedInitialDocument, BrowserInitialDocume
 mod navigation_driver;
 pub use navigation_driver::{BrowserNavigationOutcome, BrowserNavigationWaiter};
 mod navigation_events;
+mod network;
 mod popup;
 mod workers;
 
@@ -134,6 +135,14 @@ impl Browser {
             if let Some(sender) = sender.upgrade() {
                 let _ = sender.send(BrowserOwnerMessage::Execute(Box::new(move |browser| {
                     browser.commit_worker_lifecycle(id, input);
+                })));
+            }
+        });
+        let sender = self.native_sender.clone();
+        context.install_network_handler(move |input| {
+            if let Some(sender) = sender.upgrade() {
+                let _ = sender.send(BrowserOwnerMessage::Execute(Box::new(move |browser| {
+                    browser.commit_network(id, input);
                 })));
             }
         });
@@ -515,6 +524,10 @@ impl BrowserHandle {
                     .contexts
                     .values()
                     .flat_map(BrowserContext::worker_snapshots),
+                browser
+                    .contexts
+                    .values()
+                    .flat_map(|context| context.network_requests.snapshots()),
             )
         })
     }

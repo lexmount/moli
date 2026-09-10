@@ -220,6 +220,7 @@ impl CdpConnection {
             self.project_browser_workers(snapshot.workers, snapshot.sequence)
                 .await,
         );
+        events.extend(self.project_browser_network_snapshot(snapshot.network_requests));
         for download in snapshot.downloads {
             events.extend(self.project_created_browser_download(download));
         }

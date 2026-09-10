@@ -1252,6 +1252,19 @@ impl JsContextHost {
         self.close_owned_broadcast_channels();
         self.close_owned_message_ports();
         self.shutdown_workers();
+        // This shares the native reporter FIFO with the last teardown outputs.
+        // Closing an observation source does not claim that detached keepalive
+        // transports have completed or failed.
+        if let Some(document) = self.root_document_lifecycle_identity()
+            && let Some(journal) = self.output_journal.as_ref()
+            && let crate::runtime::RendererOutputResidenceIdentity::Page {
+                owner_local_host_id,
+                ..
+            } = journal.stream().residence()
+        {
+            self.browser_context_runtime
+                .close_network_source(owner_local_host_id, document.document.page_id);
+        }
     }
 }
 

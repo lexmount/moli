@@ -1201,9 +1201,9 @@ mod tests {
             SubresourceResponseBody::from_bytes(b"staged".to_vec()),
         );
         assert_xhr_terminal_retains_internal_resource_type(vec![
-            ScriptNetworkOutputItem::SubresourceRequestStarted(Box::new(request)),
-            ScriptNetworkOutputItem::SubresourceResponseStarted(Box::new(response)),
-            ScriptNetworkOutputItem::SubresourceBodyFinished(Box::new(body)),
+            ScriptNetworkOutputItem::SubresourceRequestStarted(std::sync::Arc::new(request)),
+            ScriptNetworkOutputItem::SubresourceResponseStarted(std::sync::Arc::new(response)),
+            ScriptNetworkOutputItem::SubresourceBodyFinished(std::sync::Arc::new(body)),
         ]);
     }
 }

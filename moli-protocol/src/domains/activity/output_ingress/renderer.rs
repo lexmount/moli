@@ -205,9 +205,7 @@ async fn project_renderer_output_records_for_owner(
         if projection == RendererPublicationProjection::RetiringNetworkOnly
             && !matches!(
                 &item,
-                RendererOutputItem::Observation(
-                    moli_core::RendererProtocolObservation::Network { .. }
-                )
+                RendererOutputItem::Observation(moli_core::RendererProtocolObservation::Network(_))
             )
         {
             continue;
@@ -303,20 +301,20 @@ async fn project_renderer_output_records_for_owner(
                             continue;
                         };
                         PreparedProtocolOutputs::from_browser_document_lifecycle_event(lifecycle)
-                    } else if let moli_core::RendererProtocolObservation::Network {
-                        source_document,
-                        item,
-                    } = &observation
+                    } else if let moli_core::RendererProtocolObservation::Network(network) =
+                        &observation
                     {
+                        let Some(committed) = network.clone().committed().await else {
+                            continue;
+                        };
                         let Some(outputs) =
-                            PreparedProtocolOutputs::from_renderer_network_observation(
+                            PreparedProtocolOutputs::from_browser_network_observation(
                                 conn,
                                 owner,
                                 crate::conn::RendererPageResidenceIdentity::from_residence(
                                     cursor.stream().residence(),
                                 ),
-                                *source_document,
-                                item,
+                                &committed,
                             )
                         else {
                             continue;

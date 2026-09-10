@@ -31,6 +31,127 @@ fn context_with_contents(service: &BrowserService) -> (BrowserContextHandle, Web
 }
 
 #[tokio::test]
+async fn native_network_commits_request_response_and_body_without_devtools() {
+    use crate::browser::NetworkRequestState;
+    use crate::page::{ScriptNetworkOutputItem, SubresourceNetworkOutcome};
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let url = format!("http://{}/native-network", listener.local_addr().unwrap());
+    let (headers, release_headers) = oneshot::channel();
+    let (body, release_body) = oneshot::channel();
+    let server = tokio::spawn(async move {
+        let (mut stream, _) = listener.accept().await.unwrap();
+        let mut request = Vec::new();
+        let mut byte = [0];
+        while !request.ends_with(b"\r\n\r\n") {
+            stream.read_exact(&mut byte).await.unwrap();
+            request.push(byte[0]);
+        }
+        release_headers.await.unwrap();
+        stream.write_all(b"HTTP/1.1 200 OK\r\nAccess-Control-Allow-Origin: *\r\nContent-Type: text/plain\r\nContent-Length: 4\r\nConnection: close\r\n\r\n").await.unwrap();
+        release_body.await.unwrap();
+        stream.write_all(b"body").await.unwrap();
+    });
+    let service = BrowserService::start().unwrap();
+    let browser = service.handle();
+    let (context, contents) = context_with_contents(&service);
+    let (_, mut events) = browser.subscribe().unwrap();
+    let document = navigate(
+        &context,
+        contents,
+        &format!("data:text/html,<script>fetch('{url}').then(r=>r.text())</script>"),
+    )
+    .await;
+    let (handle, started) = tokio::time::timeout(std::time::Duration::from_secs(5), async {
+        loop {
+            let event = events.recv().await.unwrap();
+            if let BrowserEvent::NetworkRequestStarted(occurrence) = event.event
+                && occurrence.document == document
+                && let ScriptNetworkOutputItem::SubresourceRequestStarted(request) =
+                    occurrence.renderer.item.as_ref()
+                && request.url().as_str() == url
+            {
+                break (request.handle(), event.sequence);
+            }
+        }
+    })
+    .await
+    .expect("native start must not wait for response or a DevTools consumer");
+    let snapshot = browser.subscribe().unwrap().0;
+    assert!(snapshot.network_requests.iter().any(|request| request.document == document
+        && matches!(&request.state, NetworkRequestState::Started(start) if start.handle() == handle)));
+    headers.send(()).unwrap();
+    let response = tokio::time::timeout(std::time::Duration::from_secs(5), async {
+        loop {
+            let event = events.recv().await.unwrap();
+            if let BrowserEvent::NetworkActivity(occurrence) = event.event
+                && occurrence.document == document
+                && let ScriptNetworkOutputItem::SubresourceResponseStarted(response) =
+                    occurrence.renderer.item.as_ref()
+                && response.handle() == handle
+            {
+                break event.sequence;
+            }
+        }
+    })
+    .await
+    .expect("native headers must not wait for the held body");
+    assert!(response > started);
+    assert!(browser.subscribe().unwrap().0.network_requests.iter().any(|request| request.document == document
+        && matches!(&request.state, NetworkRequestState::Responding { response, .. } if response.handle() == handle)));
+    body.send(()).unwrap();
+    let completed = tokio::time::timeout(std::time::Duration::from_secs(5), async {
+        loop {
+            let event = events.recv().await.unwrap();
+            if let BrowserEvent::NetworkRequestCompleted(occurrence) = event.event
+                && occurrence.document == document
+                && crate::browser::network::request_key(&occurrence.renderer)
+                    .is_some_and(|key| key.1 == handle.get())
+            {
+                break event.sequence;
+            }
+        }
+    })
+    .await
+    .expect("native completion needs no Protocol ingress");
+    assert!(completed > response);
+    let snapshot = browser.subscribe().unwrap().0;
+    let records = snapshot
+        .network_requests
+        .iter()
+        .filter_map(|request| match &request.state {
+            NetworkRequestState::Recorded(record)
+                if request.document == document && record.request_handle() == Some(handle) =>
+            {
+                Some(record)
+            }
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(records.len(), 1);
+    let SubresourceNetworkOutcome::Success { response_body, .. } = records[0].outcome() else {
+        panic!("successful request must retain its real body");
+    };
+    assert_eq!(response_body.clone_body_bytes(), b"body");
+    server.await.unwrap();
+    browser
+        .close_web_contents(contents)
+        .unwrap()
+        .close_async()
+        .await;
+    tokio::time::timeout(std::time::Duration::from_secs(5), async {
+        loop {
+            if events.recv().await.unwrap().event == BrowserEvent::NetworkSourceClosed(document) {
+                break;
+            }
+        }
+    })
+    .await
+    .expect("physical source teardown must release its Network records");
+    assert!(browser.subscribe().unwrap().0.network_requests.is_empty());
+    service.shutdown();
+}
+
+#[tokio::test]
 async fn native_navigation_transport_failure_commits_error_document_without_devtools() {
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let url = format!("http://{}/unreachable", listener.local_addr().unwrap());

@@ -103,6 +103,13 @@ impl ScriptNetworkOutputItem {
     }
 }
 
+impl SubresourceNetworkRecord {
+    #[doc(hidden)]
+    pub fn renderer_transport_charge_bytes(&self) -> usize {
+        network_record_charge(self)
+    }
+}
+
 impl InspectorIssueSnapshot {
     #[doc(hidden)]
     pub fn renderer_transport_charge_bytes(&self) -> usize {
@@ -295,6 +302,53 @@ fn response_started_charge(response: &SubresourceResponseStarted) -> usize {
                 .unwrap_or(0),
         )
         .saturating_add(response.cookie_set_reports.len().saturating_mul(256))
+        .saturating_add(
+            response
+                .request_cookie_report
+                .as_ref()
+                .map(cookie_query_report_charge)
+                .unwrap_or(0),
+        )
+}
+
+fn cookie_query_report_charge(report: &StoredCookieQueryReport) -> usize {
+    report
+        .included_cookies
+        .iter()
+        .chain(&report.excluded_cookies)
+        .fold(
+            std::mem::size_of_val(report)
+                .saturating_add(report.facade_exclusion_reasons.len().saturating_mul(32)),
+            |total, access| {
+                total
+                    .saturating_add(std::mem::size_of_val(access))
+                    .saturating_add(string_charge(&access.cookie.name))
+                    .saturating_add(string_charge(&access.cookie.value))
+                    .saturating_add(string_charge(&access.cookie.domain))
+                    .saturating_add(string_charge(&access.cookie.path))
+                    .saturating_add(
+                        access
+                            .site_for_cookies_url
+                            .as_ref()
+                            .map(url_charge)
+                            .unwrap_or(0),
+                    )
+                    .saturating_add(
+                        access
+                            .top_frame_origin_url
+                            .as_ref()
+                            .map(url_charge)
+                            .unwrap_or(0),
+                    )
+                    .saturating_add(
+                        access
+                            .exclusion_reasons
+                            .len()
+                            .saturating_add(access.warning_reasons.len())
+                            .saturating_mul(32),
+                    )
+            },
+        )
 }
 
 fn network_record_charge(record: &SubresourceNetworkRecord) -> usize {

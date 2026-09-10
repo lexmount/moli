@@ -557,9 +557,9 @@ pub struct ScriptExecutionReport {
 
 #[derive(Debug, Clone, Default)]
 struct StagedSubresourceReportState {
-    requests: BTreeMap<u64, SubresourceRequestStarted>,
-    responses: BTreeMap<u64, SubresourceResponseStarted>,
-    bodies: BTreeMap<u64, SubresourceBodyFinished>,
+    requests: BTreeMap<u64, Arc<SubresourceRequestStarted>>,
+    responses: BTreeMap<u64, Arc<SubresourceResponseStarted>>,
+    bodies: BTreeMap<u64, Arc<SubresourceBodyFinished>>,
     completed_handles: BTreeSet<u64>,
 }
 
@@ -571,11 +571,11 @@ pub struct ScriptNetworkOutput {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ScriptNetworkOutputItem {
     SubresourceNetworkRecord(Box<SubresourceNetworkRecord>),
-    SubresourceRequestStarted(Box<SubresourceRequestStarted>),
-    SubresourceResponseStarted(Box<SubresourceResponseStarted>),
+    SubresourceRequestStarted(Arc<SubresourceRequestStarted>),
+    SubresourceResponseStarted(Arc<SubresourceResponseStarted>),
     SubresourceDataReceived(SubresourceDataReceived),
     SubresourceEventSourceMessageReceived(Box<SubresourceEventSourceMessageReceived>),
-    SubresourceBodyFinished(Box<SubresourceBodyFinished>),
+    SubresourceBodyFinished(Arc<SubresourceBodyFinished>),
     WebSocketNetworkEvent(WebSocketNetworkEvent),
     WebSocketLifecycleEvent(WebSocketLifecycleEvent),
 }
@@ -926,7 +926,7 @@ impl ScriptExecutionReport {
                 if state.completed_handles.contains(&handle) {
                     return;
                 }
-                state.requests.insert(handle, *request);
+                state.requests.insert(handle, request);
                 self.try_materialize_staged_subresource_record(handle);
             }
             ScriptNetworkOutputItem::SubresourceResponseStarted(response) => {
@@ -935,7 +935,7 @@ impl ScriptExecutionReport {
                 if state.completed_handles.contains(&handle) {
                     return;
                 }
-                state.responses.insert(handle, *response);
+                state.responses.insert(handle, response);
                 self.try_materialize_staged_subresource_record(handle);
             }
             ScriptNetworkOutputItem::SubresourceBodyFinished(body) => {
@@ -944,7 +944,7 @@ impl ScriptExecutionReport {
                 if state.completed_handles.contains(&handle) {
                     return;
                 }
-                state.bodies.insert(handle, *body);
+                state.bodies.insert(handle, body);
                 self.try_materialize_staged_subresource_record(handle);
             }
             ScriptNetworkOutputItem::SubresourceDataReceived(_)
@@ -974,7 +974,7 @@ impl ScriptExecutionReport {
             let Some(body) = state.bodies.get(&handle) else {
                 return;
             };
-            let response = state.responses.get(&handle);
+            let response = state.responses.get(&handle).map(Arc::as_ref);
             let Some(record) =
                 SubresourceNetworkRecord::from_staged_lifecycle(request, response, body)
             else {
@@ -1099,6 +1099,7 @@ pub struct SubresourceResponseStarted {
     status_text: Option<String>,
     response_headers: Vec<(String, String)>,
     cookie_set_reports: Vec<StoredCookieSetReport>,
+    request_cookie_report: Option<StoredCookieQueryReport>,
     from_cache: bool,
     network_request_headers: Option<Vec<(String, String)>>,
     negotiated_http_version: Option<NegotiatedHttpVersion>,
@@ -1253,6 +1254,14 @@ impl SubresourceRequestStarted {
 }
 
 impl SubresourceResponseStarted {
+    pub fn with_request_cookie_report(mut self, report: Option<StoredCookieQueryReport>) -> Self {
+        self.request_cookie_report = report;
+        self
+    }
+
+    pub fn request_cookie_report(&self) -> Option<&StoredCookieQueryReport> {
+        self.request_cookie_report.as_ref()
+    }
     pub fn new(
         handle: SubresourceNetworkRequestHandle,
         redirect_chain: Vec<NavigationRedirect>,
@@ -1269,6 +1278,7 @@ impl SubresourceResponseStarted {
             status_text: None,
             response_headers,
             cookie_set_reports,
+            request_cookie_report: None,
             from_cache: false,
             network_request_headers: None,
             negotiated_http_version: None,
@@ -2051,7 +2061,10 @@ impl SubresourceNetworkRecord {
                     request.request_headers.clone(),
                     request.request_body.clone(),
                     request.resource_type,
-                    request.request_cookie_report.clone(),
+                    response
+                        .request_cookie_report
+                        .clone()
+                        .or_else(|| request.request_cookie_report.clone()),
                     response.redirect_chain.clone(),
                     response.final_url.clone(),
                     response.status,
@@ -2085,7 +2098,9 @@ impl SubresourceNetworkRecord {
                         request_body_bytes: request.request_body_bytes.clone(),
                         resource_type: request.resource_type,
                         request_initiator_type: request.request_initiator_type,
-                        request_cookie_report: request.request_cookie_report.clone(),
+                        request_cookie_report: response
+                            .and_then(|response| response.request_cookie_report.clone())
+                            .or_else(|| request.request_cookie_report.clone()),
                         outcome: SubresourceNetworkOutcome::Failure {
                             error_text: error_text.clone(),
                         },
@@ -3763,14 +3778,18 @@ mod tests {
         );
         let mut report = ScriptExecutionReport::default();
         report.extend_network_output(ScriptNetworkOutput::from_items([
-            ScriptNetworkOutputItem::SubresourceRequestStarted(Box::new(request.clone())),
+            ScriptNetworkOutputItem::SubresourceRequestStarted(std::sync::Arc::new(
+                request.clone(),
+            )),
         ]));
         report.extend_network_output(ScriptNetworkOutput::from_items([
-            ScriptNetworkOutputItem::SubresourceResponseStarted(Box::new(response.clone())),
+            ScriptNetworkOutputItem::SubresourceResponseStarted(std::sync::Arc::new(
+                response.clone(),
+            )),
         ]));
         assert!(report.subresource_network_records().is_empty());
         report.extend_network_output(ScriptNetworkOutput::from_items([
-            ScriptNetworkOutputItem::SubresourceBodyFinished(Box::new(body.clone())),
+            ScriptNetworkOutputItem::SubresourceBodyFinished(std::sync::Arc::new(body.clone())),
         ]));
 
         let [record] = report.subresource_network_records() else {

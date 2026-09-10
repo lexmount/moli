@@ -2192,99 +2192,70 @@ __swNonStreamFailurePromise.then(
 
 #[tokio::test(flavor = "current_thread")]
 async fn streaming_fetch_body_error_records_response_started_then_body_failed() {
-    let load_owner =
-        crate::network::ResourceRequestClient::new(&moli_fetch::FetchConfig::default())
-            .expect("streaming fetch error test loader");
-    let load_client = load_owner.handle();
     let mut vm = new_storage_test_vm("https://streaming-fetch-body-error.test/");
-    let internal_id = 100;
+    vm.set_fetch_subresource_interception(true, Some(crate::types::SubresourceResourceType::Fetch));
+    vm.eval("void fetch('/data')")
+        .expect("streaming Fetch request should be intercepted");
+    let pending = vm.take_pending_subresource_fetch_infos();
+    assert_eq!(pending.len(), 1);
+    let internal_id = pending[0].internal_id;
+    let request_handle = pending[0]
+        .network_request_handle
+        .expect("the real request must have a Network handle");
     let body_source_id = crate::network_host::new_network_body_source_id();
-    let request_handle = crate::types::SubresourceNetworkRequestHandle::new(44);
-    let request_url = Url::parse("https://streaming-fetch-body-error.test/data")
-        .expect("request URL should parse");
     let final_url = Url::parse("https://streaming-fetch-body-error.test/final")
         .expect("final URL should parse");
+    let mut items: Vec<_> = vm
+        ._context_host
+        .borrow_mut()
+        .take_network_output()
+        .into_items()
+        .collect();
+    assert!(
+        items.is_empty(),
+        "Request-stage interception has not dispatched a request: {items:?}"
+    );
 
-    let context_ptr: *const v8::Global<v8::Context> = &vm.page_default_context as *const _;
-    let context_host = vm._context_host.clone();
-    vm.renderer_document_isolate
-        .with_entered_renderer_document_isolate({
-            let request_url = request_url.clone();
-            let final_url = final_url.clone();
-            move |isolate| {
-                let scope = std::pin::pin!(v8::HandleScope::new(isolate));
-                let scope = &mut scope.init();
-                let context = unsafe { v8::Local::new(scope, &*context_ptr) };
-                let scope = &mut v8::ContextScope::new(scope, context);
-                let resolver = v8::PromiseResolver::new(scope).expect("resolver should be created");
-                let mut body_writer = crate::types::SubresourceResponseBodyWriter::default();
-                body_writer.append(b"partial");
-                let continuation =
-                    pending_fetch_continuation(scope, resolver, &context_host.borrow());
+    // Exercise the real HEAD transition, not an already-streaming fixture
+    // which bypasses response publication and expects it at failure time.
+    vm.start_streaming_async_subresource_fetch(crate::types::AsyncSubresourceStreamingStarted {
+        internal_id,
+        request_url: pending[0].url.clone(),
+        request_method: "GET".to_owned(),
+        request_headers: Vec::new(),
+        request_body: None,
+        body_source_id,
+        head: moli_fetch::ResponseHead {
+            final_url: final_url.clone(),
+            status: 206,
+            headers: vec![("content-type".to_owned(), "text/plain".to_owned())],
+            request_cookie_report: None,
+            cookie_set_reports: Vec::new(),
+            redirected: false,
+            redirect_chain: Vec::new(),
+            from_cache: false,
+            negotiated_http_version: None,
+        },
+        network_request_headers: None,
+    })
+    .expect("streaming Fetch headers should be delivered");
+    items.extend(
+        vm._context_host
+            .borrow_mut()
+            .take_network_output()
+            .into_items(),
+    );
+    assert!(
+        matches!(
+            items.as_slice(),
+            [
+                crate::types::ScriptNetworkOutputItem::SubresourceResponseStarted(response)
+            ] if response.handle() == request_handle
+        ),
+        "the real response must be published before the body can fail: {items:?}"
+    );
 
-                context_host
-                    .borrow_mut()
-                    .record_streaming_subresource_fetch(super::StreamingSubresourceFetchState {
-                        pending: super::PendingSubresourceFetchState {
-                            info: crate::types::PendingSubresourceFetchInfo {
-                                internal_id,
-                                network_request_handle: Some(request_handle),
-                                frame_id: Some("FRAME-1".to_owned()),
-                                document_url: Url::parse(
-                                    "https://streaming-fetch-body-error.test/",
-                                )
-                                .expect("document URL should parse"),
-                                url: request_url.clone(),
-                                websocket_socket_id: None,
-                                method: "GET".to_owned(),
-                                request_headers: Vec::new(),
-                                request_body: None,
-                                request_body_bytes: None,
-                                resource_type: crate::types::SubresourceResourceType::Fetch,
-                                request_cookie_report: None,
-                            },
-                            execution_context:
-                                crate::types::PendingSubresourceExecutionContext::adapter(
-                                    crate::native_bridge::OwnerDispatchScope::Top,
-                                    v8::Global::new(scope, context),
-                                ),
-                            credentials_mode: moli_fetch::RequestCredentialsMode::SameOrigin,
-                            request_mode: moli_fetch::RequestMode::Cors,
-                            network_partition_key: None,
-                            policy_context: Default::default(),
-                            continuation,
-                            load: crate::network::loads::resource_load_lease_for_test(
-                                load_client,
-                                None,
-                            ),
-                            deferred_request_started: false,
-                        },
-                        request_url: request_url.clone(),
-                        request_method: "GET".to_owned(),
-                        request_headers: Vec::new(),
-                        request_body: None,
-                        body_source_id,
-                        head: moli_fetch::ResponseHead {
-                            final_url: final_url.clone(),
-                            status: 206,
-                            headers: vec![("content-type".to_owned(), "text/plain".to_owned())],
-                            request_cookie_report: None,
-                            cookie_set_reports: Vec::new(),
-                            redirected: false,
-                            redirect_chain: Vec::new(),
-                            from_cache: false,
-                            negotiated_http_version: None,
-                        },
-                        network_request_headers: None,
-                        body_writer,
-                        event_source_parser: None,
-                        xhr_response: None,
-                    });
-                Ok(())
-            }
-        })
-        .expect("streaming fetch fixture should be recorded");
-
+    vm.append_streaming_async_subresource_fetch_chunk(body_source_id, b"partial".to_vec());
     vm.finish_streaming_async_subresource_fetch(
         internal_id,
         body_source_id,
@@ -2292,13 +2263,13 @@ async fn streaming_fetch_body_error_records_response_started_then_body_failed() 
     )
     .expect("streaming fetch finish error should record staged network output");
 
-    let items: Vec<_> = vm
-        ._context_host
-        .borrow_mut()
-        .take_network_output()
-        .into_items()
-        .collect();
-    assert_eq!(items.len(), 2);
+    items.extend(
+        vm._context_host
+            .borrow_mut()
+            .take_network_output()
+            .into_items(),
+    );
+    assert_eq!(items.len(), 2, "failure must not repeat the response HEAD");
     match &items[0] {
         crate::types::ScriptNetworkOutputItem::SubresourceResponseStarted(response) => {
             assert_eq!(response.handle(), request_handle);

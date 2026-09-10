@@ -1463,15 +1463,36 @@ impl CdpConnection {
         item: &moli_core::page::ScriptNetworkOutputItem,
     ) -> Option<crate::domains::network::TargetNetworkBacklogPreparedDelivery> {
         let owner = CommandOwnerScope::capture(self, session_id);
-        self.ingest_renderer_page_network_output_item_and_prepare_live_delivery_for_owner(
-            &owner,
-            None,
-            source_document,
-            item,
+        self.project_network_output_item_for_owner(&owner, None, source_document, item)
+    }
+
+    pub(crate) fn ingest_browser_network_observation_for_owner(
+        &mut self,
+        owner: &CommandOwnerScope,
+        source_renderer_page: Option<RendererPageResidenceIdentity>,
+        committed: &moli_core::page::RendererCommittedNetworkObservation,
+    ) -> Option<crate::domains::network::TargetNetworkBacklogPreparedDelivery> {
+        let occurrence = committed.occurrence();
+        let (context_id, _) = self.resolved_page_owner_identity_for_owner(owner)?;
+        let context = self.browser_context_by_id(&context_id)?;
+        if !context.routes_renderer_browser_context_runtime(occurrence.runtime)
+            || source_renderer_page
+                != Some(RendererPageResidenceIdentity::from_parts(
+                    occurrence.owner_local_host_id,
+                    occurrence.document.document.page_id,
+                ))
+        {
+            return None;
+        }
+        self.project_network_output_item_for_owner(
+            owner,
+            source_renderer_page,
+            occurrence.document,
+            &occurrence.item,
         )
     }
 
-    pub(crate) fn ingest_renderer_page_network_output_item_and_prepare_live_delivery_for_owner(
+    fn project_network_output_item_for_owner(
         &mut self,
         owner: &CommandOwnerScope,
         source_renderer_page: Option<RendererPageResidenceIdentity>,

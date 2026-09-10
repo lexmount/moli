@@ -1109,6 +1109,15 @@ impl BrowserContext {
             && binding.renderer_document_identity() == source_document
         {
             let loader_id = binding.loader_id.clone();
+            if self
+                .page_targets
+                .get(target_id)?
+                .runtime_slot
+                .network_agent
+                .has_observed_network_phase(item)
+            {
+                return None;
+            }
             self.page_targets
                 .get_mut(target_id)
                 .expect("resolved target projection must remain live")
@@ -1150,6 +1159,9 @@ impl BrowserContext {
                 entry.binding.renderer_document_identity() == source_document
                     && source_renderer_page.is_none_or(|page| entry.renderer_page == page)
             })?;
+        if retiring.network_agent.has_observed_network_phase(item) {
+            return None;
+        }
         Some(
             retiring
                 .network_agent
@@ -1295,7 +1307,7 @@ mod tests {
         let document_url = Url::parse("https://old.example/").expect("document URL should parse");
         let request_url =
             Url::parse("https://old.example/keepalive").expect("request URL should parse");
-        let started = ScriptNetworkOutputItem::SubresourceRequestStarted(Box::new(
+        let started = ScriptNetworkOutputItem::SubresourceRequestStarted(std::sync::Arc::new(
             SubresourceRequestStarted::new(
                 handle,
                 None,

@@ -287,7 +287,7 @@ mod tests {
         )
         .with_status_text(Some("Not Found".to_owned()));
         let items = [ScriptNetworkOutputItem::SubresourceResponseStarted(
-            Box::new(response),
+            std::sync::Arc::new(response),
         )];
         let mut queue = TargetLogOutputQueueState::default();
 

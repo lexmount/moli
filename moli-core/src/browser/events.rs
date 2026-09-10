@@ -12,6 +12,11 @@ pub enum BrowserEvent {
     WorkerCreated(super::WorkerSnapshot),
     WorkerUpdated(super::WorkerSnapshot),
     WorkerDestroyed(super::WorkerHandle),
+    NetworkRequestStarted(super::NetworkOccurrence),
+    NetworkRequestCompleted(super::NetworkOccurrence),
+    NetworkActivity(super::NetworkOccurrence),
+    /// Observation source retired; this is not a synthetic transport result.
+    NetworkSourceClosed(DocumentHandle),
     WebContentsCreated(WebContentsHandle),
     WebContentsActivated {
         web_contents: WebContentsHandle,
@@ -75,6 +80,7 @@ pub struct BrowserSnapshot {
     pub navigations: Vec<NavigationSnapshot>,
     pub downloads: Vec<super::DownloadRecordSnapshot>,
     pub workers: Vec<super::WorkerSnapshot>,
+    pub network_requests: Vec<super::NetworkRequestSnapshot>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -214,6 +220,7 @@ impl BrowserEventStream {
         javascript_dialogs: impl Iterator<Item = JavaScriptDialogOpened>,
         navigations: impl Iterator<Item = NavigationSnapshot>,
         workers: impl Iterator<Item = super::WorkerSnapshot>,
+        network_requests: impl Iterator<Item = super::NetworkRequestSnapshot>,
     ) -> (BrowserSnapshot, BrowserEventReceiver) {
         (
             BrowserSnapshot {
@@ -227,6 +234,7 @@ impl BrowserEventStream {
                 javascript_dialogs: javascript_dialogs.collect(),
                 navigations: navigations.collect(),
                 workers: workers.collect(),
+                network_requests: network_requests.collect(),
             },
             self.sender.subscribe(),
         )
@@ -429,6 +437,7 @@ mod tests {
             std::iter::empty(),
             std::iter::empty(),
             std::iter::empty(),
+            std::iter::empty(),
         );
         for _ in 0..257 {
             stream.publish(BrowserEvent::ContextCreated(context));
@@ -436,6 +445,7 @@ mod tests {
         assert_eq!(slow.try_recv(), Err(TryRecvError::Lagged(1)));
         let (snapshot, mut recovered) = stream.subscribe(
             std::iter::once(context),
+            std::iter::empty(),
             std::iter::empty(),
             std::iter::empty(),
             std::iter::empty(),

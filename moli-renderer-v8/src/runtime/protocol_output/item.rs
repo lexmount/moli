@@ -15,7 +15,6 @@ use crate::runtime::{
 };
 use moli_page_types::{
     PendingRuntimeBindingCall, PendingSubresourceContinueEvent, PendingSubresourceFetchInfo,
-    ScriptNetworkOutputItem,
 };
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -83,10 +82,7 @@ pub enum RendererProtocolObservation {
     MainDocumentCommit(RendererMainDocumentCommit),
     DocumentTitleChanged(RendererDocumentTitleChanged),
     DocumentLifecycle(RendererDocumentLifecycleEvent),
-    Network {
-        source_document: RendererDocumentLifecycleIdentity,
-        item: ScriptNetworkOutputItem,
-    },
+    Network(crate::runtime::RendererNetworkObservation),
     RuntimeBinding(PendingRuntimeBindingCall),
     DomMutations(RendererDomMutationEventBatch),
     RuntimeInspector(RendererRuntimeInspectorMessageBatch),

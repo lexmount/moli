@@ -174,6 +174,7 @@ pub(crate) struct RendererStoragePartitionIdentity {
 struct RendererBrowserContextRuntimeInner {
     id: super::RendererBrowserContextRuntimeId,
     worker_lifecycle: super::RendererWorkerLifecycleReporter,
+    network: super::RendererNetworkReporter,
     message_port_registry: crate::message_port_runtime::SharedMessagePortRegistry,
     broadcast_channel_registry: crate::broadcast_channel_runtime::SharedBroadcastChannelRegistry,
     browser_resource_runtime: crate::network::BrowserResourceRuntimeBinding,
@@ -560,6 +561,7 @@ impl RendererBrowserContextRuntime {
             inner: Arc::new(RendererBrowserContextRuntimeInner {
                 id,
                 worker_lifecycle,
+                network: super::RendererNetworkReporter::new(id),
                 message_port_registry,
                 broadcast_channel_registry,
                 browser_resource_runtime: browser_resource_runtime.clone(),
@@ -612,6 +614,34 @@ impl RendererBrowserContextRuntime {
         lifecycle: super::RendererWorkerLifecycle,
     ) -> super::RendererWorkerLifecycleObservation {
         self.inner.worker_lifecycle.report(lifecycle)
+    }
+
+    /// Native input is installed independently of DevTools transport. This
+    /// callback must enqueue work and never block a renderer on Browser.
+    pub fn install_network_handler(
+        &self,
+        handler: impl Fn(super::RendererNetworkInput) + Send + Sync + 'static,
+    ) {
+        self.inner.network.install_handler(handler);
+    }
+
+    pub(crate) fn report_network(
+        &self,
+        owner_local_host_id: super::RendererOwnerLocalHostId,
+        document: super::RendererDocumentLifecycleIdentity,
+        item: moli_page_types::ScriptNetworkOutputItem,
+    ) -> super::RendererNetworkObservation {
+        self.inner
+            .network
+            .report(owner_local_host_id, document, item)
+    }
+
+    pub(crate) fn close_network_source(
+        &self,
+        owner_local_host_id: super::RendererOwnerLocalHostId,
+        page: super::PageId,
+    ) {
+        self.inner.network.close_source(owner_local_host_id, page);
     }
 
     pub(crate) fn set_renderer_output_transport_sender(

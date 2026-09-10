@@ -34,6 +34,7 @@ mod document_queries;
 mod fetch;
 mod input;
 mod navigation;
+mod network;
 mod permissions;
 mod residence;
 mod resource_commands;
@@ -217,6 +218,7 @@ pub struct BrowserContext {
     permission_overrides: PermissionOverrides,
     download_policy: Option<DownloadPolicy>,
     pub(in crate::browser) downloads: super::downloads::DownloadManager,
+    pub(in crate::browser) network_requests: super::network::NetworkRequests,
     pub(in crate::browser) dedicated_workers: IndexMap<u64, super::DedicatedWorkerSnapshot>,
     pub(in crate::browser) service_workers: IndexMap<u64, super::ServiceWorkerSnapshot>,
     pub(in crate::browser) shared_workers: IndexMap<
@@ -357,6 +359,7 @@ impl BrowserContext {
             permission_overrides: PermissionOverrides::default(),
             download_policy: None,
             downloads: super::downloads::DownloadManager::default(),
+            network_requests: super::network::NetworkRequests::default(),
             shared_workers: IndexMap::new(),
             service_workers: IndexMap::new(),
             dedicated_workers: IndexMap::new(),

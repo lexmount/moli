@@ -2700,6 +2700,40 @@ impl TargetNetworkOutputQueue {
         self.append_page_output_item_for_loader(item, document_loader_id, &mut subresource_index);
     }
 
+    /// Recovery repeats request phases, not transient SSE/WebSocket messages.
+    /// Existing per-request publication state is sufficient; a Context-wide
+    /// BrowserSequence would swallow other Pages' still-pending source FIFOs.
+    pub(crate) fn has_observed_network_phase(&self, item: &ScriptNetworkOutputItem) -> bool {
+        match item {
+            ScriptNetworkOutputItem::SubresourceRequestStarted(request) => {
+                self.completed_subresource_handles
+                    .contains(&request.handle())
+                    || self
+                        .staged_subresource_requests
+                        .contains_key(&request.handle())
+            }
+            ScriptNetworkOutputItem::SubresourceResponseStarted(response) => {
+                self.completed_subresource_handles
+                    .contains(&response.handle())
+                    || self
+                        .staged_subresource_responses
+                        .contains_key(&response.handle())
+            }
+            ScriptNetworkOutputItem::SubresourceBodyFinished(body) => {
+                self.completed_subresource_handles.contains(&body.handle())
+            }
+            ScriptNetworkOutputItem::SubresourceNetworkRecord(record) => record
+                .request_handle()
+                .is_some_and(|handle| self.completed_subresource_handles.contains(&handle)),
+            ScriptNetworkOutputItem::SubresourceDataReceived(data) => {
+                self.completed_subresource_handles.contains(&data.handle())
+            }
+            ScriptNetworkOutputItem::SubresourceEventSourceMessageReceived(_)
+            | ScriptNetworkOutputItem::WebSocketNetworkEvent(_)
+            | ScriptNetworkOutputItem::WebSocketLifecycleEvent(_) => false,
+        }
+    }
+
     fn append_page_output_item_for_loader(
         &mut self,
         item: &ScriptNetworkOutputItem,
@@ -2720,11 +2754,20 @@ impl TargetNetworkOutputQueue {
                 *subresource_index += 1;
             }
             ScriptNetworkOutputItem::SubresourceResponseStarted(response) => {
+                if self
+                    .completed_subresource_handles
+                    .contains(&response.handle())
+                    || self
+                        .staged_subresource_responses
+                        .contains_key(&response.handle())
+                {
+                    return;
+                }
                 self.append_missing_subresource_request_extra_info(
                     *subresource_index,
                     response.handle(),
                     response.network_request_headers(),
-                    None,
+                    response.request_cookie_report(),
                 );
                 if self.append_subresource_response_started(*subresource_index, response) {
                     *subresource_index += 1;
@@ -2768,7 +2811,7 @@ impl TargetNetworkOutputQueue {
         record: &SubresourceNetworkRecord,
     ) {
         if let Some(handle) = record.request_handle() {
-            if !self.completed_subresource_handles.insert(handle) {
+            if self.completed_subresource_handles.contains(&handle) {
                 self.subresource_record_count = index + 1;
                 return;
             }
@@ -2777,6 +2820,7 @@ impl TargetNetworkOutputQueue {
                 self.subresource_record_count = index + 1;
                 return;
             }
+            self.completed_subresource_handles.insert(handle);
         }
         let delivery_order_index = self.next_delivery_order_index();
         self.delivery_outputs
@@ -2849,12 +2893,14 @@ impl TargetNetworkOutputQueue {
         handle: SubresourceNetworkRequestHandle,
         record: &SubresourceNetworkRecord,
     ) {
-        self.append_missing_subresource_request_extra_info(
-            index,
-            handle,
-            record.network_request_headers(),
-            record.request_cookie_report(),
-        );
+        if !self.staged_subresource_responses.contains_key(&handle) {
+            self.append_missing_subresource_request_extra_info(
+                index,
+                handle,
+                record.network_request_headers(),
+                record.request_cookie_report(),
+            );
+        }
         match record.outcome() {
             SubresourceNetworkOutcome::Success {
                 redirect_chain,
@@ -2897,6 +2943,18 @@ impl TargetNetworkOutputQueue {
         document_loader_id: &str,
         request: &SubresourceRequestStarted,
     ) {
+        // Atomic Browser recovery may repeat a phase already observed through
+        // the source FIFO. Keep publication state, not another native cursor.
+        if self
+            .completed_subresource_handles
+            .contains(&request.handle())
+            || self
+                .staged_subresource_requests
+                .contains_key(&request.handle())
+        {
+            self.subresource_record_count = index + 1;
+            return;
+        }
         let delivery_order_index = self.next_delivery_order_index();
         let output = Arc::new(
             TargetSubresourceRequestStartedOutput::from_page_request_started(
@@ -2918,6 +2976,12 @@ impl TargetNetworkOutputQueue {
         index: usize,
         response: &SubresourceResponseStarted,
     ) -> bool {
+        if self
+            .staged_subresource_responses
+            .contains_key(&response.handle())
+        {
+            return false;
+        }
         let Some(request) = self
             .staged_subresource_requests
             .get(&response.handle())
@@ -3039,6 +3103,9 @@ impl TargetNetworkOutputQueue {
         else {
             return false;
         };
+        if !self.completed_subresource_handles.insert(body.handle()) {
+            return false;
+        }
         let response = self
             .staged_subresource_responses
             .get(&body.handle())
@@ -3414,9 +3481,9 @@ mod tests {
             SubresourceResponseBody::from_bytes(vec![1, 2, 3]),
         );
         let items = vec![
-            ScriptNetworkOutputItem::SubresourceRequestStarted(Box::new(request)),
-            ScriptNetworkOutputItem::SubresourceResponseStarted(Box::new(response)),
-            ScriptNetworkOutputItem::SubresourceBodyFinished(Box::new(body)),
+            ScriptNetworkOutputItem::SubresourceRequestStarted(std::sync::Arc::new(request)),
+            ScriptNetworkOutputItem::SubresourceResponseStarted(std::sync::Arc::new(response)),
+            ScriptNetworkOutputItem::SubresourceBodyFinished(std::sync::Arc::new(body)),
         ];
         let mut output_queue = TargetNetworkOutputQueue::default();
         append_concrete_items_for_test(&mut output_queue, &items, "LOADER-1");
@@ -3517,6 +3584,16 @@ mod tests {
             outputs[1],
             TargetSubresourceNetworkDeliveryOutput::BodyFinished(_)
         ));
+        let count = output_queue.delivery_outputs.outputs.len();
+        for item in &items {
+            assert!(output_queue.has_observed_network_phase(item));
+        }
+        append_concrete_items_for_test(&mut output_queue, &items, "LOADER-1");
+        assert_eq!(
+            output_queue.delivery_outputs.outputs.len(),
+            count,
+            "recovery cannot duplicate phases from the source FIFO"
+        );
     }
 
     #[test]
@@ -3539,7 +3616,7 @@ mod tests {
         let record = subresource_record(SubresourceResourceType::Fetch, request_url.as_str())
             .with_request_handle(handle);
         let items = vec![
-            ScriptNetworkOutputItem::SubresourceRequestStarted(Box::new(request)),
+            ScriptNetworkOutputItem::SubresourceRequestStarted(std::sync::Arc::new(request)),
             ScriptNetworkOutputItem::SubresourceNetworkRecord(Box::new(record.clone())),
             ScriptNetworkOutputItem::SubresourceNetworkRecord(Box::new(record)),
         ];
@@ -3584,7 +3661,7 @@ mod tests {
             Url::parse("https://example.com/page").expect("document URL should parse");
         let request_url =
             Url::parse("https://example.com/incremental").expect("request URL should parse");
-        let request = ScriptNetworkOutputItem::SubresourceRequestStarted(Box::new(
+        let request = ScriptNetworkOutputItem::SubresourceRequestStarted(std::sync::Arc::new(
             SubresourceRequestStarted::new(
                 handle,
                 Some("FRAME-1".to_owned()),
@@ -3654,7 +3731,7 @@ mod tests {
                 "Moli/Test".to_owned(),
             )]));
         let items = vec![
-            ScriptNetworkOutputItem::SubresourceRequestStarted(Box::new(request)),
+            ScriptNetworkOutputItem::SubresourceRequestStarted(std::sync::Arc::new(request)),
             ScriptNetworkOutputItem::SubresourceNetworkRecord(Box::new(record)),
         ];
         let mut output_queue = TargetNetworkOutputQueue::default();
@@ -3738,7 +3815,7 @@ mod tests {
         .with_request_handle(handle)
         .with_from_cache(true);
         let items = vec![
-            ScriptNetworkOutputItem::SubresourceRequestStarted(Box::new(request)),
+            ScriptNetworkOutputItem::SubresourceRequestStarted(std::sync::Arc::new(request)),
             ScriptNetworkOutputItem::SubresourceNetworkRecord(Box::new(record)),
         ];
         let mut output_queue = TargetNetworkOutputQueue::default();

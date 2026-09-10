@@ -141,7 +141,9 @@ fn observation_transport_charge_bytes(observation: &RendererProtocolObservation)
         RendererProtocolObservation::SharedWorker(event) => {
             shared_worker_event_transport_charge_bytes(event)
         }
-        RendererProtocolObservation::Network { item, .. } => item.renderer_transport_charge_bytes(),
+        RendererProtocolObservation::Network(observation) => {
+            observation.item().renderer_transport_charge_bytes()
+        }
         RendererProtocolObservation::RuntimeBinding(call) => {
             string_charge(&call.name).saturating_add(string_charge(&call.payload))
         }

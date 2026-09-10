@@ -40,20 +40,17 @@ impl PreparedProtocolOutputs {
     /// The resulting prepared tokens are move-owned by this publication.
     /// Projection cannot later scan the target backlog, while `Network.enable`
     /// and `Log.enable` retain their independent Chromium-compatible policies.
-    pub(in crate::domains::activity) fn from_renderer_network_observation(
+    pub(in crate::domains::activity) fn from_browser_network_observation(
         conn: &mut CdpConnection,
         owner: &CommandOwnerScope,
         source_renderer_page: Option<crate::conn::RendererPageResidenceIdentity>,
-        source_document: moli_core::RendererDocumentLifecycleIdentity,
-        item: &moli_core::page::ScriptNetworkOutputItem,
+        committed: &moli_core::page::RendererCommittedNetworkObservation,
     ) -> Option<Self> {
-        let renderer_live = conn
-            .ingest_renderer_page_network_output_item_and_prepare_live_delivery_for_owner(
-                owner,
-                source_renderer_page,
-                source_document,
-                item,
-            )?;
+        let renderer_live = conn.ingest_browser_network_observation_for_owner(
+            owner,
+            source_renderer_page,
+            committed,
+        )?;
 
         let mut prepared = Self::empty();
         crate::domains::observable_output::live_log_prepared_outputs_for_renderer_network_fact(
@@ -154,7 +151,7 @@ impl PreparedProtocolOutputs {
             RendererProtocolObservation::DocumentLifecycle(_) => unreachable!(
                 "renderer lifecycle must be admitted by the Browser before preparing projection"
             ),
-            RendererProtocolObservation::Network { .. } => unreachable!(
+            RendererProtocolObservation::Network(_) => unreachable!(
                 "renderer Network facts require the ingress-bound live projection constructor"
             ),
             RendererProtocolObservation::RuntimeBinding(call) => {
