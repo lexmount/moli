@@ -11,6 +11,9 @@ async fn child_navigation_lifecycle(via: &str, kind: &str, depth: usize) -> Resu
     let markup = format!(
         r#"<!doctype html><body><script>
           window.events = [];
+          window.visibility = [];
+          window.bubbledVisibility = [];
+          window.syntheticDispatchCalled = false;
           window.staleTimerRan = false;
           window.unloadNavigationRan = false;
           window.finished = (async () => {{
@@ -24,18 +27,31 @@ async fn child_navigation_lifecycle(via: &str, kind: &str, depth: usize) -> Resu
               const win = frame.contentWindow;
               for (const type of ['beforeunload', 'pagehide', 'unload'])
                 win.addEventListener(type, () => events.push(label + ':' + type));
-              win.document.addEventListener('visibilitychange', () =>
-                events.push(label + ':visibilitychange'));
-              win.addEventListener('unload', () => {{
+              win.document.addEventListener('visibilitychange', event => {{
+                events.push(label + ':visibilitychange');
+                visibility.push({{label, hidden: win.document.hidden,
+                  state: win.document.visibilityState, trusted: event.isTrusted,
+                  bubbles: event.bubbles, cancelable: event.cancelable,
+                  documentTarget: event.target === win.document}});
+              }});
+              win.addEventListener('visibilitychange', () => bubbledVisibility.push(label));
+              win.document.dispatchEvent = () => {{ syntheticDispatchCalled = true; }};
+              const cleanup = () => {{
                 win.setTimeout(() => staleTimerRan = true, 0);
                 win.location.href = 'javascript:top.unloadNavigationRan = true; void 0';
-              }});
+              }};
+              win.addEventListener('unload', cleanup);
+              win.document.addEventListener('visibilitychange', cleanup);
               return frame;
             }}
             const frame = await makeFrame(window, 'target');
             let owner = frame.contentWindow;
             for (let i = 0; i < {depth}; ++i)
               owner = (await makeFrame(owner, 'descendant-' + i)).contentWindow;
+            if ({depth} > 0) owner.addEventListener('unload', () => {{
+              frame.contentWindow.location.href =
+                'javascript:top.unloadNavigationRan = true; void 0';
+            }});
             const unrelated = await makeFrame(window, 'unrelated');
             const oldDocument = frame.contentDocument;
             const unrelatedDocument = unrelated.contentDocument;
@@ -60,8 +76,10 @@ async fn child_navigation_lifecycle(via: &str, kind: &str, depth: usize) -> Resu
             }}
             await done;
             await new Promise(resolve => setTimeout(resolve, 0));
-            return {{events, staleTimerRan, unloadNavigationRan, loads,
+            return {{events, visibility, bubbledVisibility, syntheticDispatchCalled,
+              staleTimerRan, unloadNavigationRan, loads,
               sameDocument: frame.contentDocument === oldDocument,
+              oldHidden: oldDocument.hidden, newHidden: frame.contentDocument.hidden,
               unrelatedUnchanged: unrelated.contentDocument === unrelatedDocument,
               text: frame.contentDocument.body.textContent,
               children: frame.contentWindow.length}};
@@ -83,6 +101,11 @@ async fn child_navigation_lifecycle(via: &str, kind: &str, depth: usize) -> Resu
     server.shutdown().await;
     assert_eq!(result["unrelatedUnchanged"], true, "{via}/{kind}: {result}");
     assert_eq!(result["staleTimerRan"], false, "{via}/{kind}: {result}");
+    assert_eq!(
+        result["syntheticDispatchCalled"], false,
+        "{via}/{kind}: {result}"
+    );
+    assert_eq!(result["newHidden"], false, "{via}/{kind}: {result}");
     assert_eq!(
         result["unloadNavigationRan"], false,
         "{via}/{kind}: {result}"
@@ -137,28 +160,63 @@ async fn child_javascript_url_non_string_preserves_document_and_descendants() ->
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn ordinary_child_navigation_still_dispatches_beforeunload() -> Result<()> {
+async fn ordinary_child_navigation_unloads_descendants_and_updates_visibility() -> Result<()> {
     for via in ["location", "src", "anchor"] {
-        let result = child_navigation_lifecycle(via, "network", 0).await?;
-        assert_eq!(result["sameDocument"], false);
-        assert_eq!(result["loads"], 1);
-        assert_eq!(result["text"], "network");
-        let events: Vec<_> = result["events"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .filter(|event| *event != "target:visibilitychange")
-            .cloned()
-            .collect();
-        assert_eq!(
-            events,
-            vec![
-                json!("target:beforeunload"),
-                json!("target:pagehide"),
-                json!("target:unload")
-            ],
-            "{via}: {result}"
-        );
+        for depth in [0, 2] {
+            let result = child_navigation_lifecycle(via, "network", depth).await?;
+            assert_eq!(result["sameDocument"], false);
+            assert_eq!(result["loads"], 1);
+            assert_eq!(result["text"], "network");
+            assert_eq!(result["oldHidden"], true);
+            let events = result["events"].as_array().unwrap();
+            let labels: Vec<_> = std::iter::once("target".to_owned())
+                .chain((0..depth).map(|index| format!("descendant-{index}")))
+                .collect();
+            // Cancellation checks for every document precede actual unloads.
+            assert!(
+                events
+                    .iter()
+                    .take(labels.len())
+                    .all(|event| event.as_str().unwrap().ends_with(":beforeunload")),
+                "{via}/{depth}: {result}"
+            );
+            for label in &labels {
+                let actual: Vec<_> = events
+                    .iter()
+                    .filter(|event| event.as_str().unwrap().starts_with(&format!("{label}:")))
+                    .cloned()
+                    .collect();
+                assert_eq!(
+                    actual,
+                    vec![
+                        json!(format!("{label}:beforeunload")),
+                        json!(format!("{label}:pagehide")),
+                        json!(format!("{label}:visibilitychange")),
+                        json!(format!("{label}:unload"))
+                    ],
+                    "{via}/{depth}: {result}"
+                );
+                assert!(
+                    result["visibility"].as_array().unwrap().contains(&json!({
+                        "label": label, "hidden": true, "state": "hidden", "trusted": true,
+                        "bubbles": true, "cancelable": false, "documentTarget": true
+                    })),
+                    "{via}/{depth}: {result}"
+                );
+                assert!(
+                    result["bubbledVisibility"]
+                        .as_array()
+                        .unwrap()
+                        .contains(&json!(label))
+                );
+            }
+            assert_eq!(events.len(), 4 * labels.len(), "{via}/{depth}: {result}");
+            assert_eq!(result["visibility"].as_array().unwrap().len(), labels.len());
+            assert_eq!(
+                result["bubbledVisibility"].as_array().unwrap().len(),
+                labels.len()
+            );
+        }
     }
     Ok(())
 }
