@@ -10,7 +10,8 @@ pub(super) struct Handshake {
     pub request: Vec<u8>,
     pub response: Vec<u8>,
     pub error: Option<String>,
-    pub connection_pool: Option<std::rc::Rc<super::connection_pool::ConnectionPool>>,
+    #[cfg(test)]
+    pub pool_waiting: Option<std::sync::Arc<tokio::sync::Notify>>,
     proxy_connect: bool,
     header_bytes: usize,
 }
@@ -44,6 +45,16 @@ impl Handler for Handshake {
     }
 
     fn debug(&mut self, kind: InfoType, data: &[u8]) {
+        // Observe libcurl's actual admission decision in tests. Merely seeing
+        // connect() return does not prove that a handle is waiting for a slot.
+        #[cfg(test)]
+        if matches!(kind, InfoType::Text)
+            && (data.starts_with(b"No more connections allowed to host")
+                || data.starts_with(b"No connections available, total of"))
+            && let Some(waiting) = &self.pool_waiting
+        {
+            waiting.notify_one();
+        }
         if matches!(kind, InfoType::HeaderOut) {
             self.proxy_connect = data.starts_with(b"CONNECT ");
             if data.starts_with(b"GET ") && data.len() <= MAX_HEADERS {

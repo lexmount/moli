@@ -34,6 +34,11 @@ struct ConnectorInner {
 }
 
 impl CurlWebSocketConnector {
+    #[cfg(test)]
+    pub(super) fn available_session_slots(&self) -> usize {
+        self.inner.slots.available_permits()
+    }
+
     pub(crate) fn channel() -> (
         crossbeam_channel::Sender<Submission>,
         crossbeam_channel::Receiver<Submission>,

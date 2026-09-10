@@ -15,9 +15,11 @@ pub struct CurlMultiRuntimeConfig {
     /// Keep this separate from `max_host_connections`: the latter is a curl
     /// transport connection-pool cap and should not throttle HTTP/2 streams.
     pub max_host_active: Option<NonZeroUsize>,
-    /// libcurl per-host connection cap, matching Chromium's HTTP/1 socket-pool
-    /// concept when configured by the higher fetch runtime.
+    /// Shared libcurl per-host socket cap for HTTP/1, HTTP/2 and WebSockets.
+    /// Requests needing a new connection wait when the cap is reached; an
+    /// existing HTTP/2 connection can still carry additional streams.
     pub max_host_connections: Option<NonZeroUsize>,
+    /// Shared socket cap across all hosts and protocols on this runtime.
     pub max_total_connections: Option<NonZeroUsize>,
     pub max_concurrent_streams: Option<NonZeroUsize>,
     pub poll_interval: Duration,

@@ -126,7 +126,9 @@ async fn mixed_http2_and_websocket(tls: bool, shutdown: bool) -> Result<()> {
     });
     let mut config = FetchConfig::default();
     config.set_tls_verify_host(false);
-    config.set_transport_connection_limits(Some(1), Some(1), Some(8));
+    // One H2 socket and one WS/WSS socket fill the shared total budget. The
+    // concurrent H2 streams below must reuse their single physical connection.
+    config.set_transport_connection_limits(Some(1), Some(2), Some(8));
     let client = FetchClient::new(&config, new_shared_browser_cookie_store());
     let handle = client.handle();
     let held_url = format!("{h2_url}/held");

@@ -25,11 +25,10 @@ pub struct FetchConfig {
     // HTTP/2 can use multiple streams without being limited by the HTTP/1
     // socket default.
     http_max_host_open: Option<NonZeroU32>,
-    // Transport cap passed to libcurl's per-host connection pool. When unset,
-    // Moli uses Chromium's HTTP/1-style default of six connections per
-    // host/group.
+    // Shared HTTP/WS transport cap passed to libcurl's per-host connection
+    // pool. When unset, use six connections per host/group.
     http_max_host_connections: Option<u8>,
-    // Transport cap for total cached/open connections across hosts.
+    // Shared HTTP/WS transport cap for cached/open connections across hosts.
     http_max_total_connections: Option<u16>,
     // HTTP/2 stream cap; this is separate from HTTP/1 connection count.
     http2_max_concurrent_streams: Option<u16>,
@@ -132,9 +131,8 @@ impl FetchConfig {
         http_max_total_connections: Option<u16>,
         http2_max_concurrent_streams: Option<u16>,
     ) {
-        // These are transport-level limits handed to curl. Keep them out of the
-        // runtime scheduler so a Chromium-like HTTP/1 connection default does
-        // not accidentally throttle HTTP/2 streams or queued browser work.
+        // Host/total limits count HTTP and WebSocket sockets together. The
+        // runtime scheduler and HTTP/2 stream limits count work separately.
         self.http_max_host_connections = http_max_host_connections;
         self.http_max_total_connections = http_max_total_connections;
         self.http2_max_concurrent_streams = http2_max_concurrent_streams;

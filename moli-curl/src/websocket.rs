@@ -11,7 +11,6 @@
 //! resume paused work, such as a new frame or restored receive capacity.
 
 mod connection;
-mod connection_pool;
 mod connector;
 mod readiness;
 pub(crate) mod registry;
@@ -35,6 +34,8 @@ pub use standalone::CurlWebSocketRuntime;
 /// Fragment large messages above this layer to bound native write residence.
 pub const MAX_SEND_FRAME_BYTES: usize = 64 * 1024;
 const MAX_PENDING_EVENTS: usize = 8;
+// Bounds pending/open native work and its memory, without granting sockets
+// beyond the runtime's shared host/total connection limits.
 const SESSION_CAPACITY: usize = 255;
 
 #[derive(Debug)]
@@ -80,8 +81,8 @@ pub enum CurlWebSocketEvent {
     /// CONT marks every non-final fragment, including empty ones.
     /// UTF-8, Close contents and application size limits belong to the caller.
     Chunk { data: Vec<u8>, frame: WsFrame },
-    /// Emitted once, after all previously admitted events. Ok means TCP EOF;
-    /// it does not assert that a WebSocket close handshake was completed.
+    /// Emitted once, after all previously admitted events. Ok means TCP EOF or
+    /// requested cancellation; it does not assert a completed close handshake.
     Closed {
         result: std::result::Result<(), String>,
     },

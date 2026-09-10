@@ -32,6 +32,8 @@ pub(super) struct Control {
     pub(super) read_waiting: tokio::sync::Notify,
     #[cfg(test)]
     pub(super) owner_thread: Mutex<Option<std::thread::ThreadId>>,
+    #[cfg(test)]
+    pub(super) pool_waiting: Arc<tokio::sync::Notify>,
 }
 
 impl Control {
@@ -139,6 +141,8 @@ impl CurlWebSocketConnection {
             read_waiting: tokio::sync::Notify::new(),
             #[cfg(test)]
             owner_thread: Mutex::new(None),
+            #[cfg(test)]
+            pool_waiting: Arc::new(tokio::sync::Notify::new()),
         });
         let (event_tx, events) = mpsc::channel(MAX_PENDING_EVENTS);
         let io = SessionIo {
@@ -191,9 +195,10 @@ impl Drop for CurlWebSocketConnection {
 }
 
 pub(super) struct SessionIo {
+    // Release admission before closing the event channel publishes the terminal.
+    _slot: OwnedSemaphorePermit,
     pub(super) events: mpsc::Sender<CurlWebSocketEvent>,
     pub(super) control: Arc<Control>,
-    _slot: OwnedSemaphorePermit,
 }
 
 impl SessionIo {

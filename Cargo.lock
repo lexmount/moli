@@ -846,7 +846,7 @@ dependencies = [
 [[package]]
 name = "curl"
 version = "0.4.49"
-source = "git+https://github.com/lexmount/curl-rust?branch=moli#608f08d6b724877e940fd13db808395685e98a25"
+source = "git+https://github.com/lexmount/curl-rust?branch=moli#f28fe3049962d1be917c2d4064f1c6574b331fac"
 dependencies = [
  "curl-sys",
  "libc",
@@ -860,7 +860,7 @@ dependencies = [
 [[package]]
 name = "curl-sys"
 version = "0.4.87+curl-8.19.0"
-source = "git+https://github.com/lexmount/curl-rust?branch=moli#608f08d6b724877e940fd13db808395685e98a25"
+source = "git+https://github.com/lexmount/curl-rust?branch=moli#f28fe3049962d1be917c2d4064f1c6574b331fac"
 dependencies = [
  "brotlic-sys",
  "cc",
@@ -2467,7 +2467,6 @@ dependencies = [
  "anyhow",
  "crossbeam-channel",
  "curl",
- "curl-sys",
  "moli-dns-resolver",
  "openssl-sys",
  "parking_lot",

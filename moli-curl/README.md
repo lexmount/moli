@@ -113,11 +113,19 @@ owner, and an explicitly supplied closed connector fails without a standalone
 fallback. Fetch, Page and Worker use the connector from their network runtime.
 The Fetch semantic thread and WebSocket Tokio session thread remain separate.
 
-WebSockets have an owner-local CURLSH connection cache, so resident sockets do
-not consume HTTP host/total connection limits. HTTP retains the Multi's default
-connection pool; WebSocket session admission bounds its separate cache. This
-shares scheduling and ownership, not TCP/TLS connections. WebSocket transport
-still uses HTTP/1.1 Upgrade; this change does not implement RFC 8441.
+HTTP/1, HTTP/2 and WebSocket sockets share the Multi's default connection pool
+and its host/total connection limits. A live WebSocket consumes one connection;
+additional HTTP/2 streams can reuse an existing socket. Work requiring a new
+connection waits when the pool is full, and that wait counts towards its HTTP
+request or WebSocket handshake deadline. No protocol has reserved connections.
+Long-lived WebSockets can therefore keep new HTTP connections waiting until
+their deadline. Established WebSockets must never be evicted as idle HTTP
+connections; the pinned curl fork protects them in both eviction paths.
+
+The native WebSocket admission bound (255 pending/open sessions), event queue
+and frame/message memory limits remain separate work and memory bounds. They
+do not grant additional sockets beyond the shared pool limits. WebSocket
+transport still uses HTTP/1.1 Upgrade; it does not implement RFC 8441.
 
 In shared mode, poll/turn counters include HTTP work and HTTP wakeups. A fast
 poll with no WebSocket byte progress can therefore reflect useful HTTP work.

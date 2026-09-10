@@ -460,7 +460,7 @@ pub struct CommonArgs {
     #[arg(long)]
     pub http_max_host_open: Option<NonZeroU32>,
 
-    /// Limit transport connections per host/group.
+    /// Limit shared HTTP and WebSocket connections per host/group.
     ///
     /// Defaults to 6 to match Chromium's normal HTTP/1 socket-pool shape. This
     /// does not limit HTTP/2 streams; use `--http2-max-concurrent-streams` for
@@ -468,7 +468,7 @@ pub struct CommonArgs {
     #[arg(long)]
     pub http_max_host_connections: Option<u8>,
 
-    /// Limit total transport connections across all hosts.
+    /// Limit total HTTP and WebSocket connections across all hosts.
     #[arg(long)]
     pub http_max_total_connections: Option<u16>,
 

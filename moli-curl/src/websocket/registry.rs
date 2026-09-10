@@ -1,7 +1,7 @@
 //! Persistent WebSocket residences on the common HTTP/WebSocket Multi.
 //! The runtime owns perform, completion dispatch and the single wait loop.
 
-use std::{collections::HashMap, rc::Rc, time::Instant};
+use std::{collections::HashMap, time::Instant};
 
 use curl::{
     easy::Easy2,
@@ -10,7 +10,6 @@ use curl::{
 
 use super::{
     SessionIo, Submission,
-    connection_pool::ConnectionPool,
     readiness::SocketReadiness,
     request::{self, Handshake},
     session::{Session, Step},
@@ -34,7 +33,6 @@ pub(crate) struct WebSocketRegistry {
     dns: CurlDnsOwnerResidence<CurlTransferId, Pending>,
     readiness: SocketReadiness,
     receive: Vec<u8>,
-    pool: Option<Rc<ConnectionPool>>,
     closed: bool,
 }
 
@@ -46,7 +44,6 @@ impl WebSocketRegistry {
             dns: CurlDnsOwnerResidence::default(),
             readiness: SocketReadiness::default(),
             receive: Vec::new(),
-            pool: None,
             closed: false,
         }
     }
@@ -87,22 +84,18 @@ impl WebSocketRegistry {
                 .finish(Err("curl WebSocket runtime shut down".to_owned()));
             return;
         }
-        let easy = request::configure(&submission.request).and_then(|mut easy| {
-            if self.pool.is_none() {
-                self.pool = Some(ConnectionPool::new()?);
-            }
-            self.pool
-                .as_ref()
-                .expect("pool initialized")
-                .bind(&mut easy)?;
-            Ok(easy)
-        });
-        let easy = match easy {
+        let easy = match request::configure(&submission.request) {
             Ok(easy) => easy,
             Err(error) => {
                 submission.io.finish(Err(error.to_string()));
                 return;
             }
+        };
+        #[cfg(test)]
+        let easy = {
+            let mut easy = easy;
+            easy.get_mut().pool_waiting = Some(submission.io.control.pool_waiting.clone());
+            easy
         };
         let Some(deadline) = Instant::now().checked_add(submission.request.handshake_timeout)
         else {
