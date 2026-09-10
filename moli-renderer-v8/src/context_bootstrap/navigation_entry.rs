@@ -118,6 +118,7 @@ pub(super) fn restore_current_navigation_entry_scroll_position<'s>(
 
 pub(super) fn create_navigation_entry<'s>(
     scope: &mut v8::PinScope<'s, '_>,
+    owner: v8::Local<'s, v8::Object>,
     url: &str,
     referrer_policy: Option<&str>,
     index: u32,
@@ -139,7 +140,7 @@ pub(super) fn create_navigation_entry<'s>(
         scroll_offset: None,
     }
     .into_ref();
-    wrap_native_navigation_entry(scope, entry)
+    native::entry_wrapper(scope, owner, entry)
 }
 
 pub(in crate::context_bootstrap) fn wrap_native_navigation_entry<'s>(
