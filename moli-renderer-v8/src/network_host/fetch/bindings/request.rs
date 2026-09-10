@@ -73,6 +73,11 @@ pub(super) fn prepare_window_fetch_request<'s>(
     let request_headers =
         merge_subresource_request_headers(host.extra_http_headers(), &request_headers);
     let resolved_url = resolve_context_url(&document_url, &parsed.url, None)?;
+    validate_request_url_credentials(&resolved_url)?;
+    let referrer = parsed
+        .init_validation
+        .validate(scope, parsed.request_mode.as_ref(), &parsed.cache)?
+        .unwrap_or(parsed.referrer);
 
     Ok(PreparedWindowFetchRequest {
         frame_id,
@@ -95,7 +100,7 @@ pub(super) fn prepare_window_fetch_request<'s>(
         redirect_mode: parsed.redirect_mode,
         priority: parsed.priority,
         cache: parsed.cache,
-        referrer: parsed.referrer,
+        referrer,
         referrer_policy: parsed.referrer_policy,
         integrity: parsed.integrity,
         keepalive: parsed.keepalive,

@@ -1772,7 +1772,8 @@ pub(in crate::worker) fn resolve_worker_fetch_input<'s>(
         credentials_mode,
         redirect_mode,
         priority,
-        metadata,
+        mut metadata,
+        init_validation,
     ) = if let Some(inherited) = inherited {
         let req_obj = v8::Local::<v8::Object>::try_from(arg0).expect("request-like object");
         request_like = Some(req_obj);
@@ -1807,7 +1808,8 @@ pub(in crate::worker) fn resolve_worker_fetch_input<'s>(
         };
         let inherited_credentials = request_object_credentials_mode(scope, req_obj)?;
         let request_mode = init
-            .request_mode
+            .validation
+            .mode
             .or_else(|| moli_fetch::RequestMode::from_str(&inherited.mode).ok())
             .unwrap_or(moli_fetch::RequestMode::Cors);
         validate_worker_no_cors_method(request_mode, &method)?;
@@ -1830,7 +1832,7 @@ pub(in crate::worker) fn resolve_worker_fetch_input<'s>(
         });
         let metadata = ServiceWorkerFetchRequestMetadata {
             cache: init.cache.unwrap_or(inherited.cache),
-            referrer: init.referrer.unwrap_or(inherited.referrer),
+            referrer: inherited.referrer,
             referrer_policy: init.referrer_policy.unwrap_or(inherited.referrer_policy),
             integrity: init.integrity.unwrap_or(inherited.integrity),
             keepalive: init.keepalive.unwrap_or(inherited.keepalive),
@@ -1847,6 +1849,7 @@ pub(in crate::worker) fn resolve_worker_fetch_input<'s>(
             redirect_mode,
             priority,
             metadata,
+            init.validation,
         )
     } else {
         let url = webidl::convert::<webidl::UsvString>(
@@ -1857,7 +1860,10 @@ pub(in crate::worker) fn resolve_worker_fetch_input<'s>(
         .map(String::from)
         .map_err(|error| error.to_string())?;
         let init = parse_fetch_init(scope, args, 1)?;
-        let request_mode = init.request_mode.unwrap_or(moli_fetch::RequestMode::Cors);
+        let request_mode = init
+            .validation
+            .mode
+            .unwrap_or(moli_fetch::RequestMode::Cors);
         validate_worker_no_cors_method(request_mode, &init.method)?;
         let headers = if request_mode == moli_fetch::RequestMode::NoCors {
             filter_headers_for_guard(&init.headers, HeadersGuard::RequestNoCors)
@@ -1870,7 +1876,7 @@ pub(in crate::worker) fn resolve_worker_fetch_input<'s>(
         let redirect_mode = init.redirect_mode.unwrap_or(RequestRedirectMode::Follow);
         let metadata = ServiceWorkerFetchRequestMetadata {
             cache: init.cache.unwrap_or_else(|| "default".to_owned()),
-            referrer: init.referrer.unwrap_or_else(|| "about:client".to_owned()),
+            referrer: "about:client".to_owned(),
             referrer_policy: init.referrer_policy.unwrap_or_default(),
             integrity: init.integrity.unwrap_or_default(),
             keepalive: init.keepalive.unwrap_or(false),
@@ -1887,9 +1893,16 @@ pub(in crate::worker) fn resolve_worker_fetch_input<'s>(
             redirect_mode,
             init.priority,
             metadata,
+            init.validation,
         )
     };
     let resolved_url = resolve_context_url(base_url, &url_input, None)?;
+    crate::network_host::validate_request_url_credentials(&resolved_url)?;
+    if let Some(referrer) =
+        init_validation.validate(scope, request_mode.as_ref(), &metadata.cache)?
+    {
+        metadata.referrer = referrer;
+    }
     let signal = worker_fetch_signal_option(scope, args, request_like)?;
     if consumes_request_body && let Some(request_like) = request_like {
         crate::network_host::mark_request_input_body_used_for_fetch(scope, request_like);

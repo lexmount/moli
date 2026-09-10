@@ -6,9 +6,9 @@ use self::paths::{
     record_intercepted_fetch, reject_bad_port_fetch, reject_blocked_fetch, reject_csp_fetch,
     reject_offline_fetch, reject_url_policy_fetch, resolve_local_fetch, spawn_network_fetch,
 };
-use self::request::prepare_window_fetch_request;
+use self::request::{PreparedWindowFetchRequest, prepare_window_fetch_request};
 use self::service_worker::dispatch_service_worker_fetch;
-use super::input::{ParsedWindowFetchInput, parse_window_fetch_input};
+use super::input::parse_window_fetch_input;
 use super::promise::{make_rejected_promise, make_rejected_promise_with_value};
 use super::*;
 use crate::native_bridge::abort::abort_error_value;
@@ -185,10 +185,6 @@ pub(crate) fn window_fetch_callback<'s>(
         );
         return;
     };
-    if let Some(request_body_owner) = parsed.request_body_owner.take() {
-        let request_body_owner = v8::Local::new(scope, request_body_owner);
-        mark_request_input_body_used_for_fetch(scope, request_body_owner);
-    }
     let fetch_context = crate::native_bridge::WindowFetchContext::from_realm(binding);
     let signal = signal.map(|signal| v8::Global::new(scope, signal));
     let relevant_context = {
@@ -196,15 +192,32 @@ pub(crate) fn window_fetch_callback<'s>(
         v8::Global::new(scope, context)
     };
     let relevant_context = v8::Local::new(scope, &relevant_context);
+    let request_body_owner = parsed.request_body_owner.take();
+    let prepared = {
+        let scope = &mut v8::ContextScope::new(scope, relevant_context);
+        prepare_window_fetch_request(scope, parsed, fetch_context, unsafe { &*host_ptr })
+    };
+    let prepared = match prepared {
+        Ok(prepared) => prepared,
+        Err(message) => {
+            // Request construction uses the receiver's settings, but Blink's
+            // binding rejects construction exceptions in the function realm.
+            rv.set(make_rejected_promise(scope, &message).into());
+            return;
+        }
+    };
     let scope = &mut v8::ContextScope::new(scope, relevant_context);
-    window_fetch_callback_in_relevant_realm(scope, parsed, signal, fetch_context, rv);
+    if let Some(request_body_owner) = request_body_owner {
+        let request_body_owner = v8::Local::new(scope, request_body_owner);
+        mark_request_input_body_used_for_fetch(scope, request_body_owner);
+    }
+    window_fetch_callback_in_relevant_realm(scope, prepared, signal, rv);
 }
 
 fn window_fetch_callback_in_relevant_realm<'s>(
     scope: &mut v8::PinScope<'s, '_>,
-    parsed: ParsedWindowFetchInput,
+    prepared: PreparedWindowFetchRequest,
     signal: Option<v8::Global<v8::Object>>,
-    fetch_context: crate::native_bridge::WindowFetchContext,
     mut rv: v8::ReturnValue<'s, v8::Value>,
 ) {
     let Some(host_ptr) = context_host_ptr_from_global_bridge(scope) else {
@@ -214,13 +227,6 @@ fn window_fetch_callback_in_relevant_realm<'s>(
 
     let host = unsafe { &mut *host_ptr };
     let signal = signal.as_ref().map(|signal| v8::Local::new(scope, signal));
-    let prepared = match prepare_window_fetch_request(scope, parsed, fetch_context, host) {
-        Ok(prepared) => prepared,
-        Err(message) => {
-            rv.set(make_rejected_promise(scope, &message).into());
-            return;
-        }
-    };
     host.break_on_dom_debugger_xhr_or_fetch_network_request(prepared.resolved_url.as_str());
     if let Some(signal) = signal
         && host.abort_signal_aborted(scope, signal)
