@@ -53,6 +53,65 @@ fn input_show_picker_enforces_brand_without_rejecting_inherited_child_origin() {
 }
 
 #[test]
+fn document_visibility_and_default_view_follow_receiver_across_realms() {
+    let mut vm = new_storage_test_vm("https://document-visibility-realms.test/");
+
+    vm.eval(
+        r#"
+(() => {
+  const frame = document.createElement("iframe");
+  frame.id = "visibility-live-frame";
+  (document.body || document.documentElement || document).appendChild(frame);
+})()
+"#,
+    )
+    .expect("visibility child frame should be created");
+    materialize_single_child_default_realm_for_test(
+        &mut vm,
+        "document visibility and defaultView child Realm",
+    );
+
+    let result = vm
+        .eval(
+            r#"
+(() => {
+  const errors = [];
+  const check = (condition, message) => { if (!condition) errors.push(message); };
+  const childWindow = document.getElementById("visibility-live-frame").contentWindow;
+  const child = childWindow.document;
+  const parentView = Object.getOwnPropertyDescriptor(Document.prototype, "defaultView").get;
+  const childView = Object.getOwnPropertyDescriptor(childWindow.Document.prototype, "defaultView").get;
+  const parentHidden = Object.getOwnPropertyDescriptor(Document.prototype, "hidden").get;
+  const childHidden = Object.getOwnPropertyDescriptor(childWindow.Document.prototype, "hidden").get;
+  const parentVisibility = Object.getOwnPropertyDescriptor(Document.prototype, "visibilityState").get;
+  const childVisibility = Object.getOwnPropertyDescriptor(childWindow.Document.prototype, "visibilityState").get;
+  check(parentView.call(document) === window, "parent defaultView");
+  check(parentView.call(child) === childWindow, "parent getter on child defaultView");
+  check(childView.call(document) === window, "child getter on parent defaultView");
+  check(childView.call(child) === childWindow, "child defaultView");
+  check(!parentHidden.call(child) && parentVisibility.call(child) === "visible", "child is visible through parent getters");
+  check(!childHidden.call(document) && childVisibility.call(document) === "visible", "parent is visible through child getters");
+  const windowless = child.implementation.createHTMLDocument("");
+  check(childView.call(windowless) === null, "windowless defaultView through child getter");
+  check(parentHidden.call(windowless) && parentVisibility.call(windowless) === "hidden", "windowless remains hidden through parent getters");
+  const popup = window.open("about:blank", "visibility-popup");
+  check(popup !== null, "popup created");
+  try {
+    check(!popup.document.hidden && popup.document.visibilityState === "visible", "live popup is visible");
+    check(parentView.call(popup.document) === popup, "popup defaultView through parent getter");
+  } finally {
+    popup.close();
+  }
+  return JSON.stringify(errors);
+})()
+"#,
+        )
+        .expect("cross-realm document visibility and view probe should evaluate");
+
+    assert_eq!(result, "[]");
+}
+
+#[test]
 fn cross_realm_dom_bindings_reject_incompatible_receivers_in_their_own_realm() {
     let mut vm = new_storage_test_vm("https://cross-realm-dom-receivers.test/");
 
