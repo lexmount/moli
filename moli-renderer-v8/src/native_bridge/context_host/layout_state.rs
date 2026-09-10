@@ -236,7 +236,16 @@ impl DocumentLayoutState {
         &mut self,
         resource: StylesheetLoadBlockingResource,
     ) -> Option<StylesheetLoadBlockingResource> {
-        self.web_fonts.admit(resource, &mut self.services)
+        let result = self.web_fonts.admit(resource, &mut self.services);
+        self.mark_visual_state_dirty();
+        result
+    }
+
+    pub(super) fn observe_font(
+        &mut self,
+        font: &crate::css_resource_urls::StylesheetWebFont,
+    ) -> crate::font_loading::FontFaceLoad {
+        self.web_fonts.observe(font)
     }
 
     pub(super) fn complete(

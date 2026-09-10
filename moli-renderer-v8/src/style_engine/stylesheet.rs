@@ -107,9 +107,9 @@ pub(super) fn install_active_stylesheet(
         .into_iter()
         .filter_map(|rule| {
             let resource =
-                crate::css_resource_urls::stylesheet_web_font_resource_with_resolved_url(
+                crate::css_resource_urls::stylesheet_web_font_resource_with_resolved_sources(
                     &rule.rule_fingerprint,
-                    rule.request_url?,
+                    rule.sources,
                 )?;
             Some(ActiveWebFontResource::new(rule.rule, resource))
         })
@@ -164,6 +164,7 @@ pub(crate) struct StylesheetFontFaceRuleProjection {
     pub(crate) rule_identity: u64,
     pub(crate) rule_fingerprint: String,
     pub(crate) descriptor: moli_css_parse::CssFontFace,
+    pub(crate) resource: Option<crate::css_resource_urls::StylesheetLoadBlockingResource>,
 }
 
 #[derive(Clone, Debug, Default)]
@@ -177,10 +178,10 @@ pub(crate) struct NativeStylesheetFontFaceRuleProjection {
     pub(crate) rule: ServoArc<Locked<FontFaceRule>>,
     pub(crate) rule_fingerprint: String,
     pub(crate) descriptor: moli_css_parse::CssFontFace,
-    /// First supported network source, resolved by Stylo in the exact parser
+    /// Supported sources, resolved by Stylo in the exact parser
     /// context that owns this rule. Imported rules therefore retain the base
     /// URL of their imported stylesheet rather than inheriting the root base.
-    pub(crate) request_url: Option<url::Url>,
+    pub(crate) sources: Vec<moli_css_parse::CssFontSource>,
 }
 
 #[derive(Clone, Debug, Default)]
@@ -290,7 +291,7 @@ fn collect_font_face_rule_projections(
                         family: family.name.to_string(),
                         source: serialized_source,
                     },
-                    request_url: preferred_native_font_source_url(source),
+                    sources: native_font_sources(source),
                 });
             }
             continue;
@@ -299,17 +300,25 @@ fn collect_font_face_rule_projections(
     }
 }
 
-fn preferred_native_font_source_url(source_list: &SourceList) -> Option<url::Url> {
-    source_list.0.iter().find_map(|source| {
-        let Source::Url(source) = source else {
-            return None;
-        };
-        if !native_font_source_format_is_supported(source.format_hint.as_ref()) {
-            return None;
-        }
-        let url = source.url.url()?;
-        matches!(url.scheme(), "http" | "https" | "data" | "blob").then(|| (**url).clone())
-    })
+fn native_font_sources(source_list: &SourceList) -> Vec<moli_css_parse::CssFontSource> {
+    source_list
+        .0
+        .iter()
+        .filter_map(|source| {
+            if let Source::Local(name) = source {
+                return Some(moli_css_parse::CssFontSource::Local(name.name.to_string()));
+            }
+            let Source::Url(source) = source else {
+                return None;
+            };
+            if !native_font_source_format_is_supported(source.format_hint.as_ref()) {
+                return None;
+            }
+            let url = source.url.url()?;
+            matches!(url.scheme(), "http" | "https" | "data" | "blob")
+                .then(|| moli_css_parse::CssFontSource::Url(url.to_string()))
+        })
+        .collect()
 }
 
 fn native_font_source_format_is_supported(format: Option<&FontFaceSourceFormat>) -> bool {

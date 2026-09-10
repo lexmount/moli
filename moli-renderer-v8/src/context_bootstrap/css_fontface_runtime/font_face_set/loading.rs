@@ -28,8 +28,25 @@ pub(in crate::context_bootstrap) fn font_face_set_check_callback<'s>(
     let Some(parsed) = webidl::parse_args::<FontFaceSetCheckArgs>(scope, &args) else {
         return;
     };
-    let _ = (&parsed.font, &parsed.text);
-    rv.set(v8::Boolean::new(scope, true).into());
+    let _ = &parsed.text;
+    let Some(faces) = font_face_set_matching_faces_array(scope, args.this(), &parsed.font) else {
+        webidl::throw_dom_exception(
+            scope,
+            "SyntaxError",
+            "The provided font shorthand is invalid.",
+        );
+        return;
+    };
+    let loaded = (0..faces.length()).all(|index| {
+        faces
+            .get_index(scope, index)
+            .and_then(|value| v8::Local::<v8::Object>::try_from(value).ok())
+            .is_some_and(|face| {
+                super::super::loading::status(scope, face)
+                    == crate::font_loading::FontFaceStatus::Loaded
+            })
+    });
+    rv.set(v8::Boolean::new(scope, loaded).into());
 }
 
 pub(in crate::context_bootstrap) fn font_face_set_load_callback<'s>(
@@ -43,7 +60,7 @@ pub(in crate::context_bootstrap) fn font_face_set_load_callback<'s>(
         return;
     };
     let _ = &parsed.text;
-    if font_load_query_contains_css_wide_keyword(&parsed.font) {
+    let Some(matching_faces) = font_face_set_matching_faces_array(scope, this, &parsed.font) else {
         rv.set(
             make_rejected_dom_exception_promise(
                 scope,
@@ -53,17 +70,6 @@ pub(in crate::context_bootstrap) fn font_face_set_load_callback<'s>(
             .into(),
         );
         return;
-    }
-    let matching_faces = font_face_set_matching_faces_array(scope, this, &parsed.font)
-        .unwrap_or_else(|| v8::Array::new(scope, 0));
-    set_font_face_set_status(scope, this, "loading");
-    let _ = dispatch_font_face_set_event(scope, this, "loading", None);
-    replace_font_face_set_ready_promise(scope, this);
-    set_font_face_set_status(scope, this, "loaded");
-    let _ = dispatch_font_face_set_event(scope, this, "loadingdone", Some(matching_faces));
-    let faces_value = matching_faces.into();
-    match resolved_promise(scope, faces_value) {
-        Some(promise) => rv.set(v8::Local::<v8::Value>::from(promise)),
-        None => rv.set(v8::undefined(scope).into()),
-    }
+    };
+    rv.set(super::super::loading::load_matching_faces(scope, matching_faces).into());
 }

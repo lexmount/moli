@@ -239,7 +239,8 @@ impl DocumentRuntime {
                 _ => admitted.push((binding, resource, None)),
             }
         }
-        for (binding, resource, css_image) in admitted {
+        let mut admitted = std::collections::VecDeque::from(admitted);
+        while let Some((binding, resource, css_image)) = admitted.pop_front() {
             let request_url = resource.request_url().clone();
             let kind = resource.kind();
             let failed_css_image = css_image.clone();
@@ -258,7 +259,12 @@ impl DocumentRuntime {
                 Ok(crate::network_host::StylesheetSubresourceFetchStart::WebFontSettled(
                     web_font,
                 )) => {
-                    Self::complete_document_web_font(host, web_font);
+                    if let Some(resource) = Self::complete_document_web_font(host, web_font)
+                        && let Some(binding) =
+                            host.accept_current_main_stylesheet_subresource_load_delay()
+                    {
+                        admitted.push_back((binding, resource, None));
+                    }
                 }
                 Ok(
                     crate::network_host::StylesheetSubresourceFetchStart::Pending
@@ -270,7 +276,12 @@ impl DocumentRuntime {
                     }
                     let settlement = host.settle_stylesheet_subresource_load_delay(binding);
                     if let Some(web_font) = failed_web_font {
-                        Self::complete_document_web_font(host, web_font);
+                        if let Some(resource) = Self::complete_document_web_font(host, web_font)
+                            && let Some(binding) =
+                                host.accept_current_main_stylesheet_subresource_load_delay()
+                        {
+                            admitted.push_back((binding, resource, None));
+                        }
                     }
                     tracing::warn!(
                         url = %request_url,
@@ -283,6 +294,7 @@ impl DocumentRuntime {
                 }
             }
         }
+        crate::context_bootstrap::publish_font_face_load_changes(scope);
         tracing::debug!(
             resource_count,
             elapsed_ms = started.elapsed().as_millis(),
@@ -293,7 +305,7 @@ impl DocumentRuntime {
     fn complete_document_web_font(
         host: &JsContextHost,
         terminal: crate::css_resource_urls::CompletedStylesheetWebFont,
-    ) {
+    ) -> Option<crate::css_resource_urls::StylesheetLoadBlockingResource> {
         match host.complete_document_web_font(terminal) {
             crate::script_vm::web_fonts::DocumentWebFontCompletion::Registered(outcome) => {
                 tracing::debug!(
@@ -313,6 +325,10 @@ impl DocumentRuntime {
             crate::script_vm::web_fonts::DocumentWebFontCompletion::Stale => {
                 tracing::debug!("discarded superseded document web font response")
             }
+            crate::script_vm::web_fonts::DocumentWebFontCompletion::Retry(resource) => {
+                return Some(resource);
+            }
         }
+        None
     }
 }
