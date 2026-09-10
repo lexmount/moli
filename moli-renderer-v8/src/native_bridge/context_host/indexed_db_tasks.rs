@@ -5,7 +5,7 @@ use super::{
 use moli_indexeddb::DatabaseHandle;
 use std::{
     cell::RefCell,
-    collections::{BTreeMap, HashMap, HashSet},
+    collections::{BTreeMap, HashSet},
 };
 
 struct IndexedDbOpenConnection {
@@ -13,7 +13,6 @@ struct IndexedDbOpenConnection {
     context: v8::Global<v8::Context>,
     database: v8::Global<v8::Object>,
     database_key: String,
-    version: u64,
 }
 
 pub(crate) struct IndexedDbOpenConnectionSnapshot {
@@ -31,8 +30,8 @@ pub(super) struct IndexedDbContextRetirement {
 #[derive(Default)]
 pub(super) struct IndexedDbContextState {
     open_connections: RefCell<BTreeMap<DatabaseHandle, IndexedDbOpenConnection>>,
-    blocked_contexts: RefCell<HashMap<(String, WindowExecutionContextIdentity), usize>>,
-    pending_blocked_drains: RefCell<HashSet<WindowExecutionContextIdentity>>,
+    connection_queue: crate::context_bootstrap::SharedIndexedDbConnectionQueue,
+    pending_connection_drains: RefCell<HashSet<WindowExecutionContextIdentity>>,
 }
 
 impl IndexedDbContextState {
@@ -42,7 +41,6 @@ impl IndexedDbContextState {
         execution_context: WindowExecutionContextIdentity,
         handle: DatabaseHandle,
         database_key: String,
-        version: u64,
         database: v8::Local<'_, v8::Object>,
     ) {
         let previous = self.open_connections.borrow_mut().insert(
@@ -52,7 +50,6 @@ impl IndexedDbContextState {
                 context: v8::Global::new(scope, scope.get_current_context()),
                 database: v8::Global::new(scope, database),
                 database_key,
-                version,
             },
         );
         assert!(
@@ -78,57 +75,6 @@ impl IndexedDbContextState {
             .collect()
     }
 
-    fn open_connection_version(&self, database_key: &str) -> Option<u64> {
-        self.open_connections
-            .borrow()
-            .values()
-            .filter_map(|connection| {
-                (connection.database_key == database_key).then_some(connection.version)
-            })
-            .max()
-    }
-
-    fn register_blocked_context(
-        &self,
-        database_key: String,
-        execution_context: WindowExecutionContextIdentity,
-    ) {
-        let mut blocked_contexts = self.blocked_contexts.borrow_mut();
-        let count = blocked_contexts
-            .entry((database_key, execution_context))
-            .or_default();
-        *count = count
-            .checked_add(1)
-            .expect("IndexedDB blocked request count overflow");
-    }
-
-    fn unregister_blocked_context(
-        &self,
-        database_key: &str,
-        execution_context: WindowExecutionContextIdentity,
-    ) {
-        let key = (database_key.to_owned(), execution_context);
-        let mut blocked_contexts = self.blocked_contexts.borrow_mut();
-        let Some(count) = blocked_contexts.get_mut(&key) else {
-            return;
-        };
-        assert!(*count > 0, "IndexedDB blocked request count underflow");
-        *count -= 1;
-        if *count == 0 {
-            blocked_contexts.remove(&key);
-        }
-    }
-
-    fn blocked_contexts_for_key(&self, database_key: &str) -> Vec<WindowExecutionContextIdentity> {
-        self.blocked_contexts
-            .borrow()
-            .keys()
-            .filter_map(|(candidate_key, execution_context)| {
-                (candidate_key == database_key).then_some(*execution_context)
-            })
-            .collect()
-    }
-
     fn unregister_open_connection(
         &self,
         handle: DatabaseHandle,
@@ -138,23 +84,27 @@ impl IndexedDbContextState {
         };
         (
             true,
-            self.blocked_contexts_for_key(&connection.database_key),
+            self.connection_queue
+                .borrow()
+                .waiting_owner(&connection.database_key)
+                .into_iter()
+                .collect(),
         )
     }
 
-    fn reserve_blocked_drains(
+    fn reserve_connection_drains(
         &self,
         execution_contexts: impl IntoIterator<Item = WindowExecutionContextIdentity>,
     ) -> Vec<WindowExecutionContextIdentity> {
-        let mut pending = self.pending_blocked_drains.borrow_mut();
+        let mut pending = self.pending_connection_drains.borrow_mut();
         execution_contexts
             .into_iter()
             .filter(|execution_context| pending.insert(*execution_context))
             .collect()
     }
 
-    fn finish_blocked_drain(&self, execution_context: WindowExecutionContextIdentity) {
-        self.pending_blocked_drains
+    fn finish_connection_drain(&self, execution_context: WindowExecutionContextIdentity) {
+        self.pending_connection_drains
             .borrow_mut()
             .remove(&execution_context);
     }
@@ -163,10 +113,11 @@ impl IndexedDbContextState {
         &self,
         should_retire: impl Fn(WindowExecutionContextIdentity) -> bool,
     ) -> IndexedDbContextRetirement {
-        self.blocked_contexts
+        let next_owners = self
+            .connection_queue
             .borrow_mut()
-            .retain(|(_, candidate), _| !should_retire(*candidate));
-        self.pending_blocked_drains
+            .retire_matching(&should_retire);
+        self.pending_connection_drains
             .borrow_mut()
             .retain(|candidate| !should_retire(*candidate));
 
@@ -178,7 +129,7 @@ impl IndexedDbContextState {
                 should_retire(connection.execution_context).then_some(*handle)
             })
             .collect::<Vec<_>>();
-        let mut scheduled_drains = HashSet::new();
+        let mut scheduled_drains = next_owners.into_iter().collect::<HashSet<_>>();
         for handle in &retired_connections {
             let (_, drain_contexts) = self.unregister_open_connection(*handle);
             scheduled_drains.extend(drain_contexts);
@@ -203,20 +154,20 @@ impl IndexedDbContextState {
 }
 
 impl JsContextHost {
-    fn schedule_indexed_db_blocked_drains(
+    pub(crate) fn schedule_indexed_db_connection_drains(
         &self,
         execution_contexts: impl IntoIterator<Item = WindowExecutionContextIdentity>,
     ) -> usize {
         let drains = self
             .indexed_db_context_tasks
-            .reserve_blocked_drains(execution_contexts);
+            .reserve_connection_drains(execution_contexts);
         let mut scheduled = 0;
         for execution_context in drains {
             if self
                 .page_indexed_db_task_sender()
                 .send(
                     execution_context,
-                    crate::page_task_queue::RendererPageIndexedDbTaskKind::DrainBlockedOpenRequests,
+                    crate::page_task_queue::RendererPageIndexedDbTaskKind::DrainConnectionRequests,
                 )
                 .is_ok()
             {
@@ -227,7 +178,11 @@ impl JsContextHost {
                 // can ever execute; teardown must not fall back to legacy
                 // dispatch.
                 self.indexed_db_context_tasks
-                    .finish_blocked_drain(execution_context);
+                    .finish_connection_drain(execution_context);
+                self.indexed_db_context_tasks
+                    .connection_queue
+                    .borrow_mut()
+                    .retire_matching(|_| true);
             }
         }
         scheduled
@@ -239,7 +194,6 @@ impl JsContextHost {
         execution_context: WindowExecutionContextIdentity,
         handle: DatabaseHandle,
         database_key: String,
-        version: u64,
         database: v8::Local<'_, v8::Object>,
     ) {
         self.indexed_db_context_tasks.register_open_connection(
@@ -247,7 +201,6 @@ impl JsContextHost {
             execution_context,
             handle,
             database_key,
-            version,
             database,
         );
     }
@@ -261,43 +214,26 @@ impl JsContextHost {
             .open_connection_snapshots(scope, database_key)
     }
 
-    pub(crate) fn indexed_db_open_connection_version(&self, database_key: &str) -> Option<u64> {
-        self.indexed_db_context_tasks
-            .open_connection_version(database_key)
+    pub(crate) fn indexed_db_connection_queue(
+        &self,
+    ) -> crate::context_bootstrap::SharedIndexedDbConnectionQueue {
+        self.indexed_db_context_tasks.connection_queue.clone()
     }
 
     pub(crate) fn unregister_indexed_db_open_connection(&self, handle: DatabaseHandle) -> bool {
         let (removed, drain_contexts) = self
             .indexed_db_context_tasks
             .unregister_open_connection(handle);
-        self.schedule_indexed_db_blocked_drains(drain_contexts);
+        self.schedule_indexed_db_connection_drains(drain_contexts);
         removed
     }
 
-    pub(crate) fn register_indexed_db_blocked_context(
-        &self,
-        database_key: String,
-        execution_context: WindowExecutionContextIdentity,
-    ) {
-        self.indexed_db_context_tasks
-            .register_blocked_context(database_key, execution_context);
-    }
-
-    pub(crate) fn unregister_indexed_db_blocked_context(
-        &self,
-        database_key: &str,
-        execution_context: WindowExecutionContextIdentity,
-    ) {
-        self.indexed_db_context_tasks
-            .unregister_blocked_context(database_key, execution_context);
-    }
-
-    pub(crate) fn finish_indexed_db_blocked_drain(
+    pub(crate) fn finish_indexed_db_connection_drain(
         &self,
         execution_context: WindowExecutionContextIdentity,
     ) {
         self.indexed_db_context_tasks
-            .finish_blocked_drain(execution_context);
+            .finish_connection_drain(execution_context);
     }
 
     pub(super) fn retire_indexed_db_context(
@@ -306,7 +242,7 @@ impl JsContextHost {
     ) -> IndexedDbContextRetirement {
         let mut retirement = self.indexed_db_context_tasks.retire_context(context_token);
         let drain_contexts = std::mem::take(&mut retirement.scheduled_drains);
-        self.schedule_indexed_db_blocked_drains(drain_contexts);
+        self.schedule_indexed_db_connection_drains(drain_contexts);
         self.signal_page_indexed_db_task_reconsideration_if_installed();
         retirement
     }
@@ -317,7 +253,7 @@ impl JsContextHost {
     ) -> IndexedDbContextRetirement {
         let mut retirement = self.indexed_db_context_tasks.retire_owner(owner);
         let drain_contexts = std::mem::take(&mut retirement.scheduled_drains);
-        self.schedule_indexed_db_blocked_drains(drain_contexts);
+        self.schedule_indexed_db_connection_drains(drain_contexts);
         self.signal_page_indexed_db_task_reconsideration_if_installed();
         retirement
     }
@@ -355,14 +291,14 @@ mod tests {
     }
 
     #[test]
-    fn blocked_drain_is_coalesced_per_context() {
+    fn connection_drain_is_coalesced_per_context() {
         let state = IndexedDbContextState::default();
         let context = identity(21);
 
-        assert_eq!(state.reserve_blocked_drains([context]), vec![context]);
-        assert!(state.reserve_blocked_drains([context]).is_empty());
-        state.finish_blocked_drain(context);
-        assert_eq!(state.reserve_blocked_drains([context]), vec![context]);
+        assert_eq!(state.reserve_connection_drains([context]), vec![context]);
+        assert!(state.reserve_connection_drains([context]).is_empty());
+        state.finish_connection_drain(context);
+        assert_eq!(state.reserve_connection_drains([context]), vec![context]);
     }
 
     #[test]
@@ -370,17 +306,14 @@ mod tests {
         let state = IndexedDbContextState::default();
         let opener = identity(31);
         let popup = popup_identity(7, 9, opener.realm_token().as_u64());
-        state.register_blocked_context("shared".to_owned(), opener);
-        state.register_blocked_context("shared".to_owned(), popup);
         assert_eq!(
-            state.reserve_blocked_drains([opener, popup]),
+            state.reserve_connection_drains([opener, popup]),
             vec![opener, popup]
         );
 
         let retirement = state.retire_owner(popup.owner());
         assert!(retirement.retired_connections.is_empty());
-        assert_eq!(state.blocked_contexts_for_key("shared"), vec![opener]);
-        assert!(state.reserve_blocked_drains([opener]).is_empty());
-        assert_eq!(state.reserve_blocked_drains([popup]), vec![popup]);
+        assert!(state.reserve_connection_drains([opener]).is_empty());
+        assert_eq!(state.reserve_connection_drains([popup]), vec![popup]);
     }
 }

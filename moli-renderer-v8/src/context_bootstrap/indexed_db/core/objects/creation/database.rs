@@ -55,6 +55,6 @@ pub(in crate::context_bootstrap::indexed_db) fn create_database_object<'s>(
         storage_scope,
     );
     let _ = refresh_database_surface(scope, database);
-    register_open_database_connection(scope, owner, handle, database_key, info.version, database);
+    register_open_database_connection(scope, owner, handle, database_key, database);
     Some(database)
 }

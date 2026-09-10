@@ -1,0 +1,35 @@
+{
+  "terminal": {
+    "complete": {
+      "transactionAttachedDuringEvent": true,
+      "create": "InvalidStateError",
+      "remove": "InvalidStateError",
+      "trace": ["complete", "complete-microtask", "open-success"],
+      "transactionClearedAfterResult": true
+    },
+    "abort": {
+      "transactionAttachedDuringEvent": true,
+      "create": "InvalidStateError",
+      "remove": "InvalidStateError",
+      "trace": ["abort", "abort-microtask", "open-error:AbortError"],
+      "transactionClearedAfterResult": true
+    }
+  },
+  "deletionOrder": ["delete1", "delete2"],
+  "initialUpgrades": 1,
+  "joinedValue": "retained",
+  "upgrades": [[1, 2]],
+  "implicitVersion": 2,
+  "obsoleteResult": "VersionError",
+  "notifications": ["versionchange:1:2", "close-microtask", "upgrade", "success"],
+  "blockedOrder": ["blocked", "independent", "head:2", "old:VersionError", "tail:2"],
+  "failedHeads": {
+    "abort": ["AbortError", "reopened:1", "stores:"],
+    "close": ["AbortError", "reopened:2", "stores:upgrade"]
+  },
+  "mixedOrder": [
+    "first:upgrade:0:2", "first:success:2", "first:close", "delete1",
+    "second:upgrade:0:3", "second:success:3", "second:close", "delete2",
+    "last:upgrade:0:1", "last:success:1"
+  ]
+}
