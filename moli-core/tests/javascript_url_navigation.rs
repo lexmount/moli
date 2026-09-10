@@ -139,6 +139,7 @@ async fn child_javascript_url_string_survives_without_a_new_cross_document_navig
     for action in [
         "document.body.dataset.changed = 'yes';",
         "location.hash = 'fragment';",
+        "navigation.onnavigate = event => event.preventDefault(); document.forms[0].submit();",
     ] {
         let result = child_javascript_url_navigation(action, false).await?;
         assert_eq!(result[0]["bodyId"], "completion", "{action}: {result}");
