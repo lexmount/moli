@@ -101,6 +101,14 @@ impl CommandPort {
         self.tx.is_closed() || self.admission.failed.load(Ordering::Acquire)
     }
 
+    #[cfg(test)]
+    pub(crate) fn available_data_capacity(&self) -> (usize, usize) {
+        (
+            self.admission.bytes.available_permits(),
+            self.admission.messages.available_permits(),
+        )
+    }
+
     fn reserve(&self, command: &Command) -> Option<Reservation> {
         let bytes = match command {
             Command::SendText(text) | Command::ReceiveText(text) => Some(text.len()),

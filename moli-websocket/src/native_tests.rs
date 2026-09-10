@@ -317,6 +317,8 @@ async fn native_close_handshake_finishes_while_message_sink_is_blocked() {
         .await
         .expect("physical close must not wait for the event sink or closing timeout")
         .unwrap();
+    assert!(handle.is_closed());
+    assert_eq!(handle.send_binary(vec![1]), Err(crate::SendError::Closed));
     resume.add_permits(1);
     assert_text_message(&mut rx, 75, "blocked").await;
     assert_closing(&mut rx, 75).await;

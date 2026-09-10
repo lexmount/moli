@@ -15,6 +15,7 @@ pub(crate) async fn run_synthetic_websocket_connection(
     response_headers: Vec<(String, String)>,
 ) -> EventResult {
     let Some(_connection_slot) = acquire_websocket_connection_slot() else {
+        drop(command_rx);
         send_error_and_close(
             &event_tx,
             socket_id,
@@ -44,7 +45,7 @@ pub(crate) async fn run_synthetic_websocket_connection(
     .await?;
 
     while let Some(queued) = command_rx.recv().await {
-        let _reservation = queued.reservation;
+        let reservation = queued.reservation;
         match queued.command {
             Command::SendText(text) => {
                 let amount = text.len();
@@ -77,6 +78,8 @@ pub(crate) async fn run_synthetic_websocket_connection(
                 send_event(&event_tx, Event::BinaryMessage { socket_id, data }).await?;
             }
             Command::ServerClose { code, reason } => {
+                drop(command_rx);
+                drop(reservation);
                 let close_event_code = code.unwrap_or(1005);
                 let close_event_reason = code.map(|_| reason).unwrap_or_default();
                 send_event(
@@ -92,6 +95,8 @@ pub(crate) async fn run_synthetic_websocket_connection(
                 return Ok(());
             }
             Command::Close { code, reason } => {
+                drop(command_rx);
+                drop(reservation);
                 let close_event_code = code.unwrap_or(1005);
                 let close_event_reason = code.map(|_| reason).unwrap_or_default();
                 send_event(&event_tx, Event::Closing { socket_id }).await?;
@@ -108,6 +113,8 @@ pub(crate) async fn run_synthetic_websocket_connection(
                 return Ok(());
             }
             Command::Fail(message) => {
+                drop(command_rx);
+                drop(reservation);
                 send_error_and_close(&event_tx, socket_id, message).await?;
                 return Ok(());
             }

@@ -82,27 +82,14 @@ pub(super) async fn run_open_session(
     };
     let mut delivery: Option<Delivery> = None;
     let mut sending: Option<Sending> = None;
-    loop {
-        if session.terminal {
-            // Release physical transport and all reservations before awaiting a
-            // potentially blocked final event. Drop/cancel also aborts delivery.
-            sender.cancel();
-            sending = None;
-            session.outgoing.clear();
-            session.pongs.clear();
-            session.assembler = Assembler::default();
-        }
+    while !session.terminal {
         if delivery.is_none()
             && let Some(event) = session.outbox.pop_front()
         {
             let sink = event_tx.clone();
             delivery = Some(Box::pin(async move { send_event(&sink, event).await }));
         }
-        if session.terminal && delivery.is_none() {
-            return Ok(());
-        }
-        if !session.terminal
-            && sending.is_none()
+        if sending.is_none()
             && let Some((frame, next_flight)) = session.next_frame()
         {
             let sender = sender.clone();
@@ -115,9 +102,8 @@ pub(super) async fn run_open_session(
             }));
         }
         // Pause reads at the source while application delivery is backpressured.
-        let should_read = !session.terminal
-            && ((delivery.is_none() && session.outbox.is_empty())
-                || session.closing.requested.is_some());
+        let should_read = (delivery.is_none() && session.outbox.is_empty())
+            || session.closing.requested.is_some();
         if reading != should_read {
             reading = should_read;
             sender.set_reading(reading);
@@ -134,9 +120,9 @@ pub(super) async fn run_open_session(
             activity = async {
                 tokio::select! {
                     result = async { delivery.as_mut().expect("delivery exists").await }, if delivery.is_some() => Activity::Delivered(result),
-                    command = commands.recv(), if !session.terminal => Activity::Command(command),
+                    command = commands.recv() => Activity::Command(command),
                     event = connection.recv(), if should_read => Activity::Native(event),
-                    _ = tokio::time::sleep_until(deadline), if !session.terminal && session.closing.deadline.is_some() => Activity::CloseTimeout,
+                    _ = tokio::time::sleep_until(deadline), if session.closing.deadline.is_some() => Activity::CloseTimeout,
                 }
             } => activity,
         };
@@ -203,6 +189,22 @@ pub(super) async fn run_open_session(
             }
         }
     }
+
+    // Network termination ends admission immediately, even when the browser's
+    // last events remain backpressured. Only delivery and the outbox survive.
+    let outbox = std::mem::take(&mut session.outbox);
+    drop(commands);
+    drop(connection);
+    drop(sender);
+    drop(sending);
+    drop(session);
+    if let Some(delivery) = delivery {
+        delivery.await?;
+    }
+    for event in outbox {
+        send_event(&event_tx, event).await?;
+    }
+    Ok(())
 }
 
 impl Session {

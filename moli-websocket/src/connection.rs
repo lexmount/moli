@@ -19,6 +19,7 @@ pub(crate) async fn run_websocket_connection(
     decision: Option<tokio::sync::oneshot::Receiver<HandshakeDecision>>,
 ) -> EventResult {
     let Some(_connection_slot) = acquire_websocket_connection_slot() else {
+        drop(command_rx);
         send_error_and_close(
             &event_tx,
             socket_id,
@@ -31,12 +32,14 @@ pub(crate) async fn run_websocket_connection(
     let request = match prepare_websocket_request(&url, &protocols, &context) {
         Ok(request) => request,
         Err(error) => {
+            drop(command_rx);
             send_error_and_close(&event_tx, socket_id, error).await?;
             return Ok(());
         }
     };
 
     let Some(pending_handshake_slot) = acquire_pending_websocket_handshake_slot() else {
+        drop(command_rx);
         send_error_and_close(
             &event_tx,
             socket_id,
@@ -45,61 +48,42 @@ pub(crate) async fn run_websocket_connection(
         .await?;
         return Ok(());
     };
-    let handshake = open_websocket_connection(request, &context);
-    tokio::pin!(handshake);
+    // The handshake future owns the pending transport. End its scope before
+    // waiting for terminal delivery, including Close received while opening.
+    let opened = {
+        let handshake = open_websocket_connection(request, &context);
+        tokio::pin!(handshake);
+        loop {
+            tokio::select! {
+                biased;
+                command = command_rx.recv() => {
+                    match command.map(|queued| queued.command) {
+                        Some(Command::Close { .. }) => break Err(
+                            "WebSocket connection closed before opening".to_owned(),
+                        ),
+                        Some(Command::Fail(message)) => break Err(message),
+                        None => return Ok(()),
+                        // The browser rejects sends while CONNECTING. Ignore
+                        // direct crate users' data until the handshake succeeds.
+                        _ => {}
+                    }
+                }
+                connected = &mut handshake => break connected.map_err(|error| {
+                    format!("WebSocket connection failed: {error}")
+                }),
+            }
+        }
+    };
+    drop(pending_handshake_slot);
     let OpenedConnection {
         connection,
         handshake,
-    } = loop {
-        tokio::select! {
-            biased;
-            command = command_rx.recv() => {
-                match command.map(|queued| queued.command) {
-                    Some(Command::Close { .. }) => {
-                        drop(pending_handshake_slot);
-                        send_error_and_close(
-                            &event_tx,
-                            socket_id,
-                            "WebSocket connection closed before opening".to_owned(),
-                        )
-                        .await?;
-                        return Ok(());
-                    }
-                    Some(Command::SendText(_))
-                    | Some(Command::SendBinary(_))
-                    | Some(Command::ReceiveText(_))
-                    | Some(Command::ReceiveBinary(_))
-                    | Some(Command::ServerClose { .. }) => {
-                        // Browser-visible `send()` throws while CONNECTING, so these commands
-                        // should only appear from direct crate users. Ignore them rather than
-                        // queueing frames before the opening handshake has succeeded.
-                    }
-                    Some(Command::Fail(message)) => {
-                        drop(pending_handshake_slot);
-                        send_error_and_close(&event_tx, socket_id, message).await?;
-                        return Ok(());
-                    }
-                    None => return Ok(()),
-                }
-            }
-            connected = &mut handshake => {
-                match connected {
-                    Ok(connected) => {
-                        drop(pending_handshake_slot);
-                        break connected;
-                    }
-                    Err(error) => {
-                        drop(pending_handshake_slot);
-                        send_error_and_close(
-                            &event_tx,
-                            socket_id,
-                            format!("WebSocket connection failed: {error}"),
-                        )
-                        .await?;
-                        return Ok(());
-                    }
-                }
-            }
+    } = match opened {
+        Ok(opened) => opened,
+        Err(error) => {
+            drop(command_rx);
+            send_error_and_close(&event_tx, socket_id, error).await?;
+            return Ok(());
         }
     };
 
@@ -130,11 +114,13 @@ pub(crate) async fn run_websocket_connection(
                 command = command_rx.recv() => {
                     match command.map(|queued| queued.command) {
                         Some(Command::Fail(message)) => {
+                            drop(command_rx);
                             drop(connection);
                             send_error_and_close(&event_tx, socket_id, message).await?;
                             return Ok(());
                         }
                         Some(Command::Close { .. }) => {
+                            drop(command_rx);
                             drop(connection);
                             send_error_and_close(
                                 &event_tx, socket_id,
@@ -157,6 +143,7 @@ pub(crate) async fn run_websocket_connection(
                             break;
                         }
                         HandshakeDecision::Fail(message) => {
+                            drop(command_rx);
                             drop(connection);
                             send_error_and_close(&event_tx, socket_id, message).await?;
                             return Ok(());
