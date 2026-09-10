@@ -134,6 +134,8 @@ struct Control {
     #[cfg(test)]
     read_attempts: std::sync::atomic::AtomicUsize,
     #[cfg(test)]
+    receive_allocations: std::sync::atomic::AtomicUsize,
+    #[cfg(test)]
     read_waiting: tokio::sync::Notify,
 }
 
@@ -342,6 +344,8 @@ impl CurlWebSocketRuntime {
             write_blocked: tokio::sync::Notify::new(),
             #[cfg(test)]
             read_attempts: std::sync::atomic::AtomicUsize::new(0),
+            #[cfg(test)]
+            receive_allocations: std::sync::atomic::AtomicUsize::new(0),
             #[cfg(test)]
             read_waiting: tokio::sync::Notify::new(),
         });

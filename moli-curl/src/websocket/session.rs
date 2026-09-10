@@ -113,7 +113,7 @@ impl Session {
         Ok(Step::Idle)
     }
 
-    pub(super) fn advance(&mut self) -> Result<Step, String> {
+    pub(super) fn advance(&mut self, receive: &mut Vec<u8>) -> Result<Step, String> {
         if self.io.cancelled() {
             return Ok(Step::Closed);
         }
@@ -131,7 +131,7 @@ impl Session {
             }
             // Receive delivery must never hold up a pending write.
             progressed |= self.write_pending()?;
-            match self.read_chunk()? {
+            match self.read_chunk(receive)? {
                 Step::Progress => progressed = true,
                 Step::Idle => break,
                 Step::Closed => return Ok(Step::Closed),
@@ -180,7 +180,7 @@ impl Session {
         matches!(self.phase, Phase::Open) && self.io.control.reading.load(Ordering::Acquire)
     }
 
-    fn read_chunk(&mut self) -> Result<Step, String> {
+    fn read_chunk(&mut self, receive: &mut Vec<u8>) -> Result<Step, String> {
         if !self.reading.can_run(self.reading_enabled()) {
             return Ok(Step::Idle);
         }
@@ -194,14 +194,24 @@ impl Session {
             }
             Err(tokio::sync::mpsc::error::TrySendError::Closed(_)) => return Ok(Step::Closed),
         };
-        let mut data = vec![0; CHUNK_BYTES];
+        // The owner lends one spare buffer across connections. AGAIN keeps it;
+        // success transfers ownership to the event without copying the payload.
+        #[cfg(test)]
+        if receive.capacity() < CHUNK_BYTES {
+            self.io
+                .control
+                .receive_allocations
+                .fetch_add(1, Ordering::Relaxed);
+        }
+        receive.resize(CHUNK_BYTES, 0);
         #[cfg(test)]
         self.io
             .control
             .read_attempts
             .fetch_add(1, Ordering::Relaxed);
-        match self.handle.ws_recv(&mut data) {
+        match self.handle.ws_recv(receive) {
             Ok((count, frame)) => {
+                let mut data = std::mem::take(receive);
                 data.truncate(count);
                 // Let the caller answer Close before probing EOF. A peer can
                 // half-close TCP in the same packet as its Close frame.

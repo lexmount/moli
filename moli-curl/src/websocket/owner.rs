@@ -38,6 +38,7 @@ struct Owner {
     sessions: HashMap<CurlTransferId, Session>,
     dns: CurlDnsOwnerResidence<CurlTransferId, Pending>,
     poll: SocketPoll,
+    receive: Vec<u8>,
 }
 
 pub(super) fn run(
@@ -50,6 +51,7 @@ pub(super) fn run(
         sessions: HashMap::new(),
         dns: CurlDnsOwnerResidence::default(),
         poll: SocketPoll::default(),
+        receive: Vec::new(),
     };
     let _ = waker_tx.send(owner.multi.waker());
     while !shutdown.load(Ordering::Acquire) {
@@ -169,7 +171,7 @@ impl Owner {
         let mut retired = Vec::new();
         let mut progressed = false;
         for (id, session) in &mut self.sessions {
-            match session.advance() {
+            match session.advance(&mut self.receive) {
                 Ok(Step::Progress) => progressed = true,
                 Ok(Step::Idle) => {}
                 terminal => retired.push((*id, terminal)),
