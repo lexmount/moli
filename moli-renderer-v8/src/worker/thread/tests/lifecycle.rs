@@ -759,6 +759,7 @@ async fn service_worker_fetch_event_preload_response_resolves_network_response()
                 run.clone(),
             ),
             request_url,
+            request_method: "GET".to_owned(),
             request_mode: moli_fetch::RequestMode::Navigate,
             body_source_id,
             response_head: MaterializedServiceWorkerFetchResponseHead {
@@ -873,6 +874,7 @@ async fn service_worker_fetch_event_preload_response_opaqueredirect_exposes_requ
                 run.clone(),
             ),
             request_url: request_url.clone(),
+            request_method: "GET".to_owned(),
             request_mode: moli_fetch::RequestMode::Navigate,
             body_source_id,
             response_head: MaterializedServiceWorkerFetchResponseHead {
@@ -1043,6 +1045,7 @@ async fn service_worker_fetch_event_preload_response_body_errors_after_response(
                 run.clone(),
             ),
             request_url,
+            request_method: "GET".to_owned(),
             request_mode: moli_fetch::RequestMode::Navigate,
             body_source_id,
             response_head: MaterializedServiceWorkerFetchResponseHead {
@@ -1156,6 +1159,7 @@ async fn service_worker_fetch_event_preload_response_body_completes_after_fetch_
                 run.clone(),
             ),
             request_url,
+            request_method: "GET".to_owned(),
             request_mode: moli_fetch::RequestMode::Navigate,
             body_source_id,
             response_head: MaterializedServiceWorkerFetchResponseHead {
