@@ -902,7 +902,10 @@ impl ScriptVm {
                     let response_obj = crate::network_host::build_fetch_response_object_from_stream_for_request_mode_with_filter(
                         scope,
                         &pending.request_origin,
-                        pending.request_mode,
+                        crate::network_host::FetchResponseRequest {
+                            method: &started.request_method,
+                            mode: pending.request_mode,
+                        },
                         observable_head,
                         started.body_source_id,
                         started.response_filter,
