@@ -204,3 +204,4 @@ mod navigation;
 mod objects;
 mod service_worker;
 mod shared_worker;
+mod worker_realms;

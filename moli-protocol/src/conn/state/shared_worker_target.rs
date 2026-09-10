@@ -42,7 +42,7 @@ pub(crate) struct SharedWorkerTargetState {
     sessions: BTreeMap<String, SharedWorkerTargetSessionState>,
     pub(crate) url: String,
     pub(crate) name: String,
-    runtime_execution_context_id: Option<i64>,
+    runtime_execution_context: Option<RuntimeExecutionContextEvent>,
     console_messages: Vec<RuntimeConsoleMessageSnapshot>,
 }
 
@@ -77,13 +77,13 @@ impl SharedWorkerTargetState {
             sessions: BTreeMap::new(),
             url,
             name,
-            runtime_execution_context_id: None,
+            runtime_execution_context: None,
             console_messages: Vec::new(),
         }
     }
 
     pub(crate) fn execution_context_id(&self) -> i64 {
-        if let Some(id) = self.runtime_execution_context_id {
+        if let Some(id) = self.real_runtime_execution_context_id() {
             return id;
         }
         let instance_id = i64::try_from(self.renderer_instance_id.as_u64()).unwrap_or(i64::MAX);
@@ -91,7 +91,11 @@ impl SharedWorkerTargetState {
     }
 
     pub(crate) fn real_runtime_execution_context_id(&self) -> Option<i64> {
-        self.runtime_execution_context_id
+        self.runtime_execution_context.as_ref()?.context_id
+    }
+
+    pub(crate) fn runtime_execution_context(&self) -> Option<&RuntimeExecutionContextEvent> {
+        self.runtime_execution_context.as_ref()
     }
 
     fn rebind_synthetic_runtime_snapshots(&mut self, synthetic_id: i64, real_id: i64) {
@@ -110,12 +114,16 @@ impl SharedWorkerTargetState {
             && let Some(id) = event.context_id
         {
             let previous_id = self.execution_context_id();
-            if self.runtime_execution_context_id.is_some()
-                && self.runtime_execution_context_id != Some(id)
+            if self
+                .runtime_execution_context
+                .as_ref()
+                .is_some_and(|previous| {
+                    previous.context_id != event.context_id || previous.realm_id != event.realm_id
+                })
             {
                 self.mark_all_runtime_bindings_pending_replay();
             }
-            self.runtime_execution_context_id = Some(id);
+            self.runtime_execution_context = Some(event.clone());
             if previous_id < 0 {
                 self.rebind_synthetic_runtime_snapshots(previous_id, id);
             }
@@ -126,14 +134,24 @@ impl SharedWorkerTargetState {
         &mut self,
         event: &RuntimeExecutionContextEvent,
     ) {
-        if event.context_id == self.runtime_execution_context_id {
-            self.runtime_execution_context_id = None;
+        if self
+            .runtime_execution_context
+            .as_ref()
+            .is_some_and(|current| {
+                current.context_id == event.context_id
+                    && event
+                        .realm_id
+                        .as_ref()
+                        .is_none_or(|id| current.realm_id.as_ref() == Some(id))
+            })
+        {
+            self.runtime_execution_context = None;
             self.mark_all_runtime_bindings_pending_replay();
         }
     }
 
     pub(crate) fn record_runtime_execution_contexts_cleared_event(&mut self) {
-        self.runtime_execution_context_id = None;
+        self.runtime_execution_context = None;
         self.mark_all_runtime_bindings_pending_replay();
     }
 
@@ -196,7 +214,7 @@ impl SharedWorkerTargetState {
         &self,
         session_id: &str,
     ) -> Vec<RuntimeBindingDefinition> {
-        if self.runtime_execution_context_id.is_none() {
+        if self.runtime_execution_context.is_none() {
             return Vec::new();
         }
         let Some(state) = self.session_state(session_id) else {
@@ -567,7 +585,7 @@ impl SharedWorkerTargetState {
         if !state.runtime_session_state.runtime_frontend_enabled {
             return &[];
         }
-        if self.runtime_execution_context_id.is_none() {
+        if self.runtime_execution_context.is_none() {
             return &[];
         }
         &self.console_messages[state

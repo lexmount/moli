@@ -7449,8 +7449,14 @@ async fn devtools_realms_for_route_async(
             .browser_context_by_id(browser_context_id)
             .and_then(|context| context.shared_worker_target(target_id))
             .ok_or_else(|| DevToolsError::new(DevToolsErrorKind::NoSuchTarget, "NoSuchTarget"))?;
-        return Ok(shared_worker_target_runtime_realm(target)
+        return Ok(target
+            .runtime_execution_context()
+            .cloned()
             .into_iter()
+            .map(|mut realm| {
+                realm.context_type = Some("shared-worker".to_owned());
+                realm
+            })
             .collect());
     }
     if let CdpSessionRoute::DedicatedWorkerTarget {
@@ -7462,7 +7468,9 @@ async fn devtools_realms_for_route_async(
             .browser_context_by_id(browser_context_id)
             .and_then(|context| context.dedicated_worker_target(target_id))
             .ok_or_else(|| DevToolsError::new(DevToolsErrorKind::NoSuchTarget, "NoSuchTarget"))?;
-        return Ok(dedicated_worker_target_runtime_realm(target)
+        return Ok(target
+            .runtime_execution_context()
+            .cloned()
             .into_iter()
             .collect());
     }
@@ -7475,7 +7483,9 @@ async fn devtools_realms_for_route_async(
             .browser_context_by_id(browser_context_id)
             .and_then(|context| context.service_worker_target(target_id))
             .ok_or_else(|| DevToolsError::new(DevToolsErrorKind::NoSuchTarget, "NoSuchTarget"))?;
-        return Ok(service_worker_target_runtime_realm(target)
+        return Ok(target
+            .runtime_execution_context()
+            .cloned()
             .into_iter()
             .collect());
     }
@@ -7483,66 +7493,6 @@ async fn devtools_realms_for_route_async(
     conn.runtime_realm_inventory_for_owner_async(&owner)
         .await
         .map_err(|message| DevToolsError::new(DevToolsErrorKind::Internal, message))
-}
-
-fn shared_worker_target_runtime_realm(
-    target: &crate::conn::SharedWorkerTargetState,
-) -> Option<RuntimeExecutionContextEvent> {
-    let context_id = target.real_runtime_execution_context_id()?;
-    let origin = url::Url::parse(&target.url)
-        .ok()
-        .map(|url| moli_url::origin_ascii_serialization(&url))
-        .unwrap_or_else(|| "null".to_owned());
-    Some(RuntimeExecutionContextEvent {
-        target_id: Some(DevToolsTargetId::from(target.target_id.as_str())),
-        context_id: Some(context_id),
-        realm_id: Some(DevToolsRealmId::from(format!(
-            "shared-worker-{}",
-            target.target_id
-        ))),
-        frame_id: None,
-        origin: Some(origin),
-        name: Some(target.name.clone()),
-        is_default: Some(true),
-        context_type: Some("shared-worker".to_owned()),
-        grant_universal_access: None,
-    })
-}
-
-fn dedicated_worker_target_runtime_realm(
-    target: &crate::conn::DedicatedWorkerTargetState,
-) -> Option<RuntimeExecutionContextEvent> {
-    let mut realm = shared_worker_target_runtime_realm(&target.inner)?;
-    realm.realm_id = Some(DevToolsRealmId::from(format!(
-        "dedicated-worker-{}",
-        target.target_id
-    )));
-    realm.context_type = Some("worker".to_owned());
-    Some(realm)
-}
-
-fn service_worker_target_runtime_realm(
-    target: &crate::conn::ServiceWorkerTargetState,
-) -> Option<RuntimeExecutionContextEvent> {
-    let context_id = target.real_runtime_execution_context_id()?;
-    let origin = url::Url::parse(&target.script_url)
-        .ok()
-        .map(|url| moli_url::origin_ascii_serialization(&url))
-        .unwrap_or_else(|| "null".to_owned());
-    Some(RuntimeExecutionContextEvent {
-        target_id: Some(DevToolsTargetId::from(target.target_id.as_str())),
-        context_id: Some(context_id),
-        realm_id: Some(DevToolsRealmId::from(format!(
-            "service-worker-{}",
-            target.target_id
-        ))),
-        frame_id: None,
-        origin: Some(origin),
-        name: Some(String::new()),
-        is_default: Some(true),
-        context_type: Some("service-worker".to_owned()),
-        grant_universal_access: None,
-    })
 }
 
 fn devtools_realm_type(context_type: Option<&str>) -> &'static str {
@@ -10214,7 +10164,10 @@ fn shared_worker_runtime_enable_command_output_plan_for_session(
         return CommandOutputPlan::error(-32001, "Unknown sessionId");
     };
     target.set_runtime_frontend_enabled(session_id, true);
-    let execution_context_created = build_shared_worker_execution_context_created_event(target);
+    let execution_context_created = target
+        .runtime_execution_context()
+        .cloned()
+        .map(RuntimeContextProtocolEvent::Created);
     let has_runtime_context = target.real_runtime_execution_context_id().is_some();
     let runtime_messages = target.pending_runtime_console_messages(session_id).to_vec();
     let console_end = target.console_message_count();
@@ -10259,7 +10212,10 @@ fn service_worker_runtime_enable_command_output_plan_for_session(
         return CommandOutputPlan::error(-32001, "Unknown sessionId");
     };
     target.set_runtime_frontend_enabled(session_id, true);
-    let execution_context_created = build_service_worker_execution_context_created_event(target);
+    let execution_context_created = target
+        .runtime_execution_context()
+        .cloned()
+        .map(RuntimeContextProtocolEvent::Created);
     let has_runtime_context = target.real_runtime_execution_context_id().is_some();
     let runtime_messages = target.pending_runtime_console_messages(session_id).to_vec();
     let console_end = target.console_message_count();
@@ -10362,54 +10318,6 @@ fn push_runtime_exception_thrown_protocol_messages(
             Some(u64::from(message.message.colno.saturating_sub(1))),
         ));
     }
-}
-
-fn build_shared_worker_execution_context_created_event(
-    target: &crate::conn::SharedWorkerTargetState,
-) -> Option<RuntimeContextProtocolEvent> {
-    let context_id = target.real_runtime_execution_context_id()?;
-    let realm_id = format!("shared-worker-{}", target.target_id);
-    let origin = url::Url::parse(&target.url)
-        .ok()
-        .map(|url| moli_url::origin_ascii_serialization(&url))
-        .unwrap_or_else(|| "null".to_owned());
-    Some(RuntimeContextProtocolEvent::Created(
-        RuntimeExecutionContextEvent {
-            target_id: None,
-            context_id: Some(context_id),
-            realm_id: Some(DevToolsRealmId::from(realm_id)),
-            frame_id: None,
-            origin: Some(origin),
-            name: Some(target.name.clone()),
-            is_default: Some(true),
-            context_type: Some("worker".to_owned()),
-            grant_universal_access: None,
-        },
-    ))
-}
-
-fn build_service_worker_execution_context_created_event(
-    target: &crate::conn::ServiceWorkerTargetState,
-) -> Option<RuntimeContextProtocolEvent> {
-    let context_id = target.real_runtime_execution_context_id()?;
-    let realm_id = format!("service-worker-{}", target.target_id);
-    let origin = url::Url::parse(&target.script_url)
-        .ok()
-        .map(|url| moli_url::origin_ascii_serialization(&url))
-        .unwrap_or_else(|| "null".to_owned());
-    Some(RuntimeContextProtocolEvent::Created(
-        RuntimeExecutionContextEvent {
-            target_id: None,
-            context_id: Some(context_id),
-            realm_id: Some(DevToolsRealmId::from(realm_id)),
-            frame_id: None,
-            origin: Some(origin),
-            name: Some(String::new()),
-            is_default: Some(true),
-            context_type: Some("service-worker".to_owned()),
-            grant_universal_access: None,
-        },
-    ))
 }
 
 fn disable_command_output_plan_sync_for_owner(

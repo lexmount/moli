@@ -42,21 +42,25 @@ async fn wait_until_runtime_expression_true(
 }
 
 fn record_shared_worker_runtime_context(ctx: &mut TestContext, session_id: &str, context_id: i64) {
+    let target = ctx
+        .conn
+        .shared_worker_target_for_session_mut(Some(session_id))
+        .expect("shared worker target session should exist");
     let event = RuntimeExecutionContextEvent {
-        target_id: None,
+        target_id: Some(DevToolsTargetId::from(target.target_id.as_str())),
         context_id: Some(context_id),
-        realm_id: None,
+        realm_id: Some(crate::devtools_runtime::DevToolsRealmId::from(format!(
+            "{}:native-realm-{context_id}",
+            target.target_id
+        ))),
         frame_id: None,
-        origin: None,
-        name: None,
-        is_default: None,
+        origin: Some("https://example.test".to_owned()),
+        name: Some(target.name.clone()),
+        is_default: Some(true),
         context_type: Some("worker".to_owned()),
         grant_universal_access: None,
     };
-    ctx.conn
-        .shared_worker_target_for_session_mut(Some(session_id))
-        .expect("shared worker target session should exist")
-        .record_runtime_execution_context_created_event(&event);
+    target.record_runtime_execution_context_created_event(&event);
 }
 
 #[tokio::test]
@@ -198,7 +202,7 @@ async fn get_realms_on_shared_worker_target_returns_real_renderer_realm() {
     assert_eq!(realm.context_id, Some(81_081));
     assert_eq!(
         realm.realm_id.as_ref().map(|realm| realm.as_str()),
-        Some("shared-worker-TID-shared-worker")
+        Some("TID-shared-worker:native-realm-81081")
     );
     assert_eq!(realm.frame_id, None);
     assert_eq!(realm.origin.as_deref(), Some("https://example.test"));
@@ -266,7 +270,7 @@ async fn get_realms_global_enumeration_includes_shared_worker_real_renderer_real
                 && realm.context_id == Some(81_081)
                 && realm.context_type.as_deref() == Some("shared-worker")
                 && realm.realm_id.as_ref().map(|realm| realm.as_str())
-                    == Some("shared-worker-TID-shared-worker")
+                    == Some("TID-shared-worker:native-realm-81081")
         }),
         "global getRealms should include shared worker target realms after renderer context creation: {:?}",
         result.realms

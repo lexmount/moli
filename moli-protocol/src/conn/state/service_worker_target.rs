@@ -50,7 +50,7 @@ pub(crate) struct ServiceWorkerTargetState {
     version_scope: Option<TargetServiceWorkerVersionScope>,
     run_state: ServiceWorkerTargetRunState,
     inspector_target_crashed_session_ids: BTreeSet<String>,
-    runtime_execution_context_id: Option<i64>,
+    runtime_execution_context: Option<RuntimeExecutionContextEvent>,
     console_messages: Vec<RuntimeConsoleMessageSnapshot>,
     exception_messages: Vec<ServiceWorkerRuntimeExceptionSnapshot>,
     fetch_diagnostics: Vec<RendererServiceWorkerFetchDiagnostic>,
@@ -161,7 +161,7 @@ impl ServiceWorkerTargetState {
             version_scope: Some(TargetServiceWorkerVersionScope::new()),
             run_state,
             inspector_target_crashed_session_ids: BTreeSet::new(),
-            runtime_execution_context_id: None,
+            runtime_execution_context: None,
             console_messages: Vec::new(),
             exception_messages: Vec::new(),
             fetch_diagnostics: Vec::new(),
@@ -170,7 +170,7 @@ impl ServiceWorkerTargetState {
     }
 
     pub(crate) fn execution_context_id(&self) -> i64 {
-        if let Some(id) = self.runtime_execution_context_id {
+        if let Some(id) = self.real_runtime_execution_context_id() {
             return id;
         }
         let version_id = i64::try_from(self.renderer_version_id).unwrap_or(i64::MAX);
@@ -178,7 +178,11 @@ impl ServiceWorkerTargetState {
     }
 
     pub(crate) fn real_runtime_execution_context_id(&self) -> Option<i64> {
-        self.runtime_execution_context_id
+        self.runtime_execution_context.as_ref()?.context_id
+    }
+
+    pub(crate) fn runtime_execution_context(&self) -> Option<&RuntimeExecutionContextEvent> {
+        self.runtime_execution_context.as_ref()
     }
 
     pub(crate) fn inspection_target(&self) -> Option<moli_core::runtime::RendererWorkerIdentity> {
@@ -214,7 +218,7 @@ impl ServiceWorkerTargetState {
         ) && let Some(id) = event.context_id
         {
             let previous_id = self.execution_context_id();
-            self.runtime_execution_context_id = Some(id);
+            self.runtime_execution_context = Some(event.clone());
             if previous_id < 0 {
                 self.rebind_synthetic_runtime_snapshots(previous_id, id);
             }
@@ -225,13 +229,23 @@ impl ServiceWorkerTargetState {
         &mut self,
         event: &RuntimeExecutionContextEvent,
     ) {
-        if event.context_id == self.runtime_execution_context_id {
-            self.runtime_execution_context_id = None;
+        if self
+            .runtime_execution_context
+            .as_ref()
+            .is_some_and(|current| {
+                current.context_id == event.context_id
+                    && event
+                        .realm_id
+                        .as_ref()
+                        .is_none_or(|id| current.realm_id.as_ref() == Some(id))
+            })
+        {
+            self.runtime_execution_context = None;
         }
     }
 
     pub(crate) fn record_runtime_execution_contexts_cleared_event(&mut self) {
-        self.runtime_execution_context_id = None;
+        self.runtime_execution_context = None;
     }
 
     pub(crate) fn version_identity(
@@ -337,7 +351,7 @@ impl ServiceWorkerTargetState {
             } if retired == &renderer_run => return None,
             ServiceWorkerTargetRunState::Stopped { .. } => {}
         }
-        self.runtime_execution_context_id = None;
+        self.runtime_execution_context = None;
         self.run_state = ServiceWorkerTargetRunState::Live {
             phase: ServiceWorkerTargetLiveRunPhase::Starting,
             run: ServiceWorkerTargetLiveRun {
@@ -393,7 +407,7 @@ impl ServiceWorkerTargetState {
             &renderer_run,
             "service-worker stop must retire the exact observed run"
         );
-        self.runtime_execution_context_id = None;
+        self.runtime_execution_context = None;
         Some(run.scope.into_retirement(identity))
     }
 
@@ -647,7 +661,7 @@ impl ServiceWorkerTargetState {
         let ServiceWorkerTargetRunState::Live { run, .. } = live_state else {
             unreachable!("current service-worker run identity must retain its unique scope")
         };
-        self.runtime_execution_context_id = None;
+        self.runtime_execution_context = None;
         Some(run.scope.into_retirement(identity))
     }
 
@@ -871,7 +885,7 @@ impl ServiceWorkerTargetState {
         if !state.runtime_session_state.runtime_frontend_enabled {
             return &[];
         }
-        if self.runtime_execution_context_id.is_none() {
+        if self.runtime_execution_context.is_none() {
             return &[];
         }
         &self.console_messages[state
@@ -903,7 +917,7 @@ impl ServiceWorkerTargetState {
         if !state.runtime_session_state.runtime_frontend_enabled {
             return &[];
         }
-        if self.runtime_execution_context_id.is_none() {
+        if self.runtime_execution_context.is_none() {
             return &[];
         }
         &self.exception_messages[state
