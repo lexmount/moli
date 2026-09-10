@@ -86,6 +86,7 @@ use crate::network_host::{
     local_url_response_result, parse_fetch_init, request_input_snapshot,
     request_object_credentials_mode, reset_xhr_response_for_request_error, resolve_context_url,
     set_xhr_state_bool, set_xhr_state_number, throw_synchronous_xhr_failure,
+    validate_fetch_response_headers,
     validate_fetch_response_security_policy,
     validate_fetch_response_security_policy_with_body_classified, xhr_author_request_headers,
     xhr_dispatch_progress_event, xhr_ensure_send_allowed, xhr_state_bool_property,
@@ -1086,6 +1087,7 @@ pub(super) struct PendingWorkerFetch {
     pub(super) network_record: Option<PendingWorkerFetchNetworkRecord>,
     pub(super) paused_response: Option<PausedWorkerSubresourceResponse>,
     pub(super) streaming_body_source_id: Option<NetworkBodySourceId>,
+    pub(super) streaming_needs_orb_body_validation: bool,
 }
 
 pub(super) enum WorkerFetchEvent {
@@ -1109,6 +1111,7 @@ pub(super) struct WorkerFetchStreamingStarted {
 }
 
 pub(super) struct WorkerFetchStreamingChunk {
+    fetch_id: u32,
     body_source_id: NetworkBodySourceId,
     bytes: Vec<u8>,
 }

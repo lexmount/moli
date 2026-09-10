@@ -5247,7 +5247,6 @@ async fn worker_fetch_no_cors_opaque_response_blocking_returns_empty_opaque_resp
                     hasOrbMessage: String(error && error.message).includes("OpaqueResponseBlocking"),
                 }});
             }}
-            close();
         }})();
         "#
         ),
@@ -5291,6 +5290,7 @@ async fn worker_fetch_no_cors_opaque_response_blocking_returns_empty_opaque_resp
         SubresourceNetworkOutcome::Failure { error_text }
             if error_text == crate::network_host::ABORTED_ERROR_TEXT
     ));
+    handle.terminate_and_join();
 }
 
 #[tokio::test]
