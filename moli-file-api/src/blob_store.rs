@@ -228,13 +228,14 @@ where
         Some((String::from_utf8_lossy(&bytes).into_owned(), mime_type))
     }
 
-    /// Revoke every object URL created by one execution-context lifetime.
-    pub fn cleanup_object_url_lifetime(&self, lifetime_id: u64) -> usize {
+    /// Revoke one owner's URLs for an execution-context lifetime.
+    /// Lifetime identifiers are local to each resource owner.
+    pub fn cleanup_object_url_lifetime(&self, owner_id: OwnerId, lifetime_id: u64) -> usize {
         let removed_blob_ids = {
             let mut object_urls = self.object_urls.lock();
             let mut removed_blob_ids = Vec::new();
             object_urls.retain(|_, state| {
-                if state.lifetime_id == Some(lifetime_id) {
+                if state.owner_id == Some(owner_id) && state.lifetime_id == Some(lifetime_id) {
                     removed_blob_ids.push(state.blob_id);
                     false
                 } else {
@@ -468,8 +469,11 @@ mod tests {
         let second_url = store
             .create_object_url_with_lifetime(Some(1), Some(202), blob, "https://example.test")
             .expect("second object URL");
+        let other_owner_url = store
+            .create_object_url_with_lifetime(Some(2), Some(101), blob, "https://example.test")
+            .expect("another owner's URL with the same lifetime identifier");
 
-        assert_eq!(store.cleanup_object_url_lifetime(101), 1);
+        assert_eq!(store.cleanup_object_url_lifetime(1, 101), 1);
         assert!(store.object_url_bytes_and_type(&first_url).is_none());
         assert_eq!(
             store.object_url_bytes_and_type(&second_url),
@@ -477,7 +481,12 @@ mod tests {
         );
 
         store.release_blob_wrapper_ref(blob);
-        assert_eq!(store.cleanup_object_url_lifetime(202), 1);
+        assert_eq!(store.cleanup_object_url_lifetime(1, 202), 1);
+        assert_eq!(
+            store.object_url_bytes_and_type(&other_owner_url),
+            Some((b"shared".to_vec(), "text/plain".to_owned()))
+        );
+        assert_eq!(store.cleanup_object_url_lifetime(2, 101), 1);
         assert!(store.blob_bytes(blob).is_none());
     }
 }
