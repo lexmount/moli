@@ -107,6 +107,9 @@ pub(crate) fn mark_request_input_body_used_for_fetch<'s>(
     let has_body = request_slot_value(scope, object, REQUEST_BODY_SLOT)
         .is_some_and(|body| !body.is_null_or_undefined());
     if has_body {
+        if let Some(stream) = body_stream_object(scope, object) {
+            crate::context_bootstrap::begin_readable_stream_body_consumption(scope, stream);
+        }
         set_request_slot_bool(scope, object, REQUEST_BODY_USED_SLOT, true);
     }
 }
@@ -277,30 +280,7 @@ fn request_body_unusable<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     object: v8::Local<'s, v8::Object>,
 ) -> bool {
-    let Some(body) = request_slot_value(scope, object, REQUEST_BODY_SLOT) else {
-        return false;
-    };
-    if body.is_null_or_undefined() {
-        return false;
-    }
-    request_slot_bool(scope, object, REQUEST_BODY_USED_SLOT)
-        || request_body_stream_locked(scope, body)
-}
-
-fn request_body_stream_locked<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    body: v8::Local<'s, v8::Value>,
-) -> bool {
-    let Ok(stream) = v8::Local::<v8::Object>::try_from(body) else {
-        return false;
-    };
-    if !web_api_interfaces::ReadableStream::is_instance(scope, stream) {
-        return false;
-    }
-    stream
-        .get(scope, v8str(scope, "locked").into())
-        .map(|value| value.boolean_value(scope))
-        .unwrap_or(false)
+    body_is_unusable(scope, object)
 }
 
 fn request_signal_snapshot_from_property<'s>(

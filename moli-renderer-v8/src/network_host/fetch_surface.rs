@@ -1,7 +1,6 @@
 use super::headers::{build_headers_object, headers_entries, mark_headers_immutable};
 use super::response::{ParsedResponseInit, install_response_body_methods, parse_response_init};
 use super::*;
-use crate::context_bootstrap::readable_stream_disturbed;
 pub(in crate::network_host) use crate::util::constructor_prototype;
 use crate::util::{
     callback_data_index_value, callback_data_item, get_private_value, set_private_value,
@@ -415,7 +414,7 @@ pub(crate) fn consume_webassembly_streaming_response_value<'s>(
         );
         return None;
     }
-    if body_already_used(scope, response, RESPONSE_BODY_USED_SLOT) {
+    if body_is_unusable(scope, response) {
         throw_type_error(
             scope,
             "Cannot compile WebAssembly.Module from an already read Response",
@@ -476,8 +475,7 @@ fn request_slot_attribute_getter_callback<'s>(
         return;
     };
     if slot == REQUEST_BODY_USED_SLOT {
-        let body_used = request_slot_bool(scope, this, slot)
-            || body_stream_is_disturbed(scope, this, REQUEST_BODY_SLOT, false);
+        let body_used = body_is_used(scope, this);
         rv.set(v8::Boolean::new(scope, body_used).into());
         return;
     }
@@ -500,8 +498,7 @@ fn response_slot_attribute_getter_callback<'s>(
         return;
     };
     if slot == RESPONSE_BODY_USED_SLOT {
-        let body_used = response_slot_bool(scope, this, slot)
-            || body_stream_is_disturbed(scope, this, RESPONSE_BODY_SLOT, true);
+        let body_used = body_is_used(scope, this);
         rv.set(v8::Boolean::new(scope, body_used).into());
         return;
     }
@@ -786,7 +783,7 @@ fn request_clone_callback<'s>(
     let Some(this) = require_request_receiver(scope, args.this()) else {
         return;
     };
-    if body_already_used(scope, this, REQUEST_BODY_USED_SLOT) {
+    if body_is_unusable(scope, this) {
         throw_type_error(
             scope,
             "Failed to execute 'clone' on 'Request': body stream already used",
@@ -817,7 +814,7 @@ fn response_clone_callback<'s>(
     let Some(this) = require_response_receiver(scope, args.this()) else {
         return;
     };
-    if body_already_used(scope, this, RESPONSE_BODY_USED_SLOT) {
+    if body_is_unusable(scope, this) {
         throw_type_error(
             scope,
             "Failed to execute 'clone' on 'Response': body stream already used",
@@ -931,7 +928,7 @@ fn clone_response_readable_stream_body<'s>(
     if !web_api_interfaces::ReadableStream::is_instance(scope, stream) {
         return Ok(None);
     }
-    if readable_stream_locked(scope, stream) {
+    if readable_body_stream_unusable(scope, stream) {
         return Err(());
     }
     let global = scope.get_current_context().global(scope);
@@ -955,16 +952,6 @@ fn clone_response_readable_stream_body<'s>(
     };
     set_response_slot_value(scope, response, RESPONSE_BODY_SLOT, original_branch);
     Ok(Some(clone_branch))
-}
-
-fn readable_stream_locked(
-    scope: &mut v8::PinScope<'_, '_>,
-    stream: v8::Local<'_, v8::Object>,
-) -> bool {
-    stream
-        .get(scope, v8str(scope, "locked").into())
-        .map(|value| value.boolean_value(scope))
-        .unwrap_or(false)
 }
 
 pub(in crate::network_host) fn new_abort_signal_for_request<'s>(
@@ -1019,7 +1006,7 @@ pub(crate) fn install_response_bindings<'s>(
 }
 
 const BODY_STREAM_CONSUMER_RUNTIME_SOURCE: &str = r#"
-(() => {
+((getReader, read) => {
   const consumerName = "__lmConsumeReadableStreamBody";
   const teeName = "__lmTeeReadableStreamBody";
   if (
@@ -1028,6 +1015,7 @@ const BODY_STREAM_CONSUMER_RUNTIME_SOURCE: &str = r#"
   ) {
     return;
   }
+  const parseJSON = JSON.parse;
 
   function uint8ArrayChunkBytes(chunk) {
     if (Object.prototype.toString.call(chunk) !== "[object Uint8Array]") {
@@ -1037,22 +1025,16 @@ const BODY_STREAM_CONSUMER_RUNTIME_SOURCE: &str = r#"
   }
 
   async function consumeReadableStreamBody(stream, kind, mimeType, onChunk) {
-    const reader = stream.getReader();
+    const reader = getReader.call(stream);
     const chunks = [];
     let total = 0;
-    try {
-      for (;;) {
-        const result = await reader.read();
-        if (result.done) break;
-        const chunk = uint8ArrayChunkBytes(result.value);
-        if (typeof onChunk === "function") onChunk(chunk);
-        chunks.push(chunk);
-        total += chunk.byteLength;
-      }
-    } finally {
-      try {
-        reader.releaseLock();
-      } catch (_) {}
+    for (;;) {
+      const result = await read.call(reader);
+      if (result.done) break;
+      const chunk = uint8ArrayChunkBytes(result.value);
+      if (typeof onChunk === "function") onChunk(chunk);
+      chunks.push(chunk);
+      total += chunk.byteLength;
     }
 
     const bytes = new Uint8Array(total);
@@ -1065,7 +1047,7 @@ const BODY_STREAM_CONSUMER_RUNTIME_SOURCE: &str = r#"
     if (kind === "arrayBuffer") return bytes.buffer;
     if (kind === "bytes") return bytes;
     if (kind === "text") return new TextDecoder().decode(bytes);
-    if (kind === "json") return JSON.parse(new TextDecoder().decode(bytes));
+    if (kind === "json") return parseJSON(new TextDecoder().decode(bytes));
     if (kind === "blob") return new Blob([bytes], { type: mimeType || "" });
     if (kind === "formData") {
       return new Response(bytes, {
@@ -1164,7 +1146,7 @@ const BODY_STREAM_CONSUMER_RUNTIME_SOURCE: &str = r#"
     value: teeReadableStreamBody,
     configurable: true
   });
-})();
+})
 "#;
 
 pub(crate) fn initialize_fetch_realm_helpers(
@@ -1174,56 +1156,25 @@ pub(crate) fn initialize_fetch_realm_helpers(
 }
 
 fn install_body_stream_consumer_runtime(scope: &mut v8::PinScope<'_, '_>) -> anyhow::Result<()> {
+    let [get_reader, read] = crate::context_bootstrap::body_stream_reader_operations(scope)
+        .ok_or_else(|| anyhow::anyhow!("failed to allocate Fetch body reader operations"))?;
     let Some(source) = v8_string(scope, BODY_STREAM_CONSUMER_RUNTIME_SOURCE) else {
         anyhow::bail!("failed to allocate Fetch body stream consumer runtime source");
     };
     let script = v8::Script::compile(scope, source, None)
         .ok_or_else(|| anyhow::anyhow!("failed to compile Fetch body stream consumer runtime"))?;
-    script
+    let initializer = script
         .run(scope)
-        .ok_or_else(|| anyhow::anyhow!("failed to run Fetch body stream consumer runtime"))?;
+        .and_then(|value| v8::Local::<v8::Function>::try_from(value).ok())
+        .ok_or_else(|| anyhow::anyhow!("failed to create Fetch body stream consumer runtime"))?;
+    initializer
+        .call(
+            scope,
+            v8::undefined(scope).into(),
+            &[get_reader.into(), read.into()],
+        )
+        .ok_or_else(|| {
+            anyhow::anyhow!("failed to initialize Fetch body stream consumer runtime")
+        })?;
     Ok(())
-}
-
-fn body_already_used<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    object: v8::Local<'s, v8::Object>,
-    slot: &str,
-) -> bool {
-    if is_response_slot(slot) {
-        return response_slot_bool(scope, object, slot)
-            || body_stream_is_disturbed(scope, object, RESPONSE_BODY_SLOT, true);
-    }
-    request_slot_bool(scope, object, slot)
-        || body_stream_is_disturbed(scope, object, REQUEST_BODY_SLOT, false)
-}
-
-fn body_stream_is_disturbed<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    object: v8::Local<'s, v8::Object>,
-    body_slot: &'static str,
-    response: bool,
-) -> bool {
-    let body = if response {
-        response_slot_object(scope, object, body_slot)
-    } else {
-        request_slot_object(scope, object, body_slot)
-    };
-    body.is_some_and(|stream| readable_stream_disturbed(scope, stream))
-}
-
-fn is_response_slot(slot: &str) -> bool {
-    matches!(
-        slot,
-        RESPONSE_TYPE_SLOT
-            | RESPONSE_URL_SLOT
-            | RESPONSE_INTERNAL_URL_SLOT
-            | RESPONSE_REDIRECTED_SLOT
-            | RESPONSE_STATUS_SLOT
-            | RESPONSE_OK_SLOT
-            | RESPONSE_STATUS_TEXT_SLOT
-            | RESPONSE_HEADERS_SLOT
-            | RESPONSE_BODY_SLOT
-            | RESPONSE_BODY_USED_SLOT
-    )
 }
