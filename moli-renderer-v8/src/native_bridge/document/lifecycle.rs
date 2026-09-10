@@ -123,6 +123,10 @@ fn node_document_write_or_writeln_callback<'s>(
     if detached_native_handle_for_runtime(scope, runtime_ptr, args.this()).is_some() {
         let document = args.this();
         let stream_was_open = detached_document_write_stream_is_open(scope, document);
+        if !stream_was_open && unsafe { &*runtime_ptr }.has_document_unload_counter(handle) {
+            rv.set_undefined();
+            return;
+        }
         if !stream_was_open {
             set_detached_document_write_stream_open(scope, document, true);
         }
@@ -141,7 +145,8 @@ fn node_document_write_or_writeln_callback<'s>(
     let implicit_replacement_session = !runtime.has_active_parser_write_insertion_point()
         && !runtime.host_document().replace_on_close();
     if implicit_replacement_session
-        && (runtime.has_ignore_destructive_writes_counter(handle)
+        && (runtime.has_document_unload_counter(handle)
+            || runtime.has_ignore_destructive_writes_counter(handle)
             || current_script_ignores_document_write_without_parser_insertion_point(runtime))
     {
         rv.set_undefined();
@@ -241,6 +246,10 @@ pub(in crate::native_bridge) fn node_document_open_callback<'s>(
                 11,
                 "The object is in an invalid state.",
             );
+            return;
+        }
+        if unsafe { &*runtime_ptr }.has_document_unload_counter(handle) {
+            rv.set(args.this().into());
             return;
         }
         if detached_native_handle_for_runtime(scope, runtime_ptr, args.this()).is_some() {
