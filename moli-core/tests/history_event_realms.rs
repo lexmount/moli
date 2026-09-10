@@ -61,3 +61,35 @@ async fn cross_window_navigation_events_use_the_target_realm_and_native_construc
     }
     Ok(())
 }
+
+#[tokio::test(flavor = "multi_thread")]
+async fn child_joint_history_events_use_the_parent_event_target_realm() -> Result<()> {
+    for constructors in ["original", "overwritten"] {
+        for scenario in ["joint-cancel", "joint-prune"] {
+            let events = if scenario == "joint-cancel" {
+                json!(["navigate", "abort", "navigateerror"])
+            } else {
+                json!(["dispose", "dispose"])
+            };
+            assert_eq!(
+                navigation_events(scenario, "top", constructors).await?,
+                json!({"errors": [], "reads": 0, "events": events}),
+                "{scenario}/{constructors}"
+            );
+        }
+    }
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn parent_initiated_child_navigation_constructs_events_in_the_retiring_child_realm()
+-> Result<()> {
+    for constructors in ["original", "overwritten"] {
+        assert_eq!(
+            navigation_events("cross-document", "child", constructors).await?,
+            json!({"errors": [], "reads": 0, "events": ["navigate"]}),
+            "{constructors}"
+        );
+    }
+    Ok(())
+}
