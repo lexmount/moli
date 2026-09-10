@@ -46,7 +46,14 @@ pub(crate) const RESPONSE_BODY_SLOT: &str = "__lmResponseBody";
 pub(crate) const RESPONSE_BODY_USED_SLOT: &str = "__lmResponseBodyUsed";
 
 #[derive(WebApiObject)]
-#[webapi(interface = web_api_interfaces::Response, prototype = "Response")]
+#[webapi(interface = web_api_interfaces::Request)]
+struct RequestCloneShellDeclaration {
+    #[webapi(slot = REQUEST_BODY_USED_SLOT, init = false)]
+    body_used: (),
+}
+
+#[derive(WebApiObject)]
+#[webapi(interface = web_api_interfaces::Response)]
 struct ResponseCloneShellDeclaration<'scope> {
     #[webapi(slot = RESPONSE_BODY_USED_SLOT, init = false)]
     body_used: (),
@@ -788,6 +795,66 @@ fn request_clone_callback<'s>(
             scope,
             "Failed to execute 'clone' on 'Request': body stream already used",
         );
+        return;
+    }
+    if network_body_source_from_object(scope, this).is_none()
+        && let Some(stream) = body_stream_object(scope, this)
+    {
+        let clone = RequestCloneShellDeclaration::new()
+            .bind(scope)
+            .expect("Request clone shell declaration should bind");
+        for slot in [
+            REQUEST_METHOD_SLOT,
+            REQUEST_URL_SLOT,
+            REQUEST_DESTINATION_SLOT,
+            REQUEST_REFERRER_SLOT,
+            REQUEST_REFERRER_POLICY_SLOT,
+            REQUEST_MODE_SLOT,
+            REQUEST_CREDENTIALS_SLOT,
+            REQUEST_CACHE_SLOT,
+            REQUEST_REDIRECT_SLOT,
+            REQUEST_INTEGRITY_SLOT,
+            REQUEST_KEEPALIVE_SLOT,
+            REQUEST_PRIORITY_SLOT,
+            REQUEST_DUPLEX_SLOT,
+            REQUEST_IS_HISTORY_NAVIGATION_SLOT,
+            REQUEST_IS_RELOAD_NAVIGATION_SLOT,
+        ] {
+            if let Some(value) = request_slot_value(scope, this, slot) {
+                set_request_slot_value(scope, clone, slot, value);
+            }
+        }
+        let entries = request_slot_object(scope, this, REQUEST_HEADERS_SLOT)
+            .map(|headers| headers_entries(scope, headers))
+            .unwrap_or_default();
+        let guard =
+            if request_slot_string(scope, this, REQUEST_MODE_SLOT).as_deref() == Some("no-cors") {
+                HeadersGuard::RequestNoCors
+            } else {
+                HeadersGuard::Request
+            };
+        let headers =
+            super::headers::build_headers_object_with_state(scope, &entries, guard, false);
+        super::headers::install_headers_object_methods(scope, headers);
+        set_request_slot_value(scope, clone, REQUEST_HEADERS_SLOT, headers.into());
+        let signal_source = request_slot_object(scope, this, REQUEST_SIGNAL_SLOT);
+        let Some(signal) = new_abort_signal_for_request_with_source(scope, signal_source) else {
+            return;
+        };
+        set_request_slot_value(scope, clone, REQUEST_SIGNAL_SLOT, signal);
+        let Some(branches) = crate::context_bootstrap::tee_fetch_body_stream(scope, stream) else {
+            return;
+        };
+        let Some(original_body) = branches.get_index(scope, 0) else {
+            return;
+        };
+        let Some(clone_body) = branches.get_index(scope, 1) else {
+            return;
+        };
+        set_request_slot_value(scope, this, REQUEST_BODY_SLOT, original_body);
+        set_request_slot_value(scope, clone, REQUEST_BODY_SLOT, clone_body);
+        mark_request_object(scope, clone);
+        rv.set(clone.into());
         return;
     }
     let global = scope.get_current_context().global(scope);
