@@ -4,7 +4,7 @@ use super::*;
 pub(in crate::network_host) use crate::util::constructor_prototype;
 use crate::util::{
     callback_data_index_value, callback_data_item, get_private_value, set_private_value,
-    throw_range_error,
+    throw_range_error, v8_string,
 };
 use crate::web_api_interfaces;
 use crate::webidl;
@@ -507,6 +507,16 @@ fn response_slot_attribute_getter_callback<'s>(
     if slot == RESPONSE_BODY_USED_SLOT {
         let body_used = body_is_used(scope, this);
         rv.set(v8::Boolean::new(scope, body_used).into());
+        return;
+    }
+    if slot == RESPONSE_URL_SLOT {
+        let url = response_slot_string(scope, this, slot).unwrap_or_default();
+        let url = url.split_once('#').map_or(url.as_str(), |(url, _)| url);
+        rv.set(
+            v8_string(scope, url)
+                .map(|value| value.into())
+                .unwrap_or_else(|| v8::undefined(scope).into()),
+        );
         return;
     }
     let value =
