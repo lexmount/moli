@@ -126,6 +126,7 @@ from moli_benchmark.wpt_cross.server import (
     _host_header_hostname,
     _headers_include,
     _inspect_headers_response_headers,
+    _fetch_status_response,
     _normalize_harness_case_key,
     _nosniff_javascript_response,
     _needs_wpt_template_substitution,
@@ -4302,6 +4303,54 @@ test(() => {}, "ok");
                             self.assertEqual(
                                 response.read(), b"FAIL" if method == "GET" else b""
                             )
+
+    def test_fixture_server_parses_fetch_status_parameters_as_bytes(self) -> None:
+        self.assertEqual(_fetch_status_response(""), (200, "OMG", "", b""))
+        self.assertEqual(
+            _fetch_status_response(
+                "code=201&code=404&text=&text=ignored&type=text%2Fplain"
+                "&content=%FF%FE%00%2B+end&content=ignored"
+            ),
+            (201, "", "text/plain", b"\xff\xfe\x00+ end"),
+        )
+
+    def test_fixture_server_models_fetch_status_for_supported_methods(self) -> None:
+        with tempfile.TemporaryDirectory() as root:
+            root_path = Path(root)
+            (root_path / "resources").mkdir()
+            (root_path / "resources" / "testharness.js").write_text(
+                "// testharness", encoding="utf-8"
+            )
+            with WptFixtureServer(root_path) as server:
+                for method in ["GET", "HEAD", "POST", "OPTIONS", "PUT", "PATCH", "DELETE", "YO"]:
+                    for status in [200, 204, 205, 304]:
+                        with self.subTest(method=method, status=status):
+                            connection = HTTPConnection("127.0.0.1", server.port, timeout=2)
+                            try:
+                                connection.request(
+                                    method,
+                                    "/fetch/api/resources/status.py"
+                                    f"?code={status}&text=Custom%20%FF"
+                                    "&type=text%2Fplain%3Bcharset%3DUTF-16"
+                                    "&content=%FF%FE%00%2B+end",
+                                    body=b"ignored" if method not in {"GET", "HEAD"} else None,
+                                )
+                                response = connection.getresponse()
+                                self.assertEqual(response.status, status)
+                                self.assertEqual(response.reason, "Custom \xff")
+                                self.assertEqual(response.headers["X-Request-Method"], method)
+                                self.assertEqual(
+                                    response.headers["Content-Type"],
+                                    "text/plain;charset=UTF-16",
+                                )
+                                self.assertEqual(response.headers["Content-Length"], "8")
+                                self.assertEqual(
+                                    response.read(),
+                                    b"" if method == "HEAD" or status in {204, 304}
+                                    else b"\xff\xfe\x00+ end",
+                                )
+                            finally:
+                                connection.close()
 
     def test_fixture_server_models_fetch_inspect_headers_handler(self) -> None:
         self.assertEqual(
