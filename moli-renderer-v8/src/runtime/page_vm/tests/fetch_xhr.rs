@@ -1644,6 +1644,125 @@ async fn credentialless_child_xhr_uses_credentialless_network_partition_key() {
 }
 
 #[tokio::test]
+async fn fetch_and_xhr_preserve_empty_headers_without_typing_binary_bodies() {
+    run_page_vm_async_test(async move {
+        for worker in [false, true] {
+            for api in ["fetch", "fetch-clone", "xhr-async", "xhr-sync"] {
+                for method in ["POST", "PUT"] {
+                    for empty_content_type in [false, true] {
+                        // Sync XHR blocks the VM's thread, so the fixture must
+                        // keep accepting and responding on a separate runtime.
+                        let (ready_tx, ready_rx) = tokio::sync::oneshot::channel();
+                        let server = std::thread::spawn(move || {
+                            tokio::runtime::Builder::new_current_thread()
+                                .enable_all()
+                                .build()
+                                .expect("request capture runtime")
+                                .block_on(async move {
+                                    let (base_url, request_rx, server) =
+                                        spawn_request_capture_http_server().await;
+                                    ready_tx.send(base_url).expect("fixture ready receiver");
+                                    let request = request_rx.await.expect("captured request");
+                                    server.await.expect("request capture server should finish");
+                                    request
+                                })
+                        });
+                        let base_url = ready_rx.await.expect("request capture fixture ready");
+                        let document_url = Url::parse(&format!("{base_url}/page.html"))
+                            .expect("document url");
+                        let mut page_vm = test_page_vm_with_document_url(document_url);
+                        let local_executor = page_vm.local_executor.clone();
+                        let send = format!(
+                            r#"(async () => {{
+                                const url = {base_url:?} + "/empty-headers";
+                                const body = new Uint8Array([1, 2]);
+                                const headers = [["X-Empty", " \t "]];
+                                if ({empty_content_type}) headers.push(["Content-Type", ""]);
+                                if ({api:?}.startsWith("fetch")) {{
+                                    const init = {{method: {method:?}, body, headers}};
+                                    const response = {api:?} === "fetch-clone"
+                                        ? await fetch(new Request(url, init).clone())
+                                        : await fetch(url, init);
+                                    if (response.status !== 204) throw new Error("fetch status " + response.status);
+                                    await response.text();
+                                }} else {{
+                                    await new Promise((resolve, reject) => {{
+                                        const xhr = new XMLHttpRequest();
+                                        xhr.open({method:?}, url, {api:?} === "xhr-async");
+                                        for (const [name, value] of headers) xhr.setRequestHeader(name, value);
+                                        xhr.onload = () => xhr.status === 204 ? resolve() : reject(new Error("XHR status " + xhr.status));
+                                        xhr.onerror = () => reject(new Error("XHR network error"));
+                                        xhr.send(body);
+                                        if ({api:?} === "xhr-sync") {{
+                                            if (xhr.status !== 204) reject(new Error("sync XHR status " + xhr.status));
+                                            else resolve();
+                                        }}
+                                    }});
+                                }}
+                            }})()"#
+                        );
+                        let script = if worker {
+                            let worker_source = serde_json::to_string(&format!(
+                                "{send}.then(() => postMessage('ok'), error => postMessage(String(error)))"
+                            ))
+                            .expect("serialize worker source");
+                            format!(
+                                r#"
+                                globalThis.__emptyHeaderResult = "pending";
+                                const source = URL.createObjectURL(new Blob([{worker_source}]));
+                                const worker = new Worker(source);
+                                worker.onmessage = event => {{
+                                    globalThis.__emptyHeaderResult = event.data;
+                                    worker.terminate();
+                                    URL.revokeObjectURL(source);
+                                }};
+                                worker.onerror = event => {{ globalThis.__emptyHeaderResult = event.message; }};
+                                "#
+                            )
+                        } else {
+                            format!(
+                                "globalThis.__emptyHeaderResult = 'pending'; {send}.then(() => {{ globalThis.__emptyHeaderResult = 'ok'; }}, error => {{ globalThis.__emptyHeaderResult = String(error); }})"
+                            )
+                        };
+                        let result = local_executor
+                            .run(async move {
+                                page_vm.vm_mut().eval(&script)?;
+                                drive_websocket_until_done(
+                                    &mut page_vm,
+                                    "String(globalThis.__emptyHeaderResult !== 'pending')",
+                                    "empty header request should complete",
+                                )
+                                .await?;
+                                page_vm.vm_mut().eval("globalThis.__emptyHeaderResult")
+                            })
+                            .await
+                            .expect("empty header test should run on owner lane");
+                        assert_eq!(
+                            result, "ok",
+                            "worker={worker}, {api}, {method}, empty_content_type={empty_content_type}"
+                        );
+                        let request = server.join().expect("request capture server should finish");
+                        let head = request.split("\r\n\r\n").next().expect("request head");
+                        let head = head.to_ascii_lowercase();
+                        assert!(head.lines().any(|line| line == "x-empty:"), "{request}");
+                        let content_types = head
+                            .lines()
+                            .filter(|line| line.starts_with("content-type:"))
+                            .collect::<Vec<_>>();
+                        if empty_content_type {
+                            assert_eq!(content_types, ["content-type:"], "{request}");
+                        } else {
+                            assert!(content_types.is_empty(), "{request}");
+                        }
+                    }
+                }
+            }
+        }
+    })
+    .await;
+}
+
+#[tokio::test]
 async fn navigator_send_beacon_without_body_does_not_synthesize_content_type() {
     run_page_vm_async_test(async move {
         let (base_url, request_rx, server) = spawn_request_capture_http_server().await;
