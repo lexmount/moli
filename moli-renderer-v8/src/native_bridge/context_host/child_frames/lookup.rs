@@ -69,7 +69,7 @@ impl JsContextHost {
         self.lightweight_popup_id_for_document_handle(owner_document)
     }
 
-    fn collect_child_browsing_context_handles_in_document_order_from_document(
+    pub(in crate::native_bridge::context_host) fn collect_child_browsing_context_handles_in_document_order_from_document(
         &self,
         document: DomHandle,
         out: &mut Vec<DomHandle>,

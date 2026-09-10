@@ -5260,6 +5260,7 @@ html/browsers/browsing-the-web/navigating-across-documents/initial-empty-documen
 html/browsers/browsing-the-web/navigating-across-documents/initial-empty-document/window-open-history-length.html
 html/browsers/browsing-the-web/navigating-across-documents/initial-empty-document/window-open-nourl.html
 html/browsers/browsing-the-web/navigating-across-documents/javascript-url-global-scope.html
+html/browsers/browsing-the-web/navigating-across-documents/javascript-url-no-beforeunload.window.js?moli-wpt-script=window
 html/browsers/browsing-the-web/navigating-across-documents/javascript-url-query-fragment-components.html
 html/browsers/browsing-the-web/navigating-across-documents/javascript-url-return-value-handling-dynamic.html
 html/browsers/browsing-the-web/navigating-across-documents/javascript-url-return-value-handling.html
