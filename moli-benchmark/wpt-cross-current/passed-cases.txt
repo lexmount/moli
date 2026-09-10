@@ -5614,7 +5614,6 @@ html/browsers/browsing-the-web/navigating-across-documents/initial-empty-documen
 html/browsers/browsing-the-web/navigating-across-documents/initial-empty-document/window-open-history-length.html
 html/browsers/browsing-the-web/navigating-across-documents/initial-empty-document/window-open-nourl.html
 html/browsers/browsing-the-web/navigating-across-documents/javascript-url-global-scope.html
-html/browsers/browsing-the-web/navigating-across-documents/javascript-url-no-beforeunload.window.js?moli-wpt-script=window
 html/browsers/browsing-the-web/navigating-across-documents/javascript-url-query-fragment-components.html
 html/browsers/browsing-the-web/navigating-across-documents/javascript-url-return-value-handling-dynamic.html
 html/browsers/browsing-the-web/navigating-across-documents/javascript-url-return-value-handling.html
@@ -6264,12 +6263,10 @@ html/semantics/forms/form-submission-0/form-double-submit-to-different-origin-fr
 html/semantics/forms/form-submission-0/form-double-submit.html
 html/semantics/forms/form-submission-0/form-submit-iframe-then-location-navigate.html
 html/semantics/forms/form-submission-0/getactionurl.html
-html/semantics/forms/form-submission-0/jsurl-form-submit.tentative.html
 html/semantics/forms/form-submission-0/jsurl-navigation-then-form-submit.html
 html/semantics/forms/form-submission-0/newline-normalization.html
 html/semantics/forms/form-submission-0/reparent-form-during-planned-navigation-task.html
 html/semantics/forms/form-submission-0/request-submit-activation.html
-html/semantics/forms/form-submission-0/submit-entity-body.html
 html/semantics/forms/form-submission-0/url-encoded.html
 html/semantics/forms/historical.html
 html/semantics/forms/resetting-a-form/reset-event.html
