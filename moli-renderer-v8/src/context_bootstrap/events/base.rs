@@ -31,7 +31,7 @@ struct InitializedEventHeaderDeclaration<'scope> {
 }
 
 #[derive(WebApiObject)]
-#[webapi(interface = "Object", data_properties, enumerable)]
+#[webapi(prototype = "Object", interface = "Event", data_properties, enumerable)]
 struct InitializedEventStateDeclaration {
     bubbles: bool,
     cancelable: bool,

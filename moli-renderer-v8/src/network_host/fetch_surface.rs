@@ -48,21 +48,21 @@ pub(crate) const RESPONSE_BODY_USED_SLOT: &str = "__lmResponseBodyUsed";
 const RESPONSE_BRAND_SLOT: &str = "__lmResponseBrand";
 
 #[derive(Default, WebApiObject)]
-#[webapi(interface = "Object")]
+#[webapi(prototype = "Object", interface = "Request")]
 struct RequestBrandDeclaration {
     #[webapi(slot = REQUEST_BRAND_SLOT, init = true)]
     brand: (),
 }
 
 #[derive(Default, WebApiObject)]
-#[webapi(interface = "Object")]
+#[webapi(prototype = "Object", interface = "Response")]
 struct ResponseBrandDeclaration {
     #[webapi(slot = RESPONSE_BRAND_SLOT, init = true)]
     brand: (),
 }
 
 #[derive(WebApiObject)]
-#[webapi(interface = "Object", prototype = "Response")]
+#[webapi(interface = "Response", prototype = "Response")]
 struct ResponseCloneShellDeclaration<'scope> {
     #[webapi(slot = RESPONSE_BODY_USED_SLOT, init = false)]
     body_used: (),

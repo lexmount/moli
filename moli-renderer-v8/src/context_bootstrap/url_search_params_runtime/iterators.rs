@@ -15,7 +15,7 @@ const URL_SEARCH_PARAMS_ITERATOR_KIND_SLOT: &str = "__moliUrlSearchParamsIterato
 const URL_SEARCH_PARAMS_ITERATOR_PROTOTYPE_SLOT: &str = "__moliUrlSearchParamsIteratorPrototype";
 
 #[derive(WebApiObject)]
-#[webapi(interface = "Object")]
+#[webapi(prototype = "Object", interface = "URLSearchParams Iterator")]
 struct UrlSearchParamsIteratorDeclaration<'scope> {
     #[webapi(slot = URL_SEARCH_PARAMS_ITERATOR_TARGET_SLOT)]
     target: v8::Local<'scope, v8::Object>,

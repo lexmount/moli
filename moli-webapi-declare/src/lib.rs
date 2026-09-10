@@ -190,9 +190,26 @@ pub mod __private;
 pub use moli_webapi_declare_derive::{WebApiFunctionTemplate, WebApiInterface, WebApiObject};
 pub use v8;
 
+/// Adapts a manual native constructor to the same identity initialization used
+/// by interface derives. The interface must be a native declaration literal,
+/// never a name obtained from `new.target` or another JavaScript property.
+#[macro_export]
+macro_rules! web_api_constructor {
+    ($interface:literal, $callback:path) => {{
+        fn __moli_native_constructor_adapter<'s>(
+            scope: &mut $crate::v8::PinScope<'s, '_>,
+            args: $crate::v8::FunctionCallbackArguments<'s>,
+            rv: $crate::v8::ReturnValue<'s>,
+        ) {
+            $crate::__private::invoke_web_api_constructor(scope, args, rv, $interface, $callback);
+        }
+        __moli_native_constructor_adapter
+    }};
+}
+
 pub use brand::{
     WebApiType, implements_interface, initialize_web_api_object, register_web_api_interfaces,
-    web_api_object_type,
+    register_web_api_proxy, web_api_object_type,
 };
 
 pub use declaration::{

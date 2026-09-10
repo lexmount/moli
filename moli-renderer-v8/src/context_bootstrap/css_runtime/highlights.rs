@@ -120,6 +120,8 @@ pub(super) fn build_highlight_runtime_state<'s>(
             "failed to create the Highlight callback callability predicate"
         ));
     };
+    let initialize_identity = v8::Function::new(scope, initialize_highlight_identity_callback)
+        .ok_or_else(|| anyhow!("failed to create Highlight identity initializer"))?;
     let Some(value) = initializer.call(
         scope,
         v8::undefined(scope).into(),
@@ -127,12 +129,14 @@ pub(super) fn build_highlight_runtime_state<'s>(
             iterator_factory.into(),
             call_callback.into(),
             callback_is_callable.into(),
+            initialize_identity.into(),
         ],
     ) else {
         return Err(anyhow!("failed to initialize Highlight runtime"));
     };
     let registry = v8::Local::<v8::Object>::try_from(value)
         .map_err(|_| anyhow!("Highlight runtime did not return a registry object"))?;
+    moli_webapi_declare::initialize_web_api_object(scope, registry, "HighlightRegistry")?;
     let highlight_constructor = highlight_constructor(scope, registry)?;
     let registry_constructor = highlight_registry_constructor(scope, registry)?;
     Ok(HighlightRuntimeState {
@@ -140,6 +144,19 @@ pub(super) fn build_highlight_runtime_state<'s>(
         highlight_constructor,
         registry_constructor,
     })
+}
+
+fn initialize_highlight_identity_callback<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: v8::FunctionCallbackArguments<'s>,
+    _rv: v8::ReturnValue<'_, v8::Value>,
+) {
+    let Ok(object) = v8::Local::<v8::Object>::try_from(args.get(0)) else {
+        return;
+    };
+    if let Err(error) = moli_webapi_declare::initialize_web_api_object(scope, object, "Highlight") {
+        throw_type_error(scope, &error.to_string());
+    }
 }
 
 fn highlight_iterator_factory_callback<'s>(
@@ -174,6 +191,13 @@ fn highlight_iterator_factory_callback<'s>(
     };
     if iterator.set_prototype(scope, prototype.into()) != Some(true) {
         throw_type_error(scope, "Failed to bind Highlight iterator prototype");
+        return;
+    }
+    let interface = match kind {
+        HighlightIteratorKind::Highlight => "Highlight Iterator",
+        HighlightIteratorKind::Registry => "HighlightRegistry Iterator",
+    };
+    if moli_webapi_declare::initialize_web_api_object(scope, iterator, interface).is_err() {
         return;
     }
     rv.set(iterator.into());
@@ -292,7 +316,7 @@ fn highlight_registry_constructor<'s>(
 }
 
 const HIGHLIGHT_RUNTIME_SOURCE: &str = r#"
-((createIterator, callCallback, callbackIsCallable) => {
+((createIterator, callCallback, callbackIsCallable, initializeIdentity) => {
   // Generated maplike/setlike forEach performs an ordinary Call. The caller
   // supplies the Reflect.apply intrinsic captured during Window bootstrap;
   // reading callback.call would instead invoke a page-observable property.
@@ -331,6 +355,7 @@ const HIGHLIGHT_RUNTIME_SOURCE: &str = r#"
 
   class Highlight {
     constructor(...ranges) {
+      initializeIdentity(this);
       this[rangeSlot] = [];
       this[typeSlot] = 'highlight';
       this.priority = 0;

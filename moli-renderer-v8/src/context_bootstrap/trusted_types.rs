@@ -29,7 +29,7 @@ const TRUSTED_TYPES_CREATE_SCRIPT_SLOT: &str = "__moliTrustedTypesCreateScript";
 const TRUSTED_TYPES_CREATE_SCRIPT_URL_SLOT: &str = "__moliTrustedTypesCreateScriptURL";
 
 #[derive(Default, WebApiObject)]
-#[webapi(interface = "Object")]
+#[webapi(prototype = "Object", interface = "TrustedTypePolicyFactory")]
 struct TrustedTypesFactoryDeclaration {
     #[webapi(method, callback = trusted_types_create_policy_callback, length = 2)]
     create_policy: (),
@@ -62,7 +62,7 @@ struct TrustedTypePrototypeDeclaration {
 }
 
 #[derive(WebApiObject)]
-#[webapi(interface = "Object")]
+#[webapi(prototype = "Object", interface = "TrustedTypePolicy")]
 struct TrustedTypePolicyDeclaration<'scope> {
     #[webapi(data_property)]
     name: v8::Local<'scope, v8::String>,
@@ -675,6 +675,7 @@ fn build_trusted_type_object<'s>(
     TrustedTypeObjectDeclaration::new(v8str(scope, kind.as_slot_value()), value)
         .initialize(scope, object)
         .expect("TrustedType object declaration should initialize");
+    moli_webapi_declare::initialize_web_api_object(scope, object, kind.constructor_name()).ok()?;
     let _ = object.set_prototype(scope, prototype.into());
     Some(object)
 }

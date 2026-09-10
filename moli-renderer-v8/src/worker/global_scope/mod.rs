@@ -271,7 +271,7 @@ struct WorkerConsoleObjectDeclaration {
 }
 
 #[derive(WebApiObject)]
-#[webapi(interface = "Object")]
+#[webapi(prototype = "Object", interface = "Performance")]
 struct WorkerPerformanceObjectDeclaration {
     #[webapi(data_property, readonly)]
     time_origin: f64,
@@ -649,7 +649,7 @@ struct WorkerPrototypeTagDeclaration {
 }
 
 #[derive(WebApiObject)]
-#[webapi(interface = "ServiceWorkerRegistration")]
+#[webapi(interface = "ServiceWorkerRegistration", parent = "EventTarget")]
 struct ServiceWorkerGlobalRegistrationDeclaration<'scope> {
     #[webapi(data_property, readonly)]
     scope: String,
@@ -703,7 +703,7 @@ struct ServiceWorkerGlobalRegistrationDeclaration<'scope> {
 }
 
 #[derive(WebApiObject)]
-#[webapi(interface = "ServiceWorker")]
+#[webapi(interface = "ServiceWorker", parent = "EventTarget")]
 struct ServiceWorkerGlobalServiceWorkerDeclaration {
     #[webapi(data_property = "scriptURL", readonly)]
     script_url: String,
@@ -859,7 +859,7 @@ struct WorkerNavigationPreloadStateDeclaration {
 }
 
 #[derive(WebApiObject)]
-#[webapi(interface = "Object")]
+#[webapi(interface = "ExtendableEvent", parent = "Event", prototype = "Object")]
 struct InitializedExtendableEventStateDeclaration<'scope> {
     #[webapi(data_property = "type", enumerable)]
     event_type: String,
@@ -893,7 +893,11 @@ struct InitializedExtendableEventStateDeclaration<'scope> {
 }
 
 #[derive(WebApiObject)]
-#[webapi(interface = "Object")]
+#[webapi(
+    interface = "ExtendableMessageEvent",
+    parent = "ExtendableEvent",
+    prototype = "Object"
+)]
 struct ExtendableMessageEventStateDeclaration<'scope> {
     #[webapi(data_property, enumerable)]
     data: v8::Local<'scope, v8::Value>,
@@ -5475,6 +5479,21 @@ fn install_worker_global_scope_constructors<'s>(
     global: v8::Local<'s, v8::Object>,
     global_kind: &super::thread::WorkerGlobalKind,
 ) -> Result<()> {
+    moli_webapi_declare::register_web_api_interfaces(
+        scope,
+        [
+            ("WorkerGlobalScope", Some("EventTarget")),
+            ("DedicatedWorkerGlobalScope", Some("WorkerGlobalScope")),
+            ("SharedWorkerGlobalScope", Some("WorkerGlobalScope")),
+            ("ServiceWorkerGlobalScope", Some("WorkerGlobalScope")),
+        ],
+    )?;
+    let interface = match global_kind {
+        super::thread::WorkerGlobalKind::Dedicated { .. } => "DedicatedWorkerGlobalScope",
+        super::thread::WorkerGlobalKind::Shared { .. } => "SharedWorkerGlobalScope",
+        super::thread::WorkerGlobalKind::Service { .. } => "ServiceWorkerGlobalScope",
+    };
+    moli_webapi_declare::initialize_web_api_object(scope, global, interface)?;
     let worker_ctor = worker_scope_constructor(scope, "WorkerGlobalScope")?;
     let worker_proto = constructor_prototype(scope, worker_ctor, "WorkerGlobalScope")?;
     set_worker_to_string_tag(scope, worker_proto, "WorkerGlobalScope");

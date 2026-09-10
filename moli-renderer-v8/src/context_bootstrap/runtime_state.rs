@@ -418,7 +418,7 @@ struct ConsoleObjectDeclaration {
 }
 
 #[derive(WebApiObject)]
-#[webapi(interface = "Object", scope_lifetime = 'scope)]
+#[webapi(interface = "Window", prototype = "Object")]
 struct WindowBootstrapGlobalSlotsDeclaration<'scope> {
     #[webapi(slot = WINDOW_CONSOLE_SLOT)]
     console: v8::Local<'scope, v8::Object>,

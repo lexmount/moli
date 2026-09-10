@@ -277,6 +277,8 @@ impl NativeBridgeBindings {
                 "`{prototype_name}` wrapper must expose its reflector identity field"
             );
         }
+        moli_webapi_declare::initialize_web_api_object(scope, wrapper, prototype_name)
+            .expect("native wrapper identity should initialize");
         set_named_constructor_prototype(scope, wrapper, prototype_name);
         self.sync_wrapper_owner_realm_prototype(scope, host_ptr, &handle, wrapper);
         if matches!(wrapper_kind, WrapperKind::Node) {

@@ -29,6 +29,7 @@ struct TypeEntry {
 
 struct TypeRegistry {
     key: v8::Global<v8::Private>,
+    proxy_key: v8::Global<v8::Private>,
     entries: Vec<TypeEntry>,
     names: HashMap<&'static str, usize>,
 }
@@ -70,7 +71,9 @@ fn registry(scope: &mut v8::PinScope<'_, '_, ()>) -> Rc<RefCell<TypeRegistry>> {
     }
     let name = v8str(scope, "__moliWebApiType");
     let key = v8::Private::new(scope, Some(name));
+    let proxy_key = v8::Private::new(scope, None);
     let registry = Rc::new(RefCell::new(TypeRegistry {
+        proxy_key: v8::Global::new(scope, proxy_key),
         key: v8::Global::new(scope, key),
         entries: Vec::new(),
         names: HashMap::new(),
@@ -139,10 +142,7 @@ fn object_type_id<'s>(
     object: v8::Local<'s, v8::Object>,
     registry: &Rc<RefCell<TypeRegistry>>,
 ) -> Option<usize> {
-    // In particular, do not forward identity checks through Proxy traps.
-    if object.is_proxy() {
-        return None;
-    }
+    let object = native_identity_target(scope, object, registry)?;
     let key = v8::Local::new(scope, &registry.borrow().key);
     let value = object.get_private(scope, key)?;
     let id = v8::Local::<v8::Uint32>::try_from(value).ok()?.value() as usize;
@@ -187,12 +187,14 @@ pub fn initialize_web_api_object<'s>(
     object: v8::Local<'s, v8::Object>,
     interface: &'static str,
 ) -> Result<(), BindError> {
-    if interface == "Object" || object.is_proxy() {
+    if interface == "Object" {
         return Err(BindError::new(
             "platform identity requires a native interface instance",
         ));
     }
     let registry = registry(scope);
+    let object = native_identity_target(scope, object, &registry)
+        .ok_or_else(|| BindError::new("author proxies cannot carry platform identity"))?;
     let id = registry.borrow_mut().intern(interface);
     if let Some(existing) = object_type_id(scope, object, &registry) {
         let registry = registry.borrow();
@@ -213,6 +215,57 @@ pub fn initialize_web_api_object<'s>(
         return Err(BindError::new(format!(
             "failed to initialize `{interface}` identity"
         )));
+    }
+    Ok(())
+}
+
+// A small number of native DOM wrappers use a JS Proxy to implement named
+// properties. Only the factory can register one: the private handler value
+// must be the very same proxy, so author proxies never inherit this permission.
+fn native_identity_target<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    object: v8::Local<'s, v8::Object>,
+    registry: &Rc<RefCell<TypeRegistry>>,
+) -> Option<v8::Local<'s, v8::Object>> {
+    let Ok(proxy) = v8::Local::<v8::Proxy>::try_from(object) else {
+        return Some(object);
+    };
+    if proxy.is_revoked() {
+        return None;
+    }
+    let handler = v8::Local::<v8::Object>::try_from(proxy.get_handler(scope)).ok()?;
+    if handler.is_proxy() {
+        return None;
+    }
+    let key = v8::Local::new(scope, &registry.borrow().proxy_key);
+    if !handler.get_private(scope, key)?.strict_equals(proxy.into()) {
+        return None;
+    }
+    let target = v8::Local::<v8::Object>::try_from(proxy.get_target(scope)).ok()?;
+    (!target.is_proxy()).then_some(target)
+}
+
+/// Registers a Proxy created by a native wrapper factory. The target must
+/// already have native identity and the handler must be a private ordinary
+/// object. This never invokes traps or accepts a Proxy wrapping another Proxy.
+pub fn register_web_api_proxy<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    proxy: v8::Local<'s, v8::Proxy>,
+) -> Result<(), BindError> {
+    let registry = registry(scope);
+    let target = v8::Local::<v8::Object>::try_from(proxy.get_target(scope))
+        .map_err(|_| BindError::new("native proxy requires an object target"))?;
+    if target.is_proxy() || object_type_id(scope, target, &registry).is_none() {
+        return Err(BindError::new("native proxy requires a branded target"));
+    }
+    let handler = v8::Local::<v8::Object>::try_from(proxy.get_handler(scope))
+        .map_err(|_| BindError::new("native proxy requires an object handler"))?;
+    if handler.is_proxy() {
+        return Err(BindError::new("native proxy requires an ordinary handler"));
+    }
+    let key = v8::Local::new(scope, &registry.borrow().proxy_key);
+    if handler.set_private(scope, key, proxy.into()) != Some(true) {
+        return Err(BindError::new("failed to register native proxy"));
     }
     Ok(())
 }

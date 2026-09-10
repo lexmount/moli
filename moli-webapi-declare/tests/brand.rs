@@ -135,3 +135,86 @@ fn inheritance_registration_is_atomic_and_rejects_conflicts_and_cycles() {
     // A rejected batch has not left conflicting declarations behind.
     register_web_api_interfaces(scope, [("A", None), ("B", Some("A"))]).unwrap();
 }
+
+#[derive(moli_webapi_declare::WebApiFunctionTemplate)]
+#[webapi(name = "NativeConstructor", constructor_callback = native_constructor)]
+struct NativeConstructor {}
+
+fn native_constructor<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: v8::FunctionCallbackArguments<'s>,
+    mut rv: v8::ReturnValue<'s>,
+) {
+    let key = v8::String::new(scope, "capturedReceiver").unwrap();
+    scope
+        .get_current_context()
+        .global(scope)
+        .set(scope, key.into(), args.this().into());
+    if args.get(0).is_true() {
+        let message = v8::String::new(scope, "construction failed").unwrap();
+        let exception = v8::Exception::type_error(scope, message);
+        scope.throw_exception(exception);
+    } else if args.get(0).is_object() {
+        rv.set(args.get(0));
+    }
+}
+
+#[test]
+fn native_constructors_brand_successful_receivers_and_replacement_objects() {
+    ensure_v8();
+    let mut isolate = v8::Isolate::new(Default::default());
+    let scope = pin!(v8::HandleScope::new(&mut isolate));
+    let scope = &mut scope.init();
+    let template = NativeConstructor::build(scope);
+    let context = v8::Context::new(scope, Default::default());
+    let scope = &mut v8::ContextScope::new(scope, context);
+    let constructor = template.get_function(scope).unwrap();
+    let key = v8::String::new(scope, "NativeConstructor").unwrap();
+    context
+        .global(scope)
+        .set(scope, key.into(), constructor.into());
+    for source in [
+        "new NativeConstructor()",
+        "new (class Derived extends NativeConstructor {})()",
+        "new NativeConstructor({replacement: true})",
+        "NativeConstructor({replacement: true})",
+    ] {
+        let object = v8::Local::<v8::Object>::try_from(eval(scope, source)).unwrap();
+        assert!(
+            implements_interface(scope, object, "NativeConstructor"),
+            "{source}"
+        );
+    }
+    let failed = eval(
+        scope,
+        "try { new NativeConstructor(true); } catch (e) { if (e.message !== 'construction failed') throw e; } capturedReceiver",
+    );
+    let failed = v8::Local::<v8::Object>::try_from(failed).unwrap();
+    assert_eq!(web_api_object_type(scope, failed), None);
+}
+
+#[test]
+fn only_explicitly_registered_native_proxies_share_target_identity() {
+    ensure_v8();
+    let mut isolate = v8::Isolate::new(Default::default());
+    let scope = pin!(v8::HandleScope::new(&mut isolate));
+    let scope = &mut scope.init();
+    let context = v8::Context::new(scope, Default::default());
+    let scope = &mut v8::ContextScope::new(scope, context);
+    let target = Base::new().bind(scope).unwrap();
+    let handler = v8::Object::new(scope);
+    let native = v8::Proxy::new(scope, target, handler).unwrap();
+    let native_object = v8::Local::<v8::Object>::from(native);
+    assert_eq!(web_api_object_type(scope, native_object), None);
+    moli_webapi_declare::register_web_api_proxy(scope, native).unwrap();
+    assert!(implements_interface(scope, native_object, "TestBase"));
+    initialize_web_api_object(scope, native_object, "TestBase").unwrap();
+    let impostor = v8::Proxy::new(scope, target, handler).unwrap();
+    assert_eq!(web_api_object_type(scope, impostor.into()), None);
+    let outer_handler = v8::Object::new(scope);
+    let outer = v8::Proxy::new(scope, native_object, outer_handler).unwrap();
+    assert_eq!(web_api_object_type(scope, outer.into()), None);
+    assert!(moli_webapi_declare::register_web_api_proxy(scope, outer).is_err());
+    native.revoke();
+    assert_eq!(web_api_object_type(scope, native_object), None);
+}

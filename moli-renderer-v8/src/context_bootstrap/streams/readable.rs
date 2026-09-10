@@ -15,7 +15,7 @@ use moli_streams::readable::{AcquireReaderPlan, CancelEntryPlan, ReadableKind, R
 use moli_webapi_declare::WebApiObject;
 
 #[derive(WebApiObject)]
-#[webapi(interface = "Object")]
+#[webapi(prototype = "Object", interface = "ReadableStream AsyncIterator")]
 struct ReadableStreamAsyncIteratorObjectDeclaration<'scope> {
     #[webapi(slot = READABLE_STREAM_ITERATOR_READER_SLOT)]
     reader: v8::Local<'scope, v8::Object>,

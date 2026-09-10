@@ -758,6 +758,8 @@ pub(super) fn create_performance_entry<'s>(
         "resource" => "PerformanceResourceTiming",
         _ => "PerformanceEntry",
     };
+    moli_webapi_declare::initialize_web_api_object(scope, entry, prototype_name)
+        .expect("PerformanceEntry primary interface should initialize");
     if let Ok(prototype) =
         crate::context_bootstrap::ensure_intrinsic_interface_prototype(scope, prototype_name)
     {

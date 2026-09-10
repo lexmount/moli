@@ -168,6 +168,8 @@ fn event_subclass_constructor_callback<'s>(
         }
     }
 
+    moli_webapi_declare::initialize_web_api_object(scope, event, kind.constructor_name())
+        .expect("event primary interface should initialize");
     set_private_value(
         scope,
         event,

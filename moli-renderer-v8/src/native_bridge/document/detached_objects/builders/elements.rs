@@ -99,6 +99,7 @@ pub(in crate::native_bridge::document) fn generic_html_element_proxy<'s>(
         .bind(scope)
         .ok()?;
     let proxy = v8::Proxy::new(scope, target, handler)?;
+    moli_webapi_declare::register_web_api_proxy(scope, proxy).ok()?;
     let proxy: v8::Local<'s, v8::Value> = proxy.into();
     v8::Local::<v8::Object>::try_from(proxy).ok()
 }
@@ -115,6 +116,7 @@ pub(in crate::native_bridge::document) fn select_html_element_proxy<'s>(
     .bind(scope)
     .ok()?;
     let proxy = v8::Proxy::new(scope, target, handler)?;
+    moli_webapi_declare::register_web_api_proxy(scope, proxy).ok()?;
     let proxy: v8::Local<'s, v8::Value> = proxy.into();
     v8::Local::<v8::Object>::try_from(proxy).ok()
 }
@@ -490,6 +492,8 @@ pub(in crate::native_bridge::document) fn build_detached_element_object<'s>(
     } else {
         new_detached_object_with_prototype(scope, "__detachedElementPrototype", to_string_tag)?
     };
+    let interface = to_string_tag.unwrap_or("Element");
+    moli_webapi_declare::initialize_web_api_object(scope, object, interface).ok()?;
     let state = new_detached_state_object(scope, "element", 1, &node_name)?;
     let _ = state.set(
         scope,

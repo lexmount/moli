@@ -467,7 +467,7 @@ struct ValidityStateValidUpdateDeclaration {
 }
 
 #[derive(WebApiObject)]
-#[webapi(interface = "Object")]
+#[webapi(prototype = "Object", interface = "CustomStateSet")]
 struct CustomStateSetObjectDeclaration<'s> {
     #[webapi(slot = CUSTOM_STATE_SET_BACKING_SLOT)]
     backing: v8::Local<'s, v8::Set>,

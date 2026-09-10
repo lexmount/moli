@@ -40,7 +40,9 @@ pub(crate) fn expand_webapi_interface(
         ConstructorAttr::Illegal => {
             quote!(::moli_webapi_declare::illegal_constructor_callback)
         }
-        ConstructorAttr::Callback(callback) => quote!(#callback),
+        ConstructorAttr::Callback(callback) => {
+            quote!(::moli_webapi_declare::web_api_constructor!(#interface_name, #callback))
+        }
     };
     let constructor_length = attrs.constructor_length.unwrap_or(0);
     let fields = named_fields(&input.data)?;
@@ -156,7 +158,9 @@ pub(crate) fn expand_webapi_function_template(
         ConstructorAttr::Illegal => {
             quote!(::moli_webapi_declare::illegal_constructor_callback)
         }
-        ConstructorAttr::Callback(callback) => quote!(#callback),
+        ConstructorAttr::Callback(callback) => {
+            quote!(::moli_webapi_declare::web_api_constructor!(#template_name, #callback))
+        }
     };
     let constructor_length = attrs.constructor_length.unwrap_or(0);
     let initialize_intrinsic_prototype_parent =
@@ -364,7 +368,11 @@ pub(crate) fn expand_webapi_object(input: DeriveInput) -> Result<proc_macro2::To
             ::moli_webapi_declare::initialize_web_api_object(scope, object, #interface)?;
         }
     });
+    let register_parent = attrs.parent.as_ref().map(|parent| quote! {
+        ::moli_webapi_declare::register_web_api_interfaces(scope, [(#interface, Some(#parent))])?;
+    });
     let initialize_body = quote! {
+        #register_parent
         #(#fields)*
         #initialize_brand
         ::std::result::Result::Ok(())

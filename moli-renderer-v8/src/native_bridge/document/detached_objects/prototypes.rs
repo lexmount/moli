@@ -129,10 +129,14 @@ pub(in crate::native_bridge::document) fn set_string_tag<'s>(
 pub(in crate::native_bridge::document) fn new_detached_object_with_prototype<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     prototype_name: &str,
-    to_string_tag: Option<&str>,
+    to_string_tag: Option<&'static str>,
 ) -> Option<v8::Local<'s, v8::Object>> {
     let prototype = bridge_prototype_object(scope, prototype_name)?;
-    DetachedObjectWithPrototypeDeclaration::new(prototype, to_string_tag)
+    let object = DetachedObjectWithPrototypeDeclaration::new(prototype, to_string_tag)
         .bind(scope)
-        .ok()
+        .ok()?;
+    if let Some(interface) = to_string_tag {
+        moli_webapi_declare::initialize_web_api_object(scope, object, interface).ok()?;
+    }
+    Some(object)
 }

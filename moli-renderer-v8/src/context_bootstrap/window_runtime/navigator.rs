@@ -78,7 +78,11 @@ pub(in crate::context_bootstrap) const PERMISSIONS_BRAND_SLOT: &str = "__moliPer
 const NAVIGATOR_BATTERY_STATUS_BRAND_SLOT: &str = "__moliBatteryStatusBrand";
 
 #[derive(Default, WebApiObject)]
-#[webapi(interface = "Object", own_to_string_tag = "CacheStorage")]
+#[webapi(
+    prototype = "Object",
+    interface = "CacheStorage",
+    own_to_string_tag = "CacheStorage"
+)]
 struct StorageBucketCacheStorageObjectDeclaration {
     #[webapi(slot = STORAGE_BUCKET_CACHE_STORAGE_BRAND_SLOT, init = true)]
     brand: (),
@@ -115,7 +119,7 @@ struct StorageBucketCacheStorageObjectDeclaration {
 }
 
 #[derive(WebApiObject)]
-#[webapi(interface = "Object", own_to_string_tag = "Cache")]
+#[webapi(prototype = "Object", interface = "Cache", own_to_string_tag = "Cache")]
 struct StorageBucketCacheObjectDeclaration {
     #[webapi(slot = STORAGE_BUCKET_CACHE_BRAND_SLOT, init = true)]
     brand: (),
@@ -272,7 +276,7 @@ struct StorageUsageDetailsObjectDeclaration {
 }
 
 #[derive(WebApiObject)]
-#[webapi(interface = "Object", data_properties)]
+#[webapi(prototype = "Object", interface = "BatteryManager", data_properties)]
 struct NavigatorBatteryStatusObjectDeclaration {
     #[webapi(slot = NAVIGATOR_BATTERY_STATUS_BRAND_SLOT, init = true)]
     brand: (),

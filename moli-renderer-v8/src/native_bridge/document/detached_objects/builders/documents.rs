@@ -46,9 +46,17 @@ fn new_detached_document_object<'s>(
         .or_else(|| {
         bridge_prototype_object(scope, detached_document_bridge_prototype_name(kind))
     })?;
-    DetachedDocumentObjectDeclaration::new(prototype, to_string_tag, v8::null(scope).into())
-        .bind(scope)
-        .ok()
+    let document =
+        DetachedDocumentObjectDeclaration::new(prototype, to_string_tag, v8::null(scope).into())
+            .bind(scope)
+            .ok()?;
+    moli_webapi_declare::initialize_web_api_object(
+        scope,
+        document,
+        detached_document_constructor_name(kind),
+    )
+    .ok()?;
+    Some(document)
 }
 
 fn create_native_detached_document_handle_with_url(

@@ -12,7 +12,7 @@ const FORM_DATA_ITERATOR_KIND_SLOT: &str = "__moliFormDataIteratorKind";
 const FORM_DATA_ITERATOR_PROTOTYPE_SLOT: &str = "__moliFormDataIteratorPrototype";
 
 #[derive(WebApiObject)]
-#[webapi(interface = "Object")]
+#[webapi(prototype = "Object", interface = "FormData Iterator")]
 struct FormDataIteratorDeclaration<'scope> {
     #[webapi(slot = FORM_DATA_ITERATOR_TARGET_SLOT)]
     target: v8::Local<'scope, v8::Object>,

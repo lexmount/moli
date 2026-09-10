@@ -291,7 +291,11 @@ struct PermissionStatusPrototypeDeclaration {
 }
 
 #[derive(Default, WebApiObject)]
-#[webapi(interface = "Object")]
+#[webapi(
+    interface = "NetworkInformation",
+    parent = "EventTarget",
+    prototype = "Object"
+)]
 struct NavigatorConnectionDeclaration {
     #[webapi(slot = NAVIGATOR_CONNECTION_BRAND_SLOT, init = true)]
     brand: (),

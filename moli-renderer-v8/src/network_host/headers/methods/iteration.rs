@@ -42,7 +42,7 @@ struct HeadersIteratorResultDeclaration<'scope> {
 }
 
 #[derive(WebApiObject)]
-#[webapi(interface = "Object")]
+#[webapi(prototype = "Object", interface = "Headers Iterator")]
 struct HeadersIteratorDeclaration<'scope> {
     #[webapi(slot = HEADERS_ITERATOR_TARGET_SLOT)]
     target: v8::Local<'scope, v8::Object>,

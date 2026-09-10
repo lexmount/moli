@@ -814,7 +814,7 @@ struct FileSystemWritableFileStreamPrototypeDeclaration {
 }
 
 #[derive(WebApiObject)]
-#[webapi(interface = "Object")]
+#[webapi(prototype = "Object", interface = "FileSystemWritableSink")]
 struct FileSystemWritableSinkObjectDeclaration {
     #[webapi(slot, name = FILE_SYSTEM_WRITABLE_SINK_BRAND_SLOT, constructor_default = true)]
     brand: bool,
@@ -859,7 +859,10 @@ struct FileSystemSyncAccessHandlePrototypeDeclaration {
 }
 
 #[derive(WebApiObject)]
-#[webapi(interface = "Object")]
+#[webapi(
+    prototype = "Object",
+    interface = "FileSystemDirectoryHandle AsyncIterator"
+)]
 struct FileSystemDirectoryIteratorObjectDeclaration {
     #[webapi(slot = FILE_SYSTEM_ITERATOR_BRAND_SLOT, init = true)]
     brand: (),

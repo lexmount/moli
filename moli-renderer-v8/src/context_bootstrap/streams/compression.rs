@@ -72,6 +72,13 @@ pub(in crate::context_bootstrap) fn compression_stream_constructor_callback<
         None,
     );
     set_private_value(scope, args.this(), TRANSFORM_SLOT, transform_stream.into());
+    let interface = if DECOMPRESS {
+        "DecompressionStream"
+    } else {
+        "CompressionStream"
+    };
+    moli_webapi_declare::initialize_web_api_object(scope, args.this(), interface)
+        .expect("compression stream identity should initialize");
     set_private_value(
         scope,
         args.this(),

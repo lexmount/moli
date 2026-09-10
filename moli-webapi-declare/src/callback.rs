@@ -6,6 +6,43 @@ type MemberCallback = for<'s, 'i> fn(
     v8::ReturnValue<'s>,
 );
 
+/// Completes native constructor identity only after a successful callback.
+/// Callback data, subclass receivers, and replacement return objects retain
+/// their original V8 semantics.
+#[doc(hidden)]
+pub fn invoke_web_api_constructor<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: v8::FunctionCallbackArguments<'s>,
+    rv: v8::ReturnValue<'s>,
+    interface: &'static str,
+    callback: MemberCallback,
+) {
+    let receiver = args.this();
+    let construct = args.is_construct_call();
+    v8::tc_scope!(let scope, scope);
+    callback(scope, args, rv);
+    if scope.has_caught() {
+        scope.rethrow();
+        return;
+    }
+    if !scope.can_continue() {
+        return;
+    }
+    let result = rv.get(scope);
+    let object = match v8::Local::<v8::Object>::try_from(result) {
+        Ok(object) => object,
+        Err(_) if construct => receiver,
+        Err(_) => return,
+    };
+    if let Err(error) = crate::initialize_web_api_object(scope, object, interface) {
+        let message =
+            v8::String::new(scope, &error.to_string()).expect("constructor identity error");
+        let exception = v8::Exception::type_error(scope, message);
+        scope.throw_exception(exception);
+        scope.rethrow();
+    }
+}
+
 pub fn throw_illegal_invocation(scope: &mut v8::PinScope<'_, '_>) {
     let message = v8str(scope, "Illegal invocation");
     let exception = v8::Exception::type_error(scope, message);

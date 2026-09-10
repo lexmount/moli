@@ -115,7 +115,7 @@ impl MessagePortRealmBinding {
 }
 
 #[derive(WebApiObject)]
-#[webapi(interface = "Object")]
+#[webapi(prototype = "Object", interface = "MessagePort")]
 struct MessagePortObjectDeclaration<'scope> {
     #[webapi(prototype)]
     prototype: v8::Local<'scope, v8::Object>,

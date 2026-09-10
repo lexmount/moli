@@ -36,6 +36,15 @@ pub(crate) enum SnapshotWebIdlIteratorKind {
 }
 
 impl SnapshotWebIdlIteratorKind {
+    const fn interface(self) -> &'static str {
+        match self {
+            Self::StylePropertyMapReadOnly => "StylePropertyMapReadOnly Iterator",
+            Self::EventCounts => "EventCounts Iterator",
+            Self::FontFaceSet => "FontFaceSet Iterator",
+            Self::CssFontFeatureValuesMap => "CSSFontFeatureValuesMap Iterator",
+        }
+    }
+
     const fn prototype_slot(self) -> &'static str {
         match self {
             Self::StylePropertyMapReadOnly => STYLE_PROPERTY_MAP_ITERATOR_PROTOTYPE_SLOT,
@@ -69,6 +78,13 @@ pub(crate) enum SetlikeWebIdlIteratorKind {
 }
 
 impl SetlikeWebIdlIteratorKind {
+    const fn interface(self) -> &'static str {
+        match self {
+            Self::ViewTransitionTypeSet => "ViewTransitionTypeSet Iterator",
+            Self::CustomStateSet => "CustomStateSet Iterator",
+        }
+    }
+
     const fn prototype_slot(self) -> &'static str {
         match self {
             Self::ViewTransitionTypeSet => VIEW_TRANSITION_TYPE_SET_ITERATOR_PROTOTYPE_SLOT,
@@ -299,6 +315,7 @@ pub(crate) fn new_snapshot_webidl_iterator<'s>(
     let iterator = SnapshotWebIdlIteratorDeclaration::new(values, 0)
         .bind(scope)
         .ok()?;
+    moli_webapi_declare::initialize_web_api_object(scope, iterator, kind.interface()).ok()?;
     let prototype = snapshot_webidl_iterator_prototype(scope, kind)?;
     (iterator.set_prototype(scope, prototype.into()) == Some(true)).then_some(iterator)
 }
@@ -313,6 +330,7 @@ pub(crate) fn new_setlike_webidl_iterator<'s>(
     let iterator = NativeCollectionWebIdlIteratorDeclaration::new(native_iterator, next)
         .bind(scope)
         .ok()?;
+    moli_webapi_declare::initialize_web_api_object(scope, iterator, kind.interface()).ok()?;
     let prototype = setlike_webidl_iterator_prototype(scope, kind)?;
     (iterator.set_prototype(scope, prototype.into()) == Some(true)).then_some(iterator)
 }

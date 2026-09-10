@@ -73,7 +73,7 @@ struct NavigationInterceptOptionsMembers {
 }
 
 #[derive(WebApiObject)]
-#[webapi(interface = "Object")]
+#[webapi(prototype = "Object", interface = "NavigationPrecommitController")]
 struct PrecommitControllerDeclaration<'scope> {
     #[webapi(slot = PRECOMMIT_CONTROLLER_EVENT_SLOT)]
     event: v8::Local<'scope, v8::Object>,

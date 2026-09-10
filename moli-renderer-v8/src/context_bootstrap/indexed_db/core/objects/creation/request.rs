@@ -2,7 +2,7 @@ use super::*;
 use moli_webapi_declare::WebApiObject;
 
 #[derive(WebApiObject)]
-#[webapi(interface = "Object")]
+#[webapi(prototype = "Object", interface = "IDBRequest")]
 struct IdbRequestObjectDeclaration<'scope> {
     #[webapi(slot = INDEXED_DB_EVENT_LISTENERS_SLOT, init = "null_object")]
     event_listeners: (),
@@ -30,7 +30,7 @@ struct IdbRequestObjectDeclaration<'scope> {
 }
 
 #[derive(Default, WebApiObject)]
-#[webapi(interface = "Object")]
+#[webapi(prototype = "Object", interface = "IDBOpenDBRequest")]
 struct IdbOpenRequestHandlersDeclaration {
     #[webapi(data_property, enumerable, init = "null")]
     onupgradeneeded: (),

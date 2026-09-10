@@ -28,7 +28,7 @@ fn native_blob_line_ending() -> &'static str {
 }
 
 #[derive(WebApiObject)]
-#[webapi(interface = "Object")]
+#[webapi(prototype = "Object", interface = "Blob")]
 struct BlobInstanceDeclaration<'scope> {
     #[webapi(slot = BLOB_ID_SLOT)]
     blob_id: v8::Local<'scope, v8::BigInt>,

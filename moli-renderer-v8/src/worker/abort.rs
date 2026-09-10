@@ -52,7 +52,7 @@ struct WorkerAbortLinkedMessagePortListener {
 }
 
 #[derive(WebApiObject)]
-#[webapi(interface = "Object")]
+#[webapi(prototype = "Object", interface = "AbortSignal")]
 struct WorkerAbortSignalObjectDeclaration<'scope> {
     #[webapi(prototype)]
     prototype: v8::Local<'scope, v8::Object>,

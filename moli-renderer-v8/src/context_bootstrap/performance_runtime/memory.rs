@@ -30,7 +30,7 @@ struct MemoryInfoPrototypeDeclaration {
 }
 
 #[derive(WebApiObject)]
-#[webapi(interface = "Object")]
+#[webapi(prototype = "Object", interface = "MemoryInfo")]
 struct MemoryInfoObjectDeclaration<'scope> {
     #[webapi(prototype)]
     prototype: Option<v8::Local<'scope, v8::Object>>,

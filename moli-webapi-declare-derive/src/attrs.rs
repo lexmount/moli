@@ -48,6 +48,7 @@ pub(crate) enum RenameRule {
 pub(crate) struct ObjectAttrs {
     pub(crate) receiver: Option<Path>,
     pub(crate) interface: Option<LitStr>,
+    pub(crate) parent: Option<LitStr>,
     pub(crate) prototype: Option<LitStr>,
     pub(crate) own_to_string_tag: Option<LitStr>,
     pub(crate) fallback_to_string_tag: Option<LitStr>,
@@ -210,6 +211,10 @@ pub(crate) fn parse_object_attrs(attrs: &[syn::Attribute]) -> Result<ObjectAttrs
     let mut parsed = ObjectAttrs::default();
     for attr in attrs.iter().filter(|attr| attr.path().is_ident("webapi")) {
         attr.parse_nested_meta(|meta| {
+            if meta.path.is_ident("parent") {
+                parsed.parent = Some(meta.value()?.parse()?);
+                return Ok(());
+            }
             if meta.path.is_ident("unbranded") {
                 parsed.unbranded = true;
                 return Ok(());

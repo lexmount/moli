@@ -30,7 +30,7 @@ const TEMPORARY_STORAGE_TYPE: f64 = 0.0;
 const PERSISTENT_STORAGE_TYPE: f64 = 1.0;
 
 #[derive(Default, WebApiObject)]
-#[webapi(interface = "Object")]
+#[webapi(prototype = "Object", interface = "DeprecatedStorageQuota")]
 struct LegacyStorageQuotaObjectDeclaration {
     #[webapi(
         method,
@@ -50,7 +50,7 @@ struct LegacyStorageQuotaObjectDeclaration {
 }
 
 #[derive(WebApiObject)]
-#[webapi(interface = "Object")]
+#[webapi(prototype = "Object", interface = "DeprecatedStorageInfo")]
 struct LegacyStorageInfoObjectDeclaration {
     #[webapi(data_property = "TEMPORARY", enumerable)]
     temporary: f64,

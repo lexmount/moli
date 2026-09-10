@@ -2,7 +2,7 @@ use super::*;
 use moli_webapi_declare::{WebApiFunctionTemplate, WebApiObject};
 
 #[derive(WebApiObject)]
-#[webapi(interface = "Object")]
+#[webapi(prototype = "Object", interface = "CSSFontFeatureValuesMap")]
 struct CssFontFeatureValuesMapObjectDeclaration<'s> {
     #[webapi(slot = CSS_FONT_FEATURE_VALUES_MAP_BACKING_SLOT)]
     backing: v8::Local<'s, v8::Map>,

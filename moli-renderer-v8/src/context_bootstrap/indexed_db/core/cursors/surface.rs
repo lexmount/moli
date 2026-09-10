@@ -2,7 +2,12 @@ use super::*;
 use moli_webapi_declare::WebApiObject;
 
 #[derive(WebApiObject)]
-#[webapi(interface = "Object", data_properties, enumerable)]
+#[webapi(
+    prototype = "Object",
+    interface = "IDBCursor",
+    data_properties,
+    enumerable
+)]
 struct IdbCursorObjectDeclaration<'scope> {
     source: v8::Local<'scope, v8::Object>,
 
@@ -111,6 +116,12 @@ fn create_cursor_object_in_current_context<'s>(
         global_constructor_prototype(scope, "IDBCursorWithValue")?
     };
     let _ = cursor.set_prototype(scope, prototype.into());
+    let interface = if key_only {
+        "IDBCursor"
+    } else {
+        "IDBCursorWithValue"
+    };
+    moli_webapi_declare::initialize_web_api_object(scope, cursor, interface).ok()?;
     let storage_scope = indexed_db_typed_storage_scope(scope, request);
     let owner = indexed_db_typed_execution_owner(scope, request)
         .expect("IDBCursor should inherit typed owner from request");
