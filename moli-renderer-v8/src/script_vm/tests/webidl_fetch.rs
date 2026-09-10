@@ -9077,6 +9077,84 @@ fn response_clone_tees_user_readable_stream_body() {
 }
 
 #[test]
+fn fetched_null_bodies_discard_payloads_without_registering_pending_streams() {
+    use crate::network_host::{FetchResponseRequest, MaterializedResponseBody};
+
+    let vm = new_storage_test_vm("https://null-response.test/");
+    let context_ptr: *const v8::Global<v8::Context> = &vm.page_default_context as *const _;
+    let host = vm._context_host.clone();
+    vm.renderer_document_isolate
+        .with_entered_renderer_document_isolate(move |isolate| {
+            let scope = std::pin::pin!(v8::HandleScope::new(isolate));
+            let scope = &mut scope.init();
+            let context = unsafe { v8::Local::new(scope, &*context_ptr) };
+            let scope = &mut v8::ContextScope::new(scope, context);
+            let document_url = Url::parse("https://null-response.test/").unwrap();
+            for (method, status) in [
+                ("HEAD", 200), ("HEAD", 302), ("CONNECT", 200),
+                ("GET", 101), ("GET", 103), ("GET", 204), ("GET", 205), ("GET", 304),
+            ] {
+                for opaque in [false, true] {
+                    for source in ["response", "bytes", "subresource", "stream", "preload"] {
+                        let request = FetchResponseRequest {
+                            method,
+                            mode: if opaque { moli_fetch::RequestMode::NoCors } else { moli_fetch::RequestMode::Cors },
+                        };
+                        let head = moli_fetch::ResponseHead {
+                            final_url: Url::parse("https://cross-null-response.test/data").unwrap(),
+                            status,
+                            headers: vec![("content-type".to_owned(), "text/plain".to_owned())],
+                            request_cookie_report: None,
+                            cookie_set_reports: Vec::new(),
+                            redirected: false,
+                            redirect_chain: Vec::new(),
+                            from_cache: false,
+                            negotiated_http_version: None,
+                        };
+                        let id = crate::network_host::new_network_body_source_id();
+                        let response = match source {
+                            "response" => crate::network_host::build_fetch_response_object_for_request_mode(
+                                scope, &document_url, request,
+                                moli_fetch::Response::from_head_and_text_body(head, "discard me".to_owned()),
+                            ),
+                            "bytes" => crate::network_host::build_fetch_response_object_from_body_source_for_request_mode_with_filter(
+                                scope, &document_url, request, head,
+                                moli_fetch::ResponseBody::materialized_bytes(b"discard me".to_vec()),
+                                opaque.then_some(crate::types::AsyncSubresourceFetchResponseFilter::Opaque),
+                            ),
+                            "subresource" => crate::network_host::build_fetch_response_object_from_subresource_body_for_request_mode(
+                                scope, &document_url, request, head,
+                                crate::protocol_types::SubresourceResponseBody::from_bytes(b"discard me".to_vec()),
+                            ),
+                            "stream" => crate::network_host::build_fetch_response_object_from_stream_for_request_mode(
+                                scope, &document_url, request, head, id,
+                            ),
+                            "preload" => crate::network_host::build_navigation_preload_response_object_from_stream_for_request_mode(
+                                scope, &document_url, request, head, id,
+                            ),
+                            _ => unreachable!(),
+                        };
+                        assert!(response.get(scope, v8str(scope, "body").into()).unwrap().is_null(),
+                            "{method}/{status}/{opaque}/{source}");
+                        assert!(!host.borrow().pending_network_body_sources.contains_key(&id));
+                        crate::network_host::enqueue_pending_network_body_chunk(scope, id, b"late bytes".to_vec());
+                        crate::network_host::error_pending_network_body_stream(scope, id, "late error".to_owned());
+                        crate::network_host::close_pending_network_body_stream(scope, id);
+                        match crate::network_host::materialize_response_object_body(scope, response, "null body") {
+                            MaterializedResponseBody::Ready(bytes) => assert!(bytes.is_empty()),
+                            _ => panic!("null internal body must materialize immediately: {method}/{status}/{opaque}/{source}"),
+                        }
+                        assert!(host.borrow().pending_network_body_sources.is_empty());
+                        assert!(host.borrow().pending_network_body_clones.is_empty());
+                    }
+                }
+            }
+            Ok(())
+        })
+        .expect("null response body checks should complete");
+}
+
+#[test]
 fn response_clone_tees_pending_network_body_after_parent_consumption() {
     let mut vm = new_storage_test_vm("https://response-clone-pending-stream.test/");
     let body_source_id = crate::network_host::new_network_body_source_id();
@@ -9096,7 +9174,10 @@ fn response_clone_tees_pending_network_body_after_parent_consumption() {
                 crate::network_host::build_fetch_response_object_from_stream_for_request_mode(
                     scope,
                     &document_url,
-                    moli_fetch::RequestMode::Cors,
+                    crate::network_host::FetchResponseRequest {
+                        method: "GET",
+                        mode: moli_fetch::RequestMode::Cors,
+                    },
                     moli_fetch::ResponseHead {
                         final_url: response_url,
                         status: 200,
@@ -9197,7 +9278,10 @@ fn pending_fetch_body_pipe_through_text_decoder_stream_pulls_future_chunks() {
                 crate::network_host::build_fetch_response_object_from_stream_for_request_mode(
                     scope,
                     &document_url,
-                    moli_fetch::RequestMode::Cors,
+                    crate::network_host::FetchResponseRequest {
+                        method: "GET",
+                        mode: moli_fetch::RequestMode::Cors,
+                    },
                     moli_fetch::ResponseHead {
                         final_url: response_url,
                         status: 200,
@@ -9314,7 +9398,10 @@ fn materialize_response_object_preserves_redirected_slot() {
             let response = crate::network_host::build_fetch_response_object_for_request_mode(
                 scope,
                 &document_url,
-                moli_fetch::RequestMode::Cors,
+                crate::network_host::FetchResponseRequest {
+                    method: "GET",
+                    mode: moli_fetch::RequestMode::Cors,
+                },
                 moli_fetch::Response::from_head_and_text_body(
                     moli_fetch::ResponseHead {
                         final_url: final_url.clone(),
@@ -9363,7 +9450,7 @@ fn filtered_response_materialization_preserves_internal_url_without_exposing_url
                 let response = crate::network_host::build_fetch_response_object_from_body_source_for_request_mode_with_filter(
                     scope,
                     &document_url,
-                    moli_fetch::RequestMode::Cors,
+                    crate::network_host::FetchResponseRequest { method: "GET", mode: moli_fetch::RequestMode::Cors },
                     moli_fetch::ResponseHead {
                         final_url: final_url.clone(),
                         status: 302,

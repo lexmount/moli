@@ -2545,6 +2545,7 @@ pub(in crate::worker) fn start_worker_streaming_fetch(
                 pending.resolver.clone(),
                 pending.document_url.clone(),
                 pending.request_mode,
+                pending.request_method.clone(),
                 observable_head,
             ))
         }
@@ -2560,11 +2561,16 @@ pub(in crate::worker) fn start_worker_streaming_fetch(
         }
         return;
     }
-    if let Some((resolver, document_url, request_mode, observable_head)) = response_input {
+    if let Some((resolver, document_url, request_mode, request_method, observable_head)) =
+        response_input
+    {
         let response_obj = build_fetch_response_object_from_stream_for_request_mode(
             scope,
             &document_url,
-            request_mode,
+            crate::network_host::FetchResponseRequest {
+                method: &request_method,
+                mode: request_mode,
+            },
             observable_head,
             started.body_source_id,
         );
@@ -2939,7 +2945,10 @@ pub(in crate::worker) fn drain_worker_fetch_completion_result(
                     build_fetch_response_object_from_body_source_for_request_mode(
                         scope,
                         &pending.document_url,
-                        pending.request_mode,
+                        crate::network_host::FetchResponseRequest {
+                            method: &pending.request_method,
+                            mode: pending.request_mode,
+                        },
                         head,
                         body,
                     )
@@ -2954,7 +2963,10 @@ pub(in crate::worker) fn drain_worker_fetch_completion_result(
                     build_fetch_response_object_from_subresource_body_for_request_mode(
                         scope,
                         &pending.document_url,
-                        pending.request_mode,
+                        crate::network_host::FetchResponseRequest {
+                            method: &pending.request_method,
+                            mode: pending.request_mode,
+                        },
                         head,
                         body,
                     )
