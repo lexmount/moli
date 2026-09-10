@@ -11,6 +11,7 @@
     <script>
       (async () => {
         const response = new Response('hello world');
+        const textResponse = response.clone();
         const reader = response.body.getReader();
         const first = await reader.read();
         document.body.setAttribute(
@@ -18,7 +19,7 @@
           new TextDecoder().decode(first.value),
         );
 
-        document.body.setAttribute('data-response-text', await response.text());
+        document.body.setAttribute('data-response-text', await textResponse.text());
 
         const input = new ReadableStream({
           start(controller) {
