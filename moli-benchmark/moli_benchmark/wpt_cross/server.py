@@ -86,9 +86,10 @@ XHR_RESPONSE_RESOURCE_PATHS = {
     "/xhr/resources/last-modified.py",
 }
 FETCH_EMPTY_LOCATION_PATH = "/fetch/api/resources/redirect-empty-location.py"
-XHR_URL_RESOURCE_PATHS = {
+XHR_RESOURCE_PATHS = {
     "/xhr/resources/requri.py",
     "/xhr/resources/redirect.py",
+    "/xhr/resources/inspect-headers.py",
 }
 FETCH_ABORT_RESOURCE_PATHS = {
     "/fetch/api/resources/stash-put.py",
@@ -1930,16 +1931,22 @@ def _make_handler(
 
     class WptHandler(BaseHTTPRequestHandler):
         def __getattr__(self, name: str) -> Callable[[], None]:
-            if (
-                name.startswith("do_")
-                and unquote(urlsplit(getattr(self, "path", "")).path)
-                in XHR_URL_RESOURCE_PATHS
-            ):
-                return self._serve_xhr_url_method
+            if name.startswith("do_"):
+                path = unquote(urlsplit(getattr(self, "path", "")).path)
+                if path == NAVIGATION_SECOND_VISIT_PATH:
+                    return self._serve_navigation_second_visit
+                if path == FETCH_EMPTY_LOCATION_PATH:
+                    return self._serve_empty_location_resource
+                if path in XHR_RESPONSE_RESOURCE_PATHS:
+                    return self._serve_xhr_response_resource
+                if path in FETCH_RANGE_RESOURCE_PATHS:
+                    return self._serve_fetch_resource_method
+                if path in XHR_RESOURCE_PATHS:
+                    return self._serve_xhr_method
             raise AttributeError(name)
 
-        def _serve_xhr_url_method(self) -> None:
-            self._serve_xhr_url_resource(emit_body=self.command != "HEAD")
+        def _serve_xhr_method(self) -> None:
+            self._serve_xhr_resource(emit_body=self.command != "HEAD")
 
         def do_GET(self) -> None:  # noqa: N802 (BaseHTTPRequestHandler API)
             if self.headers.get("Upgrade", "").lower() == "websocket":
@@ -1955,7 +1962,7 @@ def _make_handler(
                 return
             if (
                 self._serve_xhr_response_resource()
-                or self._serve_xhr_url_resource(emit_body=True)
+                or self._serve_xhr_resource(emit_body=True)
             ):
                 return
             parsed = urlparse(self.path)
@@ -1990,7 +1997,7 @@ def _make_handler(
                 return
             if (
                 self._serve_xhr_response_resource()
-                or self._serve_xhr_url_resource(emit_body=True)
+                or self._serve_xhr_resource(emit_body=True)
             ):
                 return
             parsed = urlparse(self.path)
@@ -2066,7 +2073,7 @@ def _make_handler(
                 return
             if (
                 self._serve_xhr_response_resource()
-                or self._serve_xhr_url_resource(emit_body=True)
+                or self._serve_xhr_resource(emit_body=True)
             ):
                 return
             parsed = urlparse(self.path)
@@ -2103,7 +2110,7 @@ def _make_handler(
             }:
                 self._serve_xhr_response_resource()
                 return
-            if self._serve_xhr_url_resource(emit_body=True):
+            if self._serve_xhr_resource(emit_body=True):
                 return
             parsed = urlparse(self.path)
             if unquote(parsed.path) == NAVIGATION_SECOND_VISIT_PATH:
@@ -2244,7 +2251,7 @@ def _make_handler(
                 return
             if (
                 self._serve_xhr_response_resource(emit_body=emit_body)
-                or self._serve_xhr_url_resource(emit_body=emit_body)
+                or self._serve_xhr_resource(emit_body=emit_body)
             ):
                 return
             parsed = urlparse(self.path)
@@ -2851,10 +2858,10 @@ def _make_handler(
                 emit_body=emit_body, cache_control=None,
             )
 
-        def _serve_xhr_url_resource(self, *, emit_body: bool) -> bool:
+        def _serve_xhr_resource(self, *, emit_body: bool) -> bool:
             parsed = urlsplit(self.path)
             path = unquote(parsed.path)
-            if path not in XHR_URL_RESOURCE_PATHS:
+            if path not in XHR_RESOURCE_PATHS:
                 return False
             try:
                 if path == "/xhr/resources/requri.py":
@@ -2870,6 +2877,11 @@ def _make_handler(
                             authority += ":" + str(self.server.server_address[1])
                         uri = f"http://{authority}{uri}"
                     status, reason, headers, body = 200, None, [], uri.encode("utf-8")
+                elif path == "/xhr/resources/inspect-headers.py":
+                    status, reason = 200, None
+                    headers, body = _xhr_inspect_headers_fixture_response(
+                        parsed.query, list(self.headers.raw_items())
+                    )
                 else:
                     status, reason, headers, body, delay = _xhr_redirect_fixture_response(
                         parsed.path, parsed.query
@@ -2940,17 +2952,6 @@ def _make_handler(
                 b"export let delayedLoaded = true;",
                 emit_body=emit_body,
             )
-
-        def __getattr__(self, name: str):
-            if name.startswith("do_") and unquote(urlparse(self.path).path) == NAVIGATION_SECOND_VISIT_PATH:
-                return self._serve_navigation_second_visit
-            if name.startswith("do_") and unquote(urlparse(self.path).path) == FETCH_EMPTY_LOCATION_PATH:
-                return self._serve_empty_location_resource
-            if name.startswith("do_") and unquote(urlparse(self.path).path) in XHR_RESPONSE_RESOURCE_PATHS:
-                return self._serve_xhr_response_resource
-            if name.startswith("do_") and unquote(urlparse(self.path).path) in FETCH_RANGE_RESOURCE_PATHS:
-                return self._serve_fetch_resource_method
-            raise AttributeError(name)
 
         def _read_content_length_request_body(self) -> bytes | None:
             if self.headers.get("Transfer-Encoding") is not None:
