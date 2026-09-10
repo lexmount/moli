@@ -2548,6 +2548,7 @@ dependencies = [
  "strum",
  "tokio",
  "tokio-rustls",
+ "tokio-tungstenite",
  "tracing",
  "url",
  "wildcard",

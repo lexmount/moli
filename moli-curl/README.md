@@ -77,3 +77,49 @@ and record several runs. Avoid concurrent builds or test suites while measuring.
 CPU/throughput measurements are observations, not CI pass thresholds. Deterministic
 CI regressions cover idle receive attempts, buffer allocation counts, retained
 Chunk contents, WSS recovery, peer EOF and send progress under backpressure.
+
+## Shared HTTP and WebSocket runtime
+
+`CurlMultiRuntime::websocket_connector()` admits WebSockets to the same native
+owner, Multi and poll loop as HTTP. HTTP completions remove an easy handle;
+WebSocket handshake completion leaves it attached until the connection ends.
+`CurlWebSocketRuntime` is a standalone wrapper around this same driver.
+
+The connector is a request capability: retaining it does not retain the runtime
+owner, and an explicitly supplied closed connector fails without a standalone
+fallback. Fetch, Page and Worker use the connector from their network runtime.
+The Fetch semantic thread and WebSocket Tokio session thread remain separate.
+
+WebSockets have an owner-local CURLSH connection cache, so resident sockets do
+not consume HTTP host/total connection limits. HTTP retains the Multi's default
+connection pool; WebSocket session admission bounds its separate cache. This
+shares scheduling and ownership, not TCP/TLS connections. WebSocket transport
+still uses HTTP/1.1 Upgrade; this change does not implement RFC 8441.
+
+In shared mode, poll/turn counters include HTTP work and HTTP wakeups. A fast
+poll with no WebSocket byte progress can therefore reflect useful HTTP work.
+
+Compare a shared owner with two separate owners in the same release binary:
+
+```sh
+target/release/examples/websocket_owner_probe --http separate --scenario active --idle 32 --seconds 5
+target/release/examples/websocket_owner_probe --http shared --scenario active --idle 32 --seconds 5
+```
+
+`--http` defaults to `off`. Both enabled modes use an HTTP/1.1 keepalive peer,
+16 warmup requests and a sequential offered load of up to 100 requests/s.
+They report HTTP request count and p50/p95 latency, WebSocket throughput,
+native owner count and the sum of native owner CPU time. The HTTP producer,
+local peer and Tokio executor CPU are excluded. This measures native scheduling
+coexistence, not HTTP/2 throughput or end-to-end browser page performance.
+The Fetch regression tests separately verify real TLS HTTP/2 multiplexing while
+WS/WSS reads are paused and after the WebSocket close handshake.
+
+HTTP uses `runtime.http_sender().submit(job)` and WebSocket uses
+`runtime.websocket_connector().connect(request)`. Only the runtime owns shutdown
+and join; neither request handle does, and the runtime itself is not cloneable.
+
+The browser WebSocket API takes the connector as an explicit spawn argument.
+`ConnectOptions` contains only request configuration. Callers without a network
+owner must choose `spawn_standalone_connection` (or its handshake-pause variant)
+explicitly; scoped connection failures never select another owner.

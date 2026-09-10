@@ -1,4 +1,7 @@
 //! Local, repeatable owner workload. See moli-curl/README.md for commands.
+#[path = "websocket_owner_probe/http.rs"]
+mod http;
+
 use anyhow::{Context, Result, bail};
 use moli_curl::websocket::{
     CurlWebSocketConnection, CurlWebSocketEvent, CurlWebSocketRequest, CurlWebSocketRuntime,
@@ -15,6 +18,7 @@ use tokio_tungstenite::tungstenite::{self, Message};
 
 struct Options {
     scenario: String,
+    http: String,
     idle: usize,
     duration: Duration,
 }
@@ -22,6 +26,7 @@ struct Options {
 fn options() -> Result<Options> {
     let mut options = Options {
         scenario: "active".into(),
+        http: "off".into(),
         idle: 32,
         duration: Duration::from_secs(3),
     };
@@ -29,9 +34,10 @@ fn options() -> Result<Options> {
     while let Some(arg) = args.next() {
         let value = args
             .next()
-            .context("expected a value after --scenario, --idle or --seconds")?;
+            .context("expected a value after --scenario, --http, --idle or --seconds")?;
         match arg.as_str() {
             "--scenario" => options.scenario = value,
+            "--http" => options.http = value,
             "--idle" => options.idle = value.parse()?,
             "--seconds" => options.duration = Duration::try_from_secs_f64(value.parse()?)?,
             _ => bail!("unknown option: {arg}"),
@@ -42,6 +48,9 @@ fn options() -> Result<Options> {
         "idle" | "active" | "slow-read" | "wss"
     ) {
         bail!("scenario must be idle, active, slow-read or wss");
+    }
+    if !matches!(options.http.as_str(), "off" | "shared" | "separate") {
+        bail!("http must be off, shared or separate");
     }
     let count = options
         .idle
@@ -118,22 +127,29 @@ fn tls_config() -> Result<Arc<rustls::ServerConfig>> {
 
 // Linux exposes scheduled CPU nanoseconds per thread. Other platforms still
 // report workload throughput; no process-wide CPU is substituted for the owner.
-fn owner_cpu_ns() -> Option<u64> {
+fn owner_cpu_ns() -> Option<(usize, u64)> {
+    let mut count = 0;
+    let mut cpu = 0;
     for task in std::fs::read_dir("/proc/self/task").ok()? {
-        let path = task.ok()?.path();
-        if std::fs::read_to_string(path.join("comm"))
-            .ok()?
-            .starts_with("moli-curl-web")
-        {
-            return std::fs::read_to_string(path.join("schedstat"))
+        let Ok(task) = task else {
+            continue;
+        };
+        let path = task.path();
+        // An unrelated peer/producer may exit while /proc is being sampled.
+        let Ok(name) = std::fs::read_to_string(path.join("comm")) else {
+            continue;
+        };
+        if name.starts_with("moli-curl-web") || name.starts_with("moli-curl-http") {
+            count += 1;
+            cpu += std::fs::read_to_string(path.join("schedstat"))
                 .ok()?
                 .split_whitespace()
                 .next()?
-                .parse()
-                .ok();
+                .parse::<u64>()
+                .ok()?;
         }
     }
-    None
+    (count > 0).then_some((count, cpu))
 }
 
 async fn incoming(
@@ -166,7 +182,20 @@ async fn main() -> Result<()> {
         .with_ansi(false)
         .with_writer(std::io::stderr)
         .init();
-    let runtime = CurlWebSocketRuntime::new()?;
+    let http = (options.http != "off")
+        .then(http::Workload::new)
+        .transpose()?;
+    let runtime = (options.http != "shared")
+        .then(CurlWebSocketRuntime::new)
+        .transpose()?;
+    let connector = match &runtime {
+        Some(runtime) => runtime.connector(),
+        None => http
+            .as_ref()
+            .context("shared HTTP runtime missing")?
+            .runtime
+            .websocket_connector(),
+    };
     let tls = (options.scenario == "wss").then(tls_config).transpose()?;
     let mut peers = Vec::new();
     let mut connections = Vec::new();
@@ -182,7 +211,7 @@ async fn main() -> Result<()> {
         let mut request = CurlWebSocketRequest::new(url);
         // The WSS fixture owns this locally generated certificate.
         request.tls.verify = tls.is_none();
-        let mut connection = runtime.connect(request)?;
+        let mut connection = connector.connect(request)?;
         match tokio::time::timeout(Duration::from_secs(10), connection.recv()).await? {
             Some(CurlWebSocketEvent::Handshake { result, .. }) => {
                 result.map_err(anyhow::Error::msg)?
@@ -204,7 +233,10 @@ async fn main() -> Result<()> {
     }
     let cpu_before = owner_cpu_ns();
     let started = Instant::now();
-    let end = tokio::time::Instant::now() + options.duration;
+    let http_task = http
+        .as_ref()
+        .map(|http| http.start(started + options.duration));
+    let end = tokio::time::Instant::from_std(started + options.duration);
     let bytes = match options.scenario.as_str() {
         "idle" => {
             tokio::time::sleep_until(end).await;
@@ -241,17 +273,25 @@ async fn main() -> Result<()> {
     let elapsed = started.elapsed();
     let cpu_ms = cpu_before
         .zip(owner_cpu_ns())
-        .map(|(before, after)| after.saturating_sub(before) as f64 / 1_000_000.0);
+        .map(|((_, before), (_, after))| after.saturating_sub(before) as f64 / 1_000_000.0);
     println!(
-        "scenario={} idle={} elapsed_s={:.3} bytes={} mib_per_s={:.3} owner_cpu_ms={cpu_ms:?}",
+        "scenario={} http={} idle={} elapsed_s={:.3} bytes={} mib_per_s={:.3} owner_cpu_ms={cpu_ms:?} owner_threads={:?}",
         options.scenario,
+        options.http,
         options.idle,
         elapsed.as_secs_f64(),
         bytes,
-        bytes as f64 / 1_048_576.0 / elapsed.as_secs_f64()
+        bytes as f64 / 1_048_576.0 / elapsed.as_secs_f64(),
+        cpu_before.map(|(count, _)| count)
     );
+    if let Some(task) = http_task {
+        http::report(task)?;
+    }
     drop(connections);
     drop(runtime);
+    if let Some(http) = http {
+        http.finish()?;
+    }
     for task in peers {
         task.join()
             .map_err(|_| anyhow::anyhow!("peer panicked"))??;
