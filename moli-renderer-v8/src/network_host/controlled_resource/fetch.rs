@@ -90,16 +90,14 @@ impl ControlledFetchStream {
         network_request_headers: Option<Vec<(String, String)>>,
         body: ResourceInterceptionBody,
     ) -> Result<(), String> {
-        super::super::validate_fetch_response_security_policy_with_body_classified(
+        super::super::validate_fetch_response_headers(
             &self.request_origin,
             &head,
-            &[],
             self.mode,
             self.credentials,
             self.policy,
             self.load.request_client().web_security_disabled(),
-        )
-        .map_err(|error| error.into_message())?;
+        )?;
         let handle = info
             .network_request_handle
             .expect("native Fetch owns its request handle");
@@ -177,6 +175,7 @@ impl ControlledFetchStream {
         // resource lease, rather than this delivery channel, owns cancellation.
         let _ = self.completion.send(WorkerFetchEvent::StreamingChunk(
             WorkerFetchStreamingChunk {
+                fetch_id: self.fetch_id,
                 body_source_id: self.body_source_id.unwrap(),
                 bytes,
             },
