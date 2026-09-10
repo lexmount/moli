@@ -209,7 +209,6 @@ pub(in crate::worker) fn spawn_worker_fetch_network(
                         request = request.with_auth(auth.into());
                     }
                     if request.auth_requires_buffered_transport()
-                        || request.request_mode == RequestMode::NoCors
                         || !request.follow_redirects
                         || browser_request_needs_manual_preflight_redirects(
                             &request,
@@ -293,6 +292,7 @@ pub(in crate::worker) fn spawn_worker_fetch_network(
                                     body_writer.append(&chunk);
                                     let _ = completion_tx.send(WorkerFetchEvent::StreamingChunk(
                                         WorkerFetchStreamingChunk {
+                                            fetch_id,
                                             body_source_id,
                                             bytes: chunk,
                                         },
@@ -2177,6 +2177,7 @@ pub(in crate::worker) fn worker_fetch_callback<'s>(
                     network_record: None,
                     paused_response: None,
                     streaming_body_source_id: None,
+                    streaming_needs_orb_body_validation: false,
                 },
             );
             fetch_id
@@ -2274,6 +2275,7 @@ pub(in crate::worker) fn worker_fetch_callback<'s>(
                     network_record: None,
                     paused_response: None,
                     streaming_body_source_id: None,
+                    streaming_needs_orb_body_validation: false,
                 },
             );
             fetch_id
@@ -2463,7 +2465,17 @@ pub(in crate::worker) fn drain_worker_fetch_completion(
             start_worker_streaming_fetch(scope, state, started)
         }
         WorkerFetchEvent::StreamingChunk(chunk) => {
-            enqueue_pending_network_body_chunk(scope, chunk.body_source_id, chunk.bytes)
+            let deliver = state
+                .borrow()
+                .pending_fetches
+                .get(&chunk.fetch_id)
+                .is_some_and(|pending| {
+                    pending.streaming_body_source_id == Some(chunk.body_source_id)
+                        && !pending.streaming_needs_orb_body_validation
+                });
+            if deliver {
+                enqueue_pending_network_body_chunk(scope, chunk.body_source_id, chunk.bytes);
+            }
         }
         WorkerFetchEvent::StreamingFinished(finished) => {
             finish_worker_streaming_fetch(scope, state, finished)
@@ -2545,8 +2557,9 @@ pub(in crate::worker) fn start_worker_streaming_fetch(
         let Some(pending) = state_ref.pending_fetches.get_mut(&started.fetch_id) else {
             return;
         };
-        if let Err(message) = validate_fetch_response_security_policy(
-            &pending.document_url,
+        let request_origin = moli_url::WebOrigin::from_url(&pending.document_url);
+        if let Err(message) = validate_fetch_response_headers(
+            &request_origin,
             &started.head,
             pending.request_mode,
             pending.credentials_mode,
@@ -2556,6 +2569,13 @@ pub(in crate::worker) fn start_worker_streaming_fetch(
             reject = Some((pending.resolver.clone(), message));
             None
         } else {
+            pending.streaming_needs_orb_body_validation =
+                crate::network_host::fetch_response_needs_orb_body_validation(
+                    &pending.document_url,
+                    &started.head.final_url,
+                    &started.head.headers,
+                    pending.request_mode,
+                );
             let mut observable_head = started.head.clone();
             observable_head.headers = filter_cors_exposed_response_headers(
                 &pending.document_url,
@@ -2618,6 +2638,17 @@ pub(in crate::worker) fn finish_worker_streaming_fetch(
     let head = finished.head;
     match finished.result {
         Ok(body) => {
+            if pending.streaming_needs_orb_body_validation
+                && let Err(error_text) = crate::network_host::release_pending_opaque_response_body(
+                    scope,
+                    finished.body_source_id,
+                    &head.headers,
+                    &body,
+                )
+            {
+                record_worker_fetch_failure(&state.borrow(), &pending, error_text);
+                return;
+            }
             close_pending_network_body_stream(scope, finished.body_source_id);
             if let Some(record) = pending.network_record {
                 let internal_id = record.internal_id;
