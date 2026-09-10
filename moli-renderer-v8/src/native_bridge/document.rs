@@ -1401,6 +1401,20 @@ fn current_script_handle_for_document(
         })
 }
 
+fn document_has_browsing_context(runtime: &PageScriptHost, handle: DomHandle) -> bool {
+    runtime.document_has_browsing_context(handle)
+}
+
+fn document_is_hidden(runtime: &PageScriptHost, handle: DomHandle) -> bool {
+    !runtime.document_activity().visible
+        || runtime
+            .dom_host()
+            .node(handle)
+            .and_then(Node::as_document)
+            .is_some_and(|document| document.visibility_hidden())
+        || !document_has_browsing_context(runtime, handle)
+}
+
 fn document_hidden_getter_function<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     args: v8::FunctionCallbackArguments<'s>,
@@ -1411,9 +1425,7 @@ fn document_hidden_getter_function<'s>(
         rv.set_undefined();
         return;
     };
-    let visible = unsafe { &*runtime_ptr }.document_activity().visible
-        && unsafe { &*runtime_ptr }.document_has_browsing_context(handle);
-    rv.set_bool(!visible);
+    rv.set_bool(document_is_hidden(unsafe { &*runtime_ptr }, handle));
 }
 
 fn document_visibility_state_getter_function<'s>(
@@ -1426,12 +1438,10 @@ fn document_visibility_state_getter_function<'s>(
         rv.set_undefined();
         return;
     };
-    let state = if unsafe { &*runtime_ptr }.document_activity().visible
-        && unsafe { &*runtime_ptr }.document_has_browsing_context(handle)
-    {
-        "visible"
-    } else {
+    let state = if document_is_hidden(unsafe { &*runtime_ptr }, handle) {
         "hidden"
+    } else {
+        "visible"
     };
     set_document_string_return_value(scope, &mut rv, state);
 }
