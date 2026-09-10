@@ -1,6 +1,6 @@
 use super::super::stream_adapter::{
-    TeeStartError, apply_readable_stream_access_transition, enqueue_byte_chunk,
-    install_readable_stream_pipe_to_abort_signal, lock_readable_stream,
+    TeeStartError, apply_readable_stream_access_transition, disturb_readable_stream,
+    enqueue_byte_chunk, install_readable_stream_pipe_to_abort_signal, lock_readable_stream,
     new_lazy_readable_byte_stream_object, new_readable_byte_stream_object,
     new_readable_stream_pipe_owner, prime_readable_stream_pipe_to, readable_stream_access_snapshot,
     register_readable_stream_pipe_owner, register_writable_stream_pipe_owner,
@@ -414,6 +414,9 @@ fn start_readable_stream_pipe_to<'s>(
     }
     set_writable_stream_locked(scope, writable, true);
     register_writable_stream_pipe_owner(scope, writable, owner);
+    // ReadableStreamPipeTo disturbs the source before handling aborts or
+    // waiting for destination backpressure to permit the first read.
+    disturb_readable_stream(scope, stream);
     if let Some(signal) = options.signal {
         install_readable_stream_pipe_to_abort_signal(scope, stream, signal);
     }
