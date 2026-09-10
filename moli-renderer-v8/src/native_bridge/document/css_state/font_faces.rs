@@ -65,13 +65,40 @@ fn construct_font_face_from_parts<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     family: &str,
     source: &str,
+    rule_css: Option<&str>,
 ) -> Option<v8::Local<'s, v8::Value>> {
-    let global = scope.get_current_context().global(scope);
-    let ctor_value = global.get(scope, v8str(scope, "FontFace").into())?;
-    let ctor = v8::Local::<v8::Function>::try_from(ctor_value).ok()?;
+    let ctor =
+        crate::context_bootstrap::ensure_intrinsic_interface_constructor(scope, "FontFace").ok()?;
     let family = v8_string(scope, family)?;
     let source = v8_string(scope, source)?;
-    ctor.new_instance(scope, &[family.into(), source.into()])
+    let descriptors = v8::Object::new(scope);
+    let _ = descriptors.set_prototype(scope, v8::null(scope).into());
+    if let Some(rule) = rule_css.and_then(moli_css_parse::parse_font_face_rule_view_with_stylo) {
+        for entry in moli_css_parse::parse_declaration_list(
+            &rule.style_text,
+            moli_css_parse::DeclarationParseOptions {
+                canonicalize_property_name: true,
+                unescape_value_semicolons: false,
+                preserve_empty_values: false,
+            },
+        ) {
+            let name = match entry.name.as_str() {
+                "font-style" => "style",
+                "font-weight" => "weight",
+                "font-stretch" => "stretch",
+                "font-variant" => "variant",
+                "font-feature-settings" => "featureSettings",
+                "font-variation-settings" => "variationSettings",
+                "font-display" => "display",
+                _ => continue,
+            };
+            let value = v8_string(scope, &entry.value)?;
+            // Define data properties rather than invoking author Object.prototype setters.
+            let _ =
+                descriptors.create_data_property(scope, v8str(scope, name).into(), value.into());
+        }
+    }
+    ctor.new_instance(scope, &[family.into(), source.into(), descriptors.into()])
         .map(Into::into)
 }
 
@@ -79,7 +106,7 @@ fn construct_font_face<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     descriptor: &StylesheetFontFaceDescriptor,
 ) -> Option<v8::Local<'s, v8::Value>> {
-    construct_font_face_from_parts(scope, descriptor.family(), descriptor.source())
+    construct_font_face_from_parts(scope, descriptor.family(), descriptor.source(), None)
 }
 
 fn collect_font_face_objects<'s>(
@@ -254,6 +281,7 @@ fn sync_stylesheet_font_face_wrappers<'s>(
                 scope,
                 &rule.descriptor.family,
                 &rule.descriptor.source,
+                Some(&rule.rule_fingerprint),
             )?;
             let face = v8::Local::<v8::Object>::try_from(face).ok()?;
             set_private_u64(
@@ -277,6 +305,23 @@ fn sync_stylesheet_font_face_wrappers<'s>(
             Some(face)
         });
         if let Some(face) = face {
+            if let Some(font) = rule
+                .resource
+                .as_ref()
+                .and_then(|resource| resource.web_font())
+                && crate::context_bootstrap::child_browsing_context_handle_for_current_realm_scope(
+                    scope,
+                )
+                .is_none()
+                && let Some(host_ptr) = crate::util::context_host_ptr_from_global_bridge(scope)
+            {
+                // The resource metadata retains the stylesheet parser's URLs
+                // and the same slot used by CSS resource admission.
+                let load = unsafe { &*host_ptr }.observe_document_font_face(font);
+                if !crate::context_bootstrap::bind_stylesheet_font_face(scope, face, load) {
+                    continue;
+                }
+            }
             all_faces.push((rule.rule_identity, face));
         }
     }

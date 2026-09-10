@@ -1718,6 +1718,9 @@ impl LiveStylesheet {
                     rule_identity: identity,
                     rule_fingerprint: native_rule.rule_fingerprint.clone(),
                     descriptor: native_rule.descriptor.clone(),
+                    resource: crate::css_resource_urls::stylesheet_web_font_resource_with_resolved_sources(
+                        &native_rule.rule_fingerprint, native_rule.sources.clone(),
+                    ),
                 });
             if native_projection
                 .effective_rule_addresses
