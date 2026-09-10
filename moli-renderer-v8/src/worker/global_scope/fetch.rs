@@ -4,7 +4,7 @@ use std::sync::atomic::AtomicU64;
 
 use crate::network::interception_output::ResourceInterceptionContext;
 use crate::network_host::{FetchArgumentError, combined_headers_entries, convert_fetch_arguments};
-use crate::network_host::HeadersGuard;
+use crate::network_host::{HeadersGuard, validate_fetch_response_headers};
 use crate::service_worker_runtime::ServiceWorkerFetchRequestMetadata;
 use crate::types::{
     ScriptNetworkOutputItem, SubresourcePolicyContext, WebSocketLifecycleEvent,
@@ -1082,7 +1082,17 @@ pub(in crate::worker) fn drain_worker_fetch_completion(
             start_worker_streaming_fetch(scope, state, started)
         }
         WorkerFetchEvent::StreamingChunk(chunk) => {
-            enqueue_pending_network_body_chunk(scope, chunk.body_source_id, chunk.bytes)
+            let deliver = state
+                .borrow()
+                .pending_fetches
+                .get(&chunk.fetch_id)
+                .is_some_and(|pending| {
+                    pending.streaming_body_source_id == Some(chunk.body_source_id)
+                        && !pending.streaming_needs_orb_body_validation
+                });
+            if deliver {
+                enqueue_pending_network_body_chunk(scope, chunk.body_source_id, chunk.bytes);
+            }
         }
         WorkerFetchEvent::StreamingFinished(finished) => {
             finish_worker_streaming_fetch(scope, state, finished)

@@ -614,7 +614,7 @@ pub(in crate::network_host) fn set_network_body_source_object<'s>(
     set_private_value(scope, object, NETWORK_BODY_SOURCE_SLOT, source.into());
 }
 
-fn filtered_response_internal_body_source_from_object<'s>(
+pub(in crate::network_host) fn filtered_response_internal_body_source_from_object<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     object: v8::Local<'s, v8::Object>,
 ) -> Option<v8::Local<'s, v8::Object>> {
@@ -832,6 +832,30 @@ fn enqueue_pending_network_body_chunk_in_maps(
     for clone_id in clone_ids {
         if let Some(clone) = sources.get_mut(&clone_id) {
             append_pending_body_state_bytes(scope, clone, &bytes);
+        }
+    }
+}
+
+pub(crate) fn release_pending_opaque_response_body(
+    scope: &mut v8::PinScope<'_, '_>,
+    body_source_id: NetworkBodySourceId,
+    response_headers: &[(String, Vec<u8>)],
+    body: &SubresourceResponseBody,
+) -> Result<(), String> {
+    match validated_opaque_response_body(response_headers, body) {
+        Ok(bytes) => {
+            enqueue_pending_network_body_chunk(scope, body_source_id, bytes.into_owned());
+            Ok(())
+        }
+        Err(FetchResponseSecurityViolation::OpaqueResponseBlocked(message)) => {
+            // An ORB-blocked Fetch still exposes an opaque response, with an
+            // empty internal body. Its network record reports the block.
+            close_pending_network_body_stream(scope, body_source_id);
+            Err(message)
+        }
+        Err(FetchResponseSecurityViolation::Rejected(message)) => {
+            error_pending_network_body_stream(scope, body_source_id, message.clone());
+            Err(message)
         }
     }
 }

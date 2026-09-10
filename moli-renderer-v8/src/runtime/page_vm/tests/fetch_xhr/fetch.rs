@@ -1192,6 +1192,8 @@ async fn popup_response_websocket_uses_popup_response_csp() {
         let popup_body = r#"<!doctype html><script>
 (() => {
   const events = [];
+  let returned = false;
+  let initialReadyState;
   addEventListener("securitypolicyviolation", event => {
     events.push({
       blockedURI: event.blockedURI,
@@ -1199,14 +1201,18 @@ async fn popup_response_websocket_uses_popup_response_csp() {
       disposition: event.disposition,
       instance: event instanceof SecurityPolicyViolationEvent,
     });
+    opener.__popupWebSocketCspObserved = JSON.stringify({
+      url: socket.url,
+      readyState: initialReadyState,
+      returned,
+      events,
+    });
+    opener.postMessage("popup-websocket-csp-done", "*");
   });
   const socket = new WebSocket("/socket");
-  opener.__popupWebSocketCspObserved = JSON.stringify({
-    url: socket.url,
-    readyState: socket.readyState,
-    events,
-  });
-  opener.postMessage("popup-websocket-csp-done", "*");
+  initialReadyState = socket.readyState;
+  returned = true;
+  if (events.length !== 0) throw new Error("CSP delivery must be queued after construction");
 })();
 </script>"#
             .to_owned();
@@ -1260,6 +1266,7 @@ async fn popup_response_websocket_uses_popup_response_csp() {
             json!({
                 "url": expected_socket_url,
                 "readyState": 0,
+                "returned": true,
                 "events": [{
                     "blockedURI": expected_socket_url,
                     "effectiveDirective": "connect-src",
@@ -1833,10 +1840,12 @@ async fn window_fetch_no_cors_cross_origin_returns_opaque_filtered_response() {
                         "fetch no-cors should resolve",
                     )
                     .await?;
-                    while page_vm
-                        .run_exact_page_websocket_selected_task_for_test().await?
-                        .is_some()
-                    {}
+                    // The opaque response resolves at headers, before its hidden
+                    // body finishes and produces the completed network record.
+                    drain_page_work_until_no_pending_subresources(
+                        &mut page_vm,
+                        "fetch no-cors network record should complete",
+                    ).await?;
                     let observed = page_vm.vm_mut().eval("String(globalThis.__fetchObserved)")?;
                     Ok::<_, anyhow::Error>((observed, page_vm.vm_mut().take_network_output()))
                 })
@@ -1935,10 +1944,12 @@ async fn window_fetch_no_cors_opaque_response_blocking_returns_empty_opaque_resp
                         "fetch no-cors ORB should settle",
                     )
                     .await?;
-                    while page_vm
-                        .run_exact_page_websocket_selected_task_for_test().await?
-                        .is_some()
-                    {}
+                    // The opaque response resolves at its headers. Its ORB
+                    // network terminal arrives after the body has been checked.
+                    drain_page_work_until_no_pending_subresources(
+                        &mut page_vm,
+                        "fetch no-cors ORB network record should complete",
+                    ).await?;
                     let observed = page_vm.vm_mut().eval("String(globalThis.__fetchObserved)")?;
                     Ok::<_, anyhow::Error>((observed, page_vm.vm_mut().take_network_output()))
                 })

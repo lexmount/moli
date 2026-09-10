@@ -62,6 +62,7 @@ pub(super) fn start<'s>(
                 request_method: request.method.clone(),
 
                 streaming_body_source_id: None,
+                streaming_needs_orb_body_validation: false,
             },
         );
         (
