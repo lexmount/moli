@@ -1,0 +1,4 @@
+interface:
+  display_name: "Moli Web Search"
+  short_description: "Search the web and reverse-search images with Moli"
+  default_prompt: "Use $moli-websearch to search by keyword or image, verify useful matches, and return source links."
