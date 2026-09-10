@@ -235,6 +235,10 @@ fn window_fetch_callback_in_relevant_realm<'s>(
             .abort_signal_reason(scope, signal)
             .unwrap_or_else(|| abort_error_value(scope));
         rv.set(make_rejected_promise_with_value(scope, reason).into());
+        if let Some(stream) = prepared.body_stream {
+            let stream = v8::Local::new(scope, stream);
+            crate::context_bootstrap::cancel_readable_stream_for_fetch(scope, stream, reason);
+        }
         return;
     }
 

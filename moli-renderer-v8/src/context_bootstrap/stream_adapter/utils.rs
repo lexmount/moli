@@ -469,20 +469,6 @@ pub(in crate::context_bootstrap) fn rejected_promise_value<'s>(
     Some(promise.into())
 }
 
-pub(in crate::context_bootstrap) fn promise_then_undefined<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    promise: v8::Local<'s, v8::Value>,
-) -> Option<v8::Local<'s, v8::Value>> {
-    let promise_object = v8::Local::<v8::Object>::try_from(promise).ok()?;
-    let then = promise_object
-        .get(scope, v8str(scope, "then").into())
-        .and_then(|value| v8::Local::<v8::Function>::try_from(value).ok())?;
-    let on_fulfilled = v8::Function::builder(promise_return_undefined_callback)
-        .length(0)
-        .build(scope)?;
-    then.call(scope, promise, &[on_fulfilled.into()])
-}
-
 pub(in crate::context_bootstrap) fn promise_return_undefined_callback<'s>(
     _scope: &mut v8::PinScope<'s, '_>,
     _args: v8::FunctionCallbackArguments<'s>,
