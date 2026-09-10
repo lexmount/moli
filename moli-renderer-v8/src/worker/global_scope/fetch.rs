@@ -577,6 +577,7 @@ pub(in crate::worker) struct ResolvedWorkerFetchInput<'s> {
     resolved_url: Url,
     method: String,
     body: Option<bytes::Bytes>,
+    body_stream: Option<v8::Global<v8::Object>>,
     headers: Vec<(String, String)>,
     request_mode: moli_fetch::RequestMode,
     credentials_mode: RequestCredentialsMode,
@@ -602,6 +603,8 @@ pub(in crate::worker) fn resolve_worker_fetch_input<'s>(
     let mut request_like = None;
     let mut consumes_request_body = false;
     let signal;
+    let body_stream;
+    let has_stream_body;
     let (
         url_input,
         method,
@@ -621,7 +624,16 @@ pub(in crate::worker) fn resolve_worker_fetch_input<'s>(
             return Err(crate::network_host::request_body_already_used_error().into());
         }
         signal = init.signal.unwrap_or(inherited.signal);
-        consumes_request_body = !init.body_present && inherited.body.is_some();
+        body_stream = if init.body_present {
+            init.body_stream.clone()
+        } else {
+            crate::network_host::body_stream_object(scope, req_obj)
+                .map(|stream| v8::Global::new(scope, stream))
+        };
+        consumes_request_body =
+            !init.body_present && (inherited.body.is_some() || body_stream.is_some());
+        has_stream_body = init.body_stream.is_some()
+            || !init.body_present && inherited.body.is_none() && body_stream.is_some();
         let method = if init.method_present {
             init.method.clone()
         } else {
@@ -697,6 +709,8 @@ pub(in crate::worker) fn resolve_worker_fetch_input<'s>(
     } else {
         let init = parse_fetch_init(scope, args.init)?;
         signal = init.signal.flatten();
+        body_stream = init.body_stream.clone();
+        has_stream_body = body_stream.is_some();
         let request_mode = init
             .validation
             .mode
@@ -735,6 +749,12 @@ pub(in crate::worker) fn resolve_worker_fetch_input<'s>(
     };
     let resolved_url = resolve_context_url(base_url, url_input.as_str(), None)?;
     url_input.validate_credentials(&resolved_url)?;
+    crate::network_host::validate_fetch_body(
+        body.is_some() || body_stream.is_some(),
+        has_stream_body,
+        &method,
+        request_mode,
+    )?;
     if let Some(referrer) =
         init_validation.validate(scope, request_mode.as_ref(), &metadata.cache)?
     {
@@ -748,6 +768,7 @@ pub(in crate::worker) fn resolve_worker_fetch_input<'s>(
         resolved_url,
         method,
         body,
+        body_stream,
         headers,
         request_mode,
         credentials_mode,
@@ -808,6 +829,7 @@ pub(in crate::worker) fn worker_fetch_callback<'s>(
         resolved_url,
         method,
         body,
+        body_stream,
         headers: request_headers,
         request_mode,
         credentials_mode,
@@ -836,6 +858,10 @@ pub(in crate::worker) fn worker_fetch_callback<'s>(
         let reason = worker_abort_signal_reason(scope, signal)
             .unwrap_or_else(|| worker_abort_error_value(scope));
         rv.set(make_rejected_promise_with_value(scope, reason).into());
+        if let Some(stream) = body_stream {
+            let stream = v8::Local::new(scope, stream);
+            crate::context_bootstrap::cancel_readable_stream_for_fetch(scope, stream, reason);
+        }
         return;
     }
 
