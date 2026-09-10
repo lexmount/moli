@@ -74,6 +74,42 @@ mod tests {
     }
 
     #[test]
+    fn inverse_product_preserves_exact_identity_for_affine_3d_matrix() {
+        let matrix = DomMatrixComponents {
+            m11: 1.0,
+            m12: -0.5,
+            m13: 0.5,
+            m14: 0.0,
+            m21: 0.5,
+            m22: 2.0,
+            m23: -0.5,
+            m24: 0.0,
+            m31: 0.0,
+            m32: 0.0,
+            m33: 1.0,
+            m34: 0.0,
+            m41: 10.0,
+            m42: 20.0,
+            m43: 10.0,
+            m44: 1.0,
+        };
+        let product = matrix.multiply(matrix.inverse());
+
+        assert!(product.is_identity(), "unexpected product: {product:?}");
+    }
+
+    #[test]
+    fn inverse_preserves_exact_2d_structure() {
+        let inverse = DomMatrixComponents::identity()
+            .scaled_2d(0.1, 0.1)
+            .inverse();
+
+        assert!(inverse.is_2d());
+        assert_eq!(inverse.m33, 1.0);
+        assert_eq!(inverse.m44, 1.0);
+    }
+
+    #[test]
     fn combined_rotation_applies_z_then_y_then_x() {
         let combined = DomMatrixComponents::identity().rotated(90.0, 90.0, 90.0);
         let sequential = DomMatrixComponents::identity()
