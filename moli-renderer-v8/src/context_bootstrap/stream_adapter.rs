@@ -86,7 +86,8 @@ pub(super) use readable::{
     readable_stream_closed_promise,
 };
 pub(crate) use readable::{
-    cancel_readable_stream, maybe_pull_stream, prepare_readable_stream_read_with_steps,
+    cancel_readable_stream, cancel_readable_stream_for_fetch, maybe_pull_stream,
+    prepare_readable_stream_read_with_steps,
 };
 pub(crate) use readable_byte::enqueue_byte_chunk;
 pub(in crate::context_bootstrap) use readable_byte::{
@@ -115,8 +116,8 @@ pub(super) use readable_state::{
 };
 pub(in crate::context_bootstrap::stream_adapter) use transform_finish::transform_stream_readable_cancel_callback;
 pub(super) use utils::{
-    done_result, promise_then_undefined, reject_pending_read, rejected_promise_value,
-    resolved_promise_value, set_resolved_promise, suppress_pending_read_unhandled_rejection,
+    done_result, reject_pending_read, rejected_promise_value, resolved_promise_value,
+    set_resolved_promise, suppress_pending_read_unhandled_rejection,
     suppress_promise_unhandled_rejection, value_buffer_source_bytes,
 };
 pub(in crate::context_bootstrap) use writable::register_writable_stream_pipe_owner;

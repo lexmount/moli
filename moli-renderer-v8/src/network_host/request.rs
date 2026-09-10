@@ -11,7 +11,7 @@ use super::*;
 pub(crate) use self::bindings::request_constructor_callback;
 pub(in crate::network_host) use self::init::request_credentials_mode_label;
 pub(crate) use self::init::{
-    RequestInitValidation, parse_fetch_init, request_object_credentials_mode,
+    RequestInitValidation, parse_fetch_init, request_object_credentials_mode, validate_fetch_body,
 };
 pub(crate) use self::init::{parse_request_redirect_mode_label, request_redirect_mode_label};
 pub(in crate::network_host) use self::input::normalize_request_method;
