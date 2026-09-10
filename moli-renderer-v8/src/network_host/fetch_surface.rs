@@ -31,7 +31,6 @@ pub(in crate::network_host) const REQUEST_IS_RELOAD_NAVIGATION_SLOT: &str =
     "__lmRequestIsReloadNavigation";
 pub(in crate::network_host) const REQUEST_BODY_SLOT: &str = "__lmRequestBody";
 pub(in crate::network_host) const REQUEST_BODY_USED_SLOT: &str = "__lmRequestBodyUsed";
-const REQUEST_BRAND_SLOT: &str = "__lmRequestBrand";
 pub(crate) const RESPONSE_TYPE_SLOT: &str = "__lmResponseType";
 pub(crate) const RESPONSE_URL_SLOT: &str = "__lmResponseUrl";
 pub(crate) const RESPONSE_INTERNAL_URL_SLOT: &str = "__lmResponseInternalUrl";
@@ -45,21 +44,6 @@ pub(crate) const RESPONSE_STATUS_TEXT_SLOT: &str = "__lmResponseStatusText";
 pub(crate) const RESPONSE_HEADERS_SLOT: &str = "__lmResponseHeadersObject";
 pub(crate) const RESPONSE_BODY_SLOT: &str = "__lmResponseBody";
 pub(crate) const RESPONSE_BODY_USED_SLOT: &str = "__lmResponseBodyUsed";
-const RESPONSE_BRAND_SLOT: &str = "__lmResponseBrand";
-
-#[derive(Default, WebApiObject)]
-#[webapi(prototype = "Object", interface = "Request")]
-struct RequestBrandDeclaration {
-    #[webapi(slot = REQUEST_BRAND_SLOT, init = true)]
-    brand: (),
-}
-
-#[derive(Default, WebApiObject)]
-#[webapi(prototype = "Object", interface = "Response")]
-struct ResponseBrandDeclaration {
-    #[webapi(slot = RESPONSE_BRAND_SLOT, init = true)]
-    brand: (),
-}
 
 #[derive(WebApiObject)]
 #[webapi(interface = "Response", prototype = "Response")]
@@ -184,8 +168,7 @@ pub(in crate::network_host) fn mark_request_object<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     object: v8::Local<'s, v8::Object>,
 ) {
-    RequestBrandDeclaration::default()
-        .initialize(scope, object)
+    moli_webapi_declare::initialize_web_api_object(scope, object, "Request")
         .expect("Request brand declaration should initialize");
 }
 
@@ -193,10 +176,7 @@ pub(crate) fn is_branded_request_object<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     object: v8::Local<'s, v8::Object>,
 ) -> bool {
-    let Some(value) = get_private_value(scope, object, REQUEST_BRAND_SLOT) else {
-        return false;
-    };
-    value.boolean_value(scope)
+    moli_webapi_declare::implements_interface(scope, object, "Request")
 }
 
 pub(crate) fn request_headers_entries<'s>(
@@ -313,8 +293,7 @@ pub(in crate::network_host) fn mark_response_object<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     object: v8::Local<'s, v8::Object>,
 ) {
-    ResponseBrandDeclaration::default()
-        .initialize(scope, object)
+    moli_webapi_declare::initialize_web_api_object(scope, object, "Response")
         .expect("Response brand declaration should initialize");
 }
 
@@ -322,10 +301,7 @@ pub(crate) fn is_branded_response_object<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     object: v8::Local<'s, v8::Object>,
 ) -> bool {
-    let Some(value) = get_private_value(scope, object, RESPONSE_BRAND_SLOT) else {
-        return false;
-    };
-    value.boolean_value(scope)
+    moli_webapi_declare::implements_interface(scope, object, "Response")
 }
 
 fn require_response_receiver<'s>(
@@ -949,7 +925,7 @@ fn clone_response_readable_stream_body<'s>(
     let Ok(stream) = v8::Local::<v8::Object>::try_from(value) else {
         return Ok(None);
     };
-    if !crate::context_bootstrap::object_prototype_matches(scope, stream, "ReadableStream") {
+    if !moli_webapi_declare::implements_interface(scope, stream, "ReadableStream") {
         return Ok(None);
     }
     if readable_stream_locked(scope, stream) {

@@ -1,4 +1,6 @@
-use crate::native_bridge::collections::{STATIC_COLLECTION_LENGTH_SLOT, mark_collection_kind};
+use crate::native_bridge::collections::{
+    STATIC_COLLECTION_LENGTH_SLOT, initialize_collection_identity,
+};
 use crate::native_bridge::document::DETACHED_NATIVE_NODE_LIST_HANDLES_SLOT;
 use crate::native_bridge::identity::CollectionKind;
 use crate::native_bridge::named_access::{
@@ -400,7 +402,7 @@ fn install_detached_collection_state<'s>(
     kind: CollectionKind,
     length: usize,
 ) {
-    mark_collection_kind(scope, wrapper, kind);
+    initialize_collection_identity(scope, wrapper, kind);
     set_private_value(
         scope,
         wrapper,

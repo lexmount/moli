@@ -482,18 +482,13 @@ fn define_html_collection_named_properties(
     }
 }
 
-fn set_collection_prototype(
-    scope: &mut v8::PinScope<'_, '_>,
-    wrapper: v8::Local<'_, v8::Object>,
+fn set_collection_prototype<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    wrapper: v8::Local<'s, v8::Object>,
     kind: CollectionKind,
 ) {
-    let prototype_name = match kind {
-        CollectionKind::NodeList => "NodeList",
-        CollectionKind::HtmlCollection => "HTMLCollection",
-        CollectionKind::FormControlsCollection => "HTMLFormControlsCollection",
-        CollectionKind::OptionsCollection => "HTMLOptionsCollection",
-        CollectionKind::RadioNodeList => "RadioNodeList",
-    };
+    initialize_collection_identity(scope, wrapper, kind);
+    let prototype_name = collection_interface_name(kind);
     set_named_constructor_prototype(scope, wrapper, prototype_name);
 }
 

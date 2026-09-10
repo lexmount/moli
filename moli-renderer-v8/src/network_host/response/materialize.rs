@@ -673,7 +673,7 @@ fn response_body_locked<'s>(
     let Ok(stream) = v8::Local::<v8::Object>::try_from(body) else {
         return false;
     };
-    if !crate::context_bootstrap::object_prototype_matches(scope, stream, "ReadableStream") {
+    if !moli_webapi_declare::implements_interface(scope, stream, "ReadableStream") {
         return false;
     }
     stream

@@ -2,7 +2,6 @@ mod access;
 mod iteration;
 mod mutation;
 
-use super::store::headers_entries_slot_present;
 use super::*;
 
 pub(super) use self::access::{
@@ -21,7 +20,7 @@ pub(super) fn require_headers_receiver<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     receiver: v8::Local<'s, v8::Object>,
 ) -> Option<v8::Local<'s, v8::Object>> {
-    if headers_entries_slot_present(scope, receiver) {
+    if moli_webapi_declare::implements_interface(scope, receiver, "Headers") {
         return Some(receiver);
     }
     throw_type_error(scope, "Illegal invocation");

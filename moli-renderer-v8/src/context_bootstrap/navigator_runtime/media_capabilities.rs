@@ -2,16 +2,12 @@ use super::super::*;
 use crate::{util::get_private_value, webidl};
 use moli_webapi_declare::{WebApiFunctionTemplate, WebApiObject};
 
-const MEDIA_CAPABILITIES_BRAND_SLOT: &str = "__moliMediaCapabilitiesBrand";
 const MEDIA_CAPABILITIES_SECURE_CONTEXT_SLOT: &str = "__moliMediaCapabilitiesSecureContext";
 const MEDIA_CAPABILITIES_WORKER_SLOT: &str = "__moliMediaCapabilitiesWorker";
 
 #[derive(WebApiObject)]
 #[webapi(interface = "MediaCapabilities")]
 struct MediaCapabilitiesObjectDeclaration {
-    #[webapi(slot = MEDIA_CAPABILITIES_BRAND_SLOT, init = true)]
-    brand: (),
-
     #[webapi(slot = MEDIA_CAPABILITIES_SECURE_CONTEXT_SLOT)]
     secure_context: bool,
 
@@ -478,8 +474,7 @@ fn media_capabilities_receiver_branded<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     receiver: v8::Local<'s, v8::Object>,
 ) -> bool {
-    get_private_value(scope, receiver, MEDIA_CAPABILITIES_BRAND_SLOT)
-        .is_some_and(|value| value.boolean_value(scope))
+    moli_webapi_declare::implements_interface(scope, receiver, "MediaCapabilities")
 }
 
 fn media_capabilities_is_secure_context<'s>(

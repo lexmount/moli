@@ -103,12 +103,9 @@ pub(crate) fn new_css_rule_list_object<'s>(
     let list = template
         .new_instance(scope)
         .expect("CSSRuleList object template should instantiate");
-    CssRuleListDeclaration {
-        brand: (),
-        length: 0,
-    }
-    .bind_into(scope, list)
-    .expect("CSSRuleList declaration should bind into list");
+    CssRuleListDeclaration { length: 0 }
+        .bind_into(scope, list)
+        .expect("CSSRuleList declaration should bind into list");
     reset_css_rule_list_materialized_items(scope, list);
     list
 }
@@ -418,7 +415,7 @@ pub(crate) fn ensure_css_rule_list_object<'s>(
     object: v8::Local<'s, v8::Object>,
     member: &'static str,
 ) -> bool {
-    if get_private_value(scope, object, CSS_RULE_LIST_BRAND_SLOT).is_some() {
+    if moli_webapi_declare::implements_interface(scope, object, "CSSRuleList") {
         return true;
     }
     throw_type_error(

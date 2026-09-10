@@ -1002,14 +1002,14 @@ struct HtmlElementGeometryPrototypeDeclaration {
     #[webapi(
         accessor_property = "offsetWidth",
         enumerable,
-        receiver = super::receivers::html_element,
+        receiver = "HTMLElement",
         getter = node_offset_width_getter_function
     )]
     offset_width: (),
     #[webapi(
         accessor_property = "offsetHeight",
         enumerable,
-        receiver = super::receivers::html_element,
+        receiver = "HTMLElement",
         getter = node_offset_height_getter_function
     )]
     offset_height: (),
@@ -4040,13 +4040,13 @@ struct HtmlIFrameElementPrototypeDeclaration {
     #[webapi(
         accessor_property,
         getter = frame_owner_content_document_getter_function,
-        receiver = super::receivers::html_iframe_element
+        receiver = "HTMLIFrameElement"
     )]
     content_document: (),
     #[webapi(
         accessor_property,
         getter = frame_owner_content_window_getter_function,
-        receiver = super::receivers::html_iframe_element
+        receiver = "HTMLIFrameElement"
     )]
     content_window: (),
 }

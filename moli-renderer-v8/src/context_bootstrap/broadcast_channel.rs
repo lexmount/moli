@@ -19,7 +19,6 @@ use crate::{
 use moli_webapi_declare::{WebApiFunctionTemplate, WebApiObject};
 
 const BROADCAST_CHANNEL_ID_SLOT: &str = "__lmBroadcastChannelId";
-const BROADCAST_CHANNEL_BRAND_SLOT: &str = "__lmBroadcastChannelBrand";
 const BROADCAST_CHANNEL_NAME_SLOT: &str = "__lmBroadcastChannelName";
 const BROADCAST_CHANNEL_CLOSED_SLOT: &str = "__lmBroadcastChannelClosed";
 const BROADCAST_CHANNEL_LISTENERS_SLOT: &str = "__lmBroadcastChannelListeners";
@@ -29,9 +28,6 @@ const BROADCAST_CHANNEL_ONMESSAGEERROR_SLOT: &str = "__lmBroadcastChannelOnmessa
 #[derive(WebApiObject)]
 #[webapi(interface = "BroadcastChannel")]
 struct BroadcastChannelObjectDeclaration<'scope> {
-    #[webapi(slot = BROADCAST_CHANNEL_BRAND_SLOT, init = true)]
-    brand: (),
-
     #[webapi(slot = BROADCAST_CHANNEL_ID_SLOT)]
     channel_id: v8::Local<'scope, v8::Value>,
 
@@ -348,8 +344,7 @@ fn broadcast_channel_receiver_branded<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     receiver: v8::Local<'s, v8::Object>,
 ) -> bool {
-    get_private_value(scope, receiver, BROADCAST_CHANNEL_BRAND_SLOT)
-        .is_some_and(|value| value.boolean_value(scope))
+    moli_webapi_declare::implements_interface(scope, receiver, "BroadcastChannel")
 }
 
 fn broadcast_channel_event_target_add_event_listener_callback<'s>(

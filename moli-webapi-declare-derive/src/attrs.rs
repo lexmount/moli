@@ -1,9 +1,32 @@
 use syn::spanned::Spanned;
 use syn::{Error, Expr, ExprLit, Field, Lit, LitInt, LitStr, Path, Token};
 
+#[derive(Clone)]
+pub(crate) enum ReceiverAttr {
+    Predicate(Path),
+    Interface(LitStr),
+}
+
+impl syn::parse::Parse for ReceiverAttr {
+    fn parse(input: syn::parse::ParseStream<'_>) -> Result<Self, Error> {
+        if input.peek(LitStr) {
+            let name: LitStr = input.parse()?;
+            if name.value().is_empty() || name.value() == "Object" {
+                return Err(Error::new(
+                    name.span(),
+                    "receiver requires a Web IDL interface name",
+                ));
+            }
+            Ok(Self::Interface(name))
+        } else {
+            input.parse().map(Self::Predicate)
+        }
+    }
+}
+
 #[derive(Default)]
 pub(crate) struct InterfaceAttrs {
-    pub(crate) receiver: Option<Path>,
+    pub(crate) receiver: Option<ReceiverAttr>,
     pub(crate) name: Option<LitStr>,
     pub(crate) parent: Option<LitStr>,
     pub(crate) constructor: Option<ConstructorAttr>,
@@ -46,7 +69,7 @@ pub(crate) enum RenameRule {
 
 #[derive(Default)]
 pub(crate) struct ObjectAttrs {
-    pub(crate) receiver: Option<Path>,
+    pub(crate) receiver: Option<ReceiverAttr>,
     pub(crate) interface: Option<LitStr>,
     pub(crate) parent: Option<LitStr>,
     pub(crate) prototype: Option<LitStr>,
@@ -65,7 +88,7 @@ pub(crate) struct ObjectAttrs {
 
 #[derive(Default)]
 pub(crate) struct FunctionTemplateAttrs {
-    pub(crate) receiver: Option<Path>,
+    pub(crate) receiver: Option<ReceiverAttr>,
     pub(crate) name: Option<LitStr>,
     pub(crate) constructor: Option<ConstructorAttr>,
     pub(crate) constructor_length: Option<i32>,
@@ -78,7 +101,7 @@ pub(crate) struct FunctionTemplateAttrs {
 
 #[derive(Clone, Default)]
 pub(crate) struct FieldAttrs {
-    pub(crate) receiver: Option<Path>,
+    pub(crate) receiver: Option<ReceiverAttr>,
     pub(crate) returns_promise: bool,
     pub(crate) method: bool,
     pub(crate) static_method: bool,
@@ -111,7 +134,10 @@ pub(crate) struct FieldAttrs {
 }
 
 impl FieldAttrs {
-    pub(crate) fn inherit_receiver(&mut self, receiver: Option<&Path>) -> Result<(), Error> {
+    pub(crate) fn inherit_receiver(
+        &mut self,
+        receiver: Option<&ReceiverAttr>,
+    ) -> Result<(), Error> {
         if self.method || self.accessor_property {
             self.receiver = self.receiver.take().or_else(|| receiver.cloned());
         }

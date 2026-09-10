@@ -274,7 +274,7 @@ fn require_animation_receiver<'s>(
     receiver: v8::Local<'s, v8::Object>,
     member: &str,
 ) -> bool {
-    if get_private_value(scope, receiver, ANIMATION_PLAY_STATE_SLOT).is_some() {
+    if moli_webapi_declare::implements_interface(scope, receiver, "Animation") {
         return true;
     }
     throw_type_error(

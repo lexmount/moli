@@ -247,7 +247,6 @@ pub(crate) fn build_css_generic_at_rule_object_from_stylo_rule_type<'s>(
     let prototype_name = css_at_rule_prototype_name_for_stylo_rule_type(stylo_rule_type);
     let rule_type = css_rule_type_from_stylo_rule_type(stylo_rule_type);
     let declaration = CssAtRuleDeclaration {
-        brand: true,
         css_text,
         rule_type,
         parent_rule,
@@ -258,6 +257,8 @@ pub(crate) fn build_css_generic_at_rule_object_from_stylo_rule_type<'s>(
         declaration,
         stylo_rule_type == CssRuleType::Keyframes,
     );
+    moli_webapi_declare::initialize_web_api_object(scope, object, prototype_name)
+        .expect("CSS rule interface identity should initialize");
     if let Some(prototype) = global_constructor_prototype(scope, prototype_name) {
         let _ = object.set_prototype(scope, prototype.into());
     }
@@ -438,7 +439,7 @@ pub(crate) fn ensure_css_rule_object<'s>(
     interface: &'static str,
     member: &'static str,
 ) -> bool {
-    if get_private_value(scope, object, CSS_RULE_BRAND_SLOT).is_some() {
+    if moli_webapi_declare::implements_interface(scope, object, "CSSRule") {
         return true;
     }
     throw_type_error(
@@ -455,7 +456,7 @@ pub(crate) fn ensure_css_rule_type_object<'s>(
     member: &str,
     expected_type: u32,
 ) -> bool {
-    if get_private_value(scope, object, CSS_RULE_BRAND_SLOT).is_some()
+    if moli_webapi_declare::implements_interface(scope, object, "CSSRule")
         && css_rule_type_from_object(scope, object) == Some(expected_type)
     {
         return true;
@@ -543,7 +544,6 @@ pub(crate) fn build_css_rule_object_with_rule_context<'s>(
         .filter(|rule_type| *rule_type != CSS_RULE_UNKNOWN_RULE_TYPE)
         .unwrap_or_else(|| css_at_rule_type(rule_kind));
     let declaration = CssAtRuleDeclaration {
-        brand: true,
         css_text,
         rule_type,
         parent_rule,
@@ -551,6 +551,8 @@ pub(crate) fn build_css_rule_object_with_rule_context<'s>(
     };
     let object =
         bind_css_at_rule_declaration(scope, declaration, rule_kind == CssAtRuleKind::Keyframes);
+    moli_webapi_declare::initialize_web_api_object(scope, object, prototype_name)
+        .expect("CSS rule interface identity should initialize");
     if let Some(prototype) = global_constructor_prototype(scope, prototype_name) {
         let _ = object.set_prototype(scope, prototype.into());
     }
@@ -731,7 +733,7 @@ pub(crate) fn css_rule_type_from_object<'s>(
             return Some(css_rule_type);
         }
     }
-    get_private_value(scope, object, CSS_RULE_BRAND_SLOT)?;
+    moli_webapi_declare::implements_interface(scope, object, "CSSRule").then_some(())?;
     Some(private_u32(scope, object, CSS_AT_RULE_TYPE_SLOT).unwrap_or(CSS_RULE_UNKNOWN_RULE_TYPE))
 }
 

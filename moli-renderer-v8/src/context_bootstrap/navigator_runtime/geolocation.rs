@@ -12,11 +12,9 @@ use moli_webapi_declare::{WebApiFunctionTemplate, WebApiObject};
 mod position;
 mod watches;
 
-const GEOLOCATION_BRAND_SLOT: &str = "__moliGeolocationBrand";
 const GEOLOCATION_SECURE_CONTEXT_SLOT: &str = "__moliGeolocationSecureContext";
 const GEOLOCATION_NEXT_WATCH_ID_SLOT: &str = "__moliGeolocationNextWatchId";
 const GEOLOCATION_CHILD_HANDLE_SLOT: &str = "__moliGeolocationChildHandle";
-const GEOLOCATION_POSITION_ERROR_BRAND_SLOT: &str = "__moliGeolocationPositionErrorBrand";
 const GEOLOCATION_POSITION_ERROR_CODE_SLOT: &str = "__moliGeolocationPositionErrorCode";
 const GEOLOCATION_POSITION_ERROR_MESSAGE_SLOT: &str = "__moliGeolocationPositionErrorMessage";
 
@@ -27,9 +25,6 @@ const TIMEOUT: u16 = 3;
 #[derive(WebApiObject)]
 #[webapi(interface = "Geolocation")]
 struct GeolocationObjectDeclaration {
-    #[webapi(slot = GEOLOCATION_BRAND_SLOT, init = true)]
-    brand: (),
-
     #[webapi(slot = GEOLOCATION_SECURE_CONTEXT_SLOT)]
     secure_context: bool,
 
@@ -53,9 +48,6 @@ struct GeolocationPrototypeMethodsDeclaration {
 #[derive(WebApiObject)]
 #[webapi(interface = "GeolocationPositionError")]
 struct GeolocationPositionErrorObjectDeclaration {
-    #[webapi(slot = GEOLOCATION_POSITION_ERROR_BRAND_SLOT, init = true)]
-    brand: (),
-
     #[webapi(slot = GEOLOCATION_POSITION_ERROR_CODE_SLOT)]
     code: u16,
 
@@ -308,8 +300,7 @@ fn geolocation_receiver_branded<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     receiver: v8::Local<'s, v8::Object>,
 ) -> bool {
-    get_private_value(scope, receiver, GEOLOCATION_BRAND_SLOT)
-        .is_some_and(|value| value.boolean_value(scope))
+    moli_webapi_declare::implements_interface(scope, receiver, "Geolocation")
 }
 
 fn take_next_watch_id<'s>(
@@ -447,9 +438,7 @@ fn geolocation_position_error_receiver<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     receiver: v8::Local<'s, v8::Object>,
 ) -> Option<v8::Local<'s, v8::Object>> {
-    if get_private_value(scope, receiver, GEOLOCATION_POSITION_ERROR_BRAND_SLOT)
-        .is_some_and(|value| value.boolean_value(scope))
-    {
+    if moli_webapi_declare::implements_interface(scope, receiver, "GeolocationPositionError") {
         Some(receiver)
     } else {
         throw_type_error(scope, "Illegal invocation");

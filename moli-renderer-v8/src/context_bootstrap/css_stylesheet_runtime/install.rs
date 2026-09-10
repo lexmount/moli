@@ -185,7 +185,6 @@ pub(crate) fn install_css_rule_list_surface<'s>(
     list: v8::Local<'s, v8::Object>,
 ) {
     CssRuleListDeclaration {
-        brand: (),
         length: css_rule_list_length(scope, list),
     }
     .bind_into(scope, list)

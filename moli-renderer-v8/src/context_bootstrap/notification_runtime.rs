@@ -37,7 +37,6 @@ const NOTIFICATION_ACTIONS_SLOT: &str = "__lmNotificationActions";
 const NOTIFICATION_RECORD_ID_SLOT: &str = "__lmNotificationRecordId";
 const NOTIFICATION_RECORD_REGISTRATION_ID_SLOT: &str = "__lmNotificationRecordRegistrationId";
 const NOTIFICATION_LISTENERS_SLOT: &str = "__lmNotificationListeners";
-const NOTIFICATION_BRAND_SLOT: &str = "__lmNotificationBrand";
 const NOTIFICATION_MAX_ACTIONS: usize = 2;
 
 pub(crate) struct NotificationOptionsPayload {
@@ -50,9 +49,6 @@ pub(crate) struct NotificationOptionsPayload {
 #[derive(WebApiObject)]
 #[webapi(interface = "Notification")]
 struct NotificationObjectDeclaration<'scope> {
-    #[webapi(slot = NOTIFICATION_BRAND_SLOT, init = true)]
-    brand: (),
-
     #[webapi(slot = NOTIFICATION_TITLE_SLOT)]
     title: String,
 
@@ -914,7 +910,6 @@ fn initialize_notification_object<'s>(
         .map(|silent| v8::Boolean::new(scope, silent).into())
         .unwrap_or_else(|| v8::null(scope).into());
     NotificationObjectDeclaration {
-        brand: (),
         title,
         data,
         tag,
@@ -1305,8 +1300,7 @@ fn notification_receiver_branded<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     receiver: v8::Local<'s, v8::Object>,
 ) -> bool {
-    get_private_value(scope, receiver, NOTIFICATION_BRAND_SLOT)
-        .is_some_and(|value| value.boolean_value(scope))
+    moli_webapi_declare::implements_interface(scope, receiver, "Notification")
 }
 
 fn notification_event_target_add_event_listener_callback<'s>(

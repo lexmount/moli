@@ -32,9 +32,7 @@ use moli_webcrypto::{
 };
 
 use crate::{
-    context_bootstrap::WebCryptoTaskResult,
-    util::{context_host_ptr_from_global_bridge, get_private_value},
-    webidl,
+    context_bootstrap::WebCryptoTaskResult, util::context_host_ptr_from_global_bridge, webidl,
 };
 
 use super::helpers::{

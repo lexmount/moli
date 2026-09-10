@@ -468,7 +468,12 @@ struct WebAssemblyNamespaceDeclaration {
 
 #[cfg(feature = "wpt-extensions")]
 #[derive(WebApiObject)]
-#[webapi(interface = "Object", prototype = "WebDriver", require_prototype)]
+#[webapi(
+    allow_empty,
+    interface = "Object",
+    prototype = "WebDriver",
+    require_prototype
+)]
 struct WebDriverObjectDeclaration {}
 
 #[cfg(feature = "wpt-extensions")]

@@ -7,14 +7,10 @@ const DOM_RECT_X_SLOT: &str = "__moliDomRectX";
 const DOM_RECT_Y_SLOT: &str = "__moliDomRectY";
 const DOM_RECT_WIDTH_SLOT: &str = "__moliDomRectWidth";
 const DOM_RECT_HEIGHT_SLOT: &str = "__moliDomRectHeight";
-const DOM_RECT_BRAND_SLOT: &str = "__moliDomRectBrand";
 
 #[derive(WebApiObject)]
 #[webapi(interface = "DOMRect")]
 struct DomRectObjectDeclaration {
-    #[webapi(slot = DOM_RECT_BRAND_SLOT, init = true)]
-    brand: (),
-
     #[webapi(slot = DOM_RECT_X_SLOT)]
     x: f64,
     #[webapi(slot = DOM_RECT_Y_SLOT)]
@@ -28,9 +24,6 @@ struct DomRectObjectDeclaration {
 #[derive(WebApiObject)]
 #[webapi(interface = "DOMRectReadOnly")]
 struct DomRectReadOnlyObjectDeclaration {
-    #[webapi(slot = DOM_RECT_BRAND_SLOT, init = true)]
-    brand: (),
-
     #[webapi(slot = DOM_RECT_X_SLOT)]
     x: f64,
     #[webapi(slot = DOM_RECT_Y_SLOT)]
@@ -564,8 +557,7 @@ fn dom_rect_receiver_branded<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     receiver: v8::Local<'s, v8::Object>,
 ) -> bool {
-    get_private_value(scope, receiver, DOM_RECT_BRAND_SLOT)
-        .is_some_and(|value| value.boolean_value(scope))
+    moli_webapi_declare::implements_interface(scope, receiver, "DOMRectReadOnly")
 }
 
 const DOM_RECT_WRITABLE_ATTRIBUTE_SLOTS: &[&str] = &[

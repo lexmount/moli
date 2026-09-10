@@ -32,11 +32,10 @@ const SVG_TEXT_POSITIONING_LIST_ATTRIBUTES: &[(&str, &str, SvgListKind)] = &[
 fn require_svg_receiver<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     receiver: v8::Local<'s, v8::Object>,
-    brand_slot: &'static str,
     interface: &str,
     member: &str,
 ) -> bool {
-    if get_private_value(scope, receiver, brand_slot).is_some() {
+    if moli_webapi_declare::implements_interface(scope, receiver, interface) {
         return true;
     }
     webidl::throw_type_error(
@@ -299,7 +298,6 @@ pub(super) fn svg_animated_length_getter<'s>(
     if !require_svg_receiver(
         scope,
         args.this(),
-        SVG_ANIMATED_LENGTH_BASE_VAL_SLOT,
         "SVGAnimatedLength",
         &format!("{name} getter"),
     ) {
@@ -335,7 +333,6 @@ pub(super) fn svg_animated_length_list_getter<'s>(
     if !require_svg_receiver(
         scope,
         args.this(),
-        SVG_ANIMATED_LENGTH_LIST_BASE_VAL_SLOT,
         "SVGAnimatedLengthList",
         &format!("{name} getter"),
     ) {
@@ -368,13 +365,7 @@ pub(super) fn svg_length_getter<'s>(
         rv.set_undefined();
         return;
     };
-    if !require_svg_receiver(
-        scope,
-        args.this(),
-        SVG_LENGTH_UNIT_TYPE_SLOT,
-        "SVGLength",
-        &format!("{name} getter"),
-    ) {
+    if !require_svg_receiver(scope, args.this(), "SVGLength", &format!("{name} getter")) {
         return;
     }
     match name {
@@ -411,13 +402,7 @@ pub(super) fn svg_length_setter<'s>(
     ) else {
         return;
     };
-    if !require_svg_receiver(
-        scope,
-        args.this(),
-        SVG_LENGTH_UNIT_TYPE_SLOT,
-        "SVGLength",
-        &format!("{name} setter"),
-    ) {
+    if !require_svg_receiver(scope, args.this(), "SVGLength", &format!("{name} setter")) {
         return;
     }
     match name {
@@ -463,13 +448,7 @@ pub(super) fn svg_number_getter<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'_, v8::Value>,
 ) {
-    if !require_svg_receiver(
-        scope,
-        args.this(),
-        SVG_NUMBER_VALUE_SLOT,
-        "SVGNumber",
-        "value getter",
-    ) {
+    if !require_svg_receiver(scope, args.this(), "SVGNumber", "value getter") {
         return;
     }
     let value = svg_number_slot(scope, args.this(), SVG_NUMBER_VALUE_SLOT).unwrap_or(0.0);
@@ -481,13 +460,7 @@ pub(super) fn svg_number_setter<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     _rv: v8::ReturnValue<'_, v8::Value>,
 ) {
-    if !require_svg_receiver(
-        scope,
-        args.this(),
-        SVG_NUMBER_VALUE_SLOT,
-        "SVGNumber",
-        "value setter",
-    ) {
+    if !require_svg_receiver(scope, args.this(), "SVGNumber", "value setter") {
         return;
     }
     let value = match webidl::convert::<webidl::UnrestrictedDouble>(
@@ -527,7 +500,6 @@ pub(super) fn svg_animated_number_getter<'s>(
     if !require_svg_receiver(
         scope,
         args.this(),
-        SVG_ANIMATED_NUMBER_BASE_VAL_SLOT,
         "SVGAnimatedNumber",
         &format!("{name} getter"),
     ) {
@@ -562,7 +534,6 @@ pub(super) fn svg_animated_number_list_getter<'s>(
     if !require_svg_receiver(
         scope,
         args.this(),
-        SVG_ANIMATED_NUMBER_LIST_BASE_VAL_SLOT,
         "SVGAnimatedNumberList",
         &format!("{name} getter"),
     ) {
@@ -598,7 +569,6 @@ pub(super) fn svg_animated_enumeration_getter<'s>(
     if !require_svg_receiver(
         scope,
         args.this(),
-        SVG_ANIMATED_ENUMERATION_BASE_VAL_SLOT,
         "SVGAnimatedEnumeration",
         &format!("{name} getter"),
     ) {
@@ -633,7 +603,6 @@ pub(super) fn svg_animated_enumeration_setter<'s>(
     if !require_svg_receiver(
         scope,
         args.this(),
-        SVG_ANIMATED_ENUMERATION_BASE_VAL_SLOT,
         "SVGAnimatedEnumeration",
         &format!("{name} setter"),
     ) || name != "baseVal"
@@ -682,7 +651,6 @@ pub(super) fn svg_animated_number_setter<'s>(
     if !require_svg_receiver(
         scope,
         args.this(),
-        SVG_ANIMATED_NUMBER_BASE_VAL_SLOT,
         "SVGAnimatedNumber",
         &format!("{name} setter"),
     ) || name != "baseVal"
@@ -732,7 +700,6 @@ pub(super) fn svg_animated_transform_list_getter<'s>(
     if !require_svg_receiver(
         scope,
         args.this(),
-        SVG_ANIMATED_TRANSFORM_LIST_BASE_VAL_SLOT,
         "SVGAnimatedTransformList",
         &format!("{name} getter"),
     ) {
@@ -756,14 +723,7 @@ pub(super) fn svg_length_list_length_getter<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     rv: v8::ReturnValue<'_, v8::Value>,
 ) {
-    svg_value_list_length_getter(
-        scope,
-        args,
-        rv,
-        SvgListKind::Length,
-        SVG_LENGTH_LIST_ITEMS_SLOT,
-        "SVGLengthList",
-    );
+    svg_value_list_length_getter(scope, args, rv, SvgListKind::Length, "SVGLengthList");
 }
 
 pub(super) fn svg_number_list_length_getter<'s>(
@@ -771,14 +731,7 @@ pub(super) fn svg_number_list_length_getter<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     rv: v8::ReturnValue<'_, v8::Value>,
 ) {
-    svg_value_list_length_getter(
-        scope,
-        args,
-        rv,
-        SvgListKind::Number,
-        SVG_NUMBER_LIST_ITEMS_SLOT,
-        "SVGNumberList",
-    );
+    svg_value_list_length_getter(scope, args, rv, SvgListKind::Number, "SVGNumberList");
 }
 
 pub(super) fn svg_value_list_length_getter<'s>(
@@ -786,10 +739,9 @@ pub(super) fn svg_value_list_length_getter<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'_, v8::Value>,
     kind: SvgListKind,
-    brand_slot: &'static str,
     interface: &'static str,
 ) {
-    if !require_svg_receiver(scope, args.this(), brand_slot, interface, "length getter") {
+    if !require_svg_receiver(scope, args.this(), interface, "length getter") {
         return;
     }
     let length = svg_value_list_items(scope, args.this(), kind).length();
@@ -1072,13 +1024,7 @@ pub(super) fn svg_transform_list_length_getter<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'_, v8::Value>,
 ) {
-    if !require_svg_receiver(
-        scope,
-        args.this(),
-        SVG_TRANSFORM_LIST_ITEMS_SLOT,
-        "SVGTransformList",
-        "length getter",
-    ) {
+    if !require_svg_receiver(scope, args.this(), "SVGTransformList", "length getter") {
         return;
     }
     let length = svg_transform_list_items(scope, args.this()).length();
@@ -1299,7 +1245,6 @@ pub(super) fn svg_transform_getter<'s>(
     if !require_svg_receiver(
         scope,
         args.this(),
-        SVG_TRANSFORM_TYPE_SLOT,
         "SVGTransform",
         &format!("{name} getter"),
     ) {
@@ -1465,13 +1410,7 @@ pub(super) fn svg_matrix_getter<'s>(
         rv.set_undefined();
         return;
     };
-    if !require_svg_receiver(
-        scope,
-        args.this(),
-        SVG_MATRIX_A_SLOT,
-        "SVGMatrix",
-        &format!("{name} getter"),
-    ) {
+    if !require_svg_receiver(scope, args.this(), "SVGMatrix", &format!("{name} getter")) {
         return;
     }
     let slot = svg_matrix_slot(name).expect("SVGMatrix callback data must name a component");
@@ -1492,13 +1431,7 @@ pub(super) fn svg_matrix_setter<'s>(
     ) else {
         return;
     };
-    if !require_svg_receiver(
-        scope,
-        args.this(),
-        SVG_MATRIX_A_SLOT,
-        "SVGMatrix",
-        &format!("{name} setter"),
-    ) {
+    if !require_svg_receiver(scope, args.this(), "SVGMatrix", &format!("{name} setter")) {
         return;
     }
     let slot = svg_matrix_slot(name).expect("SVGMatrix callback data must name a component");

@@ -41,7 +41,6 @@ pub(in crate::context_bootstrap) use events::{
 };
 pub(super) use font_face::{
     font_face_constructor_callback, font_face_load_callback, install_font_face_template_accessors,
-    is_font_face,
 };
 pub(super) use font_face_set::{
     font_face_set_add_callback, font_face_set_add_event_listener_callback,

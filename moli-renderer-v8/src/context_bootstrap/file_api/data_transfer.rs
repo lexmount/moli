@@ -13,7 +13,6 @@ use moli_file_api::data_transfer::{
 use moli_webapi_declare::{WebApiFunctionTemplate, WebApiObject};
 
 const DATA_TRANSFER_FILES_SLOT: &str = "__lmDataTransferFiles";
-const DATA_TRANSFER_BRAND_SLOT: &str = "__lmDataTransferBrand";
 const DATA_TRANSFER_ITEMS_SLOT: &str = "__lmDataTransferItems";
 const DATA_TRANSFER_TYPES_SLOT: &str = "__lmDataTransferTypes";
 const DATA_TRANSFER_DROP_EFFECT_SLOT: &str = "__lmDataTransferDropEffect";
@@ -46,8 +45,6 @@ pub(super) const FILE_SYSTEM_DIRECTORY_READER_ERROR_SLOT: &str =
 #[derive(WebApiObject)]
 #[webapi(interface = "DataTransfer", require_prototype)]
 struct DataTransferObjectDeclaration<'s> {
-    #[webapi(slot = DATA_TRANSFER_BRAND_SLOT, init = true)]
-    brand: (),
     #[webapi(slot = DATA_TRANSFER_FILES_SLOT)]
     files: v8::Local<'s, v8::Object>,
     #[webapi(slot = DATA_TRANSFER_ITEMS_SLOT)]
@@ -66,8 +63,7 @@ pub(crate) fn is_branded_data_transfer_object<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     object: v8::Local<'s, v8::Object>,
 ) -> bool {
-    get_private_value(scope, object, DATA_TRANSFER_BRAND_SLOT)
-        .is_some_and(|value| value.boolean_value(scope))
+    moli_webapi_declare::implements_interface(scope, object, "DataTransfer")
 }
 
 #[derive(Default, WebApiObject)]

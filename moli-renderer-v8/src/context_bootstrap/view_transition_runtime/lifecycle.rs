@@ -242,7 +242,7 @@ fn require_view_transition_receiver<'s>(
     receiver: v8::Local<'s, v8::Object>,
     member: &str,
 ) -> bool {
-    if get_private_value(scope, receiver, VIEW_TRANSITION_CALLBACK_STATE_SLOT).is_some() {
+    if moli_webapi_declare::implements_interface(scope, receiver, "ViewTransition") {
         return true;
     }
     throw_type_error(

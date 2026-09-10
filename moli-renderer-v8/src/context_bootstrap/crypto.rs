@@ -6,9 +6,6 @@ mod keys;
 mod random;
 mod subtle;
 
-const CRYPTO_BRAND_SLOT: &str = "__moliCryptoBrand";
-const CRYPTO_SUBTLE_BRAND_SLOT: &str = "__moliCryptoSubtleBrand";
-
 pub(crate) use helpers::WebCryptoRejection;
 pub(in crate::context_bootstrap) use install::{
     build_window_crypto_for_receiver, ensure_worker_crypto_for_global,

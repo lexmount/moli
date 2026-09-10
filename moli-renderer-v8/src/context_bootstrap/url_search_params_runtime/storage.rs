@@ -102,9 +102,7 @@ pub(super) fn url_search_params_is_object<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     object: v8::Local<'s, v8::Object>,
 ) -> bool {
-    // The internal slot is the WebIDL brand. A constructed subclass has this
-    // slot even though its direct prototype is not URLSearchParams.prototype.
-    url_search_params_pairs_array(scope, object).is_some()
+    moli_webapi_declare::implements_interface(scope, object, "URLSearchParams")
 }
 
 pub(crate) fn url_search_params_request_body<'s>(

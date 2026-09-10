@@ -651,7 +651,7 @@ pub(super) fn is_websocket_stream_object<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     object: v8::Local<'s, v8::Object>,
 ) -> bool {
-    websocket_value_slot(scope, object, WEBSOCKET_STREAM_URL_SLOT).is_some()
+    moli_webapi_declare::implements_interface(scope, object, "WebSocketStream")
 }
 
 fn call_websocket_stream_function_slot<'s>(

@@ -12,7 +12,6 @@ const DOM_POINT_X_SLOT: &str = "__moliDomPointX";
 const DOM_POINT_Y_SLOT: &str = "__moliDomPointY";
 const DOM_POINT_Z_SLOT: &str = "__moliDomPointZ";
 const DOM_POINT_W_SLOT: &str = "__moliDomPointW";
-const DOM_POINT_BRAND_SLOT: &str = "__moliDomPointBrand";
 
 const DOM_MATRIX_M11_SLOT: &str = "__moliDomMatrixM11";
 const DOM_MATRIX_M12_SLOT: &str = "__moliDomMatrixM12";
@@ -30,16 +29,11 @@ const DOM_MATRIX_M41_SLOT: &str = "__moliDomMatrixM41";
 const DOM_MATRIX_M42_SLOT: &str = "__moliDomMatrixM42";
 const DOM_MATRIX_M43_SLOT: &str = "__moliDomMatrixM43";
 const DOM_MATRIX_M44_SLOT: &str = "__moliDomMatrixM44";
-const DOM_MATRIX_READONLY_BRAND_SLOT: &str = "__moliDomMatrixReadOnlyBrand";
-const DOM_MATRIX_MUTABLE_BRAND_SLOT: &str = "__moliDomMatrixMutableBrand";
 const DOM_MATRIX_TYPED_ARRAY_LENGTH: usize = DOM_MATRIX_COMPONENT_COUNT;
 
 #[derive(WebApiObject)]
 #[webapi(interface = "DOMPoint", fallback_to_string_tag = "DOMPoint")]
 struct DomPointObjectDeclaration {
-    #[webapi(slot = DOM_POINT_BRAND_SLOT, init = true)]
-    brand: (),
-
     #[webapi(slot = DOM_POINT_X_SLOT)]
     x: f64,
     #[webapi(slot = DOM_POINT_Y_SLOT)]
@@ -51,32 +45,10 @@ struct DomPointObjectDeclaration {
 }
 
 macro_rules! dom_matrix_object_declaration {
-    ($name:ident, $interface:literal, mutable) => {
-        dom_matrix_object_declaration!(
-            @body
-            $name,
-            $interface,
-            {
-                #[webapi(slot = DOM_MATRIX_MUTABLE_BRAND_SLOT, init = true)]
-                mutable_brand: (),
-            },
-            {
-                mutable_brand: (),
-            }
-        );
-    };
-    ($name:ident, $interface:literal, readonly) => {
-        dom_matrix_object_declaration!(@body $name, $interface, {}, {});
-    };
-    (@body $name:ident, $interface:literal, {$($extra_field:tt)*}, {$($extra_init:tt)*}) => {
+    ($name:ident, $interface:literal) => {
         #[derive(WebApiObject)]
         #[webapi(interface = $interface, fallback_to_string_tag = $interface)]
         struct $name {
-            #[webapi(slot = DOM_MATRIX_READONLY_BRAND_SLOT, init = true)]
-            readonly_brand: (),
-
-            $($extra_field)*
-
             #[webapi(slot = DOM_MATRIX_M11_SLOT)]
             m11: f64,
             #[webapi(slot = DOM_MATRIX_M12_SLOT)]
@@ -114,8 +86,6 @@ macro_rules! dom_matrix_object_declaration {
         impl $name {
             fn from_components(components: DomMatrixComponents) -> Self {
                 Self {
-                    readonly_brand: (),
-                    $($extra_init)*
                     m11: components.m11,
                     m12: components.m12,
                     m13: components.m13,
@@ -142,12 +112,8 @@ macro_rules! dom_matrix_object_declaration {
     };
 }
 
-dom_matrix_object_declaration!(DomMatrixObjectDeclaration, "DOMMatrix", mutable);
-dom_matrix_object_declaration!(
-    DomMatrixReadOnlyObjectDeclaration,
-    "DOMMatrixReadOnly",
-    readonly
-);
+dom_matrix_object_declaration!(DomMatrixObjectDeclaration, "DOMMatrix");
+dom_matrix_object_declaration!(DomMatrixReadOnlyObjectDeclaration, "DOMMatrixReadOnly");
 
 #[derive(WebApiObject)]
 #[webapi(interface = "Object", data_properties, enumerable)]
@@ -892,15 +858,14 @@ fn dom_point_receiver_branded<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     receiver: v8::Local<'s, v8::Object>,
 ) -> bool {
-    get_private_value(scope, receiver, DOM_POINT_BRAND_SLOT)
-        .is_some_and(|value| value.boolean_value(scope))
+    moli_webapi_declare::implements_interface(scope, receiver, "DOMPoint")
 }
 
 fn dom_matrix_require_readonly_receiver<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     receiver: v8::Local<'s, v8::Object>,
 ) -> bool {
-    if dom_matrix_receiver_branded(scope, receiver, DOM_MATRIX_READONLY_BRAND_SLOT) {
+    if moli_webapi_declare::implements_interface(scope, receiver, "DOMMatrixReadOnly") {
         return true;
     }
     throw_type_error(scope, "Illegal invocation");
@@ -911,19 +876,11 @@ fn dom_matrix_require_mutable_receiver<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     receiver: v8::Local<'s, v8::Object>,
 ) -> bool {
-    if dom_matrix_receiver_branded(scope, receiver, DOM_MATRIX_MUTABLE_BRAND_SLOT) {
+    if moli_webapi_declare::implements_interface(scope, receiver, "DOMMatrix") {
         return true;
     }
     throw_type_error(scope, "Illegal invocation");
     false
-}
-
-fn dom_matrix_receiver_branded<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    receiver: v8::Local<'s, v8::Object>,
-    brand: &'static str,
-) -> bool {
-    get_private_value(scope, receiver, brand).is_some_and(|value| value.boolean_value(scope))
 }
 
 fn dom_matrix_to_json_callback<'s>(

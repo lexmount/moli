@@ -300,22 +300,14 @@ pub(super) fn set_font_face_set_status<'s>(
     set_font_face_set_slot_value(scope, object, FONT_FACE_SET_STATUS_SLOT, value.into());
 }
 
-pub(super) fn is_font_face_value(
-    scope: &mut v8::PinScope<'_, '_>,
-    value: v8::Local<'_, v8::Value>,
+pub(super) fn is_font_face_value<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    value: v8::Local<'s, v8::Value>,
 ) -> bool {
     let Ok(object) = v8::Local::<v8::Object>::try_from(value) else {
         return false;
     };
-    if global_constructor_prototype(scope, "FontFace").is_some_and(|prototype| {
-        object
-            .get_prototype(scope)
-            .is_some_and(|candidate| candidate.strict_equals(prototype.into()))
-    }) {
-        return true;
-    }
-    object_has_string_property(scope, object, "family")
-        && object_has_string_property(scope, object, "status")
+    moli_webapi_declare::implements_interface(scope, object, "FontFace")
 }
 
 pub(super) fn array_contains_value(
@@ -332,21 +324,6 @@ pub(super) fn array_contains_value(
         }
     }
     false
-}
-
-fn object_has_string_property(
-    scope: &mut v8::PinScope<'_, '_>,
-    object: v8::Local<'_, v8::Object>,
-    key: &str,
-) -> bool {
-    object
-        .get(
-            scope,
-            v8_string(scope, key)
-                .map(Into::into)
-                .unwrap_or_else(|| v8::String::empty(scope).into()),
-        )
-        .is_some_and(|value| value.is_string())
 }
 
 fn sync_font_face_set_size<'s>(

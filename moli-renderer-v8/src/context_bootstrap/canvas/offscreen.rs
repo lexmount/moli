@@ -9,16 +9,12 @@ use crate::util::{
 use crate::webidl;
 use moli_webapi_declare::{WebApiFunctionTemplate, WebApiObject};
 
-const OFFSCREEN_CANVAS_BRAND_SLOT: &str = "__moliOffscreenCanvasBrand";
 const OFFSCREEN_CANVAS_CONTEXT_SLOT: &str = "__moliOffscreenCanvasContext";
 const OFFSCREEN_CANVAS_CONTEXT_KIND_SLOT: &str = "__moliOffscreenCanvasContextKind";
 
 #[derive(WebApiObject)]
 #[webapi(interface = "OffscreenCanvas")]
 struct OffscreenCanvasObjectDeclaration {
-    #[webapi(slot = OFFSCREEN_CANVAS_BRAND_SLOT, init = true)]
-    brand: (),
-
     #[webapi(slot = OFFSCREEN_CANVAS_WIDTH_SLOT)]
     width: f64,
     #[webapi(slot = OFFSCREEN_CANVAS_HEIGHT_SLOT)]
@@ -232,6 +228,5 @@ pub(super) fn offscreen_canvas_receiver_branded<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     receiver: v8::Local<'s, v8::Object>,
 ) -> bool {
-    get_private_value(scope, receiver, OFFSCREEN_CANVAS_BRAND_SLOT)
-        .is_some_and(|value| value.boolean_value(scope))
+    moli_webapi_declare::implements_interface(scope, receiver, "OffscreenCanvas")
 }

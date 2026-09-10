@@ -4,7 +4,6 @@ use moli_crypto::fill_secure_random;
 use uuid::Builder as UuidBuilder;
 
 use crate::native_bridge::throw_dom_exception;
-use crate::util::get_private_value;
 
 use super::helpers::is_crypto_integer_typed_array;
 use super::*;
@@ -14,7 +13,7 @@ pub(super) fn crypto_get_random_values_callback<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'_, v8::Value>,
 ) {
-    if get_private_value(scope, args.this(), CRYPTO_BRAND_SLOT).is_none() {
+    if !moli_webapi_declare::implements_interface(scope, args.this(), "Crypto") {
         throw_type_error(scope, "Illegal invocation");
         return;
     }
@@ -88,7 +87,7 @@ pub(super) fn crypto_random_uuid_callback<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'_, v8::Value>,
 ) {
-    if get_private_value(scope, args.this(), CRYPTO_BRAND_SLOT).is_none() {
+    if !moli_webapi_declare::implements_interface(scope, args.this(), "Crypto") {
         throw_type_error(scope, "Illegal invocation");
         return;
     }

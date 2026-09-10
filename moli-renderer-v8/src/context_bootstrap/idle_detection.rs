@@ -11,7 +11,6 @@ use crate::{
 };
 use moli_webapi_declare::{WebApiFunctionTemplate, WebApiObject};
 
-const IDLE_DETECTOR_BRAND_SLOT: &str = "__lmIdleDetectorBrand";
 const IDLE_DETECTOR_STARTED_SLOT: &str = "__lmIdleDetectorStarted";
 const IDLE_DETECTOR_USER_ACTIVE_SLOT: &str = "__lmIdleDetectorUserActive";
 const IDLE_DETECTOR_SCREEN_UNLOCKED_SLOT: &str = "__lmIdleDetectorScreenUnlocked";
@@ -27,9 +26,6 @@ const ACTUAL_IDLE_STATE: crate::protocol_types::EmulatedIdleOverride =
 #[derive(WebApiObject)]
 #[webapi(interface = "IdleDetector")]
 struct IdleDetectorObjectDeclaration {
-    #[webapi(slot = IDLE_DETECTOR_BRAND_SLOT, init = true)]
-    brand: (),
-
     #[webapi(slot = IDLE_DETECTOR_STARTED_SLOT)]
     started: bool,
 
@@ -115,9 +111,7 @@ fn idle_detector_receiver<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     receiver: v8::Local<'s, v8::Object>,
 ) -> Option<v8::Local<'s, v8::Object>> {
-    if get_private_value(scope, receiver, IDLE_DETECTOR_BRAND_SLOT)
-        .is_some_and(|value| value.is_true())
-    {
+    if moli_webapi_declare::implements_interface(scope, receiver, "IdleDetector") {
         return Some(receiver);
     }
     throw_type_error(scope, "Illegal invocation");

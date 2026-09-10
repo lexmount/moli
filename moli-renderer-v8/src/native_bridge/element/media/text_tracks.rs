@@ -37,8 +37,6 @@ const TEXT_TRACK_ACTIVE_CUES_SLOT: &str = "__moliTextTrackActiveCues";
 const TEXT_TRACK_INSERTION_COUNTER_SLOT: &str = "__moliTextTrackInsertionCounter";
 const TEXT_TRACK_CUE_ORDER_SLOT: &str = "__moliTextTrackCueOrder";
 const TEXT_TRACK_LIST_ITEMS_SLOT: &str = "__moliTextTrackListItems";
-const TEXT_TRACK_LIST_BRAND_SLOT: &str = "__moliTextTrackListBrand";
-const TEXT_TRACK_CUE_LIST_BRAND_SLOT: &str = "__moliTextTrackCueListBrand";
 const TEXT_TRACK_ONCUECHANGE_SLOT: &str = "__moliTextTrackOnCueChange";
 const TEXT_TRACK_LIST_ONADDTRACK_SLOT: &str = "__moliTextTrackListOnAddTrack";
 const TEXT_TRACK_LIST_ONREMOVETRACK_SLOT: &str = "__moliTextTrackListOnRemoveTrack";
@@ -54,9 +52,6 @@ const TRACK_READY_STATE_ERROR: u32 = 3;
 struct TextTrackCueListObjectDeclaration<'scope> {
     #[webapi(slot = TEXT_TRACK_LIST_ITEMS_SLOT)]
     items: Vec<v8::Local<'scope, v8::Value>>,
-
-    #[webapi(slot = TEXT_TRACK_CUE_LIST_BRAND_SLOT, constructor_default = true)]
-    _brand: bool,
 }
 
 #[derive(WebApiFunctionTemplate)]
@@ -85,9 +80,6 @@ struct TextTrackCueListTemplateDeclaration {
 struct TextTrackListObjectDeclaration<'scope> {
     #[webapi(slot = TEXT_TRACK_LIST_ITEMS_SLOT)]
     items: Vec<v8::Local<'scope, v8::Value>>,
-
-    #[webapi(slot = TEXT_TRACK_LIST_BRAND_SLOT, constructor_default = true)]
-    _brand: bool,
 
     #[webapi(slot = TEXT_TRACK_LIST_ONADDTRACK_SLOT, init = "null")]
     _onaddtrack: (),
@@ -232,7 +224,7 @@ fn text_track_receiver<'s>(
     args: &v8::FunctionCallbackArguments<'s>,
 ) -> Option<v8::Local<'s, v8::Object>> {
     let receiver = args.this();
-    if get_private_value(scope, receiver, TEXT_TRACK_KIND_SLOT).is_some() {
+    if moli_webapi_declare::implements_interface(scope, receiver, "TextTrack") {
         return Some(receiver);
     }
     throw_type_error(scope, "Illegal invocation");
@@ -244,7 +236,7 @@ fn text_track_list_receiver<'s>(
     args: &v8::FunctionCallbackArguments<'s>,
 ) -> Option<v8::Local<'s, v8::Object>> {
     let receiver = args.this();
-    if get_private_value(scope, receiver, TEXT_TRACK_LIST_BRAND_SLOT).is_some() {
+    if moli_webapi_declare::implements_interface(scope, receiver, "TextTrackList") {
         return Some(receiver);
     }
     throw_type_error(scope, "Illegal invocation");
@@ -256,7 +248,7 @@ fn text_track_cue_list_receiver<'s>(
     args: &v8::FunctionCallbackArguments<'s>,
 ) -> Option<v8::Local<'s, v8::Object>> {
     let receiver = args.this();
-    if get_private_value(scope, receiver, TEXT_TRACK_CUE_LIST_BRAND_SLOT).is_some() {
+    if moli_webapi_declare::implements_interface(scope, receiver, "TextTrackCueList") {
         return Some(receiver);
     }
     throw_type_error(scope, "Illegal invocation");

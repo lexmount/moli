@@ -1,6 +1,4 @@
-use super::super::window_runtime::{
-    MEDIA_DEVICES_BRAND_SLOT, navigator_media_devices_get_user_media_callback,
-};
+use super::super::window_runtime::navigator_media_devices_get_user_media_callback;
 use super::super::*;
 use crate::util::{get_private_value, set_private_value, throw_type_error};
 use moli_webapi_declare::{WebApiFunctionTemplate, WebApiObject};
@@ -11,9 +9,6 @@ const MEDIA_DEVICES_ONDEVICECHANGE_SLOT: &str = "__moliMediaDevicesOndevicechang
 #[derive(Default, WebApiObject)]
 #[webapi(interface = "MediaDevices")]
 struct MediaDevicesObjectDeclaration {
-    #[webapi(slot = MEDIA_DEVICES_BRAND_SLOT, init = true)]
-    brand: (),
-
     #[webapi(slot = SIMPLE_EVENT_TARGET_SLOT, value = MEDIA_DEVICES_LISTENERS_SLOT)]
     event_target_slot: (),
 
@@ -55,8 +50,7 @@ fn receiver_is_media_devices<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     receiver: v8::Local<'s, v8::Object>,
 ) -> bool {
-    get_private_value(scope, receiver, MEDIA_DEVICES_BRAND_SLOT)
-        .is_some_and(|value| value.boolean_value(scope))
+    moli_webapi_declare::implements_interface(scope, receiver, "MediaDevices")
 }
 
 fn enumerate_devices_callback<'s>(

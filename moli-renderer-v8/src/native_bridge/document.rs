@@ -324,7 +324,7 @@ struct DocumentMetadataPrototypeDeclaration {
         getter = document_last_modified_getter_function
     )]
     last_modified: (),
-    #[webapi(accessor_property, getter = document_referrer_getter_function, receiver = super::receivers::document)]
+    #[webapi(accessor_property, getter = document_referrer_getter_function, receiver = "Document")]
     referrer: (),
 }
 

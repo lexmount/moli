@@ -11,7 +11,6 @@ use crate::util::{
 use crate::webidl;
 use moli_webapi_declare::{WebApiFunctionTemplate, WebApiObject};
 
-const SCREEN_BRAND_SLOT: &str = "__moliScreenBrand";
 const SCREEN_WIDTH_SLOT: &str = "__moliScreenWidth";
 const SCREEN_HEIGHT_SLOT: &str = "__moliScreenHeight";
 const SCREEN_AVAIL_WIDTH_SLOT: &str = "__moliScreenAvailWidth";
@@ -22,7 +21,6 @@ const SCREEN_COLOR_DEPTH_SLOT: &str = "__moliScreenColorDepth";
 const SCREEN_PIXEL_DEPTH_SLOT: &str = "__moliScreenPixelDepth";
 const SCREEN_ORIENTATION_SLOT: &str = "__moliScreenOrientation";
 
-const SCREEN_ORIENTATION_BRAND_SLOT: &str = "__moliScreenOrientationBrand";
 const SCREEN_ORIENTATION_TYPE_SLOT: &str = "__moliScreenOrientationType";
 const SCREEN_ORIENTATION_ANGLE_SLOT: &str = "__moliScreenOrientationAngle";
 const SCREEN_ORIENTATION_ONCHANGE_SLOT: &str = "__moliScreenOrientationOnchange";
@@ -50,9 +48,6 @@ struct ScreenOrientationLockArgs {
 #[derive(WebApiObject)]
 #[webapi(interface = "Screen")]
 struct ScreenObjectDeclaration {
-    #[webapi(slot = SCREEN_BRAND_SLOT, init = true)]
-    brand: (),
-
     #[webapi(slot = SCREEN_WIDTH_SLOT)]
     width: f64,
     #[webapi(slot = SCREEN_HEIGHT_SLOT)]
@@ -97,9 +92,6 @@ struct ScreenPrototypeAccessorsDeclaration {
 #[derive(WebApiObject)]
 #[webapi(interface = "ScreenOrientation")]
 struct ScreenOrientationObjectDeclaration {
-    #[webapi(slot = SCREEN_ORIENTATION_BRAND_SLOT, init = true)]
-    brand: (),
-
     #[webapi(slot = SCREEN_ORIENTATION_TYPE_SLOT)]
     orientation_type: &'static str,
     #[webapi(slot = SCREEN_ORIENTATION_ANGLE_SLOT)]
@@ -197,7 +189,7 @@ fn screen_orientation_lock_callback<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'s, v8::Value>,
 ) {
-    if !receiver_has_brand(scope, args.this(), SCREEN_ORIENTATION_BRAND_SLOT) {
+    if !moli_webapi_declare::implements_interface(scope, args.this(), "ScreenOrientation") {
         throw_type_error(scope, "Illegal invocation");
         return;
     }
@@ -228,7 +220,7 @@ fn screen_orientation_unlock_callback<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'s, v8::Value>,
 ) {
-    if !receiver_has_brand(scope, args.this(), SCREEN_ORIENTATION_BRAND_SLOT) {
+    if !moli_webapi_declare::implements_interface(scope, args.this(), "ScreenOrientation") {
         throw_type_error(scope, "Illegal invocation");
         return;
     }
@@ -240,7 +232,7 @@ fn screen_event_target_add_event_listener_callback<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     rv: v8::ReturnValue<'s, v8::Value>,
 ) {
-    if !receiver_has_brand(scope, args.this(), SCREEN_BRAND_SLOT) {
+    if !moli_webapi_declare::implements_interface(scope, args.this(), "Screen") {
         throw_type_error(scope, "Illegal invocation");
         return;
     }
@@ -252,7 +244,7 @@ fn screen_event_target_remove_event_listener_callback<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     rv: v8::ReturnValue<'s, v8::Value>,
 ) {
-    if !receiver_has_brand(scope, args.this(), SCREEN_BRAND_SLOT) {
+    if !moli_webapi_declare::implements_interface(scope, args.this(), "Screen") {
         throw_type_error(scope, "Illegal invocation");
         return;
     }
@@ -264,7 +256,7 @@ fn screen_event_target_dispatch_event_callback<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     rv: v8::ReturnValue<'s, v8::Value>,
 ) {
-    if !receiver_has_brand(scope, args.this(), SCREEN_BRAND_SLOT) {
+    if !moli_webapi_declare::implements_interface(scope, args.this(), "Screen") {
         throw_type_error(scope, "Illegal invocation");
         return;
     }
@@ -276,7 +268,7 @@ fn screen_orientation_event_target_add_event_listener_callback<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     rv: v8::ReturnValue<'s, v8::Value>,
 ) {
-    if !receiver_has_brand(scope, args.this(), SCREEN_ORIENTATION_BRAND_SLOT) {
+    if !moli_webapi_declare::implements_interface(scope, args.this(), "ScreenOrientation") {
         throw_type_error(scope, "Illegal invocation");
         return;
     }
@@ -288,7 +280,7 @@ fn screen_orientation_event_target_remove_event_listener_callback<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     rv: v8::ReturnValue<'s, v8::Value>,
 ) {
-    if !receiver_has_brand(scope, args.this(), SCREEN_ORIENTATION_BRAND_SLOT) {
+    if !moli_webapi_declare::implements_interface(scope, args.this(), "ScreenOrientation") {
         throw_type_error(scope, "Illegal invocation");
         return;
     }
@@ -300,7 +292,7 @@ fn screen_orientation_event_target_dispatch_event_callback<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     rv: v8::ReturnValue<'s, v8::Value>,
 ) {
-    if !receiver_has_brand(scope, args.this(), SCREEN_ORIENTATION_BRAND_SLOT) {
+    if !moli_webapi_declare::implements_interface(scope, args.this(), "ScreenOrientation") {
         throw_type_error(scope, "Illegal invocation");
         return;
     }
@@ -338,7 +330,6 @@ pub(in crate::context_bootstrap) fn build_window_screen<'s>(
 ) -> Result<v8::Local<'s, v8::Object>> {
     let profile = &DEFAULT_WINDOW_SURFACE_PROFILE;
     let screen = ScreenObjectDeclaration {
-        brand: (),
         width: profile.screen_width,
         height: profile.screen_height,
         avail_width: profile.screen_avail_width,
@@ -373,7 +364,7 @@ fn screen_attribute_getter_callback<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'s, v8::Value>,
 ) {
-    if !receiver_has_brand(scope, args.this(), SCREEN_BRAND_SLOT) {
+    if !moli_webapi_declare::implements_interface(scope, args.this(), "Screen") {
         throw_type_error(scope, "Illegal invocation");
         return;
     }
@@ -455,7 +446,7 @@ fn screen_orientation_attribute_getter_callback<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'s, v8::Value>,
 ) {
-    if !receiver_has_brand(scope, args.this(), SCREEN_ORIENTATION_BRAND_SLOT) {
+    if !moli_webapi_declare::implements_interface(scope, args.this(), "ScreenOrientation") {
         throw_type_error(scope, "Illegal invocation");
         return;
     }
@@ -493,7 +484,7 @@ fn screen_orientation_onchange_getter_callback<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'s, v8::Value>,
 ) {
-    if !receiver_has_brand(scope, args.this(), SCREEN_ORIENTATION_BRAND_SLOT) {
+    if !moli_webapi_declare::implements_interface(scope, args.this(), "ScreenOrientation") {
         throw_type_error(scope, "Illegal invocation");
         return;
     }
@@ -508,7 +499,7 @@ fn screen_orientation_onchange_setter_callback<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'s, v8::Value>,
 ) {
-    if !receiver_has_brand(scope, args.this(), SCREEN_ORIENTATION_BRAND_SLOT) {
+    if !moli_webapi_declare::implements_interface(scope, args.this(), "ScreenOrientation") {
         throw_type_error(scope, "Illegal invocation");
         return;
     }
@@ -519,12 +510,4 @@ fn screen_orientation_onchange_setter_callback<'s>(
         args.get(0),
     );
     rv.set_undefined();
-}
-
-fn receiver_has_brand<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    receiver: v8::Local<'s, v8::Object>,
-    slot: &'static str,
-) -> bool {
-    get_private_value(scope, receiver, slot).is_some_and(|value| value.boolean_value(scope))
 }

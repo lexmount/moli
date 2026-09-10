@@ -176,22 +176,6 @@ pub(crate) fn ensure_intrinsic_interface_prototype<'s>(
         .ok_or_else(|| anyhow!("intrinsic prototype `{name}` is missing after materialization"))
 }
 
-pub(crate) fn object_is_intrinsic_interface_instance<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    name: &str,
-    object: v8::Local<'s, v8::Object>,
-) -> bool {
-    let Some(registry) = ExposedInterfaceTemplateRegistry::current(scope) else {
-        return false;
-    };
-    let Some(id) = registry.id_by_name(name) else {
-        return false;
-    };
-    registry
-        .ready_template(scope, id)
-        .is_some_and(|template| template.has_instance(object.into()))
-}
-
 fn materialize_uninitialized_interface<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     registry: &Rc<ExposedInterfaceTemplateRegistry>,

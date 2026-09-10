@@ -36,18 +36,13 @@ use crate::{
     webidl,
 };
 
-const FILE_SYSTEM_HANDLE_BRAND_SLOT: &str = "__moliFileSystemHandleBrand";
 const FILE_SYSTEM_HANDLE_STATE_SLOT: &str = "__moliFileSystemHandleState";
 const FILE_SYSTEM_HANDLE_ID_SLOT: &str = "__moliFileSystemHandleId";
-const FILE_SYSTEM_ITERATOR_BRAND_SLOT: &str = "__moliFileSystemIteratorBrand";
 const FILE_SYSTEM_ITERATOR_ID_SLOT: &str = "__moliFileSystemIteratorId";
 const FILE_SYSTEM_ITERATOR_PROTOTYPE_SLOT: &str = "__moliFileSystemIteratorPrototype";
-const FILE_SYSTEM_WRITABLE_BRAND_SLOT: &str = "__moliFileSystemWritableBrand";
 const FILE_SYSTEM_WRITABLE_MODE_SLOT: &str = "__moliFileSystemWritableMode";
 const FILE_SYSTEM_WRITABLE_SINK_STATE_SLOT: &str = "__moliFileSystemWritableSinkState";
-const FILE_SYSTEM_WRITABLE_SINK_BRAND_SLOT: &str = "__moliFileSystemWritableSinkBrand";
 const FILE_SYSTEM_FILE_SNAPSHOT_STATE_SLOT: &str = "__moliFileSystemFileSnapshotState";
-const FILE_SYSTEM_SYNC_ACCESS_BRAND_SLOT: &str = "__moliFileSystemSyncAccessBrand";
 const FILE_SYSTEM_SYNC_ACCESS_STATE_SLOT: &str = "__moliFileSystemSyncAccessState";
 const FILE_SYSTEM_SYNC_ACCESS_CLOSED_SLOT: &str = "__moliFileSystemSyncAccessClosed";
 const MAX_SYNC_ACCESS_FILE_OFFSET: u64 = i64::MAX as u64;
@@ -708,8 +703,6 @@ fn dispatch_opfs_quota_mutation_task<'s, T, Operation, Wrap>(
 #[derive(WebApiObject)]
 #[webapi(interface = "FileSystemDirectoryHandle", require_prototype)]
 struct FileSystemDirectoryHandleObjectDeclaration {
-    #[webapi(slot, name = FILE_SYSTEM_HANDLE_BRAND_SLOT, constructor_default = true)]
-    brand: bool,
     #[webapi(slot = FILE_SYSTEM_HANDLE_STATE_SLOT)]
     state_json: String,
     #[webapi(slot = FILE_SYSTEM_HANDLE_ID_SLOT)]
@@ -719,8 +712,6 @@ struct FileSystemDirectoryHandleObjectDeclaration {
 #[derive(WebApiObject)]
 #[webapi(interface = "FileSystemFileHandle", require_prototype)]
 struct FileSystemFileHandleObjectDeclaration {
-    #[webapi(slot, name = FILE_SYSTEM_HANDLE_BRAND_SLOT, constructor_default = true)]
-    brand: bool,
     #[webapi(slot = FILE_SYSTEM_HANDLE_STATE_SLOT)]
     state_json: String,
     #[webapi(slot = FILE_SYSTEM_HANDLE_ID_SLOT)]
@@ -794,8 +785,6 @@ struct FileSystemFileHandleSyncPrototypeDeclaration {
 #[derive(WebApiObject)]
 #[webapi(interface = "FileSystemWritableFileStream", require_prototype)]
 struct FileSystemWritableFileStreamObjectDeclaration {
-    #[webapi(slot, name = FILE_SYSTEM_WRITABLE_BRAND_SLOT, constructor_default = true)]
-    brand: bool,
     #[webapi(slot = FILE_SYSTEM_WRITABLE_MODE_SLOT)]
     mode: String,
 }
@@ -816,8 +805,6 @@ struct FileSystemWritableFileStreamPrototypeDeclaration {
 #[derive(WebApiObject)]
 #[webapi(prototype = "Object", interface = "FileSystemWritableSink")]
 struct FileSystemWritableSinkObjectDeclaration {
-    #[webapi(slot, name = FILE_SYSTEM_WRITABLE_SINK_BRAND_SLOT, constructor_default = true)]
-    brand: bool,
     #[webapi(slot = FILE_SYSTEM_WRITABLE_SINK_STATE_SLOT)]
     state_json: String,
     #[webapi(method, length = 1, callback = file_system_writable_sink_write_callback)]
@@ -831,8 +818,6 @@ struct FileSystemWritableSinkObjectDeclaration {
 #[derive(WebApiObject)]
 #[webapi(interface = "FileSystemSyncAccessHandle", require_prototype)]
 struct FileSystemSyncAccessHandleObjectDeclaration {
-    #[webapi(slot, name = FILE_SYSTEM_SYNC_ACCESS_BRAND_SLOT, constructor_default = true)]
-    brand: bool,
     #[webapi(slot = FILE_SYSTEM_SYNC_ACCESS_STATE_SLOT)]
     state_json: String,
     #[webapi(slot, name = FILE_SYSTEM_SYNC_ACCESS_CLOSED_SLOT, constructor_default = false)]
@@ -864,8 +849,6 @@ struct FileSystemSyncAccessHandlePrototypeDeclaration {
     interface = "FileSystemDirectoryHandle AsyncIterator"
 )]
 struct FileSystemDirectoryIteratorObjectDeclaration {
-    #[webapi(slot = FILE_SYSTEM_ITERATOR_BRAND_SLOT, init = true)]
-    brand: (),
     #[webapi(slot = FILE_SYSTEM_ITERATOR_ID_SLOT)]
     iterator_id: f64,
 }
@@ -1240,8 +1223,7 @@ fn handle_state<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     object: v8::Local<'s, v8::Object>,
 ) -> Option<FileSystemHandleState> {
-    let branded = get_private_value(scope, object, FILE_SYSTEM_HANDLE_BRAND_SLOT)
-        .is_some_and(|value| value.boolean_value(scope));
+    let branded = moli_webapi_declare::implements_interface(scope, object, "FileSystemHandle");
     if !branded {
         return None;
     }
@@ -2196,9 +2178,11 @@ fn file_system_directory_iterator_next_callback<'s>(
         return;
     };
     rv.set(resolver.get_promise(scope).into());
-    if !get_private_value(scope, args.this(), FILE_SYSTEM_ITERATOR_BRAND_SLOT)
-        .is_some_and(|value| value.boolean_value(scope))
-    {
+    if !moli_webapi_declare::implements_interface(
+        scope,
+        args.this(),
+        "FileSystemDirectoryHandle AsyncIterator",
+    ) {
         reject_type_error(scope, resolver, "Illegal invocation");
         return;
     }
@@ -2565,9 +2549,7 @@ fn sync_access_state<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     object: v8::Local<'s, v8::Object>,
 ) -> Option<FileSystemSyncAccessHandleState> {
-    if !get_private_value(scope, object, FILE_SYSTEM_SYNC_ACCESS_BRAND_SLOT)
-        .is_some_and(|value| value.boolean_value(scope))
-    {
+    if !moli_webapi_declare::implements_interface(scope, object, "FileSystemSyncAccessHandle") {
         return None;
     }
     let json = get_private_value(scope, object, FILE_SYSTEM_SYNC_ACCESS_STATE_SLOT)?
@@ -3091,8 +3073,7 @@ fn writable_stream_is_branded<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     stream: v8::Local<'s, v8::Object>,
 ) -> bool {
-    get_private_value(scope, stream, FILE_SYSTEM_WRITABLE_BRAND_SLOT)
-        .is_some_and(|value| value.boolean_value(scope))
+    moli_webapi_declare::implements_interface(scope, stream, "FileSystemWritableFileStream")
 }
 
 fn file_system_writable_mode_getter_callback<'s>(
@@ -3187,9 +3168,7 @@ fn writable_sink_state<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     sink: v8::Local<'s, v8::Object>,
 ) -> Option<FileSystemWritableSinkState> {
-    if !get_private_value(scope, sink, FILE_SYSTEM_WRITABLE_SINK_BRAND_SLOT)
-        .is_some_and(|value| value.boolean_value(scope))
-    {
+    if !moli_webapi_declare::implements_interface(scope, sink, "FileSystemWritableSink") {
         return None;
     }
     let json = get_private_value(scope, sink, FILE_SYSTEM_WRITABLE_SINK_STATE_SLOT)?

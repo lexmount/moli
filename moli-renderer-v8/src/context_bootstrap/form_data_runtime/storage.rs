@@ -10,11 +10,11 @@ struct FormDataObjectDeclaration<'scope> {
     entries: v8::Local<'scope, v8::Array>,
 }
 
-pub(in crate::context_bootstrap) fn form_data_is_object(
-    scope: &mut v8::PinScope<'_, '_>,
-    object: v8::Local<'_, v8::Object>,
+pub(in crate::context_bootstrap) fn form_data_is_object<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    object: v8::Local<'s, v8::Object>,
 ) -> bool {
-    object_prototype_matches(scope, object, "FormData")
+    moli_webapi_declare::implements_interface(scope, object, "FormData")
 }
 
 pub(in crate::context_bootstrap) fn form_data_entries<'s>(

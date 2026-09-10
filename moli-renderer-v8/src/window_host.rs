@@ -56,7 +56,6 @@ const WINDOW_SCROLL_Y_SLOT: &str = "__moliWindowScrollY";
 const WINDOW_PENDING_ANIMATION_FRAME_TIMESTAMP_SLOT: &str =
     "__moliWindowPendingAnimationFrameTimestamp";
 const IDLE_CALLBACK_BUDGET_MS: f64 = 50.0;
-const IDLE_DEADLINE_BRAND_SLOT: &str = "__moliIdleDeadlineBrand";
 const IDLE_DEADLINE_DID_TIMEOUT_SLOT: &str = "__moliIdleDeadlineDidTimeout";
 const IDLE_DEADLINE_MS_SLOT: &str = "__moliIdleDeadlineMs";
 const IDLE_OPPORTUNITY_DELAY_MS: u32 = 1;
@@ -82,8 +81,6 @@ struct WindowDocumentEventInitDeclaration {
 #[derive(WebApiObject)]
 #[webapi(interface = "IdleDeadline")]
 struct IdleDeadlineDeclaration {
-    #[webapi(slot = IDLE_DEADLINE_BRAND_SLOT, init = true)]
-    brand: (),
     #[webapi(slot = IDLE_DEADLINE_MS_SLOT)]
     deadline_ms: f64,
     #[webapi(slot = IDLE_DEADLINE_DID_TIMEOUT_SLOT)]
@@ -1984,9 +1981,7 @@ fn idle_deadline_receiver<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     receiver: v8::Local<'s, v8::Object>,
 ) -> Option<v8::Local<'s, v8::Object>> {
-    if get_private_value(scope, receiver, IDLE_DEADLINE_BRAND_SLOT)
-        .is_some_and(|value| value.is_true())
-    {
+    if moli_webapi_declare::implements_interface(scope, receiver, "IdleDeadline") {
         return Some(receiver);
     }
     throw_type_error(scope, "Illegal invocation");

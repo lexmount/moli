@@ -1,4 +1,4 @@
-use super::url_form::{callback_value_string, object_prototype_matches};
+use super::url_form::callback_value_string;
 use super::*;
 
 mod callbacks;

@@ -213,13 +213,6 @@ pub(in crate::network_host) fn headers_entries_if_present<'s>(
         .and_then(|json| serde_json::from_str::<Vec<(String, String)>>(&json).ok())
 }
 
-pub(in crate::network_host::headers) fn headers_entries_slot_present<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    obj: v8::Local<'s, v8::Object>,
-) -> bool {
-    get_private_value(scope, obj, HEADERS_ENTRIES_SLOT).is_some()
-}
-
 fn private_string_value<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     obj: v8::Local<'s, v8::Object>,

@@ -22,13 +22,9 @@ pub const CSS_STYLE_SHEET_ADOPTED_OWNER_KEYS_SLOT: &str = "__moliCssStyleSheetAd
 
 pub const CSS_STYLE_SHEET_ADOPTED_OWNER_ARRAYS_SLOT: &str = "__moliCssStyleSheetAdoptedOwnerArrays";
 
-pub const CSS_STYLE_SHEET_BRAND_SLOT: &str = "__moliCssStyleSheetBrand";
-
 pub const CSS_STYLE_SHEET_ID_SLOT: &str = "__moliCssStyleSheetId";
 
 pub const CSS_STYLE_SHEET_WRAPPER_LEASE_ID_SLOT: &str = "__moliCssStyleSheetWrapperLeaseId";
-
-pub const CSS_RULE_BRAND_SLOT: &str = "__moliCssRuleBrand";
 
 pub const CSS_RULE_DETACHED_SNAPSHOT_TEXT_SLOT: &str = "__moliCssRuleDetachedSnapshotText";
 
@@ -129,11 +125,7 @@ pub const CSS_MEDIA_LIST_OWNER_KIND_SLOT: &str = "__moliCssMediaListOwnerKind";
 
 pub const CSS_MEDIA_LIST_LENGTH_SLOT: &str = "__moliCssMediaListLength";
 
-pub const STYLE_SHEET_LIST_BRAND_SLOT: &str = "__moliStyleSheetListBrand";
-
 pub const STYLE_SHEET_LIST_LENGTH_SLOT: &str = "__moliStyleSheetListLength";
-
-pub const CSS_RULE_LIST_BRAND_SLOT: &str = "__moliCssRuleListBrand";
 
 pub const CSS_RULE_LIST_LENGTH_SLOT: &str = "__moliCssRuleListLength";
 
@@ -287,8 +279,6 @@ pub struct CssRuleConstantsDeclaration {
 #[derive(WebApiObject)]
 #[webapi(interface = "CSSStyleSheet")]
 pub struct CssStyleSheetDeclaration<'scope> {
-    #[webapi(slot = CSS_STYLE_SHEET_BRAND_SLOT, init = true)]
-    pub brand: (),
     #[webapi(slot = CSS_STYLE_SHEET_RULES_SLOT)]
     pub rules: v8::Local<'scope, v8::Value>,
 }
@@ -296,8 +286,6 @@ pub struct CssStyleSheetDeclaration<'scope> {
 #[derive(WebApiObject)]
 #[webapi(interface = "StyleSheetList")]
 pub struct StyleSheetListDeclaration {
-    #[webapi(slot = STYLE_SHEET_LIST_BRAND_SLOT, init = true)]
-    pub brand: (),
     #[webapi(slot = STYLE_SHEET_LIST_LENGTH_SLOT, init = 0)]
     pub length: (),
 }
@@ -305,8 +293,6 @@ pub struct StyleSheetListDeclaration {
 #[derive(WebApiObject)]
 #[webapi(interface = "CSSRuleList")]
 pub struct CssRuleListDeclaration {
-    #[webapi(slot = CSS_RULE_LIST_BRAND_SLOT, init = true)]
-    pub brand: (),
     #[webapi(slot = CSS_RULE_LIST_LENGTH_SLOT)]
     pub length: u32,
 }
@@ -314,8 +300,6 @@ pub struct CssRuleListDeclaration {
 #[derive(WebApiObject)]
 #[webapi(interface = "CSSRule")]
 pub struct CssAtRuleDeclaration<'scope> {
-    #[webapi(slot = CSS_RULE_BRAND_SLOT)]
-    pub brand: bool,
     #[webapi(slot = CSS_RULE_DETACHED_SNAPSHOT_TEXT_SLOT)]
     pub css_text: String,
     #[webapi(slot = CSS_AT_RULE_TYPE_SLOT)]
@@ -329,8 +313,6 @@ pub struct CssAtRuleDeclaration<'scope> {
 #[derive(WebApiObject)]
 #[webapi(interface = "CSSMarginRule")]
 pub struct CssMarginRuleDeclaration<'scope> {
-    #[webapi(slot = CSS_RULE_BRAND_SLOT)]
-    pub brand: bool,
     #[webapi(slot = CSS_RULE_DETACHED_SNAPSHOT_TEXT_SLOT)]
     pub css_text: String,
     #[webapi(slot = CSS_MARGIN_RULE_NAME_SLOT)]
@@ -346,8 +328,6 @@ pub struct CssMarginRuleDeclaration<'scope> {
 #[derive(WebApiObject)]
 #[webapi(interface = "CSSKeyframeRule")]
 pub struct CssKeyframeRuleDeclaration<'scope> {
-    #[webapi(slot = CSS_RULE_BRAND_SLOT)]
-    pub brand: bool,
     #[webapi(slot = CSS_RULE_DETACHED_SNAPSHOT_TEXT_SLOT)]
     pub css_text: String,
     #[webapi(slot = CSS_KEYFRAME_RULE_KEY_TEXT_SLOT)]
@@ -363,8 +343,6 @@ pub struct CssKeyframeRuleDeclaration<'scope> {
 #[derive(WebApiObject)]
 #[webapi(interface = "CSSFontFeatureValuesRule")]
 pub struct CssFontFeatureValuesRuleDeclaration<'scope> {
-    #[webapi(slot = CSS_RULE_BRAND_SLOT)]
-    pub brand: bool,
     #[webapi(slot = CSS_RULE_DETACHED_SNAPSHOT_TEXT_SLOT)]
     pub css_text: String,
     #[webapi(slot = CSS_FONT_FEATURE_VALUES_RULE_FONT_FAMILY_SLOT)]
@@ -378,8 +356,6 @@ pub struct CssFontFeatureValuesRuleDeclaration<'scope> {
 #[derive(WebApiObject)]
 #[webapi(interface = "CSSPropertyRule")]
 pub struct CssPropertyRuleDeclaration<'scope> {
-    #[webapi(slot = CSS_RULE_BRAND_SLOT)]
-    pub brand: bool,
     #[webapi(slot = CSS_RULE_DETACHED_SNAPSHOT_TEXT_SLOT)]
     pub css_text: String,
     #[webapi(slot = CSS_AT_RULE_TYPE_SLOT)]
@@ -401,8 +377,6 @@ pub struct CssPropertyRuleDeclaration<'scope> {
 #[derive(WebApiObject)]
 #[webapi(interface = "CSSStyleRule")]
 pub struct CssStyleRuleDeclaration<'scope> {
-    #[webapi(slot = CSS_RULE_BRAND_SLOT)]
-    pub brand: bool,
     #[webapi(slot = CSS_RULE_DETACHED_SNAPSHOT_TEXT_SLOT)]
     pub css_text: String,
     #[webapi(slot = CSS_STYLE_RULE_SELECTOR_TEXT_SLOT)]
@@ -418,8 +392,6 @@ pub struct CssStyleRuleDeclaration<'scope> {
 #[derive(WebApiObject)]
 #[webapi(interface = "CSSNestedDeclarations")]
 pub struct CssNestedDeclarationsRuleDeclaration<'scope> {
-    #[webapi(slot = CSS_RULE_BRAND_SLOT)]
-    pub brand: bool,
     #[webapi(slot = CSS_RULE_DETACHED_SNAPSHOT_TEXT_SLOT)]
     pub css_text: String,
     #[webapi(slot = CSS_NESTED_DECLARATIONS_STYLE_TEXT_SLOT)]

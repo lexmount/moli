@@ -148,7 +148,7 @@ pub(super) fn apply_request_init_overrides<'s>(
     let init_body_is_readable_stream = init_body_value
         .and_then(|value| v8::Local::<v8::Object>::try_from(value).ok())
         .is_some_and(|object| {
-            crate::context_bootstrap::object_prototype_matches(scope, object, "ReadableStream")
+            moli_webapi_declare::implements_interface(scope, object, "ReadableStream")
         });
     let body_from_init = init_body_value
         .map(|value| body_init(scope, value, webidl::Context::member("RequestInit", "body")))

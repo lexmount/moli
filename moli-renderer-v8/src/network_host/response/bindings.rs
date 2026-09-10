@@ -121,8 +121,7 @@ fn readable_stream_body_arg<'s>(
         return None;
     }
     let object = v8::Local::<v8::Object>::try_from(value).ok()?;
-    crate::context_bootstrap::object_prototype_matches(scope, object, "ReadableStream")
-        .then_some(object)
+    moli_webapi_declare::implements_interface(scope, object, "ReadableStream").then_some(object)
 }
 
 fn readable_stream_body_locked(

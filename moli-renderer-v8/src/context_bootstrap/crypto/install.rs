@@ -20,18 +20,12 @@ const CRYPTO_SUBTLE_AVAILABLE_SLOT: &str = "__moliCryptoSubtleAvailable";
 const WINDOW_CRYPTO_SUBTLE_AVAILABLE_SLOT: &str = "__moliWindowCryptoSubtleAvailable";
 
 #[derive(Default, WebApiObject)]
-#[webapi(interface = "Crypto")]
-struct CryptoObjectDeclaration {
-    #[webapi(slot = CRYPTO_BRAND_SLOT, init = true)]
-    brand: (),
-}
+#[webapi(allow_empty, interface = "Crypto")]
+struct CryptoObjectDeclaration {}
 
 #[derive(Default, WebApiObject)]
-#[webapi(interface = "SubtleCrypto")]
-struct SubtleCryptoObjectDeclaration {
-    #[webapi(slot = CRYPTO_SUBTLE_BRAND_SLOT, init = true)]
-    brand: (),
-}
+#[webapi(allow_empty, interface = "SubtleCrypto")]
+struct SubtleCryptoObjectDeclaration {}
 
 #[derive(Default, WebApiObject)]
 #[webapi(unbranded, interface = "Crypto")]
@@ -239,7 +233,7 @@ fn crypto_attribute_getter_callback<'s>(
         rv.set_undefined();
         return;
     };
-    if get_private_value(scope, args.this(), CRYPTO_BRAND_SLOT).is_none() {
+    if !moli_webapi_declare::implements_interface(scope, args.this(), "Crypto") {
         throw_type_error(scope, "Illegal invocation");
         return;
     }

@@ -307,7 +307,13 @@ fn require_canvas_context_receiver<'s>(
     receiver: v8::Local<'s, v8::Object>,
     member: &str,
 ) -> bool {
-    if get_private_value(scope, receiver, CANVAS_CONTEXT_FILL_STYLE_SLOT).is_some() {
+    if moli_webapi_declare::implements_interface(scope, receiver, "CanvasRenderingContext2D")
+        || moli_webapi_declare::implements_interface(
+            scope,
+            receiver,
+            "OffscreenCanvasRenderingContext2D",
+        )
+    {
         return true;
     }
     throw_type_error(

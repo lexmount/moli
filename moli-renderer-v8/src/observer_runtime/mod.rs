@@ -135,7 +135,11 @@ struct IntersectionObserverPrototypeAccessorsDeclaration {
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(name = "IntersectionObserverEntry", enumerable, receiver = is_intersection_observer_entry)]
+#[webapi(
+    name = "IntersectionObserverEntry",
+    enumerable,
+    receiver = "IntersectionObserverEntry"
+)]
 struct IntersectionObserverEntryPrototypeAccessorsDeclaration {
     #[webapi(accessor_property, getter = intersection_observer_entry_attribute_getter_callback, data = callback_data_index_value(scope, 0))]
     time: (),
@@ -2511,13 +2515,6 @@ fn intersection_observer_attribute_getter_callback(
             .get(scope, v8str(scope, slot).into())
             .unwrap_or_else(|| v8::undefined(scope).into()),
     );
-}
-
-fn is_intersection_observer_entry<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    receiver: v8::Local<'s, v8::Object>,
-) -> bool {
-    get_private_value(scope, receiver, "__moliIntersectionEntryTime").is_some()
 }
 
 fn intersection_observer_entry_attribute_getter_callback<'s>(

@@ -7,12 +7,10 @@ use crate::{
 use anyhow::{Result, anyhow};
 use moli_webapi_declare::{WebApiFunctionTemplate, WebApiObject};
 
-const CLIPBOARD_BRAND_SLOT: &str = "__moliClipboardBrand";
 const CLIPBOARD_ITEMS_SLOT: &str = "__moliClipboardItems";
 const CLIPBOARD_TEXT_SLOT: &str = "__moliClipboardText";
 const CLIPBOARD_EVENT_LISTENERS_SLOT: &str = "__moliClipboardEventListeners";
 
-const CLIPBOARD_ITEM_BRAND_SLOT: &str = "__moliClipboardItemBrand";
 const CLIPBOARD_ITEM_DATA_SLOT: &str = "__moliClipboardItemData";
 const CLIPBOARD_ITEM_RAW_DATA_SLOT: &str = "__moliClipboardItemRawData";
 const CLIPBOARD_ITEM_TYPES_SLOT: &str = "__moliClipboardItemTypes";
@@ -21,9 +19,6 @@ const CLIPBOARD_ITEM_PRESENTATION_STYLE_SLOT: &str = "__moliClipboardItemPresent
 #[derive(Default, WebApiObject)]
 #[webapi(interface = "Clipboard")]
 struct ClipboardObjectDeclaration {
-    #[webapi(slot = CLIPBOARD_BRAND_SLOT, init = true)]
-    brand: (),
-
     #[webapi(slot = SIMPLE_EVENT_TARGET_SLOT, value = CLIPBOARD_EVENT_LISTENERS_SLOT)]
     event_target_slot: (),
 
@@ -56,9 +51,6 @@ struct ClipboardPrototypeDeclaration {
 #[derive(WebApiObject)]
 #[webapi(interface = "ClipboardItem")]
 struct ClipboardItemObjectDeclaration<'scope> {
-    #[webapi(slot = CLIPBOARD_ITEM_BRAND_SLOT, init = true)]
-    brand: (),
-
     #[webapi(slot = CLIPBOARD_ITEM_DATA_SLOT)]
     data: v8::Local<'scope, v8::Object>,
 
@@ -416,16 +408,14 @@ fn clipboard_item_receiver_branded<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     receiver: v8::Local<'s, v8::Object>,
 ) -> bool {
-    get_private_value(scope, receiver, CLIPBOARD_ITEM_BRAND_SLOT)
-        .is_some_and(|value| value.boolean_value(scope))
+    moli_webapi_declare::implements_interface(scope, receiver, "ClipboardItem")
 }
 
 fn clipboard_receiver_branded<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     receiver: v8::Local<'s, v8::Object>,
 ) -> bool {
-    get_private_value(scope, receiver, CLIPBOARD_BRAND_SLOT)
-        .is_some_and(|value| value.boolean_value(scope))
+    moli_webapi_declare::implements_interface(scope, receiver, "Clipboard")
 }
 
 fn clipboard_item_presentation_style_getter<'s>(

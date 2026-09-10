@@ -1,18 +1,6 @@
 use super::*;
 use crate::util::{get_private_value, set_private_value};
 
-pub(crate) fn object_prototype_matches(
-    scope: &mut v8::PinScope<'_, '_>,
-    object: v8::Local<'_, v8::Object>,
-    ctor_name: &str,
-) -> bool {
-    global_constructor_prototype(scope, ctor_name).is_some_and(|prototype| {
-        object
-            .get_prototype(scope)
-            .is_some_and(|candidate| candidate.strict_equals(prototype.into()))
-    })
-}
-
 pub(in crate::context_bootstrap) fn callback_value_string(
     scope: &mut v8::PinScope<'_, '_>,
     value: v8::Local<'_, v8::Value>,
@@ -71,7 +59,7 @@ pub(in crate::context_bootstrap) fn require_url_receiver<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     object: v8::Local<'s, v8::Object>,
 ) -> Option<v8::Local<'s, v8::Object>> {
-    if get_private_value(scope, object, URL_HREF_SLOT).is_some() {
+    if moli_webapi_declare::implements_interface(scope, object, "URL") {
         return Some(object);
     }
     throw_type_error(scope, "Illegal invocation");

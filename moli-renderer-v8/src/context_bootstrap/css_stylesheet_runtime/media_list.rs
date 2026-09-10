@@ -5,7 +5,7 @@ pub(crate) fn ensure_media_list_object<'s>(
     object: v8::Local<'s, v8::Object>,
     member: &'static str,
 ) -> bool {
-    if get_private_value(scope, object, CSS_MEDIA_LIST_LENGTH_SLOT).is_some() {
+    if moli_webapi_declare::implements_interface(scope, object, "MediaList") {
         return true;
     }
     throw_type_error(

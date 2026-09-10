@@ -1,17 +1,14 @@
 use super::*;
-use crate::util::{get_private_value, v8str};
+use crate::util::v8str;
 use crate::webidl;
 use moli_streams::writable::{AcquireWriterPlan, DesiredSizePlan, WriterWriteEntryPlan};
 use moli_webapi_declare::WebApiObject;
 
 const WRITER_LOCK_RELEASED_MESSAGE: &str = "WritableStreamDefaultWriter lock released";
-const WRITABLE_STREAM_WRITER_BRAND_SLOT: &str = "__moliWritableStreamWriterBrand";
 
 #[derive(WebApiObject)]
 #[webapi(interface = "WritableStreamDefaultWriter")]
 struct WritableStreamWriterObjectDeclaration<'scope> {
-    #[webapi(slot = WRITABLE_STREAM_WRITER_BRAND_SLOT, init = true)]
-    brand: (),
     #[webapi(slot = WRITABLE_STREAM_WRITER_STREAM_SLOT)]
     stream: v8::Local<'scope, v8::Object>,
     #[webapi(slot = WRITABLE_STREAM_WRITER_READY_PROMISE_SLOT, init = "undefined")]
@@ -282,6 +279,5 @@ fn writable_stream_writer_is_branded<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     writer: v8::Local<'s, v8::Object>,
 ) -> bool {
-    get_private_value(scope, writer, WRITABLE_STREAM_WRITER_BRAND_SLOT)
-        .is_some_and(|value| value.is_true())
+    moli_webapi_declare::implements_interface(scope, writer, "WritableStreamDefaultWriter")
 }

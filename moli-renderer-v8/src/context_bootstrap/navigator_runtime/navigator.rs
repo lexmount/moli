@@ -1,5 +1,5 @@
 use super::super::window_runtime::{
-    PERMISSIONS_BRAND_SLOT, build_legacy_storage_quota_object, build_navigator_ua_data_object,
+    build_legacy_storage_quota_object, build_navigator_ua_data_object,
     install_initial_service_worker_ready_promise, navigator_get_battery_callback,
     navigator_java_enabled_callback, navigator_permissions_query_callback,
     navigator_send_beacon_callback, navigator_service_worker_controller_getter_callback,
@@ -82,20 +82,15 @@ const WORKER_NAVIGATOR_USER_AGENT_SEED_SLOT: &str = "__moliWorkerNavigatorUserAg
 const WORKER_NAVIGATOR_ACCEPT_LANGUAGE_SEED_SLOT: &str = "__moliWorkerNavigatorAcceptLanguageSeed";
 const WORKER_NAVIGATOR_BACKING_SLOT: &str = "__moliWorkerNavigatorBacking";
 
-const NAVIGATOR_BRAND_SLOT: &str = "__moliNavigatorBrand";
 const NAVIGATOR_STORAGE_OWNER_CHILD_HANDLE_SLOT: &str = "__moliNavigatorStorageOwnerChildHandle";
 const NAVIGATOR_STORAGE_OWNER_POPUP_ID_SLOT: &str = "__moliNavigatorStorageOwnerPopupId";
 const NAVIGATOR_ACCEPT_LANGUAGE_SLOT: &str = "__moliNavigatorAcceptLanguage";
 pub(in crate::context_bootstrap) const NAVIGATOR_IDENTITY_PROFILE_SLOT: &str =
     "__moliNavigatorIdentityProfile";
-pub(in crate::context_bootstrap) const STORAGE_MANAGER_BRAND_SLOT: &str =
-    "__moliStorageManagerBrand";
 pub(in crate::context_bootstrap) const STORAGE_MANAGER_CHILD_HANDLE_SLOT: &str =
     "__moliStorageManagerChildHandle";
 pub(in crate::context_bootstrap) const STORAGE_MANAGER_POPUP_ID_SLOT: &str =
     "__moliStorageManagerPopupId";
-pub(in crate::context_bootstrap) const STORAGE_BUCKET_MANAGER_BRAND_SLOT: &str =
-    "__moliStorageBucketManagerBrand";
 pub(in crate::context_bootstrap) const STORAGE_BUCKET_MANAGER_CHILD_HANDLE_SLOT: &str =
     "__moliStorageBucketManagerChildHandle";
 pub(in crate::context_bootstrap) const STORAGE_BUCKET_MANAGER_POPUP_ID_SLOT: &str =
@@ -109,15 +104,10 @@ const SERVICE_WORKER_CONTAINER_ONCONTROLLERCHANGE_SLOT: &str =
 const SERVICE_WORKER_CONTAINER_CONTROLLER_SLOT: &str = "__moliServiceWorkerContainerController";
 pub(in crate::context_bootstrap) const SERVICE_WORKER_OWNER_TOKEN_SLOT: &str =
     "__moliServiceWorkerOwner";
-const USER_ACTIVATION_BRAND_SLOT: &str = "__moliUserActivationBrand";
-const NAVIGATOR_CONNECTION_BRAND_SLOT: &str = "__moliNavigatorConnectionBrand";
 
 #[derive(Default, WebApiObject)]
 #[webapi(interface = "Permissions", allow_empty)]
-struct PermissionsObjectDeclaration {
-    #[webapi(slot = PERMISSIONS_BRAND_SLOT, init = true)]
-    brand: (),
-}
+struct PermissionsObjectDeclaration {}
 
 #[derive(Default, WebApiFunctionTemplate)]
 #[webapi(name = "Permissions", enumerable)]
@@ -129,9 +119,6 @@ struct PermissionsPrototypeMethodsDeclaration {
 #[derive(WebApiObject)]
 #[webapi(interface = "Navigator")]
 struct NavigatorObjectDeclaration<'scope> {
-    #[webapi(slot = NAVIGATOR_BRAND_SLOT, init = true)]
-    brand: (),
-
     #[webapi(slot = NAVIGATOR_RUNTIME_DATA_SLOT)]
     runtime_data: v8::Local<'scope, v8::Object>,
 }
@@ -297,9 +284,6 @@ struct PermissionStatusPrototypeDeclaration {
     prototype = "Object"
 )]
 struct NavigatorConnectionDeclaration {
-    #[webapi(slot = NAVIGATOR_CONNECTION_BRAND_SLOT, init = true)]
-    brand: (),
-
     #[webapi(data_property, name = "type", enumerable, value = DEFAULT_CONNECTION_TYPE)]
     connection_type: (),
 
@@ -339,11 +323,8 @@ struct NavigatorConnectionDeclaration {
 }
 
 #[derive(WebApiObject)]
-#[webapi(interface = "StorageManager")]
-struct StorageManagerObjectDeclaration {
-    #[webapi(slot, name = STORAGE_MANAGER_BRAND_SLOT, constructor_default = true)]
-    brand: bool,
-}
+#[webapi(allow_empty, interface = "StorageManager")]
+struct StorageManagerObjectDeclaration {}
 
 #[derive(WebApiFunctionTemplate)]
 #[webapi(name = "StorageManager", enumerable)]
@@ -396,15 +377,8 @@ pub(in crate::context_bootstrap) fn install_storage_manager_constructor_template
 }
 
 #[derive(WebApiObject)]
-#[webapi(interface = "StorageBucketManager")]
-struct StorageBucketManagerObjectDeclaration {
-    #[webapi(
-        slot,
-        name = STORAGE_BUCKET_MANAGER_BRAND_SLOT,
-        constructor_default = true
-    )]
-    brand: bool,
-}
+#[webapi(allow_empty, interface = "StorageBucketManager")]
+struct StorageBucketManagerObjectDeclaration {}
 
 #[derive(Default, WebApiFunctionTemplate)]
 #[webapi(name = "NavigatorUAData", enumerable)]
@@ -486,9 +460,6 @@ struct ServiceWorkerContainerDeclaration {
 #[derive(Default, WebApiObject)]
 #[webapi(interface = "UserActivation")]
 struct UserActivationObjectDeclaration {
-    #[webapi(slot = USER_ACTIVATION_BRAND_SLOT, init = true)]
-    brand: (),
-
     #[webapi(accessor_property, getter = navigator_user_activation_state_getter_callback, enumerable)]
     is_active: (),
 
@@ -723,8 +694,7 @@ pub(in crate::context_bootstrap) fn navigator_receiver_branded<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     navigator: v8::Local<'s, v8::Object>,
 ) -> bool {
-    get_private_value(scope, navigator, NAVIGATOR_BRAND_SLOT)
-        .is_some_and(|value| value.boolean_value(scope))
+    moli_webapi_declare::implements_interface(scope, navigator, "Navigator")
 }
 
 pub(crate) fn current_protocol_user_gesture_activation(scope: &mut v8::PinScope<'_, '_>) -> bool {
@@ -737,9 +707,7 @@ fn navigator_user_activation_state_getter_callback<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'s, v8::Value>,
 ) {
-    if get_private_value(scope, args.this(), USER_ACTIVATION_BRAND_SLOT)
-        .is_none_or(|value| !value.boolean_value(scope))
-    {
+    if !moli_webapi_declare::implements_interface(scope, args.this(), "UserActivation") {
         throw_type_error(scope, "Illegal invocation");
         return;
     }
@@ -814,8 +782,7 @@ fn navigator_connection_receiver_branded<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     receiver: v8::Local<'s, v8::Object>,
 ) -> bool {
-    get_private_value(scope, receiver, NAVIGATOR_CONNECTION_BRAND_SLOT)
-        .is_some_and(|value| value.boolean_value(scope))
+    moli_webapi_declare::implements_interface(scope, receiver, "NetworkInformation")
 }
 
 pub(in crate::context_bootstrap) fn install_navigator_template_bindings<'s>(

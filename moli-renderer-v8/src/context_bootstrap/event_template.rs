@@ -26,31 +26,13 @@ use super::{
     specs::{ConstructorKind, ConstructorSpec},
 };
 use crate::{native_bridge::document, window_host};
-use moli_webapi_declare::{EVENT_TARGET_INTERFACE_BRAND_SLOT, WebApiFunctionTemplate};
+use moli_webapi_declare::WebApiFunctionTemplate;
 
 pub(in crate::context_bootstrap) fn object_is_event_target<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     object: v8::Local<'s, v8::Object>,
 ) -> bool {
-    if crate::util::get_private_value(scope, object, EVENT_TARGET_INTERFACE_BRAND_SLOT)
-        .is_some_and(|value| value.is_true())
-    {
-        return true;
-    }
-    super::exposed_interfaces::object_is_intrinsic_interface_instance(scope, "EventTarget", object)
-        || crate::native_bridge::object_is_native_event_target_wrapper_or_detached(scope, object)
-}
-
-pub(in crate::context_bootstrap) fn mark_event_target_interface_prototype<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    prototype: v8::Local<'s, v8::Object>,
-) {
-    crate::util::set_private_value(
-        scope,
-        prototype,
-        EVENT_TARGET_INTERFACE_BRAND_SLOT,
-        v8::Boolean::new(scope, true).into(),
-    );
+    moli_webapi_declare::implements_interface(scope, object, "EventTarget")
 }
 
 #[derive(WebApiFunctionTemplate)]

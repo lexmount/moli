@@ -7,7 +7,6 @@ use crate::util::{
 };
 use moli_webapi_declare::{WebApiFunctionTemplate, WebApiObject};
 
-const IMAGE_BITMAP_BRAND_SLOT: &str = "__moliImageBitmapBrand";
 const IMAGE_BITMAP_WIDTH_SLOT: &str = "__moliImageBitmapWidth";
 const IMAGE_BITMAP_HEIGHT_SLOT: &str = "__moliImageBitmapHeight";
 
@@ -16,8 +15,6 @@ const IMAGE_BITMAP_DIMENSION_SLOTS: &[&str] = &[IMAGE_BITMAP_WIDTH_SLOT, IMAGE_B
 #[derive(WebApiObject)]
 #[webapi(interface = "ImageBitmap")]
 struct ImageBitmapObjectDeclaration {
-    #[webapi(slot = IMAGE_BITMAP_BRAND_SLOT, init = true)]
-    brand: (),
     #[webapi(slot = IMAGE_BITMAP_WIDTH_SLOT)]
     width: f64,
     #[webapi(slot = IMAGE_BITMAP_HEIGHT_SLOT)]
@@ -183,6 +180,5 @@ fn image_bitmap_receiver_branded<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     receiver: v8::Local<'s, v8::Object>,
 ) -> bool {
-    get_private_value(scope, receiver, IMAGE_BITMAP_BRAND_SLOT)
-        .is_some_and(|value| value.boolean_value(scope))
+    moli_webapi_declare::implements_interface(scope, receiver, "ImageBitmap")
 }

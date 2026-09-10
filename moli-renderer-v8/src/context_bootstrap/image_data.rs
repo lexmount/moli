@@ -10,14 +10,10 @@ const IMAGE_DATA_HEIGHT_SLOT: &str = "__moliImageDataHeight";
 const IMAGE_DATA_COLOR_SPACE_SLOT: &str = "__moliImageDataColorSpace";
 const IMAGE_DATA_PIXEL_FORMAT_SLOT: &str = "__moliImageDataPixelFormat";
 const IMAGE_DATA_DATA_SLOT: &str = "__moliImageDataData";
-const IMAGE_DATA_BRAND_SLOT: &str = "__moliImageDataBrand";
 
 #[derive(WebApiObject)]
 #[webapi(interface = "ImageData")]
 struct ImageDataObjectDeclaration<'s> {
-    #[webapi(slot = IMAGE_DATA_BRAND_SLOT, init = true)]
-    brand: (),
-
     #[webapi(slot = IMAGE_DATA_WIDTH_SLOT)]
     width: u32,
     #[webapi(slot = IMAGE_DATA_HEIGHT_SLOT)]
@@ -171,8 +167,7 @@ fn image_data_receiver_branded<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     receiver: v8::Local<'s, v8::Object>,
 ) -> bool {
-    get_private_value(scope, receiver, IMAGE_DATA_BRAND_SLOT)
-        .is_some_and(|value| value.boolean_value(scope))
+    moli_webapi_declare::implements_interface(scope, receiver, "ImageData")
 }
 
 fn image_data_constructor_parts<'s>(

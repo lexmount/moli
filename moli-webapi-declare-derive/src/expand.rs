@@ -1099,7 +1099,7 @@ fn expand_function_template_alias_field(
 fn expand_interface_field(
     field: &Field,
     rename_all: RenameRule,
-    receiver: Option<&syn::Path>,
+    receiver: Option<&crate::attrs::ReceiverAttr>,
 ) -> Option<Result<proc_macro2::TokenStream, Error>> {
     let mut attrs = match parse_field_attrs(field) {
         Ok(attrs) => attrs,
@@ -1770,8 +1770,16 @@ fn expand_callback(
         return quote!(#callback);
     }
     let receiver_check = attrs.receiver.as_ref().map(|receiver| {
+        let check = match receiver {
+            crate::attrs::ReceiverAttr::Predicate(predicate) => {
+                quote!(#predicate(scope, args.this()))
+            }
+            crate::attrs::ReceiverAttr::Interface(interface) => quote!(
+                ::moli_webapi_declare::implements_interface(scope, args.this(), #interface)
+            ),
+        };
         quote! {
-            if !#receiver(scope, args.this()) {
+            if !#check {
                 ::moli_webapi_declare::__private::throw_illegal_invocation(scope);
                 return;
             }

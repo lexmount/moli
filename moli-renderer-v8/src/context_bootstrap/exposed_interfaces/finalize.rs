@@ -7,7 +7,6 @@ use super::materialize::{
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum RealmDependentFinalizer {
     NodeMixinUnscopables,
-    EventTargetBrand,
     DomExceptionPrototypeCache,
     CryptoSecureContextSurface,
     BlobPrototypeCache,
@@ -36,7 +35,6 @@ const REALM_DEPENDENT_FINALIZER_ALLOWLIST: &[(&str, RealmDependentFinalizer)] = 
     ),
     // These entries install private realm state, context-conditional surface,
     // or constructor data whose JavaScript identity must be realm-local.
-    ("EventTarget", RealmDependentFinalizer::EventTargetBrand),
     (
         "DOMException",
         RealmDependentFinalizer::DomExceptionPrototypeCache,
@@ -88,11 +86,6 @@ pub(super) fn finalize_materialized_interface(
     match finalizer {
         RealmDependentFinalizer::NodeMixinUnscopables => {
             finalize_node_mixin_unscopables(scope, prototype);
-        }
-        RealmDependentFinalizer::EventTargetBrand => {
-            crate::context_bootstrap::event_template::mark_event_target_interface_prototype(
-                scope, prototype,
-            );
         }
         RealmDependentFinalizer::DomExceptionPrototypeCache => {
             crate::context_bootstrap::constructors::finalize_dom_exception_realm_bindings(
@@ -162,7 +155,6 @@ mod tests {
                 "Element",
                 "DocumentType",
                 "CharacterData",
-                "EventTarget",
                 "DOMException",
                 "Crypto",
                 "Blob",
@@ -173,6 +165,7 @@ mod tests {
             ]
         );
         for static_owner in [
+            "EventTarget",
             "Node",
             "HTMLAnchorElement",
             "HTMLAreaElement",

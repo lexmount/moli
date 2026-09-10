@@ -1403,7 +1403,7 @@ fn readable_body_stream_from_value<'s>(
     let Ok(stream) = v8::Local::<v8::Object>::try_from(value) else {
         return None;
     };
-    if crate::context_bootstrap::object_prototype_matches(scope, stream, "ReadableStream") {
+    if moli_webapi_declare::implements_interface(scope, stream, "ReadableStream") {
         return Some(stream);
     }
     None

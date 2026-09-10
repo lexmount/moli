@@ -1,7 +1,6 @@
 use super::*;
 
 const CSS_STYLE_VALUE_TEXT_SLOT: &str = "__moliCssStyleValueText";
-const CSS_STYLE_VALUE_BRAND_SLOT: &str = "__moliCssStyleValueBrand";
 const CSS_KEYWORD_VALUE_VALUE_SLOT: &str = "__moliCssKeywordValueValue";
 const CSS_UNIT_VALUE_VALUE_SLOT: &str = "__moliCssUnitValueValue";
 const CSS_UNIT_VALUE_UNIT_SLOT: &str = "__moliCssUnitValueUnit";
@@ -15,8 +14,6 @@ const VALID_UNIT_NAMES: &[&str] = &[
 #[derive(WebApiObject)]
 #[webapi(interface = "CSSStyleValue")]
 struct CssStyleValueObjectDeclaration {
-    #[webapi(slot = CSS_STYLE_VALUE_BRAND_SLOT, init = true)]
-    brand: (),
     #[webapi(slot = CSS_STYLE_VALUE_TEXT_SLOT)]
     text: String,
 }
@@ -24,8 +21,6 @@ struct CssStyleValueObjectDeclaration {
 #[derive(WebApiObject)]
 #[webapi(interface = "CSSKeywordValue")]
 struct CssKeywordValueObjectDeclaration {
-    #[webapi(slot = CSS_STYLE_VALUE_BRAND_SLOT, init = true)]
-    brand: (),
     #[webapi(slot = CSS_KEYWORD_VALUE_VALUE_SLOT)]
     value: String,
 }
@@ -33,8 +28,6 @@ struct CssKeywordValueObjectDeclaration {
 #[derive(WebApiObject)]
 #[webapi(interface = "CSSUnitValue")]
 struct CssUnitValueObjectDeclaration {
-    #[webapi(slot = CSS_STYLE_VALUE_BRAND_SLOT, init = true)]
-    brand: (),
     #[webapi(slot = CSS_UNIT_VALUE_VALUE_SLOT)]
     value: f64,
     #[webapi(slot = CSS_UNIT_VALUE_UNIT_SLOT)]
@@ -363,8 +356,7 @@ fn css_style_value_receiver_branded<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     receiver: v8::Local<'s, v8::Object>,
 ) -> bool {
-    get_private_value(scope, receiver, CSS_STYLE_VALUE_BRAND_SLOT)
-        .is_some_and(|value| value.boolean_value(scope))
+    moli_webapi_declare::implements_interface(scope, receiver, "CSSStyleValue")
 }
 
 fn css_unit_value_number<'s>(

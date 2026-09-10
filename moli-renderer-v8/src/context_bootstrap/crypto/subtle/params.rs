@@ -5,7 +5,7 @@ pub(crate) fn subtle_crypto_receiver_is_valid<'s>(
     args: &v8::FunctionCallbackArguments<'s>,
     rv: &mut v8::ReturnValue<'_, v8::Value>,
 ) -> bool {
-    if get_private_value(scope, args.this(), CRYPTO_SUBTLE_BRAND_SLOT).is_some() {
+    if moli_webapi_declare::implements_interface(scope, args.this(), "SubtleCrypto") {
         true
     } else {
         set_rejected_webcrypto_promise(scope, rv, WebCryptoRejection::Type);

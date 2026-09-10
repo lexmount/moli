@@ -11,7 +11,7 @@ use moli_webapi_declare::{
 struct Base {}
 
 #[derive(WebApiObject)]
-#[webapi(interface = "TestDerived", allow_empty)]
+#[webapi(interface = "TestDerived", parent = "TestBase", allow_empty)]
 struct Derived {}
 
 #[derive(WebApiObject)]
@@ -217,4 +217,78 @@ fn only_explicitly_registered_native_proxies_share_target_identity() {
     assert!(moli_webapi_declare::register_web_api_proxy(scope, outer).is_err());
     native.revoke();
     assert_eq!(web_api_object_type(scope, native_object), None);
+}
+
+#[derive(moli_webapi_declare::WebApiFunctionTemplate)]
+#[webapi(name = "TestBase", receiver = "TestBase")]
+struct CheckedBaseTemplate {
+    #[webapi(method, callback = convert_argument)]
+    convert: (),
+    #[webapi(method, callback = convert_argument, returns_promise)]
+    convert_async: (),
+}
+
+fn convert_argument<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: v8::FunctionCallbackArguments<'s>,
+    mut rv: v8::ReturnValue<'s>,
+) {
+    if let Some(value) = args.get(0).to_string(scope) {
+        rv.set(value.into());
+    }
+}
+
+#[test]
+fn generated_interface_receivers_accept_subtypes_and_reject_forgery_before_conversion() {
+    ensure_v8();
+    let mut isolate = v8::Isolate::new(Default::default());
+    let scope = pin!(v8::HandleScope::new(&mut isolate));
+    let scope = &mut scope.init();
+    let template = CheckedBaseTemplate::build(scope);
+    let context = v8::Context::new(scope, Default::default());
+    let other = v8::Context::new(scope, Default::default());
+    let object = {
+        let scope = &mut v8::ContextScope::new(scope, other);
+        register_web_api_interfaces(scope, [("TestDerived", Some("TestBase"))]).unwrap();
+        Derived::new().bind(scope).unwrap()
+    };
+    let scope = &mut v8::ContextScope::new(scope, context);
+    let constructor = template.get_function(scope).unwrap();
+    let global = context.global(scope);
+    let constructor_key = v8::String::new(scope, "TestBase").unwrap();
+    let object_key = v8::String::new(scope, "real").unwrap();
+    global.set(scope, constructor_key.into(), constructor.into());
+    global.set(scope, object_key.into(), object.into());
+    assert!(eval(scope, r#"
+        (() => {
+          let conversions = 0;
+          const input = {toString() { conversions++; return 'converted'; }};
+          const method = TestBase.prototype.convert;
+          Object.setPrototypeOf(real, null);
+          if (method.call(real, input) !== 'converted') return false;
+          for (const fake of [{}, Object.create(TestBase.prototype), Object.create(real), new Proxy(real, {})]) {
+            try { method.call(fake, input); return false; }
+            catch (error) { if (!(error instanceof TypeError)) return false; }
+          }
+          return conversions === 1;
+        })()
+    "#).is_true());
+    let promise = eval(
+        scope,
+        "TestBase.prototype.convertAsync.call({}, {toString() { throw Error('must not convert'); }})",
+    );
+    let promise = v8::Local::<v8::Promise>::try_from(promise).unwrap();
+    assert_eq!(promise.state(), v8::PromiseState::Rejected);
+    let reason = promise.result(scope);
+    let reason = v8::Local::<v8::Object>::try_from(reason).unwrap();
+    let name = v8::String::new(scope, "name").unwrap();
+    assert_eq!(
+        reason
+            .get(scope, name.into())
+            .unwrap()
+            .to_string(scope)
+            .unwrap()
+            .to_rust_string_lossy(scope),
+        "TypeError"
+    );
 }

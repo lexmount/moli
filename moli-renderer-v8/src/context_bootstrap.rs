@@ -436,7 +436,6 @@ pub(crate) use self::trusted_types::{
     trusted_script_url_string_or_throw, trusted_types_code_generation_check,
     trusted_types_code_generation_check_callback,
 };
-pub(crate) use self::url_form::object_prototype_matches;
 pub(crate) use self::url_search_params_runtime::url_search_params_request_body;
 pub(crate) use self::web_storage::install_storage_aliases_for_window;
 pub use self::web_storage::{

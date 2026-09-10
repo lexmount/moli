@@ -14,7 +14,6 @@ use policy_callbacks::{
 #[cfg(test)]
 pub(crate) use realm_state::trusted_types_lazy_state_materialized;
 
-const TRUSTED_TYPE_KIND_SLOT: &str = "__moliTrustedTypeKind";
 const TRUSTED_TYPE_VALUE_SLOT: &str = "__moliTrustedTypeValue";
 const TRUSTED_SCRIPT_CODE_LIKE_CONSTRUCTOR_SLOT: &str = "__moliTrustedScriptCodeLikeConstructor";
 const TRUSTED_TYPE_HTML_PROTOTYPE_SLOT: &str = "__moliTrustedHTMLPrototype";
@@ -44,8 +43,6 @@ struct TrustedTypesFactoryDeclaration {
 #[derive(WebApiObject)]
 #[webapi(interface = "Object")]
 struct TrustedTypeObjectDeclaration<'scope> {
-    #[webapi(slot = TRUSTED_TYPE_KIND_SLOT)]
-    kind: v8::Local<'scope, v8::String>,
     #[webapi(slot = TRUSTED_TYPE_VALUE_SLOT)]
     value: v8::Local<'scope, v8::String>,
 }
@@ -140,14 +137,6 @@ impl TrustedTypeKind {
             Self::Html => TRUSTED_TYPE_HTML_CONSTRUCTOR_SLOT,
             Self::Script => TRUSTED_TYPE_SCRIPT_CONSTRUCTOR_SLOT,
             Self::ScriptUrl => TRUSTED_TYPE_SCRIPT_URL_CONSTRUCTOR_SLOT,
-        }
-    }
-
-    fn as_slot_value(self) -> &'static str {
-        match self {
-            Self::Html => "html",
-            Self::Script => "script",
-            Self::ScriptUrl => "script-url",
         }
     }
 
@@ -578,9 +567,7 @@ fn trusted_type_string<'s>(
     kind: TrustedTypeKind,
 ) -> Option<String> {
     let object = v8::Local::<v8::Object>::try_from(value).ok()?;
-    let kind_value = get_private_value(scope, object, TRUSTED_TYPE_KIND_SLOT)?;
-    let kind_string = kind_value.to_string(scope)?.to_rust_string_lossy(scope);
-    if kind_string != kind.as_slot_value() {
+    if !moli_webapi_declare::implements_interface(scope, object, kind.constructor_name()) {
         return None;
     }
     let value = get_private_value(scope, object, TRUSTED_TYPE_VALUE_SLOT)?;
@@ -672,7 +659,7 @@ fn build_trusted_type_object<'s>(
     } else {
         v8::Object::new(scope)
     };
-    TrustedTypeObjectDeclaration::new(v8str(scope, kind.as_slot_value()), value)
+    TrustedTypeObjectDeclaration::new(value)
         .initialize(scope, object)
         .expect("TrustedType object declaration should initialize");
     moli_webapi_declare::initialize_web_api_object(scope, object, kind.constructor_name()).ok()?;

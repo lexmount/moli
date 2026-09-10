@@ -6,7 +6,6 @@ mod callbacks;
 mod helpers;
 mod template;
 
-pub(crate) use helpers::object_prototype_matches;
 pub(super) use helpers::{
     apply_url_update, callback_arg_url_like_string, callback_value_string, url_href_slot,
     url_object_value,

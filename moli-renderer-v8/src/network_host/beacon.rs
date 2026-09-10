@@ -337,7 +337,7 @@ fn navigator_beacon_body<'s>(
     }
     let data = args.get(1);
     if let Ok(object) = v8::Local::<v8::Object>::try_from(data)
-        && crate::context_bootstrap::object_prototype_matches(scope, object, "ReadableStream")
+        && moli_webapi_declare::implements_interface(scope, object, "ReadableStream")
     {
         crate::util::throw_type_error(scope, "sendBeacon cannot have a ReadableStream body.");
         return None;

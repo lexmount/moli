@@ -323,7 +323,7 @@ fn text_track_cue_receiver<'s>(
     args: &v8::FunctionCallbackArguments<'s>,
 ) -> Option<v8::Local<'s, v8::Object>> {
     let receiver = args.this();
-    if get_private_value(scope, receiver, TEXT_TRACK_CUE_START_TIME_SLOT).is_some() {
+    if moli_webapi_declare::implements_interface(scope, receiver, "TextTrackCue") {
         return Some(receiver);
     }
     throw_type_error(scope, "Illegal invocation");

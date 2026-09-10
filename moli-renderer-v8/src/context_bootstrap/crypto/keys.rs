@@ -274,7 +274,7 @@ pub(crate) fn is_crypto_key_object<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     key: v8::Local<'s, v8::Object>,
 ) -> bool {
-    get_private_value(scope, key, CRYPTO_KEY_KIND_SLOT).is_some()
+    moli_webapi_declare::implements_interface(scope, key, "CryptoKey")
 }
 
 pub(crate) fn crypto_key_clone_payload_from_object<'s>(

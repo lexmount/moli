@@ -278,7 +278,6 @@ pub(crate) fn build_css_margin_rule_object_from_stylo_view<'s>(
     parent_rule: Option<v8::Local<'s, v8::Object>>,
 ) -> v8::Local<'s, v8::Object> {
     CssMarginRuleDeclaration {
-        brand: true,
         css_text: view.css_text,
         name: view.name,
         style_text: view.style_text,
@@ -296,7 +295,6 @@ pub(crate) fn build_css_font_face_rule_object_from_stylo_view<'s>(
     parent_rule: Option<v8::Local<'s, v8::Object>>,
 ) -> v8::Local<'s, v8::Object> {
     let object = CssAtRuleDeclaration {
-        brand: true,
         css_text: view.css_text,
         rule_type: CSS_RULE_FONT_FACE_RULE_TYPE,
         parent_rule,
@@ -304,6 +302,8 @@ pub(crate) fn build_css_font_face_rule_object_from_stylo_view<'s>(
     }
     .bind(scope)
     .expect("CSSFontFaceRule declaration should bind");
+    moli_webapi_declare::initialize_web_api_object(scope, object, "CSSFontFaceRule")
+        .expect("CSS rule interface identity should initialize");
     if let Some(prototype) = global_constructor_prototype(scope, "CSSFontFaceRule") {
         let _ = object.set_prototype(scope, prototype.into());
     }
@@ -318,7 +318,6 @@ pub(crate) fn build_css_keyframe_rule_object<'s>(
 ) -> v8::Local<'s, v8::Object> {
     let style_text = parsed.style_text.clone();
     let rule = CssKeyframeRuleDeclaration {
-        brand: true,
         css_text: parsed.css_text,
         key_text: parsed.selector_text,
         style_text: parsed.style_text,
@@ -343,7 +342,6 @@ pub(crate) fn build_css_font_feature_values_rule_object_from_stylo_view<'s>(
     parent_rule: Option<v8::Local<'s, v8::Object>>,
 ) -> v8::Local<'s, v8::Object> {
     let object = CssFontFeatureValuesRuleDeclaration {
-        brand: true,
         css_text: view.css_text,
         font_family: view.font_family,
         parent_rule,
@@ -419,7 +417,6 @@ pub(crate) fn bind_css_property_rule_object<'s>(
     parent_rule: Option<v8::Local<'s, v8::Object>>,
 ) -> v8::Local<'s, v8::Object> {
     CssPropertyRuleDeclaration {
-        brand: true,
         css_text,
         rule_type: CSS_RULE_UNKNOWN_RULE_TYPE,
         name,
@@ -556,7 +553,6 @@ fn bind_css_style_rule_object<'s>(
     parent_rule: Option<v8::Local<'s, v8::Object>>,
 ) -> v8::Local<'s, v8::Object> {
     CssStyleRuleDeclaration {
-        brand: true,
         css_text: parsed.css_text,
         selector_text: parsed.selector_text,
         style_text: parsed.style_text,
@@ -574,7 +570,6 @@ pub(crate) fn build_css_nested_declarations_rule_object<'s>(
     parent_rule: v8::Local<'s, v8::Object>,
 ) -> v8::Local<'s, v8::Object> {
     let rule = CssNestedDeclarationsRuleDeclaration {
-        brand: true,
         css_text: style_text.to_owned(),
         style_text: style_text.to_owned(),
         parent_rule,

@@ -5,9 +5,6 @@ use moli_webapi_declare::{WebApiFunctionTemplate, WebApiObject};
 #[derive(WebApiObject)]
 #[webapi(interface = "EventSource")]
 struct EventSourceObjectDeclaration<'scope> {
-    #[webapi(slot = EVENT_SOURCE_BRAND_SLOT, init = true)]
-    brand: (),
-
     #[webapi(slot = EVENT_SOURCE_URL_SLOT)]
     url: v8::Local<'scope, v8::String>,
 
@@ -610,8 +607,7 @@ fn event_source_is_branded<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     event_source: v8::Local<'s, v8::Object>,
 ) -> bool {
-    get_private_value(scope, event_source, EVENT_SOURCE_BRAND_SLOT)
-        .is_some_and(|value| value.boolean_value(scope))
+    moli_webapi_declare::implements_interface(scope, event_source, "EventSource")
 }
 
 fn event_source_string_slot<'s>(

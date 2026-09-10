@@ -32,9 +32,6 @@ const PDF_MIME_TYPES: &[(&str, &str, &str)] = &[
     ("text/pdf", "pdf", "Portable Document Format"),
 ];
 
-const PLUGIN_ARRAY_BRAND_SLOT: &str = "__moliPluginArrayBrand";
-const MIME_TYPE_ARRAY_BRAND_SLOT: &str = "__moliMimeTypeArrayBrand";
-const PLUGIN_BRAND_SLOT: &str = "__moliPluginBrand";
 const COLLECTION_LENGTH_SLOT: &str = "__moliNavigatorCollectionLength";
 
 #[derive(WebApiObject)]
@@ -56,9 +53,6 @@ struct MimeTypeObjectDeclaration<'scope> {
 #[derive(WebApiObject)]
 #[webapi(interface = "MimeTypeArray")]
 struct MimeTypeArrayObjectDeclaration {
-    #[webapi(slot = MIME_TYPE_ARRAY_BRAND_SLOT, init = true)]
-    brand: (),
-
     #[webapi(slot = COLLECTION_LENGTH_SLOT)]
     length: u32,
 }
@@ -66,9 +60,6 @@ struct MimeTypeArrayObjectDeclaration {
 #[derive(WebApiObject)]
 #[webapi(interface = "PluginArray")]
 struct PluginArrayObjectDeclaration {
-    #[webapi(slot = PLUGIN_ARRAY_BRAND_SLOT, init = true)]
-    brand: (),
-
     #[webapi(slot = COLLECTION_LENGTH_SLOT)]
     length: u32,
 }
@@ -76,9 +67,6 @@ struct PluginArrayObjectDeclaration {
 #[derive(WebApiObject)]
 #[webapi(interface = "Plugin")]
 struct PluginObjectDeclaration<'scope> {
-    #[webapi(slot = PLUGIN_BRAND_SLOT, init = true)]
-    brand: (),
-
     #[webapi(slot = COLLECTION_LENGTH_SLOT)]
     length: u32,
 
@@ -175,7 +163,7 @@ fn plugin_array_length_getter<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     rv: v8::ReturnValue<'s, v8::Value>,
 ) {
-    collection_length_getter_for(scope, args, rv, PLUGIN_ARRAY_BRAND_SLOT);
+    collection_length_getter_for(scope, args, rv, "PluginArray");
 }
 
 fn mime_type_array_length_getter<'s>(
@@ -183,7 +171,7 @@ fn mime_type_array_length_getter<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     rv: v8::ReturnValue<'s, v8::Value>,
 ) {
-    collection_length_getter_for(scope, args, rv, MIME_TYPE_ARRAY_BRAND_SLOT);
+    collection_length_getter_for(scope, args, rv, "MimeTypeArray");
 }
 
 fn plugin_length_getter<'s>(
@@ -191,16 +179,16 @@ fn plugin_length_getter<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     rv: v8::ReturnValue<'s, v8::Value>,
 ) {
-    collection_length_getter_for(scope, args, rv, PLUGIN_BRAND_SLOT);
+    collection_length_getter_for(scope, args, rv, "Plugin");
 }
 
 fn collection_length_getter_for<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'s, v8::Value>,
-    brand_slot: &'static str,
+    interface: &'static str,
 ) {
-    if !receiver_has_brand(scope, args.this(), brand_slot) {
+    if !moli_webapi_declare::implements_interface(scope, args.this(), interface) {
         throw_type_error(scope, "Illegal invocation");
         return;
     }
@@ -214,7 +202,7 @@ fn plugin_array_item_callback<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     rv: v8::ReturnValue<'s, v8::Value>,
 ) {
-    collection_item_callback_for(scope, args, rv, PLUGIN_ARRAY_BRAND_SLOT);
+    collection_item_callback_for(scope, args, rv, "PluginArray");
 }
 
 fn plugin_array_named_item_callback<'s>(
@@ -222,7 +210,7 @@ fn plugin_array_named_item_callback<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     rv: v8::ReturnValue<'s, v8::Value>,
 ) {
-    collection_named_item_callback_for(scope, args, rv, PLUGIN_ARRAY_BRAND_SLOT);
+    collection_named_item_callback_for(scope, args, rv, "PluginArray");
 }
 
 fn mime_type_array_item_callback<'s>(
@@ -230,7 +218,7 @@ fn mime_type_array_item_callback<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     rv: v8::ReturnValue<'s, v8::Value>,
 ) {
-    collection_item_callback_for(scope, args, rv, MIME_TYPE_ARRAY_BRAND_SLOT);
+    collection_item_callback_for(scope, args, rv, "MimeTypeArray");
 }
 
 fn mime_type_array_named_item_callback<'s>(
@@ -238,7 +226,7 @@ fn mime_type_array_named_item_callback<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     rv: v8::ReturnValue<'s, v8::Value>,
 ) {
-    collection_named_item_callback_for(scope, args, rv, MIME_TYPE_ARRAY_BRAND_SLOT);
+    collection_named_item_callback_for(scope, args, rv, "MimeTypeArray");
 }
 
 fn plugin_item_callback<'s>(
@@ -246,7 +234,7 @@ fn plugin_item_callback<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     rv: v8::ReturnValue<'s, v8::Value>,
 ) {
-    collection_item_callback_for(scope, args, rv, PLUGIN_BRAND_SLOT);
+    collection_item_callback_for(scope, args, rv, "Plugin");
 }
 
 fn plugin_named_item_callback<'s>(
@@ -254,20 +242,20 @@ fn plugin_named_item_callback<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     rv: v8::ReturnValue<'s, v8::Value>,
 ) {
-    collection_named_item_callback_for(scope, args, rv, PLUGIN_BRAND_SLOT);
+    collection_named_item_callback_for(scope, args, rv, "Plugin");
 }
 
 fn collection_item_callback_for<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'s, v8::Value>,
-    brand_slot: &'static str,
+    interface: &'static str,
 ) {
     let Some(this_obj) = args.this().to_object(scope) else {
         throw_type_error(scope, "Illegal invocation");
         return;
     };
-    if !receiver_has_brand(scope, this_obj, brand_slot) {
+    if !moli_webapi_declare::implements_interface(scope, this_obj, interface) {
         throw_type_error(scope, "Illegal invocation");
         return;
     }
@@ -284,13 +272,13 @@ fn collection_named_item_callback_for<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'s, v8::Value>,
-    brand_slot: &'static str,
+    interface: &'static str,
 ) {
     let Some(this_obj) = args.this().to_object(scope) else {
         throw_type_error(scope, "Illegal invocation");
         return;
     };
-    if !receiver_has_brand(scope, this_obj, brand_slot) {
+    if !moli_webapi_declare::implements_interface(scope, this_obj, interface) {
         throw_type_error(scope, "Illegal invocation");
         return;
     }
@@ -313,17 +301,9 @@ fn plugin_array_refresh_callback<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     _rv: v8::ReturnValue<'s, v8::Value>,
 ) {
-    if !receiver_has_brand(scope, args.this(), PLUGIN_ARRAY_BRAND_SLOT) {
+    if !moli_webapi_declare::implements_interface(scope, args.this(), "PluginArray") {
         throw_type_error(scope, "Illegal invocation");
     }
-}
-
-fn receiver_has_brand<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    receiver: v8::Local<'s, v8::Object>,
-    slot: &'static str,
-) -> bool {
-    get_private_value(scope, receiver, slot).is_some_and(|value| value.boolean_value(scope))
 }
 
 fn build_mime_type<'s>(

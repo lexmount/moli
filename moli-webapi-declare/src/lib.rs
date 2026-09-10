@@ -228,10 +228,9 @@ pub use property::{
     illegal_constructor_callback, webidl_constant_property_attributes,
 };
 pub use prototype::{
-    EVENT_TARGET_INTERFACE_BRAND_SLOT, define_declared_to_string_tag,
-    define_declared_to_string_tag_with_attributes, define_interface_constructor_property,
-    define_interface_prototype_property, define_to_string_tag,
-    define_to_string_tag_with_attributes, set_declared_prototype, set_interface_prototype,
-    set_required_interface_prototype,
+    define_declared_to_string_tag, define_declared_to_string_tag_with_attributes,
+    define_interface_constructor_property, define_interface_prototype_property,
+    define_to_string_tag, define_to_string_tag_with_attributes, set_declared_prototype,
+    set_interface_prototype, set_required_interface_prototype,
 };
 pub use value::{WebApiTemplateValue, WebApiValue, define_array_data_property};

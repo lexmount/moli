@@ -7,11 +7,9 @@ use crate::{
 use moli_webapi_declare::{WebApiFunctionTemplate, WebApiObject};
 
 const TEXT_ENCODER_ENCODING_SLOT: &str = "__lmTextEncoderEncoding";
-const TEXT_ENCODER_BRAND_SLOT: &str = "__lmTextEncoderBrand";
 const TEXT_DECODER_ENCODING_SLOT: &str = "__lmTextDecoderEncoding";
 const TEXT_DECODER_FATAL_SLOT: &str = "__lmTextDecoderFatal";
 const TEXT_DECODER_IGNORE_BOM_SLOT: &str = "__lmTextDecoderIgnoreBOM";
-const TEXT_DECODER_BRAND_SLOT: &str = "__lmTextDecoderBrand";
 const TEXT_ENCODER_ENCODING_SLOT_INDEX: usize = 0;
 const TEXT_DECODER_ENCODING_SLOT_INDEX: usize = 1;
 const TEXT_DECODER_FATAL_SLOT_INDEX: usize = 2;
@@ -20,9 +18,6 @@ const TEXT_DECODER_IGNORE_BOM_SLOT_INDEX: usize = 3;
 #[derive(WebApiObject)]
 #[webapi(interface = "TextEncoder")]
 struct TextEncoderObjectDeclaration {
-    #[webapi(slot = TEXT_ENCODER_BRAND_SLOT, init = true)]
-    brand: (),
-
     #[webapi(slot = TEXT_ENCODER_ENCODING_SLOT)]
     encoding: &'static str,
 }
@@ -46,9 +41,6 @@ struct TextEncoderPrototypeDeclaration {
 #[derive(WebApiObject)]
 #[webapi(interface = "TextDecoder")]
 struct TextDecoderObjectDeclaration {
-    #[webapi(slot = TEXT_DECODER_BRAND_SLOT, init = true)]
-    brand: (),
-
     #[webapi(slot = TEXT_DECODER_ENCODING_SLOT)]
     encoding: String,
     #[webapi(slot = TEXT_DECODER_FATAL_SLOT)]
@@ -429,16 +421,14 @@ fn text_encoder_receiver_branded<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     receiver: v8::Local<'s, v8::Object>,
 ) -> bool {
-    get_private_value(scope, receiver, TEXT_ENCODER_BRAND_SLOT)
-        .is_some_and(|value| value.boolean_value(scope))
+    moli_webapi_declare::implements_interface(scope, receiver, "TextEncoder")
 }
 
 fn text_decoder_receiver_branded<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     receiver: v8::Local<'s, v8::Object>,
 ) -> bool {
-    get_private_value(scope, receiver, TEXT_DECODER_BRAND_SLOT)
-        .is_some_and(|value| value.boolean_value(scope))
+    moli_webapi_declare::implements_interface(scope, receiver, "TextDecoder")
 }
 
 fn init_text_decoder_state(

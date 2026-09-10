@@ -46,7 +46,7 @@ pub(in crate::network_host) fn body_init<'s>(
             let content_type = (!mime_type.is_empty()).then_some(mime_type);
             return Ok(Some(PreparedBodyInit::new(bytes, content_type)));
         }
-        if crate::context_bootstrap::object_prototype_matches(scope, object, "ReadableStream") {
+        if moli_webapi_declare::implements_interface(scope, object, "ReadableStream") {
             return Ok(Some(PreparedBodyInit::new(Vec::new(), None)));
         }
     }

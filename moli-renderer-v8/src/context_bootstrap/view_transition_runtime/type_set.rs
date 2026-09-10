@@ -8,7 +8,6 @@ use crate::{
     },
 };
 
-const VIEW_TRANSITION_TYPE_SET_BRAND_SLOT: &str = "__lmViewTransitionTypeSetBrand";
 const VIEW_TRANSITION_TYPE_SET_BACKING_SLOT: &str = "__lmViewTransitionTypeSetBacking";
 
 pub(super) fn new_view_transition_type_set<'s>(
@@ -25,12 +24,7 @@ pub(super) fn new_view_transition_type_set<'s>(
     if object.set_prototype(scope, prototype.into()) != Some(true) {
         return None;
     }
-    set_private_value(
-        scope,
-        object,
-        VIEW_TRANSITION_TYPE_SET_BRAND_SLOT,
-        v8::Boolean::new(scope, true).into(),
-    );
+    moli_webapi_declare::initialize_web_api_object(scope, object, "ViewTransitionTypeSet").ok()?;
     set_private_value(
         scope,
         object,
@@ -45,8 +39,8 @@ fn require_view_transition_type_set_receiver<'s>(
     receiver: v8::Local<'s, v8::Object>,
     member: &str,
 ) -> Option<v8::Local<'s, v8::Set>> {
-    let branded = get_private_value(scope, receiver, VIEW_TRANSITION_TYPE_SET_BRAND_SLOT)
-        .is_some_and(|value| value.boolean_value(scope));
+    let branded =
+        moli_webapi_declare::implements_interface(scope, receiver, "ViewTransitionTypeSet");
     let backing = get_private_value(scope, receiver, VIEW_TRANSITION_TYPE_SET_BACKING_SLOT)
         .and_then(|value| v8::Local::<v8::Set>::try_from(value).ok());
     if branded && backing.is_some() {

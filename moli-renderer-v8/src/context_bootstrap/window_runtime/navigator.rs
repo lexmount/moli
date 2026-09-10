@@ -3,8 +3,7 @@ use moli_browser_profile::BrowserIdentityProfile;
 use moli_webapi_declare::{ObjectLiteralDeclaration, WebApiObject};
 
 use crate::context_bootstrap::navigator_runtime::{
-    STORAGE_BUCKET_MANAGER_BRAND_SLOT, STORAGE_BUCKET_MANAGER_CHILD_HANDLE_SLOT,
-    STORAGE_BUCKET_MANAGER_POPUP_ID_SLOT, STORAGE_MANAGER_BRAND_SLOT,
+    STORAGE_BUCKET_MANAGER_CHILD_HANDLE_SLOT, STORAGE_BUCKET_MANAGER_POPUP_ID_SLOT,
     STORAGE_MANAGER_CHILD_HANDLE_SLOT, STORAGE_MANAGER_POPUP_ID_SLOT,
     current_protocol_user_gesture_activation, navigator_identity_profile,
     navigator_receiver_branded, set_navigator_identity_profile,
@@ -33,19 +32,15 @@ pub(in crate::context_bootstrap) use legacy_storage_quota::{
 
 const PERMISSION_STATUS_NAME_SLOT: &str = "__moliPermissionStatusName";
 const PERMISSION_STATUS_STATE_SLOT: &str = "__moliPermissionStatusState";
-const PERMISSION_STATUS_BRAND_SLOT: &str = "__moliPermissionStatusBrand";
 const VIBRATION_PATTERN_LENGTH_MAX: usize = 99;
 const VIBRATION_DURATION_MS_MAX: u32 = 10_000;
-const STORAGE_BUCKET_BRAND_SLOT: &str = "__moliStorageBucketBrand";
 const STORAGE_BUCKET_CACHES_OBJECT_SLOT: &str = "__moliStorageBucketCachesObject";
 const STORAGE_BUCKET_ID_SLOT: &str = "__moliStorageBucketId";
 const STORAGE_BUCKET_NAME_SLOT: &str = "__moliStorageBucketName";
 const STORAGE_BUCKET_ORIGIN_SLOT: &str = "__moliStorageBucketOrigin";
 const STORAGE_BUCKET_STORAGE_KEY_SLOT: &str = "__moliStorageBucketStorageKey";
-const STORAGE_BUCKET_CACHE_BRAND_SLOT: &str = "__moliStorageBucketCacheBrand";
 const STORAGE_BUCKET_CACHE_NAME_SLOT: &str = "__moliStorageBucketCacheName";
 const STORAGE_BUCKET_CACHE_ID_SLOT: &str = "__moliStorageBucketCacheId";
-const STORAGE_BUCKET_CACHE_STORAGE_BRAND_SLOT: &str = "__moliStorageBucketCacheStorageBrand";
 const GLOBAL_CACHE_STORAGE_SLOT: &str = "__moliGlobalCacheStorage";
 const STORAGE_BUCKET_CACHE_PUT_RESOLVER_SLOT: &str = "__moliStorageBucketCachePutResolver";
 const STORAGE_BUCKET_CACHE_PUT_BUCKET_ORIGIN_SLOT: &str = "__moliStorageBucketCachePutBucketOrigin";
@@ -70,12 +65,7 @@ const STORAGE_BUCKET_CACHE_PUT_RESPONSE_STATUS_TEXT_SLOT: &str =
     "__moliStorageBucketCachePutResponseStatusText";
 const STORAGE_BUCKET_CACHE_PUT_RESPONSE_HEADERS_SLOT: &str =
     "__moliStorageBucketCachePutResponseHeaders";
-pub(in crate::context_bootstrap) const NAVIGATOR_UA_DATA_BRAND_SLOT: &str =
-    "__moliNavigatorUADataBrand";
 const NAVIGATOR_UA_DATA_USER_AGENT_SLOT: &str = "__moliNavigatorUADataUserAgent";
-pub(in crate::context_bootstrap) const MEDIA_DEVICES_BRAND_SLOT: &str = "__moliMediaDevicesBrand";
-pub(in crate::context_bootstrap) const PERMISSIONS_BRAND_SLOT: &str = "__moliPermissionsBrand";
-const NAVIGATOR_BATTERY_STATUS_BRAND_SLOT: &str = "__moliBatteryStatusBrand";
 
 #[derive(Default, WebApiObject)]
 #[webapi(
@@ -84,8 +74,6 @@ const NAVIGATOR_BATTERY_STATUS_BRAND_SLOT: &str = "__moliBatteryStatusBrand";
     own_to_string_tag = "CacheStorage"
 )]
 struct StorageBucketCacheStorageObjectDeclaration {
-    #[webapi(slot = STORAGE_BUCKET_CACHE_STORAGE_BRAND_SLOT, init = true)]
-    brand: (),
     #[webapi(
         method,
         callback = storage_bucket_cache_storage_match_callback,
@@ -121,8 +109,6 @@ struct StorageBucketCacheStorageObjectDeclaration {
 #[derive(WebApiObject)]
 #[webapi(prototype = "Object", interface = "Cache", own_to_string_tag = "Cache")]
 struct StorageBucketCacheObjectDeclaration {
-    #[webapi(slot = STORAGE_BUCKET_CACHE_BRAND_SLOT, init = true)]
-    brand: (),
     #[webapi(slot = STORAGE_BUCKET_CACHE_NAME_SLOT)]
     cache_name: String,
     #[webapi(slot = STORAGE_BUCKET_CACHE_ID_SLOT)]
@@ -142,9 +128,6 @@ struct StorageBucketCacheObjectDeclaration {
 #[derive(WebApiObject)]
 #[webapi(interface = "PermissionStatus")]
 struct PermissionStatusObjectDeclaration {
-    #[webapi(slot = PERMISSION_STATUS_BRAND_SLOT, init = true)]
-    brand: (),
-
     #[webapi(slot = PERMISSION_STATUS_NAME_SLOT)]
     name: String,
 
@@ -185,9 +168,6 @@ struct NavigatorUaBrandEntryDeclaration {
 #[derive(WebApiObject)]
 #[webapi(interface = "NavigatorUAData")]
 struct NavigatorUaDataObjectDeclaration {
-    #[webapi(slot = NAVIGATOR_UA_DATA_BRAND_SLOT, init = true)]
-    brand: (),
-
     #[webapi(slot = NAVIGATOR_UA_DATA_USER_AGENT_SLOT)]
     user_agent: String,
 
@@ -278,9 +258,6 @@ struct StorageUsageDetailsObjectDeclaration {
 #[derive(WebApiObject)]
 #[webapi(prototype = "Object", interface = "BatteryManager", data_properties)]
 struct NavigatorBatteryStatusObjectDeclaration {
-    #[webapi(slot = NAVIGATOR_BATTERY_STATUS_BRAND_SLOT, init = true)]
-    brand: (),
-
     #[webapi(data_property, enumerable)]
     charging: bool,
     #[webapi(data_property, enumerable)]
@@ -313,11 +290,8 @@ struct NavigatorBatteryStatusObjectDeclaration {
 }
 
 #[derive(WebApiObject)]
-#[webapi(interface = "StorageBucket")]
-struct StorageBucketObjectDeclaration {
-    #[webapi(slot, name = STORAGE_BUCKET_BRAND_SLOT, constructor_default = true)]
-    brand: bool,
-}
+#[webapi(allow_empty, interface = "StorageBucket")]
+struct StorageBucketObjectDeclaration {}
 
 #[derive(Debug)]
 struct StorageBucketHandle {
@@ -577,8 +551,7 @@ fn battery_status_receiver_branded<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     receiver: v8::Local<'s, v8::Object>,
 ) -> bool {
-    get_private_value(scope, receiver, NAVIGATOR_BATTERY_STATUS_BRAND_SLOT)
-        .is_some_and(|value| value.boolean_value(scope))
+    moli_webapi_declare::implements_interface(scope, receiver, "BatteryManager")
 }
 
 pub(in crate::context_bootstrap) fn navigator_permissions_query_callback<'s>(
@@ -640,8 +613,7 @@ fn permissions_receiver_branded<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     receiver: v8::Local<'s, v8::Object>,
 ) -> bool {
-    get_private_value(scope, receiver, PERMISSIONS_BRAND_SLOT)
-        .is_some_and(|value| value.boolean_value(scope))
+    moli_webapi_declare::implements_interface(scope, receiver, "Permissions")
 }
 
 fn build_permission_status_object<'s>(
@@ -761,14 +733,7 @@ fn storage_manager_promise_resolver<'s>(
     rv: &mut v8::ReturnValue<'_, v8::Value>,
     method: &'static str,
 ) -> Option<v8::Local<'s, v8::PromiseResolver>> {
-    branded_promise_resolver(
-        scope,
-        args,
-        rv,
-        "StorageManager",
-        method,
-        STORAGE_MANAGER_BRAND_SLOT,
-    )
+    branded_promise_resolver(scope, args, rv, "StorageManager", method)
 }
 
 fn storage_manager_context_or_reject<'s>(
@@ -1111,14 +1076,7 @@ fn storage_bucket_manager_resolver<'s>(
     rv: &mut v8::ReturnValue<'_, v8::Value>,
     method: &'static str,
 ) -> Option<v8::Local<'s, v8::PromiseResolver>> {
-    let resolver = branded_promise_resolver(
-        scope,
-        args,
-        rv,
-        "StorageBucketManager",
-        method,
-        STORAGE_BUCKET_MANAGER_BRAND_SLOT,
-    )?;
+    let resolver = branded_promise_resolver(scope, args, rv, "StorageBucketManager", method)?;
     if !storage_bucket_manager_owner_is_live(scope, args.this()) {
         reject_illegal_invocation(scope, resolver, "StorageBucketManager", method);
         return None;
@@ -2449,14 +2407,7 @@ fn storage_bucket_resolver<'s>(
     rv: &mut v8::ReturnValue<'_, v8::Value>,
     method: &'static str,
 ) -> Option<v8::Local<'s, v8::PromiseResolver>> {
-    let resolver = branded_promise_resolver(
-        scope,
-        args,
-        rv,
-        "StorageBucket",
-        method,
-        STORAGE_BUCKET_BRAND_SLOT,
-    )?;
+    let resolver = branded_promise_resolver(scope, args, rv, "StorageBucket", method)?;
     if !storage_bucket_receiver_execution_context_is_live(scope, args.this()) {
         reject_storage_bucket_invalid_state(scope, resolver, method);
         return None;
@@ -2468,8 +2419,7 @@ fn storage_bucket_receiver_branded<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     receiver: v8::Local<'s, v8::Object>,
 ) -> bool {
-    get_private_value(scope, receiver, STORAGE_BUCKET_BRAND_SLOT)
-        .is_some_and(|value| value.boolean_value(scope))
+    moli_webapi_declare::implements_interface(scope, receiver, "StorageBucket")
 }
 
 fn build_storage_bucket_object<'s>(
@@ -2566,14 +2516,7 @@ fn storage_bucket_cache_storage_resolver<'s>(
     rv: &mut v8::ReturnValue<'_, v8::Value>,
     method: &'static str,
 ) -> Option<v8::Local<'s, v8::PromiseResolver>> {
-    let resolver = branded_promise_resolver(
-        scope,
-        args,
-        rv,
-        "CacheStorage",
-        method,
-        STORAGE_BUCKET_CACHE_STORAGE_BRAND_SLOT,
-    )?;
+    let resolver = branded_promise_resolver(scope, args, rv, "CacheStorage", method)?;
     if !storage_bucket_receiver_execution_context_is_live(scope, args.this()) {
         reject_storage_bucket_invalid_state(scope, resolver, method);
         return None;
@@ -2587,14 +2530,7 @@ fn storage_bucket_cache_resolver<'s>(
     rv: &mut v8::ReturnValue<'_, v8::Value>,
     method: &'static str,
 ) -> Option<v8::Local<'s, v8::PromiseResolver>> {
-    let resolver = branded_promise_resolver(
-        scope,
-        args,
-        rv,
-        "Cache",
-        method,
-        STORAGE_BUCKET_CACHE_BRAND_SLOT,
-    )?;
+    let resolver = branded_promise_resolver(scope, args, rv, "Cache", method)?;
     if !storage_bucket_receiver_execution_context_is_live(scope, args.this()) {
         reject_storage_bucket_invalid_state(scope, resolver, method);
         return None;
@@ -2625,13 +2561,10 @@ fn branded_promise_resolver<'s>(
     rv: &mut v8::ReturnValue<'_, v8::Value>,
     interface: &'static str,
     method: &'static str,
-    brand_slot: &'static str,
 ) -> Option<v8::Local<'s, v8::PromiseResolver>> {
     let resolver = v8::PromiseResolver::new(scope)?;
     rv.set(resolver.get_promise(scope).into());
-    if !get_private_value(scope, args.this(), brand_slot)
-        .is_some_and(|value| value.boolean_value(scope))
-    {
+    if !moli_webapi_declare::implements_interface(scope, args.this(), interface) {
         reject_illegal_invocation(scope, resolver, interface, method);
         return None;
     }
@@ -3444,8 +3377,7 @@ fn navigator_ua_data_receiver_branded<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     receiver: v8::Local<'s, v8::Object>,
 ) -> bool {
-    get_private_value(scope, receiver, NAVIGATOR_UA_DATA_BRAND_SLOT)
-        .is_some_and(|value| value.boolean_value(scope))
+    moli_webapi_declare::implements_interface(scope, receiver, "NavigatorUAData")
 }
 
 pub(in crate::context_bootstrap) fn build_navigator_ua_data_object<'s>(
@@ -3592,6 +3524,5 @@ fn media_devices_receiver_branded<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     receiver: v8::Local<'s, v8::Object>,
 ) -> bool {
-    get_private_value(scope, receiver, MEDIA_DEVICES_BRAND_SLOT)
-        .is_some_and(|value| value.boolean_value(scope))
+    moli_webapi_declare::implements_interface(scope, receiver, "MediaDevices")
 }

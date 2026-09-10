@@ -4,7 +4,6 @@ use crate::util::{
 };
 use moli_webapi_declare::{WebApiFunctionTemplate, WebApiObject};
 
-const VISUAL_VIEWPORT_BRAND_SLOT: &str = "__moliVisualViewportBrand";
 const VISUAL_VIEWPORT_OFFSET_LEFT_SLOT: &str = "__moliVisualViewportOffsetLeft";
 const VISUAL_VIEWPORT_OFFSET_TOP_SLOT: &str = "__moliVisualViewportOffsetTop";
 const VISUAL_VIEWPORT_PAGE_LEFT_SLOT: &str = "__moliVisualViewportPageLeft";
@@ -16,9 +15,6 @@ const VISUAL_VIEWPORT_SCALE_SLOT: &str = "__moliVisualViewportScale";
 #[derive(WebApiObject)]
 #[webapi(interface = "VisualViewport")]
 struct VisualViewportObjectDeclaration {
-    #[webapi(slot = VISUAL_VIEWPORT_BRAND_SLOT, init = true)]
-    brand: (),
-
     #[webapi(slot = VISUAL_VIEWPORT_OFFSET_LEFT_SLOT)]
     offset_left: f64,
     #[webapi(slot = VISUAL_VIEWPORT_OFFSET_TOP_SLOT)]
@@ -73,7 +69,6 @@ pub(in crate::context_bootstrap) fn build_window_visual_viewport<'s>(
 ) -> Result<v8::Local<'s, v8::Object>> {
     let profile = &DEFAULT_WINDOW_SURFACE_PROFILE;
     Ok(VisualViewportObjectDeclaration {
-        brand: (),
         offset_left: 0.0,
         offset_top: 0.0,
         page_left: 0.0,
@@ -107,9 +102,7 @@ fn visual_viewport_attribute_getter_callback<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'_, v8::Value>,
 ) {
-    if get_private_value(scope, args.this(), VISUAL_VIEWPORT_BRAND_SLOT)
-        .is_none_or(|value| !value.boolean_value(scope))
-    {
+    if !moli_webapi_declare::implements_interface(scope, args.this(), "VisualViewport") {
         throw_type_error(scope, "Illegal invocation");
         return;
     }

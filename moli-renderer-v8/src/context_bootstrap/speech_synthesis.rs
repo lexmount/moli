@@ -9,14 +9,12 @@ use crate::util::{
 use anyhow::Result;
 use moli_webapi_declare::{WebApiFunctionTemplate, WebApiObject, v8};
 
-const SPEECH_SYNTHESIS_BRAND_SLOT: &str = "__lmSpeechSynthesisBrand";
 const SPEECH_SYNTHESIS_PENDING_SLOT: &str = "__lmSpeechSynthesisPending";
 const SPEECH_SYNTHESIS_SPEAKING_SLOT: &str = "__lmSpeechSynthesisSpeaking";
 const SPEECH_SYNTHESIS_PAUSED_SLOT: &str = "__lmSpeechSynthesisPaused";
 const SPEECH_SYNTHESIS_LISTENERS_SLOT: &str = "__lmSpeechSynthesisListeners";
 const SPEECH_SYNTHESIS_ONVOICESCHANGED_SLOT: &str = "__lmSpeechSynthesisOnvoiceschanged";
 
-const SPEECH_UTTERANCE_BRAND_SLOT: &str = "__lmSpeechSynthesisUtteranceBrand";
 const SPEECH_UTTERANCE_TEXT_SLOT: &str = "__lmSpeechSynthesisUtteranceText";
 const SPEECH_UTTERANCE_LANG_SLOT: &str = "__lmSpeechSynthesisUtteranceLang";
 const SPEECH_UTTERANCE_VOICE_SLOT: &str = "__lmSpeechSynthesisUtteranceVoice";
@@ -32,7 +30,6 @@ const SPEECH_UTTERANCE_ONRESUME_SLOT: &str = "__lmSpeechSynthesisUtteranceOnresu
 const SPEECH_UTTERANCE_ONMARK_SLOT: &str = "__lmSpeechSynthesisUtteranceOnmark";
 const SPEECH_UTTERANCE_ONBOUNDARY_SLOT: &str = "__lmSpeechSynthesisUtteranceOnboundary";
 
-const SPEECH_VOICE_BRAND_SLOT: &str = "__lmSpeechSynthesisVoiceBrand";
 const SPEECH_VOICE_URI_SLOT: &str = "__lmSpeechSynthesisVoiceUri";
 const SPEECH_VOICE_NAME_SLOT: &str = "__lmSpeechSynthesisVoiceName";
 const SPEECH_VOICE_LANG_SLOT: &str = "__lmSpeechSynthesisVoiceLang";
@@ -42,9 +39,6 @@ const SPEECH_VOICE_DEFAULT_SLOT: &str = "__lmSpeechSynthesisVoiceDefault";
 #[derive(Default, WebApiObject)]
 #[webapi(interface = "SpeechSynthesis")]
 struct SpeechSynthesisObjectDeclaration {
-    #[webapi(slot = SPEECH_SYNTHESIS_BRAND_SLOT, init = true)]
-    brand: (),
-
     #[webapi(slot = SPEECH_SYNTHESIS_PENDING_SLOT, init = false)]
     pending: (),
 
@@ -114,9 +108,6 @@ struct SpeechSynthesisPrototypeDeclaration {
 #[derive(WebApiObject)]
 #[webapi(interface = "SpeechSynthesisUtterance")]
 struct SpeechSynthesisUtteranceObjectDeclaration<'scope> {
-    #[webapi(slot = SPEECH_UTTERANCE_BRAND_SLOT, init = true)]
-    brand: (),
-
     #[webapi(slot = SPEECH_UTTERANCE_TEXT_SLOT)]
     text: v8::Local<'scope, v8::String>,
 
@@ -392,7 +383,6 @@ pub(in crate::context_bootstrap) fn speech_synthesis_utterance_constructor_callb
     let lang = v8::String::empty(scope);
     let utterance = args.this();
     let declaration = SpeechSynthesisUtteranceObjectDeclaration {
-        brand: (),
         text,
         lang,
         voice: (),
@@ -421,7 +411,7 @@ fn speech_synthesis_state_getter<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'s, v8::Value>,
 ) {
-    if !require_brand(scope, args.this(), SPEECH_SYNTHESIS_BRAND_SLOT) {
+    if !require_brand(scope, args.this(), "SpeechSynthesis") {
         return;
     }
     let Some(slot) = callback_data_item(
@@ -443,7 +433,7 @@ fn speech_synthesis_speak_callback<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'s, v8::Value>,
 ) {
-    if !require_brand(scope, args.this(), SPEECH_SYNTHESIS_BRAND_SLOT) {
+    if !require_brand(scope, args.this(), "SpeechSynthesis") {
         return;
     }
     if args.length() == 0 {
@@ -456,7 +446,9 @@ fn speech_synthesis_speak_callback<'s>(
     let utterance = args.get(0);
     let branded = v8::Local::<v8::Object>::try_from(utterance)
         .ok()
-        .is_some_and(|object| has_brand(scope, object, SPEECH_UTTERANCE_BRAND_SLOT));
+        .is_some_and(|object| {
+            moli_webapi_declare::implements_interface(scope, object, "SpeechSynthesisUtterance")
+        });
     if !branded {
         throw_type_error(
             scope,
@@ -477,7 +469,7 @@ fn speech_synthesis_cancel_callback<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'s, v8::Value>,
 ) {
-    if !require_brand(scope, args.this(), SPEECH_SYNTHESIS_BRAND_SLOT) {
+    if !require_brand(scope, args.this(), "SpeechSynthesis") {
         return;
     }
     rv.set_undefined();
@@ -488,7 +480,7 @@ fn speech_synthesis_pause_callback<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'s, v8::Value>,
 ) {
-    if !require_brand(scope, args.this(), SPEECH_SYNTHESIS_BRAND_SLOT) {
+    if !require_brand(scope, args.this(), "SpeechSynthesis") {
         return;
     }
     rv.set_undefined();
@@ -499,7 +491,7 @@ fn speech_synthesis_resume_callback<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'s, v8::Value>,
 ) {
-    if !require_brand(scope, args.this(), SPEECH_SYNTHESIS_BRAND_SLOT) {
+    if !require_brand(scope, args.this(), "SpeechSynthesis") {
         return;
     }
     rv.set_undefined();
@@ -510,7 +502,7 @@ fn speech_synthesis_get_voices_callback<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'s, v8::Value>,
 ) {
-    if !require_brand(scope, args.this(), SPEECH_SYNTHESIS_BRAND_SLOT) {
+    if !require_brand(scope, args.this(), "SpeechSynthesis") {
         return;
     }
     rv.set(v8::Array::new(scope, 0).into());
@@ -521,7 +513,7 @@ fn speech_synthesis_onvoiceschanged_getter<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'s, v8::Value>,
 ) {
-    if !require_brand(scope, args.this(), SPEECH_SYNTHESIS_BRAND_SLOT) {
+    if !require_brand(scope, args.this(), "SpeechSynthesis") {
         return;
     }
     rv.set(
@@ -535,7 +527,7 @@ fn speech_synthesis_onvoiceschanged_setter<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     _rv: v8::ReturnValue<'s, v8::Value>,
 ) {
-    if !require_brand(scope, args.this(), SPEECH_SYNTHESIS_BRAND_SLOT) {
+    if !require_brand(scope, args.this(), "SpeechSynthesis") {
         return;
     }
     set_event_handler(
@@ -553,7 +545,7 @@ fn speech_utterance_string_getter<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'s, v8::Value>,
 ) {
-    if !require_brand(scope, args.this(), SPEECH_UTTERANCE_BRAND_SLOT) {
+    if !require_brand(scope, args.this(), "SpeechSynthesisUtterance") {
         return;
     }
     let Some(slot) = callback_data_item(
@@ -576,7 +568,7 @@ fn speech_utterance_string_setter<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     _rv: v8::ReturnValue<'s, v8::Value>,
 ) {
-    if !require_brand(scope, args.this(), SPEECH_UTTERANCE_BRAND_SLOT) {
+    if !require_brand(scope, args.this(), "SpeechSynthesisUtterance") {
         return;
     }
     let Some(slot) = callback_data_item(
@@ -598,7 +590,7 @@ fn speech_utterance_voice_getter<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'s, v8::Value>,
 ) {
-    if !require_brand(scope, args.this(), SPEECH_UTTERANCE_BRAND_SLOT) {
+    if !require_brand(scope, args.this(), "SpeechSynthesisUtterance") {
         return;
     }
     rv.set(
@@ -612,7 +604,7 @@ fn speech_utterance_voice_setter<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     _rv: v8::ReturnValue<'s, v8::Value>,
 ) {
-    if !require_brand(scope, args.this(), SPEECH_UTTERANCE_BRAND_SLOT) {
+    if !require_brand(scope, args.this(), "SpeechSynthesisUtterance") {
         return;
     }
     let value = args.get(0);
@@ -627,7 +619,9 @@ fn speech_utterance_voice_setter<'s>(
     }
     let valid = v8::Local::<v8::Object>::try_from(value)
         .ok()
-        .is_some_and(|object| has_brand(scope, object, SPEECH_VOICE_BRAND_SLOT));
+        .is_some_and(|object| {
+            moli_webapi_declare::implements_interface(scope, object, "SpeechSynthesisVoice")
+        });
     if !valid {
         throw_type_error(
             scope,
@@ -643,7 +637,7 @@ fn speech_utterance_float_getter<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'s, v8::Value>,
 ) {
-    if !require_brand(scope, args.this(), SPEECH_UTTERANCE_BRAND_SLOT) {
+    if !require_brand(scope, args.this(), "SpeechSynthesisUtterance") {
         return;
     }
     let Some(attribute) = callback_data_item(
@@ -666,7 +660,7 @@ fn speech_utterance_float_setter<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     _rv: v8::ReturnValue<'s, v8::Value>,
 ) {
-    if !require_brand(scope, args.this(), SPEECH_UTTERANCE_BRAND_SLOT) {
+    if !require_brand(scope, args.this(), "SpeechSynthesisUtterance") {
         return;
     }
     let Some(attribute) = callback_data_item(
@@ -701,7 +695,7 @@ fn speech_utterance_event_handler_getter<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'s, v8::Value>,
 ) {
-    if !require_brand(scope, args.this(), SPEECH_UTTERANCE_BRAND_SLOT) {
+    if !require_brand(scope, args.this(), "SpeechSynthesisUtterance") {
         return;
     }
     let Some(handler) = callback_data_item(
@@ -724,7 +718,7 @@ fn speech_utterance_event_handler_setter<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     _rv: v8::ReturnValue<'s, v8::Value>,
 ) {
-    if !require_brand(scope, args.this(), SPEECH_UTTERANCE_BRAND_SLOT) {
+    if !require_brand(scope, args.this(), "SpeechSynthesisUtterance") {
         return;
     }
     let Some(handler) = callback_data_item(
@@ -750,7 +744,7 @@ fn speech_voice_getter<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'s, v8::Value>,
 ) {
-    if !require_brand(scope, args.this(), SPEECH_VOICE_BRAND_SLOT) {
+    if !require_brand(scope, args.this(), "SpeechSynthesisVoice") {
         return;
     }
     let Some(slot) = callback_data_item(
@@ -799,17 +793,9 @@ fn require_brand<'s>(
     receiver: v8::Local<'s, v8::Object>,
     slot: &'static str,
 ) -> bool {
-    if has_brand(scope, receiver, slot) {
+    if moli_webapi_declare::implements_interface(scope, receiver, slot) {
         return true;
     }
     throw_type_error(scope, "Illegal invocation");
     false
-}
-
-fn has_brand<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    receiver: v8::Local<'s, v8::Object>,
-    slot: &'static str,
-) -> bool {
-    get_private_value(scope, receiver, slot).is_some_and(|value| value.is_true())
 }

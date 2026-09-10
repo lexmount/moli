@@ -22,7 +22,6 @@ pub(crate) use bindings::{
 pub(crate) use parser::{EventSourceMessage, EventSourceParser};
 pub(crate) use request::event_source_constructor_callback;
 
-const EVENT_SOURCE_BRAND_SLOT: &str = "__lmEventSourceBrand";
 const EVENT_SOURCE_URL_SLOT: &str = "__lmEventSourceUrl";
 const EVENT_SOURCE_WITH_CREDENTIALS_SLOT: &str = "__lmEventSourceWithCredentials";
 const EVENT_SOURCE_READY_STATE_SLOT: &str = "__lmEventSourceReadyState";

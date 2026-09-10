@@ -9,14 +9,13 @@ use super::{
         font_face_set_values_callback, install_font_face_set_event_handler_accessors,
         install_font_face_set_load_event_template_accessors,
         install_font_face_set_template_accessors, install_font_face_template_accessors,
-        is_font_face,
     },
     specs::ConstructorSpec,
 };
 use moli_webapi_declare::WebApiFunctionTemplate;
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(name = "FontFace", enumerable, receiver = is_font_face)]
+#[webapi(name = "FontFace", enumerable, receiver = "FontFace")]
 struct FontFaceTemplateMethodsDeclaration {
     #[webapi(method, length = 0, callback = font_face_load_callback, returns_promise)]
     load: (),

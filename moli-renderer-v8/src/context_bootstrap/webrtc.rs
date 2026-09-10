@@ -10,7 +10,6 @@ mod session_description;
 pub(in crate::context_bootstrap) use ice_candidate::rtc_ice_candidate_constructor_callback;
 pub(in crate::context_bootstrap) use session_description::rtc_session_description_constructor_callback;
 
-const RTC_PEER_CONNECTION_BRAND_SLOT: &str = "__moliRtcPeerConnectionBrand";
 const RTC_PEER_CONNECTION_CONFIGURATION_SLOT: &str = "__moliRtcPeerConnectionConfiguration";
 const RTC_PEER_CONNECTION_SIGNALING_STATE_SLOT: &str = "__moliRtcPeerConnectionSignalingState";
 const RTC_PEER_CONNECTION_ICE_GATHERING_STATE_SLOT: &str =
@@ -26,7 +25,6 @@ const RTC_PEER_CONNECTION_PENDING_LOCAL_DESCRIPTION_SLOT: &str =
 const RTC_PEER_CONNECTION_HAS_DATA_CHANNEL_SLOT: &str = "__moliRtcPeerConnectionHasDataChannel";
 const RTC_PEER_CONNECTION_LISTENERS_SLOT: &str = "__moliRtcPeerConnectionListeners";
 
-const RTC_DATA_CHANNEL_BRAND_SLOT: &str = "__moliRtcDataChannelBrand";
 const RTC_DATA_CHANNEL_LABEL_SLOT: &str = "__moliRtcDataChannelLabel";
 const RTC_DATA_CHANNEL_ORDERED_SLOT: &str = "__moliRtcDataChannelOrdered";
 const RTC_DATA_CHANNEL_MAX_PACKET_LIFETIME_SLOT: &str = "__moliRtcDataChannelMaxPacketLifetime";
@@ -68,8 +66,6 @@ const RTC_DATA_CHANNEL_VALUE_SLOTS: &[&str] = &[
 #[derive(WebApiObject)]
 #[webapi(interface = "RTCPeerConnection")]
 struct RtcPeerConnectionObjectDeclaration<'scope> {
-    #[webapi(slot = RTC_PEER_CONNECTION_BRAND_SLOT, init = true)]
-    brand: (),
     #[webapi(slot = RTC_PEER_CONNECTION_CONFIGURATION_SLOT)]
     configuration: v8::Local<'scope, v8::Object>,
     #[webapi(slot = RTC_PEER_CONNECTION_SIGNALING_STATE_SLOT)]
@@ -97,8 +93,6 @@ struct RtcPeerConnectionObjectDeclaration<'scope> {
 #[derive(WebApiObject)]
 #[webapi(interface = "RTCDataChannel")]
 struct RtcDataChannelObjectDeclaration<'scope> {
-    #[webapi(slot = RTC_DATA_CHANNEL_BRAND_SLOT, init = true)]
-    brand: (),
     #[webapi(slot = RTC_DATA_CHANNEL_LABEL_SLOT)]
     label: v8::Local<'scope, v8::String>,
     #[webapi(slot = RTC_DATA_CHANNEL_ORDERED_SLOT, init = true)]
@@ -251,7 +245,6 @@ pub(in crate::context_bootstrap) fn rtc_peer_connection_constructor_callback<'s>
         return;
     };
     let declaration = RtcPeerConnectionObjectDeclaration {
-        brand: (),
         configuration,
         signaling_state: v8str(scope, "stable"),
         ice_gathering_state: v8str(scope, "new"),
@@ -590,16 +583,14 @@ fn rtc_peer_connection_receiver_branded<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     receiver: v8::Local<'s, v8::Object>,
 ) -> bool {
-    get_private_value(scope, receiver, RTC_PEER_CONNECTION_BRAND_SLOT)
-        .is_some_and(|value| value.boolean_value(scope))
+    moli_webapi_declare::implements_interface(scope, receiver, "RTCPeerConnection")
 }
 
 fn rtc_data_channel_receiver_branded<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     receiver: v8::Local<'s, v8::Object>,
 ) -> bool {
-    get_private_value(scope, receiver, RTC_DATA_CHANNEL_BRAND_SLOT)
-        .is_some_and(|value| value.boolean_value(scope))
+    moli_webapi_declare::implements_interface(scope, receiver, "RTCDataChannel")
 }
 
 fn build_signaling_only_offer(audio: bool, video: bool, data: bool) -> String {
