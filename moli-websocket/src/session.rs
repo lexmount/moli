@@ -20,6 +20,8 @@ const CLOSE_TIMEOUT: Duration = Duration::from_secs(5);
 const MAX_PENDING_INCOMING_MESSAGES: usize = 9;
 
 #[cfg(test)]
+mod pong_tests;
+#[cfg(test)]
 mod tests;
 
 struct Outgoing {
@@ -56,7 +58,7 @@ struct Session {
     socket_id: u64,
     outbox: VecDeque<Event>,
     outgoing: VecDeque<Outgoing>,
-    pongs: VecDeque<Vec<u8>>,
+    pending_pong: Option<Vec<u8>>,
     assembler: Assembler,
     closing: Closing,
     terminal: bool,
@@ -75,7 +77,7 @@ pub(super) async fn run_open_session(
         socket_id,
         outbox: VecDeque::new(),
         outgoing: VecDeque::new(),
-        pongs: VecDeque::new(),
+        pending_pong: None,
         assembler: Assembler::default(),
         closing: Closing::default(),
         terminal: false,
@@ -253,7 +255,7 @@ impl Session {
     }
 
     fn next_frame(&mut self) -> Option<(CurlWebSocketSend, Flight)> {
-        if let Some(data) = self.pongs.pop_front() {
+        if let Some(data) = self.pending_pong.take() {
             return Some((
                 CurlWebSocketSend {
                     flags: WsFlags::PONG,
@@ -318,12 +320,10 @@ impl Session {
         match received {
             Received::Text(data) => self.queue_message(Event::TextMessage { socket_id, data }),
             Received::Binary(data) => self.queue_message(Event::BinaryMessage { socket_id, data }),
-            Received::Ping(data) => {
-                if self.pongs.len() == 4 {
-                    self.fail("WebSocket control queue capacity exceeded".to_owned());
-                } else if !self.closing.sent {
-                    self.pongs.push_back(data);
-                }
+            Received::Ping(data) if !self.closing.sent => {
+                // RFC 6455 permits replying only to the latest pending Ping.
+                // A Pong already submitted to native I/O owns its payload.
+                self.pending_pong = Some(data);
             }
             Received::Close {
                 code,
@@ -337,7 +337,7 @@ impl Session {
                     .deadline
                     .get_or_insert_with(|| Instant::now() + CLOSE_TIMEOUT);
                 self.outgoing.clear();
-                self.pongs.clear();
+                self.pending_pong = None;
                 self.begin_close(payload, false);
                 self.finish_close();
             }

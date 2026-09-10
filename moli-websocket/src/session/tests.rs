@@ -183,7 +183,7 @@ async fn completed_send_notifications_bound_further_message_scheduling() {
         socket_id: 83,
         outbox: Default::default(),
         outgoing: Default::default(),
-        pongs: Default::default(),
+        pending_pong: Default::default(),
         assembler: Assembler::default(),
         closing: Closing::default(),
         terminal: false,
