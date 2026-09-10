@@ -105,7 +105,7 @@ pub(super) fn window_owner_dispatch_scope<'s>(
     })
 }
 
-pub(super) fn window_document_handle<'s>(
+pub(in crate::context_bootstrap) fn window_document_handle<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     receiver: v8::Local<'s, v8::Object>,
     host: &JsContextHost,
