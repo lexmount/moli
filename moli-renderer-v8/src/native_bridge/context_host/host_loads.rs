@@ -403,7 +403,7 @@ impl PageScriptHost {
             action.owner(),
             DocumentLifecycleTiming::LoadStart,
         );
-        self.dispatch_child_window_event(scope, handle, "load", event);
+        self.dispatch_child_window_event_with_target_override(scope, handle, "load", event, true);
         self.record_child_document_lifecycle_timing(
             scope,
             handle,
@@ -460,7 +460,13 @@ impl PageScriptHost {
         let callback_dispatched = if let Some(event) =
             construct_original_page_transition_event(scope, "pageshow", false)
         {
-            self.dispatch_child_window_event(scope, action.child_handle(), "pageshow", event);
+            self.dispatch_child_window_event_with_target_override(
+                scope,
+                action.child_handle(),
+                "pageshow",
+                event,
+                true,
+            );
             true
         } else {
             false

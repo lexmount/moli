@@ -11,6 +11,7 @@ use super::{
     context_bootstrap::mark_event_trusted,
     context_bootstrap::performance_slot_number,
     context_bootstrap::resolve_event_target,
+    context_bootstrap::set_event_trusted,
     context_bootstrap::trusted_script_string_or_type_error,
     document_runtime::{DocumentContentSecurityPolicyViolation, DomHandle, EventTargetHandle},
     native_bridge::{
@@ -45,7 +46,7 @@ use super::{
 use crate::event_listener_args::{
     AddEventListenerArgs, RemoveEventListenerArgs, parse_listener_args,
 };
-use crate::native_bridge::OwnerDispatchScope;
+
 use crate::web_api_interfaces;
 use moli_webapi::events::{construct_native_event, init::EventInit};
 pub(crate) use moli_webapi::idle_deadline::install_idle_deadline_template_bindings;
@@ -393,6 +394,7 @@ pub(super) fn event_target_dispatch_event_callback<'s>(
         return;
     }
 
+    set_event_trusted(scope, event, false);
     let event_type = event_type_string(scope, event);
     if let Some(handle) = child_window_target {
         let event_type = event_type.as_deref().unwrap_or_default();
