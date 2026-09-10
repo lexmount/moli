@@ -14,13 +14,13 @@ pub(in crate::network_host) use self::bindings::{ParsedResponseInit, parse_respo
 pub(super) use self::body_methods::install_response_body_methods;
 pub(crate) use self::cors::{
     FetchResponseSecurityViolation, cors_preflight_request_headers,
-    filter_cors_exposed_response_headers, is_cors_policy_failure_message,
-    validate_cors_preflight_response, validate_cors_response_chain,
+    fetch_response_needs_orb_body_validation, filter_cors_exposed_response_headers,
+    is_cors_policy_failure_message, validate_cors_preflight_response, validate_cors_response_chain,
     validate_cross_origin_embedder_and_document_isolation_policy,
-    validate_cross_origin_resource_policy, validate_fetch_response_security_policy,
-    validate_fetch_response_security_policy_with_body,
+    validate_cross_origin_resource_policy, validate_fetch_response_headers,
+    validate_fetch_response_security_policy, validate_fetch_response_security_policy_with_body,
     validate_fetch_response_security_policy_with_body_classified,
-    validate_opaque_response_blocking_with_body,
+    validate_opaque_response_blocking_with_body, validated_opaque_response_body,
 };
 #[cfg(test)]
 pub(crate) use self::materialize::materialize_response_object;
