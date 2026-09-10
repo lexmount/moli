@@ -5,6 +5,7 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
+dragonbox_ecma = "0.1.12"
 moli-css-parse = { path = "../moli-css-parse" }
 
 [lints]

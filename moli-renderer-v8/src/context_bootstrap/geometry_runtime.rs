@@ -1966,7 +1966,7 @@ fn dom_matrix_css_text<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     object: v8::Local<'s, v8::Object>,
 ) -> Option<String> {
-    let Some(css_text) = dom_matrix_components(scope, object).css_text() else {
+    let Some(css_text) = dom_matrix_components(scope, object).dom_matrix_text() else {
         throw_dom_exception(
             scope,
             "InvalidStateError",
