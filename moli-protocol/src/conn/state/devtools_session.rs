@@ -343,6 +343,10 @@ impl DevToolsSessionRegistry {
         if !current_session_owns_override && another_session_owns_override {
             return Err("Another locale override is already in effect");
         }
+        let locale_override = locale_override
+            .filter(|locale| !locale.is_empty())
+            .map(|locale| v8::icu::canonicalize_locale_id(&locale).ok_or("Invalid locale override"))
+            .transpose()?;
         self.ensure_session(session_key)
             .emulation_session_state
             .locale_override = locale_override;
@@ -366,6 +370,12 @@ impl DevToolsSessionRegistry {
             && another_session_owns_override
         {
             return Err("Timezone override is already in effect");
+        }
+        if timezone_override
+            .as_deref()
+            .is_some_and(|timezone| !v8::icu::is_valid_time_zone_id(timezone))
+        {
+            return Err("Invalid timezone override");
         }
         self.ensure_session(session_key)
             .emulation_session_state
@@ -1337,6 +1347,38 @@ mod tests {
             effective_renderer_identity(&sessions).user_agent(),
             "Moli/Primary-3"
         );
+    }
+
+    #[test]
+    fn invalid_intl_overrides_do_not_claim_or_replace_session_state() {
+        let mut sessions = DevToolsSessionRegistry::default();
+        let session = DevToolsSessionKey::Attached("SID-a".to_owned());
+        for has_override in [false, true] {
+            if has_override {
+                sessions
+                    .set_locale_override(&session, Some("fr_FR".to_owned()))
+                    .unwrap();
+                sessions
+                    .set_timezone_override(&session, Some("America/New_York".to_owned()))
+                    .unwrap();
+            }
+            let before = sessions.clone();
+            for locale in ["en--US", "en-US!", "fr\0_FR"] {
+                assert_eq!(
+                    sessions.set_locale_override(&session, Some(locale.to_owned())),
+                    Err("Invalid locale override")
+                );
+                assert_eq!(sessions, before);
+            }
+            for timezone in ["Moli/Invalid", "Etc/Unknown", "UTC\0"] {
+                assert_eq!(
+                    sessions.set_timezone_override(&session, Some(timezone.to_owned())),
+                    Err("Invalid timezone override")
+                );
+                assert_eq!(sessions, before);
+            }
+        }
+        assert_eq!(sessions.effective_locale_override(), Some("fr-FR"));
     }
 
     #[test]

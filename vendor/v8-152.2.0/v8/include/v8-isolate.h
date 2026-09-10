@@ -1855,6 +1855,22 @@ class V8_EXPORT Isolate {
   void LocaleConfigurationChangeNotification();
 
   /**
+   * Overrides this isolate's default locale without modifying the process ICU
+   * default. Accepts BCP47 tags and ICU locale IDs. An empty tag restores the
+   * host default. Invalid IDs return false without changing the active
+   * override. A context must be entered. Requires Intl support.
+   */
+  V8_WARN_UNUSED_RESULT bool SetDefaultLocaleOverride(std::string_view locale);
+
+  /**
+   * Overrides this isolate's default time zone for Date, Intl, and Temporal.
+   * An empty id restores the host default. Explicit Intl timeZone options take
+   * precedence. Invalid ICU time zone ids leave the current override unchanged.
+   * This does not modify ICU's process-wide default. Requires Intl support.
+   */
+  V8_WARN_UNUSED_RESULT bool SetDefaultTimeZoneOverride(std::string_view id);
+
+  /**
    * Returns the default locale in a string if Intl support is enabled.
    * Otherwise returns an empty string.
    */

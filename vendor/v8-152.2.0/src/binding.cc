@@ -469,6 +469,16 @@ void v8__Isolate__DateTimeConfigurationChangeNotification(
   isolate->DateTimeConfigurationChangeNotification(time_zone_detection);
 }
 
+bool v8__Isolate__SetDefaultLocaleOverride(v8::Isolate* isolate,
+                                           const char* locale) {
+  return isolate->SetDefaultLocaleOverride(locale);
+}
+
+bool v8__Isolate__SetDefaultTimeZoneOverride(v8::Isolate* isolate,
+                                             const char* time_zone_id) {
+  return isolate->SetDefaultTimeZoneOverride(time_zone_id);
+}
+
 void v8__ResourceConstraints__ConfigureDefaultsFromHeapSize(
     v8::ResourceConstraints* constraints, size_t initial_heap_size_in_bytes,
     size_t maximum_heap_size_in_bytes) {

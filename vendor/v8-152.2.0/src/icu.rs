@@ -8,6 +8,123 @@ unsafe extern "C" {
   fn icu_get_default_time_zone(output: *mut char, output_len: usize) -> usize;
   fn icu_set_default_time_zone(time_zone_id: *const char) -> bool;
   fn udata_setCommonData_78(this: *const u8, error_code: *mut i32);
+  fn uloc_canonicalize_78(
+    locale: *const char,
+    output: *mut char,
+    capacity: i32,
+    error_code: *mut i32,
+  ) -> i32;
+  fn uloc_forLanguageTag_78(
+    tag: *const char,
+    output: *mut char,
+    capacity: i32,
+    parsed_length: *mut i32,
+    error_code: *mut i32,
+  ) -> i32;
+  fn uloc_toLanguageTag_78(
+    locale: *const char,
+    output: *mut char,
+    capacity: i32,
+    strict: i8,
+    error_code: *mut i32,
+  ) -> i32;
+  fn ucal_getCanonicalTimeZoneID_78(
+    id: *const u16,
+    length: i32,
+    output: *mut u16,
+    capacity: i32,
+    is_system_id: *mut i8,
+    error_code: *mut i32,
+  ) -> i32;
+}
+
+fn icu_output<T: Clone + Default>(
+  mut write: impl FnMut(*mut T, i32, *mut i32) -> i32,
+) -> Option<Vec<T>> {
+  let mut output = vec![T::default(); 128];
+  loop {
+    let mut status = 0;
+    let capacity = i32::try_from(output.len()).ok()?;
+    let length = write(output.as_mut_ptr(), capacity, &mut status);
+    if status == 15 {
+      // U_BUFFER_OVERFLOW_ERROR: reserve space for the terminating nul too.
+      output
+        .resize(usize::try_from(length.checked_add(1)?).ok()?, T::default());
+      continue;
+    }
+    if status > 0 || length < 0 || length >= capacity {
+      return None;
+    }
+    output.truncate(length as usize);
+    return Some(output);
+  }
+}
+
+/// Validate a BCP47 language tag or ICU locale ID and return its language tag.
+/// Unlike ICU's permissive language-tag parser, this rejects partially parsed
+/// input. Empty strings and interior nul bytes are also rejected.
+/// This does not change ICU's process-wide defaults or require a V8 isolate.
+pub fn canonicalize_locale_id(locale: &str) -> Option<String> {
+  if locale.is_empty() {
+    return None;
+  }
+  let input = CString::new(locale).ok()?;
+  let locale_id = if locale.contains(['_', '@']) {
+    icu_output(|output, capacity, status| unsafe {
+      uloc_canonicalize_78(input.as_ptr(), output, capacity, status)
+    })?
+  } else {
+    let mut parsed_length = 0;
+    let output = icu_output(|output, capacity, status| unsafe {
+      uloc_forLanguageTag_78(
+        input.as_ptr(),
+        output,
+        capacity,
+        &mut parsed_length,
+        status,
+      )
+    })?;
+    if usize::try_from(parsed_length).ok()? != locale.len() {
+      return None;
+    }
+    output
+  };
+  let locale_id = CString::new(
+    locale_id
+      .into_iter()
+      .map(|byte| byte as u8)
+      .collect::<Vec<_>>(),
+  )
+  .ok()?;
+  let tag = icu_output(|output, capacity, status| unsafe {
+    uloc_toLanguageTag_78(locale_id.as_ptr(), output, capacity, 1, status)
+  })?;
+  String::from_utf8(tag.into_iter().map(|byte| byte as u8).collect()).ok()
+}
+
+/// Return whether ICU recognizes a time zone ID, including custom GMT offsets.
+/// Empty strings, interior nul bytes, and `Etc/Unknown` are rejected.
+/// This does not change ICU's process-wide defaults or require a V8 isolate.
+#[must_use]
+pub fn is_valid_time_zone_id(id: &str) -> bool {
+  if id.is_empty() || id.contains('\0') || id == "Etc/Unknown" {
+    return false;
+  }
+  let input: Vec<u16> = id.encode_utf16().collect();
+  let Ok(length) = i32::try_from(input.len()) else {
+    return false;
+  };
+  icu_output(|output, capacity, status| unsafe {
+    ucal_getCanonicalTimeZoneID_78(
+      input.as_ptr(),
+      length,
+      output,
+      capacity,
+      std::ptr::null_mut(),
+      status,
+    )
+  })
+  .is_some()
 }
 
 /// This function bypasses the normal ICU data loading process and allows you to force ICU's system

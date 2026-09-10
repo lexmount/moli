@@ -704,16 +704,8 @@ impl JsContextHost {
         &self.permission_overrides
     }
 
-    pub(crate) fn set_locale_override(&mut self, locale: Option<&str>) {
-        self.locale_override = locale.map(str::to_owned);
-    }
-
     pub(crate) fn set_timezone_override(&mut self, timezone: Option<&str>) {
         self.timezone_override = timezone.map(str::to_owned);
-    }
-
-    pub(crate) fn locale_override(&self) -> Option<&str> {
-        self.locale_override.as_deref()
     }
 
     pub(crate) fn timezone_override(&self) -> Option<&str> {
