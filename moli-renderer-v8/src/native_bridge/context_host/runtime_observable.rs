@@ -165,7 +165,11 @@ impl JsContextHost {
 
         for realm_token in realm_tokens {
             self.retire_window_realm_resources(realm_token);
-            self.retire_window_execution_contexts_for_context_token(realm_token);
+            let resource_owner_id = self
+                .child_default_context_bootstrap
+                .as_ref()
+                .map(|config| config.resource_owner_id);
+            self.retire_window_execution_context_registry(realm_token, resource_owner_id);
         }
 
         for owner in owners {
@@ -544,9 +548,21 @@ impl JsContextHost {
     pub(crate) fn retire_window_execution_contexts_for_context_token(
         &mut self,
         context_token: RuntimeObservableContextToken,
+        resource_owner_id: crate::resource_owner::ResourceOwnerId,
     ) -> usize {
-        let revoked_blob_object_url_count =
-            crate::blob::cleanup_object_urls_for_context(context_token);
+        self.retire_window_execution_context_registry(context_token, Some(resource_owner_id))
+    }
+
+    fn retire_window_execution_context_registry(
+        &mut self,
+        context_token: RuntimeObservableContextToken,
+        resource_owner_id: Option<crate::resource_owner::ResourceOwnerId>,
+    ) -> usize {
+        // A host whose bootstrap failed may not have a resource owner yet.
+        // Still retire its registries without revoking another host's URLs.
+        let revoked_blob_object_url_count = resource_owner_id
+            .map(|owner| crate::blob::cleanup_object_urls_for_context(owner, context_token))
+            .unwrap_or(0);
         crate::observer_runtime::retire_context_token(self, context_token);
         let indexed_db_retirement = self.retire_indexed_db_context(context_token);
         let retired_indexed_db_connections = indexed_db_retirement.retired_connections.len();
@@ -597,9 +613,10 @@ impl JsContextHost {
     pub(crate) fn retire_isolated_window_execution_context(
         &mut self,
         context_token: RuntimeObservableContextToken,
+        resource_owner_id: crate::resource_owner::ResourceOwnerId,
     ) -> usize {
         let revoked_blob_object_url_count =
-            crate::blob::cleanup_object_urls_for_context(context_token);
+            crate::blob::cleanup_object_urls_for_context(resource_owner_id, context_token);
         crate::observer_runtime::retire_context_token(self, context_token);
         let indexed_db_retirement = self.retire_indexed_db_context(context_token);
         indexed_db_retirement.finish(self.indexed_db_manager.as_ref());
