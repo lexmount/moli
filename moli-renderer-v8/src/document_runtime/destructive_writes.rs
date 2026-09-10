@@ -5,22 +5,21 @@ use super::{DocumentRuntime, DomHandle};
 #[derive(Debug, Default)]
 pub(super) struct DocumentWriteCounters(Rc<RefCell<HashMap<DomHandle, usize>>>);
 
-/// Owns an execute-script-element counter through script cleanup, including
-/// its microtask checkpoint, but not subsequent tasks or pending TLA work.
-/// The shared state avoids borrowing the runtime across JavaScript reentry.
-pub(crate) struct IgnoreDestructiveWritesGuard {
+/// Holds a document-local writing restriction across JavaScript reentry
+/// without borrowing the runtime. Nested scopes release only their own count.
+pub(crate) struct DocumentWriteCounterGuard {
     counters: Rc<RefCell<HashMap<DomHandle, usize>>>,
     document: DomHandle,
 }
 
 impl DocumentWriteCounters {
-    fn enter(&self, document: DomHandle) -> IgnoreDestructiveWritesGuard {
+    fn enter(&self, document: DomHandle) -> DocumentWriteCounterGuard {
         let mut counters = self.0.borrow_mut();
         let counter = counters.entry(document).or_default();
         *counter = counter
             .checked_add(1)
             .expect("document write counter overflow");
-        IgnoreDestructiveWritesGuard {
+        DocumentWriteCounterGuard {
             counters: Rc::clone(&self.0),
             document,
         }
@@ -31,7 +30,7 @@ impl DocumentWriteCounters {
     }
 }
 
-impl Drop for IgnoreDestructiveWritesGuard {
+impl Drop for DocumentWriteCounterGuard {
     fn drop(&mut self) {
         let mut counters = self.counters.borrow_mut();
         let counter = counters
@@ -45,15 +44,25 @@ impl Drop for IgnoreDestructiveWritesGuard {
 }
 
 impl DocumentRuntime {
+    /// Keep the script-element counter through script cleanup and its
+    /// microtask checkpoint, but not subsequent tasks or pending TLA work.
     pub(crate) fn enter_ignore_destructive_writes(
         &self,
         document: DomHandle,
-    ) -> IgnoreDestructiveWritesGuard {
+    ) -> DocumentWriteCounterGuard {
         self.destructive_write_counters.enter(document)
     }
 
     pub(crate) fn has_ignore_destructive_writes_counter(&self, document: DomHandle) -> bool {
         self.destructive_write_counters.is_active(document)
+    }
+
+    pub(crate) fn enter_document_unload(&self, document: DomHandle) -> DocumentWriteCounterGuard {
+        self.document_unload_counters.enter(document)
+    }
+
+    pub(crate) fn has_document_unload_counter(&self, document: DomHandle) -> bool {
+        self.document_unload_counters.is_active(document)
     }
 }
 

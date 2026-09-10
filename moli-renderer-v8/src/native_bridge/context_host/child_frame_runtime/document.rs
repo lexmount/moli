@@ -592,6 +592,9 @@ impl JsContextHost {
         {
             return None;
         }
+        if unsafe { &*host_ptr }.has_document_unload_counter(document_handle) {
+            return None;
+        }
         if unsafe { &*host_ptr }.child_document_stream_is_blocked_by_navigation(child_handle) {
             tracing::debug!(
                 ?child_handle,
