@@ -5536,8 +5536,12 @@ fetch/api/crashtests/request.html
 fetch/api/policies/csp-blocked-worker.html
 fetch/api/policies/referrer-no-referrer-worker.html
 fetch/api/request/multi-globals/url-parsing.html
+fetch/api/request/request-constructor-init-body-override.any.js?moli-wpt-any=dedicatedworker
+fetch/api/request/request-constructor-init-body-override.any.js?moli-wpt-any=window
 fetch/api/request/request-error.any.js?moli-wpt-any=dedicatedworker
 fetch/api/request/request-error.any.js?moli-wpt-any=window
+fetch/api/request/request-init-stream.any.js?moli-wpt-any=dedicatedworker
+fetch/api/request/request-init-stream.any.js?moli-wpt-any=window
 fetch/api/request/url-encoding.html
 fetch/api/response/many-empty-chunks-crash.html
 fetch/api/response/multi-globals/url-parsing.html
