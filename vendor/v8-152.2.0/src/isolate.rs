@@ -2111,9 +2111,14 @@ impl Isolate {
   /// locale with which they were constructed; explicit JS arguments win.
   #[must_use]
   pub fn set_default_locale_override(&mut self, locale: Option<&str>) -> bool {
-    let Ok(locale) = std::ffi::CString::new(locale.unwrap_or_default()) else {
-      return false;
+    let locale = match locale.filter(|locale| !locale.is_empty()) {
+      Some(locale) => match crate::icu::canonicalize_locale_id(locale) {
+        Some(locale) => locale,
+        None => return false,
+      },
+      None => std::string::String::new(),
     };
+    let locale = std::ffi::CString::new(locale).unwrap();
     unsafe {
       v8__Isolate__SetDefaultLocaleOverride(self.as_real_ptr(), locale.as_ptr())
     }

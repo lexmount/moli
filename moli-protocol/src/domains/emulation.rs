@@ -1711,8 +1711,20 @@ fn start_user_agent_loader_update_for_current_route(
 
 async fn execute_devtools_set_locale_override_command_async(
     conn: &mut CdpConnection,
-    command: DevToolsSetLocaleOverrideCommand,
+    mut command: DevToolsSetLocaleOverrideCommand,
 ) -> Result<DevToolsCommandResult, DevToolsError> {
+    command.locale = command
+        .locale
+        .filter(|locale| !locale.is_empty())
+        .map(|locale| {
+            v8::icu::canonicalize_locale_id(&locale).ok_or_else(|| {
+                DevToolsError::new(
+                    DevToolsErrorKind::InvalidArgument,
+                    "Invalid locale override",
+                )
+            })
+        })
+        .transpose()?;
     if !command.target_ids.is_empty() {
         return execute_devtools_set_locale_override_for_targets(conn, command).await;
     }
@@ -1817,6 +1829,16 @@ async fn execute_devtools_set_timezone_override_command_async(
     conn: &mut CdpConnection,
     command: DevToolsSetTimezoneOverrideCommand,
 ) -> Result<DevToolsCommandResult, DevToolsError> {
+    if command
+        .timezone
+        .as_deref()
+        .is_some_and(|timezone| !v8::icu::is_valid_time_zone_id(timezone))
+    {
+        return Err(DevToolsError::new(
+            DevToolsErrorKind::InvalidArgument,
+            "Invalid timezone override",
+        ));
+    }
     if !command.target_ids.is_empty() {
         return execute_devtools_set_timezone_override_for_targets(conn, command).await;
     }

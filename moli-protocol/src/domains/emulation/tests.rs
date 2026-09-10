@@ -6,7 +6,8 @@ use crate::conn::{
 use crate::devtools_runtime::{
     DevToolsBrowserContextId, DevToolsCommand, DevToolsCommandContext, DevToolsCommandResult,
     DevToolsProtocol, DevToolsSessionId, DevToolsSetExtraHeadersCommand,
-    DevToolsSetLocaleOverrideCommand, DevToolsSetUserAgentOverrideCommand, DevToolsTargetId,
+    DevToolsSetLocaleOverrideCommand, DevToolsSetTimezoneOverrideCommand,
+    DevToolsSetUserAgentOverrideCommand, DevToolsTargetId,
 };
 use crate::testing::{TestContext, wait_until_message};
 use axum::{Router, extract::State, http::HeaderMap, response::IntoResponse, routing::get};
@@ -2937,6 +2938,121 @@ async fn locale_and_timezone_overrides_apply_to_locale_date_formatting() {
     let html = loaded_page_html_for_test(&mut ctx).await;
     assert!(html.contains("02/01/2020"), "got {html}");
     assert!(html.contains("11:04:05"), "got {html}");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn rejected_intl_overrides_preserve_defaults_across_navigation() {
+    let mut ctx = TestContext::new();
+    let mut bc = BrowserContext::new("BID-1".into());
+    bc.set_active_target_id("TID-1");
+    bc.attach_active_session("SID-1");
+    ctx.conn.install_browser_context_fixture_for_test(bc);
+
+    expect_session_command_result(
+        &mut ctx,
+        1,
+        "SID-1",
+        "Emulation.setLocaleOverride",
+        json!({"locale": "fr_FR"}),
+    )
+    .await;
+    expect_session_command_result(
+        &mut ctx,
+        2,
+        "SID-1",
+        "Emulation.setTimezoneOverride",
+        json!({"timezoneId": "America/New_York"}),
+    )
+    .await;
+    for navigation in 0..2 {
+        expect_session_command_error(
+            &mut ctx,
+            3,
+            "SID-1",
+            "Emulation.setLocaleOverride",
+            json!({"locale": "en--US"}),
+            "Invalid locale override",
+        )
+        .await;
+        expect_session_command_error(
+            &mut ctx,
+            4,
+            "SID-1",
+            "Emulation.setTimezoneOverride",
+            json!({"timezoneId": "Moli/Invalid"}),
+            "Invalid timezone override",
+        )
+        .await;
+        assert_intl_defaults_after_navigation(&mut ctx, navigation).await;
+    }
+}
+
+async fn assert_intl_defaults_after_navigation(ctx: &mut TestContext, navigation: usize) {
+    let url = format!(
+        "data:text/html,<body><script>const defaults = new Intl.DateTimeFormat().resolvedOptions(); document.body.textContent = [defaults.locale, defaults.timeZone, new Date('2022-03-31T23:59:42Z').getTimezoneOffset(), {navigation}].join('|');</script></body>"
+    );
+    ctx.process_async(json!({
+        "id": 5, "method": "Page.navigate", "sessionId": "SID-1", "params": {"url": url},
+    }))
+    .await;
+    let _ = ctx.take_all();
+    let html = loaded_page_html_for_test(ctx).await;
+    assert!(
+        html.contains(&format!(">fr-FR|America/New_York|240|{navigation}<")),
+        "got {html}"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn typed_invalid_intl_overrides_preserve_target_and_browser_context_defaults() {
+    for (navigation, browser_context_scope) in [false, true].into_iter().enumerate() {
+        let mut ctx = TestContext::new();
+        load_session_page_for_pending_emulation_test(&mut ctx).await;
+        let target_ids = if browser_context_scope {
+            Vec::new()
+        } else {
+            vec![DevToolsTargetId::from("TID-1")]
+        };
+        let browser_context_ids = if browser_context_scope {
+            vec![DevToolsBrowserContextId::from("BID-1")]
+        } else {
+            Vec::new()
+        };
+        for (locale, timezone, valid) in [
+            ("fr_FR", "America/New_York", true),
+            ("en--US", "Moli/Invalid", false),
+        ] {
+            for command in [
+                DevToolsCommand::SetLocaleOverride(DevToolsSetLocaleOverrideCommand {
+                    context: bidi_command_context(),
+                    target_ids: target_ids.clone(),
+                    browser_context_ids: browser_context_ids.clone(),
+                    locale: Some(locale.to_owned()),
+                }),
+                DevToolsCommand::SetTimezoneOverride(DevToolsSetTimezoneOverrideCommand {
+                    context: bidi_command_context(),
+                    target_ids: target_ids.clone(),
+                    browser_context_ids: browser_context_ids.clone(),
+                    timezone: Some(timezone.to_owned()),
+                }),
+            ] {
+                let outcome = ctx.conn.execute_devtools_command(command).await;
+                let (result, _, _, _) = outcome.into_complete_parts();
+                if valid {
+                    assert!(
+                        matches!(result, Ok(DevToolsCommandResult::Empty)),
+                        "{result:?}"
+                    );
+                } else {
+                    assert_eq!(
+                        result.unwrap_err().kind,
+                        crate::devtools_runtime::DevToolsErrorKind::InvalidArgument
+                    );
+                }
+            }
+        }
+        assert_intl_defaults_after_navigation(&mut ctx, navigation).await;
+    }
 }
 
 #[tokio::test(flavor = "multi_thread")]
