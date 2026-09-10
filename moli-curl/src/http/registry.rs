@@ -59,6 +59,12 @@ impl<H: Handler, C> HttpRegistry<H, C> {
         self.has_active() || !self.pending.is_empty()
     }
 
+    /// Pending work can run after completions release scheduler capacity.
+    /// Use the same global and per-origin limits as the actual startup path.
+    pub(crate) fn has_eligible_jobs(&self) -> bool {
+        self.next_eligible_job_index().is_some()
+    }
+
     pub(crate) fn next_deadline(&self) -> Option<Instant> {
         self.pending
             .iter()
@@ -174,20 +180,21 @@ impl<H: Handler, C> HttpRegistry<H, C> {
         }
     }
 
+    fn next_eligible_job_index(&self) -> Option<usize> {
+        if self.closed || self.active.len() >= self.config.max_active.get() {
+            return None;
+        }
+        self.pending.iter().position(|pending| {
+            job_is_eligible(
+                pending.job.origin.as_ref(),
+                &self.active,
+                self.config.max_host_active,
+            )
+        })
+    }
+
     fn start_eligible_jobs(&mut self, multi: &mut Multi) {
-        loop {
-            if self.closed || self.active.len() >= self.config.max_active.get() {
-                return;
-            }
-            let Some(index) = self.pending.iter().position(|pending| {
-                job_is_eligible(
-                    pending.job.origin.as_ref(),
-                    &self.active,
-                    self.config.max_host_active,
-                )
-            }) else {
-                return;
-            };
+        while let Some(index) = self.next_eligible_job_index() {
             let pending = self
                 .pending
                 .remove(index)
@@ -532,6 +539,59 @@ mod tests {
 
     fn test_transfer_id(sequence: usize) -> CurlTransferId {
         CurlTransferId::from_token(sequence).expect("test transfer ID is non-zero")
+    }
+
+    #[test]
+    fn eligible_jobs_respect_global_and_origin_capacity_after_completions() {
+        let config = CurlMultiRuntimeConfig {
+            max_active: NonZeroUsize::new(2).unwrap(),
+            max_host_active: NonZeroUsize::new(1),
+            ..CurlMultiRuntimeConfig::default()
+        };
+        let (completion_tx, _completed) = crossbeam_channel::unbounded();
+        let mut multi = Multi::new();
+        let mut registry = HttpRegistry::new(config, completion_tx);
+        let origin = |host: &str| CurlOriginKey {
+            scheme: "https".to_owned(),
+            host: host.to_owned(),
+            port: Some(443),
+        };
+        let first = test_transfer_id(1);
+        let blocked = test_transfer_id(2);
+        let other_origin = test_transfer_id(3);
+        let no_origin = test_transfer_id(4);
+
+        registry.admit(first, test_job("first", 1, Some(origin("a.test"))));
+        registry.advance(&mut multi);
+        assert!(registry.contains(first));
+        assert!(!registry.has_eligible_jobs());
+
+        // A free global slot does not bypass the origin cap.
+        registry.admit(blocked, test_job("blocked", 2, Some(origin("a.test"))));
+        assert!(!registry.has_eligible_jobs());
+        // A blocked high-priority head must not hide eligible work elsewhere.
+        registry.admit(other_origin, test_job("other", 0, Some(origin("b.test"))));
+        assert!(registry.has_eligible_jobs());
+        registry.advance(&mut multi);
+        assert!(registry.contains(other_origin));
+        assert!(!registry.contains(blocked));
+
+        // The global cap also applies to jobs without an origin key.
+        registry.admit(no_origin, test_job("no-origin", 0, None));
+        assert!(!registry.has_eligible_jobs());
+        registry.complete(&mut multi, vec![(other_origin, Ok(()))]);
+        assert!(registry.has_eligible_jobs());
+        registry.advance(&mut multi);
+        assert!(registry.contains(no_origin));
+        assert!(!registry.contains(blocked));
+
+        registry.complete(&mut multi, vec![(first, Ok(()))]);
+        assert!(registry.has_eligible_jobs());
+        registry.advance(&mut multi);
+        assert!(registry.contains(blocked));
+        assert!(!registry.has_eligible_jobs());
+        registry.shutdown(&mut multi);
+        assert!(!registry.has_eligible_jobs());
     }
 
     #[test]

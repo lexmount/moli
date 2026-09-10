@@ -1,6 +1,9 @@
 //! One native owner drives both protocols. Registries own their easy handles;
 //! only this loop performs curl work, drains CURLMSG_DONE and waits for readiness.
 
+#[cfg(test)]
+mod tests;
+
 use std::{
     sync::{
         Arc,
@@ -48,7 +51,7 @@ pub(super) struct CurlRuntimeOwner<H: Handler, C> {
 }
 
 impl<H: Handler, C> CurlRuntimeOwner<H, C> {
-    /// Construct all native state on its owner thread, including the WS cache.
+    /// Construct all native state on its owner thread, including the shared pool.
     pub(super) fn run(
         config: CurlMultiRuntimeConfig,
         command_rx: Receiver<CurlRuntimeCommand<H, C>>,
@@ -95,7 +98,9 @@ impl<H: Handler, C> CurlRuntimeOwner<H, C> {
                 return;
             }
 
-            let runnable = progressed || !self.command_rx.is_empty();
+            // HTTP completions can release slots after advance() has run.
+            let runnable =
+                progressed || !self.command_rx.is_empty() || self.http.has_eligible_jobs();
             if !runnable && !self.http.has_curl_work() && self.websockets.is_empty() {
                 self.wait_for_next_owner_event();
             } else {
