@@ -96,6 +96,7 @@ impl CdpScheduler {
                         .await
                 }
                 BrowserEvent::WorkerCreated(_)
+                | BrowserEvent::WorkerUpdated(_)
                 | BrowserEvent::WorkerDestroyed(_)
                 | BrowserEvent::DocumentLifecycleChanged(_)
                 | BrowserEvent::DocumentTitleChanged(_)

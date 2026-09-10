@@ -44,9 +44,7 @@ pub(crate) use devtools_renderer_channel::{
     RendererAgentBinding,
 };
 
-pub(crate) use dedicated_worker_target::{
-    DedicatedWorkerMainScriptOutcome, DedicatedWorkerMainScriptSnapshot, DedicatedWorkerTargetState,
-};
+pub(crate) use dedicated_worker_target::DedicatedWorkerTargetState;
 #[cfg(test)]
 pub(crate) use devtools_session::DevToolsEmulationSessionState;
 pub(crate) use devtools_session::{

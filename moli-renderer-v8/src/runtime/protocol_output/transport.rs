@@ -558,8 +558,8 @@ mod tests {
 
     use super::*;
     use crate::runtime::{
-        RendererDedicatedWorkerTargetEvent, RendererOutputItem, RendererOutputRecord,
-        RendererOwnerAction, RendererPendingDownloadActivation, RendererPendingDownloadResponse,
+        RendererOutputItem, RendererOutputRecord, RendererOwnerAction,
+        RendererPendingDownloadActivation, RendererPendingDownloadResponse,
         RendererProtocolObservation,
     };
 
@@ -588,10 +588,36 @@ mod tests {
 
     fn owner_action_record() -> RendererOutputRecord {
         RendererOutputRecord::new_for_test(RendererOutputItem::OwnerAction(
-            RendererOwnerAction::DedicatedWorkerTargetLifecycle(
-                RendererDedicatedWorkerTargetEvent::Destroyed { instance_id: 7 },
+            RendererOwnerAction::ServiceWorkerTargetLifecycle(
+                crate::runtime::RendererServiceWorkerTargetEvent::Destroyed {
+                    version_id: 7,
+                    active_run: None,
+                },
             ),
         ))
+    }
+
+    #[test]
+    fn native_dedicated_worker_lifecycle_and_inspector_output_keep_essential_admission() {
+        let reporter = crate::runtime::RendererWorkerLifecycleReporter::new(
+            crate::runtime::RendererBrowserContextRuntimeId::new_for_testing(17),
+        );
+        for observation in [
+            RendererProtocolObservation::WorkerLifecycle(reporter.report(
+                crate::runtime::RendererWorkerLifecycle::DedicatedDestroyed(7),
+            )),
+            RendererProtocolObservation::DedicatedWorker(
+                crate::runtime::RendererDedicatedWorkerObservation::RuntimeInspectorMessages {
+                    instance_id: 7,
+                    inspector_session_id: None,
+                    messages: Vec::new(),
+                },
+            ),
+        ] {
+            let record =
+                RendererOutputRecord::new_for_test(RendererOutputItem::Observation(observation));
+            assert!(record.requires_essential_transport_admission());
+        }
     }
 
     fn publication(

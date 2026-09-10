@@ -217,6 +217,7 @@ pub struct BrowserContext {
     permission_overrides: PermissionOverrides,
     download_policy: Option<DownloadPolicy>,
     pub(in crate::browser) downloads: super::downloads::DownloadManager,
+    pub(in crate::browser) dedicated_workers: IndexMap<u64, super::DedicatedWorkerSnapshot>,
     pub(in crate::browser) shared_workers: IndexMap<
         moli_shared_worker::SharedWorkerInstanceId,
         crate::page::RendererSharedWorkerTargetInfo,
@@ -356,6 +357,7 @@ impl BrowserContext {
             download_policy: None,
             downloads: super::downloads::DownloadManager::default(),
             shared_workers: IndexMap::new(),
+            dedicated_workers: IndexMap::new(),
             web_contents: IndexMap::new(),
             selected_web_contents: None,
             renderer_output_transport_sender: None,

@@ -72,20 +72,9 @@ impl ScriptVm {
                 content_security_report_only_policies,
                 content_security_reporting_endpoints,
             } => {
-                let recorded = self
-                    ._context_host
-                    .borrow_mut()
-                    .record_dedicated_worker_target_script_loaded(
-                        worker_id,
-                        script_url.clone(),
-                        network_response,
-                    );
-                if !recorded {
-                    return Ok(DedicatedWorkerClientEventBodyEffect::CurrentTargetDisappeared);
-                }
                 let handled = self._context_host.borrow_mut().finish_loading_worker(
                     worker_id,
-                    script_url,
+                    script_url.clone(),
                     script_source,
                     script_kind,
                     secure_context,
@@ -96,7 +85,19 @@ impl ScriptVm {
                     content_security_report_only_policies,
                     content_security_reporting_endpoints,
                 );
-                Ok(if handled {
+                // A native completion can be observed before this Page turn
+                // settles. Install the physical inspection endpoint first;
+                // later Inspector/Console tasks still follow this FIFO record.
+                let recorded = handled
+                    && self
+                        ._context_host
+                        .borrow_mut()
+                        .record_dedicated_worker_target_script_loaded(
+                            worker_id,
+                            script_url,
+                            network_response,
+                        );
+                Ok(if recorded {
                     DedicatedWorkerClientEventBodyEffect::StateTransitionApplied
                 } else {
                     DedicatedWorkerClientEventBodyEffect::CurrentTargetDisappeared

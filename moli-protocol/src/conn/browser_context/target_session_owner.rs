@@ -1485,6 +1485,7 @@ impl CdpConnection {
         self.renderer_page_residence_identity_for_owner(&owner)
     }
 
+    #[cfg(test)]
     pub(crate) fn renderer_page_residence_identity_for_owner(
         &self,
         owner: &CommandOwnerScope,

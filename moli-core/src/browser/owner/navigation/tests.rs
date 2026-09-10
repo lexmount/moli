@@ -476,7 +476,9 @@ async fn native_shared_worker_membership_and_retirement_do_not_require_devtools(
             unreachable!()
         };
         assert_eq!(browser.subscribe().unwrap().0.workers, vec![worker.clone()]);
-        let WorkerHandle::Shared { instance, .. } = worker.handle();
+        let WorkerHandle::Shared { instance, .. } = worker.handle() else {
+            unreachable!()
+        };
         match retirement {
             "worker" => assert!(context.close_shared_worker(instance)),
             "context" => assert!(context.remove().unwrap()),
@@ -507,6 +509,171 @@ async fn native_shared_worker_membership_and_retirement_do_not_require_devtools(
             );
         }
     }
+}
+
+#[tokio::test]
+async fn native_dedicated_worker_membership_and_document_retirement_need_no_devtools() {
+    for retirement in ["worker", "document", "contents", "context", "browser"] {
+        let service = BrowserService::start().unwrap();
+        let browser = service.handle();
+        let (context, contents) = context_with_contents(&service);
+        let (_, mut events) = browser.subscribe().unwrap();
+        navigate(&context, contents, "data:text/html,<script>globalThis.worker = new Worker('data:text/javascript,onmessage = () => {}', {name: 'native-dedicated'})</script>").await;
+        let created = tokio::time::timeout(std::time::Duration::from_secs(5), async {
+            loop {
+                let record = events.recv().await.unwrap();
+                if let BrowserEvent::WorkerCreated(worker) = record.event {
+                    break (worker, record.sequence);
+                }
+            }
+        })
+        .await
+        .expect("DedicatedWorker creation must reach Browser without DevTools");
+        assert_eq!(browser.subscribe().unwrap().0.workers.len(), 1);
+        let crate::browser::WorkerHandle::Dedicated { instance, .. } = created.0.handle() else {
+            panic!("DedicatedWorker must have its own physical identity");
+        };
+        let script = tokio::time::timeout(std::time::Duration::from_secs(5), async {
+            loop {
+                if let BrowserEvent::WorkerUpdated(worker) = events.recv().await.unwrap().event
+                    && worker.handle() == created.0.handle()
+                    && let crate::browser::WorkerSnapshot::Dedicated { worker, .. } = worker
+                {
+                    break worker
+                        .main_script
+                        .expect("completion stores the main-script fact");
+                }
+            }
+        })
+        .await
+        .expect("main-script completion must be native too");
+        assert!(matches!(
+            script.outcome,
+            crate::page::RendererDedicatedWorkerMainScriptOutcome::Loaded(_)
+        ));
+        let snapshot = browser.subscribe().unwrap().0;
+        let crate::browser::WorkerSnapshot::Dedicated { worker, .. } = &snapshot.workers[0] else {
+            unreachable!()
+        };
+        assert!(std::sync::Arc::ptr_eq(
+            worker.main_script.as_ref().unwrap(),
+            &script
+        ));
+        match retirement {
+            "worker" => assert!(context.close_dedicated_worker(instance)),
+            "document" => {
+                navigate(&context, contents, "data:text/html,replacement").await;
+            }
+            "contents" => {
+                browser
+                    .close_web_contents(contents)
+                    .unwrap()
+                    .close_async()
+                    .await;
+            }
+            "context" => {
+                assert!(context.remove().unwrap());
+            }
+            "browser" => service.shutdown(),
+            _ => unreachable!(),
+        }
+        tokio::time::timeout(std::time::Duration::from_secs(5), async {
+            loop {
+                let record = events.recv().await.unwrap();
+                if record.event == BrowserEvent::WorkerDestroyed(created.0.handle()) {
+                    assert!(record.sequence > created.1);
+                    break;
+                }
+            }
+        })
+        .await
+        .expect("exact DedicatedWorker retirement must reach Browser");
+        if retirement != "browser" {
+            assert!(browser.subscribe().unwrap().0.workers.is_empty());
+            service.shutdown();
+        }
+        while let Ok(record) = events.try_recv() {
+            assert_ne!(
+                record.event,
+                BrowserEvent::WorkerDestroyed(created.0.handle())
+            );
+        }
+    }
+}
+
+#[tokio::test]
+async fn native_short_lived_dedicated_worker_preserves_occurrences_without_devtools() {
+    let service = BrowserService::start().unwrap();
+    let browser = service.handle();
+    let (context, contents) = context_with_contents(&service);
+    let (_, mut events) = browser.subscribe().unwrap();
+    navigate(&context, contents, "data:text/html,<script>globalThis.worker = new Worker('data:text/javascript,close()')</script>").await;
+    tokio::time::timeout(std::time::Duration::from_secs(5), async {
+        let mut created = None;
+        loop {
+            let record = events.recv().await.unwrap();
+            match record.event {
+                BrowserEvent::WorkerCreated(worker) => {
+                    assert!(
+                        created
+                            .replace((worker.handle(), record.sequence))
+                            .is_none()
+                    );
+                }
+                BrowserEvent::WorkerDestroyed(handle) => {
+                    let (expected, sequence) = created.expect("creation precedes destruction");
+                    assert_eq!(handle, expected);
+                    assert!(record.sequence > sequence);
+                    break;
+                }
+                _ => {}
+            }
+        }
+    })
+    .await
+    .expect("a transient DedicatedWorker cannot disappear between native observations");
+    assert!(browser.subscribe().unwrap().0.workers.is_empty());
+    service.shutdown();
+}
+
+#[tokio::test]
+async fn native_dedicated_worker_failed_script_retires_after_its_completion_fact() {
+    let service = BrowserService::start().unwrap();
+    let browser = service.handle();
+    let (context, contents) = context_with_contents(&service);
+    let (_, mut events) = browser.subscribe().unwrap();
+    navigate(&context, contents, "data:text/html,<script>globalThis.worker = new Worker('ftp://example.test/worker.js')</script>").await;
+    tokio::time::timeout(std::time::Duration::from_secs(5), async {
+        let mut created = None;
+        let mut completed = None;
+        loop {
+            let record = events.recv().await.unwrap();
+            match record.event {
+                BrowserEvent::WorkerCreated(worker) => {
+                    assert!(created.replace((worker.handle(), record.sequence)).is_none());
+                }
+                BrowserEvent::WorkerUpdated(worker) => {
+                    let (handle, sequence) = created.expect("script completion follows creation");
+                    assert_eq!(worker.handle(), handle);
+                    assert!(record.sequence > sequence);
+                    let crate::browser::WorkerSnapshot::Dedicated { worker, .. } = worker else { unreachable!() };
+                    let script = worker.main_script.unwrap();
+                    assert!(matches!(&script.outcome,
+                        crate::page::RendererDedicatedWorkerMainScriptOutcome::Failed { error_message, .. }
+                        if !error_message.is_empty()));
+                    assert!(completed.replace(record.sequence).is_none());
+                }
+                BrowserEvent::WorkerDestroyed(handle) => {
+                    assert_eq!(handle, created.unwrap().0);
+                    assert!(record.sequence > completed.expect("failure must be observable before retirement"));
+                    break;
+                }
+                _ => {}
+            }
+        }
+    }).await.expect("failed Worker script must complete and retire without DevTools");
+    assert!(browser.subscribe().unwrap().0.workers.is_empty());
+    service.shutdown();
 }
 
 #[tokio::test]

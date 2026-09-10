@@ -16,6 +16,47 @@ impl Browser {
             return;
         }
         let event = match input.lifecycle.as_ref() {
+            RendererWorkerLifecycle::DedicatedCreated(info) => {
+                if context.dedicated_workers.contains_key(&info.instance_id) {
+                    return;
+                }
+                let worker = crate::browser::DedicatedWorkerSnapshot {
+                    info: info.clone(),
+                    main_script: None,
+                };
+                context
+                    .dedicated_workers
+                    .insert(info.instance_id, worker.clone());
+                BrowserEvent::WorkerCreated(WorkerSnapshot::Dedicated {
+                    context: id,
+                    worker,
+                })
+            }
+            RendererWorkerLifecycle::DedicatedScriptCompleted {
+                instance_id,
+                script,
+            } => {
+                let Some(worker) = context.dedicated_workers.get_mut(instance_id) else {
+                    return;
+                };
+                if worker.main_script.is_some() {
+                    return;
+                }
+                worker.main_script = Some(script.clone());
+                BrowserEvent::WorkerUpdated(WorkerSnapshot::Dedicated {
+                    context: id,
+                    worker: worker.clone(),
+                })
+            }
+            RendererWorkerLifecycle::DedicatedDestroyed(instance) => {
+                if context.dedicated_workers.shift_remove(instance).is_none() {
+                    return;
+                }
+                BrowserEvent::WorkerDestroyed(WorkerHandle::Dedicated {
+                    context: id,
+                    instance: *instance,
+                })
+            }
             RendererWorkerLifecycle::SharedCreated(info) => {
                 if context.shared_workers.contains_key(&info.instance_id) {
                     return;

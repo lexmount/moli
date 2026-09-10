@@ -10,10 +10,18 @@ struct NativeWorkers {
     service: BrowserService,
     context: BrowserContextHandle,
     output: moli_core::RendererOutputTransportReceiver,
+    occurrences: std::collections::VecDeque<(
+        moli_core::RendererOutputStreamIdentity,
+        moli_core::page::RendererWorkerLifecycleObservation,
+    )>,
 }
 
 impl NativeWorkers {
     async fn start(names: &[&str]) -> Self {
+        Self::start_named(names, false).await
+    }
+
+    async fn start_named(names: &[&str], dedicated: bool) -> Self {
         let service = BrowserService::start().unwrap();
         let browser = service.handle();
         let context = browser
@@ -36,10 +44,17 @@ impl NativeWorkers {
         let script = names
             .iter()
             .map(|name| {
-                format!(
-                    "new SharedWorker('data:text/javascript,onconnect = () => {{}}', {})",
-                    serde_json::to_string(name).unwrap(),
-                )
+                if dedicated {
+                    format!(
+                        "new Worker('data:text/javascript,onmessage = () => {{}}', {})",
+                        serde_json::json!({ "name": name })
+                    )
+                } else {
+                    format!(
+                        "new SharedWorker('data:text/javascript,onconnect = () => {{}}', {})",
+                        serde_json::to_string(name).unwrap()
+                    )
+                }
             })
             .collect::<Vec<_>>()
             .join(",");
@@ -63,13 +78,20 @@ impl NativeWorkers {
         tokio::time::timeout(std::time::Duration::from_secs(5), async {
             let mut created = std::collections::BTreeSet::new();
             while created.len() < names.len() {
-                if let BrowserEvent::WorkerCreated(WorkerSnapshot::Shared { context: id, info }) =
-                    events.recv().await.unwrap().event
-                    && id == context.id()
-                {
-                    assert!(names.contains(&info.name.as_str()));
-                    assert!(created.insert(info.name));
-                }
+                let name = match events.recv().await.unwrap().event {
+                    BrowserEvent::WorkerCreated(WorkerSnapshot::Shared { context: id, info })
+                        if !dedicated && id == context.id() =>
+                    {
+                        info.name
+                    }
+                    BrowserEvent::WorkerUpdated(WorkerSnapshot::Dedicated {
+                        context: id,
+                        worker,
+                    }) if dedicated && id == context.id() => worker.info.name,
+                    _ => continue,
+                };
+                assert!(names.contains(&name.as_str()));
+                assert!(created.insert(name));
             }
         })
         .await
@@ -78,6 +100,7 @@ impl NativeWorkers {
             service,
             context,
             output,
+            occurrences: Default::default(),
         }
     }
 
@@ -99,6 +122,15 @@ impl NativeWorkers {
     ) {
         tokio::time::timeout(std::time::Duration::from_secs(5), async {
             loop {
+                if let Some((stream, observation)) = self.occurrences.pop_front() {
+                    return (
+                        stream,
+                        observation
+                            .committed()
+                            .await
+                            .expect("live native input is committed"),
+                    );
+                }
                 let moli_core::RendererOutputTransportMessage::Publication(publication) = self
                     .output
                     .recv()
@@ -113,13 +145,7 @@ impl NativeWorkers {
                         moli_core::RendererProtocolObservation::WorkerLifecycle(observation),
                     ) = record.into_parts().1
                     {
-                        return (
-                            stream,
-                            observation
-                                .committed()
-                                .await
-                                .expect("live native input is committed"),
-                        );
+                        self.occurrences.push_back((stream, observation));
                     }
                 }
             }
@@ -144,7 +170,9 @@ async fn native_shared_worker_snapshots_recover_lag_without_replaying_old_fifo_r
         1
     );
     assert!(worker_lifecycle_prepared_outputs(&mut conn, created.clone()).is_empty());
-    let moli_core::browser::WorkerHandle::Shared { instance, .. } = worker.handle();
+    let moli_core::browser::WorkerHandle::Shared { instance, .. } = worker.handle() else {
+        unreachable!()
+    };
     assert!(fixture.context.close_shared_worker(instance));
     let (_, destroyed) = fixture.next_occurrence().await;
     assert!(
@@ -184,6 +212,174 @@ async fn native_shared_worker_snapshots_recover_lag_without_replaying_old_fifo_r
             .shared_worker_targets
             .is_empty()
     );
+    fixture.service.shutdown();
+}
+
+#[tokio::test]
+async fn native_dedicated_worker_snapshot_recovers_script_without_replaying_fifo_receipts() {
+    let mut fixture = NativeWorkers::start_named(&["native-snapshot"], true).await;
+    let (_, created) = fixture.next_occurrence().await;
+    let (_, completed) = fixture.next_occurrence().await;
+    assert!(matches!(
+        created.lifecycle(),
+        RendererWorkerLifecycle::DedicatedCreated(_)
+    ));
+    let RendererWorkerLifecycle::DedicatedScriptCompleted {
+        instance_id,
+        script,
+    } = completed.lifecycle()
+    else {
+        panic!("script completion follows creation in the source FIFO")
+    };
+    let instance = *instance_id;
+    let browser = fixture.service.handle();
+    let snapshot = browser.subscribe().unwrap().0;
+    let WorkerSnapshot::Dedicated { worker, .. } = &snapshot.workers[0] else {
+        unreachable!()
+    };
+    assert!(std::sync::Arc::ptr_eq(
+        worker.main_script.as_ref().unwrap(),
+        script
+    ));
+    let mut conn = fixture.connection();
+    let events = conn.project_browser_snapshot(snapshot).await;
+    assert_eq!(
+        protocol_event_count(&events, "Target.targetCreated", "worker"),
+        1
+    );
+    let target = &conn
+        .browser_context_by_browser_id(fixture.context.id())
+        .unwrap()
+        .dedicated_worker_targets[&instance];
+    let target_id = target.target_id.clone();
+    assert_eq!(target.url, script.script_url);
+    assert!(
+        std::ptr::eq(target.main_script().unwrap(), script.as_ref()),
+        "Protocol replay must share the native fact, not copy its response"
+    );
+    assert!(worker_lifecycle_prepared_outputs(&mut conn, created.clone()).is_empty());
+    assert!(worker_lifecycle_prepared_outputs(&mut conn, completed.clone()).is_empty());
+    let events = conn
+        .project_browser_snapshot(browser.subscribe().unwrap().0)
+        .await;
+    assert_eq!(
+        protocol_event_count(&events, "Target.targetCreated", "worker"),
+        0
+    );
+    assert_eq!(
+        protocol_event_count(&events, "Target.targetInfoChanged", "worker"),
+        0
+    );
+
+    assert!(fixture.context.close_dedicated_worker(instance));
+    let (_, destroyed) = fixture.next_occurrence().await;
+    assert_eq!(
+        destroyed.lifecycle(),
+        &RendererWorkerLifecycle::DedicatedDestroyed(instance)
+    );
+    let snapshot = browser.subscribe().unwrap().0;
+    assert!(snapshot.workers.is_empty());
+    let events = conn.project_browser_snapshot(snapshot).await;
+    assert_eq!(
+        events
+            .iter()
+            .filter(|event| {
+                let message = (*event).clone().into_protocol_message();
+                message["method"] == "Target.targetDestroyed"
+                    && message["params"]["targetId"] == target_id
+            })
+            .count(),
+        1
+    );
+    for receipt in [created, completed, destroyed] {
+        assert!(worker_lifecycle_prepared_outputs(&mut conn, receipt).is_empty());
+    }
+    assert!(
+        conn.browser_context_by_browser_id(fixture.context.id())
+            .unwrap()
+            .dedicated_worker_targets
+            .is_empty()
+    );
+    fixture.service.shutdown();
+}
+
+#[tokio::test]
+async fn native_dedicated_worker_old_document_receipts_cannot_create_on_replacement() {
+    let mut fixture = NativeWorkers::start_named(&["old-document"], true).await;
+    let (_, created) = fixture.next_occurrence().await;
+    let (_, completed) = fixture.next_occurrence().await;
+    let RendererWorkerLifecycle::DedicatedCreated(old) = created.lifecycle() else {
+        unreachable!()
+    };
+    let old_instance = old.instance_id;
+    let browser = fixture.service.handle();
+    let (snapshot, mut events) = browser.subscribe().unwrap();
+    let contents = snapshot.web_contents[0];
+    let navigation = fixture.context.navigate_document(
+        contents,
+        moli_core::browser::web_contents::NavigationRequestInterception::new(
+            "data:text/html,<script>globalThis.worker = new Worker('data:text/javascript,onmessage = () => {}', {name:'replacement'})</script>".parse().unwrap(),
+            "GET".into(), None, Vec::new(), NavigationRequestLoadPolicy::BrowserInitiated,
+        ),
+    ).unwrap();
+    let moli_core::browser::BrowserNavigationOutcome::Document(document) =
+        navigation.wait().await.unwrap()
+    else {
+        unreachable!()
+    };
+    let replacement = tokio::time::timeout(std::time::Duration::from_secs(5), async {
+        let mut retired = false;
+        let mut replacement = None;
+        loop {
+            match events.recv().await.unwrap().event {
+                BrowserEvent::WorkerUpdated(WorkerSnapshot::Dedicated { worker, .. })
+                    if worker.info.instance_id != old_instance =>
+                {
+                    replacement = Some(worker)
+                }
+                BrowserEvent::WorkerDestroyed(moli_core::browser::WorkerHandle::Dedicated {
+                    instance,
+                    ..
+                }) if instance == old_instance => retired = true,
+                _ => {}
+            }
+            if retired && let Some(worker) = replacement.take() {
+                break worker;
+            }
+        }
+    })
+    .await
+    .expect("replacement must complete while the exact old Worker retires");
+    let mut conn = fixture.connection();
+    conn.project_created_browser_context(fixture.context.id());
+    conn.project_created_web_contents(contents).await;
+    conn.project_browser_document_commit(document.document)
+        .await;
+    assert!(
+        conn.browser_context_by_browser_id(fixture.context.id())
+            .unwrap()
+            .worker_snapshot_sequence
+            .is_none(),
+        "exercise exact owner rejection, not recovery suppression"
+    );
+    assert!(worker_lifecycle_prepared_outputs(&mut conn, created).is_empty());
+    assert!(worker_lifecycle_prepared_outputs(&mut conn, completed).is_empty());
+    let mut projected = false;
+    while !projected {
+        let (_, receipt) = fixture.next_occurrence().await;
+        projected = matches!(receipt.lifecycle(),
+            RendererWorkerLifecycle::DedicatedScriptCompleted { instance_id, .. }
+            if *instance_id == replacement.info.instance_id);
+        let outputs = worker_lifecycle_prepared_outputs(&mut conn, receipt);
+        worker_target_background_events_async(&mut conn, outputs).await;
+    }
+    let context = conn
+        .browser_context_by_browser_id(fixture.context.id())
+        .unwrap();
+    assert_eq!(context.dedicated_worker_targets.len(), 1);
+    let target = &context.dedicated_worker_targets[&replacement.info.instance_id];
+    assert_eq!(target.name, "replacement");
+    assert_eq!(target.url, replacement.main_script.unwrap().script_url);
     fixture.service.shutdown();
 }
 

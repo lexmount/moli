@@ -71,8 +71,19 @@ impl PreparedProtocolOutputs {
         committed: moli_core::page::RendererCommittedWorkerLifecycle,
     ) -> Self {
         let mut prepared = Self::empty();
-        crate::domains::target::worker_lifecycle_prepared_outputs(conn, committed)
-            .append_to_shared_worker_target_lifecycle_output_sink(&mut prepared);
+        let shared = match committed.lifecycle() {
+            moli_core::page::RendererWorkerLifecycle::SharedCreated(_)
+            | moli_core::page::RendererWorkerLifecycle::SharedDestroyed(_) => true,
+            moli_core::page::RendererWorkerLifecycle::DedicatedCreated(_)
+            | moli_core::page::RendererWorkerLifecycle::DedicatedScriptCompleted { .. }
+            | moli_core::page::RendererWorkerLifecycle::DedicatedDestroyed(_) => false,
+        };
+        let outputs = crate::domains::target::worker_lifecycle_prepared_outputs(conn, committed);
+        if shared {
+            outputs.append_to_shared_worker_target_lifecycle_output_sink(&mut prepared);
+        } else {
+            outputs.append_to_dedicated_worker_target_lifecycle_output_sink(&mut prepared);
+        }
         prepared
     }
 
@@ -87,6 +98,14 @@ impl PreparedProtocolOutputs {
         match observation {
             RendererProtocolObservation::WorkerLifecycle(_) => {
                 unreachable!("Worker projection requires native commit acknowledgement first")
+            }
+            RendererProtocolObservation::DedicatedWorker(event) => {
+                crate::domains::target::dedicated_worker_observation_prepared_outputs(
+                    conn,
+                    owner,
+                    event.clone(),
+                )
+                .append_to_dedicated_worker_target_lifecycle_output_sink(&mut prepared);
             }
             RendererProtocolObservation::SharedWorker(event) => {
                 if let Some((browser_context_id, _)) = conn.target_owner_identity_for_owner(owner) {
@@ -394,15 +413,6 @@ impl PreparedProtocolOutputs {
                             &mut prepared,
                         );
                 }
-            }
-            RendererOwnerAction::DedicatedWorkerTargetLifecycle(event) => {
-                crate::domains::target::
-                    dedicated_worker_target_lifecycle_prepared_outputs_for_event(
-                        conn,
-                        owner,
-                        event,
-                    )
-                    .append_to_dedicated_worker_target_lifecycle_output_sink(&mut prepared);
             }
         }
         prepared

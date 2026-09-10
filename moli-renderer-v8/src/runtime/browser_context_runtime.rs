@@ -607,6 +607,13 @@ impl RendererBrowserContextRuntime {
         self.inner.worker_lifecycle.install_handler(handler);
     }
 
+    pub(crate) fn report_worker_lifecycle(
+        &self,
+        lifecycle: super::RendererWorkerLifecycle,
+    ) -> super::RendererWorkerLifecycleObservation {
+        self.inner.worker_lifecycle.report(lifecycle)
+    }
+
     pub(crate) fn set_renderer_output_transport_sender(
         &self,
         sender: super::RendererOutputTransportSender,

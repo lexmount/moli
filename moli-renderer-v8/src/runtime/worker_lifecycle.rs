@@ -10,6 +10,12 @@ use super::{RendererBrowserContextRuntimeId, RendererSharedWorkerTargetInfo};
 pub enum RendererWorkerLifecycle {
     SharedCreated(RendererSharedWorkerTargetInfo),
     SharedDestroyed(moli_shared_worker::SharedWorkerInstanceId),
+    DedicatedCreated(super::RendererDedicatedWorkerTargetInfo),
+    DedicatedScriptCompleted {
+        instance_id: u64,
+        script: Arc<super::RendererDedicatedWorkerMainScript>,
+    },
+    DedicatedDestroyed(u64),
 }
 
 /// The source FIFO carries an observation of the Browser commit, never its

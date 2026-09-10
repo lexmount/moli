@@ -10,6 +10,7 @@ pub enum BrowserEvent {
     ContextCreated(BrowserContextId),
     ContextDisposed(BrowserContextId),
     WorkerCreated(super::WorkerSnapshot),
+    WorkerUpdated(super::WorkerSnapshot),
     WorkerDestroyed(super::WorkerHandle),
     WebContentsCreated(WebContentsHandle),
     WebContentsActivated {

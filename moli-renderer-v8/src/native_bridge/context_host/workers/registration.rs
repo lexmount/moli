@@ -549,7 +549,7 @@ impl JsContextHost {
             .page_dedicated_worker_client_event_sender()
             .page_token();
         self.append_dedicated_worker_target_lifecycle(
-            crate::runtime::RendererDedicatedWorkerTargetEvent::Created(
+            crate::runtime::RendererWorkerLifecycle::DedicatedCreated(
                 crate::runtime::RendererDedicatedWorkerTargetInfo {
                     owner_local_host_id: page_token.local_host_id(),
                     page_id: page_token.page_id(),
@@ -571,10 +571,13 @@ impl JsContextHost {
     /// deliberately omit that journal while still exercising Worker state.
     fn append_dedicated_worker_target_lifecycle(
         &self,
-        event: crate::runtime::RendererDedicatedWorkerTargetEvent,
+        event: crate::runtime::RendererWorkerLifecycle,
     ) {
-        let appended = self.append_live_turn_owner_action(
-            crate::runtime::RendererOwnerAction::DedicatedWorkerTargetLifecycle(event),
+        let observation = self
+            .browser_context_runtime()
+            .report_worker_lifecycle(event);
+        let appended = self.append_live_turn_observation(
+            crate::runtime::RendererProtocolObservation::WorkerLifecycle(observation),
         );
         debug_assert!(
             appended || cfg!(test),
@@ -596,10 +599,14 @@ impl JsContextHost {
         }
         let instance_id = state.renderer_instance_id;
         self.append_dedicated_worker_target_lifecycle(
-            crate::runtime::RendererDedicatedWorkerTargetEvent::ScriptLoaded {
+            crate::runtime::RendererWorkerLifecycle::DedicatedScriptCompleted {
                 instance_id,
-                script_url,
-                response,
+                script: std::sync::Arc::new(crate::runtime::RendererDedicatedWorkerMainScript {
+                    script_url,
+                    outcome: crate::runtime::RendererDedicatedWorkerMainScriptOutcome::Loaded(
+                        response,
+                    ),
+                }),
             },
         );
         true
@@ -620,11 +627,15 @@ impl JsContextHost {
         }
         let instance_id = state.renderer_instance_id;
         self.append_dedicated_worker_target_lifecycle(
-            crate::runtime::RendererDedicatedWorkerTargetEvent::ScriptLoadFailed {
+            crate::runtime::RendererWorkerLifecycle::DedicatedScriptCompleted {
                 instance_id,
-                script_url,
-                error_message,
-                response,
+                script: std::sync::Arc::new(crate::runtime::RendererDedicatedWorkerMainScript {
+                    script_url,
+                    outcome: crate::runtime::RendererDedicatedWorkerMainScriptOutcome::Failed {
+                        error_message,
+                        response,
+                    },
+                }),
             },
         );
         true
@@ -643,12 +654,14 @@ impl JsContextHost {
         }
         let instance_id = state.renderer_instance_id;
         for batch in batches {
-            self.append_dedicated_worker_target_lifecycle(
-                crate::runtime::RendererDedicatedWorkerTargetEvent::RuntimeInspectorMessages {
-                    instance_id,
-                    inspector_session_id: batch.inspector_session_id,
-                    messages: batch.messages,
-                },
+            self.append_live_turn_observation(
+                crate::runtime::RendererProtocolObservation::DedicatedWorker(
+                    crate::runtime::RendererDedicatedWorkerObservation::RuntimeInspectorMessages {
+                        instance_id,
+                        inspector_session_id: batch.inspector_session_id,
+                        messages: batch.messages,
+                    },
+                ),
             );
         }
         true
@@ -665,15 +678,17 @@ impl JsContextHost {
         if !state.target_created {
             return true;
         }
-        self.append_dedicated_worker_target_lifecycle(
-            crate::runtime::RendererDedicatedWorkerTargetEvent::Console {
-                instance_id: state.renderer_instance_id,
-                message: crate::runtime::RendererSharedWorkerConsoleMessage {
-                    message: message.message,
-                    args: message.args,
-                    stack: message.stack,
+        self.append_live_turn_observation(
+            crate::runtime::RendererProtocolObservation::DedicatedWorker(
+                crate::runtime::RendererDedicatedWorkerObservation::Console {
+                    instance_id: state.renderer_instance_id,
+                    message: crate::runtime::RendererSharedWorkerConsoleMessage {
+                        message: message.message,
+                        args: message.args,
+                        stack: message.stack,
+                    },
                 },
-            },
+            ),
         );
         true
     }
@@ -1298,9 +1313,9 @@ impl JsContextHost {
                 .unregister_dedicated_worker_devtools_handle(state.renderer_instance_id);
             if state.target_created {
                 self.append_dedicated_worker_target_lifecycle(
-                    crate::runtime::RendererDedicatedWorkerTargetEvent::Destroyed {
-                        instance_id: state.renderer_instance_id,
-                    },
+                    crate::runtime::RendererWorkerLifecycle::DedicatedDestroyed(
+                        state.renderer_instance_id,
+                    ),
                 );
             }
             let owner = state.owner.owner();
@@ -1336,28 +1351,11 @@ impl JsContextHost {
     }
 
     pub(crate) fn shutdown_workers(&mut self) {
-        let browser_context_runtime = self.browser_context_runtime();
-        let workers = std::mem::take(&mut self.workers);
-        for (_, state) in workers {
-            browser_context_runtime
-                .unregister_dedicated_worker_devtools_handle(state.renderer_instance_id);
-            match state.execution {
-                WorkerExecutionState::Loading {
-                    load_task,
-                    reserved_service_worker_client_id,
-                    ..
-                } => {
-                    if let Some(load_task) = load_task {
-                        load_task.abort();
-                    }
-                    if let Some(client_id) = reserved_service_worker_client_id {
-                        browser_context_runtime.unregister_service_worker_client(client_id);
-                    }
-                }
-                WorkerExecutionState::Running { handle } => {
-                    handle.terminate();
-                }
-            }
+        // Use the same single-consumption retirement as explicit terminate and
+        // realm destruction, including the native occurrence before dropping
+        // each running handle (whose Drop terminates its thread).
+        for worker_id in self.workers.keys().copied().collect::<Vec<_>>() {
+            self.forget_worker(worker_id);
         }
     }
 }

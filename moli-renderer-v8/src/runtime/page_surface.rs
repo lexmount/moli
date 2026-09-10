@@ -525,27 +525,9 @@ pub struct RendererDedicatedWorkerTargetInfo {
     pub name: String,
 }
 
-/// Page-owned lifecycle facts for one DedicatedWorker target.
-///
-/// Chromium publishes the initial main-script request through the creator
-/// Page's Network agent, but publishes the response and terminal event through
-/// the Worker target's Network agent. Keeping the response on this target
-/// event stream lets protocol preserve that split without manufacturing a
-/// complete Page subresource record.
-#[derive(Debug, Clone)]
-pub enum RendererDedicatedWorkerTargetEvent {
-    Created(RendererDedicatedWorkerTargetInfo),
-    ScriptLoaded {
-        instance_id: u64,
-        script_url: String,
-        response: Box<crate::protocol_types::NavigationResponse>,
-    },
-    ScriptLoadFailed {
-        instance_id: u64,
-        script_url: String,
-        error_message: String,
-        response: Option<Box<crate::protocol_types::NavigationResponse>>,
-    },
+/// Read-only output from a DedicatedWorker, in its creator Page's source FIFO.
+#[derive(Debug, Clone, PartialEq)]
+pub enum RendererDedicatedWorkerObservation {
     Console {
         instance_id: u64,
         message: RendererSharedWorkerConsoleMessage,
@@ -555,49 +537,43 @@ pub enum RendererDedicatedWorkerTargetEvent {
         inspector_session_id: Option<String>,
         messages: Vec<RendererRuntimeInspectorMessage>,
     },
-    Destroyed {
-        instance_id: u64,
+}
+
+/// One immutable native main-script fact, shared by Browser snapshots and
+/// protocol replay. Session delivery progress is not part of this fact.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RendererDedicatedWorkerMainScript {
+    pub script_url: String,
+    pub outcome: RendererDedicatedWorkerMainScriptOutcome,
+}
+
+#[derive(Debug, Clone)]
+pub enum RendererDedicatedWorkerMainScriptOutcome {
+    Loaded(Box<crate::protocol_types::NavigationResponse>),
+    Failed {
+        error_message: String,
+        response: Option<Box<crate::protocol_types::NavigationResponse>>,
     },
 }
 
-impl PartialEq for RendererDedicatedWorkerTargetEvent {
+impl PartialEq for RendererDedicatedWorkerMainScriptOutcome {
     fn eq(&self, other: &Self) -> bool {
         match (self, other) {
-            (Self::Created(left), Self::Created(right)) => left == right,
-            (
-                Self::ScriptLoaded {
-                    instance_id: left_instance,
-                    script_url: left_url,
-                    response: left_response,
-                },
-                Self::ScriptLoaded {
-                    instance_id: right_instance,
-                    script_url: right_url,
-                    response: right_response,
-                },
-            ) => {
-                left_instance == right_instance
-                    && left_url == right_url
-                    && dedicated_worker_navigation_response_eq(left_response, right_response)
+            (Self::Loaded(left), Self::Loaded(right)) => {
+                dedicated_worker_navigation_response_eq(left, right)
             }
             (
-                Self::ScriptLoadFailed {
-                    instance_id: left_instance,
-                    script_url: left_url,
+                Self::Failed {
                     error_message: left_error,
-                    response: left_response,
+                    response: left,
                 },
-                Self::ScriptLoadFailed {
-                    instance_id: right_instance,
-                    script_url: right_url,
+                Self::Failed {
                     error_message: right_error,
-                    response: right_response,
+                    response: right,
                 },
             ) => {
-                left_instance == right_instance
-                    && left_url == right_url
-                    && left_error == right_error
-                    && match (left_response, right_response) {
+                left_error == right_error
+                    && match (left, right) {
                         (Some(left), Some(right)) => {
                             dedicated_worker_navigation_response_eq(left, right)
                         }
@@ -605,44 +581,12 @@ impl PartialEq for RendererDedicatedWorkerTargetEvent {
                         _ => false,
                     }
             }
-            (
-                Self::Console {
-                    instance_id: left_instance,
-                    message: left_message,
-                },
-                Self::Console {
-                    instance_id: right_instance,
-                    message: right_message,
-                },
-            ) => left_instance == right_instance && left_message == right_message,
-            (
-                Self::RuntimeInspectorMessages {
-                    instance_id: left_instance,
-                    inspector_session_id: left_session,
-                    messages: left_messages,
-                },
-                Self::RuntimeInspectorMessages {
-                    instance_id: right_instance,
-                    inspector_session_id: right_session,
-                    messages: right_messages,
-                },
-            ) => {
-                left_instance == right_instance
-                    && left_session == right_session
-                    && left_messages == right_messages
-            }
-            (
-                Self::Destroyed {
-                    instance_id: left_instance,
-                },
-                Self::Destroyed {
-                    instance_id: right_instance,
-                },
-            ) => left_instance == right_instance,
             _ => false,
         }
     }
 }
+
+impl Eq for RendererDedicatedWorkerMainScriptOutcome {}
 
 fn dedicated_worker_navigation_response_eq(
     left: &crate::protocol_types::NavigationResponse,

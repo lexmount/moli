@@ -25,6 +25,12 @@ impl BrowserContext {
                 context: self.id(),
                 info,
             })
+            .chain(self.dedicated_workers.values().cloned().map(|worker| {
+                super::super::WorkerSnapshot::Dedicated {
+                    context: self.id(),
+                    worker,
+                }
+            }))
     }
 
     pub fn worker_inspection_endpoint(
