@@ -136,6 +136,7 @@ impl JsContextHost {
         if let Some(stale) = pending_contexts.borrow_mut().remove(&handle) {
             self.retire_window_execution_contexts_for_context_token(
                 stale.runtime_observable_context_token,
+                config.resource_owner_id,
             );
             let stale_context = v8::Local::new(scope, &stale.context);
             stale_context.detach_global();
