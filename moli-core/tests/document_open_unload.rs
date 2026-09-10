@@ -29,7 +29,7 @@ async fn stream_operation_during_unload(
             let listenerFrame = frame;
             let doc = frame.contentDocument;
             if (target === 'other') doc = (await frameIn(window)).contentDocument;
-            if (target === 'ancestor') {{
+            if (target.endsWith('ancestor')) {{
               const middle = await frameIn(frame.contentWindow);
               doc = middle.contentDocument;
               listenerFrame = await frameIn(middle.contentWindow);
@@ -99,7 +99,7 @@ async fn stream_operation_during_unload(
 
 #[tokio::test(flavor = "multi_thread")]
 async fn document_stream_operations_have_no_side_effects_during_unload() -> Result<()> {
-    for event in ["beforeunload", "pagehide", "unload"] {
+    for event in ["beforeunload", "pagehide", "visibilitychange", "unload"] {
         for operation in [
             "open",
             "prototype-open",
@@ -133,8 +133,20 @@ async fn ancestor_unload_counter_covers_descendant_callbacks() -> Result<()> {
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn ordinary_ancestor_unload_counter_covers_descendant_callbacks() -> Result<()> {
+    for event in ["beforeunload", "pagehide", "visibilitychange", "unload"] {
+        let result = stream_operation_during_unload(event, "open", "ordinary-ancestor").await?;
+        assert_eq!(result["sameRoot"], true, "{event}: {result}");
+        assert_eq!(result["sameLength"], true);
+        assert_eq!(result["listenerCount"], 1);
+        assert_eq!(result["returnedDocument"], true);
+    }
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn unload_does_not_block_opening_another_document() -> Result<()> {
-    for event in ["beforeunload", "pagehide", "unload"] {
+    for event in ["beforeunload", "pagehide", "visibilitychange", "unload"] {
         let result = stream_operation_during_unload(event, "open", "other").await?;
         assert_eq!(result["sameRoot"], false, "{event}: {result}");
         assert_eq!(result["listenerCount"], 0);
