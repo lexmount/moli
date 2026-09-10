@@ -36,6 +36,8 @@ enum RuntimeCommandWait {
 
 pub(crate) enum DevToolsRuntimeCommandProgress {
     Complete(Box<DevToolsCommandExecution>),
+    /// No renderer command or Document endpoint has been captured yet.
+    AwaitingDocument(Box<DevToolsCommand>),
     Pending {
         pending: Box<PendingDevToolsRuntimeExecution>,
         protocol_output: ProtocolOutputSequence,
@@ -57,6 +59,21 @@ pub(super) fn devtools_command_uses_interleaved_runtime_dispatch(
 }
 
 impl CdpScheduler {
+    pub(crate) fn devtools_runtime_command_waits_for_document(
+        &mut self,
+        command: &DevToolsCommand,
+    ) -> bool {
+        // Only context-targeted commands follow a Page's navigation. Child
+        // frame routes share that Page's hold; Worker routes have no pending
+        // Document. Realm commands and termination retain their own binding.
+        !matches!(command, DevToolsCommand::TerminateExecution(_))
+            && command.context().target_id.is_some()
+            && (self.devtools_context_has_pending_document_navigation(command.context())
+                || self
+                    .conn
+                    .devtools_context_document_projection_is_pending(command.context()))
+    }
+
     async fn route_renderer_response_to_devtools_pending(
         &mut self,
         pending: &mut PendingDevToolsRuntimeCommandDispatch,
@@ -165,6 +182,9 @@ impl CdpScheduler {
         receivers: &mut CdpSchedulerEventReceivers,
         command: DevToolsCommand,
     ) -> DevToolsRuntimeCommandProgress {
+        if self.devtools_runtime_command_waits_for_document(&command) {
+            return DevToolsRuntimeCommandProgress::AwaitingDocument(Box::new(command));
+        }
         let protocol_output = ProtocolOutputSequence::empty();
         let step = self
             .conn

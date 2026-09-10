@@ -209,7 +209,7 @@ impl BidiSocketActor {
             Some(BidiPendingCommandWait::NavigationLifecycle(wait)) => {
                 scheduler.cancel_devtools_navigation_lifecycle(*wait);
             }
-            None => {}
+            Some(BidiPendingCommandWait::DocumentAdmission(_)) | None => {}
         }
         if let Some(previous_target_discovery) = pending.completion.previous_target_discovery {
             scheduler.replace_target_discovery_enabled(previous_target_discovery);
@@ -347,6 +347,36 @@ impl BidiSocketActor {
         if self.pending_command.as_ref().is_some_and(|command| {
             matches!(
                 command.pending,
+                Some(BidiPendingCommandWait::DocumentAdmission(_))
+            )
+        }) {
+            // Publish pauses before polling admission so the frontend can
+            // continue Fetch/auth on this same socket. Never await navigation
+            // completion inside the shared owner turn.
+            if !self
+                .send_protocol_output(scheduler, receivers, output, owner_context)
+                .await
+            {
+                return false;
+            }
+            let mut pending = self
+                .pending_command
+                .take()
+                .expect("pending document admission");
+            let Some(BidiPendingCommandWait::DocumentAdmission(command)) = pending.pending.take()
+            else {
+                unreachable!()
+            };
+            let progress = scheduler
+                .start_devtools_runtime_command(receivers, *command)
+                .await;
+            return self
+                .apply_pending_runtime_progress(scheduler, receivers, pending, progress)
+                .await;
+        }
+        if self.pending_command.as_ref().is_some_and(|command| {
+            matches!(
+                command.pending,
                 Some(BidiPendingCommandWait::NavigationLifecycle(_))
             )
         }) {
@@ -446,6 +476,11 @@ impl BidiSocketActor {
         progress: DevToolsRuntimeCommandProgress,
     ) -> bool {
         match progress {
+            DevToolsRuntimeCommandProgress::AwaitingDocument(command) => {
+                pending_command.pending = Some(BidiPendingCommandWait::DocumentAdmission(command));
+                self.pending_command = Some(pending_command);
+                true
+            }
             DevToolsRuntimeCommandProgress::Complete(execution) => {
                 complete_and_send_bidi_pending_command(
                     &mut self.socket,
@@ -1382,6 +1417,7 @@ struct BidiPendingCommand {
 }
 
 enum BidiPendingCommandWait {
+    DocumentAdmission(Box<DevToolsCommand>),
     Runtime(Box<PendingDevToolsRuntimeExecution>),
     Navigation(DevToolsNavigationCommandWait),
     NavigationLifecycle(Box<PendingDevToolsNavigationLifecycle>),
@@ -1406,7 +1442,8 @@ impl BidiPendingCommand {
     fn runtime_pending(&self) -> Option<&PendingDevToolsRuntimeExecution> {
         match self.pending.as_ref()? {
             BidiPendingCommandWait::Runtime(pending) => Some(pending),
-            BidiPendingCommandWait::Navigation(_)
+            BidiPendingCommandWait::DocumentAdmission(_)
+            | BidiPendingCommandWait::Navigation(_)
             | BidiPendingCommandWait::NavigationLifecycle(_) => None,
         }
     }
@@ -2023,20 +2060,20 @@ async fn start_bidi_devtools_command(
         &dispatch.command,
         DevToolsCommand::EvaluateScript(_) | DevToolsCommand::CallFunction(_)
     );
-    let mut event_sources =
-        match drain_bidi_background_navigation_before_command(scheduler, receivers).await {
-            Ok(event_sources) => event_sources,
-            Err(failure) => {
-                let (event_sources, error) = failure.into_parts();
-                return BidiDevToolsCommandStart::Complete(BidiDevToolsCommandOutput {
-                    response: bidi_response_from_devtools_error(dispatch.id, error),
-                    event_sources: event_sources.into_sources(),
-                    post_response_event_sources: Vec::new(),
-                    post_response_background_navigation_drain: BidiBackgroundNavigationDrain::None,
-                    event_context,
-                });
-            }
-        };
+    let mut event_sources = match drain_ready_bidi_background_navigation(scheduler, receivers).await
+    {
+        Ok(event_sources) => event_sources,
+        Err(failure) => {
+            let (event_sources, error) = failure.into_parts();
+            return BidiDevToolsCommandStart::Complete(BidiDevToolsCommandOutput {
+                response: bidi_response_from_devtools_error(dispatch.id, error),
+                event_sources: event_sources.into_sources(),
+                post_response_event_sources: Vec::new(),
+                post_response_background_navigation_drain: BidiBackgroundNavigationDrain::None,
+                event_context,
+            });
+        }
+    };
     event_sources.extend_protocol_output(
         scheduler
             .complete_ready_protocol_residences_after_command()
@@ -2083,6 +2120,16 @@ async fn start_bidi_devtools_command(
             .start_devtools_runtime_command(receivers, dispatch.command)
             .await
         {
+            DevToolsRuntimeCommandProgress::AwaitingDocument(command) => {
+                BidiDevToolsCommandStart::Pending(Box::new(BidiPendingCommand {
+                    command_method: None,
+                    command_params: None,
+                    command_channel: None,
+                    pending_navigation_candidate: None,
+                    pending: Some(BidiPendingCommandWait::DocumentAdmission(command)),
+                    completion,
+                }))
+            }
             DevToolsRuntimeCommandProgress::Complete(execution) => {
                 BidiDevToolsCommandStart::Complete(
                     complete_bidi_devtools_command_execution(

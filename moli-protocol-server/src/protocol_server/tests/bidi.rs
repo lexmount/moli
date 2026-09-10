@@ -3174,6 +3174,32 @@ async fn websocket_bidi_shared_worker_subscription_projects_runtime_listener_pre
     assert_eq!(probe["echoed"], json!("bidi"));
     assert_eq!(probe["isSharedWorker"], json!(true));
 
+    let worker_context = messages
+        .iter()
+        .find(|message| {
+            message["method"] == "browsingContext.contextCreated"
+                && message["params"]["url"] == worker_url
+        })
+        .unwrap()["params"]["context"]
+        .as_str()
+        .unwrap();
+    let realms = timeout(
+        Duration::from_secs(5),
+        send_bidi_command_response(
+            &mut socket,
+            7,
+            "script.getRealms",
+            json!({"context": worker_context, "type": "shared-worker"}),
+        ),
+    )
+    .await
+    .expect("a Worker has no main Document to await");
+    assert_eq!(realms["type"], "success", "{realms:?}");
+    assert_eq!(
+        realms["result"]["realms"][0]["type"], "shared-worker",
+        "{realms:?}"
+    );
+
     let end = send_bidi_command_response(&mut socket, 6, "session.end", json!({})).await;
     assert_eq!(end["type"], json!("success"), "{end:?}");
     let closed = timeout(Duration::from_secs(1), socket.next())
@@ -14915,6 +14941,382 @@ async fn websocket_bidi_wait_none_navigation_drains_before_next_command() {
 
     let _ = socket.close(None).await;
     protocol_server.abort();
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum BidiNavigationAdmissionHold {
+    Headers,
+    Body,
+    Request,
+    Auth,
+    Response,
+}
+
+#[derive(Clone, Copy)]
+enum BidiNavigationAdmissionFinish {
+    Commit,
+    Close,
+    RetireChild,
+}
+
+async fn assert_bidi_navigation_admission_remains_interleavable(
+    hold: BidiNavigationAdmissionHold,
+    finish: BidiNavigationAdmissionFinish,
+) {
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let url = format!("http://{}/admission", listener.local_addr().unwrap());
+    let (received_tx, received) = tokio::sync::oneshot::channel();
+    let (release, released) = tokio::sync::oneshot::channel();
+    let fixture = tokio::spawn(async move {
+        let mut accepted = 0;
+        let mut stream = loop {
+            let (mut stream, _) = listener.accept().await.unwrap();
+            let mut request = Vec::new();
+            let mut byte = [0];
+            while !request.ends_with(b"\r\n\r\n") {
+                stream.read_exact(&mut byte).await.unwrap();
+                request.push(byte[0]);
+            }
+            accepted += 1;
+            if hold == BidiNavigationAdmissionHold::Auth && accepted == 1 {
+                stream.write_all(b"HTTP/1.1 401 Unauthorized\r\nWWW-Authenticate: Basic realm=\"admission\"\r\nContent-Length: 0\r\nConnection: close\r\n\r\n").await.unwrap();
+                stream.shutdown().await.unwrap();
+                continue;
+            }
+            if hold == BidiNavigationAdmissionHold::Auth {
+                assert!(
+                    String::from_utf8(request)
+                        .unwrap()
+                        .to_ascii_lowercase()
+                        .contains("authorization: basic")
+                );
+            }
+            break stream;
+        };
+        let body = b"<body>admitted document</body>";
+        let head = format!(
+            "HTTP/1.1 200 OK\r\nContent-Type: text/html\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+            body.len()
+        );
+        let streaming = matches!(
+            hold,
+            BidiNavigationAdmissionHold::Body | BidiNavigationAdmissionHold::Response
+        );
+        if streaming {
+            stream.write_all(head.as_bytes()).await.unwrap();
+            stream.write_all(b"<body>").await.unwrap();
+        }
+        let _ = received_tx.send(());
+        if released.await.is_err() {
+            return;
+        }
+        if !streaming {
+            stream.write_all(head.as_bytes()).await.unwrap();
+            stream.write_all(body).await.unwrap();
+        } else {
+            stream.write_all(&body[b"<body>".len()..]).await.unwrap();
+        }
+        stream.shutdown().await.unwrap();
+    });
+    let (addr, protocol_server) = spawn_test_protocol_server().await;
+    let (mut socket, _) = connect_async(format!("ws://{addr}/session")).await.unwrap();
+    assert_eq!(
+        send_bidi_command_response(&mut socket, 1, "session.new", json!({})).await["type"],
+        "success"
+    );
+    let created = send_bidi_command_response(
+        &mut socket,
+        2,
+        "browsingContext.create",
+        json!({"type": "tab"}),
+    )
+    .await;
+    let context = created["result"]["context"].as_str().unwrap().to_owned();
+    let script_context = if matches!(finish, BidiNavigationAdmissionFinish::RetireChild) {
+        let initial = send_bidi_command_response(&mut socket, 20, "browsingContext.navigate",
+            json!({"context": context, "url": "data:text/html,<iframe srcdoc='<body>child document</body>'></iframe>", "wait": "complete"}),
+        ).await;
+        assert_eq!(initial["type"], "success", "{initial:?}");
+        let tree = send_bidi_command_response(
+            &mut socket,
+            21,
+            "browsingContext.getTree",
+            json!({"root": context}),
+        )
+        .await;
+        tree["result"]["contexts"][0]["children"][0]["context"]
+            .as_str()
+            .unwrap_or_else(|| panic!("real child frame: {tree:?}"))
+            .to_owned()
+    } else {
+        context.clone()
+    };
+    let event = match hold {
+        BidiNavigationAdmissionHold::Headers => None,
+        BidiNavigationAdmissionHold::Body | BidiNavigationAdmissionHold::Response => {
+            Some("network.responseStarted")
+        }
+        BidiNavigationAdmissionHold::Request => Some("network.beforeRequestSent"),
+        BidiNavigationAdmissionHold::Auth => Some("network.authRequired"),
+    };
+    if let Some(event) = event {
+        assert_eq!(
+            send_bidi_command_response(
+                &mut socket,
+                10,
+                "session.subscribe",
+                json!({"events": [event], "contexts": [context]})
+            )
+            .await["type"],
+            "success"
+        );
+    }
+    let phase = match hold {
+        BidiNavigationAdmissionHold::Request => Some("beforeRequestSent"),
+        BidiNavigationAdmissionHold::Auth => Some("authRequired"),
+        BidiNavigationAdmissionHold::Response => Some("responseStarted"),
+        _ => None,
+    };
+    if let Some(phase) = phase {
+        let intercept = send_bidi_command_response(
+            &mut socket,
+            11,
+            "network.addIntercept",
+            json!({"phases": [phase], "contexts": [context]}),
+        )
+        .await;
+        assert_eq!(intercept["type"], "success", "{intercept:?}");
+    }
+    socket.send(WsMessage::Text(json!({"id": 3, "method": "browsingContext.navigate", "params": {"context": context, "url": url, "wait": "none"}}).to_string().into())).await.unwrap();
+    let mut messages = recv_until_id(&mut socket, 3).await;
+    assert_eq!(
+        bidi_message_by_id(&messages, 3)["type"],
+        "success",
+        "{messages:?}"
+    );
+    if let Some(event) = event {
+        while !messages
+            .iter()
+            .any(|message| message["method"] == event && message["params"]["request"]["url"] == url)
+        {
+            messages.push(
+                timeout(Duration::from_secs(5), recv_ws_json(&mut socket))
+                    .await
+                    .expect("held navigation occurrence"),
+            );
+        }
+    }
+    let intercepted = phase.map(|_| {
+        let pause = messages
+            .iter()
+            .find(|message| {
+                message["method"] == event.unwrap() && message["params"]["isBlocked"] == true
+            })
+            .expect("exact navigation pause");
+        pause["params"]["request"]["request"]
+            .as_str()
+            .unwrap()
+            .to_owned()
+    });
+    let mut received = Some(received);
+    if phase.is_none() {
+        timeout(Duration::from_secs(5), received.take().unwrap())
+            .await
+            .unwrap()
+            .unwrap();
+    }
+    // Another page must remain usable while the requested page is navigating.
+    // Creating it also changes the active target before the original command
+    // is admitted: neither the wait nor dispatch may resolve that active page.
+    let other = timeout(
+        Duration::from_secs(5),
+        send_bidi_command_response(
+            &mut socket,
+            12,
+            "browsingContext.create",
+            json!({"type": "tab"}),
+        ),
+    )
+    .await
+    .expect("another target must not wait for this navigation");
+    let other_context = other["result"]["context"].as_str().unwrap().to_owned();
+    let other_script = send_bidi_command_response(&mut socket, 13, "script.evaluate",
+        json!({"expression": "document.body.textContent = 'other document'", "target": {"context": other_context}}),
+    ).await;
+    assert_eq!(
+        other_script["result"]["result"]["value"], "other document",
+        "{other_script:?}"
+    );
+    // Both commands traverse the same socket FIFO. The status reply proves the
+    // preceding script has been considered without blocking the shared owner.
+    for command in [
+        json!({"id": 4, "method": "script.evaluate", "params": {"expression": "globalThis.admissionCalls = (globalThis.admissionCalls || 0) + 1; document.body.textContent", "target": {"context": script_context}}}),
+        json!({"id": 5, "method": "session.status", "params": {}}),
+    ] {
+        socket
+            .send(WsMessage::Text(command.to_string().into()))
+            .await
+            .unwrap();
+    }
+    let progress = timeout(Duration::from_secs(5), recv_until_id(&mut socket, 5))
+        .await
+        .expect("pending admission must leave the owner responsive");
+    assert_eq!(bidi_message_by_id(&progress, 5)["type"], "success");
+    assert!(
+        progress.iter().all(|message| message["id"] != 4),
+        "{hold:?}: script must remain unadmitted: {progress:?}"
+    );
+    if matches!(finish, BidiNavigationAdmissionFinish::Close) {
+        socket
+            .send(WsMessage::Text(
+                json!({"id": 6, "method": "browsingContext.close", "params": {"context": context}})
+                    .to_string()
+                    .into(),
+            ))
+            .await
+            .unwrap();
+        let mut closed = timeout(Duration::from_secs(5), recv_until_id(&mut socket, 6))
+            .await
+            .unwrap();
+        assert_eq!(
+            bidi_message_by_id(&closed, 6)["type"],
+            "success",
+            "{closed:?}"
+        );
+        if closed.iter().all(|message| message["id"] != 4) {
+            closed.extend(
+                timeout(Duration::from_secs(5), recv_until_id(&mut socket, 4))
+                    .await
+                    .expect("closing the exact target must end admission"),
+            );
+        }
+        assert_eq!(
+            bidi_message_by_id(&closed, 4)["error"],
+            "no such frame",
+            "{closed:?}"
+        );
+        drop(release);
+    } else {
+        if let Some(request) = intercepted {
+            let (method, params) = match hold {
+                BidiNavigationAdmissionHold::Auth => (
+                    "network.continueWithAuth",
+                    json!({"request": request, "action": "provideCredentials", "credentials": {"type": "password", "username": "user", "password": "pass"}}),
+                ),
+                BidiNavigationAdmissionHold::Response => {
+                    ("network.continueResponse", json!({"request": request}))
+                }
+                _ => ("network.continueRequest", json!({"request": request})),
+            };
+            let continued = timeout(
+                Duration::from_secs(5),
+                send_bidi_command_response(&mut socket, 6, method, params),
+            )
+            .await
+            .expect("the waiting script must allow its navigation decision");
+            assert_eq!(continued["type"], "success", "{continued:?}");
+            timeout(Duration::from_secs(5), received.take().unwrap())
+                .await
+                .unwrap()
+                .unwrap();
+        }
+        release.send(()).unwrap();
+        let completed = timeout(Duration::from_secs(5), recv_until_id(&mut socket, 4))
+            .await
+            .unwrap();
+        let evaluated = bidi_message_by_id(&completed, 4);
+        if matches!(finish, BidiNavigationAdmissionFinish::RetireChild) {
+            assert_eq!(evaluated["error"], "no such frame", "{completed:?}");
+        } else {
+            assert_eq!(evaluated["type"], "success", "{completed:?}");
+            assert_eq!(evaluated["result"]["result"]["value"], "admitted document");
+            let once = send_bidi_command_response(
+                &mut socket,
+                7,
+                "script.evaluate",
+                json!({"expression": "admissionCalls", "target": {"context": context}}),
+            )
+            .await;
+            assert_eq!(once["result"]["result"]["value"], 1, "{once:?}");
+        }
+    }
+    let untouched = send_bidi_command_response(
+        &mut socket,
+        8,
+        "script.evaluate",
+        json!({"expression": "typeof admissionCalls", "target": {"context": other_context}}),
+    )
+    .await;
+    assert_eq!(
+        untouched["result"]["result"]["value"], "undefined",
+        "{untouched:?}"
+    );
+    fixture.await.unwrap();
+    socket.close(None).await.unwrap();
+    protocol_server.abort();
+}
+
+#[tokio::test]
+async fn websocket_bidi_navigation_admission_before_headers() {
+    assert_bidi_navigation_admission_remains_interleavable(
+        BidiNavigationAdmissionHold::Headers,
+        BidiNavigationAdmissionFinish::Commit,
+    )
+    .await;
+}
+
+#[tokio::test]
+async fn websocket_bidi_navigation_admission_during_body() {
+    assert_bidi_navigation_admission_remains_interleavable(
+        BidiNavigationAdmissionHold::Body,
+        BidiNavigationAdmissionFinish::Commit,
+    )
+    .await;
+}
+
+#[tokio::test]
+async fn websocket_bidi_navigation_admission_allows_request_decision() {
+    assert_bidi_navigation_admission_remains_interleavable(
+        BidiNavigationAdmissionHold::Request,
+        BidiNavigationAdmissionFinish::Commit,
+    )
+    .await;
+}
+
+#[tokio::test]
+async fn websocket_bidi_navigation_admission_allows_auth_decision() {
+    assert_bidi_navigation_admission_remains_interleavable(
+        BidiNavigationAdmissionHold::Auth,
+        BidiNavigationAdmissionFinish::Commit,
+    )
+    .await;
+}
+
+#[tokio::test]
+async fn websocket_bidi_navigation_admission_allows_response_decision() {
+    assert_bidi_navigation_admission_remains_interleavable(
+        BidiNavigationAdmissionHold::Response,
+        BidiNavigationAdmissionFinish::Commit,
+    )
+    .await;
+}
+
+#[tokio::test]
+async fn websocket_bidi_navigation_admission_ends_when_target_closes() {
+    assert_bidi_navigation_admission_remains_interleavable(
+        BidiNavigationAdmissionHold::Headers,
+        BidiNavigationAdmissionFinish::Close,
+    )
+    .await;
+}
+
+#[tokio::test]
+async fn websocket_bidi_navigation_admission_preserves_child_identity() {
+    assert_bidi_navigation_admission_remains_interleavable(
+        BidiNavigationAdmissionHold::Headers,
+        BidiNavigationAdmissionFinish::RetireChild,
+    )
+    .await;
 }
 
 #[tokio::test]

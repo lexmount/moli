@@ -1391,6 +1391,17 @@ impl CdpConnection {
             .is_ok_and(TargetRuntimeSlot::document_projection_is_pending)
     }
 
+    pub fn devtools_context_document_projection_is_pending(
+        &self,
+        context: &DevToolsCommandContext,
+    ) -> bool {
+        self.command_owner_scope_for_devtools_context(context)
+            .is_some_and(|owner| {
+                self.runtime_session_owner_slot_for_owner(&owner)
+                    .is_ok_and(TargetRuntimeSlot::document_projection_is_pending)
+            })
+    }
+
     pub(crate) fn accepts_pending_document_navigation_for_owner(
         &self,
         owner: &CommandOwnerScope,

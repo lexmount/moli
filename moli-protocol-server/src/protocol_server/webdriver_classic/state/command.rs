@@ -65,16 +65,9 @@ impl ClassicPendingRuntime {
         receivers: &mut CdpSchedulerEventReceivers,
     ) -> Option<Self> {
         if matches!(self.phase, RuntimePhase::Command)
-            && scheduler.devtools_context_has_pending_document_navigation(self.command.context())
+            && scheduler.devtools_runtime_command_waits_for_document(&self.command)
         {
-            if self.navigation_deadline.is_none() {
-                self.navigation_deadline = self
-                    .navigation_timeout
-                    .and_then(|timeout| tokio::time::Instant::now().checked_add(timeout));
-            }
-            self.deadline = self.navigation_deadline;
-            self.wait = RuntimeWait::Navigation;
-            return Some(self);
+            return Some(self.await_document());
         }
         self.page_residence =
             scheduler.page_residence_identity_for_devtools_context(self.command.context());
@@ -108,6 +101,10 @@ impl ClassicPendingRuntime {
         progress: DevToolsRuntimeCommandProgress,
     ) -> Option<Self> {
         match progress {
+            DevToolsRuntimeCommandProgress::AwaitingDocument(command) => {
+                self.command = *command;
+                Some(self.await_document())
+            }
             DevToolsRuntimeCommandProgress::Pending {
                 pending,
                 protocol_output,
@@ -135,15 +132,7 @@ impl ClassicPendingRuntime {
                             &execution.result,
                         ) && self.navigation_timeout.is_some() =>
                     {
-                        if self.navigation_deadline.is_none() {
-                            self.navigation_deadline =
-                                self.navigation_timeout.and_then(|timeout| {
-                                    tokio::time::Instant::now().checked_add(timeout)
-                                });
-                        }
-                        self.deadline = self.navigation_deadline;
-                        self.wait = RuntimeWait::Navigation;
-                        Some(self)
+                        Some(self.await_document())
                     }
                     RuntimePhase::Command => {
                         self.reply(execution.result);
@@ -152,6 +141,17 @@ impl ClassicPendingRuntime {
                 }
             }
         }
+    }
+
+    fn await_document(mut self) -> Self {
+        if self.navigation_deadline.is_none() {
+            self.navigation_deadline = self
+                .navigation_timeout
+                .and_then(|timeout| tokio::time::Instant::now().checked_add(timeout));
+        }
+        self.deadline = self.navigation_deadline;
+        self.wait = RuntimeWait::Navigation;
+        self
     }
 
     pub(super) fn deadline(&self) -> Option<tokio::time::Instant> {
@@ -214,7 +214,7 @@ impl ClassicPendingRuntime {
         receivers: &mut CdpSchedulerEventReceivers,
     ) -> Option<Self> {
         if matches!(self.wait, RuntimeWait::Navigation)
-            && !scheduler.devtools_context_has_pending_document_navigation(self.command.context())
+            && !scheduler.devtools_runtime_command_waits_for_document(&self.command)
         {
             self.dispatch(scheduler, receivers).await
         } else {
