@@ -517,9 +517,10 @@ pub(crate) fn cleanup_owner_resources(owner_id: ResourceOwnerId) {
 }
 
 pub(crate) fn cleanup_object_urls_for_context(
+    owner_id: ResourceOwnerId,
     context_token: native_bridge::RuntimeObservableContextToken,
 ) -> usize {
-    blob_store().cleanup_object_url_lifetime(context_token.as_u64())
+    blob_store().cleanup_object_url_lifetime(owner_id, context_token.as_u64())
 }
 
 fn release_blob_wrapper_ref(blob_id: BlobId) {
