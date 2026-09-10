@@ -1394,6 +1394,25 @@ impl DomHost {
         true
     }
 
+    pub fn set_document_visibility_hidden_for_handle(
+        &mut self,
+        document_handle: DomHandle,
+        hidden: bool,
+    ) -> bool {
+        let Some(document) = self
+            .node_mut(document_handle)
+            .and_then(|node| node.data_mut().as_document_mut())
+        else {
+            return false;
+        };
+        if document.visibility_hidden() == hidden {
+            return false;
+        }
+        document.set_visibility_hidden(hidden);
+        self.record_mutation(MutationScope::LocalState);
+        true
+    }
+
     pub fn child_nodes(&self, handle: DomHandle) -> Option<Vec<DomHandle>> {
         self.node(handle)?;
         Some(self.child_handles(handle).collect())
