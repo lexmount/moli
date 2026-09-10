@@ -139,6 +139,7 @@ impl JsContextHost {
                 .retire_owner(WindowExecutionContextOwner::Frame(stale.local_window_id));
             self.retire_window_execution_contexts_for_context_token(
                 stale.runtime_observable_context_token,
+                config.resource_owner_id,
             );
             let stale_context = v8::Local::new(scope, &stale.context);
             stale_context.detach_global();
