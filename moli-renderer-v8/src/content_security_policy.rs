@@ -1152,12 +1152,14 @@ fn policy_allows_trusted_type_policy_name(policy: &str, policy_name: &str) -> bo
         return true;
     };
     sources.iter().any(|source| {
-        let source = source.trim();
+        let source = *source;
         source == "*"
             || (!source.is_empty()
-                && !csp_keyword_eq(source, "none")
-                && !csp_keyword_eq(source, "allow-duplicates")
-                && source == policy_name)
+                && source == policy_name
+                && source.bytes().all(|byte| {
+                    byte.is_ascii_alphanumeric()
+                        || matches!(byte, b'-' | b'#' | b'=' | b'_' | b'/' | b'@' | b'.' | b'%')
+                }))
     })
 }
 
@@ -1231,12 +1233,15 @@ fn parsed_directives(policy: &str) -> Vec<(&str, Vec<&str>)> {
     policy
         .split(';')
         .filter_map(|directive| {
-            let mut parts = directive.split_ascii_whitespace();
-            let name = parts.next()?.trim();
-            if name.is_empty() {
+            // CSP discards the entire non-ASCII directive, independently of
+            // other directives in the same policy and before duplicate lookup.
+            if !directive.is_ascii() {
                 return None;
             }
-            Some((name, parts.collect()))
+            let mut parts = directive.split_ascii_whitespace();
+            // split_ascii_whitespace already trims exactly the CSP whitespace
+            // set. A subsequent str::trim would incorrectly erase vertical tabs.
+            Some((parts.next()?, parts.collect()))
         })
         .collect()
 }
@@ -3321,6 +3326,110 @@ mod tests {
             &["trusted-types SomeName", "trusted-types OtherName"],
             "SomeName"
         ));
+    }
+
+    #[test]
+    fn trusted_types_csp_name_grammar_matches_only_valid_tokens() {
+        for byte in 0..=127u8 {
+            let name = format!("policy{}name", char::from(byte));
+            let policy = format!("trusted-types {name}");
+            let expected = byte.is_ascii_alphanumeric() || b"-#=_/@.%".contains(&byte);
+            assert_eq!(
+                policy_allows_trusted_type_policy_name(&policy, &name),
+                expected,
+                "invalid tt-policy-name byte {byte:#04x} must not match literally",
+            );
+        }
+        for name in ["none", "allow-duplicates", "A-z_09#=/@.%"] {
+            assert!(policy_allows_trusted_type_policy_name(
+                &format!("trusted-types {name}"),
+                name
+            ));
+        }
+        assert!(policy_allows_trusted_type_policy_name(
+            "trusted-types valid policy*name",
+            "valid"
+        ));
+        assert!(!policy_allows_trusted_type_policy_name(
+            "trusted-types valid policy*name",
+            "policy*name"
+        ));
+        for wildcard in ["\u{000b}*", "*\u{000b}", "policy*"] {
+            assert!(!policy_allows_trusted_type_policy_name(
+                &format!("trusted-types {wildcard}"),
+                "valid"
+            ));
+        }
+    }
+
+    #[test]
+    fn trusted_types_csp_name_grammar_does_not_restrict_unlisted_or_wildcard_names() {
+        for name in [
+            "",
+            "policy*name",
+            "policy$name",
+            "política",
+            "ポリシー",
+            "\0",
+        ] {
+            for policy in ["", "trusted-types *"] {
+                assert!(policy_allows_trusted_type_policy_name(policy, name));
+            }
+        }
+    }
+
+    #[test]
+    fn csp_directive_parser_discards_each_non_ascii_directive_before_duplicate_matching() {
+        for directive in [
+            "trusted-types allowed política",
+            "trusted-types\u{a0}allowed",
+            "\u{a0}trusted-types allowed",
+            "trusted-types allowed\u{a0}",
+            "require-trusted-types-for 'script' ポリシー",
+            "script-src 'none' https://例子.test",
+        ] {
+            assert!(parsed_directives(directive).is_empty(), "{directive}");
+        }
+
+        let directives = parsed_directives(
+            "trusted-types invalid política; TRUSTED-TYPES allowed; trusted-types *; \
+             script-src 'none'; img-src https://例子.test; img-src 'self'",
+        );
+        assert_eq!(
+            directive_source_list(&directives, TRUSTED_TYPES),
+            Some(["allowed"].as_slice()),
+        );
+        assert_eq!(
+            directive_source_list(&directives, SCRIPT_SRC),
+            Some(["'none'"].as_slice()),
+        );
+        assert_eq!(
+            directive_source_list(&directives, IMG_SRC),
+            Some(["'self'"].as_slice()),
+        );
+    }
+
+    #[test]
+    fn csp_directive_parser_uses_only_ascii_whitespace_around_names() {
+        for space in ['\t', '\n', '\u{000c}', '\r', ' '] {
+            let policy = format!("{space}TrUsTeD-TyPeS{space}allowed{space}");
+            let directives = parsed_directives(&policy);
+            assert_eq!(
+                directive_source_list(&directives, TRUSTED_TYPES),
+                Some(["allowed"].as_slice()),
+            );
+        }
+        for invalid in ['\0', '\u{000b}', '\u{001f}', '\u{007f}'] {
+            for policy in [
+                format!("{invalid}trusted-types allowed"),
+                format!("trusted-types{invalid} allowed"),
+            ] {
+                assert!(
+                    directive_source_list(&parsed_directives(&policy), TRUSTED_TYPES).is_none(),
+                    "{policy:?}",
+                );
+            }
+        }
     }
 
     #[test]

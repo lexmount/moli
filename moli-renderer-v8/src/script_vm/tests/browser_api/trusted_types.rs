@@ -1,6 +1,46 @@
 use super::*;
 
 #[test]
+fn trusted_types_csp_policy_creation_matches_only_valid_name_tokens() {
+    for (policy, name, expected) in [
+        ("trusted-types valid policy*name", "valid", "allowed"),
+        (
+            "trusted-types valid policy*name",
+            "policy*name",
+            "TypeError",
+        ),
+        ("trusted-types none allow-duplicates", "none", "allowed"),
+        (
+            "trusted-types none allow-duplicates",
+            "allow-duplicates",
+            "allowed",
+        ),
+        (
+            "trusted-types ignored política; trusted-types valid",
+            "valid",
+            "allowed",
+        ),
+        (
+            "trusted-types ignored política; trusted-types valid",
+            "ignored",
+            "TypeError",
+        ),
+        ("trusted-types \u{000b}*", "arbitrary", "TypeError"),
+        ("trusted-types *", "name with spaces", "allowed"),
+        ("", "name with spaces", "allowed"),
+        ("trusted-types valid", "policy$name", "TypeError"),
+    ] {
+        let mut vm = new_storage_test_vm("https://trusted-types-name-grammar.test/");
+        vm.set_response_content_security_policies(&[policy.to_owned()]);
+        let script = format!(
+            "(() => {{ try {{ trustedTypes.createPolicy({}, {{createHTML: value => value}}); return 'allowed'; }} catch (error) {{ return error.name; }} }})()",
+            serde_json::to_string(name).unwrap(),
+        );
+        assert_eq!(vm.eval(&script).unwrap(), expected, "{policy:?}, {name:?}");
+    }
+}
+
+#[test]
 fn element_markup_sinks_enforce_trusted_html_and_standard_sink_names() {
     let mut vm = new_storage_test_vm("https://element-markup-trusted-types.test/");
     vm.set_response_content_security_policies(&["require-trusted-types-for 'script'".to_owned()]);
