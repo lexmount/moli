@@ -5,6 +5,7 @@ mod presence;
 mod runtime_cursor;
 mod runtime_emission;
 mod runtime_queue;
+mod worker_runtime;
 
 #[cfg(test)]
 pub(crate) use emission::ObservableOutputProjectionStep;
@@ -40,4 +41,7 @@ pub(crate) use runtime_queue::TargetRuntimeObservableQueueSnapshot;
 pub(crate) use runtime_queue::{
     TargetRuntimeObservableQueueState, TargetRuntimeObservableSourceOutput,
     TargetRuntimeObservableSourceSummary,
+};
+pub(in crate::domains) use worker_runtime::{
+    runtime_console_api_called_events, runtime_exception_thrown_events,
 };

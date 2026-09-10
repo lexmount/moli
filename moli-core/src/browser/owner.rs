@@ -1264,7 +1264,6 @@ impl BrowserContextHandle {
     forward_context_read! {
         fn controlled_service_worker_window_client_ids(registration_id: u64, version_id: u64) -> Vec<u64>;
         fn set_service_worker_pause_on_start_for_version(version_id: u64, pause: bool) -> bool;
-        fn worker_inspection_endpoint(target: crate::runtime::RendererWorkerIdentity) -> Option<crate::runtime::RendererWorkerInspectionEndpoint>;
         fn close_shared_worker(instance_id: moli_shared_worker::SharedWorkerInstanceId) -> bool;
         fn close_dedicated_worker(instance_id: u64) -> bool;
         fn run_dedicated_worker_if_waiting_for_debugger(instance_id: u64) -> bool;
@@ -1276,6 +1275,17 @@ impl BrowserContextHandle {
         fn clear_http_cache() -> Result<(), String>;
         fn snapshot_cookies() -> Vec<moli_cookie_jar::StoredCookie>;
         fn web_contents_for_renderer_owner(owner: crate::RendererOwnerLocalHostId) -> Option<WebContentsHandle>;
+    }
+
+    /// A queued observer can outlive Context shutdown before its projection
+    /// sees retirement. Absence is not a live-owner invariant violation.
+    pub fn worker_inspection_endpoint(
+        &self,
+        target: crate::runtime::RendererWorkerIdentity,
+    ) -> Option<crate::runtime::RendererWorkerInspectionEndpoint> {
+        self.read(move |context| context.worker_inspection_endpoint(target))
+            .ok()
+            .flatten()
     }
 
     /// Classify the partition and snapshot its cookies in one exact owner turn.

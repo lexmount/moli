@@ -273,7 +273,6 @@ impl ServiceWorkerTargetState {
         )
     }
 
-    #[cfg(test)]
     pub(crate) fn runtime_attachment_identity_for_current_run(
         &self,
         browser_context_id: &str,
@@ -696,6 +695,11 @@ impl ServiceWorkerTargetState {
 
     pub(crate) fn session_ids(&self) -> Vec<String> {
         self.sessions.keys().cloned().collect()
+    }
+
+    pub(crate) fn runtime_frontend_enabled(&self, session_id: &str) -> bool {
+        self.session_state(session_id)
+            .is_some_and(|state| state.runtime_session_state.runtime_frontend_enabled)
     }
 
     pub(crate) fn set_runtime_frontend_enabled(&mut self, session_id: &str, enabled: bool) {

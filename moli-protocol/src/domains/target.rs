@@ -47,6 +47,7 @@ pub(in crate::domains) use worker_target::{
     TargetPreparedOutputSlot, dedicated_worker_main_script_network_replay_for_session,
     dedicated_worker_observation_prepared_outputs, project_worker_target_output_async,
     release_failed_dedicated_worker_target_after_debugger_resume,
+    resume_service_worker_runtime_listener_for_session,
     service_worker_observation_prepared_outputs, shared_worker_observation_prepared_outputs,
     worker_lifecycle_prepared_outputs, worker_network_prepared_outputs,
 };

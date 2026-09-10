@@ -474,6 +474,7 @@ fn service_worker_lifecycle_payload_bytes(
             string_charge(reason)
         }
         crate::runtime::RendererServiceWorkerLifecycle::Starting { .. }
+        | crate::runtime::RendererServiceWorkerLifecycle::ExecutionReady { .. }
         | crate::runtime::RendererServiceWorkerLifecycle::Started { .. }
         | crate::runtime::RendererServiceWorkerLifecycle::Destroyed { .. }
         | crate::runtime::RendererServiceWorkerLifecycle::VersionUpdated { .. } => 0,

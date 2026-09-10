@@ -3036,28 +3036,38 @@ async fn websocket_bidi_classic_session_omits_synthetic_service_worker_runtime()
         "a real Service Worker Runtime context must not be exposed as a generic worker realm: {messages:#?}"
     );
 
-    let service_worker_realm = service_worker_realm_created(&messages);
-    if let Some(log) = service_worker_log_entry(&messages, &service_worker_context) {
-        let realm = service_worker_realm.unwrap_or_else(|| {
-            panic!("a Service Worker log must wait for its real Runtime realm: {messages:#?}")
-        });
-        assert_eq!(
-            log["params"]["source"]["realm"], realm["params"]["realm"],
-            "Service Worker logs must use the realm id from Runtime.executionContextCreated: {messages:#?}"
-        );
-        let realm_index = messages
-            .iter()
-            .position(|message| std::ptr::eq(message, realm))
-            .expect("service worker realm position");
-        let log_index = messages
-            .iter()
-            .position(|message| std::ptr::eq(message, log))
-            .expect("service worker log position");
-        assert!(
-            realm_index < log_index,
-            "Service Worker realmCreated must precede its log entry: {messages:#?}"
+    // Registration completion is not a barrier for the worker's inspector stream.
+    // Observe its exact log so the realm/inventory contract is checked on every run.
+    if service_worker_log_entry(&messages, &service_worker_context).is_none() {
+        messages.extend(
+            recv_until_match(&mut socket, |message| {
+                service_worker_log_entry(std::slice::from_ref(message), &service_worker_context)
+                    .is_some()
+            })
+            .await,
         );
     }
+    let log = service_worker_log_entry(&messages, &service_worker_context)
+        .expect("Service Worker startup log");
+    let service_worker_realm = service_worker_realm_created(&messages).unwrap_or_else(|| {
+        panic!("a Service Worker log must wait for its real Runtime realm: {messages:#?}")
+    });
+    assert_eq!(
+        log["params"]["source"]["realm"], service_worker_realm["params"]["realm"],
+        "Service Worker logs must use the realm id from Runtime.executionContextCreated: {messages:#?}"
+    );
+    let realm_index = messages
+        .iter()
+        .position(|message| std::ptr::eq(message, service_worker_realm))
+        .expect("service worker realm position");
+    let log_index = messages
+        .iter()
+        .position(|message| std::ptr::eq(message, log))
+        .expect("service worker log position");
+    assert!(
+        realm_index < log_index,
+        "Service Worker realmCreated must precede its log entry: {messages:#?}"
+    );
 
     let realms = send_bidi_command(
         &mut socket,
@@ -3079,14 +3089,12 @@ async fn websocket_bidi_classic_session_omits_synthetic_service_worker_runtime()
             .all(|realm| realm["type"] == json!("service-worker")),
         "script.getRealms must expose only real Service Worker-typed realms for the worker target: {realms:?}"
     );
-    if let Some(service_worker_realm) = service_worker_realm {
-        assert!(
-            returned_realms
-                .iter()
-                .any(|realm| { realm["realm"] == service_worker_realm["params"]["realm"] }),
-            "script.getRealms must retain a Service Worker realm that was already created: {realms:?}"
-        );
-    }
+    assert!(
+        returned_realms
+            .iter()
+            .any(|realm| { realm["realm"] == service_worker_realm["params"]["realm"] }),
+        "script.getRealms must retain a Service Worker realm that was already created: {realms:?}"
+    );
 
     let _ = socket.close(None).await;
     protocol_server.abort();

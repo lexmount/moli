@@ -608,6 +608,7 @@ impl RendererServiceWorkerHost {
             handle: Some(handle),
         };
         drop(state);
+        service.record_worker_execution_ready(self.version_id(), self.run_identity());
         // No parent output may expose a run before its real host is installed.
         if let Err(error) =
             spawn_parent_message_pump(service.clone(), Arc::clone(self), receiver, script_resource)

@@ -7,6 +7,7 @@ use moli_core::browser::{
 };
 
 mod network;
+mod runtime_readiness;
 
 #[tokio::test]
 async fn dedicated_worker_creation_rejects_a_renderer_page_identity_mismatch() {

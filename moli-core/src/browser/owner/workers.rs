@@ -56,6 +56,7 @@ impl Browser {
                         })
                     }
                     RendererServiceWorkerLifecycle::Starting { version_id, .. }
+                    | RendererServiceWorkerLifecycle::ExecutionReady { version_id, .. }
                     | RendererServiceWorkerLifecycle::Started { version_id, .. }
                     | RendererServiceWorkerLifecycle::Stopped { version_id, .. }
                     | RendererServiceWorkerLifecycle::VersionUpdated { version_id, .. } => {
@@ -69,8 +70,17 @@ impl Browser {
                                 }
                                 worker.execution = ServiceWorkerExecution::Starting(run.clone());
                             }
-                            RendererServiceWorkerLifecycle::Started { run, .. } => {
+                            RendererServiceWorkerLifecycle::ExecutionReady { run, .. } => {
                                 if worker.execution != ServiceWorkerExecution::Starting(run.clone())
+                                {
+                                    return;
+                                }
+                                worker.execution =
+                                    ServiceWorkerExecution::Bootstrapping(run.clone());
+                            }
+                            RendererServiceWorkerLifecycle::Started { run, .. } => {
+                                if worker.execution
+                                    != ServiceWorkerExecution::Bootstrapping(run.clone())
                                 {
                                     return;
                                 }

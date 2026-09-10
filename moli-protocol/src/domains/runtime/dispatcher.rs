@@ -38,8 +38,7 @@ use crate::conn::{
     PendingSharedWorkerRuntimeProtocolMessageDispatch, ProfilerInspectorCommand,
     RendererCommandDescriptor, RendererDispatchLane, RuntimeBindingDefinition,
     RuntimeEnableReplayEvent, RuntimeInspectorAsyncCompletionReceiver,
-    RuntimeInspectorResponseReady, ServiceWorkerRuntimeExceptionSnapshot,
-    SessionOwnerRuntimeFrontendEnableResult, monotonic_timestamp_seconds,
+    RuntimeInspectorResponseReady, SessionOwnerRuntimeFrontendEnableResult,
     renderer_command_turn_frontend_protocol_response, runtime_remote_object_ids_in_map,
 };
 use crate::domains::actions::{ConsoleAction, HeapProfilerAction, RuntimeAction};
@@ -52,8 +51,7 @@ use crate::domains::console::{
 use crate::domains::observable_output::{
     advance_runtime_observable_cursors_to_current_for_owner,
     advance_runtime_observable_cursors_to_current_for_session_owner,
-    runtime_console_api_called_background_event, runtime_console_message_type_and_text,
-    runtime_exception_thrown_background_event,
+    runtime_console_api_called_events, runtime_exception_thrown_events,
 };
 use crate::domains::runtime_context_events::{
     RuntimeContextProtocolEvent, apply_runtime_context_protocol_event_side_effects_for_owner_typed,
@@ -9669,7 +9667,8 @@ async fn complete_pending_service_worker_runtime_inspector_command(
                 && !completed.await_promise
                 && let Err(message) = completed_protocol.wait_for_session_response().await
             {
-                return complete_service_worker_runtime_inspector_error(conn, completed, message);
+                return complete_service_worker_runtime_inspector_error(conn, completed, message)
+                    .await;
             }
             let session_response_predecessor = completed_protocol.session_response_predecessor();
             let session_response_succeeded = completed_protocol.session_response_succeeded();
@@ -9687,12 +9686,13 @@ async fn complete_pending_service_worker_runtime_inspector_command(
                 Err(message) => {
                     return complete_service_worker_runtime_inspector_error(
                         conn, completed, message,
-                    );
+                    )
+                    .await;
                 }
             }
         }
         Err(message) => {
-            return complete_service_worker_runtime_inspector_error(conn, completed, message);
+            return complete_service_worker_runtime_inspector_error(conn, completed, message).await;
         }
     };
 
@@ -9965,7 +9965,7 @@ fn apply_service_worker_runtime_disable_projection(
     target.set_runtime_frontend_enabled(owner_session_id, false);
 }
 
-fn complete_service_worker_runtime_inspector_error(
+async fn complete_service_worker_runtime_inspector_error(
     conn: &mut CdpConnection,
     completed: RuntimeCommandCompletionMeta,
     message: String,
@@ -9988,12 +9988,21 @@ fn complete_service_worker_runtime_inspector_error(
         "enable"
             if message == "NoDocumentLoaded" || message == "ServiceWorkerRuntimeUnavailable" =>
         {
-            RuntimeCommandTaskStep::Complete(
-                service_worker_runtime_enable_command_output_plan_for_session(
+            let mut plan = service_worker_runtime_enable_command_output_plan_for_session(
+                conn,
+                completed.session_id(),
+            );
+            // The native readiness occurrence may have been consumed while the
+            // unavailable dispatch was pending, before its logical enable took
+            // effect. Bind now if ready; otherwise that later occurrence binds it.
+            plan.extend_background_events(
+                crate::domains::target::resume_service_worker_runtime_listener_for_session(
                     conn,
                     completed.session_id(),
-                ),
-            )
+                )
+                .await,
+            );
+            RuntimeCommandTaskStep::Complete(plan)
         }
         "disable"
             if message == "NoDocumentLoaded" || message == "ServiceWorkerRuntimeUnavailable" =>
@@ -10072,20 +10081,11 @@ fn append_shared_worker_runtime_console_messages(
         target.mark_runtime_console_emitted(session_id, console_end);
     }
 
-    let base_timestamp = monotonic_timestamp_seconds();
-    for (index, message) in runtime_messages.iter().enumerate() {
-        let (console_type, text) = runtime_console_message_type_and_text(&message.message);
-        push_runtime_console_api_called_background_event(
-            plan,
-            Some(session_id),
-            console_type,
-            text,
-            &message.args,
-            message.stack.as_deref(),
-            message.execution_context_id,
-            base_timestamp + ((index + 1) as f64 * 0.000_001),
-        );
-    }
+    plan.extend_background_events(runtime_console_api_called_events(
+        session_id,
+        &target.target_id,
+        &runtime_messages,
+    ));
 }
 
 fn append_service_worker_runtime_console_messages(
@@ -10106,20 +10106,11 @@ fn append_service_worker_runtime_console_messages(
         target.mark_runtime_console_emitted(session_id, console_end);
     }
 
-    let base_timestamp = monotonic_timestamp_seconds();
-    for (index, message) in runtime_messages.iter().enumerate() {
-        let (console_type, text) = runtime_console_message_type_and_text(&message.message);
-        push_runtime_console_api_called_background_event(
-            plan,
-            Some(session_id),
-            console_type,
-            text,
-            &message.args,
-            message.stack.as_deref(),
-            message.execution_context_id,
-            base_timestamp + ((index + 1) as f64 * 0.000_001),
-        );
-    }
+    plan.extend_background_events(runtime_console_api_called_events(
+        session_id,
+        &target.target_id,
+        &runtime_messages,
+    ));
 }
 
 fn append_service_worker_runtime_exception_messages(
@@ -10145,12 +10136,12 @@ fn append_service_worker_runtime_exception_messages(
         target.mark_runtime_exception_emitted(session_id, exception_end);
     }
 
-    push_runtime_exception_thrown_protocol_messages(
-        plan,
+    plan.extend_background_events(runtime_exception_thrown_events(
         session_id,
+        &target.target_id,
         &exception_messages,
         exception_start,
-    );
+    ));
 }
 
 fn shared_worker_runtime_enable_command_output_plan_for_session(
@@ -10184,20 +10175,11 @@ fn shared_worker_runtime_enable_command_output_plan_for_session(
             session_id,
         );
     }
-    let base_timestamp = monotonic_timestamp_seconds();
-    for (index, message) in runtime_messages.iter().enumerate() {
-        let (console_type, text) = runtime_console_message_type_and_text(&message.message);
-        push_runtime_console_api_called_background_event(
-            &mut plan,
-            Some(session_id),
-            console_type,
-            text,
-            &message.args,
-            message.stack.as_deref(),
-            message.execution_context_id,
-            base_timestamp + ((index + 1) as f64 * 0.000_001),
-        );
-    }
+    plan.extend_background_events(runtime_console_api_called_events(
+        session_id,
+        &target.target_id,
+        &runtime_messages,
+    ));
     plan
 }
 
@@ -10242,26 +10224,17 @@ fn service_worker_runtime_enable_command_output_plan_for_session(
             session_id,
         );
     }
-    let base_timestamp = monotonic_timestamp_seconds();
-    for (index, message) in runtime_messages.iter().enumerate() {
-        let (console_type, text) = runtime_console_message_type_and_text(&message.message);
-        push_runtime_console_api_called_background_event(
-            &mut plan,
-            Some(session_id),
-            console_type,
-            text,
-            &message.args,
-            message.stack.as_deref(),
-            message.execution_context_id,
-            base_timestamp + ((index + 1) as f64 * 0.000_001),
-        );
-    }
-    push_runtime_exception_thrown_protocol_messages(
-        &mut plan,
+    plan.extend_background_events(runtime_console_api_called_events(
         session_id,
+        &target.target_id,
+        &runtime_messages,
+    ));
+    plan.extend_background_events(runtime_exception_thrown_events(
+        session_id,
+        &target.target_id,
         &exception_messages,
         exception_start,
-    );
+    ));
     plan
 }
 
@@ -10273,51 +10246,6 @@ fn push_execution_context_created_background_event(
     let mut events = Vec::new();
     emit_runtime_context_protocol_background_event_typed(&mut events, event, Some(session_id));
     plan.extend_background_events(events);
-}
-
-fn push_runtime_console_api_called_background_event(
-    plan: &mut CommandOutputPlan,
-    session_id: Option<&str>,
-    console_type: &str,
-    text: &str,
-    args: &[Value],
-    stack: Option<&str>,
-    execution_context_id: i64,
-    timestamp: f64,
-) {
-    plan.push_background_event(runtime_console_api_called_background_event(
-        session_id,
-        None,
-        console_type,
-        text,
-        args,
-        stack,
-        execution_context_id,
-        timestamp,
-    ));
-}
-
-fn push_runtime_exception_thrown_protocol_messages(
-    plan: &mut CommandOutputPlan,
-    session_id: &str,
-    messages: &[ServiceWorkerRuntimeExceptionSnapshot],
-    exception_start: usize,
-) {
-    let base_timestamp = monotonic_timestamp_seconds();
-    for (offset, message) in messages.iter().enumerate() {
-        let exception_index = exception_start + offset;
-        plan.push_background_event(runtime_exception_thrown_background_event(
-            Some(session_id),
-            None,
-            &message.message.message,
-            &message.message.filename,
-            message.execution_context_id,
-            exception_index,
-            base_timestamp + ((offset + 1) as f64 * 0.000_001),
-            Some(u64::from(message.message.lineno.saturating_sub(1))),
-            Some(u64::from(message.message.colno.saturating_sub(1))),
-        ));
-    }
 }
 
 fn disable_command_output_plan_sync_for_owner(

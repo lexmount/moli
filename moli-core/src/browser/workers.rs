@@ -73,6 +73,8 @@ pub struct ServiceWorkerSnapshot {
 pub enum ServiceWorkerExecution {
     Stopped,
     Starting(crate::page::RendererServiceWorkerRunIdentity),
+    /// The executor exists; bootstrap may still be waiting for a debugger.
+    Bootstrapping(crate::page::RendererServiceWorkerRunIdentity),
     Running(crate::page::RendererServiceWorkerRunIdentity),
 }
 
@@ -80,7 +82,7 @@ impl ServiceWorkerExecution {
     pub fn active_run(&self) -> Option<&crate::page::RendererServiceWorkerRunIdentity> {
         match self {
             Self::Stopped => None,
-            Self::Starting(run) | Self::Running(run) => Some(run),
+            Self::Starting(run) | Self::Bootstrapping(run) | Self::Running(run) => Some(run),
         }
     }
 }

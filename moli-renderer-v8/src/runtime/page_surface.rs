@@ -711,6 +711,12 @@ pub enum RendererServiceWorkerLifecycle {
         version_id: u64,
         run: super::RendererServiceWorkerRunIdentity,
     },
+    /// The physical executor is installed, including while bootstrap is paused
+    /// for a debugger. Script completion is a separate, later fact.
+    ExecutionReady {
+        version_id: u64,
+        run: super::RendererServiceWorkerRunIdentity,
+    },
     Started {
         version_id: u64,
         run: super::RendererServiceWorkerRunIdentity,

@@ -341,6 +341,32 @@ impl ServiceWorkerRuntimeState {
         );
     }
 
+    pub(super) fn record_target_execution_ready(
+        &self,
+        version_id: ServiceWorkerVersionId,
+        run: RendererServiceWorkerRunIdentity,
+    ) {
+        if self.target_output_journal(version_id).is_none() {
+            return;
+        }
+        let Some(version) = self.versions.get(&version_id) else {
+            return;
+        };
+        let ServiceWorkerVersionRunningState::Starting { host } = &version.running_state else {
+            return;
+        };
+        if host.run_identity() != run || host.inspection_handle().is_none() {
+            return;
+        }
+        self.target_output_streams.publish(
+            version_id,
+            RendererServiceWorkerLifecycle::ExecutionReady {
+                version_id: version_id.as_u64(),
+                run,
+            },
+        );
+    }
+
     pub(super) fn record_target_started(
         &mut self,
         version_id: ServiceWorkerVersionId,
@@ -968,6 +994,7 @@ mod target_run_identity_tests {
                 stack: None,
             },
         ));
+        state.record_target_execution_ready(version, run.clone());
         assert!(!state.record_target_started(version, run));
         state.record_target_starting(version);
         assert!(drain_service_worker_target_events_for_test(&mut target_output_rx).is_empty());

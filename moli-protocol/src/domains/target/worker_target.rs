@@ -47,8 +47,7 @@ use crate::{
     },
     domains::observable_output::{
         console_message_added_background_event, console_message_level_and_text,
-        runtime_console_api_called_background_event, runtime_console_message_type_and_text,
-        runtime_exception_thrown_background_event,
+        runtime_console_api_called_events, runtime_exception_thrown_events,
     },
     domains::runtime::replay_shared_worker_runtime_bindings_for_session_async,
     domains::{network, service_worker},
@@ -141,6 +140,9 @@ enum WorkerTargetLifecycleOutput {
     ServiceWorkerRuntimeEvents {
         runtime: TargetServiceWorkerRuntimeAttachmentIdentity,
         events: Vec<crate::conn::BackgroundProtocolEvent>,
+    },
+    ServiceWorkerRuntimeReady {
+        runtime: TargetServiceWorkerRuntimeAttachmentIdentity,
     },
     ServiceWorkerCreated {
         version: TargetServiceWorkerVersionIdentity,
@@ -820,8 +822,18 @@ fn project_service_worker_snapshot(
             },
         ));
     }
-    if let moli_core::browser::ServiceWorkerExecution::Running(run) = worker.execution {
+    if let moli_core::browser::ServiceWorkerExecution::Running(run) = &worker.execution {
         outputs.extend(record_service_worker_target_started(
+            conn,
+            context,
+            version_id,
+            run.clone(),
+        ));
+    }
+    if let moli_core::browser::ServiceWorkerExecution::Bootstrapping(run)
+    | moli_core::browser::ServiceWorkerExecution::Running(run) = worker.execution
+    {
+        outputs.extend(service_worker_runtime_ready_outputs(
             conn, context, version_id, run,
         ));
     }
@@ -847,6 +859,9 @@ fn project_service_worker_lifecycle(
         }
         RendererServiceWorkerLifecycle::Started { version_id, run } => {
             record_service_worker_target_started(conn, browser_context_id, version_id, run)
+        }
+        RendererServiceWorkerLifecycle::ExecutionReady { version_id, run } => {
+            service_worker_runtime_ready_outputs(conn, browser_context_id, version_id, run)
         }
         RendererServiceWorkerLifecycle::Stopped {
             version_id,
@@ -2067,6 +2082,101 @@ fn register_service_worker_target(
     register_service_worker_target_with_active_run(conn, browser_context_id, info, None)
 }
 
+fn service_worker_runtime_ready_outputs(
+    conn: &mut CdpConnection,
+    browser_context_id: &str,
+    version_id: u64,
+    renderer_run: RendererServiceWorkerRunIdentity,
+) -> TargetPreparedOutputs {
+    let mut outputs = TargetPreparedOutputs::default();
+    let Some(target) = conn
+        .browser_context_by_id_mut(browser_context_id)
+        .and_then(|context| context.service_worker_targets.get_mut(&version_id))
+    else {
+        return outputs;
+    };
+    let Some(run) = target.observe_worker_run(browser_context_id, renderer_run) else {
+        return outputs;
+    };
+    for session_id in target.session_ids() {
+        if target.runtime_frontend_enabled(&session_id)
+            && let Some(runtime) =
+                target.runtime_attachment_identity_for_run(browser_context_id, &session_id, &run)
+        {
+            outputs.push(WorkerTargetLifecycleOutput::ServiceWorkerRuntimeReady { runtime });
+        }
+    }
+    outputs
+}
+
+pub(in crate::domains) async fn resume_service_worker_runtime_listener_for_session(
+    conn: &mut CdpConnection,
+    session_id: Option<&str>,
+) -> Vec<BackgroundProtocolEvent> {
+    let Some(CdpSessionRoute::ServiceWorkerTarget {
+        browser_context_id, ..
+    }) = conn.session_route(session_id)
+    else {
+        return Vec::new();
+    };
+    let Some(runtime) = session_id.and_then(|session_id| {
+        conn.service_worker_target_for_session(Some(session_id))?
+            .runtime_attachment_identity_for_current_run(&browser_context_id, session_id)
+    }) else {
+        return Vec::new();
+    };
+    let mut outputs = TargetPreparedOutputs::default();
+    outputs.push(WorkerTargetLifecycleOutput::ServiceWorkerRuntimeReady { runtime });
+    worker_target_background_events_async(conn, outputs).await
+}
+
+async fn resume_service_worker_runtime_observer(
+    conn: &mut CdpConnection,
+    runtime: TargetServiceWorkerRuntimeAttachmentIdentity,
+) -> Option<WorkerTargetLifecycleOutput> {
+    let session_id = runtime.session_id();
+    if !exact_service_worker_runtime_target_mut(conn, &runtime)?
+        .runtime_frontend_enabled(session_id)
+    {
+        return None;
+    }
+    // This existing AdapterReply path freezes the physical endpoint before
+    // yielding. A FIFO consumer must not await a response in its own SessionSink.
+    // Physical frontend call ids are nonzero, leaving 0 for this local reply.
+    let pending = conn
+        .start_service_worker_runtime_protocol_message_for_session(
+            Some(session_id),
+            r#"{"id":0,"method":"Runtime.enable"}"#.into(),
+        )
+        .ok()?;
+    let completed = pending.wait().await.ok()?;
+    let target = exact_service_worker_runtime_target_mut(conn, &runtime)?;
+    if !target.runtime_frontend_enabled(session_id) {
+        return None;
+    }
+    let renderer_run = target.active_renderer_run()?.clone();
+    let version_id = target.renderer_version_id;
+    let mut messages = conn
+        .complete_service_worker_runtime_protocol_message_for_session(completed)
+        .ok()?;
+    // The enable acknowledgement is internal; real context notifications flow
+    // through the same exact-run projection and buffered-console cursors.
+    messages.retain(|message| {
+        !matches!(message, RendererRuntimeInspectorMessage::Protocol(message)
+            if message.value().get("id") == Some(&json!(0)))
+    });
+    record_service_worker_target_runtime_inspector_messages(
+        conn,
+        runtime.attachment().browser_context_id(),
+        version_id,
+        renderer_run,
+        Some(session_id.to_owned()),
+        messages,
+    )
+    .worker_target_lifecycle_outputs
+    .pop()
+}
+
 fn record_service_worker_target_started(
     conn: &mut CdpConnection,
     browser_context_id: &str,
@@ -3096,6 +3206,16 @@ async fn emit_target_lifecycle_events(
     };
     let mut side_effects = events::TargetProtocolSideEffects::default();
     for event in events {
+        let event = match event {
+            WorkerTargetLifecycleOutput::ServiceWorkerRuntimeReady { runtime } => {
+                let Some(event) = resume_service_worker_runtime_observer(conn, runtime).await
+                else {
+                    continue;
+                };
+                event
+            }
+            event => event,
+        };
         let event = match commit_dedicated_worker_retirement_output_async(conn, event).await {
             Ok(events) => {
                 side_effects.extend_background_events(events);
@@ -3104,6 +3224,9 @@ async fn emit_target_lifecycle_events(
             Err(event) => event,
         };
         match event {
+            WorkerTargetLifecycleOutput::ServiceWorkerRuntimeReady { .. } => {
+                unreachable!("readiness is resolved to exact inspector output above")
+            }
             WorkerTargetLifecycleOutput::DedicatedWorkerEvents {
                 browser_context_id,
                 renderer_instance_id,
@@ -3146,6 +3269,7 @@ async fn emit_target_lifecycle_events(
                 ));
                 side_effects.extend_background_events(runtime_console_api_called_events(
                     &session_id,
+                    &target_id,
                     &runtime_messages,
                 ));
                 if let Some(target) = conn
@@ -3401,6 +3525,7 @@ async fn emit_target_lifecycle_events(
                 if runtime.is_current() {
                     side_effects.extend_background_events(runtime_console_api_called_events(
                         runtime.session_id(),
+                        runtime.target_id(),
                         &messages,
                     ));
                 }
@@ -3415,6 +3540,7 @@ async fn emit_target_lifecycle_events(
                 }
                 side_effects.extend_background_events(runtime_console_api_called_events(
                     attachment.session_id(),
+                    attachment.target_id(),
                     &messages,
                 ));
                 mark_exact_shared_worker_runtime_console_emitted(conn, &attachment, console_end);
@@ -3428,6 +3554,7 @@ async fn emit_target_lifecycle_events(
                 if runtime.is_current() {
                     side_effects.extend_background_events(runtime_exception_thrown_events(
                         runtime.session_id(),
+                        runtime.target_id(),
                         &messages,
                         exception_start,
                     ));
@@ -3467,7 +3594,9 @@ async fn emit_target_lifecycle_events(
                 side_effects.extend_background_events(response_events);
                 if let Some((messages, _console_end)) = pending_runtime_console {
                     side_effects.extend_background_events(runtime_console_api_called_events(
-                        session_id, &messages,
+                        session_id,
+                        runtime.target_id(),
+                        &messages,
                     ));
                 }
                 if let Some((messages, exception_start, _exception_end)) =
@@ -3475,6 +3604,7 @@ async fn emit_target_lifecycle_events(
                 {
                     side_effects.extend_background_events(runtime_exception_thrown_events(
                         session_id,
+                        runtime.target_id(),
                         &messages,
                         exception_start,
                     ));
@@ -3506,7 +3636,9 @@ async fn emit_target_lifecycle_events(
                 side_effects.extend_background_events(response_events);
                 if let Some((messages, console_end)) = pending_runtime_console {
                     side_effects.extend_background_events(runtime_console_api_called_events(
-                        session_id, &messages,
+                        session_id,
+                        attachment.target_id(),
+                        &messages,
                     ));
                     mark_exact_shared_worker_runtime_console_emitted(
                         conn,
@@ -3578,56 +3710,6 @@ fn console_message_added_events(
         .map(|message| {
             let (level, text) = console_message_level_and_text(&message.message);
             console_message_added_background_event(Some(session_id), "console-api", level, text, "")
-        })
-        .collect()
-}
-
-fn runtime_console_api_called_events(
-    session_id: &str,
-    messages: &[RuntimeConsoleMessageSnapshot],
-) -> Vec<BackgroundProtocolEvent> {
-    let base_timestamp = monotonic_timestamp_seconds();
-    messages
-        .iter()
-        .enumerate()
-        .map(|(index, message)| {
-            let (console_type, text) = runtime_console_message_type_and_text(&message.message);
-            runtime_console_api_called_background_event(
-                Some(session_id),
-                None,
-                console_type,
-                text,
-                &message.args,
-                message.stack.as_deref(),
-                message.execution_context_id,
-                base_timestamp + ((index + 1) as f64 * 0.000_001),
-            )
-        })
-        .collect()
-}
-
-fn runtime_exception_thrown_events(
-    session_id: &str,
-    messages: &[ServiceWorkerRuntimeExceptionSnapshot],
-    exception_start: usize,
-) -> Vec<BackgroundProtocolEvent> {
-    let base_timestamp = monotonic_timestamp_seconds();
-    messages
-        .iter()
-        .enumerate()
-        .map(|(offset, message)| {
-            let exception_index = exception_start + offset;
-            runtime_exception_thrown_background_event(
-                Some(session_id),
-                None,
-                &message.message.message,
-                &message.message.filename,
-                message.execution_context_id,
-                exception_index,
-                base_timestamp + ((offset + 1) as f64 * 0.000_001),
-                Some(u64::from(message.message.lineno.saturating_sub(1))),
-                Some(u64::from(message.message.colno.saturating_sub(1))),
-            )
         })
         .collect()
 }
@@ -6723,7 +6805,7 @@ mod tests {
             },
         }];
 
-        let out = runtime_exception_thrown_events("SID-worker", &messages, 7);
+        let out = runtime_exception_thrown_events("SID-worker", "TID-worker", &messages, 7);
 
         assert_eq!(out.len(), 1);
         let (message, automation_event) = out.into_iter().next().unwrap().into_parts();
@@ -6745,6 +6827,10 @@ mod tests {
             panic!("expected ScriptException sidecar");
         };
         assert_eq!(event.exception.text, "Uncaught Error: boom");
+        assert_eq!(
+            event.target_id.as_ref().map(|id| id.as_str()),
+            Some("TID-worker")
+        );
         assert_eq!(event.exception.line_number, Some(2));
         assert_eq!(event.exception.column_number, Some(8));
     }
