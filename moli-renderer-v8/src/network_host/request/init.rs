@@ -14,7 +14,6 @@ pub(crate) struct ParsedFetchInit {
     pub(crate) body_content_type: Option<String>,
     pub(crate) headers: Vec<(String, String)>,
     pub(crate) headers_present: bool,
-    pub(crate) suppress_default_content_type: bool,
     pub(crate) validation: RequestInitValidation,
     pub(crate) credentials_mode: Option<RequestCredentialsMode>,
     pub(crate) redirect_mode: Option<RequestRedirectMode>,
@@ -36,7 +35,6 @@ impl Default for ParsedFetchInit {
             body_content_type: None,
             headers: Vec::new(),
             headers_present: false,
-            suppress_default_content_type: false,
             validation: RequestInitValidation::default(),
             credentials_mode: None,
             redirect_mode: None,
@@ -239,14 +237,7 @@ pub(crate) fn parse_fetch_init<'s>(
         .has(scope, v8str(scope, "headers").into())
         .unwrap_or(false);
     let mut extra_headers = init.headers.unwrap_or_default();
-    let mut suppress_default_content_type = false;
-    if let Some(prepared_body) = prepared_body.as_ref() {
-        if let Some(content_type) = prepared_body.content_type.as_deref() {
-            append_default_body_content_type(&mut extra_headers, Some(content_type));
-        } else if !has_header(&extra_headers, "content-type") {
-            suppress_default_content_type = true;
-        }
-    }
+    append_default_body_content_type(&mut extra_headers, body_content_type.as_deref());
 
     let credentials_mode = init.credentials_mode.map(|value| value.0);
     let redirect_mode = init.redirect.map(|value| value.0);
@@ -259,7 +250,6 @@ pub(crate) fn parse_fetch_init<'s>(
         body_content_type,
         headers: extra_headers,
         headers_present,
-        suppress_default_content_type,
         validation,
         credentials_mode,
         redirect_mode,
