@@ -43,12 +43,13 @@ pub(crate) enum RendererPageStateCapturePolicy {
 mod access;
 mod browser_context_runtime;
 mod network_observation;
-pub(crate) use network_observation::RendererNetworkReporter;
 pub use network_observation::{
     RendererChildDocumentNetworkObservation, RendererCommittedNetworkObservation,
     RendererNetworkInput, RendererNetworkObservation, RendererNetworkOccurrence,
-    RendererNetworkOutputItem,
+    RendererNetworkOutputItem, RendererNetworkSource, RendererNetworkSourceIdentity,
+    RendererWorkerNetworkSource,
 };
+pub(crate) use network_observation::{RendererNetworkReporter, RendererWorkerNetworkReporter};
 mod worker_inspection;
 pub use worker_inspection::{RendererWorkerInspectionEndpoint, RendererWorkerInspectionTarget};
 mod worker_lifecycle;

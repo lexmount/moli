@@ -156,6 +156,7 @@ impl RendererProducerRegistrar {
 /// the SharedWorker constructor on Window.
 #[derive(Clone, Debug)]
 pub(crate) struct RendererWorkerContextRuntime {
+    network: super::RendererNetworkReporter,
     message_port_registry: crate::message_port_runtime::SharedMessagePortRegistry,
     broadcast_channel_registry: crate::broadcast_channel_runtime::SharedBroadcastChannelRegistry,
     storage_partition_identity: RendererStoragePartitionIdentity,
@@ -534,9 +535,8 @@ impl RendererBrowserContextRuntime {
             service_worker_context_runtime.broadcast_channel_registry();
         let storage_partition_identity =
             service_worker_context_runtime.storage_partition_identity();
-        let id = super::RendererBrowserContextRuntimeId::new(
-            NEXT_RENDERER_BROWSER_CONTEXT_RUNTIME_ID.fetch_add(1, Ordering::Relaxed),
-        );
+        let network = service_worker_context_runtime.network.clone();
+        let id = network.runtime();
         let renderer_output_transport_tx = RendererOutputTransportSenderSlot::default();
         let worker_lifecycle = super::RendererWorkerLifecycleReporter::new(id);
         let shared_worker_runtime = match shared_worker_runtime {
@@ -561,7 +561,7 @@ impl RendererBrowserContextRuntime {
             inner: Arc::new(RendererBrowserContextRuntimeInner {
                 id,
                 worker_lifecycle,
-                network: super::RendererNetworkReporter::new(id),
+                network,
                 message_port_registry,
                 broadcast_channel_registry,
                 browser_resource_runtime: browser_resource_runtime.clone(),
@@ -754,6 +754,7 @@ impl RendererBrowserContextRuntime {
 
     pub(crate) fn worker_context_runtime(&self) -> RendererWorkerContextRuntime {
         RendererWorkerContextRuntime {
+            network: self.inner.network.clone(),
             message_port_registry: self.message_port_registry(),
             broadcast_channel_registry: self.broadcast_channel_registry(),
             storage_partition_identity: self.storage_partition_identity(),
@@ -987,6 +988,13 @@ impl RendererStoragePartitionIdentity {
 }
 
 impl RendererWorkerContextRuntime {
+    pub(crate) fn network_for_worker(
+        &self,
+        source: super::RendererWorkerNetworkSource,
+    ) -> super::RendererWorkerNetworkReporter {
+        super::RendererWorkerNetworkReporter::new(self.network.clone(), source)
+    }
+
     pub(crate) fn new(
         message_port_registry: crate::message_port_runtime::SharedMessagePortRegistry,
         broadcast_channel_registry: crate::broadcast_channel_runtime::SharedBroadcastChannelRegistry,
@@ -1004,6 +1012,11 @@ impl RendererWorkerContextRuntime {
         storage_partition_identity: RendererStoragePartitionIdentity,
     ) -> Self {
         Self {
+            network: super::RendererNetworkReporter::new(
+                super::RendererBrowserContextRuntimeId::new(
+                    NEXT_RENDERER_BROWSER_CONTEXT_RUNTIME_ID.fetch_add(1, Ordering::Relaxed),
+                ),
+            ),
             message_port_registry,
             broadcast_channel_registry,
             storage_partition_identity,

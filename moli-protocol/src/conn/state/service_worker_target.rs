@@ -39,6 +39,7 @@ const SERVICE_WORKER_SYNTHETIC_EXECUTION_CONTEXT_ID_BASE: i64 = -20_000_000;
 /// state only records the CDP-observable projection for target-scoped events.
 #[derive(Debug)]
 pub(crate) struct ServiceWorkerTargetState {
+    pub(crate) network: crate::domains::network::TargetNetworkAgentState,
     pub(crate) renderer_registration_id: u64,
     pub(crate) renderer_version_id: u64,
     pub(crate) target_id: String,
@@ -150,6 +151,7 @@ impl ServiceWorkerTargetState {
         };
         Self {
             renderer_registration_id,
+            network: Default::default(),
             renderer_version_id,
             target_id,
             sessions: BTreeMap::new(),
@@ -346,6 +348,11 @@ impl ServiceWorkerTargetState {
                 scope: TargetServiceWorkerRunScope::new(renderer_run),
             },
         };
+        let network_sessions = self.network.event_session_ids(None, None);
+        self.network = Default::default();
+        for session in network_sessions.into_iter().flatten() {
+            self.network.enable_attached_events(&session);
+        }
         self.current_run_identity(browser_context_id)
     }
 
@@ -610,6 +617,7 @@ impl ServiceWorkerTargetState {
     }
 
     pub(crate) fn detach_session(&mut self, session_id: &str) -> bool {
+        self.set_network_enabled(session_id, false);
         self.inspector_target_crashed_session_ids.remove(session_id);
         self.sessions.remove(session_id).is_some()
     }
@@ -620,6 +628,7 @@ impl ServiceWorkerTargetState {
         session_id: &str,
     ) -> Option<TargetServiceWorkerProtocolAttachmentRetirement> {
         self.inspector_target_crashed_session_ids.remove(session_id);
+        self.set_network_enabled(session_id, false);
         let session = self.sessions.remove(session_id)?;
         let identity = session
             .attachment_scope
@@ -765,6 +774,17 @@ impl ServiceWorkerTargetState {
             state
                 .network_session_state
                 .service_worker_fetch_diagnostic_entries = diagnostic_len;
+        }
+        if enabled {
+            if !was_enabled {
+                self.network
+                    .initialize_session_observation_cursor_at_output_tail(Some(session_id));
+            }
+            self.network.enable_attached_events(session_id);
+        } else {
+            self.network.remove_attached_session(session_id);
+            self.network
+                .remove_captured_response_body_visibility_for_session(Some(session_id));
         }
         true
     }
@@ -1261,6 +1281,33 @@ mod tests {
             is_default: None,
             context_type: None,
             grant_universal_access: None,
+        }
+    }
+
+    #[test]
+    fn service_worker_network_retirement_removes_only_its_listener() {
+        for retire in [false, true] {
+            let mut target = target();
+            for session in ["SID-a", "SID-b"] {
+                target.attach_session(session.into());
+                assert!(target.set_network_enabled(session, true));
+            }
+            if retire {
+                assert!(
+                    target
+                        .take_protocol_attachment_retirement("BID-1", "SID-a")
+                        .is_some()
+                );
+            } else {
+                assert!(target.detach_session("SID-a"));
+            }
+            assert_eq!(
+                target.network.event_session_ids(None, None),
+                vec![Some("SID-b".into())]
+            );
+            target.attach_session("SID-a".into());
+            assert!(!target.network_enabled("SID-a"));
+            assert!(!target.network.attached_events_enabled_for_session("SID-a"));
         }
     }
 

@@ -310,6 +310,28 @@ async fn project_renderer_output_records_for_owner(
                         let Some(committed) = network.clone().committed().await else {
                             continue;
                         };
+                        if matches!(
+                            committed.occurrence().source,
+                            moli_core::page::RendererNetworkSource::Worker(_)
+                        ) {
+                            let outputs = PreparedProtocolOutputs::from_browser_worker_network(
+                                conn,
+                                owner,
+                                cursor.stream().residence(),
+                                &committed,
+                            );
+                            order
+                                .route_publication_outputs(
+                                    conn,
+                                    owner,
+                                    renderer_cause.as_ref(),
+                                    Some(cursor),
+                                    outputs,
+                                    command_context,
+                                )
+                                .await;
+                            continue;
+                        }
                         let Some(outputs) =
                             PreparedProtocolOutputs::from_browser_network_observation(
                                 conn,

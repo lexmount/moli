@@ -2,18 +2,39 @@ use std::sync::Arc;
 
 use indexmap::IndexMap;
 
-use super::{BrowserSequence, DocumentHandle};
+use super::{BrowserSequence, DocumentHandle, WorkerHandle};
 use crate::page::{
-    RendererDocumentLifecycleIdentity, RendererNetworkOccurrence, RendererNetworkOutputItem,
-    ScriptNetworkOutputItem, SubresourceBodyFinished, SubresourceBodyFinishedResult,
-    SubresourceNetworkRecord, SubresourceRequestStarted, SubresourceResponseStarted,
+    RendererNetworkOccurrence, RendererNetworkOutputItem, RendererNetworkSource,
+    RendererNetworkSourceIdentity, ScriptNetworkOutputItem, SubresourceBodyFinished,
+    SubresourceBodyFinishedResult, SubresourceNetworkRecord, SubresourceRequestStarted,
+    SubresourceResponseStarted,
 };
 
-/// A committed resource occurrence. Its source is a physical Browser Document,
-/// including a reserved Document before commit, never a protocol Target.
+/// The native owner of a request, never a protocol Target. Worker execution-run
+/// identity is retained separately in the exact renderer source.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum NetworkOwner {
+    Document(DocumentHandle),
+    Worker(WorkerHandle),
+}
+
+impl NetworkOwner {
+    pub fn context(self) -> super::BrowserContextId {
+        match self {
+            Self::Document(document) => document.web_contents().context(),
+            Self::Worker(
+                WorkerHandle::Dedicated { context, .. }
+                | WorkerHandle::Shared { context, .. }
+                | WorkerHandle::Service { context, .. },
+            ) => context,
+        }
+    }
+}
+
+/// A committed resource occurrence from its physical Browser owner.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct NetworkOccurrence {
-    pub document: DocumentHandle,
+    pub owner: NetworkOwner,
     pub renderer: Arc<RendererNetworkOccurrence>,
 }
 
@@ -73,8 +94,8 @@ impl NetworkRequestState {
 /// Completed bodies share the existing memory/file-backed capture.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct NetworkRequestSnapshot {
-    pub document: DocumentHandle,
-    pub renderer_document: RendererDocumentLifecycleIdentity,
+    pub owner: NetworkOwner,
+    pub renderer_source: RendererNetworkSource,
     pub sequence: BrowserSequence,
     pub state: NetworkRequestState,
 }
@@ -129,13 +150,10 @@ pub(super) enum NetworkRequestIdentity {
     ChildDocument(String),
 }
 
-pub(super) type NetworkRequestKey = (super::RendererPageResidenceIdentity, NetworkRequestIdentity);
+pub(super) type NetworkRequestKey = (RendererNetworkSourceIdentity, NetworkRequestIdentity);
 
 pub(super) fn request_key(occurrence: &RendererNetworkOccurrence) -> Option<NetworkRequestKey> {
-    let source = super::RendererPageResidenceIdentity::from_parts(
-        occurrence.owner_local_host_id,
-        occurrence.document.document.page_id,
-    );
+    let source = occurrence.source.identity();
     let item = match &occurrence.item {
         RendererNetworkOutputItem::Resource(item) => item,
         RendererNetworkOutputItem::ChildDocument(response) => {
@@ -174,23 +192,23 @@ impl NetworkRequests {
 
     pub(super) fn close_source(
         &mut self,
-        page: super::RendererPageResidenceIdentity,
-    ) -> Option<DocumentHandle> {
-        let mut document = None;
+        producer: &RendererNetworkSourceIdentity,
+    ) -> Option<NetworkOwner> {
+        let mut owner = None;
         self.entries.retain(|(source, _), entry| {
-            if *source == page {
-                document = Some(entry.document);
+            if source == producer {
+                owner = Some(entry.owner);
                 false
             } else {
                 true
             }
         });
-        document
+        owner
     }
 
     pub(super) fn commit(
         &mut self,
-        document: DocumentHandle,
+        owner: NetworkOwner,
         occurrence: &RendererNetworkOccurrence,
         sequence: BrowserSequence,
     ) -> bool {
@@ -268,8 +286,10 @@ impl NetworkRequests {
                 | ScriptNetworkOutputItem::WebSocketLifecycleEvent(_) => unreachable!(),
             },
         };
-        let renderer_document =
-            previous.map_or(occurrence.document, |entry| entry.renderer_document);
+        let renderer_source = previous.map_or_else(
+            || occurrence.source.clone(),
+            |entry| entry.renderer_source.clone(),
+        );
         let completed = state.is_terminal();
         if completed {
             self.entries.shift_remove(&key);
@@ -277,8 +297,8 @@ impl NetworkRequests {
         self.entries.insert(
             key,
             NetworkRequestSnapshot {
-                document,
-                renderer_document,
+                owner,
+                renderer_source,
                 sequence,
                 state,
             },
@@ -314,6 +334,7 @@ impl NetworkRequests {
 mod tests {
     use super::*;
     use crate::browser::{BrowserContextId, DocumentId, WebContentsHandle, WebContentsId};
+    use crate::page::RendererDocumentLifecycleIdentity;
     use crate::page::{
         SubresourceBodyFinished, SubresourceNetworkRequestHandle, SubresourceRequestInitiatorType,
         SubresourceResourceType,
@@ -340,8 +361,10 @@ mod tests {
     ) -> RendererNetworkOccurrence {
         RendererNetworkOccurrence {
             runtime: crate::RendererBrowserContextRuntimeId::new_for_testing(3),
-            owner_local_host_id: crate::RendererOwnerLocalHostId::new_for_testing(11),
-            document,
+            source: RendererNetworkSource::Document {
+                owner_local_host_id: crate::RendererOwnerLocalHostId::new_for_testing(11),
+                document,
+            },
             item: item.into(),
         }
     }
@@ -376,8 +399,16 @@ mod tests {
             RendererNetworkOutputItem::ChildDocument(response.clone()),
         );
         let mut requests = NetworkRequests::default();
-        assert!(requests.commit(document, &input, BrowserSequence::allocate()));
-        assert!(!requests.commit(document, &input, BrowserSequence::allocate()));
+        assert!(requests.commit(
+            NetworkOwner::Document(document),
+            &input,
+            BrowserSequence::allocate()
+        ));
+        assert!(!requests.commit(
+            NetworkOwner::Document(document),
+            &input,
+            BrowserSequence::allocate()
+        ));
         let snapshot = requests.snapshots().next().unwrap();
         let items = snapshot.output_items();
         let [RendererNetworkOutputItem::ChildDocument(stored)] = items.as_slice() else {
@@ -385,23 +416,30 @@ mod tests {
         };
         assert!(Arc::ptr_eq(stored, &response));
         let mut peer = input.clone();
-        peer.owner_local_host_id = crate::RendererOwnerLocalHostId::new_for_testing(12);
-        assert!(requests.commit(document, &peer, BrowserSequence::allocate()));
+        peer.source = RendererNetworkSource::Document {
+            owner_local_host_id: crate::RendererOwnerLocalHostId::new_for_testing(12),
+            document: renderer,
+        };
+        assert!(requests.commit(
+            NetworkOwner::Document(document),
+            &peer,
+            BrowserSequence::allocate()
+        ));
         assert_eq!(
             requests.snapshots().count(),
             2,
             "local Page and loader IDs may collide across owners"
         );
         assert_eq!(
-            requests.close_source(request_key(&input).unwrap().0),
-            Some(document)
+            requests.close_source(&request_key(&input).unwrap().0),
+            Some(NetworkOwner::Document(document))
         );
         assert_eq!(requests.snapshots().count(), 1);
         for id in 0..258 {
             let mut response = response.as_ref().clone();
             response.loader_id = format!("loader-{id}");
             assert!(requests.commit(
-                document,
+                NetworkOwner::Document(document),
                 &occurrence(
                     renderer,
                     RendererNetworkOutputItem::ChildDocument(Arc::new(response))
@@ -422,7 +460,11 @@ mod tests {
             renderer,
             RendererNetworkOutputItem::ChildDocument(Arc::new(large)),
         );
-        assert!(requests.commit(document, &large, BrowserSequence::allocate()));
+        assert!(requests.commit(
+            NetworkOwner::Document(document),
+            &large,
+            BrowserSequence::allocate()
+        ));
         assert!(
             requests.get(&request_key(&large).unwrap()).is_none(),
             "oversized completed response must not escape the retained-byte cap"
@@ -434,8 +476,16 @@ mod tests {
             renderer,
             RendererNetworkOutputItem::ChildDocument(Arc::new(failed.clone())),
         );
-        assert!(requests.commit(document, &failure, BrowserSequence::allocate()));
-        assert!(!requests.commit(document, &failure, BrowserSequence::allocate()));
+        assert!(requests.commit(
+            NetworkOwner::Document(document),
+            &failure,
+            BrowserSequence::allocate()
+        ));
+        assert!(!requests.commit(
+            NetworkOwner::Document(document),
+            &failure,
+            BrowserSequence::allocate()
+        ));
         assert!(requests.get(&request_key(&failure).unwrap()).is_some());
         failed.loader_id = "oversized-failure".into();
         failed.snapshot.response = Err("x".repeat(16 * 1024 * 1024 + 1));
@@ -443,7 +493,11 @@ mod tests {
             renderer,
             RendererNetworkOutputItem::ChildDocument(Arc::new(failed)),
         );
-        assert!(requests.commit(document, &oversized_failure, BrowserSequence::allocate()));
+        assert!(requests.commit(
+            NetworkOwner::Document(document),
+            &oversized_failure,
+            BrowserSequence::allocate()
+        ));
         assert!(
             requests
                 .get(&request_key(&oversized_failure).unwrap())
@@ -479,27 +533,51 @@ mod tests {
             )),
         );
         let mut requests = NetworkRequests::default();
-        assert!(!requests.commit(document, &body, BrowserSequence::allocate()));
-        assert!(requests.commit(document, &start, BrowserSequence::allocate()));
+        assert!(!requests.commit(
+            NetworkOwner::Document(document),
+            &body,
+            BrowserSequence::allocate()
+        ));
+        assert!(requests.commit(
+            NetworkOwner::Document(document),
+            &start,
+            BrowserSequence::allocate()
+        ));
         let NetworkRequestState::Started(stored) =
             &requests.get(&request_key(&start).unwrap()).unwrap().state
         else {
             panic!("request must be started");
         };
         assert!(Arc::ptr_eq(stored, &request));
-        assert!(!requests.commit(document, &start, BrowserSequence::allocate()));
-        assert!(requests.commit(document, &body, BrowserSequence::allocate()));
-        assert!(!requests.commit(document, &body, BrowserSequence::allocate()));
+        assert!(!requests.commit(
+            NetworkOwner::Document(document),
+            &start,
+            BrowserSequence::allocate()
+        ));
+        assert!(requests.commit(
+            NetworkOwner::Document(document),
+            &body,
+            BrowserSequence::allocate()
+        ));
+        assert!(!requests.commit(
+            NetworkOwner::Document(document),
+            &body,
+            BrowserSequence::allocate()
+        ));
         assert!(matches!(
             requests.snapshots().next().unwrap().state,
             NetworkRequestState::Completed { .. }
         ));
         assert_eq!(
-            requests.close_source(request_key(&start).unwrap().0),
-            Some(document)
+            requests.close_source(&request_key(&start).unwrap().0),
+            Some(NetworkOwner::Document(document))
         );
         assert_eq!(requests.snapshots().count(), 0);
-        assert!(!requests.commit(document, &body, BrowserSequence::allocate()));
+        assert!(!requests.commit(
+            NetworkOwner::Document(document),
+            &body,
+            BrowserSequence::allocate()
+        ));
     }
 
     #[test]
@@ -522,16 +600,20 @@ mod tests {
                 renderer,
                 ScriptNetworkOutputItem::SubresourceNetworkRecord(Box::new(record)),
             );
-            assert!(requests.commit(document, &event, BrowserSequence::allocate()));
+            assert!(requests.commit(
+                NetworkOwner::Document(document),
+                &event,
+                BrowserSequence::allocate()
+            ));
         }
         assert_eq!(requests.snapshots().count(), 256);
         assert!(
             requests
                 .get(&(
-                    super::super::RendererPageResidenceIdentity::from_parts(
-                        crate::RendererOwnerLocalHostId::new_for_testing(11),
-                        renderer.document.page_id
-                    ),
+                    RendererNetworkSourceIdentity::Page {
+                        owner_local_host_id: crate::RendererOwnerLocalHostId::new_for_testing(11),
+                        page: renderer.document.page_id
+                    },
                     NetworkRequestIdentity::Resource(1)
                 ))
                 .is_none()
@@ -539,10 +621,10 @@ mod tests {
         assert!(
             requests
                 .get(&(
-                    super::super::RendererPageResidenceIdentity::from_parts(
-                        crate::RendererOwnerLocalHostId::new_for_testing(11),
-                        renderer.document.page_id
-                    ),
+                    RendererNetworkSourceIdentity::Page {
+                        owner_local_host_id: crate::RendererOwnerLocalHostId::new_for_testing(11),
+                        page: renderer.document.page_id
+                    },
                     NetworkRequestIdentity::Resource(258)
                 ))
                 .is_some()
@@ -576,16 +658,99 @@ mod tests {
             ScriptNetworkOutputItem::SubresourceNetworkRecord(Box::new(request)),
         );
         let mut second_event = first_event.clone();
-        second_event.owner_local_host_id = crate::RendererOwnerLocalHostId::new_for_testing(12);
+        second_event.source = RendererNetworkSource::Document {
+            owner_local_host_id: crate::RendererOwnerLocalHostId::new_for_testing(12),
+            document: renderer,
+        };
         let mut requests = NetworkRequests::default();
-        assert!(requests.commit(first, &first_event, BrowserSequence::allocate()));
-        assert!(requests.commit(second, &second_event, BrowserSequence::allocate()));
+        assert!(requests.commit(
+            NetworkOwner::Document(first),
+            &first_event,
+            BrowserSequence::allocate()
+        ));
+        assert!(requests.commit(
+            NetworkOwner::Document(second),
+            &second_event,
+            BrowserSequence::allocate()
+        ));
         assert_eq!(requests.snapshots().count(), 2);
         assert_eq!(
-            requests.close_source(request_key(&first_event).unwrap().0),
-            Some(first)
+            requests.close_source(&request_key(&first_event).unwrap().0),
+            Some(NetworkOwner::Document(first))
         );
-        assert_eq!(requests.snapshots().next().unwrap().document, second);
+        assert_eq!(
+            requests.snapshots().next().unwrap().owner,
+            NetworkOwner::Document(second)
+        );
+    }
+
+    #[test]
+    fn native_worker_network_equal_handles_are_scoped_by_kind_and_physical_run() {
+        use crate::page::{RendererServiceWorkerRunIdentity, RendererWorkerNetworkSource};
+        let (document, renderer) = source();
+        let request = SubresourceNetworkRecord::failure(
+            None,
+            "https://example.test/".parse().unwrap(),
+            "https://example.test/probe".parse().unwrap(),
+            "GET".into(),
+            Vec::new(),
+            None,
+            SubresourceResourceType::Fetch,
+            "net::ERR_ABORTED".into(),
+        )
+        .with_request_handle(SubresourceNetworkRequestHandle::new(1));
+        let page = occurrence(
+            renderer,
+            ScriptNetworkOutputItem::SubresourceNetworkRecord(Box::new(request)),
+        );
+        let mut inputs = vec![(NetworkOwner::Document(document), page.clone())];
+        for worker in [
+            RendererWorkerNetworkSource::Shared(
+                moli_shared_worker::SharedWorkerInstanceId::from_u64(1),
+            ),
+            RendererWorkerNetworkSource::Service {
+                version: 1,
+                run: RendererServiceWorkerRunIdentity::fresh(),
+            },
+            RendererWorkerNetworkSource::Service {
+                version: 1,
+                run: RendererServiceWorkerRunIdentity::fresh(),
+            },
+        ] {
+            let handle = match &worker {
+                RendererWorkerNetworkSource::Shared(instance) => WorkerHandle::Shared {
+                    context: document.web_contents().context(),
+                    instance: *instance,
+                },
+                RendererWorkerNetworkSource::Service { version, .. } => WorkerHandle::Service {
+                    context: document.web_contents().context(),
+                    version: *version,
+                },
+            };
+            let mut input = page.clone();
+            input.source = RendererNetworkSource::Worker(worker);
+            inputs.push((NetworkOwner::Worker(handle), input));
+        }
+        let mut requests = NetworkRequests::default();
+        for (owner, input) in &inputs {
+            assert!(requests.commit(*owner, input, BrowserSequence::allocate()));
+            assert!(!requests.commit(*owner, input, BrowserSequence::allocate()));
+        }
+        assert_eq!(requests.snapshots().count(), 4);
+        // Closing one physical run must not evict its successor, a Shared
+        // Worker with the same local number, or the creating Page.
+        assert_eq!(
+            requests.close_source(&inputs[2].1.source.identity()),
+            Some(inputs[2].0)
+        );
+        assert_eq!(requests.snapshots().count(), 3);
+        for index in [0, 1, 3] {
+            assert!(
+                requests
+                    .get(&request_key(&inputs[index].1).unwrap())
+                    .is_some()
+            );
+        }
     }
 
     #[test]
@@ -625,7 +790,7 @@ mod tests {
         let mut requests = NetworkRequests::default();
         for item in &items {
             assert!(requests.commit(
-                document,
+                NetworkOwner::Document(document),
                 &occurrence(renderer, item.clone()),
                 BrowserSequence::allocate()
             ));

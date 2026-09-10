@@ -1486,7 +1486,7 @@ impl CdpConnection {
         self.project_network_output_item_for_owner(
             owner,
             source_renderer_page,
-            occurrence.document,
+            occurrence.source.document()?.1,
             item,
         )
     }
@@ -1498,6 +1498,9 @@ impl CdpConnection {
         committed: &moli_core::page::RendererCommittedNetworkObservation,
     ) -> bool {
         let occurrence = committed.occurrence();
+        let Some((owner_local_host_id, document)) = occurrence.source.document() else {
+            return false;
+        };
         let Some((context_id, target_id)) = self.resolved_page_owner_identity_for_owner(owner)
         else {
             return false;
@@ -1518,8 +1521,8 @@ impl CdpConnection {
             }
             && source_renderer_page
                 == Some(RendererPageResidenceIdentity::from_parts(
-                    occurrence.owner_local_host_id,
-                    occurrence.document.document.page_id,
+                    owner_local_host_id,
+                    document.document.page_id,
                 ))
     }
 

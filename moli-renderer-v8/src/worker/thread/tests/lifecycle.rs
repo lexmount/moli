@@ -158,6 +158,7 @@ async fn service_worker_parent_fifo_orders_console_around_bootstrap() {
             )
             .with_script_kind(script_kind)
             .with_global_kind(WorkerGlobalKind::Service {
+                network: crate::runtime::RendererWorkerNetworkReporter::unobserved_for_test(),
                 registration_id: ServiceWorkerRegistrationId::from_u64_for_test(1),
                 version_id: ServiceWorkerVersionId::from_u64_for_test(1),
                 scope_url: url::Url::parse("https://example.test/app/").unwrap(),
@@ -214,6 +215,7 @@ async fn service_worker_parent_fifo_reports_exception_before_bootstrap_failure()
             )
             .with_script_kind(script_kind)
             .with_global_kind(WorkerGlobalKind::Service {
+                network: crate::runtime::RendererWorkerNetworkReporter::unobserved_for_test(),
                 registration_id: ServiceWorkerRegistrationId::from_u64_for_test(1),
                 version_id: ServiceWorkerVersionId::from_u64_for_test(1),
                 scope_url: url::Url::parse("https://example.test/app/").unwrap(),
@@ -273,6 +275,7 @@ async fn service_worker_bootstrap_reports_fetch_handler_presence() {
                 "https://example.test/app/sw.js".to_owned(),
             )
             .with_global_kind(crate::worker::WorkerGlobalKind::Service {
+                network: crate::runtime::RendererWorkerNetworkReporter::unobserved_for_test(),
                 registration_id: ServiceWorkerRegistrationId::from_u64_for_test(1),
                 version_id: ServiceWorkerVersionId::from_u64_for_test(1),
                 scope_url: url::Url::parse("https://example.test/app/").unwrap(),
@@ -339,6 +342,7 @@ async fn service_worker_global_scope_does_not_expose_close() {
             "https://example.test/app/no-close-sw.js".to_owned(),
         )
         .with_global_kind(crate::worker::WorkerGlobalKind::Service {
+            network: crate::runtime::RendererWorkerNetworkReporter::unobserved_for_test(),
             registration_id: ServiceWorkerRegistrationId::from_u64_for_test(1),
             version_id: ServiceWorkerVersionId::from_u64_for_test(1),
             scope_url: url::Url::parse("https://example.test/app/").unwrap(),
@@ -701,6 +705,7 @@ async fn real_workers_register_service_worker_clients_until_thread_exit() {
         moli_storage_key::MoliStorageKey::first_party_from_url(&shared_script_url, None);
     assert_worker_client_lifetime(
         WorkerGlobalKind::Shared {
+            network: crate::runtime::RendererWorkerNetworkReporter::unobserved_for_test(),
             name: "shared".to_owned(),
             storage_key: shared_storage_key,
         },
@@ -1937,6 +1942,7 @@ async fn dispatch_service_worker_fetch_event_and_handled_console_for_test(
                 panic!("unexpected service worker error while waiting for handled: {message}");
             }
             WorkerToParentMessage::Post(_)
+            | WorkerToParentMessage::Network(_)
             | WorkerToParentMessage::SubresourceNetwork(_)
             | WorkerToParentMessage::PendingSubresourceFetch(_)
             | WorkerToParentMessage::PendingSubresourceFetchCanceled { .. }
@@ -2163,6 +2169,7 @@ async fn service_worker_fetch_handler_throw_without_respond_with_still_falls_bac
             }
             WorkerToParentMessage::Console(_)
             | WorkerToParentMessage::RuntimeInspectorMessages(_)
+            | WorkerToParentMessage::Network(_)
             | WorkerToParentMessage::SubresourceNetwork(_)
             | WorkerToParentMessage::PendingSubresourceFetch(_)
             | WorkerToParentMessage::PendingSubresourceFetchCanceled { .. }
@@ -2337,6 +2344,7 @@ async fn service_worker_fetch_respond_with_readable_stream_body_posts_stream_chu
                 panic!("unexpected service worker error while waiting for stream: {message}");
             }
             WorkerToParentMessage::Post(_)
+            | WorkerToParentMessage::Network(_)
             | WorkerToParentMessage::SubresourceNetwork(_)
             | WorkerToParentMessage::PendingSubresourceFetch(_)
             | WorkerToParentMessage::PendingSubresourceFetchCanceled { .. }
@@ -2861,6 +2869,7 @@ async fn service_worker_fetch_respond_with_body_accessed_opaque_response_keeps_i
         )
         .with_request_client(loader)
         .with_global_kind(crate::worker::WorkerGlobalKind::Service {
+            network: crate::runtime::RendererWorkerNetworkReporter::unobserved_for_test(),
             registration_id: ServiceWorkerRegistrationId::from_u64_for_test(1),
             version_id: ServiceWorkerVersionId::from_u64_for_test(1),
             scope_url: url::Url::parse("https://example.test/app/").unwrap(),
@@ -3071,6 +3080,7 @@ async fn service_worker_fetch_event_request_signal_aborts_with_parent_reason() {
             WorkerToParentMessage::ServiceWorkerFetchCompleted(completion) => break completion,
             WorkerToParentMessage::Console(_)
             | WorkerToParentMessage::RuntimeInspectorMessages(_)
+            | WorkerToParentMessage::Network(_)
             | WorkerToParentMessage::SubresourceNetwork(_)
             | WorkerToParentMessage::PendingSubresourceFetch(_)
             | WorkerToParentMessage::PendingSubresourceFetchCanceled { .. }
@@ -3287,6 +3297,7 @@ async fn service_worker_fetch_respond_with_keeps_response_when_handler_throws_af
             }
             WorkerToParentMessage::Console(_)
             | WorkerToParentMessage::RuntimeInspectorMessages(_)
+            | WorkerToParentMessage::Network(_)
             | WorkerToParentMessage::SubresourceNetwork(_)
             | WorkerToParentMessage::PendingSubresourceFetch(_)
             | WorkerToParentMessage::PendingSubresourceFetchCanceled { .. }
@@ -4372,7 +4383,8 @@ async fn service_worker_skip_waiting_posts_runtime_request() {
             WorkerToParentMessage::Error { message, .. } => {
                 panic!("unexpected service worker error: {message}");
             }
-            WorkerToParentMessage::SubresourceNetwork(_)
+            WorkerToParentMessage::Network(_)
+            | WorkerToParentMessage::SubresourceNetwork(_)
             | WorkerToParentMessage::PendingSubresourceFetch(_)
             | WorkerToParentMessage::PendingSubresourceFetchCanceled { .. }
             | WorkerToParentMessage::SubresourceContinue(_)
@@ -4462,7 +4474,8 @@ async fn service_worker_clients_claim_posts_runtime_request() {
             WorkerToParentMessage::Error { message, .. } => {
                 panic!("unexpected service worker error: {message}");
             }
-            WorkerToParentMessage::SubresourceNetwork(_)
+            WorkerToParentMessage::Network(_)
+            | WorkerToParentMessage::SubresourceNetwork(_)
             | WorkerToParentMessage::PendingSubresourceFetch(_)
             | WorkerToParentMessage::PendingSubresourceFetchCanceled { .. }
             | WorkerToParentMessage::SubresourceContinue(_)
@@ -4731,6 +4744,7 @@ async fn service_worker_clients_match_all_and_get_resolve_from_parent_query_resu
             | WorkerToParentMessage::ServiceWorkerClientsOpenWindow(_)
             | WorkerToParentMessage::ServiceWorkerSkipWaiting { .. }
             | WorkerToParentMessage::ServiceWorkerClientsClaim { .. }
+            | WorkerToParentMessage::Network(_)
             | WorkerToParentMessage::SubresourceNetwork(_)
             | WorkerToParentMessage::PendingSubresourceFetch(_)
             | WorkerToParentMessage::PendingSubresourceFetchCanceled { .. }
@@ -4924,6 +4938,7 @@ self.addEventListener("message", event => {
             "https://example.test/app/sw.js".to_owned(),
         )
         .with_global_kind(crate::worker::WorkerGlobalKind::Service {
+            network: crate::runtime::RendererWorkerNetworkReporter::unobserved_for_test(),
             registration_id: ServiceWorkerRegistrationId::from_u64_for_test(1),
             version_id: ServiceWorkerVersionId::from_u64_for_test(1),
             scope_url: url::Url::parse("https://example.test/app/").unwrap(),
@@ -5042,6 +5057,7 @@ self.addEventListener("message", event => {
             | WorkerToParentMessage::ServiceWorkerClientNavigate(_)
             | WorkerToParentMessage::ServiceWorkerSkipWaiting { .. }
             | WorkerToParentMessage::ServiceWorkerClientsClaim { .. }
+            | WorkerToParentMessage::Network(_)
             | WorkerToParentMessage::SubresourceNetwork(_)
             | WorkerToParentMessage::PendingSubresourceFetch(_)
             | WorkerToParentMessage::PendingSubresourceFetchCanceled { .. }
@@ -5096,6 +5112,7 @@ self.addEventListener("message", event => {
             "https://example.test/app/sw.js".to_owned(),
         )
         .with_global_kind(crate::worker::WorkerGlobalKind::Service {
+            network: crate::runtime::RendererWorkerNetworkReporter::unobserved_for_test(),
             registration_id: ServiceWorkerRegistrationId::from_u64_for_test(1),
             version_id: ServiceWorkerVersionId::from_u64_for_test(1),
             scope_url: url::Url::parse("https://example.test/app/").unwrap(),
@@ -5187,6 +5204,7 @@ self.addEventListener("message", event => {
             | WorkerToParentMessage::ServiceWorkerClientFocus(_)
             | WorkerToParentMessage::ServiceWorkerSkipWaiting { .. }
             | WorkerToParentMessage::ServiceWorkerClientsClaim { .. }
+            | WorkerToParentMessage::Network(_)
             | WorkerToParentMessage::SubresourceNetwork(_)
             | WorkerToParentMessage::PendingSubresourceFetch(_)
             | WorkerToParentMessage::PendingSubresourceFetchCanceled { .. }
@@ -5286,6 +5304,7 @@ self.addEventListener("message", event => {
             "https://example.test/app/sw.js".to_owned(),
         )
         .with_global_kind(crate::worker::WorkerGlobalKind::Service {
+            network: crate::runtime::RendererWorkerNetworkReporter::unobserved_for_test(),
             registration_id: ServiceWorkerRegistrationId::from_u64_for_test(1),
             version_id: ServiceWorkerVersionId::from_u64_for_test(1),
             scope_url: url::Url::parse("https://example.test/app/").unwrap(),
@@ -5400,6 +5419,7 @@ self.addEventListener("message", event => {
             | WorkerToParentMessage::ServiceWorkerClientsOpenWindow(_)
             | WorkerToParentMessage::ServiceWorkerSkipWaiting { .. }
             | WorkerToParentMessage::ServiceWorkerClientsClaim { .. }
+            | WorkerToParentMessage::Network(_)
             | WorkerToParentMessage::SubresourceNetwork(_)
             | WorkerToParentMessage::PendingSubresourceFetch(_)
             | WorkerToParentMessage::PendingSubresourceFetchCanceled { .. }
@@ -5450,6 +5470,7 @@ self.addEventListener("message", event => {
             "https://example.test/app/sw.js".to_owned(),
         )
         .with_global_kind(crate::worker::WorkerGlobalKind::Service {
+            network: crate::runtime::RendererWorkerNetworkReporter::unobserved_for_test(),
             registration_id: ServiceWorkerRegistrationId::from_u64_for_test(1),
             version_id: ServiceWorkerVersionId::from_u64_for_test(1),
             scope_url: url::Url::parse("https://example.test/app/").unwrap(),
@@ -5545,6 +5566,7 @@ self.addEventListener("message", event => {
             | WorkerToParentMessage::ServiceWorkerClientFocus(_)
             | WorkerToParentMessage::ServiceWorkerSkipWaiting { .. }
             | WorkerToParentMessage::ServiceWorkerClientsClaim { .. }
+            | WorkerToParentMessage::Network(_)
             | WorkerToParentMessage::SubresourceNetwork(_)
             | WorkerToParentMessage::PendingSubresourceFetch(_)
             | WorkerToParentMessage::PendingSubresourceFetchCanceled { .. }
@@ -5619,6 +5641,7 @@ self.addEventListener("message", event => {
             "https://example.test/app/sw.js".to_owned(),
         )
         .with_global_kind(crate::worker::WorkerGlobalKind::Service {
+            network: crate::runtime::RendererWorkerNetworkReporter::unobserved_for_test(),
             registration_id: ServiceWorkerRegistrationId::from_u64_for_test(1),
             version_id: ServiceWorkerVersionId::from_u64_for_test(1),
             scope_url: url::Url::parse("https://example.test/app/").unwrap(),
@@ -5763,6 +5786,7 @@ self.addEventListener("message", event => {
             | WorkerToParentMessage::ServiceWorkerClientNavigate(_)
             | WorkerToParentMessage::ServiceWorkerSkipWaiting { .. }
             | WorkerToParentMessage::ServiceWorkerClientsClaim { .. }
+            | WorkerToParentMessage::Network(_)
             | WorkerToParentMessage::SubresourceNetwork(_)
             | WorkerToParentMessage::PendingSubresourceFetch(_)
             | WorkerToParentMessage::PendingSubresourceFetchCanceled { .. }
@@ -5877,6 +5901,7 @@ self.addEventListener("message", event => {
             "https://example.test/app/sw.js".to_owned(),
         )
         .with_global_kind(crate::worker::WorkerGlobalKind::Service {
+            network: crate::runtime::RendererWorkerNetworkReporter::unobserved_for_test(),
             registration_id: ServiceWorkerRegistrationId::from_u64_for_test(1),
             version_id: ServiceWorkerVersionId::from_u64_for_test(1),
             scope_url: url::Url::parse("https://example.test/app/").unwrap(),
@@ -6024,6 +6049,7 @@ self.addEventListener("message", event => {
             "https://example.test/app/sw.js".to_owned(),
         )
         .with_global_kind(crate::worker::WorkerGlobalKind::Service {
+            network: crate::runtime::RendererWorkerNetworkReporter::unobserved_for_test(),
             registration_id: ServiceWorkerRegistrationId::from_u64_for_test(1),
             version_id: ServiceWorkerVersionId::from_u64_for_test(1),
             scope_url: url::Url::parse("https://example.test/app/").unwrap(),
@@ -6155,6 +6181,7 @@ self.addEventListener("message", event => {
             "https://example.test/app/sw.js".to_owned(),
         )
         .with_global_kind(crate::worker::WorkerGlobalKind::Service {
+            network: crate::runtime::RendererWorkerNetworkReporter::unobserved_for_test(),
             registration_id: ServiceWorkerRegistrationId::from_u64_for_test(1),
             version_id: ServiceWorkerVersionId::from_u64_for_test(1),
             scope_url: url::Url::parse("https://example.test/app/").unwrap(),
@@ -6454,6 +6481,7 @@ self.addEventListener("message", event => {
             "https://example.test/app/sw.js".to_owned(),
         )
         .with_global_kind(crate::worker::WorkerGlobalKind::Service {
+            network: crate::runtime::RendererWorkerNetworkReporter::unobserved_for_test(),
             registration_id: ServiceWorkerRegistrationId::from_u64_for_test(1),
             version_id: ServiceWorkerVersionId::from_u64_for_test(1),
             scope_url: url::Url::parse("https://example.test/app/").unwrap(),
@@ -6603,6 +6631,7 @@ self.addEventListener("message", event => {
             "https://example.test/app/sw.js".to_owned(),
         )
         .with_global_kind(crate::worker::WorkerGlobalKind::Service {
+            network: crate::runtime::RendererWorkerNetworkReporter::unobserved_for_test(),
             registration_id: ServiceWorkerRegistrationId::from_u64_for_test(1),
             version_id: ServiceWorkerVersionId::from_u64_for_test(1),
             scope_url: url::Url::parse("https://example.test/app/").unwrap(),
@@ -6693,6 +6722,7 @@ self.addEventListener("message", event => {
             "https://example.test/app/sw.js".to_owned(),
         )
         .with_global_kind(crate::worker::WorkerGlobalKind::Service {
+            network: crate::runtime::RendererWorkerNetworkReporter::unobserved_for_test(),
             registration_id: ServiceWorkerRegistrationId::from_u64_for_test(1),
             version_id: ServiceWorkerVersionId::from_u64_for_test(1),
             scope_url: url::Url::parse("https://example.test/app/").unwrap(),
@@ -6855,6 +6885,7 @@ self.addEventListener("message", event => {
             "https://example.test/app/sw.js".to_owned(),
         )
         .with_global_kind(crate::worker::WorkerGlobalKind::Service {
+            network: crate::runtime::RendererWorkerNetworkReporter::unobserved_for_test(),
             registration_id: ServiceWorkerRegistrationId::from_u64_for_test(1),
             version_id: ServiceWorkerVersionId::from_u64_for_test(1),
             scope_url: url::Url::parse("https://example.test/app/").unwrap(),
@@ -7077,6 +7108,7 @@ self.addEventListener("notificationclick", event => {
             "https://example.test/app/sw.js".to_owned(),
         )
         .with_global_kind(crate::worker::WorkerGlobalKind::Service {
+            network: crate::runtime::RendererWorkerNetworkReporter::unobserved_for_test(),
             registration_id: ServiceWorkerRegistrationId::from_u64_for_test(1),
             version_id: ServiceWorkerVersionId::from_u64_for_test(1),
             scope_url: url::Url::parse("https://example.test/app/").unwrap(),
@@ -7216,6 +7248,7 @@ self.addEventListener("notificationclick", event => {
             | WorkerToParentMessage::ServiceWorkerClientsOpenWindow(_)
             | WorkerToParentMessage::ServiceWorkerSkipWaiting { .. }
             | WorkerToParentMessage::ServiceWorkerClientsClaim { .. }
+            | WorkerToParentMessage::Network(_)
             | WorkerToParentMessage::SubresourceNetwork(_)
             | WorkerToParentMessage::PendingSubresourceFetch(_)
             | WorkerToParentMessage::PendingSubresourceFetchCanceled { .. }
@@ -7281,6 +7314,7 @@ self.addEventListener("notificationclose", event => {
             "https://example.test/app/sw.js".to_owned(),
         )
         .with_global_kind(crate::worker::WorkerGlobalKind::Service {
+            network: crate::runtime::RendererWorkerNetworkReporter::unobserved_for_test(),
             registration_id: ServiceWorkerRegistrationId::from_u64_for_test(1),
             version_id: ServiceWorkerVersionId::from_u64_for_test(1),
             scope_url: url::Url::parse("https://example.test/app/").unwrap(),
@@ -7377,6 +7411,7 @@ self.addEventListener("notificationclose", event => {
             | WorkerToParentMessage::ServiceWorkerClientsOpenWindow(_)
             | WorkerToParentMessage::ServiceWorkerSkipWaiting { .. }
             | WorkerToParentMessage::ServiceWorkerClientsClaim { .. }
+            | WorkerToParentMessage::Network(_)
             | WorkerToParentMessage::SubresourceNetwork(_)
             | WorkerToParentMessage::PendingSubresourceFetch(_)
             | WorkerToParentMessage::PendingSubresourceFetchCanceled { .. }
@@ -8978,6 +9013,7 @@ async fn shared_worker_global_unhandledrejection_event_dispatches_after_connect_
             "https://app.example/shared-worker.js".into(),
         )
         .with_global_kind(super::super::WorkerGlobalKind::Shared {
+            network: crate::runtime::RendererWorkerNetworkReporter::unobserved_for_test(),
             name: "shared".to_owned(),
             storage_key,
         }),
@@ -9348,6 +9384,7 @@ async fn shared_worker_fetch_csp_block_dispatches_securitypolicyviolation_event(
             "https://app.example/shared-worker.js".into(),
         )
         .with_global_kind(super::super::WorkerGlobalKind::Shared {
+            network: crate::runtime::RendererWorkerNetworkReporter::unobserved_for_test(),
             name: "shared".to_owned(),
             storage_key,
         })
@@ -9611,7 +9648,8 @@ async fn worker_error_report_ignores_throwing_accessors() {
             assert_eq!(filename, "test://throwing_error_accessors");
         }
         WorkerToParentMessage::Post(_) => panic!("expected worker error"),
-        WorkerToParentMessage::SubresourceNetwork(_)
+        WorkerToParentMessage::Network(_)
+        | WorkerToParentMessage::SubresourceNetwork(_)
         | WorkerToParentMessage::PendingSubresourceFetch(_)
         | WorkerToParentMessage::PendingSubresourceFetchCanceled { .. }
         | WorkerToParentMessage::SubresourceContinue(_)

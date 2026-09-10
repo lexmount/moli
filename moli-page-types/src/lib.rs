@@ -1065,6 +1065,19 @@ struct SubresourceNetworkRecordInner {
 pub struct SubresourceNetworkRequestHandle(u64);
 
 impl SubresourceNetworkRequestHandle {
+    /// Allocate a request identity before crossing an owner/thread boundary.
+    pub fn allocate() -> Self {
+        static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+        Self(
+            NEXT.fetch_update(
+                std::sync::atomic::Ordering::Relaxed,
+                std::sync::atomic::Ordering::Relaxed,
+                |value| value.checked_add(1),
+            )
+            .expect("network request identity exhausted"),
+        )
+    }
+
     pub fn new(value: u64) -> Self {
         Self(value)
     }

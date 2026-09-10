@@ -52,7 +52,7 @@ async fn native_child_document_network_completes_without_devtools() {
             let record = events.recv().await.unwrap();
             match record.event {
                 BrowserEvent::NetworkRequestCompleted(occurrence)
-                    if occurrence.document == document =>
+                    if occurrence.owner == crate::browser::NetworkOwner::Document(document) =>
                 {
                     completed.push(occurrence);
                 }
@@ -76,7 +76,7 @@ async fn native_child_document_network_completes_without_devtools() {
     let requests = snapshot
         .network_requests
         .iter()
-        .filter(|request| request.document == document)
+        .filter(|request| request.owner == crate::browser::NetworkOwner::Document(document))
         .collect::<Vec<_>>();
     assert_eq!(
         requests.len(),
@@ -147,7 +147,7 @@ async fn native_child_document_network_failure_completes_without_devtools() {
         loop {
             match events.recv().await.unwrap().event {
                 BrowserEvent::NetworkRequestCompleted(occurrence)
-                    if occurrence.document == document =>
+                    if occurrence.owner == crate::browser::NetworkOwner::Document(document) =>
                 {
                     completed.push(occurrence)
                 }
@@ -172,7 +172,7 @@ async fn native_child_document_network_failure_completes_without_devtools() {
     let requests = snapshot
         .network_requests
         .iter()
-        .filter(|request| request.document == document)
+        .filter(|request| request.owner == crate::browser::NetworkOwner::Document(document))
         .collect::<Vec<_>>();
     assert_eq!(
         requests.len(),
@@ -246,7 +246,7 @@ async fn native_child_document_network_precedes_held_child_script_and_load() {
     let completed = tokio::time::timeout(std::time::Duration::from_secs(5), async {
         loop {
             if let BrowserEvent::NetworkRequestCompleted(occurrence) = events.recv().await.unwrap().event
-                && occurrence.document == document
+                && occurrence.owner == crate::browser::NetworkOwner::Document(document)
                 && matches!(&occurrence.renderer.item, crate::page::RendererNetworkOutputItem::ChildDocument(response) if response.snapshot.request_url == child_url) {
                 break occurrence;
             }
@@ -261,7 +261,7 @@ async fn native_child_document_network_precedes_held_child_script_and_load() {
             .is_none()
     );
     let snapshot = browser.subscribe().unwrap().0;
-    let request = snapshot.network_requests.iter().find(|request| request.document == document
+    let request = snapshot.network_requests.iter().find(|request| request.owner == crate::browser::NetworkOwner::Document(document)
         && matches!(&request.state, crate::browser::NetworkRequestState::ChildDocument(response) if response.snapshot.request_url == child_url)).unwrap();
     let crate::browser::NetworkRequestState::ChildDocument(response) = &request.state else {
         unreachable!()
@@ -343,7 +343,7 @@ async fn native_network_commits_request_response_and_body_without_devtools() {
         loop {
             let event = events.recv().await.unwrap();
             if let BrowserEvent::NetworkRequestStarted(occurrence) = event.event
-                && occurrence.document == document
+                && occurrence.owner == crate::browser::NetworkOwner::Document(document)
                 && let crate::page::RendererNetworkOutputItem::Resource(item) =
                     &occurrence.renderer.item
                 && let ScriptNetworkOutputItem::SubresourceRequestStarted(request) = item.as_ref()
@@ -356,14 +356,14 @@ async fn native_network_commits_request_response_and_body_without_devtools() {
     .await
     .expect("native start must not wait for response or a DevTools consumer");
     let snapshot = browser.subscribe().unwrap().0;
-    assert!(snapshot.network_requests.iter().any(|request| request.document == document
+    assert!(snapshot.network_requests.iter().any(|request| request.owner == crate::browser::NetworkOwner::Document(document)
         && matches!(&request.state, NetworkRequestState::Started(start) if start.handle() == handle)));
     headers.send(()).unwrap();
     let response = tokio::time::timeout(std::time::Duration::from_secs(5), async {
         loop {
             let event = events.recv().await.unwrap();
             if let BrowserEvent::NetworkActivity(occurrence) = event.event
-                && occurrence.document == document
+                && occurrence.owner == crate::browser::NetworkOwner::Document(document)
                 && let crate::page::RendererNetworkOutputItem::Resource(item) =
                     &occurrence.renderer.item
                 && let ScriptNetworkOutputItem::SubresourceResponseStarted(response) = item.as_ref()
@@ -376,14 +376,14 @@ async fn native_network_commits_request_response_and_body_without_devtools() {
     .await
     .expect("native headers must not wait for the held body");
     assert!(response > started);
-    assert!(browser.subscribe().unwrap().0.network_requests.iter().any(|request| request.document == document
+    assert!(browser.subscribe().unwrap().0.network_requests.iter().any(|request| request.owner == crate::browser::NetworkOwner::Document(document)
         && matches!(&request.state, NetworkRequestState::Responding { response, .. } if response.handle() == handle)));
     body.send(()).unwrap();
     let completed = tokio::time::timeout(std::time::Duration::from_secs(5), async {
         loop {
             let event = events.recv().await.unwrap();
             if let BrowserEvent::NetworkRequestCompleted(occurrence) = event.event
-                && occurrence.document == document
+                && occurrence.owner == crate::browser::NetworkOwner::Document(document)
                 && crate::browser::network::request_key(&occurrence.renderer).is_some_and(|key| {
                     key.1 == crate::browser::network::NetworkRequestIdentity::Resource(handle.get())
                 })
@@ -401,7 +401,8 @@ async fn native_network_commits_request_response_and_body_without_devtools() {
         .iter()
         .filter_map(|request| match &request.state {
             NetworkRequestState::Recorded(record)
-                if request.document == document && record.request_handle() == Some(handle) =>
+                if request.owner == crate::browser::NetworkOwner::Document(document)
+                    && record.request_handle() == Some(handle) =>
             {
                 Some(record)
             }
@@ -421,7 +422,7 @@ async fn native_network_commits_request_response_and_body_without_devtools() {
         .await;
     tokio::time::timeout(std::time::Duration::from_secs(5), async {
         loop {
-            if events.recv().await.unwrap().event == BrowserEvent::NetworkSourceClosed(document) {
+            if matches!(events.recv().await.unwrap().event, BrowserEvent::NetworkSourceClosed { owner: crate::browser::NetworkOwner::Document(closed), .. } if closed == document) {
                 break;
             }
         }
@@ -1008,6 +1009,107 @@ async fn native_service_worker_failed_install_preserves_creation_and_exact_retir
 }
 
 #[tokio::test]
+async fn native_shared_worker_network_completes_before_retirement_without_devtools() {
+    shared_worker_network_before_close(
+        "onconnect=()=>fetch('data:text/plain,native-worker-network').then(r=>r.text()).then(()=>close())",
+        "data:text/plain,native-worker-network",
+    ).await;
+}
+
+#[tokio::test]
+async fn native_shared_worker_network_xhr_success_and_fetch_failure_without_devtools() {
+    for (script, url, success) in [
+        (
+            "onconnect=()=>{const x = new XMLHttpRequest(); x.open('GET', 'data:text/plain,native-xhr-body'); x.onload=()=>close(); x.send();}",
+            "data:text/plain,native-xhr-body",
+            true,
+        ),
+        (
+            "onconnect=()=>fetch('http://127.0.0.1:1/native-worker-failure').catch(()=>close())",
+            "http://127.0.0.1:1/native-worker-failure",
+            false,
+        ),
+    ] {
+        let occurrence = shared_worker_network_before_close(script, url).await;
+        let crate::page::RendererNetworkOutputItem::Resource(item) = &occurrence.renderer.item
+        else {
+            unreachable!();
+        };
+        let crate::page::ScriptNetworkOutputItem::SubresourceNetworkRecord(record) = item.as_ref()
+        else {
+            unreachable!();
+        };
+        assert_eq!(
+            matches!(
+                record.outcome(),
+                crate::page::SubresourceNetworkOutcome::Success { .. }
+            ),
+            success
+        );
+    }
+}
+
+async fn shared_worker_network_before_close(
+    script: &str,
+    url: &str,
+) -> crate::browser::NetworkOccurrence {
+    let service = BrowserService::start().unwrap();
+    let browser = service.handle();
+    let (context, contents) = context_with_contents(&service);
+    let (_, mut events) = browser.subscribe().unwrap();
+    let script = format!("data:text/javascript,{script}");
+    navigate(&context, contents, &format!("data:text/html,<script>globalThis.worker = new SharedWorker({script:?}, 'native-network')</script>")).await;
+    let mut worker = None;
+    let mut completed = Vec::new();
+    tokio::time::timeout(std::time::Duration::from_secs(5), async {
+        loop {
+            let record = events.recv().await.unwrap();
+            match record.event {
+                BrowserEvent::WorkerCreated(created @ crate::browser::WorkerSnapshot::Shared { .. }) => {
+                    assert!(worker.replace(created.handle()).is_none());
+                }
+                BrowserEvent::NetworkRequestCompleted(occurrence) => {
+                    if matches!(&occurrence.renderer.item, crate::page::RendererNetworkOutputItem::Resource(item)
+                        if matches!(item.as_ref(), crate::page::ScriptNetworkOutputItem::SubresourceNetworkRecord(result)
+                            if result.url().as_str() == url)) {
+                        completed.push(occurrence);
+                    }
+                }
+                BrowserEvent::WorkerDestroyed(closed) if Some(closed) == worker => break,
+                _ => {}
+            }
+        }
+    }).await.expect("the real worker completes fetch and closes without a Protocol observer");
+    assert!(worker.is_some());
+    assert_eq!(
+        completed.len(),
+        1,
+        "worker retirement must not erase an uncommitted Network fact for {url}"
+    );
+    let worker = worker.unwrap();
+    assert_eq!(
+        completed[0].owner,
+        crate::browser::NetworkOwner::Worker(worker)
+    );
+    let crate::browser::WorkerHandle::Shared { instance, .. } = worker else {
+        unreachable!();
+    };
+    assert_eq!(
+        completed[0].renderer.source,
+        crate::page::RendererNetworkSource::Worker(
+            crate::page::RendererWorkerNetworkSource::Shared(instance)
+        )
+    );
+    browser
+        .close_web_contents(contents)
+        .unwrap()
+        .close_async()
+        .await;
+    service.shutdown();
+    completed.pop().unwrap()
+}
+
+#[tokio::test]
 async fn native_shared_worker_membership_and_retirement_do_not_require_devtools() {
     use crate::browser::{WorkerHandle, WorkerSnapshot};
     for retirement in ["worker", "context", "browser"] {
@@ -1067,6 +1169,129 @@ async fn native_shared_worker_membership_and_retirement_do_not_require_devtools(
             );
         }
     }
+}
+
+#[tokio::test]
+async fn native_service_worker_network_is_owned_by_each_real_run_without_devtools() {
+    use crate::browser::{
+        NetworkOwner, ServiceWorkerCommand, ServiceWorkerExecution, WorkerSnapshot,
+    };
+    use crate::page::{
+        RendererNetworkOutputItem, RendererNetworkSource, RendererWorkerNetworkSource,
+        ScriptNetworkOutputItem, SubresourceNetworkOutcome,
+    };
+    let server = FixtureServer::spawn().await.unwrap();
+    let service = BrowserService::start().unwrap();
+    let browser = service.handle();
+    let (context, contents) = context_with_contents(&service);
+    let (_, mut events) = browser.subscribe().unwrap();
+    navigate(&context, contents, &server.url("/native-worker-network/")).await;
+    let mut previous_run = None;
+    let mut version = None;
+    for attempt in 0..2 {
+        let completed = tokio::time::timeout(std::time::Duration::from_secs(5), async {
+            loop {
+                if let BrowserEvent::NetworkRequestCompleted(occurrence) = events.recv().await.unwrap().event
+                    && matches!(&occurrence.renderer.item, RendererNetworkOutputItem::Resource(item)
+                        if matches!(item.as_ref(), ScriptNetworkOutputItem::SubresourceNetworkRecord(record)
+                            if record.url().as_str() == server.url("/native-worker-network/probe"))) {
+                    break occurrence;
+                }
+            }
+        }).await.expect("a real Service Worker fetch commits without Protocol consumption");
+        let RendererNetworkSource::Worker(RendererWorkerNetworkSource::Service {
+            version: current_version,
+            run,
+        }) = &completed.renderer.source
+        else {
+            panic!("Service Worker response must retain its exact physical run");
+        };
+        assert_ne!(Some(run), previous_run.as_ref());
+        if let Some(version) = version {
+            assert_eq!(*current_version, version);
+        }
+        version = Some(*current_version);
+        previous_run = Some(run.clone());
+        assert_eq!(
+            completed.owner,
+            NetworkOwner::Worker(crate::browser::WorkerHandle::Service {
+                context: context.id(),
+                version: *current_version
+            })
+        );
+        let snapshot = browser.subscribe().unwrap().0;
+        let retained = snapshot
+            .network_requests
+            .iter()
+            .find(|request| request.renderer_source == completed.renderer.source)
+            .unwrap();
+        assert_eq!(retained.owner, completed.owner);
+        let crate::browser::NetworkRequestState::Recorded(record) = &retained.state else {
+            panic!("the complete-only producer must not invent a Started phase");
+        };
+        let SubresourceNetworkOutcome::Success { response_body, .. } = record.outcome() else {
+            panic!("the real fixture response must succeed");
+        };
+        assert_eq!(
+            response_body.clone_body_bytes(),
+            b"native worker network body"
+        );
+        tokio::time::timeout(std::time::Duration::from_secs(5), async {
+            loop {
+                if browser.subscribe().unwrap().0.workers.iter().any(|snapshot| matches!(snapshot, WorkerSnapshot::Service { worker, .. }
+                    if worker.info.version_id == *current_version
+                        && worker.info.status == crate::page::RendererServiceWorkerVersionStatus::Activated
+                        && matches!(worker.execution, ServiceWorkerExecution::Running(_))
+                        && worker.execution.active_run() == Some(run))) { break; }
+                events.recv().await.unwrap();
+            }
+        }).await.expect("install and activation settle after the first fetch");
+        context
+            .execute_service_worker_command(ServiceWorkerCommand::StopVersion {
+                version_id: *current_version,
+            })
+            .unwrap();
+        tokio::time::timeout(std::time::Duration::from_secs(5), async {
+            let mut stopped = false;
+            let mut closed = false;
+            while !stopped || !closed {
+                match events.recv().await.unwrap().event {
+                    BrowserEvent::WorkerUpdated(WorkerSnapshot::Service { worker, .. })
+                        if worker.info.version_id == *current_version
+                            && worker.execution == ServiceWorkerExecution::Stopped =>
+                    {
+                        stopped = true
+                    }
+                    BrowserEvent::NetworkSourceClosed { source, .. }
+                        if source == completed.renderer.source.identity() =>
+                    {
+                        closed = true
+                    }
+                    _ => {}
+                }
+            }
+        })
+        .await
+        .expect("the exact native execution and its Network retention must retire");
+        assert!(
+            browser
+                .subscribe()
+                .unwrap()
+                .0
+                .network_requests
+                .iter()
+                .all(|request| request.renderer_source != completed.renderer.source)
+        );
+        if attempt == 0 {
+            context
+                .execute_service_worker_command(ServiceWorkerCommand::Start {
+                    scope: server.url("/native-worker-network/").parse().unwrap(),
+                })
+                .unwrap();
+        }
+    }
+    service.shutdown();
+    server.shutdown().await;
 }
 
 #[tokio::test]

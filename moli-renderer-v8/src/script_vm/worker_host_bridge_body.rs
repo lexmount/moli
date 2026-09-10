@@ -408,6 +408,11 @@ impl ScriptVm {
             WorkerToParentMessage::SubresourceNetwork(record) => {
                 context_host.borrow_mut().record_subresource_network(record);
             }
+            WorkerToParentMessage::Network(observation) => {
+                context_host.borrow_mut().append_live_turn_observation(
+                    crate::runtime::RendererProtocolObservation::Network(observation),
+                );
+            }
             WorkerToParentMessage::PendingSubresourceFetch(pending) => {
                 owner.record_pending_fetch(scope, context_host, pending);
             }

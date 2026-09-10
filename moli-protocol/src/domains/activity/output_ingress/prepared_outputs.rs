@@ -26,6 +26,27 @@ pub(in crate::domains::activity) struct PreparedProtocolOutputs {
 }
 
 impl PreparedProtocolOutputs {
+    pub(in crate::domains::activity) fn from_browser_worker_network(
+        conn: &mut CdpConnection,
+        owner: &CommandOwnerScope,
+        residence: moli_core::RendererOutputResidenceIdentity,
+        committed: &moli_core::page::RendererCommittedNetworkObservation,
+    ) -> Self {
+        let mut prepared = Self::empty();
+        let slot = match residence {
+            moli_core::RendererOutputResidenceIdentity::SharedWorker { .. } => {
+                ProtocolOutputSlot::SharedWorkerTargetLifecycle
+            }
+            moli_core::RendererOutputResidenceIdentity::ServiceWorker { .. } => {
+                ProtocolOutputSlot::ServiceWorkerTargetLifecycle
+            }
+            moli_core::RendererOutputResidenceIdentity::Page { .. } => return prepared,
+        };
+        crate::domains::target::worker_network_prepared_outputs(conn, owner, residence, committed)
+            .append_to_target_lifecycle_output_sink_for_slots(&mut prepared, &[slot]);
+        prepared
+    }
+
     pub(in crate::domains::activity) fn empty() -> Self {
         Self {
             ordered_slots: Vec::new(),

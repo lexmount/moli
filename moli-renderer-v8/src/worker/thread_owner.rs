@@ -210,10 +210,12 @@ mod tests {
                 name: String::new(),
             },
             WorkerGlobalKind::Shared {
+                network: crate::runtime::RendererWorkerNetworkReporter::unobserved_for_test(),
                 name: String::new(),
                 storage_key: moli_storage_key::MoliStorageKey::first_party_from_url(&url, None),
             },
             WorkerGlobalKind::Service {
+                network: crate::runtime::RendererWorkerNetworkReporter::unobserved_for_test(),
                 registration_id: ServiceWorkerRegistrationId::from_u64_for_test(1),
                 version_id: ServiceWorkerVersionId::from_u64_for_test(1),
                 scope_url: url.clone(),

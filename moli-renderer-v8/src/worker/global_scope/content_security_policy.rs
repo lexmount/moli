@@ -231,6 +231,7 @@ fn send_worker_content_security_policy_report_for_state(
     {
         dispatch_worker_content_security_policy_report_to_service_worker(
             state.borrow().parent_tx.clone(),
+            state.borrow().global_kind.clone(),
             runtime,
             client_id,
             load,
@@ -246,6 +247,7 @@ fn send_worker_content_security_policy_report_for_state(
 
     spawn_worker_content_security_policy_report_network(
         state.borrow().parent_tx.clone(),
+        state.borrow().global_kind.clone(),
         load,
         None,
         None,
@@ -349,6 +351,7 @@ fn worker_content_security_policy_report_context(
 #[allow(clippy::too_many_arguments)]
 fn dispatch_worker_content_security_policy_report_to_service_worker(
     parent_tx: tokio::sync::mpsc::UnboundedSender<WorkerToParentMessage>,
+    global_kind: crate::worker::WorkerGlobalKind,
     runtime: crate::service_worker_runtime::ServiceWorkerRuntimeService,
     client_id: crate::service_worker_runtime::ServiceWorkerClientId,
     load: ResourceLoadLease,
@@ -402,6 +405,7 @@ fn dispatch_worker_content_security_policy_report_to_service_worker(
         load.finish();
         send_worker_content_security_policy_report_failure(
             parent_tx,
+            global_kind,
             request_handle,
             continue_internal_id,
             document_url,
@@ -418,6 +422,7 @@ fn dispatch_worker_content_security_policy_report_to_service_worker(
             Ok(ServiceWorkerDirectFetchResult::Fallback) => {
                 spawn_worker_content_security_policy_report_network(
                     parent_tx,
+                    global_kind,
                     load,
                     request_handle,
                     continue_internal_id,
@@ -433,6 +438,7 @@ fn dispatch_worker_content_security_policy_report_to_service_worker(
                 load.finish();
                 send_worker_content_security_policy_report_success(
                     parent_tx,
+                    global_kind,
                     request_handle,
                     continue_internal_id,
                     document_url,
@@ -446,6 +452,7 @@ fn dispatch_worker_content_security_policy_report_to_service_worker(
                 load.finish();
                 send_worker_content_security_policy_report_failure(
                     parent_tx,
+                    global_kind,
                     request_handle,
                     continue_internal_id,
                     document_url,
@@ -458,6 +465,7 @@ fn dispatch_worker_content_security_policy_report_to_service_worker(
                 load.finish();
                 send_worker_content_security_policy_report_failure(
                     parent_tx,
+                    global_kind,
                     request_handle,
                     continue_internal_id,
                     document_url,
@@ -472,6 +480,7 @@ fn dispatch_worker_content_security_policy_report_to_service_worker(
 
 fn spawn_worker_content_security_policy_report_network(
     parent_tx: tokio::sync::mpsc::UnboundedSender<WorkerToParentMessage>,
+    global_kind: crate::worker::WorkerGlobalKind,
     load: ResourceLoadLease,
     request_handle: Option<SubresourceNetworkRequestHandle>,
     continue_internal_id: Option<u64>,
@@ -484,6 +493,7 @@ fn spawn_worker_content_security_policy_report_network(
     let callback_request_body = request_body.clone();
     let callback_load = load.clone();
     let callback_parent_tx = parent_tx.clone();
+    let callback_global_kind = global_kind.clone();
     if let Err(error) = load
         .request_client()
         .fetch_text_callback(request.clone(), move |result| {
@@ -494,6 +504,7 @@ fn spawn_worker_content_security_policy_report_network(
                     let body = SubresourceResponseBody::from_fetch_response(&response);
                     send_worker_content_security_policy_report_success(
                         callback_parent_tx,
+                        callback_global_kind,
                         request_handle,
                         continue_internal_id,
                         callback_document_url,
@@ -505,6 +516,7 @@ fn spawn_worker_content_security_policy_report_network(
                 }
                 Err(error) => send_worker_content_security_policy_report_failure(
                     callback_parent_tx,
+                    callback_global_kind,
                     request_handle,
                     continue_internal_id,
                     callback_document_url,
@@ -518,6 +530,7 @@ fn spawn_worker_content_security_policy_report_network(
         load.finish();
         send_worker_content_security_policy_report_failure(
             parent_tx,
+            global_kind,
             request_handle,
             continue_internal_id,
             document_url,
@@ -569,6 +582,7 @@ pub(in crate::worker) fn continue_pending_worker_csp_report(
     };
 
     let parent_tx = state.borrow().parent_tx.clone();
+    let global_kind = state.borrow().global_kind.clone();
     let document_url = pending.document_url;
     let load = pending.load;
     let policy_context = pending.policy_context;
@@ -620,6 +634,7 @@ pub(in crate::worker) fn continue_pending_worker_csp_report(
     {
         dispatch_worker_content_security_policy_report_to_service_worker(
             parent_tx,
+            global_kind,
             runtime,
             client_id,
             load,
@@ -635,6 +650,7 @@ pub(in crate::worker) fn continue_pending_worker_csp_report(
 
     spawn_worker_content_security_policy_report_network(
         parent_tx,
+        global_kind,
         load,
         continuation.network_request_handle,
         Some(continuation.internal_id),
@@ -697,6 +713,7 @@ fn record_worker_content_security_policy_report_failure(
 
 fn send_worker_content_security_policy_report_success(
     parent_tx: tokio::sync::mpsc::UnboundedSender<WorkerToParentMessage>,
+    global_kind: crate::worker::WorkerGlobalKind,
     request_handle: Option<SubresourceNetworkRequestHandle>,
     continue_internal_id: Option<u64>,
     document_url: Url,
@@ -730,12 +747,13 @@ fn send_worker_content_security_policy_report_success(
     if let Some(handle) = request_handle {
         record = record.with_request_handle(handle);
     }
-    let _ = parent_tx.send(WorkerToParentMessage::SubresourceNetwork(record));
+    let _ = parent_tx.send(global_kind.network_message(record));
     send_worker_content_security_policy_report_continue_completed(&parent_tx, continue_internal_id);
 }
 
 fn send_worker_content_security_policy_report_failure(
     parent_tx: tokio::sync::mpsc::UnboundedSender<WorkerToParentMessage>,
+    global_kind: crate::worker::WorkerGlobalKind,
     request_handle: Option<SubresourceNetworkRequestHandle>,
     continue_internal_id: Option<u64>,
     document_url: Url,
@@ -756,7 +774,7 @@ fn send_worker_content_security_policy_report_failure(
     if let Some(handle) = request_handle {
         record = record.with_request_handle(handle);
     }
-    let _ = parent_tx.send(WorkerToParentMessage::SubresourceNetwork(record));
+    let _ = parent_tx.send(global_kind.network_message(record));
     send_worker_content_security_policy_report_continue_completed(&parent_tx, continue_internal_id);
 }
 

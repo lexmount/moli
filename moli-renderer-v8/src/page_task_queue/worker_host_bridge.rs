@@ -54,6 +54,7 @@ pub(crate) fn is_worker_host_bridge_message(message: &WorkerToParentMessage) -> 
     matches!(
         message,
         WorkerToParentMessage::SubresourceNetwork(_)
+            | WorkerToParentMessage::Network(_)
             | WorkerToParentMessage::PendingSubresourceFetch(_)
             | WorkerToParentMessage::PendingSubresourceFetchCanceled { .. }
             | WorkerToParentMessage::SubresourceContinue(_)

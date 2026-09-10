@@ -795,7 +795,11 @@ impl PagePreparedOutputs {
         };
         let Some(binding) = conn.target_root_document_protocol_attachment_identity_for_owner(
             owner,
-            occurrence.document,
+            occurrence
+                .source
+                .document()
+                .expect("validated child Document source")
+                .1,
         ) else {
             return Self::default();
         };
@@ -849,7 +853,11 @@ impl PagePreparedOutputs {
                     owner,
                     source_renderer_page,
                     committed,
-                ) && committed.occurrence().document == source_document
+                ) && committed
+                    .occurrence()
+                    .source
+                    .document()
+                    .is_some_and(|(_, document)| document == source_document)
             })
             .and_then(|committed| match &committed.occurrence().item {
                 moli_core::page::RendererNetworkOutputItem::ChildDocument(response)

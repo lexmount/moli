@@ -13,7 +13,7 @@ mod emulation;
 mod events;
 mod navigation_decision;
 mod network;
-pub use network::{NetworkOccurrence, NetworkRequestSnapshot, NetworkRequestState};
+pub use network::{NetworkOccurrence, NetworkOwner, NetworkRequestSnapshot, NetworkRequestState};
 mod owner;
 mod permissions;
 mod popup;

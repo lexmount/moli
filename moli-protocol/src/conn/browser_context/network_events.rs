@@ -3,6 +3,43 @@ use crate::conn::{
 };
 
 impl CdpConnection {
+    /// Freeze the enabled listeners and their events synchronously at source
+    /// ingress. The existing Worker attachment/run outputs own later delivery.
+    pub(crate) fn project_native_worker_network_item(
+        &mut self,
+        owner: &CommandOwnerScope,
+        item: &moli_core::page::ScriptNetworkOutputItem,
+    ) -> Vec<BackgroundProtocolEvent> {
+        let Some((_, Some(target_id))) = self.network_owner_identity_for_owner(owner) else {
+            return Vec::new();
+        };
+        let mut allocator = std::mem::take(&mut self.network_request_id_allocator);
+        let delivery = self.network_agent_for_owner_mut(owner).map(|agent| {
+            agent.ingest_renderer_output_item_and_prepare_live_delivery(
+                item,
+                "",
+                None,
+                None,
+                None,
+                &mut allocator,
+            )
+        });
+        self.network_request_id_allocator = allocator;
+        let Some(mut delivery) = delivery else {
+            return Vec::new();
+        };
+        let mut events = Vec::new();
+        crate::domains::network::emit_prepared_renderer_network_live_background_events(
+            self,
+            &mut events,
+            owner,
+            &mut delivery,
+        );
+        for event in &mut events {
+            event.bind_network_to_worker_target(&target_id);
+        }
+        events
+    }
     pub(in crate::conn) fn project_browser_network_snapshot(
         &mut self,
         requests: Vec<moli_core::browser::NetworkRequestSnapshot>,
@@ -17,25 +54,47 @@ impl CdpConnection {
         }
         let mut events = Vec::new();
         for request in requests {
+            if let moli_core::page::RendererNetworkSource::Worker(source) = &request.renderer_source
+            {
+                let Some(context_id) = self
+                    .browser_context_by_browser_id(request.owner.context())
+                    .map(|context| context.id.clone())
+                else {
+                    continue;
+                };
+                if let Some(owner) = self.native_worker_network_owner(&context_id, source) {
+                    for item in request.output_items() {
+                        if let moli_core::page::RendererNetworkOutputItem::Resource(item) = item {
+                            events.extend(self.project_native_worker_network_item(&owner, &item));
+                        }
+                    }
+                }
+                continue;
+            }
+            let moli_core::browser::NetworkOwner::Document(document) = request.owner else {
+                continue;
+            };
+            let Some((_, renderer_document)) = request.renderer_source.document() else {
+                continue;
+            };
             let Some(context) =
-                self.browser_context_by_browser_id(request.document.web_contents().context())
+                self.browser_context_by_browser_id(document.web_contents().context())
             else {
                 continue;
             };
-            let Some(target) =
-                context.target_id_for_web_contents(request.document.web_contents().id())
+            let Some(target) = context.target_id_for_web_contents(document.web_contents().id())
             else {
                 continue;
             };
             // An old physical Document cannot donate its recovery records to a
             // replacement, even when that replacement has the same Target id.
-            if context.document_handle_for_target(target) != Some(request.document) {
+            if context.document_handle_for_target(target) != Some(document) {
                 continue;
             }
             let owner = CommandOwnerScope::for_page_residence(&TargetPageResidenceIdentity::new(
                 context.id.clone(),
                 Some(target.to_owned()),
-                request.document.id(),
+                document.id(),
             ));
             for item in request.output_items() {
                 match item {
@@ -43,7 +102,7 @@ impl CdpConnection {
                         let Some(binding) = self
                             .target_root_document_protocol_attachment_identity_for_owner(
                                 &owner,
-                                request.renderer_document,
+                                renderer_document,
                             )
                         else {
                             continue;
@@ -61,7 +120,7 @@ impl CdpConnection {
                         if let Some(mut delivery) = self.project_network_output_item_for_owner(
                             &owner,
                             None,
-                            request.renderer_document,
+                            renderer_document,
                             &item,
                         ) {
                             crate::domains::network::emit_prepared_renderer_network_live_background_events(
@@ -119,7 +178,8 @@ mod tests {
             loop {
                 if let BrowserEvent::NetworkRequestCompleted(occurrence) =
                     events.recv().await.unwrap().event
-                    && occurrence.document == commit.document
+                    && occurrence.owner
+                        == moli_core::browser::NetworkOwner::Document(commit.document)
                 {
                     break;
                 }
@@ -164,11 +224,18 @@ mod tests {
             .unwrap();
         assert_eq!(
             peer_renderer.page_id(),
-            committed.occurrence().document.document.page_id
+            committed
+                .occurrence()
+                .source
+                .document()
+                .unwrap()
+                .1
+                .document
+                .page_id
         );
         assert_ne!(
             peer_renderer.owner_local_host_id(),
-            committed.occurrence().owner_local_host_id
+            committed.occurrence().source.document().unwrap().0
         );
         let mut snapshot = browser.subscribe().unwrap().0;
         let requests = std::mem::take(&mut snapshot.network_requests);
@@ -234,8 +301,15 @@ mod tests {
                 .is_empty()
         );
         let renderer = crate::conn::RendererPageResidenceIdentity::from_parts(
-            committed.occurrence().owner_local_host_id,
-            committed.occurrence().document.document.page_id,
+            committed.occurrence().source.document().unwrap().0,
+            committed
+                .occurrence()
+                .source
+                .document()
+                .unwrap()
+                .1
+                .document
+                .page_id,
         );
         assert!(
             conn.ingest_browser_network_observation_for_owner(&owner, Some(renderer), &committed)

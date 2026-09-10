@@ -14,9 +14,9 @@ use crate::{
     domains::{
         log_output_state::{TargetLogOutputQueueState, TargetNetworkLogEntry},
         network::{
-            CapturedRequestBody, CapturedResponseBody, NetworkBacklogPreferredRequestId,
-            PendingNetworkBacklogDeliverySnapshot, RetiringTargetNetworkAgentState,
-            TargetIoStreamRead, TargetNetworkAgentState, TargetNetworkBacklogPreparedDelivery,
+            NetworkBacklogPreferredRequestId, PendingNetworkBacklogDeliverySnapshot,
+            RetiringTargetNetworkAgentState, TargetIoStreamRead, TargetNetworkAgentState,
+            TargetNetworkBacklogPreparedDelivery,
         },
         observable_output::{
             TargetRuntimeObservableQueueState, TargetRuntimeObservableSourceOutput,
@@ -60,7 +60,7 @@ pub(crate) struct TargetRuntimeSlot {
     devtools_renderer_channel: DevToolsRendererChannel,
     pending_renderer_call_replacements: PreparedRendererCallReplacements,
     javascript_dialog_scope: TargetJavaScriptDialogScope,
-    network_agent: TargetNetworkAgentState,
+    pub(crate) network_agent: TargetNetworkAgentState,
     retiring_renderer_document_outputs: Vec<RetiringRendererDocumentOutput>,
     log_output_queue: TargetLogOutputQueueState,
     observable_queue: TargetRuntimeObservableQueueState,
@@ -682,14 +682,6 @@ impl TargetRuntimeSlot {
             .record_pending_response_body(request_id, session_ids);
     }
 
-    pub(crate) fn captured_response_body(&self, request_id: &str) -> Option<&CapturedResponseBody> {
-        self.network_agent.captured_response_body(request_id)
-    }
-
-    pub(crate) fn captured_request_body(&self, request_id: &str) -> Option<&CapturedRequestBody> {
-        self.network_agent.captured_request_body(request_id)
-    }
-
     pub(crate) fn collected_network_data_artifacts(
         &self,
     ) -> Vec<crate::domains::network::CollectedNetworkDataArtifact> {
@@ -756,14 +748,6 @@ impl TargetRuntimeSlot {
 
     pub(crate) fn reset_subresource_cursor(&mut self) {
         self.network_agent.reset_subresource_cursor();
-    }
-
-    pub(crate) fn mark_network_backlog_delivery_snapshot_emitted(
-        &mut self,
-        snapshot: &PendingNetworkBacklogDeliverySnapshot,
-    ) {
-        self.network_agent
-            .mark_network_backlog_delivery_snapshot_emitted(snapshot);
     }
 
     pub(crate) fn clear_websocket_request_ids(&mut self) {

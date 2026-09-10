@@ -6,6 +6,8 @@ use moli_core::browser::{
     NavigationRequestLoadPolicy, StoragePartitionKind, WebContentsCreation, WorkerSnapshot,
 };
 
+mod network;
+
 struct NativeWorkers {
     service: BrowserService,
     context: BrowserContextHandle,
@@ -65,6 +67,19 @@ impl NativeWorkers {
     }
 
     async fn start_named(names: &[&str], dedicated: bool) -> Self {
+        Self::start_script(
+            names,
+            dedicated,
+            if dedicated {
+                "onmessage = () => {}"
+            } else {
+                "onconnect = () => {}"
+            },
+        )
+        .await
+    }
+
+    async fn start_script(names: &[&str], dedicated: bool, script: &str) -> Self {
         let service = BrowserService::start().unwrap();
         let browser = service.handle();
         let context = browser
@@ -84,17 +99,18 @@ impl NativeWorkers {
             .create_web_contents(WebContentsCreation::default())
             .unwrap();
         let (_, mut events) = browser.subscribe().unwrap();
+        let script_url = serde_json::to_string(&format!("data:text/javascript,{script}")).unwrap();
         let script = names
             .iter()
             .map(|name| {
                 if dedicated {
                     format!(
-                        "new Worker('data:text/javascript,onmessage = () => {{}}', {})",
+                        "new Worker({script_url}, {})",
                         serde_json::json!({ "name": name })
                     )
                 } else {
                     format!(
-                        "new SharedWorker('data:text/javascript,onconnect = () => {{}}', {})",
+                        "new SharedWorker({script_url}, {})",
                         serde_json::to_string(name).unwrap()
                     )
                 }

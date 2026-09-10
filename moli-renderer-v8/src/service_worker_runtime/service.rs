@@ -397,6 +397,18 @@ impl ServiceWorkerRuntimeService {
             return;
         }
         match output {
+            ServiceWorkerTargetOutput::Network(observation) => {
+                if let Some(journal) = state.target_output_journal(version_id) {
+                    journal.publish_record(
+                        crate::runtime::PendingRendererOutputRecord::observation(
+                            None,
+                            crate::runtime::RendererProtocolObservation::Network(observation),
+                        )
+                        .resolve()
+                        .expect("worker network observation has an exact source"),
+                    );
+                }
+            }
             ServiceWorkerTargetOutput::Console(message) => {
                 state.record_target_console_message(
                     version_id,
@@ -4512,6 +4524,7 @@ self.addEventListener("message", event => {
                 service.request_client(),
             )
             .with_global_kind(crate::worker::WorkerGlobalKind::Service {
+                network: crate::runtime::RendererWorkerNetworkReporter::unobserved_for_test(),
                 registration_id,
                 version_id,
                 scope_url: scope_url.clone(),
@@ -9656,6 +9669,7 @@ self.addEventListener("message", event => {
                 service.request_client(),
             )
             .with_global_kind(crate::worker::WorkerGlobalKind::Service {
+                network: crate::runtime::RendererWorkerNetworkReporter::unobserved_for_test(),
                 registration_id,
                 version_id,
                 scope_url: scope_url.clone(),

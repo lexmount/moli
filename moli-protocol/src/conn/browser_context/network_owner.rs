@@ -344,16 +344,13 @@ impl CdpConnection {
         request_id: &str,
         session_id: Option<&str>,
     ) -> Option<&CapturedResponseBody> {
-        self.browser_contexts().find_map(|browser_context| {
-            browser_context.page_targets.iter().find_map(|target| {
-                target
-                    .runtime_slot()
-                    .captured_response_body(request_id)
-                    .filter(|body| {
-                        body.is_visible_to_session(session_id) || body.is_visible_to_session(None)
-                    })
+        self.browser_contexts()
+            .flat_map(|context| context.network_agents())
+            .find_map(|agent| {
+                agent.captured_response_body(request_id).filter(|body| {
+                    body.is_visible_to_session(session_id) || body.is_visible_to_session(None)
+                })
             })
-        })
     }
 
     pub(crate) fn captured_request_body_for_bidi_network_data(
@@ -361,16 +358,13 @@ impl CdpConnection {
         request_id: &str,
         session_id: Option<&str>,
     ) -> Option<&CapturedRequestBody> {
-        self.browser_contexts().find_map(|browser_context| {
-            browser_context.page_targets.iter().find_map(|target| {
-                target
-                    .runtime_slot()
-                    .captured_request_body(request_id)
-                    .filter(|body| {
-                        body.is_visible_to_session(session_id) || body.is_visible_to_session(None)
-                    })
+        self.browser_contexts()
+            .flat_map(|context| context.network_agents())
+            .find_map(|agent| {
+                agent.captured_request_body(request_id).filter(|body| {
+                    body.is_visible_to_session(session_id) || body.is_visible_to_session(None)
+                })
             })
-        })
     }
 
     pub(crate) fn network_data_collector_ids_for_owner_body(
@@ -379,7 +373,7 @@ impl CdpConnection {
         data_type: DevToolsNetworkDataType,
         encoded_data_size: usize,
     ) -> Vec<String> {
-        let Some((browser_context_id, target_id)) = self.target_owner_identity_for_owner(owner)
+        let Some((browser_context_id, target_id)) = self.network_owner_identity_for_owner(owner)
         else {
             return Vec::new();
         };
@@ -537,7 +531,7 @@ impl CdpConnection {
             return target.set_network_enabled(session_id, enabled);
         }
         if let Some(session_id) = owner.session_id()
-            && let Some(target) = self.dedicated_worker_target_for_session_mut(Some(session_id))
+            && let Some(target) = self.shared_worker_target_for_session_mut(Some(session_id))
         {
             return target.set_network_enabled(session_id, enabled);
         }
@@ -1261,12 +1255,15 @@ mod tests {
         assert!(!slot.primary_network_events_enabled());
         assert!(slot.attached_network_events_enabled_for_session("SID-attached"));
         let shared = slot
+            .network_agent
             .captured_response_body("REQ-shared")
             .expect("shared body should remain while attached can observe it");
         assert!(!shared.is_visible_to_session(None));
         assert!(shared.is_visible_to_session(Some("SID-attached")));
         assert!(
-            slot.captured_response_body("REQ-primary-only").is_none(),
+            slot.network_agent
+                .captured_response_body("REQ-primary-only")
+                .is_none(),
             "primary-only body should be dropped when primary Network is disabled"
         );
     }
@@ -1299,12 +1296,15 @@ mod tests {
         assert!(slot.primary_network_events_enabled());
         assert!(!slot.attached_network_events_enabled_for_session("SID-attached"));
         let shared = slot
+            .network_agent
             .captured_response_body("REQ-shared")
             .expect("shared body should remain while primary can observe it");
         assert!(shared.is_visible_to_session(None));
         assert!(!shared.is_visible_to_session(Some("SID-attached")));
         assert!(
-            slot.captured_response_body("REQ-aux-only").is_none(),
+            slot.network_agent
+                .captured_response_body("REQ-aux-only")
+                .is_none(),
             "attached-only body should be dropped when attached Network is disabled"
         );
     }

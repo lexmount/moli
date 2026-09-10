@@ -1139,6 +1139,7 @@ pub(super) struct WorkerFetchStreamingFinished {
     fetch_id: u32,
     body_source_id: NetworkBodySourceId,
     head: ResponseHead,
+    network_request_headers: Option<Vec<(String, String)>>,
     result: Result<SubresourceResponseBody, String>,
 }
 
@@ -3082,6 +3083,7 @@ pub(super) fn install_worker_global_scope<'s>(
             registration_id,
             version_id,
             scope_url,
+            ..
         } => {
             set_worker_global_name_prop(scope, global, "")?;
             install_service_worker_global_runtime(

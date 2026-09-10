@@ -797,6 +797,12 @@ fn spawn_parent_message_pump(
                             ServiceWorkerTargetOutput::Console(message),
                         );
                     }
+                    WorkerToParentMessage::Network(observation) => {
+                        service.enqueue_target_output(
+                            owner.clone(),
+                            ServiceWorkerTargetOutput::Network(observation),
+                        );
+                    }
                     WorkerToParentMessage::RuntimeInspectorMessages(messages) => {
                         service.enqueue_target_output(
                             owner.clone(),
@@ -889,9 +895,15 @@ fn spawn_service_worker(
         )
         .with_network_policy(params.network_policy)
         .with_policy_context(policy_context)
-        .with_worker_context_runtime(params.worker_context_runtime)
+        .with_worker_context_runtime(params.worker_context_runtime.clone())
         .with_service_worker_runtime(service)
         .with_global_kind(crate::worker::WorkerGlobalKind::Service {
+            network: params.worker_context_runtime.network_for_worker(
+                crate::runtime::RendererWorkerNetworkSource::Service {
+                    version: params.run_owner.version_id().as_u64(),
+                    run: params.run_owner.cloned_run_identity(),
+                },
+            ),
             registration_id: params.registration_id,
             version_id: params.run_owner.version_id(),
             scope_url: params.scope_url.clone(),

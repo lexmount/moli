@@ -184,12 +184,37 @@ impl BrowserContext {
     ) -> Option<&crate::domains::network::CapturedResponseBody> {
         self.active_page_target()
             .runtime_slot
+            .network_agent
             .captured_response_body(request_id)
+    }
+
+    pub(crate) fn network_agents(
+        &self,
+    ) -> impl Iterator<Item = &crate::domains::network::TargetNetworkAgentState> {
+        self.page_targets
+            .iter()
+            .map(|target| &target.runtime_slot.network_agent)
+            .chain(
+                self.shared_worker_targets
+                    .values()
+                    .map(|target| &target.network),
+            )
+            .chain(
+                self.service_worker_targets
+                    .values()
+                    .map(|target| &target.network),
+            )
     }
 
     pub(crate) fn clear_network_body_artifacts(&mut self) {
         for target in self.page_targets.iter_mut() {
             target.runtime_slot.clear_network_body_artifacts();
+        }
+        for target in self.shared_worker_targets.values_mut() {
+            target.network.clear_body_artifacts();
+        }
+        for target in self.service_worker_targets.values_mut() {
+            target.network.clear_body_artifacts();
         }
     }
 

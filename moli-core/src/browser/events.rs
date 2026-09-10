@@ -16,7 +16,10 @@ pub enum BrowserEvent {
     NetworkRequestCompleted(super::NetworkOccurrence),
     NetworkActivity(super::NetworkOccurrence),
     /// Observation source retired; this is not a synthetic transport result.
-    NetworkSourceClosed(DocumentHandle),
+    NetworkSourceClosed {
+        owner: super::NetworkOwner,
+        source: crate::page::RendererNetworkSourceIdentity,
+    },
     WebContentsCreated(WebContentsHandle),
     WebContentsActivated {
         web_contents: WebContentsHandle,

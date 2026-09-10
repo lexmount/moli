@@ -286,6 +286,97 @@ impl TargetPreparedOutputs {
     }
 }
 
+pub(in crate::domains) fn worker_network_prepared_outputs(
+    conn: &mut CdpConnection,
+    owner: &CommandOwnerScope,
+    residence: moli_core::RendererOutputResidenceIdentity,
+    committed: &moli_core::page::RendererCommittedNetworkObservation,
+) -> TargetPreparedOutputs {
+    use moli_core::page::{
+        RendererNetworkOutputItem, RendererNetworkSource, RendererWorkerNetworkSource,
+    };
+    let mut outputs = TargetPreparedOutputs::default();
+    let occurrence = committed.occurrence();
+    let RendererNetworkSource::Worker(source) = &occurrence.source else {
+        return outputs;
+    };
+    let exact_source = match (source, residence) {
+        (
+            RendererWorkerNetworkSource::Shared(instance),
+            moli_core::RendererOutputResidenceIdentity::SharedWorker {
+                browser_context_runtime_id,
+                instance_id,
+            },
+        ) => browser_context_runtime_id == occurrence.runtime && instance.as_u64() == instance_id,
+        (
+            RendererWorkerNetworkSource::Service { version, .. },
+            moli_core::RendererOutputResidenceIdentity::ServiceWorker {
+                browser_context_runtime_id,
+                version_id,
+            },
+        ) => browser_context_runtime_id == occurrence.runtime && *version == version_id,
+        _ => false,
+    };
+    let Some((context_id, _)) = conn.network_owner_identity_for_owner(owner) else {
+        return outputs;
+    };
+    if !exact_source
+        || !conn
+            .browser_context_by_id(&context_id)
+            .is_some_and(|context| {
+                context.routes_renderer_browser_context_runtime(occurrence.runtime)
+            })
+    {
+        return outputs;
+    }
+    let Some(network_owner) = conn.native_worker_network_owner(&context_id, source) else {
+        return outputs;
+    };
+    let RendererNetworkOutputItem::Resource(item) = &occurrence.item else {
+        return outputs;
+    };
+    let events = conn.project_native_worker_network_item(&network_owner, item);
+    let mut sessions = std::collections::BTreeMap::<String, Vec<BackgroundProtocolEvent>>::new();
+    for event in events {
+        if let Some(session) = event.protocol_session_id() {
+            sessions.entry(session.to_owned()).or_default().push(event);
+        }
+    }
+    let context = conn
+        .browser_context_by_id(&context_id)
+        .expect("synchronous Worker projection retains its Context");
+    for (session, events) in sessions {
+        match source {
+            RendererWorkerNetworkSource::Shared(instance) => {
+                if let Some(attachment) = context
+                    .shared_worker_targets
+                    .get(instance)
+                    .and_then(|target| target.protocol_attachment_identity(&context_id, &session))
+                {
+                    outputs.push(WorkerTargetLifecycleOutput::SharedWorkerAttachmentEvents {
+                        attachment,
+                        events,
+                    });
+                }
+            }
+            RendererWorkerNetworkSource::Service { version, run } => {
+                let Some(target) = context.service_worker_targets.get(version) else {
+                    continue;
+                };
+                let Some(run) = target.observe_worker_run(&context_id, run.clone()) else {
+                    continue;
+                };
+                if let Some(runtime) =
+                    target.runtime_attachment_identity_for_run(&context_id, &session, &run)
+                {
+                    push_service_worker_runtime_events(&mut outputs, runtime, events);
+                }
+            }
+        }
+    }
+    outputs
+}
+
 fn push_service_worker_version_events(
     outputs: &mut TargetPreparedOutputs,
     version: TargetServiceWorkerVersionIdentity,
@@ -4709,7 +4800,7 @@ mod tests {
             Some(DevToolsTargetKind::Worker)
         );
 
-        conn.dedicated_worker_target_for_session_mut(Some(&session_id))
+        conn.shared_worker_target_for_session_mut(Some(&session_id))
             .expect("failed worker target session")
             .set_runtime_frontend_enabled(&session_id, true);
 

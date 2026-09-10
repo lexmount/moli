@@ -1,7 +1,7 @@
 use crate::conn::{
-    CdpConnection, DedicatedWorkerTargetState, RendererPageResidenceIdentity,
-    ServiceWorkerTargetState, SharedWorkerTargetState,
-    TargetServiceWorkerProtocolAttachmentIdentity, TargetSharedWorkerProtocolAttachmentIdentity,
+    CdpConnection, RendererPageResidenceIdentity, ServiceWorkerTargetState,
+    SharedWorkerTargetState, TargetServiceWorkerProtocolAttachmentIdentity,
+    TargetSharedWorkerProtocolAttachmentIdentity,
 };
 use moli_core::RendererOutputResidenceIdentity;
 
@@ -170,22 +170,6 @@ impl CdpConnection {
                 .map(|target| &mut target.inner),
             _ => None,
         }
-    }
-
-    pub(crate) fn dedicated_worker_target_for_session_mut(
-        &mut self,
-        session_id: Option<&str>,
-    ) -> Option<&mut DedicatedWorkerTargetState> {
-        let session_id = session_id?;
-        let CdpSessionRoute::DedicatedWorkerTarget {
-            browser_context_id,
-            target_id,
-        } = self.session_route(Some(session_id))?
-        else {
-            return None;
-        };
-        self.browser_context_by_id_mut(&browser_context_id)?
-            .dedicated_worker_target_mut(&target_id)
     }
 
     pub(crate) fn service_worker_target_for_session(

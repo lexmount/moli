@@ -1,6 +1,11 @@
 use super::Browser;
-use crate::browser::{BrowserContextId, BrowserEvent, BrowserSequence, NetworkOccurrence};
-use crate::page::{RendererNetworkInput, RendererNetworkOutputItem, ScriptNetworkOutputItem};
+use crate::browser::{
+    BrowserContextId, BrowserEvent, BrowserSequence, NetworkOccurrence, NetworkOwner, WorkerHandle,
+};
+use crate::page::{
+    RendererNetworkInput, RendererNetworkOutputItem, RendererNetworkSource,
+    RendererWorkerNetworkSource, ScriptNetworkOutputItem,
+};
 
 impl Browser {
     pub(super) fn commit_network(&mut self, id: BrowserContextId, input: RendererNetworkInput) {
@@ -9,21 +14,12 @@ impl Browser {
         };
         let input = match input {
             RendererNetworkInput::Observation(input) => input,
-            RendererNetworkInput::SourceClosed {
-                runtime,
-                owner_local_host_id,
-                page,
-            } => {
+            RendererNetworkInput::SourceClosed { runtime, source } => {
                 if context.routes_renderer_browser_context_runtime(runtime)
-                    && let Some(document) = context.network_requests.close_source(
-                        crate::browser::RendererPageResidenceIdentity::from_parts(
-                            owner_local_host_id,
-                            page,
-                        ),
-                    )
+                    && let Some(owner) = context.network_requests.close_source(&source)
                 {
                     self.events
-                        .publish(BrowserEvent::NetworkSourceClosed(document));
+                        .publish(BrowserEvent::NetworkSourceClosed { owner, source });
                 }
                 return;
             }
@@ -35,31 +31,60 @@ impl Browser {
         let admitted = crate::browser::network::request_key(occurrence)
             .as_ref()
             .and_then(|key| context.network_requests.get(key));
-        let renderer_document =
-            admitted.map_or(occurrence.document, |entry| entry.renderer_document);
-        let document = admitted.map(|entry| entry.document).or_else(|| {
-            context.network_document_for_renderer(
-                crate::browser::RendererPageResidenceIdentity::from_parts(
-                    occurrence.owner_local_host_id,
-                    occurrence.document.document.page_id,
-                ),
-            )
-        });
-        let Some(document) = document else {
+        let renderer_source = admitted.map_or_else(
+            || occurrence.source.clone(),
+            |entry| entry.renderer_source.clone(),
+        );
+        let owner = admitted
+            .map(|entry| entry.owner)
+            .or_else(|| match &occurrence.source {
+                RendererNetworkSource::Document {
+                    owner_local_host_id,
+                    document,
+                } => context
+                    .network_document_for_renderer(
+                        crate::browser::RendererPageResidenceIdentity::from_parts(
+                            *owner_local_host_id,
+                            document.document.page_id,
+                        ),
+                    )
+                    .map(NetworkOwner::Document),
+                RendererNetworkSource::Worker(worker) => {
+                    let handle = match worker {
+                        RendererWorkerNetworkSource::Shared(instance) => {
+                            context.shared_workers.get(instance)?;
+                            WorkerHandle::Shared {
+                                context: id,
+                                instance: *instance,
+                            }
+                        }
+                        RendererWorkerNetworkSource::Service { version, run } => {
+                            if context.service_workers.get(version)?.execution.active_run()
+                                != Some(run)
+                            {
+                                return None;
+                            }
+                            WorkerHandle::Service {
+                                context: id,
+                                version: *version,
+                            }
+                        }
+                    };
+                    Some(NetworkOwner::Worker(handle))
+                }
+            });
+        let Some(owner) = owner else {
             return;
         };
         let sequence = BrowserSequence::allocate();
-        if !context
-            .network_requests
-            .commit(document, occurrence, sequence)
-        {
+        if !context.network_requests.commit(owner, occurrence, sequence) {
             return;
         }
         let mut renderer = occurrence.clone();
-        if renderer.document != renderer_document {
-            std::sync::Arc::make_mut(&mut renderer).document = renderer_document;
+        if renderer.source != renderer_source {
+            std::sync::Arc::make_mut(&mut renderer).source = renderer_source.clone();
         }
-        let event = NetworkOccurrence { document, renderer };
+        let event = NetworkOccurrence { owner, renderer };
         let event = match &occurrence.item {
             RendererNetworkOutputItem::ChildDocument(_) => {
                 BrowserEvent::NetworkRequestCompleted(event)
@@ -78,6 +103,6 @@ impl Browser {
         // State, semantic event and the concrete FIFO's receipt are committed in
         // this one owner turn. Draining Protocol can only observe the result.
         self.events.publish_committed(sequence, event);
-        input.commit(sequence.get(), renderer_document);
+        input.commit(sequence.get(), renderer_source);
     }
 }

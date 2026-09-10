@@ -38,6 +38,7 @@ const SHARED_WORKER_SYNTHETIC_EXECUTION_CONTEXT_ID_BASE: i64 = -10_000_000;
 /// already been created by the renderer event stream.
 #[derive(Debug)]
 pub(crate) struct SharedWorkerTargetState {
+    pub(crate) network: crate::domains::network::TargetNetworkAgentState,
     pub(crate) renderer_owner_local_host_id: RendererOwnerLocalHostId,
     pub(crate) renderer_instance_id: SharedWorkerInstanceId,
     pub(crate) target_id: String,
@@ -75,6 +76,7 @@ impl SharedWorkerTargetState {
     ) -> Self {
         Self {
             renderer_owner_local_host_id,
+            network: Default::default(),
             renderer_instance_id,
             target_id,
             owner_target_id,
@@ -421,6 +423,7 @@ impl SharedWorkerTargetState {
     }
 
     pub(crate) fn detach_session(&mut self, session_id: &str) -> Option<String> {
+        self.set_network_enabled(session_id, false);
         self.sessions
             .remove(session_id)
             .map(|_| session_id.to_owned())
@@ -452,6 +455,7 @@ impl SharedWorkerTargetState {
         session_id: &str,
     ) -> Option<TargetSharedWorkerProtocolAttachmentRetirement> {
         let identity = self.protocol_attachment_identity(browser_context_id, session_id)?;
+        self.set_network_enabled(session_id, false);
         let session = self.sessions.remove(session_id)?;
         Some(session.attachment_scope.into_retirement(identity))
     }
@@ -491,9 +495,18 @@ impl SharedWorkerTargetState {
             return false;
         };
         if enabled {
+            let was_enabled = state.network_session_state.network_enabled;
             state.network_session_state.network_enabled = true;
+            if !was_enabled {
+                self.network
+                    .initialize_session_observation_cursor_at_output_tail(Some(session_id));
+            }
+            self.network.enable_attached_events(session_id);
         } else {
             state.network_session_state = Default::default();
+            self.network.remove_attached_session(session_id);
+            self.network
+                .remove_captured_response_body_visibility_for_session(Some(session_id));
         }
         true
     }
@@ -816,6 +829,33 @@ mod tests {
             is_default: None,
             context_type: Some("worker".to_owned()),
             grant_universal_access: None,
+        }
+    }
+
+    #[test]
+    fn shared_worker_network_retirement_removes_only_its_listener() {
+        for retire in [false, true] {
+            let mut target = shared_worker_target();
+            for session in ["SID-a", "SID-b"] {
+                target.attach_session(session.into());
+                assert!(target.set_network_enabled(session, true));
+            }
+            if retire {
+                assert!(
+                    target
+                        .take_protocol_attachment_retirement("BID-1", "SID-a")
+                        .is_some()
+                );
+            } else {
+                assert!(target.detach_session("SID-a").is_some());
+            }
+            assert_eq!(
+                target.network.event_session_ids(None, None),
+                vec![Some("SID-b".into())]
+            );
+            target.attach_session("SID-a".into());
+            assert!(!target.network_enabled("SID-a"));
+            assert!(!target.network.attached_events_enabled_for_session("SID-a"));
         }
     }
 

@@ -123,8 +123,15 @@ async fn assert_native_child_network_receipt(response: Option<(u16, &str)>, comm
         let frame_id = activity.frame_id.clone();
         assert_eq!(load.is_some(), commits_child, "response={response:?}");
         let source = RendererPageResidenceIdentity::from_parts(
-            committed.occurrence().owner_local_host_id,
-            committed.occurrence().document.document.page_id,
+            committed.occurrence().source.document().unwrap().0,
+            committed
+                .occurrence()
+                .source
+                .document()
+                .unwrap()
+                .1
+                .document
+                .page_id,
         );
         let (peer, _) = context.create_web_contents(Default::default()).unwrap();
         let peer_navigation = context
@@ -153,7 +160,7 @@ async fn assert_native_child_network_receipt(response: Option<(u16, &str)>, comm
         );
         context.select_web_contents(contents.id());
         let snapshot = browser.subscribe().unwrap().0;
-        assert_eq!(snapshot.network_requests.iter().filter(|request| request.document == commit.document && matches!(&request.state, moli_core::browser::NetworkRequestState::ChildDocument(stored) if std::sync::Arc::ptr_eq(stored, activity))).count(), 1);
+        assert_eq!(snapshot.network_requests.iter().filter(|request| request.owner == moli_core::browser::NetworkOwner::Document(commit.document) && matches!(&request.state, moli_core::browser::NetworkRequestState::ChildDocument(stored) if std::sync::Arc::ptr_eq(stored, activity))).count(), 1);
         let mut membership = snapshot.clone();
         membership.network_requests.clear();
         let mut conn = CdpConnection::new(
@@ -208,7 +215,7 @@ async fn assert_native_child_network_receipt(response: Option<(u16, &str)>, comm
             Some(load) => PagePreparedOutputs::from_renderer_child_frame_load(
                 &conn,
                 &owner,
-                committed.occurrence().document,
+                committed.occurrence().source.document().unwrap().1,
                 load,
                 Some(source),
                 Some(&committed),
@@ -287,7 +294,7 @@ async fn assert_native_child_network_receipt(response: Option<(u16, &str)>, comm
                     .any(|message| message["method"] == "Network.responseReceived")
             );
             let body = conn
-                .runtime_session_owner_slot_mut_for_owner(&owner)
+                .network_agent_for_owner(&owner)
                 .unwrap()
                 .captured_response_body(&loader_id)
                 .expect("the failed request is known, not an unknown ID");

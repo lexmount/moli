@@ -53,6 +53,9 @@ impl RendererSharedWorkerHost {
         .with_policy_context(policy_context)
         .with_worker_context_runtime(execution_policy.worker_context_runtime.clone())
         .with_global_kind(WorkerGlobalKind::Shared {
+            network: execution_policy.worker_context_runtime.network_for_worker(
+                crate::runtime::RendererWorkerNetworkSource::Shared(self.instance_id()),
+            ),
             name: name.clone(),
             storage_key: params.key.storage_key().clone(),
         })

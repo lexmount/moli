@@ -2307,6 +2307,7 @@ async fn service_worker_storage_uses_explicit_registration_storage_key() {
             script_url.to_owned(),
         )
         .with_global_kind(crate::worker::WorkerGlobalKind::Service {
+            network: crate::runtime::RendererWorkerNetworkReporter::unobserved_for_test(),
             registration_id: crate::runtime::ServiceWorkerRegistrationId::from_u64_for_test(1),
             version_id: crate::runtime::ServiceWorkerVersionId::from_u64_for_test(1),
             scope_url: url::Url::parse("https://cdn.example/").unwrap(),

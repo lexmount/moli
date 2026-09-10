@@ -6,6 +6,66 @@ use tokio::sync::watch;
 
 use super::{RendererBrowserContextRuntimeId, RendererDocumentLifecycleIdentity};
 
+/// Identity of a physical worker execution, not an Inspector target or session.
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub enum RendererWorkerNetworkSource {
+    Shared(moli_shared_worker::SharedWorkerInstanceId),
+    Service {
+        version: u64,
+        run: super::RendererServiceWorkerRunIdentity,
+    },
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum RendererNetworkSource {
+    Document {
+        owner_local_host_id: super::RendererOwnerLocalHostId,
+        document: RendererDocumentLifecycleIdentity,
+    },
+    Worker(RendererWorkerNetworkSource),
+}
+
+/// Request IDs are local to a physical producer. Page request admission spans
+/// document.open; a Service Worker version must never span execution runs.
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub enum RendererNetworkSourceIdentity {
+    Page {
+        owner_local_host_id: super::RendererOwnerLocalHostId,
+        page: super::PageId,
+    },
+    Worker(RendererWorkerNetworkSource),
+}
+
+impl RendererNetworkSource {
+    pub fn identity(&self) -> RendererNetworkSourceIdentity {
+        match self {
+            Self::Document {
+                owner_local_host_id,
+                document,
+            } => RendererNetworkSourceIdentity::Page {
+                owner_local_host_id: *owner_local_host_id,
+                page: document.document.page_id,
+            },
+            Self::Worker(worker) => RendererNetworkSourceIdentity::Worker(worker.clone()),
+        }
+    }
+
+    pub fn document(
+        &self,
+    ) -> Option<(
+        super::RendererOwnerLocalHostId,
+        RendererDocumentLifecycleIdentity,
+    )> {
+        match self {
+            Self::Document {
+                owner_local_host_id,
+                document,
+            } => Some((*owner_local_host_id, *document)),
+            Self::Worker(_) => None,
+        }
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum RendererNetworkOutputItem {
     Resource(Arc<ScriptNetworkOutputItem>),
@@ -32,8 +92,7 @@ impl RendererNetworkOutputItem {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct RendererNetworkOccurrence {
     pub runtime: RendererBrowserContextRuntimeId,
-    pub owner_local_host_id: super::RendererOwnerLocalHostId,
-    pub document: RendererDocumentLifecycleIdentity,
+    pub source: RendererNetworkSource,
     pub item: RendererNetworkOutputItem,
 }
 
@@ -75,14 +134,20 @@ mod tests {
         let RendererNetworkInput::Observation(input) = inputs.lock().pop_front().unwrap() else {
             panic!("receipt must precede closure");
         };
-        input.commit(47, document);
+        input.commit(
+            47,
+            RendererNetworkSource::Document {
+                owner_local_host_id: owner,
+                document,
+            },
+        );
         for observation in [accepted, clone] {
             let committed = observation.committed().await.unwrap();
             assert_eq!(committed.browser_sequence(), 47);
             assert_eq!(committed.occurrence().item, item.clone().into());
         }
         assert!(
-            matches!(inputs.lock().pop_front(), Some(RendererNetworkInput::SourceClosed { runtime: actual, owner_local_host_id, page }) if actual == runtime && owner_local_host_id == owner && page == document.document.page_id)
+            matches!(inputs.lock().pop_front(), Some(RendererNetworkInput::SourceClosed { runtime: actual, source: RendererNetworkSourceIdentity::Page { owner_local_host_id, page } }) if actual == runtime && owner_local_host_id == owner && page == document.document.page_id)
         );
         assert!(inputs.lock().is_empty());
     }
@@ -91,7 +156,7 @@ mod tests {
 #[derive(Clone, Debug)]
 pub struct RendererNetworkObservation {
     occurrence: Arc<RendererNetworkOccurrence>,
-    committed: watch::Receiver<Option<(u64, RendererDocumentLifecycleIdentity)>>,
+    committed: watch::Receiver<Option<(u64, RendererNetworkSource)>>,
 }
 
 impl PartialEq for RendererNetworkObservation {
@@ -119,9 +184,9 @@ impl RendererCommittedNetworkObservation {
 impl RendererNetworkObservation {
     pub async fn committed(mut self) -> Option<RendererCommittedNetworkObservation> {
         loop {
-            if let Some((browser_sequence, document)) = *self.committed.borrow_and_update() {
-                if self.occurrence.document != document {
-                    Arc::make_mut(&mut self.occurrence).document = document;
+            if let Some((browser_sequence, source)) = self.committed.borrow_and_update().clone() {
+                if self.occurrence.source != source {
+                    Arc::make_mut(&mut self.occurrence).source = source;
                 }
                 return Some(RendererCommittedNetworkObservation {
                     occurrence: self.occurrence,
@@ -195,25 +260,77 @@ pub enum RendererNetworkInput {
     Observation(RendererNetworkCommit),
     SourceClosed {
         runtime: RendererBrowserContextRuntimeId,
-        owner_local_host_id: super::RendererOwnerLocalHostId,
-        page: super::PageId,
+        source: RendererNetworkSourceIdentity,
     },
 }
 
 pub struct RendererNetworkCommit {
     pub occurrence: Arc<RendererNetworkOccurrence>,
-    committed: watch::Sender<Option<(u64, RendererDocumentLifecycleIdentity)>>,
+    committed: watch::Sender<Option<(u64, RendererNetworkSource)>>,
 }
 
 impl RendererNetworkCommit {
-    pub fn commit(self, browser_sequence: u64, document: RendererDocumentLifecycleIdentity) {
+    pub fn commit(self, browser_sequence: u64, source: RendererNetworkSource) {
         assert_ne!(browser_sequence, 0, "native occurrence needs a sequence");
         self.committed
-            .send_replace(Some((browser_sequence, document)));
+            .send_replace(Some((browser_sequence, source)));
     }
 }
 
 type NetworkHandler = Box<dyn Fn(RendererNetworkInput) + Send + Sync>;
+
+/// A producer bound before a Worker thread starts. Its parent carries only the
+/// returned receipt, and cannot change the owner or commit the request itself.
+#[derive(Clone, Debug)]
+pub(crate) struct RendererWorkerNetworkReporter {
+    reporter: RendererNetworkReporter,
+    source: RendererWorkerNetworkSource,
+}
+
+impl RendererWorkerNetworkReporter {
+    pub(crate) fn new(
+        reporter: RendererNetworkReporter,
+        source: RendererWorkerNetworkSource,
+    ) -> Self {
+        Self { reporter, source }
+    }
+
+    pub(crate) fn report(
+        &self,
+        mut record: moli_page_types::SubresourceNetworkRecord,
+    ) -> RendererNetworkObservation {
+        if record.request_handle().is_none() {
+            record = record
+                .with_request_handle(moli_page_types::SubresourceNetworkRequestHandle::allocate());
+        }
+        self.reporter.report_source(
+            RendererNetworkSource::Worker(self.source.clone()),
+            ScriptNetworkOutputItem::SubresourceNetworkRecord(Box::new(record)),
+        )
+    }
+
+    pub(crate) fn close_source(&self) {
+        self.reporter
+            .close_producer(RendererNetworkSourceIdentity::Worker(self.source.clone()));
+    }
+
+    #[cfg(test)]
+    pub(crate) fn unobserved_for_test() -> Self {
+        Self::new(
+            RendererNetworkReporter::new(RendererBrowserContextRuntimeId::new_for_testing(1)),
+            RendererWorkerNetworkSource::Shared(
+                moli_shared_worker::SharedWorkerInstanceId::from_u64(1),
+            ),
+        )
+    }
+}
+
+impl PartialEq for RendererWorkerNetworkReporter {
+    fn eq(&self, other: &Self) -> bool {
+        self.source == other.source && Arc::ptr_eq(&self.reporter.handler, &other.reporter.handler)
+    }
+}
+impl Eq for RendererWorkerNetworkReporter {}
 
 #[derive(Clone)]
 pub(crate) struct RendererNetworkReporter {
@@ -230,6 +347,10 @@ impl std::fmt::Debug for RendererNetworkReporter {
 }
 
 impl RendererNetworkReporter {
+    pub(crate) fn runtime(&self) -> RendererBrowserContextRuntimeId {
+        self.runtime
+    }
+
     pub(crate) fn new(runtime: RendererBrowserContextRuntimeId) -> Self {
         Self {
             runtime,
@@ -252,10 +373,23 @@ impl RendererNetworkReporter {
         document: RendererDocumentLifecycleIdentity,
         item: impl Into<RendererNetworkOutputItem>,
     ) -> RendererNetworkObservation {
+        self.report_source(
+            RendererNetworkSource::Document {
+                owner_local_host_id,
+                document,
+            },
+            item,
+        )
+    }
+
+    pub(crate) fn report_source(
+        &self,
+        source: RendererNetworkSource,
+        item: impl Into<RendererNetworkOutputItem>,
+    ) -> RendererNetworkObservation {
         let occurrence = Arc::new(RendererNetworkOccurrence {
             runtime: self.runtime,
-            owner_local_host_id,
-            document,
+            source,
             item: item.into(),
         });
         let (committed, observation) = watch::channel(None);
@@ -277,11 +411,17 @@ impl RendererNetworkReporter {
         owner_local_host_id: super::RendererOwnerLocalHostId,
         page: super::PageId,
     ) {
+        self.close_producer(RendererNetworkSourceIdentity::Page {
+            owner_local_host_id,
+            page,
+        });
+    }
+
+    pub(crate) fn close_producer(&self, source: RendererNetworkSourceIdentity) {
         if let Some(handler) = self.handler.lock().as_ref() {
             handler(RendererNetworkInput::SourceClosed {
                 runtime: self.runtime,
-                owner_local_host_id,
-                page,
+                source,
             });
         }
     }

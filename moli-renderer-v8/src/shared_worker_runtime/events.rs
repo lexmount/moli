@@ -55,6 +55,11 @@ impl RendererSharedWorkerHost {
             WorkerToParentMessage::RuntimeInspectorResponse(publication) => {
                 self.publish_runtime_inspector_response(publication);
             }
+            WorkerToParentMessage::Network(observation) => {
+                self.publish_observation(crate::runtime::RendererProtocolObservation::Network(
+                    observation,
+                ));
+            }
             WorkerToParentMessage::ServiceWorkerBootstrapCompleted(_)
             | WorkerToParentMessage::ServiceWorkerLifecycleCompleted(_) => {
                 trace!(url = %script_url, ?message, "dropping service worker lifecycle message on shared worker host");

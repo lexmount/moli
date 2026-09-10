@@ -900,6 +900,33 @@ pub struct BackgroundTargetReceivedMessageFromTargetEvent {
 }
 
 impl ProtocolDeliveryEnvelope {
+    /// Worker requests have a target, but no Page frame. Keep the wire and
+    /// typed observer payload in agreement without fabricating a Document.
+    pub(crate) fn bind_network_to_worker_target(&mut self, target_id: &str) {
+        let BackgroundProtocolEventPayload::Protocol(event) = &mut self.payload else {
+            return;
+        };
+        let Some(automation) = event.automation_event.as_deref_mut() else {
+            return;
+        };
+        let network = match automation {
+            AutomationEvent::NetworkBeforeRequestSent(network)
+            | AutomationEvent::NetworkResponseStarted(network)
+            | AutomationEvent::NetworkResponseCompleted(network)
+            | AutomationEvent::NetworkFetchError(network) => network,
+            _ => return,
+        };
+        network.target_id = target_id.into();
+        network.frame_id = None;
+        if let Some(params) = event
+            .message
+            .get_mut("params")
+            .and_then(Value::as_object_mut)
+        {
+            params.remove("frameId");
+        }
+    }
+
     pub fn is_target_session_control(&self) -> bool {
         matches!(
             self.payload,

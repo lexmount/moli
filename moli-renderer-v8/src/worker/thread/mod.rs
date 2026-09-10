@@ -169,12 +169,28 @@ pub(crate) enum WorkerGlobalKind {
     Shared {
         name: String,
         storage_key: MoliStorageKey,
+        network: crate::runtime::RendererWorkerNetworkReporter,
     },
     Service {
         registration_id: crate::runtime::ServiceWorkerRegistrationId,
         version_id: crate::runtime::ServiceWorkerVersionId,
         scope_url: url::Url,
+        network: crate::runtime::RendererWorkerNetworkReporter,
     },
+}
+
+impl WorkerGlobalKind {
+    pub(in crate::worker) fn network_message(
+        &self,
+        record: moli_page_types::SubresourceNetworkRecord,
+    ) -> WorkerToParentMessage {
+        match self {
+            Self::Dedicated { .. } => WorkerToParentMessage::SubresourceNetwork(record),
+            Self::Shared { network, .. } | Self::Service { network, .. } => {
+                WorkerToParentMessage::Network(network.report(record))
+            }
+        }
+    }
 }
 
 pub(crate) struct WorkerSpawnOptions {
@@ -1550,6 +1566,17 @@ async fn worker_main(
     termination_requested: Arc<AtomicBool>,
     inspector_task_runner: WorkerInspectorTaskRunner,
 ) {
+    struct NetworkSourceGuard(WorkerGlobalKind);
+    impl Drop for NetworkSourceGuard {
+        fn drop(&mut self) {
+            match &self.0 {
+                WorkerGlobalKind::Dedicated { .. } => {}
+                WorkerGlobalKind::Shared { network, .. }
+                | WorkerGlobalKind::Service { network, .. } => network.close_source(),
+            }
+        }
+    }
+    let _network_source = NetworkSourceGuard(global_kind.clone());
     debug!(url = %script_url, "worker started");
     let mut bootstrap_completion =
         WorkerBootstrapCompletionReporter::new(bootstrap_completion_target);

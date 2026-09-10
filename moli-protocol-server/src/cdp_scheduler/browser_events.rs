@@ -7,6 +7,9 @@ use super::{
 
 pub(super) type BrowserEventInput = Result<BrowserEventRecord, RecvError>;
 
+#[cfg(test)]
+mod worker_network_tests;
+
 pub(super) async fn recv_browser_event(
     receiver: &mut Option<BrowserEventReceiver>,
 ) -> BrowserEventInput {
@@ -99,7 +102,7 @@ impl CdpScheduler {
                 | BrowserEvent::NetworkRequestStarted(_)
                 | BrowserEvent::NetworkRequestCompleted(_)
                 | BrowserEvent::NetworkActivity(_)
-                | BrowserEvent::NetworkSourceClosed(_)
+                | BrowserEvent::NetworkSourceClosed { .. }
                 | BrowserEvent::WorkerUpdated(_)
                 | BrowserEvent::WorkerDestroyed(_)
                 | BrowserEvent::DocumentLifecycleChanged(_)
@@ -375,10 +378,10 @@ mod tests {
             loop {
                 let record = native.recv().await.unwrap();
                 if let BrowserEvent::NetworkRequestCompleted(occurrence) = &record.event
-                    && occurrence.document.web_contents() == contents
+                    && matches!(occurrence.owner, moli_core::browser::NetworkOwner::Document(document) if document.web_contents() == contents)
                 {
                     if let Some(navigation) = &navigation {
-                        assert_eq!(occurrence.document.id(), navigation.request().document);
+                        assert_eq!(occurrence.owner, moli_core::browser::NetworkOwner::Document(moli_core::browser::DocumentHandle::new(contents, navigation.request().document)));
                     }
                     break;
                 }
