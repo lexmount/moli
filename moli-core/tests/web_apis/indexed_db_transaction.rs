@@ -1,4 +1,4 @@
-use super::pipe_disturbed::run_probe;
+use super::event_dispatch::run_probe;
 use super::*;
 
 #[tokio::test(flavor = "multi_thread")]
