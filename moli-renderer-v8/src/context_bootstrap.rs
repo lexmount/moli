@@ -441,6 +441,7 @@ pub(crate) use self::streams::{
     new_readable_stream_from_array_buffer, new_readable_stream_from_source,
     prepare_readable_stream_transfer, prepare_transform_stream_transfer,
     prepare_writable_stream_transfer,
+    proxy_fetch_body_stream, tee_fetch_body_stream,
 };
 #[cfg(test)]
 pub(crate) use self::trusted_types::trusted_types_lazy_state_materialized;

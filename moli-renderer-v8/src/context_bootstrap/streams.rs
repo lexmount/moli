@@ -4,13 +4,14 @@ use super::stream_adapter::{
     close_stream, enqueue_chunk, initialize_transform_stream_object,
     initialize_webidl_readable_stream_object, initialize_webidl_transform_stream_object,
     initialize_webidl_writable_stream_object, new_readable_stream_object,
-    parse_readable_stream_source_object, parse_stream_strategy_arg,
-    parse_transform_stream_transformer_object, parse_writable_stream_sink_object,
-    readable_stream_byob_request_respond_callback,
+    new_transform_stream_shell_object, parse_readable_stream_source_object,
+    parse_stream_strategy_arg, parse_transform_stream_transformer_object,
+    parse_writable_stream_sink_object, readable_stream_byob_request_respond_callback,
     readable_stream_byob_request_respond_with_new_view_callback,
     readable_stream_byob_request_view_getter, readable_stream_is_byte_stream,
-    readable_stream_locked, rejected_promise_value, set_resolved_promise, stream_slot_object,
-    writable_stream_close_internal, writable_stream_locked, writable_stream_snapshot,
+    readable_stream_locked, rejected_promise_value, set_resolved_promise, stream_slot_array,
+    stream_slot_object, suppress_promise_unhandled_rejection, writable_stream_close_internal,
+    writable_stream_locked, writable_stream_snapshot,
 };
 use super::stream_objects::{
     new_readable_stream_byob_reader_object, new_readable_stream_reader_object,
@@ -42,6 +43,29 @@ pub(crate) fn body_stream_reader_operations<'s>(
         v8::Function::new(scope, readable_stream_get_reader_callback)?,
         v8::Function::new(scope, readable_stream_reader_read_callback)?,
     ])
+}
+
+pub(crate) fn tee_fetch_body_stream<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    stream: v8::Local<'s, v8::Object>,
+) -> Option<v8::Local<'s, v8::Array>> {
+    super::stream_adapter::tee_readable_stream_with_cloned_branch(scope, stream).ok()
+}
+
+pub(crate) fn proxy_fetch_body_stream<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    stream: v8::Local<'s, v8::Object>,
+) -> Option<v8::Local<'s, v8::Object>> {
+    let transform = new_transform_stream_shell_object(scope);
+    initialize_transform_stream_object(scope, transform, None, None, 1.0, None, 0.0, None);
+    let readable = stream_slot_object(scope, transform, TRANSFORM_STREAM_READABLE_SLOT)?;
+    let writable = stream_slot_object(scope, transform, TRANSFORM_STREAM_WRITABLE_SLOT)?;
+    // A proxy disturbs its input immediately, even when backpressure delays
+    // the first source read.
+    super::stream_adapter::disturb_readable_stream(scope, stream);
+    let pipe = readable::start_internal_readable_stream_pipe_to(scope, stream, writable)?;
+    suppress_promise_unhandled_rejection(scope, pipe);
+    Some(readable)
 }
 
 #[derive(Clone, Copy)]

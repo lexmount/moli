@@ -146,7 +146,9 @@ pub(in crate::context_bootstrap::stream_adapter) use readable_state::{
     readable_stream_controller_algorithm_object, readable_stream_controller_algorithm_value,
     readable_stream_pull_state_has, readable_stream_snapshot, set_readable_stream_pull_state_bit,
 };
-pub(in crate::context_bootstrap) use tee::{TeeStartError, tee_readable_stream};
+pub(in crate::context_bootstrap) use tee::{
+    TeeStartError, tee_readable_stream, tee_readable_stream_with_cloned_branch,
+};
 pub(crate) use utils::require_internal_stream_value;
 pub(in crate::context_bootstrap) use utils::{
     StreamOwnerPublication, build_required_stream_callback, call_function_result,

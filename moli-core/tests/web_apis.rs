@@ -20,6 +20,8 @@ mod callback_cleanup;
 mod event_dispatch;
 #[path = "web_apis/request_init.rs"]
 mod request_init;
+#[path = "web_apis/request_stream.rs"]
+mod request_stream;
 
 fn diagnostic_global<'a>(
     page: &'a moli_core::page::Page,
