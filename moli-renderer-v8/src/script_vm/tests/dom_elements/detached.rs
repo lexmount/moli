@@ -3275,8 +3275,8 @@ fn detached_document_state_and_collections_use_document_prototype_accessors() {
   const htmlKeys = Object.keys(html).filter((name) => names.includes(name)).join(",");
 
   assert(html.currentScript === null, "html currentScript");
-  assert(html.hidden === false, "html hidden");
-  assert(html.visibilityState === "visible", "html visibility");
+  assert(html.hidden === true, "html hidden");
+  assert(html.visibilityState === "hidden", "html visibility");
   assert(html.prerendering === false, "html prerendering");
   assert(html.scrollingElement === html.documentElement, "html scrollingElement");
   assert(html.forms.length === 1, "html forms");
@@ -3288,9 +3288,11 @@ fn detached_document_state_and_collections_use_document_prototype_accessors() {
   assert(html.plugins.length === 1, "html plugins");
   assert(html.applets.length === 0, "html applets");
   assert(parsed.images.length === 1, "parsed images");
+  assert(parsed.hidden === true, "parsed hidden");
+  assert(parsed.visibilityState === "hidden", "parsed visibility");
   assert(xml.images === undefined, "xml images");
-  assert(xml.hidden === false, "xml hidden");
-  assert(xml.visibilityState === "visible", "xml visibility");
+  assert(xml.hidden === true, "xml hidden");
+  assert(xml.visibilityState === "hidden", "xml visibility");
 
   for (const name of names) {
     html[name];

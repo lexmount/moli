@@ -1108,11 +1108,14 @@ fn document_hidden_getter_function<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'s, v8::Value>,
 ) {
-    if document_receiver_runtime_and_handle(scope, args.this()).is_none() {
+    let Some((runtime_ptr, handle)) = document_receiver_runtime_and_handle(scope, args.this())
+    else {
         rv.set_undefined();
         return;
-    }
-    rv.set_bool(false);
+    };
+    rv.set_bool(
+        document_associated_window_for_object(scope, runtime_ptr, handle, args.this()).is_none(),
+    );
 }
 
 fn document_visibility_state_getter_function<'s>(
@@ -1120,11 +1123,19 @@ fn document_visibility_state_getter_function<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'s, v8::Value>,
 ) {
-    if document_receiver_runtime_and_handle(scope, args.this()).is_none() {
+    let Some((runtime_ptr, handle)) = document_receiver_runtime_and_handle(scope, args.this())
+    else {
         rv.set_undefined();
         return;
-    }
-    set_document_string_return_value(scope, &mut rv, "visible");
+    };
+    let state = if document_associated_window_for_object(scope, runtime_ptr, handle, args.this())
+        .is_some()
+    {
+        "visible"
+    } else {
+        "hidden"
+    };
+    set_document_string_return_value(scope, &mut rv, state);
 }
 
 fn document_prerendering_getter_function<'s>(
@@ -1316,22 +1327,33 @@ fn document_default_view_getter_function<'s>(
         rv.set_null();
         return;
     };
+    match document_associated_window_for_object(scope, runtime_ptr, handle, args.this()) {
+        Some(window) => rv.set(window.into()),
+        None => rv.set_null(),
+    }
+}
+
+fn document_associated_window_for_object<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    runtime_ptr: *mut JsContextHost,
+    handle: DomHandle,
+    document: v8::Local<'s, v8::Object>,
+) -> Option<v8::Local<'s, v8::Object>> {
     let runtime = unsafe { &*runtime_ptr };
     if !node_is_document(runtime, handle) {
-        rv.set_null();
-        return;
+        return None;
     }
-    if let Some(window) = get_private_value(scope, args.this(), DOCUMENT_ASSOCIATED_WINDOW_SLOT)
-        && !window.is_null_or_undefined()
+    if let Some(window) = get_private_value(scope, document, DOCUMENT_ASSOCIATED_WINDOW_SLOT)
+        .and_then(|value| v8::Local::<v8::Object>::try_from(value).ok())
     {
-        rv.set(window);
-        return;
+        return Some(window);
     }
     if runtime.dom_host().document_handle() != handle {
-        rv.set_null();
-        return;
+        return None;
     }
-    rv.set(scope.get_current_context().global(scope).into());
+    document
+        .get_creation_context(scope)
+        .map(|context| context.global(scope))
 }
 
 pub(in crate::native_bridge) fn set_document_associated_window<'s>(

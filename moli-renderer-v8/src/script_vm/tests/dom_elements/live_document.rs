@@ -908,8 +908,8 @@ fn document_state_and_collection_accessors_live_on_document_prototype() {
               const xml = document.implementation.createDocument("urn:test", "root", null);
               assert(!own(xml, "images"), "xml images should not be own");
               assert(xml.images === undefined, "xml images value");
-              assert(xml.hidden === false, "xml hidden value");
-              assert(xml.visibilityState === "visible", "xml visibility value");
+              assert(xml.hidden === true, "xml hidden value");
+              assert(xml.visibilityState === "hidden", "xml visibility value");
 
               return [
                 Object.prototype.toString.call(fonts),
