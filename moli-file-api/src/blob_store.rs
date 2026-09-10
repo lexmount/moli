@@ -205,8 +205,9 @@ where
         true
     }
 
-    /// Return object URL bytes and MIME type.
+    /// Return object URL bytes and MIME type, excluding its fragment.
     pub fn object_url_bytes_and_type(&self, url: &str) -> Option<(Vec<u8>, String)> {
+        let url = url.split_once('#').map_or(url, |(url, _)| url);
         let blob_id = self
             .object_urls
             .lock()
@@ -379,6 +380,46 @@ mod tests {
 
         assert!(store.revoke_object_url(&other_url));
         assert!(store.blob_bytes(blob_id).is_none());
+    }
+
+    #[test]
+    fn object_url_lookup_ignores_fragment_but_revocation_requires_exact_url() {
+        let store = BlobStore::<u64, u64>::default();
+        let blob = store.create_blob(Some(1), None, b"hello".to_vec(), "text/plain".to_owned());
+        let url = store
+            .create_object_url(Some(1), blob, "https://example.test")
+            .expect("object URL");
+        store.release_blob_wrapper_ref(blob);
+
+        for suffix in ["", "#", "#fragment", "#fragment#tail"] {
+            assert_eq!(
+                store.object_url_bytes_and_type(&format!("{url}{suffix}")),
+                Some((b"hello".to_vec(), "text/plain".to_owned())),
+                "lookup should ignore the fragment: {suffix}"
+            );
+        }
+        for suffix in ["?query", "?query#fragment", "/path", "%23fragment"] {
+            assert!(
+                store
+                    .object_url_bytes_and_type(&format!("{url}{suffix}"))
+                    .is_none(),
+                "lookup must preserve the non-fragment suffix: {suffix}"
+            );
+        }
+        assert!(!store.revoke_object_url(&format!("{url}#fragment")));
+        assert!(!store.revoke_object_url(&format!("{url}#")));
+        assert_eq!(
+            store.object_url_body_and_type(&format!("{url}#fragment")),
+            Some(("hello".to_owned(), "text/plain".to_owned()))
+        );
+
+        assert!(store.revoke_object_url(&url));
+        assert!(
+            store
+                .object_url_bytes_and_type(&format!("{url}#fragment"))
+                .is_none()
+        );
+        assert!(store.blob_bytes(blob).is_none());
     }
 
     #[test]
