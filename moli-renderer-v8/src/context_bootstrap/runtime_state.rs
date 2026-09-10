@@ -33,7 +33,6 @@ use crate::{
             set_document_cookie_for_receiver,
         },
     },
-    network_host,
     util::{
         callback_data_index_value, callback_data_item, context_host_ptr_from_global_bridge,
         create_script_origin_with_base_url, get_private_value, script_base_url_continuation_data,
@@ -2203,7 +2202,6 @@ fn install_window_runtime_state<'s>(
     install_default_window_performance_seed(scope, global)?;
     install_chrome_runtime_state(scope, global)?;
     install_storage_runtime_state(scope, global)?;
-    network_host::initialize_fetch_realm_helpers(scope)?;
     install_public_window_surface_accessors(scope, global)?;
 
     Ok(())
