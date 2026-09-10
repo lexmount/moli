@@ -2,7 +2,7 @@ use crate::web_api_interfaces;
 use std::collections::{HashMap, HashSet};
 
 use super::super::document_runtime::EventTargetHandle;
-use super::super::util::{get_private_value, set_private_value, v8_string, v8str};
+use super::super::util::{get_private_value, set_private_value, v8str};
 use crate::context_bootstrap::{MessagePortEventListenerId, new_dom_exception_value};
 use crate::types::MessagePortId;
 use moli_webapi_declare::WebApiObject;
@@ -149,19 +149,6 @@ impl AbortStore {
             .and_then(|value| value.number_value(scope))
             .filter(|value| value.is_finite() && *value >= 1.0)
             .map(|value| value as u32)
-    }
-
-    fn define_hidden_value(
-        scope: &mut v8::PinScope<'_, '_>,
-        object: v8::Local<'_, v8::Object>,
-        key: &str,
-        value: v8::Local<'_, v8::Value>,
-    ) {
-        let Some(key) = v8_string(scope, key) else {
-            return;
-        };
-        let _ =
-            object.define_own_property(scope, key.into(), value, v8::PropertyAttribute::DONT_ENUM);
     }
 
     fn init_signal(
