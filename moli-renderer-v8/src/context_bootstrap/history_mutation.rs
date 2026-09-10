@@ -195,6 +195,7 @@ fn mutate_history_object<'s>(
             let next_navigation_index = current_navigation_index + 1;
             let entry = create_navigation_entry(
                 scope,
+                owner,
                 url.as_str(),
                 None,
                 next_navigation_index,
@@ -214,6 +215,7 @@ fn mutate_history_object<'s>(
                 .unwrap_or_else(|| new_navigation_entry_key().as_str().to_owned());
             let entry = create_navigation_entry(
                 scope,
+                owner,
                 url.as_str(),
                 None,
                 current_navigation_index,
