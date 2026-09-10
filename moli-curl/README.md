@@ -1,4 +1,27 @@
-# Native WebSocket owner diagnostics
+# Native HTTP and WebSocket runtime
+
+## Module boundaries
+
+| Module | Responsibility |
+| --- | --- |
+| `runtime.rs`, `runtime/owner.rs` | Runtime ownership and the single native thread: submit handling, shutdown, `perform`, completion dispatch and `poll` |
+| `http.rs`, `http/registry.rs`, `http/scheduling.rs` | HTTP request capability, priority/origin admission, DNS/deadlines and transfer completion |
+| `websocket/connector.rs`, `websocket/connection.rs` | WebSocket submission capability and the caller/owner I/O endpoints, including independent send completion |
+| `websocket/registry.rs`, `websocket/session.rs` | Resident native connections, handshake and frame I/O |
+| `websocket/readiness.rs` | I/O admission, extra socket interests and applying the shared poll's readiness results |
+| `websocket/standalone.rs` | Convenience owner using the same runtime for standalone callers |
+| `dns_adapter.rs`, `tls.rs` | Shared DNS and TLS configuration |
+
+The owner dispatches to concrete HTTP and WebSocket registries. HTTP completion
+removes a transfer; WebSocket handshake completion keeps its handle resident.
+Both registries preserve the easy handle's error details when interpreting
+`CURLMSG_DONE`. Only `runtime/owner.rs` calls `perform`, `messages` and `poll`.
+Read that file first when investigating scheduling or thread shutdown.
+
+Public exports remain at `moli_curl::*` for HTTP/runtime and
+`moli_curl::websocket::*` for WebSocket. Neither protocol's request capability
+owns the native thread. Shared owner counters live in `runtime/diagnostics.rs`;
+the diagnostics switch and log fields below remain compatible.
 
 `moli-curl` owns native connections and frame I/O. Browser message assembly,
 UTF-8 checks, command admission and the close handshake live in `moli-websocket`.

@@ -1,23 +1,24 @@
 //! Persistent WebSocket residences on the common HTTP/WebSocket Multi.
 //! The runtime owns perform, completion dispatch and the single wait loop.
 
-use std::{
-    collections::HashMap,
-    rc::Rc,
-    time::{Duration, Instant},
-};
+use std::{collections::HashMap, rc::Rc, time::Instant};
 
-use curl::{easy::Easy2, multi::Multi};
+use curl::{
+    easy::Easy2,
+    multi::{Multi, WaitFd},
+};
 
 use super::{
     SessionIo, Submission,
     connection_pool::ConnectionPool,
-    diagnostics::Diagnostics,
+    readiness::SocketReadiness,
     request::{self, Handshake},
-    scheduling::SocketPoll,
     session::{Session, Step},
 };
-use crate::{CurlDnsResolution, CurlTransferId, dns_adapter::CurlDnsOwnerResidence};
+use crate::{
+    CurlDnsResolution, CurlTransferId, dns_adapter::CurlDnsOwnerResidence,
+    runtime::diagnostics::Diagnostics,
+};
 
 struct Pending {
     id: CurlTransferId,
@@ -31,9 +32,8 @@ pub(crate) struct WebSocketRegistry {
     submissions: crossbeam_channel::Receiver<Submission>,
     sessions: HashMap<CurlTransferId, Session>,
     dns: CurlDnsOwnerResidence<CurlTransferId, Pending>,
-    poll: SocketPoll,
+    readiness: SocketReadiness,
     receive: Vec<u8>,
-    diagnostics: Diagnostics,
     pool: Option<Rc<ConnectionPool>>,
     closed: bool,
 }
@@ -44,9 +44,8 @@ impl WebSocketRegistry {
             submissions,
             sessions: HashMap::new(),
             dns: CurlDnsOwnerResidence::default(),
-            poll: SocketPoll::default(),
+            readiness: SocketReadiness::default(),
             receive: Vec::new(),
-            diagnostics: Diagnostics::from_env(),
             pool: None,
             closed: false,
         }
@@ -76,7 +75,6 @@ impl WebSocketRegistry {
                 .io
                 .finish(Err("curl WebSocket runtime shut down".to_owned()));
         }
-        self.diagnostics.report(0, true);
     }
 
     pub(crate) fn admit(&mut self, submission: Submission, multi: &mut Multi) {
@@ -188,7 +186,7 @@ impl WebSocketRegistry {
         self.sessions.get(&id)?.handshake_result(message)
     }
 
-    pub(crate) fn advance(&mut self, multi: &mut Multi) -> bool {
+    pub(crate) fn advance(&mut self, multi: &mut Multi, diagnostics: &mut Diagnostics) -> bool {
         for _ in 0..super::SESSION_CAPACITY {
             let Ok(submission) = self.submissions.try_recv() else {
                 break;
@@ -199,7 +197,7 @@ impl WebSocketRegistry {
         let mut retired = Vec::new();
         let mut progressed = false;
         for (id, session) in &mut self.sessions {
-            match session.advance(&mut self.receive, &mut self.diagnostics) {
+            match session.advance(&mut self.receive, diagnostics) {
                 Ok(Step::Progress) => progressed = true,
                 Ok(Step::Idle) => {}
                 terminal => retired.push((*id, terminal)),
@@ -207,10 +205,6 @@ impl WebSocketRegistry {
         }
         for (id, step) in retired {
             self.apply_step(id, step, multi);
-        }
-        if let Some(counters) = self.diagnostics.counters() {
-            counters.turns += 1;
-            counters.progressed_turns += u64::from(progressed);
         }
         progressed
     }
@@ -234,17 +228,16 @@ impl WebSocketRegistry {
             .min()
     }
 
-    pub(crate) fn wait(&mut self, multi: &mut Multi, timeout: Duration, progressed: bool) {
-        if let Err(error) = self.poll.wait(
-            multi,
-            &mut self.sessions,
-            timeout,
-            progressed,
-            &mut self.diagnostics,
-        ) {
-            self.fail_sessions(multi, &error.to_string());
-        }
-        self.diagnostics.report(self.sessions.len(), false);
+    pub(crate) fn session_count(&self) -> usize {
+        self.sessions.len()
+    }
+
+    pub(crate) fn poll_fds(&mut self) -> &mut [WaitFd] {
+        self.readiness.prepare(&self.sessions)
+    }
+
+    pub(crate) fn apply_readiness(&mut self) {
+        self.readiness.dispatch(&mut self.sessions);
     }
 
     pub(crate) fn fail_sessions(&mut self, multi: &mut Multi, error: &str) {

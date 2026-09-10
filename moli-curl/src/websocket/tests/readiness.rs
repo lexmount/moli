@@ -84,7 +84,7 @@ async fn native_socket_readiness_is_serviced_during_continuous_traffic() {
         .unwrap();
     opened(&mut quiet).await;
     quiet.sender().set_reading(true);
-    timeout(DEADLINE, quiet.sender.control.read_waiting.notified())
+    timeout(DEADLINE, quiet.sender().control.read_waiting.notified())
         .await
         .unwrap();
     let mut active = runtime.connect(CurlWebSocketRequest::new(url)).unwrap();
@@ -181,9 +181,12 @@ async fn native_peer_eof_wakes_waiting_reader() {
     let mut connection = runtime.connect(CurlWebSocketRequest::new(url)).unwrap();
     opened(&mut connection).await;
     connection.sender().set_reading(true);
-    timeout(DEADLINE, connection.sender.control.read_waiting.notified())
-        .await
-        .unwrap();
+    timeout(
+        DEADLINE,
+        connection.sender().control.read_waiting.notified(),
+    )
+    .await
+    .unwrap();
     finish_tx.send(()).unwrap();
     assert!(matches!(
         event(&mut connection).await,

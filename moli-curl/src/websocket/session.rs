@@ -8,9 +8,9 @@ use curl::{
     multi::{Easy2Handle, Multi, WaitFd},
 };
 
-use super::diagnostics::Diagnostics;
-use super::{CurlWebSocketEvent, SessionIo, WsFlags, request::Handshake, scheduling::IoState};
+use super::{CurlWebSocketEvent, SessionIo, WsFlags, readiness::IoState, request::Handshake};
 use crate::CurlTransferId;
+use crate::runtime::diagnostics::Diagnostics;
 
 const CHUNK_BYTES: usize = 16 * 1024;
 const IO_BUDGET: usize = 8;

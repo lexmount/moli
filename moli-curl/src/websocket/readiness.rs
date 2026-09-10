@@ -2,11 +2,11 @@
 //! work/capacity; WaitingForSocket I/O has already returned AGAIN. A successful
 //! operation stays Runnable so libcurl's buffered data can be drained as well.
 
-use std::{collections::HashMap, time::Duration};
+use std::collections::HashMap;
 
-use curl::multi::{Multi, WaitFd};
+use curl::multi::WaitFd;
 
-use super::{diagnostics::Diagnostics, session::Session};
+use super::session::Session;
 use crate::CurlTransferId;
 
 #[derive(Default, PartialEq, Eq)]
@@ -47,22 +47,15 @@ impl IoState {
 }
 
 /// Keeps each extra fd paired with its session across curl_multi_poll.
-/// libcurl also polls opening handshakes and the cross-thread waker here.
+/// The runtime polls these alongside HTTP/handshake sockets and curl's waker.
 #[derive(Default)]
-pub(super) struct SocketPoll {
+pub(super) struct SocketReadiness {
     ids: Vec<CurlTransferId>,
     fds: Vec<WaitFd>,
 }
 
-impl SocketPoll {
-    pub(super) fn wait(
-        &mut self,
-        multi: &Multi,
-        sessions: &mut HashMap<CurlTransferId, Session>,
-        timeout: Duration,
-        progressed: bool,
-        diagnostics: &mut Diagnostics,
-    ) -> Result<(), curl::MultiError> {
+impl SocketReadiness {
+    pub(super) fn prepare(&mut self, sessions: &HashMap<CurlTransferId, Session>) -> &mut [WaitFd] {
         self.ids.clear();
         self.fds.clear();
         for (id, session) in sessions.iter() {
@@ -71,10 +64,10 @@ impl SocketPoll {
                 self.fds.push(fd);
             }
         }
-        let started = diagnostics.poll_start();
-        let result = multi.poll(&mut self.fds, timeout);
-        diagnostics.polled(started, timeout, progressed);
-        result?;
+        &mut self.fds
+    }
+
+    pub(super) fn dispatch(&self, sessions: &mut HashMap<CurlTransferId, Session>) {
         for (id, fd) in self.ids.iter().zip(&self.fds) {
             if fd.received_read() || fd.received_write() {
                 // A socket event permits a retry, not guaranteed progress.
@@ -86,6 +79,5 @@ impl SocketPoll {
                     .socket_ready();
             }
         }
-        Ok(())
     }
 }

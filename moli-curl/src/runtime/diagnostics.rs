@@ -3,7 +3,7 @@
 use std::time::{Duration, Instant};
 
 #[derive(Default, Debug)]
-pub(super) struct Counters {
+pub(crate) struct Counters {
     pub turns: u64,
     pub progressed_turns: u64,
     pub read_bytes: u64,
@@ -47,10 +47,10 @@ struct Window {
     counters: Counters,
 }
 
-pub(super) struct Diagnostics(Option<Window>);
+pub(crate) struct Diagnostics(Option<Window>);
 
 impl Diagnostics {
-    pub(super) fn from_env() -> Self {
+    pub(crate) fn from_env() -> Self {
         Self::new(
             std::env::var("MOLI_CURL_WEBSOCKET_DIAGNOSTICS").is_ok_and(|value| {
                 let value = value.trim();
@@ -66,15 +66,15 @@ impl Diagnostics {
         }))
     }
 
-    pub(super) fn counters(&mut self) -> Option<&mut Counters> {
+    pub(crate) fn counters(&mut self) -> Option<&mut Counters> {
         self.0.as_mut().map(|window| &mut window.counters)
     }
 
-    pub(super) fn poll_start(&self) -> Option<Instant> {
+    pub(crate) fn poll_start(&self) -> Option<Instant> {
         self.0.as_ref().map(|_| Instant::now())
     }
 
-    pub(super) fn polled(&mut self, start: Option<Instant>, timeout: Duration, progressed: bool) {
+    pub(crate) fn polled(&mut self, start: Option<Instant>, timeout: Duration, progressed: bool) {
         if let Some(start) = start {
             self.0
                 .as_mut()
@@ -84,7 +84,7 @@ impl Diagnostics {
         }
     }
 
-    pub(super) fn report(&mut self, sessions: usize, finished: bool) {
+    pub(crate) fn report(&mut self, sessions: usize, finished: bool) {
         let Some(window) = &mut self.0 else {
             return;
         };

@@ -3,7 +3,7 @@ use std::num::NonZeroUsize;
 use curl::easy::{Easy2, Handler, WriteError};
 
 use super::*;
-use crate::{CurlMultiJob, CurlOriginKey};
+use crate::{CurlMultiJob, CurlMultiRuntime, CurlMultiRuntimeConfig, CurlOriginKey};
 
 #[derive(Default, Debug)]
 struct HttpCapture {
@@ -149,7 +149,7 @@ async fn shared_owner_keeps_http_and_websocket_pools_independent() {
         assert_eq!(easy.get_ref().body, b"ok");
         for mut connection in connections {
             assert_eq!(
-                *connection.sender.control.owner_thread.lock(),
+                *connection.sender().control.owner_thread.lock(),
                 easy.get_ref().owner
             );
             connection.sender().set_reading(true);

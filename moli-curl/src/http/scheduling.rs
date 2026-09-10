@@ -1,3 +1,5 @@
+//! Priority ordering, per-origin admission and ordered HTTP completions.
+
 use std::{
     collections::{HashMap, VecDeque},
     hash::Hash,
@@ -7,37 +9,7 @@ use std::{
 
 use curl::{easy::Handler, multi::Easy2Handle};
 
-use crate::dns_adapter::CurlDnsOwnerResidence;
-
 use super::{CurlMultiJob, CurlOriginKey, CurlTransferId};
-
-pub(super) struct CurlOwnerState<H: Handler, C> {
-    pub(super) closed: bool,
-    pub(super) pending: VecDeque<CurlPendingJob<H, C>>,
-    pub(super) dns: CurlDnsOwnerResidence<CurlTransferId, CurlPendingJob<H, C>>,
-    pub(super) active: HashMap<CurlTransferId, CurlActiveTransfer<H, C>>,
-}
-
-impl<H: Handler, C> Default for CurlOwnerState<H, C> {
-    fn default() -> Self {
-        Self {
-            closed: false,
-            pending: VecDeque::new(),
-            dns: CurlDnsOwnerResidence::default(),
-            active: HashMap::new(),
-        }
-    }
-}
-
-impl<H: Handler, C> CurlOwnerState<H, C> {
-    pub(super) fn next_waiting_deadline(&self) -> Option<Instant> {
-        self.pending
-            .iter()
-            .filter_map(|pending| pending.job.deadline)
-            .chain(self.dns.next_deadline(|pending| pending.job.deadline))
-            .min()
-    }
-}
 
 pub(super) struct CurlActiveTransfer<H: Handler, C> {
     pub(super) handle: Easy2Handle<H>,
@@ -109,11 +81,11 @@ pub(super) fn enqueue_existing_pending_job<H: Handler, C>(
 
 pub(super) fn job_is_eligible<H: Handler, C>(
     origin: Option<&CurlOriginKey>,
-    state: &CurlOwnerState<H, C>,
+    active: &HashMap<CurlTransferId, CurlActiveTransfer<H, C>>,
     max_active_per_host: Option<NonZeroUsize>,
 ) -> bool {
     match (origin, max_active_per_host) {
-        (Some(origin), Some(limit)) => active_origin_count(&state.active, origin) < limit.get(),
+        (Some(origin), Some(limit)) => active_origin_count(active, origin) < limit.get(),
         _ => true,
     }
 }
@@ -273,28 +245,6 @@ mod tests {
     }
 
     #[test]
-    fn active_transfer_wait_is_capped_by_the_earliest_queued_deadline() {
-        let now = Instant::now();
-        let later = now + Duration::from_secs(2);
-        let earlier = now + Duration::from_secs(1);
-        let mut later_job = test_job("later", 1, None);
-        later_job.deadline = Some(later);
-        let mut earlier_job = test_job("earlier", 1, None);
-        earlier_job.deadline = Some(earlier);
-        let mut pending = VecDeque::new();
-        enqueue_pending_job(&mut pending, test_transfer_id(1), later_job);
-        enqueue_pending_job(&mut pending, test_transfer_id(2), earlier_job);
-        let state = CurlOwnerState {
-            closed: false,
-            pending,
-            dns: CurlDnsOwnerResidence::default(),
-            active: HashMap::new(),
-        };
-
-        assert_eq!(state.next_waiting_deadline(), Some(earlier));
-    }
-
-    #[test]
     fn completed_jobs_preserve_libcurl_notification_order() {
         let mut active = HashMap::from([
             (test_transfer_id(1), "first"),
@@ -354,15 +304,10 @@ mod tests {
             started_at: Instant::now(),
             queued_for: Duration::ZERO,
         };
-        let state = CurlOwnerState {
-            closed: false,
-            pending: VecDeque::new(),
-            dns: CurlDnsOwnerResidence::default(),
-            active: HashMap::from([(test_transfer_id(1), active)]),
-        };
+        let active = HashMap::from([(test_transfer_id(1), active)]);
         let cap = NonZeroUsize::new(1);
 
-        assert!(!job_is_eligible(Some(&capped_origin), &state, cap));
-        assert!(job_is_eligible(Some(&other_origin), &state, cap));
+        assert!(!job_is_eligible(Some(&capped_origin), &active, cap));
+        assert!(job_is_eligible(Some(&other_origin), &active, cap));
     }
 }

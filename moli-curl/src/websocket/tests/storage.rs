@@ -18,9 +18,12 @@ async fn native_receive_storage_is_shared_across_idle_probes_and_transferred_to_
         let mut connection = runtime.connect(CurlWebSocketRequest::new(url)).unwrap();
         opened(&mut connection).await;
         connection.sender().set_reading(true);
-        timeout(DEADLINE, connection.sender.control.read_waiting.notified())
-            .await
-            .unwrap();
+        timeout(
+            DEADLINE,
+            connection.sender().control.read_waiting.notified(),
+        )
+        .await
+        .unwrap();
         connections.push(connection);
         peers.push(peer);
         writers.push(write);
@@ -30,7 +33,7 @@ async fn native_receive_storage_is_shared_across_idle_probes_and_transferred_to_
             .iter()
             .map(|connection| {
                 connection
-                    .sender
+                    .sender()
                     .control
                     .receive_allocations
                     .load(Ordering::Acquire)
@@ -53,7 +56,7 @@ async fn native_receive_storage_is_shared_across_idle_probes_and_transferred_to_
         retained.push(data);
         timeout(
             DEADLINE,
-            connections[index].sender.control.read_waiting.notified(),
+            connections[index].sender().control.read_waiting.notified(),
         )
         .await
         .unwrap();

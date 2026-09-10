@@ -1,10 +1,11 @@
 use std::{
     io::{Read, Write},
     net::{TcpListener, TcpStream},
+    sync::{Arc, atomic::Ordering},
     thread,
 };
 
-use tokio::time::timeout;
+use tokio::{sync::oneshot, time::timeout};
 use tokio_tungstenite::tungstenite::{self, Message, handshake::derive_accept_key};
 
 use super::*;
@@ -324,7 +325,7 @@ async fn native_full_delivery_queue_does_not_block_other_sessions_or_cancellatio
     let mut blocked = runtime.connect(CurlWebSocketRequest::new(url)).unwrap();
     opened(&mut blocked).await;
     blocked.sender().set_reading(true);
-    timeout(DEADLINE, blocked.sender.control.read_blocked.notified())
+    timeout(DEADLINE, blocked.sender().control.read_blocked.notified())
         .await
         .unwrap();
     assert_eq!(blocked.events.len(), MAX_PENDING_EVENTS);
@@ -359,9 +360,12 @@ async fn native_queue_capacity_restoration_wakes_owner() {
     let mut connection = runtime.connect(CurlWebSocketRequest::new(url)).unwrap();
     opened(&mut connection).await;
     connection.sender().set_reading(true);
-    timeout(DEADLINE, connection.sender.control.read_blocked.notified())
-        .await
-        .unwrap();
+    timeout(
+        DEADLINE,
+        connection.sender().control.read_blocked.notified(),
+    )
+    .await
+    .unwrap();
     for expected in 0..32 {
         assert!(
             matches!(event(&mut connection).await, CurlWebSocketEvent::Chunk { data, .. } if data == [expected])

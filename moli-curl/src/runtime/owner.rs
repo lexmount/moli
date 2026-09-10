@@ -1,62 +1,55 @@
+//! One native owner drives both protocols. Registries own their easy handles;
+//! only this loop performs curl work, drains CURLMSG_DONE and waits for readiness.
+
 use std::{
-    num::NonZeroUsize,
     sync::{
-        Arc, OnceLock,
+        Arc,
         atomic::{AtomicBool, Ordering},
     },
     time::{Duration, Instant},
 };
 
-use anyhow::{Context, Result, anyhow};
-use crossbeam_channel::{self, Receiver, Sender};
+use crossbeam_channel::{Receiver, Sender};
 use curl::{
     easy::Handler,
     multi::{Multi, MultiWaker},
 };
 use tracing::debug;
 
-use crate::dns_adapter::{CurlDnsOwnerCompletion, CurlDnsReady};
-use crate::websocket::{Submission, registry::WebSocketRegistry};
-
 use super::{
-    CurlMultiCompletion, CurlMultiJob, CurlMultiRuntimeConfig, CurlTransferId,
+    CurlMultiRuntimeConfig, CurlRuntimeCommand,
     config::{make_runtime_multi, runtime_wait_timeout},
-    residence::{
-        CurlActiveTransfer, CurlOwnerState, CurlPendingJob, active_origin_count,
-        enqueue_existing_pending_job, enqueue_pending_job, job_is_eligible, pending_origin_count,
-        take_expired_pending_jobs, take_transfers_in_notification_order,
-    },
+    diagnostics::Diagnostics,
+};
+use crate::{
+    CurlMultiCompletion, CurlTransferId,
+    dns_adapter::CurlDnsOwnerCompletion,
+    http::registry::HttpRegistry,
+    websocket::{Submission, registry::WebSocketRegistry},
 };
 
-#[derive(Debug)]
-pub(super) enum CurlRuntimeCommand<H: Handler, C> {
-    Request {
-        transfer_id: CurlTransferId,
-        job: CurlMultiJob<H, C>,
-    },
-    Shutdown,
-}
-
 enum CurlOwnerEvent<H: Handler, C> {
-    Command(std::result::Result<CurlRuntimeCommand<H, C>, crossbeam_channel::RecvError>),
-    Dns(std::result::Result<CurlDnsOwnerCompletion<CurlTransferId>, crossbeam_channel::RecvError>),
-    WebSocket(std::result::Result<Submission, crossbeam_channel::RecvError>),
+    Command(Result<CurlRuntimeCommand<H, C>, crossbeam_channel::RecvError>),
+    Dns(Result<CurlDnsOwnerCompletion<CurlTransferId>, crossbeam_channel::RecvError>),
+    WebSocket(Result<Submission, crossbeam_channel::RecvError>),
     Deadline,
 }
 
-pub(super) struct CurlRuntimeOwner<H: Handler + Send + 'static, C: Send + 'static> {
-    config: CurlMultiRuntimeConfig,
+pub(super) struct CurlRuntimeOwner<H: Handler, C> {
     command_rx: Receiver<CurlRuntimeCommand<H, C>>,
-    completion_tx: Sender<CurlMultiCompletion<H, C>>,
-    waker_tx: Sender<MultiWaker>,
     shutdown_requested: Arc<AtomicBool>,
-    websocket_rx: Receiver<Submission>,
-    #[cfg(test)]
-    owner_started: Arc<AtomicBool>,
+    closed: bool,
+    poll_interval: Duration,
+    diagnostics: Diagnostics,
+    http: HttpRegistry<H, C>,
+    websockets: WebSocketRegistry,
+    // Drop the registries' easy handles before their Multi, including on unwind.
+    multi: Multi,
 }
 
-impl<H: Handler + Send + 'static, C: Send + 'static> CurlRuntimeOwner<H, C> {
-    pub(super) fn new(
+impl<H: Handler, C> CurlRuntimeOwner<H, C> {
+    /// Construct all native state on its owner thread, including the WS cache.
+    pub(super) fn run(
         config: CurlMultiRuntimeConfig,
         command_rx: Receiver<CurlRuntimeCommand<H, C>>,
         completion_tx: Sender<CurlMultiCompletion<H, C>>,
@@ -64,640 +57,176 @@ impl<H: Handler + Send + 'static, C: Send + 'static> CurlRuntimeOwner<H, C> {
         shutdown_requested: Arc<AtomicBool>,
         websocket_rx: Receiver<Submission>,
         #[cfg(test)] owner_started: Arc<AtomicBool>,
-    ) -> Self {
-        Self {
-            config,
-            command_rx,
-            completion_tx,
-            waker_tx,
-            shutdown_requested,
-            websocket_rx,
-            #[cfg(test)]
-            owner_started,
-        }
-    }
-
-    pub(super) fn thread_name(&self) -> &str {
-        &self.config.thread_name
-    }
-
-    pub(super) fn run(self) {
+    ) {
         #[cfg(test)]
-        self.owner_started.store(true, Ordering::SeqCst);
-        let mut multi = make_runtime_multi(&self.config);
-        let _ = self.waker_tx.send(multi.waker());
-        let mut state = CurlOwnerState::default();
-        let mut websockets = WebSocketRegistry::new(self.websocket_rx.clone());
+        owner_started.store(true, Ordering::SeqCst);
+        let multi = make_runtime_multi(&config);
+        let _ = waker_tx.send(multi.waker());
+        let mut owner = Self {
+            command_rx,
+            shutdown_requested,
+            closed: false,
+            poll_interval: config.poll_interval,
+            diagnostics: Diagnostics::from_env(),
+            http: HttpRegistry::new(config, completion_tx),
+            websockets: WebSocketRegistry::new(websocket_rx),
+            multi,
+        };
+        owner.drive();
+    }
 
+    fn drive(&mut self) {
         loop {
-            self.drain_commands(&mut state, &mut multi);
-            if state.closed {
-                websockets.shutdown(&mut multi);
+            self.drain_commands();
+            self.http.advance(&mut self.multi);
+            self.process_completed_transfers();
+            let progressed = self
+                .websockets
+                .advance(&mut self.multi, &mut self.diagnostics);
+            if let Some(counters) = self.diagnostics.counters() {
+                counters.turns += 1;
+                counters.progressed_turns += u64::from(progressed);
             }
-            self.drain_dns_completions(&mut state);
-            self.expire_waiting_jobs(&mut state);
-            self.start_eligible_jobs(&mut state, &mut multi);
-            self.process_completed_transfers(&mut state, &mut multi, &mut websockets);
-            let progressed = websockets.advance(&mut multi);
 
-            if state.closed
-                && state.pending.is_empty()
-                && state.dns.is_empty()
-                && state.active.is_empty()
-                && self.command_rx.is_empty()
-            {
+            // close() retires both registries. Drain racing HTTP submissions so
+            // every accepted job still receives its terminal completion.
+            if self.closed && self.command_rx.is_empty() {
+                self.diagnostics.report(0, true);
                 return;
             }
 
             let runnable = progressed || !self.command_rx.is_empty();
-            if !runnable
-                && state.active.is_empty()
-                && state.pending.is_empty()
-                && websockets.is_empty()
-            {
-                self.wait_for_next_owner_event(&mut state, &mut multi, &mut websockets);
+            if !runnable && !self.http.has_curl_work() && self.websockets.is_empty() {
+                self.wait_for_next_owner_event();
             } else {
-                self.wait_for_curl_progress(&mut multi, &state, &mut websockets, runnable);
+                self.wait_for_curl_progress(runnable);
             }
         }
     }
 
-    fn drain_commands(&self, state: &mut CurlOwnerState<H, C>, multi: &mut Multi) {
+    fn drain_commands(&mut self) {
         // Continuous HTTP submissions must not starve native I/O or WebSockets.
         for _ in 0..256 {
             match self.command_rx.try_recv() {
-                Ok(command) => self.handle_command(state, multi, command),
+                Ok(command) => self.handle_command(command),
                 Err(crossbeam_channel::TryRecvError::Empty) => break,
                 Err(crossbeam_channel::TryRecvError::Disconnected) => {
-                    self.close(state, multi);
+                    self.close();
                     break;
                 }
             }
         }
     }
 
-    fn wait_for_next_owner_event(
-        &self,
-        state: &mut CurlOwnerState<H, C>,
-        multi: &mut Multi,
-        websockets: &mut WebSocketRegistry,
-    ) {
-        if state.closed {
+    fn handle_command(&mut self, command: CurlRuntimeCommand<H, C>) {
+        match command {
+            CurlRuntimeCommand::Request { transfer_id, job } => self.http.admit(transfer_id, job),
+            CurlRuntimeCommand::Shutdown => self.close(),
+        }
+    }
+
+    fn close(&mut self) {
+        if self.closed {
             return;
         }
-        let event = if let Some(deadline) = state.dns.next_deadline(|pending| pending.job.deadline)
-        {
+        self.closed = true;
+        self.shutdown_requested.store(true, Ordering::SeqCst);
+        self.http.shutdown(&mut self.multi);
+        self.websockets.shutdown(&mut self.multi);
+    }
+
+    fn wait_for_next_owner_event(&mut self) {
+        if self.closed {
+            return;
+        }
+        let event = if let Some(deadline) = self.http.next_deadline() {
             let deadline_rx =
                 crossbeam_channel::after(deadline.saturating_duration_since(Instant::now()));
             crossbeam_channel::select! {
                 recv(self.command_rx) -> command => CurlOwnerEvent::Command(command),
-                recv(websockets.submissions()) -> submission => CurlOwnerEvent::WebSocket(submission),
-                recv(state.dns.completion_receiver()) -> completion => CurlOwnerEvent::Dns(completion),
+                recv(self.websockets.submissions()) -> submission => CurlOwnerEvent::WebSocket(submission),
+                recv(self.http.dns_completions()) -> completion => CurlOwnerEvent::Dns(completion),
                 recv(deadline_rx) -> _ => CurlOwnerEvent::Deadline,
             }
         } else {
             crossbeam_channel::select! {
                 recv(self.command_rx) -> command => CurlOwnerEvent::Command(command),
-                recv(websockets.submissions()) -> submission => CurlOwnerEvent::WebSocket(submission),
-                recv(state.dns.completion_receiver()) -> completion => CurlOwnerEvent::Dns(completion),
+                recv(self.websockets.submissions()) -> submission => CurlOwnerEvent::WebSocket(submission),
+                recv(self.http.dns_completions()) -> completion => CurlOwnerEvent::Dns(completion),
             }
         };
         match event {
-            CurlOwnerEvent::WebSocket(Ok(submission)) => websockets.admit(submission, multi),
-            CurlOwnerEvent::WebSocket(Err(_)) => self.close(state, multi),
-            CurlOwnerEvent::Command(command) => match command {
-                Ok(command) => self.handle_command(state, multi, command),
-                Err(_) => self.close(state, multi),
-            },
-            CurlOwnerEvent::Dns(completion) => {
-                if let Ok(completion) = completion {
-                    self.claim_dns_completion(state, completion);
-                }
+            CurlOwnerEvent::Command(Ok(command)) => self.handle_command(command),
+            CurlOwnerEvent::WebSocket(Ok(submission)) => {
+                self.websockets.admit(submission, &mut self.multi)
             }
-            CurlOwnerEvent::Deadline => {}
+            CurlOwnerEvent::Command(Err(_)) | CurlOwnerEvent::WebSocket(Err(_)) => self.close(),
+            CurlOwnerEvent::Dns(Ok(completion)) => self.http.claim_dns_completion(completion),
+            CurlOwnerEvent::Dns(Err(_)) | CurlOwnerEvent::Deadline => {}
         }
     }
 
-    fn handle_command(
-        &self,
-        state: &mut CurlOwnerState<H, C>,
-        multi: &mut Multi,
-        command: CurlRuntimeCommand<H, C>,
-    ) {
-        match command {
-            CurlRuntimeCommand::Request { transfer_id, job } if state.closed => {
-                self.send_completion(CurlMultiCompletion {
-                    transfer_id,
-                    easy: Some(job.easy),
-                    context: job.context,
-                    result: Err(anyhow!("curl multi runtime is shutting down")),
-                });
-            }
-            CurlRuntimeCommand::Request { transfer_id, job } => {
-                self.admit_job(state, transfer_id, job)
-            }
-            CurlRuntimeCommand::Shutdown => self.close(state, multi),
-        }
-    }
-
-    fn admit_job(
-        &self,
-        state: &mut CurlOwnerState<H, C>,
-        transfer_id: CurlTransferId,
-        job: CurlMultiJob<H, C>,
-    ) {
-        if curl_runtime_trace_enabled() {
-            let origin = job.origin.as_ref();
-            tracing::info!(
-                target: "moli_cdp_nav_timing",
-                transfer_id = %transfer_id,
-                label = %job.label,
-                origin_scheme = origin.map(|origin| origin.scheme.as_str()).unwrap_or(""),
-                origin_host = origin.map(|origin| origin.host.as_str()).unwrap_or(""),
-                origin_port = ?origin.and_then(|origin| origin.port),
-                origin = ?job.origin,
-                priority = job.priority,
-                pending_before = state.pending.len(),
-                pending_same_origin_before = origin
-                    .map(|origin| pending_origin_count(&state.pending, origin))
-                    .unwrap_or(0),
-                stage = "curl_runtime_job_queued",
-            );
-        }
-        enqueue_pending_job(&mut state.pending, transfer_id, job);
-    }
-
-    fn close(&self, state: &mut CurlOwnerState<H, C>, multi: &mut Multi) {
-        if state.closed {
-            return;
-        }
-        state.closed = true;
-        self.shutdown_requested.store(true, Ordering::SeqCst);
-        while let Some(pending) = state.pending.pop_front() {
-            let CurlPendingJob {
-                transfer_id, job, ..
-            } = pending;
-            self.send_completion(CurlMultiCompletion {
-                transfer_id,
-                easy: Some(job.easy),
-                context: job.context,
-                result: Err(anyhow!("curl multi runtime is shutting down")),
-            });
-        }
-        for pending in state.dns.drain() {
-            let CurlPendingJob {
-                transfer_id, job, ..
-            } = pending;
-            self.send_completion(CurlMultiCompletion {
-                transfer_id,
-                easy: Some(job.easy),
-                context: job.context,
-                result: Err(anyhow!(
-                    "curl multi runtime DNS request cancelled during shutdown"
-                )),
-            });
-        }
-        for (transfer_id, active) in state.active.drain() {
-            let easy = multi.remove2(active.handle).ok();
-            self.send_completion(CurlMultiCompletion {
-                transfer_id,
-                easy,
-                context: active.context,
-                result: Err(anyhow!(
-                    "curl multi runtime request cancelled during shutdown"
-                )),
-            });
-        }
-    }
-
-    fn start_eligible_jobs(&self, state: &mut CurlOwnerState<H, C>, multi: &mut Multi) {
-        loop {
-            if state.closed || state.active.len() >= self.config.max_active.get() {
-                return;
-            }
-            let Some(index) = state.pending.iter().position(|pending| {
-                job_is_eligible(
-                    pending.job.origin.as_ref(),
-                    state,
-                    self.config.max_host_active,
-                )
-            }) else {
-                return;
-            };
-            let pending = state
-                .pending
-                .remove(index)
-                .expect("pending curl job index should exist");
-            let dns_target = pending.job.dns_resolution.target().cloned();
-            match dns_target {
-                Some(target) => {
-                    state
-                        .dns
-                        .start(pending.transfer_id, pending, target, multi.waker())
-                }
-                None => self.start_job(state, multi, pending),
-            }
-        }
-    }
-
-    fn drain_dns_completions(&self, state: &mut CurlOwnerState<H, C>) {
-        while let Some(ready) = state.dns.try_claim_next() {
-            self.handle_dns_completion(state, ready);
-        }
-    }
-
-    fn claim_dns_completion(
-        &self,
-        state: &mut CurlOwnerState<H, C>,
-        completion: CurlDnsOwnerCompletion<CurlTransferId>,
-    ) {
-        let Some(ready) = state.dns.claim(completion) else {
-            return;
-        };
-        self.handle_dns_completion(state, ready);
-    }
-
-    fn handle_dns_completion(
-        &self,
-        state: &mut CurlOwnerState<H, C>,
-        ready: CurlDnsReady<CurlPendingJob<H, C>>,
-    ) {
-        let mut pending = ready.pending;
-        if state.closed {
-            let CurlPendingJob {
-                transfer_id, job, ..
-            } = pending;
-            self.send_completion(CurlMultiCompletion {
-                transfer_id,
-                easy: Some(job.easy),
-                context: job.context,
-                result: Err(anyhow!("curl multi runtime is shutting down")),
-            });
-            return;
-        }
-        if pending.deadline_reached(Instant::now()) {
-            self.complete_timed_out_job(pending, "while waiting for DNS");
-            return;
-        }
-        match ready.result {
-            Ok(addresses) => {
-                if let Err(error) = pending
-                    .job
-                    .dns_resolution
-                    .install(&mut pending.job.easy, addresses.as_ref())
-                {
-                    let CurlPendingJob {
-                        transfer_id, job, ..
-                    } = pending;
-                    self.send_completion(CurlMultiCompletion {
-                        transfer_id,
-                        easy: Some(job.easy),
-                        context: job.context,
-                        result: Err(error),
-                    });
-                    return;
-                }
-                enqueue_existing_pending_job(&mut state.pending, pending);
-            }
-            Err(error) => {
-                let CurlPendingJob {
-                    transfer_id, job, ..
-                } = pending;
-                self.send_completion(CurlMultiCompletion {
-                    transfer_id,
-                    easy: Some(job.easy),
-                    context: job.context,
-                    result: Err(anyhow!(error.to_string())),
-                });
-            }
-        }
-    }
-
-    fn start_job(
-        &self,
-        state: &mut CurlOwnerState<H, C>,
-        multi: &mut Multi,
-        pending: CurlPendingJob<H, C>,
-    ) {
-        if pending.deadline_reached(Instant::now()) {
-            self.complete_timed_out_job(pending, "while waiting to start");
-            return;
-        }
-        let transfer_id = pending.transfer_id;
-        let queued_for = pending.enqueued_at.elapsed();
-        let mut job = pending.job;
-        let label = job.label.clone();
-        if let Some(deadline) = job.deadline {
-            let Some(remaining) = curl_timeout_for_deadline(deadline, Instant::now()) else {
-                self.send_completion(CurlMultiCompletion {
-                    transfer_id,
-                    easy: Some(job.easy),
-                    context: job.context,
-                    result: Err(curl_runtime_timeout_error("while waiting to start")),
-                });
-                return;
-            };
-            if let Err(error) = job.easy.timeout(remaining) {
-                self.send_completion(CurlMultiCompletion {
-                    transfer_id,
-                    easy: Some(job.easy),
-                    context: job.context,
-                    result: Err(error).context("failed to apply remaining curl request deadline"),
-                });
-                return;
-            }
-        }
-        match multi
-            .add2(job.easy)
-            .with_context(|| anyhow!("failed to add curl easy handle for {label}"))
-        {
-            Ok(mut handle) => {
-                handle
-                    .set_token(transfer_id.token())
-                    .expect("active curl handle must accept its transfer token");
-                if curl_runtime_trace_enabled() {
-                    let origin = job.origin.as_ref();
-                    tracing::info!(
-                        target: "moli_cdp_nav_timing",
-                        transfer_id = %transfer_id,
-                        label = %label,
-                        origin_scheme = origin.map(|origin| origin.scheme.as_str()).unwrap_or(""),
-                        origin_host = origin.map(|origin| origin.host.as_str()).unwrap_or(""),
-                        origin_port = ?origin.and_then(|origin| origin.port),
-                        origin = ?job.origin,
-                        priority = job.priority,
-                        queued_ms = queued_for.as_millis(),
-                        active_before = state.active.len(),
-                        active_same_origin_before = origin
-                            .map(|origin| active_origin_count(&state.active, origin))
-                            .unwrap_or(0),
-                        pending_after = state.pending.len(),
-                        pending_same_origin_after = origin
-                            .map(|origin| pending_origin_count(&state.pending, origin))
-                            .unwrap_or(0),
-                        max_active = self.config.max_active.get(),
-                        max_host_active = ?self.config.max_host_active.map(NonZeroUsize::get),
-                        max_host_connections = ?self.config.max_host_connections.map(NonZeroUsize::get),
-                        max_total_connections = ?self.config.max_total_connections.map(NonZeroUsize::get),
-                        max_concurrent_streams = ?self.config.max_concurrent_streams.map(NonZeroUsize::get),
-                        multiplex = self.config.multiplex,
-                        stage = "curl_runtime_job_start",
-                    );
-                }
-                let previous = state.active.insert(
-                    transfer_id,
-                    CurlActiveTransfer {
-                        handle,
-                        context: job.context,
-                        origin: job.origin,
-                        priority: job.priority,
-                        label,
-                        started_at: Instant::now(),
-                        queued_for,
-                    },
-                );
-                assert!(previous.is_none(), "curl transfer identity is unique");
-            }
-            Err(error) => self.send_completion(CurlMultiCompletion {
-                transfer_id,
-                easy: None,
-                context: job.context,
-                result: Err(error),
-            }),
-        }
-    }
-
-    fn process_completed_transfers(
-        &self,
-        state: &mut CurlOwnerState<H, C>,
-        multi: &mut Multi,
-        websockets: &mut WebSocketRegistry,
-    ) {
-        if let Err(error) = multi.perform() {
+    fn process_completed_transfers(&mut self) {
+        if let Err(error) = self.multi.perform() {
             debug!("curl multi runtime perform failed: {error}");
-            websockets.fail_sessions(multi, &error.to_string());
+            self.websockets
+                .fail_sessions(&mut self.multi, &error.to_string());
         }
         // Drain CURLMSG_DONE once. A WebSocket DONE starts its open residence;
         // HTTP DONE removes a finished transfer, preserving notification order.
         let mut completed = Vec::new();
-        multi.messages(|message| {
+        self.multi.messages(|message| {
             let Some(id) = message.token().ok().and_then(CurlTransferId::from_token) else {
                 return;
             };
-            // Keep the easy handle's error buffer as well as the CURLcode.
-            let result = match state.active.get(&id) {
-                Some(transfer) => message.result_for2(&transfer.handle),
-                None => websockets.handshake_result(id, &message),
-            };
+            // Both registries use result_for2 to retain the easy error buffer.
+            let result = self
+                .http
+                .completion_result(id, &message)
+                .or_else(|| self.websockets.handshake_result(id, &message));
             if let Some(result) = result {
                 completed.push((id, result));
             }
         });
         for (id, result) in &completed {
-            if !state.active.contains_key(id) {
-                websockets.complete_handshake(*id, result.clone(), multi);
+            if !self.http.contains(*id) {
+                self.websockets
+                    .complete_handshake(*id, result.clone(), &mut self.multi);
             }
         }
-        for (transfer_id, active, result) in
-            take_transfers_in_notification_order(&mut state.active, completed)
-        {
-            self.finish_active_transfer(
-                state,
-                multi,
-                transfer_id,
-                active,
-                result.map_err(Into::into),
-            );
-        }
+        self.http.complete(&mut self.multi, completed);
     }
 
-    fn expire_waiting_jobs(&self, state: &mut CurlOwnerState<H, C>) {
-        let now = Instant::now();
-        for pending in take_expired_pending_jobs(&mut state.pending, now) {
-            self.complete_timed_out_job(pending, "while waiting in the scheduler");
-        }
-        for pending in state.dns.take_expired(now, |pending| pending.job.deadline) {
-            self.complete_timed_out_job(pending, "while waiting for DNS");
-        }
-    }
-
-    fn complete_timed_out_job(&self, pending: CurlPendingJob<H, C>, stage: &'static str) {
-        let CurlPendingJob {
-            transfer_id, job, ..
-        } = pending;
-        self.send_completion(CurlMultiCompletion {
-            transfer_id,
-            easy: Some(job.easy),
-            context: job.context,
-            result: Err(curl_runtime_timeout_error(stage)),
-        });
-    }
-
-    fn finish_active_transfer(
-        &self,
-        state: &CurlOwnerState<H, C>,
-        multi: &mut Multi,
-        transfer_id: CurlTransferId,
-        active: CurlActiveTransfer<H, C>,
-        result: Result<()>,
-    ) {
-        let easy = match multi.remove2(active.handle) {
-            Ok(easy) => Some(easy),
-            Err(error) => {
-                self.send_completion(CurlMultiCompletion {
-                    transfer_id,
-                    easy: None,
-                    context: active.context,
-                    result: Err(anyhow!(
-                        "failed to remove curl easy handle for {}: {error}",
-                        active.label
-                    )),
-                });
-                return;
-            }
-        };
-        if curl_runtime_trace_enabled() {
-            let origin = active.origin.as_ref();
-            match &result {
-                Ok(()) => {
-                    tracing::info!(
-                        target: "moli_cdp_nav_timing",
-                        transfer_id = %transfer_id,
-                        label = %active.label,
-                        origin_scheme = origin.map(|origin| origin.scheme.as_str()).unwrap_or(""),
-                        origin_host = origin.map(|origin| origin.host.as_str()).unwrap_or(""),
-                        origin_port = ?origin.and_then(|origin| origin.port),
-                        origin = ?active.origin,
-                        priority = active.priority,
-                        ok = true,
-                        active_ms = active.started_at.elapsed().as_millis(),
-                        queued_ms = active.queued_for.as_millis(),
-                        active_remaining = state.active.len(),
-                        active_same_origin_remaining = origin
-                            .map(|origin| active_origin_count(&state.active, origin))
-                            .unwrap_or(0),
-                        pending_after = state.pending.len(),
-                        pending_same_origin_after = origin
-                            .map(|origin| pending_origin_count(&state.pending, origin))
-                            .unwrap_or(0),
-                        stage = "curl_runtime_job_done",
-                    );
-                }
-                Err(error) => {
-                    tracing::info!(
-                        target: "moli_cdp_nav_timing",
-                        transfer_id = %transfer_id,
-                        label = %active.label,
-                        origin_scheme = origin.map(|origin| origin.scheme.as_str()).unwrap_or(""),
-                        origin_host = origin.map(|origin| origin.host.as_str()).unwrap_or(""),
-                        origin_port = ?origin.and_then(|origin| origin.port),
-                        origin = ?active.origin,
-                        priority = active.priority,
-                        ok = false,
-                        error = %error,
-                        active_ms = active.started_at.elapsed().as_millis(),
-                        queued_ms = active.queued_for.as_millis(),
-                        active_remaining = state.active.len(),
-                        active_same_origin_remaining = origin
-                            .map(|origin| active_origin_count(&state.active, origin))
-                            .unwrap_or(0),
-                        pending_after = state.pending.len(),
-                        pending_same_origin_after = origin
-                            .map(|origin| pending_origin_count(&state.pending, origin))
-                            .unwrap_or(0),
-                        stage = "curl_runtime_job_done",
-                    );
-                }
-            }
-        }
-        let result = result.with_context(|| {
-            anyhow!(
-                "curl request failed for {} after active={}ms queued={}ms",
-                active.label,
-                active.started_at.elapsed().as_millis(),
-                active.queued_for.as_millis()
-            )
-        });
-        self.send_completion(CurlMultiCompletion {
-            transfer_id,
-            easy,
-            context: active.context,
-            result,
-        });
-    }
-
-    fn wait_for_curl_progress(
-        &self,
-        multi: &mut Multi,
-        state: &CurlOwnerState<H, C>,
-        websockets: &mut WebSocketRegistry,
-        progressed: bool,
-    ) {
+    fn wait_for_curl_progress(&mut self, runnable: bool) {
         // HTTP cancellation uses its configured progress interval. Idle WS
         // sessions use socket/waker readiness and need not inherit that cadence.
-        let interval = if state.active.is_empty() {
-            Duration::from_secs(1)
+        let interval = if self.http.has_active() {
+            self.poll_interval
         } else {
-            self.config.poll_interval
+            Duration::from_secs(1)
         };
-        let mut wait_timeout = runtime_wait_timeout(multi, interval).unwrap_or(interval);
-        if let Some(deadline) = state.next_waiting_deadline() {
-            wait_timeout = wait_timeout.min(deadline.saturating_duration_since(Instant::now()));
+        let mut timeout = runtime_wait_timeout(&self.multi, interval).unwrap_or(interval);
+        for deadline in [self.http.next_deadline(), self.websockets.next_deadline()]
+            .into_iter()
+            .flatten()
+        {
+            timeout = timeout.min(deadline.saturating_duration_since(Instant::now()));
         }
-        if let Some(deadline) = websockets.next_deadline() {
-            wait_timeout = wait_timeout.min(deadline.saturating_duration_since(Instant::now()));
+        if runnable {
+            timeout = Duration::ZERO;
         }
-        if progressed {
-            wait_timeout = Duration::ZERO;
+        // libcurl adds HTTP/handshake sockets and its waker to these open WS fds.
+        let fds = self.websockets.poll_fds();
+        let started = self.diagnostics.poll_start();
+        let result = self.multi.poll(fds, timeout);
+        self.diagnostics.polled(started, timeout, runnable);
+        match result {
+            Ok(_) => self.websockets.apply_readiness(),
+            Err(error) => self
+                .websockets
+                .fail_sessions(&mut self.multi, &error.to_string()),
         }
-        websockets.wait(multi, wait_timeout, progressed);
-    }
-
-    fn send_completion(&self, completion: CurlMultiCompletion<H, C>) {
-        let _ = self.completion_tx.send(completion);
-    }
-}
-
-fn curl_runtime_timeout_error(stage: &str) -> anyhow::Error {
-    anyhow!("curl multi runtime request timed out {stage}")
-}
-
-fn curl_timeout_for_deadline(deadline: Instant, now: Instant) -> Option<Duration> {
-    let remaining = deadline.saturating_duration_since(now);
-    // curl-rust converts CURLOPT_TIMEOUT_MS with `Duration::as_millis()`. A
-    // positive sub-millisecond value would therefore become zero, which
-    // libcurl interprets as disabling the timeout entirely.
-    (remaining >= Duration::from_millis(1)).then_some(remaining)
-}
-
-fn curl_runtime_trace_enabled() -> bool {
-    static ENABLED: OnceLock<bool> = OnceLock::new();
-    *ENABLED.get_or_init(|| {
-        env_flag_enabled("MOLI_CDP_NAV_TIMING") || env_flag_enabled("MOLI_CURL_RUNTIME_TRACE")
-    })
-}
-
-fn env_flag_enabled(name: &str) -> bool {
-    std::env::var(name).is_ok_and(|value| {
-        let value = value.trim();
-        !value.is_empty() && value != "0" && !value.eq_ignore_ascii_case("false")
-    })
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn sub_millisecond_deadline_never_disables_the_libcurl_timeout() {
-        let now = Instant::now();
-        assert_eq!(
-            curl_timeout_for_deadline(now + Duration::from_micros(999), now),
-            None
-        );
-        assert_eq!(
-            curl_timeout_for_deadline(now + Duration::from_millis(1), now),
-            Some(Duration::from_millis(1))
-        );
+        self.diagnostics
+            .report(self.websockets.session_count(), false);
     }
 }
