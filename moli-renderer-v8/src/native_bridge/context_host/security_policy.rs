@@ -831,12 +831,15 @@ impl JsContextHost {
         if report_only_violation.is_none() && enforced_violation.is_none() {
             return true;
         }
-        if include_call_location {
-            let (line_number, column_number) = current_script_call_location(scope);
+        if include_call_location
+            && let Some((source_file, line_number, column_number)) =
+                current_script_violation_location(scope)
+        {
             for violation in [&mut report_only_violation, &mut enforced_violation]
                 .into_iter()
                 .flatten()
             {
+                violation.source_file = source_file.clone();
                 violation.line_number = line_number;
                 violation.column_number = column_number;
             }
@@ -1264,14 +1267,21 @@ impl JsContextHost {
     }
 }
 
-fn current_script_call_location(scope: &v8::PinScope<'_, '_>) -> (i32, i32) {
-    let Some(stack) = v8::StackTrace::current_stack_trace(scope, 1) else {
-        return (0, 0);
-    };
-    let Some(frame) = stack.get_frame(scope, 0) else {
-        return (0, 0);
-    };
-    let line = i32::try_from(frame.get_line_number()).unwrap_or(0).max(0);
-    let column = i32::try_from(frame.get_column()).unwrap_or(0).max(0);
-    (line, column)
+fn current_script_violation_location(
+    scope: &mut v8::PinScope<'_, '_>,
+) -> Option<(String, i32, i32)> {
+    let stack = v8::StackTrace::current_stack_trace(scope, 1)?;
+    let frame = stack.get_frame(scope, 0)?;
+    let source_file = frame
+        .get_script_name_or_source_url(scope)
+        .map(|source| source.to_rust_string_lossy(scope))
+        .map(|source| {
+            crate::content_security_policy::content_security_policy_source_file_for_report(&source)
+        })
+        .unwrap_or_default();
+    let line_number = i32::try_from(frame.get_line_number())
+        .unwrap_or_default()
+        .max(0);
+    let column_number = i32::try_from(frame.get_column()).unwrap_or_default().max(0);
+    Some((source_file, line_number, column_number))
 }
