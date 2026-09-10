@@ -3013,7 +3013,6 @@ navigation-timing/navigation-type-post-backforward.html
 navigation-timing/test-document-onload.html
 navigation-timing/test-timing-attributes-order.html
 old-tests/submission/Microsoft/foreigncontent/foreign_content_015.html
-page-visibility/iframe-session-history.html
 permissions-policy/experimental-features/focus-without-user-activation-disabled.html
 permissions-policy/experimental-features/focus-without-user-activation-focused-frame-descendant.html
 permissions-policy/experimental-features/focus-without-user-activation-setter-policy.html

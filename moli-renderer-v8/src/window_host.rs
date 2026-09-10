@@ -9,6 +9,7 @@ use super::{
     context_bootstrap::increment_performance_event_count,
     context_bootstrap::mark_event_trusted,
     context_bootstrap::performance_slot_number,
+    context_bootstrap::set_event_trusted,
     context_bootstrap::simple_event_target_add_event_listener_callback,
     context_bootstrap::simple_event_target_dispatch_event_callback,
     context_bootstrap::simple_event_target_remove_event_listener_callback,
@@ -493,6 +494,7 @@ pub(super) fn event_target_dispatch_event_callback<'s>(
         return;
     }
 
+    set_event_trusted(scope, event, false);
     let event_type = event_type_string(scope, event);
     if let Some(handle) = child_window_target {
         let event_type = event_type.as_deref().unwrap_or_default();

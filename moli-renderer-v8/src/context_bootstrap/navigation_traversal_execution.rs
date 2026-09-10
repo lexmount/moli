@@ -8,8 +8,7 @@ use super::navigation_entry::{
 };
 use super::navigation_events::{
     dispatch_beforeunload_for_runtime_owner, dispatch_navigation_traverse_event,
-    dispatch_navigation_traverse_event_with_outcome, dispatch_pagehide_for_runtime_owner,
-    dispatch_unload_for_runtime_owner, mark_navigation_outcome_default_prevented,
+    dispatch_navigation_traverse_event_with_outcome, mark_navigation_outcome_default_prevented,
 };
 use super::navigation_lifecycle::finish_navigation_error_events;
 use super::navigation_result::{
@@ -339,7 +338,7 @@ fn dispatch_child_cross_document_traverse_event<'s>(
     info: Option<v8::Local<'s, v8::Value>>,
 ) -> bool {
     dispatch_beforeunload_for_runtime_owner(scope, target.owner);
-    let proceed = window_navigation_for_holder(scope, target.owner).is_none_or(|navigation| {
+    window_navigation_for_holder(scope, target.owner).is_none_or(|navigation| {
         let outcome = dispatch_navigation_traverse_event_with_outcome(
             scope,
             navigation,
@@ -352,12 +351,7 @@ fn dispatch_child_cross_document_traverse_event<'s>(
             return false;
         }
         outcome.proceed
-    });
-    if proceed {
-        dispatch_pagehide_for_runtime_owner(scope, target.owner);
-        dispatch_unload_for_runtime_owner(scope, target.owner);
-    }
-    proceed
+    })
 }
 
 pub(in crate::context_bootstrap) fn apply_pending_child_cross_document_traversal(
@@ -393,13 +387,25 @@ pub(in crate::context_bootstrap) fn apply_pending_child_cross_document_traversal
         .info
         .as_ref()
         .map(|info| v8::Local::new(scope, info));
+    let retiring_document = host.child_browsing_context_document_handle(traversal.child_handle);
     if !dispatch_child_cross_document_traverse_event(scope, &target, info) {
         reject_child_cross_document_traversal(scope, &traversal);
         return;
     }
-    let _ = host.mark_current_child_document_unload_dispatched_after_navigation_traversal(
-        traversal.child_handle,
-    );
+    if retiring_document.is_none()
+        || host.child_browsing_context_document_handle(traversal.child_handle) != retiring_document
+        || window_task_target_for_runtime_owner(scope, host, owner) != Some(traversal.target)
+    {
+        reject_child_cross_document_traversal(scope, &traversal);
+        return;
+    }
+    host.dispatch_child_document_unload_after_traversal_check(scope, traversal.child_handle);
+    if host.child_browsing_context_document_handle(traversal.child_handle) != retiring_document
+        || window_task_target_for_runtime_owner(scope, host, owner) != Some(traversal.target)
+    {
+        reject_child_cross_document_traversal(scope, &traversal);
+        return;
+    }
     queue_child_cross_document_traversal(
         host,
         traversal.child_handle,

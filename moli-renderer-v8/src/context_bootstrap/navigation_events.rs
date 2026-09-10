@@ -675,11 +675,12 @@ fn dispatch_unload_lifecycle_event_for_runtime_owner<'s>(
     } else if let Some(child_handle) = child_browsing_context_handle_for_runtime_owner(scope, owner)
         && let Some(host_ptr) = context_host_ptr_from_global_bridge(scope)
     {
-        unsafe { &mut *host_ptr }.dispatch_child_window_event(
+        unsafe { &mut *host_ptr }.dispatch_child_window_event_with_target_override(
             scope,
             child_handle,
             event_type,
             event,
+            matches!(event_type, "pagehide" | "unload"),
         );
     }
     set_navigation_unload_event_active(scope, owner, false);
