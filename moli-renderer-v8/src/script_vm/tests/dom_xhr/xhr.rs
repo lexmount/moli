@@ -830,6 +830,75 @@ fn xml_http_request_methods_apply_webidl_argument_conversion() {
     );
 }
 #[test]
+fn xml_http_request_set_request_header_preserves_validation_order() {
+    let mut vm = new_storage_test_vm("https://xhr-header-validation.test/");
+    let result = vm
+        .eval(
+            r#"
+(() => {
+  const probe = callback => {
+    try {
+      return callback() === undefined ? "undefined" : "unexpected return value";
+    } catch (error) {
+      return error instanceof DOMException
+        ? "DOM:" + error.name + ":" + error.code : error.name;
+    }
+  };
+  const unopened = new XMLHttpRequest();
+  const xhr = new XMLHttpRequest();
+  xhr.open("GET", "/headers");
+  const conversions = [];
+  const entered = new XMLHttpRequest();
+  return JSON.stringify({
+    unopenedBadSyntax: probe(() => unopened.setRequestHeader("bad:name", "bad\nvalue")),
+    unopenedNonByteString: probe(() => unopened.setRequestHeader("X-Test", "\u0100")),
+    forbiddenUnopened: probe(() => unopened.setRequestHeader("Host", "example.test")),
+    invalidNames: ["", "x y", "x:y", "\u00ff", "\u007f"].map(
+      name => probe(() => xhr.setRequestHeader(name, "ok"))),
+    invalidValues: ["x\0x", "x\rx", "x\nx"].map(
+      value => probe(() => xhr.setRequestHeader("X-Test", value))),
+    forbiddenBadValue: probe(() => xhr.setRequestHeader("Host", "x\nx")),
+    forbiddenValidValue: probe(() => xhr.setRequestHeader("Host", "example.test")),
+    emptyValue: probe(() => xhr.setRequestHeader("X-Test", "")),
+    normalizedLineEnds: probe(() => xhr.setRequestHeader("X-Test", "\r\n \tvalue\r\n ")),
+    otherBytes: probe(() => xhr.setRequestHeader("X-Test", "\u000b\u000c\u0085\u00a0")),
+    reentrantConversion: probe(() => entered.setRequestHeader({
+      toString() { conversions.push("name"); return "X-Test"; }
+    }, {
+      toString() {
+        conversions.push("value");
+        entered.open("GET", "/headers");
+        return " value ";
+      }
+    })),
+    conversions
+  });
+})()
+"#,
+        )
+        .expect("XHR request header validation probe should run");
+    let observed: serde_json::Value =
+        serde_json::from_str(&result).expect("parse XHR header validation result");
+    assert_eq!(
+        observed,
+        serde_json::json!({
+            "unopenedBadSyntax": "DOM:InvalidStateError:11",
+            "unopenedNonByteString": "TypeError",
+            "forbiddenUnopened": "DOM:InvalidStateError:11",
+            "invalidNames": vec!["DOM:SyntaxError:12"; 5],
+            "invalidValues": vec!["DOM:SyntaxError:12"; 3],
+            "forbiddenBadValue": "DOM:SyntaxError:12",
+            "forbiddenValidValue": "undefined",
+            "emptyValue": "undefined",
+            "normalizedLineEnds": "undefined",
+            "otherBytes": "undefined",
+            "reentrantConversion": "undefined",
+            "conversions": ["name", "value"],
+        })
+    );
+}
+
+#[test]
 fn xml_http_request_override_mime_type_affects_response_mime() {
     let mut vm = new_storage_test_vm("https://xhr-override-mime.test/");
 

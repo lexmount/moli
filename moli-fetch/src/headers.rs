@@ -42,15 +42,34 @@ pub fn is_forbidden_request_header_override_value(name: &str, value: &str) -> bo
     ) {
         return false;
     }
-    value.split(',').any(|method| {
-        matches!(
-            method
-                .trim_matches(is_http_whitespace)
-                .to_ascii_uppercase()
-                .as_str(),
-            "CONNECT" | "TRACE" | "TRACK"
-        )
-    })
+    // Fetch's "get, decode, and split" keeps quoted strings intact, including
+    // their quotes, so commas and method names inside them are ordinary data.
+    let mut quoted = false;
+    let mut escaped = false;
+    value
+        .split(|character| {
+            if escaped {
+                escaped = false;
+                false
+            } else if quoted && character == '\\' {
+                escaped = true;
+                false
+            } else if character == '"' {
+                quoted = !quoted;
+                false
+            } else {
+                character == ',' && !quoted
+            }
+        })
+        .any(|method| {
+            matches!(
+                method
+                    .trim_matches(is_http_whitespace)
+                    .to_ascii_uppercase()
+                    .as_str(),
+                "CONNECT" | "TRACE" | "TRACK"
+            )
+        })
 }
 
 pub fn is_no_cors_safelisted_request_header(name: &str, value: &str) -> bool {
@@ -201,6 +220,39 @@ mod tests {
             "x-http-method",
             "\",TRACE\","
         ));
+    }
+
+    #[test]
+    fn method_override_filter_respects_quoted_list_members() {
+        for name in [
+            "X-HTTP-Method",
+            "X-HTTP-Method-Override",
+            "X-Method-Override",
+        ] {
+            for value in [
+                r#""GET,TRACE,POST""#,
+                r#""GET\",TRACK,POST""#,
+                r#"prefix"one,CONNECT,two"suffix"#,
+                r#""unterminated,TRACE"#,
+                r#""TRACE""#,
+            ] {
+                assert!(
+                    !is_forbidden_request_header_override_value(name, value),
+                    "{name}: {value}"
+                );
+            }
+            for value in [
+                r#""GET,TRACE", TRACK"#,
+                r#""GET\",TRACE", CONNECT"#,
+                r#""GET\\", CONNECT"#,
+                r#"prefix"CONNECT", TRACE"#,
+            ] {
+                assert!(
+                    is_forbidden_request_header_override_value(name, value),
+                    "{name}: {value}"
+                );
+            }
+        }
     }
 
     #[test]

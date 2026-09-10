@@ -2542,7 +2542,17 @@ async fn xhr_emits_browser_style_subresource_headers_on_wire() {
                             globalThis.__xhrDone = false;
                             const xhr = new XMLHttpRequest();
                             xhr.open("GET", {xhr_url_literal});
-                            xhr.setRequestHeader("X-Test", "xhr");
+                            xhr.setRequestHeader("X-Test", " \txhr \r\n");
+                            xhr.setRequestHeader("x-test", "\nsecond\t");
+                            xhr.setRequestHeader("X-Empty", "");
+                            xhr.setRequestHeader("x-empty", "value");
+                            xhr.setRequestHeader("X-HTTP-Method", "GET");
+                            xhr.setRequestHeader("x-http-method", "TRACE");
+                            xhr.setRequestHeader("x-http-method", '"GET,TRACE,POST"');
+                            xhr.setRequestHeader("Sec-Fetch-Mode", "no-cors");
+                            xhr.setRequestHeader("Cookie", "forbidden=1");
+                            xhr.setRequestHeader("Proxy-Authorization", "blocked");
+                            xhr.setRequestHeader("Referer", "https://injected.test/");
                             xhr.onload = () => {{
                                 globalThis.__xhrDone = true;
                             }};
@@ -2565,7 +2575,12 @@ async fn xhr_emits_browser_style_subresource_headers_on_wire() {
         let request_lower = request.to_ascii_lowercase();
 
         assert!(request.starts_with("GET /xhr HTTP/1.1\r\n"));
-        assert!(request_lower.contains("x-test: xhr\r\n"));
+        assert!(request.contains("\r\nX-Test: xhr, second\r\n"));
+        assert!(request.contains("\r\nX-Empty: , value\r\n"));
+        assert!(request.contains("\r\nX-HTTP-Method: GET, \"GET,TRACE,POST\"\r\n"));
+        assert!(!request_lower.contains("forbidden=1"));
+        assert!(!request_lower.contains("proxy-authorization:"));
+        assert!(!request_lower.contains("injected.test"));
         assert!(request_lower.contains("referer: "));
         assert!(request_lower.contains("/page.html\r\n"));
         assert!(request_lower.contains("accept: */*\r\n"));
