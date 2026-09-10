@@ -5066,6 +5066,12 @@ async fn audio_worklet_module_imports_wasm_source_phase() -> Result<()> {
         Some(&JsValueSnapshot::String(String::new()))
     );
     assert_eq!(
+        diagnostic_global(&page, "audioWorkletWasmConnections"),
+        Some(&JsValueSnapshot::String(
+            "true|InvalidAccessError".to_owned()
+        ))
+    );
+    assert_eq!(
         diagnostic_global(&page, "audioWorkletWasmResult"),
         Some(&JsValueSnapshot::String(
             "42|true|true|func,glob,mem,tab".to_owned()

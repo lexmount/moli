@@ -12,11 +12,19 @@ use crate::util::{
 use crate::webidl;
 use moli_webapi_declare::{WebApiFunctionTemplate, WebApiObject};
 
+mod analyser;
+mod audio_buffer;
 mod audio_param;
+mod backend;
 mod biquad;
+mod compressor;
 mod graph;
+mod oscillator;
+mod oscillator_dsp;
+mod wavetable;
 
-use audio_param::{audio_param, detune_param};
+pub(in crate::context_bootstrap) use audio_buffer::build_constructor_template as build_audio_buffer_constructor_template;
+use backend::{Node, NodeKind, State};
 
 const AUDIO_CONTEXT_LISTENERS_SLOT: &str = "__moliAudioContextListeners";
 const AUDIO_CONTEXT_MODULES_SLOT: &str = "__moliAudioContextModules";
@@ -30,20 +38,12 @@ const AUDIO_WORKLET_MODULE_RESOLVER_SLOT: &str = "__moliAudioWorkletModuleResolv
 const AUDIO_WORKLET_MODULE_LOADED_SLOT: &str = "__moliAudioWorkletModuleLoaded";
 const AUDIO_WORKLET_MODULE_SETTLED_SLOT: &str = "__moliAudioWorkletModuleSettled";
 const AUDIO_WORKLET_CALLBACK_MODULE_SLOT: &str = "__moliAudioWorkletCallbackModule";
-const OFFLINE_AUDIO_LENGTH_SLOT: &str = "__moliOfflineAudioLength";
-const OFFLINE_AUDIO_SAMPLE_RATE_SLOT: &str = "__moliOfflineAudioSampleRate";
-const OFFLINE_AUDIO_CHANNEL_COUNT_SLOT: &str = "__moliOfflineAudioChannelCount";
 const OFFLINE_AUDIO_COMPLETE_CONTEXT_SLOT: &str = "__moliOfflineAudioCompleteContext";
-const OFFLINE_AUDIO_COMPLETE_BUFFER_SLOT: &str = "__moliOfflineAudioCompleteBuffer";
-const OFFLINE_AUDIO_COMPRESSORS_SLOT: &str = "__moliOfflineAudioCompressors";
-const DYNAMICS_COMPRESSOR_REDUCTION_SLOT: &str = "__moliDynamicsCompressorReduction";
-const ANALYSER_FFT_SIZE_SLOT: &str = "__moliAnalyserFftSize";
+const OFFLINE_AUDIO_COMPLETE_RESOLVER_SLOT: &str = "__moliOfflineAudioCompleteResolver";
 
 #[derive(WebApiObject)]
 #[webapi(interface = "AudioContext")]
 struct AudioContextObjectDeclaration<'scope> {
-    #[webapi(data_property = "currentTime")]
-    current_time: f64,
     #[webapi(data_property = "sampleRate")]
     sample_rate: f64,
     #[webapi(data_property)]
@@ -130,20 +130,10 @@ struct AudioWorkletProcessorConstructMessageDeclaration<'scope> {
 #[derive(WebApiObject)]
 #[webapi(interface = "OfflineAudioContext")]
 struct OfflineAudioContextObjectDeclaration<'scope> {
-    #[webapi(data_property = "currentTime")]
-    current_time: f64,
     #[webapi(data_property)]
     length: f64,
     #[webapi(data_property = "sampleRate")]
     sample_rate: f64,
-    #[webapi(slot = OFFLINE_AUDIO_LENGTH_SLOT)]
-    internal_length: f64,
-    #[webapi(slot = OFFLINE_AUDIO_SAMPLE_RATE_SLOT)]
-    internal_sample_rate: f64,
-    #[webapi(slot = OFFLINE_AUDIO_CHANNEL_COUNT_SLOT)]
-    channel_count: f64,
-    #[webapi(slot = OFFLINE_AUDIO_COMPRESSORS_SLOT)]
-    compressors: v8::Local<'scope, v8::Array>,
     #[webapi(slot = SIMPLE_EVENT_TARGET_SLOT)]
     event_target_slot: &'static str,
     #[webapi(data_property)]
@@ -167,9 +157,7 @@ struct OfflineAudioContextObjectDeclaration<'scope> {
 #[derive(WebApiObject)]
 #[webapi(interface = "OscillatorNode")]
 struct OscillatorNodeObjectDeclaration<'scope> {
-    #[webapi(data_property = "type")]
-    kind: &'static str,
-    #[webapi(data_property)]
+    #[webapi(data_property, readonly)]
     frequency: v8::Local<'scope, v8::Object>,
     #[webapi(data_property, readonly)]
     detune: v8::Local<'scope, v8::Object>,
@@ -184,18 +172,16 @@ struct OscillatorNodeObjectDeclaration<'scope> {
 #[derive(WebApiObject)]
 #[webapi(interface = "DynamicsCompressorNode")]
 struct DynamicsCompressorNodeObjectDeclaration<'scope> {
-    #[webapi(data_property)]
+    #[webapi(data_property, readonly)]
     threshold: v8::Local<'scope, v8::Object>,
-    #[webapi(data_property)]
+    #[webapi(data_property, readonly)]
     knee: v8::Local<'scope, v8::Object>,
-    #[webapi(data_property)]
+    #[webapi(data_property, readonly)]
     ratio: v8::Local<'scope, v8::Object>,
-    #[webapi(data_property)]
+    #[webapi(data_property, readonly)]
     attack: v8::Local<'scope, v8::Object>,
-    #[webapi(data_property)]
+    #[webapi(data_property, readonly)]
     release: v8::Local<'scope, v8::Object>,
-    #[webapi(slot = DYNAMICS_COMPRESSOR_REDUCTION_SLOT)]
-    reduction: f64,
     #[webapi(method, length = 1, callback = audio_node_connect_callback)]
     connect: (),
     #[webapi(method, length = 0, callback = audio_node_disconnect_callback)]
@@ -210,46 +196,12 @@ struct DynamicsCompressorNodePrototypeDeclaration {
 }
 
 #[derive(WebApiObject)]
-#[webapi(interface = "AnalyserNode")]
-struct AnalyserNodeObjectDeclaration {
-    #[webapi(slot = ANALYSER_FFT_SIZE_SLOT)]
-    fft_size: f64,
-    #[webapi(data_property = "minDecibels")]
-    min_decibels: f64,
-    #[webapi(data_property = "maxDecibels")]
-    max_decibels: f64,
-    #[webapi(data_property = "smoothingTimeConstant")]
-    smoothing_time_constant: f64,
-    #[webapi(method, length = 1, callback = audio_node_connect_callback)]
-    connect: (),
-    #[webapi(method, length = 0, callback = audio_node_disconnect_callback)]
-    disconnect: (),
-}
-
-#[derive(WebApiFunctionTemplate)]
-#[webapi(name = "AnalyserNode", enumerable)]
-struct AnalyserNodePrototypeDeclaration {
-    #[webapi(accessor_property = "fftSize", getter = analyser_fft_size_getter_callback, setter = analyser_fft_size_setter_callback)]
-    fft_size: (),
-    #[webapi(accessor_property = "frequencyBinCount", getter = analyser_frequency_bin_count_getter_callback)]
-    frequency_bin_count: (),
-    #[webapi(method, length = 1, callback = analyser_get_float_frequency_data_callback)]
-    get_float_frequency_data: (),
-    #[webapi(method, length = 1, callback = analyser_get_float_time_domain_data_callback)]
-    get_float_time_domain_data: (),
-    #[webapi(method, length = 1, callback = analyser_get_byte_frequency_data_callback)]
-    get_byte_frequency_data: (),
-    #[webapi(method, length = 1, callback = analyser_get_byte_time_domain_data_callback)]
-    get_byte_time_domain_data: (),
-}
-
-#[derive(WebApiObject)]
 #[webapi(interface = "Object")]
 struct OfflineAudioCompletePayloadDeclaration<'scope> {
     #[webapi(slot = OFFLINE_AUDIO_COMPLETE_CONTEXT_SLOT)]
     context: v8::Local<'scope, v8::Object>,
-    #[webapi(slot = OFFLINE_AUDIO_COMPLETE_BUFFER_SLOT)]
-    rendered_buffer: v8::Local<'scope, v8::Object>,
+    #[webapi(slot = OFFLINE_AUDIO_COMPLETE_RESOLVER_SLOT)]
+    resolver: v8::Local<'scope, v8::Object>,
 }
 
 #[derive(WebApiObject)]
@@ -265,107 +217,15 @@ struct OfflineAudioCompletionEventDeclaration<'scope> {
 #[webapi(interface = "AudioDestinationNode", allow_empty)]
 struct AudioDestinationNodeObjectDeclaration {}
 
-#[derive(WebApiObject)]
-#[webapi(interface = "AudioBuffer")]
-struct AudioBufferObjectDeclaration<'scope> {
-    #[webapi(data_property)]
-    length: f64,
-    #[webapi(data_property = "sampleRate")]
-    sample_rate: f64,
-    #[webapi(data_property)]
-    duration: f64,
-    #[webapi(slot = OFFLINE_AUDIO_BUFFER_SLOT)]
-    channel_data: v8::Local<'scope, v8::Object>,
-}
-
-// Captured from the Chromium-on-Linux baseline we use for Zhihu probe parity.
-// If that browser profile changes, update this together with the audio probe
-// assertions in `script_vm/tests.rs`.
-const TARGET_AUDIO_FINGERPRINT_SUM: f64 = 124.04347527516074;
-const SYNTHETIC_COMPRESSOR_REDUCTION: f64 = -82.26815795898438;
-const SYNTHETIC_ANALYSER_FREQUENCY_BINS: &[f64] = &[
-    -90.25955200195312,
-    -90.22233581542969,
-    -90.11856842041016,
-    -89.96821594238281,
-    -89.79446411132812,
-    -89.61327362060547,
-    -89.42459106445312,
-    -89.20698547363281,
-    -88.91907501220703,
-    -88.51146697998047,
-    -87.94953918457031,
-    -87.2354736328125,
-    -86.41204833984375,
-    -85.54572296142578,
-    -84.70391082763672,
-    -83.94123077392578,
-    -83.29612731933594,
-    -82.79357147216797,
-    -82.4489974975586,
-    -82.27188110351562,
-    -82.26815795898438,
-    -82.4417953491211,
-    -82.79552459716797,
-    -83.33106231689453,
-    -84.04853820800781,
-    -84.94512939453125,
-    -86.0123062133789,
-    -87.2312240600586,
-    -88.56591796875,
-    -89.95575714111328,
-    -91.31378936767578,
-    -92.54295349121094,
-    -93.5753173828125,
-    -94.40994262695312,
-    -95.10946655273438,
-    -95.75737762451172,
-    -96.4164810180664,
-    -97.1112060546875,
-    -97.82959747314453,
-    -98.53618621826172,
-    -99.19161987304688,
-    -99.77345275878906,
-    -100.28733825683594,
-    -100.76123046875,
-    -101.2282485961914,
-    -101.71035766601562,
-    -102.21070098876953,
-    -102.71531677246094,
-    -103.20209503173828,
-    -103.65292358398438,
-    -104.06330108642578,
-    -104.44380950927734,
-    -104.81304168701172,
-    -105.1873779296875,
-    -105.57337951660156,
-    -105.9659423828125,
-    -106.35223388671875,
-    -106.71916961669922,
-    -107.06056213378906,
-    -107.38026428222656,
-    -107.68936920166016,
-    -107.99988555908203,
-    -108.31855773925781,
-    -108.6440658569336,
-];
-
 #[derive(webidl::WebIdlArgs)]
 #[webidl(prefix = "OfflineAudioContext")]
 struct OfflineAudioContextConstructorArgs {
     #[webidl(required)]
-    channel_count: f64,
+    channel_count: u32,
     #[webidl(required)]
-    length: f64,
+    length: u32,
     #[webidl(required)]
     sample_rate: f64,
-}
-
-#[derive(webidl::WebIdlArgs)]
-#[webidl(prefix = "AudioBuffer.getChannelData")]
-struct AudioBufferGetChannelDataArgs {
-    #[webidl(required)]
-    channel: f64,
 }
 
 #[derive(webidl::WebIdlArgs)]
@@ -375,13 +235,6 @@ struct AudioParamSetValueAtTimeArgs {
     value: f64,
     #[webidl(required)]
     start_time: f64,
-}
-
-#[derive(webidl::WebIdlArgs)]
-#[webidl(prefix = "AnalyserNode.fftSize")]
-struct AnalyserFftSizeArgs {
-    #[webidl(required)]
-    value: u32,
 }
 
 #[derive(WebApiFunctionTemplate)]
@@ -413,6 +266,12 @@ struct AudioWorkletNodeTemplateDeclaration {
 #[derive(WebApiFunctionTemplate)]
 #[webapi(name = "BaseAudioContext", enumerable)]
 struct BaseAudioContextPrototypeDeclaration {
+    #[webapi(accessor_property, getter = audio_context_current_time)]
+    current_time: (),
+
+    #[webapi(method = "createBuffer", length = 3, callback = audio_buffer::create_buffer)]
+    create_buffer: (),
+
     #[webapi(method = "createBiquadFilter", length = 0, callback = biquad::create_biquad_filter)]
     create_biquad_filter: (),
 
@@ -478,6 +337,7 @@ pub(in crate::context_bootstrap) fn install_web_audio_template_bindings<'s>(
     }
     match interface_name {
         "AudioParam" => audio_param::install(scope, template),
+        "OscillatorNode" => oscillator::install(scope, template),
         "BiquadFilterNode" => biquad::install(scope, template),
         "BaseAudioContext" => {
             BaseAudioContextPrototypeDeclaration::initialize_prototype_template(
@@ -491,12 +351,8 @@ pub(in crate::context_bootstrap) fn install_web_audio_template_bindings<'s>(
                 template.prototype_template(scope),
             );
         }
-        "AnalyserNode" => {
-            AnalyserNodePrototypeDeclaration::initialize_prototype_template(
-                scope,
-                template.prototype_template(scope),
-            );
-        }
+        "AnalyserNode" => analyser::install(scope, template),
+
         "DynamicsCompressorNode" => {
             DynamicsCompressorNodePrototypeDeclaration::initialize_prototype_template(
                 scope,
@@ -521,6 +377,7 @@ fn audio_context_constructor_callback<'s>(
     }
 
     let context = args.this();
+    backend::initialize(scope, context, State::Context(backend::Context::realtime()));
     let destination = audio_destination_node(scope, context);
     let modules = new_web_audio_map_object(scope);
     let module_list = v8::Array::new(scope, 0);
@@ -531,7 +388,6 @@ fn audio_context_constructor_callback<'s>(
     set_symbol_to_string_tag(scope, audio_worklet, "AudioWorklet");
 
     AudioContextObjectDeclaration::new(
-        0.0,
         44_100.0,
         "running",
         destination,
@@ -552,12 +408,35 @@ pub(in crate::context_bootstrap) fn is_audio_context_object<'s>(
     get_private_value(scope, object, AUDIO_CONTEXT_MODULES_SLOT).is_some()
 }
 
+fn audio_context_current_time<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: v8::FunctionCallbackArguments<'s>,
+    mut rv: v8::ReturnValue<'s, v8::Value>,
+) {
+    if let Some(state) = backend::get(scope, args.this())
+        && let State::Context(context) = &*state.borrow()
+    {
+        rv.set(v8::Number::new(scope, context.current_time()).into());
+        return;
+    }
+    throw_type_error(scope, "Illegal invocation: expected a BaseAudioContext.");
+}
+
 fn audio_context_close_callback<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'s, v8::Value>,
 ) {
     let context = args.this();
+    if !is_audio_context_object(scope, context) {
+        throw_type_error(scope, "Illegal invocation: expected an AudioContext.");
+        return;
+    }
+    if let Some(state) = backend::get(scope, context)
+        && let State::Context(backend::Context::Realtime(native)) = &*state.borrow()
+    {
+        native.close_sync();
+    }
     if let Some(module_list) = web_audio_array_slot(scope, context, AUDIO_CONTEXT_MODULE_LIST_SLOT)
     {
         let length = module_list
@@ -856,6 +735,7 @@ fn audio_worklet_node_constructor_callback<'s>(
     AudioWorkletNodeObjectDeclaration::new(context, port1)
         .initialize(scope, node)
         .expect("AudioWorkletNode declaration should initialize object");
+    backend::initialize(scope, node, State::ModuleWorklet);
     graph::initialize_node(scope, node, context);
     if let Some(worker) =
         web_audio_object_slot(scope, module_state, AUDIO_WORKLET_MODULE_WORKER_SLOT)
@@ -1222,9 +1102,17 @@ fn dynamics_compressor_reduction_getter_callback<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'s, v8::Value>,
 ) {
-    let value = web_audio_number_slot(scope, args.this(), DYNAMICS_COMPRESSOR_REDUCTION_SLOT)
-        .unwrap_or(0.0);
-    rv.set(v8::Number::new(scope, value).into());
+    if let Some(state) = backend::get(scope, args.this())
+        && let State::Node(Node::Compressor { reduction, .. }) = &*state.borrow()
+    {
+        let value = f32::from_bits(reduction.load(std::sync::atomic::Ordering::Relaxed));
+        rv.set(v8::Number::new(scope, f64::from(value)).into());
+        return;
+    }
+    throw_type_error(
+        scope,
+        "Illegal invocation: expected a DynamicsCompressorNode.",
+    );
 }
 
 pub(in crate::context_bootstrap) fn offline_audio_context_constructor_callback<'s>(
@@ -1245,34 +1133,43 @@ pub(in crate::context_bootstrap) fn offline_audio_context_constructor_callback<'
         return;
     };
 
-    let channel_count = parsed.channel_count.trunc();
-    let length = parsed.length.trunc();
-    let sample_rate = parsed.sample_rate;
-    if !channel_count.is_finite()
-        || !length.is_finite()
-        || !sample_rate.is_finite()
-        || channel_count <= 0.0
-        || length <= 0.0
-        || sample_rate <= 0.0
-    {
+    let channel_count = parsed.channel_count;
+    let length = parsed.length;
+    let sample_rate = f64::from(parsed.sample_rate as f32);
+    if !sample_rate.is_finite() {
         throw_type_error(
             scope,
+            "OfflineAudioContext sampleRate must be a finite float.",
+        );
+        return;
+    }
+    if !(1..=32).contains(&channel_count)
+        || !(1..=i32::MAX as u32).contains(&length)
+        || !(3000.0..=768000.0).contains(&sample_rate)
+    {
+        throw_dom_exception(
+            scope,
+            "NotSupportedError",
+            9,
             "Failed to construct 'OfflineAudioContext': invalid channel count, length, or sample rate.",
         );
         return;
     }
 
     let context = args.this();
+    backend::initialize(
+        scope,
+        context,
+        State::Context(backend::Context::offline(
+            channel_count as usize,
+            length as usize,
+            sample_rate as f32,
+        )),
+    );
     let destination = audio_destination_node(scope, context);
-    let compressors = v8::Array::new(scope, 0);
     OfflineAudioContextObjectDeclaration::new(
-        0.0,
-        length,
+        f64::from(length),
         sample_rate,
-        length,
-        sample_rate,
-        channel_count,
-        compressors,
         OFFLINE_AUDIO_LISTENERS_SLOT,
         "suspended",
         destination,
@@ -1282,36 +1179,12 @@ pub(in crate::context_bootstrap) fn offline_audio_context_constructor_callback<'
     rv.set(context.into());
 }
 
-pub(in crate::context_bootstrap) fn audio_buffer_get_channel_data_callback<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    args: v8::FunctionCallbackArguments<'s>,
-    mut rv: v8::ReturnValue<'s, v8::Value>,
-) {
-    let buffer = args.this();
-    let Some(parsed) = webidl::parse_args::<AudioBufferGetChannelDataArgs>(scope, &args) else {
-        return;
-    };
-    let requested_channel = parsed.channel.trunc();
-    if !requested_channel.is_finite() || requested_channel != 0.0 {
-        throw_range_error(
-            scope,
-            "Failed to execute 'getChannelData' on 'AudioBuffer': channel index is out of range.",
-        );
-        return;
-    }
-    let Some(data) = web_audio_object_slot(scope, buffer, OFFLINE_AUDIO_BUFFER_SLOT) else {
-        rv.set_undefined();
-        return;
-    };
-    rv.set(data.into());
-}
-
 fn require_base_audio_context<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     object: v8::Local<'s, v8::Object>,
 ) -> bool {
-    if is_audio_context_object(scope, object)
-        || get_private_value(scope, object, OFFLINE_AUDIO_LENGTH_SLOT).is_some()
+    if backend::get(scope, object)
+        .is_some_and(|state| matches!(&*state.borrow(), State::Context(_)))
     {
         return true;
     }
@@ -1327,14 +1200,15 @@ fn audio_context_create_oscillator_callback<'s>(
     if !require_base_audio_context(scope, args.this()) {
         return;
     }
-    let nyquist = audio_context_sample_rate(scope, args.this()) / 2.0;
-    let frequency = audio_param(scope, 440.0, -nyquist, nyquist);
-    let detune = detune_param(scope);
-    let node = OscillatorNodeObjectDeclaration::new("sine", frequency, detune)
+    let native = backend::create_node(scope, args.this(), NodeKind::Oscillator);
+    let frequency = audio_param::wrap(scope, native.param("frequency"));
+    let detune = audio_param::wrap(scope, native.param("detune"));
+    let node = OscillatorNodeObjectDeclaration::new(frequency, detune)
         .bind(scope)
         .expect("OscillatorNode declaration should bind");
     graph::initialize_node(scope, node, args.this());
     graph::initialize_source(scope, node);
+    backend::initialize(scope, node, State::Node(native));
     rv.set(node.into());
 }
 
@@ -1346,17 +1220,18 @@ fn audio_context_create_dynamics_compressor_callback<'s>(
     if !require_base_audio_context(scope, args.this()) {
         return;
     }
-    let threshold = audio_param(scope, -24.0, -100.0, 0.0);
-    let knee = audio_param(scope, 30.0, 0.0, 40.0);
-    let ratio = audio_param(scope, 12.0, 1.0, 20.0);
-    let attack = audio_param(scope, 0.003, 0.0, 1.0);
-    let release = audio_param(scope, 0.25, 0.0, 1.0);
+    let native = backend::create_node(scope, args.this(), NodeKind::Compressor);
+    let threshold = audio_param::wrap(scope, native.param("threshold"));
+    let knee = audio_param::wrap(scope, native.param("knee"));
+    let ratio = audio_param::wrap(scope, native.param("ratio"));
+    let attack = audio_param::wrap(scope, native.param("attack"));
+    let release = audio_param::wrap(scope, native.param("release"));
     let node =
-        DynamicsCompressorNodeObjectDeclaration::new(threshold, knee, ratio, attack, release, 0.0)
+        DynamicsCompressorNodeObjectDeclaration::new(threshold, knee, ratio, attack, release)
             .bind(scope)
             .expect("DynamicsCompressorNode declaration should bind");
     graph::initialize_node(scope, node, args.this());
-    remember_context_compressor(scope, args.this(), node);
+    backend::initialize(scope, node, State::Node(native));
     rv.set(node.into());
 }
 
@@ -1368,10 +1243,7 @@ fn audio_context_create_analyser_callback<'s>(
     if !require_base_audio_context(scope, args.this()) {
         return;
     }
-    let node = AnalyserNodeObjectDeclaration::new(2048.0, -100.0, -30.0, 0.8)
-        .bind(scope)
-        .expect("AnalyserNode declaration should bind");
-    graph::initialize_node(scope, node, args.this());
+    let node = analyser::create(scope, args.this());
     rv.set(node.into());
 }
 
@@ -1381,32 +1253,50 @@ fn offline_audio_context_start_rendering_callback<'s>(
     mut rv: v8::ReturnValue<'s, v8::Value>,
 ) {
     let context = args.this();
-    let length = web_audio_number_slot(scope, context, OFFLINE_AUDIO_LENGTH_SLOT)
-        .and_then(float_to_usize)
-        .unwrap_or(44_100);
-    let sample_rate =
-        web_audio_number_slot(scope, context, OFFLINE_AUDIO_SAMPLE_RATE_SLOT).unwrap_or(44_100.0);
-    let has_input = graph::prepare_offline_render(scope, context, length as f64 / sample_rate);
-    let rendered_buffer = build_audio_buffer(scope, length, sample_rate, has_input);
-    define_non_enumerable_string_property(scope, context, "state", "closed");
-
-    let payload = OfflineAudioCompletePayloadDeclaration::new(context, rendered_buffer)
+    let Some(state) = backend::get(scope, context) else {
+        throw_type_error(
+            scope,
+            "Illegal invocation: expected an OfflineAudioContext.",
+        );
+        return;
+    };
+    {
+        let mut state = state.borrow_mut();
+        let State::Context(backend::Context::Offline { rendered, .. }) = &mut *state else {
+            throw_type_error(
+                scope,
+                "Illegal invocation: expected an OfflineAudioContext.",
+            );
+            return;
+        };
+        if *rendered {
+            let error = new_dom_exception_value(
+                scope,
+                "Offline rendering has already started.",
+                "InvalidStateError",
+            );
+            set_rejected_promise_return(scope, &mut rv, error);
+            return;
+        }
+        *rendered = true;
+    }
+    let Some(resolver) = v8::PromiseResolver::new(scope) else {
+        return;
+    };
+    let payload = OfflineAudioCompletePayloadDeclaration::new(context, resolver.into())
         .bind(scope)
-        .expect("OfflineAudio complete payload declaration should bind");
-    if let Some(callback) = v8::Function::builder(offline_audio_context_complete_microtask_callback)
+        .expect("OfflineAudio payload should bind");
+    let Some(callback) = v8::Function::builder(offline_audio_context_complete_microtask_callback)
         .data(payload.into())
         .build(scope)
-    {
-        scope.enqueue_microtask(callback);
-    }
-
-    if let Some(resolver) = v8::PromiseResolver::new(scope) {
-        let promise = resolver.get_promise(scope);
-        let _ = resolver.resolve(scope, rendered_buffer.into());
-        rv.set(promise.into());
+    else {
         return;
-    }
-    rv.set(v8::undefined(scope).into());
+    };
+    // Defer work and observable results until after the initiating JS call.
+    // Both PCM and analyser history are produced by the same native graph.
+    scope.enqueue_microtask(callback);
+    define_non_enumerable_string_property(scope, context, "state", "running");
+    rv.set(resolver.get_promise(scope).into());
 }
 
 fn offline_audio_context_complete_microtask_callback<'s>(
@@ -1421,16 +1311,45 @@ fn offline_audio_context_complete_microtask_callback<'s>(
     else {
         return;
     };
-    let Some(rendered_buffer) =
-        web_audio_object_slot(scope, payload, OFFLINE_AUDIO_COMPLETE_BUFFER_SLOT)
+    let Some(resolver) =
+        web_audio_object_slot(scope, payload, OFFLINE_AUDIO_COMPLETE_RESOLVER_SLOT)
     else {
         return;
     };
-    mark_context_compressors_rendered(scope, context);
-
-    let event = OfflineAudioCompletionEventDeclaration::new("complete", rendered_buffer)
+    // Only this callback's native payload can provide this private slot.
+    let resolver = unsafe { v8::Local::<v8::PromiseResolver>::cast_unchecked(resolver) };
+    let state = backend::get(scope, context).expect("rendering context must retain its backend");
+    let rendered = {
+        let mut state = state.borrow_mut();
+        let State::Context(backend::Context::Offline { context, .. }) = &mut *state else {
+            unreachable!()
+        };
+        context.start_rendering_sync()
+    };
+    let Some(buffer) = audio_buffer::new_buffer(
+        scope,
+        rendered.number_of_channels() as u32,
+        rendered.length() as u32,
+        f64::from(rendered.sample_rate()),
+    ) else {
+        return;
+    };
+    for channel in 0..rendered.number_of_channels() {
+        if audio_buffer::write_channel(
+            scope,
+            buffer,
+            channel as u32,
+            rendered.get_channel_data(channel),
+        )
+        .is_none()
+        {
+            return;
+        }
+    }
+    define_non_enumerable_string_property(scope, context, "state", "closed");
+    let event = OfflineAudioCompletionEventDeclaration::new("complete", buffer)
         .bind(scope)
-        .expect("OfflineAudio completion event declaration should bind");
+        .expect("OfflineAudio completion event should bind");
     let _ = dispatch_simple_event_target_event(
         scope,
         context,
@@ -1438,50 +1357,7 @@ fn offline_audio_context_complete_microtask_callback<'s>(
         "complete",
         event,
     );
-}
-
-fn remember_context_compressor<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    context: v8::Local<'s, v8::Object>,
-    node: v8::Local<'s, v8::Object>,
-) {
-    let Some(compressors) = web_audio_object_slot(scope, context, OFFLINE_AUDIO_COMPRESSORS_SLOT)
-    else {
-        return;
-    };
-    let length = compressors
-        .get(scope, v8str(scope, "length").into())
-        .and_then(|value| value.uint32_value(scope))
-        .unwrap_or(0);
-    let _ = compressors.set_index(scope, length, node.into());
-}
-
-fn mark_context_compressors_rendered<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    context: v8::Local<'s, v8::Object>,
-) {
-    let Some(compressors) = web_audio_object_slot(scope, context, OFFLINE_AUDIO_COMPRESSORS_SLOT)
-    else {
-        return;
-    };
-    let length = compressors
-        .get(scope, v8str(scope, "length").into())
-        .and_then(|value| value.uint32_value(scope))
-        .unwrap_or(0);
-    for index in 0..length {
-        let Some(value) = compressors.get_index(scope, index) else {
-            continue;
-        };
-        let Ok(node) = v8::Local::<v8::Object>::try_from(value) else {
-            continue;
-        };
-        let reduction = if graph::rendered_with_input(scope, node) {
-            SYNTHETIC_COMPRESSOR_REDUCTION
-        } else {
-            0.0
-        };
-        set_web_audio_number_slot(scope, node, DYNAMICS_COMPRESSOR_REDUCTION_SLOT, reduction);
-    }
+    let _ = resolver.resolve(scope, buffer.into());
 }
 
 fn audio_node_connect_callback<'s>(
@@ -1502,202 +1378,12 @@ fn audio_node_disconnect_callback<'s>(
     graph::disconnect(scope, &args);
 }
 
-fn analyser_get_float_frequency_data_callback<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    args: v8::FunctionCallbackArguments<'s>,
-    _rv: v8::ReturnValue<'s, v8::Value>,
-) {
-    copy_analyser_data(scope, &args, AnalyserData::FloatFrequency);
-}
-
-fn analyser_get_float_time_domain_data_callback<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    args: v8::FunctionCallbackArguments<'s>,
-    _rv: v8::ReturnValue<'s, v8::Value>,
-) {
-    copy_analyser_data(scope, &args, AnalyserData::FloatTimeDomain);
-}
-
-fn analyser_get_byte_frequency_data_callback<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    args: v8::FunctionCallbackArguments<'s>,
-    _rv: v8::ReturnValue<'s, v8::Value>,
-) {
-    copy_analyser_data(scope, &args, AnalyserData::ByteFrequency);
-}
-
-fn analyser_get_byte_time_domain_data_callback<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    args: v8::FunctionCallbackArguments<'s>,
-    _rv: v8::ReturnValue<'s, v8::Value>,
-) {
-    copy_analyser_data(scope, &args, AnalyserData::ByteTimeDomain);
-}
-
-fn analyser_fft_size<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    object: v8::Local<'s, v8::Object>,
-) -> Option<u32> {
-    let Some(size) = web_audio_number_slot(scope, object, ANALYSER_FFT_SIZE_SLOT) else {
-        throw_type_error(scope, "Illegal invocation: expected an AnalyserNode.");
-        return None;
-    };
-    Some(size as u32)
-}
-
-fn analyser_fft_size_getter_callback<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    args: v8::FunctionCallbackArguments<'s>,
-    mut rv: v8::ReturnValue<'s, v8::Value>,
-) {
-    if let Some(size) = analyser_fft_size(scope, args.this()) {
-        rv.set_uint32(size);
-    }
-}
-
-fn analyser_fft_size_setter_callback<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    args: v8::FunctionCallbackArguments<'s>,
-    _rv: v8::ReturnValue<'s, v8::Value>,
-) {
-    if analyser_fft_size(scope, args.this()).is_none() {
-        return;
-    }
-    let Some(parsed) = webidl::parse_args::<AnalyserFftSizeArgs>(scope, &args) else {
-        return;
-    };
-    if !(32..=32768).contains(&parsed.value) || !parsed.value.is_power_of_two() {
-        throw_dom_exception(
-            scope,
-            "IndexSizeError",
-            1,
-            "AnalyserNode.fftSize must be a power of two between 32 and 32768.",
-        );
-        return;
-    }
-    set_web_audio_number_slot(
-        scope,
-        args.this(),
-        ANALYSER_FFT_SIZE_SLOT,
-        parsed.value as f64,
-    );
-}
-
-fn analyser_frequency_bin_count_getter_callback<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    args: v8::FunctionCallbackArguments<'s>,
-    mut rv: v8::ReturnValue<'s, v8::Value>,
-) {
-    if let Some(size) = analyser_fft_size(scope, args.this()) {
-        rv.set_uint32(size / 2);
-    }
-}
-
-enum AnalyserData {
-    FloatFrequency,
-    FloatTimeDomain,
-    ByteFrequency,
-    ByteTimeDomain,
-}
-
-fn copy_analyser_data<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    args: &v8::FunctionCallbackArguments<'s>,
-    kind: AnalyserData,
-) {
-    let Some(fft_size) = analyser_fft_size(scope, args.this()) else {
-        return;
-    };
-    let array: Option<v8::Local<v8::TypedArray>> = match kind {
-        AnalyserData::FloatFrequency | AnalyserData::FloatTimeDomain => {
-            v8::Local::<v8::Float32Array>::try_from(args.get(0))
-                .ok()
-                .map(Into::into)
-        }
-        AnalyserData::ByteFrequency | AnalyserData::ByteTimeDomain => {
-            v8::Local::<v8::Uint8Array>::try_from(args.get(0))
-                .ok()
-                .map(Into::into)
-        }
-    };
-    let Some(array) = array else {
-        let message = match kind {
-            AnalyserData::FloatFrequency | AnalyserData::FloatTimeDomain => {
-                "AnalyserNode data argument must be a Float32Array."
-            }
-            AnalyserData::ByteFrequency | AnalyserData::ByteTimeDomain => {
-                "AnalyserNode data argument must be a Uint8Array."
-            }
-        };
-        throw_type_error(scope, message);
-        return;
-    };
-    if let Some(store) = array.get_backing_store()
-        && (store.is_shared() || store.is_resizable_by_user_javascript())
-    {
-        throw_type_error(
-            scope,
-            "AnalyserNode data requires a non-shared, fixed-length buffer.",
-        );
-        return;
-    }
-    let source_length = match kind {
-        AnalyserData::FloatFrequency | AnalyserData::ByteFrequency => fft_size / 2,
-        AnalyserData::FloatTimeDomain | AnalyserData::ByteTimeDomain => fft_size,
-    };
-    // Use the intrinsic view length, not a user-overridable JS property. The
-    // validated fftSize bounds the work, and excess destination entries stay intact.
-    let length = array.length().min(source_length as usize);
-    let has_input = graph::rendered_with_input(scope, args.this());
-    for index in 0..length {
-        // The existing connected-input profile is still synthetic, not an FFT.
-        // Never expose it before rendering or for a graph with no started source.
-        let fill = match kind {
-            AnalyserData::FloatFrequency if !has_input => f64::NEG_INFINITY,
-            AnalyserData::FloatFrequency => SYNTHETIC_ANALYSER_FREQUENCY_BINS
-                .get(index)
-                .or_else(|| SYNTHETIC_ANALYSER_FREQUENCY_BINS.last())
-                .copied()
-                .unwrap_or(-100.0),
-            AnalyserData::FloatTimeDomain | AnalyserData::ByteFrequency => 0.0,
-            AnalyserData::ByteTimeDomain => 128.0,
-        };
-        let value = v8::Number::new(scope, fill);
-        if array.set_index(scope, index as u32, value.into()).is_none() {
-            return;
-        }
-    }
-}
-
 fn oscillator_start_callback<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     args: v8::FunctionCallbackArguments<'s>,
     _rv: v8::ReturnValue<'s, v8::Value>,
 ) {
     graph::start_source(scope, &args);
-}
-
-fn audio_param_set_value_at_time_callback<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    args: v8::FunctionCallbackArguments<'s>,
-    mut rv: v8::ReturnValue<'s, v8::Value>,
-) {
-    let param = args.this();
-    let Some(parsed) = webidl::parse_args::<AudioParamSetValueAtTimeArgs>(scope, &args) else {
-        return;
-    };
-    let _ = parsed.start_time;
-    define_non_enumerable_number_property(scope, param, "value", parsed.value);
-    rv.set(param.into());
-}
-
-fn audio_context_sample_rate<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    context: v8::Local<'s, v8::Object>,
-) -> f64 {
-    // Realtime contexts currently have a fixed 44.1 kHz sample rate. Do not
-    // consult an overridable JS property when constructing native parameters.
-    web_audio_number_slot(scope, context, OFFLINE_AUDIO_SAMPLE_RATE_SLOT).unwrap_or(44_100.0)
 }
 
 fn web_audio_number_slot<'s>(
@@ -1745,78 +1431,7 @@ fn audio_destination_node<'s>(
         .expect("AudioDestinationNode declaration should bind");
     graph::initialize_node(scope, node, context);
     graph::set_destination(scope, context, node);
+    let native = backend::create_node(scope, context, NodeKind::Destination);
+    backend::initialize(scope, node, State::Node(native));
     node
-}
-
-fn build_audio_buffer<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    length: usize,
-    sample_rate: f64,
-    has_input: bool,
-) -> v8::Local<'s, v8::Object> {
-    let channel_data = build_channel_data_view(scope, length, has_input);
-    AudioBufferObjectDeclaration::new(
-        length as f64,
-        sample_rate,
-        (length as f64) / sample_rate.max(1.0),
-        channel_data,
-    )
-    .bind(scope)
-    .expect("AudioBuffer declaration should bind")
-}
-
-fn build_channel_data_view<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    length: usize,
-    has_input: bool,
-) -> v8::Local<'s, v8::Object> {
-    let samples = if has_input {
-        synthetic_audio_samples(length)
-    } else {
-        vec![0.0; length]
-    };
-    let mut bytes = Vec::with_capacity(samples.len() * std::mem::size_of::<f32>());
-    for sample in samples {
-        bytes.extend_from_slice(&sample.to_le_bytes());
-    }
-    let backing_store = v8::ArrayBuffer::new_backing_store_from_vec(bytes).make_shared();
-    let buffer = v8::ArrayBuffer::with_backing_store(scope, &backing_store);
-    let view = v8::Float32Array::new(scope, buffer, 0, length)
-        .expect("Float32Array construction should succeed");
-    view.into()
-}
-
-fn synthetic_audio_samples(length: usize) -> Vec<f32> {
-    let mut samples = vec![0.0_f32; length];
-    let (start, end) = if length >= 5_000 {
-        (4_500, 5_000)
-    } else {
-        (0, length)
-    };
-    let window_len = end.saturating_sub(start);
-    if window_len == 0 {
-        return samples;
-    }
-
-    let mut weights = Vec::with_capacity(window_len);
-    for index in 0..window_len {
-        let x = index as f64;
-        let weight = (x * 0.137).sin().abs() + 0.31 * (x * 0.053).cos().abs() + 0.07;
-        weights.push(weight);
-    }
-    let total = weights.iter().sum::<f64>().max(f64::EPSILON);
-    let target_sum = TARGET_AUDIO_FINGERPRINT_SUM * (window_len as f64 / 500.0).min(1.0);
-    let scale = target_sum / total;
-    for (index, weight) in weights.into_iter().enumerate() {
-        let signed = if index % 2 == 0 { weight } else { -weight };
-        samples[start + index] = (signed * scale) as f32;
-    }
-    samples
-}
-
-fn float_to_usize(value: f64) -> Option<usize> {
-    if !value.is_finite() || value < 0.0 || value.fract() != 0.0 {
-        return None;
-    }
-    usize::try_from(value as u64).ok()
 }
