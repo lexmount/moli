@@ -214,6 +214,11 @@ pub(super) fn navigation_unload_event_active<'s>(
     owner: v8::Local<'s, v8::Object>,
 ) -> bool {
     object_bool_property(scope, owner, WINDOW_UNLOAD_EVENT_ACTIVE_SLOT).unwrap_or(false)
+        || context_host_ptr_from_global_bridge(scope).is_some_and(|host_ptr| {
+            let host = unsafe { &*host_ptr };
+            super::window_accessors::window_document_handle(scope, owner, host)
+                .is_some_and(|document| host.has_document_unload_counter(document))
+        })
 }
 
 pub(super) fn set_navigation_unload_event_active<'s>(
