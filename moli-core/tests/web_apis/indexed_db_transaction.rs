@@ -1,4 +1,4 @@
-use super::pipe_disturbed::run_probe;
+use super::event_dispatch::run_probe;
 use super::*;
 
 async fn assert_multi_entry_keys(scenario: &str) -> Result<()> {
