@@ -5326,6 +5326,7 @@ html/browsers/browsing-the-web/overlapping-navigations-and-traversals/same-docum
 html/browsers/browsing-the-web/read-text/load-text-plain.html
 html/browsers/browsing-the-web/unloading-documents/beforeunload-canceling.html
 html/browsers/browsing-the-web/unloading-documents/beforeunload-on-history-back.html
+html/browsers/browsing-the-web/unloading-documents/beforeunload-on-navigation-of-parent.html
 html/browsers/browsing-the-web/unloading-documents/beforeunload-sticky-activation-iframe.html
 html/browsers/browsing-the-web/unloading-documents/beforeunload-sticky-activation-popup.html
 html/browsers/browsing-the-web/unloading-documents/navigation-within-beforeunload.html
@@ -7018,6 +7019,7 @@ html/webappapis/dynamic-markup-insertion/opening-the-input-stream/document-open-
 html/webappapis/dynamic-markup-insertion/opening-the-input-stream/document.open-02.html
 html/webappapis/dynamic-markup-insertion/opening-the-input-stream/document.open-03.html
 html/webappapis/dynamic-markup-insertion/opening-the-input-stream/form-control-state.html
+html/webappapis/dynamic-markup-insertion/opening-the-input-stream/ignore-opens-during-unload.window.js?moli-wpt-script=window
 html/webappapis/dynamic-markup-insertion/opening-the-input-stream/location-set-and-document-open.html
 html/webappapis/dynamic-markup-insertion/opening-the-input-stream/origin-check-in-document-open-basic.html
 html/webappapis/dynamic-markup-insertion/the-outerhtml-property/outerhtml-documentfragment.html
