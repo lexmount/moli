@@ -20,6 +20,8 @@ mod callback_cleanup;
 mod event_dispatch;
 #[path = "web_apis/fetch_body_native.rs"]
 mod fetch_body_native;
+#[path = "web_apis/fetch_body_realm.rs"]
+mod fetch_body_realm;
 #[path = "web_apis/pipe_disturbed.rs"]
 mod pipe_disturbed;
 #[path = "web_apis/request_init.rs"]

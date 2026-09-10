@@ -5184,6 +5184,8 @@ fetch/api/request/url-encoding.html
 fetch/api/response/json.any.js?moli-wpt-any=dedicatedworker
 fetch/api/response/json.any.js?moli-wpt-any=window
 fetch/api/response/multi-globals/url-parsing.html
+fetch/api/response/response-arraybuffer-realm.window.js?moli-wpt-script=window
+fetch/api/response/response-blob-realm.any.js?moli-wpt-any=window
 fetch/api/response/response-body-read-task-handling.html
 fetch/api/response/response-clone.any.js?moli-wpt-any=dedicatedworker
 fetch/api/response/response-clone.any.js?moli-wpt-any=window

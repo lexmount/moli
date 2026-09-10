@@ -10,6 +10,7 @@ use crate::context_bootstrap::{
 use crate::util::set_null_prototype;
 
 const STREAM: &str = "__moliBodyConsumerStream";
+const BODY_OWNER: &str = "__moliBodyConsumerOwner";
 const RESOLVER: &str = "__moliBodyConsumerResolver";
 const CHUNKS: &str = "__moliBodyConsumerChunks";
 const KIND: &str = "__moliBodyConsumerKind";
@@ -26,6 +27,8 @@ const REASON: &str = "__moliBodyConsumerReason";
 #[derive(WebApiObject)]
 #[webapi(interface = "Object")]
 struct BodyConsumerDeclaration<'scope> {
+    #[webapi(slot = BODY_OWNER)]
+    body_owner: v8::Local<'scope, v8::Object>,
     #[webapi(slot = STREAM)]
     stream: v8::Local<'scope, v8::Object>,
     #[webapi(slot = RESOLVER)]
@@ -134,6 +137,7 @@ impl<'s> Consumer<'s> {
 
 pub(super) fn consume_readable_body_stream<'s>(
     scope: &mut v8::PinScope<'s, '_>,
+    object: v8::Local<'s, v8::Object>,
     stream: v8::Local<'s, v8::Object>,
     kind: NetworkBodyConsumptionKind,
     chunk_callback: Option<v8::Local<'s, v8::Function>>,
@@ -157,9 +161,17 @@ pub(super) fn consume_readable_body_stream<'s>(
     let chunks = v8::Array::new(scope, 0);
     set_null_prototype(scope, chunks.into());
     let consumer = Consumer(
-        BodyConsumerDeclaration::new(stream, resolver.into(), chunks, kind, mime, chunk_callback)
-            .bind(scope)
-            .expect("body consumer declaration must bind"),
+        BodyConsumerDeclaration::new(
+            object,
+            stream,
+            resolver.into(),
+            chunks,
+            kind,
+            mime,
+            chunk_callback,
+        )
+        .bind(scope)
+        .expect("body consumer declaration must bind"),
     );
     let callbacks = [
         v8::Function::builder(chunk_callback_step)
@@ -295,20 +307,24 @@ fn materialize_callback<'s>(
             .to_rust_string_lossy(scope)
             .as_str()
         {
-            "text" => PendingBodyMaterializationKind::Text,
-            "json" => PendingBodyMaterializationKind::Json,
-            "arrayBuffer" => PendingBodyMaterializationKind::ArrayBuffer,
-            "bytes" => PendingBodyMaterializationKind::Bytes,
-            "blob" => PendingBodyMaterializationKind::Blob { mime_type: mime },
-            "formData" => PendingBodyMaterializationKind::FormData { content_type: mime },
+            "text" => NetworkBodyConsumptionKind::Text,
+            "json" => NetworkBodyConsumptionKind::Json,
+            "arrayBuffer" => NetworkBodyConsumptionKind::ArrayBuffer,
+            "bytes" => NetworkBodyConsumptionKind::Bytes,
+            "blob" => NetworkBodyConsumptionKind::Blob { mime_type: mime },
+            "formData" => NetworkBodyConsumptionKind::FormData { content_type: mime },
             _ => unreachable!("body materialization kind is private"),
         };
+        let object = v8::Local::try_from(consumer.value(scope, BODY_OWNER))
+            .expect("body materialization owner must exist");
+        let kind = PendingBodyMaterializationKind::new(scope, object, kind);
         resolve_body_materialization(scope, resolver, bytes, kind);
     } else {
         let error = consumer.value(scope, REASON);
         let _ = resolver.reject(scope, error);
     }
     for slot in [
+        BODY_OWNER,
         STREAM,
         RESOLVER,
         CHUNKS,

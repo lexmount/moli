@@ -240,8 +240,8 @@ impl Drop for NetworkBodySourceState {
 enum PendingBodyMaterializationKind {
     Text,
     Json,
-    ArrayBuffer,
-    Bytes,
+    ArrayBuffer(v8::Global<v8::Context>),
+    Bytes(v8::Global<v8::Context>),
     Blob { mime_type: String },
     FormData { content_type: String },
 }
@@ -289,28 +289,41 @@ pub(in crate::network_host) enum NetworkBodyConsumptionKind {
     FormData { content_type: String },
 }
 
-impl From<NetworkBodyConsumptionKind> for PendingBodyMaterializationKind {
-    fn from(kind: NetworkBodyConsumptionKind) -> Self {
+impl PendingBodyMaterializationKind {
+    fn new<'s>(
+        scope: &mut v8::PinScope<'s, '_>,
+        object: v8::Local<'s, v8::Object>,
+        kind: NetworkBodyConsumptionKind,
+    ) -> Self {
         match kind {
             NetworkBodyConsumptionKind::Text => Self::Text,
             NetworkBodyConsumptionKind::Json => Self::Json,
-            NetworkBodyConsumptionKind::ArrayBuffer => Self::ArrayBuffer,
-            NetworkBodyConsumptionKind::Bytes => Self::Bytes,
+            NetworkBodyConsumptionKind::ArrayBuffer | NetworkBodyConsumptionKind::Bytes => {
+                // Fetch explicitly allocates binary results in the Body
+                // receiver's relevant realm, even for a borrowed method or a
+                // stream created in another realm. Retain it until completion.
+                let realm = object
+                    .get_creation_context(scope)
+                    .expect("body owner must have a creation context");
+                let realm = v8::Global::new(scope, realm);
+                if matches!(kind, NetworkBodyConsumptionKind::ArrayBuffer) {
+                    Self::ArrayBuffer(realm)
+                } else {
+                    Self::Bytes(realm)
+                }
+            }
             NetworkBodyConsumptionKind::Blob { mime_type } => Self::Blob { mime_type },
             NetworkBodyConsumptionKind::FormData { content_type } => {
                 Self::FormData { content_type }
             }
         }
     }
-}
-
-impl PendingBodyMaterializationKind {
     fn clone_for_ready(&self) -> Self {
         match self {
             Self::Text => Self::Text,
             Self::Json => Self::Json,
-            Self::ArrayBuffer => Self::ArrayBuffer,
-            Self::Bytes => Self::Bytes,
+            Self::ArrayBuffer(realm) => Self::ArrayBuffer(realm.clone()),
+            Self::Bytes(realm) => Self::Bytes(realm.clone()),
             Self::Blob { mime_type } => Self::Blob {
                 mime_type: mime_type.clone(),
             },
@@ -1226,6 +1239,7 @@ pub(in crate::network_host) fn consume_filtered_response_internal_body_value_fro
     {
         return Some(consume_readable_body_stream(
             scope,
+            object,
             stream,
             kind,
             Some(chunk_callback),
@@ -1280,7 +1294,7 @@ fn consume_network_body_value_from_source_inner<'s>(
         if let Some(chunk_callback) = chunk_callback
             && let Some(stream) = readable_body_stream_from_object(scope, object)
         {
-            return consume_readable_body_stream(scope, stream, kind, Some(chunk_callback));
+            return consume_readable_body_stream(scope, object, stream, kind, Some(chunk_callback));
         }
         let Some(id) = registry_body_source_id(scope, source) else {
             return (NetworkBodyConsumption::Failed, None);
@@ -1289,7 +1303,7 @@ fn consume_network_body_value_from_source_inner<'s>(
             return (NetworkBodyConsumption::Failed, None);
         };
         let promise = resolver.get_promise(scope);
-        let materialization_kind = PendingBodyMaterializationKind::from(kind);
+        let materialization_kind = PendingBodyMaterializationKind::new(scope, object, kind);
         let mut ready = None;
         let mut rejected = None;
         if let Some(host) = context_host_mut(scope) {
@@ -1339,7 +1353,7 @@ fn consume_network_body_value_from_source_inner<'s>(
     if explicit_source.is_none()
         && let Some(stream) = readable_body_stream_from_object(scope, object)
     {
-        return consume_readable_body_stream(scope, stream, kind, chunk_callback);
+        return consume_readable_body_stream(scope, object, stream, kind, chunk_callback);
     }
 
     let bytes = match try_network_body_bytes_from_storage(scope, source, true) {
@@ -1350,7 +1364,8 @@ fn consume_network_body_value_from_source_inner<'s>(
         Ok(None) => return (NetworkBodyConsumption::Failed, None),
         Err(_) => return (NetworkBodyConsumption::Failed, None),
     };
-    match body_materialization_value(scope, &bytes, PendingBodyMaterializationKind::from(kind)) {
+    let kind = PendingBodyMaterializationKind::new(scope, object, kind);
+    match body_materialization_value(scope, &bytes, kind) {
         Ok(value) => (NetworkBodyConsumption::Ready(value), None),
         Err(error) => (NetworkBodyConsumption::Rejected(error), None),
     }
@@ -1775,17 +1790,11 @@ fn body_materialization_value<'s>(
                     .unwrap_or_else(|| v8::undefined(&scope).into())
             })
         }
-        PendingBodyMaterializationKind::ArrayBuffer => {
-            blob::array_buffer_from_bytes(scope, bytes.to_vec())
-                .map(Into::into)
-                .ok_or_else(|| v8::undefined(scope).into())
+        PendingBodyMaterializationKind::ArrayBuffer(realm) => {
+            binary_body_materialization_value(scope, bytes, realm, false)
         }
-        PendingBodyMaterializationKind::Bytes => {
-            let byte_len = bytes.len();
-            blob::array_buffer_from_bytes(scope, bytes.to_vec())
-                .and_then(|buffer| v8::Uint8Array::new(scope, buffer, 0, byte_len))
-                .map(Into::into)
-                .ok_or_else(|| v8::undefined(scope).into())
+        PendingBodyMaterializationKind::Bytes(realm) => {
+            binary_body_materialization_value(scope, bytes, realm, true)
         }
         PendingBodyMaterializationKind::Blob { mime_type } => {
             blob::build_blob_object(scope, bytes.to_vec(), mime_type)
@@ -1819,6 +1828,30 @@ fn body_materialization_value<'s>(
             }
         }
     }
+}
+
+fn binary_body_materialization_value<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    bytes: &[u8],
+    realm: v8::Global<v8::Context>,
+    as_uint8_array: bool,
+) -> Result<v8::Local<'s, v8::Value>, v8::Local<'s, v8::Value>> {
+    let realm = v8::Local::new(scope, realm);
+    let value = {
+        let scope = &mut v8::ContextScope::new(scope, realm);
+        blob::array_buffer_from_bytes(scope, bytes.to_vec())
+            .and_then(|buffer| {
+                if as_uint8_array {
+                    v8::Uint8Array::new(scope, buffer, 0, bytes.len()).map(Into::into)
+                } else {
+                    Some(v8::Local::<v8::Value>::from(buffer))
+                }
+            })
+            .map(|value| v8::Global::new(scope, value))
+    };
+    value
+        .map(|value| v8::Local::new(scope, value))
+        .ok_or_else(|| v8::undefined(scope).into())
 }
 
 fn registry_body_source_id<'s>(
