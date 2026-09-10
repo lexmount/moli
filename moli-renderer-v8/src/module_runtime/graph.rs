@@ -460,14 +460,24 @@ impl NativeModuleGraphFetchRequest {
                             .message()
                             .to_owned());
                     }
-                    crate::subresource_integrity::observe_subresource_integrity_metadata(
-                        integrity.as_deref(),
-                    );
                     let response_referrer_policy =
                         crate::referrer_policy::response_referrer_policy_from_headers(
                             &response.headers,
                         );
-                    let (head, _body, body_bytes) = response.into_parts();
+                    let (head, _, body_bytes) = response.into_parts();
+                    if !crate::subresource_integrity::response_body_matches_subresource_integrity_metadata(
+                        &body_bytes,
+                        integrity.as_deref(),
+                    ) {
+                        return Err(ModuleLoadError::new(
+                            ModuleLoadStage::Fetch,
+                            format!(
+                                "module request `{source_url}` failed its integrity check (FailedToLoad)"
+                            ),
+                        )
+                        .message()
+                        .to_owned());
+                    }
                     Ok(match kind {
                         ModuleKind::WebAssembly => ModuleGraphFetchedSource::new(
                             head.final_url,
@@ -989,6 +999,7 @@ fn trace_module_graph_job_created(kind: &'static str, root: &ModuleRootInput) {
         initiator_url = %root.initiator_url,
         phase = ?root.phase,
         parser_owned = root.parser_owned,
+        integrity = ?root.fetch_metadata.request_metadata.integrity,
     );
 }
 
@@ -3771,7 +3782,7 @@ import "./c.mjs";
     }
 
     #[tokio::test(flavor = "multi_thread")]
-    async fn module_graph_fetch_allows_invalid_integrity() -> anyhow::Result<()> {
+    async fn module_graph_fetch_rejects_integrity_mismatch() -> anyhow::Result<()> {
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
         let addr = listener.local_addr()?;
         let server = tokio::spawn(async move {
@@ -3792,22 +3803,26 @@ import "./c.mjs";
         let module_url = Url::parse(&format!("http://{addr}/bad-integrity.js"))?;
         let metadata = ModuleFetchMetadata {
             request_metadata: ScriptFetchRequestMetadata {
-                integrity: Some("sha384-invalid".to_owned()),
+                integrity: Some(
+                    "sha384-Li9vy3DqF8tnTXuiaAJuML3ky+er10rcgNR/VqsVpcw+ThHmYcwiB1pbOxEbzJr7"
+                        .to_owned(),
+                ),
                 ..ScriptFetchRequestMetadata::default()
             },
             ..ModuleFetchMetadata::default()
         };
-        let response = fetch_module_for_test(
+        let error = fetch_module_for_test(
             &loader,
             module_url,
             Url::parse(&format!("http://{addr}/page.html"))?,
             metadata,
         )
-        .await?;
+        .await
+        .expect_err("an integrity mismatch must reject the module fetch");
 
         assert!(
-            !response.from_cache,
-            "module graph fetch should complete normally even with invalid integrity"
+            error.to_string().contains("failed its integrity check"),
+            "module graph fetch should report an integrity mismatch: {error:#}"
         );
         server.await?;
         Ok(())

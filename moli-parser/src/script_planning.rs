@@ -291,7 +291,9 @@ impl ScriptFetchMetadata {
             cross_origin: normalize_cross_origin(cross_origin),
             referrer_policy: normalize_referrer_policy(referrer_policy),
             charset: normalize_attr_token(charset),
-            integrity: normalize_non_empty_attr(integrity),
+            // Attribute presence is significant for module scripts: an explicit
+            // empty value suppresses integrity metadata supplied by an import map.
+            integrity: integrity.map(str::trim).map(str::to_owned),
             nonce: normalize_non_empty_attr(nonce),
             fetch_priority: FetchPriorityHint::from_attribute(fetch_priority),
             parser_inserted: false,
@@ -587,6 +589,14 @@ mod tests {
         );
 
         assert_eq!(metadata.referrer_policy, None);
+    }
+
+    #[test]
+    fn script_fetch_metadata_preserves_explicit_empty_integrity() {
+        let metadata =
+            ScriptFetchMetadata::from_script_attributes(None, None, None, Some("   "), None, None);
+
+        assert_eq!(metadata.integrity.as_deref(), Some(""));
     }
 
     #[test]
