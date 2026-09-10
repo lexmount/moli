@@ -277,6 +277,104 @@ fn spawn_blocking_xhr_response_server(
 }
 
 #[tokio::test]
+async fn response_url_getters_exclude_fragments_without_changing_request_urls() {
+    run_page_vm_async_test(async move {
+        let mut page_vm = test_page_vm_with_document_url(
+            Url::parse("https://response-url-fragment.test/").unwrap(),
+        );
+        let local_executor = page_vm.local_executor.clone();
+        let observed = local_executor
+            .run(async move {
+                page_vm.vm_mut().eval(
+                    r#"
+                    (async () => {
+                      const results = [];
+                      for (const url of [
+                        "data:text/plain,hello#fragment",
+                        "data:text/plain,empty#",
+                        "data:text/plain,encoded%23hash?query#fragment",
+                        "data:text/plain,plain"
+                      ]) {
+                        const request = new Request(url);
+                        const response = await fetch(request);
+                        const clone = response.clone();
+                        const asyncXhr = new XMLHttpRequest();
+                        asyncXhr.open("GET", url);
+                        await new Promise((resolve, reject) => {
+                          asyncXhr.onload = resolve;
+                          asyncXhr.onerror = () => reject(new Error("XHR failed"));
+                          asyncXhr.send();
+                        });
+                        const syncXhr = new XMLHttpRequest();
+                        syncXhr.open("GET", url, false);
+                        syncXhr.send();
+                        results.push({
+                          request: request.url,
+                          response: response.url,
+                          clone: clone.url,
+                          asyncXhr: asyncXhr.responseURL,
+                          syncXhr: syncXhr.responseURL,
+                          body: await response.text(),
+                          cloneBody: await clone.text(),
+                          asyncBody: asyncXhr.responseText,
+                          syncBody: syncXhr.responseText
+                        });
+                      }
+                      return results;
+                    })().then(
+                      results => { globalThis.__responseUrls = results; },
+                      error => { globalThis.__responseUrls = { error: String(error) }; }
+                    ).finally(() => { globalThis.__responseUrlsDone = true; });
+                    "#,
+                )?;
+                drive_websocket_until_done(
+                    &mut page_vm,
+                    "String(globalThis.__responseUrlsDone === true)",
+                    "response URL fragment checks should finish",
+                )
+                .await?;
+                page_vm
+                    .vm_mut()
+                    .eval("JSON.stringify(globalThis.__responseUrls)")
+            })
+            .await
+            .expect("response URL test should run on owner lane");
+        let expected = [
+            (
+                "data:text/plain,hello#fragment",
+                "data:text/plain,hello",
+                "hello",
+            ),
+            ("data:text/plain,empty#", "data:text/plain,empty", "empty"),
+            (
+                "data:text/plain,encoded%23hash?query#fragment",
+                "data:text/plain,encoded%23hash?query",
+                "encoded#hash?query",
+            ),
+            ("data:text/plain,plain", "data:text/plain,plain", "plain"),
+        ]
+        .map(|(request, response, body)| {
+            serde_json::json!({
+                "request": request,
+                "response": response,
+                "clone": response,
+                "asyncXhr": response,
+                "syncXhr": response,
+                "body": body,
+                "cloneBody": body,
+                "asyncBody": body,
+                "syncBody": body,
+            })
+        });
+        assert_eq!(
+            serde_json::from_str::<serde_json::Value>(&observed).unwrap(),
+            serde_json::json!(expected)
+        );
+    })
+    .await;
+}
+
+#[tokio::test]
 async fn event_source_streams_sse_and_records_incremental_network_output() {
     run_page_vm_async_test(async move {
         let listener = TcpListener::bind("127.0.0.1:0")
