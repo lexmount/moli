@@ -33,6 +33,17 @@ mod readable;
 mod transferable;
 mod writable;
 
+pub(crate) fn body_stream_reader_operations<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+) -> Option<[v8::Local<'s, v8::Function>; 2]> {
+    // Fetch keeps intrinsic reader operations without eagerly materializing
+    // the public ReadableStream and reader interfaces during realm bootstrap.
+    Some([
+        v8::Function::new(scope, readable_stream_get_reader_callback)?,
+        v8::Function::new(scope, readable_stream_reader_read_callback)?,
+    ])
+}
+
 #[derive(Clone, Copy)]
 enum StreamPrototypeInstaller {
     ReadableStream,

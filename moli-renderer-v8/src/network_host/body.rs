@@ -27,6 +27,22 @@ pub(in crate::network_host) fn readable_body_stream_unusable<'s>(
         || crate::context_bootstrap::readable_stream_disturbed(scope, stream)
 }
 
+pub(in crate::network_host) fn body_is_used<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    object: v8::Local<'s, v8::Object>,
+) -> bool {
+    body_stream_object(scope, object)
+        .is_some_and(|stream| crate::context_bootstrap::readable_stream_disturbed(scope, stream))
+}
+
+pub(in crate::network_host) fn body_is_unusable<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    object: v8::Local<'s, v8::Object>,
+) -> bool {
+    body_stream_object(scope, object)
+        .is_some_and(|stream| readable_body_stream_unusable(scope, stream))
+}
+
 #[derive(Debug, Clone)]
 pub(in crate::network_host) struct PreparedBodyInit {
     pub(in crate::network_host) bytes: Vec<u8>,
@@ -69,6 +85,11 @@ pub(in crate::network_host) fn body_init<'s>(
             return Ok(Some(PreparedBodyInit::new(bytes, content_type)));
         }
         if web_api_interfaces::ReadableStream::is_instance(scope, object) {
+            if readable_body_stream_unusable(scope, object) {
+                return Err(webidl::WebIdlError::custom_message(
+                    "BodyInit ReadableStream is locked or disturbed",
+                ));
+            }
             return Ok(Some(PreparedBodyInit::new(Vec::new(), None)));
         }
     }
