@@ -1064,6 +1064,17 @@ def _response_content_type_and_extra_headers(
     return merged_content_type, merged_extra_headers
 
 
+def _fetch_status_response(query: str) -> tuple[int, str, str, bytes]:
+    """Model fetch/api/resources/status.py without decoding its byte payload."""
+    params = parse_qs(query, keep_blank_values=True, encoding="latin-1")
+    return (
+        int(params.get("code", ["200"])[0]),
+        params.get("text", ["OMG"])[0],
+        params.get("type", [""])[0],
+        params.get("content", [""])[0].encode("latin-1"),
+    )
+
+
 def _wasm_webapi_status_code(query: str) -> int | None:
     """Return the status for WPT's wasm/webapi/status.py fixture.
 
@@ -2072,6 +2083,9 @@ def _make_handler(
                     emit_body=emit_body,
                 )
                 return
+            if path == "/fetch/api/resources/status.py":
+                self._serve_fetch_status(parsed.query, emit_body=emit_body)
+                return
             if path == "/fetch/api/resources/inspect-headers.py":
                 self._send_bytes(
                     "text/plain",
@@ -2730,6 +2744,21 @@ def _make_handler(
                     self.wfile.write(body)
                 except (BrokenPipeError, ConnectionResetError):
                     return
+
+        def _serve_fetch_status(self, query: str, *, emit_body: bool) -> None:
+            try:
+                status, text, content_type, body = _fetch_status_response(query)
+            except ValueError:
+                self.send_error(500)
+                return
+            self._send_bytes(
+                content_type,
+                body,
+                emit_body=emit_body,
+                status_code=status,
+                status_text=text,
+                extra_headers=[("X-Request-Method", self.command)],
+            )
 
         def _send_bytes(
             self,
