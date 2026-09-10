@@ -24,6 +24,8 @@ pub(super) struct RequestConstructionState {
     pub(super) priority: moli_fetch::FetchPriorityHint,
     pub(super) duplex: String,
     pub(super) body: Option<Vec<u8>>,
+    pub(super) body_stream: Option<v8::Global<v8::Object>>,
+    pub(super) inherited_body_stream: bool,
     pub(super) inherited_body_unusable: bool,
     pub(super) body_content_type: Option<String>,
     pub(super) headers: Vec<(String, String)>,
@@ -101,6 +103,17 @@ pub(super) fn request_initial_state<'s>(
     let body = inherited
         .as_ref()
         .and_then(|snapshot| snapshot.body.clone());
+    let body_stream = body
+        .is_none()
+        .then(|| {
+            v8::Local::<v8::Object>::try_from(args.get(0))
+                .ok()
+                .filter(|input| is_branded_request_object(scope, *input))
+                .and_then(|input| body_stream_object(scope, input))
+                .map(|stream| v8::Global::new(scope, stream))
+        })
+        .flatten();
+    let inherited_body_stream = body_stream.is_some();
     let inherited_body_unusable = inherited
         .as_ref()
         .is_some_and(|snapshot| snapshot.body_unusable);
@@ -124,6 +137,8 @@ pub(super) fn request_initial_state<'s>(
         priority,
         duplex,
         body,
+        body_stream,
+        inherited_body_stream,
         inherited_body_unusable,
         body_content_type: None,
         headers,
@@ -156,20 +171,35 @@ pub(super) fn apply_request_init_overrides<'s>(
         "body",
         webidl::Context::member("RequestInit", "body"),
     )?;
-    let init_body_is_readable_stream = init_body_value
+    let init_body_stream = init_body_value
         .and_then(|value| v8::Local::<v8::Object>::try_from(value).ok())
-        .is_some_and(|object| web_api_interfaces::ReadableStream::is_instance(scope, object));
+        .filter(|object| web_api_interfaces::ReadableStream::is_instance(scope, *object));
     let body_from_init = init_body_value
+        .filter(|_| init_body_stream.is_none())
         .map(|value| body_init(scope, value, webidl::Context::member("RequestInit", "body")))
         .transpose()?
         .flatten();
     if let Some(init_body) = body_from_init.as_ref() {
         state.body_content_type = init_body.content_type.clone();
         state.body = Some(init_body.bytes.clone());
+        state.body_stream = None;
+        state.inherited_body_stream = false;
         state.inherited_body_unusable = false;
     }
-    if state.body.as_ref().is_some_and(|body| !body.is_empty())
-        && (body_from_init.is_some() || method_overridden)
+    if let Some(stream) = init_body_stream {
+        if readable_body_stream_unusable(scope, stream) {
+            return Err(webidl::WebIdlError::custom_message(
+                "BodyInit ReadableStream is locked or disturbed",
+            ));
+        }
+        state.body = None;
+        state.body_content_type = None;
+        state.body_stream = Some(v8::Global::new(scope, stream));
+        state.inherited_body_stream = false;
+        state.inherited_body_unusable = false;
+    }
+    if (state.body.is_some() || state.body_stream.is_some())
+        && (body_from_init.is_some() || init_body_stream.is_some() || method_overridden)
         && !request_method_allows_body(&state.method)
     {
         return Err(webidl::WebIdlError::custom_message(
@@ -218,13 +248,23 @@ pub(super) fn apply_request_init_overrides<'s>(
     if parsed.duplex.is_some() {
         state.duplex = "half".to_owned();
     }
-    if parsed.keepalive == Some(true) && init_body_is_readable_stream {
+    if init_body_stream.is_some() && parsed.duplex.is_none() {
         return Err(webidl::WebIdlError::custom_message(
-            "Request with keepalive cannot have a ReadableStream body",
+            "Request with a ReadableStream body requires duplex",
         ));
     }
     if let Some(keepalive) = parsed.keepalive {
         state.keepalive = keepalive;
+    }
+    if state.keepalive && init_body_stream.is_some() {
+        return Err(webidl::WebIdlError::custom_message(
+            "Request with keepalive cannot have a ReadableStream body",
+        ));
+    }
+    if state.body_stream.is_some() && !matches!(state.mode.as_str(), "cors" | "same-origin") {
+        return Err(webidl::WebIdlError::custom_message(
+            "Request with a ReadableStream body requires cors or same-origin mode",
+        ));
     }
     let guard = request_headers_guard_for_mode(&state.mode);
     state.headers = filter_headers_for_guard(&state.headers, guard);
@@ -232,9 +272,15 @@ pub(super) fn apply_request_init_overrides<'s>(
 }
 
 pub(super) fn validate_request_body_is_usable(
+    scope: &mut v8::PinScope<'_, '_>,
     state: &RequestConstructionState,
 ) -> Result<(), webidl::WebIdlError> {
-    if state.inherited_body_unusable {
+    if state.inherited_body_unusable
+        || state.body_stream.as_ref().is_some_and(|stream| {
+            let stream = v8::Local::new(scope, stream);
+            readable_body_stream_unusable(scope, stream)
+        })
+    {
         return Err(request_body_already_used_error());
     }
     Ok(())
