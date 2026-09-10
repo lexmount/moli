@@ -5567,6 +5567,8 @@ fetch/api/response/response-stream-disturbed-4.any.js?moli-wpt-any=dedicatedwork
 fetch/api/response/response-stream-disturbed-4.any.js?moli-wpt-any=window
 fetch/api/response/response-stream-disturbed-5.any.js?moli-wpt-any=dedicatedworker
 fetch/api/response/response-stream-disturbed-5.any.js?moli-wpt-any=window
+fetch/api/response/response-stream-disturbed-by-pipe.any.js?moli-wpt-any=dedicatedworker
+fetch/api/response/response-stream-disturbed-by-pipe.any.js?moli-wpt-any=window
 fetch/content-length/content-length.html
 fetch/security/dangling-markup/media.html
 focus/activeelement-after-focusing-different-site-iframe-then-immediately-focusing-back.html
