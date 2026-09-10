@@ -896,6 +896,9 @@ impl JsContextHost {
         let execution_context_owner = crate::native_bridge::WindowExecutionContextOwner::Frame(
             action.owner().local_window_id,
         );
+        let _document_unload = self
+            .child_browsing_context_document_handle(handle)
+            .map(|document| self.enter_document_unload(document));
         dispatch_beforeunload_for_runtime_owner(scope, window);
         dispatch_pagehide_for_runtime_owner(scope, window);
         dispatch_unload_for_runtime_owner(scope, window);
@@ -932,11 +935,27 @@ impl JsContextHost {
             .into_iter()
             .filter_map(|handle| {
                 unsafe { &*host_ptr }.child_browsing_context_document_handle(handle)
-                    .map(|document| (handle, document))
+                    .map(|document| {
+                        (
+                            handle,
+                            document,
+                            unsafe { &*host_ptr }.dom_host().owner_document_handle(handle),
+                        )
+                    })
             })
             .collect();
-        for (handle, document) in documents {
+        // Keep an ancestor's counter active while its descendants unload,
+        // and release a completed sibling before entering the next subtree.
+        let mut unload_guards = Vec::new();
+        for (handle, document, parent_document) in documents {
+            while unload_guards
+                .last()
+                .is_some_and(|(document, _)| Some(*document) != parent_document)
+            {
+                unload_guards.pop();
+            }
             if unsafe { &*host_ptr }.child_browsing_context_document_handle(handle) == Some(document) {
+                unload_guards.push((document, unsafe { &*host_ptr }.enter_document_unload(document)));
                 Self::dispatch_child_document_unload_without_beforeunload(scope, host_ptr, handle);
             }
         }
@@ -970,6 +989,9 @@ impl JsContextHost {
             action.owner().local_window_id,
         );
 
+        let _document_unload = unsafe { &*host_ptr }
+            .child_browsing_context_document_handle(handle)
+            .map(|document| unsafe { &*host_ptr }.enter_document_unload(document));
         dispatch_pagehide_for_runtime_owner(scope, window);
         if let Some(event) = construct_original_event(scope, "visibilitychange") {
             let _ = call_object_method(scope, document, "dispatchEvent", &[event.into()]);
