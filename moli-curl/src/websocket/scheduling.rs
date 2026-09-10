@@ -6,7 +6,7 @@ use std::{collections::HashMap, time::Duration};
 
 use curl::multi::{Multi, WaitFd};
 
-use super::session::Session;
+use super::{diagnostics::Diagnostics, session::Session};
 use crate::CurlTransferId;
 
 #[derive(Default, PartialEq, Eq)]
@@ -60,6 +60,8 @@ impl SocketPoll {
         multi: &Multi,
         sessions: &mut HashMap<CurlTransferId, Session>,
         timeout: Duration,
+        progressed: bool,
+        diagnostics: &mut Diagnostics,
     ) -> Result<(), curl::MultiError> {
         self.ids.clear();
         self.fds.clear();
@@ -69,7 +71,10 @@ impl SocketPoll {
                 self.fds.push(fd);
             }
         }
-        multi.poll(&mut self.fds, timeout)?;
+        let started = diagnostics.poll_start();
+        let result = multi.poll(&mut self.fds, timeout);
+        diagnostics.polled(started, timeout, progressed);
+        result?;
         for (id, fd) in self.ids.iter().zip(&self.fds) {
             if fd.received_read() || fd.received_write() {
                 // A socket event permits a retry, not guaranteed progress.

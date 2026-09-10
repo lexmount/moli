@@ -8,6 +8,7 @@ use curl::{
     multi::{Easy2Handle, Multi, WaitFd},
 };
 
+use super::diagnostics::Diagnostics;
 use super::{CurlWebSocketEvent, SessionIo, WsFlags, request::Handshake, scheduling::IoState};
 use crate::CurlTransferId;
 
@@ -113,7 +114,11 @@ impl Session {
         Ok(Step::Idle)
     }
 
-    pub(super) fn advance(&mut self, receive: &mut Vec<u8>) -> Result<Step, String> {
+    pub(super) fn advance(
+        &mut self,
+        receive: &mut Vec<u8>,
+        diagnostics: &mut Diagnostics,
+    ) -> Result<Step, String> {
         if self.io.cancelled() {
             return Ok(Step::Closed);
         }
@@ -130,8 +135,8 @@ impl Session {
                 return Ok(Step::Closed);
             }
             // Receive delivery must never hold up a pending write.
-            progressed |= self.write_pending()?;
-            match self.read_chunk(receive)? {
+            progressed |= self.write_pending(diagnostics)?;
+            match self.read_chunk(receive, diagnostics)? {
                 Step::Progress => progressed = true,
                 Step::Idle => break,
                 Step::Closed => return Ok(Step::Closed),
@@ -144,7 +149,7 @@ impl Session {
         })
     }
 
-    fn write_pending(&mut self) -> Result<bool, String> {
+    fn write_pending(&mut self, diagnostics: &mut Diagnostics) -> Result<bool, String> {
         // Keep the single frame resident across partial nonblocking writes.
         let mut pending = self.io.control.send.lock();
         if !self.writing.can_run(pending.is_some()) {
@@ -159,7 +164,12 @@ impl Session {
         {
             Ok(count) => {
                 send.offset += count;
-                if send.offset == send.frame.data.len() {
+                let completed = send.offset == send.frame.data.len();
+                if let Some(counters) = diagnostics.counters() {
+                    counters.written_bytes += count as u64;
+                    counters.written_frames += u64::from(completed);
+                }
+                if completed {
                     let send = pending.take().expect("completed frame");
                     self.writing.pause();
                     let _ = send.completed.send(send.offset);
@@ -168,6 +178,9 @@ impl Session {
             }
             Err(error) if error.is_again() => {
                 self.writing.would_block();
+                if let Some(counters) = diagnostics.counters() {
+                    counters.write_again += 1;
+                }
                 #[cfg(test)]
                 self.io.control.write_blocked.notify_one();
                 Ok(false)
@@ -180,7 +193,11 @@ impl Session {
         matches!(self.phase, Phase::Open) && self.io.control.reading.load(Ordering::Acquire)
     }
 
-    fn read_chunk(&mut self, receive: &mut Vec<u8>) -> Result<Step, String> {
+    fn read_chunk(
+        &mut self,
+        receive: &mut Vec<u8>,
+        diagnostics: &mut Diagnostics,
+    ) -> Result<Step, String> {
         if !self.reading.can_run(self.reading_enabled()) {
             return Ok(Step::Idle);
         }
@@ -196,14 +213,17 @@ impl Session {
         };
         // The owner lends one spare buffer across connections. AGAIN keeps it;
         // success transfers ownership to the event without copying the payload.
-        #[cfg(test)]
-        if receive.capacity() < CHUNK_BYTES {
+        if receive.is_empty() {
+            *receive = vec![0; CHUNK_BYTES];
+            if let Some(counters) = diagnostics.counters() {
+                counters.receive_allocations += 1;
+            }
+            #[cfg(test)]
             self.io
                 .control
                 .receive_allocations
                 .fetch_add(1, Ordering::Relaxed);
         }
-        receive.resize(CHUNK_BYTES, 0);
         #[cfg(test)]
         self.io
             .control
@@ -213,6 +233,10 @@ impl Session {
             Ok((count, frame)) => {
                 let mut data = std::mem::take(receive);
                 data.truncate(count);
+                if let Some(counters) = diagnostics.counters() {
+                    counters.read_bytes += count as u64;
+                    counters.read_frames += u64::from(frame.bytes_left() == 0);
+                }
                 // Let the caller answer Close before probing EOF. A peer can
                 // half-close TCP in the same packet as its Close frame.
                 if frame.flags().contains(WsFlags::CLOSE) && frame.bytes_left() == 0 {
@@ -223,6 +247,9 @@ impl Session {
             }
             Err(error) if error.is_again() => {
                 self.reading.would_block();
+                if let Some(counters) = diagnostics.counters() {
+                    counters.read_again += 1;
+                }
                 #[cfg(test)]
                 self.io.control.read_waiting.notify_one();
                 Ok(Step::Idle)

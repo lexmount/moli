@@ -17,6 +17,7 @@ use curl::{
 
 use super::{
     SessionIo, Submission,
+    diagnostics::Diagnostics,
     request::{self, Handshake},
     scheduling::SocketPoll,
     session::{Session, Step},
@@ -39,6 +40,7 @@ struct Owner {
     dns: CurlDnsOwnerResidence<CurlTransferId, Pending>,
     poll: SocketPoll,
     receive: Vec<u8>,
+    diagnostics: Diagnostics,
 }
 
 pub(super) fn run(
@@ -52,6 +54,7 @@ pub(super) fn run(
         dns: CurlDnsOwnerResidence::default(),
         poll: SocketPoll::default(),
         receive: Vec::new(),
+        diagnostics: Diagnostics::from_env(),
     };
     let _ = waker_tx.send(owner.multi.waker());
     while !shutdown.load(Ordering::Acquire) {
@@ -59,6 +62,10 @@ pub(super) fn run(
         owner.resolve_dns();
         owner.advance_handshakes();
         let progressed = owner.advance_sessions();
+        if let Some(counters) = owner.diagnostics.counters() {
+            counters.turns += 1;
+            counters.progressed_turns += u64::from(progressed);
+        }
         owner.wait_for_work(progressed);
     }
     owner.fail_sessions("curl WebSocket runtime shut down");
@@ -67,6 +74,7 @@ pub(super) fn run(
             .io
             .finish(Err("curl WebSocket runtime shut down".to_owned()));
     }
+    owner.diagnostics.report(0, true);
 }
 
 impl Owner {
@@ -171,7 +179,7 @@ impl Owner {
         let mut retired = Vec::new();
         let mut progressed = false;
         for (id, session) in &mut self.sessions {
-            match session.advance(&mut self.receive) {
+            match session.advance(&mut self.receive, &mut self.diagnostics) {
                 Ok(Step::Progress) => progressed = true,
                 Ok(Step::Idle) => {}
                 terminal => retired.push((*id, terminal)),
@@ -214,9 +222,16 @@ impl Owner {
                 })
                 .unwrap_or(IDLE_WAIT)
         };
-        if let Err(error) = self.poll.wait(&self.multi, &mut self.sessions, timeout) {
+        if let Err(error) = self.poll.wait(
+            &self.multi,
+            &mut self.sessions,
+            timeout,
+            progressed,
+            &mut self.diagnostics,
+        ) {
             self.fail_sessions(&error.to_string());
         }
+        self.diagnostics.report(self.sessions.len(), false);
     }
 
     fn fail_sessions(&mut self, error: &str) {

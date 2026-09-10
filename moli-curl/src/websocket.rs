@@ -10,6 +10,7 @@
 //! AGAIN parks that I/O until its socket is signalled. Application wakeups only
 //! resume paused work, such as a new frame or restored receive capacity.
 
+mod diagnostics;
 mod owner;
 mod request;
 mod scheduling;
