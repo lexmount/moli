@@ -52,9 +52,7 @@ use super::super::{
     svg_runtime::install_svg_template_bindings,
     touch_runtime::install_touch_template_bindings,
     view_transition_runtime::install_view_transition_template_bindings,
-    web_audio_runtime::{
-        audio_buffer_get_channel_data_callback, install_web_audio_template_bindings,
-    },
+    web_audio_runtime::install_web_audio_template_bindings,
     webrtc::install_webrtc_template_bindings,
     websocket::{install_websocket_bindings, install_websocket_stream_bindings},
     window_runtime::storage_bucket_caches_getter_callback,
@@ -179,17 +177,6 @@ struct HtmlCanvasElementTemplateMethodsDeclaration {
         callback = element::canvas_transfer_control_to_offscreen_callback
     )]
     transfer_control_to_offscreen: (),
-}
-
-#[derive(WebApiFunctionTemplate)]
-#[webapi(name = "AudioBuffer", enumerable)]
-struct AudioBufferTemplateMethodsDeclaration {
-    #[webapi(
-        method = "getChannelData",
-        length = 1,
-        callback = audio_buffer_get_channel_data_callback
-    )]
-    get_channel_data: (),
 }
 
 #[derive(WebApiFunctionTemplate)]
@@ -562,10 +549,6 @@ pub(super) fn install_constructor_template_bindings<'s>(
         }
         "Navigation" => {
             install_navigation_bindings(scope, template);
-        }
-        "AudioBuffer" => {
-            let proto = template.prototype_template(scope);
-            AudioBufferTemplateMethodsDeclaration::initialize_prototype_template(scope, proto);
         }
         "Worker" => {
             let proto = template.prototype_template(scope);

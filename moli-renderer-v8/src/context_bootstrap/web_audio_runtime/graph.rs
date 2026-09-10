@@ -1,18 +1,15 @@
-//! Minimal connection/start bookkeeping for the existing audio backend.
-//!
-//! Reachability can establish silence without pretending to implement DSP. Keep
-//! connections in native slots, handle cycles, and snapshot input availability
-//! before completion callbacks can disconnect or reconnect nodes.
+//! WebIDL connection validation and GC-traced wrapper relationships.
+//! Signal processing and scheduling belong to the native audio graph.
 
 use super::*;
 
 const CONTEXT: &str = "__moliAudioNodeContext";
-const ANALYSERS: &str = "__moliAudioContextActiveAnalysers";
+const ANALYSERS: &str = "__moliAudioContextPullAnalysers";
+const DEMANDED: &str = "__moliAudioContextDemandedCompressors";
 const DESTINATION: &str = "__moliAudioContextDestination";
 const INPUTS: &str = "__moliAudioNodeInputs";
 const OUTPUTS: &str = "__moliAudioNodeOutputs";
 const START_TIME: &str = "__moliAudioSourceStartTime";
-const RENDERED_INPUT: &str = "__moliAudioNodeRenderedInput";
 
 #[derive(WebApiFunctionTemplate)]
 #[webapi(name = "AudioNode", enumerable)]
@@ -102,15 +99,15 @@ fn add_edge<'s>(
     slot: &'static str,
     other: v8::Local<'s, v8::Object>,
 ) {
-    if objects(scope, node, slot).contains(&other) {
+    let mut values = objects(scope, node, slot);
+    if values.contains(&other) {
         return;
     }
-    let array = web_audio_array_slot(scope, node, slot).unwrap_or_else(|| {
-        let array = v8::Array::new(scope, 0);
-        set_private_value(scope, node, slot, array.into());
-        array
-    });
-    let _ = array.set_index(scope, array.length(), other.into());
+    values.push(other);
+    let values: Vec<v8::Local<v8::Value>> = values.into_iter().map(Into::into).collect();
+    // Define dense own elements without invoking Array.prototype setters.
+    let array = v8::Array::new_with_elements(scope, &values);
+    set_private_value(scope, node, slot, array.into());
 }
 
 fn remove_edge<'s>(
@@ -174,13 +171,17 @@ pub(super) fn connect<'s>(
             return None;
         }
     }
+    if !with_connection(scope, source, destination, |source, destination| {
+        source.audio_node().connect(destination.audio_node());
+    }) {
+        return None;
+    }
     add_edge(scope, source, OUTPUTS, destination);
     add_edge(scope, destination, INPUTS, source);
-    if get_private_value(scope, destination, ANALYSER_FFT_SIZE_SLOT).is_some() {
-        // Track candidates for offline automatic pull: analysers with input
-        // can process even without an output connection.
+    if is_analyser(scope, destination) {
         add_edge(scope, context, ANALYSERS, destination);
     }
+    update_pull_demand(scope, context);
     Some(destination)
 }
 
@@ -192,21 +193,11 @@ pub(super) fn disconnect<'s>(
     let Some(context) = require_node_context(scope, source) else {
         return;
     };
-    let outputs = objects(scope, source, OUTPUTS);
     let selected = if args.length() == 0 {
         None
     } else if args.get(0).is_object() {
         let destination = v8::Local::<v8::Object>::try_from(args.get(0)).unwrap();
         if require_node_context(scope, destination).is_none() {
-            return;
-        }
-        if !outputs.contains(&destination) {
-            throw_dom_exception(
-                scope,
-                "InvalidAccessError",
-                15,
-                "The audio nodes are not connected.",
-            );
             return;
         }
         Some(destination)
@@ -239,17 +230,35 @@ pub(super) fn disconnect<'s>(
             return;
         }
     }
+    // Port conversion can reenter connect/disconnect. Never pass a stale edge
+    // to the backend, whose targeted-disconnect contract requires it to exist.
+    let outputs = objects(scope, source, OUTPUTS);
+    if selected.is_some_and(|destination| !outputs.contains(&destination)) {
+        throw_dom_exception(
+            scope,
+            "InvalidAccessError",
+            15,
+            "The audio nodes are not connected.",
+        );
+        return;
+    }
     for destination in outputs {
         if selected.is_none_or(|selected| selected == destination) {
+            if !with_connection(scope, source, destination, |source, destination| {
+                source
+                    .audio_node()
+                    .disconnect_dest(destination.audio_node());
+            }) {
+                return;
+            }
             remove_edge(scope, source, OUTPUTS, destination);
             remove_edge(scope, destination, INPUTS, source);
-            if get_private_value(scope, destination, ANALYSER_FFT_SIZE_SLOT).is_some()
-                && objects(scope, destination, INPUTS).is_empty()
-            {
+            if is_analyser(scope, destination) && objects(scope, destination, INPUTS).is_empty() {
                 remove_edge(scope, context, ANALYSERS, destination);
             }
         }
     }
+    update_pull_demand(scope, context);
 }
 
 pub(super) fn start_source<'s>(
@@ -257,10 +266,10 @@ pub(super) fn start_source<'s>(
     args: &v8::FunctionCallbackArguments<'s>,
 ) {
     let node = args.this();
-    let Some(start) = web_audio_number_slot(scope, node, START_TIME) else {
+    if web_audio_number_slot(scope, node, START_TIME).is_none() {
         throw_type_error(scope, "Illegal invocation: expected an OscillatorNode.");
         return;
-    };
+    }
     let when = if args.get(0).is_undefined() {
         0.0
     } else {
@@ -273,11 +282,9 @@ pub(super) fn start_source<'s>(
         throw_type_error(scope, "Audio source start time must be finite.");
         return;
     }
-    if when < 0.0 {
-        throw_range_error(scope, "Audio source start time must not be negative.");
-        return;
-    }
-    if start.is_finite() {
+    // WebIDL conversion above may run page code and start this same source.
+    // Check the live state afterwards, before the algorithm's range check.
+    if web_audio_number_slot(scope, node, START_TIME).is_some_and(f64::is_finite) {
         throw_dom_exception(
             scope,
             "InvalidStateError",
@@ -286,57 +293,104 @@ pub(super) fn start_source<'s>(
         );
         return;
     }
+    if when < 0.0 {
+        throw_range_error(scope, "Audio source start time must not be negative.");
+        return;
+    }
+    let Some(state) = backend::get(scope, node) else {
+        return;
+    };
+    if let State::Node(Node::Oscillator(native)) = &mut *state.borrow_mut() {
+        native.start_at(when);
+    }
     set_web_audio_number_slot(scope, node, START_TIME, when);
 }
 
-fn has_started_source<'s>(
+fn is_analyser<'s>(scope: &mut v8::PinScope<'s, '_>, node: v8::Local<'s, v8::Object>) -> bool {
+    backend::get(scope, node)
+        .is_some_and(|state| matches!(&*state.borrow(), State::Node(Node::Analyser(_))))
+}
+
+fn set_demand<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     node: v8::Local<'s, v8::Object>,
-    end_time: f64,
+    active: bool,
 ) -> bool {
-    let mut pending = vec![node];
-    let mut visited = Vec::new();
-    while let Some(node) = pending.pop() {
-        if visited.contains(&node) {
-            continue;
-        }
-        visited.push(node);
-        if web_audio_number_slot(scope, node, START_TIME).is_some_and(|start| start < end_time) {
-            return true;
-        }
-        pending.extend(objects(scope, node, INPUTS));
+    if let Some(state) = backend::get(scope, node)
+        && let State::Node(Node::Compressor { demanded, .. }) = &*state.borrow()
+    {
+        demanded.store(active, std::sync::atomic::Ordering::Release);
+        return true;
     }
     false
 }
 
-pub(super) fn prepare_offline_render<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    context: v8::Local<'s, v8::Object>,
-    end_time: f64,
-) -> bool {
-    let destination = web_audio_object_slot(scope, context, DESTINATION);
-    let mut pending: Vec<_> = objects(scope, context, ANALYSERS)
-        .into_iter()
-        .filter(|node| objects(scope, *node, OUTPUTS).is_empty())
-        .collect();
-    pending.extend(destination);
+// Demand and input availability are different: a pulled compressor processes
+// silent input too. This only selects processors; it never substitutes PCM or
+// decides whether the output is silent from graph reachability.
+fn update_pull_demand<'s>(scope: &mut v8::PinScope<'s, '_>, context: v8::Local<'s, v8::Object>) {
+    let previous = objects(scope, context, DEMANDED);
+    let mut pending = objects(scope, context, ANALYSERS);
+    pending.extend(web_audio_object_slot(scope, context, DESTINATION));
     let mut visited = Vec::new();
+    let mut demanded = Vec::new();
     while let Some(node) = pending.pop() {
         if visited.contains(&node) {
             continue;
         }
         visited.push(node);
+        if backend::get(scope, node)
+            .is_some_and(|state| matches!(*state.borrow(), State::ModuleWorklet))
+        {
+            // Module-only worklets have no DSP pull edge yet. Do not propagate
+            // native processor demand across a control-only connection.
+            continue;
+        }
         pending.extend(objects(scope, node, INPUTS));
-        let has_input = has_started_source(scope, node, end_time);
-        let flag = v8::Boolean::new(scope, has_input);
-        set_private_value(scope, node, RENDERED_INPUT, flag.into());
+        if set_demand(scope, node, true) {
+            demanded.push(node.into());
+        }
     }
-    destination.is_some_and(|node| rendered_with_input(scope, node))
+    // Retained processors must not briefly observe false on the audio thread
+    // just because an unrelated edge changed in the control thread.
+    for node in previous {
+        if !visited.contains(&node) {
+            set_demand(scope, node, false);
+        }
+    }
+    let nodes = v8::Array::new_with_elements(scope, &demanded);
+    set_private_value(scope, context, DEMANDED, nodes.into());
 }
 
-pub(super) fn rendered_with_input<'s>(
+fn with_connection<'s>(
     scope: &mut v8::PinScope<'s, '_>,
-    node: v8::Local<'s, v8::Object>,
+    source: v8::Local<'s, v8::Object>,
+    destination: v8::Local<'s, v8::Object>,
+    operation: impl FnOnce(&Node, &Node),
 ) -> bool {
-    get_private_value(scope, node, RENDERED_INPUT).is_some_and(|value| value.boolean_value(scope))
+    if let Some(source) = backend::get(scope, source)
+        && let Some(destination) = backend::get(scope, destination)
+    {
+        match (&*source.borrow(), &*destination.borrow()) {
+            (State::Node(source), State::Node(destination)) => {
+                operation(source, destination);
+                return true;
+            }
+            (State::ModuleWorklet, State::Node(_) | State::ModuleWorklet)
+            | (State::Node(_), State::ModuleWorklet) => {
+                // Keep the pre-existing module/MessagePort surface usable.
+                // The caller records the logical edge; unlike native-to-native
+                // edges, it does not imply that JS worklet DSP is implemented.
+                return true;
+            }
+            _ => {}
+        }
+    }
+    throw_dom_exception(
+        scope,
+        "NotSupportedError",
+        9,
+        "This AudioNode has no native audio processor.",
+    );
+    false
 }
