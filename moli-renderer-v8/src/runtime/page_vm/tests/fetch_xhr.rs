@@ -4447,10 +4447,12 @@ async fn window_fetch_no_cors_opaque_response_blocking_returns_empty_opaque_resp
                         "fetch no-cors ORB should settle",
                     )
                     .await?;
-                    while page_vm
-                        .run_exact_page_websocket_selected_task_for_test().await?
-                        .is_some()
-                    {}
+                    // The opaque response resolves at its headers. Its ORB
+                    // network terminal arrives after the body has been checked.
+                    drain_page_work_until_no_pending_subresources(
+                        &mut page_vm,
+                        "fetch no-cors ORB network record should complete",
+                    ).await?;
                     let observed = page_vm.vm_mut().eval("String(globalThis.__fetchObserved)")?;
                     Ok::<_, anyhow::Error>((observed, page_vm.vm_mut().take_network_output()))
                 })

@@ -14,14 +14,16 @@ pub(in crate::network_host) use self::bindings::{ParsedResponseInit, parse_respo
 pub(super) use self::body_methods::install_response_body_methods;
 pub(crate) use self::cors::{
     FetchResponseSecurityViolation, cors_preflight_request_headers_for_origin,
-    cors_request_origin_after_redirects, filter_cors_exposed_response_headers_for_origin,
-    is_cors_policy_failure_message, validate_cors_preflight_response_for_origin,
-    validate_cors_response, validate_cors_response_for_origin,
+    cors_request_origin_after_redirects, fetch_response_needs_orb_body_validation,
+    filter_cors_exposed_response_headers_for_origin, is_cors_policy_failure_message,
+    validate_cors_preflight_response_for_origin, validate_cors_response,
+    validate_cors_response_for_origin,
     validate_cross_origin_embedder_and_document_isolation_policy,
-    validate_cross_origin_resource_policy, validate_fetch_response_security_policy_for_origin,
+    validate_cross_origin_resource_policy, validate_fetch_response_headers_for_origin,
+    validate_fetch_response_security_policy_for_origin,
     validate_fetch_response_security_policy_with_body,
     validate_fetch_response_security_policy_with_body_classified_for_origin,
-    validate_fetch_response_security_policy_with_body_for_origin,
+    validate_fetch_response_security_policy_with_body_for_origin, validated_opaque_response_body,
 };
 #[cfg(test)]
 pub(crate) use self::materialize::materialize_response_object;

@@ -1767,6 +1767,11 @@ impl JsContextHost {
             .streaming_subresource_fetches
             .values()
             .find(|state| state.body_source_id == body_source_id)?;
+        if state.needs_orb_body_validation() {
+            // Keep the original bytes in the capture body writer until ORB
+            // has approved them for the opaque response's internal stream.
+            return None;
+        }
         if let Some(target) = state.pending.execution_context.window_request_target()
             && !self
                 .window_execution_context_owner_is_current(target.owner(), target.dispatch_scope())

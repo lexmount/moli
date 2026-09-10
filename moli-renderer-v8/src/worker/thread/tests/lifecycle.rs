@@ -2702,6 +2702,127 @@ async fn service_worker_fetch_event_request_exposes_destination_metadata() {
 }
 
 #[tokio::test]
+async fn service_worker_opaque_headers_precede_orb_validation_and_cache_preserves_checked_body() {
+    ensure_v8();
+    for (mime, bytes, expected) in [
+        (
+            "application/json",
+            &b"globalThis.value = 1;"[..],
+            &b"globalThis.value = 1;"[..],
+        ),
+        ("application/json", &b"{\"secret\":true}"[..], &b""[..]),
+        (
+            "text/html",
+            &b"\x89PNG\r\n\x1a\nimage data"[..],
+            &b"\x89PNG\r\n\x1a\nimage data"[..],
+        ),
+    ] {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let fetch_url = format!("http://{}/body", listener.local_addr().unwrap());
+        let (release, released) = oneshot::channel();
+        let server = tokio::spawn(async move {
+            let (mut stream, _) = listener.accept().await.unwrap();
+            read_http_request_head(&mut stream).await.unwrap();
+            stream.write_all(format!(
+                "HTTP/1.1 200 OK\r\nContent-Type: {mime}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                bytes.len(),
+            ).as_bytes()).await.unwrap();
+            stream.write_all(&bytes[..bytes.len() - 1]).await.unwrap();
+            if timeout(TIMEOUT, released)
+                .await
+                .is_ok_and(|result| result.is_ok())
+            {
+                stream.write_all(&bytes[bytes.len() - 1..]).await.unwrap();
+            }
+        });
+        let source = format!(
+            r#"
+            addEventListener('fetch', event => {{
+              event.respondWith((async () => {{
+                const response = await fetch({}, {{mode: 'no-cors'}});
+                const clone = response.clone();
+                const cacheName = event.request.url;
+                const cache = await caches.open(cacheName);
+                let settled = false;
+                const write = cache.put(event.request, clone).then(() => settled = true);
+                await new Promise(resolve => setTimeout(resolve, 30));
+                console.log(JSON.stringify({{type: response.type, bodyNull: response.body === null,
+                  cloneNull: clone.body === null, settled}}));
+                await write;
+                const cached = await cache.match(event.request);
+                await caches.delete(cacheName);
+                return cached;
+              }})());
+            }});
+        "#,
+            serde_json::to_string(&fetch_url).unwrap()
+        );
+        let loader = ResourceRequestClient::new(&FetchConfig::default()).unwrap();
+        let mut handle = spawn_test_worker_with_options(
+            WorkerSpawnOptions::new(source, "https://example.test/app/sw.js".to_owned())
+                .with_request_client(loader)
+                .with_global_kind(crate::worker::WorkerGlobalKind::Service {
+                    registration_id: ServiceWorkerRegistrationId::from_u64_for_test(1),
+                    version_id: ServiceWorkerVersionId::from_u64_for_test(1),
+                    scope_url: url::Url::parse("https://example.test/app/").unwrap(),
+                }),
+        );
+        let mut request = service_worker_fetch_request_for_test();
+        request.request_mode = moli_fetch::RequestMode::NoCors;
+        request.destination = ServiceWorkerRequestDestination::Script;
+        handle.dispatch_service_worker_fetch_event(ServiceWorkerFetchEvent {
+            event_id: ServiceWorkerEventId::from_u64_for_worker(31),
+            owner: crate::service_worker_runtime::ServiceWorkerRunOwner::new(
+                ServiceWorkerVersionId::from_u64_for_test(1),
+                crate::runtime::RendererServiceWorkerRunIdentity::fresh(),
+            ),
+            request,
+            navigation_preload_sent: false,
+        });
+        let early = loop {
+            match timeout(TIMEOUT, handle.recv()).await.unwrap().unwrap() {
+                WorkerToParentMessage::Console(message) => break message.message,
+                WorkerToParentMessage::SubresourceNetwork(_)
+                | WorkerToParentMessage::SubresourceContinue(_) => {}
+                other => panic!("expected opaque headers before EOF for {mime}: {other:?}"),
+            }
+        };
+        let early: serde_json::Value = serde_json::from_str(
+            early
+                .strip_prefix("log: ")
+                .unwrap_or_else(|| panic!("unexpected opaque response console message: {early}")),
+        )
+        .unwrap_or_else(|error| panic!("invalid opaque response diagnostic {early}: {error}"));
+        assert_eq!(early["type"], "opaque", "{mime}");
+        assert_eq!(early["bodyNull"], true, "{mime}");
+        assert_eq!(early["cloneNull"], true, "{mime}");
+        if !expected.is_empty() {
+            assert_eq!(
+                early["settled"], false,
+                "allowed body ended before its last byte"
+            );
+        }
+        release.send(()).unwrap();
+        let response = loop {
+            match timeout(TIMEOUT, handle.recv()).await.unwrap().unwrap() {
+                WorkerToParentMessage::ServiceWorkerFetchCompleted(completion) => {
+                    match completion.result {
+                        ServiceWorkerFetchResult::Response(response) => break response,
+                        other => panic!("expected cached opaque response for {mime}: {other:?}"),
+                    }
+                }
+                WorkerToParentMessage::Error { message, .. } => panic!("{mime}: {message}"),
+                _ => {}
+            }
+        };
+        assert_eq!(response.response_type, "opaque", "{mime}");
+        assert_eq!(response.body, expected, "{mime}");
+        server.await.unwrap();
+        handle.terminate_and_join();
+    }
+}
+
+#[tokio::test]
 async fn service_worker_fetch_respond_with_body_accessed_opaque_response_keeps_internal_body() {
     ensure_v8();
     let listener = TcpListener::bind("127.0.0.1:0")

@@ -904,6 +904,17 @@ pub(super) struct StreamingSubresourceFetchState {
     pub(super) xhr_response: Option<XhrStreamingResponseState>,
 }
 
+impl StreamingSubresourceFetchState {
+    pub(super) fn needs_orb_body_validation(&self) -> bool {
+        crate::network_host::fetch_response_needs_orb_body_validation(
+            &self.pending.info.document_url,
+            &self.head.final_url,
+            &self.head.headers,
+            self.pending.request_mode,
+        )
+    }
+}
+
 pub(super) struct EventSourceStreamingChunkDelivery<'s> {
     pub(super) context: v8::Local<'s, v8::Context>,
     pub(super) event_source: v8::Local<'s, v8::Object>,

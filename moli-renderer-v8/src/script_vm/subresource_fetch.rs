@@ -4398,7 +4398,7 @@ impl ScriptVm {
                     None
                 }
                 .or_else(|| {
-                    crate::network_host::validate_fetch_response_security_policy_for_origin(
+                    crate::network_host::validate_fetch_response_headers_for_origin(
                         &pending.info.document_url,
                         &pending.response_request_origin(
                             started
@@ -4606,7 +4606,7 @@ impl ScriptVm {
                         | SubresourceResourceType::Xhr
                 )
                 .then(|| {
-                    crate::network_host::validate_fetch_response_security_policy_for_origin(
+                    crate::network_host::validate_fetch_response_headers_for_origin(
                         &pending.info.document_url,
                         &pending.response_request_origin(started.head.redirect_chain.iter().map(|redirect| (&redirect.from_url, &redirect.to_url))),
                         &started.head.final_url,
@@ -5277,6 +5277,20 @@ impl ScriptVm {
             .pending
             .execution_context
             .window_document_network_only_identity();
+        let needs_orb_body_validation = streaming.needs_orb_body_validation();
+        let response_body = streaming.body_writer.finish();
+        let result = result.and_then(|()| {
+            if needs_orb_body_validation {
+                crate::network_host::validated_opaque_response_body(
+                    &streaming.head.headers,
+                    &response_body,
+                )
+                .map(|_| ())
+                .map_err(crate::network_host::FetchResponseSecurityViolation::into_message)
+            } else {
+                Ok(())
+            }
+        });
         match result {
             Ok(()) => {
                 let request_cookie_report = streaming
@@ -5284,7 +5298,6 @@ impl ScriptVm {
                     .request_cookie_report
                     .clone()
                     .or_else(|| streaming.pending.info.request_cookie_report.clone());
-                let response_body = streaming.body_writer.finish();
                 let mut network_record = crate::types::SubresourceNetworkRecord::success_with_body(
                     streaming.pending.info.frame_id.clone(),
                     streaming.pending.info.document_url.clone(),
@@ -5321,7 +5334,7 @@ impl ScriptVm {
             Err(_) => {
                 let network_error_text = crate::network_host::ABORTED_ERROR_TEXT.to_owned();
                 if let Some(handle) = streaming.pending.info.network_request_handle {
-                    let partial_body = streaming.body_writer.finish();
+                    let partial_body = response_body;
                     self._context_host
                         .borrow_mut()
                         .record_subresource_response_started(
@@ -5551,6 +5564,7 @@ impl ScriptVm {
                 }
                 match result {
                     Ok(()) => {
+                        let needs_orb_body_validation = streaming.needs_orb_body_validation();
                         let request_cookie_report = streaming
                             .head
                             .request_cookie_report
@@ -5559,6 +5573,38 @@ impl ScriptVm {
                         let finish_body_started =
                             moli_trace::cdp_runtime_trace_enabled().then(Instant::now);
                         let response_body = streaming.body_writer.finish();
+                        if needs_orb_body_validation
+                            && let Err(error_text) =
+                                crate::network_host::release_pending_opaque_response_body(
+                                    scope,
+                                    body_source_id,
+                                    &streaming.head.headers,
+                                    &response_body,
+                                )
+                        {
+                            let mut record = crate::types::SubresourceNetworkRecord::failure(
+                                streaming.pending.info.frame_id.clone(),
+                                streaming.pending.info.document_url.clone(),
+                                streaming.request_url,
+                                streaming.request_method,
+                                streaming.request_headers,
+                                streaming.request_body,
+                                streaming.pending.info.resource_type,
+                                error_text,
+                            )
+                            .with_request_body_bytes(streaming.pending.info.request_body_bytes.clone());
+                            if let Some(handle) = streaming.pending.info.network_request_handle {
+                                record = record.with_request_handle(handle);
+                            }
+                            context_host.borrow_mut().record_subresource_network(record);
+                            context_host.borrow_mut().record_pending_subresource_continue_event(
+                                PendingSubresourceContinueEvent::Completed { internal_id },
+                            );
+                            defer_subresource_owner_async_scope(
+                                &context_host, scope, pending_owner, owner_async_scope,
+                            );
+                            return Ok(AsyncSubresourceFetchBodyActivity::WindowRealmEntered);
+                        }
                         let response_body_size = response_body.len();
                         trace_async_subresource_stage(
                             "async_subresource_streaming_body_finished",

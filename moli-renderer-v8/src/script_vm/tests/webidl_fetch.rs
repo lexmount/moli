@@ -9077,6 +9077,125 @@ fn response_clone_tees_user_readable_stream_body() {
 }
 
 #[test]
+fn opaque_window_fetch_keeps_blocked_bytes_out_of_internal_clone_consumers() {
+    use crate::network_host::MaterializedResponseBody;
+    for (mime, bytes, expected) in [
+        (
+            "application/json",
+            &b"globalThis.value = 1;"[..],
+            &b"globalThis.value = 1;"[..],
+        ),
+        ("application/json", &b"{\"secret\":true}"[..], &b""[..]),
+        (
+            "text/html",
+            &b"\x89PNG\r\n\x1a\nimage data"[..],
+            &b"\x89PNG\r\n\x1a\nimage data"[..],
+        ),
+    ] {
+        let mut vm = new_storage_test_vm("https://opaque-stream.test/");
+        vm.set_fetch_subresource_interception(
+            true,
+            Some(crate::types::SubresourceResourceType::Fetch),
+        );
+        vm.eval(
+            r#"
+            globalThis.__chunks = [];
+            globalThis.__finished = false;
+            globalThis.__onChunk = chunk => __chunks.push(...chunk);
+            fetch('https://cross-origin.test/body', {mode: 'no-cors'}).then(response => {
+                globalThis.__opaque = response;
+                globalThis.__clone = response.clone();
+            });
+        "#,
+        )
+        .unwrap();
+        let pending = vm.take_pending_subresource_fetch_infos();
+        assert_eq!(pending.len(), 1);
+        let pending = &pending[0];
+        let id = crate::network_host::new_network_body_source_id();
+        vm.start_streaming_async_subresource_fetch(
+            crate::types::AsyncSubresourceStreamingStarted {
+                internal_id: pending.internal_id,
+                request_url: pending.url.clone(),
+                request_method: "GET".to_owned(),
+                request_headers: Vec::new(),
+                request_body: None,
+                body_source_id: id,
+                network_request_headers: None,
+                head: moli_fetch::ResponseHead {
+                    final_url: pending.url.clone(),
+                    status: 200,
+                    headers: vec![("Content-Type".to_owned(), mime.to_owned())],
+                    request_cookie_report: None,
+                    cookie_set_reports: Vec::new(),
+                    redirected: false,
+                    redirect_chain: Vec::new(),
+                    from_cache: false,
+                    negotiated_http_version: None,
+                },
+            },
+        )
+        .unwrap();
+        assert_eq!(
+            vm.eval("JSON.stringify([__opaque.type, __opaque.body, __clone.body])")
+                .unwrap(),
+            r#"["opaque",null,null]"#
+        );
+        vm.with_default_context_scope_and_checkpoint_for_test(|scope, _| {
+            let global = scope.get_current_context().global(scope);
+            let response = v8::Local::<v8::Object>::try_from(
+                global.get(scope, v8str(scope, "__clone").into()).unwrap(),
+            )
+            .unwrap();
+            let callback = v8::Local::<v8::Function>::try_from(
+                global.get(scope, v8str(scope, "__onChunk").into()).unwrap(),
+            )
+            .unwrap();
+            let (body, _) =
+                crate::network_host::materialize_response_object_body_with_chunk_callback(
+                    scope,
+                    response,
+                    "opaque clone consumer",
+                    callback,
+                );
+            let MaterializedResponseBody::Pending(promise) = body else {
+                panic!("incomplete opaque body must remain pending");
+            };
+            assert_eq!(
+                global.set(scope, v8str(scope, "__bodyDone").into(), promise.into()),
+                Some(true)
+            );
+            Ok(())
+        })
+        .unwrap();
+        vm.eval("__bodyDone.then(() => __finished = true)").unwrap();
+        vm.append_streaming_async_subresource_fetch_chunk(id, bytes[..bytes.len() - 1].to_vec());
+        if expected.is_empty() {
+            assert_eq!(
+                vm.eval("JSON.stringify(__chunks)").unwrap(),
+                "[]",
+                "blocked prefix reached internal consumer"
+            );
+        } else {
+            assert_eq!(
+                vm.eval("String(__finished)").unwrap(),
+                "false",
+                "allowed body ended before its last byte"
+            );
+        }
+        vm.append_streaming_async_subresource_fetch_chunk(id, bytes[bytes.len() - 1..].to_vec());
+        vm.finish_streaming_async_subresource_fetch(pending.internal_id, id, Ok(()))
+            .unwrap();
+        assert_eq!(vm.eval("String(__finished)").unwrap(), "true");
+        assert_eq!(
+            vm.eval("JSON.stringify(__chunks)").unwrap(),
+            serde_json::to_string(expected).unwrap(),
+            "{mime}"
+        );
+    }
+}
+
+#[test]
 fn fetched_null_bodies_discard_payloads_without_registering_pending_streams() {
     use crate::network_host::{FetchResponseRequest, MaterializedResponseBody};
 

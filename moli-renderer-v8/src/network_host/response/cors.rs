@@ -123,6 +123,33 @@ pub(crate) fn validate_fetch_response_security_policy(
     credentials_mode: RequestCredentialsMode,
     policy_context: crate::types::SubresourcePolicyContext,
 ) -> Result<(), String> {
+    validate_fetch_response_headers_for_origin(
+        document_url,
+        &WebOrigin::from_url(document_url),
+        response_url,
+        response_headers,
+        request_mode,
+        credentials_mode,
+        policy_context,
+    )?;
+    if request_mode == RequestMode::NoCors {
+        validate_opaque_response_blocking(document_url, response_url, response_headers)
+    } else {
+        Ok(())
+    }
+}
+
+/// Header policies precede response delivery; ORB gates the opaque internal
+/// body separately so an unfinished download does not hold up fetch().
+pub(crate) fn validate_fetch_response_headers_for_origin(
+    document_url: &url::Url,
+    request_origin: &WebOrigin,
+    response_url: &url::Url,
+    response_headers: &[(String, String)],
+    request_mode: RequestMode,
+    credentials_mode: RequestCredentialsMode,
+    policy_context: crate::types::SubresourcePolicyContext,
+) -> Result<(), String> {
     if request_mode == RequestMode::NoCors {
         validate_cross_origin_resource_policy(document_url, response_url, response_headers)?;
         validate_cross_origin_embedder_and_document_isolation_policy(
@@ -133,16 +160,44 @@ pub(crate) fn validate_fetch_response_security_policy(
             credentials_mode,
             policy_context.cross_origin_embedder_policy,
             policy_context.document_isolation_policy,
-        )?;
-        validate_opaque_response_blocking(document_url, response_url, response_headers)
+        )
     } else {
-        validate_cors_response(
-            document_url,
+        validate_cors_response_for_origin(
+            request_origin,
             response_url,
             response_headers,
             credentials_mode,
         )
     }
+}
+
+pub(crate) fn fetch_response_needs_orb_body_validation(
+    document_url: &url::Url,
+    response_url: &url::Url,
+    response_headers: &[(String, String)],
+    request_mode: RequestMode,
+) -> bool {
+    request_mode == RequestMode::NoCors
+        && matches!(response_url.scheme(), "http" | "https")
+        && !same_origin(document_url, response_url)
+        && should_opaque_response_be_blocked_by_orb(response_headers)
+}
+
+pub(crate) fn validated_opaque_response_body<'a>(
+    response_headers: &[(String, String)],
+    body: &'a crate::protocol_types::SubresourceResponseBody,
+) -> Result<std::borrow::Cow<'a, [u8]>, FetchResponseSecurityViolation> {
+    let bytes = body.try_bytes().map_err(|error| {
+        FetchResponseSecurityViolation::Rejected(format!(
+            "fetch: failed to read response body: {error}"
+        ))
+    })?;
+    if should_opaque_response_be_blocked_by_orb_with_body(response_headers, &bytes) {
+        return Err(FetchResponseSecurityViolation::OpaqueResponseBlocked(
+            crate::network_host::ABORTED_ERROR_TEXT.to_owned(),
+        ));
+    }
+    Ok(bytes)
 }
 
 pub(crate) fn validate_fetch_response_security_policy_for_origin(
