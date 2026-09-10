@@ -1,5 +1,6 @@
 use crate::document_runtime::DomHandle;
 use crate::dom::{forms::InputType, native::Node};
+use crate::native_bridge::document::XHTML_NS;
 use crate::util::v8_string;
 use crate::webidl;
 
@@ -2427,6 +2428,60 @@ pub(in crate::native_bridge) fn node_hidden_setter_function<'s>(
             );
         }
     }
+    rv.set_undefined();
+}
+
+pub(in crate::native_bridge) fn node_inert_getter_function<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: v8::FunctionCallbackArguments<'s>,
+    mut rv: v8::ReturnValue<'s, v8::Value>,
+) {
+    let Ok((runtime_ptr, handle)) =
+        node_runtime_and_handle_from_object_or_detached(scope, args.this())
+    else {
+        throw_incompatible_getter_receiver(scope, "HTMLElement", "inert");
+        return;
+    };
+    let runtime = unsafe { &*runtime_ptr };
+    let is_html_element = runtime
+        .dom_host()
+        .node(handle)
+        .and_then(Node::as_element)
+        .is_some_and(|element| element.namespace() == XHTML_NS);
+    if !is_html_element {
+        throw_incompatible_getter_receiver(scope, "HTMLElement", "inert");
+        return;
+    }
+    rv.set_bool(element_attribute(runtime, handle, "inert").is_some());
+}
+
+pub(in crate::native_bridge) fn node_inert_setter_function<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: v8::FunctionCallbackArguments<'s>,
+    mut rv: v8::ReturnValue<'s, v8::Value>,
+) {
+    let Ok((runtime_ptr, handle)) =
+        node_runtime_and_handle_from_object_or_detached(scope, args.this())
+    else {
+        throw_incompatible_setter_receiver(scope, "HTMLElement", "inert");
+        return;
+    };
+    let is_html_element = unsafe { &*runtime_ptr }
+        .dom_host()
+        .node(handle)
+        .and_then(Node::as_element)
+        .is_some_and(|element| element.namespace() == XHTML_NS);
+    if !is_html_element {
+        throw_incompatible_setter_receiver(scope, "HTMLElement", "inert");
+        return;
+    }
+    set_reflected_boolean_attribute(
+        scope,
+        runtime_ptr,
+        handle,
+        "inert",
+        args.get(0).boolean_value(scope),
+    );
     rv.set_undefined();
 }
 

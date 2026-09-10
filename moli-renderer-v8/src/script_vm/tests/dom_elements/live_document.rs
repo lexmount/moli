@@ -706,6 +706,14 @@ fn htmlelement_standard_accessors_live_on_owner_prototypes() {
               };
               const own = (object, name) =>
                 Object.prototype.hasOwnProperty.call(object, name);
+              const throwsTypeError = callback => {
+                try {
+                  callback();
+                } catch (error) {
+                  return error instanceof TypeError;
+                }
+                return false;
+              };
 
               const htmlNames = [
                 "title",
@@ -715,6 +723,7 @@ fn htmlelement_standard_accessors_live_on_owner_prototypes() {
                 "translate",
                 "dir",
                 "hidden",
+                "inert",
                 "accessKey",
                 "draggable",
                 "spellcheck",
@@ -758,6 +767,7 @@ fn htmlelement_standard_accessors_live_on_owner_prototypes() {
               div.translate = false;
               div.dir = "RTL";
               div.hidden = true;
+              div.inert = true;
               div.accessKey = "x";
               div.draggable = true;
               div.spellcheck = false;
@@ -779,6 +789,10 @@ fn htmlelement_standard_accessors_live_on_owner_prototypes() {
               assert(div.translate === false && div.getAttribute("translate") === "no", "translate behavior");
               assert(div.dir === "rtl", "dir behavior");
               assert(div.hidden === true && div.hasAttribute("hidden"), "hidden behavior");
+              assert(div.inert === true && div.hasAttribute("inert"), "inert behavior");
+              const inertDescriptor = Object.getOwnPropertyDescriptor(HTMLElement.prototype, "inert");
+              assert(throwsTypeError(() => inertDescriptor.get.call(HTMLElement.prototype)), "inert getter brand");
+              assert(throwsTypeError(() => inertDescriptor.set.call(HTMLElement.prototype, true)), "inert setter brand");
               assert(div.accessKey === "x", "accessKey behavior");
               assert(div.draggable === true && div.getAttribute("draggable") === "true", "draggable behavior");
               assert(div.spellcheck === false && div.getAttribute("spellcheck") === "false", "spellcheck behavior");

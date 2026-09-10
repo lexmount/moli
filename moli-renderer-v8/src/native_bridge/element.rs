@@ -444,7 +444,8 @@ pub(super) use global_attributes::{
     node_enter_key_hint_setter_function, node_focus_group_getter_function,
     node_focus_group_setter_function, node_focus_group_start_getter_function,
     node_focus_group_start_setter_function, node_hidden_getter_function,
-    node_hidden_setter_function, node_input_mode_getter_function, node_input_mode_setter_function,
+    node_hidden_setter_function, node_inert_getter_function, node_inert_setter_function,
+    node_input_mode_getter_function, node_input_mode_setter_function,
     node_is_content_editable_getter_function, node_lang_getter_function, node_lang_setter_function,
     node_sandbox_getter_function, node_sandbox_setter_function, node_spellcheck_getter_function,
     node_spellcheck_setter_function, node_tab_index_getter_function,
@@ -1460,6 +1461,13 @@ struct HtmlElementStandardPrototypeDeclaration {
         setter = node_hidden_setter_function
     )]
     hidden: (),
+    #[webapi(
+        accessor_property,
+        enumerable,
+        getter = node_inert_getter_function,
+        setter = node_inert_setter_function
+    )]
+    inert: (),
     #[webapi(
         accessor_property = "accessKey",
         enumerable,

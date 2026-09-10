@@ -2736,6 +2736,7 @@ fn detached_global_html_attributes_use_html_element_prototype_accessors() {
     "translate",
     "dir",
     "hidden",
+    "inert",
     "accessKey",
     "draggable",
     "spellcheck",
@@ -2762,6 +2763,7 @@ fn detached_global_html_attributes_use_html_element_prototype_accessors() {
     descriptors.enterKeyHint.set.call(element, "send");
     descriptors.inputMode.set.call(element, "email");
     descriptors.hidden.set.call(element, true);
+    descriptors.inert.set.call(element, true);
     descriptors.autofocus.set.call(element, true);
     descriptors.translate.set.call(element, false);
     descriptors.draggable.set.call(element, true);
@@ -2778,6 +2780,7 @@ fn detached_global_html_attributes_use_html_element_prototype_accessors() {
     assert(descriptors.enterKeyHint.get.call(element) === "send", `${label}.enterKeyHint`);
     assert(descriptors.inputMode.get.call(element) === "email", `${label}.inputMode`);
     assert(descriptors.hidden.get.call(element) === true, `${label}.hidden`);
+    assert(descriptors.inert.get.call(element) === true, `${label}.inert`);
     assert(descriptors.autofocus.get.call(element) === true, `${label}.autofocus`);
     assert(descriptors.translate.get.call(element) === false, `${label}.translate`);
     assert(descriptors.draggable.get.call(element) === true, `${label}.draggable`);
@@ -2791,10 +2794,13 @@ fn detached_global_html_attributes_use_html_element_prototype_accessors() {
     assert(element.getAttribute("tabindex") === "7", `${label}.tabindex attr`);
 
     descriptors.hidden.set.call(element, false);
+    descriptors.inert.set.call(element, false);
     descriptors.autofocus.set.call(element, false);
     assert(descriptors.hidden.get.call(element) === false, `${label}.hidden false`);
+    assert(descriptors.inert.get.call(element) === false, `${label}.inert false`);
     assert(descriptors.autofocus.get.call(element) === false, `${label}.autofocus false`);
     assert(!element.hasAttribute("hidden"), `${label}.hidden removed`);
+    assert(!element.hasAttribute("inert"), `${label}.inert removed`);
     assert(!element.hasAttribute("autofocus"), `${label}.autofocus removed`);
 
     for (const name of names) {
