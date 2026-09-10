@@ -12,7 +12,7 @@ fn tls_context(tls: CurlTlsConfig) -> ConnectOptions {
 
 async fn exercise_tls_connection(url: String, context: ConnectOptions, opens: bool) {
     let (events, mut receiver) = mpsc::channel(32);
-    let connection = spawn_connection(501, url, Vec::new(), context, events);
+    let connection = spawn_standalone_connection(501, url, Vec::new(), context, events);
     if !opens {
         assert!(
             !recv_handshake_failure_events(&mut receiver)

@@ -451,7 +451,8 @@ async fn websocket_last_handle_drop_releases_pending_handshake() {
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let url = format!("ws://{}/pending", listener.local_addr().unwrap());
     let (event_tx, _event_rx) = mpsc::channel(1);
-    let handle = spawn_connection(61, url, Vec::new(), test_websocket_context(), event_tx);
+    let handle =
+        spawn_standalone_connection(61, url, Vec::new(), test_websocket_context(), event_tx);
     let retained = handle.clone();
     let (mut server, _) = timeout(Duration::from_secs(3), listener.accept())
         .await
@@ -495,6 +496,7 @@ async fn websocket_rejected_handshake_or_open_event_releases_transport() {
             assert!(terminal.is_none() || terminal.is_some_and(|result| result.is_err()));
         };
         let client = crate::connection::run_websocket_connection(
+            crate::runtime::standalone_connector().unwrap(),
             64,
             url,
             Vec::new(),
@@ -535,6 +537,7 @@ async fn websocket_rejected_message_event_releases_transport_and_writer() {
         assert!(terminal.is_none() || terminal.is_some_and(|result| result.is_err()));
     };
     let client = crate::connection::run_websocket_connection(
+        crate::runtime::standalone_connector().unwrap(),
         65,
         url,
         Vec::new(),
@@ -614,7 +617,7 @@ async fn websocket_cancel_releases_blocked_sink_and_open_writer() {
             true
         }
     });
-    let handle = spawn_connection(62, url, Vec::new(), test_websocket_context(), sink);
+    let handle = spawn_standalone_connection(62, url, Vec::new(), test_websocket_context(), sink);
     let retained = handle.clone();
     let (stream, _) = timeout(Duration::from_secs(3), listener.accept())
         .await
@@ -820,7 +823,8 @@ async fn websocket_synthetic_connection_can_receive_frames_and_server_close() {
 async fn websocket_transport_close_while_connecting_fails_before_open() {
     let (url, server) = spawn_sleeping_handshake_websocket_server().await;
     let (event_tx, mut event_rx) = mpsc::channel(32);
-    let command_tx = spawn_connection(91, url, Vec::new(), test_websocket_context(), event_tx);
+    let command_tx =
+        spawn_standalone_connection(91, url, Vec::new(), test_websocket_context(), event_tx);
 
     command_tx
         .close(None, String::new())
@@ -836,7 +840,7 @@ async fn websocket_transport_close_while_connecting_fails_before_open() {
 async fn websocket_transport_can_pause_after_handshake_before_open() {
     let (url, server) = spawn_text_echo_websocket_server().await;
     let (event_tx, mut event_rx) = mpsc::channel(32);
-    let (command_tx, controller) = spawn_connection_with_handshake_pause(
+    let (command_tx, controller) = spawn_standalone_connection_with_handshake_pause(
         92,
         url,
         Vec::new(),
@@ -890,7 +894,8 @@ async fn websocket_transport_handshake_applies_context_headers_and_preserves_con
     ];
     context.cookie_header = Some("sid=server".to_owned());
 
-    let command_tx = spawn_connection(1, url, vec!["chat".to_owned()], context, event_tx);
+    let command_tx =
+        spawn_standalone_connection(1, url, vec!["chat".to_owned()], context, event_tx);
     let headers = timeout(Duration::from_secs(3), headers_rx)
         .await
         .expect("websocket headers should arrive")
@@ -939,7 +944,7 @@ async fn websocket_transport_uses_explicit_http_proxy_connect_without_forwarding
     context.proxy_bearer_token = Some("proxy-token".to_owned());
     let user_agent = context.user_agent.clone();
 
-    let command_tx = spawn_connection(2, url.clone(), Vec::new(), context, event_tx);
+    let command_tx = spawn_standalone_connection(2, url.clone(), Vec::new(), context, event_tx);
     let proxy_request = timeout(Duration::from_secs(3), proxy_request_rx)
         .await
         .expect("proxy CONNECT should arrive")
@@ -985,7 +990,7 @@ async fn websocket_transport_rejects_non_200_http_proxy_connect() {
     context.http_proxy = Some(proxy_url);
     context.http_no_proxy = Some(String::new());
 
-    let _command_tx = spawn_connection(
+    let _command_tx = spawn_standalone_connection(
         3,
         "ws://example.test/socket".to_owned(),
         Vec::new(),
@@ -1016,7 +1021,7 @@ async fn websocket_transport_respects_disabled_tls_verify_for_self_signed_wss() 
     let mut context = test_websocket_context();
     context.tls.verify = false;
 
-    let command_tx = spawn_connection(3, url, Vec::new(), context, event_tx);
+    let command_tx = spawn_standalone_connection(3, url, Vec::new(), context, event_tx);
     let headers = timeout(Duration::from_secs(3), headers_rx)
         .await
         .expect("websocket TLS headers should arrive")
@@ -1041,7 +1046,7 @@ async fn websocket_transport_wss_allows_server_to_omit_response_subprotocol() {
     let mut context = test_websocket_context();
     context.tls.verify = false;
 
-    let _command_tx = spawn_connection(
+    let _command_tx = spawn_standalone_connection(
         4,
         url,
         vec!["chat".to_owned(), "superchat".to_owned()],
@@ -1175,7 +1180,7 @@ async fn websocket_transport_allows_server_to_omit_response_subprotocol() {
     let (url, server) = spawn_text_binary_echo_websocket_server().await;
     let (event_tx, mut event_rx) = mpsc::channel(32);
 
-    let command_tx = spawn_connection(
+    let command_tx = spawn_standalone_connection(
         4,
         url,
         vec!["chat".to_owned(), "superchat".to_owned()],
@@ -1200,7 +1205,8 @@ async fn websocket_transport_allows_server_to_omit_response_subprotocol() {
 async fn websocket_transport_sends_text_binary_and_reports_buffered_amount_consumption() {
     let (url, server) = spawn_text_binary_echo_websocket_server().await;
     let (event_tx, mut event_rx) = mpsc::channel(32);
-    let command_tx = spawn_connection(4, url, Vec::new(), test_websocket_context(), event_tx);
+    let command_tx =
+        spawn_standalone_connection(4, url, Vec::new(), test_websocket_context(), event_tx);
 
     let open = recv_open_event(&mut event_rx).await;
     assert_eq!(open.socket_id, 4);
@@ -1231,7 +1237,8 @@ async fn websocket_transport_sends_text_binary_and_reports_buffered_amount_consu
 async fn websocket_transport_reads_while_sending_many_large_messages() {
     let (url, server) = spawn_backpressure_websocket_server().await;
     let (event_tx, mut event_rx) = mpsc::channel(32);
-    let command_tx = spawn_connection(40, url, Vec::new(), test_websocket_context(), event_tx);
+    let command_tx =
+        spawn_standalone_connection(40, url, Vec::new(), test_websocket_context(), event_tx);
 
     let open = recv_open_event(&mut event_rx).await;
     assert_eq!(open.socket_id, 40);
@@ -1280,7 +1287,8 @@ async fn websocket_transport_reads_while_sending_many_large_messages() {
 async fn websocket_transport_reports_server_initiated_close_frame() {
     let (url, server) = spawn_server_close_websocket_server().await;
     let (event_tx, mut event_rx) = mpsc::channel(32);
-    let _command_tx = spawn_connection(5, url, Vec::new(), test_websocket_context(), event_tx);
+    let _command_tx =
+        spawn_standalone_connection(5, url, Vec::new(), test_websocket_context(), event_tx);
 
     let open = recv_open_event(&mut event_rx).await;
     assert_eq!(open.socket_id, 5);
@@ -1299,7 +1307,8 @@ async fn websocket_transport_handles_close_frame_in_handshake_packet() {
     )
     .await;
     let (event_tx, mut event_rx) = mpsc::channel(32);
-    let _command_tx = spawn_connection(6, url, Vec::new(), test_websocket_context(), event_tx);
+    let _command_tx =
+        spawn_standalone_connection(6, url, Vec::new(), test_websocket_context(), event_tx);
 
     let open = recv_open_event(&mut event_rx).await;
     assert_eq!(open.socket_id, 6);
@@ -1320,7 +1329,7 @@ async fn websocket_dropped_handshake_controller_fails_open_and_releases_transpor
         assert!(socket.next().await.unwrap().is_err());
     });
     let (events, mut receiver) = mpsc::channel(4);
-    let (_connection, controller) = spawn_connection_with_handshake_pause(
+    let (_connection, controller) = spawn_standalone_connection_with_handshake_pause(
         95,
         url,
         Vec::new(),
@@ -1387,8 +1396,13 @@ async fn websocket_queued_close_precedes_handshake_continuation() {
             accepted
         }
     });
-    let (connection, controller) =
-        spawn_connection_with_handshake_pause(97, url, Vec::new(), test_websocket_context(), sink);
+    let (connection, controller) = spawn_standalone_connection_with_handshake_pause(
+        97,
+        url,
+        Vec::new(),
+        test_websocket_context(),
+        sink,
+    );
     assert!(matches!(
         timeout(Duration::from_secs(3), receiver.recv())
             .await
@@ -1432,7 +1446,7 @@ async fn websocket_native_handshake_generates_keys_and_reports_actual_headers() 
                 "{header} belongs to native handshake generation"
             );
         }
-        let connection = spawn_connection(socket_id, url, Vec::new(), context, events);
+        let connection = spawn_standalone_connection(socket_id, url, Vec::new(), context, events);
         let actual = timeout(Duration::from_secs(3), captured)
             .await
             .unwrap()

@@ -7,7 +7,7 @@ pub mod websocket;
 
 pub use dns_adapter::CurlDnsResolution;
 pub use runtime::{
-    CurlMultiCompletion, CurlMultiJob, CurlMultiRuntime, CurlMultiRuntimeConfig, CurlOriginKey,
-    CurlSubmitError, CurlTransferId,
+    CurlHttpSender, CurlMultiCompletion, CurlMultiJob, CurlMultiRuntime, CurlMultiRuntimeConfig,
+    CurlOriginKey, CurlSubmitError, CurlTransferId,
 };
 pub use tls::CurlTlsConfig;

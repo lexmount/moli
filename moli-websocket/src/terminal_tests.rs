@@ -106,6 +106,7 @@ async fn failed_handshake_closes_commands_before_blocked_error() {
         let (commands, receiver) = command_channel();
         let (sink, mut events, release) = blocked_terminal_sink();
         let task = tokio::spawn(run_websocket_connection(
+            crate::runtime::standalone_connector().unwrap(),
             99,
             url,
             Vec::new(),
@@ -138,6 +139,7 @@ async fn close_during_handshake_releases_tcp_before_blocked_error() {
     let (commands, receiver) = command_channel();
     let (sink, mut events, release) = blocked_terminal_sink();
     let task = tokio::spawn(run_websocket_connection(
+        crate::runtime::standalone_connector().unwrap(),
         100,
         url,
         Vec::new(),
@@ -197,6 +199,7 @@ async fn rejected_handshake_decision_closes_commands_before_blocked_error() {
     let (decision, decide) = oneshot::channel();
     let (sink, mut events, release) = blocked_terminal_sink();
     let task = tokio::spawn(run_websocket_connection(
+        crate::runtime::standalone_connector().unwrap(),
         101,
         url,
         Vec::new(),

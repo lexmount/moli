@@ -136,6 +136,7 @@ async fn shared_owner_keeps_http_and_websocket_pools_independent() {
             connections.push(connection);
         }
         runtime
+            .http_sender()
             .submit(request(
                 &(base.clone() + "/ok"),
                 HttpCapture::default(),
@@ -167,6 +168,7 @@ async fn shared_owner_keeps_http_and_websocket_pools_independent() {
         }
         // Retiring WS does not retire the shared owner or its HTTP pool.
         runtime
+            .http_sender()
             .submit(request(
                 &(base.clone() + "/after"),
                 HttpCapture::default(),
@@ -200,6 +202,7 @@ async fn shared_owner_preserves_http_connection_caps_with_live_websocket() {
         opened(&mut connection).await;
         let (headers, ready) = tokio::sync::oneshot::channel();
         let first = runtime
+            .http_sender()
             .submit(request(
                 &(base.clone() + "/held"),
                 HttpCapture {
@@ -213,6 +216,7 @@ async fn shared_owner_preserves_http_connection_caps_with_live_websocket() {
         // Both HTTP jobs fit max_active=2. Only the connection cap keeps the
         // second waiting until its own deadline, while the first is held open.
         let second = runtime
+            .http_sender()
             .submit(request(
                 &(base.clone() + "/queued"),
                 HttpCapture::default(),

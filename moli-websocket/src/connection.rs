@@ -10,6 +10,7 @@ use crate::{
 };
 
 pub(crate) async fn run_websocket_connection(
+    connector: moli_curl::websocket::CurlWebSocketConnector,
     socket_id: u64,
     url: String,
     protocols: Vec<String>,
@@ -51,7 +52,7 @@ pub(crate) async fn run_websocket_connection(
     // The handshake future owns the pending transport. End its scope before
     // waiting for terminal delivery, including Close received while opening.
     let opened = {
-        let handshake = open_websocket_connection(request, &context);
+        let handshake = open_websocket_connection(&connector, request, &context);
         tokio::pin!(handshake);
         loop {
             tokio::select! {

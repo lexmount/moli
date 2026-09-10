@@ -106,29 +106,32 @@ impl<H: Handler, C> fmt::Debug for CurlSubmitError<H, C> {
     }
 }
 
-/// Cloneable handle for a single libcurl multi owner thread.
+/// Owns one native thread. Request handles cannot extend its lifetime or join it.
 #[derive(Debug)]
 pub struct CurlMultiRuntime<H: Handler + Send + 'static, C: Send + 'static> {
-    inner: Arc<CurlMultiRuntimeInner<H, C>>,
-}
-
-impl<H: Handler + Send + 'static, C: Send + 'static> Clone for CurlMultiRuntime<H, C> {
-    fn clone(&self) -> Self {
-        Self {
-            inner: Arc::clone(&self.inner),
-        }
-    }
-}
-
-#[derive(Debug)]
-struct CurlMultiRuntimeInner<H: Handler + Send + 'static, C: Send + 'static> {
-    command_tx: Sender<CurlRuntimeCommand<H, C>>,
-    owner_waker: MultiWaker,
-    shutdown_requested: Arc<AtomicBool>,
+    http: CurlHttpSender<H, C>,
     websocket_connector: CurlWebSocketConnector,
     #[cfg(test)]
     owner_started: Arc<AtomicBool>,
     owner_handle: Mutex<Option<thread::JoinHandle<()>>>,
+}
+
+/// Submits HTTP work to one owner. Clones carry no shutdown or join authority.
+#[derive(Debug)]
+pub struct CurlHttpSender<H: Handler + Send + 'static, C: Send + 'static> {
+    command_tx: Sender<CurlRuntimeCommand<H, C>>,
+    owner_waker: MultiWaker,
+    shutdown_requested: Arc<AtomicBool>,
+}
+
+impl<H: Handler + Send + 'static, C: Send + 'static> Clone for CurlHttpSender<H, C> {
+    fn clone(&self) -> Self {
+        Self {
+            command_tx: self.command_tx.clone(),
+            owner_waker: self.owner_waker.clone(),
+            shutdown_requested: self.shutdown_requested.clone(),
+        }
+    }
 }
 
 impl<H: Handler + Send + 'static, C: Send + 'static> CurlMultiRuntime<H, C> {
@@ -162,28 +165,61 @@ impl<H: Handler + Send + 'static, C: Send + 'static> CurlMultiRuntime<H, C> {
             .recv()
             .context("curl multi runtime owner did not publish a waker")?;
         let runtime = Self {
-            inner: Arc::new(CurlMultiRuntimeInner {
+            websocket_connector: CurlWebSocketConnector::new(
+                websocket_tx,
+                owner_waker.clone(),
+                shutdown_requested.clone(),
+            ),
+            http: CurlHttpSender {
                 command_tx,
-                websocket_connector: CurlWebSocketConnector::new(
-                    websocket_tx,
-                    owner_waker.clone(),
-                    shutdown_requested.clone(),
-                ),
                 owner_waker,
                 shutdown_requested,
-                #[cfg(test)]
-                owner_started,
-                owner_handle: Mutex::new(Some(owner_handle)),
-            }),
+            },
+            #[cfg(test)]
+            owner_started,
+            owner_handle: Mutex::new(Some(owner_handle)),
         };
         Ok((runtime, completion_rx))
     }
 
+    pub fn http_sender(&self) -> CurlHttpSender<H, C> {
+        self.http.clone()
+    }
+
+    pub fn shutdown(&self) {
+        if !self.http.shutdown_requested.swap(true, Ordering::SeqCst) {
+            let _ = self.http.command_tx.send(CurlRuntimeCommand::Shutdown);
+            let _ = self.http.owner_waker.wakeup();
+        }
+        if let Some(owner_handle) = self.owner_handle.lock().take() {
+            let _ = owner_handle.join();
+        }
+    }
+
+    /// Creates WebSockets on this runtime's owner and Multi. The capability
+    /// cannot keep the runtime alive or shut down unrelated HTTP transfers.
+    pub fn websocket_connector(&self) -> CurlWebSocketConnector {
+        self.websocket_connector.clone()
+    }
+
+    #[cfg(test)]
+    pub fn owner_count_for_testing(&self) -> usize {
+        usize::from(self.owner_started.load(Ordering::SeqCst))
+    }
+}
+
+impl<H: Handler + Send + 'static, C: Send + 'static> Drop for CurlMultiRuntime<H, C> {
+    fn drop(&mut self) {
+        self.shutdown();
+    }
+}
+
+impl<H: Handler + Send + 'static, C: Send + 'static> CurlHttpSender<H, C> {
     pub fn submit(
         &self,
         job: CurlMultiJob<H, C>,
     ) -> std::result::Result<CurlTransferId, CurlSubmitError<H, C>> {
-        if self.inner.shutdown_requested.load(Ordering::SeqCst) {
+        if self.shutdown_requested.load(Ordering::SeqCst) {
             return Err(CurlSubmitError {
                 job,
                 error: anyhow!("curl multi runtime is shutting down"),
@@ -194,12 +230,11 @@ impl<H: Handler + Send + 'static, C: Send + 'static> CurlMultiRuntime<H, C> {
             Err(error) => return Err(CurlSubmitError { job, error }),
         };
         match self
-            .inner
             .command_tx
             .send(CurlRuntimeCommand::Request { transfer_id, job })
         {
             Ok(()) => {
-                let _ = self.inner.owner_waker.wakeup();
+                let _ = self.owner_waker.wakeup();
                 Ok(transfer_id)
             }
             Err(error) => {
@@ -212,41 +247,6 @@ impl<H: Handler + Send + 'static, C: Send + 'static> CurlMultiRuntime<H, C> {
                 })
             }
         }
-    }
-
-    pub fn shutdown(&self) {
-        self.inner.shutdown();
-    }
-
-    /// Creates WebSockets on this runtime's owner and Multi. The capability
-    /// cannot keep the runtime alive or shut down unrelated HTTP transfers.
-    pub fn websocket_connector(&self) -> CurlWebSocketConnector {
-        self.inner.websocket_connector.clone()
-    }
-
-    #[cfg(test)]
-    pub fn owner_count_for_testing(&self) -> usize {
-        usize::from(self.inner.owner_started.load(Ordering::SeqCst))
-    }
-}
-
-impl<H: Handler + Send + 'static, C: Send + 'static> Drop for CurlMultiRuntimeInner<H, C> {
-    fn drop(&mut self) {
-        self.shutdown();
-    }
-}
-
-impl<H: Handler + Send + 'static, C: Send + 'static> CurlMultiRuntimeInner<H, C> {
-    fn shutdown(&self) {
-        if self.shutdown_requested.swap(true, Ordering::SeqCst) {
-            return;
-        }
-        let _ = self.command_tx.send(CurlRuntimeCommand::Shutdown);
-        let _ = self.owner_waker.wakeup();
-        let Some(owner_handle) = self.owner_handle.lock().take() else {
-            return;
-        };
-        let _ = owner_handle.join();
     }
 }
 
@@ -297,6 +297,7 @@ mod tests {
         easy.url(&format!("http://{address}/identity"))
             .expect("test curl URL should be valid");
         let transfer_id = runtime
+            .http_sender()
             .submit(CurlMultiJob {
                 easy,
                 context: "matching-context".to_owned(),
@@ -320,5 +321,36 @@ mod tests {
 
         runtime.shutdown();
         server.join().expect("test HTTP server should finish");
+    }
+
+    #[test]
+    fn http_sender_does_not_keep_owner_alive_and_returns_rejected_job() {
+        let (runtime, completed) =
+            CurlMultiRuntime::<TestHandler, Vec<u8>>::new(Default::default()).unwrap();
+        let sender = runtime.http_sender();
+        let retained = sender.clone();
+        drop(runtime);
+        for sender in [sender, retained] {
+            let mut easy = Easy2::new(TestHandler);
+            easy.url("http://127.0.0.1:1/must-not-connect").unwrap();
+            let error = sender
+                .submit(CurlMultiJob {
+                    easy,
+                    context: vec![7; 1024],
+                    origin: None,
+                    deadline: None,
+                    dns_resolution: CurlDnsResolution::curl_managed(),
+                    priority: 1,
+                    label: "closed".into(),
+                })
+                .unwrap_err();
+            assert!(error.error.to_string().contains("shutting down"));
+            assert_eq!(error.job.context, vec![7; 1024]);
+            assert_eq!(error.job.label, "closed");
+        }
+        assert!(matches!(
+            completed.try_recv(),
+            Err(crossbeam_channel::TryRecvError::Disconnected)
+        ));
     }
 }

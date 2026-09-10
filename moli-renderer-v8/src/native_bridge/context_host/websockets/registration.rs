@@ -9,7 +9,8 @@ use crate::types::{
 };
 use moli_websocket::{
     ConnectOptions as WebSocketConnectOptions, spawn_connection,
-    spawn_connection_with_handshake_pause, spawn_failed_connection, spawn_synthetic_connection,
+    spawn_connection_with_handshake_pause, spawn_failed_connection, spawn_standalone_connection,
+    spawn_standalone_connection_with_handshake_pause, spawn_synthetic_connection,
     websocket_cookie_url,
 };
 use url::Url;
@@ -49,8 +50,8 @@ impl JsContextHost {
             .as_ref()
             .ok()
             .and_then(|header| header.clone());
+        let connector = loader.map(|loader| loader.websocket_connector());
         let context = WebSocketConnectOptions {
-            connector: loader.map(|loader| loader.websocket_connector()),
             origin: moli_url::origin_ascii_serialization(&document_url),
             user_agent: loader
                 .map(|loader| loader.user_agent().to_owned())
@@ -91,6 +92,7 @@ impl JsContextHost {
                 v8::Global::new(scope, scope.get_current_context()),
                 dispatch_scope,
                 PendingWebSocketConnection {
+                    connector,
                     socket_id,
                     protocols,
                     connect_options: context,
@@ -113,13 +115,23 @@ impl JsContextHost {
             (None, Some(internal_id))
         } else {
             let connection = match cookie_header {
-                Ok(_) => spawn_connection(
-                    socket_id,
-                    url.to_string(),
-                    protocols,
-                    context,
-                    self.page_websocket_sender().event_sender(),
-                ),
+                Ok(_) => match connector {
+                    Some(connector) => spawn_connection(
+                        connector,
+                        socket_id,
+                        url.to_string(),
+                        protocols,
+                        context,
+                        self.page_websocket_sender().event_sender(),
+                    ),
+                    None => spawn_standalone_connection(
+                        socket_id,
+                        url.to_string(),
+                        protocols,
+                        context,
+                        self.page_websocket_sender().event_sender(),
+                    ),
+                },
                 Err(error) => spawn_failed_connection(
                     socket_id,
                     format!("failed to build WebSocket cookie header: {error}"),
@@ -166,25 +178,43 @@ impl JsContextHost {
             context.cookie_header = None;
         }
         let (connection, handshake_controller) = if intercept_response {
-            let (connection, controller) = spawn_connection_with_handshake_pause(
-                pending.socket_id,
-                url.to_string(),
-                pending.protocols,
-                context,
-                event_sender,
-            );
-            (connection, Some(controller))
-        } else {
-            (
-                spawn_connection(
+            let (connection, controller) = match pending.connector {
+                Some(connector) => spawn_connection_with_handshake_pause(
+                    connector,
                     pending.socket_id,
                     url.to_string(),
                     pending.protocols,
                     context,
                     event_sender,
                 ),
-                None,
-            )
+                None => spawn_standalone_connection_with_handshake_pause(
+                    pending.socket_id,
+                    url.to_string(),
+                    pending.protocols,
+                    context,
+                    event_sender,
+                ),
+            };
+            (connection, Some(controller))
+        } else {
+            let connection = match pending.connector {
+                Some(connector) => spawn_connection(
+                    connector,
+                    pending.socket_id,
+                    url.to_string(),
+                    pending.protocols,
+                    context,
+                    event_sender,
+                ),
+                None => spawn_standalone_connection(
+                    pending.socket_id,
+                    url.to_string(),
+                    pending.protocols,
+                    context,
+                    event_sender,
+                ),
+            };
+            (connection, None)
         };
         state.handshake_controller = handshake_controller;
         state.url = url;

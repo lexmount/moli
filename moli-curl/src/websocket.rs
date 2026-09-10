@@ -377,7 +377,7 @@ impl CurlWebSocketConnector {
 
 /// Standalone owner for callers without an existing HTTP runtime. Uses the
 /// same Multi driver as HTTP, with no HTTP submissions.
-#[derive(Clone, Debug)]
+#[derive(Debug)]
 pub struct CurlWebSocketRuntime {
     runtime: CurlMultiRuntime<StandaloneHandler, ()>,
 }

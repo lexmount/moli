@@ -16,7 +16,8 @@ use tokio_tungstenite::tungstenite::{
 };
 
 use crate::{
-    ConnectOptions, Event, FrameOpcode, proxy::websocket_proxy_url_with_env, spawn_connection,
+    ConnectOptions, Event, FrameOpcode, proxy::websocket_proxy_url_with_env,
+    spawn_standalone_connection,
 };
 
 struct InfallibleHandshakeCallback<F>(F);
@@ -32,7 +33,6 @@ where
 
 pub fn test_websocket_context() -> ConnectOptions {
     ConnectOptions {
-        connector: None,
         origin: "https://example.com".to_owned(),
         user_agent: "Moli-WebSocket-Test/1.0".to_owned(),
         extra_headers: Vec::new(),
@@ -84,7 +84,8 @@ pub async fn websocket_computed_accept_handshake_failure_message(
 
 async fn websocket_handshake_failure_message(url: String, protocols: Vec<String>) -> String {
     let (event_tx, mut event_rx) = mpsc::channel(32);
-    let _command_tx = spawn_connection(90, url, protocols, test_websocket_context(), event_tx);
+    let _command_tx =
+        spawn_standalone_connection(90, url, protocols, test_websocket_context(), event_tx);
     recv_handshake_failure_events(&mut event_rx).await
 }
 

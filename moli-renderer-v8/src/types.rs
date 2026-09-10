@@ -307,6 +307,7 @@ impl ImageRequestKey {
     }
 }
 pub(super) struct PendingWebSocketConnection {
+    pub(super) connector: Option<moli_fetch::CurlWebSocketConnector>,
     pub(super) socket_id: u64,
     pub(super) protocols: Vec<String>,
     pub(super) connect_options: moli_websocket::ConnectOptions,

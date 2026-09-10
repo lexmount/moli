@@ -1,5 +1,5 @@
 use super::CLOSE_TIMEOUT;
-use crate::{Command, Event, FrameOpcode, spawn_connection, test_support::*};
+use crate::{Command, Event, FrameOpcode, spawn_standalone_connection, test_support::*};
 use futures_util::{SinkExt, StreamExt};
 use tokio::{
     net::{TcpListener, TcpSocket},
@@ -39,7 +39,7 @@ async fn native_close_waits_for_queued_data_before_starting_timeout() {
         socket.flush().await.unwrap();
     });
     let (tx, mut rx) = mpsc::channel(8);
-    let handle = spawn_connection(80, url, Vec::new(), test_websocket_context(), tx);
+    let handle = spawn_standalone_connection(80, url, Vec::new(), test_websocket_context(), tx);
     recv_open_event(&mut rx).await;
     handle
         .send_binary((0..MESSAGE_BYTES).map(|i| (i % 251) as u8).collect())
@@ -78,7 +78,7 @@ async fn native_close_still_times_out_when_peer_never_answers_close() {
         let _ = finish_rx.await;
     });
     let (tx, mut rx) = mpsc::channel(8);
-    let handle = spawn_connection(81, url, Vec::new(), test_websocket_context(), tx);
+    let handle = spawn_standalone_connection(81, url, Vec::new(), test_websocket_context(), tx);
     recv_open_event(&mut rx).await;
     handle.close(Some(1000), String::new()).unwrap();
     assert_closing(&mut rx, 81).await;
@@ -151,7 +151,7 @@ async fn native_fragmented_sends_complete_while_incoming_sink_is_blocked() {
             }
         }
     });
-    let handle = spawn_connection(82, url, Vec::new(), test_websocket_context(), sink);
+    let handle = spawn_standalone_connection(82, url, Vec::new(), test_websocket_context(), sink);
     recv_open_event(&mut rx).await;
     timeout(Duration::from_secs(3), blocked.notified())
         .await

@@ -11,10 +11,10 @@ async fn page_and_worker_websocket_connectors_follow_resource_runtime_owner() ->
     let mut connections = Vec::new();
     let mut peers = Vec::new();
     for (index, client) in [&page, &worker].into_iter().enumerate() {
-        let mut context = test_websocket_context();
-        context.connector = Some(client.websocket_connector());
+        let context = test_websocket_context();
         let (events, incoming) = tokio::sync::mpsc::channel(8);
         let connection = spawn_connection(
+            client.websocket_connector(),
             3000 + index as u64,
             url.clone(),
             Vec::new(),

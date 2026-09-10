@@ -1276,7 +1276,6 @@ pub(crate) fn register_worker_websocket<'s>(
         .ok()
         .and_then(|header| header.clone());
     let context = WebSocketConnectOptions {
-        connector: Some(loader.request_client().websocket_connector()),
         origin: moli_url::origin_ascii_serialization(&document_url),
         user_agent: loader.request_client().user_agent().to_owned(),
         extra_headers: extra_http_headers,
@@ -1327,6 +1326,7 @@ pub(crate) fn register_worker_websocket<'s>(
             None,
         )?;
         let connection = spawn_connection(
+            loader.request_client().websocket_connector(),
             socket_id,
             url.to_string(),
             protocols,

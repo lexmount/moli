@@ -8,11 +8,10 @@ use crate::{
 use moli_curl::{
     CurlDnsResolution,
     websocket::{
-        CurlWebSocketConnection, CurlWebSocketEvent, CurlWebSocketRequest, CurlWebSocketRuntime,
+        CurlWebSocketConnection, CurlWebSocketConnector, CurlWebSocketEvent, CurlWebSocketRequest,
     },
 };
 use moli_dns_resolver::DnsTarget;
-use std::sync::OnceLock;
 
 pub(crate) struct HandshakeInfo {
     pub request_headers: http::HeaderMap,
@@ -25,6 +24,7 @@ pub(crate) struct OpenedConnection {
 }
 
 pub(crate) async fn open_websocket_connection(
+    connector: &CurlWebSocketConnector,
     request: PreparedWebSocketRequest,
     context: &ConnectOptions,
 ) -> Result<OpenedConnection, String> {
@@ -57,18 +57,9 @@ pub(crate) async fn open_websocket_connection(
             );
         }
     }
-    let mut connection = match &context.connector {
-        Some(connector) => connector.connect(native),
-        None => {
-            static RUNTIME: OnceLock<Result<CurlWebSocketRuntime, String>> = OnceLock::new();
-            let runtime = RUNTIME
-                .get_or_init(|| CurlWebSocketRuntime::new().map_err(|error| error.to_string()))
-                .as_ref()
-                .map_err(Clone::clone)?;
-            runtime.connect(native)
-        }
-    }
-    .map_err(|error| error.to_string())?;
+    let mut connection = connector
+        .connect(native)
+        .map_err(|error| error.to_string())?;
     match connection.recv().await {
         Some(CurlWebSocketEvent::Handshake {
             request: actual,

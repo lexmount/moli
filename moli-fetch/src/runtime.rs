@@ -25,7 +25,8 @@ use moli_cookie_jar::{
     advance_cookie_request_context,
 };
 use moli_curl::{
-    CurlMultiCompletion, CurlMultiJob, CurlMultiRuntime, CurlMultiRuntimeConfig, CurlOriginKey,
+    CurlHttpSender, CurlMultiCompletion, CurlMultiJob, CurlMultiRuntime, CurlMultiRuntimeConfig,
+    CurlOriginKey,
 };
 use moli_url_policy::ensure_http_network_transport_url;
 use parking_lot::Mutex;
@@ -390,12 +391,14 @@ impl FetchRuntimeOwner {
         let (curl_runtime, curl_completion_rx) = CurlMultiRuntime::new(curl_runtime_config(config))
             .expect("failed to start fetch curl multi runtime");
         let websocket_connector = curl_runtime.websocket_connector();
+        let curl_http = curl_runtime.http_sender();
         let owner = RuntimeOwner {
             config: config.clone(),
             cookie_store,
             client_hint_preferences,
             request_rx,
             curl_runtime,
+            curl_http,
             curl_completion_rx,
             shutdown_requested: Arc::clone(&shutdown_requested),
             #[cfg(test)]
@@ -704,6 +707,7 @@ struct RuntimeOwner {
     client_hint_preferences: SharedClientHintPreferences,
     request_rx: Receiver<RuntimeCommand>,
     curl_runtime: CurlMultiRuntime<FetchTransferHandler, ActiveTransferContext>,
+    curl_http: CurlHttpSender<FetchTransferHandler, ActiveTransferContext>,
     curl_completion_rx: Receiver<RuntimeCurlCompletion>,
     shutdown_requested: Arc<AtomicBool>,
     #[cfg(test)]
@@ -942,7 +946,7 @@ impl RuntimeOwner {
             label,
             context: ActiveTransferContext::Buffered(Box::new(context)),
         };
-        match self.curl_runtime.submit(curl_job) {
+        match self.curl_http.submit(curl_job) {
             Ok(_) => Ok(JobOutcome::Submitted),
             Err(error) => Err((
                 error
@@ -1128,7 +1132,7 @@ impl RuntimeOwner {
             label,
             context: ActiveTransferContext::Streaming(Box::new(context)),
         };
-        match self.curl_runtime.submit(curl_job) {
+        match self.curl_http.submit(curl_job) {
             Ok(_) => Ok(StreamingJobOutcome::Submitted),
             Err(error) => {
                 let context = error
@@ -1327,7 +1331,7 @@ impl RuntimeOwner {
             label,
             context: ActiveTransferContext::StreamingRaw(Box::new(context)),
         };
-        match self.curl_runtime.submit(curl_job) {
+        match self.curl_http.submit(curl_job) {
             Ok(_) => Ok(StreamingJobOutcome::Submitted),
             Err(error) => {
                 let context = error

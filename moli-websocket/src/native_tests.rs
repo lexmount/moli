@@ -1,4 +1,4 @@
-use crate::{Event, FrameOpcode, spawn_connection, test_support::*};
+use crate::{Event, FrameOpcode, spawn_standalone_connection, test_support::*};
 use futures_util::{SinkExt, StreamExt};
 use tokio::{
     io::AsyncWriteExt,
@@ -25,7 +25,7 @@ async fn native_send_accounting_does_not_require_a_server_echo() {
         let _ = socket.flush().await;
     });
     let (tx, mut rx) = mpsc::channel(8);
-    let handle = spawn_connection(70, url, Vec::new(), test_websocket_context(), tx);
+    let handle = spawn_standalone_connection(70, url, Vec::new(), test_websocket_context(), tx);
     recv_open_event(&mut rx).await;
     handle.send_text("without echo".to_owned()).unwrap();
     assert_send_completed(&mut rx, 70, FrameOpcode::Text, 12).await;
@@ -51,7 +51,7 @@ async fn native_local_close_without_peer_close_is_abnormal_once() {
         // Intentionally drop without flushing tungstenite's queued Close reply.
     });
     let (tx, mut rx) = mpsc::channel(8);
-    let handle = spawn_connection(71, url, Vec::new(), test_websocket_context(), tx);
+    let handle = spawn_standalone_connection(71, url, Vec::new(), test_websocket_context(), tx);
     recv_open_event(&mut rx).await;
     handle
         .close(Some(3001), "not acknowledged".to_owned())
@@ -105,7 +105,7 @@ async fn native_fragmented_utf8_and_ping_are_assembled_as_one_message() {
     })
     .await;
     let (tx, mut rx) = mpsc::channel(8);
-    let handle = spawn_connection(72, url, Vec::new(), test_websocket_context(), tx);
+    let handle = spawn_standalone_connection(72, url, Vec::new(), test_websocket_context(), tx);
     recv_open_event(&mut rx).await;
     assert_text_message(&mut rx, 72, "🙂").await;
     assert_text_message(&mut rx, 72, "").await;
@@ -154,7 +154,8 @@ async fn native_invalid_frames_and_messages_fail_before_delivery() {
         })
         .await;
         let (tx, mut rx) = mpsc::channel(8);
-        let _handle = spawn_connection(73, url, Vec::new(), test_websocket_context(), tx);
+        let _handle =
+            spawn_standalone_connection(73, url, Vec::new(), test_websocket_context(), tx);
         recv_open_event(&mut rx).await;
         match timeout(Duration::from_secs(3), rx.recv()).await.unwrap() {
             Some(Event::Error { message, .. }) => {
@@ -209,7 +210,7 @@ async fn native_message_size_limit_counts_fragments_and_resets_after_delivery() 
         })
         .await;
         let (tx, mut rx) = mpsc::channel(8);
-        let handle = spawn_connection(76, url, Vec::new(), test_websocket_context(), tx);
+        let handle = spawn_standalone_connection(76, url, Vec::new(), test_websocket_context(), tx);
         recv_open_event(&mut rx).await;
         let event = timeout(Duration::from_secs(10), rx.recv()).await.unwrap();
         if overflow {
@@ -260,7 +261,7 @@ async fn native_large_incoming_frame_keeps_chunk_offsets_and_utf8() {
     })
     .await;
     let (tx, mut rx) = mpsc::channel(8);
-    let handle = spawn_connection(74, url, Vec::new(), test_websocket_context(), tx);
+    let handle = spawn_standalone_connection(74, url, Vec::new(), test_websocket_context(), tx);
     recv_open_event(&mut rx).await;
     assert_text_message(&mut rx, 74, &expected).await;
     handle.close(Some(1000), String::new()).unwrap();
@@ -307,7 +308,7 @@ async fn native_close_handshake_finishes_while_message_sink_is_blocked() {
             }
         }
     });
-    let handle = spawn_connection(75, url, Vec::new(), test_websocket_context(), sink);
+    let handle = spawn_standalone_connection(75, url, Vec::new(), test_websocket_context(), sink);
     recv_open_event(&mut rx).await;
     timeout(Duration::from_secs(3), blocked.notified())
         .await

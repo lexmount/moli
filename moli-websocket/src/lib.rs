@@ -28,6 +28,7 @@ pub use protocol::{
 };
 pub use runtime::{
     spawn_connection, spawn_connection_with_handshake_pause, spawn_failed_connection,
+    spawn_standalone_connection, spawn_standalone_connection_with_handshake_pause,
     spawn_synthetic_connection,
 };
 pub(crate) use types::Command;
