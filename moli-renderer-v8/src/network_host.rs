@@ -61,7 +61,7 @@ pub(crate) use self::body_source::{
     PendingNetworkBodySourceState, close_pending_network_body_stream,
     enqueue_pending_network_body_chunk, error_pending_network_body_stream,
     error_pending_network_body_stream_with_reason, new_network_body_source_id,
-    pending_network_body_stream,
+    pending_network_body_stream, release_pending_opaque_response_body,
 };
 pub(in crate::network_host) use self::browser_response::http_status_text;
 pub(crate) use self::browser_response::{local_url_response, local_url_response_result};
@@ -151,17 +151,18 @@ pub(crate) use self::response::{
     build_fetch_response_object_from_subresource_body_for_request_mode,
     build_filtered_cached_response_object,
     build_navigation_preload_response_object_from_stream_for_request_mode,
-    cors_preflight_request_headers, filter_cors_exposed_response_headers,
-    is_cors_policy_failure_message, materialize_response_object_body,
-    materialize_response_object_body_with_chunk_callback, materialize_response_object_head,
+    cors_preflight_request_headers, fetch_response_needs_orb_body_validation,
+    filter_cors_exposed_response_headers, is_cors_policy_failure_message,
+    materialize_response_object_body, materialize_response_object_body_with_chunk_callback,
+    materialize_response_object_head,
     materialize_response_object_head_for_service_worker_respond_with,
     materialized_body_bytes_from_value, network_response_filter, response_constructor_callback,
     validate_cors_preflight_response, validate_cors_response_chain,
     validate_cross_origin_embedder_and_document_isolation_policy,
-    validate_cross_origin_resource_policy, validate_fetch_response_security_policy,
-    validate_fetch_response_security_policy_with_body,
+    validate_cross_origin_resource_policy, validate_fetch_response_headers,
+    validate_fetch_response_security_policy, validate_fetch_response_security_policy_with_body,
     validate_fetch_response_security_policy_with_body_classified,
-    validate_opaque_response_blocking_with_body,
+    validate_opaque_response_blocking_with_body, validated_opaque_response_body,
 };
 pub(crate) use self::stylesheet_subresource::{
     StylesheetSubresourceFetchStart, start_stylesheet_subresource_fetch,
