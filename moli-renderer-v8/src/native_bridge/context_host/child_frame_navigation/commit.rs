@@ -643,7 +643,12 @@ impl JsContextHost {
         preserve_window_event_state: bool,
     ) -> FrameDocumentJavascriptUrlPostExecutionApplication {
         let attempted_script_job = true;
-        if !self.frame_document_task_owner_is_current(target.child_handle(), target.task_owner()) {
+        // The script can start another navigation without replacing its
+        // Document yet. Its completion must not clear that newer request.
+        if !self.frame_document_task_owner_is_current(target.child_handle(), target.task_owner())
+            || self.current_child_navigation_load(target.child_handle())
+                != Some(target.navigation_load())
+        {
             return FrameDocumentJavascriptUrlPostExecutionApplication {
                 attempted_script_job,
                 failed_script_job: false,
