@@ -417,7 +417,7 @@ struct NavigatorUaDataPrototypeMethodsDeclaration {
 }
 
 #[derive(Default, WebApiObject)]
-#[webapi(interface = "Object")]
+#[webapi(interface = "ServiceWorkerContainer", prototype = "Object")]
 struct ServiceWorkerContainerDeclaration {
     #[webapi(slot = SIMPLE_EVENT_TARGET_SLOT, value = SERVICE_WORKER_CONTAINER_LISTENERS_SLOT)]
     event_target_slot: (),

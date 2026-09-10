@@ -63,7 +63,13 @@ fn structured_clone_rejects_native_dom_nodes() {
 
 #[test]
 fn structured_clone_rejects_real_performance_entries_without_prototype_spoofing() {
-    let mut vm = new_storage_test_vm("https://performance-entry-clone.test/");
+    let document_url = Url::parse("https://performance-entry-clone.test/").expect("document URL");
+    let mut vm = new_storage_test_vm(document_url.as_str());
+    vm.record_script_subresource_network_result(
+        document_url.clone(),
+        document_url.join("resource.js").expect("resource URL"),
+        &Err("synthetic resource failure".to_owned()),
+    );
 
     let result = vm
         .eval(
@@ -78,6 +84,7 @@ fn structured_clone_rejects_real_performance_entries_without_prototype_spoofing(
                 }
               };
               const navigation = performance.getEntriesByType("navigation")[0];
+              const resource = performance.getEntriesByType("resource")[0];
               performance.mark("clone-mark");
               const mark = performance.getEntriesByName("clone-mark")[0];
               performance.measure("clone-measure");
@@ -96,6 +103,7 @@ fn structured_clone_rejects_real_performance_entries_without_prototype_spoofing(
 
               return JSON.stringify({
                 navigation: probe(() => structuredClone(navigation)),
+                resource: probe(() => structuredClone(resource)),
                 mark: probe(() => structuredClone(mark)),
                 measure: probe(() => structuredClone(measure)),
                 postMessage: probe(() => window.postMessage(navigation, "*")),
@@ -109,7 +117,57 @@ fn structured_clone_rejects_real_performance_entries_without_prototype_spoofing(
 
     assert_eq!(
         result,
-        r#"{"navigation":"DataCloneError","mark":"DataCloneError","measure":"DataCloneError","postMessage":"DataCloneError","fake":[7,false],"plain":["navigation","number"]}"#
+        r#"{"navigation":"DataCloneError","resource":"DataCloneError","mark":"DataCloneError","measure":"DataCloneError","postMessage":"DataCloneError","fake":[7,false],"plain":["navigation","number"]}"#
+    );
+}
+
+#[test]
+fn structured_clone_performance_entry_brand_is_private_and_survives_prototype_changes() {
+    let mut vm = new_storage_test_vm("https://performance-entry-brand.test/");
+
+    let result = vm
+        .eval(
+            r#"
+            (() => {
+              const probe = callback => {
+                try {
+                  callback();
+                  return "ok";
+                } catch (error) {
+                  return error && error.name;
+                }
+              };
+              const mark = performance.mark("factory-mark");
+              const constructed = new PerformanceMark("constructed-mark");
+              class DerivedMark extends PerformanceMark {}
+              const derived = new DerivedMark("derived-mark");
+              const inherited = Object.create(mark);
+              inherited.value = 7;
+              const inheritedClone = structuredClone(inherited);
+              const forgedClone = structuredClone({ __moliWebApiType: true });
+              const hiddenBrand = !Reflect.ownKeys(mark).includes("__moliWebApiType");
+              mark.__moliWebApiType = false;
+              Object.setPrototypeOf(mark, null);
+              Object.setPrototypeOf(constructed, Object.prototype);
+
+              return JSON.stringify({
+                hiddenBrand,
+                alteredFactory: probe(() => structuredClone(mark)),
+                alteredConstructor: probe(() => structuredClone(constructed)),
+                derived: probe(() => structuredClone(derived)),
+                nested: probe(() => structuredClone({ entry: mark })),
+                detail: probe(() => performance.mark("entry-as-detail", { detail: mark })),
+                inherited: [inheritedClone.value, inheritedClone instanceof PerformanceEntry],
+                forged: [forgedClone.__moliWebApiType, forgedClone instanceof PerformanceEntry]
+              });
+            })()
+            "#,
+        )
+        .expect("PerformanceEntry private brand probe should evaluate");
+
+    assert_eq!(
+        result,
+        r#"{"hiddenBrand":true,"alteredFactory":"DataCloneError","alteredConstructor":"DataCloneError","derived":"DataCloneError","nested":"DataCloneError","detail":"DataCloneError","inherited":[7,false],"forged":[true,false]}"#
     );
 }
 
@@ -441,5 +499,74 @@ fn structured_clone_preserves_quota_exceeded_error_fields_and_brand() {
     assert_eq!(
         result,
         "true|true|true|QuotaExceededError|full|22|0.1|1|true|true|true"
+    );
+}
+
+#[test]
+fn structured_clone_rejects_platform_objects_in_nested_graphs_without_running_their_getters() {
+    let mut vm = new_storage_test_vm("https://platform-identity-clone.test/");
+    let result = vm.eval(r#"
+      (() => {
+        const objects = [
+          new URL('https://example.test/'), new URLSearchParams('a=b'), new Headers(),
+          new Request('https://example.test/'), new Response('body'), new Response().headers, new FormData(),
+          new Event('event'), new EventTarget(), new AbortController(), new AbortController().signal,
+          navigator, performance, history, localStorage, new Highlight(), CSS.highlights,
+          document, document.implementation, new XMLHttpRequest().upload, document.createElement('select'), document.createTextNode('text'),
+          document.implementation.createHTMLDocument('detached').body,
+          new TextEncoder(), new TextDecoder(), new TextEncoderStream(), new TextDecoderStream(),
+          new CompressionStream('gzip'), new DecompressionStream('gzip'),
+          new URLSearchParams().entries(), new Headers().entries(), new Highlight().values(),
+        ];
+        const failures = [];
+        for (const [index, object] of objects.entries()) {
+          let getterCalls = 0;
+          Object.defineProperty(object, 'cloneProbe', {enumerable: true, get() { getterCalls++; return 1; }});
+          try { structuredClone({nested: new Map([['entry', object]])}); failures.push(`${index}:accepted`); }
+          catch (error) { if (error.name !== 'DataCloneError') failures.push(`${index}:${error.name}`); }
+          if (getterCalls) failures.push(`${index}:getter`);
+        }
+        const buffer = new ArrayBuffer(4);
+        try { structuredClone({buffer, rejected: objects[0]}, {transfer: [buffer]}); }
+        catch (error) { if (error.name !== 'DataCloneError') failures.push('transfer-error'); }
+        if (buffer.byteLength !== 4) failures.push('premature-detach');
+        return failures.join('|');
+      })()
+    "#).expect("platform identity clone matrix should evaluate");
+    assert_eq!(result, "");
+}
+
+#[test]
+fn structured_clone_does_not_read_fake_private_slots_or_inherit_native_identity() {
+    let mut vm = new_storage_test_vm("https://platform-identity-forgery.test/");
+    let result = vm.eval(r#"
+      (() => {
+        let reads = 0;
+        const prototype = Object.create(new URL('https://example.test/'));
+        for (const key of ['__moliWebApiType', '__lmUrlHref', '__lmUrlSearchParamsPairs', '__lmFormDataEntries']) {
+          Object.defineProperty(prototype, key, {get() { reads++; throw Error('must not run'); }});
+        }
+        const object = Object.create(prototype);
+        object.value = 7;
+        const clone = structuredClone(object);
+        const forged = structuredClone({__moliWebApiType: 'URL', __lmUrlHref: 'public'});
+        return [reads, clone.value, Object.getPrototypeOf(clone) === Object.prototype,
+          forged.__moliWebApiType, forged.__lmUrlHref].join('|');
+      })()
+    "#).expect("ordinary records must not trigger native identity checks through author properties");
+    assert_eq!(result, "0|7|true|URL|public");
+}
+
+#[test]
+fn encoding_stream_wrappers_do_not_inherit_transform_transferability() {
+    let mut vm = new_storage_test_vm("https://platform-transfer-types.test/");
+    let result = vm.eval(r#"
+      [new TextEncoderStream(), new TextDecoderStream(), new CompressionStream('gzip'), new DecompressionStream('gzip')]
+        .map(stream => { try { structuredClone(stream, {transfer: [stream]}); return 'accepted'; }
+          catch (error) { return error.name; } }).join('|')
+    "#).expect("only actual transferable stream interfaces should be accepted");
+    assert_eq!(
+        result,
+        "DataCloneError|DataCloneError|DataCloneError|DataCloneError"
     );
 }

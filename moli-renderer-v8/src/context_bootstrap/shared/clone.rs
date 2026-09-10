@@ -13,13 +13,8 @@ use crate::{
         serialize_for_wire_for_storage,
     },
     types::MessagePortId,
-    util::{context_host_ptr_from_global_bridge, get_private_value, v8_string, v8str},
+    util::{context_host_ptr_from_global_bridge, v8_string, v8str},
     webidl,
-};
-
-use super::slots::{
-    FORM_DATA_ENTRIES_SLOT, NAVIGATOR_RUNTIME_DATA_SLOT, URL_HREF_SLOT,
-    URL_SEARCH_PARAMS_PAIRS_SLOT,
 };
 
 struct PostMessageTransferList<'s> {
@@ -96,7 +91,6 @@ pub(crate) fn structured_serialize_value<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     value: v8::Local<'s, v8::Value>,
 ) -> Option<V8StructuredClonePayload> {
-    reject_uncloneable_web_platform_object(scope, value)?;
     serialize_for_wire_for_runtime(scope, value)
 }
 
@@ -104,7 +98,6 @@ pub(crate) fn structured_serialize_value_for_storage<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     value: v8::Local<'s, v8::Value>,
 ) -> Option<V8StructuredClonePayload> {
-    reject_uncloneable_web_platform_object(scope, value)?;
     serialize_for_wire_for_storage(scope, value)
 }
 
@@ -132,16 +125,6 @@ pub(crate) fn structured_serialize_value_for_post_message_with_source_port<'s>(
 ) -> Option<V8StructuredClonePayload> {
     let transfers =
         parse_post_message_transfer_list(scope, transfer_arg, interface_name, source_port_id)?;
-    if is_uncloneable_web_platform_object(scope, value)
-        && !transfer_list_contains_stream_value(value, &transfers)
-    {
-        throw_post_message_data_clone_error(
-            scope,
-            interface_name,
-            "This object is not structured-serializable.",
-        );
-        return None;
-    }
     let mut payload = serialize_for_wire_for_runtime_message(
         scope,
         value,
@@ -191,16 +174,6 @@ fn structured_serialize_value_for_window_post_message_transfers<'s>(
     transfers: PostMessageTransferList<'s>,
     source_security: RuntimeMessageSourceSecurity,
 ) -> Option<V8StructuredClonePayload> {
-    if is_uncloneable_web_platform_object(scope, value)
-        && !transfer_list_contains_stream_value(value, &transfers)
-    {
-        throw_post_message_data_clone_error(
-            scope,
-            "Window",
-            "This object is not structured-serializable.",
-        );
-        return None;
-    }
     let mut payload = serialize_for_wire_for_runtime_message(
         scope,
         value,
@@ -222,20 +195,6 @@ fn empty_post_message_transfer_list<'s>() -> PostMessageTransferList<'s> {
         writable_streams: Vec::new(),
         transform_streams: Vec::new(),
     }
-}
-
-fn transfer_list_contains_stream_value<'s>(
-    value: v8::Local<'s, v8::Value>,
-    transfers: &PostMessageTransferList<'s>,
-) -> bool {
-    v8::Local::<v8::Object>::try_from(value).is_ok_and(|object| {
-        transfers
-            .readable_streams
-            .iter()
-            .chain(&transfers.writable_streams)
-            .chain(&transfers.transform_streams)
-            .any(|stream| stream.strict_equals(object.into()))
-    })
 }
 
 pub(crate) fn structured_deserialize_value<'s>(
@@ -346,13 +305,6 @@ pub(crate) fn structured_clone_value_with_options<'s>(
     options: v8::Local<'s, v8::Value>,
 ) -> Option<v8::Local<'s, v8::Value>> {
     let transfers = parse_structured_clone_options_transfer_list(scope, options)?;
-    if is_uncloneable_web_platform_object(scope, value)
-        && !transfer_list_contains_stream_value(value, &transfers)
-    {
-        TransferListOperation::StructuredClone
-            .throw_data_clone_error(scope, "This object is not structured-serializable.");
-        return None;
-    }
     let payload = serialize_for_wire_for_runtime_with_transfers(
         scope,
         value,
@@ -371,51 +323,6 @@ pub(crate) fn structured_clone_value_for_storage<'s>(
 ) -> Option<v8::Local<'s, v8::Value>> {
     let bytes = structured_serialize_value_for_storage(scope, value)?;
     structured_deserialize_value(scope, &bytes)
-}
-
-fn reject_uncloneable_web_platform_object<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    value: v8::Local<'s, v8::Value>,
-) -> Option<()> {
-    if value.is_shared_array_buffer() {
-        throw_data_clone_error(scope, "SharedArrayBuffer could not be cloned.");
-        return None;
-    }
-    if !is_uncloneable_web_platform_object(scope, value) {
-        return Some(());
-    }
-    throw_data_clone_error(scope, "This object is not structured-serializable.");
-    None
-}
-
-fn is_uncloneable_web_platform_object<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    value: v8::Local<'s, v8::Value>,
-) -> bool {
-    let Ok(object) = v8::Local::<v8::Object>::try_from(value) else {
-        return false;
-    };
-    has_present_slot(scope, object, URL_HREF_SLOT)
-        || crate::native_bridge::object_is_node_wrapper_or_detached(scope, object)
-        || has_present_slot(scope, object, URL_SEARCH_PARAMS_PAIRS_SLOT)
-        || has_present_slot(scope, object, FORM_DATA_ENTRIES_SLOT)
-        || has_present_slot(scope, object, NAVIGATOR_RUNTIME_DATA_SLOT)
-        || is_readable_stream_object(scope, object)
-        || is_writable_stream_object(scope, object)
-        || is_transform_stream_object(scope, object)
-}
-
-fn has_present_slot<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    object: v8::Local<'s, v8::Object>,
-    slot: &'static str,
-) -> bool {
-    get_private_value(scope, object, slot)
-        .or_else(|| {
-            let key = v8str(scope, slot);
-            object.get(scope, key.into())
-        })
-        .is_some_and(|value| !value.is_null_or_undefined())
 }
 
 fn parse_post_message_transfer_list<'s>(

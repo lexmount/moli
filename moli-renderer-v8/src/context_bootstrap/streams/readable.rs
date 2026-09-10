@@ -3,9 +3,8 @@ use super::super::stream_adapter::{
     install_readable_stream_pipe_to_abort_signal, lock_readable_stream,
     new_lazy_readable_byte_stream_object, new_readable_byte_stream_object,
     new_readable_stream_pipe_owner, prime_readable_stream_pipe_to, readable_stream_access_snapshot,
-    readable_stream_queue_exists, register_readable_stream_pipe_owner,
-    register_writable_stream_pipe_owner, set_writable_stream_locked,
-    suppress_promise_unhandled_rejection, tee_readable_stream,
+    register_readable_stream_pipe_owner, register_writable_stream_pipe_owner,
+    set_writable_stream_locked, suppress_promise_unhandled_rejection, tee_readable_stream,
 };
 use super::*;
 use crate::context_bootstrap::stream_objects::readable_stream_async_iterator_prototype;
@@ -314,7 +313,7 @@ fn has_readable_stream_brand<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     object: v8::Local<'s, v8::Object>,
 ) -> bool {
-    readable_stream_queue_exists(scope, object)
+    moli_webapi_declare::implements_interface(scope, object, "ReadableStream")
 }
 
 fn parse_stream_pipe_options<'s>(

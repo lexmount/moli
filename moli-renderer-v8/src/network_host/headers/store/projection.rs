@@ -6,7 +6,7 @@ use super::entries::{
 use moli_webapi_declare::WebApiObject;
 
 #[derive(WebApiObject)]
-#[webapi(interface = "Object")]
+#[webapi(interface = "Headers", prototype = "Object")]
 struct HeadersStorageDeclaration {
     #[webapi(slot = HEADERS_ENTRIES_SLOT)]
     entries: String,

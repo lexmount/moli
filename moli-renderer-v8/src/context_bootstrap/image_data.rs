@@ -364,15 +364,6 @@ pub(crate) fn image_data_clone_payload_from_object<'s>(
     })
 }
 
-pub(crate) fn is_image_data_object<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    object: v8::Local<'s, v8::Object>,
-) -> bool {
-    image_data_dimensions_from_object(scope, object).is_some()
-        && get_private_value(scope, object, IMAGE_DATA_DATA_SLOT)
-            .is_some_and(|value| v8::Local::<v8::Uint8ClampedArray>::try_from(value).is_ok())
-}
-
 pub(super) fn image_data_dimensions_from_object<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     object: v8::Local<'s, v8::Object>,

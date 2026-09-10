@@ -148,7 +148,7 @@ struct ActiveNavigateEventDataDeclaration<'scope> {
 }
 
 #[derive(WebApiObject)]
-#[webapi(interface = "Object", enumerable)]
+#[webapi(interface = "NavigationDestination", prototype = "Object", enumerable)]
 struct NavigationDestinationDeclaration<'scope> {
     #[webapi(data_property)]
     url: v8::Local<'scope, v8::String>,
@@ -167,7 +167,7 @@ struct NavigationDestinationDeclaration<'scope> {
 }
 
 #[derive(WebApiObject)]
-#[webapi(interface = "Object", enumerable)]
+#[webapi(interface = "NavigationDestination", prototype = "Object", enumerable)]
 struct NavigationEntryBackedDestinationDeclaration<'scope> {
     #[webapi(data_property)]
     url: v8::Local<'scope, v8::String>,

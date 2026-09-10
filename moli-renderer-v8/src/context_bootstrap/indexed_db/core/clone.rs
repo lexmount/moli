@@ -39,11 +39,7 @@ impl v8::ValueSerializerImpl for IndexedDbStructuredCloneSerializer {
         scope: &mut v8::PinScope<'s, '_>,
         object: v8::Local<'s, v8::Object>,
     ) -> Option<bool> {
-        Some(
-            crate::context_bootstrap::is_crypto_key_object(scope, object)
-                || crate::blob::is_blob_object(scope, object)
-                || file_system_handle_clone_payload_from_object(scope, object).is_some(),
-        )
+        Some(moli_webapi_declare::web_api_object_type(scope, object).is_some())
     }
 
     fn write_host_object<'s>(
@@ -102,6 +98,20 @@ impl v8::ValueSerializerImpl for IndexedDbStructuredCloneSerializer {
         let exception = dom_exception_value(
             scope,
             "Unsupported host object during IndexedDB structured clone.",
+            "DataCloneError",
+        );
+        scope.throw_exception(exception);
+        None
+    }
+
+    fn get_shared_array_buffer_id<'s>(
+        &self,
+        scope: &mut v8::PinScope<'s, '_>,
+        _buffer: v8::Local<'s, v8::SharedArrayBuffer>,
+    ) -> Option<u32> {
+        let exception = dom_exception_value(
+            scope,
+            "SharedArrayBuffer could not be cloned.",
             "DataCloneError",
         );
         scope.throw_exception(exception);

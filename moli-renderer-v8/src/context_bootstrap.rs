@@ -125,7 +125,6 @@ pub(crate) use self::events::{
 pub(crate) use crypto::{
     CryptoKeyAlgorithmClonePayload, CryptoKeyClonePayload, WebCryptoRejection, WebCryptoTaskResult,
     crypto_key_clone_payload_from_object, crypto_key_object_from_clone_payload,
-    is_crypto_key_object,
 };
 pub(crate) use css_fontface_runtime::rebuild_font_face_set_faces;
 pub(crate) use location_navigation::{
@@ -260,7 +259,7 @@ pub(crate) use self::history_runtime::{
 };
 pub(crate) use self::image_data::{
     ImageDataClonePayload, build_image_data_object_from_clone_payload,
-    image_data_clone_payload_from_object, is_image_data_object,
+    image_data_clone_payload_from_object,
 };
 pub(crate) use self::indexed_db::{
     IndexedDbTaskId, discard_indexed_db_task_by_id, flush_blocked_indexed_db_requests,
@@ -346,8 +345,7 @@ pub(crate) use self::notification_runtime::{
 };
 pub(crate) use self::performance_runtime::{
     ResourcePerformanceEntry, bind_window_performance_seed, current_performance_time_origin,
-    increment_performance_event_count, is_performance_entry_object,
-    record_performance_dom_content_loaded_event_end,
+    increment_performance_event_count, record_performance_dom_content_loaded_event_end,
     record_performance_dom_content_loaded_event_start, record_performance_load_event_end,
     record_performance_load_event_start, record_resource_performance_entry,
     run_resource_timing_buffer_full_task,

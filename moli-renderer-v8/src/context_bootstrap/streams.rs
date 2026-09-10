@@ -8,9 +8,8 @@ use super::stream_adapter::{
     readable_stream_byob_request_respond_callback,
     readable_stream_byob_request_respond_with_new_view_callback,
     readable_stream_byob_request_view_getter, readable_stream_is_byte_stream,
-    readable_stream_locked, rejected_promise_value, set_resolved_promise, stream_slot_array,
-    stream_slot_object, writable_stream_close_internal, writable_stream_locked,
-    writable_stream_snapshot,
+    readable_stream_locked, rejected_promise_value, set_resolved_promise, stream_slot_object,
+    writable_stream_close_internal, writable_stream_locked, writable_stream_snapshot,
 };
 use super::stream_objects::{
     new_readable_stream_byob_reader_object, new_readable_stream_reader_object,
@@ -350,17 +349,14 @@ pub(crate) fn is_writable_stream_object<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     object: v8::Local<'s, v8::Object>,
 ) -> bool {
-    stream_slot_array(scope, object, WRITABLE_STREAM_STRATEGY_SLOT).is_some()
+    moli_webapi_declare::implements_interface(scope, object, "WritableStream")
 }
 
 pub(crate) fn is_transform_stream_object<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     object: v8::Local<'s, v8::Object>,
 ) -> bool {
-    stream_slot_object(scope, object, TRANSFORM_STREAM_READABLE_SLOT)
-        .is_some_and(|readable| is_readable_stream_object(scope, readable))
-        && stream_slot_object(scope, object, TRANSFORM_STREAM_WRITABLE_SLOT)
-            .is_some_and(|writable| is_writable_stream_object(scope, writable))
+    moli_webapi_declare::implements_interface(scope, object, "TransformStream")
 }
 
 pub(super) fn install_stream_template_bindings<'s>(

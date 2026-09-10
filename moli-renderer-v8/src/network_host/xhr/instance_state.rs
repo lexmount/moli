@@ -125,7 +125,7 @@ struct XmlHttpRequestStateDeclaration {
 }
 
 #[derive(WebApiObject)]
-#[webapi(interface = "Object")]
+#[webapi(interface = "XMLHttpRequestUpload", prototype = "Object")]
 struct XmlHttpRequestUploadDeclaration<'scope> {
     #[webapi(prototype)]
     prototype: Option<v8::Local<'scope, v8::Object>>,

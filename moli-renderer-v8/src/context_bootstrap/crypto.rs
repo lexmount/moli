@@ -17,7 +17,7 @@ pub(in crate::context_bootstrap) use install::{
 };
 pub(crate) use keys::{
     CryptoKeyAlgorithmClonePayload, CryptoKeyClonePayload, crypto_key_clone_payload_from_object,
-    crypto_key_object_from_clone_payload, is_crypto_key_object,
+    crypto_key_object_from_clone_payload,
 };
 
 /// Owner-neutral result of one blocking WebCrypto operation.

@@ -28,7 +28,7 @@ struct DetachedNodeIteratorDeclaration<'scope> {
 }
 
 #[derive(WebApiObject)]
-#[webapi(interface = "Object")]
+#[webapi(interface = "DOMImplementation", prototype = "Object")]
 struct DetachedDomImplementationDeclaration<'scope> {
     #[webapi(slot = DOM_IMPLEMENTATION_OWNER_DOCUMENT_SLOT)]
     owner_document: v8::Local<'scope, v8::Object>,

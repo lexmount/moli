@@ -20,10 +20,9 @@ use crate::{
         ensure_message_port_wrapper_for_id, file_system_file_snapshot_clone_payload_from_object,
         file_system_handle_clone_payload_from_object, image_data_clone_payload_from_object,
         initialize_readable_stream_clone_shell, initialize_transform_stream_clone_shell,
-        initialize_writable_stream_clone_shell, is_crypto_key_object, is_image_data_object,
-        is_performance_entry_object, is_readable_stream_object, is_transform_stream_object,
-        is_writable_stream_object, message_port_id_from_object, new_dom_exception_value,
-        new_quota_exceeded_error_value, prepare_readable_stream_transfer,
+        initialize_writable_stream_clone_shell, is_readable_stream_object,
+        is_transform_stream_object, is_writable_stream_object, message_port_id_from_object,
+        new_dom_exception_value, new_quota_exceeded_error_value, prepare_readable_stream_transfer,
         prepare_transform_stream_transfer, prepare_writable_stream_transfer,
         quota_exceeded_error_clone_fields, require_internal_stream_value,
         selected_file_from_object,
@@ -307,18 +306,7 @@ impl v8::ValueSerializerImpl for WireSerializer {
         scope: &mut v8::PinScope<'s, '_>,
         object: v8::Local<'s, v8::Object>,
     ) -> Option<bool> {
-        Some(
-            message_port_id_from_object(scope, object).is_some()
-                || is_image_data_object(scope, object)
-                || is_crypto_key_object(scope, object)
-                || is_performance_entry_object(scope, object)
-                || is_readable_stream_object(scope, object)
-                || is_writable_stream_object(scope, object)
-                || is_transform_stream_object(scope, object)
-                || crate::blob::is_blob_object(scope, object)
-                || file_system_handle_clone_payload_from_object(scope, object).is_some()
-                || dom_exception_clone_fields(scope, object).is_some(),
-        )
+        Some(moli_webapi_declare::web_api_object_type(scope, object).is_some())
     }
 
     fn write_host_object<'s>(
@@ -454,6 +442,15 @@ impl v8::ValueSerializerImpl for WireSerializer {
             return Some(true);
         }
         throw_data_clone_exception(scope, "Unsupported host object during structured clone.");
+        None
+    }
+
+    fn get_shared_array_buffer_id<'s>(
+        &self,
+        scope: &mut v8::PinScope<'s, '_>,
+        _buffer: v8::Local<'s, v8::SharedArrayBuffer>,
+    ) -> Option<u32> {
+        throw_data_clone_exception(scope, "SharedArrayBuffer could not be cloned.");
         None
     }
 

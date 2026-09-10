@@ -3190,6 +3190,64 @@ fn indexed_db_put_function_throws_data_clone_error() {
 }
 
 #[test]
+fn indexed_db_put_rejects_performance_entries_without_rejecting_plain_objects() {
+    let mut vm =
+        new_storage_page_task_executor_test_vm("https://indexeddb-performance-clone.test/");
+
+    vm.eval(
+        r#"
+(() => {
+  globalThis.__indexedDbPerformanceClone = "pending";
+  const open = indexedDB.open(`app-${Math.random()}`, 1);
+  open.onupgradeneeded = () => {
+    const store = open.result.createObjectStore("entries");
+    let key = 0;
+    const probe = value => {
+      try {
+        store.put(value, ++key);
+        return "ok";
+      } catch (error) {
+        return error && error.name;
+      }
+    };
+    const navigation = performance.getEntriesByType("navigation")[0];
+    const mark = performance.mark("stored-mark");
+    const measure = performance.measure("stored-measure");
+    const constructed = new PerformanceMark("stored-constructor");
+    const inherited = Object.create(mark);
+    inherited.value = 7;
+    const fake = Object.create(PerformanceEntry.prototype);
+    fake.value = 8;
+
+    globalThis.__indexedDbPerformanceClone = JSON.stringify({
+      navigation: probe(navigation),
+      mark: probe(mark),
+      measure: probe(measure),
+      constructed: probe(constructed),
+      nested: probe({ entry: mark }),
+      plain: probe(mark.toJSON()),
+      inherited: probe(inherited),
+      fake: probe(fake),
+      forged: probe({ __moliWebApiType: true })
+    });
+  };
+  return "scheduled";
+})()
+"#,
+    )
+    .expect("indexeddb PerformanceEntry clone workflow should schedule");
+
+    let result = vm
+        .eval_after_selected_page_tasks("String(globalThis.__indexedDbPerformanceClone)")
+        .expect("indexeddb PerformanceEntry clone result should be readable");
+
+    assert_eq!(
+        result,
+        r#"{"navigation":"DataCloneError","mark":"DataCloneError","measure":"DataCloneError","constructed":"DataCloneError","nested":"DataCloneError","plain":"ok","inherited":"ok","fake":"ok","forged":"ok"}"#
+    );
+}
+
+#[test]
 fn indexed_db_put_webassembly_module_throws_data_clone_error_for_storage() {
     let mut vm = new_storage_page_task_executor_test_vm("https://indexeddb-wasm-dataclone.test/");
 
