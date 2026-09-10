@@ -373,6 +373,7 @@ impl ScriptVmContextBootstrap {
             host_ptr,
             mode,
             runtime_observable_context_token,
+            resource_owner_id,
         )?;
         // SecureContext is origin-based, not document-URL-based. Initial
         // about:blank/srcdoc child contexts can keep about:* document URLs while
@@ -555,6 +556,7 @@ enum WindowContextBootstrapMode {
 struct PendingWindowRealmBootstrapRegistration {
     host: *mut PageScriptHost,
     realm_token: crate::native_bridge::RuntimeObservableContextToken,
+    resource_owner_id: ResourceOwnerId,
     committed: bool,
 }
 
@@ -563,6 +565,7 @@ impl PendingWindowRealmBootstrapRegistration {
         host: *mut PageScriptHost,
         mode: WindowContextBootstrapMode,
         realm_token: crate::native_bridge::RuntimeObservableContextToken,
+        resource_owner_id: ResourceOwnerId,
     ) -> Result<Option<Self>> {
         let Some((owner, dispatch_scope, access_policy)) = mode.registration() else {
             return Ok(None);
@@ -578,6 +581,7 @@ impl PendingWindowRealmBootstrapRegistration {
         Ok(Some(Self {
             host,
             realm_token,
+            resource_owner_id,
             committed: false,
         }))
     }
@@ -590,8 +594,10 @@ impl PendingWindowRealmBootstrapRegistration {
 impl Drop for PendingWindowRealmBootstrapRegistration {
     fn drop(&mut self) {
         if !self.committed {
-            unsafe { &mut *self.host }
-                .retire_window_execution_contexts_for_context_token(self.realm_token);
+            unsafe { &mut *self.host }.retire_window_execution_contexts_for_context_token(
+                self.realm_token,
+                self.resource_owner_id,
+            );
         }
     }
 }
