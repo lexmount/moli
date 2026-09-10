@@ -1848,11 +1848,16 @@ fn body_materialization_value<'s>(
     kind: PendingBodyMaterializationKind,
 ) -> Result<v8::Local<'s, v8::Value>, v8::Local<'s, v8::Value>> {
     match kind {
-        PendingBodyMaterializationKind::Text => v8_string(scope, &String::from_utf8_lossy(bytes))
-            .map(Into::into)
-            .ok_or_else(|| v8::undefined(scope).into()),
+        PendingBodyMaterializationKind::Text => {
+            // Fetch's UTF-8 decode removes one initial UTF-8 BOM without
+            // selecting a different encoding from the bytes or MIME type.
+            let text = encoding_rs::UTF_8.decode_with_bom_removal(bytes).0;
+            v8_string(scope, &text)
+                .map(Into::into)
+                .ok_or_else(|| v8::undefined(scope).into())
+        }
         PendingBodyMaterializationKind::Json => {
-            let text = String::from_utf8_lossy(bytes).into_owned();
+            let text = encoding_rs::UTF_8.decode_with_bom_removal(bytes).0;
             let Some(text) = v8_string(scope, &text) else {
                 return Err(v8::undefined(scope).into());
             };
