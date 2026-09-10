@@ -553,6 +553,19 @@ impl PageScriptHost {
         event_type: &str,
         event: v8::Local<'s, v8::Object>,
     ) {
+        self.dispatch_child_window_event_with_target_override(
+            scope, handle, event_type, event, false,
+        );
+    }
+
+    pub(crate) fn dispatch_child_window_event_with_target_override<'s>(
+        &mut self,
+        scope: &mut v8::PinScope<'s, '_>,
+        handle: DomHandle,
+        event_type: &str,
+        event: v8::Local<'s, v8::Object>,
+        legacy_target_override: bool,
+    ) {
         if !self.child_window_event_requires_runtime_dispatch(handle, event_type) {
             return;
         }
@@ -564,7 +577,9 @@ impl PageScriptHost {
         };
         let previous_active_child_window = enter_child_window_event_dispatch(scope, handle);
         self.push_child_subresource_request_scope(handle);
-        let target = if event_type == "unload" {
+        // The legacy flag changes event.target, while dispatch still takes
+        // place at Window. Script dispatch never sets this flag.
+        let target = if legacy_target_override {
             self.child_browsing_context_document_wrapper(scope, handle)
                 .map(Into::into)
                 .unwrap_or_else(|| window.into())
@@ -601,14 +616,6 @@ impl PageScriptHost {
             let Some(ready) = self
                 .prepare_child_window_event_listener_invocation(scope, handle, event_type, slot)
             else {
-                if let Some(callback_id) = self.remove_child_window_event_registration_by_id(
-                    handle,
-                    event_type,
-                    slot.registration_id,
-                ) {
-                    self.unregister_abort_target_listener(callback_id);
-                    self.release_event_callback(callback_id);
-                }
                 continue;
             };
             if ready.once
