@@ -10,6 +10,7 @@ pub(super) struct Handshake {
     pub request: Vec<u8>,
     pub response: Vec<u8>,
     pub error: Option<String>,
+    pub connection_pool: Option<std::rc::Rc<super::connection_pool::ConnectionPool>>,
     proxy_connect: bool,
     header_bytes: usize,
 }

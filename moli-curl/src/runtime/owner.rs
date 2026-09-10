@@ -16,14 +16,15 @@ use curl::{
 use tracing::debug;
 
 use crate::dns_adapter::{CurlDnsOwnerCompletion, CurlDnsReady};
+use crate::websocket::{Submission, registry::WebSocketRegistry};
 
 use super::{
     CurlMultiCompletion, CurlMultiJob, CurlMultiRuntimeConfig, CurlTransferId,
     config::{make_runtime_multi, runtime_wait_timeout},
     residence::{
         CurlActiveTransfer, CurlOwnerState, CurlPendingJob, active_origin_count,
-        completed_transfers, enqueue_existing_pending_job, enqueue_pending_job, job_is_eligible,
-        pending_origin_count, take_expired_pending_jobs, take_transfers_in_notification_order,
+        enqueue_existing_pending_job, enqueue_pending_job, job_is_eligible, pending_origin_count,
+        take_expired_pending_jobs, take_transfers_in_notification_order,
     },
 };
 
@@ -39,6 +40,7 @@ pub(super) enum CurlRuntimeCommand<H: Handler, C> {
 enum CurlOwnerEvent<H: Handler, C> {
     Command(std::result::Result<CurlRuntimeCommand<H, C>, crossbeam_channel::RecvError>),
     Dns(std::result::Result<CurlDnsOwnerCompletion<CurlTransferId>, crossbeam_channel::RecvError>),
+    WebSocket(std::result::Result<Submission, crossbeam_channel::RecvError>),
     Deadline,
 }
 
@@ -48,6 +50,7 @@ pub(super) struct CurlRuntimeOwner<H: Handler + Send + 'static, C: Send + 'stati
     completion_tx: Sender<CurlMultiCompletion<H, C>>,
     waker_tx: Sender<MultiWaker>,
     shutdown_requested: Arc<AtomicBool>,
+    websocket_rx: Receiver<Submission>,
     #[cfg(test)]
     owner_started: Arc<AtomicBool>,
 }
@@ -59,6 +62,7 @@ impl<H: Handler + Send + 'static, C: Send + 'static> CurlRuntimeOwner<H, C> {
         completion_tx: Sender<CurlMultiCompletion<H, C>>,
         waker_tx: Sender<MultiWaker>,
         shutdown_requested: Arc<AtomicBool>,
+        websocket_rx: Receiver<Submission>,
         #[cfg(test)] owner_started: Arc<AtomicBool>,
     ) -> Self {
         Self {
@@ -67,6 +71,7 @@ impl<H: Handler + Send + 'static, C: Send + 'static> CurlRuntimeOwner<H, C> {
             completion_tx,
             waker_tx,
             shutdown_requested,
+            websocket_rx,
             #[cfg(test)]
             owner_started,
         }
@@ -82,32 +87,44 @@ impl<H: Handler + Send + 'static, C: Send + 'static> CurlRuntimeOwner<H, C> {
         let mut multi = make_runtime_multi(&self.config);
         let _ = self.waker_tx.send(multi.waker());
         let mut state = CurlOwnerState::default();
+        let mut websockets = WebSocketRegistry::new(self.websocket_rx.clone());
 
         loop {
             self.drain_commands(&mut state, &mut multi);
+            if state.closed {
+                websockets.shutdown(&mut multi);
+            }
             self.drain_dns_completions(&mut state);
             self.expire_waiting_jobs(&mut state);
             self.start_eligible_jobs(&mut state, &mut multi);
-            self.process_completed_transfers(&mut state, &mut multi);
+            self.process_completed_transfers(&mut state, &mut multi, &mut websockets);
+            let progressed = websockets.advance(&mut multi);
 
             if state.closed
                 && state.pending.is_empty()
                 && state.dns.is_empty()
                 && state.active.is_empty()
+                && self.command_rx.is_empty()
             {
                 return;
             }
 
-            if state.active.is_empty() && state.pending.is_empty() {
-                self.wait_for_next_owner_event(&mut state, &mut multi);
-            } else if !state.active.is_empty() {
-                self.wait_for_curl_progress(&multi, &state);
+            let runnable = progressed || !self.command_rx.is_empty();
+            if !runnable
+                && state.active.is_empty()
+                && state.pending.is_empty()
+                && websockets.is_empty()
+            {
+                self.wait_for_next_owner_event(&mut state, &mut multi, &mut websockets);
+            } else {
+                self.wait_for_curl_progress(&mut multi, &state, &mut websockets, runnable);
             }
         }
     }
 
     fn drain_commands(&self, state: &mut CurlOwnerState<H, C>, multi: &mut Multi) {
-        loop {
+        // Continuous HTTP submissions must not starve native I/O or WebSockets.
+        for _ in 0..256 {
             match self.command_rx.try_recv() {
                 Ok(command) => self.handle_command(state, multi, command),
                 Err(crossbeam_channel::TryRecvError::Empty) => break,
@@ -119,15 +136,13 @@ impl<H: Handler + Send + 'static, C: Send + 'static> CurlRuntimeOwner<H, C> {
         }
     }
 
-    fn wait_for_next_owner_event(&self, state: &mut CurlOwnerState<H, C>, multi: &mut Multi) {
+    fn wait_for_next_owner_event(
+        &self,
+        state: &mut CurlOwnerState<H, C>,
+        multi: &mut Multi,
+        websockets: &mut WebSocketRegistry,
+    ) {
         if state.closed {
-            return;
-        }
-        if state.dns.is_empty() {
-            match self.command_rx.recv() {
-                Ok(command) => self.handle_command(state, multi, command),
-                Err(_) => self.close(state, multi),
-            }
             return;
         }
         let event = if let Some(deadline) = state.dns.next_deadline(|pending| pending.job.deadline)
@@ -136,16 +151,20 @@ impl<H: Handler + Send + 'static, C: Send + 'static> CurlRuntimeOwner<H, C> {
                 crossbeam_channel::after(deadline.saturating_duration_since(Instant::now()));
             crossbeam_channel::select! {
                 recv(self.command_rx) -> command => CurlOwnerEvent::Command(command),
+                recv(websockets.submissions()) -> submission => CurlOwnerEvent::WebSocket(submission),
                 recv(state.dns.completion_receiver()) -> completion => CurlOwnerEvent::Dns(completion),
                 recv(deadline_rx) -> _ => CurlOwnerEvent::Deadline,
             }
         } else {
             crossbeam_channel::select! {
                 recv(self.command_rx) -> command => CurlOwnerEvent::Command(command),
+                recv(websockets.submissions()) -> submission => CurlOwnerEvent::WebSocket(submission),
                 recv(state.dns.completion_receiver()) -> completion => CurlOwnerEvent::Dns(completion),
             }
         };
         match event {
+            CurlOwnerEvent::WebSocket(Ok(submission)) => websockets.admit(submission, multi),
+            CurlOwnerEvent::WebSocket(Err(_)) => self.close(state, multi),
             CurlOwnerEvent::Command(command) => match command {
                 Ok(command) => self.handle_command(state, multi, command),
                 Err(_) => self.close(state, multi),
@@ -448,11 +467,37 @@ impl<H: Handler + Send + 'static, C: Send + 'static> CurlRuntimeOwner<H, C> {
         }
     }
 
-    fn process_completed_transfers(&self, state: &mut CurlOwnerState<H, C>, multi: &mut Multi) {
+    fn process_completed_transfers(
+        &self,
+        state: &mut CurlOwnerState<H, C>,
+        multi: &mut Multi,
+        websockets: &mut WebSocketRegistry,
+    ) {
         if let Err(error) = multi.perform() {
             debug!("curl multi runtime perform failed: {error}");
+            websockets.fail_sessions(multi, &error.to_string());
         }
-        let completed = completed_transfers(multi, &state.active);
+        // Drain CURLMSG_DONE once. A WebSocket DONE starts its open residence;
+        // HTTP DONE removes a finished transfer, preserving notification order.
+        let mut completed = Vec::new();
+        multi.messages(|message| {
+            let Some(id) = message.token().ok().and_then(CurlTransferId::from_token) else {
+                return;
+            };
+            // Keep the easy handle's error buffer as well as the CURLcode.
+            let result = match state.active.get(&id) {
+                Some(transfer) => message.result_for2(&transfer.handle),
+                None => websockets.handshake_result(id, &message),
+            };
+            if let Some(result) = result {
+                completed.push((id, result));
+            }
+        });
+        for (id, result) in &completed {
+            if !state.active.contains_key(id) {
+                websockets.complete_handshake(*id, result.clone(), multi);
+            }
+        }
         for (transfer_id, active, result) in
             take_transfers_in_notification_order(&mut state.active, completed)
         {
@@ -581,18 +626,31 @@ impl<H: Handler + Send + 'static, C: Send + 'static> CurlRuntimeOwner<H, C> {
         });
     }
 
-    fn wait_for_curl_progress(&self, multi: &Multi, state: &CurlOwnerState<H, C>) {
-        let mut wait_timeout = runtime_wait_timeout(multi, self.config.poll_interval)
-            .unwrap_or(self.config.poll_interval);
+    fn wait_for_curl_progress(
+        &self,
+        multi: &mut Multi,
+        state: &CurlOwnerState<H, C>,
+        websockets: &mut WebSocketRegistry,
+        progressed: bool,
+    ) {
+        // HTTP cancellation uses its configured progress interval. Idle WS
+        // sessions use socket/waker readiness and need not inherit that cadence.
+        let interval = if state.active.is_empty() {
+            Duration::from_secs(1)
+        } else {
+            self.config.poll_interval
+        };
+        let mut wait_timeout = runtime_wait_timeout(multi, interval).unwrap_or(interval);
         if let Some(deadline) = state.next_waiting_deadline() {
             wait_timeout = wait_timeout.min(deadline.saturating_duration_since(Instant::now()));
         }
-        if wait_timeout.is_zero() {
-            return;
+        if let Some(deadline) = websockets.next_deadline() {
+            wait_timeout = wait_timeout.min(deadline.saturating_duration_since(Instant::now()));
         }
-        if let Err(error) = multi.poll(&mut [], wait_timeout) {
-            debug!("curl multi runtime poll failed: {error}");
+        if progressed {
+            wait_timeout = Duration::ZERO;
         }
+        websockets.wait(multi, wait_timeout, progressed);
     }
 
     fn send_completion(&self, completion: CurlMultiCompletion<H, C>) {

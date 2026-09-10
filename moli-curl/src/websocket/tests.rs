@@ -10,6 +10,7 @@ use tokio_tungstenite::tungstenite::{self, Message, handshake::derive_accept_key
 use super::*;
 
 mod readiness;
+mod shared;
 mod storage;
 
 const DEADLINE: Duration = Duration::from_secs(10);

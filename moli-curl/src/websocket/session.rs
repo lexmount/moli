@@ -45,6 +45,10 @@ impl Session {
         io: SessionIo,
         deadline: Instant,
     ) -> Option<Self> {
+        #[cfg(test)]
+        {
+            *io.control.owner_thread.lock() = Some(std::thread::current().id());
+        }
         if io.cancelled() {
             return None;
         }
@@ -112,6 +116,13 @@ impl Session {
         }
         self.phase = Phase::Open;
         Ok(Step::Idle)
+    }
+
+    pub(super) fn handshake_result(
+        &self,
+        message: &curl::multi::Message<'_>,
+    ) -> Option<Result<(), curl::Error>> {
+        message.result_for2(&self.handle)
     }
 
     pub(super) fn advance(

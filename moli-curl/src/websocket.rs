@@ -4,14 +4,15 @@
 //! close-handshake semantics belong to the caller. Dropping the receiver cancels
 //! its session, including DNS and handshake work, independently of queue capacity.
 //!
-//! Internally, owner coordinates DNS and scheduling; session owns the native
+//! Internally, the shared runtime drives DNS and scheduling; session owns the native
 //! handle and its Opening/Open/ReceivedClose lifecycle; scheduling holds I/O
 //! admission state and maps polled sockets back to their sessions. Returning
 //! AGAIN parks that I/O until its socket is signalled. Application wakeups only
 //! resume paused work, such as a new frame or restored receive capacity.
 
+mod connection_pool;
 mod diagnostics;
-mod owner;
+pub(crate) mod registry;
 mod request;
 mod scheduling;
 mod session;
@@ -23,7 +24,6 @@ use std::{
         Arc,
         atomic::{AtomicBool, Ordering},
     },
-    thread,
     time::Duration,
 };
 
@@ -33,7 +33,8 @@ use parking_lot::Mutex;
 use tokio::sync::{OwnedSemaphorePermit, Semaphore, mpsc, oneshot};
 
 use crate::{
-    CurlDnsResolution, CurlTlsConfig, CurlTransferId, runtime::identity::next_transfer_id,
+    CurlDnsResolution, CurlMultiRuntime, CurlMultiRuntimeConfig, CurlTlsConfig, CurlTransferId,
+    runtime::identity::next_transfer_id,
 };
 pub use curl::easy::{WsFlags, WsFrame};
 
@@ -138,6 +139,8 @@ struct Control {
     receive_allocations: std::sync::atomic::AtomicUsize,
     #[cfg(test)]
     read_waiting: tokio::sync::Notify,
+    #[cfg(test)]
+    owner_thread: Mutex<Option<std::thread::ThreadId>>,
 }
 
 impl Control {
@@ -277,48 +280,48 @@ impl Drop for SessionIo {
     }
 }
 
-struct Submission {
+pub(crate) struct Submission {
     id: CurlTransferId,
     request: CurlWebSocketRequest,
     io: SessionIo,
 }
 
+/// Admission capability for one native owner. Clones do not keep that owner
+/// alive; shutting down its runtime closes connections and rejects new ones.
 #[derive(Clone, Debug)]
-pub struct CurlWebSocketRuntime {
-    inner: Arc<RuntimeInner>,
+pub struct CurlWebSocketConnector {
+    inner: Arc<ConnectorInner>,
 }
 
 #[derive(Debug)]
-struct RuntimeInner {
+struct ConnectorInner {
     submissions: crossbeam_channel::Sender<Submission>,
     slots: Arc<Semaphore>,
     waker: MultiWaker,
     shutdown: Arc<AtomicBool>,
-    thread: Mutex<Option<thread::JoinHandle<()>>>,
 }
 
-impl CurlWebSocketRuntime {
-    pub fn new() -> Result<Self> {
-        let (submissions, rx) = crossbeam_channel::bounded(SESSION_CAPACITY);
-        let (waker_tx, waker_rx) = crossbeam_channel::bounded(1);
-        let shutdown = Arc::new(AtomicBool::new(false));
-        let owner_shutdown = shutdown.clone();
-        let thread = thread::Builder::new()
-            .name("moli-curl-websocket".to_owned())
-            .spawn(move || owner::run(rx, waker_tx, owner_shutdown))
-            .context("failed to start curl WebSocket owner")?;
-        let waker = waker_rx
-            .recv()
-            .context("curl WebSocket owner failed to start")?;
-        Ok(Self {
-            inner: Arc::new(RuntimeInner {
+impl CurlWebSocketConnector {
+    pub(crate) fn channel() -> (
+        crossbeam_channel::Sender<Submission>,
+        crossbeam_channel::Receiver<Submission>,
+    ) {
+        crossbeam_channel::bounded(SESSION_CAPACITY)
+    }
+
+    pub(crate) fn new(
+        submissions: crossbeam_channel::Sender<Submission>,
+        waker: MultiWaker,
+        shutdown: Arc<AtomicBool>,
+    ) -> Self {
+        Self {
+            inner: Arc::new(ConnectorInner {
                 submissions,
                 slots: Arc::new(Semaphore::new(SESSION_CAPACITY)),
                 waker,
                 shutdown,
-                thread: Mutex::new(Some(thread)),
             }),
-        })
+        }
     }
 
     pub fn connect(&self, request: CurlWebSocketRequest) -> Result<CurlWebSocketConnection> {
@@ -349,6 +352,8 @@ impl CurlWebSocketRuntime {
             receive_allocations: std::sync::atomic::AtomicUsize::new(0),
             #[cfg(test)]
             read_waiting: tokio::sync::Notify::new(),
+            #[cfg(test)]
+            owner_thread: Mutex::new(None),
         });
         let (event_tx, events) = mpsc::channel(MAX_PENDING_EVENTS);
         let io = SessionIo {
@@ -370,12 +375,32 @@ impl CurlWebSocketRuntime {
     }
 }
 
-impl Drop for RuntimeInner {
-    fn drop(&mut self) {
-        self.shutdown.store(true, Ordering::Release);
-        let _ = self.waker.wakeup();
-        if let Some(thread) = self.thread.get_mut().take() {
-            let _ = thread.join();
-        }
+/// Standalone owner for callers without an existing HTTP runtime. Uses the
+/// same Multi driver as HTTP, with no HTTP submissions.
+#[derive(Clone, Debug)]
+pub struct CurlWebSocketRuntime {
+    runtime: CurlMultiRuntime<StandaloneHandler, ()>,
+}
+
+#[derive(Debug)]
+struct StandaloneHandler;
+impl curl::easy::Handler for StandaloneHandler {}
+
+impl CurlWebSocketRuntime {
+    pub fn new() -> Result<Self> {
+        let (runtime, _) = CurlMultiRuntime::new(CurlMultiRuntimeConfig {
+            thread_name: "moli-curl-websocket".to_owned(),
+            poll_interval: Duration::from_secs(1),
+            ..CurlMultiRuntimeConfig::default()
+        })?;
+        Ok(Self { runtime })
+    }
+
+    pub fn connector(&self) -> CurlWebSocketConnector {
+        self.runtime.websocket_connector()
+    }
+
+    pub fn connect(&self, request: CurlWebSocketRequest) -> Result<CurlWebSocketConnection> {
+        self.connector().connect(request)
     }
 }

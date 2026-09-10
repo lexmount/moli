@@ -22,6 +22,7 @@ use curl::{
 use parking_lot::Mutex;
 
 use crate::dns_adapter::CurlDnsResolution;
+use crate::websocket::CurlWebSocketConnector;
 
 pub use config::CurlMultiRuntimeConfig;
 pub use identity::CurlTransferId;
@@ -124,6 +125,7 @@ struct CurlMultiRuntimeInner<H: Handler + Send + 'static, C: Send + 'static> {
     command_tx: Sender<CurlRuntimeCommand<H, C>>,
     owner_waker: MultiWaker,
     shutdown_requested: Arc<AtomicBool>,
+    websocket_connector: CurlWebSocketConnector,
     #[cfg(test)]
     owner_started: Arc<AtomicBool>,
     owner_handle: Mutex<Option<thread::JoinHandle<()>>>,
@@ -137,6 +139,7 @@ impl<H: Handler + Send + 'static, C: Send + 'static> CurlMultiRuntime<H, C> {
         let (command_tx, command_rx) = crossbeam_channel::unbounded();
         let (completion_tx, completion_rx) = crossbeam_channel::unbounded();
         let (waker_tx, waker_rx) = crossbeam_channel::bounded(1);
+        let (websocket_tx, websocket_rx) = CurlWebSocketConnector::channel();
         let shutdown_requested = Arc::new(AtomicBool::new(false));
         #[cfg(test)]
         let owner_started = Arc::new(AtomicBool::new(false));
@@ -146,6 +149,7 @@ impl<H: Handler + Send + 'static, C: Send + 'static> CurlMultiRuntime<H, C> {
             completion_tx,
             waker_tx,
             Arc::clone(&shutdown_requested),
+            websocket_rx,
             #[cfg(test)]
             Arc::clone(&owner_started),
         );
@@ -160,6 +164,11 @@ impl<H: Handler + Send + 'static, C: Send + 'static> CurlMultiRuntime<H, C> {
         let runtime = Self {
             inner: Arc::new(CurlMultiRuntimeInner {
                 command_tx,
+                websocket_connector: CurlWebSocketConnector::new(
+                    websocket_tx,
+                    owner_waker.clone(),
+                    shutdown_requested.clone(),
+                ),
                 owner_waker,
                 shutdown_requested,
                 #[cfg(test)]
@@ -207,6 +216,12 @@ impl<H: Handler + Send + 'static, C: Send + 'static> CurlMultiRuntime<H, C> {
 
     pub fn shutdown(&self) {
         self.inner.shutdown();
+    }
+
+    /// Creates WebSockets on this runtime's owner and Multi. The capability
+    /// cannot keep the runtime alive or shut down unrelated HTTP transfers.
+    pub fn websocket_connector(&self) -> CurlWebSocketConnector {
+        self.inner.websocket_connector.clone()
     }
 
     #[cfg(test)]

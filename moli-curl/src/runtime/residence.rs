@@ -5,11 +5,7 @@ use std::{
     time::{Duration, Instant},
 };
 
-use curl::{
-    easy::Handler,
-    multi::{Easy2Handle, Multi},
-};
-use tracing::debug;
+use curl::{easy::Handler, multi::Easy2Handle};
 
 use crate::dns_adapter::CurlDnsOwnerResidence;
 
@@ -140,31 +136,6 @@ pub(super) fn pending_origin_count<H: Handler, C>(
         .iter()
         .filter(|pending| pending.job.origin.as_ref() == Some(origin))
         .count()
-}
-
-pub(super) fn completed_transfers<H: Handler, C>(
-    multi: &Multi,
-    active: &HashMap<CurlTransferId, CurlActiveTransfer<H, C>>,
-) -> Vec<(CurlTransferId, std::result::Result<(), curl::Error>)> {
-    let mut completed = Vec::new();
-    multi.messages(|message| {
-        let Ok(token) = message.token() else {
-            debug!("ignored curl completion whose private token could not be read");
-            return;
-        };
-        let Some(transfer_id) = CurlTransferId::from_token(token) else {
-            debug!("ignored curl completion with an empty private token");
-            return;
-        };
-        let Some(transfer) = active.get(&transfer_id) else {
-            debug!(%transfer_id, "ignored stale curl completion");
-            return;
-        };
-        if let Some(result) = message.result_for2(&transfer.handle) {
-            completed.push((transfer_id, result));
-        }
-    });
-    completed
 }
 
 /// Removes exact active transfers while preserving libcurl's notification
