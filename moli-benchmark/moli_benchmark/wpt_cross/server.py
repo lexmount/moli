@@ -9,8 +9,8 @@ implements a small subset of WPT fixture behavior needed by the benchmark:
 ``.headers`` sidecars plus ``pipe=header(Name,Value)``,
 ``pipe=status(NNN)`` and ``pipe=trickle(dN)`` are translated into simple static
 response metadata and whole-response delays.
-It also implements tiny explicitly-listed WPT Python handlers when their
-behavior is static enough to model without a general wptserve runtime, and
+It also implements explicitly-listed WPT Python handlers, including shared
+Fetch abort state and streaming responses, without a general wptserve runtime, and
 carries a small set of legacy resource aliases for WPT checkouts where older
 fixture paths have moved.
 
@@ -38,7 +38,7 @@ import uuid
 from html import escape as html_escape
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from urllib.parse import parse_qsl, unquote, urlparse, urlsplit, urlunsplit
+from urllib.parse import parse_qs, parse_qsl, unquote, urlparse, urlsplit, urlunsplit
 
 from .any_js import (
     ANY_JS_DEDICATED_WORKER_GLOBAL,
@@ -66,6 +66,11 @@ from .case_set import (
 DEFAULT_TESTHARNESS_TIMEOUT_SECONDS = 10.0
 MAX_REQUEST_BODY_BYTES = 16 * 1024 * 1024
 MAX_REQUEST_BODY_LINE_BYTES = 64 * 1024
+FETCH_ABORT_RESOURCE_PATHS = {
+    "/fetch/api/resources/stash-put.py",
+    "/fetch/api/resources/stash-take.py",
+    "/fetch/api/resources/infinite-slow-response.py",
+}
 BENCH_TIMEOUT_MULTIPLIER_QUERY = "__moli_bench_timeout_multiplier"
 BENCH_REPORT_BRIDGE_SRC_RE = re.compile(
     rb"(?P<prefix>\bsrc\s*=\s*)(?P<quote>['\"])"
@@ -1534,10 +1539,47 @@ class CspReportStore:
             self._cv.notify_all()
 
 
+def _fetch_status_response(query: str) -> tuple[int, str, str, bytes]:
+    """Model fetch/api/resources/status.py without decoding its byte payload."""
+    params = parse_qs(query, keep_blank_values=True, encoding="latin-1")
+    return (
+        int(params.get("code", ["200"])[0]),
+        params.get("text", ["OMG"])[0],
+        params.get("type", [""])[0],
+        params.get("content", [""])[0].encode("latin-1"),
+    )
+
+
+class FetchStash:
+    """Write-once, read-once stash scoped to /fetch/api/resources/.
+
+    Every origin of one fixture server shares this namespace. UUID
+    normalization matches wptserve, including equivalent key spellings.
+    """
+
+    def __init__(self) -> None:
+        self._lock = threading.Lock()
+        self._values: dict[uuid.UUID, str] = {}
+
+    def put(self, key: str, value: str, *, overwrite: bool = False) -> None:
+        parsed_key = uuid.UUID(key)
+        with self._lock:
+            if not overwrite and parsed_key in self._values:
+                raise ValueError("Tried to overwrite existing shared stash value")
+            self._values[parsed_key] = value
+
+    def take(self, key: str) -> str | None:
+        parsed_key = uuid.UUID(key)
+        with self._lock:
+            return self._values.pop(parsed_key, None)
+
+
 def _make_handler(
     wpt_root: Path,
     results_store: "ResultsStore",
     report_store: CspReportStore,
+    fetch_stash: FetchStash,
+    stopping: threading.Event,
 ) -> type[BaseHTTPRequestHandler]:
     class WptHandler(BaseHTTPRequestHandler):
         def do_GET(self) -> None:  # noqa: N802 (BaseHTTPRequestHandler API)
@@ -1552,6 +1594,11 @@ def _make_handler(
         def do_OPTIONS(self) -> None:  # noqa: N802
             parsed = urlparse(self.path)
             path = unquote(parsed.path)
+            if path in FETCH_ABORT_RESOURCE_PATHS | {
+                "/fetch/api/resources/status.py", "/fetch/api/resources/trickle.py"
+            }:
+                self._serve_fetch_resource_method()
+                return
             if path == "/xhr/resources/delay.py":
                 self._serve_xhr_delay(parsed.query, emit_body=True)
                 return
@@ -1572,6 +1619,11 @@ def _make_handler(
         def do_POST(self) -> None:  # noqa: N802
             parsed = urlparse(self.path)
             path = unquote(parsed.path)
+            if path in FETCH_ABORT_RESOURCE_PATHS | {
+                "/fetch/api/resources/status.py", "/fetch/api/resources/trickle.py"
+            }:
+                self._serve_fetch_resource_method()
+                return
             if path == "/xhr/resources/delay.py":
                 if self._consume_request_body():
                     self._serve_xhr_delay(parsed.query, emit_body=True)
@@ -1610,8 +1662,33 @@ def _make_handler(
             self.send_header("Content-Length", "0")
             self.end_headers()
 
+        def _serve_fetch_resource_method(self) -> None:
+            parsed = urlparse(self.path)
+            if unquote(parsed.path) in FETCH_ABORT_RESOURCE_PATHS:
+                self._serve_fetch_abort_resource(
+                    unquote(parsed.path), parsed.query, emit_body=True
+                )
+                return
+            if unquote(parsed.path) == "/fetch/api/resources/trickle.py":
+                self._serve_fetch_trickle(parsed.query, emit_body=True)
+                return
+            if unquote(parsed.path) != "/fetch/api/resources/status.py":
+                self.send_error(501, f"Unsupported method ({self.command!r})")
+                return
+            if self._consume_request_body():
+                self._serve_fetch_status(parsed.query, emit_body=True)
+
+        do_PUT = _serve_fetch_resource_method
+        do_PATCH = _serve_fetch_resource_method
+        do_DELETE = _serve_fetch_resource_method
+
         def do_YO(self) -> None:  # noqa: N802 (WPT custom method)
             parsed = urlparse(self.path)
+            if unquote(parsed.path) in FETCH_ABORT_RESOURCE_PATHS | {
+                "/fetch/api/resources/status.py", "/fetch/api/resources/trickle.py"
+            }:
+                self._serve_fetch_resource_method()
+                return
             if unquote(parsed.path) != "/xhr/resources/delay.py":
                 self.send_error(404)
                 return
@@ -1734,6 +1811,15 @@ def _make_handler(
         def _serve(self, *, emit_body: bool) -> None:
             parsed = urlparse(self.path)
             path = unquote(parsed.path)
+            if path == "/fetch/api/resources/status.py":
+                self._serve_fetch_status(parsed.query, emit_body=emit_body)
+                return
+            if path == "/fetch/api/resources/trickle.py":
+                self._serve_fetch_trickle(parsed.query, emit_body=emit_body)
+                return
+            if path in FETCH_ABORT_RESOURCE_PATHS:
+                self._serve_fetch_abort_resource(path, parsed.query, emit_body=emit_body)
+                return
             pipe_status_code = _pipe_response_status(parsed.query)
             if path == "/reporting/resources/report.py":
                 self._serve_csp_report(parsed.query, emit_body=emit_body)
@@ -2195,6 +2281,141 @@ def _make_handler(
                 emit_body=emit_body,
             )
 
+        def _serve_fetch_abort_resource(
+            self, path: str, query: str, *, emit_body: bool
+        ) -> None:
+            if not self._consume_request_body():
+                return
+            if path.endswith("/infinite-slow-response.py"):
+                self._serve_fetch_infinite_response(query, emit_body=emit_body)
+                return
+            params = parse_qs(query, keep_blank_values=True, encoding="latin-1")
+            headers = [("Access-Control-Allow-Origin", "*")]
+            try:
+                if path.endswith("/stash-take.py"):
+                    body = json.dumps(fetch_stash.take(params["key"][0])).encode("ascii")
+                    headers.append(("Content-Type", "application/json"))
+                elif self.command == "OPTIONS":
+                    headers.extend([
+                        ("Access-Control-Allow-Methods", "*"),
+                        ("Access-Control-Allow-Headers", "*"),
+                    ])
+                    body = b"done"
+                else:
+                    allowed = True
+                    if "disallow_cross_origin" in params:
+                        headers = []
+                        if params["mode"][0] != "no-cors":
+                            # Preserve the upstream handler's required query
+                            # fields, including its trailing-space guard.
+                            if "frame_origin " not in params:
+                                raise ValueError("Missing frame_origin guard")
+                            frame_origin = (
+                                params["frame_origin"][0].encode("latin-1").decode("utf-8")
+                            )
+                            host_origin = f"http://{self.headers.get('Host', '')}"
+                            allowed = frame_origin == host_origin
+                    if allowed:
+                        fetch_stash.put(params["key"][0], params["value"][0])
+                    body = b"done" if allowed else b"not stashing for cors request"
+            except (KeyError, ValueError):
+                self.send_error(500)
+                return
+            self.send_response(200)
+            for name, value in headers:
+                self.send_header(name, value)
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            if emit_body:
+                self.wfile.write(body)
+
+        def _serve_fetch_infinite_response(self, query: str, *, emit_body: bool) -> None:
+            params = parse_qs(query, keep_blank_values=True)
+            state_key = params.get("stateKey", [""])[0]
+            abort_key = params.get("abortKey", [""])[0]
+            try:
+                for key in (state_key, abort_key):
+                    if key:
+                        uuid.UUID(key)
+            except ValueError:
+                self.send_error(500)
+                return
+            if state_key:
+                fetch_stash.put(state_key, "open", overwrite=True)
+            self.close_connection = True
+            try:
+                self.send_response(200)
+                self.send_header("Content-Type", "text/plain")
+                self.send_header("Connection", "close")
+                self.end_headers()
+                self.wfile.flush()
+                if not emit_body:
+                    return
+                self.wfile.write(b"." * 2048)
+                self.wfile.flush()
+                while not stopping.is_set():
+                    self.wfile.write(b".")
+                    self.wfile.flush()
+                    if abort_key and fetch_stash.take(abort_key):
+                        break
+                    stopping.wait(0.01)
+            except OSError:
+                # The state changes when the actual streaming write fails.
+                pass
+            finally:
+                if state_key:
+                    fetch_stash.put(state_key, "closed", overwrite=True)
+
+        def _serve_fetch_trickle(self, query: str, *, emit_body: bool) -> None:
+            params = parse_qs(query, keep_blank_values=True)
+            delay = _wpt_delay_seconds(query)
+            try:
+                count = int(params.get("count", ["50"])[0])
+            except ValueError:
+                self.send_error(500)
+                return
+            if delay is None:
+                self.send_error(500)
+                return
+            # Upstream reads the upload before delaying the response headers.
+            if not self._consume_request_body():
+                return
+            self.close_connection = True
+            try:
+                time.sleep(delay)
+                self.send_response(200)
+                if "notype" not in params:
+                    self.send_header("Content-Type", "text/plain")
+                # Like wptserve's explicit writer, delimit the body by EOF.
+                # Flush each chunk so readers can consume it before EOF.
+                self.send_header("Connection", "close")
+                self.end_headers()
+                self.wfile.flush()
+                if not emit_body:
+                    return
+                time.sleep(delay)
+                for _ in range(count):
+                    self.wfile.write(b"TEST_TRICKLE\n")
+                    self.wfile.flush()
+                    time.sleep(delay)
+            except (BrokenPipeError, ConnectionResetError, OSError):
+                return
+
+        def _serve_fetch_status(self, query: str, *, emit_body: bool) -> None:
+            try:
+                status, text, content_type, body = _fetch_status_response(query)
+            except ValueError:
+                self.send_error(500)
+                return
+            self._send_bytes(
+                content_type,
+                body,
+                emit_body=emit_body,
+                status_code=status,
+                status_text=text,
+                extra_headers=[("X-Request-Method", self.command)],
+            )
+
         def _send_bytes(
             self,
             content_type: str,
@@ -2203,12 +2424,13 @@ def _make_handler(
             emit_body: bool,
             extra_headers: list[tuple[str, str]] | None = None,
             status_code: int = 200,
+            status_text: str | None = None,
         ) -> None:
             content_type, extra_headers = _response_content_type_and_extra_headers(
                 content_type,
                 extra_headers,
             )
-            self.send_response(status_code)
+            self.send_response(status_code, status_text)
             header_block = _static_response_header_block(content_type, extra_headers)
             for name, value in header_block:
                 self.send_header(name, value)
@@ -2589,7 +2811,12 @@ class WptFixtureServer:
             )
         self.results = ResultsStore()
         self.csp_reports = CspReportStore()
-        handler_cls = _make_handler(self.wpt_root, self.results, self.csp_reports)
+        self.fetch_stash = FetchStash()
+        self._stopping = threading.Event()
+        handler_cls = _make_handler(
+            self.wpt_root, self.results, self.csp_reports,
+            self.fetch_stash, self._stopping,
+        )
         self.httpd = _FixtureThreadingHTTPServer(("127.0.0.1", 0), handler_cls)
         self.port = int(self.httpd.server_address[1])
         self.alternate_httpd = _FixtureThreadingHTTPServer(
@@ -2776,6 +3003,7 @@ class WptFixtureServer:
         return self
 
     def __exit__(self, exc_type: object, exc: object, tb: object) -> None:
+        self._stopping.set()
         self.httpd.shutdown()
         self.httpd.server_close()
         self.thread.join(timeout=2)
