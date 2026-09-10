@@ -1315,6 +1315,9 @@ pub(super) fn node_owner_document_relevant_context<'s>(
     let document_handle = unsafe { &*runtime_ptr }
         .dom_host()
         .owner_document_handle(handle)?;
+    if document_handle == unsafe { &*runtime_ptr }.document_handle() {
+        return unsafe { &*runtime_ptr }.page_default_context(scope);
+    }
     if let Some(child_handle) =
         unsafe { &*runtime_ptr }.child_browsing_context_host_for_document_handle(document_handle)
         && let Some(context) =

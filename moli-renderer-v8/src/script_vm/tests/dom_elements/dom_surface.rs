@@ -9450,6 +9450,112 @@ seen.join('|')
         "push,true,true,false,false,true,https://targeted-child-navigate.test/next.html,false,,,-1,true"
     );
 }
+
+#[tokio::test(flavor = "current_thread")]
+async fn base_target_navigation_exposes_replacement_document_before_iframe_load() {
+    const HOST: &str = "anchor-base-target.test";
+
+    let server = StaticHttpServer::spawn(3).await;
+    let top_url = server.url_for_host(HOST, "/path/page.html");
+    let replacement_url = server.url_for_host(HOST, "/replacement.html");
+    let loader = static_http_loader([server.resolve_entry(HOST)]);
+    let mut vm = new_storage_page_task_executor_test_vm_with_loader(top_url.as_str(), &loader);
+
+    vm.eval(
+        r#"
+(() => {
+  globalThis.__targetLoadCount = 0;
+  globalThis.__targetLoadAccess = "pending";
+  globalThis.__frameLoadCount = 0;
+  globalThis.__baseTargetOwnerRealm = "pending";
+
+  const root = document.documentElement || document.appendChild(document.createElement('html'));
+  const body = document.body || root.appendChild(document.createElement('body'));
+  document.addEventListener('load', () => { __frameLoadCount += 1; }, true);
+  body.innerHTML = `
+    <iframe id="base-target-source" name="sourceFrame" src="/source.html"></iframe>
+    <iframe id="base-target-target" name="targetFrame" src="/target.html"></iframe>
+  `;
+})()
+"#,
+    )
+    .expect("base-target network child setup should evaluate");
+    advance_page_task_executor_until_eval_equals(
+        &mut vm,
+        &loader,
+        "String(__frameLoadCount)",
+        "2",
+        "initial parser-created base-target child documents should load",
+    )
+    .await;
+
+    vm.eval(
+        r#"
+(() => {
+  const source = document.getElementById('base-target-source');
+  const target = document.getElementById('base-target-target');
+  __baseTargetOwnerRealm = [
+    source instanceof HTMLIFrameElement,
+    target instanceof HTMLIFrameElement,
+    target instanceof target.contentWindow.HTMLIFrameElement,
+    target.contentWindow.frameElement === target
+  ].join('|');
+
+  const doc = source.contentDocument;
+  const firstBase = doc.createElement('base');
+  firstBase.target = 'targetFrame';
+  const secondBase = doc.createElement('base');
+  secondBase.target = '_self';
+  doc.head.append(firstBase, secondBase);
+
+  const link = doc.createElement('a');
+  link.href = '/replacement.html';
+  link.setAttribute('target', '');
+  doc.body.appendChild(link);
+
+  target.addEventListener('load', () => {
+    __targetLoadCount += 1;
+    try {
+      __targetLoadAccess = target.contentDocument.location.href;
+    } catch (error) {
+      __targetLoadAccess = `${error && error.name}:${error && error.message}`;
+    }
+  }, true);
+  link.click();
+})()
+"#,
+    )
+    .expect("base-target replacement navigation should start");
+    advance_page_task_executor_until_eval_equals(
+        &mut vm,
+        &loader,
+        "String(__targetLoadCount)",
+        "1",
+        "base-target replacement document should load",
+    )
+    .await;
+
+    assert_eq!(
+        vm.eval("__baseTargetOwnerRealm")
+            .expect("base-target frame owner realm result should evaluate"),
+        "true|true|false|true",
+        "parser-created frame elements and window.frameElement must use the owner Document realm"
+    );
+    assert_eq!(
+        vm.eval("__targetLoadAccess")
+            .expect("target load callback access result should evaluate"),
+        replacement_url.as_str(),
+        "the replacement Document must be same-origin accessible during the iframe load callback"
+    );
+
+    let mut targets = server.finish_targets().await;
+    targets.sort();
+    assert_eq!(
+        targets,
+        ["/replacement.html", "/source.html", "/target.html"]
+    );
+}
+
 #[test]
 fn targeted_anchor_click_reports_same_document_hash_change_for_child_window() {
     let mut vm = new_storage_test_vm("https://targeted-child-hash.test/page.html");
