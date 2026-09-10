@@ -785,9 +785,9 @@ def _empty_location_handler_reference_patterns(directory: str) -> tuple[re.Patte
 
 
 @lru_cache(maxsize=None)
-def _xhr_url_handler_reference_patterns(directory: str) -> tuple[re.Pattern[str], ...]:
+def _xhr_handler_reference_patterns(directory: str) -> tuple[re.Pattern[str], ...]:
     references = []
-    for name in ("requri.py", "redirect.py"):
+    for name in ("requri.py", "redirect.py", "inspect-headers.py"):
         resource = f"xhr/resources/{name}"
         relative = posixpath.relpath(resource, directory)
         references.extend(("/" + resource, relative, "./" + relative))
@@ -820,7 +820,7 @@ def _supported_wptserve_handler_references(
         supported += _script_load_error_handler_reference_patterns(posixpath.dirname(rel) or ".")
     if rel is not None and rel.startswith("xhr/"):
         supported += SUPPORTED_XHR_DELAY_WPTSERVE_HANDLER_PATTERNS
-        supported += _xhr_url_handler_reference_patterns(rel.rsplit("/", 1)[0])
+        supported += _xhr_handler_reference_patterns(rel.rsplit("/", 1)[0])
     if rel is not None and rel.startswith(
         "html/semantics/scripting-1/the-script-element/module/"
     ):
