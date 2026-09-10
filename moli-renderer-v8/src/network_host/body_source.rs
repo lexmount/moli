@@ -651,6 +651,30 @@ fn enqueue_pending_network_body_chunk_in_maps(
     }
 }
 
+pub(crate) fn release_pending_opaque_response_body(
+    scope: &mut v8::PinScope<'_, '_>,
+    body_source_id: NetworkBodySourceId,
+    response_headers: &[(String, String)],
+    body: &SubresourceResponseBody,
+) -> Result<(), String> {
+    match validated_opaque_response_body(response_headers, body) {
+        Ok(bytes) => {
+            enqueue_pending_network_body_chunk(scope, body_source_id, bytes.into_owned());
+            Ok(())
+        }
+        Err(FetchResponseSecurityViolation::OpaqueResponseBlocked(message)) => {
+            // An ORB-blocked Fetch still exposes an opaque response, with an
+            // empty internal body. Its network record reports the block.
+            close_pending_network_body_stream(scope, body_source_id);
+            Err(message)
+        }
+        Err(FetchResponseSecurityViolation::Rejected(message)) => {
+            error_pending_network_body_stream(scope, body_source_id, message.clone());
+            Err(message)
+        }
+    }
+}
+
 pub(crate) fn close_pending_network_body_stream<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     id: NetworkBodySourceId,
