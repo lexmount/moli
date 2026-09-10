@@ -133,13 +133,13 @@ pub(in crate::network_host) use self::preflight_events::CorsPreflightNetworkObse
 pub(in crate::network_host) use self::request::normalize_request_method;
 pub(crate) use self::request::request_constructor_callback;
 pub(crate) use self::request::{
-    FetchArgs, parse_fetch_init, parse_request_redirect_mode_label, request_object_credentials_mode,
+    FetchArgs, RequestInitValidation, parse_fetch_init, parse_request_redirect_mode_label, request_object_credentials_mode,
 };
 pub(crate) use self::request::{FetchArgumentError, convert_fetch_arguments};
 pub(crate) use self::request::{
     mark_request_input_body_used_for_fetch, request_body_already_used_error,
     try_resolve_request_constructor_url, try_resolve_request_constructor_url_for_base,
-    try_resolve_request_constructor_url_for_child, validate_request_method_body,
+    try_resolve_request_constructor_url_for_child, validate_request_method_body, validate_request_url_credentials,
 };
 pub(in crate::network_host) use self::request_scope::{
     XHR_CHILD_CONTEXT_HANDLE_SLOT, active_subresource_network_partition_key,
