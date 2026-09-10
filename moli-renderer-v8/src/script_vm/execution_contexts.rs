@@ -508,6 +508,7 @@ impl ScriptVm {
             host.retire_window_realm_resources(context.runtime_observable_context_token);
             host.retire_window_execution_contexts_for_context_token(
                 context.runtime_observable_context_token,
+                self.resource_owner_id,
             );
             host.child_window_proxy_frame_is_current(child_handle, &context.frame_id)
         };
@@ -545,6 +546,7 @@ impl ScriptVm {
             host.retire_window_realm_resources(context.runtime_observable_context_token);
             host.retire_window_execution_contexts_for_context_token(
                 context.runtime_observable_context_token,
+                self.resource_owner_id,
             );
         }
         assert!(
@@ -641,7 +643,10 @@ impl ScriptVm {
         let retired_window_execution_context_realm_count = self
             ._context_host
             .borrow_mut()
-            .retire_isolated_window_execution_context(context.runtime_observable_context_token);
+            .retire_isolated_window_execution_context(
+                context.runtime_observable_context_token,
+                self.resource_owner_id,
+            );
         if reuses_window_proxy {
             let detached = self
                 .renderer_document_isolate
