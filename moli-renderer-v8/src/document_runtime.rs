@@ -776,6 +776,7 @@ pub(super) struct DocumentRuntime {
     resource_loader_binding: Option<DocumentResourceLoaderBinding>,
     script_context_stack: Vec<CurrentScriptContext>,
     destructive_write_counters: destructive_writes::DocumentWriteCounters,
+    document_unload_counters: destructive_writes::DocumentWriteCounters,
     root_document_parser: Option<DocumentParserSession>,
     post_parse_schedule_invalidated: bool,
     stylesheet_lifecycle: StylesheetLifecycleState,

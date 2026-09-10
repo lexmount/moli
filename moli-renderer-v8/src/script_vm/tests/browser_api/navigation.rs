@@ -2119,6 +2119,50 @@ fn cross_document_unload_lifecycle_orders_pagehide_before_unload_without_timer()
 }
 
 #[test]
+fn main_document_stream_operations_are_suppressed_only_during_unload() {
+    for event in ["beforeunload", "pagehide", "unload"] {
+        for operation in ["open", "write", "writeln"] {
+            let mut vm = new_storage_test_vm("https://document-open-unload.test/source");
+            let result = vm
+                .eval(&format!(
+                    r#"(() => {{
+                      const doc = document;
+                      if (!doc.documentElement) doc.appendChild(doc.createElement('html'));
+                      const root = doc.documentElement;
+                      root.appendChild(doc.createElement('p'));
+                      let retained = false;
+                      let nestedRetained = false;
+                      let listenerCount = 0;
+                      let converted = 0;
+                      doc.addEventListener('retained-listener', () => listenerCount++);
+                      addEventListener('nested-open', () => {{
+                        doc.open();
+                        nestedRetained = doc.documentElement === root;
+                      }});
+                      addEventListener({event:?}, () => {{
+                        if ({operation:?} === 'open') doc.open();
+                        else doc[{operation:?}]({{toString() {{ converted++; return 'changed'; }}}});
+                        retained = doc.documentElement === root;
+                        dispatchEvent(new Event('nested-open'));
+                        doc.dispatchEvent(new Event('retained-listener'));
+                      }});
+                      navigation.navigate('/destination');
+                      doc.open();
+                      return [retained, nestedRetained, listenerCount, converted,
+                        doc.documentElement !== root].join('|');
+                    }})()"#
+                ))
+                .expect("main document unload stream operations should evaluate");
+            assert_eq!(
+                result,
+                format!("true|true|1|{}|true", usize::from(operation != "open")),
+                "{event}/{operation}"
+            );
+        }
+    }
+}
+
+#[test]
 fn before_unload_handler_coerces_its_result_while_window_event_is_current() {
     let mut vm = new_storage_test_vm("https://example.com/base");
 

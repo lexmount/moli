@@ -21,7 +21,8 @@ pub(super) use child_context::{
     window_frame_element_getter, window_length_getter,
 };
 pub(super) use helpers::{
-    window_child_context_handle, window_has_discarded_child_browsing_context,
+    window_child_context_handle, window_document_handle,
+    window_has_discarded_child_browsing_context,
 };
 pub(super) use interceptors::{
     window_indexed_property_definer, window_indexed_property_deleter,

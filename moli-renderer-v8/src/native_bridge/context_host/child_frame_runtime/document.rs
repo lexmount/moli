@@ -567,6 +567,9 @@ impl JsContextHost {
         if self.child_browsing_context_document_handle(child_handle) != Some(document_handle) {
             return None;
         }
+        if self.has_document_unload_counter(document_handle) {
+            return None;
+        }
         if self.child_document_stream_is_blocked_by_navigation(child_handle) {
             tracing::debug!(
                 ?child_handle,

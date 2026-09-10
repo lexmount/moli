@@ -655,6 +655,11 @@ fn dispatch_unload_lifecycle_event_for_runtime_owner<'s>(
     event_type: &str,
     event: v8::Local<'s, v8::Object>,
 ) {
+    let _document_unload = context_host_ptr_from_global_bridge(scope).and_then(|host_ptr| {
+        let host = unsafe { &*host_ptr };
+        super::window_accessors::window_document_handle(scope, owner, host)
+            .map(|document| host.enter_document_unload(document))
+    });
     set_navigation_unload_event_active(scope, owner, true);
     if runtime_window_is_global(scope, owner) {
         if let Some(host_ptr) = context_host_ptr_from_global_bridge(scope) {
