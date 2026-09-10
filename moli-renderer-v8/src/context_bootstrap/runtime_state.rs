@@ -1845,6 +1845,7 @@ pub(crate) fn finish_context_bootstrap(
             "OffscreenCanvasRenderingContext2D",
         ),
         ("WebGLRenderingContext", "WebGLRenderingContext"),
+        ("WebGLContextEvent", "WebGLContextEvent"),
         ("WebGL2RenderingContext", "WebGL2RenderingContext"),
         ("WebGLObject", "WebGLObject"),
         ("WebGLBuffer", "WebGLBuffer"),

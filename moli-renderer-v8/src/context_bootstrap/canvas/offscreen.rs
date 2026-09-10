@@ -1,7 +1,5 @@
 use super::backing_store::{attach_canvas_like_context_object, reset_canvas_like_backing_store};
-use super::objects::{
-    build_offscreen_2d_context_object, build_webgl_context_object, build_webgl2_context_object,
-};
+use super::objects::build_offscreen_2d_context_object;
 use super::*;
 use crate::util::{
     callback_data_index_value, callback_data_item, get_private_value, set_private_value, v8str,
@@ -12,10 +10,13 @@ use moli_webapi_declare::{WebApiFunctionTemplate, WebApiObject};
 const OFFSCREEN_CANVAS_BRAND_SLOT: &str = "__moliOffscreenCanvasBrand";
 const OFFSCREEN_CANVAS_CONTEXT_SLOT: &str = "__moliOffscreenCanvasContext";
 const OFFSCREEN_CANVAS_CONTEXT_KIND_SLOT: &str = "__moliOffscreenCanvasContextKind";
+pub(super) const OFFSCREEN_CANVAS_LISTENERS_SLOT: &str = "__moliOffscreenCanvasListeners";
 
 #[derive(WebApiObject)]
 #[webapi(interface = "OffscreenCanvas")]
 struct OffscreenCanvasObjectDeclaration {
+    #[webapi(slot = crate::context_bootstrap::SIMPLE_EVENT_TARGET_SLOT, value = OFFSCREEN_CANVAS_LISTENERS_SLOT)]
+    event_target_slot: (),
     #[webapi(slot = OFFSCREEN_CANVAS_BRAND_SLOT, init = true)]
     brand: (),
 
@@ -146,9 +147,8 @@ pub(crate) fn offscreen_canvas_get_context_callback<'s>(
         throw_type_error(scope, "Illegal invocation");
         return;
     }
-    let Some(kind) = webidl::try_parse_args::<OffscreenCanvasGetContextArgs>(scope, &args)
-        .ok()
-        .map(|parsed| parsed.kind)
+    let Some(kind) =
+        webidl::parse_args::<OffscreenCanvasGetContextArgs>(scope, &args).map(|parsed| parsed.kind)
     else {
         rv.set_null();
         return;
@@ -166,14 +166,17 @@ pub(crate) fn offscreen_canvas_get_context_callback<'s>(
     }
     let context = match kind {
         CanvasContextKind::TwoD => build_offscreen_2d_context_object(scope),
-        CanvasContextKind::WebGl => build_webgl_context_object(scope),
-        CanvasContextKind::WebGl2 => build_webgl2_context_object(scope),
+        CanvasContextKind::WebGl | CanvasContextKind::WebGl2 => {
+            dispatch_webgl_creation_error(scope, args.this(), WEBGL_BACKEND_UNAVAILABLE);
+            None
+        }
+        CanvasContextKind::BitmapRenderer | CanvasContextKind::WebGpu => None,
     };
     let Some(context) = context else {
         rv.set_null();
         return;
     };
-    // Reacquiring a context must retain its GL state, and an OffscreenCanvas
+    // Reacquiring a context must retain its state, and an OffscreenCanvas
     // cannot switch context modes after the first successful acquisition.
     set_private_value(
         scope,

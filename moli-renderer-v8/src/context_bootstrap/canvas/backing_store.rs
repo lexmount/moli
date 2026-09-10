@@ -26,9 +26,6 @@ pub(crate) fn attach_canvas_like_context_object<'s>(
     canvas: v8::Local<'s, v8::Object>,
     context: v8::Local<'s, v8::Object>,
 ) {
-    if canvas_owner_from_context(scope, context).is_none() {
-        super::webgl::initialize_attached_webgl_viewport(scope, canvas, context);
-    }
     let _ = CanvasContextOwnerDeclaration::new(canvas).initialize(scope, context);
     set_private_value(scope, context, CANVAS_OWNER_SLOT, canvas.into());
     if get_private_value(scope, context, super::CANVAS_CONTEXT_FILL_STYLE_SLOT).is_some() {

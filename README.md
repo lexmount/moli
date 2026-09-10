@@ -356,6 +356,9 @@ Its current intentional boundaries include:
   paint architecture.
 - It does not pursue pixel-for-pixel parity with Chrome or provide
   high-fidelity Canvas/WebGL/media playback.
+- No WebGL rendering backend is currently connected. HTML and Offscreen canvas
+  WebGL requests report creation failure and return `null`, allowing callers to
+  fall back to 2D; exposed WebGL interfaces do not imply GPU availability.
 - `--layout` supports software screenshots and raster-backed CDP PDF
   generation, but not every Chrome screenshot or print mode is implemented.
 

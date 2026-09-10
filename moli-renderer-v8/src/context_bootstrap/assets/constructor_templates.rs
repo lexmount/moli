@@ -5,8 +5,7 @@ use super::super::{
     canvas::{
         canvas_rendering_context_2d_constructor_callback, offscreen_canvas_constructor_callback,
         offscreen_canvas_rendering_context_2d_constructor_callback,
-        webgl_debug_renderer_info_constructor_callback, webgl_lose_context_constructor_callback,
-        webgl_rendering_context_constructor_callback,
+        webgl_context_event_constructor_callback,
     },
     css_fontface_runtime::{font_face_constructor_callback, font_face_set_constructor_callback},
     css_runtime::{css_keyword_value_constructor_callback, css_unit_value_constructor_callback},
@@ -348,19 +347,9 @@ pub(in crate::context_bootstrap) fn build_constructor_template<'s>(
         )
         .length(0)
         .build(scope),
-        ConstructorKind::WebGLRenderingContext => {
-            v8::FunctionTemplate::builder(webgl_rendering_context_constructor_callback)
-                .length(0)
-                .build(scope)
-        }
-        ConstructorKind::WebGlDebugRendererInfo => {
-            v8::FunctionTemplate::builder(webgl_debug_renderer_info_constructor_callback)
-                .length(0)
-                .build(scope)
-        }
-        ConstructorKind::WebGlLoseContext => {
-            v8::FunctionTemplate::builder(webgl_lose_context_constructor_callback)
-                .length(0)
+        ConstructorKind::WebGlContextEvent => {
+            v8::FunctionTemplate::builder(webgl_context_event_constructor_callback)
+                .length(1)
                 .build(scope)
         }
         ConstructorKind::File => v8::FunctionTemplate::builder(file_constructor_callback)

@@ -1073,7 +1073,7 @@ const CONSTRUCTOR_SPECS_AFTER_STREAMS: &[ConstructorSpec] = &[
     },
     ConstructorSpec {
         name: "OffscreenCanvas",
-        parent: None,
+        parent: Some("EventTarget"),
         kind: ConstructorKind::OffscreenCanvas,
     },
     ConstructorSpec {
@@ -1089,7 +1089,12 @@ const CONSTRUCTOR_SPECS_AFTER_STREAMS: &[ConstructorSpec] = &[
     ConstructorSpec {
         name: "WebGLRenderingContext",
         parent: None,
-        kind: ConstructorKind::WebGLRenderingContext,
+        kind: ConstructorKind::Illegal,
+    },
+    ConstructorSpec {
+        name: "WebGLContextEvent",
+        parent: Some("Event"),
+        kind: ConstructorKind::WebGlContextEvent,
     },
     ConstructorSpec {
         name: "WebGL2RenderingContext",
@@ -1134,12 +1139,12 @@ const CONSTRUCTOR_SPECS_AFTER_STREAMS: &[ConstructorSpec] = &[
     ConstructorSpec {
         name: "WEBGL_debug_renderer_info",
         parent: None,
-        kind: ConstructorKind::WebGlDebugRendererInfo,
+        kind: ConstructorKind::Illegal,
     },
     ConstructorSpec {
         name: "WEBGL_lose_context",
         parent: None,
-        kind: ConstructorKind::WebGlLoseContext,
+        kind: ConstructorKind::Illegal,
     },
     ConstructorSpec {
         name: "File",

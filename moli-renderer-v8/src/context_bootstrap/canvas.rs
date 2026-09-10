@@ -76,48 +76,6 @@ pub(crate) fn canvas_composite_operation_canonical(value: &str) -> Option<&'stat
         .find(|candidate| *candidate == value)
 }
 
-const WEBGL_SUPPORTED_EXTENSIONS: &[&str] = &[
-    "ANGLE_instanced_arrays",
-    "EXT_blend_minmax",
-    "EXT_clip_control",
-    "EXT_color_buffer_half_float",
-    "EXT_depth_clamp",
-    "EXT_disjoint_timer_query",
-    "EXT_float_blend",
-    "EXT_frag_depth",
-    "EXT_polygon_offset_clamp",
-    "EXT_shader_texture_lod",
-    "EXT_texture_compression_bptc",
-    "EXT_texture_compression_rgtc",
-    "EXT_texture_filter_anisotropic",
-    "EXT_texture_mirror_clamp_to_edge",
-    "EXT_sRGB",
-    "KHR_parallel_shader_compile",
-    "OES_element_index_uint",
-    "OES_fbo_render_mipmap",
-    "OES_standard_derivatives",
-    "OES_texture_float",
-    "OES_texture_float_linear",
-    "OES_texture_half_float",
-    "OES_texture_half_float_linear",
-    "OES_vertex_array_object",
-    "WEBGL_blend_func_extended",
-    "WEBGL_color_buffer_float",
-    "WEBGL_compressed_texture_astc",
-    "WEBGL_compressed_texture_etc",
-    "WEBGL_compressed_texture_etc1",
-    "WEBGL_compressed_texture_pvrtc",
-    "WEBGL_compressed_texture_s3tc",
-    "WEBGL_compressed_texture_s3tc_srgb",
-    "WEBGL_debug_renderer_info",
-    "WEBGL_debug_shaders",
-    "WEBGL_depth_texture",
-    "WEBGL_draw_buffers",
-    "WEBGL_lose_context",
-    "WEBGL_multi_draw",
-    "WEBGL_polygon_mode",
-];
-
 #[derive(WebApiFunctionTemplate)]
 #[webapi(name = "HTMLCanvasElement", receiver = crate::native_bridge::receivers::html_canvas_element)]
 struct HtmlCanvasElementPrototypeAccessorsDeclaration {
@@ -141,7 +99,7 @@ struct HtmlCanvasElementPrototypeAccessorsDeclaration {
 #[derive(
     Clone, Copy, Debug, PartialEq, Eq, strum::EnumString, strum::IntoStaticStr, webidl::WebIdlEnum,
 )]
-#[webidl(name = "CanvasContextId", parse_with = Self::parse)]
+#[webidl(name = "OffscreenRenderingContextType", parse_with = Self::parse)]
 #[strum(serialize_all = "lowercase")]
 pub(crate) enum CanvasContextKind {
     #[strum(serialize = "2d")]
@@ -149,6 +107,8 @@ pub(crate) enum CanvasContextKind {
     WebGl,
     #[strum(serialize = "webgl2")]
     WebGl2,
+    BitmapRenderer,
+    WebGpu,
 }
 
 impl CanvasContextKind {
@@ -180,7 +140,10 @@ mod canvas_context_kind_tests {
             Some(CanvasContextKind::WebGl2)
         );
         assert_eq!(CanvasContextKind::parse("WebGL"), None);
-        assert_eq!(CanvasContextKind::parse("bitmaprenderer"), None);
+        assert_eq!(
+            CanvasContextKind::parse("bitmaprenderer"),
+            Some(CanvasContextKind::BitmapRenderer)
+        );
     }
 }
 
@@ -195,6 +158,7 @@ mod path;
 mod state;
 mod transform;
 mod webgl;
+mod webgl_creation;
 
 pub(crate) use backing_store::{
     attach_canvas_like_context_object, canvas_like_to_data_url,
@@ -203,8 +167,6 @@ pub(crate) use backing_store::{
 pub(crate) use constructors::{
     canvas_rendering_context_2d_constructor_callback, offscreen_canvas_constructor_callback,
     offscreen_canvas_rendering_context_2d_constructor_callback,
-    webgl_debug_renderer_info_constructor_callback, webgl_lose_context_constructor_callback,
-    webgl_rendering_context_constructor_callback,
 };
 pub(crate) use context2d::{
     canvas_context_arc_callback, canvas_context_arc_to_callback,
@@ -242,27 +204,14 @@ pub(crate) use context2d::{
     canvas_gradient_add_color_stop_callback,
 };
 pub(crate) use image_bitmap::window_create_image_bitmap_callback;
-pub(crate) use objects::{
-    build_canvas_rendering_context_2d_object, build_offscreen_canvas_object,
-    build_webgl_context_object, build_webgl2_context_object,
-};
+pub(crate) use objects::{build_canvas_rendering_context_2d_object, build_offscreen_canvas_object};
 pub(crate) use offscreen::{
     offscreen_canvas_convert_to_blob_callback, offscreen_canvas_get_context_callback,
 };
-pub(crate) use webgl::{
-    WEBGL_CONSTANTS, WEBGL2_CONSTANTS, webgl_boolean_callback,
-    webgl_check_framebuffer_status_callback, webgl_create_buffer_callback,
-    webgl_create_framebuffer_callback, webgl_create_program_callback,
-    webgl_create_renderbuffer_callback, webgl_create_shader_callback,
-    webgl_get_attrib_location_callback, webgl_get_context_attributes_callback,
-    webgl_get_error_callback, webgl_get_extension_callback, webgl_get_parameter_callback,
-    webgl_get_shader_info_log_callback, webgl_get_shader_precision_format_callback,
-    webgl_get_supported_extensions_callback, webgl_is_context_lost_callback,
-    webgl_lose_context_noop_callback, webgl_noop_callback, webgl_uniform_location_callback,
-    webgl_viewport_callback, webgl2_color_space_getter_callback,
-    webgl2_color_space_setter_callback, webgl2_get_extension_callback,
-    webgl2_get_internalformat_parameter_callback, webgl2_get_parameter_callback,
-    webgl2_get_supported_extensions_callback,
+pub(crate) use webgl::{WEBGL_CONSTANTS, WEBGL2_CONSTANTS, webgl_unavailable_receiver_callback};
+pub(crate) use webgl_creation::{
+    WEBGL_BACKEND_UNAVAILABLE, WEBGL_CONTEXT_TYPE_CONFLICT, dispatch_webgl_creation_error,
+    webgl_context_event_constructor_callback,
 };
 
 pub(super) fn install_canvas_template_bindings<'s>(
@@ -279,6 +228,9 @@ pub(super) fn install_canvas_template_bindings<'s>(
         }
         "OffscreenCanvas" => {
             offscreen::install_offscreen_canvas_template_bindings(scope, template);
+        }
+        "WebGLContextEvent" => {
+            webgl_creation::install_webgl_context_event_template(scope, template);
         }
         "ImageBitmap" => {
             image_bitmap::install_image_bitmap_template_bindings(scope, template);

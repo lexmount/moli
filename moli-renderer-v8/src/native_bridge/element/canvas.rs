@@ -1,10 +1,10 @@
 use crate::{
     context_bootstrap::{
-        CanvasContextKind, attach_canvas_like_context_object,
-        build_canvas_rendering_context_2d_object, build_offscreen_canvas_object,
-        build_webgl_context_object, build_webgl2_context_object, canvas_like_to_data_url,
+        CanvasContextKind, WEBGL_BACKEND_UNAVAILABLE, WEBGL_CONTEXT_TYPE_CONFLICT,
+        attach_canvas_like_context_object, build_canvas_rendering_context_2d_object,
+        build_offscreen_canvas_object, canvas_like_to_data_url, dispatch_webgl_creation_error,
     },
-    util::{get_own_static_property, object_own_static_string_property, v8_string, v8str},
+    util::{get_private_value, set_private_value, v8_string},
     webidl,
 };
 
@@ -13,22 +13,12 @@ use super::{element_attribute, set_reflected_attribute};
 
 const CANVAS_CONTEXT_KIND_SLOT: &str = "__moliCanvasContextKind";
 const CANVAS_CONTEXT_2D_SLOT: &str = "__moliCanvasContext2D";
-const CANVAS_CONTEXT_WEBGL_SLOT: &str = "__moliCanvasContextWebGL";
-const CANVAS_CONTEXT_WEBGL2_SLOT: &str = "__moliCanvasContextWebGL2";
 
 #[derive(webidl::WebIdlArgs)]
 #[webidl(prefix = "HTMLCanvasElement.getContext")]
 struct HtmlCanvasGetContextArgs {
-    #[webidl(required, converter = "enum")]
-    kind: CanvasContextKind,
-}
-
-fn canvas_context_slot(kind: CanvasContextKind) -> &'static str {
-    match kind {
-        CanvasContextKind::TwoD => CANVAS_CONTEXT_2D_SLOT,
-        CanvasContextKind::WebGl => CANVAS_CONTEXT_WEBGL_SLOT,
-        CanvasContextKind::WebGl2 => CANVAS_CONTEXT_WEBGL2_SLOT,
-    }
+    #[webidl(required)]
+    kind: String,
 }
 
 pub(crate) fn html_canvas_width_getter_callback<'s>(
@@ -156,33 +146,41 @@ pub(crate) fn canvas_get_context_callback<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'s, v8::Value>,
 ) {
-    let Some(kind) = webidl::try_parse_args::<HtmlCanvasGetContextArgs>(scope, &args)
-        .ok()
-        .map(|parsed| parsed.kind)
-    else {
+    let Some(parsed) = webidl::parse_args::<HtmlCanvasGetContextArgs>(scope, &args) else {
+        return;
+    };
+    let Some(kind) = CanvasContextKind::parse(match parsed.kind.as_str() {
+        "experimental-webgl" => "webgl",
+        name => name,
+    }) else {
         rv.set_null();
         return;
     };
     let canvas = args.this();
-    if let Some(existing_kind) =
-        object_own_static_string_property(scope, canvas, CANVAS_CONTEXT_KIND_SLOT)
-            .and_then(|value| CanvasContextKind::parse(&value))
+    if let Some(existing_kind) = get_private_value(scope, canvas, CANVAS_CONTEXT_KIND_SLOT)
+        .and_then(|value| v8::Local::<v8::String>::try_from(value).ok())
+        .and_then(|value| CanvasContextKind::parse(&value.to_rust_string_lossy(scope)))
     {
         if existing_kind != kind {
+            if matches!(kind, CanvasContextKind::WebGl | CanvasContextKind::WebGl2) {
+                dispatch_webgl_creation_error(scope, canvas, WEBGL_CONTEXT_TYPE_CONFLICT);
+            }
             rv.set_null();
             return;
         }
-        let slot = canvas_context_slot(kind);
-        if let Some(existing) = get_own_static_property(scope, canvas, slot) {
+        if let Some(existing) = get_private_value(scope, canvas, CANVAS_CONTEXT_2D_SLOT) {
             rv.set(existing);
             return;
         }
     }
 
-    let Some(value) = (match kind {
-        CanvasContextKind::TwoD => build_canvas_rendering_context_2d_object(scope).map(Into::into),
-        CanvasContextKind::WebGl => build_webgl_context_object(scope).map(Into::into),
-        CanvasContextKind::WebGl2 => build_webgl2_context_object(scope).map(Into::into),
+    let Some(context) = (match kind {
+        CanvasContextKind::TwoD => build_canvas_rendering_context_2d_object(scope),
+        CanvasContextKind::WebGl | CanvasContextKind::WebGl2 => {
+            dispatch_webgl_creation_error(scope, canvas, WEBGL_BACKEND_UNAVAILABLE);
+            None
+        }
+        CanvasContextKind::BitmapRenderer | CanvasContextKind::WebGpu => None,
     }) else {
         rv.set_null();
         return;
@@ -191,27 +189,10 @@ pub(crate) fn canvas_get_context_callback<'s>(
         rv.set_null();
         return;
     };
-    let _ = canvas.define_own_property(
-        scope,
-        v8str(scope, CANVAS_CONTEXT_KIND_SLOT).into(),
-        kind_value.into(),
-        v8::PropertyAttribute::DONT_ENUM,
-    );
-    let slot = canvas_context_slot(kind);
-    let _ = canvas.define_own_property(
-        scope,
-        v8str(scope, slot).into(),
-        value,
-        v8::PropertyAttribute::DONT_ENUM,
-    );
-    if matches!(
-        kind,
-        CanvasContextKind::TwoD | CanvasContextKind::WebGl | CanvasContextKind::WebGl2
-    ) && let Ok(context) = v8::Local::<v8::Object>::try_from(value)
-    {
-        attach_canvas_like_context_object(scope, canvas, context);
-    }
-    rv.set(value);
+    set_private_value(scope, canvas, CANVAS_CONTEXT_KIND_SLOT, kind_value.into());
+    set_private_value(scope, canvas, CANVAS_CONTEXT_2D_SLOT, context.into());
+    attach_canvas_like_context_object(scope, canvas, context);
+    rv.set(context.into());
 }
 
 pub(crate) fn canvas_transfer_control_to_offscreen_callback<'s>(

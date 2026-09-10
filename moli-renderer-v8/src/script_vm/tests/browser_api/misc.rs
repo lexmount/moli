@@ -6319,8 +6319,8 @@ fn zhihu_capability_probe_fixture_matches_stable_moli_baseline() {
     assert_eq!(value["canvasCtor"], "HTMLCanvasElement");
     assert_eq!(value["canvasContextCtor"], "CanvasRenderingContext2D");
     assert_eq!(value["canvasToDataURLType"], "function");
-    assert_eq!(value["webgl"]["ctor"], "WebGLRenderingContext");
-    assert_eq!(value["webgl"]["getParameterType"], "function");
+    assert_eq!(value["webgl"]["ctor"], serde_json::Value::Null);
+    assert_eq!(value["webgl"]["getParameterType"], "undefined");
     assert_eq!(value["webdriver"], false);
 
     let phantom_flags = value["phantomFlags"]

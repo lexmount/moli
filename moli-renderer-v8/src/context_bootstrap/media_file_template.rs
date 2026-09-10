@@ -33,18 +33,7 @@ use super::canvas::{
     canvas_context_transform_callback, canvas_context_translate_callback,
     canvas_gradient_add_color_stop_callback, install_canvas_template_bindings,
     offscreen_canvas_convert_to_blob_callback, offscreen_canvas_get_context_callback,
-    webgl_boolean_callback, webgl_check_framebuffer_status_callback, webgl_create_buffer_callback,
-    webgl_create_framebuffer_callback, webgl_create_program_callback,
-    webgl_create_renderbuffer_callback, webgl_create_shader_callback,
-    webgl_get_attrib_location_callback, webgl_get_context_attributes_callback,
-    webgl_get_error_callback, webgl_get_extension_callback, webgl_get_parameter_callback,
-    webgl_get_shader_info_log_callback, webgl_get_shader_precision_format_callback,
-    webgl_get_supported_extensions_callback, webgl_is_context_lost_callback,
-    webgl_lose_context_noop_callback, webgl_noop_callback, webgl_uniform_location_callback,
-    webgl_viewport_callback, webgl2_color_space_getter_callback,
-    webgl2_color_space_setter_callback, webgl2_get_extension_callback,
-    webgl2_get_internalformat_parameter_callback, webgl2_get_parameter_callback,
-    webgl2_get_supported_extensions_callback,
+    webgl_unavailable_receiver_callback,
 };
 use super::file_api::{
     file_list_item_callback, file_reader_abort_callback, file_reader_add_event_listener_callback,
@@ -415,198 +404,198 @@ struct CanvasGradientTemplateMethodsDeclaration {
 #[derive(WebApiFunctionTemplate)]
 #[webapi(name = "WebGLRenderingContext", enumerable)]
 struct WebGlRenderingContextTemplateMethodsDeclaration {
-    #[webapi(method = "viewport", length = 4, callback = webgl_viewport_callback)]
+    #[webapi(method = "viewport", length = 4, callback = webgl_unavailable_receiver_callback)]
     viewport: (),
 
-    #[webapi(method = "clearColor", length = 4, callback = webgl_noop_callback)]
+    #[webapi(method = "clearColor", length = 4, callback = webgl_unavailable_receiver_callback)]
     clear_color: (),
 
-    #[webapi(method = "enable", length = 1, callback = webgl_noop_callback)]
+    #[webapi(method = "enable", length = 1, callback = webgl_unavailable_receiver_callback)]
     enable: (),
 
-    #[webapi(method = "depthFunc", length = 1, callback = webgl_noop_callback)]
+    #[webapi(method = "depthFunc", length = 1, callback = webgl_unavailable_receiver_callback)]
     depth_func: (),
 
-    #[webapi(method = "clear", length = 1, callback = webgl_noop_callback)]
+    #[webapi(method = "clear", length = 1, callback = webgl_unavailable_receiver_callback)]
     clear: (),
 
-    #[webapi(method = "createBuffer", length = 0, callback = webgl_create_buffer_callback)]
+    #[webapi(method = "createBuffer", length = 0, callback = webgl_unavailable_receiver_callback)]
     create_buffer: (),
 
-    #[webapi(method = "bindBuffer", length = 2, callback = webgl_noop_callback)]
+    #[webapi(method = "bindBuffer", length = 2, callback = webgl_unavailable_receiver_callback)]
     bind_buffer: (),
 
-    #[webapi(method = "bufferData", length = 3, callback = webgl_noop_callback)]
+    #[webapi(method = "bufferData", length = 3, callback = webgl_unavailable_receiver_callback)]
     buffer_data: (),
 
-    #[webapi(method = "createProgram", length = 0, callback = webgl_create_program_callback)]
+    #[webapi(method = "createProgram", length = 0, callback = webgl_unavailable_receiver_callback)]
     create_program: (),
 
-    #[webapi(method = "deleteProgram", length = 1, callback = webgl_noop_callback)]
+    #[webapi(method = "deleteProgram", length = 1, callback = webgl_unavailable_receiver_callback)]
     delete_program: (),
 
-    #[webapi(method = "createShader", length = 1, callback = webgl_create_shader_callback)]
+    #[webapi(method = "createShader", length = 1, callback = webgl_unavailable_receiver_callback)]
     create_shader: (),
 
-    #[webapi(method = "shaderSource", length = 2, callback = webgl_noop_callback)]
+    #[webapi(method = "shaderSource", length = 2, callback = webgl_unavailable_receiver_callback)]
     shader_source: (),
 
-    #[webapi(method = "compileShader", length = 1, callback = webgl_noop_callback)]
+    #[webapi(method = "compileShader", length = 1, callback = webgl_unavailable_receiver_callback)]
     compile_shader: (),
 
-    #[webapi(method = "deleteShader", length = 1, callback = webgl_noop_callback)]
+    #[webapi(method = "deleteShader", length = 1, callback = webgl_unavailable_receiver_callback)]
     delete_shader: (),
 
-    #[webapi(method = "attachShader", length = 2, callback = webgl_noop_callback)]
+    #[webapi(method = "attachShader", length = 2, callback = webgl_unavailable_receiver_callback)]
     attach_shader: (),
 
-    #[webapi(method = "linkProgram", length = 1, callback = webgl_noop_callback)]
+    #[webapi(method = "linkProgram", length = 1, callback = webgl_unavailable_receiver_callback)]
     link_program: (),
 
-    #[webapi(method = "useProgram", length = 1, callback = webgl_noop_callback)]
+    #[webapi(method = "useProgram", length = 1, callback = webgl_unavailable_receiver_callback)]
     use_program: (),
 
     #[webapi(
         method = "getAttribLocation",
         length = 2,
-        callback = webgl_get_attrib_location_callback
+        callback = webgl_unavailable_receiver_callback
     )]
     get_attrib_location: (),
 
     #[webapi(
         method = "getUniformLocation",
         length = 2,
-        callback = webgl_uniform_location_callback
+        callback = webgl_unavailable_receiver_callback
     )]
     get_uniform_location: (),
 
     #[webapi(
         method = "enableVertexAttribArray",
         length = 1,
-        callback = webgl_noop_callback
+        callback = webgl_unavailable_receiver_callback
     )]
     enable_vertex_attrib_array: (),
 
     #[webapi(
         method = "vertexAttribPointer",
         length = 6,
-        callback = webgl_noop_callback
+        callback = webgl_unavailable_receiver_callback
     )]
     vertex_attrib_pointer: (),
 
-    #[webapi(method = "uniform2f", length = 3, callback = webgl_noop_callback)]
+    #[webapi(method = "uniform2f", length = 3, callback = webgl_unavailable_receiver_callback)]
     uniform2f: (),
 
-    #[webapi(method = "uniform1f", length = 2, callback = webgl_noop_callback)]
+    #[webapi(method = "uniform1f", length = 2, callback = webgl_unavailable_receiver_callback)]
     uniform1f: (),
 
-    #[webapi(method = "uniform2fv", length = 2, callback = webgl_noop_callback)]
+    #[webapi(method = "uniform2fv", length = 2, callback = webgl_unavailable_receiver_callback)]
     uniform2fv: (),
 
-    #[webapi(method = "drawArrays", length = 3, callback = webgl_noop_callback)]
+    #[webapi(method = "drawArrays", length = 3, callback = webgl_unavailable_receiver_callback)]
     draw_arrays: (),
 
-    #[webapi(method = "getError", length = 0, callback = webgl_get_error_callback)]
+    #[webapi(method = "getError", length = 0, callback = webgl_unavailable_receiver_callback)]
     get_error: (),
 
-    #[webapi(method = "getShaderParameter", length = 2, callback = webgl_boolean_callback)]
+    #[webapi(method = "getShaderParameter", length = 2, callback = webgl_unavailable_receiver_callback)]
     get_shader_parameter: (),
 
     #[webapi(
         method = "getProgramParameter",
         length = 2,
-        callback = webgl_boolean_callback
+        callback = webgl_unavailable_receiver_callback
     )]
     get_program_parameter: (),
 
     #[webapi(
         method = "getShaderInfoLog",
         length = 1,
-        callback = webgl_get_shader_info_log_callback
+        callback = webgl_unavailable_receiver_callback
     )]
     get_shader_info_log: (),
 
     #[webapi(
         method = "getProgramInfoLog",
         length = 1,
-        callback = webgl_get_shader_info_log_callback
+        callback = webgl_unavailable_receiver_callback
     )]
     get_program_info_log: (),
 
     #[webapi(
         method = "getSupportedExtensions",
         length = 0,
-        callback = webgl_get_supported_extensions_callback
+        callback = webgl_unavailable_receiver_callback
     )]
     get_supported_extensions: (),
 
-    #[webapi(method = "getExtension", length = 1, callback = webgl_get_extension_callback)]
+    #[webapi(method = "getExtension", length = 1, callback = webgl_unavailable_receiver_callback)]
     get_extension: (),
 
-    #[webapi(method = "getParameter", length = 1, callback = webgl_get_parameter_callback)]
+    #[webapi(method = "getParameter", length = 1, callback = webgl_unavailable_receiver_callback)]
     get_parameter: (),
 
     #[webapi(
         method = "getContextAttributes",
         length = 0,
-        callback = webgl_get_context_attributes_callback
+        callback = webgl_unavailable_receiver_callback
     )]
     get_context_attributes: (),
 
-    #[webapi(method = "isContextLost", length = 0, callback = webgl_is_context_lost_callback)]
+    #[webapi(method = "isContextLost", length = 0, callback = webgl_unavailable_receiver_callback)]
     is_context_lost: (),
 
     #[webapi(
         method = "getShaderPrecisionFormat",
         length = 2,
-        callback = webgl_get_shader_precision_format_callback
+        callback = webgl_unavailable_receiver_callback
     )]
     get_shader_precision_format: (),
 
-    #[webapi(method = "readPixels", length = 7, callback = webgl_noop_callback)]
+    #[webapi(method = "readPixels", length = 7, callback = webgl_unavailable_receiver_callback)]
     read_pixels: (),
 
     #[webapi(
         method = "createFramebuffer",
         length = 0,
-        callback = webgl_create_framebuffer_callback
+        callback = webgl_unavailable_receiver_callback
     )]
     create_framebuffer: (),
 
-    #[webapi(method = "bindFramebuffer", length = 2, callback = webgl_noop_callback)]
+    #[webapi(method = "bindFramebuffer", length = 2, callback = webgl_unavailable_receiver_callback)]
     bind_framebuffer: (),
 
     #[webapi(
         method = "createRenderbuffer",
         length = 0,
-        callback = webgl_create_renderbuffer_callback
+        callback = webgl_unavailable_receiver_callback
     )]
     create_renderbuffer: (),
 
-    #[webapi(method = "bindRenderbuffer", length = 2, callback = webgl_noop_callback)]
+    #[webapi(method = "bindRenderbuffer", length = 2, callback = webgl_unavailable_receiver_callback)]
     bind_renderbuffer: (),
 
-    #[webapi(method = "renderbufferStorage", length = 4, callback = webgl_noop_callback)]
+    #[webapi(method = "renderbufferStorage", length = 4, callback = webgl_unavailable_receiver_callback)]
     renderbuffer_storage: (),
 
     #[webapi(
         method = "framebufferRenderbuffer",
         length = 4,
-        callback = webgl_noop_callback
+        callback = webgl_unavailable_receiver_callback
     )]
     framebuffer_renderbuffer: (),
 
     #[webapi(
         method = "checkFramebufferStatus",
         length = 1,
-        callback = webgl_check_framebuffer_status_callback
+        callback = webgl_unavailable_receiver_callback
     )]
     check_framebuffer_status: (),
 
-    #[webapi(method = "deleteRenderbuffer", length = 1, callback = webgl_noop_callback)]
+    #[webapi(method = "deleteRenderbuffer", length = 1, callback = webgl_unavailable_receiver_callback)]
     delete_renderbuffer: (),
 
-    #[webapi(method = "deleteFramebuffer", length = 1, callback = webgl_noop_callback)]
+    #[webapi(method = "deleteFramebuffer", length = 1, callback = webgl_unavailable_receiver_callback)]
     delete_framebuffer: (),
 }
 
@@ -616,28 +605,28 @@ struct WebGl2RenderingContextTemplateDeclaration {
     #[webapi(
         method = "getSupportedExtensions",
         length = 0,
-        callback = webgl2_get_supported_extensions_callback
+        callback = webgl_unavailable_receiver_callback
     )]
     get_supported_extensions: (),
 
-    #[webapi(method = "getExtension", length = 1, callback = webgl2_get_extension_callback)]
+    #[webapi(method = "getExtension", length = 1, callback = webgl_unavailable_receiver_callback)]
     get_extension: (),
 
-    #[webapi(method = "getParameter", length = 1, callback = webgl2_get_parameter_callback)]
+    #[webapi(method = "getParameter", length = 1, callback = webgl_unavailable_receiver_callback)]
     get_parameter: (),
 
     #[webapi(
         method = "getInternalformatParameter",
         length = 3,
-        callback = webgl2_get_internalformat_parameter_callback
+        callback = webgl_unavailable_receiver_callback
     )]
     get_internalformat_parameter: (),
 
     #[webapi(
         accessor_property,
         enumerable,
-        getter = webgl2_color_space_getter_callback,
-        setter = webgl2_color_space_setter_callback,
+        getter = webgl_unavailable_receiver_callback,
+        setter = webgl_unavailable_receiver_callback,
         data = callback_data_index_value(scope, 0)
     )]
     drawing_buffer_color_space: (),
@@ -645,8 +634,8 @@ struct WebGl2RenderingContextTemplateDeclaration {
     #[webapi(
         accessor_property,
         enumerable,
-        getter = webgl2_color_space_getter_callback,
-        setter = webgl2_color_space_setter_callback,
+        getter = webgl_unavailable_receiver_callback,
+        setter = webgl_unavailable_receiver_callback,
         data = callback_data_index_value(scope, 1)
     )]
     unpack_color_space: (),
@@ -655,10 +644,10 @@ struct WebGl2RenderingContextTemplateDeclaration {
 #[derive(WebApiFunctionTemplate)]
 #[webapi(name = "WEBGL_lose_context", enumerable)]
 struct WebGlLoseContextTemplateMethodsDeclaration {
-    #[webapi(method = "loseContext", length = 0, callback = webgl_lose_context_noop_callback)]
+    #[webapi(method = "loseContext", length = 0, callback = webgl_unavailable_receiver_callback)]
     lose_context: (),
 
-    #[webapi(method = "restoreContext", length = 0, callback = webgl_lose_context_noop_callback)]
+    #[webapi(method = "restoreContext", length = 0, callback = webgl_unavailable_receiver_callback)]
     restore_context: (),
 }
 

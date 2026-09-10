@@ -10,12 +10,12 @@ pub use moli_v8_util::{
     initialize_intrinsic_interface_registry, new_null_prototype_object, object_bool_property,
     object_chain_contains, object_defined_string_property, object_non_empty_string_property,
     object_number_property, object_own_static_bool_property, object_own_static_property_as_array,
-    object_own_static_string_property, object_property_as_array, object_property_as_object,
-    object_string_property, private_key, register_intrinsic_interface,
-    register_public_interface_object, registered_intrinsic_constructor,
-    registered_intrinsic_prototype, registered_public_interface_object, set_null_prototype,
-    set_private_value, set_symbol_to_string_tag, throw_range_error, throw_type_error,
-    v8_json_parse, v8_string, v8str, walk_object_chain,
+    object_property_as_array, object_property_as_object, object_string_property, private_key,
+    register_intrinsic_interface, register_public_interface_object,
+    registered_intrinsic_constructor, registered_intrinsic_prototype,
+    registered_public_interface_object, set_null_prototype, set_private_value,
+    set_symbol_to_string_tag, throw_range_error, throw_type_error, v8_json_parse, v8_string, v8str,
+    walk_object_chain,
 };
 use moli_webapi_declare::WebApiValue;
 pub(crate) use moli_webapi_declare::define_array_data_property as define_v8_array_data_property;
