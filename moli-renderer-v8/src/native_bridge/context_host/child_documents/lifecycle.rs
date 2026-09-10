@@ -852,18 +852,14 @@ impl JsContextHost {
         }
     }
 
-    pub(crate) fn mark_current_child_document_unload_dispatched_after_navigation_traversal(
+    pub(crate) fn dispatch_child_document_unload_after_traversal_check(
         &mut self,
+        scope: &mut v8::PinScope<'_, '_>,
         handle: DomHandle,
     ) -> bool {
-        let Some(action) = self
-            .frame_owner_store
-            .begin_current_child_document_unload(handle)
-        else {
-            return false;
-        };
-        self.frame_owner_store
-            .finish_current_child_document_unload(action)
+        // Traversal has already fired the root beforeunload before navigate.
+        // Descendants still need their checks before any document unloads.
+        self.dispatch_child_document_tree_unload_lifecycle(scope, handle, false)
     }
 
     pub(in crate::native_bridge::context_host) fn dispatch_child_browsing_context_unload_lifecycle_if_needed(
@@ -871,6 +867,16 @@ impl JsContextHost {
         scope: &mut v8::PinScope<'_, '_>,
         handle: DomHandle,
     ) -> bool {
+        self.dispatch_child_document_tree_unload_lifecycle(scope, handle, true)
+    }
+
+    fn dispatch_child_document_tree_unload_lifecycle(
+        &mut self,
+        scope: &mut v8::PinScope<'_, '_>,
+        handle: DomHandle,
+        include_root_beforeunload: bool,
+    ) -> bool {
+        let root_handle = handle;
         let documents = self.child_document_unload_tree_snapshot(handle);
         let mut unload_guards = Vec::new();
         let mut actions = Vec::new();
@@ -904,7 +910,9 @@ impl JsContextHost {
             };
             unload_guards.push((document, self.enter_document_unload(document)));
             actions.push((document, parent_document, action));
-            dispatch_beforeunload_for_runtime_owner(scope, window);
+            if include_root_beforeunload || handle != root_handle {
+                dispatch_beforeunload_for_runtime_owner(scope, window);
+            }
         }
         unload_guards.clear();
         let dispatched = !actions.is_empty();
