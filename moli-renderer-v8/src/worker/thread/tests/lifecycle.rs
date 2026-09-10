@@ -143,6 +143,124 @@ async fn readable_stream_controller_error_rejects_pending_read() {
 }
 
 #[tokio::test]
+async fn service_worker_parent_fifo_orders_console_around_bootstrap() {
+    ensure_v8();
+    for (script_kind, prefix) in [
+        (WorkerScriptKind::Classic, ""),
+        (WorkerScriptKind::Module, "await Promise.resolve();"),
+    ] {
+        let mut handle = spawn_test_worker_with_options(
+            WorkerSpawnOptions::new(
+                format!(
+                    "{prefix} console.log('before'); setTimeout(() => console.log('after'), 0);"
+                ),
+                "https://example.test/app/fifo-sw.js".to_owned(),
+            )
+            .with_script_kind(script_kind)
+            .with_global_kind(WorkerGlobalKind::Service {
+                registration_id: ServiceWorkerRegistrationId::from_u64_for_test(1),
+                version_id: ServiceWorkerVersionId::from_u64_for_test(1),
+                scope_url: url::Url::parse("https://example.test/app/").unwrap(),
+            })
+            .with_parent_bootstrap_completion(),
+        );
+        let order = timeout(TIMEOUT, async {
+            let mut order = Vec::new();
+            while let Some(message) = handle.recv().await {
+                match message {
+                    WorkerToParentMessage::Console(message) => {
+                        let after = message.message == "log: after";
+                        order.push(message.message);
+                        if after {
+                            return order;
+                        }
+                    }
+                    WorkerToParentMessage::ServiceWorkerBootstrapCompleted(completion) => {
+                        assert!(completion.result.is_ok(), "{completion:?}");
+                        order.push("bootstrap".to_owned());
+                    }
+                    WorkerToParentMessage::RuntimeInspectorMessages(_) => {}
+                    other => panic!("unexpected bootstrap output: {other:?}"),
+                }
+            }
+            panic!("Worker parent FIFO closed before its timer ran");
+        })
+        .await
+        .expect("ServiceWorker bootstrap FIFO must finish");
+        assert_eq!(
+            order,
+            ["log: before", "bootstrap", "log: after"],
+            "{script_kind:?}"
+        );
+        handle.terminate_and_join();
+    }
+}
+
+#[tokio::test]
+async fn service_worker_parent_fifo_reports_exception_before_bootstrap_failure() {
+    ensure_v8();
+    for (script_kind, prefix) in [
+        (WorkerScriptKind::Classic, ""),
+        (WorkerScriptKind::Module, "await Promise.resolve();"),
+    ] {
+        let mut handle = spawn_test_worker_with_options(
+            WorkerSpawnOptions::new(
+                format!(
+                    "{prefix} console.log('before'); \
+                     self.addEventListener('error', () => console.log('error handler')); \
+                     throw new Error('bootstrap broken');"
+                ),
+                "https://example.test/app/failing-fifo-sw.js".to_owned(),
+            )
+            .with_script_kind(script_kind)
+            .with_global_kind(WorkerGlobalKind::Service {
+                registration_id: ServiceWorkerRegistrationId::from_u64_for_test(1),
+                version_id: ServiceWorkerVersionId::from_u64_for_test(1),
+                scope_url: url::Url::parse("https://example.test/app/").unwrap(),
+            })
+            .with_parent_bootstrap_completion(),
+        );
+        let order = timeout(TIMEOUT, async {
+            let mut order = Vec::new();
+            while let Some(message) = handle.recv().await {
+                match message {
+                    WorkerToParentMessage::Console(message) => order.push(message.message),
+                    WorkerToParentMessage::Error {
+                        message, filename, ..
+                    } => {
+                        assert!(message.contains("bootstrap broken"), "{message}");
+                        assert_eq!(filename, "https://example.test/app/failing-fifo-sw.js");
+                        order.push("exception".to_owned());
+                    }
+                    WorkerToParentMessage::ServiceWorkerBootstrapCompleted(completion) => {
+                        let failure = completion.result.expect_err("bootstrap must fail");
+                        assert!(failure.message.contains("bootstrap broken"), "{failure:?}");
+                        order.push("bootstrap failure".to_owned());
+                        return order;
+                    }
+                    WorkerToParentMessage::RuntimeInspectorMessages(_) => {}
+                    other => panic!("unexpected bootstrap output: {other:?}"),
+                }
+            }
+            panic!("Worker parent FIFO closed before reporting bootstrap failure");
+        })
+        .await
+        .expect("ServiceWorker failure FIFO must finish");
+        assert_eq!(
+            order,
+            [
+                "log: before",
+                "log: error handler",
+                "exception",
+                "bootstrap failure"
+            ],
+            "{script_kind:?}"
+        );
+        handle.terminate_and_join();
+    }
+}
+
+#[tokio::test]
 async fn service_worker_bootstrap_reports_fetch_handler_presence() {
     ensure_v8();
 
@@ -1855,6 +1973,7 @@ async fn dispatch_service_worker_fetch_event_and_handled_console_for_test(
             | WorkerToParentMessage::ServiceWorkerSkipWaiting { .. }
             | WorkerToParentMessage::ServiceWorkerClientsClaim { .. }
             | WorkerToParentMessage::ServiceWorkerImportedScriptLoaded { .. }
+            | WorkerToParentMessage::ServiceWorkerBootstrapCompleted(_)
             | WorkerToParentMessage::RuntimeInspectorResponse(_)
             | WorkerToParentMessage::SharedWorkerClosed => {}
         }
@@ -2253,6 +2372,7 @@ async fn service_worker_fetch_respond_with_readable_stream_body_posts_stream_chu
             | WorkerToParentMessage::ServiceWorkerSkipWaiting { .. }
             | WorkerToParentMessage::ServiceWorkerClientsClaim { .. }
             | WorkerToParentMessage::ServiceWorkerImportedScriptLoaded { .. }
+            | WorkerToParentMessage::ServiceWorkerBootstrapCompleted(_)
             | WorkerToParentMessage::RuntimeInspectorResponse(_)
             | WorkerToParentMessage::SharedWorkerClosed => {}
         }
@@ -4262,6 +4382,7 @@ async fn service_worker_skip_waiting_posts_runtime_request() {
             | WorkerToParentMessage::Console(_)
             | WorkerToParentMessage::RuntimeInspectorMessages(_)
             | WorkerToParentMessage::Post(_)
+            | WorkerToParentMessage::ServiceWorkerBootstrapCompleted(_)
             | WorkerToParentMessage::RuntimeInspectorResponse(_)
             | WorkerToParentMessage::SharedWorkerClosed => {}
         }
@@ -4352,6 +4473,7 @@ async fn service_worker_clients_claim_posts_runtime_request() {
             | WorkerToParentMessage::RuntimeInspectorMessages(_)
             | WorkerToParentMessage::Post(_)
             | WorkerToParentMessage::ServiceWorkerImportedScriptLoaded { .. }
+            | WorkerToParentMessage::ServiceWorkerBootstrapCompleted(_)
             | WorkerToParentMessage::RuntimeInspectorResponse(_)
             | WorkerToParentMessage::SharedWorkerClosed => {}
         }
@@ -4620,6 +4742,7 @@ async fn service_worker_clients_match_all_and_get_resolve_from_parent_query_resu
             | WorkerToParentMessage::RuntimeInspectorMessages(_)
             | WorkerToParentMessage::Post(_)
             | WorkerToParentMessage::ServiceWorkerImportedScriptLoaded { .. }
+            | WorkerToParentMessage::ServiceWorkerBootstrapCompleted(_)
             | WorkerToParentMessage::RuntimeInspectorResponse(_)
             | WorkerToParentMessage::SharedWorkerClosed => {}
         }
@@ -4739,6 +4862,7 @@ async fn service_worker_worker_client_query_builds_base_client_object() {
             }
             WorkerToParentMessage::Console(_)
             | WorkerToParentMessage::RuntimeInspectorMessages(_)
+            | WorkerToParentMessage::ServiceWorkerBootstrapCompleted(_)
             | WorkerToParentMessage::RuntimeInspectorResponse(_)
             | WorkerToParentMessage::SharedWorkerClosed => {}
             other => panic!("unexpected worker message: {other:?}"),
@@ -4929,6 +5053,7 @@ self.addEventListener("message", event => {
             | WorkerToParentMessage::RuntimeInspectorMessages(_)
             | WorkerToParentMessage::Post(_)
             | WorkerToParentMessage::ServiceWorkerImportedScriptLoaded { .. }
+            | WorkerToParentMessage::ServiceWorkerBootstrapCompleted(_)
             | WorkerToParentMessage::RuntimeInspectorResponse(_)
             | WorkerToParentMessage::SharedWorkerClosed => {}
         }
@@ -5073,6 +5198,7 @@ self.addEventListener("message", event => {
             | WorkerToParentMessage::RuntimeInspectorMessages(_)
             | WorkerToParentMessage::Post(_)
             | WorkerToParentMessage::ServiceWorkerImportedScriptLoaded { .. }
+            | WorkerToParentMessage::ServiceWorkerBootstrapCompleted(_)
             | WorkerToParentMessage::RuntimeInspectorResponse(_)
             | WorkerToParentMessage::SharedWorkerClosed => {}
         }
@@ -5285,6 +5411,7 @@ self.addEventListener("message", event => {
             | WorkerToParentMessage::RuntimeInspectorMessages(_)
             | WorkerToParentMessage::Post(_)
             | WorkerToParentMessage::ServiceWorkerImportedScriptLoaded { .. }
+            | WorkerToParentMessage::ServiceWorkerBootstrapCompleted(_)
             | WorkerToParentMessage::RuntimeInspectorResponse(_)
             | WorkerToParentMessage::SharedWorkerClosed => {}
         }
@@ -5429,6 +5556,7 @@ self.addEventListener("message", event => {
             | WorkerToParentMessage::RuntimeInspectorMessages(_)
             | WorkerToParentMessage::Post(_)
             | WorkerToParentMessage::ServiceWorkerImportedScriptLoaded { .. }
+            | WorkerToParentMessage::ServiceWorkerBootstrapCompleted(_)
             | WorkerToParentMessage::RuntimeInspectorResponse(_)
             | WorkerToParentMessage::SharedWorkerClosed => {}
         }
@@ -5646,6 +5774,7 @@ self.addEventListener("message", event => {
             | WorkerToParentMessage::RuntimeInspectorMessages(_)
             | WorkerToParentMessage::Post(_)
             | WorkerToParentMessage::ServiceWorkerImportedScriptLoaded { .. }
+            | WorkerToParentMessage::ServiceWorkerBootstrapCompleted(_)
             | WorkerToParentMessage::RuntimeInspectorResponse(_)
             | WorkerToParentMessage::SharedWorkerClosed => {}
             WorkerToParentMessage::ServiceWorkerClientsOpenWindow(open_window) => {
@@ -7098,6 +7227,7 @@ self.addEventListener("notificationclick", event => {
             | WorkerToParentMessage::RuntimeInspectorMessages(_)
             | WorkerToParentMessage::Post(_)
             | WorkerToParentMessage::ServiceWorkerImportedScriptLoaded { .. }
+            | WorkerToParentMessage::ServiceWorkerBootstrapCompleted(_)
             | WorkerToParentMessage::RuntimeInspectorResponse(_)
             | WorkerToParentMessage::SharedWorkerClosed => {}
         }
@@ -7258,6 +7388,7 @@ self.addEventListener("notificationclose", event => {
             | WorkerToParentMessage::RuntimeInspectorMessages(_)
             | WorkerToParentMessage::Post(_)
             | WorkerToParentMessage::ServiceWorkerImportedScriptLoaded { .. }
+            | WorkerToParentMessage::ServiceWorkerBootstrapCompleted(_)
             | WorkerToParentMessage::RuntimeInspectorResponse(_)
             | WorkerToParentMessage::SharedWorkerClosed => {}
         }
@@ -9518,6 +9649,7 @@ async fn worker_error_report_ignores_throwing_accessors() {
         | WorkerToParentMessage::ServiceWorkerSkipWaiting { .. }
         | WorkerToParentMessage::ServiceWorkerClientsClaim { .. }
         | WorkerToParentMessage::ServiceWorkerImportedScriptLoaded { .. }
+        | WorkerToParentMessage::ServiceWorkerBootstrapCompleted(_)
         | WorkerToParentMessage::RuntimeInspectorResponse(_)
         | WorkerToParentMessage::SharedWorkerClosed => panic!("expected worker error"),
     }

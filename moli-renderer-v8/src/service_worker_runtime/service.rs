@@ -26,9 +26,8 @@ use crate::{
         ServiceWorkerReadyCompletion,
     },
     worker::{
-        WorkerBootstrapFailure, WorkerConsoleMessage, WorkerErrorPhase, WorkerErrorSource,
-        WorkerNetworkPolicy, WorkerParentErrorEventKind, WorkerRuntimeInspectorMessageBatch,
-        WorkerScriptKind, WorkerScriptResource,
+        WorkerBootstrapFailure, WorkerErrorPhase, WorkerErrorSource, WorkerNetworkPolicy,
+        WorkerParentErrorEventKind, WorkerScriptKind, WorkerScriptResource,
     },
 };
 
@@ -114,7 +113,7 @@ use super::{
     snapshots::{
         ServiceWorkerControlState, ServiceWorkerRegistrationSnapshot, ServiceWorkerVersionSnapshot,
     },
-    start_completion::ServiceWorkerRuntimeCompletion,
+    start_completion::{ServiceWorkerRuntimeCompletion, ServiceWorkerTargetOutput},
     state::{
         LifecycleProgress, ServiceWorkerClient, ServiceWorkerClientEndpoint,
         ServiceWorkerControllerChangeDelivery, ServiceWorkerDevToolsRelatedPauseOnStartPolicy,
@@ -374,53 +373,95 @@ impl ServiceWorkerRuntimeService {
         )
     }
 
-    pub(super) fn enqueue_target_console_message(
+    pub(super) fn enqueue_target_output(
         &self,
-        version_id: ServiceWorkerVersionId,
-        run: RendererServiceWorkerRunIdentity,
-        message: WorkerConsoleMessage,
+        owner: ServiceWorkerRunOwner,
+        output: ServiceWorkerTargetOutput,
     ) {
-        let mut state = self.inner.state.lock();
-        if state.observes_live_target_run(version_id, &run) {
-            state.record_target_console_message(
-                version_id,
-                run,
-                RendererServiceWorkerConsoleMessage {
-                    message: message.message,
-                    args: message.args,
-                    stack: message.stack,
-                },
-            );
-        }
+        self.enqueue_service_lane_completion(ServiceWorkerRuntimeCompletion::target_output(
+            self.downgrade(),
+            owner,
+            output,
+        ));
+        self.signal_service_lane_wake();
     }
 
-    pub(super) fn enqueue_target_exception_message(
+    pub(super) fn finish_target_output(
         &self,
-        version_id: ServiceWorkerVersionId,
-        run: RendererServiceWorkerRunIdentity,
-        message: String,
-        filename: String,
-        lineno: u32,
-        colno: u32,
-        event_kind: WorkerParentErrorEventKind,
-        phase: WorkerErrorPhase,
-        source: WorkerErrorSource,
+        owner: ServiceWorkerRunOwner,
+        output: ServiceWorkerTargetOutput,
     ) {
+        let (version_id, run) = owner.into_parts();
         let mut state = self.inner.state.lock();
-        if state.observes_live_target_run(version_id, &run) {
-            state.record_target_exception_message(
-                version_id,
-                run,
-                RendererServiceWorkerExceptionMessage {
-                    message,
-                    filename,
-                    lineno,
-                    colno,
-                    event_kind: worker_error_event_kind_label(event_kind).to_owned(),
-                    phase: worker_error_phase_label(phase).to_owned(),
-                    source: worker_error_source_label(source).to_owned(),
-                },
-            );
+        if !state.observes_live_target_run(version_id, &run) {
+            return;
+        }
+        match output {
+            ServiceWorkerTargetOutput::Console(message) => {
+                state.record_target_console_message(
+                    version_id,
+                    run,
+                    RendererServiceWorkerConsoleMessage {
+                        message: message.message,
+                        args: message.args,
+                        stack: message.stack,
+                    },
+                );
+            }
+            ServiceWorkerTargetOutput::Exception {
+                message,
+                filename,
+                lineno,
+                colno,
+                event_kind,
+                phase,
+                source,
+            } => {
+                state.record_target_exception_message(
+                    version_id,
+                    run,
+                    RendererServiceWorkerExceptionMessage {
+                        message,
+                        filename,
+                        lineno,
+                        colno,
+                        event_kind: worker_error_event_kind_label(event_kind).to_owned(),
+                        phase: worker_error_phase_label(phase).to_owned(),
+                        source: worker_error_source_label(source).to_owned(),
+                    },
+                );
+            }
+            ServiceWorkerTargetOutput::InspectorMessages(batches) => {
+                for batch in batches {
+                    let (responses, notifications): (Vec<_>, Vec<_>) = batch
+                        .messages
+                        .into_iter()
+                        .partition(|message| match message {
+                            RendererRuntimeInspectorMessage::Protocol(message) => {
+                                message.get("id").is_some()
+                            }
+                            RendererRuntimeInspectorMessage::RuntimeContext(_) => false,
+                        });
+                    for message in responses {
+                        tracing::trace!(
+                            version_id = version_id.as_u64(),
+                            inspector_session_id = ?batch.inspector_session_id,
+                            message = ?message,
+                            "dropping stale service worker runtime inspector response without a deferred callback"
+                        );
+                    }
+                    state.record_target_runtime_inspector_messages(
+                        version_id,
+                        run.clone(),
+                        batch.inspector_session_id,
+                        notifications,
+                    );
+                }
+            }
+            ServiceWorkerTargetOutput::InspectorResponse(publication) => {
+                drop(state);
+                let _ = publication.commit(None);
+            }
         }
     }
 
@@ -435,43 +476,6 @@ impl ServiceWorkerRuntimeService {
             return;
         }
         state.record_target_fetch_diagnostic(version_id, run, diagnostic);
-    }
-
-    pub(super) fn enqueue_target_runtime_inspector_messages(
-        &self,
-        version_id: ServiceWorkerVersionId,
-        run: RendererServiceWorkerRunIdentity,
-        batches: Vec<WorkerRuntimeInspectorMessageBatch>,
-    ) {
-        let mut state = self.inner.state.lock();
-        if !state.observes_live_target_run(version_id, &run) {
-            return;
-        }
-        for batch in batches {
-            let (responses, notifications): (Vec<_>, Vec<_>) = batch
-                .messages
-                .into_iter()
-                .partition(|message| match message {
-                    RendererRuntimeInspectorMessage::Protocol(message) => {
-                        message.get("id").is_some()
-                    }
-                    RendererRuntimeInspectorMessage::RuntimeContext(_) => false,
-                });
-            for message in responses {
-                tracing::trace!(
-                    version_id = version_id.as_u64(),
-                    inspector_session_id = ?batch.inspector_session_id,
-                    message = ?message,
-                    "dropping stale service worker runtime inspector response without a deferred callback"
-                );
-            }
-            state.record_target_runtime_inspector_messages(
-                version_id,
-                run.clone(),
-                batch.inspector_session_id,
-                notifications,
-            );
-        }
     }
 }
 
@@ -6301,6 +6305,217 @@ self.addEventListener("message", event => {
                 .result
                 .is_ok()
         );
+    }
+
+    #[test]
+    fn service_worker_fifo_orders_target_output_with_script_and_start_completion() {
+        use crate::runtime::{RendererServiceWorkerLifecycle, RendererServiceWorkerObservation};
+
+        let service = new_service_worker_runtime_service();
+        let (script_url, scope_url, registration_id, version_id) =
+            insert_starting_version(&service);
+        let run = exact_version_run(&service, version_id);
+        let owner = test_run_owner(version_id, &run);
+        service.inner.state.lock().record_target_created(
+            registration_id,
+            version_id,
+            script_url.clone(),
+            scope_url,
+        );
+        service.take_target_output_events_for_test();
+        let console = |message: &str| {
+            ServiceWorkerTargetOutput::Console(crate::worker::WorkerConsoleMessage {
+                message: message.to_owned(),
+                args: Vec::new(),
+                stack: None,
+            })
+        };
+        service.enqueue_target_output(owner.clone(), console("before"));
+        service.enqueue_imported_script_loaded(
+            registration_id,
+            owner.clone(),
+            test_worker_script_resource(&url("https://example.test/app/dep.js")),
+        );
+        service.enqueue_worker_start_completed(
+            owner.clone(),
+            script_url.to_string(),
+            test_script_resource(&script_url),
+            ServiceWorkerFetchHandlerType::NoHandler,
+        );
+        service.enqueue_target_output(
+            owner.clone(),
+            ServiceWorkerTargetOutput::InspectorMessages(vec![
+                crate::worker::WorkerRuntimeInspectorMessageBatch {
+                    inspector_session_id: Some("fifo-session".to_owned()),
+                    messages: vec![RendererRuntimeInspectorMessage::from_v8_inspector_message(
+                        serde_json::json!({
+                            "method": "Debugger.scriptParsed", "params": {"scriptId": "fifo-script"}
+                        }),
+                    )],
+                },
+            ]),
+        );
+        service.enqueue_target_output(owner, console("after"));
+        assert!(
+            service.take_target_output_events_for_test().is_empty(),
+            "output cannot bypass the service lane"
+        );
+        assert_eq!(service.drain_service_lane(), 5);
+        assert_eq!(
+            service.diagnostics_snapshot().versions[0].imported_script_count,
+            1
+        );
+        let events = service.take_target_output_events_for_test();
+        let order = events
+            .iter()
+            .map(|event| match event {
+                ServiceWorkerOutputForTest::Observation(
+                    RendererServiceWorkerObservation::Console {
+                        version_id: output_version,
+                        run: output_run,
+                        message,
+                    },
+                ) => {
+                    assert_eq!(*output_version, version_id.as_u64());
+                    assert_eq!(output_run, &run);
+                    message.message.as_str()
+                }
+                ServiceWorkerOutputForTest::Lifecycle(
+                    RendererServiceWorkerLifecycle::Started {
+                        version_id: output_version,
+                        run: output_run,
+                    },
+                ) => {
+                    assert_eq!(*output_version, version_id.as_u64());
+                    assert_eq!(output_run, &run);
+                    "started"
+                }
+                ServiceWorkerOutputForTest::Observation(
+                    RendererServiceWorkerObservation::RuntimeInspectorMessages {
+                        version_id: output_version,
+                        run: output_run,
+                        inspector_session_id,
+                        messages,
+                    },
+                ) => {
+                    assert_eq!(*output_version, version_id.as_u64());
+                    assert_eq!(output_run, &run);
+                    assert_eq!(inspector_session_id.as_deref(), Some("fifo-session"));
+                    assert_eq!(messages.len(), 1);
+                    "inspector"
+                }
+                other => panic!("unexpected service FIFO output: {other:?}"),
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(order, ["before", "started", "inspector", "after"]);
+    }
+
+    #[test]
+    fn service_worker_fifo_publishes_exception_before_failed_run_retirement() {
+        use crate::runtime::{RendererServiceWorkerLifecycle, RendererServiceWorkerObservation};
+
+        let service = new_service_worker_runtime_service();
+        let (script_url, scope_url, registration_id, version_id) =
+            insert_starting_version(&service);
+        let run = exact_version_run(&service, version_id);
+        let owner = test_run_owner(version_id, &run);
+        service.inner.state.lock().record_target_created(
+            registration_id,
+            version_id,
+            script_url.clone(),
+            scope_url,
+        );
+        service.take_target_output_events_for_test();
+        service.enqueue_target_output(
+            owner.clone(),
+            ServiceWorkerTargetOutput::Exception {
+                message: "bootstrap broken".to_owned(),
+                filename: script_url.to_string(),
+                lineno: 1,
+                colno: 1,
+                event_kind: WorkerParentErrorEventKind::ErrorEvent,
+                phase: WorkerErrorPhase::Bootstrap,
+                source: WorkerErrorSource::InitialScriptEvaluation,
+            },
+        );
+        service.enqueue_worker_start_failed(
+            owner.clone(),
+            ServiceWorkerVersionStartFailure::BootstrapChannelClosed,
+        );
+        service.enqueue_target_output(
+            owner,
+            ServiceWorkerTargetOutput::Console(crate::worker::WorkerConsoleMessage {
+                message: "after retirement".to_owned(),
+                args: Vec::new(),
+                stack: None,
+            }),
+        );
+        assert!(service.take_target_output_events_for_test().is_empty());
+        assert_eq!(service.drain_service_lane(), 3);
+        let events = service.take_target_output_events_for_test();
+        assert!(
+            matches!(events.first(), Some(ServiceWorkerOutputForTest::Observation(
+            RendererServiceWorkerObservation::Exception {version_id: output_version, run: output_run, message}
+        )) if *output_version == version_id.as_u64() && output_run == &run && message.message == "bootstrap broken"),
+            "{events:?}"
+        );
+        assert!(
+            matches!(events.last(), Some(ServiceWorkerOutputForTest::Lifecycle(
+            RendererServiceWorkerLifecycle::Destroyed {version_id: output_version, active_run: Some(output_run)}
+        )) if *output_version == version_id.as_u64() && output_run == &run),
+            "{events:?}"
+        );
+        assert!(
+            !events.iter().any(|event| matches!(
+                event,
+                ServiceWorkerOutputForTest::Observation(
+                    RendererServiceWorkerObservation::Console { .. }
+                )
+            )),
+            "late output must not outlive its failed run: {events:?}"
+        );
+    }
+
+    #[test]
+    fn service_worker_fifo_drops_queued_output_from_a_replaced_run() {
+        let service = new_service_worker_runtime_service();
+        let (script_url, scope_url, registration_id, version_id) =
+            insert_starting_version(&service);
+        let old_run = exact_version_run(&service, version_id);
+        service.inner.state.lock().record_target_created(
+            registration_id,
+            version_id,
+            script_url,
+            scope_url,
+        );
+        service.take_target_output_events_for_test();
+        service.enqueue_target_output(
+            test_run_owner(version_id, &old_run),
+            ServiceWorkerTargetOutput::Console(crate::worker::WorkerConsoleMessage {
+                message: "stale".to_owned(),
+                args: Vec::new(),
+                stack: None,
+            }),
+        );
+        let new_run = RendererServiceWorkerRunIdentity::fresh();
+        {
+            let mut state = service.inner.state.lock();
+            let version = state.versions.get_mut(&version_id).unwrap();
+            version.run = new_run.clone();
+            version.running_state = ServiceWorkerVersionRunningState::Starting {
+                host: new_running_test_host(version_id, &new_run),
+            };
+        }
+        assert!(
+            service.take_target_output_events_for_test().is_empty(),
+            "output must await owner validation"
+        );
+        assert_eq!(service.drain_service_lane(), 1);
+        assert!(
+            service.take_target_output_events_for_test().is_empty(),
+            "an old parent FIFO cannot publish into the replacement run"
+        );
+        assert_eq!(exact_version_run(&service, version_id), new_run);
     }
 
     #[test]

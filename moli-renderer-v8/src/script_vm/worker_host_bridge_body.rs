@@ -491,6 +491,7 @@ impl ScriptVm {
             | WorkerToParentMessage::ServiceWorkerClientsClaim { .. }
             | WorkerToParentMessage::ServiceWorkerImportedScriptLoaded { .. }
             | WorkerToParentMessage::SharedWorkerClosed
+            | WorkerToParentMessage::ServiceWorkerBootstrapCompleted(_)
             | WorkerToParentMessage::RuntimeInspectorResponse(_) => {}
         }
         Ok(())

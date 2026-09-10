@@ -202,7 +202,7 @@ pub(crate) struct WorkerSpawnOptions {
     pub(crate) reserved_service_worker_client_id: Option<ServiceWorkerClientId>,
     pub(crate) indexed_db_manager: Option<crate::context_bootstrap::WeakIndexedDbManager>,
     pub(crate) storage_bucket_store: Option<crate::context_bootstrap::SharedStorageBucketStore>,
-    pub(crate) bootstrap_completion_tx: Option<mpsc::UnboundedSender<WorkerBootstrapCompletion>>,
+    pub(crate) bootstrap_completion_target: Option<WorkerBootstrapCompletionTarget>,
     pub(crate) pause_evaluation_until_debugger: bool,
     #[cfg(test)]
     test_request_client_owner: Option<ResourceRequestClientOwner>,
@@ -336,7 +336,7 @@ impl WorkerSpawnOptions {
             reserved_service_worker_client_id: None,
             indexed_db_manager: None,
             storage_bucket_store: None,
-            bootstrap_completion_tx: None,
+            bootstrap_completion_target: None,
             pause_evaluation_until_debugger: false,
             #[cfg(test)]
             test_request_client_owner: None,
@@ -496,11 +496,17 @@ impl WorkerSpawnOptions {
         self
     }
 
+    pub(crate) fn with_parent_bootstrap_completion(mut self) -> Self {
+        self.bootstrap_completion_target = Some(WorkerBootstrapCompletionTarget::Parent);
+        self
+    }
+
+    #[cfg(test)]
     pub(crate) fn with_bootstrap_completion_sender(
         mut self,
         sender: mpsc::UnboundedSender<WorkerBootstrapCompletion>,
     ) -> Self {
-        self.bootstrap_completion_tx = Some(sender);
+        self.bootstrap_completion_target = Some(WorkerBootstrapCompletionTarget::Observer(sender));
         self
     }
 
@@ -1354,7 +1360,7 @@ pub(crate) fn spawn_worker_with_options(options: WorkerSpawnOptions) -> WorkerHa
         reserved_service_worker_client_id,
         indexed_db_manager,
         storage_bucket_store,
-        bootstrap_completion_tx,
+        bootstrap_completion_target,
         pause_evaluation_until_debugger,
         #[cfg(test)]
             test_request_client_owner: _,
@@ -1410,7 +1416,7 @@ pub(crate) fn spawn_worker_with_options(options: WorkerSpawnOptions) -> WorkerHa
                     reserved_service_worker_client_id,
                     indexed_db_manager,
                     storage_bucket_store,
-                    bootstrap_completion_tx,
+                    bootstrap_completion_target,
                     pause_evaluation_until_debugger,
                     worker_wake_tx,
                     parent_to_worker_rx,
@@ -1535,7 +1541,7 @@ async fn worker_main(
     reserved_service_worker_client_id: Option<ServiceWorkerClientId>,
     indexed_db_manager: Option<crate::context_bootstrap::WeakIndexedDbManager>,
     storage_bucket_store: Option<crate::context_bootstrap::SharedStorageBucketStore>,
-    bootstrap_completion_tx: Option<mpsc::UnboundedSender<WorkerBootstrapCompletion>>,
+    bootstrap_completion_target: Option<WorkerBootstrapCompletionTarget>,
     pause_evaluation_until_debugger: bool,
     worker_wake_tx: mpsc::UnboundedSender<WorkerMessage>,
     mut rx: mpsc::UnboundedReceiver<WorkerMessage>,
@@ -1545,7 +1551,8 @@ async fn worker_main(
     inspector_task_runner: WorkerInspectorTaskRunner,
 ) {
     debug!(url = %script_url, "worker started");
-    let mut bootstrap_completion = WorkerBootstrapCompletionReporter::new(bootstrap_completion_tx);
+    let mut bootstrap_completion =
+        WorkerBootstrapCompletionReporter::new(bootstrap_completion_target);
     let resource_task_runner = crate::network::RendererResourceTaskRunner::from_current_tokio()
         .expect("Worker owner loop must expose its resource task runner");
     let loader = resource_loader_for_worker_context(
@@ -1769,7 +1776,11 @@ async fn worker_main(
         let global = ctx.global(scope);
         if let Err(e) = install_worker_global_scope(scope, global, state.clone()) {
             tracing::error!(url = %script_url, error = %e, "failed to install worker global scope");
-            bootstrap_completion.mark_install_global_failure(&script_url, e.to_string());
+            bootstrap_completion.mark_install_global_failure(
+                &script_url,
+                e.to_string(),
+                &parent_tx,
+            );
             install_global_failed = true;
         } else if script_kind == WorkerScriptKind::Classic {
             let referrer_policy = { state.borrow().referrer_policy.clone() };
@@ -1829,7 +1840,8 @@ async fn worker_main(
             module_evaluation_tx.clone(),
         ) {
             WorkerBootstrapStart::Complete => {
-                bootstrap_completion.mark_success(worker_bootstrap_success(scope, global, &state));
+                bootstrap_completion
+                    .mark_success(worker_bootstrap_success(scope, global, &state), &parent_tx);
             }
             WorkerBootstrapStart::Pending(pending) => {
                 if let Some(requests) = pending.pending_requests().cloned() {
@@ -1845,7 +1857,7 @@ async fn worker_main(
                 } else {
                     WorkerErrorSource::Runtime
                 };
-                bootstrap_completion.mark_failure(
+                let bootstrap_failure = WorkerBootstrapFailure::from_exception_report(
                     &report,
                     &script_url,
                     parent_event_kind,
@@ -1862,6 +1874,10 @@ async fn worker_main(
                     error_source,
                     &parent_tx,
                     &script_url,
+                );
+                bootstrap_completion.send(
+                    WorkerBootstrapCompletion::failure(bootstrap_failure),
+                    &parent_tx,
                 );
                 bootstrap_failed = phase == WorkerErrorPhase::Bootstrap
                     && !handled
@@ -3082,8 +3098,10 @@ async fn worker_main(
                     match resume {
                         WorkerModuleBootstrapResume::Complete => {
                             pending_module_bootstrap = None;
-                            bootstrap_completion
-                                .mark_success(worker_bootstrap_success(scope, global, &state));
+                            bootstrap_completion.mark_success(
+                                worker_bootstrap_success(scope, global, &state),
+                                &parent_tx,
+                            );
                             perform_worker_microtask_checkpoint_and_report_pending_promise_rejections(scope);
                             drain_worker_dynamic_module_imports(
                                 scope,
@@ -3106,7 +3124,7 @@ async fn worker_main(
                             let exception =
                                 exception.as_ref().map(|value| v8::Local::new(scope, value));
                             let global = ctx.global(scope);
-                            bootstrap_completion.mark_failure(
+                            let bootstrap_failure = WorkerBootstrapFailure::from_exception_report(
                                 &report,
                                 &script_url,
                                 parent_event_kind,
@@ -3122,6 +3140,10 @@ async fn worker_main(
                                 WorkerErrorPhase::Bootstrap,
                                 &parent_tx,
                                 &script_url,
+                            );
+                            bootstrap_completion.send(
+                                WorkerBootstrapCompletion::failure(bootstrap_failure),
+                                &parent_tx,
                             );
                             forward_worker_script_loaded(&runtime_inspector, &parent_tx);
                             break;
@@ -3167,8 +3189,10 @@ async fn worker_main(
                     match resume {
                         WorkerModuleBootstrapResume::Complete => {
                             pending_module_bootstrap = None;
-                            bootstrap_completion
-                                .mark_success(worker_bootstrap_success(scope, global, &state));
+                            bootstrap_completion.mark_success(
+                                worker_bootstrap_success(scope, global, &state),
+                                &parent_tx,
+                            );
                             perform_worker_microtask_checkpoint_and_report_pending_promise_rejections(scope);
                             drain_worker_dynamic_module_imports(
                                 scope,
@@ -3191,7 +3215,7 @@ async fn worker_main(
                             let exception =
                                 exception.as_ref().map(|value| v8::Local::new(scope, value));
                             let global = ctx.global(scope);
-                            bootstrap_completion.mark_failure(
+                            let bootstrap_failure = WorkerBootstrapFailure::from_exception_report(
                                 &report,
                                 &script_url,
                                 parent_event_kind,
@@ -3207,6 +3231,10 @@ async fn worker_main(
                                 WorkerErrorPhase::Bootstrap,
                                 &parent_tx,
                                 &script_url,
+                            );
+                            bootstrap_completion.send(
+                                WorkerBootstrapCompletion::failure(bootstrap_failure),
+                                &parent_tx,
                             );
                             forward_worker_script_loaded(&runtime_inspector, &parent_tx);
                             break;
@@ -3471,35 +3499,35 @@ enum WorkerBootstrapStart {
     },
 }
 
+pub(crate) enum WorkerBootstrapCompletionTarget {
+    Parent,
+    #[cfg(test)]
+    Observer(mpsc::UnboundedSender<WorkerBootstrapCompletion>),
+}
+
 struct WorkerBootstrapCompletionReporter {
-    sender: Option<mpsc::UnboundedSender<WorkerBootstrapCompletion>>,
+    target: Option<WorkerBootstrapCompletionTarget>,
 }
 
 impl WorkerBootstrapCompletionReporter {
-    fn new(sender: Option<mpsc::UnboundedSender<WorkerBootstrapCompletion>>) -> Self {
-        Self { sender }
+    fn new(target: Option<WorkerBootstrapCompletionTarget>) -> Self {
+        Self { target }
     }
 
-    fn mark_success(&mut self, success: WorkerBootstrapSuccess) {
-        self.send(WorkerBootstrapCompletion::success(success));
-    }
-
-    fn mark_failure(
+    fn mark_success(
         &mut self,
-        report: &V8ExceptionReport,
-        script_url: &str,
-        event_kind: WorkerParentErrorEventKind,
-        phase: WorkerErrorPhase,
-        source: WorkerErrorSource,
+        success: WorkerBootstrapSuccess,
+        parent: &mpsc::UnboundedSender<WorkerToParentMessage>,
     ) {
-        self.send(WorkerBootstrapCompletion::failure(
-            WorkerBootstrapFailure::from_exception_report(
-                report, script_url, event_kind, phase, source,
-            ),
-        ));
+        self.send(WorkerBootstrapCompletion::success(success), parent);
     }
 
-    fn mark_install_global_failure(&mut self, script_url: &str, message: String) {
+    fn mark_install_global_failure(
+        &mut self,
+        script_url: &str,
+        message: String,
+        parent: &mpsc::UnboundedSender<WorkerToParentMessage>,
+    ) {
         let failure = WorkerBootstrapFailure {
             message,
             filename: script_url.to_owned(),
@@ -3509,12 +3537,25 @@ impl WorkerBootstrapCompletionReporter {
             phase: WorkerErrorPhase::Bootstrap,
             source: WorkerErrorSource::Runtime,
         };
-        self.send(WorkerBootstrapCompletion::failure(failure));
+        self.send(WorkerBootstrapCompletion::failure(failure), parent);
     }
 
-    fn send(&mut self, completion: WorkerBootstrapCompletion) {
-        if let Some(sender) = self.sender.take() {
-            let _ = sender.send(completion);
+    fn send(
+        &mut self,
+        completion: WorkerBootstrapCompletion,
+        parent: &mpsc::UnboundedSender<WorkerToParentMessage>,
+    ) {
+        match self.target.take() {
+            Some(WorkerBootstrapCompletionTarget::Parent) => {
+                let _ = parent.send(WorkerToParentMessage::ServiceWorkerBootstrapCompleted(
+                    completion,
+                ));
+            }
+            #[cfg(test)]
+            Some(WorkerBootstrapCompletionTarget::Observer(sender)) => {
+                let _ = sender.send(completion);
+            }
+            None => {}
         }
     }
 }

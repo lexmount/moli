@@ -297,6 +297,8 @@ pub(crate) enum WorkerToParentMessage {
     /// target-stream cursor that precedes it instead of racing a separate
     /// response channel against target retirement.
     RuntimeInspectorResponse(crate::runtime::RendererRuntimeInspectorResponsePublication),
+    /// ServiceWorker bootstrap result, ordered after its initial script output.
+    ServiceWorkerBootstrapCompleted(WorkerBootstrapCompletion),
     /// A Service Worker lifecycle event finished dispatch and all `waitUntil()` promises.
     ServiceWorkerLifecycleCompleted(ServiceWorkerLifecycleCompletion),
     /// A Service Worker fetch event finished dispatch and `respondWith()` settled or fell back.
