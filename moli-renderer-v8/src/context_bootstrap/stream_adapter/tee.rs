@@ -28,6 +28,7 @@ const STREAM_TEE_READING_INDEX: u32 = 11;
 const STREAM_TEE_BYOB_BRANCH_INDEX: u32 = 12;
 const STREAM_TEE_READ_AGAIN1_INDEX: u32 = 13;
 const STREAM_TEE_READ_AGAIN2_INDEX: u32 = 14;
+const STREAM_TEE_CLONE_BRANCH2_INDEX: u32 = 15;
 const TEE_READ_MICROTASK_STATE_INDEX: u32 = 0;
 const TEE_READ_MICROTASK_CHUNK_INDEX: u32 = 1;
 
@@ -41,17 +42,35 @@ pub(in crate::context_bootstrap) fn tee_readable_stream<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     stream: v8::Local<'s, v8::Object>,
 ) -> Result<v8::Local<'s, v8::Array>, TeeStartError> {
+    tee_readable_stream_with_options(scope, stream, false)
+}
+
+/// Specification consumers such as Fetch clone the second branch's chunks.
+/// The public ReadableStream.tee() method instead shares default-stream chunks.
+pub(in crate::context_bootstrap) fn tee_readable_stream_with_cloned_branch<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    stream: v8::Local<'s, v8::Object>,
+) -> Result<v8::Local<'s, v8::Array>, TeeStartError> {
+    tee_readable_stream_with_options(scope, stream, true)
+}
+
+fn tee_readable_stream_with_options<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    stream: v8::Local<'s, v8::Object>,
+    clone_branch2: bool,
+) -> Result<v8::Local<'s, v8::Array>, TeeStartError> {
     let relevant_context = stream
         .get_creation_context(scope)
         .ok_or(TeeStartError::Unavailable)?;
     let [branch1, branch2] = if relevant_context == scope.get_current_context() {
-        tee_readable_stream_in_current_realm(scope, stream)?
+        tee_readable_stream_in_current_realm(scope, stream, clone_branch2)?
     } else {
         let stream = v8::Global::new(scope, stream);
         let (branch1, branch2) = {
             let target_scope = &mut v8::ContextScope::new(scope, relevant_context);
             let stream = v8::Local::new(target_scope, &stream);
-            let [branch1, branch2] = tee_readable_stream_in_current_realm(target_scope, stream)?;
+            let [branch1, branch2] =
+                tee_readable_stream_in_current_realm(target_scope, stream, clone_branch2)?;
             (
                 v8::Global::new(target_scope, branch1),
                 v8::Global::new(target_scope, branch2),
@@ -71,6 +90,7 @@ pub(in crate::context_bootstrap) fn tee_readable_stream<'s>(
 fn tee_readable_stream_in_current_realm<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     stream: v8::Local<'s, v8::Object>,
+    clone_branch2: bool,
 ) -> Result<[v8::Local<'s, v8::Object>; 2], TeeStartError> {
     match TeeEntrySnapshot::new(readable_stream_locked(scope, stream)).plan() {
         TeeEntryPlan::RejectLocked => return Err(TeeStartError::Locked),
@@ -90,7 +110,12 @@ fn tee_readable_stream_in_current_realm<'s>(
     };
     let (cancel_promise, cancel_pending) =
         new_pending_read_promise(scope).ok_or(TeeStartError::Unavailable)?;
-    let tee_state = v8::Array::new(scope, 15);
+    let tee_state = v8::Array::new(scope, 16);
+    let _ = tee_state.set_index(
+        scope,
+        STREAM_TEE_CLONE_BRANCH2_INDEX,
+        v8::Boolean::new(scope, clone_branch2).into(),
+    );
     let _ = tee_state.set_index(scope, STREAM_TEE_BRANCH1_INDEX, branch1.into());
     let _ = tee_state.set_index(scope, STREAM_TEE_BRANCH2_INDEX, branch2.into());
     let _ = tee_state.set_index(scope, STREAM_TEE_ORIGINAL_INDEX, stream.into());
@@ -689,6 +714,30 @@ fn apply_default_tee_chunk_actions<'s>(
     actions: BranchPair<DefaultChunkAction>,
     value: v8::Local<'s, v8::Value>,
 ) -> bool {
+    let clone_branch2 = matches!(actions.get(TeeBranch::Second), DefaultChunkAction::Enqueue)
+        && tee_state
+            .get_index(scope, STREAM_TEE_CLONE_BRANCH2_INDEX)
+            .is_some_and(|value| value.boolean_value(scope));
+    let second_value = if clone_branch2 {
+        let cloned = {
+            let try_catch = std::pin::pin!(v8::TryCatch::new(scope));
+            let mut scope = try_catch.init();
+            structured_clone_value(&mut scope, value).ok_or_else(|| {
+                scope
+                    .exception()
+                    .unwrap_or_else(|| v8::undefined(&scope).into())
+            })
+        };
+        match cloned {
+            Ok(cloned) => cloned,
+            Err(error) => {
+                error_default_tee_clone(scope, tee_state, error);
+                return false;
+            }
+        }
+    } else {
+        value
+    };
     for branch in [TeeBranch::First, TeeBranch::Second] {
         if !matches!(actions.get(branch), DefaultChunkAction::Enqueue) {
             continue;
@@ -696,7 +745,12 @@ fn apply_default_tee_chunk_actions<'s>(
         let Some(stream) = readable_stream_tee_branch(scope, tee_state, branch) else {
             continue;
         };
-        match enqueue_chunk(scope, stream, value) {
+        let chunk = if branch == TeeBranch::Second {
+            second_value
+        } else {
+            value
+        };
+        match enqueue_chunk(scope, stream, chunk) {
             Ok(()) => maybe_pull_stream(scope, stream),
             Err(EnqueueChunkError::ClosedOrErrored) => {}
             Err(EnqueueChunkError::Strategy(error)) => {
@@ -706,6 +760,35 @@ fn apply_default_tee_chunk_actions<'s>(
         }
     }
     true
+}
+
+fn error_default_tee_clone<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    tee_state: v8::Local<'s, v8::Array>,
+    error: v8::Local<'s, v8::Value>,
+) {
+    let moli_streams::tee::SourceErrorPlan::ErrorBranches { branches, .. } =
+        readable_stream_tee_snapshot(scope, tee_state).plan_source_error();
+    apply_terminal_branch_actions(scope, tee_state, branches, Some(error));
+    let Some(original) = readable_stream_tee_original(scope, tee_state) else {
+        return;
+    };
+    let Some(pending) = tee_state
+        .get_index(scope, STREAM_TEE_CANCEL_PENDING_INDEX)
+        .and_then(|value| v8::Local::<v8::Object>::try_from(value).ok())
+    else {
+        return;
+    };
+    // Source cancellation can synchronously close the stream. Reserve the
+    // shared promise before that callback so it adopts the cancel result.
+    let _ = tee_state.set_index(
+        scope,
+        STREAM_TEE_CANCEL_SETTLED_INDEX,
+        v8::Boolean::new(scope, true).into(),
+    );
+    let result = cancel_readable_stream(scope, original, error)
+        .unwrap_or_else(|| v8::undefined(scope).into());
+    resolve_pending_promise(scope, pending, result);
 }
 
 fn readable_stream_tee_error_steps<'s>(
