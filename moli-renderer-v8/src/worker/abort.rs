@@ -1,5 +1,5 @@
 use crate::web_api_interfaces;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::{cell::RefCell, rc::Rc};
 
 use crate::exception_reporting::invoke_callback;
@@ -32,6 +32,8 @@ pub(super) struct WorkerAbortSignalState {
     aborted: bool,
     reason: Option<v8::Global<v8::Value>>,
     abort_algorithms: Vec<v8::Global<v8::Function>>,
+    // None for a source; Some (including empty) for a dependent signal's ordered roots.
+    source_signals: Option<Vec<u32>>,
     dependent_signals: Vec<u32>,
 }
 
@@ -208,12 +210,34 @@ impl WorkerAbortStore {
         true
     }
 
-    fn link_dependent_signal(&mut self, source_signal_id: u32, dependent_signal_id: u32) {
-        let Some(state) = self.signal_state_mut(source_signal_id) else {
-            return;
-        };
-        if !state.dependent_signals.contains(&dependent_signal_id) {
-            state.dependent_signals.push(dependent_signal_id);
+    fn set_signal_sources(
+        &mut self,
+        dependent_signal_id: u32,
+        input_signal_ids: impl IntoIterator<Item = u32>,
+    ) {
+        let mut sources = Vec::new();
+        let mut seen = HashSet::new();
+        for input_signal_id in input_signal_ids {
+            let Some(state) = self.signal_state(input_signal_id) else {
+                continue;
+            };
+            let roots = state
+                .source_signals
+                .as_deref()
+                .unwrap_or(std::slice::from_ref(&input_signal_id));
+            for &source_signal_id in roots {
+                if seen.insert(source_signal_id) {
+                    sources.push(source_signal_id);
+                }
+            }
+        }
+        for &source_signal_id in &sources {
+            if let Some(state) = self.signal_state_mut(source_signal_id) {
+                state.dependent_signals.push(dependent_signal_id);
+            }
+        }
+        if let Some(state) = self.signal_state_mut(dependent_signal_id) {
+            state.source_signals = Some(sources);
         }
     }
 }
@@ -227,7 +251,7 @@ fn abort_worker_signal<'s>(
     let Some(signal_id) = WorkerAbortStore::signal_id_from_object(scope, signal) else {
         return;
     };
-    let Some((abort_algorithms, dependent_signals)) = ({
+    let signals_to_abort = {
         let mut store = store.borrow_mut();
         let Some(state) = store.signal_state_mut(signal_id) else {
             return;
@@ -238,25 +262,50 @@ fn abort_worker_signal<'s>(
         state.aborted = true;
         state.reason = Some(v8::Global::new(scope, reason));
         set_private_value(scope, signal, WORKER_ABORT_SIGNAL_REASON_SLOT, reason);
-        let abort_algorithms = std::mem::take(&mut state.abort_algorithms);
-        Some((abort_algorithms, state.dependent_signals.clone()))
-    }) else {
-        return;
-    };
+        let dependent_signals = state.dependent_signals.clone();
 
+        // Mark the complete dependency list before callbacks can reenter abort().
+        let mut signals_to_abort = vec![(signal_id, signal)];
+        for dependent_signal_id in dependent_signals {
+            let Some(state) = store.signal_state_mut(dependent_signal_id) else {
+                continue;
+            };
+            if state.aborted {
+                continue;
+            }
+            state.aborted = true;
+            state.reason = Some(v8::Global::new(scope, reason));
+            if let Some(signal) = &state.signal {
+                let signal = v8::Local::new(scope, signal);
+                set_private_value(scope, signal, WORKER_ABORT_SIGNAL_REASON_SLOT, reason);
+                signals_to_abort.push((dependent_signal_id, signal));
+            }
+        }
+        signals_to_abort
+    };
+    for (signal_id, signal) in signals_to_abort {
+        run_worker_abort_steps(store, scope, signal, signal_id, reason);
+    }
+}
+
+fn run_worker_abort_steps<'s>(
+    store: &Rc<RefCell<WorkerAbortStore>>,
+    scope: &mut v8::PinScope<'s, '_>,
+    signal: v8::Local<'s, v8::Object>,
+    signal_id: u32,
+    reason: v8::Local<'s, v8::Value>,
+) {
+    let abort_algorithms = {
+        let mut store = store.borrow_mut();
+        let Some(state) = store.signal_state_mut(signal_id) else {
+            return;
+        };
+        std::mem::take(&mut state.abort_algorithms)
+    };
     reject_worker_fetches_for_signal(scope, signal_id, reason);
     invoke_worker_abort_algorithms(scope, signal, reason, abort_algorithms);
+    // Snapshot listeners after earlier signals and abort algorithms.
     abort_signal_events::dispatch_abort(scope, signal);
-    for dependent_signal_id in dependent_signals {
-        let dependent_signal = {
-            let store = store.borrow();
-            store.signal_object(scope, dependent_signal_id)
-        };
-        let Some(dependent_signal) = dependent_signal else {
-            continue;
-        };
-        abort_worker_signal(store, scope, dependent_signal, reason);
-    }
 }
 
 fn invoke_worker_abort_algorithms<'s>(
@@ -598,15 +647,12 @@ pub(crate) fn worker_abort_signal_any_callback<'s>(
         rv.set(signal.into());
         return;
     }
-    for source_signal in signals {
-        let Some(source_signal_id) = WorkerAbortStore::signal_id_from_object(scope, source_signal)
-        else {
-            continue;
-        };
-        store
-            .borrow_mut()
-            .link_dependent_signal(source_signal_id, composite_signal_id);
-    }
+    store.borrow_mut().set_signal_sources(
+        composite_signal_id,
+        signals
+            .into_iter()
+            .filter_map(|signal| WorkerAbortStore::signal_id_from_object(scope, signal)),
+    );
     rv.set(signal.into());
 }
 
