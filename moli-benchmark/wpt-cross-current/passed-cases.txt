@@ -3521,6 +3521,7 @@ custom-elements/upgrading/upgrading-parser-created-element.html
 digital-credentials/non-secure-contexts.http.html
 document-picture-in-picture/requires-secure-context.html
 dom/abort/abort-signal-timeout.html
+dom/abort/event.any.js?moli-wpt-any=window
 dom/abort/reason-constructor.html
 dom/attributes-are-nodes.html
 dom/collections/HTMLCollection-as-prototype.html
@@ -7305,6 +7306,7 @@ navigation-api/navigate-event/navigate-window-open.html
 navigation-api/navigate-event/navigatesuccess-cross-document.html
 navigation-api/navigate-event/navigatesuccess-same-document.html
 navigation-api/navigate-event/navigation-back-same-document-preventDefault.html
+navigation-api/navigate-event/navigation-traverseTo-in-iframe-same-document-preventDefault.html
 navigation-api/navigate-event/navigation-traverseTo-same-document-preventDefault-multiple-windows.html
 navigation-api/navigate-event/navigation-traverseTo-top-cancels-cross-document-child.html
 navigation-api/navigate-event/replaceState-inside-back-handler.html

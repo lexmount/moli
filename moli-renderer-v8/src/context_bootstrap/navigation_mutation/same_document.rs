@@ -43,6 +43,7 @@ pub(in crate::context_bootstrap) fn update_navigation_current_entry_for_same_doc
             set_child_joint_top_index_for_entry(scope, owner, Some(current_entry));
             let next_entry = create_navigation_entry(
                 scope,
+                owner,
                 href,
                 history_state_json.as_deref(),
                 navigation_state_json.as_deref(),
@@ -71,6 +72,7 @@ pub(in crate::context_bootstrap) fn update_navigation_current_entry_for_same_doc
                 .unwrap_or_else(|| new_navigation_entry_key().as_str().to_owned());
             let entry = create_navigation_entry(
                 scope,
+                owner,
                 href,
                 history_state_json.as_deref(),
                 navigation_state_json.as_deref(),
@@ -135,6 +137,7 @@ pub(in crate::context_bootstrap) fn apply_navigation_navigate_same_document<'s>(
             }
             let next_entry = create_navigation_entry(
                 scope,
+                owner,
                 href,
                 None,
                 None,
@@ -170,6 +173,7 @@ pub(in crate::context_bootstrap) fn apply_navigation_navigate_same_document<'s>(
                 .unwrap_or_else(|| new_navigation_entry_key().as_str().to_owned());
             let entry = create_navigation_entry(
                 scope,
+                owner,
                 href,
                 None,
                 None,

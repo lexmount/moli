@@ -2988,7 +2988,6 @@ navigation-api/focus-reset/autofocus.html?delayed-checkpoint
 navigation-api/focus-reset/autofocus.html?same-checkpoint
 navigation-api/navigate-event/defer/tentative/defer-same-document.html
 navigation-api/navigate-event/intercept-detach-multiple.html
-navigation-api/navigate-event/navigation-traverseTo-in-iframe-same-document-preventDefault.html
 navigation-api/navigate-event/traverseTo-detach.html
 navigation-api/navigation-methods/reload-service-worker-fetch-event.html
 navigation-api/navigation-methods/traverseTo-detach-between-navigate-and-navigatesuccess.html

@@ -1,12 +1,11 @@
 use super::{AbortDispatchSnapshot, AbortStore};
 use crate::context_bootstrap::{
-    EVENT_PASSIVE_SLOT, EVENT_STOP_IMMEDIATE_PROPAGATION_SLOT, event_internal_bool_flag,
-    set_event_internal_flag,
+    EVENT_PASSIVE_SLOT, EVENT_STOP_IMMEDIATE_PROPAGATION_SLOT, construct_original_event,
+    event_internal_bool_flag, set_event_internal_flag,
 };
 use crate::exception_reporting::invoke_callback;
 use crate::host::invoke_prepared_event_callback_on_object;
 use crate::native_bridge::JsContextHost;
-use crate::util::{v8_string, v8str};
 
 pub(super) fn invoke_abort_algorithms<'s>(
     scope: &mut v8::PinScope<'s, '_>,
@@ -41,17 +40,11 @@ pub(super) fn dispatch_abort<'s>(
     // front so listeners and `onabort` retain local `TryCatch`, structured
     // stderr, and no stdout pollution.
     let signal = local_object_in_scope(scope, signal);
-    let global = scope.get_current_context().global(scope);
-    let Some(event_ctor) = global
-        .get(scope, v8str(scope, "Event").into())
-        .and_then(|value| v8::Local::<v8::Function>::try_from(value).ok())
-    else {
-        return;
-    };
-    let Some(event_type) = v8_string(scope, "abort") else {
-        return;
-    };
-    let Some(event) = event_ctor.new_instance(scope, &[event_type.into()]) else {
+    let context = signal
+        .get_creation_context(scope)
+        .unwrap_or_else(|| scope.get_current_context());
+    let scope = &mut v8::ContextScope::new(scope, context);
+    let Some(event) = construct_original_event(scope, "abort") else {
         return;
     };
     AbortStore::define_hidden_value(scope, event, "target", signal.into());

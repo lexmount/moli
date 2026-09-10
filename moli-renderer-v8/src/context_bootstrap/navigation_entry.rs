@@ -172,6 +172,7 @@ pub(super) fn restore_current_navigation_entry_scroll_position<'s>(
 
 pub(super) fn create_navigation_entry<'s>(
     scope: &mut v8::PinScope<'s, '_>,
+    owner: v8::Local<'s, v8::Object>,
     url: &str,
     history_state_json: Option<&str>,
     navigation_state_json: Option<&str>,
@@ -180,6 +181,11 @@ pub(super) fn create_navigation_entry<'s>(
     id: &str,
     key: &str,
 ) -> v8::Local<'s, v8::Object> {
+    // Borrowed cross-window methods still create entries in the owner realm.
+    let context = owner
+        .get_creation_context(scope)
+        .unwrap_or_else(|| scope.get_current_context());
+    let scope = &mut v8::ContextScope::new(scope, context);
     let history_snapshot =
         super::navigation_serialize::parse_history_entry_state(scope, history_state_json);
     let navigation_snapshot =

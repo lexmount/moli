@@ -40,6 +40,7 @@ pub(crate) fn install_navigation_bootstrap_entry_for_holder<'s>(
     for snapshot in &entry_seed.entries {
         let entry = create_navigation_entry(
             scope,
+            owner,
             &snapshot.url,
             snapshot.history_state_json.as_deref(),
             snapshot.navigation_state_json.as_deref(),
@@ -64,6 +65,7 @@ pub(crate) fn install_navigation_bootstrap_entry_for_holder<'s>(
         let entry_key = NavigationHistoryEntryKey::allocate();
         let entry = create_navigation_entry(
             scope,
+            owner,
             "about:blank",
             None,
             None,
