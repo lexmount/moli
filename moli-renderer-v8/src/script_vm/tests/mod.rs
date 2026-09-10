@@ -5783,6 +5783,25 @@ fn embedded_frame_owners_create_child_contexts_only_for_document_content() {
         vm.eval(
             r#"
 (() => {
+  const object = document.getElementById("accepted-object");
+  const contentDocument = object.contentDocument;
+  const contentWindow = object.contentWindow;
+  return [
+    contentDocument !== null,
+    contentWindow !== null,
+    contentDocument === contentWindow.document
+  ].join("|");
+})()
+"#,
+        )
+        .expect("object child browsing context accessors should evaluate"),
+        "true|true|true"
+    );
+
+    assert_eq!(
+        vm.eval(
+            r#"
+(() => {
   document.getElementById("accepted-embed").type = "image/png";
   document.getElementById("accepted-object").data = "/image.png";
   return "reclassified";

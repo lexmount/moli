@@ -5667,6 +5667,14 @@ fn detached_object_param_and_data_accessors_use_owner_prototypes() {
     assert(descriptor.enumerable === true, `${name} enumerable`);
     assert(descriptor.configurable === true, `${name} configurable`);
   };
+  const readonlyAccessor = (prototype, name) => {
+    const descriptor = Object.getOwnPropertyDescriptor(prototype, name);
+    assert(!!descriptor, `${prototype.constructor.name}.${name} descriptor missing`);
+    assert(typeof descriptor.get === "function", `${name} getter`);
+    assert(descriptor.set === undefined, `${name} setter absent`);
+    assert(descriptor.enumerable === true, `${name} enumerable`);
+    assert(descriptor.configurable === true, `${name} configurable`);
+  };
   const absent = (prototype, name) => {
     assert(
       Object.getOwnPropertyDescriptor(prototype, name) === undefined,
@@ -5688,6 +5696,22 @@ fn detached_object_param_and_data_accessors_use_owner_prototypes() {
     absent(HTMLElement.prototype, name);
     assert(!own(object, name), `object.${name} should not be own`);
     assert(!(name in div), `div.${name} should be absent`);
+  }
+  for (const name of ["contentDocument", "contentWindow"]) {
+    readonlyAccessor(HTMLObjectElement.prototype, name);
+    absent(HTMLElement.prototype, name);
+    assert(!own(object, name), `object.${name} should not be own`);
+    assert(!(name in div), `div.${name} should be absent`);
+    assert(object[name] === null, `detached object.${name} should be null`);
+    const getter = Object.getOwnPropertyDescriptor(HTMLObjectElement.prototype, name).get;
+    assert(getter.call(object) === null, `borrowed object.${name} getter`);
+    for (const receiver of [div, document.createElement("iframe"), {}, null,
+                            HTMLObjectElement.prototype,
+                            document.createElementNS("http://www.w3.org/2000/svg", "object")]) {
+      let rejected = false;
+      try { getter.call(receiver); } catch (error) { rejected = error instanceof TypeError; }
+      assert(rejected, `${name} must reject an incompatible receiver`);
+    }
   }
   for (const name of ["value", "type", "valueType"]) {
     accessor(HTMLParamElement.prototype, name);

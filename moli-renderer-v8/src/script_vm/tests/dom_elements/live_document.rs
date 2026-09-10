@@ -1720,7 +1720,7 @@ fn detached_specialized_element_surfaces_are_inherited() {
     [id("menu"), ["compact"], "menu"],
     [id("meta"), ["content", "httpEquiv", "media", "name"], "meta"],
     [id("meter"), ["high", "labels", "low", "max", "min", "optimum", "value"], "meter"],
-    [id("object"), ["archive", "border", "code", "codeBase", "codeType", "data", "declare", "form", "hspace", "name", "standby", "type", "useMap", "validity", "validationMessage", "vspace", "willValidate", "checkValidity", "reportValidity", "setCustomValidity"], "object"],
+    [id("object"), ["archive", "border", "code", "codeBase", "codeType", "contentDocument", "contentWindow", "data", "declare", "form", "hspace", "name", "standby", "type", "useMap", "validity", "validationMessage", "vspace", "willValidate", "checkValidity", "reportValidity", "setCustomValidity"], "object"],
     [id("ol"), ["compact", "reversed", "start", "type"], "ol"],
     [id("optgroup"), ["disabled", "label"], "optgroup"],
     [id("option"), ["defaultSelected", "disabled", "form", "index", "label", "selected", "text", "value"], "option"],
@@ -3442,6 +3442,14 @@ fn object_param_and_data_accessors_live_on_owner_prototypes() {
                 assert(descriptor.enumerable === true, `${name} enumerable`);
                 assert(descriptor.configurable === true, `${name} configurable`);
               };
+              const readonlyAccessor = (prototype, name) => {
+                const descriptor = Object.getOwnPropertyDescriptor(prototype, name);
+                assert(!!descriptor, `${prototype.constructor.name}.${name} descriptor missing`);
+                assert(typeof descriptor.get === "function", `${name} getter`);
+                assert(descriptor.set === undefined, `${name} setter absent`);
+                assert(descriptor.enumerable === true, `${name} enumerable`);
+                assert(descriptor.configurable === true, `${name} configurable`);
+              };
               const absent = (prototype, name) => {
                 assert(
                   Object.getOwnPropertyDescriptor(prototype, name) === undefined,
@@ -3466,6 +3474,12 @@ fn object_param_and_data_accessors_live_on_owner_prototypes() {
                 "standby"
               ]) {
                 accessor(HTMLObjectElement.prototype, name);
+                absent(HTMLElement.prototype, name);
+                assert(!own(object, name), `object.${name} should not be own`);
+                assert(!(name in div), `div.${name} should be absent`);
+              }
+              for (const name of ["contentDocument", "contentWindow"]) {
+                readonlyAccessor(HTMLObjectElement.prototype, name);
                 absent(HTMLElement.prototype, name);
                 assert(!own(object, name), `object.${name} should not be own`);
                 assert(!(name in div), `div.${name} should be absent`);
