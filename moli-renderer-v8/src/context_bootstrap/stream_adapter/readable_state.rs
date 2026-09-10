@@ -568,7 +568,7 @@ fn reject_readable_stream_closed_promises<'s>(
     );
 }
 
-pub(in crate::context_bootstrap) fn readable_stream_locked<'s>(
+pub(crate) fn readable_stream_locked<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     stream: v8::Local<'s, v8::Object>,
 ) -> bool {
@@ -580,6 +580,19 @@ pub(crate) fn readable_stream_disturbed<'s>(
     stream: v8::Local<'s, v8::Object>,
 ) -> bool {
     readable_stream_access_snapshot(scope, stream).disturbed()
+}
+
+// Fetch can consume buffered/native body storage without running a JS reader.
+// Commit the same access state as acquiring a reader and starting its read.
+pub(crate) fn begin_readable_stream_body_consumption<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    stream: v8::Local<'s, v8::Object>,
+) -> bool {
+    if !lock_readable_stream(scope, stream) {
+        return false;
+    }
+    disturb_readable_stream(scope, stream);
+    true
 }
 
 pub(in crate::context_bootstrap) fn readable_stream_access_snapshot<'s>(

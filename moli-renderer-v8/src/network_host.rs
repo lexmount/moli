@@ -37,20 +37,22 @@ pub(crate) use self::async_fetch::{
 };
 pub(crate) use self::beacon::{navigator_send_beacon_callback, send_link_audit_ping};
 pub(super) use self::bindings::install_window_network_bindings;
-pub(in crate::network_host) use self::body::{PreparedBodyInit, body_init};
+pub(in crate::network_host) use self::body::{
+    PreparedBodyInit, body_init, body_is_unusable, body_is_used, body_stream_object,
+    readable_body_stream_unusable,
+};
 pub(crate) use self::body::{append_default_body_content_type, has_header};
 #[cfg(test)]
 pub(crate) use self::body_source::pending_network_body_source_buffered_len_for_test;
 pub(in crate::network_host) use self::body_source::{
-    BODY_FORM_DATA_UNSUPPORTED_CONTENT_TYPE_ERROR_TEXT, NetworkBodyConsumption,
-    NetworkBodyConsumptionKind, clone_filtered_response_internal_body_source,
-    clone_pending_network_body_stream, consume_filtered_response_internal_body_value_from_object,
+    NetworkBodyConsumption, NetworkBodyConsumptionKind,
+    clone_filtered_response_internal_body_source, clone_pending_network_body_stream,
+    consume_filtered_response_internal_body_value_from_object,
     consume_filtered_response_internal_body_value_from_object_with_chunk_callback,
     consume_network_body_value_from_object,
     consume_network_body_value_from_object_with_chunk_callback, network_body_source_from_object,
     network_body_source_object_from_bytes, network_body_stream_from_response_body,
-    network_body_stream_from_subresource_body, network_body_value_is_pending_stream,
-    set_filtered_response_internal_body_from_bytes,
+    network_body_stream_from_subresource_body, set_filtered_response_internal_body_from_bytes,
     set_filtered_response_internal_body_from_pending_stream,
     set_filtered_response_internal_body_from_response_body,
     set_filtered_response_internal_body_from_subresource_body, set_network_body_owned_bytes,
