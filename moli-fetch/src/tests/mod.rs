@@ -287,6 +287,35 @@ fn response_body_keeps_invalid_utf8_bytes_beside_lossy_text() {
     ));
 }
 
+#[test]
+fn response_byte_parts_transfer_utf8_storage_without_copying() {
+    let head = sample_response_head();
+    let bytes = b"module source".to_vec();
+    let storage = bytes.as_ptr();
+    let response = Response::from_head_and_lossy_body_bytes(head.clone(), bytes);
+
+    let (split_head, bytes) = response.into_byte_parts();
+
+    assert_eq!(split_head.final_url, head.final_url);
+    assert_eq!(split_head.status, head.status);
+    assert_eq!(split_head.headers, head.headers);
+    assert_eq!(bytes, b"module source");
+    assert_eq!(bytes.as_ptr(), storage, "UTF-8 storage must be transferred");
+}
+
+#[test]
+fn response_byte_parts_preserve_exact_non_utf8_storage() {
+    let bytes = vec![b'a', 0xff, b'b'];
+    let storage = bytes.as_ptr();
+    let response = Response::from_head_and_lossy_body_bytes(sample_response_head(), bytes);
+    assert_eq!(response.body_text(), "a\u{fffd}b");
+
+    let (_, bytes) = response.into_byte_parts();
+
+    assert_eq!(bytes, [b'a', 0xff, b'b']);
+    assert_eq!(bytes.as_ptr(), storage, "exact bytes must be transferred");
+}
+
 #[tokio::test]
 async fn response_body_materializes_streaming_text_source() {
     let (body_tx, body_rx) = mpsc::unbounded_channel();

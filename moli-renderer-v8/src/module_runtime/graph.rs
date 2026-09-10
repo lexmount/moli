@@ -464,7 +464,7 @@ impl NativeModuleGraphFetchRequest {
                         crate::referrer_policy::response_referrer_policy_from_headers(
                             &response.headers,
                         );
-                    let (head, _, body_bytes) = response.into_parts();
+                    let (head, body_bytes) = response.into_byte_parts();
                     if !crate::subresource_integrity::response_body_matches_subresource_integrity_metadata(
                         &body_bytes,
                         integrity.as_deref(),

@@ -749,7 +749,7 @@ fn start_worker_module_graph_fetch(
                     .elapsed()
                     .as_millis()
                     .min(u64::MAX as u128) as u64;
-                let (head, _body, body_bytes) = response.into_parts();
+                let (head, body_bytes) = response.into_byte_parts();
                 let response_referrer_policy =
                     crate::referrer_policy::response_referrer_policy_from_headers(&head.headers);
                 let resource = WorkerScriptResource::from_response_parts(

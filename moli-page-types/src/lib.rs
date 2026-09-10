@@ -489,6 +489,16 @@ impl NavigationResponse {
         (head, body)
     }
 
+    /// Consumes a materialized response and transfers its exact byte payload
+    /// without retaining the text view or copying UTF-8 text storage.
+    pub fn into_byte_parts(self) -> (ResponseHead, Vec<u8>) {
+        let (head, body) = self.into_body();
+        let bytes = body
+            .try_into_materialized_bytes()
+            .expect("NavigationResponse body should remain materialized");
+        (head, bytes)
+    }
+
     pub fn into_body(self) -> (ResponseHead, ResponseBody) {
         let head = ResponseHead {
             final_url: self.final_url,
@@ -3414,6 +3424,26 @@ mod tests {
 
     fn test_url(path: &str) -> Url {
         Url::parse(&format!("https://example.test{path}")).expect("test URL should parse")
+    }
+
+    #[test]
+    fn navigation_response_byte_parts_transfer_exact_storage() {
+        let template =
+            NavigationResponse::from_text_body(test_url("/module"), 200, Vec::new(), String::new());
+        for bytes in [b"module source".to_vec(), vec![b'a', 0xff, b'b']] {
+            let expected = bytes.clone();
+            let storage = bytes.as_ptr();
+            let response = NavigationResponse::from_head_and_materialized_body(
+                template.head(),
+                ResponseBody::lossy_text_from_bytes(bytes),
+            );
+
+            let (head, bytes) = response.into_byte_parts();
+
+            assert_eq!(head.final_url, template.final_url);
+            assert_eq!(bytes, expected);
+            assert_eq!(bytes.as_ptr(), storage, "exact bytes must be transferred");
+        }
     }
 
     #[test]

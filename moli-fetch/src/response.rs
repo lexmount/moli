@@ -413,6 +413,16 @@ impl Response {
         (head, body)
     }
 
+    /// Consumes a materialized response and transfers its exact byte payload
+    /// without retaining the text view or copying UTF-8 text storage.
+    pub fn into_byte_parts(self) -> (ResponseHead, Vec<u8>) {
+        let (head, body) = self.into_body();
+        let bytes = body
+            .try_into_materialized_bytes()
+            .expect("Response body should remain materialized");
+        (head, bytes)
+    }
+
     pub fn into_body(self) -> (ResponseHead, ResponseBody) {
         let head = ResponseHead {
             final_url: self.final_url,

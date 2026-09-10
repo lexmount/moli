@@ -357,7 +357,7 @@ fn load_imported_script_resource_for_update_check(
     moli_fetch::ensure_http_status_success(response.final_url.as_str(), response.status, false)
         .map_err(|error| error.to_string())?;
     ensure_imported_script_resource_mime(kind, &response)?;
-    let (head, _body, body_bytes) = response.into_parts();
+    let (head, body_bytes) = response.into_byte_parts();
     let mut resource = ServiceWorkerScriptResource::from_response_parts(
         request_url_without_fragment,
         &head,
