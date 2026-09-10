@@ -5160,6 +5160,8 @@ event-timing/supported-types-consistent-with-self.html
 fetch/api/abort/destroyed-context.html
 fetch/api/basic/response-null-body.any.js?moli-wpt-any=dedicatedworker
 fetch/api/basic/response-null-body.any.js?moli-wpt-any=window
+fetch/api/basic/stream-response.any.js?moli-wpt-any=dedicatedworker
+fetch/api/basic/stream-response.any.js?moli-wpt-any=window
 fetch/api/basic/text-utf8.any.js?moli-wpt-any=dedicatedworker
 fetch/api/basic/text-utf8.any.js?moli-wpt-any=window
 fetch/api/cors/data-url-iframe.html

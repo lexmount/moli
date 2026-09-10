@@ -2086,6 +2086,9 @@ def _make_handler(
             if path == "/fetch/api/resources/status.py":
                 self._serve_fetch_status(parsed.query, emit_body=emit_body)
                 return
+            if path == "/fetch/api/resources/trickle.py":
+                self._serve_fetch_trickle(parsed.query, emit_body=emit_body)
+                return
             if path == "/fetch/api/resources/inspect-headers.py":
                 self._send_bytes(
                     "text/plain",
@@ -2744,6 +2747,41 @@ def _make_handler(
                     self.wfile.write(body)
                 except (BrokenPipeError, ConnectionResetError):
                     return
+
+        def _serve_fetch_trickle(self, query: str, *, emit_body: bool) -> None:
+            params = parse_qs(query, keep_blank_values=True)
+            delay = _wpt_delay_seconds(query)
+            try:
+                count = int(params.get("count", ["50"])[0])
+            except ValueError:
+                self.send_error(500)
+                return
+            if delay is None:
+                self.send_error(500)
+                return
+            # Upstream reads the upload before delaying the response headers.
+            if not self._consume_request_body():
+                return
+            self.close_connection = True
+            try:
+                time.sleep(delay)
+                self.send_response(200)
+                if "notype" not in params:
+                    self.send_header("Content-Type", "text/plain")
+                # Like wptserve's explicit writer, delimit the body by EOF.
+                # Flush each chunk so readers can consume it before EOF.
+                self.send_header("Connection", "close")
+                self.end_headers()
+                self.wfile.flush()
+                if not emit_body:
+                    return
+                time.sleep(delay)
+                for _ in range(count):
+                    self.wfile.write(b"TEST_TRICKLE\n")
+                    self.wfile.flush()
+                    time.sleep(delay)
+            except (BrokenPipeError, ConnectionResetError, OSError):
+                return
 
         def _serve_fetch_status(self, query: str, *, emit_body: bool) -> None:
             try:
