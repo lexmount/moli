@@ -421,9 +421,10 @@ impl JsContextHost {
     pub(crate) fn retire_window_execution_contexts_for_context_token(
         &mut self,
         context_token: RuntimeObservableContextToken,
+        resource_owner_id: crate::resource_owner::ResourceOwnerId,
     ) -> usize {
         let revoked_blob_object_url_count =
-            crate::blob::cleanup_object_urls_for_context(context_token);
+            crate::blob::cleanup_object_urls_for_context(resource_owner_id, context_token);
         crate::observer_runtime::retire_context_token(self, context_token);
         let indexed_db_retirement = self.retire_indexed_db_context(context_token);
         let retired_indexed_db_connections = indexed_db_retirement.retired_connections.len();
@@ -476,9 +477,10 @@ impl JsContextHost {
     pub(crate) fn retire_isolated_window_execution_context(
         &mut self,
         context_token: RuntimeObservableContextToken,
+        resource_owner_id: crate::resource_owner::ResourceOwnerId,
     ) -> usize {
         let revoked_blob_object_url_count =
-            crate::blob::cleanup_object_urls_for_context(context_token);
+            crate::blob::cleanup_object_urls_for_context(resource_owner_id, context_token);
         crate::observer_runtime::retire_context_token(self, context_token);
         let retired_realm_count = self
             .window_execution_context_realms
