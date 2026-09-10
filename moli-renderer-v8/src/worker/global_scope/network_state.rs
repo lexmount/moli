@@ -22,6 +22,7 @@ pub(in crate::worker) struct PendingWorkerFetch {
     pub(in crate::worker) network_record: Option<PendingWorkerFetchNetworkRecord>,
     pub(in crate::worker) paused_response: Option<PausedWorkerSubresourceResponse>,
     pub(in crate::worker) streaming_body_source_id: Option<NetworkBodySourceId>,
+    pub(in crate::worker) streaming_needs_orb_body_validation: bool,
 }
 
 pub(in crate::worker) enum WorkerFetchEvent {
@@ -45,6 +46,7 @@ pub(in crate::worker) struct WorkerFetchStreamingStarted {
 }
 
 pub(in crate::worker) struct WorkerFetchStreamingChunk {
+    pub(super) fetch_id: u32,
     pub(super) body_source_id: NetworkBodySourceId,
     pub(super) bytes: Vec<u8>,
 }
