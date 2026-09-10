@@ -18,6 +18,7 @@ use curl::{
 use super::{
     SessionIo, Submission,
     request::{self, Handshake},
+    scheduling::SocketPoll,
     session::{Session, Step},
 };
 use crate::{CurlDnsResolution, CurlTransferId, dns_adapter::CurlDnsOwnerResidence};
@@ -36,6 +37,7 @@ struct Owner {
     multi: Multi,
     sessions: HashMap<CurlTransferId, Session>,
     dns: CurlDnsOwnerResidence<CurlTransferId, Pending>,
+    poll: SocketPoll,
 }
 
 pub(super) fn run(
@@ -47,15 +49,15 @@ pub(super) fn run(
         multi: Multi::new(),
         sessions: HashMap::new(),
         dns: CurlDnsOwnerResidence::default(),
+        poll: SocketPoll::default(),
     };
     let _ = waker_tx.send(owner.multi.waker());
     while !shutdown.load(Ordering::Acquire) {
         owner.accept_submissions(&submissions);
         owner.resolve_dns();
         owner.advance_handshakes();
-        if !owner.advance_sessions() {
-            owner.wait_for_work();
-        }
+        let progressed = owner.advance_sessions();
+        owner.wait_for_work(progressed);
     }
     owner.fail_sessions("curl WebSocket runtime shut down");
     for pending in owner.dns.drain() {
@@ -190,26 +192,27 @@ impl Owner {
         }
     }
 
-    fn wait_for_work(&mut self) {
-        let mut fds: Vec<_> = self
-            .sessions
-            .values()
-            .filter_map(Session::wait_fd)
-            .collect();
+    fn wait_for_work(&mut self, progressed: bool) {
         let deadline = self
             .sessions
             .values()
             .filter_map(Session::handshake_deadline)
             .chain(self.dns.next_deadline(|pending| Some(pending.deadline)))
             .min();
-        let timeout = deadline
-            .map(|deadline| {
-                deadline
-                    .saturating_duration_since(Instant::now())
-                    .min(IDLE_WAIT)
-            })
-            .unwrap_or(IDLE_WAIT);
-        if let Err(error) = self.multi.poll(&mut fds, timeout) {
+        let timeout = if progressed {
+            // Keep draining local work, but collect other sockets' readiness on
+            // every turn so a busy session cannot starve a newly readable one.
+            Duration::ZERO
+        } else {
+            deadline
+                .map(|deadline| {
+                    deadline
+                        .saturating_duration_since(Instant::now())
+                        .min(IDLE_WAIT)
+                })
+                .unwrap_or(IDLE_WAIT)
+        };
+        if let Err(error) = self.poll.wait(&self.multi, &mut self.sessions, timeout) {
             self.fail_sessions(&error.to_string());
         }
     }

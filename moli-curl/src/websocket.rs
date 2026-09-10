@@ -3,9 +3,16 @@
 //! This layer transports frames. Browser handshake policy, message assembly and
 //! close-handshake semantics belong to the caller. Dropping the receiver cancels
 //! its session, including DNS and handshake work, independently of queue capacity.
+//!
+//! Internally, owner coordinates DNS and scheduling; session owns the native
+//! handle and its Opening/Open/ReceivedClose lifecycle; scheduling holds I/O
+//! admission state and maps polled sockets back to their sessions. Returning
+//! AGAIN parks that I/O until its socket is signalled. Application wakeups only
+//! resume paused work, such as a new frame or restored receive capacity.
 
 mod owner;
 mod request;
+mod scheduling;
 mod session;
 #[cfg(test)]
 mod tests;
@@ -124,6 +131,10 @@ struct Control {
     read_blocked: tokio::sync::Notify,
     #[cfg(test)]
     write_blocked: tokio::sync::Notify,
+    #[cfg(test)]
+    read_attempts: std::sync::atomic::AtomicUsize,
+    #[cfg(test)]
+    read_waiting: tokio::sync::Notify,
 }
 
 impl Control {
@@ -329,6 +340,10 @@ impl CurlWebSocketRuntime {
             read_blocked: tokio::sync::Notify::new(),
             #[cfg(test)]
             write_blocked: tokio::sync::Notify::new(),
+            #[cfg(test)]
+            read_attempts: std::sync::atomic::AtomicUsize::new(0),
+            #[cfg(test)]
+            read_waiting: tokio::sync::Notify::new(),
         });
         let (event_tx, events) = mpsc::channel(MAX_PENDING_EVENTS);
         let io = SessionIo {

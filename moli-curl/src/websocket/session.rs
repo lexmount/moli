@@ -8,7 +8,7 @@ use curl::{
     multi::{Easy2Handle, Multi, WaitFd},
 };
 
-use super::{CurlWebSocketEvent, SessionIo, WsFlags, request::Handshake};
+use super::{CurlWebSocketEvent, SessionIo, WsFlags, request::Handshake, scheduling::IoState};
 use crate::CurlTransferId;
 
 const CHUNK_BYTES: usize = 16 * 1024;
@@ -32,6 +32,8 @@ pub(super) struct Session {
     handle: Easy2Handle<Handshake>,
     io: SessionIo,
     phase: Phase,
+    reading: IoState,
+    writing: IoState,
 }
 
 impl Session {
@@ -66,6 +68,8 @@ impl Session {
                     handle,
                     io,
                     phase: Phase::Opening { deadline },
+                    reading: IoState::default(),
+                    writing: IoState::default(),
                 })
             }
             Err(error) => {
@@ -143,9 +147,12 @@ impl Session {
     fn write_pending(&mut self) -> Result<bool, String> {
         // Keep the single frame resident across partial nonblocking writes.
         let mut pending = self.io.control.send.lock();
-        let Some(send) = &mut *pending else {
+        if !self.writing.can_run(pending.is_some()) {
             return Ok(false);
-        };
+        }
+        let send = pending
+            .as_mut()
+            .expect("runnable write has a pending frame");
         match self
             .handle
             .ws_send(&send.frame.data[send.offset..], 0, send.frame.flags)
@@ -154,11 +161,13 @@ impl Session {
                 send.offset += count;
                 if send.offset == send.frame.data.len() {
                     let send = pending.take().expect("completed frame");
+                    self.writing.pause();
                     let _ = send.completed.send(send.offset);
                 }
                 Ok(true)
             }
             Err(error) if error.is_again() => {
+                self.writing.would_block();
                 #[cfg(test)]
                 self.io.control.write_blocked.notify_one();
                 Ok(false)
@@ -172,12 +181,13 @@ impl Session {
     }
 
     fn read_chunk(&mut self) -> Result<Step, String> {
-        if !self.reading_enabled() {
+        if !self.reading.can_run(self.reading_enabled()) {
             return Ok(Step::Idle);
         }
         let permit = match self.io.events.try_reserve() {
             Ok(permit) => permit,
             Err(tokio::sync::mpsc::error::TrySendError::Full(_)) => {
+                self.reading.pause();
                 #[cfg(test)]
                 self.io.control.read_blocked.notify_one();
                 return Ok(Step::Idle);
@@ -185,6 +195,11 @@ impl Session {
             Err(tokio::sync::mpsc::error::TrySendError::Closed(_)) => return Ok(Step::Closed),
         };
         let mut data = vec![0; CHUNK_BYTES];
+        #[cfg(test)]
+        self.io
+            .control
+            .read_attempts
+            .fetch_add(1, Ordering::Relaxed);
         match self.handle.ws_recv(&mut data) {
             Ok((count, frame)) => {
                 data.truncate(count);
@@ -196,7 +211,12 @@ impl Session {
                 permit.send(CurlWebSocketEvent::Chunk { data, frame });
                 Ok(Step::Progress)
             }
-            Err(error) if error.is_again() => Ok(Step::Idle),
+            Err(error) if error.is_again() => {
+                self.reading.would_block();
+                #[cfg(test)]
+                self.io.control.read_waiting.notify_one();
+                Ok(Step::Idle)
+            }
             Err(error) if error.is_got_nothing() => Ok(Step::Closed),
             Err(error) => Err(format!("WebSocket receive failed: {error}")),
         }
@@ -206,15 +226,25 @@ impl Session {
         if self.handshake_deadline().is_some() {
             return None;
         }
-        let reading = self.reading_enabled() && self.io.events.capacity() > 0;
-        let writing = self.io.control.send.lock().is_some();
+        let reading = self.reading.waiting_for_socket()
+            && self.reading_enabled()
+            && self.io.events.capacity() > 0;
+        let writing = self.writing.waiting_for_socket();
         if !reading && !writing {
             return None;
         }
         let mut fd = WaitFd::new();
         fd.set_fd(self.handle.active_socket().ok()??);
+        // curl-rust exposes AGAIN without a TLS wait direction. These are the
+        // operation's read/write interests; cross-direction TLS waits would
+        // require extending the native contract here.
         fd.poll_on_read(reading).poll_on_write(writing);
         Some(fd)
+    }
+
+    pub(super) fn socket_ready(&mut self) {
+        self.reading.socket_ready();
+        self.writing.socket_ready();
     }
 
     pub(super) fn finish(self, multi: &mut Multi, result: Result<(), String>) {

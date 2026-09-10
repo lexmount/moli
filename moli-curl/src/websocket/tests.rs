@@ -9,6 +9,8 @@ use tokio_tungstenite::tungstenite::{self, Message, handshake::derive_accept_key
 
 use super::*;
 
+mod readiness;
+
 const DEADLINE: Duration = Duration::from_secs(10);
 
 fn server(handler: impl FnOnce(TcpStream) + Send + 'static) -> (String, thread::JoinHandle<()>) {
