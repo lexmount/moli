@@ -30,6 +30,7 @@ pub(crate) fn apply_local_window_location_navigation<'s>(
             let state = v8::null(scope).into();
             let next_entry = create_navigation_entry(
                 scope,
+                owner,
                 resolved.as_str(),
                 None,
                 None,
@@ -60,6 +61,7 @@ pub(crate) fn apply_local_window_location_navigation<'s>(
                 .unwrap_or_else(|| new_navigation_entry_key().as_str().to_owned());
             let entry = create_navigation_entry(
                 scope,
+                owner,
                 resolved.as_str(),
                 None,
                 None,
