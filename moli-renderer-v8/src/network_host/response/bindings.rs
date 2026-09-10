@@ -44,10 +44,10 @@ pub(crate) fn response_constructor_callback<'s>(
     let obj = args.this();
     let body_arg = args.get(0);
     let body_stream = readable_stream_body_arg(scope, body_arg);
-    if body_stream.is_some_and(|stream| readable_stream_body_locked(scope, stream)) {
+    if body_stream.is_some_and(|stream| readable_body_stream_unusable(scope, stream)) {
         throw_type_error(
             scope,
-            "Failed to construct 'Response': ReadableStream body is locked.",
+            "Failed to construct 'Response': ReadableStream body is locked or disturbed.",
         );
         return;
     }
@@ -123,16 +123,6 @@ fn readable_stream_body_arg<'s>(
     }
     let object = v8::Local::<v8::Object>::try_from(value).ok()?;
     web_api_interfaces::ReadableStream::is_instance(scope, object).then_some(object)
-}
-
-fn readable_stream_body_locked(
-    scope: &mut v8::PinScope<'_, '_>,
-    stream: v8::Local<'_, v8::Object>,
-) -> bool {
-    stream
-        .get(scope, v8str(scope, "locked").into())
-        .map(|value| value.boolean_value(scope))
-        .unwrap_or(false)
 }
 
 fn is_valid_response_status_text(value: &str) -> bool {

@@ -457,6 +457,9 @@ pub(crate) fn materialize_response_object<'s>(
         }
         Err(error) => return Err(error),
     };
+    if let Some(stream) = body_stream_object(scope, response) {
+        crate::context_bootstrap::begin_readable_stream_body_consumption(scope, stream);
+    }
     set_response_slot_bool(scope, response, RESPONSE_BODY_USED_SLOT, true);
     Ok(head.with_body(body))
 }
@@ -476,14 +479,14 @@ pub(crate) fn materialize_response_object_head<'s>(
     if response_type == "error" {
         return Err(format!("{context} rejected an error Response."));
     }
+    if body_is_used(scope, response) {
+        return Err(format!(
+            "{context} rejected a Response whose body is already used."
+        ));
+    }
     if response_body_locked(scope, response) {
         return Err(format!(
             "{context} rejected a Response whose body is locked."
-        ));
-    }
-    if response_slot_bool(scope, response, RESPONSE_BODY_USED_SLOT) {
-        return Err(format!(
-            "{context} rejected a Response whose body is already used."
         ));
     }
     let status = response_slot_value(scope, response, RESPONSE_STATUS_SLOT)
@@ -650,19 +653,6 @@ fn response_body_locked<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     response: v8::Local<'s, v8::Object>,
 ) -> bool {
-    let Some(body) = response_slot_value(scope, response, RESPONSE_BODY_SLOT) else {
-        return false;
-    };
-    if body.is_null_or_undefined() {
-        return false;
-    }
-    let Ok(stream) = v8::Local::<v8::Object>::try_from(body) else {
-        return false;
-    };
-    if !web_api_interfaces::ReadableStream::is_instance(scope, stream) {
-        return false;
-    }
-    stream
-        .get(scope, crate::util::v8str(scope, "locked").into())
-        .is_some_and(move |value| value.boolean_value(scope))
+    body_stream_object(scope, response)
+        .is_some_and(|stream| crate::context_bootstrap::readable_stream_locked(scope, stream))
 }

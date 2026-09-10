@@ -98,16 +98,18 @@ pub(in crate::context_bootstrap) use readable_byte::{
     reset_byte_stream_pending_pull_intos, respond_byte_stream_with_new_view,
 };
 pub(in crate::context_bootstrap) use readable_state::EnqueueChunkError;
-pub(crate) use readable_state::readable_stream_disturbed;
 pub(in crate::context_bootstrap) use readable_state::{
     apply_readable_stream_access_transition, disturb_readable_stream,
     finish_readable_stream_close_if_requested_and_queue_empty, lock_readable_stream,
     readable_stream_access_snapshot, readable_stream_is_byte_stream, unlock_readable_stream,
 };
+pub(crate) use readable_state::{
+    begin_readable_stream_body_consumption, readable_stream_disturbed, readable_stream_locked,
+};
 pub(crate) use readable_state::{close_stream, enqueue_chunk, error_stream};
 pub(super) use readable_state::{
-    readable_stream_closed, readable_stream_error, readable_stream_locked,
-    reject_pending_read_requests, remove_pending_closed_promise, writable_stream_locked,
+    readable_stream_closed, readable_stream_error, reject_pending_read_requests,
+    remove_pending_closed_promise, writable_stream_locked,
 };
 pub(super) use utils::{
     done_result, promise_then_undefined, reject_pending_read, rejected_promise_value,

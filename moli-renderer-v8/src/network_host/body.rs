@@ -6,6 +6,43 @@ pub(in crate::network_host) const URL_SEARCH_PARAMS_CONTENT_TYPE: &str =
     "application/x-www-form-urlencoded;charset=UTF-8";
 pub(in crate::network_host) const TEXT_CONTENT_TYPE: &str = "text/plain;charset=UTF-8";
 
+pub(in crate::network_host) fn body_stream_object<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    object: v8::Local<'s, v8::Object>,
+) -> Option<v8::Local<'s, v8::Object>> {
+    if is_branded_request_object(scope, object) {
+        request_slot_object(scope, object, REQUEST_BODY_SLOT)
+    } else if is_branded_response_object(scope, object) {
+        response_slot_object(scope, object, RESPONSE_BODY_SLOT)
+    } else {
+        None
+    }
+}
+
+pub(in crate::network_host) fn readable_body_stream_unusable<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    stream: v8::Local<'s, v8::Object>,
+) -> bool {
+    crate::context_bootstrap::readable_stream_locked(scope, stream)
+        || crate::context_bootstrap::readable_stream_disturbed(scope, stream)
+}
+
+pub(in crate::network_host) fn body_is_used<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    object: v8::Local<'s, v8::Object>,
+) -> bool {
+    body_stream_object(scope, object)
+        .is_some_and(|stream| crate::context_bootstrap::readable_stream_disturbed(scope, stream))
+}
+
+pub(in crate::network_host) fn body_is_unusable<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    object: v8::Local<'s, v8::Object>,
+) -> bool {
+    body_stream_object(scope, object)
+        .is_some_and(|stream| readable_body_stream_unusable(scope, stream))
+}
+
 #[derive(Debug, Clone)]
 pub(in crate::network_host) struct PreparedBodyInit {
     pub(in crate::network_host) bytes: Vec<u8>,
@@ -48,6 +85,11 @@ pub(in crate::network_host) fn body_init<'s>(
             return Ok(Some(PreparedBodyInit::new(bytes, content_type)));
         }
         if web_api_interfaces::ReadableStream::is_instance(scope, object) {
+            if readable_body_stream_unusable(scope, object) {
+                return Err(webidl::WebIdlError::custom_message(
+                    "BodyInit ReadableStream is locked or disturbed",
+                ));
+            }
             return Ok(Some(PreparedBodyInit::new(Vec::new(), None)));
         }
     }

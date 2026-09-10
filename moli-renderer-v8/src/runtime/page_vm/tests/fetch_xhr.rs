@@ -4267,7 +4267,7 @@ async fn window_fetch_manual_redirect_returns_opaqueredirect_filtered_response()
             server.await.expect("manual redirect fetch server should finish");
             assert_eq!(
                 observed,
-                r#"{"type":"opaqueredirect","status":0,"ok":false,"statusText":"","redirected":false,"urlIsEmpty":true,"bodyIsNull":true,"headers":[],"bodyUsedBefore":false,"bodyUsedAfter":true,"text":"","cloneType":"opaqueredirect","cloneStatus":0,"cloneBodyIsNull":true,"cloneText":""}"#
+                r#"{"type":"opaqueredirect","status":0,"ok":false,"statusText":"","redirected":false,"urlIsEmpty":true,"bodyIsNull":true,"headers":[],"bodyUsedBefore":false,"bodyUsedAfter":false,"text":"","cloneType":"opaqueredirect","cloneStatus":0,"cloneBodyIsNull":true,"cloneText":""}"#
             );
             let (records, _, _) = split_network_output_items(network_output);
             assert_eq!(records.len(), 1);
@@ -4362,7 +4362,7 @@ async fn window_fetch_no_cors_cross_origin_returns_opaque_filtered_response() {
                 .contains("sec-fetch-mode: no-cors\r\n"));
             assert_eq!(
                 observed,
-                r#"{"type":"opaque","status":0,"ok":false,"statusText":"","url":"","redirected":false,"bodyIsNull":true,"headers":[],"bodyUsedBefore":false,"bodyUsedAfter":true,"text":"","cloneType":"opaque","cloneStatus":0,"cloneBodyIsNull":true,"cloneText":""}"#
+                r#"{"type":"opaque","status":0,"ok":false,"statusText":"","url":"","redirected":false,"bodyIsNull":true,"headers":[],"bodyUsedBefore":false,"bodyUsedAfter":false,"text":"","cloneType":"opaque","cloneStatus":0,"cloneBodyIsNull":true,"cloneText":""}"#
             );
             let (records, _, _) = split_network_output_items(network_output);
             assert_eq!(records.len(), 1);

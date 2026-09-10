@@ -18185,7 +18185,7 @@ async fn navigator_service_worker_respond_with_no_cors_fetch_projects_opaque_res
         &browser_context_runtime,
         &loader,
         "String(globalThis.__serviceWorkerOpaqueRespondWithFetchProbe)",
-        "opaque|0|false|||false|true|0|false|true||opaque|0|true|",
+        "opaque|0|false|||false|true|0|false|false||opaque|0|true|",
     )
     .await;
 
