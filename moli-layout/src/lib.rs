@@ -34,6 +34,7 @@ mod source;
 mod stacking;
 mod style;
 mod stylo_to_parley;
+mod svg_text;
 mod system_fonts;
 mod table;
 mod taffy_tree;
@@ -97,6 +98,7 @@ pub use style::{
     LayoutDisplay, LayoutInlineAlignment, LayoutListMarkerPosition, LayoutListMarkerType,
     LayoutPosition, ResolvedLayoutStyle,
 };
+pub use svg_text::{LayoutSvgText, LayoutSvgTextElement};
 pub use text::{
     DocumentLayoutServices, SystemFontPolicy, WebFontFace, WebFontRegistration,
     WebFontRegistrationError, WebFontRegistrationOutcome, WebFontStyle, WebFontUnicodeRange,

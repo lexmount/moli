@@ -402,6 +402,7 @@ where
         );
         layout_box.replaced_context = replaced_context;
         layout_box.replaced_image = self.source.replaced_image(source_node, &style);
+        layout_box.svg_text = self.source.svg_text_layout(source_node, &style);
         if !matches!(
             style.display(),
             LayoutDisplay::None | LayoutDisplay::Contents

@@ -31,6 +31,7 @@ pub(crate) struct CssSizing {
 /// element without manufacturing CSSOM rects for that element.
 #[derive(Clone, Debug, PartialEq)]
 pub struct FrozenLayoutBox<N> {
+    pub svg_text: Option<std::sync::Arc<crate::LayoutSvgText<N>>>,
     pub geometry: LayoutBoxGeometry,
     pub scroll_extent: LayoutScrollExtent,
     pub coordinate_space: FrozenCoordinateSpace,
@@ -173,6 +174,12 @@ where
             bytes
                 .saturating_add(fragment_bytes)
                 .saturating_add(grid_bytes)
+                .saturating_add(
+                    layout_box
+                        .svg_text
+                        .as_ref()
+                        .map_or(0, |text| text.estimated_bytes()),
+                )
         });
         let own_estimated_geometry_bytes = std::mem::size_of::<Self>()
             .saturating_add(allocation::<FrozenLayoutBox<N>>(self.boxes.capacity()))

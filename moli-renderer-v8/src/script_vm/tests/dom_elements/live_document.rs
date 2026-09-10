@@ -1159,7 +1159,7 @@ fn svg_geometry_queries_use_computed_paths_live_tree_and_kurbo_bounds() {
           <image id="image_box" x="2" y="3" width="4" height="5"/>
           <foreignObject id="foreign_box" x="6" y="7" width="8" height="9"/>
           <use id="use_box" href="#definition" x="5" y="7"/>
-          <text y="180" font-size="100" font-family="Ahem" transform="translate(0 -100)">X<tspan id="span">X</tspan></text>
+          <text y="180" font-size="100" font-family="serif" transform="translate(0 -100)">X<tspan id="span">X</tspan></text>
         </svg>"##,
     );
 
@@ -1180,6 +1180,14 @@ fn svg_geometry_queries_use_computed_paths_live_tree_and_kurbo_bounds() {
               rect.remove();
               const afterRemove = box("aggregate");
               byId("aggregate").appendChild(rect);
+              // No test font is registered in this fixture. Verify actual
+              // shaped cells instead of assuming a fallback glyph is 1em wide
+              // and 1em tall; fixed-font metrics are covered by moli-image.
+              const span = byId("span");
+              const bounds = span.getBBox();
+              const cell = span.getExtentOfChar(0);
+              const start = span.getStartPositionOfChar(0);
+              const close = (a, b) => Math.abs(a - b) < 0.001;
               return JSON.stringify({
                 cssLength: byId("css_path").getTotalLength(),
                 circleRadius: byId("circle").r.baseVal.value,
@@ -1198,7 +1206,16 @@ fn svg_geometry_queries_use_computed_paths_live_tree_and_kurbo_bounds() {
                 use: box("use_box"),
                 ellipseRxInvalid: box("ellipse_rx_invalid"),
                 ellipseRyInvalid: box("ellipse_ry_invalid"),
-                tspan: box("span"),
+                tspan: [
+                  span.getNumberOfChars(),
+                  span.parentNode.getNumberOfChars(),
+                  bounds.width > 0 && bounds.height > 0,
+                  ["x", "y", "width", "height"].every(key => close(bounds[key], cell[key])),
+                  close(bounds.width, span.getComputedTextLength()),
+                  close(bounds.x, span.parentNode.getEndPositionOfChar(0).x),
+                  bounds.y < start.y && bounds.y + bounds.height > start.y,
+                  start.y
+                ],
                 foreignInterface: byId("foreign_box") instanceof SVGForeignObjectElement,
                 tspanInterface: byId("span") instanceof SVGTSpanElement,
                 tspanHasBBox: typeof byId("span").getBBox === "function"
@@ -1210,7 +1227,7 @@ fn svg_geometry_queries_use_computed_paths_live_tree_and_kurbo_bounds() {
 
     assert_eq!(
         result,
-        r#"{"cssLength":100,"circleRadius":5,"circleLength":31,"move":[40,20,0,0],"aggregate":[40,20,60,80],"afterRemove":[40,20,0,0],"afterAppend":[40,20,60,80],"childTransform":[11,22,3,4],"ownTransform":[1,2,3,4],"hidden":[0,0,0,0],"hiddenChild":[0,0,0,0],"definition":[0,0,0,0],"image":[2,3,4,5],"foreign":[6,7,8,9],"use":[15,27,30,40],"ellipseRxInvalid":[-9,2,20,20],"ellipseRyInvalid":[1,-3,10,10],"tspan":[100,100,100,100],"foreignInterface":true,"tspanInterface":true,"tspanHasBBox":true}"#,
+        r#"{"cssLength":100,"circleRadius":5,"circleLength":31,"move":[40,20,0,0],"aggregate":[40,20,60,80],"afterRemove":[40,20,0,0],"afterAppend":[40,20,60,80],"childTransform":[11,22,3,4],"ownTransform":[1,2,3,4],"hidden":[0,0,0,0],"hiddenChild":[0,0,0,0],"definition":[0,0,0,0],"image":[2,3,4,5],"foreign":[6,7,8,9],"use":[15,27,30,40],"ellipseRxInvalid":[-9,2,20,20],"ellipseRyInvalid":[1,-3,10,10],"tspan":[1,2,true,true,true,true,true,180],"foreignInterface":true,"tspanInterface":true,"tspanHasBBox":true}"#,
     );
 }
 
