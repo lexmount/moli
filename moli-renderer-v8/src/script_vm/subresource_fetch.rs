@@ -3629,6 +3629,7 @@ impl ScriptVm {
             match result {
                 Ok(response) => {
                     let response_status = response.status;
+                    let response_request_method = request_method.clone();
                     let request_cookie_report = response
                         .request_cookie_report
                         .clone()
@@ -3724,7 +3725,10 @@ impl ScriptVm {
                                 crate::network_host::build_fetch_response_object_from_body_source_for_request_mode_with_filter(
                                     scope,
                                     &pending.info.document_url,
-                                    pending.request_mode,
+                                    crate::network_host::FetchResponseRequest {
+                                        method: &response_request_method,
+                                        mode: pending.request_mode,
+                                    },
                                     head,
                                     body,
                                     response_filter,
@@ -4887,7 +4891,10 @@ impl ScriptVm {
                     let response_obj = crate::network_host::build_fetch_response_object_from_stream_for_request_mode(
                         scope,
                         &pending.info.document_url,
-                        pending.request_mode,
+                        crate::network_host::FetchResponseRequest {
+                            method: &started.request_method,
+                            mode: pending.request_mode,
+                        },
                         observable_head,
                         started.body_source_id,
                     );

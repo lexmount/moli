@@ -144,8 +144,8 @@ pub(in crate::network_host) use self::request_scope::{
 #[cfg(test)]
 pub(crate) use self::response::materialize_response_object;
 pub(crate) use self::response::{
-    FetchResponseSecurityViolation, MaterializedResponseBody, MaterializedResponseHead,
-    build_fetch_response_object_for_request_mode,
+    FetchResponseRequest, FetchResponseSecurityViolation, MaterializedResponseBody,
+    MaterializedResponseHead, build_fetch_response_object_for_request_mode,
     build_fetch_response_object_from_body_source_for_request_mode,
     build_fetch_response_object_from_body_source_for_request_mode_with_filter,
     build_fetch_response_object_from_stream_for_request_mode,

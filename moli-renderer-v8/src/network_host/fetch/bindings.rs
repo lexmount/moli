@@ -312,7 +312,10 @@ fn window_fetch_callback_in_relevant_realm<'s>(
             let response_obj = build_fetch_response_object_for_request_mode(
                 scope,
                 &document_url,
-                prepared.request_mode,
+                FetchResponseRequest {
+                    method: &prepared.method,
+                    mode: prepared.request_mode,
+                },
                 response,
             );
             resolver.resolve(scope, response_obj.into());

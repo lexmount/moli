@@ -26,7 +26,7 @@ pub(crate) use self::cors::{
 #[cfg(test)]
 pub(crate) use self::materialize::materialize_response_object;
 pub(crate) use self::materialize::{
-    MaterializedResponseBody, MaterializedResponseHead,
+    FetchResponseRequest, MaterializedResponseBody, MaterializedResponseHead,
     build_fetch_response_object_for_request_mode,
     build_fetch_response_object_from_body_source_for_request_mode,
     build_fetch_response_object_from_body_source_for_request_mode_with_filter,

@@ -3562,7 +3562,10 @@ fn start_service_worker_navigation_preload_response_in_context(
     let response_object = build_navigation_preload_response_object_from_stream_for_request_mode(
         scope,
         &started.request_url,
-        started.request_mode,
+        crate::network_host::FetchResponseRequest {
+            method: &started.request_method,
+            mode: started.request_mode,
+        },
         head,
         started.body_source_id,
     );
