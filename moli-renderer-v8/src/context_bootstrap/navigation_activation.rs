@@ -138,6 +138,7 @@ pub(super) fn navigation_entry_object_from_snapshot<'s>(
     }
     let entry = create_navigation_entry(
         scope,
+        owner,
         &snapshot.url,
         snapshot.history_state_json.as_deref(),
         snapshot.navigation_state_json.as_deref(),

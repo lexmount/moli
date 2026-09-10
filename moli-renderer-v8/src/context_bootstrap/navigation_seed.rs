@@ -37,6 +37,7 @@ pub(super) fn build_history_entries_array_from_seed<'s>(
     for snapshot in &seed.entries {
         let entry = create_navigation_entry(
             scope,
+            owner,
             &snapshot.url,
             snapshot.history_state_json.as_deref(),
             snapshot.navigation_state_json.as_deref(),
@@ -68,6 +69,7 @@ pub(super) fn build_current_navigation_entry_from_seed<'s>(
         let entry_key = NavigationHistoryEntryKey::allocate();
         let entry = create_navigation_entry(
             scope,
+            owner,
             "about:blank",
             fallback_state_json.as_deref(),
             fallback_state_json.as_deref(),
@@ -83,6 +85,7 @@ pub(super) fn build_current_navigation_entry_from_seed<'s>(
     };
     let entry = create_navigation_entry(
         scope,
+        owner,
         &snapshot.url,
         snapshot.history_state_json.as_deref(),
         snapshot.navigation_state_json.as_deref(),
