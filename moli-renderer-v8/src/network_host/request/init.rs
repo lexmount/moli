@@ -1,4 +1,4 @@
-use super::input::{normalize_request_method, normalize_request_referrer};
+use super::input::{normalize_fetch_request_method, normalize_request_referrer};
 use super::*;
 use crate::webidl;
 use moli_fetch::{FetchPriorityHint, RequestCredentialsMode, RequestMode, RequestRedirectMode};
@@ -14,12 +14,11 @@ pub(crate) struct ParsedFetchInit {
     pub(crate) headers: Vec<(String, String)>,
     pub(crate) headers_present: bool,
     pub(crate) suppress_default_content_type: bool,
-    pub(crate) request_mode: Option<RequestMode>,
+    pub(crate) validation: RequestInitValidation,
     pub(crate) credentials_mode: Option<RequestCredentialsMode>,
     pub(crate) redirect_mode: Option<RequestRedirectMode>,
     pub(crate) priority: Option<FetchPriorityHint>,
     pub(crate) cache: Option<String>,
-    pub(crate) referrer: Option<String>,
     pub(crate) referrer_policy: Option<String>,
     pub(crate) integrity: Option<String>,
     pub(crate) keepalive: Option<bool>,
@@ -36,16 +35,51 @@ impl Default for ParsedFetchInit {
             headers: Vec::new(),
             headers_present: false,
             suppress_default_content_type: false,
-            request_mode: None,
+            validation: RequestInitValidation::default(),
             credentials_mode: None,
             redirect_mode: None,
             priority: None,
             cache: None,
-            referrer: None,
             referrer_policy: None,
             integrity: None,
             keepalive: None,
         }
+    }
+}
+
+#[derive(Debug, Clone, Default)]
+pub(crate) struct RequestInitValidation {
+    pub(crate) mode: Option<RequestMode>,
+    window_non_null: bool,
+    referrer: Option<String>,
+}
+
+impl RequestInitValidation {
+    // Run construction checks after dictionary conversion, using the effective
+    // inherited/overridden values and the request's relevant realm. Fetch must
+    // complete these checks before consuming an input body or observing abort.
+    pub(crate) fn validate(
+        &self,
+        scope: &mut v8::PinScope<'_, '_>,
+        mode: &str,
+        cache: &str,
+    ) -> Result<Option<String>, &'static str> {
+        if self.window_non_null {
+            return Err("RequestInit's window member must be null");
+        }
+        let referrer = self
+            .referrer
+            .as_deref()
+            .map(|value| normalize_request_referrer(scope, value))
+            .transpose()
+            .map_err(|_| "Request referrer is not a valid URL")?;
+        if self.mode == Some(RequestMode::Navigate) {
+            return Err("Cannot construct a Request with mode navigate");
+        }
+        if cache == "only-if-cached" && mode != "same-origin" {
+            return Err("Request cache only-if-cached requires mode same-origin");
+        }
+        Ok(referrer)
     }
 }
 
@@ -65,25 +99,40 @@ pub(super) struct RequestRedirectModeWebIdl(pub(super) RequestRedirectMode);
 #[webidl(name = "RequestPriority", parse_with = parse_request_priority_webidl)]
 pub(super) struct RequestPriorityWebIdl(pub(super) FetchPriorityHint);
 
+#[derive(Clone, Copy, webidl::WebIdlEnum)]
+#[webidl(name = "RequestCache", parse_with = parse_request_cache_webidl)]
+pub(super) struct RequestCacheWebIdl(pub(super) &'static str);
+
+#[derive(Clone, Copy, webidl::WebIdlEnum)]
+#[webidl(name = "ReferrerPolicy", parse_with = parse_referrer_policy_webidl)]
+pub(super) struct ReferrerPolicyWebIdl(pub(super) &'static str);
+
+#[derive(Clone, Copy, webidl::WebIdlEnum)]
+#[webidl(name = "RequestDuplex")]
+pub(super) enum RequestDuplexWebIdl {
+    #[webidl(token = "half")]
+    Half,
+}
+
 #[derive(webidl::WebIdlDictionary)]
 #[webidl(prefix = "RequestInit")]
 pub(super) struct RequestInitMembers {
-    #[webidl(legacy_nullish)]
+    #[webidl(converter = "byte_string")]
     pub(super) method: Option<String>,
-    #[webidl(legacy_nullish)]
-    pub(super) cache: Option<String>,
+    #[webidl(converter = "enum")]
+    pub(super) cache: Option<RequestCacheWebIdl>,
     #[webidl(converter = "enum")]
     pub(super) mode: Option<RequestModeWebIdl>,
-    #[webidl(legacy_nullish, converter = "enum")]
+    #[webidl(converter = "enum")]
     pub(super) redirect: Option<RequestRedirectModeWebIdl>,
-    #[webidl(legacy_nullish)]
+    #[webidl(converter = "usv_string")]
     pub(super) referrer: Option<String>,
-    #[webidl(legacy_nullish)]
-    pub(super) referrer_policy: Option<String>,
+    #[webidl(converter = "enum")]
+    pub(super) referrer_policy: Option<ReferrerPolicyWebIdl>,
     #[webidl(legacy_nullish)]
     pub(super) integrity: Option<String>,
-    #[webidl(legacy_nullish)]
-    pub(super) duplex: Option<String>,
+    #[webidl(converter = "enum")]
+    pub(super) duplex: Option<RequestDuplexWebIdl>,
     #[webidl(with = request_init_headers_member)]
     pub(super) headers: Option<Vec<(String, String)>>,
     #[webidl(name = "credentials", converter = "enum")]
@@ -91,6 +140,32 @@ pub(super) struct RequestInitMembers {
     #[webidl(converter = "enum")]
     pub(super) priority: Option<RequestPriorityWebIdl>,
     pub(super) keepalive: Option<bool>,
+    #[webidl(name = "window", with = request_init_window_member)]
+    window_non_null: bool,
+}
+
+impl RequestInitMembers {
+    pub(super) fn validation(&self) -> RequestInitValidation {
+        RequestInitValidation {
+            mode: self.mode.map(|value| value.0),
+            window_non_null: self.window_non_null,
+            referrer: self.referrer.clone(),
+        }
+    }
+}
+
+fn request_init_window_member<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    object: v8::Local<'s, v8::Object>,
+    _key: &str,
+) -> Result<bool, webidl::WebIdlError> {
+    webidl::property_result(
+        scope,
+        object,
+        "window",
+        webidl::Context::member("RequestInit", "window"),
+    )
+    .map(|value| value.is_some_and(|value| !value.is_null_or_undefined()))
 }
 
 fn request_init_headers_member<'s>(
@@ -118,13 +193,14 @@ pub(crate) fn parse_fetch_init<'s>(
 
     let init = webidl::parse_dictionary_object::<RequestInitMembers>(scope, init_object)
         .map_err(|error| error.to_string())?;
+    let validation = init.validation();
     let priority = init.priority.map(|value| value.0);
     let method_present = init_object
         .has(scope, v8str(scope, "method").into())
         .unwrap_or(false);
     let method = init
         .method
-        .map(|s| normalize_request_method(&s).map_err(str::to_owned))
+        .map(|s| normalize_fetch_request_method(&s).map_err(str::to_owned))
         .transpose()?
         .unwrap_or_else(|| "GET".to_owned());
 
@@ -165,13 +241,8 @@ pub(crate) fn parse_fetch_init<'s>(
         }
     }
 
-    let request_mode = init.mode.map(|value| value.0);
     let credentials_mode = init.credentials_mode.map(|value| value.0);
     let redirect_mode = init.redirect.map(|value| value.0);
-    let referrer = init
-        .referrer
-        .map(|referrer| normalize_request_referrer(scope, &referrer));
-
     Ok(ParsedFetchInit {
         method,
         method_present,
@@ -181,13 +252,12 @@ pub(crate) fn parse_fetch_init<'s>(
         headers: extra_headers,
         headers_present,
         suppress_default_content_type,
-        request_mode,
+        validation,
         credentials_mode,
         redirect_mode,
         priority,
-        cache: init.cache,
-        referrer,
-        referrer_policy: init.referrer_policy,
+        cache: init.cache.map(|value| value.0.to_owned()),
+        referrer_policy: init.referrer_policy.map(|value| value.0.to_owned()),
         integrity: init.integrity,
         keepalive: init.keepalive,
     })
@@ -240,6 +310,33 @@ fn parse_request_priority_webidl(value: &str) -> Option<RequestPriorityWebIdl> {
     FetchPriorityHint::from_str(value)
         .ok()
         .map(RequestPriorityWebIdl)
+}
+
+fn parse_request_cache_webidl(value: &str) -> Option<RequestCacheWebIdl> {
+    Some(RequestCacheWebIdl(match value {
+        "default" => "default",
+        "no-store" => "no-store",
+        "reload" => "reload",
+        "no-cache" => "no-cache",
+        "force-cache" => "force-cache",
+        "only-if-cached" => "only-if-cached",
+        _ => return None,
+    }))
+}
+
+fn parse_referrer_policy_webidl(value: &str) -> Option<ReferrerPolicyWebIdl> {
+    Some(ReferrerPolicyWebIdl(match value {
+        "" => "",
+        "no-referrer" => "no-referrer",
+        "no-referrer-when-downgrade" => "no-referrer-when-downgrade",
+        "same-origin" => "same-origin",
+        "origin" => "origin",
+        "strict-origin" => "strict-origin",
+        "origin-when-cross-origin" => "origin-when-cross-origin",
+        "strict-origin-when-cross-origin" => "strict-origin-when-cross-origin",
+        "unsafe-url" => "unsafe-url",
+        _ => return None,
+    }))
 }
 
 #[cfg(test)]

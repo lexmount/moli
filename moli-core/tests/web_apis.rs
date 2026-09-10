@@ -16,6 +16,8 @@ mod abort_signal;
 mod callback_cleanup;
 #[path = "web_apis/event_dispatch.rs"]
 mod event_dispatch;
+#[path = "web_apis/request_init.rs"]
+mod request_init;
 
 fn diagnostic_global<'a>(
     page: &'a moli_core::page::Page,
