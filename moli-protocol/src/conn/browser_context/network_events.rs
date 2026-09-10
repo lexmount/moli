@@ -7,6 +7,14 @@ impl CdpConnection {
         &mut self,
         requests: Vec<moli_core::browser::NetworkRequestSnapshot>,
     ) -> Vec<BackgroundProtocolEvent> {
+        // Browser broadcast loss does not lose the renderer FIFO. Even a late
+        // Document binding replays the journal's frozen publications. Restore
+        // request state only for a snapshot-only observer: a second live path
+        // would bypass source order, Document and command-response fences and
+        // consume the phase dedupe before the original publication arrives.
+        if self.scheduler_hooks.renderer_publication_sender().is_some() {
+            return Vec::new();
+        }
         let mut events = Vec::new();
         for request in requests {
             let Some(context) =
