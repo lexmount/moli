@@ -74,9 +74,10 @@ http.client._MAXHEADERS = 512
 DEFAULT_TESTHARNESS_TIMEOUT_SECONDS = 10.0
 MAX_REQUEST_BODY_BYTES = 16 * 1024 * 1024
 MAX_REQUEST_BODY_LINE_BYTES = 64 * 1024
-XHR_URL_RESOURCE_PATHS = {
+XHR_RESOURCE_PATHS = {
     "/xhr/resources/requri.py",
     "/xhr/resources/redirect.py",
+    "/xhr/resources/inspect-headers.py",
 }
 FETCH_ABORT_RESOURCE_PATHS = {
     "/fetch/api/resources/stash-put.py",
@@ -1211,6 +1212,38 @@ def _xhr_redirect_fixture_response(
     return code, "WEBSRT MARKETING", [("Location", location)], b"TEST", delay
 
 
+def _xhr_inspect_headers_fixture_response(
+    query: str, raw_headers: list[tuple[str, str]]
+) -> tuple[list[tuple[str, str]], bytes]:
+    """Model xhr/resources/inspect-headers.py's raw header filtering."""
+    params = parse_qs(query, keep_blank_values=True, encoding="latin-1")
+    filter_value = params.get("filter_value", [""])[0].encode("latin-1")
+    filter_name = params.get("filter_name", [""])[0].encode("latin-1").lower()
+    parts = []
+    for raw_name, raw_value in raw_headers:
+        name, value = raw_name.encode("latin-1"), raw_value.encode("latin-1")
+        if filter_value:
+            if value == filter_value:
+                parts.append(name + b",")
+        elif name.lower() == filter_name:
+            parts.append(name + b": " + value + b"\n")
+    headers = []
+    if "cors" in params:
+        headers.extend([
+            ("Access-Control-Allow-Origin", "*"),
+            ("Access-Control-Allow-Credentials", "true"),
+            ("Access-Control-Allow-Methods", "GET, POST, PUT, FOO"),
+            ("Access-Control-Allow-Headers", "x-test, x-foo"),
+            (
+                "Access-Control-Expose-Headers",
+                "x-request-method, x-request-content-type, x-request-query, "
+                "x-request-content-length",
+            ),
+        ])
+    headers.append(("content-type", "text/plain"))
+    return headers, b"".join(parts)
+
+
 def _redirect_fixture_response(query: str) -> tuple[int, str] | None:
     """Return the shared redirect response used by static WPT fixture handlers."""
 
@@ -1855,13 +1888,13 @@ def _make_handler(
             if (
                 name.startswith("do_")
                 and unquote(urlsplit(getattr(self, "path", "")).path)
-                in XHR_URL_RESOURCE_PATHS
+                in XHR_RESOURCE_PATHS
             ):
-                return self._serve_xhr_url_method
+                return self._serve_xhr_method
             raise AttributeError(name)
 
-        def _serve_xhr_url_method(self) -> None:
-            self._serve_xhr_url_resource(emit_body=self.command != "HEAD")
+        def _serve_xhr_method(self) -> None:
+            self._serve_xhr_resource(emit_body=self.command != "HEAD")
 
         def do_GET(self) -> None:  # noqa: N802 (BaseHTTPRequestHandler API)
             if self.headers.get("Upgrade", "").lower() == "websocket":
@@ -1873,7 +1906,7 @@ def _make_handler(
             self._serve(emit_body=False)
 
         def do_OPTIONS(self) -> None:  # noqa: N802
-            if self._serve_xhr_url_resource(emit_body=True):
+            if self._serve_xhr_resource(emit_body=True):
                 return
             parsed = urlparse(self.path)
             path = unquote(parsed.path)
@@ -1900,7 +1933,7 @@ def _make_handler(
             self.send_error(404)
 
         def do_POST(self) -> None:  # noqa: N802
-            if self._serve_xhr_url_resource(emit_body=True):
+            if self._serve_xhr_resource(emit_body=True):
                 return
             parsed = urlparse(self.path)
             path = unquote(parsed.path)
@@ -1968,7 +2001,7 @@ def _make_handler(
             self.end_headers()
 
         def _serve_fetch_resource_method(self) -> None:
-            if self._serve_xhr_url_resource(emit_body=True):
+            if self._serve_xhr_resource(emit_body=True):
                 return
             parsed = urlparse(self.path)
             if unquote(parsed.path) in FETCH_ABORT_RESOURCE_PATHS:
@@ -1990,7 +2023,7 @@ def _make_handler(
         do_DELETE = _serve_fetch_resource_method
 
         def do_YO(self) -> None:  # noqa: N802 (WPT custom method)
-            if self._serve_xhr_url_resource(emit_body=True):
+            if self._serve_xhr_resource(emit_body=True):
                 return
             parsed = urlparse(self.path)
             if unquote(parsed.path) in FETCH_ABORT_RESOURCE_PATHS | {
@@ -2118,7 +2151,7 @@ def _make_handler(
                 return
 
         def _serve(self, *, emit_body: bool) -> None:
-            if self._serve_xhr_url_resource(emit_body=emit_body):
+            if self._serve_xhr_resource(emit_body=emit_body):
                 return
             parsed = urlparse(self.path)
             path = unquote(parsed.path)
@@ -2687,10 +2720,10 @@ def _make_handler(
                 emit_body=emit_body, cache_control=None,
             )
 
-        def _serve_xhr_url_resource(self, *, emit_body: bool) -> bool:
+        def _serve_xhr_resource(self, *, emit_body: bool) -> bool:
             parsed = urlsplit(self.path)
             path = unquote(parsed.path)
-            if path not in XHR_URL_RESOURCE_PATHS:
+            if path not in XHR_RESOURCE_PATHS:
                 return False
             try:
                 if path == "/xhr/resources/requri.py":
@@ -2706,6 +2739,11 @@ def _make_handler(
                             authority += ":" + str(self.server.server_address[1])
                         uri = f"http://{authority}{uri}"
                     status, reason, headers, body = 200, None, [], uri.encode("utf-8")
+                elif path == "/xhr/resources/inspect-headers.py":
+                    status, reason = 200, None
+                    headers, body = _xhr_inspect_headers_fixture_response(
+                        parsed.query, list(self.headers.raw_items())
+                    )
                 else:
                     status, reason, headers, body, delay = _xhr_redirect_fixture_response(
                         parsed.path, parsed.query
