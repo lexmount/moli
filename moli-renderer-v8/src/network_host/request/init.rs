@@ -38,6 +38,7 @@ pub(crate) struct ParsedFetchInit {
     pub(crate) method: String,
     pub(crate) method_present: bool,
     pub(crate) body: Option<bytes::Bytes>,
+    pub(crate) body_stream: Option<v8::Global<v8::Object>>,
     pub(crate) body_present: bool,
     pub(crate) body_content_type: Option<String>,
     pub(crate) headers: Vec<(String, String)>,
@@ -59,6 +60,7 @@ impl Default for ParsedFetchInit {
             method: "GET".to_owned(),
             method_present: false,
             body: None,
+            body_stream: None,
             body_present: false,
             body_content_type: None,
             headers: Vec::new(),
@@ -141,7 +143,6 @@ pub(crate) fn parse_fetch_init<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     init: RequestInitMembers<'s>,
 ) -> Result<ParsedFetchInit, webidl::WebIdlError> {
-    let body_present = init.body_is_present();
     let validation = RequestInitValidation::from_members(&init);
     let priority = init.priority.map(|value| value.0);
     let method_present = init.method.is_some();
@@ -151,23 +152,27 @@ pub(crate) fn parse_fetch_init<'s>(
         .transpose()?
         .unwrap_or_else(|| "GET".to_owned());
 
-    if init.keepalive == Some(true)
-        && init
-            .body
-            .and_then(|value| v8::Local::<v8::Object>::try_from(value).ok())
-            .is_some_and(|object| {
-                crate::web_api_interfaces::ReadableStream::is_instance(scope, object)
-            })
-    {
+    let body_value = init.body;
+    let body_stream = body_value
+        .and_then(|value| v8::Local::<v8::Object>::try_from(value).ok())
+        .filter(|object| crate::context_bootstrap::is_readable_stream_object(scope, *object))
+        .map(|stream| v8::Global::new(scope, stream));
+    let prepared_body = body_value
+        .map(|value| body_init(scope, value, webidl::Context::member("RequestInit", "body")))
+        .transpose()?
+        .flatten();
+    // Null and undefined RequestInit bodies inherit an input Request's body.
+    let body_present = prepared_body.is_some();
+    if body_stream.is_some() && init.duplex.is_none() {
+        return Err(webidl::WebIdlError::custom_message(
+            "Request with a ReadableStream body requires duplex",
+        ));
+    }
+    if body_stream.is_some() && init.keepalive == Some(true) {
         return Err(webidl::WebIdlError::custom_message(
             "Request with keepalive cannot have a ReadableStream body",
         ));
     }
-    let prepared_body = init
-        .body
-        .map(|body| body_init(scope, body, webidl::Context::member("RequestInit", "body")))
-        .transpose()?
-        .flatten();
     let body = prepared_body
         .as_ref()
         .map(|body| match &body.source {
@@ -190,6 +195,7 @@ pub(crate) fn parse_fetch_init<'s>(
         method,
         method_present,
         body,
+        body_stream,
         body_present,
         body_content_type,
         headers: extra_headers,
@@ -204,6 +210,23 @@ pub(crate) fn parse_fetch_init<'s>(
         keepalive: init.keepalive,
         signal: init.signal,
     })
+}
+
+pub(crate) fn validate_fetch_body(
+    has_body: bool,
+    has_stream_body: bool,
+    method: &str,
+    mode: RequestMode,
+) -> Result<(), String> {
+    if has_body && matches!(method, "GET" | "HEAD") {
+        return Err("Request with GET/HEAD method cannot have body".to_owned());
+    }
+    if has_stream_body && !matches!(mode, RequestMode::Cors | RequestMode::SameOrigin) {
+        return Err(
+            "Request with a ReadableStream body requires cors or same-origin mode".to_owned(),
+        );
+    }
+    Ok(())
 }
 
 pub(crate) fn request_object_credentials_mode<'s>(

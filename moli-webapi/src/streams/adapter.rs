@@ -54,17 +54,21 @@ mod utils;
 mod writable;
 
 pub(in crate::streams) use callbacks::{
-    QueuingStrategyMembers, StreamWebIdlCallbackCarrier, WebIdlReadableStreamSource,
-    WebIdlTransformStreamTransformer, WebIdlWritableStreamSink, callback_carrier_value,
-    invoke_stored_stream_algorithm, invoke_stored_stream_promise_algorithm,
+    QueuingStrategyMembers, StreamWebIdlCallbackCarrier, WebIdlTransformStreamTransformer,
+    callback_carrier_value, invoke_stored_stream_algorithm, invoke_stored_stream_promise_algorithm,
     invoke_stored_stream_size_algorithm, invoke_stream_webidl_callback,
-    parse_readable_stream_source_object, parse_transform_stream_transformer_object,
-    parse_writable_stream_sink_object, stored_stream_algorithm_is_webidl,
+    parse_transform_stream_transformer_object, stored_stream_algorithm_is_webidl,
 };
-pub use construction::initialize_writable_stream_object;
+pub use callbacks::{
+    WebIdlReadableStreamSource, WebIdlWritableStreamSink, parse_readable_stream_source_object,
+    parse_writable_stream_sink_object,
+};
 pub(super) use construction::{
-    initialize_transform_stream_object, initialize_webidl_readable_stream_object,
-    initialize_webidl_transform_stream_object, initialize_webidl_writable_stream_object,
+    initialize_transform_stream_object, initialize_webidl_transform_stream_object,
+};
+pub use construction::{
+    initialize_webidl_readable_stream_object, initialize_webidl_writable_stream_object,
+    initialize_writable_stream_object, new_readable_stream_object,
 };
 pub use pipe::readable_stream_has_pipe_owner;
 pub(in crate::streams) use pipe::{
@@ -85,7 +89,8 @@ pub(super) use readable::{
     PreparedReadableStreamRead, prepare_read_from_stream_as_promise, readable_stream_closed_promise,
 };
 pub use readable::{
-    cancel_readable_stream, maybe_pull_stream, prepare_readable_stream_read_with_steps,
+    cancel_readable_stream, cancel_readable_stream_for_fetch, maybe_pull_stream,
+    prepare_readable_stream_read_with_steps,
 };
 pub use readable_byte::enqueue_byte_chunk;
 pub(in crate::streams) use readable_byte::{
@@ -107,11 +112,12 @@ pub use readable_state::{begin_readable_stream_body_consumption, readable_stream
 pub use readable_state::{close_stream, enqueue_chunk, error_stream, readable_stream_error};
 pub(in crate::streams) use readable_state::{
     disturb_readable_stream, finish_readable_stream_close_if_requested_and_queue_empty,
-    lock_readable_stream, readable_stream_is_byte_stream, unlock_readable_stream,
+    lock_readable_stream, unlock_readable_stream,
 };
 pub(super) use readable_state::{
     readable_stream_closed, reject_pending_read_requests, remove_pending_closed_promise,
 };
+pub use readable_state::{readable_stream_is_byte_stream, writable_stream_locked};
 pub(in crate::streams::adapter) use transform_finish::transform_stream_readable_cancel_callback;
 pub(super) use utils::{
     done_result, resolved_promise_value, suppress_pending_read_unhandled_rejection,
@@ -126,13 +132,14 @@ pub(in crate::streams::adapter) use writable::transform_stream_readable_pull_cal
 pub(super) use writable::{
     acquire_writable_stream_writer, begin_writable_stream_start, error_transform_stream_with_value,
     release_writable_stream_writer, set_transform_stream_start_result,
-    set_writable_stream_start_result, terminate_transform_stream, writable_stream_abort_internal,
-    writable_stream_abort_promise, writable_stream_close_internal, writable_stream_has_capacity,
-    writable_stream_stored_error, writable_stream_writer_closed_promise_value,
-    writable_stream_writer_ready_promise_value, writable_stream_writer_write_internal,
+    set_writable_stream_start_result, terminate_transform_stream, writable_stream_abort_promise,
+    writable_stream_close_internal, writable_stream_has_capacity, writable_stream_stored_error,
+    writable_stream_writer_closed_promise_value, writable_stream_writer_ready_promise_value,
+    writable_stream_writer_write_internal,
 };
 pub use writable::{
-    error_writable_stream_with_value, writable_stream_snapshot, writable_stream_write_internal,
+    error_writable_stream_with_value, writable_stream_abort_internal, writable_stream_snapshot,
+    writable_stream_write_internal,
 };
 
 pub use construction::{
@@ -143,7 +150,6 @@ pub use construction::{
 };
 pub(in crate::streams) use construction::{
     new_lazy_readable_byte_stream_object, new_readable_byte_stream_object,
-    new_readable_stream_object,
 };
 pub(in crate::streams::adapter) use read_request::{
     error_read_request, fulfill_read_request, new_internal_read_request,
@@ -171,7 +177,7 @@ pub(in crate::streams::adapter) use utils::{
     reject_pending_read_after_timeout, resolve_callable_property_result,
 };
 
-pub(in crate::streams) fn stream_slot_value<'s>(
+pub fn stream_slot_value<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     stream: v8::Local<'s, v8::Object>,
     slot: &'static str,
