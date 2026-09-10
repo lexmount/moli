@@ -6,6 +6,7 @@
 
 mod owner;
 mod request;
+mod session;
 #[cfg(test)]
 mod tests;
 
