@@ -2375,19 +2375,17 @@ fn resolve_stylo_2d_transform(
     } else {
         match box_styles
             .transform
-            .to_transform_3d_matrix(Some(&reference_box))
+            // Keep the computed matrix in double precision until mapping the
+            // final points. Casting coefficients to float here loses geometry
+            // precision even if they are widened again for LayoutTransform2D.
+            .to_transform_3d_matrix_f64(Some(&reference_box))
         {
             Ok((_matrix, true)) => {
                 has_unsupported_3d = true;
                 None
             }
             Ok((matrix, false)) => Some(LayoutTransform2D::new([
-                f64::from(matrix.m11),
-                f64::from(matrix.m12),
-                f64::from(matrix.m21),
-                f64::from(matrix.m22),
-                f64::from(matrix.m41),
-                f64::from(matrix.m42),
+                matrix.m11, matrix.m12, matrix.m21, matrix.m22, matrix.m41, matrix.m42,
             ])),
             Err(_) => {
                 has_unsupported_3d = true;
