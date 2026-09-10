@@ -69,10 +69,22 @@ from .case_set import (
 DEFAULT_TESTHARNESS_TIMEOUT_SECONDS = 10.0
 MAX_REQUEST_BODY_BYTES = 16 * 1024 * 1024
 MAX_REQUEST_BODY_LINE_BYTES = 64 * 1024
+XHR_DOCUMENT_FIXTURES = {
+    "/xhr/resources/win-1252-xml.py": ("application/xml;charset=windows-1252", b"<\xff/>"),
+    # The upstream handler returns a Unicode string, encoded by wptserve as UTF-8.
+    "/xhr/resources/win-1252-html.py": ("text/html;charset=windows-1252", b"\xc3\xbf"),
+    "/xhr/resources/invalid-utf8-html.py": ("text/html;charset=utf-8", b"\xff"),
+    "/xhr/resources/shift-jis-html.py": ("text/html;charset=shift-jis", b"\x83e\x83X\x83g"),
+    "/xhr/resources/img-utf8-html.py": ("text/html;charset=utf-8", b"<img>foo"),
+    "/xhr/resources/empty-div-utf8-html.py": ("text/html;charset=utf-8", b"<!DOCTYPE html><div></div>"),
+}
 XHR_RESOURCE_PATHS = {
     "/xhr/resources/requri.py",
     "/xhr/resources/redirect.py",
     "/xhr/resources/inspect-headers.py",
+    "/xhr/resources/content.py",
+    "/xhr/resources/echo-content-type.py",
+    *XHR_DOCUMENT_FIXTURES,
 }
 FETCH_ABORT_RESOURCE_PATHS = {
     "/fetch/api/resources/stash-put.py",
@@ -2688,6 +2700,7 @@ def _make_handler(
             path = unquote(parsed.path)
             if path not in XHR_RESOURCE_PATHS:
                 return False
+            upload_consumed = False
             try:
                 if path == "/xhr/resources/requri.py":
                     params = parse_qs(parsed.query, keep_blank_values=True)
@@ -2707,6 +2720,34 @@ def _make_handler(
                     headers, body = _xhr_inspect_headers_fixture_response(
                         parsed.query, list(self.headers.raw_items())
                     )
+                elif path == "/xhr/resources/content.py":
+                    params = parse_qs(parsed.query, keep_blank_values=True, encoding="latin-1")
+                    if "content" in params:
+                        body = params["content"][0].encode("latin-1")
+                    else:
+                        body = self._read_content_length_request_body()
+                        if body is None:
+                            return True
+                        upload_consumed = True
+                    content_type = "text/plain"
+                    if "response_charset_label" in params:
+                        content_type += ";charset=" + params["response_charset_label"][0]
+                    status, reason = 200, None
+                    headers = [
+                        ("Content-Type", content_type),
+                        ("X-Request-Method", self.command),
+                        ("X-Request-Query", parsed.query or "NO"),
+                        ("X-Request-Content-Length", self.headers.get("Content-Length", "NO")),
+                        ("X-Request-Content-Type", self.headers.get("Content-Type", "NO")),
+                    ]
+                elif path == "/xhr/resources/echo-content-type.py":
+                    status, reason = 200, None
+                    headers = [("Content-Type", "text/plain")]
+                    body = self.headers.get("Content-Type", "").encode("latin-1")
+                elif path in XHR_DOCUMENT_FIXTURES:
+                    content_type, body = XHR_DOCUMENT_FIXTURES[path]
+                    status, reason = 200, None
+                    headers = [("Content-Type", content_type)]
                 else:
                     status, reason, headers, body, delay = _xhr_redirect_fixture_response(
                         parsed.path, parsed.query
@@ -2716,9 +2757,9 @@ def _make_handler(
             except (ValueError, KeyError, OverflowError):
                 self.send_error(500)
                 return True
-            # These handlers reply without reading uploads. Close connections
-            # with unread bodies so a redirect can arrive before upload finishes.
-            if (
+            # Close connections with unread uploads so early responses and
+            # redirects do not wait for the request body to finish.
+            if path == "/xhr/resources/echo-content-type.py" or not upload_consumed and (
                 self.headers.get("Transfer-Encoding") is not None
                 or self.headers.get("Content-Length", "0").strip() not in {"", "0"}
             ):
