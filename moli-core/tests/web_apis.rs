@@ -13,9 +13,6 @@ mod font_queries;
 #[path = "web_apis/indexed_db_transaction.rs"]
 mod indexed_db_transaction;
 
-#[path = "web_apis/pipe_disturbed.rs"]
-mod pipe_disturbed;
-
 use moli_test_support as support;
 
 use anyhow::Result;
@@ -40,6 +37,8 @@ mod event_dispatch;
 mod fetch_body_native;
 #[path = "web_apis/fetch_body_realm.rs"]
 mod fetch_body_realm;
+#[path = "web_apis/pipe_disturbed.rs"]
+mod pipe_disturbed;
 #[path = "web_apis/request_init.rs"]
 mod request_init;
 #[path = "web_apis/request_stream.rs"]
