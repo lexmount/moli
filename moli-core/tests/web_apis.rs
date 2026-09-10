@@ -38,6 +38,8 @@ mod event_dispatch;
 mod fetch_body_native;
 #[path = "web_apis/fetch_body_realm.rs"]
 mod fetch_body_realm;
+#[path = "web_apis/request_init.rs"]
+mod request_init;
 #[path = "web_apis/request_stream.rs"]
 mod request_stream;
 

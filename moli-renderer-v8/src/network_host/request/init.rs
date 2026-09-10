@@ -1,4 +1,4 @@
-use super::input::{RequestInfo, normalize_request_method, normalize_request_referrer};
+use super::input::{RequestInfo, normalize_fetch_request_method, normalize_request_referrer};
 use super::*;
 use crate::webidl;
 use moli_fetch::{FetchPriorityHint, RequestCredentialsMode, RequestMode, RequestRedirectMode};
@@ -42,12 +42,11 @@ pub(crate) struct ParsedFetchInit {
     pub(crate) body_content_type: Option<String>,
     pub(crate) headers: Vec<(String, String)>,
     pub(crate) headers_present: bool,
-    pub(crate) request_mode: Option<RequestMode>,
+    pub(crate) validation: RequestInitValidation,
     pub(crate) credentials_mode: Option<RequestCredentialsMode>,
     pub(crate) redirect_mode: Option<RequestRedirectMode>,
     pub(crate) priority: Option<FetchPriorityHint>,
     pub(crate) cache: Option<String>,
-    pub(crate) referrer: Option<String>,
     pub(crate) referrer_policy: Option<String>,
     pub(crate) integrity: Option<String>,
     pub(crate) keepalive: Option<bool>,
@@ -64,17 +63,68 @@ impl Default for ParsedFetchInit {
             body_content_type: None,
             headers: Vec::new(),
             headers_present: false,
-            request_mode: None,
+            validation: RequestInitValidation::default(),
             credentials_mode: None,
             redirect_mode: None,
             priority: None,
             cache: None,
-            referrer: None,
             referrer_policy: None,
             integrity: None,
             keepalive: None,
             signal: None,
         }
+    }
+}
+
+#[derive(Debug, Clone, Default)]
+pub(crate) struct RequestInitValidation {
+    pub(crate) mode: Option<RequestMode>,
+    window_non_null: bool,
+    referrer: Option<String>,
+}
+
+impl RequestInitValidation {
+    pub(super) fn from_members(init: &RequestInitMembers<'_>) -> Self {
+        Self {
+            mode: init.mode.map(|value| value.0),
+            window_non_null: init.window_non_null,
+            referrer: init.referrer.clone(),
+        }
+    }
+
+    // Run construction checks after dictionary conversion, using the effective
+    // inherited/overridden values and the request's relevant realm. Fetch must
+    // complete these checks before consuming an input body or observing abort.
+    pub(crate) fn validate(
+        &self,
+        scope: &mut v8::PinScope<'_, '_>,
+        mode: &str,
+        cache: &str,
+    ) -> Result<Option<String>, webidl::WebIdlError> {
+        if self.window_non_null {
+            return Err(webidl::WebIdlError::custom_message(
+                "RequestInit's window member must be null",
+            ));
+        }
+        let referrer = self
+            .referrer
+            .as_deref()
+            .map(|value| normalize_request_referrer(scope, value))
+            .transpose()
+            .map_err(|_| {
+                webidl::WebIdlError::custom_message("Request referrer is not a valid URL")
+            })?;
+        if self.mode == Some(RequestMode::Navigate) {
+            return Err(webidl::WebIdlError::custom_message(
+                "Cannot construct a Request with mode navigate",
+            ));
+        }
+        if cache == "only-if-cached" && mode != "same-origin" {
+            return Err(webidl::WebIdlError::custom_message(
+                "Request cache only-if-cached requires mode same-origin",
+            ));
+        }
+        Ok(referrer)
     }
 }
 
@@ -92,11 +142,12 @@ pub(crate) fn parse_fetch_init<'s>(
     init: RequestInitMembers<'s>,
 ) -> Result<ParsedFetchInit, webidl::WebIdlError> {
     let body_present = init.body_is_present();
+    let validation = RequestInitValidation::from_members(&init);
     let priority = init.priority.map(|value| value.0);
     let method_present = init.method.is_some();
     let method = init
         .method
-        .map(|s| normalize_request_method(&s))
+        .map(|s| normalize_fetch_request_method(&s))
         .transpose()?
         .unwrap_or_else(|| "GET".to_owned());
 
@@ -132,12 +183,8 @@ pub(crate) fn parse_fetch_init<'s>(
     let mut extra_headers = init.headers.unwrap_or_default();
     append_default_body_content_type(&mut extra_headers, body_content_type.as_deref());
 
-    let request_mode = init.mode.map(|value| value.0);
     let credentials_mode = init.credentials_mode.map(|value| value.0);
     let redirect_mode = init.redirect.map(|value| value.0);
-    let referrer = init
-        .referrer
-        .map(|referrer| normalize_request_referrer(scope, &referrer));
 
     Ok(ParsedFetchInit {
         method,
@@ -147,13 +194,12 @@ pub(crate) fn parse_fetch_init<'s>(
         body_content_type,
         headers: extra_headers,
         headers_present,
-        request_mode,
+        validation,
         credentials_mode,
         redirect_mode,
         priority,
-        cache: init.cache,
-        referrer,
-        referrer_policy: init.referrer_policy,
+        cache: init.cache.map(|value| value.0.to_owned()),
+        referrer_policy: init.referrer_policy.map(|value| value.0.to_owned()),
         integrity: init.integrity,
         keepalive: init.keepalive,
         signal: init.signal,

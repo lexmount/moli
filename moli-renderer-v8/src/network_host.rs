@@ -133,7 +133,8 @@ pub(crate) use self::request::build_cached_request_object;
 pub(in crate::network_host) use self::request::normalize_request_method;
 pub(crate) use self::request::request_constructor_callback;
 pub(crate) use self::request::{
-    FetchArgs, parse_fetch_init, parse_request_redirect_mode_label, request_object_credentials_mode,
+    FetchArgs, RequestInitValidation, parse_fetch_init, parse_request_redirect_mode_label,
+    request_object_credentials_mode,
 };
 pub(crate) use self::request::{FetchArgumentError, convert_fetch_arguments};
 pub(crate) use self::request::{

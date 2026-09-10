@@ -1,11 +1,11 @@
-use super::super::init::RequestInitMembers;
+use super::super::init::{RequestInitMembers, RequestInitValidation};
 use super::super::input::{
-    normalize_request_method, normalize_request_referrer, request_body_already_used_error,
+    normalize_fetch_request_method, request_body_already_used_error,
     request_headers_guard_for_mode, request_method_allows_body,
 };
 use super::super::*;
 use crate::webidl;
-use moli_fetch::{RequestMode, RequestRedirectMode};
+use moli_fetch::RequestRedirectMode;
 
 pub(super) struct RequestConstructionState {
     pub(super) url_resolved: String,
@@ -146,9 +146,16 @@ pub(super) fn apply_request_init_overrides<'s>(
         state.referrer = "about:client".to_owned();
         state.referrer_policy.clear();
     }
+    let validation = RequestInitValidation::from_members(&parsed);
+    if let Some(mode) = validation.mode {
+        state.mode = mode.as_ref().to_owned();
+    }
+    if let Some(cache) = parsed.cache {
+        state.cache = cache.0.to_owned();
+    }
     let method_overridden = parsed.method.is_some();
     if let Some(method) = parsed.method {
-        state.method = normalize_request_method(&method)?;
+        state.method = normalize_fetch_request_method(&method)?;
     }
     let init_body_value = parsed.body;
     let init_body_stream = init_body_value
@@ -194,13 +201,8 @@ pub(super) fn apply_request_init_overrides<'s>(
     if let Some(signal) = parsed.signal {
         state.signal = signal;
     }
-    if let Some(mode) = parsed.mode.map(|value| value.0) {
-        if mode == RequestMode::Navigate {
-            return Err(webidl::WebIdlError::custom_message(
-                "Cannot construct a Request with a RequestInit whose mode member is \"navigate\".",
-            ));
-        }
-        state.mode = mode.as_ref().to_owned();
+    if let Some(referrer) = validation.validate(scope, &state.mode, &state.cache)? {
+        state.referrer = referrer;
     }
     if state.mode == "no-cors" && !moli_fetch::is_cors_safelisted_method(&state.method) {
         return Err(webidl::WebIdlError::custom_message(
@@ -210,17 +212,11 @@ pub(super) fn apply_request_init_overrides<'s>(
     if let Some(credentials_mode) = parsed.credentials_mode.map(|value| value.0) {
         state.credentials = request_credentials_mode_label(credentials_mode).to_owned();
     }
-    if let Some(cache) = parsed.cache {
-        state.cache = cache;
-    }
     if let Some(redirect) = parsed.redirect {
         state.redirect_mode = redirect.0;
     }
-    if let Some(referrer) = parsed.referrer {
-        state.referrer = normalize_request_referrer(scope, &referrer);
-    }
     if let Some(referrer_policy) = parsed.referrer_policy {
-        state.referrer_policy = referrer_policy;
+        state.referrer_policy = referrer_policy.0.to_owned();
     }
     if let Some(integrity) = parsed.integrity {
         state.integrity = integrity;
@@ -233,8 +229,8 @@ pub(super) fn apply_request_init_overrides<'s>(
             "Request with a ReadableStream body requires duplex",
         ));
     }
-    if let Some(duplex) = parsed.duplex {
-        state.duplex = duplex;
+    if parsed.duplex.is_some() {
+        state.duplex = "half".to_owned();
     }
     if let Some(keepalive) = parsed.keepalive {
         state.keepalive = keepalive;
