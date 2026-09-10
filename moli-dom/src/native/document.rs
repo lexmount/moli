@@ -68,6 +68,8 @@ struct DocumentMetadata {
     content_type: Box<str>,
     character_set: Box<str>,
     ready_state: DocumentReadyState,
+    // Retained with the Document when its Window is replaced during navigation.
+    visibility_hidden: bool,
     quirks_mode: QuirksMode,
     kind: DocumentKind,
     interface: DocumentInterface,
@@ -119,6 +121,7 @@ impl Document {
                 content_type: content_type.into(),
                 character_set: "UTF-8".into(),
                 ready_state: DocumentReadyState::Complete,
+                visibility_hidden: false,
                 quirks_mode: QuirksMode::NoQuirks,
                 kind,
                 interface,
@@ -195,6 +198,10 @@ impl Document {
 
     pub fn meta_referrer_policy(&self) -> Option<&str> {
         self.metadata.meta_referrer_policy
+    }
+
+    pub fn visibility_hidden(&self) -> bool {
+        self.metadata.visibility_hidden
     }
 
     pub fn default_language(&self) -> Option<&str> {
@@ -302,6 +309,10 @@ impl Document {
 
     pub fn set_ready_state(&mut self, ready_state: DocumentReadyState) {
         self.metadata.ready_state = ready_state;
+    }
+
+    pub fn set_visibility_hidden(&mut self, hidden: bool) {
+        self.metadata.visibility_hidden = hidden;
     }
 
     pub fn set_default_language(&mut self, language: Option<String>) {
