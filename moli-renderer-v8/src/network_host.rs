@@ -42,10 +42,9 @@ pub(crate) use self::async_fetch::{
 pub(crate) use self::beacon::{navigator_send_beacon_callback, send_link_audit_ping};
 pub(super) use self::bindings::install_window_network_bindings;
 pub(in crate::network_host) use self::body::{
-    PreparedBodyInit, body_init, body_is_unusable, body_is_used, body_stream_object,
-    readable_body_stream_unusable,
+    PreparedBodyInit, body_init, body_is_unusable, body_is_used, readable_body_stream_unusable,
 };
-pub(crate) use self::body::{append_default_body_content_type, has_header};
+pub(crate) use self::body::{append_default_body_content_type, body_stream_object, has_header};
 #[cfg(test)]
 pub(crate) use self::body_source::pending_network_body_source_buffered_len_for_test;
 pub(in crate::network_host) use self::body_source::{
@@ -131,7 +130,7 @@ pub(in crate::network_host) use self::preflight_events::CorsPreflightNetworkObse
 pub(in crate::network_host) use self::request::normalize_request_method;
 pub(crate) use self::request::request_constructor_callback;
 pub(crate) use self::request::{
-    FetchArgs, RequestInitValidation, parse_fetch_init, parse_request_redirect_mode_label, request_object_credentials_mode,
+    FetchArgs, RequestInitValidation, validate_fetch_body, parse_fetch_init, parse_request_redirect_mode_label, request_object_credentials_mode,
 };
 pub(crate) use self::request::{FetchArgumentError, convert_fetch_arguments};
 pub(crate) use self::request::{

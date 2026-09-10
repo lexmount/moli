@@ -387,6 +387,26 @@ fn apply_readable_stream_pull_state<'s>(
     );
 }
 
+/// Fetch ignores the cancellation promise and keeps its own abort reason.
+/// This must run the source algorithm before returning to the fetch caller.
+pub(crate) fn cancel_readable_stream_for_fetch<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    stream: v8::Local<'s, v8::Object>,
+    reason: v8::Local<'s, v8::Value>,
+) {
+    if !readable_stream_snapshot(scope, stream)
+        .state()
+        .is_readable()
+    {
+        return;
+    }
+    if let Some(result) = cancel_readable_stream(scope, stream, reason)
+        && let Ok(promise) = v8::Local::<v8::Promise>::try_from(result)
+    {
+        promise.mark_as_handled();
+    }
+}
+
 pub(crate) fn cancel_readable_stream<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     stream: v8::Local<'s, v8::Object>,
