@@ -1040,7 +1040,6 @@ pub(crate) struct JsContextHost {
     javascript_dialog_handler_enabled: bool,
     pending_network_output: Vec<ScriptNetworkOutputItem>,
     focus_change_epoch: u64,
-    next_subresource_network_request_handle: u64,
     subresource_activity_epoch: u64,
     subresource_last_activity_at: std::time::Instant,
     fetch_subresource_interception_enabled: bool,

@@ -17,6 +17,8 @@ mod handle;
 mod inspector_task_runner;
 mod module_mime;
 mod module_runtime;
+mod parent_output;
+pub(crate) use parent_output::WorkerParentSender;
 mod script_loading;
 mod script_mime;
 mod thread;
@@ -30,18 +32,19 @@ pub(crate) use global_scope::{
     close_worker_websocket, dispatch_worker_trusted_types_sink_violation_event,
     ensure_worker_opfs_directory_iterator_registry, ensure_worker_opfs_handle_registry,
     forget_nested_worker_context, forget_worker_broadcast_channel_wrapper,
-    forget_worker_message_port_wrapper, get_worker_state,
-    register_worker_broadcast_channel_wrapper, register_worker_message_port_event_listener,
-    register_worker_message_port_wrapper, register_worker_opfs_iterator_task,
-    register_worker_opfs_move_task, register_worker_opfs_task, register_worker_webcrypto_task,
-    register_worker_websocket, remove_worker_message_port_event_listener,
-    remove_worker_message_port_event_listener_by_id, reserve_nested_worker_context,
-    send_worker_websocket_binary, send_worker_websocket_text, service_worker_runtime_identity,
-    try_worker_xhr_abort_callback, try_worker_xhr_reschedule_timeout_after_timeout_change,
-    try_worker_xhr_send_callback, worker_allows_trusted_type_policy_name,
-    worker_allows_trusted_types_eval, worker_broadcast_channel_registry,
-    worker_broadcast_channel_storage_key, worker_broadcast_channel_wake_sender,
-    worker_broadcast_channel_wrapper, worker_current_script_url, worker_global_is_closed,
+    forget_worker_message_port_wrapper, get_worker_state, install_nested_worker_handle,
+    post_nested_worker_message, register_worker_broadcast_channel_wrapper,
+    register_worker_message_port_event_listener, register_worker_message_port_wrapper,
+    register_worker_opfs_iterator_task, register_worker_opfs_move_task, register_worker_opfs_task,
+    register_worker_webcrypto_task, register_worker_websocket,
+    remove_worker_message_port_event_listener, remove_worker_message_port_event_listener_by_id,
+    reserve_nested_worker_context, send_worker_websocket_binary, send_worker_websocket_text,
+    service_worker_runtime_identity, try_worker_xhr_abort_callback,
+    try_worker_xhr_reschedule_timeout_after_timeout_change, try_worker_xhr_send_callback,
+    worker_allows_trusted_type_policy_name, worker_allows_trusted_types_eval,
+    worker_broadcast_channel_registry, worker_broadcast_channel_storage_key,
+    worker_broadcast_channel_wake_sender, worker_broadcast_channel_wrapper,
+    worker_current_script_url, worker_global_is_closed,
     worker_message_port_event_listener_snapshots, worker_message_port_registry,
     worker_message_port_wake_sender, worker_message_port_wrapper,
     worker_notification_permission_state, worker_opfs_directory_iterator_registry,
@@ -70,6 +73,6 @@ pub(crate) use script_mime::{
 };
 pub(crate) use thread::{
     WorkerGlobalKind, WorkerScriptKind, WorkerScriptSource, WorkerSpawnOptions,
-    dispatch_current_worker_callback_exception, spawn_worker_with_options,
+    dispatch_current_worker_callback_exception, spawn_dedicated_worker, spawn_worker_with_options,
 };
 pub(crate) use thread_owner::{WorkerThreadOwner, WorkerThreadRegistrar};

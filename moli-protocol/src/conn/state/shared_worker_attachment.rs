@@ -3,7 +3,6 @@ use std::sync::{
     atomic::{AtomicBool, Ordering},
 };
 
-use moli_core::RendererOwnerLocalHostId;
 use moli_shared_worker::SharedWorkerInstanceId;
 
 /// Stable lifetime of one protocol session attached to one renderer-owned
@@ -34,7 +33,6 @@ struct TargetSharedWorkerProtocolAttachmentScopeInner {
 #[derive(Clone, Debug)]
 pub(crate) struct TargetSharedWorkerProtocolAttachmentIdentity {
     browser_context_id: String,
-    renderer_owner_local_host_id: RendererOwnerLocalHostId,
     renderer_instance_id: SharedWorkerInstanceId,
     owner_target_id: Option<String>,
     target_id: String,
@@ -66,7 +64,6 @@ impl TargetSharedWorkerProtocolAttachmentScope {
     pub(crate) fn bind(
         &self,
         browser_context_id: impl Into<String>,
-        renderer_owner_local_host_id: RendererOwnerLocalHostId,
         renderer_instance_id: SharedWorkerInstanceId,
         owner_target_id: Option<String>,
         target_id: impl Into<String>,
@@ -74,7 +71,6 @@ impl TargetSharedWorkerProtocolAttachmentScope {
     ) -> TargetSharedWorkerProtocolAttachmentIdentity {
         TargetSharedWorkerProtocolAttachmentIdentity {
             browser_context_id: browser_context_id.into(),
-            renderer_owner_local_host_id,
             renderer_instance_id,
             owner_target_id,
             target_id: target_id.into(),
@@ -118,10 +114,6 @@ impl TargetSharedWorkerProtocolAttachmentIdentity {
         &self.browser_context_id
     }
 
-    pub(crate) fn renderer_owner_local_host_id(&self) -> RendererOwnerLocalHostId {
-        self.renderer_owner_local_host_id
-    }
-
     pub(crate) fn renderer_instance_id(&self) -> SharedWorkerInstanceId {
         self.renderer_instance_id
     }
@@ -148,7 +140,6 @@ impl TargetSharedWorkerProtocolAttachmentIdentity {
 impl PartialEq for TargetSharedWorkerProtocolAttachmentIdentity {
     fn eq(&self, other: &Self) -> bool {
         self.browser_context_id == other.browser_context_id
-            && self.renderer_owner_local_host_id == other.renderer_owner_local_host_id
             && self.renderer_instance_id == other.renderer_instance_id
             && self.owner_target_id == other.owner_target_id
             && self.target_id == other.target_id
@@ -183,7 +174,6 @@ impl Eq for TargetSharedWorkerProtocolAttachmentRetirement {}
 
 #[cfg(test)]
 mod tests {
-    use moli_core::RendererOwnerLocalHostId;
     use moli_shared_worker::SharedWorkerInstanceId;
 
     use super::TargetSharedWorkerProtocolAttachmentScope;
@@ -193,7 +183,6 @@ mod tests {
     ) -> super::TargetSharedWorkerProtocolAttachmentIdentity {
         scope.bind(
             "BID-1",
-            RendererOwnerLocalHostId::new_for_testing(7),
             SharedWorkerInstanceId::from_u64(11),
             Some("TID-owner".to_owned()),
             "TID-worker",

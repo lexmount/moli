@@ -500,11 +500,11 @@ impl CdpConnection {
         &self,
         owner: &crate::conn::CommandOwnerScope,
     ) -> Vec<Option<String>> {
-        let Ok(runtime_slot) = self.runtime_session_owner_slot_for_owner(owner) else {
+        let Some(agent) = self.network_agent_for_owner(owner) else {
             return vec![owner.session_id().map(str::to_owned)];
         };
         let primary_session_id = self.runtime_session_owner_primary_session_id_for_owner(owner);
-        runtime_slot.network_event_session_ids(owner.session_id(), primary_session_id.as_deref())
+        agent.event_session_ids(owner.session_id(), primary_session_id.as_deref())
     }
 
     pub(crate) fn enable_network_listener_for_session_owner(

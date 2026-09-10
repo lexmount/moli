@@ -42,6 +42,10 @@ pub enum RendererOutputResidenceIdentity {
         owner_local_host_id: RendererOwnerLocalHostId,
         page_id: PageId,
     },
+    DedicatedWorker {
+        browser_context_runtime_id: RendererBrowserContextRuntimeId,
+        instance_id: u64,
+    },
     SharedWorker {
         browser_context_runtime_id: RendererBrowserContextRuntimeId,
         instance_id: u64,
@@ -82,6 +86,20 @@ impl RendererOutputStreamIdentity {
     ) -> Self {
         Self {
             residence: RendererOutputResidenceIdentity::SharedWorker {
+                browser_context_runtime_id,
+                instance_id,
+            },
+            renderer_agent: RendererDevToolsAgentToken::allocate(),
+            epoch: RendererOutputStreamEpoch::allocate(),
+        }
+    }
+
+    pub(crate) fn new_dedicated_worker(
+        browser_context_runtime_id: RendererBrowserContextRuntimeId,
+        instance_id: u64,
+    ) -> Self {
+        Self {
+            residence: RendererOutputResidenceIdentity::DedicatedWorker {
                 browser_context_runtime_id,
                 instance_id,
             },

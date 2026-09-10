@@ -583,8 +583,8 @@ pub use state::{
 };
 pub(crate) use state::{
     BrowserContextPageStorageHandles, BrowserContextStoragePartitionHandles,
-    CommittedRendererDocumentBinding, ContextNetworkPolicy, DedicatedWorkerTargetState,
-    DevToolsBrowserIdentityOverride, DevToolsConsoleOutputSessionState,
+    CommittedRendererDocumentBinding, ContextNetworkPolicy, DedicatedWorkerOwner,
+    DedicatedWorkerTargetState, DevToolsBrowserIdentityOverride, DevToolsConsoleOutputSessionState,
     DevToolsLogViolationThreshold, DocumentId, DocumentProjectionOutputRelease,
     DuplicatePendingRendererCommand, EmulatedNetworkConditions, EmulatedViewportSurface,
     EmulationPolicyChange, InitialDocumentCreator, InspectorCommandDispatch,

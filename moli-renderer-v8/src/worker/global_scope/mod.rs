@@ -1487,7 +1487,7 @@ pub(crate) struct WorkerGlobalState {
     /// teardown clears this registry before `OwnedIsolate` is destroyed.
     pub(crate) v8_finalizers: crate::v8_finalizer::V8FinalizerRegistry,
     /// Channel to send messages back to the parent.
-    pub(super) parent_tx: mpsc::UnboundedSender<WorkerToParentMessage>,
+    pub(super) parent_tx: crate::worker::WorkerParentSender,
     /// Internal wake channel used by worker-owned async runtime surfaces.
     pub(crate) worker_wake_tx: mpsc::UnboundedSender<super::handle::WorkerMessage>,
     /// Shared lifecycle bit published by `Worker.terminate()` before V8 is
@@ -1589,7 +1589,7 @@ pub(crate) struct WorkerGlobalState {
     pub(super) next_websocket_id: u64,
     /// Worker-local dedicated workers created through `new Worker(...)`.
     pub(super) next_nested_worker_id: u64,
-    pub(super) nested_worker_wrappers: HashMap<DedicatedWorkerId, v8::Global<v8::Object>>,
+    pub(super) nested_worker_wrappers: HashMap<DedicatedWorkerId, NestedWorkerConnection>,
     /// Heavyweight WebCrypto completions routed back onto the worker event loop.
     pub(super) webcrypto_completion_tx: mpsc::UnboundedSender<WorkerWebCryptoCompletion>,
     /// In-flight worker WebCrypto blocking tasks keyed by task id.
@@ -2803,6 +2803,7 @@ pub(super) fn drain_service_worker_push_unsubscribe_result(
 }
 
 pub(crate) struct NestedWorkerContext {
+    pub(crate) owner: crate::runtime::RendererWorkerIdentity,
     pub(crate) worker_id: DedicatedWorkerId,
     pub(crate) base_url: Url,
     pub(crate) loader: crate::network::context::WorkerResourceLoader,
@@ -2822,6 +2823,56 @@ pub(crate) struct NestedWorkerContext {
     pub(crate) wake_tx: mpsc::UnboundedSender<super::handle::WorkerMessage>,
 }
 
+pub(super) struct NestedWorkerConnection {
+    wrapper: v8::Global<v8::Object>,
+    handle: Option<super::WorkerHandle>,
+}
+
+impl Drop for NestedWorkerConnection {
+    fn drop(&mut self) {
+        if let Some(handle) = &self.handle {
+            handle.terminate();
+        }
+    }
+}
+
+pub(crate) fn install_nested_worker_handle(
+    scope: &mut v8::PinScope<'_, '_>,
+    worker_id: DedicatedWorkerId,
+    handle: super::WorkerHandle,
+) -> bool {
+    let Some(state) = get_worker_state(scope) else {
+        handle.terminate();
+        return false;
+    };
+    let mut state = state.borrow_mut();
+    let Some(worker) = state.nested_worker_wrappers.get_mut(&worker_id) else {
+        handle.terminate();
+        return false;
+    };
+    assert!(
+        worker.handle.replace(handle).is_none(),
+        "one nested wrapper binds one execution"
+    );
+    true
+}
+
+pub(crate) fn post_nested_worker_message(
+    scope: &mut v8::PinScope<'_, '_>,
+    worker_id: DedicatedWorkerId,
+    payload: crate::structured_clone::V8StructuredClonePayload,
+) {
+    if let Some(state) = get_worker_state(scope)
+        && let Some(handle) = state
+            .borrow()
+            .nested_worker_wrappers
+            .get(&worker_id)
+            .and_then(|worker| worker.handle.as_ref())
+    {
+        handle.post_message(payload);
+    }
+}
+
 pub(crate) fn reserve_nested_worker_context(
     scope: &mut v8::PinScope<'_, '_>,
     worker: v8::Local<'_, v8::Object>,
@@ -2834,10 +2885,15 @@ pub(crate) fn reserve_nested_worker_context(
         .next_nested_worker_id
         .checked_add(1)
         .expect("nested worker id space exhausted");
-    state
-        .nested_worker_wrappers
-        .insert(worker_id, v8::Global::new(scope, worker));
+    state.nested_worker_wrappers.insert(
+        worker_id,
+        NestedWorkerConnection {
+            wrapper: v8::Global::new(scope, worker),
+            handle: None,
+        },
+    );
     Some(NestedWorkerContext {
+        owner: state.global_kind.network().identity().clone(),
         worker_id,
         base_url,
         loader: state.loader.clone(),
@@ -2913,7 +2969,7 @@ pub(super) fn dispatch_nested_worker_event(
         .borrow()
         .nested_worker_wrappers
         .get(&worker_id)
-        .map(|worker| v8::Local::new(scope, worker))
+        .map(|worker| v8::Local::new(scope, &worker.wrapper))
     else {
         return NestedWorkerDispatchResult {
             dispatched: false,
@@ -2996,7 +3052,11 @@ pub(super) fn install_worker_global_scope<'s>(
     install_worker_performance(scope, global)?;
     install_worker_global_scope_constructors(scope, global, &global_kind)?;
     let realm_kind = match &global_kind {
-        super::thread::WorkerGlobalKind::Dedicated { .. } => {
+        super::thread::WorkerGlobalKind::Dedicated(_) => {
+            crate::context_bootstrap::exposed_interfaces::RealmKind::DedicatedWorker
+        }
+        #[cfg(test)]
+        super::thread::WorkerGlobalKind::UnobservedDedicated { .. } => {
             crate::context_bootstrap::exposed_interfaces::RealmKind::DedicatedWorker
         }
         super::thread::WorkerGlobalKind::Shared { .. } => {
@@ -3069,13 +3129,16 @@ pub(super) fn install_worker_global_scope<'s>(
         )?;
     }
 
+    if let Some(name) = global_kind.dedicated_name() {
+        set_worker_global_name_prop(scope, global, name)?;
+        DedicatedWorkerGlobalPostMessageDeclaration::default()
+            .initialize(scope, global)
+            .map_err(|error| anyhow!("failed to initialize worker postMessage: {error}"))?;
+    }
     match &global_kind {
-        super::thread::WorkerGlobalKind::Dedicated { name } => {
-            set_worker_global_name_prop(scope, global, name)?;
-            DedicatedWorkerGlobalPostMessageDeclaration::default()
-                .initialize(scope, global)
-                .map_err(|error| anyhow!("failed to initialize worker postMessage: {error}"))?;
-        }
+        super::thread::WorkerGlobalKind::Dedicated(_) => {}
+        #[cfg(test)]
+        super::thread::WorkerGlobalKind::UnobservedDedicated { .. } => {}
         super::thread::WorkerGlobalKind::Shared { name, .. } => {
             set_worker_global_name_prop(scope, global, name)?;
         }
@@ -4545,7 +4608,7 @@ pub(crate) fn service_worker_runtime_identity<'s>(
 ) -> Option<(
     ServiceWorkerRegistrationId,
     ServiceWorkerVersionId,
-    mpsc::UnboundedSender<WorkerToParentMessage>,
+    crate::worker::WorkerParentSender,
 )> {
     let state = get_worker_state(scope)?;
     let state = state.borrow();
@@ -4754,7 +4817,7 @@ fn service_worker_runtime_message_identity<'s>(
     scope: &mut v8::PinScope<'s, '_>,
 ) -> Option<(
     crate::runtime::ServiceWorkerVersionId,
-    mpsc::UnboundedSender<WorkerToParentMessage>,
+    crate::worker::WorkerParentSender,
 )> {
     let state = get_worker_state(scope)?;
     let state = state.borrow();
@@ -4961,10 +5024,7 @@ fn install_worker_global_event_handler_accessors<'s>(
     global: v8::Local<'s, v8::Object>,
     global_kind: &super::thread::WorkerGlobalKind,
 ) -> Result<()> {
-    if matches!(
-        global_kind,
-        super::thread::WorkerGlobalKind::Dedicated { .. }
-    ) {
+    if global_kind.dedicated_name().is_some() {
         DedicatedWorkerGlobalEventHandlersDeclaration::default().initialize(scope, global)?;
         DedicatedWorkerGlobalEventHandlerStateDeclaration::default().initialize(scope, global)?;
     }
@@ -5482,7 +5542,9 @@ fn install_worker_global_scope_constructors<'s>(
     global_kind: &super::thread::WorkerGlobalKind,
 ) -> Result<()> {
     let interface = match global_kind {
-        super::thread::WorkerGlobalKind::Dedicated { .. } => "DedicatedWorkerGlobalScope",
+        super::thread::WorkerGlobalKind::Dedicated(_) => "DedicatedWorkerGlobalScope",
+        #[cfg(test)]
+        super::thread::WorkerGlobalKind::UnobservedDedicated { .. } => "DedicatedWorkerGlobalScope",
         super::thread::WorkerGlobalKind::Shared { .. } => "SharedWorkerGlobalScope",
         super::thread::WorkerGlobalKind::Service { .. } => "ServiceWorkerGlobalScope",
     };
@@ -5494,7 +5556,11 @@ fn install_worker_global_scope_constructors<'s>(
         .initialize(scope, global)
         .map_err(|error| anyhow!("failed to initialize WorkerGlobalScope global: {error}"))?;
     match global_kind {
-        super::thread::WorkerGlobalKind::Dedicated { .. } => {
+        super::thread::WorkerGlobalKind::Dedicated(_) => {
+            install_dedicated_worker_global_constructor(scope, global, worker_ctor, worker_proto)?
+        }
+        #[cfg(test)]
+        super::thread::WorkerGlobalKind::UnobservedDedicated { .. } => {
             install_dedicated_worker_global_constructor(scope, global, worker_ctor, worker_proto)?
         }
         super::thread::WorkerGlobalKind::Shared { .. } => {
@@ -6224,7 +6290,7 @@ pub(crate) fn dispatch_worker_trusted_types_sink_violation_event(
 
 pub(crate) fn worker_exception_report_target(
     scope: &mut v8::PinScope<'_, '_>,
-) -> Option<(mpsc::UnboundedSender<WorkerToParentMessage>, String)> {
+) -> Option<(crate::worker::WorkerParentSender, String)> {
     let state = get_worker_state(scope)?;
     let state = state.borrow();
     let script_url = state

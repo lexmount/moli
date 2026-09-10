@@ -74,8 +74,9 @@ impl ScriptVm {
             } => {
                 let handled = self._context_host.borrow_mut().finish_loading_worker(
                     worker_id,
-                    script_url.clone(),
+                    script_url,
                     script_source,
+                    network_response,
                     script_kind,
                     secure_context,
                     response_referrer_policy,
@@ -85,19 +86,7 @@ impl ScriptVm {
                     content_security_report_only_policies,
                     content_security_reporting_endpoints,
                 );
-                // A native completion can be observed before this Page turn
-                // settles. Install the physical inspection endpoint first;
-                // later Inspector/Console tasks still follow this FIFO record.
-                let recorded = handled
-                    && self
-                        ._context_host
-                        .borrow_mut()
-                        .record_dedicated_worker_target_script_loaded(
-                            worker_id,
-                            script_url,
-                            network_response,
-                        );
-                Ok(if recorded {
+                Ok(if handled {
                     DedicatedWorkerClientEventBodyEffect::StateTransitionApplied
                 } else {
                     DedicatedWorkerClientEventBodyEffect::CurrentTargetDisappeared

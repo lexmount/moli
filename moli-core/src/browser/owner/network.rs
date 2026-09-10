@@ -3,8 +3,8 @@ use crate::browser::{
     BrowserContextId, BrowserEvent, BrowserSequence, NetworkOccurrence, NetworkOwner, WorkerHandle,
 };
 use crate::page::{
-    RendererNetworkInput, RendererNetworkOutputItem, RendererNetworkSource,
-    RendererWorkerNetworkSource, ScriptNetworkOutputItem,
+    RendererNetworkInput, RendererNetworkOutputItem, RendererNetworkSource, RendererWorkerIdentity,
+    ScriptNetworkOutputItem,
 };
 
 impl Browser {
@@ -51,14 +51,21 @@ impl Browser {
                     .map(NetworkOwner::Document),
                 RendererNetworkSource::Worker(worker) => {
                     let handle = match worker {
-                        RendererWorkerNetworkSource::Shared(instance) => {
+                        RendererWorkerIdentity::Dedicated(instance) => {
+                            context.dedicated_workers.get(instance)?;
+                            WorkerHandle::Dedicated {
+                                context: id,
+                                instance: *instance,
+                            }
+                        }
+                        RendererWorkerIdentity::Shared(instance) => {
                             context.shared_workers.get(instance)?;
                             WorkerHandle::Shared {
                                 context: id,
                                 instance: *instance,
                             }
                         }
-                        RendererWorkerNetworkSource::Service { version, run } => {
+                        RendererWorkerIdentity::Service { version, run } => {
                             if context.service_workers.get(version)?.execution.active_run()
                                 != Some(run)
                             {

@@ -181,18 +181,14 @@ impl ServiceWorkerTargetState {
         self.runtime_execution_context_id
     }
 
-    pub(crate) fn inspection_target(
-        &self,
-    ) -> Option<moli_core::runtime::RendererWorkerInspectionTarget> {
+    pub(crate) fn inspection_target(&self) -> Option<moli_core::runtime::RendererWorkerIdentity> {
         let ServiceWorkerTargetRunState::Live { run, .. } = &self.run_state else {
             return None;
         };
-        Some(
-            moli_core::runtime::RendererWorkerInspectionTarget::Service {
-                version_id: self.renderer_version_id,
-                run: run.scope.renderer_run().clone(),
-            },
-        )
+        Some(moli_core::runtime::RendererWorkerIdentity::Service {
+            version: self.renderer_version_id,
+            run: run.scope.renderer_run().clone(),
+        })
     }
 
     fn rebind_synthetic_runtime_snapshots(&mut self, synthetic_id: i64, real_id: i64) {

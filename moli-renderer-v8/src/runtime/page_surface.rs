@@ -516,16 +516,24 @@ pub enum RendererSharedWorkerObservation {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub enum RendererDedicatedWorkerOwner {
+    Document {
+        owner_local_host_id: super::RendererOwnerLocalHostId,
+        page_id: super::PageId,
+    },
+    Worker(super::RendererWorkerIdentity),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RendererDedicatedWorkerTargetInfo {
-    pub owner_local_host_id: super::RendererOwnerLocalHostId,
-    pub page_id: super::PageId,
+    pub owner: RendererDedicatedWorkerOwner,
     pub instance_id: u64,
     pub request_url: String,
     pub document_url: String,
     pub name: String,
 }
 
-/// Read-only output from a DedicatedWorker, in its creator Page's source FIFO.
+/// Read-only output from one physical DedicatedWorker's source FIFO.
 #[derive(Debug, Clone, PartialEq)]
 pub enum RendererDedicatedWorkerObservation {
     Console {
@@ -3460,7 +3468,7 @@ impl RendererRuntimeInspectorResponseDestination {
 enum RendererRuntimeInspectorResponsePublicationBoundary {
     Immediate,
     PageOwner(RendererOwnerWakeSender),
-    WorkerParent(tokio::sync::mpsc::UnboundedSender<crate::worker::WorkerToParentMessage>),
+    WorkerParent(crate::worker::WorkerParentSender),
 }
 
 #[derive(Clone)]
@@ -3546,7 +3554,7 @@ impl RendererRuntimeInspectorResponseSender {
 
     pub(crate) fn defer_publication_to_worker_parent(
         mut self,
-        parent_tx: tokio::sync::mpsc::UnboundedSender<crate::worker::WorkerToParentMessage>,
+        parent_tx: crate::worker::WorkerParentSender,
     ) -> Self {
         self.publication_boundary =
             RendererRuntimeInspectorResponsePublicationBoundary::WorkerParent(parent_tx);

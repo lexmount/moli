@@ -10608,7 +10608,6 @@ mod protocol_neutral_tests {
         DevToolsCallFunctionCommand, DevToolsCommand, DevToolsCommandContext, DevToolsProtocol,
         DevToolsResultOwnership, RuntimeExecutionContextEvent,
     };
-    use moli_core::RendererOwnerLocalHostId;
     use moli_core::page::{MAX_INSPECTOR_PROTOCOL_VALUE_DEPTH, RendererSharedWorkerConsoleMessage};
     use moli_page_types::RendererInspectorResponseDelivery;
     use moli_shared_worker::SharedWorkerInstanceId;
@@ -11732,7 +11731,6 @@ mod protocol_neutral_tests {
         let mut browser_context =
             conn.new_browser_context_fixture_for_test("BID-shared".to_owned());
         let mut target = SharedWorkerTargetState::new(
-            RendererOwnerLocalHostId::new_for_testing(1),
             SharedWorkerInstanceId::from_u64(91),
             "TID-shared-worker".to_owned(),
             None,

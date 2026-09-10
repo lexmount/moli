@@ -188,7 +188,7 @@ async fn project_renderer_output_records_for_owner(
                 RendererOutputItem::Observation(
                     moli_core::RendererProtocolObservation::DomMutations(_)
                     | moli_core::RendererProtocolObservation::RuntimeBinding(_)
-                    | moli_core::RendererProtocolObservation::Network { .. },
+                    | moli_core::RendererProtocolObservation::Network(_),
                 ) => {}
                 RendererOutputItem::Observation(
                     moli_core::RendererProtocolObservation::RuntimeInspector(batch),
@@ -217,6 +217,25 @@ async fn project_renderer_output_records_for_owner(
                 let Some(committed) = observation.committed().await else {
                     continue;
                 };
+                if let moli_core::page::RendererWorkerLifecycle::DedicatedCreated(info) =
+                    committed.lifecycle()
+                    && let moli_core::page::RendererDedicatedWorkerOwner::Document {
+                        owner_local_host_id,
+                        page_id,
+                    } = info.owner
+                    && let Some(RendererPublicationOwner::PageTarget { page_owner, .. }) = conn
+                        .native_renderer_page_output_owner(
+                            crate::conn::RendererPageResidenceIdentity::from_parts(
+                                owner_local_host_id,
+                                page_id,
+                            ),
+                        )
+                {
+                    let events =
+                        Box::pin(conn.project_native_commit_before_renderer_output(&page_owner))
+                            .await;
+                    command_context.protocol_events_mut().extend(events);
+                }
                 let outputs =
                     PreparedProtocolOutputs::from_browser_worker_lifecycle(conn, committed);
                 order

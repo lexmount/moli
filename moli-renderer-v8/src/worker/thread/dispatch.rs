@@ -393,7 +393,7 @@ struct PendingWorkerPromiseRejection {
 }
 
 struct WorkerPromiseRejectDispatchSlot {
-    parent_tx: mpsc::UnboundedSender<WorkerToParentMessage>,
+    parent_tx: crate::worker::WorkerParentSender,
     worker_wake_tx: mpsc::UnboundedSender<WorkerMessage>,
     script_url: String,
     pending_unhandled_rejections: Rc<RefCell<Vec<PendingWorkerPromiseRejection>>>,
@@ -403,7 +403,7 @@ struct WorkerPromiseRejectDispatchSlot {
 
 pub(super) fn install_worker_promise_rejection_dispatch(
     isolate: &mut v8::OwnedIsolate,
-    parent_tx: mpsc::UnboundedSender<WorkerToParentMessage>,
+    parent_tx: crate::worker::WorkerParentSender,
     worker_wake_tx: mpsc::UnboundedSender<WorkerMessage>,
     script_url: String,
 ) {
@@ -421,7 +421,7 @@ pub(super) fn install_worker_promise_rejection_dispatch(
 fn worker_promise_reject_dispatch_state(
     scope: &mut v8::PinScope<'_, '_>,
 ) -> Option<(
-    mpsc::UnboundedSender<WorkerToParentMessage>,
+    crate::worker::WorkerParentSender,
     String,
     Rc<RefCell<Vec<PendingWorkerPromiseRejection>>>,
     Rc<RefCell<Vec<PendingWorkerPromiseRejection>>>,
@@ -830,7 +830,7 @@ fn dispatch_worker_promise_rejection_event<'s>(
     event_type: &str,
     promise: v8::Local<'s, v8::Promise>,
     reason: Option<v8::Local<'s, v8::Value>>,
-    parent_tx: &mpsc::UnboundedSender<WorkerToParentMessage>,
+    parent_tx: &crate::worker::WorkerParentSender,
     script_url: &str,
 ) -> bool {
     let global = scope.get_current_context().global(scope);
@@ -884,7 +884,7 @@ pub(super) fn report_exception_to_parent(
     report: &V8ExceptionReport,
     script_url: &str,
     event_kind: WorkerParentErrorEventKind,
-    parent_tx: &mpsc::UnboundedSender<WorkerToParentMessage>,
+    parent_tx: &crate::worker::WorkerParentSender,
 ) {
     report_exception_to_parent_with_phase(
         report,
@@ -900,7 +900,7 @@ pub(super) fn report_exception_to_parent_with_phase(
     script_url: &str,
     event_kind: WorkerParentErrorEventKind,
     phase: WorkerErrorPhase,
-    parent_tx: &mpsc::UnboundedSender<WorkerToParentMessage>,
+    parent_tx: &crate::worker::WorkerParentSender,
 ) {
     report_exception_to_parent_with_phase_and_source(
         report,
@@ -918,7 +918,7 @@ pub(super) fn report_exception_to_parent_with_phase_and_source(
     event_kind: WorkerParentErrorEventKind,
     phase: WorkerErrorPhase,
     source: WorkerErrorSource,
-    parent_tx: &mpsc::UnboundedSender<WorkerToParentMessage>,
+    parent_tx: &crate::worker::WorkerParentSender,
 ) {
     let _ = parent_tx.send(WorkerToParentMessage::Error {
         message: report.summary.clone(),
@@ -1015,7 +1015,7 @@ pub(super) fn dispatch_worker_error_event<'s>(
     global: v8::Local<'s, v8::Object>,
     report: &V8ExceptionReport,
     exception: Option<v8::Local<'s, v8::Value>>,
-    parent_tx: &mpsc::UnboundedSender<WorkerToParentMessage>,
+    parent_tx: &crate::worker::WorkerParentSender,
     script_url: &str,
 ) -> bool {
     let event = new_worker_error_event(scope, report, script_url, exception);
@@ -1112,7 +1112,7 @@ pub(super) fn dispatch_service_worker_lifecycle_event(
     context: &v8::Global<v8::Context>,
     state: &Rc<RefCell<super::WorkerGlobalState>>,
     event: ServiceWorkerLifecycleEvent,
-    parent_tx: &mpsc::UnboundedSender<WorkerToParentMessage>,
+    parent_tx: &crate::worker::WorkerParentSender,
     script_url: &str,
 ) {
     let scope = pin!(v8::HandleScope::new(isolate));
@@ -1131,7 +1131,7 @@ pub(super) fn dispatch_service_worker_fetch_event(
     context: &v8::Global<v8::Context>,
     state: &Rc<RefCell<super::WorkerGlobalState>>,
     event: ServiceWorkerFetchEvent,
-    parent_tx: &mpsc::UnboundedSender<WorkerToParentMessage>,
+    parent_tx: &crate::worker::WorkerParentSender,
     script_url: &str,
 ) {
     let scope = pin!(v8::HandleScope::new(isolate));
@@ -1180,7 +1180,7 @@ pub(super) fn dispatch_service_worker_message_event(
     context: &v8::Global<v8::Context>,
     state: &Rc<RefCell<super::WorkerGlobalState>>,
     event: ServiceWorkerMessageEvent,
-    parent_tx: &mpsc::UnboundedSender<WorkerToParentMessage>,
+    parent_tx: &crate::worker::WorkerParentSender,
     script_url: &str,
 ) {
     let scope = pin!(v8::HandleScope::new(isolate));
@@ -1211,7 +1211,7 @@ pub(super) fn dispatch_service_worker_notification_event(
     context: &v8::Global<v8::Context>,
     state: &Rc<RefCell<super::WorkerGlobalState>>,
     event: ServiceWorkerNotificationEvent,
-    parent_tx: &mpsc::UnboundedSender<WorkerToParentMessage>,
+    parent_tx: &crate::worker::WorkerParentSender,
     script_url: &str,
 ) {
     let scope = pin!(v8::HandleScope::new(isolate));
@@ -1230,7 +1230,7 @@ pub(super) fn dispatch_service_worker_push_event(
     context: &v8::Global<v8::Context>,
     state: &Rc<RefCell<super::WorkerGlobalState>>,
     event: ServiceWorkerPushEvent,
-    parent_tx: &mpsc::UnboundedSender<WorkerToParentMessage>,
+    parent_tx: &crate::worker::WorkerParentSender,
     script_url: &str,
 ) {
     let scope = pin!(v8::HandleScope::new(isolate));
@@ -1249,7 +1249,7 @@ pub(super) fn dispatch_service_worker_sync_event(
     context: &v8::Global<v8::Context>,
     state: &Rc<RefCell<super::WorkerGlobalState>>,
     event: ServiceWorkerSyncEvent,
-    parent_tx: &mpsc::UnboundedSender<WorkerToParentMessage>,
+    parent_tx: &crate::worker::WorkerParentSender,
     script_url: &str,
 ) {
     let scope = pin!(v8::HandleScope::new(isolate));
@@ -1268,7 +1268,7 @@ pub(super) fn dispatch_service_worker_periodic_sync_event(
     context: &v8::Global<v8::Context>,
     state: &Rc<RefCell<super::WorkerGlobalState>>,
     event: ServiceWorkerPeriodicSyncEvent,
-    parent_tx: &mpsc::UnboundedSender<WorkerToParentMessage>,
+    parent_tx: &crate::worker::WorkerParentSender,
     script_url: &str,
 ) {
     let scope = pin!(v8::HandleScope::new(isolate));
@@ -1287,7 +1287,7 @@ fn dispatch_service_worker_lifecycle_event_in_context<'s>(
     global: v8::Local<'s, v8::Object>,
     state: &Rc<RefCell<super::WorkerGlobalState>>,
     event: ServiceWorkerLifecycleEvent,
-    parent_tx: &mpsc::UnboundedSender<WorkerToParentMessage>,
+    parent_tx: &crate::worker::WorkerParentSender,
     script_url: &str,
 ) {
     let event_object = new_service_worker_lifecycle_event(scope, event.kind);
@@ -1359,7 +1359,7 @@ fn dispatch_service_worker_fetch_event_in_context<'s>(
     global: v8::Local<'s, v8::Object>,
     state: &Rc<RefCell<super::WorkerGlobalState>>,
     event: ServiceWorkerFetchEvent,
-    parent_tx: &mpsc::UnboundedSender<WorkerToParentMessage>,
+    parent_tx: &crate::worker::WorkerParentSender,
     script_url: &str,
 ) {
     let Some((request, request_signal_id)) =
@@ -1494,7 +1494,7 @@ fn dispatch_service_worker_message_event_in_context<'s>(
     global: v8::Local<'s, v8::Object>,
     state: &Rc<RefCell<super::WorkerGlobalState>>,
     event: ServiceWorkerMessageEvent,
-    parent_tx: &mpsc::UnboundedSender<WorkerToParentMessage>,
+    parent_tx: &crate::worker::WorkerParentSender,
     script_url: &str,
 ) {
     let (event_type, event_object) = new_service_worker_message_event(scope, &event)
@@ -1576,7 +1576,7 @@ fn dispatch_service_worker_notification_event_in_context<'s>(
     global: v8::Local<'s, v8::Object>,
     state: &Rc<RefCell<super::WorkerGlobalState>>,
     event: ServiceWorkerNotificationEvent,
-    parent_tx: &mpsc::UnboundedSender<WorkerToParentMessage>,
+    parent_tx: &crate::worker::WorkerParentSender,
     script_url: &str,
 ) {
     let Some(event_object) = new_service_worker_notification_event(scope, global, &event) else {
@@ -1663,7 +1663,7 @@ fn dispatch_service_worker_push_event_in_context<'s>(
     global: v8::Local<'s, v8::Object>,
     state: &Rc<RefCell<super::WorkerGlobalState>>,
     event: ServiceWorkerPushEvent,
-    parent_tx: &mpsc::UnboundedSender<WorkerToParentMessage>,
+    parent_tx: &crate::worker::WorkerParentSender,
     script_url: &str,
 ) {
     let Some(event_object) = new_service_worker_push_event(scope, &event) else {
@@ -1738,7 +1738,7 @@ fn dispatch_service_worker_sync_event_in_context<'s>(
     global: v8::Local<'s, v8::Object>,
     state: &Rc<RefCell<super::WorkerGlobalState>>,
     event: ServiceWorkerSyncEvent,
-    parent_tx: &mpsc::UnboundedSender<WorkerToParentMessage>,
+    parent_tx: &crate::worker::WorkerParentSender,
     script_url: &str,
 ) {
     let Some(event_object) = new_service_worker_sync_event(scope, &event) else {
@@ -1817,7 +1817,7 @@ fn dispatch_service_worker_periodic_sync_event_in_context<'s>(
     global: v8::Local<'s, v8::Object>,
     state: &Rc<RefCell<super::WorkerGlobalState>>,
     event: ServiceWorkerPeriodicSyncEvent,
-    parent_tx: &mpsc::UnboundedSender<WorkerToParentMessage>,
+    parent_tx: &crate::worker::WorkerParentSender,
     script_url: &str,
 ) {
     let Some(event_object) = new_service_worker_periodic_sync_event(scope, &event) else {
@@ -4269,7 +4269,7 @@ pub(super) fn dispatch_worker_exception<'s>(
     report: V8ExceptionReport,
     exception: Option<v8::Local<'s, v8::Value>>,
     parent_event_kind: WorkerParentErrorEventKind,
-    parent_tx: &mpsc::UnboundedSender<WorkerToParentMessage>,
+    parent_tx: &crate::worker::WorkerParentSender,
     script_url: &str,
 ) -> bool {
     dispatch_worker_exception_with_phase(
@@ -4314,7 +4314,7 @@ pub(super) fn dispatch_worker_exception_with_phase<'s>(
     exception: Option<v8::Local<'s, v8::Value>>,
     parent_event_kind: WorkerParentErrorEventKind,
     parent_phase: WorkerErrorPhase,
-    parent_tx: &mpsc::UnboundedSender<WorkerToParentMessage>,
+    parent_tx: &crate::worker::WorkerParentSender,
     script_url: &str,
 ) -> bool {
     dispatch_worker_exception_with_phase_and_source(
@@ -4338,7 +4338,7 @@ pub(super) fn dispatch_worker_exception_with_phase_and_source<'s>(
     parent_event_kind: WorkerParentErrorEventKind,
     parent_phase: WorkerErrorPhase,
     source: WorkerErrorSource,
-    parent_tx: &mpsc::UnboundedSender<WorkerToParentMessage>,
+    parent_tx: &crate::worker::WorkerParentSender,
     script_url: &str,
 ) -> bool {
     apply_worker_exception_location_overrides(scope, &mut report, exception);
@@ -4363,7 +4363,7 @@ fn dispatch_worker_global_message_event<'s>(
     event_type: &str,
     data: v8::Local<'s, v8::Value>,
     ports: v8::Local<'s, v8::Array>,
-    parent_tx: &mpsc::UnboundedSender<WorkerToParentMessage>,
+    parent_tx: &crate::worker::WorkerParentSender,
     script_url: &str,
 ) {
     let event = new_worker_message_event(scope, event_type, data, None, ports);
@@ -4415,7 +4415,7 @@ pub(super) fn dispatch_message_event(
     isolate: &mut v8::OwnedIsolate,
     context: &v8::Global<v8::Context>,
     payload: &V8StructuredClonePayload,
-    parent_tx: &mpsc::UnboundedSender<WorkerToParentMessage>,
+    parent_tx: &crate::worker::WorkerParentSender,
     script_url: &str,
 ) {
     let scope = pin!(v8::HandleScope::new(isolate));
@@ -4464,7 +4464,7 @@ pub(super) fn dispatch_shared_worker_connect_event(
     isolate: &mut v8::OwnedIsolate,
     context: &v8::Global<v8::Context>,
     port_id: MessagePortId,
-    parent_tx: &mpsc::UnboundedSender<WorkerToParentMessage>,
+    parent_tx: &crate::worker::WorkerParentSender,
     script_url: &str,
 ) {
     let scope = pin!(v8::HandleScope::new(isolate));
@@ -4532,7 +4532,7 @@ pub(super) fn dispatch_message_port_event(
     isolate: &mut v8::OwnedIsolate,
     context: &v8::Global<v8::Context>,
     port_id: MessagePortId,
-    parent_tx: &mpsc::UnboundedSender<WorkerToParentMessage>,
+    parent_tx: &crate::worker::WorkerParentSender,
     script_url: &str,
 ) -> bool {
     let scope = pin!(v8::HandleScope::new(isolate));
@@ -4602,7 +4602,7 @@ pub(super) fn dispatch_broadcast_channel_event(
 pub(super) fn fire_timer_callback(
     isolate: &mut v8::OwnedIsolate,
     timer: &ActiveTimer,
-    parent_tx: &mpsc::UnboundedSender<WorkerToParentMessage>,
+    parent_tx: &crate::worker::WorkerParentSender,
     script_url: &str,
 ) {
     let scope = pin!(v8::HandleScope::new(isolate));

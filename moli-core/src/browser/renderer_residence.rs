@@ -40,7 +40,8 @@ impl RendererPageResidenceIdentity {
                 owner_local_host_id,
                 page_id,
             } => Some(Self::from_parts(owner_local_host_id, page_id)),
-            RendererOutputResidenceIdentity::SharedWorker { .. }
+            RendererOutputResidenceIdentity::DedicatedWorker { .. }
+            | RendererOutputResidenceIdentity::SharedWorker { .. }
             | RendererOutputResidenceIdentity::ServiceWorker { .. } => None,
         }
     }

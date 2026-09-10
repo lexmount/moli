@@ -1998,11 +1998,13 @@ async fn dedicated_worker_main_scripts_publish_split_target_lifecycle_records() 
                 && matches!(script.outcome, crate::runtime::RendererDedicatedWorkerMainScriptOutcome::Loaded(_))
             {
                 let ready = weak_runtime.upgrade().unwrap()
-                    .worker_inspection_endpoint(crate::runtime::RendererWorkerInspectionTarget::Dedicated(*instance_id))
+                    .worker_inspection_endpoint(crate::runtime::RendererWorkerIdentity::Dedicated(*instance_id))
                     .is_some();
                 readiness.lock().push((script.script_url.clone(), ready));
             }
         });
+        let (output_tx, mut output_rx) = crate::runtime::renderer_output_transport_channel();
+        runtime.set_renderer_output_transport_sender(output_tx);
         let output_journal = crate::runtime::RendererTurnOutputJournal::new(
             crate::runtime::RendererOutputStreamIdentity::new_page_for_protocol_test(
                 page_vm.page_id,
@@ -2051,21 +2053,18 @@ async fn dedicated_worker_main_scripts_publish_split_target_lifecycle_records() 
                     page_vm.vm_mut().take_network_output().is_empty(),
                     "DedicatedWorker main scripts are not complete Page subresources"
                 );
-                let publication = output_journal
-                    .settle()
-                    .expect("DedicatedWorker target events should settle as Page output");
-                anyhow::Ok(
-                    publication
-                        .into_records()
-                        .into_iter()
-                        .filter_map(|record| match record.into_parts().1 {
-                            RendererOutputItem::Observation(
-                                crate::runtime::RendererProtocolObservation::WorkerLifecycle(event),
-                            ) => Some(event),
-                            _ => None,
-                        })
-                        .collect::<Vec<_>>(),
-                )
+                let mut events = Vec::new();
+                while let Ok(message) = output_rx.try_recv() {
+                    let crate::runtime::RendererOutputTransportMessage::Publication(publication) = message else { continue; };
+                    let residence = publication.cursor().stream().residence();
+                    for record in publication.into_records() {
+                        if let RendererOutputItem::Observation(crate::runtime::RendererProtocolObservation::WorkerLifecycle(event)) = record.into_parts().1 {
+                            assert!(matches!(residence, crate::runtime::RendererOutputResidenceIdentity::DedicatedWorker { .. }));
+                            events.push(event);
+                        }
+                    }
+                }
+                anyhow::Ok(events)
             })
             .await
             .expect("worker main-script Network test should run on owner lane");

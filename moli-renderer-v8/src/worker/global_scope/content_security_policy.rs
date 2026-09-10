@@ -350,7 +350,7 @@ fn worker_content_security_policy_report_context(
 
 #[allow(clippy::too_many_arguments)]
 fn dispatch_worker_content_security_policy_report_to_service_worker(
-    parent_tx: tokio::sync::mpsc::UnboundedSender<WorkerToParentMessage>,
+    parent_tx: crate::worker::WorkerParentSender,
     global_kind: crate::worker::WorkerGlobalKind,
     runtime: crate::service_worker_runtime::ServiceWorkerRuntimeService,
     client_id: crate::service_worker_runtime::ServiceWorkerClientId,
@@ -479,7 +479,7 @@ fn dispatch_worker_content_security_policy_report_to_service_worker(
 }
 
 fn spawn_worker_content_security_policy_report_network(
-    parent_tx: tokio::sync::mpsc::UnboundedSender<WorkerToParentMessage>,
+    parent_tx: crate::worker::WorkerParentSender,
     global_kind: crate::worker::WorkerGlobalKind,
     load: ResourceLoadLease,
     request_handle: Option<SubresourceNetworkRequestHandle>,
@@ -712,7 +712,7 @@ fn record_worker_content_security_policy_report_failure(
 }
 
 fn send_worker_content_security_policy_report_success(
-    parent_tx: tokio::sync::mpsc::UnboundedSender<WorkerToParentMessage>,
+    parent_tx: crate::worker::WorkerParentSender,
     global_kind: crate::worker::WorkerGlobalKind,
     request_handle: Option<SubresourceNetworkRequestHandle>,
     continue_internal_id: Option<u64>,
@@ -752,7 +752,7 @@ fn send_worker_content_security_policy_report_success(
 }
 
 fn send_worker_content_security_policy_report_failure(
-    parent_tx: tokio::sync::mpsc::UnboundedSender<WorkerToParentMessage>,
+    parent_tx: crate::worker::WorkerParentSender,
     global_kind: crate::worker::WorkerGlobalKind,
     request_handle: Option<SubresourceNetworkRequestHandle>,
     continue_internal_id: Option<u64>,
@@ -779,7 +779,7 @@ fn send_worker_content_security_policy_report_failure(
 }
 
 fn send_worker_content_security_policy_report_continue_completed(
-    parent_tx: &tokio::sync::mpsc::UnboundedSender<WorkerToParentMessage>,
+    parent_tx: &crate::worker::WorkerParentSender,
     continue_internal_id: Option<u64>,
 ) {
     let Some(internal_id) = continue_internal_id else {

@@ -409,22 +409,17 @@ pub(crate) fn try_worker_xhr_send_callback<'s>(
     }
 
     if let Some(response) = local_url_response(&prepared.resolved_url) {
-        if !matches!(
-            state.borrow().global_kind,
-            crate::worker::WorkerGlobalKind::Dedicated { .. }
-        ) {
-            record_worker_subresource_success(
-                &state.borrow(),
-                prepared.document_url,
-                prepared.resolved_url,
-                prepared.method,
-                prepared.request_headers,
-                request_body_text(&prepared.send_body),
-                SubresourceResourceType::Xhr,
-                response.head(),
-                SubresourceResponseBody::from_fetch_response(&response),
-            );
-        }
+        record_worker_subresource_success(
+            &state.borrow(),
+            prepared.document_url,
+            prepared.resolved_url,
+            prepared.method,
+            prepared.request_headers,
+            request_body_text(&prepared.send_body),
+            SubresourceResourceType::Xhr,
+            response.head(),
+            SubresourceResponseBody::from_fetch_response(&response),
+        );
         apply_xhr_response(scope, xhr, response);
         return true;
     }
@@ -1096,53 +1091,43 @@ pub(in crate::worker) fn drain_worker_xhr_completion(
                 pending.credentials_mode,
             ) {
                 Ok(()) => {
-                    let response_body = (pending.network_record.is_some()
-                        || !matches!(
-                            state.borrow().global_kind,
-                            crate::worker::WorkerGlobalKind::Dedicated { .. }
-                        ))
-                    .then(|| response.subresource_response_body());
+                    let response_body = response.subresource_response_body();
                     match response.into_body_source() {
                         Ok((mut response_head, body)) => {
-                            if let Some(response_body) = response_body {
-                                let record = pending.network_record.as_ref();
-                                record_worker_subresource_success_with_handle(
-                                    &state.borrow(),
-                                    pending.network_request_handle,
-                                    pending.document_url.clone(),
-                                    record
-                                        .map_or(&pending.request_url, |record| &record.url)
-                                        .clone(),
-                                    record
-                                        .map_or(&pending.request_method, |record| &record.method)
-                                        .clone(),
-                                    record
-                                        .map_or(&pending.request_headers, |record| {
-                                            &record.request_headers
-                                        })
-                                        .clone(),
-                                    record
-                                        .map_or(&pending.request_body, |record| {
-                                            &record.request_body
-                                        })
-                                        .clone(),
-                                    SubresourceResourceType::Xhr,
-                                    record
-                                        .and_then(|record| {
-                                            record.initial_network_request_headers.clone()
-                                        })
-                                        .or(completion.network_request_headers),
-                                    response_head.clone(),
-                                    response_body,
-                                );
-                                if let Some(record) = record {
-                                    let _ =
-                                        parent_tx.send(WorkerToParentMessage::SubresourceContinue(
-                                            PendingSubresourceContinueEvent::Completed {
-                                                internal_id: record.internal_id,
-                                            },
-                                        ));
-                                }
+                            let record = pending.network_record.as_ref();
+                            record_worker_subresource_success_with_handle(
+                                &state.borrow(),
+                                pending.network_request_handle,
+                                pending.document_url.clone(),
+                                record
+                                    .map_or(&pending.request_url, |record| &record.url)
+                                    .clone(),
+                                record
+                                    .map_or(&pending.request_method, |record| &record.method)
+                                    .clone(),
+                                record
+                                    .map_or(&pending.request_headers, |record| {
+                                        &record.request_headers
+                                    })
+                                    .clone(),
+                                record
+                                    .map_or(&pending.request_body, |record| &record.request_body)
+                                    .clone(),
+                                SubresourceResourceType::Xhr,
+                                record
+                                    .and_then(|record| {
+                                        record.initial_network_request_headers.clone()
+                                    })
+                                    .or(completion.network_request_headers),
+                                response_head.clone(),
+                                response_body,
+                            );
+                            if let Some(record) = record {
+                                let _ = parent_tx.send(WorkerToParentMessage::SubresourceContinue(
+                                    PendingSubresourceContinueEvent::Completed {
+                                        internal_id: record.internal_id,
+                                    },
+                                ));
                             }
                             response_head.headers = filter_cors_exposed_response_headers(
                                 &pending.document_url,

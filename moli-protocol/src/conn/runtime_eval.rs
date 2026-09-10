@@ -19,7 +19,7 @@ use moli_core::{
         RendererInspectorCommandRoute, RendererRuntimeCommandOutput,
         RendererRuntimeInspectorMessage, RendererRuntimeRealmInfo,
     },
-    runtime::{RendererWorkerInspectionEndpoint, RendererWorkerInspectionTarget},
+    runtime::{RendererWorkerIdentity, RendererWorkerInspectionEndpoint},
 };
 
 use crate::conn::state::{
@@ -4421,7 +4421,7 @@ impl CdpConnection {
             .ok_or_else(|| "UnknownSession".to_owned())?;
         let worker = match &route {
             CdpSessionRoute::SharedWorkerTarget { target_id, .. } => {
-                RendererWorkerInspectionTarget::Shared(
+                RendererWorkerIdentity::Shared(
                     context
                         .shared_worker_target(target_id)
                         .ok_or_else(|| "UnknownSession".to_owned())?
@@ -4429,7 +4429,7 @@ impl CdpConnection {
                 )
             }
             CdpSessionRoute::DedicatedWorkerTarget { target_id, .. } => {
-                RendererWorkerInspectionTarget::Dedicated(
+                RendererWorkerIdentity::Dedicated(
                     context
                         .dedicated_worker_target(target_id)
                         .ok_or_else(|| "UnknownSession".to_owned())?

@@ -1189,7 +1189,6 @@ async fn memory_diagnostics_splits_pending_inspector_await_counts_by_target_owne
 
     let shared_worker_instance_id = SharedWorkerInstanceId::from_u64(30_001);
     let mut shared_worker_target = SharedWorkerTargetState::new(
-        moli_core::RendererOwnerLocalHostId::new_for_testing(1),
         shared_worker_instance_id,
         "TID-pending-await-sw".to_owned(),
         Some("TID-pending-await-active".to_owned()),

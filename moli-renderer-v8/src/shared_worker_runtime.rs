@@ -33,7 +33,6 @@ mod service;
 mod service_lane;
 mod shutdown;
 mod target_close;
-mod target_output_streams;
 #[cfg(test)]
 mod test_support;
 mod threads;

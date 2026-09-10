@@ -547,7 +547,8 @@ async fn set_auto_attach_inner_async(
                             super::worker_target::dedicated_worker_auto_attach_owner_session_allowed(
                                 conn,
                                 owner_session_id,
-                                &target.owner_page,
+                                &bc.id,
+                                &target.owner,
                             ) && !owner_already_auto_attached_to_exact_target(
                                 conn,
                                 owner_session_id,

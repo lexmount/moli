@@ -510,15 +510,6 @@ impl TargetRuntimeSlot {
             .attached_events_enabled_for_session(session_id)
     }
 
-    pub(crate) fn network_event_session_ids(
-        &self,
-        trigger_session_id: Option<&str>,
-        primary_session_id: Option<&str>,
-    ) -> Vec<Option<String>> {
-        self.network_agent
-            .event_session_ids(trigger_session_id, primary_session_id)
-    }
-
     pub(crate) fn pending_network_backlog_delivery_snapshot(
         &mut self,
         trigger_session_id: Option<&str>,

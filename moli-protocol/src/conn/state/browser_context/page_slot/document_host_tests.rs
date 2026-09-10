@@ -646,7 +646,7 @@ async fn old_network_ingress_survives_native_commit_before_projection() {
         .clone();
     let handle = SubresourceNetworkRequestHandle::new(7);
     let url = url::Url::parse("https://old.example/held-xhr").unwrap();
-    let started = ScriptNetworkOutputItem::SubresourceRequestStarted(Box::new(
+    let started = ScriptNetworkOutputItem::SubresourceRequestStarted(std::sync::Arc::new(
         SubresourceRequestStarted::new(
             handle,
             None,
@@ -676,12 +676,7 @@ async fn old_network_ingress_survives_native_commit_before_projection() {
             .is_some()
     );
 
-    let waiter = prepare_navigation(
-        &mut owner,
-        "LOADER-successor",
-        "data:text/html,<title>successor</title>",
-    )
-    .await;
+    let waiter = prepare_navigation(&mut owner, "data:text/html,<title>successor</title>").await;
     // Deliberately finish the Browser transaction without projecting its commit.
     // The old renderer has closed; its final FIFO facts still belong to the
     // observer's old request correlations, not to the successor Document.

@@ -47,11 +47,13 @@ pub use network_observation::{
     RendererChildDocumentNetworkObservation, RendererCommittedNetworkObservation,
     RendererNetworkInput, RendererNetworkObservation, RendererNetworkOccurrence,
     RendererNetworkOutputItem, RendererNetworkSource, RendererNetworkSourceIdentity,
-    RendererWorkerNetworkSource,
+    RendererWorkerIdentity,
 };
 pub(crate) use network_observation::{RendererNetworkReporter, RendererWorkerNetworkReporter};
 mod worker_inspection;
-pub use worker_inspection::{RendererWorkerInspectionEndpoint, RendererWorkerInspectionTarget};
+mod worker_output_streams;
+pub use worker_inspection::RendererWorkerInspectionEndpoint;
+pub(crate) use worker_output_streams::RendererWorkerOutputStreams;
 mod worker_lifecycle;
 pub(crate) use worker_lifecycle::RendererWorkerLifecycleReporter;
 pub use worker_lifecycle::{
@@ -273,7 +275,7 @@ pub use self::browser_context_runtime::{
     RendererReservedServiceWorkerClient, RendererServiceWorkerMainResourceFetch,
 };
 pub(crate) use self::browser_context_runtime::{
-    RendererStoragePartitionIdentity, RendererWorkerContextRuntime,
+    RendererDedicatedWorkerHost, RendererStoragePartitionIdentity, RendererWorkerContextRuntime,
 };
 pub(crate) use self::document_lifecycle::{
     RendererDocumentLifecycleDriveAdmission, RendererDocumentLifecycleJournalHandle,
@@ -340,14 +342,15 @@ pub use self::page_surface::{
     RendererCapturedScreencastFrame, RendererCapturedScreenshot, RendererCommandTurnCompletion,
     RendererCommandTurnOutput, RendererCountEntry, RendererDedicatedWorkerMainScript,
     RendererDedicatedWorkerMainScriptOutcome, RendererDedicatedWorkerObservation,
-    RendererDedicatedWorkerTargetInfo, RendererDevToolsAgentToken, RendererDocumentBoxModel,
-    RendererDocumentChildNodeSnapshotEvent, RendererDocumentChildNodeSnapshotEvents,
-    RendererDocumentChildNodeSnapshots, RendererDocumentFrontendNodeIdsResolution,
-    RendererDocumentHitTestResult, RendererDocumentIsolateAccountingDiagnostics,
-    RendererDocumentNodeAttributesResolution, RendererDocumentNodeClientRect,
-    RendererDocumentNodeGeometry, RendererDocumentNodePropertyResolution,
-    RendererDocumentNodeReference, RendererDocumentNodeTextResolution,
-    RendererDocumentQuerySelectorNode, RendererDocumentQuerySelectorResolution,
+    RendererDedicatedWorkerOwner, RendererDedicatedWorkerTargetInfo, RendererDevToolsAgentToken,
+    RendererDocumentBoxModel, RendererDocumentChildNodeSnapshotEvent,
+    RendererDocumentChildNodeSnapshotEvents, RendererDocumentChildNodeSnapshots,
+    RendererDocumentFrontendNodeIdsResolution, RendererDocumentHitTestResult,
+    RendererDocumentIsolateAccountingDiagnostics, RendererDocumentNodeAttributesResolution,
+    RendererDocumentNodeClientRect, RendererDocumentNodeGeometry,
+    RendererDocumentNodePropertyResolution, RendererDocumentNodeReference,
+    RendererDocumentNodeTextResolution, RendererDocumentQuerySelectorNode,
+    RendererDocumentQuerySelectorResolution,
     RendererDocumentQuerySelectorWithChildNodeSnapshotEvents,
     RendererDocumentSourcedSameDocumentNavigation,
     RendererDocumentSourcedTopLevelLocationNavigation, RendererDomAttributeMutation,

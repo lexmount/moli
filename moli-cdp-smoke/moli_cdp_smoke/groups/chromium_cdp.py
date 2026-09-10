@@ -10,7 +10,7 @@ from uuid import UUID
 from . import SmokeState
 from ..assertions import SmokeError, assert_equal, wait_until
 from ..fixture import FixtureServer
-from ..helpers import attach_cdp_event_collector, run_worker_command
+from ..helpers import attach_cdp_event_collector, collect_worker_network_events, run_worker_command
 
 
 async def run_chromium_cdp_group(state: SmokeState) -> None:
@@ -18,7 +18,8 @@ async def run_chromium_cdp_group(state: SmokeState) -> None:
     await _verify_chromium_main_document_network_extra_info_sample(state)
     await _verify_chromium_cookie_blocked_reason_sample(state)
     await _verify_chromium_worker_cancel_auth_response_sample(state)
-    await _verify_chromium_worker_auth_extra_info_sample(state)
+    async with collect_worker_network_events(state.endpoint, state.cdp) as network_events:
+        await _verify_chromium_worker_auth_extra_info_sample(state, network_events)
     await _verify_chromium_fetch_cancel_auth_response_stage_sample(state)
     await _verify_chromium_navigation_cancel_auth_response_sample(state)
     await _verify_chromium_fetch_continuation_extra_info_sample(state)
@@ -1131,12 +1132,12 @@ async def _verify_chromium_worker_cancel_auth_response_sample(state: SmokeState)
     state.record("chromium_worker_cancel_auth_response_sample")
 
 
-async def _verify_chromium_worker_auth_extra_info_sample(state: SmokeState) -> None:
+async def _verify_chromium_worker_auth_extra_info_sample(
+    state: SmokeState, network_events: list[dict[str, Any]],
+) -> None:
     methods = [
         "Fetch.requestPaused",
         "Fetch.authRequired",
-        "Network.requestWillBeSentExtraInfo",
-        "Network.responseReceivedExtraInfo",
     ]
     events = attach_cdp_event_collector(state.cdp, methods)
 
@@ -1149,6 +1150,7 @@ async def _verify_chromium_worker_auth_extra_info_sample(state: SmokeState) -> N
         relative_url = f"/api-auth?realm={realm}"
         url = f"{origin}{relative_url}"
         start = len(events)
+        network_start = len(network_events)
         worker_task: asyncio.Task[Any] | None = None
         patterns = [{"urlPattern": url, "requestStage": "Request"}]
         if kind == "xhr":
@@ -1258,20 +1260,20 @@ async def _verify_chromium_worker_auth_extra_info_sample(state: SmokeState) -> N
             await wait_until(
                 lambda: len(
                     _network_events_for_request(
-                        events[start:], "Network.requestWillBeSentExtraInfo", network_id
+                        network_events[network_start:], "Network.requestWillBeSentExtraInfo", network_id
                     )
                 )
                 == 1
                 and len(
                     _network_events_for_request(
-                        events[start:], "Network.responseReceivedExtraInfo", network_id
+                        network_events[network_start:], "Network.responseReceivedExtraInfo", network_id
                     )
                 )
                 == 1,
                 f"Chromium worker {kind} auth ExtraInfo",
             )
             request_extra = _network_events_for_request(
-                events[start:], "Network.requestWillBeSentExtraInfo", network_id
+                network_events[network_start:], "Network.requestWillBeSentExtraInfo", network_id
             )[0]
             request_headers = request_extra.get("params", {}).get("headers") or {}
             assert_equal(
@@ -1285,7 +1287,7 @@ async def _verify_chromium_worker_auth_extra_info_sample(state: SmokeState) -> N
                 f"Chromium worker {kind} auth must expose the initial request",
             )
             response_extra = _network_events_for_request(
-                events[start:], "Network.responseReceivedExtraInfo", network_id
+                network_events[network_start:], "Network.responseReceivedExtraInfo", network_id
             )[0]
             assert_equal(
                 response_extra.get("params", {}).get("statusCode"),

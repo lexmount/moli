@@ -2861,12 +2861,8 @@ async fn worker_xmlhttprequest_uses_worker_script_base_url_and_event_target_list
         loader,
     );
 
-    let msg = timeout(TIMEOUT, handle.recv())
-        .await
-        .expect("timed out")
-        .expect("channel closed");
     assert_eq!(
-        expect_post_json(msg),
+        recv_post_json(&mut handle).await,
         format!(
             r#"{{"ctor":"function","eventTarget":true,"uploadTag":"[object XMLHttpRequestUpload]","status":200,"url":"{base_url}/assets/data.txt","text":"hello from worker xhr","readyState":4,"events":["prop-rs:readystatechange:1","rs:readystatechange:1","prop-rs:readystatechange:2","rs:readystatechange:2","prop-rs:readystatechange:3","rs:readystatechange:3","prop-rs:readystatechange:4","rs:readystatechange:4","prop-load:200","load:200:hello from worker xhr","prop-loadend:4","loadend:4"]}}"#
         )
@@ -2992,7 +2988,9 @@ async fn worker_sync_xhr_request_stage_interception_reports_explicit_failure() {
             .expect("timed out")
             .expect("worker channel closed");
         match message {
-            WorkerToParentMessage::SubresourceNetwork(record) => network = Some(record),
+            WorkerToParentMessage::Network(observation) => {
+                network = Some(observation.worker_record_for_test().clone())
+            }
             WorkerToParentMessage::Post(payload) => post = Some(stringify_payload(&payload)),
             WorkerToParentMessage::PendingSubresourceFetch(pending) => {
                 panic!("sync worker XHR should not be paused for interception: {pending:?}")
@@ -3175,7 +3173,9 @@ async fn worker_sync_xhr_timeout_cancels_fetch_and_throws_without_progress_event
             .expect("timed out")
             .expect("worker channel closed");
         match message {
-            WorkerToParentMessage::SubresourceNetwork(record) => network = Some(record),
+            WorkerToParentMessage::Network(observation) => {
+                network = Some(observation.worker_record_for_test().clone())
+            }
             WorkerToParentMessage::Post(payload) => post = Some(stringify_payload(&payload)),
             other => panic!("unexpected worker message: {other:?}"),
         }
@@ -3575,12 +3575,8 @@ async fn worker_xmlhttprequest_arraybuffer_preserves_response_bytes() {
         loader,
     );
 
-    let msg = timeout(TIMEOUT, handle.recv())
-        .await
-        .expect("timed out")
-        .expect("channel closed");
     assert_eq!(
-        expect_post_json(msg),
+        recv_post_json(&mut handle).await,
         r#"{"status":200,"bytes":"65,0,66","responseTextState":"InvalidStateError"}"#
     );
     server
@@ -3646,12 +3642,8 @@ async fn worker_xmlhttprequest_upload_dispatches_completion_events() {
         loader,
     );
 
-    let msg = timeout(TIMEOUT, handle.recv())
-        .await
-        .expect("timed out")
-        .expect("channel closed");
     assert_eq!(
-        expect_post_json(msg),
+        recv_post_json(&mut handle).await,
         r#"{"status":200,"response":"{\"ok\":true}","uploadEvents":["loadstart:true:true:true:20:20","progress:true:true:true:20:20","load:true:true:true:20:20","loadend:true:true:true:20:20"],"uploadOrder":["listener-before:loadstart","handler:loadstart","listener-after:loadstart","listener-before:progress","handler:progress","listener-after:progress","listener-before:load","handler:load","listener-after:load","listener-before:loadend","handler:loadend","listener-after:loadend"]}"#
     );
     server
@@ -3693,12 +3685,8 @@ async fn worker_fetch_uses_worker_script_base_url_and_resolves_response_text() {
         loader,
     );
 
-    let msg = timeout(TIMEOUT, handle.recv())
-        .await
-        .expect("timed out")
-        .expect("channel closed");
     assert_eq!(
-        expect_post_json(msg),
+        recv_post_json(&mut handle).await,
         format!(
             r#"{{"ok":true,"status":200,"url":"{base_url}/assets/data.txt","text":"hello from worker fetch"}}"#
         )
@@ -3764,12 +3752,8 @@ async fn worker_fetch_resolves_response_before_delayed_body() {
     release_body_tx
         .send(())
         .expect("delayed body receiver should still be waiting");
-    let body = timeout(TIMEOUT, handle.recv())
-        .await
-        .expect("timed out waiting for delayed worker fetch body")
-        .expect("worker channel closed");
     assert_eq!(
-        expect_post_json(body),
+        recv_post_json(&mut handle).await,
         r#"{"phase":"body","text":"hello world"}"#
     );
     server
@@ -3817,11 +3801,7 @@ async fn worker_fetch_streams_spooled_response_body_chunks() {
         loader,
     );
 
-    let msg = timeout(TIMEOUT, handle.recv())
-        .await
-        .expect("timed out")
-        .expect("channel closed");
-    let payload = expect_post_json(msg);
+    let payload = recv_post_json(&mut handle).await;
     let payload = serde_json::from_str::<serde_json::Value>(&payload)
         .expect("worker fetch stream result should be JSON");
     assert_eq!(payload["status"], 200);
@@ -3890,11 +3870,7 @@ async fn worker_fetch_applies_network_policy_extra_http_headers() {
         },
     );
 
-    let msg = timeout(TIMEOUT, handle.recv())
-        .await
-        .expect("timed out")
-        .expect("channel closed");
-    assert_eq!(expect_post_json(msg), r#""works-worker""#);
+    assert_eq!(recv_post_json(&mut handle).await, r#""works-worker""#);
     server.await.expect("worker header server should finish");
 }
 
@@ -4669,7 +4645,8 @@ async fn worker_fetch_bad_port_rejects_before_transport() {
         .expect("timed out")
         .expect("channel closed");
     match network {
-        WorkerToParentMessage::SubresourceNetwork(record) => {
+        WorkerToParentMessage::Network(observation) => {
+            let record = observation.worker_record_for_test().clone();
             assert_eq!(record.url().as_str(), "http://example.test:25/blocked-port");
             assert_eq!(record.resource_type(), SubresourceResourceType::Fetch);
             assert!(matches!(
@@ -4725,7 +4702,9 @@ async fn worker_fetch_file_url_rejects_before_interception_or_transport() {
             .expect("timed out waiting for worker file fetch rejection")
             .expect("worker channel closed")
         {
-            WorkerToParentMessage::SubresourceNetwork(record) => network = Some(record),
+            WorkerToParentMessage::Network(observation) => {
+                network = Some(observation.worker_record_for_test().clone())
+            }
             WorkerToParentMessage::Post(payload) => post = Some(stringify_payload(&payload)),
             other => panic!("unsupported worker fetch must not reach interception: {other:?}"),
         }
@@ -4774,7 +4753,8 @@ async fn worker_network_offline_fetch_rejects_and_reports_subresource_failure() 
         .expect("timed out")
         .expect("channel closed");
     match network {
-        WorkerToParentMessage::SubresourceNetwork(record) => {
+        WorkerToParentMessage::Network(observation) => {
+            let record = observation.worker_record_for_test().clone();
             assert_eq!(
                 record.url().as_str(),
                 "http://example.test/offline/worker-fetch"
@@ -4825,7 +4805,8 @@ async fn worker_fetch_blocked_url_rejects_and_reports_subresource_failure() {
         .expect("timed out")
         .expect("channel closed");
     match network {
-        WorkerToParentMessage::SubresourceNetwork(record) => {
+        WorkerToParentMessage::Network(observation) => {
+            let record = observation.worker_record_for_test().clone();
             assert_eq!(
                 record.url().as_str(),
                 "http://example.test/blocked/worker-fetch"
@@ -4895,7 +4876,9 @@ async fn worker_fetch_connection_refused_rejects_and_reports_subresource_failure
             })
             .expect("channel closed");
         match message {
-            WorkerToParentMessage::SubresourceNetwork(record) => network = Some(record),
+            WorkerToParentMessage::Network(observation) => {
+                network = Some(observation.worker_record_for_test().clone())
+            }
             WorkerToParentMessage::Post(payload) => {
                 post = Some(stringify_payload(&payload));
             }
@@ -4960,7 +4943,9 @@ async fn worker_fetch_dns_failure_rejects_and_reports_subresource_failure() {
             .expect("timed out")
             .expect("channel closed");
         match message {
-            WorkerToParentMessage::SubresourceNetwork(record) => network = Some(record),
+            WorkerToParentMessage::Network(observation) => {
+                network = Some(observation.worker_record_for_test().clone())
+            }
             WorkerToParentMessage::Post(payload) => {
                 post = Some(stringify_payload(&payload));
             }
@@ -5028,7 +5013,9 @@ async fn worker_fetch_redirect_error_rejects_before_following_redirect() {
             .expect("timed out")
             .expect("channel closed");
         match message {
-            WorkerToParentMessage::SubresourceNetwork(record) => network = Some(record),
+            WorkerToParentMessage::Network(observation) => {
+                network = Some(observation.worker_record_for_test().clone())
+            }
             WorkerToParentMessage::Post(payload) => {
                 post = Some(stringify_payload(&payload));
             }
@@ -5257,7 +5244,9 @@ async fn worker_fetch_no_cors_opaque_response_blocking_returns_empty_opaque_resp
             .expect("timed out")
             .expect("channel closed");
         match message {
-            WorkerToParentMessage::SubresourceNetwork(record) => network = Some(record),
+            WorkerToParentMessage::Network(observation) => {
+                network = Some(observation.worker_record_for_test().clone())
+            }
             WorkerToParentMessage::Post(payload) => post = Some(stringify_payload(&payload)),
             other => panic!("unexpected worker message: {other:?}"),
         }
@@ -5353,7 +5342,9 @@ async fn worker_fetch_no_cors_image_rejects_when_worker_policy_requires_coep_cor
             .expect("timed out")
             .expect("channel closed");
         match message {
-            WorkerToParentMessage::SubresourceNetwork(record) => network = Some(record),
+            WorkerToParentMessage::Network(observation) => {
+                network = Some(observation.worker_record_for_test().clone())
+            }
             WorkerToParentMessage::Post(payload) => post = Some(stringify_payload(&payload)),
             other => panic!("unexpected worker message: {other:?}"),
         }
@@ -5513,7 +5504,9 @@ async fn worker_fetch_no_cors_cross_origin_resource_policy_blocks_response() {
             .expect("timed out")
             .expect("channel closed");
         match message {
-            WorkerToParentMessage::SubresourceNetwork(record) => network = Some(record),
+            WorkerToParentMessage::Network(observation) => {
+                network = Some(observation.worker_record_for_test().clone())
+            }
             WorkerToParentMessage::Post(payload) => post = Some(stringify_payload(&payload)),
             other => panic!("unexpected worker message: {other:?}"),
         }
@@ -5580,7 +5573,9 @@ async fn worker_fetch_redirect_loop_rejects_and_reports_subresource_failure() {
             .expect("timed out")
             .expect("channel closed");
         match message {
-            WorkerToParentMessage::SubresourceNetwork(record) => network = Some(record),
+            WorkerToParentMessage::Network(observation) => {
+                network = Some(observation.worker_record_for_test().clone())
+            }
             WorkerToParentMessage::Post(payload) => {
                 post = Some(stringify_payload(&payload));
             }
@@ -5650,7 +5645,9 @@ async fn worker_fetch_cross_origin_redirect_without_cors_rejects_and_reports_fai
             .expect("timed out")
             .expect("channel closed");
         match message {
-            WorkerToParentMessage::SubresourceNetwork(record) => network = Some(record),
+            WorkerToParentMessage::Network(observation) => {
+                network = Some(observation.worker_record_for_test().clone())
+            }
             WorkerToParentMessage::Post(payload) => {
                 post = Some(stringify_payload(&payload));
             }
@@ -5735,7 +5732,9 @@ async fn worker_fetch_cross_origin_redirect_final_url_obeys_connect_src() {
             .expect("timed out")
             .expect("channel closed");
         match message {
-            WorkerToParentMessage::SubresourceNetwork(record) => network = Some(record),
+            WorkerToParentMessage::Network(observation) => {
+                network = Some(observation.worker_record_for_test().clone())
+            }
             WorkerToParentMessage::Post(payload) => {
                 post = Some(stringify_payload(&payload));
             }
@@ -5796,7 +5795,8 @@ async fn worker_blocked_url_pattern_update_reaches_running_worker() {
         .expect("timed out")
         .expect("channel closed");
     match network {
-        WorkerToParentMessage::SubresourceNetwork(record) => {
+        WorkerToParentMessage::Network(observation) => {
+            let record = observation.worker_record_for_test().clone();
             assert_eq!(
                 record.url().as_str(),
                 "http://example.test/blocked/live-worker-fetch"
@@ -6270,7 +6270,8 @@ async fn worker_xmlhttprequest_bad_port_errors_before_transport() {
         .expect("timed out")
         .expect("channel closed");
     match network {
-        WorkerToParentMessage::SubresourceNetwork(record) => {
+        WorkerToParentMessage::Network(observation) => {
+            let record = observation.worker_record_for_test().clone();
             assert_eq!(record.url().as_str(), "http://example.test:25/blocked-port");
             assert_eq!(record.resource_type(), SubresourceResourceType::Xhr);
             assert!(matches!(
@@ -6332,7 +6333,8 @@ async fn worker_xmlhttprequest_blocked_url_reports_error_after_loadstart() {
         .expect("timed out")
         .expect("channel closed");
     match network {
-        WorkerToParentMessage::SubresourceNetwork(record) => {
+        WorkerToParentMessage::Network(observation) => {
+            let record = observation.worker_record_for_test().clone();
             assert_eq!(
                 record.url().as_str(),
                 "http://example.test/blocked/worker-xhr"
@@ -6400,7 +6402,8 @@ async fn worker_xmlhttprequest_offline_reports_error_after_loadstart() {
         .expect("timed out")
         .expect("channel closed");
     match network {
-        WorkerToParentMessage::SubresourceNetwork(record) => {
+        WorkerToParentMessage::Network(observation) => {
+            let record = observation.worker_record_for_test().clone();
             assert_eq!(
                 record.url().as_str(),
                 "http://example.test/offline/worker-xhr"
@@ -6474,7 +6477,9 @@ async fn worker_xmlhttprequest_connection_refused_reports_error_after_loadstart(
             .expect("timed out")
             .expect("channel closed");
         match message {
-            WorkerToParentMessage::SubresourceNetwork(record) => network = Some(record),
+            WorkerToParentMessage::Network(observation) => {
+                network = Some(observation.worker_record_for_test().clone())
+            }
             WorkerToParentMessage::Post(payload) => {
                 post = Some(stringify_payload(&payload));
             }
@@ -6542,7 +6547,9 @@ async fn worker_xmlhttprequest_file_url_rejects_before_interception_or_transport
             .expect("timed out waiting for worker file XHR rejection")
             .expect("worker channel closed")
         {
-            WorkerToParentMessage::SubresourceNetwork(record) => network = Some(record),
+            WorkerToParentMessage::Network(observation) => {
+                network = Some(observation.worker_record_for_test().clone())
+            }
             WorkerToParentMessage::Post(payload) => post = Some(stringify_payload(&payload)),
             other => panic!("unsupported worker XHR must not reach interception: {other:?}"),
         }
@@ -6609,7 +6616,9 @@ async fn synchronous_worker_xhr_file_url_throws_network_error_without_progress_e
             .expect("timed out waiting for synchronous worker file XHR rejection")
             .expect("worker channel closed")
         {
-            WorkerToParentMessage::SubresourceNetwork(record) => network = Some(record),
+            WorkerToParentMessage::Network(observation) => {
+                network = Some(observation.worker_record_for_test().clone())
+            }
             WorkerToParentMessage::Post(payload) => post = Some(stringify_payload(&payload)),
             other => panic!("unsupported synchronous worker XHR reached interception: {other:?}"),
         }
@@ -6683,7 +6692,9 @@ async fn worker_xmlhttprequest_dns_failure_reports_error_after_loadstart() {
             })
             .expect("channel closed");
         match message {
-            WorkerToParentMessage::SubresourceNetwork(record) => network = Some(record),
+            WorkerToParentMessage::Network(observation) => {
+                network = Some(observation.worker_record_for_test().clone())
+            }
             WorkerToParentMessage::Post(payload) => {
                 post = Some(stringify_payload(&payload));
             }
@@ -6760,7 +6771,9 @@ async fn worker_xmlhttprequest_redirect_loop_reports_error_after_loadstart() {
             .expect("timed out")
             .expect("channel closed");
         match message {
-            WorkerToParentMessage::SubresourceNetwork(record) => network = Some(record),
+            WorkerToParentMessage::Network(observation) => {
+                network = Some(observation.worker_record_for_test().clone())
+            }
             WorkerToParentMessage::Post(payload) => {
                 post = Some(stringify_payload(&payload));
             }
@@ -6841,7 +6854,9 @@ async fn worker_xmlhttprequest_cross_origin_redirect_without_cors_reports_error_
             .expect("timed out")
             .expect("channel closed");
         match message {
-            WorkerToParentMessage::SubresourceNetwork(record) => network = Some(record),
+            WorkerToParentMessage::Network(observation) => {
+                network = Some(observation.worker_record_for_test().clone())
+            }
             WorkerToParentMessage::Post(payload) => {
                 post = Some(stringify_payload(&payload));
             }
@@ -6938,7 +6953,9 @@ async fn worker_xmlhttprequest_cross_origin_redirect_final_url_obeys_connect_src
             .expect("timed out")
             .expect("channel closed");
         match message {
-            WorkerToParentMessage::SubresourceNetwork(record) => network = Some(record),
+            WorkerToParentMessage::Network(observation) => {
+                network = Some(observation.worker_record_for_test().clone())
+            }
             WorkerToParentMessage::Post(payload) => {
                 post = Some(stringify_payload(&payload));
             }

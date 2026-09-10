@@ -5,7 +5,7 @@ use crate::devtools_runtime::{
 };
 use moli_core::page::{
     RendererCommittedNetworkObservation, RendererNetworkOutputItem, RendererNetworkSource,
-    RendererWorkerNetworkSource, ScriptNetworkOutputItem,
+    RendererWorkerIdentity, ScriptNetworkOutputItem,
 };
 
 async fn network_command(
@@ -75,7 +75,7 @@ impl NativeWorkers {
 fn attach_worker_network(
     conn: &mut CdpConnection,
     context_id: &str,
-    source: &RendererWorkerNetworkSource,
+    source: &RendererWorkerIdentity,
     session: &str,
 ) -> CommandOwnerScope {
     let owner = conn
@@ -83,12 +83,17 @@ fn attach_worker_network(
         .unwrap();
     let context = conn.browser_context_by_id_mut(context_id).unwrap();
     match source {
-        RendererWorkerNetworkSource::Shared(instance) => {
+        RendererWorkerIdentity::Dedicated(instance) => {
+            let target = context.dedicated_worker_targets.get_mut(instance).unwrap();
+            target.attach_session(session.into());
+            assert!(target.set_network_enabled(session, true));
+        }
+        RendererWorkerIdentity::Shared(instance) => {
             let target = context.shared_worker_targets.get_mut(instance).unwrap();
             target.attach_session(session.into());
             assert!(target.set_network_enabled(session, true));
         }
-        RendererWorkerNetworkSource::Service { version, .. } => {
+        RendererWorkerIdentity::Service { version, .. } => {
             let target = context.service_worker_targets.get_mut(version).unwrap();
             target.attach_session(session.into());
             assert!(target.set_network_enabled(session, true));
@@ -100,14 +105,30 @@ fn attach_worker_network(
 
 #[tokio::test]
 async fn native_shared_worker_network_snapshot_and_late_fifo_preserve_source_and_body_visibility() {
+    worker_network_snapshot_and_late_fifo_preserve_source_and_body_visibility(false).await;
+}
+
+#[tokio::test]
+async fn native_dedicated_worker_network_snapshot_and_late_fifo_preserve_source_and_body_visibility()
+ {
+    worker_network_snapshot_and_late_fifo_preserve_source_and_body_visibility(true).await;
+}
+
+async fn worker_network_snapshot_and_late_fifo_preserve_source_and_body_visibility(
+    dedicated: bool,
+) {
     const URL: &str = "data:text/plain,worker-network-body";
     // Real connect delivery triggers the requests while Browser retains the
     // Context. The legacy direct-evaluate test helper borrows that Context out
     // of its owner, so it cannot drive a test of concurrent native input.
     let mut fixture = NativeWorkers::start_script(
         &["first", "second"],
-        false,
-        "onconnect=()=>fetch('data:text/plain,worker-network-body').then(r=>r.text())",
+        dedicated,
+        if dedicated {
+            "fetch('data:text/plain,worker-network-body').then(r=>r.text())"
+        } else {
+            "onconnect=()=>fetch('data:text/plain,worker-network-body').then(r=>r.text())"
+        },
     )
     .await;
     let observations = fixture.network_occurrences(2, URL).await;
@@ -385,4 +406,164 @@ async fn native_service_worker_network_held_output_and_old_receipt_cannot_cross_
     );
     fixture.service.shutdown();
     server.shutdown().await;
+}
+
+#[tokio::test]
+async fn native_dedicated_worker_held_network_cannot_follow_a_reused_attachment() {
+    let mut fixture = NativeWorkers::start_script(
+        &["held"],
+        true,
+        "fetch('data:text/plain,dedicated-held-body').then(r=>r.text())",
+    )
+    .await;
+    let (residence, observation) = fixture
+        .network_occurrences(1, "data:text/plain,dedicated-held-body")
+        .await
+        .pop()
+        .unwrap();
+    let RendererNetworkSource::Worker(source @ RendererWorkerIdentity::Dedicated(instance)) =
+        &observation.occurrence().source
+    else {
+        panic!("a physical Dedicated source is required");
+    };
+    let mut snapshot = fixture.service.handle().subscribe().unwrap().0;
+    snapshot.network_requests.clear();
+    let mut conn = fixture.connection();
+    conn.project_browser_snapshot(snapshot).await;
+    let context_id = conn
+        .browser_context_by_browser_id(fixture.context.id())
+        .unwrap()
+        .id
+        .clone();
+    let owner = attach_worker_network(&mut conn, &context_id, source, "SID-held");
+    let held = worker_network_prepared_outputs(&mut conn, &owner, residence, &observation);
+    assert!(!held.is_empty());
+    {
+        let target = conn
+            .browser_context_by_id_mut(&context_id)
+            .unwrap()
+            .dedicated_worker_targets
+            .get_mut(instance)
+            .unwrap();
+        assert!(target.detach_session("SID-held").is_some());
+        target.attach_session("SID-held".into());
+        assert!(target.set_network_enabled("SID-held", true));
+    }
+    assert!(
+        worker_target_background_events_async(&mut conn, held)
+            .await
+            .is_empty(),
+        "target/session strings cannot revive the previous attachment's held output"
+    );
+    assert!(
+        worker_network_prepared_outputs(&mut conn, &owner, residence, &observation).is_empty(),
+        "a held request's publication claim cannot be acquired twice"
+    );
+    fixture.service.shutdown();
+}
+
+#[tokio::test]
+async fn native_nested_worker_snapshot_keeps_typed_parent_and_session_scope() {
+    for dedicated in [false, true] {
+        let child = "data:text/javascript,fetch('data:text/plain,nested-network').then(r=>r.text()).then(()=>postMessage('ready'))";
+        let body = format!(
+            "globalThis.child=new Worker({child:?},{{name:'nested'}});child.onmessage=()=>fetch('data:text/plain,parent-network').then(r=>r.text())"
+        );
+        let script = if dedicated {
+            body
+        } else {
+            format!("onconnect=()=>{{{body}}}")
+        };
+        let mut fixture = NativeWorkers::start_script(&["parent"], dedicated, &script).await;
+        // The parent's message-triggered request proves that the nested
+        // execution completed its request and is live in the same snapshot.
+        fixture
+            .network_occurrences(1, "data:text/plain,parent-network")
+            .await;
+        let mut snapshot = fixture.service.handle().subscribe().unwrap().0;
+        assert_eq!(snapshot.workers.len(), 2);
+        let child = snapshot
+            .workers
+            .iter()
+            .find_map(|worker| match worker {
+                WorkerSnapshot::Dedicated { worker, .. } if worker.info.name == "nested" => {
+                    Some(worker.info.clone())
+                }
+                _ => None,
+            })
+            .unwrap();
+        let RendererDedicatedWorkerOwner::Worker(parent_source) = &child.owner else {
+            panic!("nested Worker cannot acquire a Page parent");
+        };
+        assert_eq!(
+            matches!(parent_source, RendererWorkerIdentity::Dedicated(_)),
+            dedicated
+        );
+        let requests = std::mem::take(&mut snapshot.network_requests);
+        let mut conn = fixture.connection();
+        conn.project_browser_snapshot(snapshot).await;
+        let context_id = conn
+            .browser_context_by_browser_id(fixture.context.id())
+            .unwrap()
+            .id
+            .clone();
+        let parent_owner =
+            attach_worker_network(&mut conn, &context_id, parent_source, "SID-parent");
+        attach_worker_network(
+            &mut conn,
+            &context_id,
+            &RendererWorkerIdentity::Dedicated(child.instance_id),
+            "SID-child",
+        );
+        let context = conn.browser_context_by_id(&context_id).unwrap();
+        let parent_target = conn
+            .network_owner_identity_for_owner(&parent_owner)
+            .unwrap()
+            .1
+            .unwrap();
+        let child_target = context
+            .dedicated_worker_targets
+            .get(&child.instance_id)
+            .unwrap();
+        assert_eq!(
+            child_target.owner.target_id(context),
+            Some(parent_target.as_str())
+        );
+        assert!(dedicated_worker_auto_attach_owner_session_allowed(
+            &conn,
+            Some("SID-parent"),
+            &context_id,
+            &child_target.owner
+        ));
+        assert!(!dedicated_worker_auto_attach_owner_session_allowed(
+            &conn,
+            Some("SID-child"),
+            &context_id,
+            &child_target.owner
+        ));
+        let mut snapshot = fixture.service.handle().subscribe().unwrap().0;
+        snapshot.network_requests = requests;
+        let messages = conn
+            .project_browser_snapshot(snapshot)
+            .await
+            .into_iter()
+            .map(BackgroundProtocolEvent::into_protocol_message)
+            .collect::<Vec<_>>();
+        for (session, url) in [
+            ("SID-parent", "data:text/plain,parent-network"),
+            ("SID-child", "data:text/plain,nested-network"),
+        ] {
+            let starts = messages
+                .iter()
+                .filter(|message| {
+                    message["method"] == "Network.requestWillBeSent"
+                        && message["sessionId"] == session
+                })
+                .collect::<Vec<_>>();
+            assert_eq!(starts.len(), 1, "{messages:?}");
+            assert_eq!(starts[0]["params"]["request"]["url"], url);
+            assert!(starts[0]["params"].get("frameId").is_none());
+        }
+        fixture.service.shutdown();
+    }
 }

@@ -347,7 +347,8 @@ impl BrowserContext {
     ) -> Vec<Option<String>> {
         self.active_page_target()
             .runtime_slot
-            .network_event_session_ids(trigger_session_id, self.active_session_id())
+            .network_agent
+            .event_session_ids(trigger_session_id, self.active_session_id())
     }
 
     pub(crate) fn active_target_identity(&self) -> Option<(String, Option<String>)> {
@@ -738,7 +739,7 @@ impl BrowserContext {
         // best-effort registering the live renderer session before the attach
         // event is published.
         if let Some(endpoint) = self.worker_inspection_endpoint(
-            moli_core::runtime::RendererWorkerInspectionTarget::Dedicated(renderer_instance_id),
+            moli_core::runtime::RendererWorkerIdentity::Dedicated(renderer_instance_id),
         ) {
             endpoint.attach_session(Some(session_id));
         }
@@ -923,7 +924,7 @@ impl BrowserContext {
             title,
             url: target.url.clone(),
             attached: target.has_session(),
-            opener_id: target.owner_page.target_id().map(DevToolsTargetId::from),
+            opener_id: target.owner.target_id(self).map(DevToolsTargetId::from),
             opener_frame_id: None,
             can_access_opener: false,
             browser_context_id: Some(DevToolsBrowserContextId::from(self.id.as_str())),

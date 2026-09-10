@@ -124,8 +124,7 @@ pub(crate) fn dispatch_worker_event<'s>(
                 *event_kind,
             )
         }
-        WorkerToParentMessage::SubresourceNetwork(_)
-        | WorkerToParentMessage::Network(_)
+        WorkerToParentMessage::Network(_)
         | WorkerToParentMessage::PendingSubresourceFetch(_)
         | WorkerToParentMessage::PendingSubresourceFetchCanceled { .. }
         | WorkerToParentMessage::SubresourceContinue(_)

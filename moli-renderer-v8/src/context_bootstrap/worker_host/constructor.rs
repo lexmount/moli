@@ -223,26 +223,21 @@ pub(in crate::context_bootstrap) fn worker_constructor_callback<'s>(
                 );
                 return;
             };
+            let native_host = host.prepare_dedicated_worker_host(
+                base_url.clone(),
+                worker_script_resource_url(&resolved_url),
+                worker_options.name.clone(),
+            );
             let worker_id = host.register_loading_worker(
                 scope,
                 worker,
                 creator_top_level_site,
                 creator_storage_key,
-                worker_options.name.clone(),
+                native_host,
                 worker_options.credentials_mode,
                 None,
                 outside_settings_load,
                 execution_context_owner,
-            );
-            let recorded = host.record_dedicated_worker_target_created(
-                worker_id,
-                base_url,
-                worker_script_resource_url(&resolved_url),
-                worker_options.name,
-            );
-            debug_assert!(
-                recorded,
-                "newly registered DedicatedWorker must publish its target before load failure"
             );
             let started = host.start_failed_worker_script_load(
                 worker_id,
@@ -306,10 +301,23 @@ pub(in crate::context_bootstrap) fn worker_constructor_callback<'s>(
             if resolved_url.scheme() == "data" {
                 worker_policy_context.cross_origin_isolated = false;
             }
-            let mut options = WorkerSpawnOptions::new_with_request_client(
-                script_source,
+            let native_host = host.prepare_dedicated_worker_host(
+                base_url.clone(),
+                request_url,
+                worker_options.name.clone(),
+            );
+            let script = crate::runtime::RendererDedicatedWorkerMainScript {
+                script_url: resolved_url.to_string(),
+                outcome: crate::runtime::RendererDedicatedWorkerMainScriptOutcome::Loaded(
+                    Box::new(network_response),
+                ),
+            };
+            let mut options = WorkerSpawnOptions::for_worker_source(
+                crate::worker::WorkerScriptSource::text(script_source),
                 resolved_url.to_string(),
                 creator_request_client.clone(),
+                WorkerGlobalKind::Dedicated(native_host.clone()),
+                host.browser_context_runtime().worker_context_runtime(),
             )
             .with_script_kind(worker_options.worker_type)
             .with_module_credentials_mode(worker_options.credentials_mode)
@@ -317,45 +325,23 @@ pub(in crate::context_bootstrap) fn worker_constructor_callback<'s>(
             .with_module_static_import_content_security_policies(document_content_security_policies)
             .with_network_policy(network_policy)
             .with_policy_context(worker_policy_context)
-            .with_worker_context_runtime(host.browser_context_runtime().worker_context_runtime())
             .with_service_worker_runtime(host.browser_context_runtime().service_worker_runtime())
-            .with_global_kind(WorkerGlobalKind::Dedicated {
-                name: worker_options.name.clone(),
-            })
             .with_storage_key_top_level_site(Some(creator_top_level_site.clone()))
             .with_creator_storage_key(creator_storage_key)
             .with_indexed_db_manager(host.indexed_db_manager())
             .with_storage_bucket_store(Some(host.storage_bucket_store()))
-            .with_pause_evaluation_until_debugger(
-                host.browser_context_runtime()
-                    .dedicated_worker_pause_on_start_for_devtools(),
-            );
+            .with_pause_evaluation_until_debugger(native_host.pause_on_start());
             if let Some(client_id) = reserved_service_worker_client_id {
                 options = options.with_reserved_service_worker_client_id(client_id);
             }
-            let worker_handle = spawn_worker_with_options(options);
-            let worker_id =
-                host.register_worker(scope, worker, worker_handle, execution_context_owner);
-            let recorded = host.record_dedicated_worker_target_created(
-                worker_id,
-                base_url.clone(),
-                request_url,
-                worker_options.name.clone(),
-            );
-            debug_assert!(
-                recorded,
-                "newly registered local DedicatedWorker must publish its target"
-            );
-            let recorded = host.record_dedicated_worker_target_script_loaded(
-                worker_id,
-                resolved_url.to_string(),
-                Box::new(network_response),
-            );
-            debug_assert!(
-                recorded,
-                "newly registered local DedicatedWorker must publish its main script response"
-            );
-            worker_id
+            let worker_handle = crate::worker::spawn_dedicated_worker(options, script);
+            host.register_worker(
+                scope,
+                worker,
+                worker_handle,
+                execution_context_owner,
+                native_host,
+            )
         } else {
             let cross_origin_http_worker_script =
                 is_cross_origin_http_worker_script(&base_url, &resolved_url);
@@ -384,26 +370,21 @@ pub(in crate::context_bootstrap) fn worker_constructor_callback<'s>(
                 );
                 return;
             };
+            let native_host = host.prepare_dedicated_worker_host(
+                base_url.clone(),
+                worker_script_resource_url(&resolved_url),
+                worker_options.name.clone(),
+            );
             let worker_id = host.register_loading_worker(
                 scope,
                 worker,
                 creator_top_level_site,
                 creator_storage_key,
-                worker_options.name.clone(),
+                native_host,
                 worker_options.credentials_mode,
                 reserved_service_worker_client_id,
                 outside_settings_load,
                 execution_context_owner,
-            );
-            let recorded = host.record_dedicated_worker_target_created(
-                worker_id,
-                base_url.clone(),
-                worker_script_resource_url(&resolved_url),
-                worker_options.name.clone(),
-            );
-            debug_assert!(
-                recorded,
-                "newly registered external DedicatedWorker must publish its target before loading"
             );
             let started = if cross_origin_http_worker_script {
                 host.start_failed_worker_script_load(
@@ -421,7 +402,6 @@ pub(in crate::context_bootstrap) fn worker_constructor_callback<'s>(
                     worker_options.worker_type,
                     worker_options.credentials_mode,
                     document_referrer_policy,
-                    worker_options.name.clone(),
                     reserved_service_worker_client_id,
                 )
             };
@@ -462,10 +442,27 @@ pub(in crate::context_bootstrap) fn worker_constructor_callback<'s>(
                     return;
                 }
             };
-        let (script_url, script_source) =
+        let native_host = nested_context
+            .worker_context_runtime
+            .create_dedicated_worker(
+                crate::runtime::RendererDedicatedWorkerOwner::Worker(nested_context.owner.clone()),
+                worker_script_resource_url(&resolved_url).to_string(),
+                nested_context.base_url.to_string(),
+                worker_options.name.clone(),
+            );
+        let (script_source, script) =
             match materialize_nested_worker_script_source(&resolved_url, &nested_context) {
                 Ok(source) => source,
-                Err(message) => {
+                Err(script) => {
+                    let crate::runtime::RendererDedicatedWorkerMainScriptOutcome::Failed {
+                        error_message,
+                        ..
+                    } = &script.outcome
+                    else {
+                        unreachable!()
+                    };
+                    let message = error_message.clone();
+                    native_host.script_completed(script);
                     let _ = nested_context.wake_tx.send(
                         crate::worker::WorkerMessage::NestedWorkerEvent {
                             worker_id: nested_context.worker_id,
@@ -489,6 +486,7 @@ pub(in crate::context_bootstrap) fn worker_constructor_callback<'s>(
                     return;
                 }
             };
+        let script_url = script.script_url.clone();
         let mut network_policy = nested_context.network_policy.clone();
         network_policy.secure_context = Url::parse(&script_url).ok().is_some_and(|script_url| {
             worker_secure_context_for_script_url(
@@ -506,10 +504,12 @@ pub(in crate::context_bootstrap) fn worker_constructor_callback<'s>(
         if resolved_url.scheme() == "data" {
             worker_policy_context.cross_origin_isolated = false;
         }
-        let options = WorkerSpawnOptions::new_with_request_client(
-            script_source,
+        let options = WorkerSpawnOptions::for_worker_source(
+            crate::worker::WorkerScriptSource::text(script_source),
             script_url,
             nested_context.loader.request_client().clone(),
+            WorkerGlobalKind::Dedicated(native_host.clone()),
+            nested_context.worker_context_runtime.clone(),
         )
         .with_script_kind(worker_options.worker_type)
         .with_module_credentials_mode(worker_options.credentials_mode)
@@ -519,14 +519,11 @@ pub(in crate::context_bootstrap) fn worker_constructor_callback<'s>(
         )
         .with_network_policy(network_policy)
         .with_policy_context(worker_policy_context)
-        .with_worker_context_runtime(nested_context.worker_context_runtime.clone())
-        .with_global_kind(WorkerGlobalKind::Dedicated {
-            name: worker_options.name.clone(),
-        })
         .with_storage_key_top_level_site(Some(nested_context.storage_key_top_level_site.clone()))
         .with_creator_storage_key(nested_context.creator_storage_key.clone())
         .with_indexed_db_manager(nested_context.indexed_db_manager.clone())
-        .with_storage_bucket_store(nested_context.storage_bucket_store.clone());
+        .with_storage_bucket_store(nested_context.storage_bucket_store.clone())
+        .with_pause_evaluation_until_debugger(native_host.pause_on_start());
         let options = if let Some(runtime) = nested_context.service_worker_runtime.clone() {
             options.with_service_worker_runtime(runtime)
         } else {
@@ -537,7 +534,7 @@ pub(in crate::context_bootstrap) fn worker_constructor_callback<'s>(
         } else {
             options
         };
-        let mut worker_handle = spawn_worker_with_options(options);
+        let mut worker_handle = crate::worker::spawn_dedicated_worker(options, script);
         if let Some(mut rx) = worker_handle.take_receiver() {
             let wake_tx = nested_context.wake_tx.clone();
             let worker_id = nested_context.worker_id;
@@ -552,10 +549,15 @@ pub(in crate::context_bootstrap) fn worker_constructor_callback<'s>(
                     }
                 });
         }
-        let handle_box = Box::new(worker_handle);
-        let handle_ptr = Box::into_raw(handle_box);
-        let external = v8::External::new(scope, handle_ptr as *mut std::ffi::c_void);
-        set_private_value(scope, worker, WORKER_HANDLE_SLOT, external.into());
+        let installed = crate::worker::install_nested_worker_handle(
+            scope,
+            nested_context.worker_id,
+            worker_handle,
+        );
+        debug_assert!(
+            installed,
+            "a synchronous Worker constructor retains its reserved wrapper"
+        );
         set_private_value(
             scope,
             worker,
@@ -857,38 +859,76 @@ fn child_context_handle_from_global<'s>(
 fn materialize_nested_worker_script_source(
     script_url: &Url,
     context: &NestedWorkerContext,
-) -> Result<(String, String), String> {
-    if let Some(source) = materialize_worker_script_source(script_url)? {
-        return Ok((script_url.to_string(), source));
+) -> Result<
+    (String, crate::runtime::RendererDedicatedWorkerMainScript),
+    crate::runtime::RendererDedicatedWorkerMainScript,
+> {
+    use crate::runtime::{
+        RendererDedicatedWorkerMainScript, RendererDedicatedWorkerMainScriptOutcome,
+    };
+    let failed = |error_message, response| RendererDedicatedWorkerMainScript {
+        script_url: script_url.to_string(),
+        outcome: RendererDedicatedWorkerMainScriptOutcome::Failed {
+            error_message,
+            response,
+        },
+    };
+    if let Some(source) =
+        materialize_worker_script_source(script_url).map_err(|error| failed(error, None))?
+    {
+        let response = local_worker_main_script_network_response(script_url, &source);
+        return Ok((
+            source,
+            RendererDedicatedWorkerMainScript {
+                script_url: script_url.to_string(),
+                outcome: RendererDedicatedWorkerMainScriptOutcome::Loaded(Box::new(response)),
+            },
+        ));
     }
     let loader = context.loader.clone();
     let resource_url = worker_script_resource_url(script_url);
     let request = moli_fetch::Request::new("GET", resource_url.as_str(), None, vec![])
-        .map_err(|error| error.to_string())?
+        .map_err(|error| failed(error.to_string(), None))?
         .with_page_network_policy()
         .with_network_partition_key(context.network_policy.network_partition_key.clone())
         .with_initiator_url(&context.base_url);
     let response = loader
         .request_client()
         .fetch_text_for_worker_blocking_boundary(request)
-        .map_err(|error| format!("Failed to load worker script `{resource_url}`: {error}"))?;
-    crate::worker::ensure_worker_script_redirect_chain_same_origin(
-        &context.base_url,
-        &response.redirect_chain,
-        &response.final_url,
-    )
-    .map_err(|message| format!("Failed to construct 'Worker': {message}"))?;
-    moli_fetch::ensure_http_status_success(response.final_url.as_str(), response.status, false)
-        .map_err(|error| error.to_string())?;
-    crate::worker::ensure_worker_script_mime_acceptable(
-        &response.final_url,
-        &response.headers,
-        response.body_bytes(),
-    )?;
-    let (head, body) = response.into_text_parts();
-    let mut final_url = head.final_url;
+        .map_err(|error| {
+            failed(
+                format!("Failed to load worker script `{resource_url}`: {error}"),
+                None,
+            )
+        })?;
+    let admitted = (|| {
+        crate::worker::ensure_worker_script_redirect_chain_same_origin(
+            &context.base_url,
+            &response.redirect_chain,
+            &response.final_url,
+        )
+        .map_err(|message| format!("Failed to construct 'Worker': {message}"))?;
+        moli_fetch::ensure_http_status_success(response.final_url.as_str(), response.status, false)
+            .map_err(|error| error.to_string())?;
+        crate::worker::ensure_worker_script_mime_acceptable(
+            &response.final_url,
+            &response.headers,
+            response.body_bytes(),
+        )
+    })();
+    let response = Box::new(crate::protocol_types::NavigationResponse::from(response));
+    if let Err(message) = admitted {
+        return Err(failed(message, Some(response)));
+    }
+    let mut final_url = response.final_url.clone();
     final_url.set_fragment(script_url.fragment());
-    Ok((final_url.to_string(), body))
+    Ok((
+        response.body_text().to_owned(),
+        RendererDedicatedWorkerMainScript {
+            script_url: final_url.to_string(),
+            outcome: RendererDedicatedWorkerMainScriptOutcome::Loaded(response),
+        },
+    ))
 }
 
 fn worker_script_inherits_parent_service_worker_controller(script_url: &Url) -> bool {
@@ -1002,6 +1042,7 @@ fn local_worker_main_script_network_response(
 }
 
 /// Get the WorkerHandle pointer from a Worker JS object.
+#[cfg(test)]
 pub(super) fn get_worker_handle<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     worker: v8::Local<'s, v8::Object>,

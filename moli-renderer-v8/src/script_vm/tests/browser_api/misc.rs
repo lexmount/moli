@@ -89,6 +89,28 @@ fn service_worker_csp_report_seen(
     report_body_seen || report_record_seen
 }
 
+fn observe_dedicated_worker_network(
+    runtime: &crate::runtime::RendererBrowserContextRuntime,
+) -> std::sync::Arc<parking_lot::Mutex<Vec<crate::types::ScriptNetworkOutputItem>>> {
+    let items = std::sync::Arc::new(parking_lot::Mutex::new(Vec::new()));
+    let observed = items.clone();
+    runtime.install_network_handler(move |input| {
+        if let crate::runtime::RendererNetworkInput::Observation(input) = input
+            && matches!(
+                input.occurrence.source,
+                crate::runtime::RendererNetworkSource::Worker(
+                    crate::runtime::RendererWorkerIdentity::Dedicated(_)
+                )
+            )
+            && let crate::runtime::RendererNetworkOutputItem::Resource(item) =
+                &input.occurrence.item
+        {
+            observed.lock().push(item.as_ref().clone());
+        }
+    });
+    items
+}
+
 #[test]
 fn date_locale_methods_use_shared_time_formatting_surface() {
     let mut vm = new_storage_test_vm("https://date-locale-formatting.test/");
@@ -12143,6 +12165,7 @@ async fn navigator_service_worker_intercepts_worker_csp_report_destination() {
             &format!("{base_url}/app/page.html"),
             &loader,
         );
+    let worker_network = observe_dedicated_worker_network(&browser_context_runtime);
 
     vm.eval(
         r#"
@@ -12183,7 +12206,7 @@ async fn navigator_service_worker_intercepts_worker_csp_report_destination() {
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
     let mut items = Vec::new();
     loop {
-        items.extend(vm.take_network_output().into_items());
+        items.extend(std::mem::take(&mut *worker_network.lock()));
         if service_worker_csp_report_seen(
             &items,
             &report_url,
@@ -12266,6 +12289,7 @@ async fn worker_csp_report_fetch_pause_continue_preserves_service_worker_dispatc
             &format!("{base_url}/app/page.html"),
             &loader,
         );
+    let worker_network = observe_dedicated_worker_network(&browser_context_runtime);
 
     vm.eval(
         r#"
@@ -12359,7 +12383,7 @@ async fn worker_csp_report_fetch_pause_continue_preserves_service_worker_dispatc
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
     let mut items = Vec::new();
     loop {
-        items.extend(vm.take_network_output().into_items());
+        items.extend(std::mem::take(&mut *worker_network.lock()));
         if service_worker_csp_report_seen(
             &items,
             &report_url,

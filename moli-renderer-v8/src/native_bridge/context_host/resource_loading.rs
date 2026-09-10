@@ -185,18 +185,6 @@ impl JsContextHost {
         self.note_subresource_activity();
     }
 
-    pub(crate) fn next_subresource_network_request_handle(
-        &mut self,
-    ) -> SubresourceNetworkRequestHandle {
-        let handle =
-            SubresourceNetworkRequestHandle::new(self.next_subresource_network_request_handle);
-        self.next_subresource_network_request_handle = self
-            .next_subresource_network_request_handle
-            .wrapping_add(1)
-            .max(1);
-        handle
-    }
-
     pub(crate) fn record_subresource_request_started(
         &mut self,
         request: SubresourceRequestStarted,
@@ -251,7 +239,7 @@ impl JsContextHost {
             **record = record
                 .as_ref()
                 .clone()
-                .with_request_handle(self.next_subresource_network_request_handle());
+                .with_request_handle(SubresourceNetworkRequestHandle::allocate());
         }
         if let Some((owner_local_host_id, source_document)) = self.renderer_network_source() {
             let observation = self.browser_context_runtime.report_network(
@@ -406,7 +394,7 @@ impl JsContextHost {
         request_initiator_type: SubresourceRequestInitiatorType,
         result: &std::result::Result<crate::protocol_types::NavigationResponse, String>,
     ) {
-        let handle = self.next_subresource_network_request_handle();
+        let handle = SubresourceNetworkRequestHandle::allocate();
         self.record_subresource_request_started(SubresourceRequestStarted::new(
             handle,
             frame_id,
@@ -486,7 +474,7 @@ impl JsContextHost {
         self.next_pending_subresource_fetch_id += 1;
         info.internal_id = self.next_pending_subresource_fetch_id;
         if info.network_request_handle.is_none() {
-            info.network_request_handle = Some(self.next_subresource_network_request_handle());
+            info.network_request_handle = Some(SubresourceNetworkRequestHandle::allocate());
         }
     }
 

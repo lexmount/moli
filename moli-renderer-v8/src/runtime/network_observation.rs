@@ -8,12 +8,23 @@ use super::{RendererBrowserContextRuntimeId, RendererDocumentLifecycleIdentity};
 
 /// Identity of a physical worker execution, not an Inspector target or session.
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
-pub enum RendererWorkerNetworkSource {
+pub enum RendererWorkerIdentity {
+    Dedicated(u64),
     Shared(moli_shared_worker::SharedWorkerInstanceId),
     Service {
         version: u64,
         run: super::RendererServiceWorkerRunIdentity,
     },
+}
+
+impl RendererWorkerIdentity {
+    pub fn unavailable_message(&self) -> &'static str {
+        match self {
+            Self::Dedicated(_) => "DedicatedWorkerRuntimeUnavailable",
+            Self::Shared(_) => "SharedWorkerRuntimeUnavailable",
+            Self::Service { .. } => "ServiceWorkerRuntimeUnavailable",
+        }
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -22,7 +33,7 @@ pub enum RendererNetworkSource {
         owner_local_host_id: super::RendererOwnerLocalHostId,
         document: RendererDocumentLifecycleIdentity,
     },
-    Worker(RendererWorkerNetworkSource),
+    Worker(RendererWorkerIdentity),
 }
 
 /// Request IDs are local to a physical producer. Page request admission spans
@@ -33,7 +44,7 @@ pub enum RendererNetworkSourceIdentity {
         owner_local_host_id: super::RendererOwnerLocalHostId,
         page: super::PageId,
     },
-    Worker(RendererWorkerNetworkSource),
+    Worker(RendererWorkerIdentity),
 }
 
 impl RendererNetworkSource {
@@ -182,6 +193,17 @@ impl RendererCommittedNetworkObservation {
 }
 
 impl RendererNetworkObservation {
+    #[cfg(test)]
+    pub(crate) fn worker_record_for_test(&self) -> &moli_page_types::SubresourceNetworkRecord {
+        let RendererNetworkOutputItem::Resource(item) = &self.occurrence.item else {
+            panic!("expected a Worker resource")
+        };
+        let ScriptNetworkOutputItem::SubresourceNetworkRecord(record) = item.as_ref() else {
+            panic!("expected a complete Worker record")
+        };
+        record
+    }
+
     pub async fn committed(mut self) -> Option<RendererCommittedNetworkObservation> {
         loop {
             if let Some((browser_sequence, source)) = self.committed.borrow_and_update().clone() {
@@ -284,14 +306,15 @@ type NetworkHandler = Box<dyn Fn(RendererNetworkInput) + Send + Sync>;
 #[derive(Clone, Debug)]
 pub(crate) struct RendererWorkerNetworkReporter {
     reporter: RendererNetworkReporter,
-    source: RendererWorkerNetworkSource,
+    source: RendererWorkerIdentity,
 }
 
 impl RendererWorkerNetworkReporter {
-    pub(crate) fn new(
-        reporter: RendererNetworkReporter,
-        source: RendererWorkerNetworkSource,
-    ) -> Self {
+    pub(crate) fn identity(&self) -> &RendererWorkerIdentity {
+        &self.source
+    }
+
+    pub(crate) fn new(reporter: RendererNetworkReporter, source: RendererWorkerIdentity) -> Self {
         Self { reporter, source }
     }
 
@@ -318,9 +341,7 @@ impl RendererWorkerNetworkReporter {
     pub(crate) fn unobserved_for_test() -> Self {
         Self::new(
             RendererNetworkReporter::new(RendererBrowserContextRuntimeId::new_for_testing(1)),
-            RendererWorkerNetworkSource::Shared(
-                moli_shared_worker::SharedWorkerInstanceId::from_u64(1),
-            ),
+            RendererWorkerIdentity::Shared(moli_shared_worker::SharedWorkerInstanceId::from_u64(1)),
         )
     }
 }

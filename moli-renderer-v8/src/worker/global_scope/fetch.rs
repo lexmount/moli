@@ -800,9 +800,9 @@ pub(in crate::worker) fn continue_pending_worker_fetch_response(
         };
         if let Some(record) = pending.network_record.as_mut() {
             record.intercept_response = false;
+            record.handle_auth_requests = false;
         }
         pending.network_request_handle = request.network_request_handle;
-        pending.network_record = None;
         let Some(mut response) = pending.paused_response.take() else {
             return;
         };
@@ -1075,9 +1075,9 @@ pub(in crate::worker) fn continue_pending_worker_xhr_response(
         };
         if let Some(record) = pending.network_record.as_mut() {
             record.intercept_response = false;
+            record.handle_auth_requests = false;
         }
         pending.network_request_handle = request.network_request_handle;
-        pending.network_record = None;
         let Some(mut response) = pending.paused_response.take() else {
             return;
         };
@@ -2577,16 +2577,6 @@ fn record_worker_fetch_success(
     network_request_headers: Option<Vec<(String, String)>>,
 ) {
     let record = pending.network_record.as_ref();
-    // Dedicated Worker projection still belongs to the parent migration.
-    // Native Worker facts do not depend on a Fetch interception being active.
-    if record.is_none()
-        && matches!(
-            state.global_kind,
-            crate::worker::WorkerGlobalKind::Dedicated { .. }
-        )
-    {
-        return;
-    }
     record_worker_subresource_success_with_handle(
         state,
         pending.network_request_handle,

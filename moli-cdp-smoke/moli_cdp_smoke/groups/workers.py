@@ -6,7 +6,7 @@ from typing import Any
 
 from . import SmokeState
 from ..assertions import SmokeError, assert_equal, wait_until
-from ..helpers import attach_cdp_event_collector, run_worker_command
+from ..helpers import attach_cdp_event_collector, collect_worker_network_events, run_worker_command
 
 
 async def run_workers_group(state: SmokeState) -> None:
@@ -59,12 +59,13 @@ async def run_workers_group(state: SmokeState) -> None:
     await context.unroute("**/worker-route-continue")
     await context.unroute("**/worker-route-abort")
 
-    await _verify_worker_fetch_auth_challenge(state)
-    await _verify_worker_fetch_auth_cancel(state)
-    await _verify_worker_fetch_auth_response_stage(state)
-    await _verify_worker_xhr_auth_challenge(state)
-    await _verify_worker_xhr_auth_cancel(state)
-    await _verify_worker_xhr_auth_response_stage(state)
+    async with collect_worker_network_events(state.endpoint, state.cdp) as network_events:
+        await _verify_worker_fetch_auth_challenge(state, network_events)
+        await _verify_worker_fetch_auth_cancel(state, network_events)
+        await _verify_worker_fetch_auth_response_stage(state, network_events)
+        await _verify_worker_xhr_auth_challenge(state, network_events)
+        await _verify_worker_xhr_auth_cancel(state, network_events)
+        await _verify_worker_xhr_auth_response_stage(state, network_events)
 
 
 async def _verify_shared_worker_postmessage_reuse(state: SmokeState) -> None:
@@ -280,7 +281,9 @@ async def _cancel_worker_auth(state: SmokeState, request_id: str) -> None:
     )
 
 
-async def _verify_worker_fetch_auth_challenge(state: SmokeState) -> None:
+async def _verify_worker_fetch_auth_challenge(
+    state: SmokeState, network_events: list[dict[str, Any]],
+) -> None:
     page = state.page
     fixture = state.fixture
     auth_url = f"{fixture}/api-auth?worker=1&realm=worker-fetch-auth"
@@ -289,7 +292,7 @@ async def _verify_worker_fetch_auth_challenge(state: SmokeState) -> None:
         ["Fetch.requestPaused", "Fetch.authRequired"],
     )
     fetch_start = len(fetch_events)
-    network_start = len(state.subresource_events)
+    network_start = len(network_events)
     await _enable_worker_auth_interception(state, "Fetch")
     worker_task = asyncio.create_task(
         run_worker_command(
@@ -324,7 +327,7 @@ async def _verify_worker_fetch_auth_challenge(state: SmokeState) -> None:
                 event["method"] == "Network.responseReceived"
                 and event["params"].get("requestId") == network_id
                 and event["params"].get("response", {}).get("status") == 200
-                for event in state.subresource_events[network_start:]
+                for event in network_events[network_start:]
             ),
             "worker authenticated Fetch Network.responseReceived",
         )
@@ -332,7 +335,7 @@ async def _verify_worker_fetch_auth_challenge(state: SmokeState) -> None:
             lambda: any(
                 event["method"] == "Network.loadingFinished"
                 and event["params"].get("requestId") == network_id
-                for event in state.subresource_events[network_start:]
+                for event in network_events[network_start:]
             ),
             "worker authenticated Fetch Network.loadingFinished",
         )
@@ -343,7 +346,9 @@ async def _verify_worker_fetch_auth_challenge(state: SmokeState) -> None:
         await state.cdp.send("Fetch.disable")
 
 
-async def _verify_worker_fetch_auth_cancel(state: SmokeState) -> None:
+async def _verify_worker_fetch_auth_cancel(
+    state: SmokeState, network_events: list[dict[str, Any]],
+) -> None:
     page = state.page
     fixture = state.fixture
     auth_url = f"{fixture}/api-auth?worker-cancel=1&realm=worker-fetch-cancel"
@@ -352,7 +357,7 @@ async def _verify_worker_fetch_auth_cancel(state: SmokeState) -> None:
         ["Fetch.requestPaused", "Fetch.authRequired"],
     )
     fetch_start = len(fetch_events)
-    network_start = len(state.subresource_events)
+    network_start = len(network_events)
     await _enable_worker_auth_interception(state, "Fetch")
     worker_task = asyncio.create_task(
         run_worker_command(
@@ -381,7 +386,7 @@ async def _verify_worker_fetch_auth_cancel(state: SmokeState) -> None:
                 event["method"] == "Network.responseReceived"
                 and event["params"].get("requestId") == network_id
                 and event["params"].get("response", {}).get("status") == 401
-                for event in state.subresource_events[network_start:]
+                for event in network_events[network_start:]
             ),
             "worker auth cancel Network.responseReceived",
         )
@@ -389,14 +394,14 @@ async def _verify_worker_fetch_auth_cancel(state: SmokeState) -> None:
             lambda: any(
                 event["method"] == "Network.loadingFinished"
                 and event["params"].get("requestId") == network_id
-                for event in state.subresource_events[network_start:]
+                for event in network_events[network_start:]
             ),
             "worker auth cancel Network.loadingFinished",
         )
         if any(
             event["method"] == "Network.loadingFailed"
             and event["params"].get("requestId") == network_id
-            for event in state.subresource_events[network_start:]
+            for event in network_events[network_start:]
         ):
             raise SmokeError("worker auth cancel Fetch must not emit Network.loadingFailed")
         state.record("worker_fetch_auth_challenge_cancel")
@@ -406,7 +411,9 @@ async def _verify_worker_fetch_auth_cancel(state: SmokeState) -> None:
         await state.cdp.send("Fetch.disable")
 
 
-async def _verify_worker_fetch_auth_response_stage(state: SmokeState) -> None:
+async def _verify_worker_fetch_auth_response_stage(
+    state: SmokeState, network_events: list[dict[str, Any]],
+) -> None:
     page = state.page
     fixture = state.fixture
     auth_url = f"{fixture}/api-auth?worker-response-stage=1&realm=worker-fetch-response-stage"
@@ -415,7 +422,7 @@ async def _verify_worker_fetch_auth_response_stage(state: SmokeState) -> None:
         ["Fetch.requestPaused", "Fetch.authRequired"],
     )
     fetch_start = len(fetch_events)
-    network_start = len(state.subresource_events)
+    network_start = len(network_events)
     await _enable_worker_auth_interception(state, "Fetch")
     worker_task = asyncio.create_task(
         run_worker_command(
@@ -452,7 +459,7 @@ async def _verify_worker_fetch_auth_response_stage(state: SmokeState) -> None:
             lambda: any(
                 event["method"] == "Network.loadingFinished"
                 and event["params"].get("requestId") == network_id
-                for event in state.subresource_events[network_start:]
+                for event in network_events[network_start:]
             ),
             "worker auth response-stage Network.loadingFinished",
         )
@@ -463,7 +470,9 @@ async def _verify_worker_fetch_auth_response_stage(state: SmokeState) -> None:
         await state.cdp.send("Fetch.disable")
 
 
-async def _verify_worker_xhr_auth_challenge(state: SmokeState) -> None:
+async def _verify_worker_xhr_auth_challenge(
+    state: SmokeState, network_events: list[dict[str, Any]],
+) -> None:
     page = state.page
     fixture = state.fixture
     auth_url = f"{fixture}/api-auth?worker-xhr=1&realm=worker-xhr-auth"
@@ -472,7 +481,7 @@ async def _verify_worker_xhr_auth_challenge(state: SmokeState) -> None:
         ["Fetch.requestPaused", "Fetch.authRequired"],
     )
     fetch_start = len(fetch_events)
-    network_start = len(state.subresource_events)
+    network_start = len(network_events)
     await _enable_worker_auth_interception(state, "XHR")
     worker_task = asyncio.create_task(
         run_worker_command(
@@ -507,7 +516,7 @@ async def _verify_worker_xhr_auth_challenge(state: SmokeState) -> None:
                 event["method"] == "Network.responseReceived"
                 and event["params"].get("requestId") == network_id
                 and event["params"].get("response", {}).get("status") == 200
-                for event in state.subresource_events[network_start:]
+                for event in network_events[network_start:]
             ),
             "worker authenticated XHR Network.responseReceived",
         )
@@ -515,7 +524,7 @@ async def _verify_worker_xhr_auth_challenge(state: SmokeState) -> None:
             lambda: any(
                 event["method"] == "Network.loadingFinished"
                 and event["params"].get("requestId") == network_id
-                for event in state.subresource_events[network_start:]
+                for event in network_events[network_start:]
             ),
             "worker authenticated XHR Network.loadingFinished",
         )
@@ -526,7 +535,9 @@ async def _verify_worker_xhr_auth_challenge(state: SmokeState) -> None:
         await state.cdp.send("Fetch.disable")
 
 
-async def _verify_worker_xhr_auth_cancel(state: SmokeState) -> None:
+async def _verify_worker_xhr_auth_cancel(
+    state: SmokeState, network_events: list[dict[str, Any]],
+) -> None:
     page = state.page
     fixture = state.fixture
     auth_url = f"{fixture}/api-auth?worker-xhr-cancel=1&realm=worker-xhr-cancel"
@@ -535,7 +546,7 @@ async def _verify_worker_xhr_auth_cancel(state: SmokeState) -> None:
         ["Fetch.requestPaused", "Fetch.authRequired"],
     )
     fetch_start = len(fetch_events)
-    network_start = len(state.subresource_events)
+    network_start = len(network_events)
     await _enable_worker_auth_interception(state, "XHR")
     worker_task = asyncio.create_task(
         run_worker_command(
@@ -564,7 +575,7 @@ async def _verify_worker_xhr_auth_cancel(state: SmokeState) -> None:
                 event["method"] == "Network.responseReceived"
                 and event["params"].get("requestId") == network_id
                 and event["params"].get("response", {}).get("status") == 401
-                for event in state.subresource_events[network_start:]
+                for event in network_events[network_start:]
             ),
             "worker XHR auth cancel Network.responseReceived",
         )
@@ -572,14 +583,14 @@ async def _verify_worker_xhr_auth_cancel(state: SmokeState) -> None:
             lambda: any(
                 event["method"] == "Network.loadingFinished"
                 and event["params"].get("requestId") == network_id
-                for event in state.subresource_events[network_start:]
+                for event in network_events[network_start:]
             ),
             "worker XHR auth cancel Network.loadingFinished",
         )
         if any(
             event["method"] == "Network.loadingFailed"
             and event["params"].get("requestId") == network_id
-            for event in state.subresource_events[network_start:]
+            for event in network_events[network_start:]
         ):
             raise SmokeError("worker XHR auth cancel must not emit Network.loadingFailed")
         state.record("worker_xhr_auth_challenge_cancel")
@@ -589,7 +600,9 @@ async def _verify_worker_xhr_auth_cancel(state: SmokeState) -> None:
         await state.cdp.send("Fetch.disable")
 
 
-async def _verify_worker_xhr_auth_response_stage(state: SmokeState) -> None:
+async def _verify_worker_xhr_auth_response_stage(
+    state: SmokeState, network_events: list[dict[str, Any]],
+) -> None:
     page = state.page
     fixture = state.fixture
     auth_url = f"{fixture}/api-auth?worker-xhr-response-stage=1&realm=worker-xhr-response-stage"
@@ -598,7 +611,7 @@ async def _verify_worker_xhr_auth_response_stage(state: SmokeState) -> None:
         ["Fetch.requestPaused", "Fetch.authRequired"],
     )
     fetch_start = len(fetch_events)
-    network_start = len(state.subresource_events)
+    network_start = len(network_events)
     await _enable_worker_auth_interception(state, "XHR")
     worker_task = asyncio.create_task(
         run_worker_command(
@@ -635,7 +648,7 @@ async def _verify_worker_xhr_auth_response_stage(state: SmokeState) -> None:
             lambda: any(
                 event["method"] == "Network.loadingFinished"
                 and event["params"].get("requestId") == network_id
-                for event in state.subresource_events[network_start:]
+                for event in network_events[network_start:]
             ),
             "worker XHR auth response-stage Network.loadingFinished",
         )

@@ -817,7 +817,6 @@ fn spawn_parent_message_pump(
                     }
                     WorkerToParentMessage::Post(_)
                     | WorkerToParentMessage::SharedWorkerClosed
-                    | WorkerToParentMessage::SubresourceNetwork(_)
                     | WorkerToParentMessage::PendingSubresourceFetch(_)
                     | WorkerToParentMessage::PendingSubresourceFetchCanceled { .. }
                     | WorkerToParentMessage::SubresourceContinue(_)
@@ -878,10 +877,22 @@ fn spawn_service_worker(
     let policy_context =
         service_worker_script_policy_context(&script.resource.final_url, &script.resource.headers);
     crate::worker::spawn_worker_with_options(
-        WorkerSpawnOptions::new_with_request_client(
-            script.source,
+        WorkerSpawnOptions::for_worker_source(
+            crate::worker::WorkerScriptSource::text(script.source),
             script.resource.final_url.to_string(),
             params.request_client.clone(),
+            crate::worker::WorkerGlobalKind::Service {
+                network: params.worker_context_runtime.network_for_worker(
+                    crate::runtime::RendererWorkerIdentity::Service {
+                        version: params.run_owner.version_id().as_u64(),
+                        run: params.run_owner.cloned_run_identity(),
+                    },
+                ),
+                registration_id: params.registration_id,
+                version_id: params.run_owner.version_id(),
+                scope_url: params.scope_url.clone(),
+            },
+            params.worker_context_runtime.clone(),
         )
         .with_script_kind(params.script_kind)
         .with_module_static_import_initiator_url(params.document_url.clone())
@@ -895,19 +906,7 @@ fn spawn_service_worker(
         )
         .with_network_policy(params.network_policy)
         .with_policy_context(policy_context)
-        .with_worker_context_runtime(params.worker_context_runtime.clone())
         .with_service_worker_runtime(service)
-        .with_global_kind(crate::worker::WorkerGlobalKind::Service {
-            network: params.worker_context_runtime.network_for_worker(
-                crate::runtime::RendererWorkerNetworkSource::Service {
-                    version: params.run_owner.version_id().as_u64(),
-                    run: params.run_owner.cloned_run_identity(),
-                },
-            ),
-            registration_id: params.registration_id,
-            version_id: params.run_owner.version_id(),
-            scope_url: params.scope_url.clone(),
-        })
         .with_api_storage_key(Some(storage_key))
         .with_broadcast_channel_top_level_site(params.broadcast_channel_top_level_site)
         .with_indexed_db_manager(params.indexed_db_manager)

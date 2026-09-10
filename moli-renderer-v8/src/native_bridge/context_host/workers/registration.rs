@@ -13,7 +13,7 @@ use crate::types::{DedicatedWorkerId, SubresourcePolicyContext};
 use crate::worker::{
     WorkerGlobalKind, WorkerHandle, WorkerNetworkPolicy, WorkerPendingFetchContinue,
     WorkerPendingXhrContinue, WorkerRuntimeEvent, WorkerScriptKind, WorkerScriptSource,
-    WorkerSpawnOptions, spawn_worker_with_options,
+    WorkerSpawnOptions, spawn_dedicated_worker,
 };
 use moli_storage_key::MoliStorageKey;
 use url::Url;
@@ -56,6 +56,28 @@ impl WorkerScriptLoadFailure {
 }
 
 impl JsContextHost {
+    pub(crate) fn prepare_dedicated_worker_host(
+        &self,
+        document_url: Url,
+        request_url: Url,
+        name: String,
+    ) -> crate::runtime::RendererDedicatedWorkerHost {
+        let page = self
+            .page_dedicated_worker_client_event_sender()
+            .page_token();
+        self.browser_context_runtime()
+            .worker_context_runtime()
+            .create_dedicated_worker(
+                crate::runtime::RendererDedicatedWorkerOwner::Document {
+                    owner_local_host_id: page.local_host_id(),
+                    page_id: page.page_id(),
+                },
+                request_url.to_string(),
+                document_url.to_string(),
+                name,
+            )
+    }
+
     pub(crate) fn register_dedicated_worker_outside_settings_load(
         &self,
         dispatch_scope: super::super::OwnerDispatchScope,
@@ -151,18 +173,10 @@ impl JsContextHost {
         wrapper: v8::Local<'_, v8::Object>,
         mut worker_handle: WorkerHandle,
         owner: super::super::WindowExecutionContextBinding,
+        native_host: crate::runtime::RendererDedicatedWorkerHost,
     ) -> DedicatedWorkerId {
         let worker_id = DedicatedWorkerId::new(self.next_worker_id);
         self.next_worker_id += 1;
-        let renderer_instance_id = self
-            .browser_context_runtime()
-            .allocate_dedicated_worker_instance_id();
-        self.browser_context_runtime()
-            .attach_dedicated_worker_devtools_handle(
-                renderer_instance_id,
-                &worker_handle,
-                self.renderer_output_journal(),
-            );
         let client_event_producer = self.dedicated_worker_client_event_producer(worker_id, &owner);
         Self::start_worker_message_relay(
             worker_id,
@@ -173,8 +187,7 @@ impl JsContextHost {
         self.workers.insert(
             worker_id,
             WorkerConnectionState {
-                renderer_instance_id,
-                target_created: false,
+                host: native_host,
                 wrapper: v8::Global::new(scope, wrapper),
                 owner,
                 client_event_producer,
@@ -193,7 +206,7 @@ impl JsContextHost {
         wrapper: v8::Local<'_, v8::Object>,
         storage_key_top_level_site: String,
         creator_storage_key: MoliStorageKey,
-        name: String,
+        native_host: crate::runtime::RendererDedicatedWorkerHost,
         module_credentials_mode: moli_fetch::RequestCredentialsMode,
         reserved_service_worker_client_id: Option<ServiceWorkerClientId>,
         outside_settings_load: ResourceLoadLease,
@@ -201,15 +214,11 @@ impl JsContextHost {
     ) -> DedicatedWorkerId {
         let worker_id = DedicatedWorkerId::new(self.next_worker_id);
         self.next_worker_id += 1;
-        let renderer_instance_id = self
-            .browser_context_runtime()
-            .allocate_dedicated_worker_instance_id();
         let client_event_producer = self.dedicated_worker_client_event_producer(worker_id, &owner);
         self.workers.insert(
             worker_id,
             WorkerConnectionState {
-                renderer_instance_id,
-                target_created: false,
+                host: native_host,
                 wrapper: v8::Global::new(scope, wrapper),
                 owner,
                 client_event_producer,
@@ -219,7 +228,6 @@ impl JsContextHost {
                     load_task: None,
                     terminated: false,
                     outside_settings_load,
-                    name,
                     module_credentials_mode,
                     storage_key_top_level_site,
                     creator_storage_key,
@@ -240,7 +248,6 @@ impl JsContextHost {
         script_kind: WorkerScriptKind,
         module_credentials_mode: moli_fetch::RequestCredentialsMode,
         document_referrer_policy: Option<String>,
-        name: String,
         reserved_service_worker_client_id: Option<ServiceWorkerClientId>,
     ) -> bool {
         let browser_context_runtime = self.browser_context_runtime();
@@ -328,14 +335,12 @@ impl JsContextHost {
                 WorkerExecutionState::Loading {
                     load_task: slot,
                     terminated,
-                    name: loading_name,
                     ..
                 } => {
                     if *terminated {
                         load_task.abort();
                         return false;
                     }
-                    *loading_name = name;
                     *slot = Some(load_task);
                     true
                 }
@@ -414,6 +419,7 @@ impl JsContextHost {
         worker_id: DedicatedWorkerId,
         script_url: String,
         script_source: WorkerScriptSource,
+        network_response: Box<crate::protocol_types::NavigationResponse>,
         script_kind: WorkerScriptKind,
         secure_context: bool,
         response_referrer_policy: Option<String>,
@@ -427,11 +433,11 @@ impl JsContextHost {
         let Some(state) = self.workers.get_mut(&worker_id) else {
             return false;
         };
+        let native_host = state.host.clone();
         let WorkerExecutionState::Loading {
             pending_messages,
             load_task,
             terminated,
-            name,
             module_credentials_mode,
             storage_key_top_level_site,
             creator_storage_key,
@@ -447,7 +453,6 @@ impl JsContextHost {
             return false;
         }
         let pending_messages = std::mem::take(pending_messages);
-        let name = name.clone();
         let storage_key_top_level_site = storage_key_top_level_site.clone();
         let creator_storage_key = creator_storage_key.clone();
         let reserved_service_worker_client_id = reserved_service_worker_client_id.take();
@@ -464,10 +469,18 @@ impl JsContextHost {
             fetch_subresource_interception_resource_type: self
                 .fetch_subresource_interception_resource_type(),
         };
-        let mut spawn_options = WorkerSpawnOptions::with_source_and_request_client(
+        let script = crate::runtime::RendererDedicatedWorkerMainScript {
+            script_url: script_url.clone(),
+            outcome: crate::runtime::RendererDedicatedWorkerMainScriptOutcome::Loaded(
+                network_response,
+            ),
+        };
+        let mut spawn_options = WorkerSpawnOptions::for_worker_source(
             script_source,
             script_url,
             request_client,
+            WorkerGlobalKind::Dedicated(native_host.clone()),
+            self.browser_context_runtime().worker_context_runtime(),
         )
         .with_script_kind(script_kind)
         .with_module_credentials_mode(module_credentials_mode)
@@ -477,32 +490,16 @@ impl JsContextHost {
         .with_content_security_reporting_endpoints(content_security_reporting_endpoints)
         .with_network_policy(network_policy)
         .with_policy_context(policy_context)
-        .with_worker_context_runtime(self.browser_context_runtime().worker_context_runtime())
         .with_service_worker_runtime(self.browser_context_runtime().service_worker_runtime())
-        .with_global_kind(WorkerGlobalKind::Dedicated { name })
         .with_storage_key_top_level_site(Some(storage_key_top_level_site))
         .with_creator_storage_key(creator_storage_key)
         .with_storage_bucket_store(Some(self.storage_bucket_store()))
         .with_indexed_db_manager(self.indexed_db_manager())
-        .with_pause_evaluation_until_debugger(
-            self.browser_context_runtime()
-                .dedicated_worker_pause_on_start_for_devtools(),
-        );
+        .with_pause_evaluation_until_debugger(native_host.pause_on_start());
         if let Some(client_id) = reserved_service_worker_client_id {
             spawn_options = spawn_options.with_reserved_service_worker_client_id(client_id);
         }
-        let mut worker_handle = spawn_worker_with_options(spawn_options);
-        let renderer_instance_id = self
-            .workers
-            .get(&worker_id)
-            .map(|state| state.renderer_instance_id)
-            .expect("loading DedicatedWorker must retain its renderer instance identity");
-        self.browser_context_runtime()
-            .attach_dedicated_worker_devtools_handle(
-                renderer_instance_id,
-                &worker_handle,
-                self.renderer_output_journal(),
-            );
+        let mut worker_handle = spawn_dedicated_worker(spawn_options, script);
         for message in pending_messages {
             worker_handle.post_message(message);
         }
@@ -528,90 +525,6 @@ impl JsContextHost {
         true
     }
 
-    pub(crate) fn record_dedicated_worker_target_created(
-        &mut self,
-        worker_id: DedicatedWorkerId,
-        document_url: Url,
-        request_url: Url,
-        name: String,
-    ) -> bool {
-        let renderer_instance_id = {
-            let Some(state) = self.workers.get_mut(&worker_id) else {
-                return false;
-            };
-            if state.target_created {
-                return false;
-            }
-            state.target_created = true;
-            state.renderer_instance_id
-        };
-        let page_token = self
-            .page_dedicated_worker_client_event_sender()
-            .page_token();
-        self.append_dedicated_worker_target_lifecycle(
-            crate::runtime::RendererWorkerLifecycle::DedicatedCreated(
-                crate::runtime::RendererDedicatedWorkerTargetInfo {
-                    owner_local_host_id: page_token.local_host_id(),
-                    page_id: page_token.page_id(),
-                    instance_id: renderer_instance_id,
-                    request_url: request_url.to_string(),
-                    document_url: document_url.to_string(),
-                    name,
-                },
-            ),
-        );
-        true
-    }
-
-    /// Publishes one Worker lifecycle fact without conflating a test-only
-    /// missing output sink with a disappeared Worker.
-    ///
-    /// Production Pages structurally require an owner reservation and bind a
-    /// concrete output journal. Low-level standalone PageVm fixtures
-    /// deliberately omit that journal while still exercising Worker state.
-    fn append_dedicated_worker_target_lifecycle(
-        &self,
-        event: crate::runtime::RendererWorkerLifecycle,
-    ) {
-        let observation = self
-            .browser_context_runtime()
-            .report_worker_lifecycle(event);
-        let appended = self.append_live_turn_observation(
-            crate::runtime::RendererProtocolObservation::WorkerLifecycle(observation),
-        );
-        debug_assert!(
-            appended || cfg!(test),
-            "production DedicatedWorker lifecycle requires a renderer output sink"
-        );
-    }
-
-    pub(crate) fn record_dedicated_worker_target_script_loaded(
-        &mut self,
-        worker_id: DedicatedWorkerId,
-        script_url: String,
-        response: Box<crate::protocol_types::NavigationResponse>,
-    ) -> bool {
-        let Some(state) = self.workers.get(&worker_id) else {
-            return false;
-        };
-        if !state.target_created {
-            return true;
-        }
-        let instance_id = state.renderer_instance_id;
-        self.append_dedicated_worker_target_lifecycle(
-            crate::runtime::RendererWorkerLifecycle::DedicatedScriptCompleted {
-                instance_id,
-                script: std::sync::Arc::new(crate::runtime::RendererDedicatedWorkerMainScript {
-                    script_url,
-                    outcome: crate::runtime::RendererDedicatedWorkerMainScriptOutcome::Loaded(
-                        response,
-                    ),
-                }),
-            },
-        );
-        true
-    }
-
     pub(crate) fn record_dedicated_worker_target_script_load_failed(
         &mut self,
         worker_id: DedicatedWorkerId,
@@ -622,74 +535,15 @@ impl JsContextHost {
         let Some(state) = self.workers.get(&worker_id) else {
             return false;
         };
-        if !state.target_created {
-            return true;
-        }
-        let instance_id = state.renderer_instance_id;
-        self.append_dedicated_worker_target_lifecycle(
-            crate::runtime::RendererWorkerLifecycle::DedicatedScriptCompleted {
-                instance_id,
-                script: std::sync::Arc::new(crate::runtime::RendererDedicatedWorkerMainScript {
-                    script_url,
-                    outcome: crate::runtime::RendererDedicatedWorkerMainScriptOutcome::Failed {
-                        error_message,
-                        response,
-                    },
-                }),
-            },
-        );
-        true
-    }
-
-    pub(crate) fn record_dedicated_worker_runtime_inspector_messages(
-        &mut self,
-        worker_id: DedicatedWorkerId,
-        batches: Vec<crate::worker::WorkerRuntimeInspectorMessageBatch>,
-    ) -> bool {
-        let Some(state) = self.workers.get(&worker_id) else {
-            return false;
-        };
-        if !state.target_created {
-            return true;
-        }
-        let instance_id = state.renderer_instance_id;
-        for batch in batches {
-            self.append_live_turn_observation(
-                crate::runtime::RendererProtocolObservation::DedicatedWorker(
-                    crate::runtime::RendererDedicatedWorkerObservation::RuntimeInspectorMessages {
-                        instance_id,
-                        inspector_session_id: batch.inspector_session_id,
-                        messages: batch.messages,
-                    },
-                ),
-            );
-        }
-        true
-    }
-
-    pub(crate) fn record_dedicated_worker_target_console_message(
-        &mut self,
-        worker_id: DedicatedWorkerId,
-        message: crate::worker::WorkerConsoleMessage,
-    ) -> bool {
-        let Some(state) = self.workers.get(&worker_id) else {
-            return false;
-        };
-        if !state.target_created {
-            return true;
-        }
-        self.append_live_turn_observation(
-            crate::runtime::RendererProtocolObservation::DedicatedWorker(
-                crate::runtime::RendererDedicatedWorkerObservation::Console {
-                    instance_id: state.renderer_instance_id,
-                    message: crate::runtime::RendererSharedWorkerConsoleMessage {
-                        message: message.message,
-                        args: message.args,
-                        stack: message.stack,
-                    },
+        state
+            .host
+            .script_completed(crate::runtime::RendererDedicatedWorkerMainScript {
+                script_url,
+                outcome: crate::runtime::RendererDedicatedWorkerMainScriptOutcome::Failed {
+                    error_message,
+                    response,
                 },
-            ),
-        );
+            });
         true
     }
 
@@ -1309,15 +1163,6 @@ impl JsContextHost {
         let retired_subresource_count = self.cancel_subresource_fetches_for_worker(worker_id);
         let browser_context_runtime = self.browser_context_runtime();
         if let Some(state) = self.workers.remove(&worker_id) {
-            self.browser_context_runtime()
-                .unregister_dedicated_worker_devtools_handle(state.renderer_instance_id);
-            if state.target_created {
-                self.append_dedicated_worker_target_lifecycle(
-                    crate::runtime::RendererWorkerLifecycle::DedicatedDestroyed(
-                        state.renderer_instance_id,
-                    ),
-                );
-            }
             let owner = state.owner.owner();
             let realm_token = state.owner.realm_token();
             let execution_state = match &state.execution {

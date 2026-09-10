@@ -34,6 +34,9 @@ impl PreparedProtocolOutputs {
     ) -> Self {
         let mut prepared = Self::empty();
         let slot = match residence {
+            moli_core::RendererOutputResidenceIdentity::DedicatedWorker { .. } => {
+                ProtocolOutputSlot::DedicatedWorkerTargetLifecycle
+            }
             moli_core::RendererOutputResidenceIdentity::SharedWorker { .. } => {
                 ProtocolOutputSlot::SharedWorkerTargetLifecycle
             }
@@ -138,6 +141,7 @@ impl PreparedProtocolOutputs {
                 crate::domains::target::dedicated_worker_observation_prepared_outputs(
                     conn,
                     owner,
+                    source_residence,
                     event.clone(),
                 )
                 .append_to_dedicated_worker_target_lifecycle_output_sink(&mut prepared);
@@ -206,18 +210,10 @@ impl PreparedProtocolOutputs {
             }
             RendererProtocolObservation::RuntimeInspector(batch) => {
                 let worker_output = match source_residence {
-                    moli_core::RendererOutputResidenceIdentity::SharedWorker { .. }
+                    moli_core::RendererOutputResidenceIdentity::DedicatedWorker { .. }
+                    | moli_core::RendererOutputResidenceIdentity::SharedWorker { .. }
                     | moli_core::RendererOutputResidenceIdentity::ServiceWorker { .. } => true,
-                    moli_core::RendererOutputResidenceIdentity::Page { .. } => batch
-                        .session
-                        .wire_session_id()
-                        .and_then(|session_id| conn.session_route(Some(session_id)))
-                        .is_some_and(|route| {
-                            matches!(
-                                route,
-                                crate::conn::CdpSessionRoute::DedicatedWorkerTarget { .. }
-                            )
-                        }),
+                    moli_core::RendererOutputResidenceIdentity::Page { .. } => false,
                 };
                 if worker_output {
                     crate::domains::runtime::RuntimePreparedOutputs::

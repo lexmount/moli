@@ -195,6 +195,11 @@ impl BrowserContext {
             .iter()
             .map(|target| &target.runtime_slot.network_agent)
             .chain(
+                self.dedicated_worker_targets
+                    .values()
+                    .map(|target| &target.network),
+            )
+            .chain(
                 self.shared_worker_targets
                     .values()
                     .map(|target| &target.network),
@@ -211,6 +216,9 @@ impl BrowserContext {
             target.runtime_slot.clear_network_body_artifacts();
         }
         for target in self.shared_worker_targets.values_mut() {
+            target.network.clear_body_artifacts();
+        }
+        for target in self.dedicated_worker_targets.values_mut() {
             target.network.clear_body_artifacts();
         }
         for target in self.service_worker_targets.values_mut() {

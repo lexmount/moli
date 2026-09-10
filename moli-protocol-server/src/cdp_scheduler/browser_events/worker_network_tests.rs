@@ -16,7 +16,7 @@ async fn native_worker_network_real_lag_preserves_console_command_and_body_fifo(
     tokio::task::LocalSet::new()
         .run_until(async {
             for recover in [false, true] {
-                assert_worker_network_fifo(recover).await;
+                assert_worker_network_fifo(recover, false).await;
             }
         })
         .await;
@@ -34,7 +34,18 @@ async fn command(
         .into_messages()
 }
 
-async fn assert_worker_network_fifo(recover: bool) {
+#[tokio::test]
+async fn native_dedicated_worker_network_real_lag_preserves_console_command_and_body_fifo() {
+    tokio::task::LocalSet::new()
+        .run_until(async {
+            for recover in [false, true] {
+                assert_worker_network_fifo(recover, true).await;
+            }
+        })
+        .await;
+}
+
+async fn assert_worker_network_fifo(recover: bool, dedicated: bool) {
     let service = BrowserService::start().unwrap();
     let browser = service.handle();
     let (mut scheduler, mut receivers) = CdpScheduler::new_with_initial_state_runtime_config(
@@ -47,7 +58,11 @@ async fn assert_worker_network_fifo(recover: bool) {
         DevToolsCommand::Navigate(DevToolsNavigateCommand {
             context: DevToolsCommandContext { protocol: DevToolsProtocol::Cdp, session_id: None,
                 target_id: Some(scheduler.conn.default_target_id().into()), browser_context_id: None },
-            url: "data:text/html,<script>globalThis.worker = new SharedWorker('data:text/javascript,onconnect=()=>{}', 'network-fifo')</script>".into(),
+            url: if dedicated {
+                "data:text/html,<script>globalThis.worker = new Worker('data:text/javascript,onmessage=()=>{}', {name:'network-fifo'})</script>"
+            } else {
+                "data:text/html,<script>globalThis.worker = new SharedWorker('data:text/javascript,onconnect=()=>{}', 'network-fifo')</script>"
+            }.into(),
             referrer: None, wait: DevToolsNavigationWait::DocumentInstalled,
         }),
     )).await;
@@ -68,9 +83,13 @@ async fn assert_worker_network_fifo(recover: bool) {
                 .find(|message| message["id"] == 1)
                 .and_then(|message| message["result"]["targetInfos"].as_array())
                 .and_then(|targets| {
-                    targets
-                        .iter()
-                        .find(|target| target["type"] == "shared_worker")
+                    targets.iter().find(|target| {
+                        target["type"] == if dedicated { "worker" } else { "shared_worker" }
+                            // Created exposes a loading Dedicated target. Its URL is
+                            // published by ScriptCompleted, after execution binding;
+                            // Runtime.enable alone can acknowledge only projection.
+                            && (!dedicated || target["url"] == "data:text/javascript,onmessage=()=>{}")
+                    })
                 })
             {
                 break target["targetId"].as_str().unwrap().to_owned();
@@ -80,7 +99,7 @@ async fn assert_worker_network_fifo(recover: bool) {
         }
     })
     .await
-    .expect("real Worker creation must reach the production target directory");
+    .expect("real Worker execution must reach the production target directory");
     let attached = command(&mut scheduler, &mut receivers, json!({"id": 2, "method": "Target.attachToTarget", "params": {"targetId": target, "flatten": true}})).await;
     let session =
         attached.iter().find(|message| message["id"] == 2).unwrap()["result"]["sessionId"]
@@ -116,7 +135,10 @@ async fn assert_worker_network_fifo(recover: bool) {
                     if matches!(item.as_ref(), moli_core::page::ScriptNetworkOutputItem::SubresourceNetworkRecord(record)
                         if record.url().as_str() == "data:text/plain,worker-fifo-body")) { break; }
         }
-    }).await.expect("native Worker response must complete before Protocol consumes its FIFO");
+    }).await.unwrap_or_else(|error| panic!(
+        "native Worker response must complete before Protocol consumes its FIFO: {error:?}; dedicated={dedicated}, recover={recover}; outcome={outcome:#?}; snapshot={:#?}",
+        browser.subscribe().unwrap().0,
+    ));
     if recover {
         for _ in 0..130 {
             browser

@@ -152,8 +152,7 @@ impl RendererSharedWorkerHost {
             message if is_worker_host_bridge_message(&message) => {
                 self.send_host_bridge_message(message, script_url);
             }
-            WorkerToParentMessage::SubresourceNetwork(_)
-            | WorkerToParentMessage::PendingSubresourceFetch(_)
+            WorkerToParentMessage::PendingSubresourceFetch(_)
             | WorkerToParentMessage::PendingSubresourceFetchCanceled { .. }
             | WorkerToParentMessage::SubresourceContinue(_)
             | WorkerToParentMessage::WebSocketSubresource(_)

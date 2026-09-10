@@ -96,7 +96,6 @@ pub(super) fn push_shared_worker_target(
             .as_mut()
             .expect("browser context must exist before adding shared worker target");
         let mut target = crate::conn::SharedWorkerTargetState::new(
-            moli_core::RendererOwnerLocalHostId::new_for_testing(1),
             renderer_instance_id,
             target_id.to_owned(),
             None,
@@ -182,8 +181,7 @@ pub(super) fn push_dedicated_worker_target(
         .as_mut()
         .expect("browser context must exist before adding dedicated worker target");
     bc.insert_dedicated_worker_target(crate::conn::DedicatedWorkerTargetState::new(
-        owner_page,
-        moli_core::RendererOwnerLocalHostId::new_for_testing(1),
+        crate::conn::DedicatedWorkerOwner::Document(owner_page),
         renderer_instance_id,
         target_id.to_owned(),
         String::new(),

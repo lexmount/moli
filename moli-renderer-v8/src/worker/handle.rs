@@ -370,7 +370,6 @@ pub(crate) enum WorkerToParentMessage {
     /// Deferred CDP Runtime inspector messages produced by later worker tasks.
     RuntimeInspectorMessages(Vec<WorkerRuntimeInspectorMessageBatch>),
     /// Worker-owned subresource activity that should be surfaced through the page/CDP host.
-    SubresourceNetwork(SubresourceNetworkRecord),
     /// Browser-owned Shared/Service Worker fact, retained in the target's source FIFO.
     Network(crate::runtime::RendererNetworkObservation),
     /// Worker-owned fetch/XHR that should be paused by the page/CDP Fetch domain.

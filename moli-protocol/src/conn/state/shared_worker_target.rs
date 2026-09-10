@@ -1,9 +1,6 @@
 use std::collections::BTreeMap;
 
-use moli_core::{
-    RendererOwnerLocalHostId,
-    page::{RendererSharedWorkerConsoleMessage, RuntimeConsoleMessageSnapshot},
-};
+use moli_core::page::{RendererSharedWorkerConsoleMessage, RuntimeConsoleMessageSnapshot};
 use moli_shared_worker::SharedWorkerInstanceId;
 
 use crate::devtools_runtime::RuntimeExecutionContextEvent;
@@ -39,7 +36,6 @@ const SHARED_WORKER_SYNTHETIC_EXECUTION_CONTEXT_ID_BASE: i64 = -10_000_000;
 #[derive(Debug)]
 pub(crate) struct SharedWorkerTargetState {
     pub(crate) network: crate::domains::network::TargetNetworkAgentState,
-    pub(crate) renderer_owner_local_host_id: RendererOwnerLocalHostId,
     pub(crate) renderer_instance_id: SharedWorkerInstanceId,
     pub(crate) target_id: String,
     owner_target_id: Option<String>,
@@ -67,7 +63,6 @@ impl Default for SharedWorkerTargetSessionState {
 
 impl SharedWorkerTargetState {
     pub(crate) fn new(
-        renderer_owner_local_host_id: RendererOwnerLocalHostId,
         renderer_instance_id: SharedWorkerInstanceId,
         target_id: String,
         owner_target_id: Option<String>,
@@ -75,7 +70,6 @@ impl SharedWorkerTargetState {
         name: String,
     ) -> Self {
         Self {
-            renderer_owner_local_host_id,
             network: Default::default(),
             renderer_instance_id,
             target_id,
@@ -437,7 +431,6 @@ impl SharedWorkerTargetState {
         let session = self.sessions.get(session_id)?;
         Some(session.attachment_scope.bind(
             browser_context_id,
-            self.renderer_owner_local_host_id,
             self.renderer_instance_id,
             self.owner_target_id.clone(),
             self.target_id.clone(),
@@ -804,12 +797,11 @@ impl SharedWorkerTargetState {
 mod tests {
     use super::SharedWorkerTargetState;
     use crate::devtools_runtime::RuntimeExecutionContextEvent;
-    use moli_core::{RendererOwnerLocalHostId, page::RendererSharedWorkerConsoleMessage};
+    use moli_core::page::RendererSharedWorkerConsoleMessage;
     use moli_shared_worker::SharedWorkerInstanceId;
 
     fn shared_worker_target() -> SharedWorkerTargetState {
         SharedWorkerTargetState::new(
-            RendererOwnerLocalHostId::new_for_testing(1),
             SharedWorkerInstanceId::from_u64(91),
             "TID-shared-worker".to_owned(),
             None,

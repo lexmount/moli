@@ -73,9 +73,7 @@ async fn worker_loader_shares_backend_without_sharing_page_policy() {
     let worker = resource_loader_for_worker_context(
         creator.clone(),
         &policy,
-        &super::WorkerGlobalKind::Dedicated {
-            name: "test-worker".to_owned(),
-        },
+        &super::WorkerGlobalKind::unobserved_dedicated("test-worker".to_owned()),
         crate::network::RendererResourceTaskRunner::from_current_tokio()
             .expect("worker authority test must own a Tokio runtime"),
     );
@@ -270,7 +268,6 @@ async fn recv_post_json(handle: &mut WorkerHandle) -> String {
         match message {
             WorkerToParentMessage::Post(payload) => return stringify_payload(&payload),
             WorkerToParentMessage::Network(_)
-            | WorkerToParentMessage::SubresourceNetwork(_)
             | WorkerToParentMessage::PendingSubresourceFetch(_)
             | WorkerToParentMessage::PendingSubresourceFetchCanceled { .. }
             | WorkerToParentMessage::SubresourceContinue(_)
@@ -284,8 +281,8 @@ async fn recv_post_json(handle: &mut WorkerHandle) -> String {
 
 fn expect_subresource_network_record(message: WorkerToParentMessage) -> SubresourceNetworkRecord {
     match message {
-        WorkerToParentMessage::SubresourceNetwork(record)
-        | WorkerToParentMessage::WebSocketSubresource(record) => record,
+        WorkerToParentMessage::Network(observation) => observation.worker_record_for_test().clone(),
+        WorkerToParentMessage::WebSocketSubresource(record) => record,
         other => panic!("expected worker subresource network record, got {other:?}"),
     }
 }
@@ -334,7 +331,6 @@ async fn dispatch_service_worker_lifecycle_event_for_test(
             }
             WorkerToParentMessage::Post(_)
             | WorkerToParentMessage::Network(_)
-            | WorkerToParentMessage::SubresourceNetwork(_)
             | WorkerToParentMessage::PendingSubresourceFetch(_)
             | WorkerToParentMessage::PendingSubresourceFetchCanceled { .. }
             | WorkerToParentMessage::SubresourceContinue(_)
@@ -432,7 +428,6 @@ async fn dispatch_service_worker_fetch_event_with_request_for_test(
             }
             WorkerToParentMessage::Post(_)
             | WorkerToParentMessage::Network(_)
-            | WorkerToParentMessage::SubresourceNetwork(_)
             | WorkerToParentMessage::PendingSubresourceFetch(_)
             | WorkerToParentMessage::PendingSubresourceFetchCanceled { .. }
             | WorkerToParentMessage::SubresourceContinue(_)
@@ -520,7 +515,6 @@ async fn dispatch_service_worker_message_event_object_for_test(
             }
             WorkerToParentMessage::Post(_)
             | WorkerToParentMessage::Network(_)
-            | WorkerToParentMessage::SubresourceNetwork(_)
             | WorkerToParentMessage::PendingSubresourceFetch(_)
             | WorkerToParentMessage::PendingSubresourceFetchCanceled { .. }
             | WorkerToParentMessage::SubresourceContinue(_)
@@ -585,7 +579,6 @@ async fn dispatch_service_worker_notification_event_for_test(
             }
             WorkerToParentMessage::Post(_)
             | WorkerToParentMessage::Network(_)
-            | WorkerToParentMessage::SubresourceNetwork(_)
             | WorkerToParentMessage::PendingSubresourceFetch(_)
             | WorkerToParentMessage::PendingSubresourceFetchCanceled { .. }
             | WorkerToParentMessage::SubresourceContinue(_)
@@ -656,7 +649,6 @@ async fn dispatch_service_worker_push_event_for_test(
             }
             WorkerToParentMessage::Post(_)
             | WorkerToParentMessage::Network(_)
-            | WorkerToParentMessage::SubresourceNetwork(_)
             | WorkerToParentMessage::PendingSubresourceFetch(_)
             | WorkerToParentMessage::PendingSubresourceFetchCanceled { .. }
             | WorkerToParentMessage::SubresourceContinue(_)
@@ -729,7 +721,6 @@ async fn dispatch_service_worker_sync_event_for_test(
             }
             WorkerToParentMessage::Post(_)
             | WorkerToParentMessage::Network(_)
-            | WorkerToParentMessage::SubresourceNetwork(_)
             | WorkerToParentMessage::PendingSubresourceFetch(_)
             | WorkerToParentMessage::PendingSubresourceFetchCanceled { .. }
             | WorkerToParentMessage::SubresourceContinue(_)
@@ -803,7 +794,6 @@ async fn dispatch_service_worker_periodic_sync_event_for_test(
             }
             WorkerToParentMessage::Post(_)
             | WorkerToParentMessage::Network(_)
-            | WorkerToParentMessage::SubresourceNetwork(_)
             | WorkerToParentMessage::PendingSubresourceFetch(_)
             | WorkerToParentMessage::PendingSubresourceFetchCanceled { .. }
             | WorkerToParentMessage::SubresourceContinue(_)
@@ -1327,17 +1317,13 @@ fn worker_broadcast_channel_unknown_script_url_is_not_marked_third_party() {
         Some("https://app.example".to_owned()),
         None,
         &registry,
-        &super::WorkerGlobalKind::Dedicated {
-            name: String::new(),
-        },
+        &super::WorkerGlobalKind::unobserved_dedicated(String::new()),
     );
 
     let key = super::worker_broadcast_channel_storage_key(
         None,
         &worker_storage_key,
-        &super::WorkerGlobalKind::Dedicated {
-            name: String::new(),
-        },
+        &super::WorkerGlobalKind::unobserved_dedicated(String::new()),
     );
 
     assert_eq!(key, worker_storage_key);
@@ -1441,9 +1427,7 @@ fn dedicated_worker_broadcast_channel_can_inherit_creator_storage_key() {
         moli_storage_key::StoragePartitionRelation::Unknown,
     );
     let script_url = url::Url::parse("blob:null/worker-script").unwrap();
-    let global_kind = super::WorkerGlobalKind::Dedicated {
-        name: "dedicated".to_owned(),
-    };
+    let global_kind = super::WorkerGlobalKind::unobserved_dedicated("dedicated".to_owned());
     let storage_key = super::worker_global_storage_key(
         Some(&script_url),
         None,
@@ -1470,9 +1454,7 @@ fn data_url_dedicated_worker_broadcast_channel_uses_script_opaque_storage_key() 
         moli_storage_key::StoragePartitionRelation::ThirdParty,
     );
     let script_url = url::Url::parse("data:text/javascript,postMessage('ready')").unwrap();
-    let global_kind = super::WorkerGlobalKind::Dedicated {
-        name: "dedicated".to_owned(),
-    };
+    let global_kind = super::WorkerGlobalKind::unobserved_dedicated("dedicated".to_owned());
     let worker_storage_key = super::worker_global_storage_key(
         Some(&script_url),
         None,

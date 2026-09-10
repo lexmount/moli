@@ -746,7 +746,8 @@ pub(crate) fn emit_prepared_renderer_network_live_background_events(
 ) {
     let Some((frame_id, snapshot)) = (|| {
         let frame_id = match owner.resolve_route(conn)? {
-            crate::conn::CdpSessionRoute::SharedWorkerTarget { .. }
+            crate::conn::CdpSessionRoute::DedicatedWorkerTarget { .. }
+            | crate::conn::CdpSessionRoute::SharedWorkerTarget { .. }
             | crate::conn::CdpSessionRoute::ServiceWorkerTarget { .. } => String::new(),
             _ => conn.target_owner_identity_for_owner(owner)?.1?,
         };

@@ -404,7 +404,8 @@ impl RendererInspectorPauseBridge {
         let route_page_id = state.route.as_ref().and_then(|route| {
             match route.output_journal.stream().residence() {
                 RendererOutputResidenceIdentity::Page { page_id, .. } => Some(page_id),
-                RendererOutputResidenceIdentity::SharedWorker { .. }
+                RendererOutputResidenceIdentity::DedicatedWorker { .. }
+                | RendererOutputResidenceIdentity::SharedWorker { .. }
                 | RendererOutputResidenceIdentity::ServiceWorker { .. } => None,
             }
         });

@@ -33,7 +33,6 @@ fn renderer_info(instance_id: u64) -> RendererSharedWorkerTargetInfo {
 
 fn install_collision_target(conn: &mut CdpConnection) {
     let mut target = SharedWorkerTargetState::new(
-        RendererOwnerLocalHostId::new_for_testing(17),
         SharedWorkerInstanceId::from_u64(INSTANCE_ID),
         TARGET_ID.to_owned(),
         Some("TID-owner".to_owned()),

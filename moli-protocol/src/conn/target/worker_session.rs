@@ -1,7 +1,6 @@
 use crate::conn::{
-    CdpConnection, RendererPageResidenceIdentity, ServiceWorkerTargetState,
-    SharedWorkerTargetState, TargetServiceWorkerProtocolAttachmentIdentity,
-    TargetSharedWorkerProtocolAttachmentIdentity,
+    CdpConnection, ServiceWorkerTargetState, SharedWorkerTargetState,
+    TargetServiceWorkerProtocolAttachmentIdentity, TargetSharedWorkerProtocolAttachmentIdentity,
 };
 use moli_core::RendererOutputResidenceIdentity;
 
@@ -79,15 +78,19 @@ impl CdpConnection {
                 browser_context_id,
                 target_id,
             } => {
-                let renderer_page = RendererPageResidenceIdentity::from_residence(residence)?;
+                let RendererOutputResidenceIdentity::DedicatedWorker {
+                    browser_context_runtime_id,
+                    instance_id,
+                } = residence
+                else {
+                    return None;
+                };
                 let browser_context = self.browser_context_by_id(&browser_context_id)?;
                 let target = browser_context.dedicated_worker_target(&target_id)?;
-                let owner_target_id = target.owner_page.target_id()?;
-                if !browser_context.routes_current_renderer_page_owner_for_target(
-                    owner_target_id,
-                    renderer_page,
-                    target.owner_page.document_id(),
-                ) {
+                if target.renderer_instance_id != instance_id
+                    || !browser_context
+                        .routes_renderer_browser_context_runtime(browser_context_runtime_id)
+                {
                     return None;
                 }
                 target

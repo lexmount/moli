@@ -686,7 +686,7 @@ mod tests {
 
     #[test]
     fn native_worker_network_equal_handles_are_scoped_by_kind_and_physical_run() {
-        use crate::page::{RendererServiceWorkerRunIdentity, RendererWorkerNetworkSource};
+        use crate::page::{RendererServiceWorkerRunIdentity, RendererWorkerIdentity};
         let (document, renderer) = source();
         let request = SubresourceNetworkRecord::failure(
             None,
@@ -705,24 +705,27 @@ mod tests {
         );
         let mut inputs = vec![(NetworkOwner::Document(document), page.clone())];
         for worker in [
-            RendererWorkerNetworkSource::Shared(
-                moli_shared_worker::SharedWorkerInstanceId::from_u64(1),
-            ),
-            RendererWorkerNetworkSource::Service {
+            RendererWorkerIdentity::Shared(moli_shared_worker::SharedWorkerInstanceId::from_u64(1)),
+            RendererWorkerIdentity::Service {
                 version: 1,
                 run: RendererServiceWorkerRunIdentity::fresh(),
             },
-            RendererWorkerNetworkSource::Service {
+            RendererWorkerIdentity::Service {
                 version: 1,
                 run: RendererServiceWorkerRunIdentity::fresh(),
             },
+            RendererWorkerIdentity::Dedicated(1),
         ] {
             let handle = match &worker {
-                RendererWorkerNetworkSource::Shared(instance) => WorkerHandle::Shared {
+                RendererWorkerIdentity::Dedicated(instance) => WorkerHandle::Dedicated {
                     context: document.web_contents().context(),
                     instance: *instance,
                 },
-                RendererWorkerNetworkSource::Service { version, .. } => WorkerHandle::Service {
+                RendererWorkerIdentity::Shared(instance) => WorkerHandle::Shared {
+                    context: document.web_contents().context(),
+                    instance: *instance,
+                },
+                RendererWorkerIdentity::Service { version, .. } => WorkerHandle::Service {
                     context: document.web_contents().context(),
                     version: *version,
                 },
@@ -736,15 +739,15 @@ mod tests {
             assert!(requests.commit(*owner, input, BrowserSequence::allocate()));
             assert!(!requests.commit(*owner, input, BrowserSequence::allocate()));
         }
-        assert_eq!(requests.snapshots().count(), 4);
+        assert_eq!(requests.snapshots().count(), 5);
         // Closing one physical run must not evict its successor, a Shared
         // Worker with the same local number, or the creating Page.
         assert_eq!(
             requests.close_source(&inputs[2].1.source.identity()),
             Some(inputs[2].0)
         );
-        assert_eq!(requests.snapshots().count(), 3);
-        for index in [0, 1, 3] {
+        assert_eq!(requests.snapshots().count(), 4);
+        for index in [0, 1, 3, 4] {
             assert!(
                 requests
                     .get(&request_key(&inputs[index].1).unwrap())

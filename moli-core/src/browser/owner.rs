@@ -1264,7 +1264,7 @@ impl BrowserContextHandle {
     forward_context_read! {
         fn controlled_service_worker_window_client_ids(registration_id: u64, version_id: u64) -> Vec<u64>;
         fn set_service_worker_pause_on_start_for_version(version_id: u64, pause: bool) -> bool;
-        fn worker_inspection_endpoint(target: crate::runtime::RendererWorkerInspectionTarget) -> Option<crate::runtime::RendererWorkerInspectionEndpoint>;
+        fn worker_inspection_endpoint(target: crate::runtime::RendererWorkerIdentity) -> Option<crate::runtime::RendererWorkerInspectionEndpoint>;
         fn close_shared_worker(instance_id: moli_shared_worker::SharedWorkerInstanceId) -> bool;
         fn close_dedicated_worker(instance_id: u64) -> bool;
         fn run_dedicated_worker_if_waiting_for_debugger(instance_id: u64) -> bool;

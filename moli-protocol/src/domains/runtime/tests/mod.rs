@@ -35,7 +35,6 @@ fn load_shared_worker_target(ctx: &mut TestContext, session_id: &str) {
         .conn
         .new_browser_context_fixture_for_test("BID-shared".to_owned());
     let mut target = crate::conn::SharedWorkerTargetState::new(
-        moli_core::RendererOwnerLocalHostId::new_for_testing(1),
         SharedWorkerInstanceId::from_u64(81),
         "TID-shared-worker".to_owned(),
         None,
@@ -52,8 +51,9 @@ fn load_dedicated_worker_target(ctx: &mut TestContext, session_id: &str) {
         .conn
         .new_browser_context_fixture_for_test(browser_context_id.clone());
     let mut target = crate::conn::DedicatedWorkerTargetState::new(
-        crate::conn::TargetPageResidenceIdentity::new_for_test(browser_context_id, None, 1),
-        moli_core::RendererOwnerLocalHostId::new_for_testing(1),
+        crate::conn::DedicatedWorkerOwner::Document(
+            crate::conn::TargetPageResidenceIdentity::new_for_test(browser_context_id, None, 1),
+        ),
         82,
         "TID-dedicated-worker".to_owned(),
         "worker".to_owned(),

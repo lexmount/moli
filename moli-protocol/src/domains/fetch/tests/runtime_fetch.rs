@@ -10,6 +10,7 @@ use crate::devtools_runtime::{
 use crate::testing::{
     drain_scheduler_events_like_scheduler,
     drain_scheduler_events_like_scheduler_preserving_internal_fields,
+    enable_network_on_new_dedicated_worker, pause_new_dedicated_workers,
     protocol_events_into_internal_messages, wait_until_scheduler_message,
 };
 
@@ -1966,6 +1967,7 @@ fetch('/worker-api', {
     .await;
     ctx.expect_result(37_001, json!({}), Some("SID-1"));
     enable_runtime_async(&mut ctx, "SID-1", 37_002).await;
+    pause_new_dedicated_workers(&mut ctx, "SID-1", 880_000).await;
 
     ctx.process_async(json!({
         "id": 37_003,
@@ -1982,6 +1984,7 @@ fetch('/worker-api', {
     }))
     .await;
     let _ = take_response_by_id(&mut ctx, 37_003);
+    let worker_session = enable_network_on_new_dedicated_worker(&mut ctx, "SID-1", 880_001).await;
 
     let paused = wait_for_request_paused(&mut ctx, &api_url, "worker fetch requestPaused").await;
     let request_id = paused["params"]["requestId"]
@@ -2018,6 +2021,7 @@ fetch('/worker-api', {
         |messages| {
             messages.iter().any(|message| {
                 message["method"] == json!("Network.loadingFinished")
+                    && message["sessionId"] == worker_session
                     && message["params"]["requestId"] == json!(network_id)
             })
         },
@@ -2440,6 +2444,7 @@ self.onmessage = async () => {
     .await;
     ctx.expect_result(37_047, json!({}), Some("SID-1"));
     enable_runtime_async(&mut ctx, "SID-1", 37_048).await;
+    pause_new_dedicated_workers(&mut ctx, "SID-1", 880_000).await;
     ctx.process_async(json!({
         "id": 37_049,
         "method": "Runtime.evaluate",
@@ -2458,6 +2463,7 @@ self.onmessage = async () => {
     }))
     .await;
     let _ = take_response_by_id(&mut ctx, 37_049);
+    let worker_session = enable_network_on_new_dedicated_worker(&mut ctx, "SID-1", 880_001).await;
 
     let paused = wait_for_background_request_paused(
         &mut ctx,
@@ -2478,6 +2484,25 @@ self.onmessage = async () => {
     assert_eq!(paused["params"]["resourceType"], "CSPViolationReport");
     assert_eq!(paused["params"]["request"]["method"], "POST");
     assert_eq!(paused["params"]["request"]["hasPostData"], true);
+    wait_until_scheduler_message(&mut ctx, "CSP-blocked Worker fetch terminal", |message| {
+        message["method"] == "Network.loadingFailed"
+            && message["sessionId"] == worker_session
+            && message["params"]["type"] == "Fetch"
+    })
+    .await;
+    let blocked = ctx
+        .sent
+        .iter()
+        .find(|message| {
+            message["method"] == "Network.loadingFailed"
+                && message["sessionId"] == worker_session
+                && message["params"]["type"] == "Fetch"
+        })
+        .expect("the rejected fetch has its own native Worker request");
+    assert_ne!(
+        blocked["params"]["requestId"], network_id,
+        "the blocked fetch and its resumed CSP report cannot share a request identity"
+    );
     ctx.sent.clear();
 
     ctx.process_async(json!({
@@ -2496,6 +2521,7 @@ self.onmessage = async () => {
         |messages| {
             messages.iter().any(|message| {
                 message["method"] == json!("Network.loadingFinished")
+                    && message["sessionId"] == worker_session
                     && message["params"]["requestId"] == json!(network_id)
             })
         },
@@ -3031,6 +3057,7 @@ fetch('/worker-api-two')
     .await;
     ctx.expect_result(37_011, json!({}), Some("SID-1"));
     enable_runtime_async(&mut ctx, "SID-1", 37_012).await;
+    pause_new_dedicated_workers(&mut ctx, "SID-1", 880_000).await;
 
     ctx.process_async(json!({
         "id": 37_013,
@@ -3047,6 +3074,8 @@ fetch('/worker-api-two')
     }))
     .await;
     let _ = take_response_by_id(&mut ctx, 37_013);
+    let first_worker_session =
+        enable_network_on_new_dedicated_worker(&mut ctx, "SID-1", 880_001).await;
 
     let paused_one =
         wait_for_request_paused(&mut ctx, &api_one_url, "first worker fetch requestPaused").await;
@@ -3076,6 +3105,7 @@ fetch('/worker-api-two')
         |messages| {
             messages.iter().any(|message| {
                 message["method"] == json!("Network.loadingFinished")
+                    && message["sessionId"] == first_worker_session
                     && message["params"]["requestId"] == json!(network_id_one)
             })
         },
@@ -3106,6 +3136,9 @@ fetch('/worker-api-two')
     }))
     .await;
     let _ = take_response_by_id(&mut ctx, 37_016);
+    let second_worker_session =
+        enable_network_on_new_dedicated_worker(&mut ctx, "SID-1", 880_003).await;
+    assert_ne!(first_worker_session, second_worker_session);
 
     let paused_two =
         wait_for_request_paused(&mut ctx, &api_two_url, "second worker fetch requestPaused").await;
@@ -3136,6 +3169,7 @@ fetch('/worker-api-two')
         |messages| {
             messages.iter().any(|message| {
                 message["method"] == json!("Network.loadingFinished")
+                    && message["sessionId"] == second_worker_session
                     && message["params"]["requestId"] == json!(network_id_two)
             })
         },
@@ -3511,6 +3545,7 @@ xhr.send('payload');
     .await;
     ctx.expect_result(37_071, json!({}), Some("SID-1"));
     enable_runtime_async(&mut ctx, "SID-1", 37_072).await;
+    pause_new_dedicated_workers(&mut ctx, "SID-1", 880_000).await;
 
     ctx.process_async(json!({
         "id": 37_073,
@@ -3527,6 +3562,7 @@ xhr.send('payload');
     }))
     .await;
     let _ = take_response_by_id(&mut ctx, 37_073);
+    let worker_session = enable_network_on_new_dedicated_worker(&mut ctx, "SID-1", 880_001).await;
 
     let paused = wait_for_request_paused(&mut ctx, &api_url, "worker xhr requestPaused").await;
     let request_id = paused["params"]["requestId"]
@@ -3564,6 +3600,7 @@ xhr.send('payload');
         |messages| {
             messages.iter().any(|message| {
                 message["method"] == json!("Network.loadingFinished")
+                    && message["sessionId"] == worker_session
                     && message["params"]["requestId"] == json!(network_id)
             })
         },
@@ -4238,6 +4275,7 @@ fetch('/worker-auth')
     .await;
     ctx.expect_result(37_701, json!({}), Some("SID-1"));
     enable_runtime_async(&mut ctx, "SID-1", 37_702).await;
+    pause_new_dedicated_workers(&mut ctx, "SID-1", 880_000).await;
 
     ctx.process_async(json!({
         "id": 37_703,
@@ -4254,6 +4292,7 @@ fetch('/worker-auth')
     }))
     .await;
     let _ = take_response_by_id(&mut ctx, 37_703);
+    let worker_session = enable_network_on_new_dedicated_worker(&mut ctx, "SID-1", 880_001).await;
 
     let paused = wait_for_request_paused(&mut ctx, &api_url, "worker fetch auth pause").await;
     let request_id = paused["params"]["requestId"]
@@ -4311,6 +4350,7 @@ fetch('/worker-auth')
         |messages| {
             messages.iter().any(|message| {
                 message["method"] == json!("Network.loadingFinished")
+                    && message["sessionId"] == worker_session
                     && message["params"]["requestId"] == json!(network_id)
             })
         },
@@ -4560,6 +4600,15 @@ fetch('/worker-auth')
 
 #[tokio::test(flavor = "multi_thread")]
 async fn worker_fetch_auth_then_response_stage_pauses_authenticated_response() {
+    assert_worker_auth_then_response_stage(false).await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn worker_xhr_auth_then_response_stage_pauses_authenticated_response() {
+    assert_worker_auth_then_response_stage(true).await;
+}
+
+async fn assert_worker_auth_then_response_stage(xhr: bool) {
     async fn page() -> impl IntoResponse {
         (
             [(CONTENT_TYPE.as_str(), "text/html")],
@@ -4567,15 +4616,25 @@ async fn worker_fetch_auth_then_response_stage_pauses_authenticated_response() {
         )
     }
 
-    async fn worker() -> impl IntoResponse {
+    async fn worker(xhr: bool) -> impl IntoResponse {
         (
             [(CONTENT_TYPE.as_str(), "text/javascript")],
-            r#"
+            if xhr {
+                r#"
+const xhr = new XMLHttpRequest();
+xhr.open('GET', '/worker-auth');
+xhr.onload = () => postMessage(xhr.responseText);
+xhr.onerror = () => postMessage(`error:${xhr.status}`);
+xhr.send();
+"#
+            } else {
+                r#"
 fetch('/worker-auth')
   .then(response => response.text())
   .then(text => postMessage(text))
   .catch(error => postMessage(`rejected:${String(error)}`));
-"#,
+"#
+            },
         )
     }
 
@@ -4615,7 +4674,7 @@ fetch('/worker-auth')
             listener,
             Router::new()
                 .route("/page", get(page))
-                .route("/worker.js", get(worker))
+                .route("/worker.js", get(move || worker(xhr)))
                 .route("/worker-auth", any(protected)),
         )
         .await
@@ -4645,6 +4704,7 @@ fetch('/worker-auth')
     .await;
     ctx.expect_result(37_741, json!({}), Some("SID-1"));
     enable_runtime_async(&mut ctx, "SID-1", 37_742).await;
+    pause_new_dedicated_workers(&mut ctx, "SID-1", 880_000).await;
 
     ctx.process_async(json!({
         "id": 37_743,
@@ -4661,6 +4721,7 @@ fetch('/worker-auth')
     }))
     .await;
     let _ = take_response_by_id(&mut ctx, 37_743);
+    let worker_session = enable_network_on_new_dedicated_worker(&mut ctx, "SID-1", 880_001).await;
 
     let paused = wait_for_request_paused(
         &mut ctx,
@@ -4760,11 +4821,40 @@ fetch('/worker-auth')
         |messages| {
             messages.iter().any(|message| {
                 message["method"] == json!("Network.loadingFinished")
+                    && message["sessionId"] == worker_session
                     && message["params"]["requestId"] == json!(network_id)
             })
         },
     )
     .await;
+
+    let extras = |method| {
+        ctx.sent
+            .iter()
+            .filter(|message| {
+                message["method"] == method
+                    && message["sessionId"] == worker_session
+                    && message["params"]["requestId"] == network_id
+            })
+            .collect::<Vec<_>>()
+    };
+    let request_extra = extras("Network.requestWillBeSentExtraInfo");
+    assert_eq!(request_extra.len(), 1, "xhr={xhr}: {:?}", ctx.sent);
+    let headers = request_extra[0]["params"]["headers"].as_object().unwrap();
+    assert!(
+        headers
+            .iter()
+            .any(|(name, value)| name.eq_ignore_ascii_case("host") && value == &addr.to_string())
+    );
+    assert!(
+        !headers
+            .keys()
+            .any(|name| name.eq_ignore_ascii_case("authorization")),
+        "the original request headers must survive auth and response continuation"
+    );
+    let response_extra = extras("Network.responseReceivedExtraInfo");
+    assert_eq!(response_extra.len(), 1, "xhr={xhr}: {:?}", ctx.sent);
+    assert_eq!(response_extra[0]["params"]["statusCode"], 200);
 
     evaluate_until_value_async(
         &mut ctx,
