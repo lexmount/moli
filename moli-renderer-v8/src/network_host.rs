@@ -98,9 +98,8 @@ pub(crate) use self::fetch_surface::{
     RESPONSE_URL_SLOT, is_branded_response_object,
 };
 pub(crate) use self::fetch_surface::{
-    consume_webassembly_streaming_response_value, initialize_fetch_realm_helpers,
-    install_request_bindings, install_response_bindings,
-    set_request_destination_for_service_worker_fetch_event,
+    consume_webassembly_streaming_response_value, install_request_bindings,
+    install_response_bindings, set_request_destination_for_service_worker_fetch_event,
     set_request_mode_for_service_worker_fetch_event,
     set_request_reload_navigation_for_service_worker_fetch_event,
 };
@@ -196,7 +195,6 @@ pub(in crate::network_host) const NETWORK_BODY_SLOT: &str = "__lmBody";
 pub(in crate::network_host) const NETWORK_BODY_BYTES_SLOT: &str = "__lmBodyBytes";
 pub(in crate::network_host) const NETWORK_BODY_SOURCE_SLOT: &str = "__lmNetworkBodySource";
 pub(in crate::network_host) const NETWORK_BODY_SOURCE_KIND_SLOT: &str = "__lmNetworkBodySourceKind";
-pub(in crate::network_host) const BODY_STREAM_CONSUMER_SLOT: &str = "__lmConsumeReadableStreamBody";
 pub(crate) const BLOCKED_BY_CLIENT_ERROR_TEXT: &str = "net::ERR_BLOCKED_BY_CLIENT";
 pub(crate) const FILE_NOT_FOUND_ERROR_TEXT: &str = "net::ERR_FILE_NOT_FOUND";
 pub(crate) const FAILED_ERROR_TEXT: &str = "net::ERR_FAILED";

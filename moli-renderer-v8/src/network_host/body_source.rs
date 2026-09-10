@@ -1,3 +1,6 @@
+mod stream_consumer;
+
+use self::stream_consumer::consume_readable_body_stream;
 use super::*;
 use crate::context_bootstrap::{
     close_stream, enqueue_byte_chunk, error_stream, readable_stream_has_pipe_owner,
@@ -1385,76 +1388,6 @@ fn readable_body_stream_from_value<'s>(
     None
 }
 
-fn consume_readable_body_stream<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    stream: v8::Local<'s, v8::Object>,
-    kind: NetworkBodyConsumptionKind,
-    chunk_callback: Option<v8::Local<'s, v8::Function>>,
-) -> (NetworkBodyConsumption<'s>, Option<v8::Global<v8::Object>>) {
-    let global = scope.get_current_context().global(scope);
-    let Some(consumer) = global
-        .get(scope, v8str(scope, BODY_STREAM_CONSUMER_SLOT).into())
-        .and_then(|value| v8::Local::<v8::Function>::try_from(value).ok())
-    else {
-        return (NetworkBodyConsumption::Failed, None);
-    };
-    let (kind_name, mime_type) = body_stream_consumer_args(&kind);
-    let Some(kind_value) = v8_string(scope, kind_name) else {
-        return (NetworkBodyConsumption::Failed, None);
-    };
-    let Some(mime_value) = v8_string(scope, mime_type.unwrap_or_default()) else {
-        return (NetworkBodyConsumption::Failed, None);
-    };
-    let this = v8::undefined(scope).into();
-    let (value, cancel_handle) = if let Some(chunk_callback) = chunk_callback {
-        let cancel_handle = v8::Global::new(scope, stream);
-        (
-            consumer.call(
-                scope,
-                this,
-                &[
-                    stream.into(),
-                    kind_value.into(),
-                    mime_value.into(),
-                    chunk_callback.into(),
-                ],
-            ),
-            Some(cancel_handle),
-        )
-    } else {
-        (
-            consumer.call(
-                scope,
-                this,
-                &[stream.into(), kind_value.into(), mime_value.into()],
-            ),
-            None,
-        )
-    };
-    let Some(value) = value else {
-        return (NetworkBodyConsumption::Failed, None);
-    };
-    let consumption = if let Ok(promise) = v8::Local::<v8::Promise>::try_from(value) {
-        NetworkBodyConsumption::Pending(promise)
-    } else {
-        NetworkBodyConsumption::Ready(value)
-    };
-    (consumption, cancel_handle)
-}
-
-fn body_stream_consumer_args(kind: &NetworkBodyConsumptionKind) -> (&'static str, Option<&str>) {
-    match kind {
-        NetworkBodyConsumptionKind::Text => ("text", None),
-        NetworkBodyConsumptionKind::Json => ("json", None),
-        NetworkBodyConsumptionKind::ArrayBuffer => ("arrayBuffer", None),
-        NetworkBodyConsumptionKind::Bytes => ("bytes", None),
-        NetworkBodyConsumptionKind::Blob { mime_type } => ("blob", Some(mime_type.as_str())),
-        NetworkBodyConsumptionKind::FormData { content_type } => {
-            ("formData", Some(content_type.as_str()))
-        }
-    }
-}
-
 fn object_has_null_body_slot<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     object: v8::Local<'s, v8::Object>,
@@ -1960,10 +1893,27 @@ fn pending_body_source_pull_callback<'s>(
 ) {
     let source = args.this();
     mark_registry_body_source_used(scope, source);
+    // Internal read requests can ask for another chunk while network delivery
+    // still borrows its pending-source state. Access that state after enqueue
+    // has returned, while retaining the stream's synchronous read request.
+    let callback = v8::Function::builder(pending_body_source_pull_microtask)
+        .data(source.into())
+        .build(scope)
+        .expect("pending body pull callback must allocate");
+    scope.enqueue_microtask(callback);
+    rv.set_undefined();
+}
+
+fn pending_body_source_pull_microtask<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: v8::FunctionCallbackArguments<'s>,
+    _rv: v8::ReturnValue<'_, v8::Value>,
+) {
+    let source = v8::Local::<v8::Object>::try_from(args.data())
+        .expect("pending body pull must retain its source");
     if let Some(id) = registry_body_source_id(scope, source) {
         pull_pending_network_body_source(scope, id);
     }
-    rv.set_undefined();
 }
 
 fn pull_pending_network_body_source(scope: &mut v8::PinScope<'_, '_>, id: NetworkBodySourceId) {

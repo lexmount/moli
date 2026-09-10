@@ -78,13 +78,14 @@ pub(in crate::context_bootstrap) use queue_v8::{
     readable_stream_queue_exists, readable_stream_queue_is_empty, readable_stream_queue_total_size,
     reset_readable_stream_queue, take_byte_stream_bytes,
 };
-pub(crate) use readable::cancel_readable_stream;
 pub(in crate::context_bootstrap::stream_adapter) use readable::mark_readable_stream_started;
-pub(in crate::context_bootstrap) use readable::maybe_pull_stream;
 pub(in crate::context_bootstrap::stream_adapter) use readable::perform_read_from_stream;
 pub(super) use readable::{
     PreparedReadableStreamRead, prepare_read_from_stream_as_promise, read_from_stream_as_promise,
     readable_stream_closed_promise,
+};
+pub(crate) use readable::{
+    cancel_readable_stream, maybe_pull_stream, prepare_readable_stream_read_with_steps,
 };
 pub(crate) use readable_byte::enqueue_byte_chunk;
 pub(in crate::context_bootstrap) use readable_byte::{
