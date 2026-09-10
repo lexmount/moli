@@ -1450,6 +1450,21 @@ fn current_script_belongs_to_document(
         .is_some_and(|owner_document| owner_document == document_handle)
 }
 
+fn document_is_hidden<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    runtime_ptr: *mut JsContextHost,
+    handle: DomHandle,
+    document: v8::Local<'s, v8::Object>,
+) -> bool {
+    !unsafe { &*runtime_ptr }.document_activity().visible
+        || unsafe { &*runtime_ptr }
+        .dom_host()
+        .node(handle)
+        .and_then(Node::as_document)
+        .is_some_and(|document| document.visibility_hidden())
+        || document_associated_window_for_object(scope, runtime_ptr, handle, document).is_none()
+}
+
 fn document_hidden_getter_function<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     args: v8::FunctionCallbackArguments<'s>,
@@ -1460,9 +1475,7 @@ fn document_hidden_getter_function<'s>(
         rv.set_undefined();
         return;
     };
-    let visible = document_associated_window_for_object(scope, runtime_ptr, handle, args.this())
-        .is_some_and(|_| unsafe { &*runtime_ptr }.document_activity().visible);
-    rv.set_bool(!visible);
+    rv.set_bool(document_is_hidden(scope, runtime_ptr, handle, args.this()));
 }
 
 fn document_visibility_state_getter_function<'s>(
@@ -1475,12 +1488,10 @@ fn document_visibility_state_getter_function<'s>(
         rv.set_undefined();
         return;
     };
-    let state = if document_associated_window_for_object(scope, runtime_ptr, handle, args.this())
-        .is_some_and(|_| unsafe { &*runtime_ptr }.document_activity().visible)
-    {
-        "visible"
-    } else {
+    let state = if document_is_hidden(scope, runtime_ptr, handle, args.this()) {
         "hidden"
+    } else {
+        "visible"
     };
     set_document_string_return_value(scope, &mut rv, state);
 }
