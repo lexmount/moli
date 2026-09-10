@@ -6,7 +6,7 @@ pub(in crate::network_host) const URL_SEARCH_PARAMS_CONTENT_TYPE: &str =
     "application/x-www-form-urlencoded;charset=UTF-8";
 pub(in crate::network_host) const TEXT_CONTENT_TYPE: &str = "text/plain;charset=UTF-8";
 
-pub(in crate::network_host) fn body_stream_object<'s>(
+pub(crate) fn body_stream_object<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     object: v8::Local<'s, v8::Object>,
 ) -> Option<v8::Local<'s, v8::Object>> {

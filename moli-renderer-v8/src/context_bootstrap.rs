@@ -428,10 +428,10 @@ pub use self::storage_buckets::{
     storage_bucket_indexed_db_storage_key,
 };
 pub(crate) use self::stream_adapter::{
-    begin_readable_stream_body_consumption, cancel_readable_stream, close_stream,
-    enqueue_byte_chunk, error_stream, maybe_pull_stream, prepare_readable_stream_read_with_steps,
-    readable_stream_disturbed, readable_stream_has_pipe_owner, readable_stream_locked,
-    require_internal_stream_value,
+    begin_readable_stream_body_consumption, cancel_readable_stream,
+    cancel_readable_stream_for_fetch, close_stream, enqueue_byte_chunk, error_stream,
+    maybe_pull_stream, prepare_readable_stream_read_with_steps, readable_stream_disturbed,
+    readable_stream_has_pipe_owner, readable_stream_locked, require_internal_stream_value,
 };
 pub(crate) use self::streams::{
     ReadableStreamClonePayload, TransformStreamClonePayload, WritableStreamClonePayload,

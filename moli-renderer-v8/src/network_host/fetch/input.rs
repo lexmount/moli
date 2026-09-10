@@ -6,6 +6,7 @@ pub(super) struct ParsedWindowFetchInput {
     pub(super) url: String,
     pub(super) method: String,
     pub(super) body: Option<Vec<u8>>,
+    pub(super) body_stream: Option<v8::Global<v8::Object>>,
     pub(super) headers: Vec<(String, String)>,
     pub(super) suppress_default_content_type: bool,
     pub(super) request_mode: moli_fetch::RequestMode,
@@ -37,8 +38,14 @@ pub(super) fn parse_window_fetch_input<'s>(
         let req_obj = v8::Local::<v8::Object>::try_from(arg0).expect("request-like object");
         let url = inherited.url.clone();
         let init = parse_fetch_init(scope, args, 1)?;
-        let request_body_owner = (!init.body_present && inherited.body.is_some())
-            .then(|| v8::Global::new(scope, req_obj));
+        let body_stream = if init.body_present {
+            init.body_stream.clone()
+        } else {
+            body_stream_object(scope, req_obj).map(|stream| v8::Global::new(scope, stream))
+        };
+        let request_body_owner = (!init.body_present
+            && (inherited.body.is_some() || body_stream.is_some()))
+        .then(|| v8::Global::new(scope, req_obj));
         let method = if init.method_present {
             init.method.clone()
         } else {
@@ -72,6 +79,14 @@ pub(super) fn parse_window_fetch_input<'s>(
             .or_else(|| moli_fetch::RequestMode::from_str(&inherited.mode).ok())
             .unwrap_or(moli_fetch::RequestMode::Cors);
         validate_no_cors_method(request_mode, &method)?;
+        let has_stream_body = init.body_stream.is_some()
+            || !init.body_present && inherited.body.is_none() && body_stream.is_some();
+        validate_fetch_body(
+            body.is_some() || body_stream.is_some(),
+            has_stream_body,
+            &method,
+            request_mode,
+        )?;
         if request_mode == moli_fetch::RequestMode::NoCors {
             headers = filter_headers_for_guard(&headers, HeadersGuard::RequestNoCors);
         }
@@ -91,6 +106,7 @@ pub(super) fn parse_window_fetch_input<'s>(
             url,
             method,
             body,
+            body_stream,
             headers,
             suppress_default_content_type,
             request_mode,
@@ -113,6 +129,12 @@ pub(super) fn parse_window_fetch_input<'s>(
             .mode
             .unwrap_or(moli_fetch::RequestMode::Cors);
         validate_no_cors_method(request_mode, &init.method)?;
+        validate_fetch_body(
+            init.body.is_some() || init.body_stream.is_some(),
+            init.body_stream.is_some(),
+            &init.method,
+            request_mode,
+        )?;
         let headers = if request_mode == moli_fetch::RequestMode::NoCors {
             filter_headers_for_guard(&init.headers, HeadersGuard::RequestNoCors)
         } else {
@@ -128,6 +150,7 @@ pub(super) fn parse_window_fetch_input<'s>(
             url,
             method: init.method,
             body: init.body,
+            body_stream: init.body_stream,
             headers,
             suppress_default_content_type: init.suppress_default_content_type,
             request_mode,

@@ -122,7 +122,9 @@ const DIRECT_V8_CALL_ALLOWLIST: &[AllowedDirectCallFile] = &[
     ),
     allowed(
         "context_bootstrap/stream_adapter/utils.rs",
-        9,
+        // Cancellation now uses a native Promise reaction instead of calling
+        // the page-visible `then` method through this browser-algorithm shim.
+        8,
         DirectCallOwner::BrowserAlgorithm,
     ),
     allowed(
