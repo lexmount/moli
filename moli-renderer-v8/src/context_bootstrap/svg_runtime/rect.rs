@@ -75,10 +75,30 @@ pub(super) fn create_svg_rect<'s>(
         );
         return;
     }
-    let rect = SvgRectObjectDeclaration::new(0.0, 0.0, 0.0, 0.0)
-        .bind(scope)
-        .expect("SVGRect declaration should bind");
+    let rect = build_svg_rect(
+        scope,
+        moli_svg::SvgGeometryBox {
+            x: 0.0,
+            y: 0.0,
+            width: 0.0,
+            height: 0.0,
+        },
+    );
     rv.set(rect.into());
+}
+
+pub(super) fn build_svg_rect<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    rect: moli_svg::SvgGeometryBox,
+) -> v8::Local<'s, v8::Object> {
+    SvgRectObjectDeclaration::new(
+        f64::from(rect.x as f32),
+        f64::from(rect.y as f32),
+        f64::from(rect.width as f32),
+        f64::from(rect.height as f32),
+    )
+    .bind(scope)
+    .expect("SVGRect declaration should bind")
 }
 
 fn field_for_receiver<'s>(

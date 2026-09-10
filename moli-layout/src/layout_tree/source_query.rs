@@ -25,6 +25,12 @@ impl<N> FrozenLayoutTree<N>
 where
     N: Copy + Debug + Eq + Hash,
 {
+    pub fn svg_text_for_source(&self, source: N) -> Option<moli_svg::SvgTextQuery<'_>> {
+        self.boxes
+            .iter()
+            .find_map(|layout_box| layout_box.svg_text.as_ref()?.query(source))
+    }
+
     /// Derives the source view from canonical box provenance.
     ///
     /// No source hash table survives the pass. The returned IDs are copied
@@ -799,6 +805,7 @@ mod tests {
             LayoutSize::new(100.0, 100.0),
             box_id,
             vec![FrozenLayoutBox {
+                svg_text: None,
                 geometry: LayoutBoxGeometry {
                     id: box_id,
                     effective_zoom: 1.0,

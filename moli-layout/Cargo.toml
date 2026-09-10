@@ -8,6 +8,7 @@ license = "MIT OR Apache-2.0"
 euclid = "=0.22.14"
 kurbo = "=0.13.1"
 moli-image = { path = "../moli-image" }
+moli-svg = { path = "../moli-svg" }
 parley = "=0.11.1"
 parking_lot = "0.12"
 stylo = "0.20"

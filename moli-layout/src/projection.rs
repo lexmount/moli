@@ -966,6 +966,7 @@ where
                     });
                     let resolved_grid_tracks = layout_box.resolved_grid_tracks.clone();
                     FrozenLayoutBox {
+                        svg_text: layout_box.svg_text.clone(),
                         geometry,
                         scroll_extent,
                         coordinate_space,

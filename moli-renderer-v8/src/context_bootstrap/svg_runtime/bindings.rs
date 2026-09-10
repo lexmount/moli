@@ -1,4 +1,5 @@
 use super::callbacks::*;
+use super::text::*;
 use super::*;
 use crate::util::callback_data_index_value;
 use moli_webapi_declare::WebApiFunctionTemplate;
@@ -354,7 +355,7 @@ struct SvgGeometryElementTemplateMethodsDeclaration {
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(name = "SVGTextContentElement", enumerable)]
+#[webapi(name = "SVGTextContentElement", receiver = super::text::is_text_receiver, enumerable)]
 struct SvgTextContentElementTemplateMethodsDeclaration {
     #[webapi(constant = "LENGTHADJUST_UNKNOWN", value = SVG_LENGTH_ADJUST_UNKNOWN)]
     length_adjust_unknown: (),
@@ -435,6 +436,10 @@ struct SvgTextContentElementTemplateMethodsDeclaration {
 #[derive(WebApiFunctionTemplate)]
 #[webapi(name = "SVGSVGElement", enumerable)]
 struct SvgSvgElementTemplateMethodsDeclaration {
+    #[webapi(method = "createSVGPoint", length = 0, callback = super::point::create,
+        receiver = super::point::is_svg_root)]
+    create_svg_point: (),
+
     #[webapi(
         method = "createSVGRect",
         length = 0,
@@ -751,7 +756,7 @@ struct SvgGeometryElementPrototypeAccessorsDeclaration {
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(name = "SVGTextContentElement", enumerable)]
+#[webapi(name = "SVGTextContentElement", receiver = super::text::is_text_receiver, enumerable)]
 struct SvgTextContentElementPrototypeAccessorsDeclaration {
     #[webapi(accessor_property = "textLength", getter = svg_text_content_text_length_getter)]
     text_length: (),

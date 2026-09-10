@@ -1,4 +1,4 @@
-use super::{build_dom_point_object, build_dom_rect_object, optional_dom_point_init_arg};
+use super::{build_dom_point_object, optional_dom_point_init_arg};
 use crate::{
     native_bridge::throw_dom_exception,
     util::{callback_data_item, get_private_value, set_private_value, v8_string, v8str},
@@ -12,7 +12,9 @@ use moli_svg::{
 mod bindings;
 mod builders;
 mod callbacks;
+mod point;
 mod rect;
+mod text;
 
 const SVG_GRAPHICS_TRANSFORM_SLOT: &str = "__moliSvgGraphicsTransform";
 const SVG_PATTERN_TRANSFORM_SLOT: &str = "__moliSvgPatternTransform";
@@ -245,6 +247,7 @@ pub(in crate::context_bootstrap) fn install_svg_template_bindings<'s>(
     match name {
         "SVGLength" => bindings::install_svg_length_bindings(scope, template),
         "SVGNumber" => bindings::install_svg_number_bindings(scope, template),
+        "SVGPoint" => point::install_bindings(scope, template),
         "SVGRect" => rect::install_bindings(scope, template),
         "SVGAnimatedLength" => bindings::install_svg_animated_length_bindings(scope, template),
         "SVGLengthList" => bindings::install_svg_length_list_bindings(scope, template),

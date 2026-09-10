@@ -1,5 +1,8 @@
 use super::*;
 
+mod inline_svg_styles;
+mod svg_text_metrics;
+
 use base64::Engine as _;
 
 use super::super::main_document_lifecycle_completion::execute_main_document_lifecycle_on_owner_local_task;
