@@ -6,6 +6,9 @@ use parley::{FontFamily, FontFamilyName, TextStyle, fontique::Collection};
 
 use crate::stylo_to_parley::TextBrush;
 
+#[cfg(any(test, target_os = "linux", target_os = "freebsd"))]
+mod matching;
+
 pub(crate) struct SystemFontFamilyResolver {
     system_families: HashMap<String, String>,
     substitutions: HashMap<String, Option<String>>,
@@ -77,13 +80,7 @@ impl SystemFontFamilyResolver {
         if let Some(cached) = self.substitutions.get(&key) {
             return cached.clone();
         }
-        let substitution = platform::explicit_substitution_families(family)
-            .into_iter()
-            .find_map(|candidate| {
-                self.system_families
-                    .get(&normalized_family_name(&candidate))
-                    .cloned()
-            });
+        let substitution = platform::match_family(family, &self.system_families);
         self.substitutions.insert(key, substitution.clone());
         substitution
     }
@@ -93,40 +90,25 @@ fn normalized_family_name(name: &str) -> String {
     name.chars().flat_map(char::to_lowercase).collect()
 }
 
-#[cfg(any(test, target_os = "linux", target_os = "freebsd"))]
-fn explicit_substitution_prefix<'a>(
-    requested: &'a [String],
-    default_families: &[String],
-) -> &'a [String] {
-    let common_suffix_len = requested
-        .iter()
-        .rev()
-        .zip(default_families.iter().rev())
-        .take_while(|(left, right)| left.eq_ignore_ascii_case(right))
-        .count();
-    &requested[..requested.len().saturating_sub(common_suffix_len)]
-}
-
 #[cfg(any(target_os = "linux", target_os = "freebsd"))]
 mod platform {
     use std::{
+        collections::HashMap,
         ffi::{CStr, CString},
         ptr::NonNull,
-        sync::OnceLock,
     };
 
     use fontconfig_sys::{
-        FcConfigSubstitute, FcDefaultSubstitute, FcInit, FcMatchPattern, FcPattern,
-        FcPatternAddString, FcPatternCreate, FcPatternDestroy, FcPatternGetString, FcResultMatch,
-        constants::FC_FAMILY,
+        FcConfig, FcConfigSubstitute, FcDefaultSubstitute, FcFontSet, FcFontSetDestroy, FcFontSort,
+        FcInit, FcMatchPattern, FcPattern, FcPatternAddBool, FcPatternAddString, FcPatternCreate,
+        FcPatternDestroy, FcPatternGetString, FcResultMatch,
+        constants::{FC_FAMILY, FC_SCALABLE},
     };
     use parking_lot::Mutex;
 
-    use super::explicit_substitution_prefix;
+    use super::{matching::accepts_substitution, normalized_family_name};
 
-    const MISSING_FAMILY_SENTINEL: &str = "__moli_missing_font_family_7f41c8d2__";
     static FONTCONFIG_LOCK: Mutex<()> = Mutex::new(());
-    static DEFAULT_FAMILIES: OnceLock<Option<Vec<String>>> = OnceLock::new();
 
     struct Pattern(NonNull<FcPattern>);
 
@@ -136,26 +118,23 @@ mod platform {
         }
     }
 
-    pub(super) fn explicit_substitution_families(family: &str) -> Vec<String> {
-        let Some(default_families) = DEFAULT_FAMILIES
-            .get_or_init(|| substituted_families(MISSING_FAMILY_SENTINEL))
-            .as_deref()
-        else {
-            return Vec::new();
-        };
-        let Some(requested) = substituted_families(family) else {
-            return Vec::new();
-        };
-        explicit_substitution_prefix(&requested, default_families)
-            .iter()
-            .filter(|candidate| !candidate.eq_ignore_ascii_case(family))
-            .cloned()
-            .collect()
+    struct FontSet(NonNull<FcFontSet>);
+
+    impl Drop for FontSet {
+        fn drop(&mut self) {
+            unsafe { FcFontSetDestroy(self.0.as_ptr()) };
+        }
     }
 
-    fn substituted_families(family: &str) -> Option<Vec<String>> {
+    pub(super) fn match_family(
+        family: &str,
+        available_families: &HashMap<String, String>,
+    ) -> Option<String> {
+        if family.len() > 2048 {
+            return None;
+        }
         let _guard = FONTCONFIG_LOCK.lock();
-        let family = CString::new(family).ok()?;
+        let requested = CString::new(family).ok()?;
         unsafe {
             if FcInit() == 0 {
                 return None;
@@ -164,9 +143,12 @@ mod platform {
             if FcPatternAddString(
                 pattern.0.as_ptr(),
                 FC_FAMILY.as_ptr(),
-                family.as_ptr().cast(),
+                requested.as_ptr().cast(),
             ) == 0
             {
+                return None;
+            }
+            if FcPatternAddBool(pattern.0.as_ptr(), FC_SCALABLE.as_ptr(), 1) == 0 {
                 return None;
             }
             if FcConfigSubstitute(std::ptr::null_mut(), pattern.0.as_ptr(), FcMatchPattern) == 0 {
@@ -174,61 +156,151 @@ mod platform {
             }
             FcDefaultSubstitute(pattern.0.as_ptr());
 
-            let mut families = Vec::new();
-            for index in 0.. {
-                let mut value = std::ptr::null_mut();
-                if FcPatternGetString(pattern.0.as_ptr(), FC_FAMILY.as_ptr(), index, &mut value)
-                    != FcResultMatch
-                {
-                    break;
-                }
-                if value.is_null() {
-                    return None;
-                }
-                families.push(CStr::from_ptr(value.cast()).to_string_lossy().into_owned());
+            match_pattern(std::ptr::null_mut(), family, &pattern, available_families)
+        }
+    }
+
+    // The config (or global config for null) must outlive the query. Taking a
+    // configured pattern keeps native substitution separate from accepting the
+    // resulting best match; tests can supply an isolated application font set.
+    unsafe fn match_pattern(
+        config: *mut FcConfig,
+        family: &str,
+        pattern: &Pattern,
+        available_families: &HashMap<String, String>,
+    ) -> Option<String> {
+        unsafe {
+            let configured = family_names(pattern.0.as_ptr()).into_iter().next()?;
+            let mut result = FcResultMatch;
+            let matches = FontSet(NonNull::new(FcFontSort(
+                config,
+                pattern.0.as_ptr(),
+                0,
+                std::ptr::null_mut(),
+                &mut result,
+            ))?);
+            let font_set = matches.0.as_ref();
+            for index in 0..font_set.nfont {
+                let names = family_names(*font_set.fonts.add(index as usize));
+                let Some(available) = names
+                    .iter()
+                    .find_map(|name| available_families.get(&normalized_family_name(name)))
+                else {
+                    continue;
+                };
+                // Fontconfig always finds a best-effort font. Like Chromium's
+                // SkFontConfigInterfaceDirect, reject an unrelated first match
+                // so the next CSS family can be tried instead. Do not search
+                // later matches for an arbitrary acceptable alias.
+                return names
+                    .iter()
+                    .any(|name| accepts_substitution(family, &configured, name))
+                    .then(|| available.clone());
             }
-            (!families.is_empty()).then_some(families)
+            None
+        }
+    }
+
+    // The caller retains the owning Pattern or FontSet for the entire read.
+    unsafe fn family_names(pattern: *mut FcPattern) -> Vec<String> {
+        let mut families = Vec::new();
+        for index in 0..255 {
+            let mut value = std::ptr::null_mut();
+            if unsafe { FcPatternGetString(pattern, FC_FAMILY.as_ptr(), index, &mut value) }
+                != FcResultMatch
+                || value.is_null()
+            {
+                break;
+            }
+            families.push(
+                unsafe { CStr::from_ptr(value.cast()) }
+                    .to_string_lossy()
+                    .into_owned(),
+            );
+        }
+        families
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+        use fontconfig_sys::{FcConfigAppFontAddFile, FcConfigCreate, FcConfigDestroy};
+
+        struct Config(NonNull<FcConfig>);
+
+        impl Drop for Config {
+            fn drop(&mut self) {
+                unsafe { FcConfigDestroy(self.0.as_ptr()) };
+            }
+        }
+
+        #[test]
+        fn native_font_match_rejects_appended_alias_but_accepts_configured_rename() {
+            let _guard = FONTCONFIG_LOCK.lock();
+            unsafe {
+                assert_ne!(FcInit(), 0);
+                let config = Config(NonNull::new(FcConfigCreate()).expect("fontconfig config"));
+                let file = CString::new(concat!(
+                    env!("CARGO_MANIFEST_DIR"),
+                    "/tests/fixtures/moli-ahem.ttf"
+                ))
+                .unwrap();
+                assert_ne!(
+                    FcConfigAppFontAddFile(config.0.as_ptr(), file.as_ptr().cast()),
+                    0
+                );
+                let families = HashMap::from([("moli ahem".to_owned(), "Moli Ahem".to_owned())]);
+
+                for (requested, configured, expected) in [
+                    ("Missing Font", ["Missing Font", "Moli Ahem"], None),
+                    (
+                        "Renamed Font",
+                        ["Moli Ahem", "Renamed Font"],
+                        Some("Moli Ahem"),
+                    ),
+                    (
+                        "Moli Ahem",
+                        ["Different Override", "Moli Ahem"],
+                        Some("Moli Ahem"),
+                    ),
+                ] {
+                    let pattern = Pattern(NonNull::new(FcPatternCreate()).expect("font pattern"));
+                    for name in configured {
+                        let name = CString::new(name).unwrap();
+                        assert_ne!(
+                            FcPatternAddString(
+                                pattern.0.as_ptr(),
+                                FC_FAMILY.as_ptr(),
+                                name.as_ptr().cast()
+                            ),
+                            0
+                        );
+                    }
+                    FcDefaultSubstitute(pattern.0.as_ptr());
+                    assert_eq!(
+                        match_pattern(config.0.as_ptr(), requested, &pattern, &families).as_deref(),
+                        expected,
+                        "native best-match acceptance for {requested}"
+                    );
+                }
+            }
         }
     }
 }
 
 #[cfg(not(any(target_os = "linux", target_os = "freebsd")))]
 mod platform {
-    pub(super) fn explicit_substitution_families(_family: &str) -> Vec<String> {
-        Vec::new()
+    pub(super) fn match_family(
+        _family: &str,
+        _available_families: &std::collections::HashMap<String, String>,
+    ) -> Option<String> {
+        None
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn shared_fontconfig_defaults_are_not_treated_as_named_aliases() {
-        let defaults = [
-            "missing".to_owned(),
-            "DejaVu Sans".to_owned(),
-            "Noto Sans".to_owned(),
-        ];
-        let arial = [
-            "Arial".to_owned(),
-            "Arimo".to_owned(),
-            "Liberation Sans".to_owned(),
-            "DejaVu Sans".to_owned(),
-            "Noto Sans".to_owned(),
-        ];
-        let unknown = [
-            "unknown".to_owned(),
-            "DejaVu Sans".to_owned(),
-            "Noto Sans".to_owned(),
-        ];
-
-        assert_eq!(explicit_substitution_prefix(&arial, &defaults), &arial[..3]);
-        assert_eq!(
-            explicit_substitution_prefix(&unknown, &defaults),
-            &unknown[..1]
-        );
-    }
 
     #[test]
     fn successful_family_lookup_is_cached() {
@@ -255,6 +327,28 @@ mod tests {
             resolver.family_lookup_count, 1,
             "a known family must not rebuild Fontique's normalized lookup key"
         );
+    }
+
+    #[test]
+    fn missing_family_lookup_is_cached_without_replacing_the_css_fallback() {
+        let mut collection = Collection::new(parley::fontique::CollectionOptions {
+            shared: false,
+            system_fonts: true,
+        });
+        let mut resolver = SystemFontFamilyResolver::new(&mut collection);
+        let family = "__moli_missing_font_family_cache_3bb2__";
+        for _ in 0..2 {
+            let mut style = TextStyle {
+                font_family: FontFamily::Single(FontFamilyName::Named(Cow::Borrowed(family))),
+                ..TextStyle::default()
+            };
+            resolver.resolve_text_style(&mut collection, &mut style);
+            assert!(matches!(
+                style.font_family,
+                FontFamily::Single(FontFamilyName::Named(name)) if name == family
+            ));
+        }
+        assert_eq!(resolver.family_lookup_count, 1);
     }
 
     #[cfg(any(target_os = "linux", target_os = "freebsd"))]
