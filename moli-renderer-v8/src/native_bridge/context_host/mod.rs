@@ -867,7 +867,6 @@ pub(crate) struct JsContextHost {
     app_manifest_link_change_epoch: u64,
     extra_http_headers: Vec<(String, String)>,
     permission_overrides: Vec<crate::protocol_types::PermissionOverrideRegistration>,
-    locale_override: Option<String>,
     timezone_override: Option<String>,
     idle_override: Option<crate::protocol_types::EmulatedIdleOverride>,
     protocol_user_gesture_activation_depth: usize,

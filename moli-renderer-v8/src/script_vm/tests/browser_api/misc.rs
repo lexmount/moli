@@ -90,7 +90,7 @@ fn service_worker_csp_report_seen(
 }
 
 #[test]
-fn date_locale_methods_use_shared_time_formatting_surface() {
+fn date_locale_methods_use_native_intl_defaults() {
     let mut vm = new_storage_test_vm("https://date-locale-formatting.test/");
 
     let us = vm
@@ -114,10 +114,10 @@ fn date_locale_methods_use_shared_time_formatting_surface() {
     let values: Vec<String> = serde_json::from_str(&us).expect("locale output pair should decode");
     assert_eq!(values[0], values[1]);
 
-    vm.set_locale_override_and_sync_surface(Some("fr-FR"))
-        .expect("Date locale override should sync into private surface");
-    vm.set_timezone_override_and_sync_surface(Some("Asia/Shanghai"))
-        .expect("Date timezone override should sync into private surface");
+    vm.set_locale_override(Some("fr-FR"))
+        .expect("Date locale override should update V8 defaults");
+    vm.set_timezone_override(Some("Asia/Shanghai"))
+        .expect("Date timezone override should update V8 defaults");
 
     let result = vm
         .eval(
@@ -131,6 +131,20 @@ fn date_locale_methods_use_shared_time_formatting_surface() {
   const initialSlots = internalNames();
   globalThis.__moliLocaleOverride = "en-US";
   globalThis.__moliTimeZoneOverride = "UTC";
+  const numericDate = {year: "numeric", month: "numeric", day: "numeric"};
+  const numericTime = {hour: "numeric", minute: "numeric", second: "numeric"};
+  const expected = [
+    new Intl.DateTimeFormat("fr-FR", {
+      ...numericDate, ...numericTime, timeZone: "Asia/Shanghai"
+    }).format(date),
+    new Intl.DateTimeFormat("fr-FR", {
+      ...numericDate, timeZone: "Asia/Shanghai"
+    }).format(date),
+    new Intl.DateTimeFormat("fr-FR", {
+      ...numericTime, timeZone: "Asia/Shanghai"
+    }).format(date),
+    "Invalid Date"
+  ].join("|");
   return JSON.stringify({
     initialSlots,
     spoofedSlots: internalNames(),
@@ -138,12 +152,12 @@ fn date_locale_methods_use_shared_time_formatting_surface() {
       Intl.DateTimeFormat().resolvedOptions().locale,
       Intl.DateTimeFormat().resolvedOptions().timeZone
     ].join("|"),
-    formatted: [
+    formattedMatches: [
       date.toLocaleString(),
       date.toLocaleDateString(),
       date.toLocaleTimeString(),
       new Date(NaN).toLocaleString()
-    ].join("|")
+    ].join("|") === expected
   });
 })()
 "#,
@@ -152,8 +166,98 @@ fn date_locale_methods_use_shared_time_formatting_surface() {
 
     assert_eq!(
         result,
-        r#"{"initialSlots":"","spoofedSlots":"__moliLocaleOverride,__moliTimeZoneOverride","intl":"fr-FR|Asia/Shanghai","formatted":"01/01/1970 08:00:00|01/01/1970|08:00:00|Invalid Date"}"#
+        r#"{"initialSlots":"","spoofedSlots":"__moliLocaleOverride,__moliTimeZoneOverride","intl":"fr-FR|Asia/Shanghai","formattedMatches":true}"#
     );
+}
+
+#[test]
+fn date_locale_overrides_preserve_native_arguments_and_other_page_defaults() {
+    const PROBE: &str = r#"
+const overrideProbeDate = new Date("2022-03-31T23:59:42Z");
+const hostDateDefaults = new Intl.DateTimeFormat().resolvedOptions();
+const hostDateOffset = overrideProbeDate.getTimezoneOffset();
+const savedDateFormatter = new Intl.DateTimeFormat();
+const savedDateFormat = savedDateFormatter.format(overrideProbeDate);
+function checkDateLocaleOverrides(locale, timeZone) {
+  const expectedLocale = locale || hostDateDefaults.locale;
+  const expectedZone = timeZone || hostDateDefaults.timeZone;
+  const errors = [];
+  const check = (name, actual, expected) => {
+    if (actual !== expected) errors.push({name, actual, expected});
+  };
+  const actualDefaults = new Intl.DateTimeFormat().resolvedOptions();
+  check("default locale", actualDefaults.locale,
+    new Intl.DateTimeFormat(expectedLocale).resolvedOptions().locale);
+  check("default time zone", actualDefaults.timeZone, expectedZone);
+  check("Date offset", overrideProbeDate.getTimezoneOffset(),
+    timeZone === "America/New_York" ? 240 : timeZone === "Asia/Shanghai" ? -480 : hostDateOffset);
+  check("existing formatter output", savedDateFormatter.format(overrideProbeDate), savedDateFormat);
+  check("existing formatter locale", savedDateFormatter.resolvedOptions().locale, hostDateDefaults.locale);
+  check("existing formatter time zone", savedDateFormatter.resolvedOptions().timeZone, hostDateDefaults.timeZone);
+  check("NumberFormat default", new Intl.NumberFormat().format(42123.5),
+    new Intl.NumberFormat(expectedLocale).format(42123.5));
+  const day = {year: "numeric", month: "numeric", day: "numeric"};
+  const time = {hour: "numeric", minute: "numeric", second: "numeric"};
+  for (const [method, fields, styles] of [
+    ["toLocaleString", {...day, ...time}, {dateStyle: "full", timeStyle: "long"}],
+    ["toLocaleDateString", day, {dateStyle: "full"}],
+    ["toLocaleTimeString", time, {timeStyle: "full"}]
+  ]) {
+    const expected = new Intl.DateTimeFormat(expectedLocale,
+      {...fields, timeZone: expectedZone}).format(overrideProbeDate);
+    check(method + " default", overrideProbeDate[method](), expected);
+    check(method + " empty locale list", overrideProbeDate[method]([]), expected);
+    check(method + " unsupported locale", overrideProbeDate[method]("zz-ZZ"), expected);
+    const options = {...styles, timeZone: "Asia/Tokyo", calendar: "japanese",
+      numberingSystem: "latn", hourCycle: "h23"};
+    check(method + " explicit arguments", overrideProbeDate[method]("ja-JP", options),
+      new Intl.DateTimeFormat("ja-JP", options).format(overrideProbeDate));
+    const marker = {};
+    for (const [name, locales, options] of [
+      ["locales", {get length() {throw marker}}, undefined],
+      ["options", undefined, {get dateStyle() {throw marker}}]
+    ]) {
+      let caught;
+      try { overrideProbeDate[method](locales, options); } catch (error) { caught = error; }
+      check(method + " " + name + " error", caught === marker, true);
+    }
+    check(method + " invalid date", new Date(NaN)[method]({get length() {throw marker}}), "Invalid Date");
+  }
+  const explicit = new Intl.DateTimeFormat("ja-JP", {timeZone: "Asia/Tokyo"}).resolvedOptions();
+  check("Intl explicit locale", explicit.locale, "ja-JP");
+  check("Intl explicit time zone", explicit.timeZone, "Asia/Tokyo");
+  return JSON.stringify(errors);
+}
+"#;
+    let mut vm = new_storage_test_vm("https://date-locale-overrides.test/");
+    let mut other = new_storage_test_vm("https://date-locale-unmodified.test/");
+    vm.eval(PROBE).expect("override probe should initialize");
+    other
+        .eval(PROBE)
+        .expect("other page probe should initialize");
+    for (locale, timezone) in [
+        (None, None),
+        (Some("fr-FR"), None),
+        (None, Some("America/New_York")),
+        (Some("fr-FR"), Some("Asia/Shanghai")),
+        (None, None),
+    ] {
+        vm.set_locale_override(locale).expect("locale should apply");
+        vm.set_timezone_override(timezone)
+            .expect("time zone should apply");
+        let arguments = serde_json::json!([locale, timezone]);
+        let result = vm
+            .eval(&format!("checkDateLocaleOverrides(...{arguments})"))
+            .expect("Date locale override probe should evaluate");
+        assert_eq!(result, "[]", "locale={locale:?}, timezone={timezone:?}");
+        assert_eq!(
+            other
+                .eval("checkDateLocaleOverrides(null, null)")
+                .expect("other page probe should evaluate"),
+            "[]",
+            "another page must retain its host defaults"
+        );
+    }
 }
 
 #[test]

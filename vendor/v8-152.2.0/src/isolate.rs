@@ -865,6 +865,14 @@ unsafe extern "C" {
     isolate: *mut RealIsolate,
     time_zone_detection: TimeZoneDetection,
   );
+  fn v8__Isolate__SetDefaultLocaleOverride(
+    isolate: *mut RealIsolate,
+    locale: *const char,
+  ) -> bool;
+  fn v8__Isolate__SetDefaultTimeZoneOverride(
+    isolate: *mut RealIsolate,
+    time_zone_id: *const char,
+  ) -> bool;
   fn v8__Isolate__HasPendingBackgroundTasks(
     isolate: *const RealIsolate,
   ) -> bool;
@@ -2090,6 +2098,45 @@ impl Isolate {
         self.as_real_ptr(),
         time_zone_detection,
       );
+    }
+  }
+
+  /// Override the default locale for this isolate's native Intl APIs, accepting
+  /// BCP47 tags (e.g. `fr-FR`) and ICU locale IDs (e.g. `fr_FR`).
+  /// Pass `None` or an empty tag to restore the host default. Invalid tags
+  /// return `false` without changing the active override or throwing.
+  ///
+  /// A context must be entered. This leaves ICU's process-wide defaults and
+  /// other isolates unchanged. Existing Intl formatter objects retain the
+  /// locale with which they were constructed; explicit JS arguments win.
+  #[must_use]
+  pub fn set_default_locale_override(&mut self, locale: Option<&str>) -> bool {
+    let Ok(locale) = std::ffi::CString::new(locale.unwrap_or_default()) else {
+      return false;
+    };
+    unsafe {
+      v8__Isolate__SetDefaultLocaleOverride(self.as_real_ptr(), locale.as_ptr())
+    }
+  }
+
+  /// Override the default time zone for this isolate's Date, Intl, and
+  /// Temporal APIs. `None` or an empty id restores the host default.
+  /// Invalid ICU time zone ids return `false` and preserve the active override.
+  ///
+  /// This leaves ICU's process-wide defaults and other isolates unchanged.
+  /// Explicit Intl `timeZone` options take precedence and existing formatter
+  /// objects retain the time zone with which they were constructed.
+  #[must_use]
+  pub fn set_default_time_zone_override(
+    &mut self,
+    time_zone_id: Option<&str>,
+  ) -> bool {
+    let Ok(id) = std::ffi::CString::new(time_zone_id.unwrap_or_default())
+    else {
+      return false;
+    };
+    unsafe {
+      v8__Isolate__SetDefaultTimeZoneOverride(self.as_real_ptr(), id.as_ptr())
     }
   }
 

@@ -263,7 +263,6 @@ impl JsContextHost {
             app_manifest_link_change_epoch: 0,
             extra_http_headers: Vec::new(),
             permission_overrides: Vec::new(),
-            locale_override: None,
             timezone_override: None,
             idle_override: None,
             protocol_user_gesture_activation_depth: 0,

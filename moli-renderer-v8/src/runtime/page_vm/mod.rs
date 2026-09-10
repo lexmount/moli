@@ -4387,12 +4387,20 @@ impl PageVm {
         page_vm
             .vm_mut()
             .set_stored_runtime_bindings(&env.runtime_bindings);
-        page_vm
+        let default_overrides = page_vm
             .vm_mut()
-            .set_locale_override(env.locale_override.as_deref());
-        page_vm
-            .vm_mut()
-            .set_timezone_override(env.timezone_override.as_deref());
+            .set_locale_override(env.locale_override.as_deref())
+            .and_then(|()| {
+                page_vm
+                    .vm_mut()
+                    .set_timezone_override(env.timezone_override.as_deref())
+            });
+        if let Err(error) = default_overrides {
+            return Err(Box::new((
+                error,
+                page_vm.vm().document_runtime.dom_host().clone(),
+            )));
+        }
         page_vm.vm_mut().set_emulated_media(&env.emulated_media);
         page_vm.vm_mut().set_idle_override(env.idle_override);
         page_vm
