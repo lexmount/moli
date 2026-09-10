@@ -150,10 +150,11 @@ pub use moli_renderer_v8::{
 pub use navigation_diagnostics::{NavigationRedirect, NavigationResponse};
 pub use protocol_support::{
     BidiPreloadChannelHandoff, ChildFrameAttachmentSnapshot, ChildFrameDetachmentSnapshot,
-    ChildFrameDocumentNetworkActivitySnapshot, ChildFrameDocumentNetworkSnapshot,
-    ChildFrameDocumentOpenedSnapshot, ChildFrameNavigationSnapshot, ChildFrameTreeEventSnapshot,
-    ChildFrameTreeSnapshot, ContentSecurityPolicyIssueSnapshot, ContentSecurityPolicyViolationType,
-    DocumentStartScript, EmulatedIdleOverride, EmulatedMediaOverrides, InspectorIssueSnapshot,
+    ChildFrameDocumentNetworkActivitySnapshot, ChildFrameDocumentNetworkResponse,
+    ChildFrameDocumentNetworkSnapshot, ChildFrameDocumentOpenedSnapshot,
+    ChildFrameNavigationSnapshot, ChildFrameTreeEventSnapshot, ChildFrameTreeSnapshot,
+    ContentSecurityPolicyIssueSnapshot, ContentSecurityPolicyViolationType, DocumentStartScript,
+    EmulatedIdleOverride, EmulatedMediaOverrides, InspectorIssueSnapshot,
     InspectorSourceCodeLocationSnapshot, PendingRuntimeBindingCall, PendingSubresourceAuthInfo,
     PendingSubresourceContinueEvent, PendingSubresourceContinueOutcome,
     PendingSubresourceFetchInfo, PendingSubresourceResponseInfo, PermissionOverrideRegistration,

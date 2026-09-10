@@ -171,7 +171,12 @@ mod tests {
                 for (replace_document, recover) in
                     [(false, false), (false, true), (true, false), (true, true)]
                 {
-                    assert_native_network_recovery_fifo(replace_document, recover, false).await;
+                    assert_native_network_recovery_fifo(
+                        replace_document,
+                        recover,
+                        NetworkFixture::Resource,
+                    )
+                    .await;
                 }
             })
             .await;
@@ -184,16 +189,46 @@ mod tests {
                 for (replace_document, recover) in
                     [(false, false), (false, true), (true, false), (true, true)]
                 {
-                    assert_native_network_recovery_fifo(replace_document, recover, true).await;
+                    assert_native_network_recovery_fifo(
+                        replace_document,
+                        recover,
+                        NetworkFixture::ChildResponse,
+                    )
+                    .await;
                 }
             })
             .await;
     }
 
+    #[tokio::test]
+    async fn native_child_network_failure_lag_recovery_preserves_source_and_command_fifo() {
+        tokio::task::LocalSet::new()
+            .run_until(async {
+                for (replace_document, recover) in
+                    [(false, false), (false, true), (true, false), (true, true)]
+                {
+                    assert_native_network_recovery_fifo(
+                        replace_document,
+                        recover,
+                        NetworkFixture::ChildFailure,
+                    )
+                    .await;
+                }
+            })
+            .await;
+    }
+
+    #[derive(Clone, Copy)]
+    enum NetworkFixture {
+        Resource,
+        ChildResponse,
+        ChildFailure,
+    }
+
     async fn assert_native_network_recovery_fifo(
         replace_document: bool,
         recover: bool,
-        child_document: bool,
+        fixture: NetworkFixture,
     ) {
         use moli_core::browser::{
             BrowserContextStoragePartitionHandles, BrowserNavigationOutcome,
@@ -205,6 +240,14 @@ mod tests {
             DevToolsNavigateCommand, DevToolsNavigationWait, DevToolsProtocol,
         };
         use serde_json::json;
+
+        let child_document = !matches!(fixture, NetworkFixture::Resource);
+        let failed = matches!(fixture, NetworkFixture::ChildFailure);
+        let terminal_method = if failed {
+            "Network.loadingFailed"
+        } else {
+            "Network.loadingFinished"
+        };
 
         let service = BrowserService::start().unwrap();
         let browser = service.handle();
@@ -268,6 +311,10 @@ mod tests {
                 while !request.ends_with(b"\r\n\r\n") {
                     stream.read_exact(&mut byte).await.unwrap();
                     request.push(byte[0]);
+                }
+                assert!(String::from_utf8_lossy(&request).starts_with("GET /native-child "));
+                if failed {
+                    return;
                 }
                 let body = "<!doctype html><p>native child FIFO body</p>";
                 stream.write_all(format!("HTTP/1.1 200 OK\r\nContent-Type: text/html\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}", body.len()).as_bytes()).await.unwrap();
@@ -404,7 +451,7 @@ mod tests {
                     message["method"] == "Network.requestWillBeSent"
                         && message["params"]["request"]["url"] == resource_url
                 }) && messages.iter().any(|message| {
-                    message["method"] == "Network.loadingFinished"
+                    message["method"] == terminal_method
                         && message["params"]["requestId"] == request["params"]["requestId"]
                 }) {
                     break;
@@ -461,13 +508,27 @@ mod tests {
         assert_eq!(
             messages
                 .iter()
-                .filter(|message| message["method"] == "Network.loadingFinished"
+                .filter(|message| message["method"] == terminal_method
                     && &message["params"]["requestId"] == request_id)
                 .count(),
             1,
             "{messages:?}"
         );
-        if child_document {
+        if failed {
+            assert!(!messages.iter().any(|message| matches!(
+                message["method"].as_str(),
+                Some("Network.responseReceived" | "Network.loadingFinished")
+            ) && &message["params"]["requestId"]
+                == request_id));
+            let body = scheduler.execute_internal_protocol_message(&mut receivers, json!({"id":12,"method":"Network.getResponseBody","params":{"requestId":request_id}})).await
+                .unwrap_or_else(|failure| panic!("{:?}", failure.into_parts().1)).into_messages();
+            assert!(
+                body.iter().any(|message| message["id"] == 12
+                    && message["error"]["message"]
+                        == "No data found for resource with given identifier"),
+                "{body:?}"
+            );
+        } else if child_document {
             let frame = &messages[request]["params"]["frameId"];
             assert_eq!(messages[request]["params"]["type"], "Document");
             let start = messages

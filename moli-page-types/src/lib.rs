@@ -3207,6 +3207,12 @@ pub struct ChildFrameDocumentNetworkSnapshot {
     pub request_method: String,
     #[serde(default)]
     pub request_headers: Vec<(String, String)>,
+    /// The completed fetch result. Failure does not fabricate an HTTP response.
+    pub response: Result<ChildFrameDocumentNetworkResponse, String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
+pub struct ChildFrameDocumentNetworkResponse {
     pub final_url: String,
     pub status: u16,
     #[serde(default)]
@@ -3216,8 +3222,7 @@ pub struct ChildFrameDocumentNetworkSnapshot {
     /// Exact in-process response body source for protocol consumers.
     ///
     /// Renderer/protocol transport shares this carrier without copying the
-    /// complete payload. Serialized snapshots retain their historical wire
-    /// shape and therefore deserialize without a body source.
+    /// complete payload. Serialized snapshots deserialize without a body source.
     #[serde(skip)]
     pub response_body: Option<SubresourceResponseBody>,
     #[serde(default)]
@@ -3229,7 +3234,7 @@ pub struct ChildFrameDocumentNetworkSnapshot {
 /// Document.
 ///
 /// Keeping this separate from `ChildFrameNavigationSnapshot` prevents a stale
-/// response from synthesizing a navigation commit or lifecycle terminal.
+/// result from synthesizing a navigation commit or lifecycle terminal.
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
 pub struct ChildFrameDocumentNetworkActivitySnapshot {
     pub frame_id: String,

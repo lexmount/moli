@@ -255,7 +255,7 @@ impl ResourcePerformanceEntry {
         name: impl Into<String>,
         initiator_type: &'static str,
         start_unix_millis: Option<f64>,
-        network: &crate::protocol_types::ChildFrameDocumentNetworkSnapshot,
+        network: &crate::protocol_types::ChildFrameDocumentNetworkResponse,
     ) -> Self {
         let body_size = network.encoded_data_length as f64;
         let header_size = network

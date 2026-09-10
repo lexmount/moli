@@ -692,8 +692,14 @@ pub(crate) fn emit_child_document_navigation_network_background_events(
     let Ok(request_url) = Url::parse(&network.request_url) else {
         return;
     };
-    let Ok(final_url) = Url::parse(&network.final_url) else {
-        return;
+    let response = match &network.response {
+        Ok(response) => {
+            let Ok(final_url) = Url::parse(&response.final_url) else {
+                return;
+            };
+            Ok((response, final_url))
+        }
+        Err(error) => Err(error),
     };
     let session_ids = conn.network_event_session_ids_for_owner(owner);
     if session_ids.is_empty() {
@@ -727,18 +733,29 @@ pub(crate) fn emit_child_document_navigation_network_background_events(
         redirect_has_extra_info: false,
         cookie_access_report: None,
     });
+    let (response, final_url) = match response {
+        Ok(response) => response,
+        Err(error) => {
+            record_child_document_response_body(conn, owner, request_id, &session_ids, None);
+            output.emit_event(MainDocumentNavigationProgressEvent::LoadingFailed {
+                target,
+                error_text: error.clone(),
+            });
+            return;
+        }
+    };
     output.emit_event(MainDocumentNavigationProgressEvent::ResponseReceived {
         target: target.clone(),
         final_url,
-        status: network.status,
-        headers: network.response_headers.clone(),
+        status: response.status,
+        headers: response.response_headers.clone(),
         cookie_set_reports: Vec::new(),
-        extra_info_status: network.status,
-        extra_info_headers: network.response_headers.clone(),
+        extra_info_status: response.status,
+        extra_info_headers: response.response_headers.clone(),
         network_extra_info_available: false,
         emit_extra_info: false,
         encoded_data_length: 0,
-        from_cache: network.from_cache,
+        from_cache: response.from_cache,
         negotiated_http_version: None,
         has_extra_info: false,
     });
@@ -747,11 +764,11 @@ pub(crate) fn emit_child_document_navigation_network_background_events(
         owner,
         request_id,
         &session_ids,
-        network.response_body.as_ref(),
+        response.response_body.as_ref(),
     );
     output.emit_event(MainDocumentNavigationProgressEvent::LoadingFinished {
         target,
-        encoded_data_length: network.encoded_data_length,
+        encoded_data_length: response.encoded_data_length,
     });
 }
 

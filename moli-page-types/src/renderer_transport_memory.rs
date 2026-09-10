@@ -10,18 +10,22 @@ use super::*;
 impl ChildFrameDocumentNetworkSnapshot {
     #[doc(hidden)]
     pub fn renderer_transport_charge_bytes(&self) -> usize {
-        [&self.request_url, &self.request_method, &self.final_url]
+        [&self.request_url, &self.request_method]
             .into_iter()
             .map(|value| string_charge(value))
             .sum::<usize>()
             .saturating_add(headers_charge(&self.request_headers))
-            .saturating_add(headers_charge(&self.response_headers))
-            .saturating_add(
-                self.response_body
-                    .as_ref()
-                    .map(|body| body.renderer_transport_retained_memory_bytes())
-                    .unwrap_or(0),
-            )
+            .saturating_add(match &self.response {
+                Ok(response) => string_charge(&response.final_url)
+                    .saturating_add(headers_charge(&response.response_headers))
+                    .saturating_add(
+                        response
+                            .response_body
+                            .as_ref()
+                            .map_or(0, |body| body.renderer_transport_retained_memory_bytes()),
+                    ),
+                Err(error) => string_charge(error),
+            })
     }
 }
 

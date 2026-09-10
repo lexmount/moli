@@ -17,8 +17,8 @@ use crate::{
         FrameDocumentInteractiveLifecycleAction, FrameRequestKind,
     },
     types::{
-        ChildDocumentLoadCompletion, ChildDocumentLoadOutcome, LoadedChildDocument,
-        SubresourceResponseBody,
+        ChildDocumentLoadCompletion, ChildDocumentLoadFailure, ChildDocumentLoadOutcome,
+        LoadedChildDocument, SubresourceResponseBody,
     },
 };
 use moli_encoding::decode_html_document_with_fallback;
@@ -211,13 +211,13 @@ impl JsContextHost {
                     #[cfg(test)]
                     { crate::runtime::RendererChildDocumentNetworkObservation::unobserved_for_test(response) }
                     #[cfg(not(test))]
-                    { panic!("a child network response needs its captured physical renderer source") }
+                    { panic!("a child network result needs its captured physical renderer source") }
                 }
             };
             let result = async {
                 let request = configure_child_document_navigation_request(
                     child_document_load_request(bootstrap).ok_or_else(|| {
-                        "unsupported child document navigation bootstrap".to_owned()
+                        ChildDocumentLoadFailure::Document("unsupported child document navigation bootstrap".to_owned())
                     })?,
                     &initiator_url,
                     &browser_context,
@@ -227,6 +227,19 @@ impl JsContextHost {
                 let request_url = request.url.as_str().to_owned();
                 let request_method = request.method.clone();
                 let request_headers = request.request_headers.clone();
+                let record_failure = |error: anyhow::Error| {
+                    let error = error.downcast_ref::<moli_fetch::NetworkFetchFailureContext>()
+                        .map(|failure| failure.network_error_text().to_owned())
+                        .unwrap_or_else(|| error.to_string());
+                    ChildDocumentLoadFailure::Network(record_network(
+                        crate::protocol_types::ChildFrameDocumentNetworkSnapshot {
+                            request_url: request_url.clone(),
+                            request_method: request_method.clone(),
+                            request_headers: request_headers.clone(),
+                            response: Err(error),
+                        },
+                    ))
+                };
                 if let Some(client_id) = service_worker_client_id
                     && let Some(response) = browser_context_runtime
                         .fetch_service_worker_child_main_resource_for_reserved_client(
@@ -237,11 +250,11 @@ impl JsContextHost {
                             completion_tx.clone(),
                         )
                         .await
-                        .map_err(|error| error.to_string())?
+                        .map_err(record_failure)?
                 {
                     task_resource_loader
                         .note_service_worker_response_ready()
-                        .map_err(|error| error.to_string())?;
+                        .map_err(|error| ChildDocumentLoadFailure::Document(error.to_string()))?;
                     let (head, body) = response.into_body();
                     return child_document_load_outcome_from_response(
                         request_url,
@@ -251,12 +264,12 @@ impl JsContextHost {
                         body,
                         &parent_character_set,
                         record_network,
-                    );
+                    ).map_err(ChildDocumentLoadFailure::Document);
                 }
                 let response = task_resource_loader
                     .fetch_raw(request)
                     .await
-                    .map_err(|error| error.to_string())?;
+                    .map_err(record_failure)?;
                 let (head, body) = response.into_body();
                 child_document_load_outcome_from_response(
                     request_url,
@@ -266,7 +279,7 @@ impl JsContextHost {
                     body,
                     &parent_character_set,
                     record_network,
-                )
+                ).map_err(ChildDocumentLoadFailure::Document)
             }
             .await;
             let _ = completion_tx.send_child_document(ChildDocumentLoadCompletion::new(
@@ -357,7 +370,7 @@ impl JsContextHost {
         #[cfg(test)]
         {
             self.completed_child_document_networks
-                .push(network.response().clone());
+                .push(network.activity().clone());
         }
         #[cfg(not(test))]
         {
@@ -455,10 +468,10 @@ impl JsContextHost {
                     if let Some(network) = loaded.document_network.take() {
                         self.publish_child_document_network(network);
                     }
-                    Err(format!(
+                    Err(ChildDocumentLoadFailure::Document(format!(
                         "child document response blocked by Content Security Policy `{}` for `{}`",
                         violation.effective_directive, violation.blocked_uri
-                    ))
+                    )))
                 } else {
                     Ok(ChildDocumentLoadOutcome::Loaded(loaded))
                 }
@@ -559,10 +572,14 @@ impl JsContextHost {
                     document_credentialless,
                     credentialless_storage_nonce,
                 );
-                let resource_was_cached = loaded
-                    .document_network
-                    .as_ref()
-                    .is_some_and(|network| network.response().snapshot.from_cache);
+                let resource_was_cached = loaded.document_network.as_ref().is_some_and(|network| {
+                    network
+                        .activity()
+                        .snapshot
+                        .response
+                        .as_ref()
+                        .is_ok_and(|response| response.from_cache)
+                });
                 completed_document_network = loaded.document_network;
                 let snapshot = super::super::ChildBrowsingContextSnapshot::with_character_set(
                     final_url,
@@ -595,12 +612,6 @@ impl JsContextHost {
                         body_activity,
                     };
                 }
-                tracing::debug!(
-                    ?handle,
-                    url = %pending.target_url,
-                    error,
-                    "child document load failed"
-                );
                 self.clear_child_browsing_context_pending_navigation(handle);
                 let Some(entry) = self.child_browsing_contexts.get_mut(&handle) else {
                     self.clear_pending_service_worker_child_client_if_matches(
@@ -618,6 +629,28 @@ impl JsContextHost {
                 };
                 entry.clear_cached_snapshot();
                 entry.clear_completed_document_network();
+                let error = match error {
+                    ChildDocumentLoadFailure::Network(network) => {
+                        let error = network
+                            .activity()
+                            .snapshot
+                            .response
+                            .as_ref()
+                            .expect_err("the failed fetch records an error, never an HTTP response")
+                            .clone();
+                        // Retain the receipt through unload authorization. If
+                        // superseded, the historical path publishes it instead.
+                        self.publish_child_document_network(network);
+                        error
+                    }
+                    ChildDocumentLoadFailure::Document(error) => error,
+                };
+                tracing::debug!(
+                    ?handle,
+                    url = %pending.target_url,
+                    error,
+                    "child document load failed"
+                );
                 self.reject_replaced_service_worker_child_client_navigation(
                     handle,
                     format!("Cannot navigate to URL: {error}"),
@@ -662,9 +695,15 @@ impl JsContextHost {
                 let frame_owner_resource_timing = pending
                     .frame_owner_resource_timing
                     .take()
-                    .zip(completed_document_network.clone())
-                    .map(|(timing, network)| {
-                        timing.complete(current_owner, network.response().snapshot.clone())
+                    .zip(completed_document_network.as_ref())
+                    .and_then(|(timing, network)| {
+                        network
+                            .activity()
+                            .snapshot
+                            .response
+                            .as_ref()
+                            .ok()
+                            .map(|response| timing.complete(current_owner, response.clone()))
                     });
                 entry.bind_completed_frame_owner_resource_timing(frame_owner_resource_timing);
                 entry.bind_completed_document_network(current_owner, completed_document_network);
@@ -765,12 +804,14 @@ fn child_document_load_outcome_from_response(
         request_url,
         request_method,
         request_headers,
-        final_url: head.final_url.as_str().to_owned(),
-        status: head.status,
-        response_headers: head.headers.clone(),
-        encoded_data_length: response_body.len(),
-        response_body: Some(response_body.clone()),
-        from_cache: head.from_cache,
+        response: Ok(crate::protocol_types::ChildFrameDocumentNetworkResponse {
+            final_url: head.final_url.as_str().to_owned(),
+            status: head.status,
+            response_headers: head.headers.clone(),
+            encoded_data_length: response_body.len(),
+            response_body: Some(response_body.clone()),
+            from_cache: head.from_cache,
+        }),
     });
     // Receiving a response is a native fact even when it cannot commit a
     // Document. Parsing, policy checks and Load must not own its publication.
@@ -888,7 +929,7 @@ mod tests {
             .document_network
             .as_ref()
             .expect("loaded child document should retain Network metadata");
-        let network = &network.response().snapshot;
+        let network = network.activity().snapshot.response.as_ref().unwrap();
         assert_eq!(network.encoded_data_length, body_bytes.len());
         assert_eq!(
             network

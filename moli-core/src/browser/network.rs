@@ -349,8 +349,8 @@ mod tests {
     #[test]
     fn native_child_network_retention_is_shared_bounded_and_scoped_to_its_renderer() {
         use crate::page::{
-            ChildFrameDocumentNetworkActivitySnapshot, ChildFrameDocumentNetworkSnapshot,
-            SubresourceResponseBody,
+            ChildFrameDocumentNetworkActivitySnapshot, ChildFrameDocumentNetworkResponse,
+            ChildFrameDocumentNetworkSnapshot, SubresourceResponseBody,
         };
         let (document, renderer) = source();
         let response = Arc::new(ChildFrameDocumentNetworkActivitySnapshot {
@@ -361,12 +361,14 @@ mod tests {
                 request_url: "https://example.test/child".into(),
                 request_method: "GET".into(),
                 request_headers: Vec::new(),
-                final_url: "https://example.test/child".into(),
-                status: 200,
-                response_headers: Vec::new(),
-                encoded_data_length: 4,
-                response_body: Some(SubresourceResponseBody::from_bytes(b"body".to_vec())),
-                from_cache: false,
+                response: Ok(ChildFrameDocumentNetworkResponse {
+                    final_url: "https://example.test/child".into(),
+                    status: 200,
+                    response_headers: Vec::new(),
+                    encoded_data_length: 4,
+                    response_body: Some(SubresourceResponseBody::from_bytes(b"body".to_vec())),
+                    from_cache: false,
+                }),
             },
         });
         let input = occurrence(
@@ -410,12 +412,12 @@ mod tests {
         assert_eq!(requests.snapshots().count(), 256);
         let mut large = response.as_ref().clone();
         large.loader_id = "large".into();
-        large.snapshot.response_body = Some(SubresourceResponseBody::from_bytes(vec![
-            b'x';
-            16 * 1024
-                * 1024
-                + 1
-        ]));
+        large.snapshot.response.as_mut().unwrap().response_body =
+            Some(SubresourceResponseBody::from_bytes(vec![
+                b'x';
+                16 * 1024 * 1024
+                    + 1
+            ]));
         let large = occurrence(
             renderer,
             RendererNetworkOutputItem::ChildDocument(Arc::new(large)),
@@ -424,6 +426,29 @@ mod tests {
         assert!(
             requests.get(&request_key(&large).unwrap()).is_none(),
             "oversized completed response must not escape the retained-byte cap"
+        );
+        let mut failed = response.as_ref().clone();
+        failed.loader_id = "failed".into();
+        failed.snapshot.response = Err("connection closed before headers".into());
+        let failure = occurrence(
+            renderer,
+            RendererNetworkOutputItem::ChildDocument(Arc::new(failed.clone())),
+        );
+        assert!(requests.commit(document, &failure, BrowserSequence::allocate()));
+        assert!(!requests.commit(document, &failure, BrowserSequence::allocate()));
+        assert!(requests.get(&request_key(&failure).unwrap()).is_some());
+        failed.loader_id = "oversized-failure".into();
+        failed.snapshot.response = Err("x".repeat(16 * 1024 * 1024 + 1));
+        let oversized_failure = occurrence(
+            renderer,
+            RendererNetworkOutputItem::ChildDocument(Arc::new(failed)),
+        );
+        assert!(requests.commit(document, &oversized_failure, BrowserSequence::allocate()));
+        assert!(
+            requests
+                .get(&request_key(&oversized_failure).unwrap())
+                .is_none(),
+            "failure diagnostics must obey the same retained-byte cap"
         );
     }
 

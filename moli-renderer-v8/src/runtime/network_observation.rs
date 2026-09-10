@@ -137,8 +137,8 @@ impl RendererNetworkObservation {
     }
 }
 
-/// The response and its native receipt travel together through child parsing
-/// and load delivery. The renderer never stores a second raw protocol response.
+/// The fetch result and its native receipt travel together through child
+/// completion and load delivery, without a second raw protocol result.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct RendererChildDocumentNetworkObservation(RendererNetworkObservation);
 
@@ -149,20 +149,20 @@ impl RendererChildDocumentNetworkObservation {
             super::RendererOwnerLocalHostId,
             RendererDocumentLifecycleIdentity,
         ),
-        response: ChildFrameDocumentNetworkActivitySnapshot,
+        activity: ChildFrameDocumentNetworkActivitySnapshot,
     ) -> Self {
         Self(runtime.report_network(
             source.0,
             source.1,
-            RendererNetworkOutputItem::ChildDocument(Arc::new(response)),
+            RendererNetworkOutputItem::ChildDocument(Arc::new(activity)),
         ))
     }
 
-    pub(crate) fn response(&self) -> &ChildFrameDocumentNetworkActivitySnapshot {
-        let RendererNetworkOutputItem::ChildDocument(response) = self.0.item() else {
-            unreachable!("child response constructor fixes its payload kind");
+    pub(crate) fn activity(&self) -> &ChildFrameDocumentNetworkActivitySnapshot {
+        let RendererNetworkOutputItem::ChildDocument(activity) = self.0.item() else {
+            unreachable!("child network constructor fixes its payload kind");
         };
-        response
+        activity
     }
 
     pub(crate) fn into_observation(self) -> RendererNetworkObservation {

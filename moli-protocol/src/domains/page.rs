@@ -2377,10 +2377,10 @@ pub(in crate::domains) fn emit_same_document_navigation_activity_background_even
 mod producer_tests {
     use moli_core::RendererDocumentTitleChanged;
     use moli_core::page::{
-        ChildFrameDocumentNetworkActivitySnapshot, ChildFrameDocumentNetworkSnapshot,
-        ChildFrameNavigationSnapshot, RENDERER_BACKEND_NODE_ID_START,
-        RendererDocumentLifecycleIdentity, RendererDocumentLifecycleSnapshot,
-        RendererDocumentSourcedSameDocumentNavigation,
+        ChildFrameDocumentNetworkActivitySnapshot, ChildFrameDocumentNetworkResponse,
+        ChildFrameDocumentNetworkSnapshot, ChildFrameNavigationSnapshot,
+        RENDERER_BACKEND_NODE_ID_START, RendererDocumentLifecycleIdentity,
+        RendererDocumentLifecycleSnapshot, RendererDocumentSourcedSameDocumentNavigation,
         RendererDocumentSourcedTopLevelLocationNavigation, RendererDocumentToken,
         RendererFrameToken, RendererJavaScriptDialogCompletion, RendererJavaScriptDialogId,
         RendererJavaScriptDialogSource, RendererLifecycleEpoch, RendererLifecycleEventStamp,
@@ -4118,14 +4118,19 @@ mod producer_tests {
                         request_url: "https://example.test/child".to_owned(),
                         request_method: "GET".to_owned(),
                         request_headers: vec![("Accept".to_owned(), "text/html".to_owned())],
-                        final_url: "https://example.test/child".to_owned(),
-                        status: 200,
-                        response_headers: vec![("Content-Type".to_owned(), "text/html".to_owned())],
-                        encoded_data_length: 3,
-                        response_body: Some(SubresourceResponseBody::from_bytes(vec![
-                            0x00, 0xff, b'a',
-                        ])),
-                        from_cache: true,
+                        response: Ok(ChildFrameDocumentNetworkResponse {
+                            final_url: "https://example.test/child".to_owned(),
+                            status: 200,
+                            response_headers: vec![(
+                                "Content-Type".to_owned(),
+                                "text/html".to_owned(),
+                            )],
+                            encoded_data_length: 3,
+                            response_body: Some(SubresourceResponseBody::from_bytes(vec![
+                                0x00, 0xff, b'a',
+                            ])),
+                            from_cache: true,
+                        }),
                     },
                 }),
             ),
@@ -4255,14 +4260,16 @@ mod producer_tests {
                     request_url: "https://example.test/retired-child".to_owned(),
                     request_method: "GET".to_owned(),
                     request_headers: Vec::new(),
-                    final_url: "https://example.test/retired-child".to_owned(),
-                    status: 200,
-                    response_headers: vec![("Content-Type".to_owned(), "text/html".to_owned())],
-                    encoded_data_length: 21,
-                    response_body: Some(SubresourceResponseBody::from_bytes(
-                        b"historical child body".to_vec(),
-                    )),
-                    from_cache: false,
+                    response: Ok(ChildFrameDocumentNetworkResponse {
+                        final_url: "https://example.test/retired-child".to_owned(),
+                        status: 200,
+                        response_headers: vec![("Content-Type".to_owned(), "text/html".to_owned())],
+                        encoded_data_length: 21,
+                        response_body: Some(SubresourceResponseBody::from_bytes(
+                            b"historical child body".to_vec(),
+                        )),
+                        from_cache: false,
+                    }),
                 },
             }],
             Vec::new(),
@@ -4363,12 +4370,14 @@ mod producer_tests {
             request_url: "https://example.test/legacy-child".to_owned(),
             request_method: "GET".to_owned(),
             request_headers: Vec::new(),
-            final_url: "https://example.test/legacy-child".to_owned(),
-            status: 200,
-            response_headers: vec![("Content-Type".to_owned(), "text/html".to_owned())],
-            encoded_data_length: 0,
-            response_body: None,
-            from_cache: false,
+            response: Ok(ChildFrameDocumentNetworkResponse {
+                final_url: "https://example.test/legacy-child".to_owned(),
+                status: 200,
+                response_headers: vec![("Content-Type".to_owned(), "text/html".to_owned())],
+                encoded_data_length: 0,
+                response_body: None,
+                from_cache: false,
+            }),
         };
         let mut background_events = Vec::new();
 

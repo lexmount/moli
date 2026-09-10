@@ -87,11 +87,14 @@ async fn native_child_document_network_completes_without_devtools() {
         panic!("the recovery record must identify a child Document response");
     };
     assert_eq!(response.snapshot.request_url, server.url("/static"));
-    assert_eq!(response.snapshot.status, 200);
+    assert_eq!(response.snapshot.response.as_ref().unwrap().status, 200);
     assert!(
         String::from_utf8_lossy(
             &response
                 .snapshot
+                .response
+                .as_ref()
+                .unwrap()
                 .response_body
                 .as_ref()
                 .unwrap()
@@ -112,6 +115,91 @@ async fn native_child_document_network_completes_without_devtools() {
         .await;
     service.shutdown();
     server.shutdown().await;
+}
+
+#[tokio::test]
+async fn native_child_document_network_failure_completes_without_devtools() {
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let child_url = format!("http://{}/no-response", listener.local_addr().unwrap());
+    let server = tokio::spawn(async move {
+        let (mut stream, _) = listener.accept().await.unwrap();
+        let mut request = Vec::new();
+        let mut byte = [0];
+        while !request.ends_with(b"\r\n\r\n") {
+            stream.read_exact(&mut byte).await.unwrap();
+            request.push(byte[0]);
+        }
+        assert!(String::from_utf8_lossy(&request).starts_with("GET /no-response "));
+        // Close the accepted request without sending an HTTP response.
+    });
+    let service = BrowserService::start().unwrap();
+    let browser = service.handle();
+    let (context, contents) = context_with_contents(&service);
+    let (_, mut events) = browser.subscribe().unwrap();
+    let document = navigate(
+        &context,
+        contents,
+        &format!("data:text/html,<iframe src='{child_url}'></iframe>"),
+    )
+    .await;
+    let mut completed = Vec::new();
+    tokio::time::timeout(std::time::Duration::from_secs(5), async {
+        loop {
+            match events.recv().await.unwrap().event {
+                BrowserEvent::NetworkRequestCompleted(occurrence)
+                    if occurrence.document == document =>
+                {
+                    completed.push(occurrence)
+                }
+                BrowserEvent::DocumentLifecycleChanged(snapshot)
+                    if snapshot.document == document && snapshot.lifecycle.load.is_some() =>
+                {
+                    break;
+                }
+                _ => {}
+            }
+        }
+    })
+    .await
+    .expect("failed child transport must settle the parent without Protocol");
+    server.await.unwrap();
+    assert_eq!(
+        completed.len(),
+        1,
+        "the actual failed request needs one native terminal"
+    );
+    let snapshot = browser.subscribe().unwrap().0;
+    let requests = snapshot
+        .network_requests
+        .iter()
+        .filter(|request| request.document == document)
+        .collect::<Vec<_>>();
+    assert_eq!(
+        requests.len(),
+        1,
+        "recovery must retain the failed child request"
+    );
+    let crate::browser::NetworkRequestState::ChildDocument(activity) = &requests[0].state else {
+        panic!("the failure must retain its child request identity");
+    };
+    assert_eq!(activity.snapshot.request_url, child_url);
+    assert_eq!(activity.snapshot.request_method, "GET");
+    assert!(
+        !activity.snapshot.response.as_ref().unwrap_err().is_empty(),
+        "no HTTP response may be fabricated for the failed fetch"
+    );
+    let crate::page::RendererNetworkOutputItem::ChildDocument(occurred) =
+        &completed[0].renderer.item
+    else {
+        panic!("the event must carry the same failed child request");
+    };
+    assert!(std::sync::Arc::ptr_eq(activity, occurred));
+    browser
+        .close_web_contents(contents)
+        .unwrap()
+        .close_async()
+        .await;
+    service.shutdown();
 }
 
 #[tokio::test]
@@ -187,6 +275,9 @@ async fn native_child_document_network_precedes_held_child_script_and_load() {
         String::from_utf8_lossy(
             &response
                 .snapshot
+                .response
+                .as_ref()
+                .unwrap()
                 .response_body
                 .as_ref()
                 .unwrap()

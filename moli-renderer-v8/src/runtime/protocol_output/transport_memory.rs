@@ -236,7 +236,7 @@ fn owner_action_transport_charge_bytes(action: &RendererOwnerAction) -> usize {
         .saturating_add(
             network
                 .as_ref()
-                .map(|network| network.response().renderer_transport_charge_bytes())
+                .map(|network| network.activity().renderer_transport_charge_bytes())
                 .unwrap_or(0),
         ),
         RendererOwnerAction::SameDocumentNavigation(event) => {

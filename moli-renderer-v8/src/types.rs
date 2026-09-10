@@ -1400,17 +1400,23 @@ pub(super) enum ChildDocumentLoadOutcome {
 }
 
 #[derive(Debug)]
+pub(super) enum ChildDocumentLoadFailure {
+    Network(crate::runtime::RendererChildDocumentNetworkObservation),
+    Document(String),
+}
+
+#[derive(Debug)]
 pub(super) struct ChildDocumentLoadCompletion {
     target: crate::frame_owner_model::ChildDocumentNavigationFetchTarget,
     loader_id: String,
-    result: std::result::Result<ChildDocumentLoadOutcome, String>,
+    result: std::result::Result<ChildDocumentLoadOutcome, ChildDocumentLoadFailure>,
 }
 
 impl ChildDocumentLoadCompletion {
     pub(super) fn new(
         target: crate::frame_owner_model::ChildDocumentNavigationFetchTarget,
         loader_id: String,
-        result: std::result::Result<ChildDocumentLoadOutcome, String>,
+        result: std::result::Result<ChildDocumentLoadOutcome, ChildDocumentLoadFailure>,
     ) -> Self {
         Self {
             target,
@@ -1433,8 +1439,9 @@ impl ChildDocumentLoadCompletion {
     ) -> Option<&crate::runtime::RendererChildDocumentNetworkObservation> {
         match &self.result {
             Ok(ChildDocumentLoadOutcome::Loaded(loaded)) => loaded.document_network.as_ref(),
-            Ok(ChildDocumentLoadOutcome::IgnoredNavigation(network)) => Some(network),
-            Err(_) => None,
+            Ok(ChildDocumentLoadOutcome::IgnoredNavigation(network))
+            | Err(ChildDocumentLoadFailure::Network(network)) => Some(network),
+            Err(ChildDocumentLoadFailure::Document(_)) => None,
         }
     }
 
@@ -1443,7 +1450,7 @@ impl ChildDocumentLoadCompletion {
     ) -> (
         crate::frame_owner_model::ChildDocumentNavigationFetchTarget,
         String,
-        std::result::Result<ChildDocumentLoadOutcome, String>,
+        std::result::Result<ChildDocumentLoadOutcome, ChildDocumentLoadFailure>,
     ) {
         (self.target, self.loader_id, self.result)
     }
@@ -1469,7 +1476,11 @@ impl ChildDocumentLoadCompletion {
             load_id,
             FrameRequestId(load_id),
         );
-        Self::new(target, format!("TEST-CHILD-LOADER-{load_id}"), result)
+        Self::new(
+            target,
+            format!("TEST-CHILD-LOADER-{load_id}"),
+            result.map_err(ChildDocumentLoadFailure::Document),
+        )
     }
 }
 
