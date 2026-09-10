@@ -78,19 +78,6 @@ impl WorkerAbortStore {
         self.next_controller_id
     }
 
-    fn define_hidden_value(
-        scope: &mut v8::PinScope<'_, '_>,
-        object: v8::Local<'_, v8::Object>,
-        key: &str,
-        value: v8::Local<'_, v8::Value>,
-    ) {
-        let Some(key) = v8_string(scope, key) else {
-            return;
-        };
-        let _ =
-            object.define_own_property(scope, key.into(), value, v8::PropertyAttribute::DONT_ENUM);
-    }
-
     pub(super) fn signal_id_from_object<'s>(
         scope: &mut v8::PinScope<'s, '_>,
         object: v8::Local<'s, v8::Object>,

@@ -3523,6 +3523,7 @@ document-picture-in-picture/requires-secure-context.html
 dom/abort/abort-signal-any.any.js?moli-wpt-any=dedicatedworker
 dom/abort/abort-signal-any.any.js?moli-wpt-any=window
 dom/abort/abort-signal-timeout.html
+dom/abort/event.any.js?moli-wpt-any=dedicatedworker
 dom/abort/event.any.js?moli-wpt-any=window
 dom/abort/reason-constructor.html
 dom/attributes-are-nodes.html
