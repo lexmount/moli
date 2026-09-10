@@ -198,7 +198,7 @@ pub(crate) use crate::protocol_types::extract_subresource_auth_challenge;
 pub(crate) use moli_fetch::NET_ERR_ABORTED_ERROR_TEXT as ABORTED_ERROR_TEXT;
 
 #[derive(WebApiObject)]
-#[webapi(interface = "Response")]
+#[webapi(unbranded, interface = "Response")]
 struct ChildResponseConstructorDeclaration<'scope> {
     data: v8::Local<'scope, v8::Value>,
 

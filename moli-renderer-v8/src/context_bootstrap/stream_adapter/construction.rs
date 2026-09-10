@@ -145,7 +145,7 @@ struct WritableStreamObjectDeclaration<'scope, 'value> {
 }
 
 #[derive(WebApiObject)]
-#[webapi(interface = "TransformStream")]
+#[webapi(interface = "TransformStream", unbranded)]
 struct TransformStreamObjectDeclaration<'scope> {
     #[webapi(slot = TRANSFORM_STREAM_READABLE_SLOT)]
     readable: v8::Local<'scope, v8::Object>,
@@ -213,6 +213,14 @@ pub(in crate::context_bootstrap) fn initialize_transform_stream_object<'s>(
     TransformStreamObjectDeclaration::new(readable, writable)
         .initialize(scope, stream)
         .expect("TransformStream declaration should initialize object");
+    // Encoding wrappers share endpoint storage, but are separate interfaces.
+    let interface = match mode {
+        Some("text-encoder") => "TextEncoderStream",
+        Some("text-decoder") => "TextDecoderStream",
+        _ => "TransformStream",
+    };
+    moli_webapi_declare::initialize_web_api_object(scope, stream, interface)
+        .expect("stream identity should initialize");
 }
 
 pub(in crate::context_bootstrap) fn initialize_webidl_transform_stream_object<'s>(
@@ -314,6 +322,8 @@ pub(in crate::context_bootstrap) fn initialize_webidl_transform_stream_object<'s
     TransformStreamObjectDeclaration::new(readable, writable)
         .initialize(scope, stream)
         .expect("TransformStream declaration should initialize object");
+    moli_webapi_declare::initialize_web_api_object(scope, stream, "TransformStream")
+        .expect("TransformStream identity should initialize");
 }
 
 fn install_transform_stream_readable_pull_algorithm<'s>(

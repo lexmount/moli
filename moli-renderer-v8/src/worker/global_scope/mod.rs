@@ -374,7 +374,7 @@ struct SharedWorkerGlobalEventHandlerStateDeclaration {
 }
 
 #[derive(Default, WebApiObject)]
-#[webapi(interface = "DedicatedWorkerGlobalScope", enumerable)]
+#[webapi(unbranded, interface = "DedicatedWorkerGlobalScope", enumerable)]
 struct DedicatedWorkerGlobalMethodsDeclaration {
     #[webapi(method, callback = worker_close_callback, length = 0)]
     close: (),
@@ -388,7 +388,7 @@ struct DedicatedWorkerGlobalPostMessageDeclaration {
 }
 
 #[derive(Default, WebApiObject)]
-#[webapi(interface = "SharedWorkerGlobalScope", enumerable)]
+#[webapi(unbranded, interface = "SharedWorkerGlobalScope", enumerable)]
 struct SharedWorkerGlobalMethodsDeclaration {
     #[webapi(method, callback = worker_close_callback, length = 0)]
     close: (),
@@ -5598,6 +5598,10 @@ fn install_service_worker_extendable_event_constructors<'s>(
         .map_err(|error| anyhow!("failed to initialize ExtendableMessageEvent global: {error}"))?;
 
     ensure_worker_interface_constructor(scope, "ServiceWorker")?;
+    moli_webapi_declare::register_web_api_interfaces(
+        scope,
+        [("Client", None), ("WindowClient", Some("Client"))],
+    )?;
     ensure_worker_interface_constructor(scope, "Client")?;
     ensure_worker_interface_constructor(scope, "WindowClient")?;
     if let Some(client_ctor) = global_constructor_object(scope, "Client")

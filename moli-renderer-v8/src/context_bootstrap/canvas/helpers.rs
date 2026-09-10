@@ -4,7 +4,7 @@ use moli_canvas::{DEFAULT_FILL_STYLE, DEFAULT_FONT};
 use moli_webapi_declare::WebApiObject;
 
 #[derive(WebApiObject)]
-#[webapi(interface = "CanvasRenderingContext2D")]
+#[webapi(unbranded, interface = "CanvasRenderingContext2D")]
 struct CanvasLikeContextObjectDeclaration {
     #[webapi(
         slot = CANVAS_CONTEXT_FILL_STYLE_SLOT,

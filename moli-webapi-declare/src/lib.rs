@@ -84,6 +84,20 @@
 //! `data = self.some_field`, which lets a declaration carry callback data
 //! without expanding the object reflection surface.
 //!
+//! Named interface instances automatically receive a private Web API type after
+//! their fields initialize successfully. `bind`, `bind_into`, and `initialize`
+//! all use this path. `interface = "Object"` describes an unbranded record;
+//! `#[webapi(unbranded)]` explicitly opts named prototype/constructor installers,
+//! dictionaries, and shared initialization fragments out of instance branding.
+//! These fragments never erase an identity already present on their target.
+//!
+//! Register inheritance with `register_web_api_interfaces` using the same
+//! interface metadata that drives constructor installation. `WebApiInterface`
+//! registers its own name and parent automatically. Identity is independent of
+//! realm exposure and mutable JavaScript prototypes. Use `web_api_object_type`
+//! for the primary interface and `implements_interface` for inherited receiver
+//! checks. Native factories can call `initialize_web_api_object` directly.
+//!
 //! The derive generates a Rust-side `new(...)` constructor by default. The
 //! generated constructor takes every non-`()` declaration field as a named
 //! argument and fills `()` declaration fields with `()`. If every field is
@@ -163,6 +177,7 @@
 
 extern crate self as moli_webapi_declare;
 
+mod brand;
 mod callback;
 mod declaration;
 mod error;
@@ -174,6 +189,11 @@ pub mod __private;
 
 pub use moli_webapi_declare_derive::{WebApiFunctionTemplate, WebApiInterface, WebApiObject};
 pub use v8;
+
+pub use brand::{
+    WebApiType, implements_interface, initialize_web_api_object, register_web_api_interfaces,
+    web_api_object_type,
+};
 
 pub use declaration::{
     DataPropertyDescriptorDeclaration, ObjectLiteralDeclaration, WebApiFunctionTemplateDeclaration,

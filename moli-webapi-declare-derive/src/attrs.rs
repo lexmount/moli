@@ -59,6 +59,7 @@ pub(crate) struct ObjectAttrs {
     pub(crate) default_data_properties: bool,
     pub(crate) default_enumerable: bool,
     pub(crate) no_dynamic_constructor: bool,
+    pub(crate) unbranded: bool,
 }
 
 #[derive(Default)]
@@ -209,6 +210,10 @@ pub(crate) fn parse_object_attrs(attrs: &[syn::Attribute]) -> Result<ObjectAttrs
     let mut parsed = ObjectAttrs::default();
     for attr in attrs.iter().filter(|attr| attr.path().is_ident("webapi")) {
         attr.parse_nested_meta(|meta| {
+            if meta.path.is_ident("unbranded") {
+                parsed.unbranded = true;
+                return Ok(());
+            }
             if meta.path.is_ident("receiver") {
                 parsed.receiver = Some(meta.value()?.parse()?);
                 return Ok(());

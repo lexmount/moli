@@ -85,7 +85,7 @@ struct PerformanceJsonSnapshotDeclaration<'scope> {
 }
 
 #[derive(WebApiObject)]
-#[webapi(interface = "PerformanceObserver")]
+#[webapi(unbranded, interface = "PerformanceObserver")]
 struct PerformanceObserverConstructorDeclaration {
     #[webapi(data_property = "supportedEntryTypes")]
     supported_entry_types: &'static [&'static str],

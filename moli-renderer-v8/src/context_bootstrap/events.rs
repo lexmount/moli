@@ -38,7 +38,7 @@ struct StorageEventStateDeclaration<'scope> {
 }
 
 #[derive(Default, WebApiObject)]
-#[webapi(interface = "PointerEvent", enumerable)]
+#[webapi(unbranded, interface = "PointerEvent", enumerable)]
 struct SecurePointerEventPrototypeRuntimeDeclaration {
     #[webapi(
         method = "getCoalescedEvents",

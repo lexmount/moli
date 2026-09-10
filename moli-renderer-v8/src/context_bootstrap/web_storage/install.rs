@@ -37,7 +37,7 @@ struct StoragePrototypeMethodsDeclaration {
 }
 
 #[derive(Default, WebApiObject)]
-#[webapi(interface = "Storage")]
+#[webapi(unbranded, interface = "Storage")]
 struct StoragePrototypeMetadataDeclaration {
     #[webapi(to_string_tag, init = string("Storage"))]
     to_string_tag: (),

@@ -248,7 +248,7 @@ struct NavigatorUaDataHighEntropySnapshotDeclaration {
 }
 
 #[derive(WebApiObject)]
-#[webapi(interface = "StorageEstimate")]
+#[webapi(unbranded, interface = "StorageEstimate")]
 struct StorageEstimateObjectDeclaration<'scope> {
     #[webapi(data_property, enumerable)]
     quota: f64,

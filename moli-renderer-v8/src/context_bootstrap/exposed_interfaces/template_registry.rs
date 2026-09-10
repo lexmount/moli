@@ -59,6 +59,10 @@ impl ExposedInterfaceTemplateRegistry {
         profile: TemplateBuildProfile,
     ) -> Result<Rc<Self>> {
         let metadata = ExposedInterfaceMetadataTable::from_constructor_specs(&specs)?;
+        moli_webapi_declare::register_web_api_interfaces(
+            scope,
+            specs.iter().map(|spec| (spec.name, spec.parent)),
+        )?;
         let templates = (0..metadata.len())
             .map(|_| ExposedInterfaceTemplateEntry::new())
             .collect();

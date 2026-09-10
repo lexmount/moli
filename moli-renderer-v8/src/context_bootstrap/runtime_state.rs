@@ -69,14 +69,14 @@ struct HtmlScriptElementSupportsArgs {
 }
 
 #[derive(Default, WebApiObject)]
-#[webapi(interface = "HTMLScriptElement", enumerable)]
+#[webapi(unbranded, interface = "HTMLScriptElement", enumerable)]
 struct HtmlScriptElementStaticMethodsDeclaration {
     #[webapi(method, length = 1, callback = html_script_element_supports_callback)]
     supports: (),
 }
 
 #[derive(Default, WebApiObject)]
-#[webapi(interface = "Document", enumerable)]
+#[webapi(unbranded, interface = "Document", enumerable)]
 struct DocumentStaticMethodsDeclaration {
     #[webapi(
         method = "parseHTMLUnsafe",
@@ -87,7 +87,7 @@ struct DocumentStaticMethodsDeclaration {
 }
 
 #[derive(Default, WebApiObject)]
-#[webapi(interface = "Document", enumerable)]
+#[webapi(unbranded, interface = "Document", enumerable)]
 struct DocumentPrototypeRuntimeDeclaration {
     #[webapi(
         accessor_property = "designMode",
@@ -288,7 +288,7 @@ struct WindowLegacyAliasAccessorsDeclaration {
 }
 
 #[derive(WebApiObject)]
-#[webapi(interface = "Window", enumerable)]
+#[webapi(unbranded, interface = "Window", enumerable)]
 struct WindowAdditionalReplaceableAccessorsDeclaration<'scope> {
     origin_name: v8::Local<'scope, v8::Value>,
     inner_width_name: v8::Local<'scope, v8::Value>,

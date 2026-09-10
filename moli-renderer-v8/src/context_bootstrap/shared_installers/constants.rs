@@ -39,7 +39,7 @@ struct NodeFilterConstantsObjectDeclaration {
 }
 
 #[derive(WebApiObject)]
-#[webapi(interface = "Window")]
+#[webapi(unbranded, interface = "Window")]
 struct NodeFilterGlobalDeclaration<'scope> {
     #[webapi(data_property = "NodeFilter")]
     node_filter: v8::Local<'scope, v8::Function>,

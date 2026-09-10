@@ -779,7 +779,7 @@ struct WorkerAbortControllerTemplateDeclaration {
 }
 
 #[derive(Default, WebApiObject)]
-#[webapi(interface = "WorkerGlobalScope", enumerable)]
+#[webapi(unbranded, interface = "WorkerGlobalScope", enumerable)]
 struct WorkerGlobalScopeCryptoPrototypeDeclaration {
     #[webapi(accessor_property, getter = worker_crypto_getter_callback)]
     crypto: (),

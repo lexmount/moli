@@ -34,7 +34,7 @@ struct SubtleCryptoObjectDeclaration {
 }
 
 #[derive(Default, WebApiObject)]
-#[webapi(interface = "Crypto")]
+#[webapi(unbranded, interface = "Crypto")]
 struct CryptoPrototypeAccessorsDeclaration {
     #[webapi(
         accessor_property,
@@ -58,7 +58,7 @@ struct CryptoPrototypeOperationsDeclaration {
 }
 
 #[derive(Default, WebApiObject)]
-#[webapi(interface = "Crypto")]
+#[webapi(unbranded, interface = "Crypto")]
 struct CryptoSecurePrototypeOperationsDeclaration {
     #[webapi(
         method = "randomUUID",

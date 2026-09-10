@@ -55,6 +55,10 @@ pub(crate) fn expand_webapi_interface(
         const INTERFACE_NAME: &'static str = #interface_name;
         const PARENT_INTERFACE: ::std::option::Option<&'static str> = #parent;
 
+        ::moli_webapi_declare::register_web_api_interfaces(
+            scope, [(INTERFACE_NAME, PARENT_INTERFACE)],
+        )?;
+
         let prototype = ::moli_webapi_declare::v8::Object::new(scope);
         if let ::std::option::Option::Some(parent) = PARENT_INTERFACE {
             if let ::std::option::Option::Some(parent_prototype) =
@@ -355,8 +359,14 @@ pub(crate) fn expand_webapi_object(input: DeriveInput) -> Result<proc_macro2::To
         ));
     }
 
+    let initialize_brand = (!attrs.unbranded && interface.value() != "Object").then(|| {
+        quote! {
+            ::moli_webapi_declare::initialize_web_api_object(scope, object, #interface)?;
+        }
+    });
     let initialize_body = quote! {
         #(#fields)*
+        #initialize_brand
         ::std::result::Result::Ok(())
     };
     let trait_impl = match scope_lifetime {

@@ -23,7 +23,7 @@ struct WorkerLocationGlobalDeclaration<'scope> {
 }
 
 #[derive(Default, WebApiObject)]
-#[webapi(interface = "WorkerLocation", enumerable)]
+#[webapi(unbranded, interface = "WorkerLocation", enumerable)]
 struct WorkerLocationPrototypeDeclaration {
     #[webapi(
         accessor_property,
