@@ -2714,9 +2714,6 @@ html/browsers/browsing-the-web/navigating-across-documents/014.html
 html/browsers/browsing-the-web/navigating-across-documents/abort-document-load.html
 html/browsers/browsing-the-web/navigating-across-documents/initial-empty-document/iframe-src-204-fragment.html
 html/browsers/browsing-the-web/navigating-across-documents/plugin-document.historical.html
-html/browsers/browsing-the-web/navigating-across-documents/replace-before-load/iframe-src-during-load.html
-html/browsers/browsing-the-web/navigating-across-documents/replace-before-load/iframe-src-during-pageshow.html
-html/browsers/browsing-the-web/navigating-across-documents/replace-before-load/iframe-src.html
 html/browsers/browsing-the-web/overlapping-navigations-and-traversals/cross-document-nav-same-document-traversal.html
 html/browsers/browsing-the-web/overlapping-navigations-and-traversals/cross-document-traversal-cross-document-traversal.html
 html/browsers/browsing-the-web/overlapping-navigations-and-traversals/cross-document-traversal-same-document-traversal.html

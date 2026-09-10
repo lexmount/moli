@@ -38,8 +38,15 @@ pub(in crate::native_bridge) fn update_iframe_snapshot_navigation(
             handle,
             previous_seed_snapshot,
         );
-        let replace_current =
-            runtime.child_browsing_context_is_on_initial_about_blank_entry(handle);
+        // Attribute navigation replaces an incompletely loaded Document,
+        // including inside its Window load/pageshow callbacks. readyState
+        // alone cannot distinguish those callbacks from a completed load.
+        let replace_current = runtime
+            .child_browsing_context_is_on_initial_about_blank_entry(handle)
+            || runtime
+                .child_browsing_context_document_handle(handle)
+                .and_then(|document| runtime.document_is_completely_loaded(document))
+                == Some(false);
         if runtime.queue_child_browsing_context_navigation_from_existing_seed(
             handle,
             &navigation_target,

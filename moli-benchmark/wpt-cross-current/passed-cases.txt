@@ -5289,6 +5289,9 @@ html/browsers/browsing-the-web/navigating-across-documents/replace-before-load/f
 html/browsers/browsing-the-web/navigating-across-documents/replace-before-load/history-pushstate-during-load.html
 html/browsers/browsing-the-web/navigating-across-documents/replace-before-load/history-pushstate-during-pageshow.html
 html/browsers/browsing-the-web/navigating-across-documents/replace-before-load/history-pushstate.html
+html/browsers/browsing-the-web/navigating-across-documents/replace-before-load/iframe-src-during-load.html
+html/browsers/browsing-the-web/navigating-across-documents/replace-before-load/iframe-src-during-pageshow.html
+html/browsers/browsing-the-web/navigating-across-documents/replace-before-load/iframe-src.html
 html/browsers/browsing-the-web/navigating-across-documents/replace-before-load/location-assign-during-load.html
 html/browsers/browsing-the-web/navigating-across-documents/replace-before-load/location-assign-during-pageshow.html
 html/browsers/browsing-the-web/navigating-across-documents/replace-before-load/location-assign.html
