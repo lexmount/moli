@@ -5,13 +5,38 @@ description: Search the web by keyword or reverse-search images with Moli to fin
 
 # Search the Web with Moli
 
-Search by keyword or image, then verify useful matches against source pages.
+Search by keyword or image and verify source pages with Moli throughout.
+
+## Parallel Execution
+
+- **Batch first.** Launch 4–6 independent searches together, covering at least
+  3 suitable engines when available. For broad requests, split the work into
+  independent subquestions and keep 8–12 searches and source fetches in flight.
+  Honor explicit source/budget limits and available work. Regional aliases and
+  DuckDuckGo HTML/Lite count as one engine.
+- **Dispatch before waiting.** Use parallel tool calls or a subprocess pool;
+  refill slots as results arrive. Deduplicate promising URLs and fetch source
+  pages concurrently, without waiting for the slowest search. Keep errors and
+  outputs separate per job so one failure cannot abort the batch. Limit each
+  engine/source host to 2 concurrent requests; reduce load on rate/resource limits.
+- **Recover across engines with Moli.** On CAPTCHA, access errors, timeouts,
+  empty shells, or irrelevant results, queue another suitable engine or route
+  while other jobs continue. Use the full engine tables when needed. Stop
+  expanding once the requested coverage has been verified or the task budget
+  is reached; report remaining gaps.
+- **Keep tool changes explicit.** A single blocked engine is not a reason to
+  switch to built-in search. Switch only if the user requests it, Moli cannot
+  run after setup, or two diversified batches for an unresolved question yield
+  no usable results. Disclose the attempts and tool change; honor Moli-only
+  requests by reporting blockers instead. Track actual Moli search calls
+  separately from source fetches so execution counts can be reported accurately.
 
 ## Fast Path
 
-These routes returned relevant results locally. Choose by language and input;
-availability varies with network and session. Encode the query as `Q` or the
-public image URL as `ENC` once with `encodeURIComponent(...)`.
+These routes returned relevant results locally. Choose several for the first
+batch by language and input; row order is not priority. Availability varies
+with network and session. Encode the query as `Q` or the public image URL as
+`ENC` once with `encodeURIComponent(...)`.
 
 **Text search**
 
@@ -37,10 +62,12 @@ public image URL as `ENC` once with `encodeURIComponent(...)`.
 | Baidu | Local file: [auto-upload and hydrated cards](references/cdp-driver.md#browser-uploads). |
 | SauceNAO | Public URL through the [homepage form](references/cdp-driver.md#browser-uploads). |
 
-Fetch URL routes with:
+Use a 10-second request timeout (`--timeout 10000`) by default for searches
+and source fetches. Extend it only for explicit upload/rendering waits.
+Dispatch the selected jobs concurrently:
 
 ```bash
-moli fetch --timeout 25000 --wait-until done --dump markdown "$SEARCH_URL"
+moli fetch --timeout 10000 --wait-until done --dump markdown "$SEARCH_URL"
 ```
 
 Use `--wait-until domcontentloaded` for Toutiao, Sogou Weixin, and Naver.
@@ -69,14 +96,16 @@ Use `--wait-until domcontentloaded` for Toutiao, Sogou Weixin, and Naver.
    [image recipes](references/imagesearch.md) as needed.
 3. Expand through the full [web engine](references/websearch-engines.md) or
    [image engine](references/imagesearch-engines.md) tables for other scopes,
-   languages, inputs, or indexes, or when a route fails. Assess the current
-   response; searches can run concurrently.
+   languages, inputs, or indexes, or when a route fails. Follow the
+   [parallel execution rules](#parallel-execution) throughout.
 4. Read results as Markdown, inspect HTML for empty page shells, and use JSON
    for API responses. Enable layout for interactive uploads or screenshots;
    save binary captures to files.
-5. Fetch supporting source pages with `moli fetch --dump markdown`, then cite
-   them beside claims. Report useful engines, uncertainty, and failed attempts.
-   Use [moli-webfetch](../moli-webfetch/SKILL.md) for advanced retrieval.
+5. Fetch supporting source pages concurrently with
+   `moli fetch --timeout 10000 --dump markdown`, verify coverage of each
+   subquestion, then cite sources beside claims. Report useful engines,
+   uncertainty, and failed attempts. Use
+   [moli-webfetch](../moli-webfetch/SKILL.md) for advanced retrieval.
 
 ## Operating Rules
 
