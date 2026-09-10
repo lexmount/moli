@@ -5959,6 +5959,7 @@ html/semantics/forms/form-submission-0/form-double-submit.html
 html/semantics/forms/form-submission-0/form-submission-algorithm.html
 html/semantics/forms/form-submission-0/form-submit-iframe-then-location-navigate.html
 html/semantics/forms/form-submission-0/getactionurl.html
+html/semantics/forms/form-submission-0/jsurl-form-submit.tentative.html
 html/semantics/forms/form-submission-0/jsurl-navigation-then-form-submit.html
 html/semantics/forms/form-submission-0/newline-normalization.html
 html/semantics/forms/form-submission-0/reparent-form-during-planned-navigation-task.html
