@@ -1,4 +1,4 @@
-use super::pipe_disturbed::run_probe;
+use super::event_dispatch::run_probe;
 use super::*;
 #[tokio::test(flavor = "multi_thread")]
 async fn indexed_db_key_ranges_protect_bounds_and_validate_receivers() -> Result<()> {
