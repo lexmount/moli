@@ -10,7 +10,7 @@ use crate::runtime::{
     RendererJavaScriptDialogOpening, RendererMainDocumentCommit, RendererPendingDownloadActivation,
     RendererPendingFileChooserActivation, RendererPendingTopLevelHistoryTraversal,
     RendererPopupOpening, RendererRuntimeCommandCausalIdentity,
-    RendererRuntimeInspectorMessageBatch, RendererServiceWorkerTargetEvent,
+    RendererRuntimeInspectorMessageBatch, RendererServiceWorkerObservation,
     RendererSharedWorkerObservation,
 };
 use moli_page_types::{
@@ -65,7 +65,6 @@ pub enum RendererOwnerAction {
         info: Box<PendingSubresourceFetchInfo>,
         continuation: DetachedParserScriptFetchContinuation,
     },
-    ServiceWorkerTargetLifecycle(RendererServiceWorkerTargetEvent),
 }
 
 /// A concrete renderer fact that protocol may project to interested sessions.
@@ -77,6 +76,7 @@ pub enum RendererOwnerAction {
 pub enum RendererProtocolObservation {
     WorkerLifecycle(crate::runtime::RendererWorkerLifecycleObservation),
     SharedWorker(RendererSharedWorkerObservation),
+    ServiceWorker(RendererServiceWorkerObservation),
     DedicatedWorker(RendererDedicatedWorkerObservation),
     Popup(std::sync::Arc<RendererPopupOpening>),
     JavaScriptDialog(std::sync::Arc<RendererJavaScriptDialogOpening>),
@@ -181,8 +181,8 @@ impl PendingRendererOutputRecord {
                 crate::runtime::RendererRuntimeInspectorMessage::has_resolved_source_identity,
             ))
             .then_some(RendererOutputResolutionError::SharedWorkerRuntimeInspector),
-            RendererOutputItem::OwnerAction(RendererOwnerAction::ServiceWorkerTargetLifecycle(
-                crate::runtime::RendererServiceWorkerTargetEvent::RuntimeInspectorMessages {
+            RendererOutputItem::Observation(RendererProtocolObservation::ServiceWorker(
+                crate::runtime::RendererServiceWorkerObservation::RuntimeInspectorMessages {
                     messages,
                     ..
                 },
@@ -256,6 +256,7 @@ impl RendererOutputRecord {
                 | RendererOutputItem::Observation(
                     RendererProtocolObservation::WorkerLifecycle(_)
                         | RendererProtocolObservation::SharedWorker(_)
+                        | RendererProtocolObservation::ServiceWorker(_)
                         | RendererProtocolObservation::DedicatedWorker(_)
                 )
         )

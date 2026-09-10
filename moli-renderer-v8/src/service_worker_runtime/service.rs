@@ -1,3 +1,6 @@
+#[cfg(test)]
+use super::target_output_streams::ServiceWorkerOutputForTest;
+
 use std::{
     collections::{HashMap, HashSet, VecDeque},
     sync::{Arc, atomic::Ordering},
@@ -300,7 +303,7 @@ pub(crate) fn new_service_worker_runtime_service_with_resource_store_and_browser
     restored_worker_context_runtime: RendererWorkerContextRuntime,
     browser_resource_runtime: crate::network::BrowserResourceRuntimeBinding,
     client_id_allocator: super::ids::ServiceWorkerClientIdAllocator,
-    browser_context_runtime_id: crate::runtime::RendererBrowserContextRuntimeId,
+    worker_lifecycle: crate::runtime::RendererWorkerLifecycleReporter,
     output_transport: crate::runtime::RendererOutputTransportSenderSlot,
 ) -> ServiceWorkerRuntimeService {
     let service = ServiceWorkerRuntimeService {
@@ -310,7 +313,7 @@ pub(crate) fn new_service_worker_runtime_service_with_resource_store_and_browser
             restored_worker_context_runtime,
             browser_resource_runtime,
             client_id_allocator,
-            browser_context_runtime_id,
+            worker_lifecycle,
             output_transport,
         )),
     };
@@ -362,9 +365,7 @@ impl ServiceWorkerRuntimeService {
     }
 
     #[cfg(test)]
-    fn take_target_output_events_for_test(
-        &self,
-    ) -> Vec<crate::runtime::RendererServiceWorkerTargetEvent> {
+    fn take_target_output_events_for_test(&self) -> Vec<ServiceWorkerOutputForTest> {
         let mut receiver = self.inner.target_output_test_rx.lock();
         super::target_output_streams::drain_service_worker_target_events_for_test(
             receiver
@@ -749,16 +750,18 @@ mod tests {
     }
 
     fn exact_created_target_run(
-        events: &[crate::runtime::RendererServiceWorkerTargetEvent],
+        events: &[ServiceWorkerOutputForTest],
         version_id: ServiceWorkerVersionId,
     ) -> crate::runtime::RendererServiceWorkerRunIdentity {
         events
             .iter()
             .find_map(|event| match event {
-                crate::runtime::RendererServiceWorkerTargetEvent::Created {
-                    info,
-                    active_run: Some(active_run),
-                } if info.version_id == version_id.as_u64() => Some(active_run.clone()),
+                ServiceWorkerOutputForTest::Lifecycle(
+                    crate::runtime::RendererServiceWorkerLifecycle::Created {
+                        info,
+                        active_run: Some(active_run),
+                    },
+                ) if info.version_id == version_id.as_u64() => Some(active_run.clone()),
                 _ => None,
             })
             .expect("a target created for a concrete worker host must expose its exact run")
@@ -2292,10 +2295,10 @@ mod tests {
         assert!(
             target_events.iter().any(|event| matches!(
                 event,
-                crate::runtime::RendererServiceWorkerTargetEvent::VersionUpdated {
+                ServiceWorkerOutputForTest::Lifecycle(crate::runtime::RendererServiceWorkerLifecycle::VersionUpdated {
                     version_id: updated_version_id,
                     status,
-                } if *updated_version_id == version_id.as_u64()
+                }) if *updated_version_id == version_id.as_u64()
                     && *status == crate::runtime::RendererServiceWorkerVersionStatus::Activated
             )),
             "newly controlled client should refresh ServiceWorker version projection: {target_events:?}"
@@ -6213,10 +6216,10 @@ self.addEventListener("message", event => {
         assert!(
             target_events.iter().any(|event| matches!(
                 event,
-                crate::runtime::RendererServiceWorkerTargetEvent::Destroyed {
+                ServiceWorkerOutputForTest::Lifecycle(crate::runtime::RendererServiceWorkerLifecycle::Destroyed {
                     version_id: destroyed_version_id,
                     active_run: Some(active_run),
-                } if *destroyed_version_id == version_id.as_u64()
+                }) if *destroyed_version_id == version_id.as_u64()
                     && active_run == &created_run
             )),
             "failed installing target should destroy its exact starting run: {target_events:?}"
@@ -6224,10 +6227,10 @@ self.addEventListener("message", event => {
         assert!(
             !target_events.iter().any(|event| matches!(
                 event,
-                crate::runtime::RendererServiceWorkerTargetEvent::Stopped {
+                ServiceWorkerOutputForTest::Lifecycle(crate::runtime::RendererServiceWorkerLifecycle::Stopped {
                     version_id: stopped_version_id,
                     ..
-                } if *stopped_version_id == version_id.as_u64()
+                }) if *stopped_version_id == version_id.as_u64()
             )),
             "failed installing target should not be retained as stopped: {target_events:?}"
         );
@@ -6285,10 +6288,10 @@ self.addEventListener("message", event => {
         assert!(
             install_events.iter().any(|event| matches!(
                 event,
-                crate::runtime::RendererServiceWorkerTargetEvent::VersionUpdated {
+                ServiceWorkerOutputForTest::Lifecycle(crate::runtime::RendererServiceWorkerLifecycle::VersionUpdated {
                     version_id: updated_version_id,
                     status: crate::runtime::RendererServiceWorkerVersionStatus::Installed,
-                } if *updated_version_id == version_id.as_u64()
+                }) if *updated_version_id == version_id.as_u64()
             )),
             "install completion should refresh target status to installed: {install_events:?}"
         );
@@ -6564,7 +6567,7 @@ self.addEventListener("message", event => {
         assert!(
             target_events.iter().any(|event| matches!(
                 event,
-                crate::runtime::RendererServiceWorkerTargetEvent::Created { info, .. }
+                ServiceWorkerOutputForTest::Lifecycle(crate::runtime::RendererServiceWorkerLifecycle::Created { info, .. })
                     if info.version_id == version_id.as_u64()
             )),
             "deferred install launch should still expose the installing target: {target_events:?}"
@@ -6575,10 +6578,10 @@ self.addEventListener("message", event => {
         assert!(
             shutdown_events.iter().any(|event| matches!(
                 event,
-                crate::runtime::RendererServiceWorkerTargetEvent::Destroyed {
+                ServiceWorkerOutputForTest::Lifecycle(crate::runtime::RendererServiceWorkerLifecycle::Destroyed {
                     version_id: destroyed_version_id,
                     active_run: Some(active_run),
-                } if *destroyed_version_id == version_id.as_u64()
+                }) if *destroyed_version_id == version_id.as_u64()
                     && active_run == &created_run
             )),
             "context shutdown should destroy the pending launch's exact run: {shutdown_events:?}"
@@ -6857,7 +6860,7 @@ self.addEventListener("message", event => {
         assert!(
             target_events.iter().any(|event| matches!(
                 event,
-                crate::runtime::RendererServiceWorkerTargetEvent::Created { info, .. }
+                ServiceWorkerOutputForTest::Lifecycle(crate::runtime::RendererServiceWorkerLifecycle::Created { info, .. })
                     if info.version_id != active_version_id.as_u64()
             )),
             "deferred update check should still expose the precreated installing target: {target_events:?}"
@@ -7033,7 +7036,7 @@ self.addEventListener("message", event => {
         assert!(
             target_events.iter().any(|event| matches!(
                 event,
-                crate::runtime::RendererServiceWorkerTargetEvent::Created { info, .. }
+                ServiceWorkerOutputForTest::Lifecycle(crate::runtime::RendererServiceWorkerLifecycle::Created { info, .. })
                     if info.version_id == new_version_id.as_u64()
             )),
             "force-update update check should precreate a Service Worker target: {target_events:?}"
@@ -7041,7 +7044,9 @@ self.addEventListener("message", event => {
         assert!(
             target_events.iter().all(|event| !matches!(
                 event,
-                crate::runtime::RendererServiceWorkerTargetEvent::Console { .. }
+                ServiceWorkerOutputForTest::Observation(
+                    crate::runtime::RendererServiceWorkerObservation::Console { .. }
+                )
             )),
             "force-update warning should wait until the install launch starts: {target_events:?}"
         );
@@ -7058,11 +7063,11 @@ self.addEventListener("message", event => {
         assert!(
             target_events.iter().any(|event| matches!(
                 event,
-                crate::runtime::RendererServiceWorkerTargetEvent::Console {
+                ServiceWorkerOutputForTest::Observation(crate::runtime::RendererServiceWorkerObservation::Console {
                     version_id,
                     message,
                     ..
-                } if *version_id == new_version_id.as_u64()
+                }) if *version_id == new_version_id.as_u64()
                     && message.message == SERVICE_WORKER_FORCE_UPDATE_DEVTOOLS_CONSOLE_MESSAGE
                     && message.args.is_empty()
                     && message.stack.is_none()
@@ -7073,7 +7078,7 @@ self.addEventListener("message", event => {
     }
 
     #[test]
-    fn resource_store_restores_registration_at_service_startup_for_client_observation() {
+    fn native_service_worker_restore_does_not_manufacture_a_run_before_transport_binding() {
         let resource_store = new_shared_service_worker_resource_store();
         let first_service = new_service_worker_runtime_service_with_resource_store(
             resource_store.clone(),
@@ -7106,9 +7111,24 @@ self.addEventListener("message", event => {
                 .expect("stored registration resources should persist")
         );
 
-        let second_service = new_service_worker_runtime_service_with_resource_store(
-            resource_store,
-            test_worker_context_runtime(),
+        let restored_owner =
+            RendererBrowserContextRuntime::new_with_worker_context_and_service_worker_store_for_test(
+                test_worker_context_runtime(), resource_store,
+            );
+        let facts = Arc::new(parking_lot::Mutex::new(Vec::new()));
+        let observed = facts.clone();
+        restored_owner.install_worker_lifecycle_handler(move |input| {
+            observed.lock().push(input.lifecycle.as_ref().clone());
+        });
+        let second_service = restored_owner.service_worker_runtime();
+        assert!(
+            matches!(
+                facts.lock().as_slice(),
+                [crate::runtime::RendererWorkerLifecycle::Service(
+                    crate::runtime::RendererServiceWorkerLifecycle::Created { info, active_run: None },
+                )] if info.version_id == version_id.as_u64()
+            ),
+            "restoration reports a stable stopped version before any output transport is bound"
         );
         assert_eq!(second_service.diagnostics_snapshot().registration_count, 1);
 
@@ -7987,7 +8007,7 @@ self.addEventListener("message", event => {
         assert!(
             target_events.iter().any(|event| matches!(
                 event,
-                crate::runtime::RendererServiceWorkerTargetEvent::Created { info, .. }
+                ServiceWorkerOutputForTest::Lifecycle(crate::runtime::RendererServiceWorkerLifecycle::Created { info, .. })
                     if info.version_id == new_version_id.as_u64()
                         && info.registration_id == registration_id.as_u64()
                         && info.script_url == script_url.as_str()
@@ -8010,10 +8030,10 @@ self.addEventListener("message", event => {
         assert!(
             target_events.iter().any(|event| matches!(
                 event,
-                crate::runtime::RendererServiceWorkerTargetEvent::Destroyed {
+                ServiceWorkerOutputForTest::Lifecycle(crate::runtime::RendererServiceWorkerLifecycle::Destroyed {
                     version_id,
                     active_run: Some(active_run),
-                } if *version_id == new_version_id.as_u64()
+                }) if *version_id == new_version_id.as_u64()
                     && active_run == &created_run
             )),
             "identical update check should destroy the precreated target's exact run: {target_events:?}"
@@ -8867,14 +8887,18 @@ self.addEventListener("message", event => {
         assert!(!completion_queue.has_ready_completion());
 
         let target_events = service.take_target_output_events_for_test();
-        let Some(crate::runtime::RendererServiceWorkerTargetEvent::FetchDiagnostic {
-            version_id: diagnostic_version_id,
-            diagnostic,
-            ..
-        }) = target_events.iter().find(|event| {
+        let Some(ServiceWorkerOutputForTest::Observation(
+            crate::runtime::RendererServiceWorkerObservation::FetchDiagnostic {
+                version_id: diagnostic_version_id,
+                diagnostic,
+                ..
+            },
+        )) = target_events.iter().find(|event| {
             matches!(
                 event,
-                crate::runtime::RendererServiceWorkerTargetEvent::FetchDiagnostic { .. }
+                ServiceWorkerOutputForTest::Observation(
+                    crate::runtime::RendererServiceWorkerObservation::FetchDiagnostic { .. }
+                )
             )
         })
         else {
@@ -9901,11 +9925,11 @@ self.addEventListener("message", event => {
         assert!(
             target_events.iter().any(|event| matches!(
                 event,
-                crate::runtime::RendererServiceWorkerTargetEvent::Stopped {
+                ServiceWorkerOutputForTest::Lifecycle(crate::runtime::RendererServiceWorkerLifecycle::Stopped {
                     version_id: stopped_version_id,
                     reason,
                     ..
-                } if *stopped_version_id == version_id.as_u64()
+                }) if *stopped_version_id == version_id.as_u64()
                     && reason == "idle_timeout"
             )),
             "idle timeout should enqueue a stopped target lifecycle event: {target_events:?}"
@@ -9913,10 +9937,10 @@ self.addEventListener("message", event => {
         assert!(
             !target_events.iter().any(|event| matches!(
                 event,
-                crate::runtime::RendererServiceWorkerTargetEvent::Destroyed {
+                ServiceWorkerOutputForTest::Lifecycle(crate::runtime::RendererServiceWorkerLifecycle::Destroyed {
                     version_id: destroyed_version_id,
                     ..
-                } if *destroyed_version_id == version_id.as_u64()
+                }) if *destroyed_version_id == version_id.as_u64()
             )),
             "idle timeout must retain the service worker target: {target_events:?}"
         );
@@ -9965,11 +9989,11 @@ self.addEventListener("message", event => {
         assert!(
             target_events.iter().any(|event| matches!(
                 event,
-                crate::runtime::RendererServiceWorkerTargetEvent::Stopped {
+                ServiceWorkerOutputForTest::Lifecycle(crate::runtime::RendererServiceWorkerLifecycle::Stopped {
                     version_id: stopped_version_id,
                     reason,
                     ..
-                } if *stopped_version_id == version_id.as_u64()
+                }) if *stopped_version_id == version_id.as_u64()
                     && reason == "devtools_stop"
             )),
             "DevTools stopWorker should enqueue a stopped target event: {target_events:?}"
@@ -10011,10 +10035,10 @@ self.addEventListener("message", event => {
         assert!(
             target_events.iter().any(|event| matches!(
                 event,
-                crate::runtime::RendererServiceWorkerTargetEvent::Destroyed {
+                ServiceWorkerOutputForTest::Lifecycle(crate::runtime::RendererServiceWorkerLifecycle::Destroyed {
                     version_id: destroyed_version_id,
                     active_run: None,
-                } if *destroyed_version_id == version_id.as_u64()
+                }) if *destroyed_version_id == version_id.as_u64()
             )),
             "DevTools unregister should destroy the runtime-owned target: {target_events:?}"
         );
@@ -11489,10 +11513,10 @@ self.addEventListener("message", event => {
         assert!(
             activation_start_events.iter().any(|event| matches!(
                 event,
-                crate::runtime::RendererServiceWorkerTargetEvent::VersionUpdated {
+                ServiceWorkerOutputForTest::Lifecycle(crate::runtime::RendererServiceWorkerLifecycle::VersionUpdated {
                     version_id: updated_version_id,
                     status: crate::runtime::RendererServiceWorkerVersionStatus::Activating,
-                } if *updated_version_id == waiting_version_id.as_u64()
+                }) if *updated_version_id == waiting_version_id.as_u64()
             )),
             "activation start should refresh target status to activating: {activation_start_events:?}"
         );
@@ -11615,10 +11639,10 @@ self.addEventListener("message", event => {
         assert!(
             activation_events.iter().any(|event| matches!(
                 event,
-                crate::runtime::RendererServiceWorkerTargetEvent::VersionUpdated {
+                ServiceWorkerOutputForTest::Lifecycle(crate::runtime::RendererServiceWorkerLifecycle::VersionUpdated {
                     version_id: updated_version_id,
                     status: crate::runtime::RendererServiceWorkerVersionStatus::Activated,
-                } if *updated_version_id == version_id.as_u64()
+                }) if *updated_version_id == version_id.as_u64()
             )),
             "activate completion should refresh target status to activated: {activation_events:?}"
         );
@@ -12234,20 +12258,24 @@ self.addEventListener("message", event => {
 
         let target_events = service.take_target_output_events_for_test();
         assert_eq!(target_events.len(), 2);
-        let crate::runtime::RendererServiceWorkerTargetEvent::Stopped {
-            version_id,
-            run: _,
-            reason,
-        } = &target_events[0]
+        let ServiceWorkerOutputForTest::Lifecycle(
+            crate::runtime::RendererServiceWorkerLifecycle::Stopped {
+                version_id,
+                run: _,
+                reason,
+            },
+        ) = &target_events[0]
         else {
             panic!("active replacement must first retire its exact run: {target_events:?}");
         };
         assert_eq!(*version_id, active_version_id.as_u64());
         assert_eq!(reason, "replaced_by_newer_active_worker");
-        let crate::runtime::RendererServiceWorkerTargetEvent::Destroyed {
-            version_id,
-            active_run,
-        } = &target_events[1]
+        let ServiceWorkerOutputForTest::Lifecycle(
+            crate::runtime::RendererServiceWorkerLifecycle::Destroyed {
+                version_id,
+                active_run,
+            },
+        ) = &target_events[1]
         else {
             panic!("active replacement must then destroy its version: {target_events:?}");
         };
@@ -12266,9 +12294,7 @@ self.addEventListener("message", event => {
             ServiceWorkerVersionLifecycleState::Redundant
         );
         assert!(
-            !state
-                .service_worker_target_infos
-                .contains_key(&active_version_id),
+            state.target_output_journal(active_version_id).is_none(),
             "doomed active version should no longer be exposed as a Service Worker target"
         );
     }

@@ -690,14 +690,18 @@ pub enum RendererServiceWorkerFetchDiagnosticResult {
 /// `VersionUpdated` never manufactures a run. `Destroyed` is a version-level
 /// terminal but snapshots the exact active run, when one exists, so a delayed
 /// terminal cannot retire a restarted worker beneath the same version id.
-#[derive(Debug, Clone, PartialEq)]
-pub enum RendererServiceWorkerTargetEvent {
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum RendererServiceWorkerLifecycle {
     Created {
         info: RendererServiceWorkerTargetInfo,
         /// Exact run already owned by a live worker host when this stable
         /// version target is first exposed. Restored stopped versions carry
         /// `None`; target creation alone must never manufacture a run.
         active_run: Option<super::RendererServiceWorkerRunIdentity>,
+    },
+    Starting {
+        version_id: u64,
+        run: super::RendererServiceWorkerRunIdentity,
     },
     Started {
         version_id: u64,
@@ -716,6 +720,11 @@ pub enum RendererServiceWorkerTargetEvent {
         version_id: u64,
         status: RendererServiceWorkerVersionStatus,
     },
+}
+
+/// Run-scoped output can observe an existing host, never create a run.
+#[derive(Debug, Clone, PartialEq)]
+pub enum RendererServiceWorkerObservation {
     Console {
         version_id: u64,
         run: super::RendererServiceWorkerRunIdentity,

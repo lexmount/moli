@@ -25,6 +25,12 @@ impl BrowserContext {
                 context: self.id(),
                 info,
             })
+            .chain(self.service_workers.values().cloned().map(|worker| {
+                super::super::WorkerSnapshot::Service {
+                    context: self.id(),
+                    worker,
+                }
+            }))
             .chain(self.dedicated_workers.values().cloned().map(|worker| {
                 super::super::WorkerSnapshot::Dedicated {
                     context: self.id(),

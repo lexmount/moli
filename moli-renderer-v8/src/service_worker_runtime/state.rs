@@ -15,9 +15,9 @@ use crate::{
     runtime::{
         RendererRuntimeInspectorMessage, RendererServiceWorkerConsoleMessage,
         RendererServiceWorkerExceptionMessage, RendererServiceWorkerFetchDiagnostic,
-        RendererServiceWorkerRunIdentity, RendererServiceWorkerTargetEvent,
-        RendererServiceWorkerTargetInfo, RendererServiceWorkerVersionStatus,
-        RendererWorkerContextRuntime,
+        RendererServiceWorkerLifecycle, RendererServiceWorkerObservation,
+        RendererServiceWorkerRunIdentity, RendererServiceWorkerTargetInfo,
+        RendererServiceWorkerVersionStatus, RendererWorkerContextRuntime,
     },
     types::{
         AsyncSubresourceNetworkContext, ServiceWorkerClientMessageCompletion,
@@ -148,7 +148,7 @@ impl ServiceWorkerRuntimeInner {
         restored_worker_context_runtime: RendererWorkerContextRuntime,
         browser_resource_runtime: crate::network::BrowserResourceRuntimeBinding,
         client_id_allocator: super::ids::ServiceWorkerClientIdAllocator,
-        browser_context_runtime_id: crate::runtime::RendererBrowserContextRuntimeId,
+        worker_lifecycle: crate::runtime::RendererWorkerLifecycleReporter,
         output_transport: crate::runtime::RendererOutputTransportSenderSlot,
     ) -> Self {
         Self {
@@ -162,7 +162,7 @@ impl ServiceWorkerRuntimeInner {
             force_update_on_page_load: AtomicBool::new(false),
             pause_new_workers_on_start_for_devtools: AtomicBool::new(false),
             state: Mutex::new(ServiceWorkerRuntimeState::new(
-                browser_context_runtime_id,
+                worker_lifecycle,
                 output_transport,
             )),
             service_lane: ServiceWorkerServiceLane::default(),
@@ -202,10 +202,6 @@ pub(super) struct ServiceWorkerRuntimeState {
     pub(super) devtools_attached_versions: HashSet<ServiceWorkerVersionId>,
     pub(super) main_script_update_check_diagnostics:
         HashMap<ServiceWorkerRegistrationId, ServiceWorkerMainScriptUpdateCheckDiagnostics>,
-    pub(super) service_worker_target_infos:
-        HashMap<ServiceWorkerVersionId, RendererServiceWorkerTargetInfo>,
-    service_worker_target_run_projections:
-        HashMap<ServiceWorkerVersionId, RendererServiceWorkerTargetRunResidence>,
     target_output_streams: ServiceWorkerTargetOutputStreams,
     pub(super) devtools_related_pause_on_start_policies:
         Vec<ServiceWorkerDevToolsRelatedPauseOnStartPolicy>,
@@ -214,71 +210,9 @@ pub(super) struct ServiceWorkerRuntimeState {
         HashMap<ServiceWorkerRegistrationKey, ServiceWorkerStoredRegistration>,
 }
 
-/// Renderer-owned protocol identity residence for one stable ServiceWorker
-/// version target.
-///
-/// This is a projection journal, not a second run authority. The concrete
-/// worker host creates the identity when its V8 run is created; this residence
-/// only remembers which exact identity has been exposed to protocol and which
-/// one has already reached its terminal.
-#[derive(Debug, Default)]
-struct RendererServiceWorkerTargetRunResidence {
-    last_retired: Option<RendererServiceWorkerRunIdentity>,
-    live: Option<RendererServiceWorkerRunIdentity>,
-}
-
-impl RendererServiceWorkerTargetRunResidence {
-    /// Returns the exact current run or establishes the next renderer-owned
-    /// run projection.
-    ///
-    /// Run-specific output can precede the public `Started` event, so the
-    /// first such fact is allowed to establish the projection. A different
-    /// exact identity may not replace a live run; the renderer must publish
-    /// and retire the old run first.
-    fn observe_run(
-        &mut self,
-        run: RendererServiceWorkerRunIdentity,
-    ) -> Option<RendererServiceWorkerRunIdentity> {
-        if self.last_retired.as_ref() == Some(&run) {
-            return None;
-        }
-        if let Some(live) = &self.live {
-            assert!(
-                live == &run,
-                "a different ServiceWorker host must not replace a live renderer run"
-            );
-            return Some(live.clone());
-        }
-
-        self.live = Some(run.clone());
-        Some(run)
-    }
-
-    fn retire_run(
-        &mut self,
-        run: RendererServiceWorkerRunIdentity,
-    ) -> Option<RendererServiceWorkerRunIdentity> {
-        let identity = self.observe_run(run)?;
-        let live = self
-            .live
-            .take()
-            .expect("an observed ServiceWorker run must remain resident until retirement");
-        assert_eq!(
-            live, identity,
-            "ServiceWorker retirement must consume the exact renderer run"
-        );
-        self.last_retired = Some(identity.clone());
-        Some(identity)
-    }
-
-    fn active_run(&self) -> Option<RendererServiceWorkerRunIdentity> {
-        self.live.clone()
-    }
-}
-
 impl ServiceWorkerRuntimeState {
     fn new(
-        browser_context_runtime_id: crate::runtime::RendererBrowserContextRuntimeId,
+        worker_lifecycle: crate::runtime::RendererWorkerLifecycleReporter,
         output_transport: crate::runtime::RendererOutputTransportSenderSlot,
     ) -> Self {
         Self {
@@ -300,10 +234,8 @@ impl ServiceWorkerRuntimeState {
             pending_devtools_evaluation_releases: HashSet::new(),
             devtools_attached_versions: HashSet::new(),
             main_script_update_check_diagnostics: HashMap::new(),
-            service_worker_target_infos: HashMap::new(),
-            service_worker_target_run_projections: HashMap::new(),
             target_output_streams: ServiceWorkerTargetOutputStreams::new(
-                browser_context_runtime_id,
+                worker_lifecycle,
                 output_transport,
             ),
             devtools_related_pause_on_start_policies: Vec::new(),
@@ -320,7 +252,9 @@ impl ServiceWorkerRuntimeState {
         output_transport.set(sender);
         (
             Self::new(
-                crate::runtime::RendererBrowserContextRuntimeId::new_for_testing(0),
+                crate::runtime::RendererWorkerLifecycleReporter::new(
+                    crate::runtime::RendererBrowserContextRuntimeId::new_for_testing(0),
+                ),
                 output_transport,
             ),
             receiver,
@@ -370,36 +304,40 @@ impl ServiceWorkerRuntimeState {
         script_url: Url,
         scope_url: Url,
     ) {
-        if self.service_worker_target_infos.contains_key(&version_id) {
+        if self.target_output_journal(version_id).is_some() {
             return;
         }
-        let status = self.target_status_for_version(version_id);
-        let active_run = self.live_target_run(version_id);
         let info = RendererServiceWorkerTargetInfo {
             registration_id: registration_id.as_u64(),
             version_id: version_id.as_u64(),
             script_url: script_url.to_string(),
             scope_url: scope_url.to_string(),
-            status,
+            status: self.target_status_for_version(version_id),
         };
-        self.service_worker_target_infos
-            .insert(version_id, info.clone());
-        let mut projection = RendererServiceWorkerTargetRunResidence::default();
-        if let Some(active_run) = &active_run {
-            projection
-                .observe_run(active_run.clone())
-                .expect("a new target may project its exact live worker host");
-        }
-        let previous = self
-            .service_worker_target_run_projections
-            .insert(version_id, projection);
-        assert!(
-            previous.is_none(),
-            "a newly created ServiceWorker target must own one run residence"
-        );
         self.target_output_streams.publish_created(
             version_id,
-            RendererServiceWorkerTargetEvent::Created { info, active_run },
+            RendererServiceWorkerLifecycle::Created {
+                info,
+                active_run: self.live_target_run(version_id),
+            },
+        );
+    }
+
+    /// Called under the runtime state lock immediately after installing a host.
+    /// Console and inspector output cannot introduce a run on their own.
+    pub(super) fn record_target_starting(&self, version_id: ServiceWorkerVersionId) {
+        if self.target_output_journal(version_id).is_none() {
+            return;
+        }
+        let Some(run) = self.live_target_run(version_id) else {
+            return;
+        };
+        self.target_output_streams.publish(
+            version_id,
+            RendererServiceWorkerLifecycle::Starting {
+                version_id: version_id.as_u64(),
+                run,
+            },
         );
     }
 
@@ -408,19 +346,14 @@ impl ServiceWorkerRuntimeState {
         version_id: ServiceWorkerVersionId,
         run: RendererServiceWorkerRunIdentity,
     ) -> bool {
-        if !self.service_worker_target_infos.contains_key(&version_id) {
+        if self.target_output_journal(version_id).is_none()
+            || !self.observes_live_target_run(version_id, &run)
+        {
             return false;
         }
-        let Some(run) = self
-            .service_worker_target_run_projections
-            .get_mut(&version_id)
-            .and_then(|residence| residence.observe_run(run))
-        else {
-            return false;
-        };
         self.target_output_streams.publish(
             version_id,
-            RendererServiceWorkerTargetEvent::Started {
+            RendererServiceWorkerLifecycle::Started {
                 version_id: version_id.as_u64(),
                 run,
             },
@@ -434,19 +367,17 @@ impl ServiceWorkerRuntimeState {
         run: RendererServiceWorkerRunIdentity,
         reason: impl Into<String>,
     ) -> bool {
-        if !self.service_worker_target_infos.contains_key(&version_id) {
+        if self.target_output_journal(version_id).is_none()
+            || !self
+                .versions
+                .get(&version_id)
+                .is_some_and(|version| version.run == run)
+        {
             return false;
         }
-        let Some(run) = self
-            .service_worker_target_run_projections
-            .get_mut(&version_id)
-            .and_then(|residence| residence.retire_run(run))
-        else {
-            return false;
-        };
         self.target_output_streams.publish(
             version_id,
-            RendererServiceWorkerTargetEvent::Stopped {
+            RendererServiceWorkerLifecycle::Stopped {
                 version_id: version_id.as_u64(),
                 run,
                 reason: reason.into(),
@@ -456,22 +387,21 @@ impl ServiceWorkerRuntimeState {
     }
 
     pub(super) fn record_target_destroyed(&mut self, version_id: ServiceWorkerVersionId) -> bool {
+        self.record_target_destroyed_with_run(version_id, self.live_target_run(version_id))
+    }
+
+    pub(super) fn record_target_destroyed_with_run(
+        &mut self,
+        version_id: ServiceWorkerVersionId,
+        active_run: Option<RendererServiceWorkerRunIdentity>,
+    ) -> bool {
         self.devtools_attached_versions.remove(&version_id);
-        if self
-            .service_worker_target_infos
-            .remove(&version_id)
-            .is_none()
-        {
+        if self.target_output_journal(version_id).is_none() {
             return false;
         }
-        let active_run = self
-            .service_worker_target_run_projections
-            .remove(&version_id)
-            .expect("a ServiceWorker target must retain its renderer run residence")
-            .active_run();
         self.target_output_streams.publish_destroyed(
             version_id,
-            RendererServiceWorkerTargetEvent::Destroyed {
+            RendererServiceWorkerLifecycle::Destroyed {
                 version_id: version_id.as_u64(),
                 active_run,
             },
@@ -483,16 +413,14 @@ impl ServiceWorkerRuntimeState {
         &mut self,
         version_id: ServiceWorkerVersionId,
     ) -> bool {
-        let status = self.target_status_for_version(version_id);
-        let Some(info) = self.service_worker_target_infos.get_mut(&version_id) else {
+        if self.target_output_journal(version_id).is_none() {
             return false;
-        };
-        info.status = status;
+        }
         self.target_output_streams.publish(
             version_id,
-            RendererServiceWorkerTargetEvent::VersionUpdated {
+            RendererServiceWorkerLifecycle::VersionUpdated {
                 version_id: version_id.as_u64(),
-                status,
+                status: self.target_status_for_version(version_id),
             },
         );
         true
@@ -514,19 +442,14 @@ impl ServiceWorkerRuntimeState {
         run: RendererServiceWorkerRunIdentity,
         message: RendererServiceWorkerConsoleMessage,
     ) -> bool {
-        if !self.service_worker_target_infos.contains_key(&version_id) {
+        if self.target_output_journal(version_id).is_none()
+            || !self.observes_live_target_run(version_id, &run)
+        {
             return false;
         }
-        let Some(run) = self
-            .service_worker_target_run_projections
-            .get_mut(&version_id)
-            .and_then(|residence| residence.observe_run(run))
-        else {
-            return false;
-        };
-        self.target_output_streams.publish(
+        self.target_output_streams.publish_observation(
             version_id,
-            RendererServiceWorkerTargetEvent::Console {
+            RendererServiceWorkerObservation::Console {
                 version_id: version_id.as_u64(),
                 run,
                 message,
@@ -541,19 +464,14 @@ impl ServiceWorkerRuntimeState {
         run: RendererServiceWorkerRunIdentity,
         message: RendererServiceWorkerExceptionMessage,
     ) -> bool {
-        if !self.service_worker_target_infos.contains_key(&version_id) {
+        if self.target_output_journal(version_id).is_none()
+            || !self.observes_live_target_run(version_id, &run)
+        {
             return false;
         }
-        let Some(run) = self
-            .service_worker_target_run_projections
-            .get_mut(&version_id)
-            .and_then(|residence| residence.observe_run(run))
-        else {
-            return false;
-        };
-        self.target_output_streams.publish(
+        self.target_output_streams.publish_observation(
             version_id,
-            RendererServiceWorkerTargetEvent::Exception {
+            RendererServiceWorkerObservation::Exception {
                 version_id: version_id.as_u64(),
                 run,
                 message,
@@ -568,19 +486,14 @@ impl ServiceWorkerRuntimeState {
         run: RendererServiceWorkerRunIdentity,
         diagnostic: RendererServiceWorkerFetchDiagnostic,
     ) -> bool {
-        if !self.service_worker_target_infos.contains_key(&version_id) {
+        if self.target_output_journal(version_id).is_none()
+            || !self.observes_live_target_run(version_id, &run)
+        {
             return false;
         }
-        let Some(run) = self
-            .service_worker_target_run_projections
-            .get_mut(&version_id)
-            .and_then(|residence| residence.observe_run(run))
-        else {
-            return false;
-        };
-        self.target_output_streams.publish(
+        self.target_output_streams.publish_observation(
             version_id,
-            RendererServiceWorkerTargetEvent::FetchDiagnostic {
+            RendererServiceWorkerObservation::FetchDiagnostic {
                 version_id: version_id.as_u64(),
                 run,
                 diagnostic,
@@ -596,22 +509,17 @@ impl ServiceWorkerRuntimeState {
         inspector_session_id: Option<String>,
         messages: Vec<RendererRuntimeInspectorMessage>,
     ) -> bool {
-        if !self.service_worker_target_infos.contains_key(&version_id) {
+        if self.target_output_journal(version_id).is_none()
+            || !self.observes_live_target_run(version_id, &run)
+        {
             return false;
         }
         if messages.is_empty() {
             return false;
         }
-        let Some(run) = self
-            .service_worker_target_run_projections
-            .get_mut(&version_id)
-            .and_then(|residence| residence.observe_run(run))
-        else {
-            return false;
-        };
-        self.target_output_streams.publish(
+        self.target_output_streams.publish_observation(
             version_id,
-            RendererServiceWorkerTargetEvent::RuntimeInspectorMessages {
+            RendererServiceWorkerObservation::RuntimeInspectorMessages {
                 version_id: version_id.as_u64(),
                 run,
                 inspector_session_id,
@@ -997,64 +905,12 @@ impl ServiceWorkerClient {
 
 #[cfg(test)]
 mod target_run_identity_tests {
-    use super::{
-        RendererServiceWorkerTargetRunResidence, ServiceWorkerRegistrationId,
-        ServiceWorkerRuntimeState, ServiceWorkerVersionId,
+    use super::{ServiceWorkerRegistrationId, ServiceWorkerRuntimeState, ServiceWorkerVersionId};
+    use crate::runtime::{RendererServiceWorkerConsoleMessage, RendererServiceWorkerRunIdentity};
+    use crate::service_worker_runtime::target_output_streams::{
+        ServiceWorkerOutputForTest, drain_service_worker_target_events_for_test,
     };
-    use crate::runtime::{
-        RendererServiceWorkerConsoleMessage, RendererServiceWorkerRunIdentity,
-        RendererServiceWorkerTargetEvent,
-    };
-    use crate::service_worker_runtime::target_output_streams::drain_service_worker_target_events_for_test;
     use url::Url;
-
-    #[test]
-    fn one_host_identity_reuses_one_target_run_projection() {
-        let mut residence = RendererServiceWorkerTargetRunResidence::default();
-        let run = RendererServiceWorkerRunIdentity::fresh();
-
-        let first = residence
-            .observe_run(run.clone())
-            .expect("first run-specific fact should establish an identity");
-        let second = residence
-            .observe_run(run)
-            .expect("same host identity should observe the established run");
-
-        assert_eq!(first, second);
-        assert_eq!(residence.active_run(), Some(first));
-    }
-
-    #[test]
-    fn retirement_blocks_late_facts_and_accepts_a_fresh_host_identity() {
-        let mut residence = RendererServiceWorkerTargetRunResidence::default();
-        let first_run = RendererServiceWorkerRunIdentity::fresh();
-        let retired = residence
-            .retire_run(first_run.clone())
-            .expect("a stop terminal may establish and immediately retire a failed run");
-
-        assert!(
-            residence.observe_run(first_run).is_none(),
-            "late facts must not reopen the retired renderer run"
-        );
-
-        let next_run = RendererServiceWorkerRunIdentity::fresh();
-        let restarted = residence
-            .observe_run(next_run)
-            .expect("a fresh worker host should establish a fresh exact run");
-        assert_ne!(retired, restarted);
-        assert_eq!(residence.active_run(), Some(restarted));
-    }
-
-    #[test]
-    #[should_panic(expected = "must not replace a live renderer run")]
-    fn a_different_host_identity_cannot_replace_a_live_run() {
-        let mut residence = RendererServiceWorkerTargetRunResidence::default();
-        residence
-            .observe_run(RendererServiceWorkerRunIdentity::fresh())
-            .expect("test run should become live");
-
-        let _ = residence.observe_run(RendererServiceWorkerRunIdentity::fresh());
-    }
 
     #[test]
     fn version_facts_do_not_manufacture_a_worker_run() {
@@ -1077,94 +933,43 @@ mod target_run_identity_tests {
         assert!(matches!(
             events.as_slice(),
             [
-                RendererServiceWorkerTargetEvent::VersionUpdated { .. },
-                RendererServiceWorkerTargetEvent::Destroyed {
-                    active_run: None,
-                    ..
-                }
+                ServiceWorkerOutputForTest::Lifecycle(
+                    crate::runtime::RendererServiceWorkerLifecycle::VersionUpdated { .. }
+                ),
+                ServiceWorkerOutputForTest::Lifecycle(
+                    crate::runtime::RendererServiceWorkerLifecycle::Destroyed {
+                        active_run: None,
+                        ..
+                    }
+                )
             ]
         ));
     }
 
     #[test]
-    fn target_event_producer_carries_one_identity_across_one_run() {
+    fn observations_cannot_create_a_host_for_a_stopped_version() {
         let (mut state, mut target_output_rx) =
             ServiceWorkerRuntimeState::new_with_target_output_for_test();
-        let registration_id = ServiceWorkerRegistrationId(1);
-        let version_id = ServiceWorkerVersionId(7);
+        let version = ServiceWorkerVersionId(7);
         state.record_target_created(
-            registration_id,
-            version_id,
+            ServiceWorkerRegistrationId(1),
+            version,
             Url::parse("https://example.test/service-worker.js").unwrap(),
             Url::parse("https://example.test/").unwrap(),
         );
-        assert!(matches!(
-            drain_service_worker_target_events_for_test(&mut target_output_rx).as_slice(),
-            [RendererServiceWorkerTargetEvent::Created { .. }]
-        ));
-
+        drain_service_worker_target_events_for_test(&mut target_output_rx);
         let run = RendererServiceWorkerRunIdentity::fresh();
-        assert!(state.record_target_console_message(
-            version_id,
+        assert!(!state.record_target_console_message(
+            version,
             run.clone(),
             RendererServiceWorkerConsoleMessage {
-                message: "before Started".to_owned(),
+                message: "no physical host".into(),
                 args: Vec::new(),
                 stack: None,
             },
         ));
-        assert!(state.record_target_started(version_id, run.clone()));
-        assert!(state.record_target_stopped(version_id, run.clone(), "idle_timeout"));
-
-        let events = drain_service_worker_target_events_for_test(&mut target_output_rx);
-        let [
-            RendererServiceWorkerTargetEvent::Console {
-                run: console_run, ..
-            },
-            RendererServiceWorkerTargetEvent::Started {
-                run: started_run, ..
-            },
-            RendererServiceWorkerTargetEvent::Stopped {
-                run: stopped_run, ..
-            },
-        ] = events.as_slice()
-        else {
-            panic!("one run should publish console/start/stop in source order: {events:?}");
-        };
-        assert_eq!(console_run, started_run);
-        assert_eq!(started_run, stopped_run);
-
-        assert!(
-            !state.record_target_console_message(
-                version_id,
-                run,
-                RendererServiceWorkerConsoleMessage {
-                    message: "late old run".to_owned(),
-                    args: Vec::new(),
-                    stack: None,
-                },
-            ),
-            "a late local callback must not republish the retired exact run"
-        );
-        let restarted = RendererServiceWorkerRunIdentity::fresh();
-        assert!(state.record_target_console_message(
-            version_id,
-            restarted,
-            RendererServiceWorkerConsoleMessage {
-                message: "new run".to_owned(),
-                args: Vec::new(),
-                stack: None,
-            },
-        ));
-        let restarted_events = drain_service_worker_target_events_for_test(&mut target_output_rx);
-        let [
-            RendererServiceWorkerTargetEvent::Console {
-                run: restarted_run, ..
-            },
-        ] = restarted_events.as_slice()
-        else {
-            panic!("the later worker host should publish one fresh exact run");
-        };
-        assert_ne!(stopped_run, restarted_run);
+        assert!(!state.record_target_started(version, run));
+        state.record_target_starting(version);
+        assert!(drain_service_worker_target_events_for_test(&mut target_output_rx).is_empty());
     }
 }

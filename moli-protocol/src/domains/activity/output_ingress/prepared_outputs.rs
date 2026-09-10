@@ -71,19 +71,22 @@ impl PreparedProtocolOutputs {
         committed: moli_core::page::RendererCommittedWorkerLifecycle,
     ) -> Self {
         let mut prepared = Self::empty();
-        let shared = match committed.lifecycle() {
+        let slot = match committed.lifecycle() {
+            moli_core::page::RendererWorkerLifecycle::Service(_) => {
+                crate::domains::activity::ProtocolOutputSlot::ServiceWorkerTargetLifecycle
+            }
             moli_core::page::RendererWorkerLifecycle::SharedCreated(_)
-            | moli_core::page::RendererWorkerLifecycle::SharedDestroyed(_) => true,
+            | moli_core::page::RendererWorkerLifecycle::SharedDestroyed(_) => {
+                crate::domains::activity::ProtocolOutputSlot::SharedWorkerTargetLifecycle
+            }
             moli_core::page::RendererWorkerLifecycle::DedicatedCreated(_)
             | moli_core::page::RendererWorkerLifecycle::DedicatedScriptCompleted { .. }
-            | moli_core::page::RendererWorkerLifecycle::DedicatedDestroyed(_) => false,
+            | moli_core::page::RendererWorkerLifecycle::DedicatedDestroyed(_) => {
+                crate::domains::activity::ProtocolOutputSlot::DedicatedWorkerTargetLifecycle
+            }
         };
         let outputs = crate::domains::target::worker_lifecycle_prepared_outputs(conn, committed);
-        if shared {
-            outputs.append_to_shared_worker_target_lifecycle_output_sink(&mut prepared);
-        } else {
-            outputs.append_to_dedicated_worker_target_lifecycle_output_sink(&mut prepared);
-        }
+        outputs.append_to_target_lifecycle_output_sink_for_slots(&mut prepared, &[slot]);
         prepared
     }
 
@@ -106,6 +109,16 @@ impl PreparedProtocolOutputs {
                     event.clone(),
                 )
                 .append_to_dedicated_worker_target_lifecycle_output_sink(&mut prepared);
+            }
+            RendererProtocolObservation::ServiceWorker(event) => {
+                if let Some((browser_context_id, _)) = conn.target_owner_identity_for_owner(owner) {
+                    crate::domains::target::service_worker_observation_prepared_outputs(
+                        conn,
+                        browser_context_id,
+                        event.clone(),
+                    )
+                    .append_to_service_worker_target_lifecycle_output_sink(&mut prepared);
+                }
             }
             RendererProtocolObservation::SharedWorker(event) => {
                 if let Some((browser_context_id, _)) = conn.target_owner_identity_for_owner(owner) {
@@ -400,19 +413,6 @@ impl PreparedProtocolOutputs {
                     )
                     .await
                     .append_to_output_sink(&mut prepared);
-            }
-            RendererOwnerAction::ServiceWorkerTargetLifecycle(event) => {
-                if let Some((browser_context_id, _)) = conn.target_owner_identity_for_owner(owner) {
-                    crate::domains::target::
-                        service_worker_target_lifecycle_prepared_outputs_for_event(
-                            conn,
-                            browser_context_id,
-                            event,
-                        )
-                        .append_to_service_worker_target_lifecycle_output_sink(
-                            &mut prepared,
-                        );
-                }
             }
         }
         prepared

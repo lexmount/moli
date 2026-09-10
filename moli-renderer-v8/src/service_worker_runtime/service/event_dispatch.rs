@@ -411,6 +411,7 @@ impl ServiceWorkerRuntimeService {
                             .push_back(ServiceWorkerPendingStartEvent::Fetch(event));
                         version.running_state =
                             ServiceWorkerVersionRunningState::Starting { host: host.clone() };
+                        state.record_target_starting(version_id);
                         (
                             None,
                             Some(ServiceWorkerQueuedLaunch {

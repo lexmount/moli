@@ -553,7 +553,7 @@ impl RendererBrowserContextRuntime {
             service_worker_resource_store,
             service_worker_context_runtime,
             browser_resource_runtime.clone(),
-            id,
+            worker_lifecycle.clone(),
             renderer_output_transport_tx.clone(),
         );
         let runtime = Self {

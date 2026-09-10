@@ -55,6 +55,7 @@ moli-core = { path = "../moli-core", features = ["test-support"] }
 moli-cookie-jar = { path = "../moli-cookie-jar", features = ["test-support"] }
 moli-image = { path = "../moli-image" }
 moli-storage-service = { path = "../moli-storage-service" }
+moli-test-support = { path = "../moli-test-support" }
 moli-v8-init = { path = "../moli-v8-init" }
 
 [build-dependencies]

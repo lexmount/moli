@@ -303,13 +303,25 @@ impl ServiceWorkerTargetState {
                 == Some(runtime.attachment())
     }
 
-    /// Projects one exact renderer run into this protocol target.
-    ///
-    /// Runtime inspector output can arrive before the public `Started` event,
-    /// so the first run-specific fact may establish a `Starting` projection.
-    /// A different identity can be admitted only after the prior run moved to
-    /// an ordered retirement output.
+    pub(crate) fn active_renderer_run(&self) -> Option<&RendererServiceWorkerRunIdentity> {
+        match &self.run_state {
+            ServiceWorkerTargetRunState::Live { run, .. } => Some(run.scope.renderer_run()),
+            ServiceWorkerTargetRunState::Stopped { .. } => None,
+        }
+    }
+
     pub(crate) fn observe_worker_run(
+        &self,
+        browser_context_id: &str,
+        renderer_run: RendererServiceWorkerRunIdentity,
+    ) -> Option<TargetServiceWorkerRunIdentity> {
+        let identity = self.current_run_identity(browser_context_id)?;
+        (identity.renderer_run() == &renderer_run).then_some(identity)
+    }
+
+    /// Projects an explicit Browser-committed physical host installation.
+    /// Observations cannot introduce a run or replace one awaiting retirement.
+    pub(crate) fn mark_worker_starting(
         &mut self,
         browser_context_id: &str,
         renderer_run: RendererServiceWorkerRunIdentity,
@@ -342,7 +354,7 @@ impl ServiceWorkerTargetState {
         browser_context_id: &str,
         renderer_run: RendererServiceWorkerRunIdentity,
     ) -> Option<TargetServiceWorkerRunIdentity> {
-        let run = self.observe_worker_run(browser_context_id, renderer_run)?;
+        let run = self.mark_worker_starting(browser_context_id, renderer_run)?;
         match &mut self.run_state {
             ServiceWorkerTargetRunState::Live { phase, .. }
                 if *phase == ServiceWorkerTargetLiveRunPhase::Starting =>
@@ -363,7 +375,7 @@ impl ServiceWorkerTargetState {
         renderer_run: RendererServiceWorkerRunIdentity,
         _reason: &str,
     ) -> Option<TargetServiceWorkerRunRetirement> {
-        let identity = self.observe_worker_run(browser_context_id, renderer_run.clone())?;
+        let identity = self.mark_worker_starting(browser_context_id, renderer_run.clone())?;
         let live_state = std::mem::replace(
             &mut self.run_state,
             ServiceWorkerTargetRunState::Stopped {
@@ -1419,7 +1431,7 @@ mod tests {
     fn a_different_renderer_identity_cannot_replace_a_live_protocol_run() {
         let (mut target, _) = target_with_started_run();
 
-        let _ = target.observe_worker_run("BID-1", RendererServiceWorkerRunIdentity::fresh());
+        let _ = target.mark_worker_starting("BID-1", RendererServiceWorkerRunIdentity::fresh());
     }
 
     #[test]

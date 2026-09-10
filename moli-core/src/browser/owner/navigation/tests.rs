@@ -450,6 +450,162 @@ async fn native_document_lifecycle_advances_without_a_devtools_output_consumer()
 }
 
 #[tokio::test]
+async fn native_service_worker_version_survives_stop_and_restart_without_devtools() {
+    use crate::browser::{ServiceWorkerCommand, ServiceWorkerExecution, WorkerSnapshot};
+    use crate::page::RendererServiceWorkerVersionStatus;
+
+    let server = FixtureServer::spawn().await.unwrap();
+    let service = BrowserService::start().unwrap();
+    let browser = service.handle();
+    let (context, contents) = context_with_contents(&service);
+    let (_, mut events) = browser.subscribe().unwrap();
+    navigate(&context, contents, &server.url("/native-service-worker/")).await;
+    tokio::time::timeout(std::time::Duration::from_secs(5), async {
+        let mut created = None;
+        let mut first_run = None;
+        let mut restarted = None;
+        let mut phase = 0;
+        loop {
+            let record = events.recv().await.unwrap();
+            match record.event {
+                BrowserEvent::WorkerCreated(worker @ WorkerSnapshot::Service { .. }) => {
+                    assert!(
+                        created
+                            .replace((worker.handle(), record.sequence))
+                            .is_none()
+                    );
+                    let WorkerSnapshot::Service { worker, .. } = worker else {
+                        unreachable!()
+                    };
+                    let ServiceWorkerExecution::Starting(run) = worker.execution else {
+                        panic!("creation must expose the already installed physical host");
+                    };
+                    first_run = Some(run);
+                }
+                BrowserEvent::WorkerUpdated(snapshot @ WorkerSnapshot::Service { .. }) => {
+                    let (handle, created_sequence) = created.as_ref().unwrap();
+                    assert_eq!(snapshot.handle(), *handle);
+                    assert!(record.sequence > *created_sequence);
+                    let WorkerSnapshot::Service { worker, .. } = &snapshot else {
+                        unreachable!()
+                    };
+                    match (phase, &worker.execution) {
+                        (0, ServiceWorkerExecution::Running(run))
+                            if worker.info.status
+                                == RendererServiceWorkerVersionStatus::Activated =>
+                        {
+                            assert_eq!(Some(run), first_run.as_ref());
+                            context
+                                .execute_service_worker_command(ServiceWorkerCommand::StopVersion {
+                                    version_id: worker.info.version_id,
+                                })
+                                .unwrap();
+                            phase = 1;
+                        }
+                        (1, ServiceWorkerExecution::Stopped) => {
+                            assert_eq!(
+                                browser.subscribe().unwrap().0.workers,
+                                vec![snapshot.clone()]
+                            );
+                            context
+                                .execute_service_worker_command(ServiceWorkerCommand::Start {
+                                    scope: worker.info.scope_url.parse().unwrap(),
+                                })
+                                .unwrap();
+                            phase = 2;
+                        }
+                        (2, ServiceWorkerExecution::Starting(run)) => {
+                            assert_ne!(Some(run), first_run.as_ref());
+                            assert!(restarted.replace(run.clone()).is_none());
+                        }
+                        (2, ServiceWorkerExecution::Running(run)) => {
+                            assert_eq!(Some(run), restarted.as_ref());
+                            assert_eq!(
+                                browser.subscribe().unwrap().0.workers,
+                                vec![snapshot.clone()]
+                            );
+                            assert!(context.remove().unwrap());
+                            phase = 3;
+                        }
+                        _ => {}
+                    }
+                }
+                BrowserEvent::WorkerDestroyed(handle) => {
+                    assert_eq!(phase, 3);
+                    assert_eq!(handle, created.unwrap().0);
+                    break;
+                }
+                _ => {}
+            }
+        }
+    })
+    .await
+    .expect("native ServiceWorker creation, restart and retirement need no Protocol consumer");
+    assert!(browser.subscribe().unwrap().0.workers.is_empty());
+    service.shutdown();
+    while let Ok(record) = events.try_recv() {
+        assert!(!matches!(record.event, BrowserEvent::WorkerDestroyed(_)));
+    }
+    server.shutdown().await;
+}
+
+#[tokio::test]
+async fn native_service_worker_failed_install_preserves_creation_and_exact_retirement() {
+    use crate::browser::WorkerSnapshot;
+    let server = FixtureServer::spawn().await.unwrap();
+    let service = BrowserService::start().unwrap();
+    let browser = service.handle();
+    let (context, contents) = context_with_contents(&service);
+    let (_, mut events) = browser.subscribe().unwrap();
+    // Inline script runs in the resident Browser-owned Document. The generic
+    // test-only Context-borrowing evaluator temporarily removes its registry
+    // entry and cannot be used to test native lifecycle admission.
+    navigate(
+        &context,
+        contents,
+        &server.url("/native-service-worker/failed-install"),
+    )
+    .await;
+    let mut observed = Vec::new();
+    let result = tokio::time::timeout(std::time::Duration::from_secs(5), async {
+        let mut created = None;
+        loop {
+            let record = events.recv().await.unwrap();
+            observed.push(record.event.clone());
+            match record.event {
+                BrowserEvent::WorkerCreated(worker @ WorkerSnapshot::Service { .. }) => {
+                    assert!(
+                        created
+                            .replace((worker.handle(), record.sequence))
+                            .is_none()
+                    );
+                }
+                BrowserEvent::WorkerDestroyed(handle) => {
+                    let (expected, sequence) =
+                        created.expect("even a failed initial run publishes its version creation");
+                    assert_eq!(handle, expected);
+                    assert!(record.sequence > sequence);
+                    break;
+                }
+                _ => {}
+            }
+        }
+    })
+    .await;
+    assert!(
+        result.is_ok(),
+        "failed install facts: {observed:?}; snapshot: {:?}",
+        browser.subscribe().unwrap().0.workers
+    );
+    assert!(browser.subscribe().unwrap().0.workers.is_empty());
+    service.shutdown();
+    while let Ok(record) = events.try_recv() {
+        assert!(!matches!(record.event, BrowserEvent::WorkerDestroyed(_)));
+    }
+    server.shutdown().await;
+}
+
+#[tokio::test]
 async fn native_shared_worker_membership_and_retirement_do_not_require_devtools() {
     use crate::browser::{WorkerHandle, WorkerSnapshot};
     for retirement in ["worker", "context", "browser"] {

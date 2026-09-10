@@ -331,6 +331,7 @@ impl ServiceWorkerRuntimeService {
                     );
                     version.running_state =
                         ServiceWorkerVersionRunningState::Starting { host: host.clone() };
+                    state.record_target_starting(version_id);
                     Some(ServiceWorkerQueuedLaunch {
                         params,
                         host,

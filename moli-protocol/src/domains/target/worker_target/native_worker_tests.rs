@@ -17,6 +17,49 @@ struct NativeWorkers {
 }
 
 impl NativeWorkers {
+    async fn navigate_service_worker(
+        &self,
+        url: &str,
+    ) -> moli_core::browser::ServiceWorkerSnapshot {
+        let (snapshot, mut events) = self.service.handle().subscribe().unwrap();
+        let contents = snapshot
+            .web_contents
+            .into_iter()
+            .find(|contents| self.context.contains_web_contents(*contents))
+            .unwrap();
+        let navigation = self
+            .context
+            .navigate_document(
+                contents,
+                moli_core::browser::web_contents::NavigationRequestInterception::new(
+                    url.parse().unwrap(),
+                    "GET".into(),
+                    None,
+                    Vec::new(),
+                    NavigationRequestLoadPolicy::BrowserInitiated,
+                ),
+            )
+            .unwrap();
+        assert!(matches!(
+            tokio::time::timeout(std::time::Duration::from_secs(5), navigation.wait())
+                .await
+                .unwrap_or_else(|_| panic!(
+                    "navigation pending: {:?}",
+                    self.service.handle().subscribe().unwrap().0
+                ))
+                .unwrap(),
+            moli_core::browser::BrowserNavigationOutcome::Document(_)
+        ));
+        wait_service_worker_state(&mut events, |worker| {
+            worker.info.status == RendererServiceWorkerVersionStatus::Activated
+                && matches!(
+                    worker.execution,
+                    moli_core::browser::ServiceWorkerExecution::Running(_)
+                )
+        })
+        .await
+    }
+
     async fn start(names: &[&str]) -> Self {
         Self::start_named(names, false).await
     }
@@ -153,6 +196,253 @@ impl NativeWorkers {
         .await
         .expect("concrete Worker stream must retain its lifecycle receipt")
     }
+}
+
+async fn wait_service_worker_state(
+    events: &mut tokio::sync::broadcast::Receiver<moli_core::browser::BrowserEventRecord>,
+    predicate: impl Fn(&moli_core::browser::ServiceWorkerSnapshot) -> bool,
+) -> moli_core::browser::ServiceWorkerSnapshot {
+    tokio::time::timeout(std::time::Duration::from_secs(5), async {
+        loop {
+            if let BrowserEvent::WorkerUpdated(WorkerSnapshot::Service { worker, .. }) =
+                events.recv().await.unwrap().event
+                && predicate(&worker)
+            {
+                return worker;
+            }
+        }
+    })
+    .await
+    .expect("ServiceWorker must make native progress without Protocol draining its output")
+}
+
+#[tokio::test]
+async fn native_service_worker_snapshot_recovers_missed_restart_without_rotating_version() {
+    use moli_core::browser::ServiceWorkerExecution;
+    let server = moli_test_support::FixtureServer::spawn().await.unwrap();
+    let mut fixture = NativeWorkers::start(&[]).await;
+    let first = fixture
+        .navigate_service_worker(&server.url("/native-service-worker/"))
+        .await;
+    let (_, created) = fixture.next_occurrence().await;
+    assert!(matches!(
+        created.lifecycle(),
+        RendererWorkerLifecycle::Service(RendererServiceWorkerLifecycle::Created { .. })
+    ));
+    let browser = fixture.service.handle();
+    let mut conn = fixture.connection();
+    conn.project_browser_snapshot(browser.subscribe().unwrap().0)
+        .await;
+    let context_id = conn
+        .browser_context_by_browser_id(fixture.context.id())
+        .unwrap()
+        .id
+        .clone();
+    let target = &conn
+        .browser_context_by_id(&context_id)
+        .unwrap()
+        .service_worker_targets[&first.info.version_id];
+    let target_id = target.target_id.clone();
+    let version = target.version_identity(&context_id).unwrap();
+    assert!(target.worker_running());
+    assert_eq!(target.active_renderer_run(), first.execution.active_run());
+
+    let (_, mut events) = browser.subscribe().unwrap();
+    fixture
+        .context
+        .execute_service_worker_command(ServiceWorkerCommand::StopVersion {
+            version_id: first.info.version_id,
+        })
+        .unwrap();
+    wait_service_worker_state(&mut events, |worker| {
+        worker.execution == ServiceWorkerExecution::Stopped
+    })
+    .await;
+    fixture
+        .context
+        .execute_service_worker_command(ServiceWorkerCommand::Start {
+            scope: first.info.scope_url.parse().unwrap(),
+        })
+        .unwrap();
+    let restarted = wait_service_worker_state(&mut events, |worker| {
+        matches!(worker.execution, ServiceWorkerExecution::Running(_))
+    })
+    .await;
+    assert_ne!(
+        first.execution.active_run(),
+        restarted.execution.active_run()
+    );
+    let recovered = conn
+        .project_browser_snapshot(browser.subscribe().unwrap().0)
+        .await;
+    assert_eq!(
+        protocol_event_count(&recovered, "Target.targetCreated", "service_worker"),
+        0
+    );
+    let target = &conn
+        .browser_context_by_id(&context_id)
+        .unwrap()
+        .service_worker_targets[&first.info.version_id];
+    assert_eq!(target.target_id, target_id);
+    assert_eq!(target.version_identity(&context_id), Some(version.clone()));
+    assert_eq!(
+        target.active_renderer_run(),
+        restarted.execution.active_run()
+    );
+    assert!(target.worker_running());
+    assert!(worker_lifecycle_prepared_outputs(&mut conn, created).is_empty());
+    loop {
+        let (_, committed) = fixture.next_occurrence().await;
+        let restarted_fact = matches!(committed.lifecycle(), RendererWorkerLifecycle::Service(RendererServiceWorkerLifecycle::Started { run, .. }) if Some(run) == restarted.execution.active_run());
+        assert!(worker_lifecycle_prepared_outputs(&mut conn, committed).is_empty());
+        if restarted_fact {
+            break;
+        }
+    }
+
+    fixture
+        .context
+        .execute_service_worker_command(ServiceWorkerCommand::StopVersion {
+            version_id: first.info.version_id,
+        })
+        .unwrap();
+    wait_service_worker_state(&mut events, |worker| {
+        worker.execution == ServiceWorkerExecution::Stopped
+    })
+    .await;
+    conn.project_browser_snapshot(browser.subscribe().unwrap().0)
+        .await;
+    let target = &conn
+        .browser_context_by_id(&context_id)
+        .unwrap()
+        .service_worker_targets[&first.info.version_id];
+    assert_eq!(target.target_id, target_id);
+    assert_eq!(target.version_identity(&context_id), Some(version));
+    assert!(target.active_renderer_run().is_none());
+    let late = service_worker_observation_prepared_outputs(
+        &mut conn,
+        context_id.clone(),
+        RendererServiceWorkerObservation::Console {
+            version_id: first.info.version_id,
+            run: restarted.execution.active_run().unwrap().clone(),
+            message: RendererServiceWorkerConsoleMessage {
+                message: "late retired run".into(),
+                args: Vec::new(),
+                stack: None,
+            },
+        },
+    );
+    assert!(late.is_empty());
+    assert!(
+        conn.browser_context_by_id(&context_id)
+            .unwrap()
+            .service_worker_targets[&first.info.version_id]
+            .active_renderer_run()
+            .is_none()
+    );
+    fixture.service.shutdown();
+    server.shutdown().await;
+}
+
+#[tokio::test]
+async fn native_service_worker_fifo_admits_the_real_host_before_early_console() {
+    let server = moli_test_support::FixtureServer::spawn().await.unwrap();
+    let mut fixture = NativeWorkers::start(&[]).await;
+    // Create the worker before installing a live Protocol navigation-decision
+    // provider. This test consumes the Worker FIFO, not a Page command loop.
+    let worker = fixture
+        .navigate_service_worker(&server.url("/native-service-worker/"))
+        .await;
+    let mut conn = fixture.connection();
+    conn.project_created_browser_context(fixture.context.id());
+    let context_id = conn
+        .browser_context_by_browser_id(fixture.context.id())
+        .unwrap()
+        .id
+        .clone();
+    let mut console_seen = false;
+    let mut started_runs = 0;
+    tokio::time::timeout(std::time::Duration::from_secs(5), async {
+        loop {
+            let moli_core::RendererOutputTransportMessage::Publication(publication) =
+                fixture.output.recv().await.unwrap()
+            else {
+                continue;
+            };
+            for record in publication.into_records() {
+                match record.into_parts().1 {
+                    moli_core::RendererOutputItem::Observation(
+                        moli_core::RendererProtocolObservation::WorkerLifecycle(observation),
+                    ) => {
+                        let committed = observation.committed().await.unwrap();
+                        let started = matches!(
+                            committed.lifecycle(),
+                            RendererWorkerLifecycle::Service(
+                                RendererServiceWorkerLifecycle::Started { .. }
+                            )
+                        );
+                        let outputs = worker_lifecycle_prepared_outputs(&mut conn, committed);
+                        worker_target_background_events_async(&mut conn, outputs).await;
+                        if started {
+                            assert!(
+                                console_seen,
+                                "top-level Console precedes public Started in the concrete FIFO"
+                            );
+                            started_runs += 1;
+                            if started_runs == 2 {
+                                return;
+                            }
+                            console_seen = false;
+                            fixture
+                                .context
+                                .execute_service_worker_command(ServiceWorkerCommand::StopVersion {
+                                    version_id: worker.info.version_id,
+                                })
+                                .unwrap();
+                            fixture
+                                .context
+                                .execute_service_worker_command(ServiceWorkerCommand::Start {
+                                    scope: worker.info.scope_url.parse().unwrap(),
+                                })
+                                .unwrap();
+                        }
+                    }
+                    moli_core::RendererOutputItem::Observation(
+                        moli_core::RendererProtocolObservation::ServiceWorker(observation),
+                    ) => {
+                        if let RendererServiceWorkerObservation::Console { run, message, .. } =
+                            &observation
+                        {
+                            assert_eq!(message.message, "log: before native Started");
+                            if started_runs == 0 {
+                                assert_eq!(Some(run), worker.execution.active_run());
+                            } else {
+                                assert_ne!(Some(run), worker.execution.active_run());
+                            }
+                            let target = &conn
+                                .browser_context_by_id(&context_id)
+                                .unwrap()
+                                .service_worker_targets[&worker.info.version_id];
+                            assert_eq!(target.active_renderer_run(), Some(run));
+                            assert!(!target.worker_running());
+                            console_seen = true;
+                        }
+                        let outputs = service_worker_observation_prepared_outputs(
+                            &mut conn,
+                            context_id.clone(),
+                            observation,
+                        );
+                        worker_target_background_events_async(&mut conn, outputs).await;
+                    }
+                    _ => {}
+                }
+            }
+        }
+    })
+    .await
+    .expect("native receipt and early output must retain source FIFO order");
+    fixture.service.shutdown();
+    server.shutdown().await;
 }
 
 #[tokio::test]

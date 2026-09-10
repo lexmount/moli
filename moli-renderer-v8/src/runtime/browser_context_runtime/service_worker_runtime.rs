@@ -23,7 +23,7 @@ pub(super) struct LazyServiceWorkerRuntime {
     restored_worker_context_runtime: super::RendererWorkerContextRuntime,
     browser_resource_runtime: crate::network::BrowserResourceRuntimeBinding,
     client_id_allocator: crate::service_worker_runtime::ServiceWorkerClientIdAllocator,
-    browser_context_runtime_id: crate::runtime::RendererBrowserContextRuntimeId,
+    worker_lifecycle: crate::runtime::RendererWorkerLifecycleReporter,
     output_transport: crate::runtime::RendererOutputTransportSenderSlot,
 }
 
@@ -59,7 +59,7 @@ impl LazyServiceWorkerRuntime {
         resource_store: crate::SharedServiceWorkerResourceStore,
         restored_worker_context_runtime: super::RendererWorkerContextRuntime,
         browser_resource_runtime: crate::network::BrowserResourceRuntimeBinding,
-        browser_context_runtime_id: crate::runtime::RendererBrowserContextRuntimeId,
+        worker_lifecycle: crate::runtime::RendererWorkerLifecycleReporter,
         output_transport: crate::runtime::RendererOutputTransportSenderSlot,
     ) -> Self {
         Self {
@@ -74,7 +74,7 @@ impl LazyServiceWorkerRuntime {
             restored_worker_context_runtime,
             browser_resource_runtime,
             client_id_allocator: Default::default(),
-            browser_context_runtime_id,
+            worker_lifecycle,
             output_transport,
         }
     }
@@ -105,7 +105,7 @@ impl LazyServiceWorkerRuntime {
                 self.restored_worker_context_runtime.clone(),
                 self.browser_resource_runtime.clone(),
                 self.client_id_allocator.clone(),
-                self.browser_context_runtime_id,
+                self.worker_lifecycle.clone(),
                 self.output_transport.clone(),
             );
         for sender in owner_wake_senders.into_senders() {

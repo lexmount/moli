@@ -8,6 +8,7 @@ use super::{RendererBrowserContextRuntimeId, RendererSharedWorkerTargetInfo};
 /// Execution facts, without Inspector commands, sessions or protocol target IDs.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum RendererWorkerLifecycle {
+    Service(super::RendererServiceWorkerLifecycle),
     SharedCreated(RendererSharedWorkerTargetInfo),
     SharedDestroyed(moli_shared_worker::SharedWorkerInstanceId),
     DedicatedCreated(super::RendererDedicatedWorkerTargetInfo),

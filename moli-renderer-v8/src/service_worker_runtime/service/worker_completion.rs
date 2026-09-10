@@ -874,7 +874,7 @@ impl ServiceWorkerRuntimeService {
                 Vec::new()
             };
             if failed_installing_version {
-                state.record_target_destroyed(version_id);
+                state.record_target_destroyed_with_run(version_id, target_run);
                 state.versions.remove(&version_id);
             } else if let Some(run) = target_run {
                 state.record_target_stopped(version_id, run, "start_failed");
