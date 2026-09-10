@@ -76,13 +76,10 @@ fn xml_serialization_resolves_namespace_declaration_conflicts() {
         prefixConflict.setAttributeNS(xmlns, 'xmlns:p', 'urn:b');
         prefixConflict.setAttributeNS('urn:b', 'p:value', 'b');
         roots.push(prefixConflict);
-        const plainPrefixConflict = document.createElementNS('urn:a', 'p:root');
-        plainPrefixConflict.setAttribute('xmlns:p', 'urn:b');
-        roots.push(plainPrefixConflict);
         const attributeConflict = document.createElementNS('urn:a', 'p:root');
         attributeConflict.setAttributeNS('urn:b', 'p:first', 'b');
         attributeConflict.setAttributeNS('urn:c', 'p:second', 'c');
-        attributeConflict.setAttributeNS(xmlns, 'xmlns:ns1', 'urn:reserved');
+        attributeConflict.setAttributeNS(xmlns, 'xmlns:reserved', 'urn:reserved');
         attributeConflict.setAttributeNS('urn:d', 'fourth', 'd');
         roots.push(attributeConflict);
         for (const root of roots) {
@@ -96,6 +93,43 @@ fn xml_serialization_resolves_namespace_declaration_conflicts() {
         }
         return true;
     })()"#).unwrap(), "true");
+}
+
+#[test]
+fn xml_serialization_preserves_ordinary_xmlns_spelling_and_generated_prefix_collisions() {
+    let mut vm = new_storage_html_test_vm("https://xml-namespace-collisions.test/");
+    let result = vm
+        .eval(
+            r#"(() => {
+        const xmlns = 'http://www.w3.org/2000/xmlns/';
+        const plain = document.createElementNS('urn:a', 'p:root');
+        plain.setAttribute('xmlns:p', 'urn:b');
+        const generated = document.createElementNS(null, 'root');
+        generated.setAttributeNS(xmlns, 'xmlns:ns1', 'urn:reserved');
+        generated.setAttributeNS('urn:b', 'value', 'b');
+        const roots = [plain, generated];
+        const snapshot = root => JSON.stringify(Array.from(root.attributes,
+            attr => [attr.namespaceURI, attr.prefix, attr.localName, attr.value]));
+        const before = roots.map(snapshot);
+        const serializer = new XMLSerializer();
+        const serialized = roots.map(root => serializer.serializeToString(root));
+        for (let i = 0; i < roots.length; ++i) {
+            if (snapshot(roots[i]) !== before[i]) throw Error('serializer mutated source');
+            const parsed = new DOMParser().parseFromString(serialized[i], 'application/xml');
+            if (!parsed.getElementsByTagName('parsererror').length)
+                throw Error('this serialization is not required to be well-formed');
+        }
+        return JSON.stringify(serialized);
+    })()"#,
+        )
+        .unwrap();
+    // XMLSerializer uses require-well-formed=false. Namespace recording excludes
+    // ordinary xmlns:p spelling, and the specified nsN index can collide with a
+    // declaration already present on this element (DOM Parsing issue #44).
+    assert_eq!(
+        result,
+        r#"["<p:root xmlns:p=\"urn:a\" xmlns:p=\"urn:b\"/>","<root xmlns:ns1=\"urn:reserved\" xmlns:ns1=\"urn:b\" ns1:value=\"b\"/>"]"#
+    );
 }
 
 #[test]
