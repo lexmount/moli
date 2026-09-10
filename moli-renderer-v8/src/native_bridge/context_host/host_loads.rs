@@ -417,7 +417,7 @@ impl JsContextHost {
             record_performance_load_event_start_for_window(scope, window);
         }
         self.enter_child_browsing_context_host_load_dispatch(handle);
-        self.dispatch_child_window_event(scope, handle, "load", event);
+        self.dispatch_child_window_event_with_target_override(scope, handle, "load", event, true);
         self.leave_child_browsing_context_host_load_dispatch(handle);
         if let Some(window) = performance_window {
             record_performance_load_event_end_for_window(scope, window);
@@ -473,7 +473,13 @@ impl JsContextHost {
         let callback_dispatched = if let Some(event) =
             construct_original_page_transition_event(scope, "pageshow", false)
         {
-            self.dispatch_child_window_event(scope, action.child_handle(), "pageshow", event);
+            self.dispatch_child_window_event_with_target_override(
+                scope,
+                action.child_handle(),
+                "pageshow",
+                event,
+                true,
+            );
             true
         } else {
             false

@@ -4,8 +4,7 @@ use super::history_runtime::{apply, results, traversal};
 use super::navigation_entry::{history_entries, history_index, navigation_current_entry};
 use super::navigation_events::{
     NavigationDispatchOutcome, dispatch_beforeunload_for_runtime_owner,
-    dispatch_navigation_traverse_event_with_outcome, dispatch_pagehide_for_runtime_owner,
-    dispatch_unload_for_runtime_owner,
+    dispatch_navigation_traverse_event_with_outcome,
 };
 use super::navigation_result::navigation_dom_exception;
 use super::navigation_seed::history_entry_seed_for_traversal;
@@ -461,12 +460,10 @@ fn commit(scope: &mut v8::PinScope<'_, '_>, admission: &PendingHistoryTraversalA
         }
     }
     for participant in &cross_document {
-        dispatch_pagehide_for_runtime_owner(scope, participant.owner);
-        if validate(scope, admission).is_none() {
-            abort(scope, admission, None);
-            return;
-        }
-        dispatch_unload_for_runtime_owner(scope, participant.owner);
+        unsafe { &mut *host_ptr }.dispatch_child_document_unload_after_traversal_check(
+            scope,
+            participant.handle,
+        );
         if validate(scope, admission).is_none() {
             abort(scope, admission, None);
             return;
@@ -490,9 +487,6 @@ fn commit(scope: &mut v8::PinScope<'_, '_>, admission: &PendingHistoryTraversalA
     }
     for participant in &cross_document {
         let host = unsafe { &mut *host_ptr };
-        let _ = host.mark_current_child_document_unload_dispatched_after_navigation_traversal(
-            participant.handle,
-        );
         if !host.queue_deferred_child_browsing_context_navigation_from_entry_seed(
             participant.handle,
             participant.url.as_str(),
