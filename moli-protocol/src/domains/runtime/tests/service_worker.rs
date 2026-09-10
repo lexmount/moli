@@ -828,7 +828,7 @@ async fn pending_service_worker_inspection_never_dispatches_to_a_restarted_run()
             .expect("capture the worker before async session cleanup");
     let pending = ctx
         .conn
-        .start_service_worker_runtime_protocol_message_for_session(
+        .start_worker_runtime_protocol_message_for_session(
             Some(&session_id),
             json!({"id": 9001, "method": "Runtime.evaluate", "params": {
                 "expression": "globalThis.__staleWorkerDispatch = true", "returnByValue": true

@@ -6,6 +6,7 @@ use moli_core::browser::{
     NavigationRequestLoadPolicy, StoragePartitionKind, WebContentsCreation, WorkerSnapshot,
 };
 
+mod dedicated_runtime_readiness;
 mod network;
 mod runtime_readiness;
 

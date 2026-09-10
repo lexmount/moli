@@ -125,7 +125,9 @@ impl PendingObserver {
         } else {
             assert!(matches!(
                 outputs.worker_target_lifecycle_outputs.as_slice(),
-                [WorkerTargetLifecycleOutput::ServiceWorkerRuntimeReady { .. }]
+                [WorkerTargetLifecycleOutput::RuntimeObserverReady(
+                    WorkerRuntimeObserver::Service(_)
+                )]
             ));
         }
         Self {
@@ -217,7 +219,7 @@ async fn native_service_worker_runtime_listener_recovers_before_paused_bootstrap
     let (_, mut native_events) = pending.fixture.service.handle().subscribe().unwrap();
     let release = pending
         .conn
-        .start_service_worker_runtime_protocol_message_for_session(
+        .start_worker_runtime_protocol_message_for_session(
             Some(&pending.session_id),
             r#"{"id":72,"method":"Runtime.runIfWaitingForDebugger"}"#.into(),
         )
@@ -225,7 +227,7 @@ async fn native_service_worker_runtime_listener_recovers_before_paused_bootstrap
     let release = release.wait().await.unwrap();
     let release = pending
         .conn
-        .complete_service_worker_runtime_protocol_message_for_session(release)
+        .complete_worker_runtime_protocol_message_for_session(release)
         .unwrap();
     assert!(
         release.iter().any(

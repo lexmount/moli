@@ -74,10 +74,7 @@ enum WorkerTargetLifecycleOutput {
         events: Vec<crate::conn::BackgroundProtocolEvent>,
     },
     DedicatedWorkerConsoleMessages {
-        browser_context_id: String,
-        renderer_instance_id: u64,
-        target_id: String,
-        session_id: String,
+        attachment: TargetSharedWorkerProtocolAttachmentIdentity,
         console_messages: Vec<RuntimeConsoleMessageSnapshot>,
         runtime_messages: Vec<RuntimeConsoleMessageSnapshot>,
         console_end: usize,
@@ -141,9 +138,7 @@ enum WorkerTargetLifecycleOutput {
         runtime: TargetServiceWorkerRuntimeAttachmentIdentity,
         events: Vec<crate::conn::BackgroundProtocolEvent>,
     },
-    ServiceWorkerRuntimeReady {
-        runtime: TargetServiceWorkerRuntimeAttachmentIdentity,
-    },
+    RuntimeObserverReady(WorkerRuntimeObserver),
     ServiceWorkerCreated {
         version: TargetServiceWorkerVersionIdentity,
         target_delta: PreparedTargetHostDelta,
@@ -215,12 +210,34 @@ enum WorkerTargetLifecycleOutput {
         messages: Vec<RendererRuntimeInspectorMessage>,
     },
     DedicatedWorkerRuntimeInspectorMessages {
-        browser_context_id: String,
-        renderer_instance_id: u64,
-        target_id: String,
-        session_id: String,
+        attachment: TargetSharedWorkerProtocolAttachmentIdentity,
         messages: Vec<RendererRuntimeInspectorMessage>,
     },
+}
+
+/// Already-existing lifetime capabilities, not another readiness ledger.
+#[derive(Debug, PartialEq)]
+enum WorkerRuntimeObserver {
+    Dedicated(TargetSharedWorkerProtocolAttachmentIdentity),
+    Service(TargetServiceWorkerRuntimeAttachmentIdentity),
+}
+
+impl WorkerRuntimeObserver {
+    fn session_id(&self) -> &str {
+        match self {
+            Self::Dedicated(attachment) => attachment.session_id(),
+            Self::Service(runtime) => runtime.session_id(),
+        }
+    }
+
+    fn is_enabled(&self, conn: &mut CdpConnection) -> bool {
+        match self {
+            Self::Dedicated(attachment) => exact_dedicated_worker_target(conn, attachment)
+                .is_some_and(|target| target.runtime_frontend_enabled(attachment.session_id())),
+            Self::Service(runtime) => exact_service_worker_runtime_target_mut(conn, runtime)
+                .is_some_and(|target| target.runtime_frontend_enabled(runtime.session_id())),
+        }
+    }
 }
 
 #[derive(Clone, Copy)]
@@ -1108,7 +1125,11 @@ fn project_dedicated_worker_main_script(
         .filter(|target| target.main_script().is_none())
         .map(|target| target.owner.clone())
     else {
-        return outputs;
+        return dedicated_worker_runtime_ready_outputs(
+            conn,
+            browser_context_id,
+            renderer_instance_id,
+        );
     };
     let auto_attach_owners =
         dedicated_worker_auto_attach_owner_sessions(conn, browser_context_id, &owner_page);
@@ -1248,6 +1269,44 @@ fn project_dedicated_worker_main_script(
                 target_id: target_id.clone(),
                 events,
             });
+        }
+    }
+    outputs.extend(dedicated_worker_runtime_ready_outputs(
+        conn,
+        browser_context_id,
+        renderer_instance_id,
+    ));
+    outputs
+}
+
+fn dedicated_worker_runtime_ready_outputs(
+    conn: &CdpConnection,
+    browser_context_id: &str,
+    instance: u64,
+) -> TargetPreparedOutputs {
+    let mut outputs = TargetPreparedOutputs::default();
+    let Some(target) = conn
+        .browser_context_by_id(browser_context_id)
+        .and_then(|context| context.dedicated_worker_targets.get(&instance))
+        .filter(|target| {
+            matches!(
+                target.main_script().map(|script| &script.outcome),
+                Some(RendererDedicatedWorkerMainScriptOutcome::Loaded(_))
+            )
+        })
+    else {
+        return outputs;
+    };
+    // Loaded is published after binding the physical endpoint, including while
+    // evaluation is debugger-paused. Recovery consumes the same native fact.
+    for session in target.session_ids() {
+        if target.runtime_frontend_enabled(&session)
+            && let Some(attachment) =
+                target.protocol_attachment_identity(browser_context_id, &session)
+        {
+            outputs.push(WorkerTargetLifecycleOutput::RuntimeObserverReady(
+                WorkerRuntimeObserver::Dedicated(attachment),
+            ));
         }
     }
     outputs
@@ -1711,7 +1770,6 @@ fn record_dedicated_worker_target_runtime_inspector_messages(
     else {
         return outputs;
     };
-    let target_id = target.target_id.clone();
     let session_ids = if let Some(session_id) = inspector_session_id {
         target
             .is_session(&session_id)
@@ -1721,12 +1779,13 @@ fn record_dedicated_worker_target_runtime_inspector_messages(
         target.session_ids()
     };
     for session_id in session_ids {
+        let Some(attachment) = target.protocol_attachment_identity(browser_context_id, &session_id)
+        else {
+            continue;
+        };
         outputs.push(
             WorkerTargetLifecycleOutput::DedicatedWorkerRuntimeInspectorMessages {
-                browser_context_id: browser_context_id.to_owned(),
-                renderer_instance_id,
-                target_id: target_id.clone(),
-                session_id,
+                attachment,
                 messages: messages.clone(),
             },
         );
@@ -1751,9 +1810,12 @@ fn record_dedicated_worker_target_console_message(
         return outputs;
     };
     target.record_console_message(message);
-    let target_id = target.target_id.clone();
     let console_end = target.console_message_count();
     for session_id in target.session_ids() {
+        let Some(attachment) = target.protocol_attachment_identity(browser_context_id, &session_id)
+        else {
+            continue;
+        };
         let console_messages = target.pending_console_domain_messages(&session_id).to_vec();
         let runtime_messages = target
             .pending_runtime_console_messages(&session_id)
@@ -1763,10 +1825,7 @@ fn record_dedicated_worker_target_console_message(
         }
         outputs.push(
             WorkerTargetLifecycleOutput::DedicatedWorkerConsoleMessages {
-                browser_context_id: browser_context_id.to_owned(),
-                renderer_instance_id,
-                target_id: target_id.clone(),
-                session_id,
+                attachment,
                 console_messages,
                 runtime_messages,
                 console_end,
@@ -2103,61 +2162,65 @@ fn service_worker_runtime_ready_outputs(
             && let Some(runtime) =
                 target.runtime_attachment_identity_for_run(browser_context_id, &session_id, &run)
         {
-            outputs.push(WorkerTargetLifecycleOutput::ServiceWorkerRuntimeReady { runtime });
+            outputs.push(WorkerTargetLifecycleOutput::RuntimeObserverReady(
+                WorkerRuntimeObserver::Service(runtime),
+            ));
         }
     }
     outputs
 }
 
-pub(in crate::domains) async fn resume_service_worker_runtime_listener_for_session(
+pub(in crate::domains) async fn resume_worker_runtime_listener_for_session(
     conn: &mut CdpConnection,
     session_id: Option<&str>,
 ) -> Vec<BackgroundProtocolEvent> {
-    let Some(CdpSessionRoute::ServiceWorkerTarget {
-        browser_context_id, ..
-    }) = conn.session_route(session_id)
-    else {
-        return Vec::new();
-    };
-    let Some(runtime) = session_id.and_then(|session_id| {
-        conn.service_worker_target_for_session(Some(session_id))?
-            .runtime_attachment_identity_for_current_run(&browser_context_id, session_id)
-    }) else {
+    let observer =
+        session_id.and_then(|session_id| match conn.session_route(Some(session_id))? {
+            CdpSessionRoute::ServiceWorkerTarget {
+                browser_context_id, ..
+            } => conn
+                .service_worker_target_for_session(Some(session_id))?
+                .runtime_attachment_identity_for_current_run(&browser_context_id, session_id)
+                .map(WorkerRuntimeObserver::Service),
+            CdpSessionRoute::DedicatedWorkerTarget {
+                browser_context_id, ..
+            } => conn
+                .shared_worker_target_for_session(Some(session_id))?
+                .protocol_attachment_identity(&browser_context_id, session_id)
+                .map(WorkerRuntimeObserver::Dedicated),
+            _ => None,
+        });
+    let Some(observer) = observer else {
         return Vec::new();
     };
     let mut outputs = TargetPreparedOutputs::default();
-    outputs.push(WorkerTargetLifecycleOutput::ServiceWorkerRuntimeReady { runtime });
+    outputs.push(WorkerTargetLifecycleOutput::RuntimeObserverReady(observer));
     worker_target_background_events_async(conn, outputs).await
 }
 
-async fn resume_service_worker_runtime_observer(
+async fn resume_worker_runtime_observer(
     conn: &mut CdpConnection,
-    runtime: TargetServiceWorkerRuntimeAttachmentIdentity,
+    observer: WorkerRuntimeObserver,
 ) -> Option<WorkerTargetLifecycleOutput> {
-    let session_id = runtime.session_id();
-    if !exact_service_worker_runtime_target_mut(conn, &runtime)?
-        .runtime_frontend_enabled(session_id)
-    {
+    let session_id = observer.session_id();
+    if !observer.is_enabled(conn) {
         return None;
     }
     // This existing AdapterReply path freezes the physical endpoint before
     // yielding. A FIFO consumer must not await a response in its own SessionSink.
     // Physical frontend call ids are nonzero, leaving 0 for this local reply.
     let pending = conn
-        .start_service_worker_runtime_protocol_message_for_session(
+        .start_worker_runtime_protocol_message_for_session(
             Some(session_id),
             r#"{"id":0,"method":"Runtime.enable"}"#.into(),
         )
         .ok()?;
     let completed = pending.wait().await.ok()?;
-    let target = exact_service_worker_runtime_target_mut(conn, &runtime)?;
-    if !target.runtime_frontend_enabled(session_id) {
+    if !observer.is_enabled(conn) {
         return None;
     }
-    let renderer_run = target.active_renderer_run()?.clone();
-    let version_id = target.renderer_version_id;
     let mut messages = conn
-        .complete_service_worker_runtime_protocol_message_for_session(completed)
+        .complete_worker_runtime_protocol_message_for_session(completed)
         .ok()?;
     // The enable acknowledgement is internal; real context notifications flow
     // through the same exact-run projection and buffered-console cursors.
@@ -2165,16 +2228,29 @@ async fn resume_service_worker_runtime_observer(
         !matches!(message, RendererRuntimeInspectorMessage::Protocol(message)
             if message.value().get("id") == Some(&json!(0)))
     });
-    record_service_worker_target_runtime_inspector_messages(
-        conn,
-        runtime.attachment().browser_context_id(),
-        version_id,
-        renderer_run,
-        Some(session_id.to_owned()),
-        messages,
-    )
-    .worker_target_lifecycle_outputs
-    .pop()
+    match observer {
+        WorkerRuntimeObserver::Dedicated(attachment) => Some(
+            WorkerTargetLifecycleOutput::DedicatedWorkerRuntimeInspectorMessages {
+                attachment,
+                messages,
+            },
+        ),
+        WorkerRuntimeObserver::Service(runtime) => {
+            let target = exact_service_worker_runtime_target_mut(conn, &runtime)?;
+            let renderer_run = target.active_renderer_run()?.clone();
+            let version_id = target.renderer_version_id;
+            record_service_worker_target_runtime_inspector_messages(
+                conn,
+                runtime.attachment().browser_context_id(),
+                version_id,
+                renderer_run,
+                Some(runtime.session_id().to_owned()),
+                messages,
+            )
+            .worker_target_lifecycle_outputs
+            .pop()
+        }
+    }
 }
 
 fn record_service_worker_target_started(
@@ -3207,9 +3283,8 @@ async fn emit_target_lifecycle_events(
     let mut side_effects = events::TargetProtocolSideEffects::default();
     for event in events {
         let event = match event {
-            WorkerTargetLifecycleOutput::ServiceWorkerRuntimeReady { runtime } => {
-                let Some(event) = resume_service_worker_runtime_observer(conn, runtime).await
-                else {
+            WorkerTargetLifecycleOutput::RuntimeObserverReady(observer) => {
+                let Some(event) = resume_worker_runtime_observer(conn, observer).await else {
                     continue;
                 };
                 event
@@ -3224,7 +3299,7 @@ async fn emit_target_lifecycle_events(
             Err(event) => event,
         };
         match event {
-            WorkerTargetLifecycleOutput::ServiceWorkerRuntimeReady { .. } => {
+            WorkerTargetLifecycleOutput::RuntimeObserverReady(_) => {
                 unreachable!("readiness is resolved to exact inspector output above")
             }
             WorkerTargetLifecycleOutput::DedicatedWorkerEvents {
@@ -3243,50 +3318,29 @@ async fn emit_target_lifecycle_events(
                 }
             }
             WorkerTargetLifecycleOutput::DedicatedWorkerConsoleMessages {
-                browser_context_id,
-                renderer_instance_id,
-                target_id,
-                session_id,
+                attachment,
                 console_messages,
                 runtime_messages,
                 console_end,
             } => {
-                if !dedicated_worker_target_is_current(
-                    conn,
-                    &browser_context_id,
-                    renderer_instance_id,
-                    &target_id,
-                ) || !conn
-                    .browser_context_by_id(&browser_context_id)
-                    .and_then(|context| context.dedicated_worker_targets.get(&renderer_instance_id))
-                    .is_some_and(|target| target.is_session(&session_id))
-                {
+                let Some(target) = exact_dedicated_worker_target_mut(conn, &attachment) else {
                     continue;
-                }
+                };
+                let session_id = attachment.session_id();
                 side_effects.extend_background_events(console_message_added_events(
-                    &session_id,
+                    session_id,
                     &console_messages,
                 ));
                 side_effects.extend_background_events(runtime_console_api_called_events(
-                    &session_id,
-                    &target_id,
+                    session_id,
+                    attachment.target_id(),
                     &runtime_messages,
                 ));
-                if let Some(target) = conn
-                    .browser_context_by_id_mut(&browser_context_id)
-                    .and_then(|context| {
-                        context
-                            .dedicated_worker_targets
-                            .get_mut(&renderer_instance_id)
-                    })
-                    .filter(|target| target.target_id == target_id)
-                {
-                    if !console_messages.is_empty() {
-                        target.mark_console_domain_emitted(&session_id, console_end);
-                    }
-                    if !runtime_messages.is_empty() {
-                        target.mark_runtime_console_emitted(&session_id, console_end);
-                    }
+                if !console_messages.is_empty() {
+                    target.mark_console_domain_emitted(session_id, console_end);
+                }
+                if !runtime_messages.is_empty() {
+                    target.mark_runtime_console_emitted(session_id, console_end);
                 }
             }
             WorkerTargetLifecycleOutput::DedicatedWorkerCreated {
@@ -3648,34 +3702,39 @@ async fn emit_target_lifecycle_events(
                 }
             }
             WorkerTargetLifecycleOutput::DedicatedWorkerRuntimeInspectorMessages {
-                browser_context_id,
-                renderer_instance_id,
-                target_id,
-                session_id,
+                attachment,
                 messages,
             } => {
-                if !dedicated_worker_target_is_current(
-                    conn,
-                    &browser_context_id,
-                    renderer_instance_id,
-                    &target_id,
-                ) {
+                if exact_dedicated_worker_target(conn, &attachment).is_none() {
                     continue;
                 }
+                let session_id = attachment.session_id();
                 let mut response_events = Vec::new();
                 let mut background_events = Vec::new();
                 let current_response_seen = route_worker_runtime_inspector_messages_into(
                     conn,
                     messages,
-                    &session_id,
+                    session_id,
                     &mut response_events,
                     &mut background_events,
                 );
                 debug_assert!(!current_response_seen);
                 side_effects.extend_background_events(background_events);
-                replay_shared_worker_runtime_bindings_for_session_async(conn, Some(&session_id))
+                replay_shared_worker_runtime_bindings_for_session_async(conn, Some(session_id))
                     .await;
                 side_effects.extend_background_events(response_events);
+                if let Some(target) = exact_dedicated_worker_target_mut(conn, &attachment)
+                    && !target
+                        .pending_runtime_console_messages(session_id)
+                        .is_empty()
+                {
+                    side_effects.extend_background_events(runtime_console_api_called_events(
+                        session_id,
+                        attachment.target_id(),
+                        target.pending_runtime_console_messages(session_id),
+                    ));
+                    target.mark_runtime_console_emitted(session_id, target.console_message_count());
+                }
             }
         }
     }
@@ -3955,6 +4014,36 @@ fn service_worker_fetch_diagnostic_resource_type(destination: &str) -> DevToolsN
         "" => DevToolsNetworkResourceType::Fetch,
         _ => DevToolsNetworkResourceType::Other,
     }
+}
+
+fn exact_dedicated_worker_target<'a>(
+    conn: &'a CdpConnection,
+    attachment: &TargetSharedWorkerProtocolAttachmentIdentity,
+) -> Option<&'a SharedWorkerTargetState> {
+    if !attachment.is_current() {
+        return None;
+    }
+    let context = conn.browser_context_by_id(attachment.browser_context_id())?;
+    let target = context
+        .dedicated_worker_targets
+        .get(&attachment.renderer_instance_id().as_u64())?;
+    target.owner.target_id(context)?;
+    (target
+        .protocol_attachment_identity(attachment.browser_context_id(), attachment.session_id())
+        .as_ref()
+        == Some(attachment))
+    .then_some(&target.inner)
+}
+
+fn exact_dedicated_worker_target_mut<'a>(
+    conn: &'a mut CdpConnection,
+    attachment: &TargetSharedWorkerProtocolAttachmentIdentity,
+) -> Option<&'a mut SharedWorkerTargetState> {
+    exact_dedicated_worker_target(conn, attachment)?;
+    conn.browser_context_by_id_mut(attachment.browser_context_id())?
+        .dedicated_worker_targets
+        .get_mut(&attachment.renderer_instance_id().as_u64())
+        .map(|target| &mut target.inner)
 }
 
 fn exact_shared_worker_target<'a>(

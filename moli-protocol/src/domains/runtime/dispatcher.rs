@@ -28,14 +28,12 @@ use crate::conn::{
     Cmd, CommandOwnerScope, CompletedMoliDiagnosticsDispatch,
     CompletedRuntimeBindingPageCommandDispatch, CompletedRuntimeChildDefaultContextLookupDispatch,
     CompletedRuntimeEnableEventsDispatch, CompletedRuntimeProtocolMessageDispatch,
-    CompletedServiceWorkerRuntimeProtocolMessageDispatch,
-    CompletedSharedWorkerRuntimeProtocolMessageDispatch, DevToolsCommandDispatchOutcome,
+    CompletedWorkerRuntimeProtocolMessageDispatch, DevToolsCommandDispatchOutcome,
     DevToolsCommandExecutionOutput, DuplicatePendingRendererCommand, InspectorCommandDispatch,
     ParsedCdpCommand, PendingBidiChannelListener, PendingMoliDiagnosticsDispatch,
     PendingRuntimeBindingPageCommandDispatch, PendingRuntimeChildDefaultContextLookupDispatch,
     PendingRuntimeEnableEventsDispatch, PendingRuntimeProtocolMessageDispatch,
-    PendingServiceWorkerRuntimeProtocolMessageDispatch,
-    PendingSharedWorkerRuntimeProtocolMessageDispatch, ProfilerInspectorCommand,
+    PendingWorkerRuntimeProtocolMessageDispatch, ProfilerInspectorCommand,
     RendererCommandDescriptor, RendererDispatchLane, RuntimeBindingDefinition,
     RuntimeEnableReplayEvent, RuntimeInspectorAsyncCompletionReceiver,
     RuntimeInspectorResponseReady, SessionOwnerRuntimeFrontendEnableResult,
@@ -257,11 +255,11 @@ enum PendingRuntimeCommandKind {
         claimed_await: Option<ClaimedPendingInspectorAwait>,
     },
     SharedWorkerInspector {
-        pending: PendingSharedWorkerRuntimeProtocolMessageDispatch,
+        pending: PendingWorkerRuntimeProtocolMessageDispatch,
         binding_effect: Option<SharedWorkerRuntimeBindingEffect>,
     },
     ServiceWorkerInspector {
-        pending: PendingServiceWorkerRuntimeProtocolMessageDispatch,
+        pending: PendingWorkerRuntimeProtocolMessageDispatch,
     },
     MoliDiagnostics(PendingMoliDiagnosticsDispatch),
     Enable(PendingRuntimeEnableEventsDispatch),
@@ -287,11 +285,11 @@ enum CompletedRuntimeCommandKind {
         routed_output: RuntimeInspectorRoutedOutput,
     },
     SharedWorkerInspector {
-        completed: Result<CompletedSharedWorkerRuntimeProtocolMessageDispatch, String>,
+        completed: Result<CompletedWorkerRuntimeProtocolMessageDispatch, String>,
         binding_effect: Option<SharedWorkerRuntimeBindingEffect>,
     },
     ServiceWorkerInspector {
-        completed: Result<CompletedServiceWorkerRuntimeProtocolMessageDispatch, String>,
+        completed: Result<CompletedWorkerRuntimeProtocolMessageDispatch, String>,
     },
     MoliDiagnostics(Result<CompletedMoliDiagnosticsDispatch, String>),
     Enable(Result<CompletedRuntimeEnableEventsDispatch, String>),
@@ -1328,7 +1326,7 @@ fn start_heap_profiler_inspector_shared_worker_command_dispatch(
         ));
     }
 
-    let pending = match start_shared_worker_frontend_inspector_dispatch(
+    let pending = match start_worker_frontend_inspector_dispatch(
         conn,
         cmd,
         cmd.json.to_owned(),
@@ -1426,7 +1424,7 @@ fn start_profiler_inspector_shared_worker_command_dispatch(
     }
 
     let action = dispatch.protocol_method();
-    let pending = match start_shared_worker_frontend_inspector_dispatch(
+    let pending = match start_worker_frontend_inspector_dispatch(
         conn,
         cmd,
         dispatch.into_inspector_json(),
@@ -1553,7 +1551,7 @@ fn start_console_inspector_shared_worker_command_dispatch(
         ));
     }
 
-    let pending = match start_shared_worker_frontend_inspector_dispatch(
+    let pending = match start_worker_frontend_inspector_dispatch(
         conn,
         cmd,
         cmd.json.to_owned(),
@@ -1616,7 +1614,7 @@ fn start_console_inspector_service_worker_command_dispatch(
         ));
     }
 
-    let pending = match start_service_worker_frontend_inspector_dispatch(
+    let pending = match start_worker_frontend_inspector_dispatch(
         conn,
         cmd,
         cmd.json.to_owned(),
@@ -2021,53 +2019,25 @@ fn start_pending_runtime_inspector_dispatch_with_delivery(
     }
 }
 
-fn start_shared_worker_frontend_inspector_dispatch(
+fn start_worker_frontend_inspector_dispatch(
     conn: &mut CdpConnection,
     cmd: &Cmd<'_>,
     inspector_json: String,
     response_delivery: RendererInspectorResponseDelivery,
-) -> Result<PendingSharedWorkerRuntimeProtocolMessageDispatch, String> {
+) -> Result<PendingWorkerRuntimeProtocolMessageDispatch, String> {
     if let Some(command_id) = cmd.id {
         let descriptor = RendererCommandDescriptor::from_frontend_policy(
             inspector_json,
             cmd.renderer_policy(),
             response_delivery,
         );
-        conn.start_shared_worker_runtime_protocol_message_for_session_with_deferred_response(
+        conn.start_worker_runtime_protocol_message_for_session_with_deferred_response(
             cmd.session_id,
             descriptor,
             command_id,
         )
     } else {
-        conn.start_shared_worker_runtime_protocol_message_for_session(
-            cmd.session_id,
-            inspector_json,
-        )
-    }
-}
-
-fn start_service_worker_frontend_inspector_dispatch(
-    conn: &mut CdpConnection,
-    cmd: &Cmd<'_>,
-    inspector_json: String,
-    response_delivery: RendererInspectorResponseDelivery,
-) -> Result<PendingServiceWorkerRuntimeProtocolMessageDispatch, String> {
-    if let Some(command_id) = cmd.id {
-        let descriptor = RendererCommandDescriptor::from_frontend_policy(
-            inspector_json,
-            cmd.renderer_policy(),
-            response_delivery,
-        );
-        conn.start_service_worker_runtime_protocol_message_for_session_with_deferred_response(
-            cmd.session_id,
-            descriptor,
-            command_id,
-        )
-    } else {
-        conn.start_service_worker_runtime_protocol_message_for_session(
-            cmd.session_id,
-            inspector_json,
-        )
+        conn.start_worker_runtime_protocol_message_for_session(cmd.session_id, inspector_json)
     }
 }
 
@@ -9239,7 +9209,7 @@ fn start_pending_shared_worker_runtime_inspector_command(
     )
     .map_err(|error| error.to_string())?;
     let response_delivery = cmd.terminal_response_delivery();
-    let pending = match start_shared_worker_frontend_inspector_dispatch(
+    let pending = match start_worker_frontend_inspector_dispatch(
         conn,
         cmd,
         inspector_json,
@@ -9307,7 +9277,7 @@ fn start_pending_service_worker_runtime_inspector_command(
     )
     .map_err(|error| error.to_string())?;
     let response_delivery = cmd.terminal_response_delivery();
-    let pending = match start_service_worker_frontend_inspector_dispatch(
+    let pending = match start_worker_frontend_inspector_dispatch(
         conn,
         cmd,
         inspector_json,
@@ -9350,7 +9320,7 @@ pub(in crate::domains) async fn replay_shared_worker_runtime_bindings_for_sessio
             .saturating_add(u64::try_from(index).unwrap_or(u64::MAX));
         let raw_json = shared_worker_runtime_binding_replay_json(command_id, &binding);
         match conn
-            .dispatch_shared_worker_runtime_helper_protocol_message_for_session_async(
+            .dispatch_worker_runtime_helper_protocol_message_for_session_async(
                 Some(session_id),
                 &raw_json,
                 command_id,
@@ -9461,7 +9431,7 @@ fn apply_shared_worker_runtime_binding_effect_after_success(
 async fn complete_pending_shared_worker_runtime_inspector_command(
     conn: &mut CdpConnection,
     completed: RuntimeCommandCompletionMeta,
-    completed_inspector: Result<CompletedSharedWorkerRuntimeProtocolMessageDispatch, String>,
+    completed_inspector: Result<CompletedWorkerRuntimeProtocolMessageDispatch, String>,
     binding_effect: Option<SharedWorkerRuntimeBindingEffect>,
     timing_started: Option<std::time::Instant>,
 ) -> RuntimeCommandTaskStep {
@@ -9478,14 +9448,13 @@ async fn complete_pending_shared_worker_runtime_inspector_command(
                 && !completed.await_promise
                 && let Err(message) = completed_protocol.wait_for_session_response().await
             {
-                return complete_shared_worker_runtime_inspector_error(conn, completed, message);
+                return complete_shared_worker_runtime_inspector_error(conn, completed, message)
+                    .await;
             }
             let session_response_predecessor = completed_protocol.session_response_predecessor();
             let session_response_succeeded = completed_protocol.session_response_succeeded();
             let renderer_response_rx = completed_protocol.take_deferred_response_receiver();
-            match conn
-                .complete_shared_worker_runtime_protocol_message_for_session(completed_protocol)
-            {
+            match conn.complete_worker_runtime_protocol_message_for_session(completed_protocol) {
                 Ok(messages) => (
                     messages,
                     renderer_response_rx,
@@ -9496,12 +9465,13 @@ async fn complete_pending_shared_worker_runtime_inspector_command(
                 Err(message) => {
                     return complete_shared_worker_runtime_inspector_error(
                         conn, completed, message,
-                    );
+                    )
+                    .await;
                 }
             }
         }
         Err(message) => {
-            return complete_shared_worker_runtime_inspector_error(conn, completed, message);
+            return complete_shared_worker_runtime_inspector_error(conn, completed, message).await;
         }
     };
 
@@ -9651,7 +9621,7 @@ async fn complete_pending_shared_worker_runtime_inspector_command(
 async fn complete_pending_service_worker_runtime_inspector_command(
     conn: &mut CdpConnection,
     completed: RuntimeCommandCompletionMeta,
-    completed_inspector: Result<CompletedServiceWorkerRuntimeProtocolMessageDispatch, String>,
+    completed_inspector: Result<CompletedWorkerRuntimeProtocolMessageDispatch, String>,
     timing_started: Option<std::time::Instant>,
 ) -> RuntimeCommandTaskStep {
     let (
@@ -9673,9 +9643,7 @@ async fn complete_pending_service_worker_runtime_inspector_command(
             let session_response_predecessor = completed_protocol.session_response_predecessor();
             let session_response_succeeded = completed_protocol.session_response_succeeded();
             let renderer_response_rx = completed_protocol.take_deferred_response_receiver();
-            match conn
-                .complete_service_worker_runtime_protocol_message_for_session(completed_protocol)
-            {
+            match conn.complete_worker_runtime_protocol_message_for_session(completed_protocol) {
                 Ok(messages) => (
                     messages,
                     renderer_response_rx,
@@ -9864,7 +9832,7 @@ fn apply_shared_worker_runtime_disable_projection(
     }
 }
 
-fn complete_shared_worker_runtime_inspector_error(
+async fn complete_shared_worker_runtime_inspector_error(
     conn: &mut CdpConnection,
     completed: RuntimeCommandCompletionMeta,
     message: String,
@@ -9885,12 +9853,18 @@ fn complete_shared_worker_runtime_inspector_error(
     }
     match completed.action {
         "enable" if message == "NoDocumentLoaded" || worker_runtime_is_unavailable(&message) => {
-            RuntimeCommandTaskStep::Complete(
-                shared_worker_runtime_enable_command_output_plan_for_session(
+            let mut plan = shared_worker_runtime_enable_command_output_plan_for_session(
+                conn,
+                completed.session_id(),
+            );
+            plan.extend_background_events(
+                crate::domains::target::resume_worker_runtime_listener_for_session(
                     conn,
                     completed.session_id(),
-                ),
-            )
+                )
+                .await,
+            );
+            RuntimeCommandTaskStep::Complete(plan)
         }
         "disable" if message == "NoDocumentLoaded" || worker_runtime_is_unavailable(&message) => {
             apply_shared_worker_runtime_disable_projection(conn, completed.session_id());
@@ -9996,7 +9970,7 @@ async fn complete_service_worker_runtime_inspector_error(
             // unavailable dispatch was pending, before its logical enable took
             // effect. Bind now if ready; otherwise that later occurrence binds it.
             plan.extend_background_events(
-                crate::domains::target::resume_service_worker_runtime_listener_for_session(
+                crate::domains::target::resume_worker_runtime_listener_for_session(
                     conn,
                     completed.session_id(),
                 )
