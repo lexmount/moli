@@ -60,9 +60,6 @@ pub(crate) fn proxy_fetch_body_stream<'s>(
     initialize_transform_stream_object(scope, transform, None, None, 1.0, None, 0.0, None);
     let readable = stream_slot_object(scope, transform, TRANSFORM_STREAM_READABLE_SLOT)?;
     let writable = stream_slot_object(scope, transform, TRANSFORM_STREAM_WRITABLE_SLOT)?;
-    // A proxy disturbs its input immediately, even when backpressure delays
-    // the first source read.
-    super::stream_adapter::disturb_readable_stream(scope, stream);
     let pipe = readable::start_internal_readable_stream_pipe_to(scope, stream, writable)?;
     suppress_promise_unhandled_rejection(scope, pipe);
     Some(readable)
