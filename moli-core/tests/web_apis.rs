@@ -22,6 +22,8 @@ mod event_dispatch;
 mod request_init;
 #[path = "web_apis/request_stream.rs"]
 mod request_stream;
+#[path = "web_apis/response_clone.rs"]
+mod response_clone;
 
 fn diagnostic_global<'a>(
     page: &'a moli_core::page::Page,

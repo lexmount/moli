@@ -5185,6 +5185,8 @@ fetch/api/response/json.any.js?moli-wpt-any=dedicatedworker
 fetch/api/response/json.any.js?moli-wpt-any=window
 fetch/api/response/multi-globals/url-parsing.html
 fetch/api/response/response-body-read-task-handling.html
+fetch/api/response/response-clone.any.js?moli-wpt-any=dedicatedworker
+fetch/api/response/response-clone.any.js?moli-wpt-any=window
 fetch/api/response/response-error-from-stream.any.js?moli-wpt-any=dedicatedworker
 fetch/api/response/response-error-from-stream.any.js?moli-wpt-any=window
 fetch/api/response/response-form-data.html

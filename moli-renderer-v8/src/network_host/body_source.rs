@@ -1035,33 +1035,6 @@ pub(in crate::network_host) fn try_take_network_body_bytes_from_object<'s>(
     try_network_body_bytes_from_storage(scope, object, true)
 }
 
-pub(in crate::network_host) fn try_network_body_value_from_object<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    object: v8::Local<'s, v8::Object>,
-) -> Result<Option<v8::Local<'s, v8::Value>>, String> {
-    let source = network_body_source_from_object(scope, object).unwrap_or(object);
-    if network_body_source_kind(scope, source)
-        .as_deref()
-        .is_some_and(|kind| {
-            matches!(
-                kind,
-                BODY_SOURCE_KIND_REGISTRY_BYTES | BODY_SOURCE_KIND_SUBRESOURCE_BODY
-            )
-        })
-    {
-        return try_network_body_bytes_from_storage(scope, source, false).map(|bytes| {
-            bytes
-                .and_then(|bytes| blob::array_buffer_from_bytes(scope, bytes))
-                .map(Into::into)
-        });
-    }
-    Ok(
-        network_body_source_slot_value(scope, source, NETWORK_BODY_BYTES_SLOT)
-            .or_else(|| source.get(scope, v8str(scope, NETWORK_BODY_SLOT).into()))
-            .filter(|value| !value.is_null_or_undefined()),
-    )
-}
-
 pub(in crate::network_host) fn clone_pending_network_body_stream<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     source: v8::Local<'s, v8::Object>,
