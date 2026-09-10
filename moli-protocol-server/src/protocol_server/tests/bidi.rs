@@ -14904,7 +14904,7 @@ async fn websocket_bidi_wait_none_navigation_drains_before_next_command() {
         .await
         .expect("send script.evaluate after wait=none navigation");
     let evaluate = recv_ws_json(&mut socket).await;
-    assert_eq!(evaluate["type"], json!("success"));
+    assert_eq!(evaluate["type"], json!("success"), "{evaluate:?}");
     assert_eq!(evaluate["id"], json!(4_u64));
     assert_eq!(evaluate["result"]["type"], json!("success"));
     assert_eq!(evaluate["result"]["result"]["type"], json!("string"));

@@ -145,7 +145,7 @@ impl CdpConnection {
         ))
     }
 
-    fn project_native_navigation_network(
+    pub(super) fn project_native_navigation_network(
         &mut self,
         response: &moli_core::browser::NavigationResponseSnapshot,
         complete: bool,
@@ -719,14 +719,8 @@ impl CdpConnection {
         let (context_id, target_id) = self
             .resolved_page_owner_identity_for_owner(&state.owner)
             .ok_or("navigation projection unavailable")?;
-        let failure = previous.and_then(|navigation| {
-            self.browser_context_by_id_mut(&context_id)?
-                .take_failed_native_navigation(&target_id, navigation)
-        });
-        let mut events = failure
-            .map(|(state, emit_network)| {
-                self.native_navigation_retirement_events(&state, emit_network)
-            })
+        let mut events = previous
+            .map(|navigation| self.native_navigation_retirement_events(contents, navigation))
             .unwrap_or_default();
         self.browser_context_by_id_mut(&context_id)
             .expect("resolved Context")

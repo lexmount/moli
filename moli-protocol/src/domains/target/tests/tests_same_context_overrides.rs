@@ -355,7 +355,8 @@ async fn same_context_targets_restore_their_own_network_conditions_after_session
     let second_error = take_response_by_id(&mut ctx, 104169273);
     assert_eq!(
         second_error["error"]["message"],
-        json!("Network emulation offline")
+        json!("Network emulation offline"),
+        "background navigation response: {second_error}"
     );
 
     {
