@@ -26,6 +26,14 @@ pub(in crate::domains::activity) struct PreparedProtocolOutputs {
 }
 
 impl PreparedProtocolOutputs {
+    pub(in crate::domains::activity) fn from_worker_fetch(
+        outputs: crate::domains::network::NetworkPreparedOutputs,
+    ) -> Self {
+        let mut prepared = Self::empty();
+        outputs.append_to_output_sink(&mut prepared);
+        prepared
+    }
+
     pub(in crate::domains::activity) fn from_browser_worker_network(
         conn: &mut CdpConnection,
         owner: &CommandOwnerScope,
@@ -396,7 +404,6 @@ impl PreparedProtocolOutputs {
             }
             RendererOwnerAction::SubresourceFetchPause {
                 source_document,
-                worker,
                 info,
             } => {
                 crate::domains::fetch::
@@ -404,7 +411,6 @@ impl PreparedProtocolOutputs {
                         conn,
                         owner,
                         source_document,
-                        worker,
                         *info,
                     )
                     .await

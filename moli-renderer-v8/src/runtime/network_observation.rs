@@ -81,6 +81,13 @@ impl RendererNetworkSource {
 pub enum RendererNetworkOutputItem {
     Resource(Arc<ScriptNetworkOutputItem>),
     ChildDocument(Arc<ChildFrameDocumentNetworkActivitySnapshot>),
+    WorkerFetch {
+        policy_document: Option<(
+            super::RendererOwnerLocalHostId,
+            super::RendererDocumentToken,
+        )>,
+        pause: super::RendererWorkerFetchPause,
+    },
 }
 
 impl From<ScriptNetworkOutputItem> for RendererNetworkOutputItem {
@@ -94,6 +101,7 @@ impl RendererNetworkOutputItem {
         match self {
             Self::Resource(item) => item.renderer_transport_charge_bytes(),
             Self::ChildDocument(item) => item.renderer_transport_charge_bytes(),
+            Self::WorkerFetch { pause, .. } => pause.renderer_transport_charge_bytes(),
         }
     }
 }
@@ -299,6 +307,18 @@ impl RendererNetworkCommit {
     }
 }
 
+impl Drop for RendererNetworkCommit {
+    fn drop(&mut self) {
+        if self.committed.borrow().is_none()
+            && let RendererNetworkOutputItem::WorkerFetch { pause, .. } = &self.occurrence.item
+        {
+            // The source journal can outlive a rejected native input. Its
+            // observation must not retain an unowned request decision.
+            pause.release();
+        }
+    }
+}
+
 type NetworkHandler = Box<dyn Fn(RendererNetworkInput) + Send + Sync>;
 
 /// A producer bound before a Worker thread starts. Its parent carries only the
@@ -310,6 +330,23 @@ pub(crate) struct RendererWorkerNetworkReporter {
 }
 
 impl RendererWorkerNetworkReporter {
+    pub(crate) fn report_pause(
+        &self,
+        pause: super::RendererWorkerFetchPause,
+        policy_document: Option<(
+            super::RendererOwnerLocalHostId,
+            super::RendererDocumentToken,
+        )>,
+    ) -> RendererNetworkObservation {
+        self.reporter.report_source(
+            RendererNetworkSource::Worker(self.source.clone()),
+            RendererNetworkOutputItem::WorkerFetch {
+                policy_document,
+                pause,
+            },
+        )
+    }
+
     pub(crate) fn identity(&self) -> &RendererWorkerIdentity {
         &self.source
     }

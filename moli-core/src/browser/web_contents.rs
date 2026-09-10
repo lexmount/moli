@@ -126,8 +126,7 @@ impl WebContents {
         self.session_storage = namespace;
     }
 
-    #[cfg(any(test, feature = "test-support"))]
-    pub fn fetch_subresource_interception(
+    pub(in crate::browser) fn fetch_subresource_interception(
         &self,
     ) -> (bool, Option<crate::page::SubresourceResourceType>) {
         self.fetch_subresource_interception

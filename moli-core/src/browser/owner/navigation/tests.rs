@@ -1017,6 +1017,143 @@ async fn native_shared_worker_network_completes_before_retirement_without_devtoo
 }
 
 #[tokio::test]
+async fn native_shared_worker_request_pause_releases_when_policy_document_closes() {
+    shared_worker_pause_survives_observer_retirement(false).await;
+}
+
+#[tokio::test]
+async fn native_shared_worker_response_pause_releases_when_policy_document_closes() {
+    shared_worker_pause_survives_observer_retirement(true).await;
+}
+
+async fn shared_worker_pause_survives_observer_retirement(response_stage: bool) {
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let url = format!("http://{}/page", listener.local_addr().unwrap());
+    let server = tokio::spawn(async move {
+        let script = "data:text/javascript,const ports=[];onconnect=async e=>{const p=e.ports[0];ports.push(p);p.start();if(ports.length===2){const r=await fetch('data:text/plain,native-release');const text=await r.text();for(const port of ports)port.postMessage(text);}};";
+        let html = format!(
+            "<!doctype html><script>const worker=new SharedWorker({script:?},'native-pause');worker.port.onmessage=e=>document.title=e.data;worker.port.start();</script>"
+        );
+        for _ in 0..2 {
+            let (mut stream, _) = listener.accept().await.unwrap();
+            let mut request = Vec::new();
+            let mut byte = [0];
+            while !request.ends_with(b"\r\n\r\n") {
+                stream.read_exact(&mut byte).await.unwrap();
+                request.push(byte[0]);
+            }
+            stream.write_all(format!("HTTP/1.1 200 OK\r\nContent-Type: text/html\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{html}", html.len()).as_bytes()).await.unwrap();
+        }
+    });
+    let service = BrowserService::start().unwrap();
+    let browser = service.handle();
+    let (context, contents) = context_with_contents(&service);
+    context
+        .install_web_contents_fetch_interception_policy(
+            contents,
+            true,
+            Some(crate::page::SubresourceResourceType::Fetch),
+        )
+        .unwrap();
+    let (_, mut events) = browser.subscribe().unwrap();
+    let document = navigate(&context, contents, &url).await;
+    let (peer, _) = context.create_web_contents(Default::default()).unwrap();
+    let peer_document = navigate(&context, peer, &url).await;
+    let mut pause = tokio::time::timeout(std::time::Duration::from_secs(5), async {
+        loop {
+            if let BrowserEvent::WorkerFetchPaused(pause) = events.recv().await.unwrap().event {
+                break pause;
+            }
+        }
+    })
+    .await
+    .expect("the real SharedWorker must pause without any Protocol consumer");
+    assert_eq!(pause.document, document);
+    assert!(matches!(
+        pause.pause.stage(),
+        crate::page::RendererWorkerFetchStage::Request(_)
+    ));
+    if response_stage {
+        context
+            .start_worker_fetch_decision(
+                pause,
+                crate::page::WorkerFetchDecision::ContinueRequest {
+                    url: None,
+                    method: None,
+                    body: None,
+                    headers: None,
+                    intercept_response: true,
+                    handle_auth_requests: false,
+                },
+            )
+            .unwrap()
+            .wait()
+            .await
+            .unwrap();
+        pause = tokio::time::timeout(std::time::Duration::from_secs(5), async {
+            loop {
+                if let BrowserEvent::WorkerFetchPaused(pause) = events.recv().await.unwrap().event {
+                    break pause;
+                }
+            }
+        })
+        .await
+        .expect("the response stage must be owned by the physical Worker");
+        assert!(matches!(
+            pause.pause.stage(),
+            crate::page::RendererWorkerFetchStage::Response(_)
+        ));
+    }
+    let snapshot = browser.subscribe().unwrap().0;
+    assert_eq!(snapshot.worker_fetch_pauses, vec![pause.clone()]);
+    assert!(matches!(
+        pause.worker,
+        crate::browser::WorkerHandle::Shared { .. }
+    ));
+    context
+        .close_web_contents(contents)
+        .unwrap()
+        .close_async()
+        .await;
+    assert!(
+        !pause.pause.is_available(),
+        "retained snapshots must not keep retired policy authority alive"
+    );
+    assert!(
+        context
+            .start_worker_fetch_decision(
+                pause.clone(),
+                crate::page::WorkerFetchDecision::Fail("stale".into())
+            )
+            .is_err()
+    );
+    tokio::time::timeout(std::time::Duration::from_secs(5), async {
+        loop {
+            assert_eq!(context.document_handle(peer).unwrap(), Some(peer_document));
+            let (index, history) = context.navigation_history_snapshot(peer).unwrap();
+            if history[index].title == "native-release" {
+                break;
+            }
+            events.recv().await.unwrap();
+        }
+    })
+    .await
+    .expect("the surviving client's script must receive the released response");
+    let snapshot = browser.subscribe().unwrap().0;
+    assert!(snapshot.worker_fetch_pauses.is_empty());
+    assert!(
+        snapshot
+            .workers
+            .iter()
+            .any(|worker| worker.handle() == pause.worker)
+    );
+    assert!(snapshot.network_requests.iter().any(|request| request.owner == crate::browser::NetworkOwner::Worker(pause.worker)
+        && matches!(&request.state, crate::browser::NetworkRequestState::Recorded(record) if record.url().as_str() == "data:text/plain,native-release")));
+    service.shutdown();
+    server.await.unwrap();
+}
+
+#[tokio::test]
 async fn native_shared_worker_network_xhr_success_and_fetch_failure_without_devtools() {
     for (script, url, success) in [
         (

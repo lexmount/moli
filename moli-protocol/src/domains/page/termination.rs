@@ -269,6 +269,10 @@ async fn fail_pending_fetch_state_for_owner_background_events_async(
         merge_renderer_output_predecessor(&mut renderer_output_predecessor, predecessor);
     }
     for (_, pending) in pending_subresource_fetches {
+        if let Some(pause) = pending.residence.worker() {
+            pause.pause.release();
+            continue;
+        }
         if !conn.pending_subresource_fetch_request_residence_is_current(&pending) {
             continue;
         }
@@ -295,7 +299,11 @@ async fn fail_pending_fetch_state_for_owner_background_events_async(
         }
     }
     for (_, pending) in pending_subresource_auths {
-        if !conn.target_page_residence_identity_is_current(&pending.page_owner) {
+        if let Some(pause) = pending.residence.worker() {
+            pause.pause.release();
+            continue;
+        }
+        if !conn.subresource_fetch_residence_is_current(&pending.residence) {
             continue;
         }
         match conn
@@ -318,7 +326,11 @@ async fn fail_pending_fetch_state_for_owner_background_events_async(
         }
     }
     for (_, pending) in pending_subresource_responses {
-        if !conn.target_page_residence_identity_is_current(&pending.page_owner) {
+        if let Some(pause) = pending.residence.worker() {
+            pause.pause.release();
+            continue;
+        }
+        if !conn.subresource_fetch_residence_is_current(&pending.residence) {
             continue;
         }
         match conn

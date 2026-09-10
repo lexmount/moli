@@ -4664,7 +4664,7 @@ self.addEventListener("message", event => {
                 }
                 crate::worker::WorkerToParentMessage::ServiceWorkerShowNotification(request) => {
                     service.finish_show_notification_requested(
-                        request,
+                        *request,
                         stale_run.clone(),
                         host.clone(),
                     );

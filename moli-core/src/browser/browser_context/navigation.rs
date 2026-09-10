@@ -111,6 +111,10 @@ impl BrowserContext {
         &mut self,
         handle: WebContentsHandle,
     ) -> Result<RetiringDocument, String> {
+        if let Some(document) = self.document_handle(handle)? {
+            self.network_requests
+                .release_worker_pauses_for_document(document);
+        }
         Ok(RetiringDocument::from_page(
             self.web_contents_mut(handle)?.replace_document(None),
         ))

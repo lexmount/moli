@@ -36,9 +36,8 @@ use crate::{
         style_engine::MoliStyleEngine,
         text_codec::TextCodecStore,
         types::{
-            BroadcastChannelId, DedicatedWorkerId, ImageRequestKey,
-            InFlightWorkerSubresourceFetchState, MessagePortId, NetworkBodySourceId,
-            PendingSubresourceAuthState, PendingSubresourceFetchState,
+            BroadcastChannelId, DedicatedWorkerId, ImageRequestKey, MessagePortId,
+            NetworkBodySourceId, PendingSubresourceAuthState, PendingSubresourceFetchState,
             PendingSubresourceResponseState, PendingWebSocketResponseState,
             RunningSubresourceFetchState, ScriptErrorConstructorKind, ScriptNetworkOutputItem,
             StreamingSubresourceFetchState, SubresourceResourceType,
@@ -1054,7 +1053,6 @@ pub(crate) struct JsContextHost {
     pending_subresource_fetch_infos: Vec<PendingSubresourceFetchInfo>,
     running_subresource_fetches: HashMap<u64, RunningSubresourceFetchState>,
     streaming_subresource_fetches: HashMap<u64, StreamingSubresourceFetchState>,
-    in_flight_worker_subresource_fetches: HashMap<u64, InFlightWorkerSubresourceFetchState>,
     #[cfg(test)]
     pending_subresource_continue_events: Vec<PendingSubresourceContinueEvent>,
     pub(crate) pending_network_body_sources:

@@ -1678,7 +1678,14 @@ impl RendererPageTaskProducerRoutes {
         &self,
         root_document: RendererDocumentToken,
     ) -> RendererWorkerHostBridgeEventSender {
-        RendererWorkerHostBridgeEventSender::new(self.networking.clone(), root_document)
+        RendererWorkerHostBridgeEventSender::new(
+            self.networking.clone(),
+            root_document,
+            self.dedicated_worker_client_event
+                .sender(root_document)
+                .page_token()
+                .local_host_id(),
+        )
     }
 
     pub(crate) fn webcrypto_task_sender(

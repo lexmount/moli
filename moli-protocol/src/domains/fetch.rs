@@ -56,7 +56,7 @@ use params::EnableParams;
 use patterns::supported_pattern_config;
 pub(crate) use subresource::{
     detached_parser_script_fetch_pause_prepared_outputs_for_renderer_record_async,
-    emit_subresource_fetch_pause_outputs,
+    emit_subresource_fetch_pause_outputs, native_worker_fetch_prepared_outputs,
     subresource_fetch_pause_prepared_outputs_for_renderer_record_async,
 };
 
@@ -199,6 +199,10 @@ enum PendingFetchCommandKind {
 enum PendingFetchCommandOperation {
     Ready,
     DocumentFetch(Result<PendingDocumentFetchCommand, String>),
+    WorkerFetch {
+        pending: moli_core::page::PendingWorkerFetchDecision,
+        outcome: DocumentFetchCommandOutcome,
+    },
     MaterializeResponseBody {
         request_id: String,
         transfer: Box<crate::conn::PausedDocumentTransfer>,
@@ -208,7 +212,7 @@ enum PendingFetchCommandOperation {
 
 enum CompletedFetchCommandOperation {
     Ready,
-    DocumentFetch(Box<Result<CompletedDocumentFetchCommand, String>>),
+    Fetch(Result<CompletedFetchExecution, String>),
     MaterializeResponseBody {
         request_id: String,
         result: Box<
@@ -218,6 +222,41 @@ enum CompletedFetchCommandOperation {
             >,
         >,
     },
+}
+
+enum CompletedFetchExecution {
+    Document(Box<CompletedDocumentFetchCommand>),
+    Worker(DocumentFetchCommandOutcome),
+}
+
+impl CompletedFetchExecution {
+    fn renderer_output_predecessor(&self) -> Option<moli_core::RendererOutputFence> {
+        match self {
+            Self::Document(completion) => completion.renderer_output_predecessor(),
+            Self::Worker(_) => None,
+        }
+    }
+
+    fn finish(self, conn: &mut CdpConnection) -> Result<DocumentFetchCommandOutcome, String> {
+        match self {
+            Self::Document(completion) => conn.finish_document_fetch_command(*completion),
+            Self::Worker(outcome) => Ok(outcome),
+        }
+    }
+}
+
+fn start_subresource_fetch_command(
+    conn: &CdpConnection,
+    owner: &CommandOwnerScope,
+    residence: &crate::conn::PendingSubresourceFetchResidence,
+    command: DocumentFetchCommand,
+) -> Result<PendingFetchCommandOperation, String> {
+    if let Some(pause) = residence.worker() {
+        let (pending, outcome) = conn.start_worker_fetch_decision(pause, command)?;
+        return Ok(PendingFetchCommandOperation::WorkerFetch { pending, outcome });
+    }
+    start_document_fetch_command_for_owner(conn, owner, command)
+        .map(|pending| PendingFetchCommandOperation::DocumentFetch(Ok(pending)))
 }
 
 fn start_document_fetch_command_for_owner(
@@ -231,10 +270,10 @@ fn start_document_fetch_command_for_owner(
 
 fn finish_document_fetch_command(
     conn: &mut CdpConnection,
-    completed: Option<Result<CompletedDocumentFetchCommand, String>>,
+    completed: Option<Result<CompletedFetchExecution, String>>,
 ) -> Result<DocumentFetchCommandOutcome, String> {
     let completion = completed.ok_or_else(|| "Missing renderer completion".to_owned())??;
-    conn.finish_document_fetch_command(completion)
+    completion.finish(conn)
 }
 
 type FetchDisablePendingState = (
@@ -347,10 +386,20 @@ impl PendingFetchCommandDispatch {
         let completed = match self.pending {
             PendingFetchCommandOperation::Ready => CompletedFetchCommandOperation::Ready,
             PendingFetchCommandOperation::DocumentFetch(pending) => {
-                CompletedFetchCommandOperation::DocumentFetch(Box::new(match pending {
-                    Ok(pending) => Ok(pending.wait().await),
+                CompletedFetchCommandOperation::Fetch(match pending {
+                    Ok(pending) => Ok(CompletedFetchExecution::Document(Box::new(
+                        pending.wait().await,
+                    ))),
                     Err(error) => Err(error),
-                }))
+                })
+            }
+            PendingFetchCommandOperation::WorkerFetch { pending, outcome } => {
+                CompletedFetchCommandOperation::Fetch(
+                    pending
+                        .wait()
+                        .await
+                        .map(|()| CompletedFetchExecution::Worker(outcome)),
+                )
             }
             PendingFetchCommandOperation::MaterializeResponseBody {
                 request_id,
@@ -383,20 +432,17 @@ impl CompletedFetchCommandDispatch {
 impl CompletedFetchCommandOperation {
     fn renderer_output_predecessor(&self) -> Option<moli_core::RendererOutputFence> {
         match self {
-            Self::DocumentFetch(completed) => completed
-                .as_ref()
+            Self::Fetch(completed) => completed
                 .as_ref()
                 .ok()
-                .and_then(CompletedDocumentFetchCommand::renderer_output_predecessor),
+                .and_then(CompletedFetchExecution::renderer_output_predecessor),
             Self::Ready | Self::MaterializeResponseBody { .. } => None,
         }
     }
 
-    fn into_document_fetch_completion(
-        self,
-    ) -> Option<Result<CompletedDocumentFetchCommand, String>> {
+    fn into_document_fetch_completion(self) -> Option<Result<CompletedFetchExecution, String>> {
         match self {
-            Self::DocumentFetch(completed) => Some(*completed),
+            Self::Fetch(completed) => Some(completed),
             Self::Ready | Self::MaterializeResponseBody { .. } => None,
         }
     }
@@ -908,7 +954,7 @@ fn complete_fetch_config_update_command(
         Ok(completion) => completion,
         Err(error) => return CommandOutputPlan::error(-32000, error),
     };
-    let finish = conn.finish_document_fetch_command(completion);
+    let finish = completion.finish(conn);
     match finish {
         Ok(_) => CommandOutputPlan::from_devtools_result(result),
         Err(error) => CommandOutputPlan::error(-32000, error),
@@ -942,14 +988,14 @@ fn start_disable_command(conn: &mut CdpConnection, cmd: &Cmd<'_>) -> FetchComman
 async fn complete_disable_command_async(
     conn: &mut CdpConnection,
     owner: &CommandOwnerScope,
-    completed: Option<Result<CompletedDocumentFetchCommand, String>>,
+    completed: Option<Result<CompletedFetchExecution, String>>,
     pending_fetch_state: FetchDisablePendingState,
     out: &mut FetchCommandOutput,
 ) {
     let renderer_result = completed
         .map(|completion| {
             let completion = completion?;
-            conn.finish_document_fetch_command(completion).map(drop)
+            completion.finish(conn).map(drop)
         })
         .transpose();
     match renderer_result {

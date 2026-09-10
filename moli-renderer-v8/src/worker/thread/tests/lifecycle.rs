@@ -1941,9 +1941,7 @@ async fn dispatch_service_worker_fetch_event_and_handled_console_for_test(
             }
             WorkerToParentMessage::Post(_)
             | WorkerToParentMessage::Network(_)
-            | WorkerToParentMessage::PendingSubresourceFetch(_)
-            | WorkerToParentMessage::PendingSubresourceFetchCanceled { .. }
-            | WorkerToParentMessage::SubresourceContinue(_)
+            | WorkerToParentMessage::FetchInterception(_)
             | WorkerToParentMessage::WebSocketSubresource(_)
             | WorkerToParentMessage::WebSocketLifecycle(_)
             | WorkerToParentMessage::WebSocketFrame(_)
@@ -2167,9 +2165,7 @@ async fn service_worker_fetch_handler_throw_without_respond_with_still_falls_bac
             WorkerToParentMessage::Console(_)
             | WorkerToParentMessage::RuntimeInspectorMessages(_)
             | WorkerToParentMessage::Network(_)
-            | WorkerToParentMessage::PendingSubresourceFetch(_)
-            | WorkerToParentMessage::PendingSubresourceFetchCanceled { .. }
-            | WorkerToParentMessage::SubresourceContinue(_)
+            | WorkerToParentMessage::FetchInterception(_)
             | WorkerToParentMessage::WebSocketSubresource(_)
             | WorkerToParentMessage::WebSocketLifecycle(_)
             | WorkerToParentMessage::WebSocketFrame(_) => {}
@@ -2341,9 +2337,7 @@ async fn service_worker_fetch_respond_with_readable_stream_body_posts_stream_chu
             }
             WorkerToParentMessage::Post(_)
             | WorkerToParentMessage::Network(_)
-            | WorkerToParentMessage::PendingSubresourceFetch(_)
-            | WorkerToParentMessage::PendingSubresourceFetchCanceled { .. }
-            | WorkerToParentMessage::SubresourceContinue(_)
+            | WorkerToParentMessage::FetchInterception(_)
             | WorkerToParentMessage::WebSocketSubresource(_)
             | WorkerToParentMessage::WebSocketLifecycle(_)
             | WorkerToParentMessage::WebSocketFrame(_)
@@ -3076,9 +3070,7 @@ async fn service_worker_fetch_event_request_signal_aborts_with_parent_reason() {
             WorkerToParentMessage::Console(_)
             | WorkerToParentMessage::RuntimeInspectorMessages(_)
             | WorkerToParentMessage::Network(_)
-            | WorkerToParentMessage::PendingSubresourceFetch(_)
-            | WorkerToParentMessage::PendingSubresourceFetchCanceled { .. }
-            | WorkerToParentMessage::SubresourceContinue(_)
+            | WorkerToParentMessage::FetchInterception(_)
             | WorkerToParentMessage::WebSocketSubresource(_)
             | WorkerToParentMessage::WebSocketLifecycle(_)
             | WorkerToParentMessage::WebSocketFrame(_) => {}
@@ -3292,9 +3284,7 @@ async fn service_worker_fetch_respond_with_keeps_response_when_handler_throws_af
             WorkerToParentMessage::Console(_)
             | WorkerToParentMessage::RuntimeInspectorMessages(_)
             | WorkerToParentMessage::Network(_)
-            | WorkerToParentMessage::PendingSubresourceFetch(_)
-            | WorkerToParentMessage::PendingSubresourceFetchCanceled { .. }
-            | WorkerToParentMessage::SubresourceContinue(_)
+            | WorkerToParentMessage::FetchInterception(_)
             | WorkerToParentMessage::WebSocketSubresource(_)
             | WorkerToParentMessage::WebSocketLifecycle(_)
             | WorkerToParentMessage::WebSocketFrame(_) => {}
@@ -4377,9 +4367,7 @@ async fn service_worker_skip_waiting_posts_runtime_request() {
                 panic!("unexpected service worker error: {message}");
             }
             WorkerToParentMessage::Network(_)
-            | WorkerToParentMessage::PendingSubresourceFetch(_)
-            | WorkerToParentMessage::PendingSubresourceFetchCanceled { .. }
-            | WorkerToParentMessage::SubresourceContinue(_)
+            | WorkerToParentMessage::FetchInterception(_)
             | WorkerToParentMessage::WebSocketSubresource(_)
             | WorkerToParentMessage::WebSocketLifecycle(_)
             | WorkerToParentMessage::WebSocketFrame(_)
@@ -4467,9 +4455,7 @@ async fn service_worker_clients_claim_posts_runtime_request() {
                 panic!("unexpected service worker error: {message}");
             }
             WorkerToParentMessage::Network(_)
-            | WorkerToParentMessage::PendingSubresourceFetch(_)
-            | WorkerToParentMessage::PendingSubresourceFetchCanceled { .. }
-            | WorkerToParentMessage::SubresourceContinue(_)
+            | WorkerToParentMessage::FetchInterception(_)
             | WorkerToParentMessage::WebSocketSubresource(_)
             | WorkerToParentMessage::WebSocketLifecycle(_)
             | WorkerToParentMessage::WebSocketFrame(_)
@@ -4736,9 +4722,7 @@ async fn service_worker_clients_match_all_and_get_resolve_from_parent_query_resu
             | WorkerToParentMessage::ServiceWorkerSkipWaiting { .. }
             | WorkerToParentMessage::ServiceWorkerClientsClaim { .. }
             | WorkerToParentMessage::Network(_)
-            | WorkerToParentMessage::PendingSubresourceFetch(_)
-            | WorkerToParentMessage::PendingSubresourceFetchCanceled { .. }
-            | WorkerToParentMessage::SubresourceContinue(_)
+            | WorkerToParentMessage::FetchInterception(_)
             | WorkerToParentMessage::WebSocketSubresource(_)
             | WorkerToParentMessage::WebSocketLifecycle(_)
             | WorkerToParentMessage::WebSocketFrame(_)
@@ -5048,9 +5032,7 @@ self.addEventListener("message", event => {
             | WorkerToParentMessage::ServiceWorkerSkipWaiting { .. }
             | WorkerToParentMessage::ServiceWorkerClientsClaim { .. }
             | WorkerToParentMessage::Network(_)
-            | WorkerToParentMessage::PendingSubresourceFetch(_)
-            | WorkerToParentMessage::PendingSubresourceFetchCanceled { .. }
-            | WorkerToParentMessage::SubresourceContinue(_)
+            | WorkerToParentMessage::FetchInterception(_)
             | WorkerToParentMessage::WebSocketSubresource(_)
             | WorkerToParentMessage::WebSocketLifecycle(_)
             | WorkerToParentMessage::WebSocketFrame(_)
@@ -5194,9 +5176,7 @@ self.addEventListener("message", event => {
             | WorkerToParentMessage::ServiceWorkerSkipWaiting { .. }
             | WorkerToParentMessage::ServiceWorkerClientsClaim { .. }
             | WorkerToParentMessage::Network(_)
-            | WorkerToParentMessage::PendingSubresourceFetch(_)
-            | WorkerToParentMessage::PendingSubresourceFetchCanceled { .. }
-            | WorkerToParentMessage::SubresourceContinue(_)
+            | WorkerToParentMessage::FetchInterception(_)
             | WorkerToParentMessage::WebSocketSubresource(_)
             | WorkerToParentMessage::WebSocketLifecycle(_)
             | WorkerToParentMessage::WebSocketFrame(_)
@@ -5408,9 +5388,7 @@ self.addEventListener("message", event => {
             | WorkerToParentMessage::ServiceWorkerSkipWaiting { .. }
             | WorkerToParentMessage::ServiceWorkerClientsClaim { .. }
             | WorkerToParentMessage::Network(_)
-            | WorkerToParentMessage::PendingSubresourceFetch(_)
-            | WorkerToParentMessage::PendingSubresourceFetchCanceled { .. }
-            | WorkerToParentMessage::SubresourceContinue(_)
+            | WorkerToParentMessage::FetchInterception(_)
             | WorkerToParentMessage::WebSocketSubresource(_)
             | WorkerToParentMessage::WebSocketLifecycle(_)
             | WorkerToParentMessage::WebSocketFrame(_)
@@ -5554,9 +5532,7 @@ self.addEventListener("message", event => {
             | WorkerToParentMessage::ServiceWorkerSkipWaiting { .. }
             | WorkerToParentMessage::ServiceWorkerClientsClaim { .. }
             | WorkerToParentMessage::Network(_)
-            | WorkerToParentMessage::PendingSubresourceFetch(_)
-            | WorkerToParentMessage::PendingSubresourceFetchCanceled { .. }
-            | WorkerToParentMessage::SubresourceContinue(_)
+            | WorkerToParentMessage::FetchInterception(_)
             | WorkerToParentMessage::WebSocketSubresource(_)
             | WorkerToParentMessage::WebSocketLifecycle(_)
             | WorkerToParentMessage::WebSocketFrame(_)
@@ -5773,9 +5749,7 @@ self.addEventListener("message", event => {
             | WorkerToParentMessage::ServiceWorkerSkipWaiting { .. }
             | WorkerToParentMessage::ServiceWorkerClientsClaim { .. }
             | WorkerToParentMessage::Network(_)
-            | WorkerToParentMessage::PendingSubresourceFetch(_)
-            | WorkerToParentMessage::PendingSubresourceFetchCanceled { .. }
-            | WorkerToParentMessage::SubresourceContinue(_)
+            | WorkerToParentMessage::FetchInterception(_)
             | WorkerToParentMessage::WebSocketSubresource(_)
             | WorkerToParentMessage::WebSocketLifecycle(_)
             | WorkerToParentMessage::WebSocketFrame(_)
@@ -7234,9 +7208,7 @@ self.addEventListener("notificationclick", event => {
             | WorkerToParentMessage::ServiceWorkerSkipWaiting { .. }
             | WorkerToParentMessage::ServiceWorkerClientsClaim { .. }
             | WorkerToParentMessage::Network(_)
-            | WorkerToParentMessage::PendingSubresourceFetch(_)
-            | WorkerToParentMessage::PendingSubresourceFetchCanceled { .. }
-            | WorkerToParentMessage::SubresourceContinue(_)
+            | WorkerToParentMessage::FetchInterception(_)
             | WorkerToParentMessage::WebSocketSubresource(_)
             | WorkerToParentMessage::WebSocketLifecycle(_)
             | WorkerToParentMessage::WebSocketFrame(_)
@@ -7396,9 +7368,7 @@ self.addEventListener("notificationclose", event => {
             | WorkerToParentMessage::ServiceWorkerSkipWaiting { .. }
             | WorkerToParentMessage::ServiceWorkerClientsClaim { .. }
             | WorkerToParentMessage::Network(_)
-            | WorkerToParentMessage::PendingSubresourceFetch(_)
-            | WorkerToParentMessage::PendingSubresourceFetchCanceled { .. }
-            | WorkerToParentMessage::SubresourceContinue(_)
+            | WorkerToParentMessage::FetchInterception(_)
             | WorkerToParentMessage::WebSocketSubresource(_)
             | WorkerToParentMessage::WebSocketLifecycle(_)
             | WorkerToParentMessage::WebSocketFrame(_)
@@ -9644,9 +9614,7 @@ async fn worker_error_report_ignores_throwing_accessors() {
         }
         WorkerToParentMessage::Post(_) => panic!("expected worker error"),
         WorkerToParentMessage::Network(_)
-        | WorkerToParentMessage::PendingSubresourceFetch(_)
-        | WorkerToParentMessage::PendingSubresourceFetchCanceled { .. }
-        | WorkerToParentMessage::SubresourceContinue(_)
+        | WorkerToParentMessage::FetchInterception(_)
         | WorkerToParentMessage::WebSocketSubresource(_)
         | WorkerToParentMessage::WebSocketLifecycle(_)
         | WorkerToParentMessage::WebSocketFrame(_)

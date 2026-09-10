@@ -439,7 +439,6 @@ impl JsContextHost {
             pending_subresource_fetch_infos: Vec::new(),
             running_subresource_fetches: HashMap::new(),
             streaming_subresource_fetches: HashMap::new(),
-            in_flight_worker_subresource_fetches: HashMap::new(),
             #[cfg(test)]
             pending_subresource_continue_events: Vec::new(),
             pending_network_body_sources: HashMap::new(),

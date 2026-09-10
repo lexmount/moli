@@ -26,8 +26,6 @@ mod loading;
 mod matching;
 mod owner_wake;
 mod pump;
-mod resource_commands;
-mod resource_routing;
 mod routing;
 mod service;
 mod service_lane;

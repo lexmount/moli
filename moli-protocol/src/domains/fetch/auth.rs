@@ -1,7 +1,6 @@
 use crate::conn::{
-    BackgroundProtocolEvent, CdpConnection, Cmd, CommandOwnerScope, CompletedDocumentFetchCommand,
-    DocumentFetchCommand, PendingFetchAuthNavigation, PendingSubresourceFetchAuthRequest,
-    PendingSubresourceFetchRequest,
+    BackgroundProtocolEvent, CdpConnection, Cmd, CommandOwnerScope, DocumentFetchCommand,
+    PendingFetchAuthNavigation, PendingSubresourceFetchAuthRequest, PendingSubresourceFetchRequest,
 };
 use crate::devtools_runtime::{
     DevToolsAuthChallengeAction, DevToolsCommand, DevToolsContinueWithAuthCommand,
@@ -10,7 +9,6 @@ use crate::devtools_runtime::{
 use crate::domains::activity;
 use crate::domains::command_output::CommandOutputPlan;
 
-use super::PendingFetchCommandOperation;
 use super::helpers::{
     pending_fetch_auth_navigation_required_event, pending_subresource_auth_required_event,
     request_auth_for_challenge,
@@ -175,8 +173,12 @@ pub(super) fn start_devtools_continue_with_auth_command_for_pending(
                     },
                     DevToolsAuthChallengeAction::ProvideCredentials => unreachable!(),
                 };
-                let pending_page =
-                    super::start_document_fetch_command_for_owner(conn, owner, browser_command);
+                let pending_page = super::start_subresource_fetch_command(
+                    conn,
+                    owner,
+                    &pending.residence,
+                    browser_command,
+                );
                 let pending_page = match pending_page {
                     Ok(pending_page) => pending_page,
                     Err(error) => {
@@ -213,7 +215,7 @@ pub(super) fn start_devtools_continue_with_auth_command_for_pending(
                         PendingFetchCommandKind::ContinueWithAuth {
                             state: Box::new(state),
                         },
-                        PendingFetchCommandOperation::DocumentFetch(Ok(pending_page)),
+                        pending_page,
                     ),
                 ));
             }
@@ -252,9 +254,10 @@ pub(super) fn start_devtools_continue_with_auth_command_for_pending(
                         )));
                     }
                 };
-                let pending_page = super::start_document_fetch_command_for_owner(
+                let pending_page = super::start_subresource_fetch_command(
                     conn,
                     owner,
+                    &pending.residence,
                     DocumentFetchCommand::ContinueAuth {
                         internal_id: pending.internal_id,
                         auth,
@@ -284,7 +287,7 @@ pub(super) fn start_devtools_continue_with_auth_command_for_pending(
                                 },
                             ),
                         },
-                        PendingFetchCommandOperation::DocumentFetch(Ok(pending_page)),
+                        pending_page,
                     ),
                 ));
             }
@@ -375,9 +378,7 @@ fn continued_subresource_request(
     pending: &PendingSubresourceFetchAuthRequest,
 ) -> PendingSubresourceFetchRequest {
     PendingSubresourceFetchRequest {
-        residence: crate::conn::PendingSubresourceFetchResidence::InstalledPage(
-            pending.page_owner.clone(),
-        ),
+        residence: pending.residence.clone(),
         owner_session_id: pending.owner_session_id.clone(),
         action_session_id: pending.action_session_id.clone(),
         owner_kind: pending.owner_kind,
@@ -522,7 +523,7 @@ fn next_chained_subresource_auth_required_event(
 pub(super) async fn complete_continue_with_auth_command_async(
     conn: &mut CdpConnection,
     owner: &CommandOwnerScope,
-    completed: Option<Result<CompletedDocumentFetchCommand, String>>,
+    completed: Option<Result<super::CompletedFetchExecution, String>>,
     state: PendingContinueWithAuthState,
     out: &mut FetchCommandOutput,
 ) {
@@ -559,7 +560,7 @@ pub(super) async fn complete_continue_with_auth_command_async(
 async fn complete_subresource_auth_terminal_async(
     conn: &mut CdpConnection,
     owner: &CommandOwnerScope,
-    completed: Option<Result<CompletedDocumentFetchCommand, String>>,
+    completed: Option<Result<super::CompletedFetchExecution, String>>,
     pending: crate::conn::PendingSubresourceFetchAuthRequest,
     correlation: Option<PreparedSubresourceCorrelation>,
     out: &mut FetchCommandOutput,
@@ -590,7 +591,7 @@ async fn complete_subresource_auth_terminal_async(
 
 fn finish_continue_subresource_auth(
     conn: &mut CdpConnection,
-    completed: Option<Result<CompletedDocumentFetchCommand, String>>,
+    completed: Option<Result<super::CompletedFetchExecution, String>>,
 ) -> Result<(), String> {
     super::finish_document_fetch_command(conn, completed)
         .and_then(crate::conn::DocumentFetchCommandOutcome::into_continue_outcome)

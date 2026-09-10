@@ -718,6 +718,29 @@ impl CompletedFetchResponseBodyStreamReadDispatch {
 pub(crate) enum PendingSubresourceFetchResidence {
     InstalledPage(super::state::TargetPageResidenceIdentity),
     DetachedParserScript(DetachedParserScriptFetchContinuation),
+    Worker {
+        observer: super::state::TargetPageResidenceIdentity,
+        pause: moli_core::browser::WorkerFetchPause,
+    },
+}
+
+impl PendingSubresourceFetchResidence {
+    pub(crate) fn observer(&self) -> Option<&super::state::TargetPageResidenceIdentity> {
+        match self {
+            Self::InstalledPage(owner)
+            | Self::Worker {
+                observer: owner, ..
+            } => Some(owner),
+            Self::DetachedParserScript(_) => None,
+        }
+    }
+
+    pub(crate) fn worker(&self) -> Option<&moli_core::browser::WorkerFetchPause> {
+        match self {
+            Self::Worker { pause, .. } => Some(pause),
+            _ => None,
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -737,24 +760,40 @@ pub struct PendingSubresourceFetchRequest {
 }
 
 impl PendingSubresourceFetchRequest {
-    pub(crate) fn installed_page_owner(
-        &self,
-    ) -> Option<&super::state::TargetPageResidenceIdentity> {
-        match &self.residence {
-            PendingSubresourceFetchResidence::InstalledPage(owner) => Some(owner),
-            PendingSubresourceFetchResidence::DetachedParserScript(_) => None,
-        }
+    pub(crate) fn continuation_key(&self) -> SubresourceFetchKey {
+        self.residence
+            .worker()
+            .map_or(SubresourceFetchKey::Document(self.internal_id), |pause| {
+                SubresourceFetchKey::Worker(pause.pause.handle())
+            })
+    }
+
+    pub(crate) fn observer_page_owner(&self) -> Option<&super::state::TargetPageResidenceIdentity> {
+        self.residence.observer()
     }
 
     pub(crate) fn detached_parser_script_fetch_continuation(
         &self,
     ) -> Option<&DetachedParserScriptFetchContinuation> {
         match &self.residence {
-            PendingSubresourceFetchResidence::InstalledPage(_) => None,
+            PendingSubresourceFetchResidence::InstalledPage(_)
+            | PendingSubresourceFetchResidence::Worker { .. } => None,
             PendingSubresourceFetchResidence::DetachedParserScript(continuation) => {
                 Some(continuation)
             }
         }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub(crate) enum SubresourceFetchKey {
+    Document(u64),
+    Worker(SubresourceNetworkRequestHandle),
+}
+
+impl From<u64> for SubresourceFetchKey {
+    fn from(id: u64) -> Self {
+        Self::Document(id)
     }
 }
 
@@ -857,8 +896,7 @@ pub(crate) enum ClaimedSubresourceContinueRequest {
 
 #[derive(Debug, Clone)]
 pub struct PendingSubresourceFetchAuthRequest {
-    /// Page residence that owns the paused renderer authentication request.
-    pub(crate) page_owner: super::state::TargetPageResidenceIdentity,
+    pub(crate) residence: PendingSubresourceFetchResidence,
     pub owner_session_id: Option<String>,
     pub action_session_id: Option<String>,
     pub owner_kind: PendingSubresourceFetchOwnerKind,
@@ -907,8 +945,7 @@ pub struct PendingSubresourceFetchAuthStage {
 
 #[derive(Debug, Clone)]
 pub struct PendingSubresourceFetchResponseRequest {
-    /// Page residence that owns the paused renderer response request.
-    pub(crate) page_owner: super::state::TargetPageResidenceIdentity,
+    pub(crate) residence: PendingSubresourceFetchResidence,
     pub owner_session_id: Option<String>,
     pub action_session_id: Option<String>,
     pub owner_kind: PendingSubresourceFetchOwnerKind,
@@ -980,6 +1017,105 @@ pub struct FetchAuthChallenge {
 }
 
 impl CdpConnection {
+    pub(crate) fn start_worker_fetch_decision(
+        &self,
+        pause: &moli_core::browser::WorkerFetchPause,
+        command: DocumentFetchCommand,
+    ) -> Result<
+        (
+            moli_core::page::PendingWorkerFetchDecision,
+            DocumentFetchCommandOutcome,
+        ),
+        String,
+    > {
+        use moli_core::page::WorkerFetchDecision as Decision;
+        let continued = matches!(
+            &command,
+            DocumentFetchCommand::ContinueRequest { .. }
+                | DocumentFetchCommand::ContinueAuth { .. }
+                | DocumentFetchCommand::CancelAuth { .. }
+        );
+        let decision = match command {
+            DocumentFetchCommand::ContinueRequest {
+                url,
+                method,
+                body,
+                headers,
+                intercept_response,
+                handle_auth_requests,
+                ..
+            } => Decision::ContinueRequest {
+                url,
+                method,
+                body,
+                headers,
+                intercept_response,
+                handle_auth_requests,
+            },
+            DocumentFetchCommand::ContinueAuth { auth, .. } => Decision::ProvideAuth(auth),
+            DocumentFetchCommand::CancelAuth { .. } => Decision::CancelAuth,
+            DocumentFetchCommand::ContinueResponse {
+                response_code,
+                response_headers,
+                ..
+            } => Decision::ContinueResponse {
+                response_code,
+                response_headers,
+            },
+            DocumentFetchCommand::FailAuth { error_text, .. }
+            | DocumentFetchCommand::FailRequest { error_text, .. }
+            | DocumentFetchCommand::FailResponse { error_text, .. } => Decision::Fail(error_text),
+            DocumentFetchCommand::FulfillRequest {
+                response_code,
+                response_headers,
+                response_body,
+                ..
+            }
+            | DocumentFetchCommand::FulfillResponse {
+                response_code,
+                response_headers,
+                response_body,
+                ..
+            } => Decision::Fulfill {
+                response_code,
+                response_headers,
+                response_body,
+            },
+            _ => return Err("Worker Fetch decision cannot control a WebSocket".into()),
+        };
+        let context = self
+            .browser
+            .context_handle(pause.document.web_contents().context())?;
+        let pending = context.start_worker_fetch_decision(pause.clone(), decision)?;
+        let outcome = if continued {
+            DocumentFetchCommandOutcome::Continued(PendingSubresourceContinueOutcome::Started)
+        } else {
+            DocumentFetchCommandOutcome::Complete
+        };
+        Ok((pending, outcome))
+    }
+
+    pub(crate) async fn execute_subresource_fetch_command(
+        &mut self,
+        owner: &CommandOwnerScope,
+        residence: &PendingSubresourceFetchResidence,
+        command: DocumentFetchCommand,
+    ) -> Result<
+        (
+            DocumentFetchCommandOutcome,
+            Option<moli_core::RendererOutputFence>,
+        ),
+        String,
+    > {
+        if let Some(pause) = residence.worker() {
+            let (pending, outcome) = self.start_worker_fetch_decision(pause, command)?;
+            pending.wait().await?;
+            return Ok((outcome, None));
+        }
+        self.execute_document_fetch_command_for_owner(owner, command)
+            .await
+    }
+
     async fn execute_document_fetch_command_for_owner(
         &mut self,
         owner: &CommandOwnerScope,

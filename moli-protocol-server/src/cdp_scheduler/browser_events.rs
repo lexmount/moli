@@ -99,6 +99,7 @@ impl CdpScheduler {
                         .await
                 }
                 BrowserEvent::WorkerCreated(_)
+                | BrowserEvent::WorkerFetchPaused(_)
                 | BrowserEvent::NetworkRequestStarted(_)
                 | BrowserEvent::NetworkRequestCompleted(_)
                 | BrowserEvent::NetworkActivity(_)

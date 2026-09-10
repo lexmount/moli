@@ -54,8 +54,8 @@ use super::{
     decode_data_url_script_source,
     handle::{
         WorkerConsoleMessage, WorkerFetchHandlerType, WorkerPendingFetchContinue,
-        WorkerPendingSubresourceFetch, WorkerPendingXhrContinue, WorkerToParentMessage,
-        WorkerWebSocketFrameEvent, WorkerWebSocketLifecycleEvent,
+        WorkerPendingXhrContinue, WorkerToParentMessage, WorkerWebSocketFrameEvent,
+        WorkerWebSocketLifecycleEvent,
     },
 };
 use crate::context_bootstrap::WebCryptoTaskResult;
@@ -94,10 +94,10 @@ use crate::network_host::{
 };
 use crate::opfs_task_result::OpfsTaskResult;
 use crate::protocol_types::{
-    PendingSubresourceAuthInfo, PendingSubresourceContinueEvent, PendingSubresourceFetchInfo,
-    PendingSubresourceResponseInfo, SubresourceNetworkRecord, SubresourceNetworkRequestHandle,
-    SubresourceResourceType, SubresourceResponseBody, SubresourceResponseBodyWriter,
-    WebSocketFrameDirection, WebSocketFrameOpcode,
+    PendingSubresourceAuthInfo, PendingSubresourceFetchInfo, PendingSubresourceResponseInfo,
+    SubresourceNetworkRecord, SubresourceNetworkRequestHandle, SubresourceResourceType,
+    SubresourceResponseBody, SubresourceResponseBodyWriter, WebSocketFrameDirection,
+    WebSocketFrameOpcode,
 };
 use crate::queue_microtask::worker_queue_microtask_callback;
 use crate::runtime::{
@@ -128,6 +128,7 @@ use crate::worker::abort::{
 mod content_security_policy;
 mod fetch;
 mod import_scripts;
+mod interception;
 mod timers;
 mod xhr;
 
@@ -138,6 +139,9 @@ pub(in crate::worker) use content_security_policy::{
 };
 pub(crate) use fetch::*;
 use import_scripts::*;
+pub(in crate::worker) use interception::{
+    decide_intercepted_worker_request, publish_worker_fetch_pause,
+};
 use timers::*;
 pub(crate) use xhr::*;
 
@@ -1221,6 +1225,7 @@ pub(super) struct PendingWorkerXhr {
 }
 
 pub(super) struct PendingWorkerCspReport {
+    handle: SubresourceNetworkRequestHandle,
     pub(super) load: ResourceLoadLease,
     pub(super) document_url: Url,
     pub(super) request: Request,
@@ -3466,7 +3471,7 @@ fn service_worker_registration_show_notification_callback<'s>(
     };
     if parent_tx
         .send(WorkerToParentMessage::ServiceWorkerShowNotification(
-            crate::runtime::ServiceWorkerShowNotification {
+            Box::new(crate::runtime::ServiceWorkerShowNotification {
                 request_id,
                 registration_id,
                 version_id,
@@ -3475,7 +3480,7 @@ fn service_worker_registration_show_notification_callback<'s>(
                 metadata: options.metadata,
                 actions: options.actions,
                 data: options.data,
-            },
+            }),
         ))
         .is_err()
     {

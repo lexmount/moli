@@ -53,10 +53,7 @@ impl RendererPageWorkerHostBridgeOwner {
 pub(crate) fn is_worker_host_bridge_message(message: &WorkerToParentMessage) -> bool {
     matches!(
         message,
-        WorkerToParentMessage::PendingSubresourceFetch(_)
-            | WorkerToParentMessage::PendingSubresourceFetchCanceled { .. }
-            | WorkerToParentMessage::SubresourceContinue(_)
-            | WorkerToParentMessage::WebSocketSubresource(_)
+        WorkerToParentMessage::WebSocketSubresource(_)
             | WorkerToParentMessage::WebSocketLifecycle(_)
             | WorkerToParentMessage::WebSocketFrame(_)
             | WorkerToParentMessage::Console(_)
@@ -109,17 +106,29 @@ pub(crate) struct RendererWorkerHostBridgeRouteClosed;
 #[derive(Clone, Debug)]
 pub(crate) struct RendererWorkerHostBridgeEventSender {
     route: RendererPageNetworkingRoute,
+    owner_local_host_id: crate::runtime::RendererOwnerLocalHostId,
     root_document: RendererDocumentToken,
 }
 
 impl RendererWorkerHostBridgeEventSender {
+    pub(crate) fn document_source(
+        &self,
+    ) -> (
+        crate::runtime::RendererOwnerLocalHostId,
+        RendererDocumentToken,
+    ) {
+        (self.owner_local_host_id, self.root_document)
+    }
+
     pub(crate) const fn new(
         route: RendererPageNetworkingRoute,
         root_document: RendererDocumentToken,
+        owner_local_host_id: crate::runtime::RendererOwnerLocalHostId,
     ) -> Self {
         Self {
             route,
             root_document,
+            owner_local_host_id,
         }
     }
 
@@ -229,7 +238,11 @@ mod tests {
             RendererOwnerWakeSender::new(wake_tx, page_token),
         );
         let expected_root = root_document(3);
-        let sender = RendererWorkerHostBridgeEventSender::new(source.route(), expected_root);
+        let sender = RendererWorkerHostBridgeEventSender::new(
+            source.route(),
+            expected_root,
+            crate::runtime::RendererOwnerLocalHostId::new_for_testing(0),
+        );
         let worker_id = dedicated_worker_id(8);
 
         sender
@@ -256,7 +269,11 @@ mod tests {
     #[test]
     fn dedicated_worker_terminal_stays_after_the_prior_bridge_burst() {
         let mut source = RendererPageNetworkingSource::new_for_test();
-        let sender = RendererWorkerHostBridgeEventSender::new(source.route(), root_document(1));
+        let sender = RendererWorkerHostBridgeEventSender::new(
+            source.route(),
+            root_document(1),
+            crate::runtime::RendererOwnerLocalHostId::new_for_testing(0),
+        );
         let worker_id = dedicated_worker_id(7);
 
         // Source-level fairness may yield after eight Page turns. Keeping the
@@ -266,9 +283,13 @@ mod tests {
             sender
                 .send(WorkerRuntimeEvent::Message {
                     worker_id,
-                    message: Box::new(WorkerToParentMessage::PendingSubresourceFetchCanceled {
-                        fetch_id,
-                    }),
+                    message: Box::new(WorkerToParentMessage::WebSocketLifecycle(
+                        crate::worker::WorkerWebSocketLifecycleEvent::Closing {
+                            socket_id: fetch_id,
+                            document_url: "https://worker-host-bridge.test/".parse().unwrap(),
+                            url: "wss://worker-host-bridge.test/socket".parse().unwrap(),
+                        },
+                    )),
                 })
                 .expect("DedicatedWorker host record should send");
         }
@@ -285,10 +306,7 @@ mod tests {
                 } if queued_worker_id == worker_id
                     && matches!(
                         message.as_ref(),
-                        WorkerToParentMessage::PendingSubresourceFetchCanceled {
-                            fetch_id,
-                            ..
-                        } if *fetch_id == expected_fetch_id
+                        WorkerToParentMessage::WebSocketLifecycle(crate::worker::WorkerWebSocketLifecycleEvent::Closing { socket_id: fetch_id, .. }) if *fetch_id == expected_fetch_id
                     )
             ));
         }
@@ -303,15 +321,23 @@ mod tests {
     #[test]
     fn shared_worker_target_is_not_inferred_from_dedicated_ids() {
         let mut source = RendererPageNetworkingSource::new_for_test();
-        let sender = RendererWorkerHostBridgeEventSender::new(source.route(), root_document(1));
+        let sender = RendererWorkerHostBridgeEventSender::new(
+            source.route(),
+            root_document(1),
+            crate::runtime::RendererOwnerLocalHostId::new_for_testing(0),
+        );
         let instance_id = SharedWorkerInstanceId::from_u64(7);
 
         sender
             .send(WorkerRuntimeEvent::SharedWorkerMessage {
                 instance_id,
-                message: Box::new(WorkerToParentMessage::PendingSubresourceFetchCanceled {
-                    fetch_id: 99,
-                }),
+                message: Box::new(WorkerToParentMessage::WebSocketLifecycle(
+                    crate::worker::WorkerWebSocketLifecycleEvent::Closing {
+                        socket_id: 99,
+                        document_url: "https://worker-host-bridge.test/".parse().unwrap(),
+                        url: "wss://worker-host-bridge.test/socket".parse().unwrap(),
+                    },
+                )),
             })
             .expect("SharedWorker host record should send");
 
@@ -325,7 +351,11 @@ mod tests {
     #[test]
     fn closed_page_route_rejects_worker_record_without_fallback() {
         let source = RendererPageNetworkingSource::new_for_test();
-        let sender = RendererWorkerHostBridgeEventSender::new(source.route(), root_document(1));
+        let sender = RendererWorkerHostBridgeEventSender::new(
+            source.route(),
+            root_document(1),
+            crate::runtime::RendererOwnerLocalHostId::new_for_testing(0),
+        );
         drop(source);
 
         assert!(

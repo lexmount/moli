@@ -1,10 +1,8 @@
 //! Worker-side message types and parent-facing handle.
 
-use crate::RendererSyntheticResponseBody;
 use crate::protocol_types::{
-    PendingSubresourceContinueEvent, PendingSubresourceFetchInfo, SubresourceAuthCredentials,
-    SubresourceNetworkRecord, SubresourceNetworkRequestHandle, SubresourceResourceType,
-    WebSocketFrameDirection, WebSocketFrameOpcode,
+    SubresourceAuthCredentials, SubresourceNetworkRecord, SubresourceNetworkRequestHandle,
+    SubresourceResourceType, WebSocketFrameDirection, WebSocketFrameOpcode,
 };
 use crate::runtime::{
     RendererRuntimeInspectorMessage, RendererRuntimeInspectorResponseSender,
@@ -35,7 +33,7 @@ use crate::structured_clone::V8StructuredClonePayload;
 use crate::types::{BroadcastChannelId, DedicatedWorkerId, MessagePortId, NetworkBodySourceId};
 use crate::worker::inspector_task_runner::{WorkerInspectorTaskMode, WorkerInspectorTaskRunner};
 use moli_crypto::sha256_hex;
-use moli_fetch::{RequestCredentialsMode, ResponseHead};
+use moli_fetch::ResponseHead;
 use moli_shared_worker::SharedWorkerInstanceId;
 use parking_lot::Mutex;
 use serde_json::Value;
@@ -164,94 +162,8 @@ pub(crate) enum WorkerMessage {
         enabled: bool,
         resource_type: Option<SubresourceResourceType>,
     },
-    /// Continue a worker-owned fetch() that was paused for Fetch domain interception.
-    ContinuePendingFetch(WorkerPendingFetchContinue),
-    /// Continue a worker-owned XHR that was paused for Fetch domain interception.
-    ContinuePendingXhr(WorkerPendingXhrContinue),
-    /// Continue a worker-owned CSP report that was paused for Fetch domain interception.
-    ContinuePendingCspReport(WorkerPendingFetchContinue),
-    /// Continue a worker-owned fetch() response that was paused for Fetch domain interception.
-    ContinuePendingFetchResponse {
-        request: WorkerPendingFetchContinue,
-        response_code: Option<u16>,
-        response_headers: Option<Vec<(String, String)>>,
-    },
-    /// Continue a worker-owned XHR response that was paused for Fetch domain interception.
-    ContinuePendingXhrResponse {
-        request: WorkerPendingXhrContinue,
-        response_code: Option<u16>,
-        response_headers: Option<Vec<(String, String)>>,
-    },
-    /// Fail a worker-owned fetch() that was paused for Fetch domain interception.
-    FailPendingFetch {
-        request: WorkerPendingFetchContinue,
-        error_text: String,
-    },
-    /// Fail a worker-owned XHR that was paused for Fetch domain interception.
-    FailPendingXhr {
-        request: WorkerPendingXhrContinue,
-        error_text: String,
-    },
-    /// Fail a worker-owned CSP report that was paused for Fetch domain interception.
-    FailPendingCspReport {
-        request: WorkerPendingFetchContinue,
-        error_text: String,
-    },
-    /// Fail a worker-owned fetch() that was paused for Fetch domain auth handling.
-    FailPendingFetchAuth {
-        request: WorkerPendingFetchContinue,
-        error_text: String,
-    },
-    /// Fail a worker-owned XHR that was paused for Fetch domain auth handling.
-    FailPendingXhrAuth {
-        request: WorkerPendingXhrContinue,
-        error_text: String,
-    },
-    /// Fail a worker-owned fetch() response that was paused for Fetch domain interception.
-    FailPendingFetchResponse {
-        request: WorkerPendingFetchContinue,
-        error_text: String,
-    },
-    /// Fail a worker-owned XHR response that was paused for Fetch domain interception.
-    FailPendingXhrResponse {
-        request: WorkerPendingXhrContinue,
-        error_text: String,
-    },
-    /// Fulfill a worker-owned fetch() that was paused for Fetch domain interception.
-    FulfillPendingFetch {
-        request: WorkerPendingFetchContinue,
-        response_code: u16,
-        response_headers: Vec<(String, String)>,
-        response_body: RendererSyntheticResponseBody,
-    },
-    /// Fulfill a worker-owned XHR that was paused for Fetch domain interception.
-    FulfillPendingXhr {
-        request: WorkerPendingXhrContinue,
-        response_code: u16,
-        response_headers: Vec<(String, String)>,
-        response_body: RendererSyntheticResponseBody,
-    },
-    /// Fulfill a worker-owned CSP report that was paused for Fetch domain interception.
-    FulfillPendingCspReport {
-        request: WorkerPendingFetchContinue,
-        response_code: u16,
-        response_headers: Vec<(String, String)>,
-        response_body: RendererSyntheticResponseBody,
-    },
-    /// Fulfill a worker-owned fetch() response that was paused for Fetch domain interception.
-    FulfillPendingFetchResponse {
-        request: WorkerPendingFetchContinue,
-        response_code: u16,
-        response_headers: Vec<(String, String)>,
-        response_body: RendererSyntheticResponseBody,
-    },
-    /// Fulfill a worker-owned XHR response that was paused for Fetch domain interception.
-    FulfillPendingXhrResponse {
-        request: WorkerPendingXhrContinue,
-        response_code: u16,
-        response_headers: Vec<(String, String)>,
-        response_body: RendererSyntheticResponseBody,
-    },
+    /// Consume one Browser-authorized decision in this physical Worker.
+    DecideInterceptedRequest(Box<crate::runtime::WorkerFetchDecisionDispatch>),
     /// Request the worker to terminate.
     Terminate,
 }
@@ -272,6 +184,8 @@ pub(crate) struct WorkerResourceOwnerSlotDiagnostics {
 /// Message from the worker back to the parent context.
 #[derive(Debug)]
 pub(crate) enum WorkerToParentMessage {
+    /// A stage capability owned by this Worker, never by a parent Page VM.
+    FetchInterception(crate::runtime::RendererWorkerFetchPause),
     /// A `postMessage` payload encoded via V8 structured clone.
     Post(V8StructuredClonePayload),
     /// The worker encountered an unhandled error.
@@ -318,7 +232,7 @@ pub(crate) enum WorkerToParentMessage {
     /// A Service Worker periodic sync event finished dispatch and all `waitUntil()` promises.
     ServiceWorkerPeriodicSyncCompleted(ServiceWorkerPeriodicSyncCompletion),
     /// A Service Worker requested display/recording of a notification.
-    ServiceWorkerShowNotification(ServiceWorkerShowNotification),
+    ServiceWorkerShowNotification(Box<ServiceWorkerShowNotification>),
     /// A Service Worker requested stored notification snapshots.
     ServiceWorkerGetNotifications(ServiceWorkerGetNotifications),
     /// A Service Worker requested registration of a one-shot background sync tag.
@@ -371,12 +285,6 @@ pub(crate) enum WorkerToParentMessage {
     RuntimeInspectorMessages(Vec<WorkerRuntimeInspectorMessageBatch>),
     /// Browser-owned Worker fact, retained in the physical Worker's source FIFO.
     Network(crate::runtime::RendererNetworkObservation),
-    /// Worker-owned fetch/XHR that should be paused by the page/CDP Fetch domain.
-    PendingSubresourceFetch(WorkerPendingSubresourceFetch),
-    /// Worker-owned fetch/XHR was canceled before CDP made a Fetch-domain decision.
-    PendingSubresourceFetchCanceled { fetch_id: u32 },
-    /// Completion signal for a worker-owned fetch/XHR that was continued after interception.
-    SubresourceContinue(PendingSubresourceContinueEvent),
     /// Worker-owned WebSocket handshake activity. The embedded socket id is worker-local; the
     /// parent remaps it before exposing it through page-level CDP state.
     WebSocketSubresource(SubresourceNetworkRecord),
@@ -543,20 +451,6 @@ pub(crate) enum WorkerErrorPhase {
 pub(crate) enum WorkerErrorSource {
     Runtime,
     InitialScriptEvaluation,
-}
-
-#[derive(Debug, Clone)]
-pub(crate) struct WorkerPendingSubresourceFetch {
-    /// Opaque worker-local request id. Historically named `fetch_id`; also used for XHR pauses.
-    pub(crate) fetch_id: u32,
-    /// Request-time authority. Parent-side CDP continuation must use this
-    /// captured client instead of resolving whichever Worker or Document is
-    /// current when the command eventually arrives.
-    pub(crate) load: crate::network::loads::ResourceLoadLease,
-    pub(crate) credentials_mode: RequestCredentialsMode,
-    pub(crate) request_mode: moli_fetch::RequestMode,
-    pub(crate) network_partition_key: Option<String>,
-    pub(crate) info: PendingSubresourceFetchInfo,
 }
 
 #[derive(Debug, Clone)]
@@ -1117,194 +1011,6 @@ impl WorkerHandle {
         let _ = self
             .tx
             .send(WorkerMessage::ServiceWorkerShowNotificationResult(result));
-    }
-
-    pub(crate) fn continue_pending_fetch(&self, request: WorkerPendingFetchContinue) {
-        let _ = self.tx.send(WorkerMessage::ContinuePendingFetch(request));
-    }
-
-    pub(crate) fn continue_pending_xhr(&self, request: WorkerPendingXhrContinue) {
-        let _ = self.tx.send(WorkerMessage::ContinuePendingXhr(request));
-    }
-
-    pub(crate) fn continue_pending_csp_report(&self, request: WorkerPendingFetchContinue) {
-        let _ = self
-            .tx
-            .send(WorkerMessage::ContinuePendingCspReport(request));
-    }
-
-    pub(crate) fn continue_pending_fetch_response(
-        &self,
-        request: WorkerPendingFetchContinue,
-        response_code: Option<u16>,
-        response_headers: Option<Vec<(String, String)>>,
-    ) {
-        let _ = self.tx.send(WorkerMessage::ContinuePendingFetchResponse {
-            request,
-            response_code,
-            response_headers,
-        });
-    }
-
-    pub(crate) fn continue_pending_xhr_response(
-        &self,
-        request: WorkerPendingXhrContinue,
-        response_code: Option<u16>,
-        response_headers: Option<Vec<(String, String)>>,
-    ) {
-        let _ = self.tx.send(WorkerMessage::ContinuePendingXhrResponse {
-            request,
-            response_code,
-            response_headers,
-        });
-    }
-
-    pub(crate) fn fail_pending_fetch(
-        &self,
-        request: WorkerPendingFetchContinue,
-        error_text: String,
-    ) {
-        let _ = self.tx.send(WorkerMessage::FailPendingFetch {
-            request,
-            error_text,
-        });
-    }
-
-    pub(crate) fn fail_pending_xhr(&self, request: WorkerPendingXhrContinue, error_text: String) {
-        let _ = self.tx.send(WorkerMessage::FailPendingXhr {
-            request,
-            error_text,
-        });
-    }
-
-    pub(crate) fn fail_pending_csp_report(
-        &self,
-        request: WorkerPendingFetchContinue,
-        error_text: String,
-    ) {
-        let _ = self.tx.send(WorkerMessage::FailPendingCspReport {
-            request,
-            error_text,
-        });
-    }
-
-    pub(crate) fn fail_pending_fetch_auth(
-        &self,
-        request: WorkerPendingFetchContinue,
-        error_text: String,
-    ) {
-        let _ = self.tx.send(WorkerMessage::FailPendingFetchAuth {
-            request,
-            error_text,
-        });
-    }
-
-    pub(crate) fn fail_pending_xhr_auth(
-        &self,
-        request: WorkerPendingXhrContinue,
-        error_text: String,
-    ) {
-        let _ = self.tx.send(WorkerMessage::FailPendingXhrAuth {
-            request,
-            error_text,
-        });
-    }
-
-    pub(crate) fn fail_pending_fetch_response(
-        &self,
-        request: WorkerPendingFetchContinue,
-        error_text: String,
-    ) {
-        let _ = self.tx.send(WorkerMessage::FailPendingFetchResponse {
-            request,
-            error_text,
-        });
-    }
-
-    pub(crate) fn fail_pending_xhr_response(
-        &self,
-        request: WorkerPendingXhrContinue,
-        error_text: String,
-    ) {
-        let _ = self.tx.send(WorkerMessage::FailPendingXhrResponse {
-            request,
-            error_text,
-        });
-    }
-
-    pub(crate) fn fulfill_pending_fetch(
-        &self,
-        request: WorkerPendingFetchContinue,
-        response_code: u16,
-        response_headers: Vec<(String, String)>,
-        response_body: RendererSyntheticResponseBody,
-    ) {
-        let _ = self.tx.send(WorkerMessage::FulfillPendingFetch {
-            request,
-            response_code,
-            response_headers,
-            response_body,
-        });
-    }
-
-    pub(crate) fn fulfill_pending_xhr(
-        &self,
-        request: WorkerPendingXhrContinue,
-        response_code: u16,
-        response_headers: Vec<(String, String)>,
-        response_body: RendererSyntheticResponseBody,
-    ) {
-        let _ = self.tx.send(WorkerMessage::FulfillPendingXhr {
-            request,
-            response_code,
-            response_headers,
-            response_body,
-        });
-    }
-
-    pub(crate) fn fulfill_pending_csp_report(
-        &self,
-        request: WorkerPendingFetchContinue,
-        response_code: u16,
-        response_headers: Vec<(String, String)>,
-        response_body: RendererSyntheticResponseBody,
-    ) {
-        let _ = self.tx.send(WorkerMessage::FulfillPendingCspReport {
-            request,
-            response_code,
-            response_headers,
-            response_body,
-        });
-    }
-
-    pub(crate) fn fulfill_pending_fetch_response(
-        &self,
-        request: WorkerPendingFetchContinue,
-        response_code: u16,
-        response_headers: Vec<(String, String)>,
-        response_body: RendererSyntheticResponseBody,
-    ) {
-        let _ = self.tx.send(WorkerMessage::FulfillPendingFetchResponse {
-            request,
-            response_code,
-            response_headers,
-            response_body,
-        });
-    }
-
-    pub(crate) fn fulfill_pending_xhr_response(
-        &self,
-        request: WorkerPendingXhrContinue,
-        response_code: u16,
-        response_headers: Vec<(String, String)>,
-        response_body: RendererSyntheticResponseBody,
-    ) {
-        let _ = self.tx.send(WorkerMessage::FulfillPendingXhrResponse {
-            request,
-            response_code,
-            response_headers,
-            response_body,
-        });
     }
 
     pub(crate) fn take_receiver(

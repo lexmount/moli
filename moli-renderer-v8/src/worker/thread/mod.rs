@@ -69,13 +69,11 @@ use runtime_inspector::WorkerRuntimeInspector;
 use super::global_scope::{
     WorkerFetchEvent, WorkerGlobalState, WorkerIsolateTimerQueues, WorkerOpfsCompletion,
     WorkerWebCryptoCompletion, WorkerXhrCompletion, close_worker_owned_broadcast_channels,
-    close_worker_owned_message_ports, continue_pending_worker_csp_report,
-    continue_pending_worker_fetch, continue_pending_worker_fetch_response,
-    continue_pending_worker_xhr, continue_pending_worker_xhr_response,
-    dispatch_nested_worker_event, dispatch_worker_csp_violation_event,
-    dispatch_worker_websocket_event, drain_service_worker_client_focus_result,
-    drain_service_worker_client_navigate_result, drain_service_worker_client_query_result,
-    drain_service_worker_clients_open_window_result, drain_service_worker_get_notifications_result,
+    close_worker_owned_message_ports, dispatch_nested_worker_event,
+    dispatch_worker_csp_violation_event, dispatch_worker_websocket_event,
+    drain_service_worker_client_focus_result, drain_service_worker_client_navigate_result,
+    drain_service_worker_client_query_result, drain_service_worker_clients_open_window_result,
+    drain_service_worker_get_notifications_result,
     drain_service_worker_periodic_sync_get_tags_result,
     drain_service_worker_periodic_sync_registration_result,
     drain_service_worker_periodic_sync_unregistration_result,
@@ -83,13 +81,7 @@ use super::global_scope::{
     drain_service_worker_push_unsubscribe_result, drain_service_worker_show_notification_result,
     drain_service_worker_sync_get_tags_result, drain_service_worker_sync_registration_result,
     drain_worker_fetch_completion, drain_worker_opfs_completion, drain_worker_webcrypto_completion,
-    drain_worker_xhr_completion, fail_pending_worker_csp_report, fail_pending_worker_fetch,
-    fail_pending_worker_fetch_auth, fail_pending_worker_fetch_response, fail_pending_worker_xhr,
-    fail_pending_worker_xhr_auth, fail_pending_worker_xhr_response,
-    fulfill_pending_worker_csp_report, fulfill_pending_worker_fetch,
-    fulfill_pending_worker_fetch_response, fulfill_pending_worker_xhr,
-    fulfill_pending_worker_xhr_response, install_worker_global_scope,
-    service_worker_fetch_handler_type,
+    drain_worker_xhr_completion, install_worker_global_scope, service_worker_fetch_handler_type,
 };
 use super::handle::{
     WorkerBootstrapCompletion, WorkerBootstrapFailure, WorkerBootstrapSuccess,
@@ -2859,150 +2851,8 @@ async fn worker_main(
                 state.fetch_subresource_interception_enabled = enabled;
                 state.fetch_subresource_interception_resource_type = resource_type;
             }
-            WorkerLoopWake::Message(Some(WorkerMessage::ContinuePendingFetch(request))) => {
-                continue_pending_worker_fetch(&state, request);
-            }
-            WorkerLoopWake::Message(Some(WorkerMessage::ContinuePendingXhr(request))) => {
-                continue_pending_worker_xhr(&state, request);
-            }
-            WorkerLoopWake::Message(Some(WorkerMessage::ContinuePendingCspReport(request))) => {
-                continue_pending_worker_csp_report(&state, request);
-            }
-            WorkerLoopWake::Message(Some(WorkerMessage::ContinuePendingFetchResponse {
-                request,
-                response_code,
-                response_headers,
-            })) => {
-                continue_pending_worker_fetch_response(
-                    &state,
-                    request,
-                    response_code,
-                    response_headers,
-                );
-            }
-            WorkerLoopWake::Message(Some(WorkerMessage::ContinuePendingXhrResponse {
-                request,
-                response_code,
-                response_headers,
-            })) => {
-                continue_pending_worker_xhr_response(
-                    &state,
-                    request,
-                    response_code,
-                    response_headers,
-                );
-            }
-            WorkerLoopWake::Message(Some(WorkerMessage::FailPendingFetch {
-                request,
-                error_text,
-            })) => {
-                fail_pending_worker_fetch(&state, request, error_text);
-            }
-            WorkerLoopWake::Message(Some(WorkerMessage::FailPendingXhr {
-                request,
-                error_text,
-            })) => {
-                fail_pending_worker_xhr(&state, request, error_text);
-            }
-            WorkerLoopWake::Message(Some(WorkerMessage::FailPendingCspReport {
-                request,
-                error_text,
-            })) => {
-                fail_pending_worker_csp_report(&state, request, error_text);
-            }
-            WorkerLoopWake::Message(Some(WorkerMessage::FailPendingFetchAuth {
-                request,
-                error_text,
-            })) => {
-                fail_pending_worker_fetch_auth(&state, request, error_text);
-            }
-            WorkerLoopWake::Message(Some(WorkerMessage::FailPendingXhrAuth {
-                request,
-                error_text,
-            })) => {
-                fail_pending_worker_xhr_auth(&state, request, error_text);
-            }
-            WorkerLoopWake::Message(Some(WorkerMessage::FailPendingFetchResponse {
-                request,
-                error_text,
-            })) => {
-                fail_pending_worker_fetch_response(&state, request, error_text);
-            }
-            WorkerLoopWake::Message(Some(WorkerMessage::FailPendingXhrResponse {
-                request,
-                error_text,
-            })) => {
-                fail_pending_worker_xhr_response(&state, request, error_text);
-            }
-            WorkerLoopWake::Message(Some(WorkerMessage::FulfillPendingFetch {
-                request,
-                response_code,
-                response_headers,
-                response_body,
-            })) => {
-                fulfill_pending_worker_fetch(
-                    &state,
-                    request,
-                    response_code,
-                    response_headers,
-                    response_body,
-                );
-            }
-            WorkerLoopWake::Message(Some(WorkerMessage::FulfillPendingXhr {
-                request,
-                response_code,
-                response_headers,
-                response_body,
-            })) => {
-                fulfill_pending_worker_xhr(
-                    &state,
-                    request,
-                    response_code,
-                    response_headers,
-                    response_body,
-                );
-            }
-            WorkerLoopWake::Message(Some(WorkerMessage::FulfillPendingCspReport {
-                request,
-                response_code,
-                response_headers,
-                response_body,
-            })) => {
-                fulfill_pending_worker_csp_report(
-                    &state,
-                    request,
-                    response_code,
-                    response_headers,
-                    response_body,
-                );
-            }
-            WorkerLoopWake::Message(Some(WorkerMessage::FulfillPendingFetchResponse {
-                request,
-                response_code,
-                response_headers,
-                response_body,
-            })) => {
-                fulfill_pending_worker_fetch_response(
-                    &state,
-                    request,
-                    response_code,
-                    response_headers,
-                    response_body,
-                );
-            }
-            WorkerLoopWake::Message(Some(WorkerMessage::FulfillPendingXhrResponse {
-                request,
-                response_code,
-                response_headers,
-                response_body,
-            })) => {
-                fulfill_pending_worker_xhr_response(
-                    &state,
-                    request,
-                    response_code,
-                    response_headers,
-                    response_body,
-                );
+            WorkerLoopWake::Message(Some(WorkerMessage::DecideInterceptedRequest(dispatch))) => {
+                super::global_scope::decide_intercepted_worker_request(&state, *dispatch);
             }
             WorkerLoopWake::Message(Some(WorkerMessage::Terminate)) => {
                 trace!(url = %script_url, "worker terminated by parent");

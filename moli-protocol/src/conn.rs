@@ -142,7 +142,7 @@ pub(crate) use fetch_support::{
     ClaimedFetchNavigation, ClaimedFetchResponseNavigation, ClaimedSubresourceContinueRequest,
     CompletedFetchResponseBodyStreamReadDispatch, PendingFetchResponseBodyStreamRead,
     PendingFetchResponseBodyStreamReadDispatch, PendingFetchResponseBodyStreamReadStart,
-    PendingFetchResponseNavigation, PendingSubresourceFetchResidence,
+    PendingFetchResponseNavigation, PendingSubresourceFetchResidence, SubresourceFetchKey,
 };
 pub use fetch_support::{
     FetchAuthChallenge, FetchInterceptionPattern, FetchRequestStage, FetchResourceTypeFilter,
@@ -1512,6 +1512,7 @@ impl CdpConnection {
                 // renderer. Its request-phase projection below owns that
                 // exact admission; current Page membership cannot revoke it.
                 moli_core::page::RendererNetworkOutputItem::Resource(_) => true,
+                moli_core::page::RendererNetworkOutputItem::WorkerFetch { .. } => false,
                 moli_core::page::RendererNetworkOutputItem::ChildDocument(_) => {
                     context.target_renderer_page_residence_identity(&target_id)
                         == source_renderer_page

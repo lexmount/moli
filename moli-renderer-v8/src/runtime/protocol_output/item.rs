@@ -49,7 +49,6 @@ pub enum RendererOwnerAction {
     TopLevelHistoryTraversal(RendererPendingTopLevelHistoryTraversal),
     SubresourceFetchPause {
         source_document: RendererDocumentLifecycleIdentity,
-        worker: Option<crate::runtime::RendererWorkerIdentity>,
         info: Box<PendingSubresourceFetchInfo>,
     },
     SubresourceContinue {

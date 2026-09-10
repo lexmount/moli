@@ -2,6 +2,232 @@ use super::*;
 use moli_core::browser::{BrowserEvent, NetworkOwner, NetworkRequestState, WorkerHandle};
 use moli_core::page::{RendererNetworkOutputItem, ScriptNetworkOutputItem};
 
+#[tokio::test(flavor = "multi_thread")]
+async fn dedicated_fetch_without_worker_attachment() {
+    worker_fetch_without_attachment(false, false, UnattachedWorkerFinish::Fulfill).await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn shared_fetch_without_worker_attachment() {
+    worker_fetch_without_attachment(true, false, UnattachedWorkerFinish::Fulfill).await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn dedicated_fetch_retirement_without_worker_attachment() {
+    worker_fetch_without_attachment(false, false, UnattachedWorkerFinish::Retire).await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn shared_fetch_retirement_without_worker_attachment() {
+    worker_fetch_without_attachment(true, false, UnattachedWorkerFinish::Retire).await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn dedicated_fetch_retirement_snapshot_without_worker_attachment() {
+    worker_fetch_without_attachment(false, false, UnattachedWorkerFinish::RetireSnapshot).await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn shared_fetch_retirement_snapshot_without_worker_attachment() {
+    worker_fetch_without_attachment(true, false, UnattachedWorkerFinish::RetireSnapshot).await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn nested_dedicated_fetch_without_worker_attachment() {
+    worker_fetch_without_attachment(false, true, UnattachedWorkerFinish::Fulfill).await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn shared_ancestor_fetch_without_worker_attachment() {
+    worker_fetch_without_attachment(true, true, UnattachedWorkerFinish::Fulfill).await;
+}
+
+enum UnattachedWorkerFinish {
+    Fulfill,
+    Retire,
+    RetireSnapshot,
+}
+
+async fn worker_fetch_without_attachment(
+    shared: bool,
+    nested: bool,
+    finish: UnattachedWorkerFinish,
+) {
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    let server = tokio::spawn(async move {
+        axum::serve(listener, Router::new()
+            .route("/page", get(|| async { ([(CONTENT_TYPE.as_str(), "text/html")], "<!doctype html>") }))
+            .route("/worker.js", get(|| async { ([(CONTENT_TYPE.as_str(), "text/javascript")],
+                "async function run(reply){const r=await fetch('/body');reply(await r.text());}onmessage=()=>run(postMessage);onconnect=e=>{const p=e.ports[0];p.onmessage=()=>run(v=>p.postMessage(v));p.start();p.postMessage('ready');};if(typeof postMessage==='function')postMessage('ready');") }))
+        ).await.unwrap();
+    });
+    let mut ctx = TestContext::new();
+    with_loaded_http_document(
+        &mut ctx,
+        &format!("http://{address}/page"),
+        "SID-1",
+        "TID-1",
+    )
+    .await;
+    enable_runtime_async(&mut ctx, "SID-1", 1).await;
+    ctx.process_async(json!({"id":2,"method":"Fetch.enable","sessionId":"SID-1","params":{"patterns":[{"urlPattern":"*/body"}]}})).await;
+    ctx.expect_result(2, json!({}), Some("SID-1"));
+    let (_, mut native) = ctx.conn.subscribe_browser_events().unwrap();
+    let worker_script = if nested {
+        let child = format!(
+            "data:text/javascript,onmessage=()=>fetch('http://{address}/body').then(r=>r.text()).then(postMessage);postMessage('ready');"
+        );
+        format!(
+            "data:text/javascript,function bridge(port){{const child=new Worker({child:?});child.onmessage=e=>port.postMessage(e.data);port.onmessage=e=>child.postMessage(e.data);if(port.start)port.start();}};onconnect=e=>bridge(e.ports[0]);if(typeof postMessage==='function')bridge(globalThis);"
+        )
+    } else {
+        "/worker.js".into()
+    };
+    // Deliberately do not discover/attach Worker targets or enable their
+    // Network domains. The Page supplies policy, not the Worker executor.
+    ctx.process_and_wait_for_response_async(json!({"id":3,"method":"Runtime.evaluate","sessionId":"SID-1","params":{
+        "expression":format!("globalThis.result=new Promise(done=>{{const worker=new {}({});const port=worker.port||worker;port.onmessage=e=>{{if(e.data==='ready')port.postMessage('fetch');else done(e.data);}};if(worker.port)port.start();}});'started'", if shared { "SharedWorker" } else { "Worker" }, json!(worker_script)),
+        "returnByValue":true,
+    }})).await;
+    assert_eq!(
+        take_response_by_id(&mut ctx, 3)["result"]["result"]["value"],
+        "started"
+    );
+    let url = format!("http://{address}/body");
+    wait_until_messages(
+        &mut ctx,
+        Some("SID-1"),
+        "Worker pause without attachment",
+        |messages| {
+            messages.iter().any(|message| {
+                message["method"] == "Fetch.requestPaused"
+                    && message["params"]["request"]["url"] == url
+            })
+        },
+    )
+    .await;
+    let paused = ctx.take_first_matching("unattached Worker pause", |message| {
+        message["method"] == "Fetch.requestPaused" && message["params"]["request"]["url"] == url
+    });
+    assert_eq!(paused["sessionId"], "SID-1");
+    if !matches!(finish, UnattachedWorkerFinish::Fulfill) {
+        let pause = ctx.conn.subscribe_browser_events().unwrap().0.worker_fetch_pauses.into_iter().find(|pause| {
+            matches!(pause.pause.stage(), moli_core::page::RendererWorkerFetchStage::Request(info) if info.url.as_str() == url)
+        }).expect("the observed stage must still belong to its physical Worker");
+        assert!(ctx.conn.observes_worker_fetch_pause(&pause));
+        let context_id = ctx
+            .conn
+            .browser_context_by_browser_id(pause.document.web_contents().context())
+            .unwrap()
+            .id
+            .clone();
+        assert!(
+            ctx.conn
+                .native_worker_network_owner(&context_id, pause.pause.worker())
+                .is_some()
+        );
+        assert!(match pause.worker {
+            WorkerHandle::Dedicated { context, instance } => ctx
+                .conn
+                .close_browser_dedicated_worker(context, instance)
+                .unwrap(),
+            WorkerHandle::Shared { context, instance } => ctx
+                .conn
+                .close_browser_shared_worker(context, instance)
+                .unwrap(),
+            WorkerHandle::Service { .. } => unreachable!(),
+        });
+        tokio::time::timeout(std::time::Duration::from_secs(5), async {
+            loop {
+                if matches!(native.recv().await.unwrap().event, BrowserEvent::WorkerDestroyed(worker) if worker == pause.worker) {
+                    break;
+                }
+            }
+        }).await.expect("Worker retirement must not need a Protocol consumer");
+        assert!(!pause.pause.is_available());
+        if matches!(finish, UnattachedWorkerFinish::RetireSnapshot) {
+            let snapshot = ctx.conn.subscribe_browser_events().unwrap().0;
+            assert!(snapshot.worker_fetch_pauses.is_empty());
+            ctx.conn.project_browser_snapshot(snapshot).await;
+        } else {
+            ctx.wait_until_scheduler_state("the exact Worker retirement", |conn| {
+                conn.native_worker_network_owner(&context_id, pause.pause.worker())
+                    .is_none()
+            })
+            .await;
+        }
+        assert!(
+            !ctx.conn.observes_worker_fetch_pause(&pause),
+            "retiring a Worker must remove Page observer correlation without a Network terminal"
+        );
+        assert!(
+            !ctx.conn
+                .browser_context_by_id(&context_id)
+                .unwrap()
+                .page_targets
+                .get("TID-1")
+                .unwrap()
+                .fetch_owner
+                .has_pending_fetch_state_for_test()
+        );
+        // Consume a late FIFO in the snapshot case too: neither a late
+        // projection nor the old wire request id may revive retired work.
+        ctx.process_and_wait_for_response_async(json!({"id":4,"method":"Fetch.continueRequest","sessionId":"SID-1","params":{"requestId":paused["params"]["requestId"]}})).await;
+        assert_eq!(take_response_by_id(&mut ctx, 4)["error"]["code"], -32000);
+        assert!(!ctx.conn.observes_worker_fetch_pause(&pause));
+        server.abort();
+        return;
+    }
+    ctx.process_and_wait_for_response_async(json!({"id":4,"method":"Fetch.fulfillRequest","sessionId":"SID-1","params":{
+        "requestId":paused["params"]["requestId"],"responseCode":200,
+        "responseHeaders":[{"name":"Access-Control-Allow-Origin","value":"*"}],
+        "body":base64::Engine::encode(&base64::engine::general_purpose::STANDARD, "worker-owned"),
+    }})).await;
+    ctx.expect_result(4, json!({}), Some("SID-1"));
+    ctx.process_and_wait_for_response_async(
+        json!({"id":5,"method":"Runtime.evaluate","sessionId":"SID-1","params":{
+            "expression":"result","awaitPromise":true,"returnByValue":true,
+        }}),
+    )
+    .await;
+    assert_eq!(
+        take_response_by_id(&mut ctx, 5)["result"]["result"]["value"],
+        "worker-owned"
+    );
+    let completed = tokio::time::timeout(std::time::Duration::from_secs(5), async {
+        loop {
+            if let BrowserEvent::NetworkRequestCompleted(occurrence) =
+                native.recv().await.unwrap().event
+                && let RendererNetworkOutputItem::Resource(item) = &occurrence.renderer.item
+                && let ScriptNetworkOutputItem::SubresourceNetworkRecord(record) = item.as_ref()
+                && record.url().as_str() == url
+            {
+                break occurrence;
+            }
+        }
+    })
+    .await
+    .expect("unattached Worker must publish its own terminal fact");
+    assert!(matches!(completed.owner, NetworkOwner::Worker(_)));
+    assert!(
+        !ctx.sent
+            .iter()
+            .any(|message| message["method"] == "Target.attachedToTarget")
+    );
+    assert!(
+        !ctx.sent.iter().any(|message| {
+            message["params"]["requestId"] == paused["params"]["networkId"]
+                && message["method"]
+                    .as_str()
+                    .is_some_and(|method| method.starts_with("Network."))
+        }),
+        "Page must not inherit unattached Worker Network events: {:?}",
+        ctx.sent
+    );
+    server.abort();
+}
+
 #[derive(Clone, Copy, Debug)]
 enum Resource {
     Fetch,

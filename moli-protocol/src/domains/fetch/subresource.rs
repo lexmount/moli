@@ -6,7 +6,8 @@ use crate::conn::{
     BackgroundProtocolEvent, CdpConnection, CommandOwnerScope, DEFAULT_LOADER_ID,
     FetchRequestStage, PendingSubresourceFetchOwnerKind, PendingSubresourceFetchRequest,
     PendingSubresourceFetchRequestStage, PendingSubresourceFetchRequestStageChain,
-    PendingSubresourceFetchResponseRequest, build_event, monotonic_timestamp_seconds,
+    PendingSubresourceFetchResidence, PendingSubresourceFetchResponseRequest, build_event,
+    monotonic_timestamp_seconds,
 };
 use crate::devtools_runtime::{
     AutomationEvent, DevToolsFrameId, DevToolsNetworkInterceptId, DevToolsNetworkResourceType,
@@ -52,20 +53,62 @@ fn subresource_request_paused_payload(
 
 struct PendingSubresourceFetchPauseSource {
     info: moli_core::page::PendingSubresourceFetchInfo,
-    worker: Option<moli_core::page::RendererWorkerIdentity>,
-    detached_parser_script_fetch_continuation: Option<DetachedParserScriptFetchContinuation>,
+    residence: PendingSubresourceFetchResidence,
+}
+
+pub(crate) async fn native_worker_fetch_prepared_outputs(
+    conn: &mut CdpConnection,
+    pause: moli_core::browser::WorkerFetchPause,
+) -> Option<(CommandOwnerScope, network::NetworkPreparedOutputs)> {
+    if !pause.pause.is_available() || conn.observes_worker_fetch_pause(&pause) {
+        return None;
+    }
+    let Some(owner) = conn.worker_fetch_observer(&pause) else {
+        pause.pause.release();
+        return None;
+    };
+    let observer = conn.target_page_residence_identity_for_owner(&owner)?;
+    let outputs = match pause.pause.stage() {
+        moli_core::page::RendererWorkerFetchStage::Request(info) => {
+            let sources = vec![PendingSubresourceFetchPauseSource {
+                info: (**info).clone(),
+                residence: PendingSubresourceFetchResidence::Worker { observer, pause },
+            }];
+            network::NetworkPreparedOutputs::from_subresource_fetch_pauses(
+                prepare_subresource_fetch_pause_sources_async(conn, &owner, None, None, sources)
+                    .await,
+            )
+        }
+        moli_core::page::RendererWorkerFetchStage::Auth(info) => {
+            let event =
+                moli_core::page::PendingSubresourceContinueEvent::AuthRequired((**info).clone());
+            network::NetworkPreparedOutputs::from_worker_subresource_continue(
+                conn, &owner, pause, event,
+            )
+        }
+        moli_core::page::RendererWorkerFetchStage::Response(info) => {
+            let event =
+                moli_core::page::PendingSubresourceContinueEvent::ResponsePaused((**info).clone());
+            network::NetworkPreparedOutputs::from_worker_subresource_continue(
+                conn, &owner, pause, event,
+            )
+        }
+    };
+    Some((owner, outputs))
 }
 
 pub(crate) async fn subresource_fetch_pause_prepared_outputs_for_renderer_record_async(
     conn: &mut CdpConnection,
     owner: &CommandOwnerScope,
     source_document: moli_core::RendererDocumentLifecycleIdentity,
-    worker: Option<moli_core::page::RendererWorkerIdentity>,
     info: moli_core::page::PendingSubresourceFetchInfo,
 ) -> network::NetworkPreparedOutputs {
     if conn.target_root_document_lifecycle_identity_for_owner(owner) != Some(source_document) {
         return network::NetworkPreparedOutputs::default();
     }
+    let Some(page_owner) = conn.target_page_residence_identity_for_owner(owner) else {
+        return network::NetworkPreparedOutputs::default();
+    };
     network::NetworkPreparedOutputs::from_subresource_fetch_pauses(
         prepare_subresource_fetch_pause_sources_async(
             conn,
@@ -74,8 +117,7 @@ pub(crate) async fn subresource_fetch_pause_prepared_outputs_for_renderer_record
             None,
             vec![PendingSubresourceFetchPauseSource {
                 info,
-                worker,
-                detached_parser_script_fetch_continuation: None,
+                residence: PendingSubresourceFetchResidence::InstalledPage(page_owner),
             }],
         )
         .await,
@@ -100,8 +142,7 @@ pub(crate) async fn detached_parser_script_fetch_pause_prepared_outputs_for_rend
             None,
             vec![PendingSubresourceFetchPauseSource {
                 info,
-                worker: None,
-                detached_parser_script_fetch_continuation: Some(continuation),
+                residence: PendingSubresourceFetchResidence::DetachedParserScript(continuation),
             }],
         )
         .await,
@@ -117,7 +158,6 @@ async fn prepare_subresource_fetch_pause_sources_async(
 ) -> Vec<network::TargetSubresourceFetchPauseOutput> {
     let mut outputs = Vec::new();
     let session_id = owner.session_id();
-    let page_owner = conn.target_page_residence_identity_for_owner(owner);
     let Some((fetch_snapshot, frame_id)) = (|| {
         let target_frame_id = conn
             .target_session_owner_frame_tree_identity_for_owner(owner)
@@ -134,11 +174,8 @@ async fn prepare_subresource_fetch_pause_sources_async(
         .current_document_loader_id_for_owner(owner)
         .unwrap_or_else(|| DEFAULT_LOADER_ID.to_owned());
     for source in sources {
-        let PendingSubresourceFetchPauseSource {
-            info,
-            worker,
-            detached_parser_script_fetch_continuation,
-        } = source;
+        let PendingSubresourceFetchPauseSource { info, residence } = source;
+        let worker = residence.worker().map(|pause| pause.pause.worker().clone());
         let Ok((request_id, network_request_id)) =
             conn.allocate_pending_subresource_fetch_request_ids_for_owner(owner)
         else {
@@ -166,17 +203,13 @@ async fn prepare_subresource_fetch_pause_sources_async(
             &info.url,
         );
         if request_stage_pause_sessions.is_empty() {
-            if let Some(continuation) = detached_parser_script_fetch_continuation {
+            if let PendingSubresourceFetchResidence::DetachedParserScript(continuation) = &residence
+            {
                 continuation.continue_request(None);
                 continue;
             }
-            let Some(page_owner) = page_owner.clone() else {
-                continue;
-            };
             let pending = PendingSubresourceFetchRequest {
-                residence: crate::conn::PendingSubresourceFetchResidence::InstalledPage(
-                    page_owner.clone(),
-                ),
+                residence,
                 owner_session_id: None,
                 action_session_id: None,
                 owner_kind: PendingSubresourceFetchOwnerKind::NetworkOrBidi,
@@ -265,7 +298,7 @@ async fn prepare_subresource_fetch_pause_sources_async(
                 conn,
                 owner,
                 handle_auth_requests.then_some(request_id),
-                page_owner.clone(),
+                pending.residence,
                 info.internal_id,
                 network_request_id,
                 info.network_request_handle,
@@ -282,17 +315,6 @@ async fn prepare_subresource_fetch_pause_sources_async(
             .first()
             .expect("request-stage pause session should be present")
             .clone();
-        let residence = match detached_parser_script_fetch_continuation {
-            Some(continuation) => {
-                crate::conn::PendingSubresourceFetchResidence::DetachedParserScript(continuation)
-            }
-            None => {
-                let Some(page_owner) = page_owner.clone() else {
-                    continue;
-                };
-                crate::conn::PendingSubresourceFetchResidence::InstalledPage(page_owner)
-            }
-        };
         let pending = PendingSubresourceFetchRequest {
             residence,
             owner_session_id: None,

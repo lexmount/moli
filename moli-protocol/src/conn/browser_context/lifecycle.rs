@@ -221,6 +221,15 @@ impl CdpConnection {
                 .await,
         );
         events.extend(self.project_browser_network_snapshot(snapshot.network_requests));
+        if self.scheduler_hooks.renderer_publication_sender().is_none() {
+            for pause in snapshot.worker_fetch_pauses {
+                if let Some((owner, outputs)) =
+                    crate::domains::fetch::native_worker_fetch_prepared_outputs(self, pause).await
+                {
+                    events.extend(outputs.emit_fetch_snapshot(self, &owner).await);
+                }
+            }
+        }
         for download in snapshot.downloads {
             events.extend(self.project_created_browser_download(download));
         }

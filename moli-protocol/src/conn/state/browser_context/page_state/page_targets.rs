@@ -629,7 +629,14 @@ impl BrowserContext {
         &mut self,
         renderer_instance_id: moli_shared_worker::SharedWorkerInstanceId,
     ) -> Option<SharedWorkerTargetState> {
-        self.shared_worker_targets.remove(&renderer_instance_id)
+        let retired = self.shared_worker_targets.remove(&renderer_instance_id)?;
+        for target in self.page_targets.iter_mut() {
+            target.fetch_owner.retire_worker_requests(
+                &moli_core::page::RendererWorkerIdentity::Shared(renderer_instance_id),
+                None,
+            );
+        }
+        Some(retired)
     }
 
     pub(crate) fn assign_session_to_shared_worker_target(
@@ -717,7 +724,16 @@ impl BrowserContext {
         &mut self,
         renderer_instance_id: u64,
     ) -> Option<DedicatedWorkerTargetState> {
-        self.dedicated_worker_targets.remove(&renderer_instance_id)
+        let retired = self
+            .dedicated_worker_targets
+            .remove(&renderer_instance_id)?;
+        for target in self.page_targets.iter_mut() {
+            target.fetch_owner.retire_worker_requests(
+                &moli_core::page::RendererWorkerIdentity::Dedicated(renderer_instance_id),
+                None,
+            );
+        }
+        Some(retired)
     }
 
     pub(crate) fn assign_session_to_dedicated_worker_target(

@@ -125,9 +125,7 @@ pub(crate) fn dispatch_worker_event<'s>(
             )
         }
         WorkerToParentMessage::Network(_)
-        | WorkerToParentMessage::PendingSubresourceFetch(_)
-        | WorkerToParentMessage::PendingSubresourceFetchCanceled { .. }
-        | WorkerToParentMessage::SubresourceContinue(_)
+        | WorkerToParentMessage::FetchInterception(_)
         | WorkerToParentMessage::WebSocketSubresource(_)
         | WorkerToParentMessage::WebSocketLifecycle(_)
         | WorkerToParentMessage::WebSocketFrame(_)

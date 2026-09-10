@@ -31,9 +31,8 @@ use crate::context_bootstrap::{
 use crate::ensure_v8_for_test as ensure_v8;
 use crate::network::ResourceRequestClient;
 use crate::protocol_types::{
-    PendingSubresourceContinueEvent, SubresourceAuthCredentials, SubresourceAuthScheme,
-    SubresourceAuthTarget, SubresourceNetworkOutcome, SubresourceNetworkRecord,
-    SubresourceNetworkRequestHandle, SubresourceResourceType,
+    SubresourceAuthCredentials, SubresourceAuthScheme, SubresourceAuthTarget,
+    SubresourceNetworkOutcome, SubresourceNetworkRecord, SubresourceResourceType,
 };
 use crate::runtime::{
     MaterializedServiceWorkerFetchResponseHead, ServiceWorkerEventId, ServiceWorkerFetchCompletion,
@@ -55,7 +54,7 @@ use crate::service_worker_runtime::{
 use crate::structured_clone::V8StructuredClonePayload;
 use crate::worker::handle::{
     WorkerErrorPhase, WorkerFetchHandlerType, WorkerHandle, WorkerNetworkPolicy,
-    WorkerPendingFetchContinue, WorkerPendingXhrContinue, WorkerToParentMessage,
+    WorkerToParentMessage,
 };
 
 const TIMEOUT: Duration = Duration::from_secs(5);
@@ -268,9 +267,7 @@ async fn recv_post_json(handle: &mut WorkerHandle) -> String {
         match message {
             WorkerToParentMessage::Post(payload) => return stringify_payload(&payload),
             WorkerToParentMessage::Network(_)
-            | WorkerToParentMessage::PendingSubresourceFetch(_)
-            | WorkerToParentMessage::PendingSubresourceFetchCanceled { .. }
-            | WorkerToParentMessage::SubresourceContinue(_)
+            | WorkerToParentMessage::FetchInterception(_)
             | WorkerToParentMessage::WebSocketSubresource(_)
             | WorkerToParentMessage::WebSocketLifecycle(_)
             | WorkerToParentMessage::WebSocketFrame(_) => continue,
@@ -331,9 +328,7 @@ async fn dispatch_service_worker_lifecycle_event_for_test(
             }
             WorkerToParentMessage::Post(_)
             | WorkerToParentMessage::Network(_)
-            | WorkerToParentMessage::PendingSubresourceFetch(_)
-            | WorkerToParentMessage::PendingSubresourceFetchCanceled { .. }
-            | WorkerToParentMessage::SubresourceContinue(_)
+            | WorkerToParentMessage::FetchInterception(_)
             | WorkerToParentMessage::WebSocketSubresource(_)
             | WorkerToParentMessage::WebSocketLifecycle(_)
             | WorkerToParentMessage::WebSocketFrame(_)
@@ -428,9 +423,7 @@ async fn dispatch_service_worker_fetch_event_with_request_for_test(
             }
             WorkerToParentMessage::Post(_)
             | WorkerToParentMessage::Network(_)
-            | WorkerToParentMessage::PendingSubresourceFetch(_)
-            | WorkerToParentMessage::PendingSubresourceFetchCanceled { .. }
-            | WorkerToParentMessage::SubresourceContinue(_)
+            | WorkerToParentMessage::FetchInterception(_)
             | WorkerToParentMessage::WebSocketSubresource(_)
             | WorkerToParentMessage::WebSocketLifecycle(_)
             | WorkerToParentMessage::WebSocketFrame(_)
@@ -515,9 +508,7 @@ async fn dispatch_service_worker_message_event_object_for_test(
             }
             WorkerToParentMessage::Post(_)
             | WorkerToParentMessage::Network(_)
-            | WorkerToParentMessage::PendingSubresourceFetch(_)
-            | WorkerToParentMessage::PendingSubresourceFetchCanceled { .. }
-            | WorkerToParentMessage::SubresourceContinue(_)
+            | WorkerToParentMessage::FetchInterception(_)
             | WorkerToParentMessage::WebSocketSubresource(_)
             | WorkerToParentMessage::WebSocketLifecycle(_)
             | WorkerToParentMessage::WebSocketFrame(_)
@@ -579,9 +570,7 @@ async fn dispatch_service_worker_notification_event_for_test(
             }
             WorkerToParentMessage::Post(_)
             | WorkerToParentMessage::Network(_)
-            | WorkerToParentMessage::PendingSubresourceFetch(_)
-            | WorkerToParentMessage::PendingSubresourceFetchCanceled { .. }
-            | WorkerToParentMessage::SubresourceContinue(_)
+            | WorkerToParentMessage::FetchInterception(_)
             | WorkerToParentMessage::WebSocketSubresource(_)
             | WorkerToParentMessage::WebSocketLifecycle(_)
             | WorkerToParentMessage::WebSocketFrame(_)
@@ -649,9 +638,7 @@ async fn dispatch_service_worker_push_event_for_test(
             }
             WorkerToParentMessage::Post(_)
             | WorkerToParentMessage::Network(_)
-            | WorkerToParentMessage::PendingSubresourceFetch(_)
-            | WorkerToParentMessage::PendingSubresourceFetchCanceled { .. }
-            | WorkerToParentMessage::SubresourceContinue(_)
+            | WorkerToParentMessage::FetchInterception(_)
             | WorkerToParentMessage::WebSocketSubresource(_)
             | WorkerToParentMessage::WebSocketLifecycle(_)
             | WorkerToParentMessage::WebSocketFrame(_)
@@ -721,9 +708,7 @@ async fn dispatch_service_worker_sync_event_for_test(
             }
             WorkerToParentMessage::Post(_)
             | WorkerToParentMessage::Network(_)
-            | WorkerToParentMessage::PendingSubresourceFetch(_)
-            | WorkerToParentMessage::PendingSubresourceFetchCanceled { .. }
-            | WorkerToParentMessage::SubresourceContinue(_)
+            | WorkerToParentMessage::FetchInterception(_)
             | WorkerToParentMessage::WebSocketSubresource(_)
             | WorkerToParentMessage::WebSocketLifecycle(_)
             | WorkerToParentMessage::WebSocketFrame(_)
@@ -794,9 +779,7 @@ async fn dispatch_service_worker_periodic_sync_event_for_test(
             }
             WorkerToParentMessage::Post(_)
             | WorkerToParentMessage::Network(_)
-            | WorkerToParentMessage::PendingSubresourceFetch(_)
-            | WorkerToParentMessage::PendingSubresourceFetchCanceled { .. }
-            | WorkerToParentMessage::SubresourceContinue(_)
+            | WorkerToParentMessage::FetchInterception(_)
             | WorkerToParentMessage::WebSocketSubresource(_)
             | WorkerToParentMessage::WebSocketLifecycle(_)
             | WorkerToParentMessage::WebSocketFrame(_)
@@ -834,52 +817,6 @@ async fn dispatch_service_worker_periodic_sync_event_for_test(
             | WorkerToParentMessage::RuntimeInspectorResponse(_)
             | WorkerToParentMessage::SharedWorkerClosed => {}
         }
-    }
-}
-
-fn pending_worker_fetch_continue(
-    fetch_id: u32,
-    internal_id: u64,
-    info: &crate::protocol_types::PendingSubresourceFetchInfo,
-    intercept_response: bool,
-) -> WorkerPendingFetchContinue {
-    WorkerPendingFetchContinue {
-        fetch_id,
-        internal_id,
-        network_request_handle: Some(
-            info.network_request_handle
-                .unwrap_or_else(SubresourceNetworkRequestHandle::allocate),
-        ),
-        url: info.url.clone(),
-        method: info.method.clone(),
-        body: info.request_body_bytes.clone(),
-        headers: info.request_headers.clone(),
-        intercept_response,
-        handle_auth_requests: false,
-        auth: None,
-    }
-}
-
-fn pending_worker_xhr_continue(
-    xhr_id: u32,
-    internal_id: u64,
-    info: &crate::protocol_types::PendingSubresourceFetchInfo,
-    intercept_response: bool,
-) -> WorkerPendingXhrContinue {
-    WorkerPendingXhrContinue {
-        xhr_id,
-        internal_id,
-        network_request_handle: Some(
-            info.network_request_handle
-                .unwrap_or_else(SubresourceNetworkRequestHandle::allocate),
-        ),
-        url: info.url.clone(),
-        method: info.method.clone(),
-        body: info.request_body_bytes.clone(),
-        headers: info.request_headers.clone(),
-        intercept_response,
-        handle_auth_requests: false,
-        auth: None,
     }
 }
 

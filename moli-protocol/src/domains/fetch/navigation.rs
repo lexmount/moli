@@ -80,7 +80,7 @@ pub(crate) async fn continue_subresource_without_fetch_pause_async(
     conn: &mut CdpConnection,
     owner: &CommandOwnerScope,
     request_id: Option<String>,
-    page_owner: crate::conn::TargetPageResidenceIdentity,
+    residence: crate::conn::PendingSubresourceFetchResidence,
     internal_id: u64,
     network_request_id: String,
     network_request_handle: Option<moli_core::page::SubresourceNetworkRequestHandle>,
@@ -91,7 +91,7 @@ pub(crate) async fn continue_subresource_without_fetch_pause_async(
     owner_kind: PendingSubresourceFetchOwnerKind,
 ) {
     let pending = PendingSubresourceFetchRequest {
-        residence: crate::conn::PendingSubresourceFetchResidence::InstalledPage(page_owner),
+        residence,
         owner_session_id: None,
         action_session_id: None,
         owner_kind,
@@ -105,15 +105,18 @@ pub(crate) async fn continue_subresource_without_fetch_pause_async(
         request_stage_chain: None,
     };
     if conn
-        .continue_pending_subresource_fetch_for_owner_async(
+        .execute_subresource_fetch_command(
             owner,
-            internal_id,
-            None,
-            None,
-            None,
-            None,
-            false,
-            handle_auth_requests,
+            &pending.residence,
+            crate::conn::DocumentFetchCommand::ContinueRequest {
+                internal_id,
+                url: None,
+                method: None,
+                body: None,
+                headers: None,
+                intercept_response: false,
+                handle_auth_requests,
+            },
         )
         .await
         .is_ok()
@@ -278,15 +281,18 @@ pub(crate) async fn continue_subresource_for_response_stage_async(
         .map(CommandOwnerScope::for_session)
         .unwrap_or_else(|| owner.clone());
     if conn
-        .continue_pending_subresource_fetch_for_owner_async(
+        .execute_subresource_fetch_command(
             &action_owner,
-            pending.internal_id,
-            None,
-            None,
-            None,
-            None,
-            true,
-            handle_auth_requests,
+            &pending.residence,
+            crate::conn::DocumentFetchCommand::ContinueRequest {
+                internal_id: pending.internal_id,
+                url: None,
+                method: None,
+                body: None,
+                headers: None,
+                intercept_response: true,
+                handle_auth_requests,
+            },
         )
         .await
         .is_ok()
@@ -312,15 +318,18 @@ pub(crate) async fn continue_subresource_for_deferred_response_stage_async(
         .map(CommandOwnerScope::for_session)
         .unwrap_or_else(|| owner.clone());
     if conn
-        .continue_pending_subresource_fetch_for_owner_async(
+        .execute_subresource_fetch_command(
             &action_owner,
-            pending.internal_id,
-            None,
-            None,
-            None,
-            None,
-            true,
-            handle_auth_requests,
+            &pending.residence,
+            crate::conn::DocumentFetchCommand::ContinueRequest {
+                internal_id: pending.internal_id,
+                url: None,
+                method: None,
+                body: None,
+                headers: None,
+                intercept_response: true,
+                handle_auth_requests,
+            },
         )
         .await
         .is_ok()

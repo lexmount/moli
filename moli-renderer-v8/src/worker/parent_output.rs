@@ -43,6 +43,9 @@ impl WorkerParentSender {
             return sender.send(message).map_err(Box::new);
         };
         match message {
+            WorkerToParentMessage::FetchInterception(pause) => {
+                host.publish(RendererProtocolObservation::Network(pause.report(None)))
+            }
             WorkerToParentMessage::Network(observation) => {
                 host.publish(RendererProtocolObservation::Network(observation))
             }

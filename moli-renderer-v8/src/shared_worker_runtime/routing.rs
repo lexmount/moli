@@ -3,34 +3,28 @@ use std::sync::Arc;
 use moli_shared_worker::SharedWorkerInstanceId;
 
 use super::{
-    host::{RendererSharedWorkerHost, SharedRendererSharedWorkerHost},
+    host::SharedRendererSharedWorkerHost,
     service::{SharedWorkerRuntimeService, WeakSharedWorkerRuntimeService},
 };
 
 impl SharedWorkerRuntimeService {
+    pub(crate) fn client_document(
+        &self,
+        instance_id: SharedWorkerInstanceId,
+    ) -> Option<(
+        crate::runtime::RendererOwnerLocalHostId,
+        crate::runtime::RendererDocumentToken,
+    )> {
+        self.running_host_for_instance(instance_id)?
+            .worker_host_bridge_sender()
+            .map(|client| client.document_source())
+    }
+
     pub(super) fn running_host_for_instance(
         &self,
         instance_id: SharedWorkerInstanceId,
     ) -> Option<SharedRendererSharedWorkerHost> {
         self.running_matching_host(instance_id)
-    }
-
-    pub(super) fn route_running_host(
-        &self,
-        instance_id: SharedWorkerInstanceId,
-        route: impl FnOnce(&RendererSharedWorkerHost) -> bool,
-    ) -> bool {
-        let Some(host) = self.running_host_for_route(instance_id) else {
-            return false;
-        };
-        route(&host)
-    }
-
-    fn running_host_for_route(
-        &self,
-        instance_id: SharedWorkerInstanceId,
-    ) -> Option<SharedRendererSharedWorkerHost> {
-        self.running_host_for_instance(instance_id)
     }
 }
 

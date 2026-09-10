@@ -16,16 +16,15 @@ use crate::content_security_policy::{
 use crate::context_bootstrap::dispatch_simple_event_target_event;
 use crate::network::loads::{ResourceLoadDisposition, ResourceLoadKind, ResourceLoadLease};
 use crate::protocol_types::{
-    PendingSubresourceContinueEvent, PendingSubresourceFetchInfo, SubresourceNetworkRecord,
-    SubresourceNetworkRequestHandle, SubresourceResponseBody,
+    PendingSubresourceFetchInfo, SubresourceNetworkRecord, SubresourceNetworkRequestHandle,
+    SubresourceResponseBody,
 };
 use crate::service_worker_runtime::{
     ServiceWorkerDirectFetchResult, ServiceWorkerFetchDispatch, ServiceWorkerFetchRequest,
     ServiceWorkerRequestDestination, service_worker_fetch_request_metadata,
 };
 use crate::types::{AsyncSubresourceNetworkContext, SubresourceResourceType};
-use crate::worker::handle::WorkerPendingSubresourceFetch;
-use crate::worker::{WorkerPendingFetchContinue, WorkerToParentMessage};
+use crate::worker::WorkerPendingFetchContinue;
 use moli_fetch::{
     BrowserRequestMetadata, FetchCancelHandle, Request, RequestResourceType,
     should_request_be_blocked_due_to_bad_port,
@@ -162,7 +161,6 @@ fn send_worker_content_security_policy_report_for_state(
         record_worker_content_security_policy_report_failure(
             state,
             None,
-            None,
             document_url,
             request,
             "csp report: worker global is shutting down".to_owned(),
@@ -175,7 +173,6 @@ fn send_worker_content_security_policy_report_for_state(
         record_worker_content_security_policy_report_failure(
             state,
             None,
-            None,
             document_url,
             request,
             message,
@@ -185,7 +182,6 @@ fn send_worker_content_security_policy_report_for_state(
     if load.blocks_url(&request.url) {
         record_worker_content_security_policy_report_failure(
             state,
-            None,
             None,
             document_url,
             request,
@@ -212,7 +208,6 @@ fn send_worker_content_security_policy_report_for_state(
         record_worker_content_security_policy_report_failure(
             state,
             None,
-            None,
             document_url,
             request,
             "Network emulation offline".to_owned(),
@@ -233,7 +228,6 @@ fn send_worker_content_security_policy_report_for_state(
             load,
             policy_context,
             None,
-            None,
             document_url,
             request,
             request_body,
@@ -245,7 +239,6 @@ fn send_worker_content_security_policy_report_for_state(
         state.borrow().parent_tx.clone(),
         state.borrow().global_kind.clone(),
         load,
-        None,
         None,
         document_url,
         request,
@@ -276,9 +269,10 @@ fn pause_worker_content_security_policy_report_for_fetch_interception(
     request_body: Option<String>,
 ) {
     let request_body_bytes = request.body.clone();
+    let handle = SubresourceNetworkRequestHandle::allocate();
     let info = PendingSubresourceFetchInfo {
-        internal_id: 0,
-        network_request_handle: None,
+        internal_id: handle.get(),
+        network_request_handle: Some(handle),
         frame_id: None,
         document_url: document_url.clone(),
         url: request.url.clone(),
@@ -292,12 +286,10 @@ fn pause_worker_content_security_policy_report_for_fetch_interception(
     };
     let mut state = state.borrow_mut();
     let report_id = next_fetch_id(&mut state);
-    let network_partition_key = request.network_partition_key().map(str::to_owned);
-    let credentials_mode = request.credentials_mode;
-    let request_mode = request.request_mode;
     state.pending_csp_reports.insert(
         report_id,
         PendingWorkerCspReport {
+            handle,
             load: load.clone(),
             document_url,
             request,
@@ -306,18 +298,13 @@ fn pause_worker_content_security_policy_report_for_fetch_interception(
             service_worker_client_id,
         },
     );
-    let _ = state
-        .parent_tx
-        .send(WorkerToParentMessage::PendingSubresourceFetch(
-            WorkerPendingSubresourceFetch {
-                fetch_id: report_id,
-                load,
-                credentials_mode,
-                request_mode,
-                network_partition_key,
-                info,
-            },
-        ));
+    super::publish_worker_fetch_pause(
+        &state,
+        crate::runtime::WorkerFetchTarget::CspReport(report_id),
+        handle,
+        load,
+        crate::runtime::RendererWorkerFetchStage::Request(Box::new(info)),
+    );
 }
 
 type WorkerContentSecurityPolicyReportContext = (
@@ -352,7 +339,6 @@ fn dispatch_worker_content_security_policy_report_to_service_worker(
     load: ResourceLoadLease,
     policy_context: crate::types::SubresourcePolicyContext,
     request_handle: Option<SubresourceNetworkRequestHandle>,
-    continue_internal_id: Option<u64>,
     document_url: Url,
     request: Request,
     request_body: Option<String>,
@@ -402,7 +388,6 @@ fn dispatch_worker_content_security_policy_report_to_service_worker(
             parent_tx,
             global_kind,
             request_handle,
-            continue_internal_id,
             document_url,
             request,
             request_body,
@@ -420,7 +405,6 @@ fn dispatch_worker_content_security_policy_report_to_service_worker(
                     global_kind,
                     load,
                     request_handle,
-                    continue_internal_id,
                     document_url,
                     request,
                     request_body,
@@ -435,7 +419,6 @@ fn dispatch_worker_content_security_policy_report_to_service_worker(
                     parent_tx,
                     global_kind,
                     request_handle,
-                    continue_internal_id,
                     document_url,
                     request,
                     request_body,
@@ -449,7 +432,6 @@ fn dispatch_worker_content_security_policy_report_to_service_worker(
                     parent_tx,
                     global_kind,
                     request_handle,
-                    continue_internal_id,
                     document_url,
                     request,
                     request_body,
@@ -462,7 +444,6 @@ fn dispatch_worker_content_security_policy_report_to_service_worker(
                     parent_tx,
                     global_kind,
                     request_handle,
-                    continue_internal_id,
                     document_url,
                     request,
                     request_body,
@@ -478,7 +459,6 @@ fn spawn_worker_content_security_policy_report_network(
     global_kind: crate::worker::WorkerGlobalKind,
     load: ResourceLoadLease,
     request_handle: Option<SubresourceNetworkRequestHandle>,
-    continue_internal_id: Option<u64>,
     document_url: Url,
     request: Request,
     request_body: Option<String>,
@@ -501,7 +481,6 @@ fn spawn_worker_content_security_policy_report_network(
                         callback_parent_tx,
                         callback_global_kind,
                         request_handle,
-                        continue_internal_id,
                         callback_document_url,
                         callback_request,
                         callback_request_body,
@@ -513,7 +492,6 @@ fn spawn_worker_content_security_policy_report_network(
                     callback_parent_tx,
                     callback_global_kind,
                     request_handle,
-                    continue_internal_id,
                     callback_document_url,
                     callback_request,
                     callback_request_body,
@@ -527,7 +505,6 @@ fn spawn_worker_content_security_policy_report_network(
             parent_tx,
             global_kind,
             request_handle,
-            continue_internal_id,
             document_url,
             request,
             request_body,
@@ -566,7 +543,6 @@ pub(in crate::worker) fn continue_pending_worker_csp_report(
             record_worker_content_security_policy_report_failure(
                 state,
                 continuation.network_request_handle,
-                Some(continuation.internal_id),
                 pending.document_url,
                 pending.request,
                 format!("csp report: {error}"),
@@ -588,7 +564,6 @@ pub(in crate::worker) fn continue_pending_worker_csp_report(
         record_worker_content_security_policy_report_failure(
             state,
             continuation.network_request_handle,
-            Some(continuation.internal_id),
             document_url,
             request,
             message,
@@ -599,7 +574,6 @@ pub(in crate::worker) fn continue_pending_worker_csp_report(
         record_worker_content_security_policy_report_failure(
             state,
             continuation.network_request_handle,
-            Some(continuation.internal_id),
             document_url,
             request,
             crate::network_host::BLOCKED_BY_CLIENT_ERROR_TEXT.to_owned(),
@@ -610,7 +584,6 @@ pub(in crate::worker) fn continue_pending_worker_csp_report(
         record_worker_content_security_policy_report_failure(
             state,
             continuation.network_request_handle,
-            Some(continuation.internal_id),
             document_url,
             request,
             "Network emulation offline".to_owned(),
@@ -631,7 +604,6 @@ pub(in crate::worker) fn continue_pending_worker_csp_report(
             load,
             policy_context,
             continuation.network_request_handle,
-            Some(continuation.internal_id),
             document_url,
             request,
             request_body,
@@ -644,7 +616,6 @@ pub(in crate::worker) fn continue_pending_worker_csp_report(
         global_kind,
         load,
         continuation.network_request_handle,
-        Some(continuation.internal_id),
         document_url,
         request,
         request_body,
@@ -667,7 +638,6 @@ pub(in crate::worker) fn fail_pending_worker_csp_report(
     record_worker_content_security_policy_report_failure(
         state,
         continuation.network_request_handle,
-        Some(continuation.internal_id),
         pending.document_url,
         pending.request,
         error_text,
@@ -701,7 +671,6 @@ pub(in crate::worker) fn fulfill_pending_worker_csp_report(
         state.parent_tx.clone(),
         state.global_kind.clone(),
         continuation.network_request_handle,
-        Some(continuation.internal_id),
         pending.document_url,
         pending.request,
         request_body,
@@ -713,7 +682,6 @@ pub(in crate::worker) fn fulfill_pending_worker_csp_report(
 fn record_worker_content_security_policy_report_failure(
     state: &Rc<RefCell<WorkerGlobalState>>,
     request_handle: Option<SubresourceNetworkRequestHandle>,
-    continue_internal_id: Option<u64>,
     document_url: Url,
     request: Request,
     message: String,
@@ -730,17 +698,12 @@ fn record_worker_content_security_policy_report_failure(
         SubresourceResourceType::CspReport,
         message,
     );
-    send_worker_content_security_policy_report_continue_completed(
-        &state.parent_tx,
-        continue_internal_id,
-    );
 }
 
 fn send_worker_content_security_policy_report_success(
     parent_tx: crate::worker::WorkerParentSender,
     global_kind: crate::worker::WorkerGlobalKind,
     request_handle: Option<SubresourceNetworkRequestHandle>,
-    continue_internal_id: Option<u64>,
     document_url: Url,
     request: Request,
     request_body: Option<String>,
@@ -773,14 +736,12 @@ fn send_worker_content_security_policy_report_success(
         record = record.with_request_handle(handle);
     }
     let _ = parent_tx.send(global_kind.network_message(record));
-    send_worker_content_security_policy_report_continue_completed(&parent_tx, continue_internal_id);
 }
 
 fn send_worker_content_security_policy_report_failure(
     parent_tx: crate::worker::WorkerParentSender,
     global_kind: crate::worker::WorkerGlobalKind,
     request_handle: Option<SubresourceNetworkRequestHandle>,
-    continue_internal_id: Option<u64>,
     document_url: Url,
     request: Request,
     request_body: Option<String>,
@@ -800,19 +761,6 @@ fn send_worker_content_security_policy_report_failure(
         record = record.with_request_handle(handle);
     }
     let _ = parent_tx.send(global_kind.network_message(record));
-    send_worker_content_security_policy_report_continue_completed(&parent_tx, continue_internal_id);
-}
-
-fn send_worker_content_security_policy_report_continue_completed(
-    parent_tx: &crate::worker::WorkerParentSender,
-    continue_internal_id: Option<u64>,
-) {
-    let Some(internal_id) = continue_internal_id else {
-        return;
-    };
-    let _ = parent_tx.send(WorkerToParentMessage::SubresourceContinue(
-        PendingSubresourceContinueEvent::Completed { internal_id },
-    ));
 }
 
 pub(super) fn worker_content_security_policy_violation(

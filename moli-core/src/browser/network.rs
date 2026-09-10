@@ -38,6 +38,30 @@ pub struct NetworkOccurrence {
     pub renderer: Arc<RendererNetworkOccurrence>,
 }
 
+/// A committed, single-use decision for a physical Worker request. The
+/// observing Document supplies policy, never the request's execution owner.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct WorkerFetchPause {
+    pub worker: WorkerHandle,
+    pub document: DocumentHandle,
+    pub sequence: BrowserSequence,
+    pub pause: crate::page::RendererWorkerFetchPause,
+    pub(super) renderer_document: super::RendererPageResidenceIdentity,
+}
+
+impl WorkerFetchPause {
+    fn key(&self) -> NetworkRequestKey {
+        worker_pause_key(&self.pause)
+    }
+}
+
+fn worker_pause_key(pause: &crate::page::RendererWorkerFetchPause) -> NetworkRequestKey {
+    (
+        RendererNetworkSourceIdentity::Worker(pause.worker().clone()),
+        NetworkRequestIdentity::Resource(pause.handle().get()),
+    )
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum NetworkRequestState {
     Started(Arc<SubresourceRequestStarted>),
@@ -156,6 +180,9 @@ pub(super) fn request_key(occurrence: &RendererNetworkOccurrence) -> Option<Netw
     let source = occurrence.source.identity();
     let item = match &occurrence.item {
         RendererNetworkOutputItem::Resource(item) => item,
+        RendererNetworkOutputItem::WorkerFetch { pause, .. } => {
+            return Some(worker_pause_key(pause));
+        }
         RendererNetworkOutputItem::ChildDocument(response) => {
             return Some((
                 source,
@@ -179,9 +206,82 @@ pub(super) fn request_key(occurrence: &RendererNetworkOccurrence) -> Option<Netw
 #[derive(Default)]
 pub(super) struct NetworkRequests {
     entries: IndexMap<NetworkRequestKey, NetworkRequestSnapshot>,
+    worker_pauses: IndexMap<NetworkRequestKey, WorkerFetchPause>,
+}
+
+impl Drop for NetworkRequests {
+    fn drop(&mut self) {
+        for pause in self.worker_pauses.values() {
+            pause.pause.release();
+        }
+    }
 }
 
 impl NetworkRequests {
+    pub(super) fn worker_pauses(&self) -> impl Iterator<Item = WorkerFetchPause> + '_ {
+        self.worker_pauses
+            .values()
+            .filter(|entry| entry.pause.is_available())
+            .cloned()
+    }
+
+    pub(super) fn worker_pause(
+        &self,
+        pause: &crate::page::RendererWorkerFetchPause,
+    ) -> Option<WorkerFetchPause> {
+        self.worker_pauses
+            .get(&worker_pause_key(pause))
+            .filter(|entry| entry.pause == *pause && pause.is_available())
+            .cloned()
+    }
+
+    pub(super) fn pause_worker(&mut self, pause: WorkerFetchPause) {
+        if self
+            .worker_pauses
+            .get(&pause.key())
+            .is_some_and(|old| old.pause == pause.pause)
+        {
+            return;
+        }
+        if let Some(old) = self.worker_pauses.insert(pause.key(), pause) {
+            old.pause.invalidate();
+        }
+    }
+
+    pub(super) fn start_worker_decision(
+        &mut self,
+        pause: &WorkerFetchPause,
+        decision: crate::page::WorkerFetchDecision,
+    ) -> Result<crate::page::PendingWorkerFetchDecision, String> {
+        let key = pause.key();
+        if self.worker_pauses.get(&key) != Some(pause) {
+            return Err("Worker request pause is no longer available".into());
+        }
+        let pending = pause.pause.start_decision(decision)?;
+        self.worker_pauses.shift_remove(&key);
+        Ok(pending)
+    }
+
+    pub(super) fn release_worker_pauses_for_document(&mut self, document: DocumentHandle) {
+        self.worker_pauses.retain(|_, entry| {
+            if entry.document != document {
+                return true;
+            }
+            entry.pause.release();
+            false
+        });
+    }
+
+    pub(super) fn retire_worker_pauses(&mut self, worker: WorkerHandle) {
+        self.worker_pauses.retain(|_, entry| {
+            if entry.worker != worker {
+                return true;
+            }
+            entry.pause.invalidate();
+            false
+        });
+    }
+
     pub(super) fn get(&self, key: &NetworkRequestKey) -> Option<&NetworkRequestSnapshot> {
         self.entries.get(key)
     }
@@ -195,6 +295,24 @@ impl NetworkRequests {
         producer: &RendererNetworkSourceIdentity,
     ) -> Option<NetworkOwner> {
         let mut owner = None;
+        self.worker_pauses.retain(|(source, _), entry| {
+            if source == producer {
+                owner = Some(NetworkOwner::Worker(entry.worker));
+                entry.pause.invalidate();
+                return false;
+            }
+            if let RendererNetworkSourceIdentity::Page {
+                owner_local_host_id,
+                page,
+            } = producer
+                && entry.renderer_document
+                    == super::RendererPageResidenceIdentity::from_parts(*owner_local_host_id, *page)
+            {
+                entry.pause.release();
+                return false;
+            }
+            true
+        });
         self.entries.retain(|(source, _), entry| {
             if source == producer {
                 owner = Some(entry.owner);
@@ -221,6 +339,9 @@ impl NetworkRequests {
             return false;
         }
         let state = match &occurrence.item {
+            RendererNetworkOutputItem::WorkerFetch { .. } => {
+                unreachable!("decision admission is separate from Network state")
+            }
             RendererNetworkOutputItem::ChildDocument(response) => {
                 NetworkRequestState::ChildDocument(response.clone())
             }
@@ -292,6 +413,9 @@ impl NetworkRequests {
         );
         let completed = state.is_terminal();
         if completed {
+            if let Some(pause) = self.worker_pauses.shift_remove(&key) {
+                pause.pause.invalidate();
+            }
             self.entries.shift_remove(&key);
         }
         self.entries.insert(

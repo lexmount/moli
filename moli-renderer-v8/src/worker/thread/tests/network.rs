@@ -1,5 +1,78 @@
 use super::*;
 
+fn worker_request_info(
+    pause: &crate::runtime::RendererWorkerFetchPause,
+) -> &crate::protocol_types::PendingSubresourceFetchInfo {
+    let crate::runtime::RendererWorkerFetchStage::Request(info) = pause.stage() else {
+        panic!("expected request stage");
+    };
+    info
+}
+
+async fn decide_worker_pause(
+    pause: &crate::runtime::RendererWorkerFetchPause,
+    decision: crate::runtime::WorkerFetchDecision,
+) {
+    let pending = pause
+        .start_decision(decision)
+        .expect("exact Worker pause must accept its decision");
+    timeout(TIMEOUT, pending.wait())
+        .await
+        .expect("Worker decision must complete")
+        .expect("Worker decision must succeed");
+}
+
+async fn continue_worker_request(
+    pause: &crate::runtime::RendererWorkerFetchPause,
+    intercept_response: bool,
+    handle_auth_requests: bool,
+) {
+    decide_worker_pause(
+        pause,
+        crate::runtime::WorkerFetchDecision::ContinueRequest {
+            url: None,
+            method: None,
+            body: None,
+            headers: None,
+            intercept_response,
+            handle_auth_requests,
+        },
+    )
+    .await;
+}
+
+async fn continue_worker_response(
+    pause: &crate::runtime::RendererWorkerFetchPause,
+    response_code: Option<u16>,
+    response_headers: Option<Vec<(String, String)>>,
+) {
+    decide_worker_pause(
+        pause,
+        crate::runtime::WorkerFetchDecision::ContinueResponse {
+            response_code,
+            response_headers,
+        },
+    )
+    .await;
+}
+
+async fn fulfill_worker_pause(
+    pause: &crate::runtime::RendererWorkerFetchPause,
+    response_code: u16,
+    response_headers: Vec<(String, String)>,
+    response_body: RendererSyntheticResponseBody,
+) {
+    decide_worker_pause(
+        pause,
+        crate::runtime::WorkerFetchDecision::Fulfill {
+            response_code,
+            response_headers,
+            response_body,
+        },
+    )
+    .await;
+}
+
 fn assert_initial_worker_auth_network_headers(headers: Option<&[(String, String)]>) {
     let headers = headers.expect("worker auth transport request headers");
     assert!(
@@ -2905,24 +2978,29 @@ async fn worker_xhr_request_stage_interception_can_fulfill_synthetic_response() 
         .await
         .expect("timed out waiting for worker xhr pause")
         .expect("worker channel closed");
-    let WorkerToParentMessage::PendingSubresourceFetch(pending) = pending else {
+    let WorkerToParentMessage::FetchInterception(pending) = pending else {
         panic!("expected worker xhr pause, got {pending:?}");
     };
-    assert!(pending.info.network_request_handle.is_some());
-    assert_eq!(pending.info.resource_type, SubresourceResourceType::Xhr);
+    assert!(
+        worker_request_info(&pending)
+            .network_request_handle
+            .is_some()
+    );
     assert_eq!(
-        pending.info.url.as_str(),
+        worker_request_info(&pending).resource_type,
+        SubresourceResourceType::Xhr
+    );
+    assert_eq!(
+        worker_request_info(&pending).url.as_str(),
         "http://example.test/intercepted-worker-xhr"
     );
-    assert_eq!(pending.info.request_body.as_deref(), Some("payload"));
     assert_eq!(
-        pending.network_partition_key.as_deref(),
-        Some("credentialless-worker-xhr")
+        worker_request_info(&pending).request_body.as_deref(),
+        Some("payload")
     );
 
-    let request = pending_worker_xhr_continue(pending.fetch_id, 31, &pending.info, false);
-    handle.fulfill_pending_xhr(
-        request,
+    fulfill_worker_pause(
+        &pending,
         204,
         vec![
             ("content-type".to_owned(), "text/plain".to_owned()),
@@ -2932,7 +3010,8 @@ async fn worker_xhr_request_stage_interception_can_fulfill_synthetic_response() 
             ),
         ],
         RendererSyntheticResponseBody::from_bytes(b"fulfilled-worker-xhr".to_vec()),
-    );
+    )
+    .await;
 
     assert_eq!(
         recv_post_json(&mut handle).await,
@@ -2992,7 +3071,7 @@ async fn worker_sync_xhr_request_stage_interception_reports_explicit_failure() {
                 network = Some(observation.worker_record_for_test().clone())
             }
             WorkerToParentMessage::Post(payload) => post = Some(stringify_payload(&payload)),
-            WorkerToParentMessage::PendingSubresourceFetch(pending) => {
+            WorkerToParentMessage::FetchInterception(pending) => {
                 panic!("sync worker XHR should not be paused for interception: {pending:?}")
             }
             other => panic!("unexpected worker message: {other:?}"),
@@ -3061,23 +3140,22 @@ async fn worker_xhr_response_stage_interception_pauses_before_done() {
         .await
         .expect("timed out waiting for request-stage worker xhr pause")
         .expect("worker channel closed");
-    let WorkerToParentMessage::PendingSubresourceFetch(pending) = pending else {
+    let WorkerToParentMessage::FetchInterception(pending) = pending else {
         panic!("expected worker xhr pause, got {pending:?}");
     };
-    let request = pending_worker_xhr_continue(pending.fetch_id, 37, &pending.info, true);
-    handle.continue_pending_xhr(request.clone());
+    continue_worker_request(&pending, true, false).await;
 
     let response_pause = timeout(TIMEOUT, handle.recv())
         .await
         .expect("timed out waiting for response-stage worker xhr pause")
         .expect("worker channel closed");
-    let WorkerToParentMessage::SubresourceContinue(
-        PendingSubresourceContinueEvent::ResponsePaused(info),
-    ) = response_pause
-    else {
+    let WorkerToParentMessage::FetchInterception(response_pause) = response_pause else {
         panic!("expected worker xhr response-stage pause, got {response_pause:?}");
     };
-    assert_eq!(info.internal_id, 37);
+    let crate::runtime::RendererWorkerFetchStage::Response(info) = response_pause.stage() else {
+        panic!("expected response stage");
+    };
+    assert_eq!(info.internal_id, pending.handle().get());
     assert_eq!(info.resource_type, SubresourceResourceType::Xhr);
     assert_eq!(info.response_status, 200);
     assert_eq!(
@@ -3085,8 +3163,8 @@ async fn worker_xhr_response_stage_interception_pauses_before_done() {
         b"origin-worker-xhr"
     );
 
-    handle.continue_pending_xhr_response(
-        request,
+    continue_worker_response(
+        &response_pause,
         Some(206),
         Some(vec![
             ("content-type".to_owned(), "text/plain".to_owned()),
@@ -3095,7 +3173,8 @@ async fn worker_xhr_response_stage_interception_pauses_before_done() {
                 "continued".to_owned(),
             ),
         ]),
-    );
+    )
+    .await;
 
     assert_eq!(
         recv_post_json(&mut handle).await,
@@ -3345,23 +3424,22 @@ async fn worker_xhr_response_stage_continue_preserves_large_spooled_body() {
         .await
         .expect("timed out waiting for request-stage large worker xhr pause")
         .expect("worker channel closed");
-    let WorkerToParentMessage::PendingSubresourceFetch(pending) = pending else {
+    let WorkerToParentMessage::FetchInterception(pending) = pending else {
         panic!("expected large worker xhr pause, got {pending:?}");
     };
-    let request = pending_worker_xhr_continue(pending.fetch_id, 67, &pending.info, true);
-    handle.continue_pending_xhr(request.clone());
+    continue_worker_request(&pending, true, false).await;
 
     let response_pause = timeout(TIMEOUT, handle.recv())
         .await
         .expect("timed out waiting for response-stage large worker xhr pause")
         .expect("worker channel closed");
-    let WorkerToParentMessage::SubresourceContinue(
-        PendingSubresourceContinueEvent::ResponsePaused(info),
-    ) = response_pause
-    else {
+    let WorkerToParentMessage::FetchInterception(response_pause) = response_pause else {
         panic!("expected large worker xhr response-stage pause, got {response_pause:?}");
     };
-    assert_eq!(info.internal_id, 67);
+    let crate::runtime::RendererWorkerFetchStage::Response(info) = response_pause.stage() else {
+        panic!("expected response stage");
+    };
+    assert_eq!(info.internal_id, pending.handle().get());
     assert_eq!(
         info.response_body
             .read_chunk(expected_len - 1, 1)
@@ -3369,7 +3447,7 @@ async fn worker_xhr_response_stage_continue_preserves_large_spooled_body() {
         b"x"
     );
 
-    handle.continue_pending_xhr_response(request, None, None);
+    continue_worker_response(&response_pause, None, None).await;
 
     assert_eq!(
         recv_post_json(&mut handle).await,
@@ -3416,24 +3494,22 @@ async fn worker_xhr_auth_required_then_continue_with_auth_resolves() {
         .await
         .expect("timed out waiting for request-stage worker xhr auth pause")
         .expect("worker channel closed");
-    let WorkerToParentMessage::PendingSubresourceFetch(pending) = pending else {
+    let WorkerToParentMessage::FetchInterception(pending) = pending else {
         panic!("expected worker xhr auth request pause, got {pending:?}");
     };
-    let mut request = pending_worker_xhr_continue(pending.fetch_id, 41, &pending.info, false);
-    request.handle_auth_requests = true;
-    handle.continue_pending_xhr(request.clone());
+    continue_worker_request(&pending, false, true).await;
 
     let auth_pause = timeout(TIMEOUT, handle.recv())
         .await
         .expect("timed out waiting for worker xhr auth challenge")
         .expect("worker channel closed");
-    let WorkerToParentMessage::SubresourceContinue(PendingSubresourceContinueEvent::AuthRequired(
-        info,
-    )) = auth_pause
-    else {
+    let WorkerToParentMessage::FetchInterception(auth_pause) = auth_pause else {
         panic!("expected worker xhr auth challenge, got {auth_pause:?}");
     };
-    assert_eq!(info.internal_id, 41);
+    let crate::runtime::RendererWorkerFetchStage::Auth(info) = auth_pause.stage() else {
+        panic!("expected auth stage");
+    };
+    assert_eq!(info.internal_id, pending.handle().get());
     assert_eq!(info.resource_type, SubresourceResourceType::Xhr);
     assert_eq!(info.challenge.source, "Server");
     assert_eq!(info.challenge.scheme, "basic");
@@ -3441,8 +3517,11 @@ async fn worker_xhr_auth_required_then_continue_with_auth_resolves() {
     assert!(!info.intercept_response);
     assert_initial_worker_auth_network_headers(info.network_request_headers.as_deref());
 
-    request.auth = Some(server_basic_auth_credentials());
-    handle.continue_pending_xhr(request);
+    decide_worker_pause(
+        &auth_pause,
+        crate::runtime::WorkerFetchDecision::ProvideAuth(server_basic_auth_credentials()),
+    )
+    .await;
 
     let network = timeout(TIMEOUT, handle.recv())
         .await
@@ -3502,27 +3581,29 @@ async fn worker_xhr_auth_required_then_fail_errors_without_exposing_challenge_bo
         .await
         .expect("timed out waiting for request-stage worker xhr auth pause")
         .expect("worker channel closed");
-    let WorkerToParentMessage::PendingSubresourceFetch(pending) = pending else {
+    let WorkerToParentMessage::FetchInterception(pending) = pending else {
         panic!("expected worker xhr auth request pause, got {pending:?}");
     };
-    let mut request = pending_worker_xhr_continue(pending.fetch_id, 43, &pending.info, false);
-    request.handle_auth_requests = true;
-    handle.continue_pending_xhr(request.clone());
+    continue_worker_request(&pending, false, true).await;
 
     let auth_pause = timeout(TIMEOUT, handle.recv())
         .await
         .expect("timed out waiting for worker xhr auth challenge")
         .expect("worker channel closed");
-    let WorkerToParentMessage::SubresourceContinue(PendingSubresourceContinueEvent::AuthRequired(
-        info,
-    )) = auth_pause
-    else {
+    let WorkerToParentMessage::FetchInterception(auth_pause) = auth_pause else {
         panic!("expected worker xhr auth challenge, got {auth_pause:?}");
     };
-    assert_eq!(info.internal_id, 43);
+    let crate::runtime::RendererWorkerFetchStage::Auth(info) = auth_pause.stage() else {
+        panic!("expected auth stage");
+    };
+    assert_eq!(info.internal_id, pending.handle().get());
     assert_eq!(info.challenge.realm, "worker-xhr-area");
 
-    handle.fail_pending_xhr_auth(request, "worker xhr auth aborted".to_owned());
+    decide_worker_pause(
+        &auth_pause,
+        crate::runtime::WorkerFetchDecision::Fail("worker xhr auth aborted".to_owned()),
+    )
+    .await;
 
     assert_eq!(
         recv_post_json(&mut handle).await,
@@ -3908,30 +3989,33 @@ async fn worker_fetch_request_stage_interception_can_fulfill_synthetic_response(
         .await
         .expect("timed out waiting for worker fetch pause")
         .expect("worker channel closed");
-    let WorkerToParentMessage::PendingSubresourceFetch(pending) = pending else {
+    let WorkerToParentMessage::FetchInterception(pending) = pending else {
         panic!("expected worker fetch pause, got {pending:?}");
     };
-    assert!(pending.info.network_request_handle.is_some());
-    assert_eq!(pending.info.resource_type, SubresourceResourceType::Fetch);
+    assert!(
+        worker_request_info(&pending)
+            .network_request_handle
+            .is_some()
+    );
     assert_eq!(
-        pending.info.url.as_str(),
+        worker_request_info(&pending).resource_type,
+        SubresourceResourceType::Fetch
+    );
+    assert_eq!(
+        worker_request_info(&pending).url.as_str(),
         "http://example.test/intercepted-worker-fetch"
     );
-    assert_eq!(
-        pending.network_partition_key.as_deref(),
-        Some("credentialless-worker-fetch")
-    );
 
-    let request = pending_worker_fetch_continue(pending.fetch_id, 17, &pending.info, false);
-    handle.fulfill_pending_fetch(
-        request,
+    fulfill_worker_pause(
+        &pending,
         202,
         vec![
             ("content-type".to_owned(), "text/plain".to_owned()),
             ("x-worker-intercept".to_owned(), "request-stage".to_owned()),
         ],
         RendererSyntheticResponseBody::from_bytes(b"fulfilled-worker-fetch".to_vec()),
-    );
+    )
+    .await;
 
     assert_eq!(
         recv_post_json(&mut handle).await,
@@ -3981,57 +4065,55 @@ async fn worker_subresource_request_handles_are_owner_unique() {
         .await
         .expect("timed out waiting for second worker fetch pause")
         .expect("second worker channel closed");
-    let WorkerToParentMessage::PendingSubresourceFetch(first_pending) = first_pending else {
+    let WorkerToParentMessage::FetchInterception(first_pending) = first_pending else {
         panic!("expected first worker fetch pause, got {first_pending:?}");
     };
-    let WorkerToParentMessage::PendingSubresourceFetch(second_pending) = second_pending else {
+    let WorkerToParentMessage::FetchInterception(second_pending) = second_pending else {
         panic!("expected second worker fetch pause, got {second_pending:?}");
     };
 
     assert!(
-        first_pending.info.network_request_handle.is_some(),
+        worker_request_info(&first_pending)
+            .network_request_handle
+            .is_some(),
         "the physical Worker allocates before publishing its pause"
     );
     assert!(
-        second_pending.info.network_request_handle.is_some(),
+        worker_request_info(&second_pending)
+            .network_request_handle
+            .is_some(),
         "the physical Worker allocates before publishing its pause"
     );
 
-    let first_request =
-        pending_worker_fetch_continue(first_pending.fetch_id, 101, &first_pending.info, false);
-    let second_request =
-        pending_worker_fetch_continue(second_pending.fetch_id, 202, &second_pending.info, false);
-    let first_handle = first_request
-        .network_request_handle
-        .expect("first owner-assigned worker fetch handle");
-    let second_handle = second_request
-        .network_request_handle
-        .expect("second owner-assigned worker fetch handle");
+    let first_handle = first_pending.handle();
+    let second_handle = second_pending.handle();
     assert_eq!(
         Some(first_handle),
-        first_pending.info.network_request_handle
+        worker_request_info(&first_pending).network_request_handle
     );
     assert_eq!(
         Some(second_handle),
-        second_pending.info.network_request_handle
+        worker_request_info(&second_pending).network_request_handle
     );
     assert_ne!(
         first_handle, second_handle,
         "worker-owned request handles must carry owner identity"
     );
 
-    first.fulfill_pending_fetch(
-        first_request,
+    fulfill_worker_pause(
+        &first_pending,
         200,
         vec![("content-type".to_owned(), "text/plain".to_owned())],
         RendererSyntheticResponseBody::from_bytes(b"first-worker-body".to_vec()),
-    );
-    second.fulfill_pending_fetch(
-        second_request,
+    )
+    .await;
+    fulfill_worker_pause(
+        &second_pending,
         200,
         vec![("content-type".to_owned(), "text/plain".to_owned())],
         RendererSyntheticResponseBody::from_bytes(b"second-worker-body".to_vec()),
-    );
+    )
+    .await;
 
     let first_network = timeout(TIMEOUT, first.recv())
         .await
@@ -4052,6 +4134,88 @@ async fn worker_subresource_request_handles_are_owner_unique() {
 
     first.terminate_and_join();
     second.terminate_and_join();
+}
+
+#[tokio::test]
+async fn worker_fetch_native_continue_keeps_physical_network_partition() {
+    assert_native_worker_continue_partition(SubresourceResourceType::Fetch).await;
+}
+
+#[tokio::test]
+async fn worker_xhr_native_continue_keeps_physical_network_partition() {
+    assert_native_worker_continue_partition(SubresourceResourceType::Xhr).await;
+}
+
+async fn assert_native_worker_continue_partition(resource_type: SubresourceResourceType) {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    ensure_v8();
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    let requests = Arc::new(AtomicUsize::new(0));
+    let received = requests.clone();
+    let server = tokio::spawn(async move {
+        loop {
+            let (mut stream, _) = listener.accept().await.unwrap();
+            let head = read_http_request_head(&mut stream).await.unwrap();
+            assert!(head.starts_with("GET /cache "), "{head}");
+            let body = (received.fetch_add(1, Ordering::SeqCst) + 1).to_string();
+            stream.write_all(format!("HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nCache-Control: public, max-age=3600\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}", body.len()).as_bytes()).await.unwrap();
+        }
+    });
+    let cache_dir = std::env::temp_dir().join(format!(
+        "moli-worker-partition-{}-{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+    ));
+    std::fs::create_dir(&cache_dir).unwrap();
+    let mut config = FetchConfig::default();
+    config.set_http_cache_dir(Some(cache_dir.to_str().unwrap().to_owned()));
+    let client = ResourceRequestClient::new(&config).unwrap();
+    let script = match resource_type {
+        SubresourceResourceType::Fetch => {
+            "onmessage=async()=>{try{const r=await fetch('/cache');postMessage(await r.text());}catch(e){postMessage(String(e));}close();};"
+        }
+        SubresourceResourceType::Xhr => {
+            "onmessage=()=>{const x=new XMLHttpRequest();x.open('GET','/cache');x.onload=()=>{postMessage(x.responseText);close();};x.onerror=()=>{postMessage('failed');close();};x.send();};"
+        }
+        _ => unreachable!(),
+    };
+    for (partition, expected) in [("first", "1"), ("second", "2"), ("first", "1")] {
+        let mut worker = spawn_worker_with_request_client_and_network_policy(
+            script.into(),
+            format!("http://{address}/worker.js"),
+            client.handle(),
+            WorkerNetworkPolicy {
+                network_partition_key: Some(partition.into()),
+                ..Default::default()
+            },
+        );
+        worker.set_fetch_subresource_interception(true, Some(resource_type));
+        worker.post_message(serialize_test_string("go"));
+        let WorkerToParentMessage::FetchInterception(pause) =
+            timeout(TIMEOUT, worker.recv()).await.unwrap().unwrap()
+        else {
+            panic!("real Worker request must pause");
+        };
+        continue_worker_request(&pause, false, false).await;
+        assert_eq!(
+            recv_post_json(&mut worker).await,
+            serde_json::to_string(expected).unwrap(),
+            "continuation must preserve partition {partition}"
+        );
+        worker.terminate_and_join();
+    }
+    assert_eq!(
+        requests.load(Ordering::SeqCst),
+        2,
+        "same-partition request must hit cache, other partition must use transport"
+    );
+    server.abort();
+    drop(client);
+    std::fs::remove_dir_all(cache_dir).unwrap();
 }
 
 #[tokio::test]
@@ -4116,11 +4280,10 @@ async fn worker_fetch_continue_request_resolves_response_before_delayed_body() {
         .await
         .expect("timed out waiting for continued worker fetch pause")
         .expect("worker channel closed");
-    let WorkerToParentMessage::PendingSubresourceFetch(pending) = pending else {
+    let WorkerToParentMessage::FetchInterception(pending) = pending else {
         panic!("expected continued worker fetch pause, got {pending:?}");
     };
-    let request = pending_worker_fetch_continue(pending.fetch_id, 61, &pending.info, false);
-    handle.continue_pending_fetch(request);
+    continue_worker_request(&pending, false, false).await;
 
     assert_eq!(
         recv_post_json(&mut handle).await,
@@ -4177,37 +4340,37 @@ async fn worker_fetch_response_stage_interception_pauses_before_resolving_respon
         .await
         .expect("timed out waiting for request-stage worker fetch pause")
         .expect("worker channel closed");
-    let WorkerToParentMessage::PendingSubresourceFetch(pending) = pending else {
+    let WorkerToParentMessage::FetchInterception(pending) = pending else {
         panic!("expected worker fetch pause, got {pending:?}");
     };
-    let request = pending_worker_fetch_continue(pending.fetch_id, 23, &pending.info, true);
-    handle.continue_pending_fetch(request.clone());
+    continue_worker_request(&pending, true, false).await;
 
     let response_pause = timeout(TIMEOUT, handle.recv())
         .await
         .expect("timed out waiting for response-stage worker fetch pause")
         .expect("worker channel closed");
-    let WorkerToParentMessage::SubresourceContinue(
-        PendingSubresourceContinueEvent::ResponsePaused(info),
-    ) = response_pause
-    else {
+    let WorkerToParentMessage::FetchInterception(response_pause) = response_pause else {
         panic!("expected worker response-stage pause, got {response_pause:?}");
     };
-    assert_eq!(info.internal_id, 23);
+    let crate::runtime::RendererWorkerFetchStage::Response(info) = response_pause.stage() else {
+        panic!("expected response stage");
+    };
+    assert_eq!(info.internal_id, pending.handle().get());
     assert_eq!(info.response_status, 200);
     assert_eq!(
         info.response_body.try_bytes().unwrap().as_ref(),
         b"origin-worker-body"
     );
 
-    handle.continue_pending_fetch_response(
-        request,
+    continue_worker_response(
+        &response_pause,
         Some(203),
         Some(vec![
             ("content-type".to_owned(), "text/plain".to_owned()),
             ("x-worker-response-stage".to_owned(), "continued".to_owned()),
         ]),
-    );
+    )
+    .await;
 
     assert_eq!(
         recv_post_json(&mut handle).await,
@@ -4264,23 +4427,22 @@ async fn worker_fetch_response_stage_continue_preserves_large_spooled_body_strea
         .await
         .expect("timed out waiting for request-stage large worker fetch pause")
         .expect("worker channel closed");
-    let WorkerToParentMessage::PendingSubresourceFetch(pending) = pending else {
+    let WorkerToParentMessage::FetchInterception(pending) = pending else {
         panic!("expected large worker fetch pause, got {pending:?}");
     };
-    let request = pending_worker_fetch_continue(pending.fetch_id, 71, &pending.info, true);
-    handle.continue_pending_fetch(request.clone());
+    continue_worker_request(&pending, true, false).await;
 
     let response_pause = timeout(TIMEOUT, handle.recv())
         .await
         .expect("timed out waiting for response-stage large worker fetch pause")
         .expect("worker channel closed");
-    let WorkerToParentMessage::SubresourceContinue(
-        PendingSubresourceContinueEvent::ResponsePaused(info),
-    ) = response_pause
-    else {
+    let WorkerToParentMessage::FetchInterception(response_pause) = response_pause else {
         panic!("expected large worker fetch response-stage pause, got {response_pause:?}");
     };
-    assert_eq!(info.internal_id, 71);
+    let crate::runtime::RendererWorkerFetchStage::Response(info) = response_pause.stage() else {
+        panic!("expected response stage");
+    };
+    assert_eq!(info.internal_id, pending.handle().get());
     assert_eq!(
         info.response_body
             .read_chunk(expected_len - 1, 1)
@@ -4288,7 +4450,7 @@ async fn worker_fetch_response_stage_continue_preserves_large_spooled_body_strea
         b"x"
     );
 
-    handle.continue_pending_fetch_response(request, None, None);
+    continue_worker_response(&response_pause, None, None).await;
 
     assert_eq!(
         recv_post_json(&mut handle).await,
@@ -4333,24 +4495,22 @@ async fn worker_fetch_auth_required_then_continue_with_auth_resolves() {
         .await
         .expect("timed out waiting for request-stage worker fetch auth pause")
         .expect("worker channel closed");
-    let WorkerToParentMessage::PendingSubresourceFetch(pending) = pending else {
+    let WorkerToParentMessage::FetchInterception(pending) = pending else {
         panic!("expected worker fetch auth request pause, got {pending:?}");
     };
-    let mut request = pending_worker_fetch_continue(pending.fetch_id, 47, &pending.info, false);
-    request.handle_auth_requests = true;
-    handle.continue_pending_fetch(request.clone());
+    continue_worker_request(&pending, false, true).await;
 
     let auth_pause = timeout(TIMEOUT, handle.recv())
         .await
         .expect("timed out waiting for worker fetch auth challenge")
         .expect("worker channel closed");
-    let WorkerToParentMessage::SubresourceContinue(PendingSubresourceContinueEvent::AuthRequired(
-        info,
-    )) = auth_pause
-    else {
+    let WorkerToParentMessage::FetchInterception(auth_pause) = auth_pause else {
         panic!("expected worker fetch auth challenge, got {auth_pause:?}");
     };
-    assert_eq!(info.internal_id, 47);
+    let crate::runtime::RendererWorkerFetchStage::Auth(info) = auth_pause.stage() else {
+        panic!("expected auth stage");
+    };
+    assert_eq!(info.internal_id, pending.handle().get());
     assert_eq!(info.resource_type, SubresourceResourceType::Fetch);
     assert_eq!(info.challenge.source, "Server");
     assert_eq!(info.challenge.scheme, "basic");
@@ -4358,9 +4518,12 @@ async fn worker_fetch_auth_required_then_continue_with_auth_resolves() {
     assert!(!info.intercept_response);
     assert_initial_worker_auth_network_headers(info.network_request_headers.as_deref());
 
-    let expected_request_handle = request.network_request_handle;
-    request.auth = Some(server_basic_auth_credentials());
-    handle.continue_pending_fetch(request);
+    let expected_request_handle = Some(pending.handle());
+    decide_worker_pause(
+        &auth_pause,
+        crate::runtime::WorkerFetchDecision::ProvideAuth(server_basic_auth_credentials()),
+    )
+    .await;
 
     let network = timeout(TIMEOUT, handle.recv())
         .await
@@ -4418,28 +4581,30 @@ async fn worker_fetch_auth_required_then_fail_rejects_without_exposing_challenge
         .await
         .expect("timed out waiting for request-stage worker fetch auth pause")
         .expect("worker channel closed");
-    let WorkerToParentMessage::PendingSubresourceFetch(pending) = pending else {
+    let WorkerToParentMessage::FetchInterception(pending) = pending else {
         panic!("expected worker fetch auth request pause, got {pending:?}");
     };
-    let mut request = pending_worker_fetch_continue(pending.fetch_id, 53, &pending.info, false);
-    request.handle_auth_requests = true;
-    handle.continue_pending_fetch(request.clone());
+    continue_worker_request(&pending, false, true).await;
 
     let auth_pause = timeout(TIMEOUT, handle.recv())
         .await
         .expect("timed out waiting for worker fetch auth challenge")
         .expect("worker channel closed");
-    let WorkerToParentMessage::SubresourceContinue(PendingSubresourceContinueEvent::AuthRequired(
-        info,
-    )) = auth_pause
-    else {
+    let WorkerToParentMessage::FetchInterception(auth_pause) = auth_pause else {
         panic!("expected worker fetch auth challenge, got {auth_pause:?}");
     };
-    assert_eq!(info.internal_id, 53);
+    let crate::runtime::RendererWorkerFetchStage::Auth(info) = auth_pause.stage() else {
+        panic!("expected auth stage");
+    };
+    assert_eq!(info.internal_id, pending.handle().get());
     assert_eq!(info.challenge.realm, "worker-fetch-area");
 
-    let expected_request_handle = request.network_request_handle;
-    handle.fail_pending_fetch_auth(request, "worker fetch auth aborted".to_owned());
+    let expected_request_handle = Some(pending.handle());
+    decide_worker_pause(
+        &auth_pause,
+        crate::runtime::WorkerFetchDecision::Fail("worker fetch auth aborted".to_owned()),
+    )
+    .await;
 
     let network = timeout(TIMEOUT, handle.recv())
         .await

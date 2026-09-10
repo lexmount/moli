@@ -82,7 +82,7 @@ pub use moli_renderer_v8::network::{
     RendererNetworkResourceLoadResponse, RendererPreparedNetworkResourceLoad,
 };
 pub use moli_renderer_v8::{
-    CompletedWorkerRuntimeInspectorCommandDispatch, DevToolsSessionKey,
+    CompletedWorkerRuntimeInspectorCommandDispatch, DevToolsSessionKey, PendingWorkerFetchDecision,
     PendingWorkerRuntimeInspectorSessionResponse, RendererActivityDiagnostics,
     RendererAgentAttachmentId, RendererAutofillAddressField, RendererAutofillCreditCard,
     RendererAutofillTriggerOutcome, RendererAutofillTriggerRequest,
@@ -138,9 +138,9 @@ pub use moli_renderer_v8::{
     RendererSetDocumentContentResult, RendererSharedWorkerConsoleMessage,
     RendererSharedWorkerObservation, RendererSharedWorkerTargetInfo, RendererSyntheticResponseBody,
     RendererTextSearchMatch, RendererTouchPoint, RendererVisualStateToken,
-    RendererWindowDocumentSource, RendererWorkerIdentity, RendererWorkerLifecycle,
-    RendererWorkerLifecycleInput, RendererWorkerLifecycleObservation,
-    RuntimeConsoleMessageSnapshot,
+    RendererWindowDocumentSource, RendererWorkerFetchPause, RendererWorkerFetchStage,
+    RendererWorkerIdentity, RendererWorkerLifecycle, RendererWorkerLifecycleInput,
+    RendererWorkerLifecycleObservation, RuntimeConsoleMessageSnapshot, WorkerFetchDecision,
 };
 pub use moli_renderer_v8::{
     RendererAppManifest, RendererAppManifestDisplayMode, RendererAppManifestError,

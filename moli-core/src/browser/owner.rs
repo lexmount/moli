@@ -528,6 +528,10 @@ impl BrowserHandle {
                     .contexts
                     .values()
                     .flat_map(|context| context.network_requests.snapshots()),
+                browser
+                    .contexts
+                    .values()
+                    .flat_map(|context| context.network_requests.worker_pauses()),
             )
         })
     }
@@ -1727,7 +1731,12 @@ impl BrowserContextHandle {
         fn start_document_fetch_command(document: super::DocumentHandle, command: super::DocumentFetchCommand) -> super::PendingDocumentFetchCommand;
     }
 
+    forward_context_read! {
+        fn worker_fetch_pause(pause: crate::page::RendererWorkerFetchPause) -> Option<super::WorkerFetchPause>;
+    }
+
     forward_context_try_update! {
+        fn start_worker_fetch_decision(pause: super::WorkerFetchPause, decision: crate::page::WorkerFetchDecision) -> crate::page::PendingWorkerFetchDecision;
         fn start_web_contents_fetch_interception_update(web_contents: WebContentsHandle, enabled: bool, resource_type: Option<crate::page::SubresourceResourceType>, accept_stale_completion: bool) -> Option<super::PendingDocumentFetchCommand>;
         fn install_web_contents_fetch_interception_policy(web_contents: WebContentsHandle, enabled: bool, resource_type: Option<crate::page::SubresourceResourceType>) -> ();
         fn finish_document_fetch_command(completed: super::CompletedDocumentFetchCommand) -> super::DocumentFetchCommandOutcome;

@@ -641,6 +641,7 @@ fn spawn_parent_message_pump(
             let mut pending_script = Some(script_resource);
             while let Some(message) = receiver.blocking_recv() {
                 match message {
+                    WorkerToParentMessage::FetchInterception(pause) => pause.release(),
                     WorkerToParentMessage::ServiceWorkerBootstrapCompleted(completion) => {
                         if let Some(script) = pending_script.take() {
                             report_bootstrap_completion(
@@ -679,8 +680,10 @@ fn spawn_parent_message_pump(
                         service.enqueue_periodic_sync_event_completed(completion);
                     }
                     WorkerToParentMessage::ServiceWorkerShowNotification(request) => {
-                        service
-                            .enqueue_show_notification_requested(request, Arc::clone(&source_host));
+                        service.enqueue_show_notification_requested(
+                            *request,
+                            Arc::clone(&source_host),
+                        );
                     }
                     WorkerToParentMessage::ServiceWorkerGetNotifications(request) => {
                         service
@@ -818,9 +821,6 @@ fn spawn_parent_message_pump(
                     }
                     WorkerToParentMessage::Post(_)
                     | WorkerToParentMessage::SharedWorkerClosed
-                    | WorkerToParentMessage::PendingSubresourceFetch(_)
-                    | WorkerToParentMessage::PendingSubresourceFetchCanceled { .. }
-                    | WorkerToParentMessage::SubresourceContinue(_)
                     | WorkerToParentMessage::WebSocketSubresource(_)
                     | WorkerToParentMessage::WebSocketLifecycle(_)
                     | WorkerToParentMessage::WebSocketFrame(_) => {}

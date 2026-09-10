@@ -2093,7 +2093,7 @@ pub(in crate::worker) fn worker_fetch_callback<'s>(
             return;
         };
         let request_body = request_body_text(&body);
-        let network_request_handle = Some(SubresourceNetworkRequestHandle::allocate());
+        let network_request_handle = SubresourceNetworkRequestHandle::allocate();
         let fetch_id = {
             let mut state = state.borrow_mut();
             let fetch_id = next_fetch_id(&mut state);
@@ -2114,7 +2114,7 @@ pub(in crate::worker) fn worker_fetch_callback<'s>(
                     request_method: method.clone(),
                     request_headers: headers.clone(),
                     request_body: body.clone(),
-                    network_request_handle,
+                    network_request_handle: Some(network_request_handle),
                     network_record: None,
                     paused_response: None,
                     streaming_body_source_id: None,
@@ -2124,7 +2124,7 @@ pub(in crate::worker) fn worker_fetch_callback<'s>(
         };
         let info = PendingSubresourceFetchInfo {
             internal_id: 0,
-            network_request_handle,
+            network_request_handle: Some(network_request_handle),
             frame_id: None,
             document_url,
             url: resolved_url,
@@ -2136,19 +2136,13 @@ pub(in crate::worker) fn worker_fetch_callback<'s>(
             resource_type: SubresourceResourceType::Fetch,
             request_cookie_report: None,
         };
-        let _ = state
-            .borrow()
-            .parent_tx
-            .send(WorkerToParentMessage::PendingSubresourceFetch(
-                WorkerPendingSubresourceFetch {
-                    fetch_id,
-                    load,
-                    credentials_mode,
-                    request_mode,
-                    network_partition_key: state.borrow().network_partition_key.clone(),
-                    info,
-                },
-            ));
+        publish_worker_fetch_pause(
+            &state.borrow(),
+            crate::runtime::WorkerFetchTarget::Fetch(fetch_id),
+            network_request_handle,
+            load,
+            crate::runtime::RendererWorkerFetchStage::Request(Box::new(info)),
+        );
         rv.set(promise.into());
         return;
     }
@@ -2313,12 +2307,6 @@ pub(in crate::worker) fn reject_worker_fetches_for_signal(
             runtime.abort_controlled_fetch(u64::from(fetch_id));
         }
         record_worker_fetch_failure(&state.borrow(), &pending, ABORTED_ERROR_TEXT.to_owned());
-        if pending.network_record.is_none() {
-            let _ = state
-                .borrow()
-                .parent_tx
-                .send(WorkerToParentMessage::PendingSubresourceFetchCanceled { fetch_id });
-        }
         if let Some(body_source_id) = pending.streaming_body_source_id {
             let abort_reason = worker_abort_error_value(scope);
             error_pending_network_body_stream_with_reason(
@@ -2571,15 +2559,6 @@ fn record_worker_fetch_success(
         head,
         body,
     );
-    if let Some(record) = record {
-        let _ = state
-            .parent_tx
-            .send(WorkerToParentMessage::SubresourceContinue(
-                PendingSubresourceContinueEvent::Completed {
-                    internal_id: record.internal_id,
-                },
-            ));
-    }
 }
 
 pub(in crate::worker) fn record_worker_fetch_failure(
@@ -2604,13 +2583,6 @@ pub(in crate::worker) fn record_worker_fetch_failure(
             SubresourceResourceType::Fetch,
             network_error_text,
         );
-        let _ = state
-            .parent_tx
-            .send(WorkerToParentMessage::SubresourceContinue(
-                PendingSubresourceContinueEvent::Completed {
-                    internal_id: record.internal_id,
-                },
-            ));
         return;
     }
 
@@ -2634,7 +2606,6 @@ pub(in crate::worker) fn drain_worker_fetch_completion_result(
 ) {
     let global = scope.get_current_context().global(scope);
     let _ = global;
-    let parent_tx = state.borrow().parent_tx.clone();
     if let Some(network_request_headers) = completion.network_request_headers.as_ref()
         && let Some(record) = state
             .borrow_mut()
@@ -2752,9 +2723,17 @@ pub(in crate::worker) fn drain_worker_fetch_completion_result(
             })
         };
         if let Some(info) = auth_required {
-            let _ = parent_tx.send(WorkerToParentMessage::SubresourceContinue(
-                PendingSubresourceContinueEvent::AuthRequired(info),
-            ));
+            let state = state.borrow();
+            let pending = &state.pending_fetches[&completion.fetch_id];
+            publish_worker_fetch_pause(
+                &state,
+                crate::runtime::WorkerFetchTarget::Fetch(completion.fetch_id),
+                pending
+                    .network_request_handle
+                    .expect("paused request has a physical handle"),
+                pending.load.clone(),
+                crate::runtime::RendererWorkerFetchStage::Auth(Box::new(info)),
+            );
             return;
         }
         let response_paused = {
@@ -2790,9 +2769,17 @@ pub(in crate::worker) fn drain_worker_fetch_completion_result(
             }
         };
         if let Some(info) = response_paused {
-            let _ = parent_tx.send(WorkerToParentMessage::SubresourceContinue(
-                PendingSubresourceContinueEvent::ResponsePaused(info),
-            ));
+            let state = state.borrow();
+            let pending = &state.pending_fetches[&completion.fetch_id];
+            publish_worker_fetch_pause(
+                &state,
+                crate::runtime::WorkerFetchTarget::Fetch(completion.fetch_id),
+                pending
+                    .network_request_handle
+                    .expect("paused request has a physical handle"),
+                pending.load.clone(),
+                crate::runtime::RendererWorkerFetchStage::Response(Box::new(info)),
+            );
             return;
         }
     }

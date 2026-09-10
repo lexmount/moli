@@ -269,7 +269,6 @@ enum PendingWindowFetchTestStage {
     Streaming,
     Auth,
     Response,
-    ServiceWorkerInFlight,
 }
 
 fn register_pending_window_fetch_for_test(
@@ -404,17 +403,6 @@ fn register_pending_window_fetch_for_test(
                             Vec::new(),
                             "pending response".to_owned(),
                         ),
-                    },
-                );
-            }
-            PendingWindowFetchTestStage::ServiceWorkerInFlight => {
-                host.record_in_flight_worker_subresource_fetch(
-                    crate::types::InFlightWorkerSubresourceFetchState {
-                        pending,
-                        request_url: url,
-                        request_method: "GET".to_owned(),
-                        request_headers: Vec::new(),
-                        request_body: None,
                     },
                 );
             }
@@ -2525,7 +2513,6 @@ fn window_fetch_retirement_covers_every_host_stage() {
         PendingWindowFetchTestStage::Streaming,
         PendingWindowFetchTestStage::Auth,
         PendingWindowFetchTestStage::Response,
-        PendingWindowFetchTestStage::ServiceWorkerInFlight,
     ];
     let mut ordinary = Vec::new();
     let mut keepalive = Vec::new();

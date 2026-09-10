@@ -84,6 +84,38 @@ impl Browser {
             return;
         };
         let sequence = BrowserSequence::allocate();
+        if let RendererNetworkOutputItem::WorkerFetch {
+            pause,
+            policy_document,
+        } = &occurrence.item
+        {
+            let NetworkOwner::Worker(worker) = owner else {
+                return;
+            };
+            if !pause.is_available() {
+                return;
+            }
+            let Some(document) =
+                context.worker_fetch_policy_document(pause.worker(), *policy_document)
+            else {
+                return;
+            };
+            let Ok(renderer_document) = context.document_renderer_residence(document) else {
+                return;
+            };
+            let pause = crate::browser::WorkerFetchPause {
+                worker,
+                document,
+                sequence,
+                pause: pause.clone(),
+                renderer_document,
+            };
+            context.network_requests.pause_worker(pause.clone());
+            self.events
+                .publish_committed(sequence, BrowserEvent::WorkerFetchPaused(pause));
+            input.commit(sequence.get(), renderer_source);
+            return;
+        }
         if !context.network_requests.commit(owner, occurrence, sequence) {
             return;
         }
@@ -93,6 +125,7 @@ impl Browser {
         }
         let event = NetworkOccurrence { owner, renderer };
         let event = match &occurrence.item {
+            RendererNetworkOutputItem::WorkerFetch { .. } => unreachable!("pause committed above"),
             RendererNetworkOutputItem::ChildDocument(_) => {
                 BrowserEvent::NetworkRequestCompleted(event)
             }

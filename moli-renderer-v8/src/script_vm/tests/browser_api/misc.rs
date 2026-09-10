@@ -89,10 +89,18 @@ fn service_worker_csp_report_seen(
     report_body_seen || report_record_seen
 }
 
+#[derive(Default)]
+struct ObservedDedicatedWorkerNetwork {
+    items: Vec<crate::types::ScriptNetworkOutputItem>,
+    pauses: Vec<crate::runtime::RendererWorkerFetchPause>,
+}
+
 fn observe_dedicated_worker_network(
     runtime: &crate::runtime::RendererBrowserContextRuntime,
-) -> std::sync::Arc<parking_lot::Mutex<Vec<crate::types::ScriptNetworkOutputItem>>> {
-    let items = std::sync::Arc::new(parking_lot::Mutex::new(Vec::new()));
+) -> std::sync::Arc<parking_lot::Mutex<ObservedDedicatedWorkerNetwork>> {
+    let items = std::sync::Arc::new(parking_lot::Mutex::new(
+        ObservedDedicatedWorkerNetwork::default(),
+    ));
     let observed = items.clone();
     runtime.install_network_handler(move |input| {
         if let crate::runtime::RendererNetworkInput::Observation(input) = input
@@ -102,10 +110,22 @@ fn observe_dedicated_worker_network(
                     crate::runtime::RendererWorkerIdentity::Dedicated(_)
                 )
             )
-            && let crate::runtime::RendererNetworkOutputItem::Resource(item) =
-                &input.occurrence.item
         {
-            observed.lock().push(item.as_ref().clone());
+            match &input.occurrence.item {
+                crate::runtime::RendererNetworkOutputItem::Resource(item) => {
+                    observed.lock().items.push(item.as_ref().clone());
+                }
+                crate::runtime::RendererNetworkOutputItem::WorkerFetch { pause, .. } => {
+                    observed.lock().pauses.push(pause.clone());
+                    // This renderer-only fixture is the native input consumer;
+                    // rejecting the receipt would neutrally release the pause.
+                    let source = input.occurrence.source.clone();
+                    input.commit(1, source);
+                }
+                crate::runtime::RendererNetworkOutputItem::ChildDocument(_) => {
+                    panic!("a Worker must not publish a child Document response");
+                }
+            }
         }
     });
     items
@@ -12206,7 +12226,7 @@ async fn navigator_service_worker_intercepts_worker_csp_report_destination() {
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
     let mut items = Vec::new();
     loop {
-        items.extend(std::mem::take(&mut *worker_network.lock()));
+        items.extend(std::mem::take(&mut worker_network.lock().items));
         if service_worker_csp_report_seen(
             &items,
             &report_url,
@@ -12349,12 +12369,20 @@ async fn worker_csp_report_fetch_pause_continue_preserves_service_worker_dispatc
     let report_url = format!("{base_url}/app/csp-report");
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
     let paused_report = loop {
-        let mut infos = vm.take_pending_subresource_fetch_infos();
-        if let Some(index) = infos.iter().position(|info| {
-            info.resource_type == crate::types::SubresourceResourceType::CspReport
-                && info.url.as_str() == report_url
-        }) {
-            break infos.remove(index);
+        let pause = {
+            let mut observed = worker_network.lock();
+            observed
+                .pauses
+                .iter()
+                .position(|pause| {
+                    matches!(pause.stage(), crate::runtime::RendererWorkerFetchStage::Request(info)
+                        if info.resource_type == crate::types::SubresourceResourceType::CspReport
+                            && info.url.as_str() == report_url)
+                })
+                .map(|index| observed.pauses.remove(index))
+        };
+        if let Some(pause) = pause {
+            break pause;
         }
         assert!(
             std::time::Instant::now() < deadline,
@@ -12362,28 +12390,39 @@ async fn worker_csp_report_fetch_pause_continue_preserves_service_worker_dispatc
         );
         drain_service_worker_test_turn(&mut vm, &browser_context_runtime, &loader).await;
     };
-    assert_eq!(paused_report.method, "POST");
+    let crate::runtime::RendererWorkerFetchStage::Request(info) = paused_report.stage() else {
+        panic!("CSP report must pause at request stage");
+    };
+    assert_eq!(info.method, "POST");
+    assert!(paused_report.is_available());
+    assert_eq!(info.network_request_handle, Some(paused_report.handle()));
+    assert!(vm.take_pending_subresource_fetch_infos().is_empty());
+    assert!(!service_worker_csp_report_seen(
+        &worker_network.lock().items,
+        &report_url,
+        "destination=report|mode=no-cors|credentials=same-origin|method=POST|from=service-worker|client=true",
+    ));
 
-    let outcome = vm
-        .continue_pending_subresource_fetch(
-            paused_report.internal_id,
-            None,
-            None,
-            None,
-            None,
-            false,
-            false,
-        )
+    let pending = paused_report
+        .start_decision(crate::runtime::WorkerFetchDecision::ContinueRequest {
+            url: None,
+            method: None,
+            body: None,
+            headers: None,
+            intercept_response: false,
+            handle_auth_requests: false,
+        })
         .expect("paused worker CSP report continue should start");
-    assert_eq!(
-        outcome,
-        crate::types::PendingSubresourceContinueOutcome::Started
-    );
+    tokio::time::timeout(std::time::Duration::from_secs(5), pending.wait())
+        .await
+        .expect("physical Worker must acknowledge CSP report continuation")
+        .expect("paused worker CSP report continue should succeed");
+    assert!(!paused_report.is_available());
 
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
     let mut items = Vec::new();
     loop {
-        items.extend(std::mem::take(&mut *worker_network.lock()));
+        items.extend(std::mem::take(&mut worker_network.lock().items));
         if service_worker_csp_report_seen(
             &items,
             &report_url,

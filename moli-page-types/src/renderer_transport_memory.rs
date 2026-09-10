@@ -201,48 +201,60 @@ impl PendingSubresourceFetchInfo {
     }
 }
 
+impl PendingSubresourceResponseInfo {
+    #[doc(hidden)]
+    pub fn renderer_transport_charge_bytes(&self) -> usize {
+        url_charge(&self.url)
+            .saturating_add(url_charge(&self.final_url))
+            .saturating_add(string_charge(&self.method))
+            .saturating_add(headers_charge(&self.request_headers))
+            .saturating_add(self.request_body.as_deref().map(string_charge).unwrap_or(0))
+            .saturating_add(
+                self.network_request_headers
+                    .as_deref()
+                    .map(headers_charge)
+                    .unwrap_or(0),
+            )
+            .saturating_add(headers_charge(&self.response_headers))
+            .saturating_add(
+                self.response_body
+                    .renderer_transport_retained_memory_bytes(),
+            )
+    }
+}
+
+impl PendingSubresourceAuthInfo {
+    #[doc(hidden)]
+    pub fn renderer_transport_charge_bytes(&self) -> usize {
+        url_charge(&self.url)
+            .saturating_add(string_charge(&self.method))
+            .saturating_add(headers_charge(&self.request_headers))
+            .saturating_add(self.request_body.as_deref().map(string_charge).unwrap_or(0))
+            .saturating_add(
+                self.network_request_headers
+                    .as_deref()
+                    .map(headers_charge)
+                    .unwrap_or(0),
+            )
+            .saturating_add(string_charge(&self.challenge.source))
+            .saturating_add(string_charge(&self.challenge.scheme))
+            .saturating_add(string_charge(&self.challenge.realm))
+            .saturating_add(url_charge(&self.response_final_url))
+            .saturating_add(headers_charge(&self.response_headers))
+            .saturating_add(
+                self.response_body
+                    .renderer_transport_retained_memory_bytes(),
+            )
+    }
+}
+
 impl PendingSubresourceContinueEvent {
     #[doc(hidden)]
     pub fn renderer_transport_charge_bytes(&self) -> usize {
         match self {
             Self::Completed { .. } => 0,
-            Self::ResponsePaused(response) => url_charge(&response.url)
-                .saturating_add(url_charge(&response.final_url))
-                .saturating_add(string_charge(&response.method))
-                .saturating_add(headers_charge(&response.request_headers))
-                .saturating_add(
-                    response
-                        .request_body
-                        .as_deref()
-                        .map(string_charge)
-                        .unwrap_or(0),
-                )
-                .saturating_add(
-                    response
-                        .network_request_headers
-                        .as_deref()
-                        .map(headers_charge)
-                        .unwrap_or(0),
-                )
-                .saturating_add(headers_charge(&response.response_headers))
-                .saturating_add(
-                    response
-                        .response_body
-                        .renderer_transport_retained_memory_bytes(),
-                ),
-            Self::AuthRequired(auth) => url_charge(&auth.url)
-                .saturating_add(string_charge(&auth.method))
-                .saturating_add(headers_charge(&auth.request_headers))
-                .saturating_add(auth.request_body.as_deref().map(string_charge).unwrap_or(0))
-                .saturating_add(
-                    auth.network_request_headers
-                        .as_deref()
-                        .map(headers_charge)
-                        .unwrap_or(0),
-                )
-                .saturating_add(string_charge(&auth.challenge.source))
-                .saturating_add(string_charge(&auth.challenge.scheme))
-                .saturating_add(string_charge(&auth.challenge.realm)),
+            Self::ResponsePaused(info) => info.renderer_transport_charge_bytes(),
+            Self::AuthRequired(info) => info.renderer_transport_charge_bytes(),
         }
     }
 }

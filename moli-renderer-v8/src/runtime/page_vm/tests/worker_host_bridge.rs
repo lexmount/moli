@@ -36,9 +36,7 @@ Promise.resolve().then(() => {
             .worker_host_bridge_sender_for_test()
             .send(WorkerRuntimeEvent::SharedWorkerMessage {
                 instance_id: moli_shared_worker::SharedWorkerInstanceId::from_u64(1),
-                message: Box::new(WorkerToParentMessage::PendingSubresourceFetchCanceled {
-                    fetch_id: 7,
-                }),
+                message: Box::new(WorkerToParentMessage::WebSocketLifecycle(crate::worker::WorkerWebSocketLifecycleEvent::Closing { socket_id: 7, document_url: "https://worker-host-bridge.test/".parse().unwrap(), url: "wss://worker-host-bridge.test/socket".parse().unwrap() })),
             })
             .expect("SharedWorker host record should enter the stable Networking source");
         let task = page_vm
@@ -108,9 +106,7 @@ Promise.resolve().then(() => {
             .worker_host_bridge_sender_for_test()
             .send(WorkerRuntimeEvent::SharedWorkerMessage {
                 instance_id: moli_shared_worker::SharedWorkerInstanceId::from_u64(1),
-                message: Box::new(WorkerToParentMessage::PendingSubresourceFetchCanceled {
-                    fetch_id: 8,
-                }),
+                message: Box::new(WorkerToParentMessage::WebSocketLifecycle(crate::worker::WorkerWebSocketLifecycleEvent::Closing { socket_id: 8, document_url: "https://worker-host-bridge.test/".parse().unwrap(), url: "wss://worker-host-bridge.test/socket".parse().unwrap() })),
             })
             .expect("a second host record should enter the same stable source");
         assert!(
@@ -150,9 +146,7 @@ Promise.resolve().then(() => {
             .worker_host_bridge_sender_for_test()
             .send(WorkerRuntimeEvent::Message {
                 worker_id,
-                message: Box::new(WorkerToParentMessage::PendingSubresourceFetchCanceled {
-                    fetch_id: 9,
-                }),
+                message: Box::new(WorkerToParentMessage::WebSocketLifecycle(crate::worker::WorkerWebSocketLifecycleEvent::Closing { socket_id: 9, document_url: "https://worker-host-bridge.test/".parse().unwrap(), url: "wss://worker-host-bridge.test/socket".parse().unwrap() })),
             })
             .expect("a DedicatedWorker host record should enter the stable source");
         assert!(

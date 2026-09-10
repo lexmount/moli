@@ -1,9 +1,7 @@
 use crate::{
-    RendererSyntheticResponseBody,
     shared_worker_runtime::{
         SharedWorkerLaunchParams, SharedWorkerRuntimeOwnerWake, SharedWorkerRuntimeOwnerWakeSender,
     },
-    worker::{WorkerPendingFetchContinue, WorkerPendingXhrContinue},
     worker_owner_wake::WorkerOwnerWakeRoutes,
 };
 use moli_shared_worker::{
@@ -194,251 +192,21 @@ impl RendererBrowserContextRuntime {
             .is_some_and(|runtime| runtime.close_instance(instance_id))
     }
 
+    pub fn shared_worker_client_document(
+        &self,
+        instance_id: SharedWorkerInstanceId,
+    ) -> Option<(
+        RendererOwnerLocalHostId,
+        crate::runtime::RendererDocumentToken,
+    )> {
+        self.shared_worker_runtime_if_initialized()?
+            .client_document(instance_id)
+    }
+
     pub(crate) fn remove_shared_worker_client(&self, client_id: SharedWorkerClientId) {
         if let Some(runtime) = self.shared_worker_runtime_if_initialized() {
             runtime.remove_client(client_id);
         }
-    }
-
-    pub(crate) fn continue_shared_worker_fetch(
-        &self,
-        instance_id: SharedWorkerInstanceId,
-        request: WorkerPendingFetchContinue,
-    ) -> bool {
-        self.shared_worker_runtime_if_initialized()
-            .is_some_and(|runtime| runtime.continue_pending_fetch(instance_id, request))
-    }
-
-    pub(crate) fn continue_shared_worker_xhr(
-        &self,
-        instance_id: SharedWorkerInstanceId,
-        request: WorkerPendingXhrContinue,
-    ) -> bool {
-        self.shared_worker_runtime_if_initialized()
-            .is_some_and(|runtime| runtime.continue_pending_xhr(instance_id, request))
-    }
-
-    pub(crate) fn continue_shared_worker_csp_report(
-        &self,
-        instance_id: SharedWorkerInstanceId,
-        request: WorkerPendingFetchContinue,
-    ) -> bool {
-        self.shared_worker_runtime_if_initialized()
-            .is_some_and(|runtime| runtime.continue_pending_csp_report(instance_id, request))
-    }
-
-    pub(crate) fn continue_shared_worker_fetch_response(
-        &self,
-        instance_id: SharedWorkerInstanceId,
-        request: WorkerPendingFetchContinue,
-        response_code: Option<u16>,
-        response_headers: Option<Vec<(String, String)>>,
-    ) -> bool {
-        self.shared_worker_runtime_if_initialized()
-            .is_some_and(|runtime| {
-                runtime.continue_pending_fetch_response(
-                    instance_id,
-                    request,
-                    response_code,
-                    response_headers,
-                )
-            })
-    }
-
-    pub(crate) fn continue_shared_worker_xhr_response(
-        &self,
-        instance_id: SharedWorkerInstanceId,
-        request: WorkerPendingXhrContinue,
-        response_code: Option<u16>,
-        response_headers: Option<Vec<(String, String)>>,
-    ) -> bool {
-        self.shared_worker_runtime_if_initialized()
-            .is_some_and(|runtime| {
-                runtime.continue_pending_xhr_response(
-                    instance_id,
-                    request,
-                    response_code,
-                    response_headers,
-                )
-            })
-    }
-
-    pub(crate) fn fail_shared_worker_fetch(
-        &self,
-        instance_id: SharedWorkerInstanceId,
-        request: WorkerPendingFetchContinue,
-        error_text: String,
-    ) -> bool {
-        self.shared_worker_runtime_if_initialized()
-            .is_some_and(|runtime| runtime.fail_pending_fetch(instance_id, request, error_text))
-    }
-
-    pub(crate) fn fail_shared_worker_xhr(
-        &self,
-        instance_id: SharedWorkerInstanceId,
-        request: WorkerPendingXhrContinue,
-        error_text: String,
-    ) -> bool {
-        self.shared_worker_runtime_if_initialized()
-            .is_some_and(|runtime| runtime.fail_pending_xhr(instance_id, request, error_text))
-    }
-
-    pub(crate) fn fail_shared_worker_csp_report(
-        &self,
-        instance_id: SharedWorkerInstanceId,
-        request: WorkerPendingFetchContinue,
-        error_text: String,
-    ) -> bool {
-        self.shared_worker_runtime_if_initialized()
-            .is_some_and(|runtime| {
-                runtime.fail_pending_csp_report(instance_id, request, error_text)
-            })
-    }
-
-    pub(crate) fn fail_shared_worker_fetch_auth(
-        &self,
-        instance_id: SharedWorkerInstanceId,
-        request: WorkerPendingFetchContinue,
-        error_text: String,
-    ) -> bool {
-        self.shared_worker_runtime_if_initialized()
-            .is_some_and(|runtime| {
-                runtime.fail_pending_fetch_auth(instance_id, request, error_text)
-            })
-    }
-
-    pub(crate) fn fail_shared_worker_xhr_auth(
-        &self,
-        instance_id: SharedWorkerInstanceId,
-        request: WorkerPendingXhrContinue,
-        error_text: String,
-    ) -> bool {
-        self.shared_worker_runtime_if_initialized()
-            .is_some_and(|runtime| runtime.fail_pending_xhr_auth(instance_id, request, error_text))
-    }
-
-    pub(crate) fn fail_shared_worker_fetch_response(
-        &self,
-        instance_id: SharedWorkerInstanceId,
-        request: WorkerPendingFetchContinue,
-        error_text: String,
-    ) -> bool {
-        self.shared_worker_runtime_if_initialized()
-            .is_some_and(|runtime| {
-                runtime.fail_pending_fetch_response(instance_id, request, error_text)
-            })
-    }
-
-    pub(crate) fn fail_shared_worker_xhr_response(
-        &self,
-        instance_id: SharedWorkerInstanceId,
-        request: WorkerPendingXhrContinue,
-        error_text: String,
-    ) -> bool {
-        self.shared_worker_runtime_if_initialized()
-            .is_some_and(|runtime| {
-                runtime.fail_pending_xhr_response(instance_id, request, error_text)
-            })
-    }
-
-    pub(crate) fn fulfill_shared_worker_fetch(
-        &self,
-        instance_id: SharedWorkerInstanceId,
-        request: WorkerPendingFetchContinue,
-        response_code: u16,
-        response_headers: Vec<(String, String)>,
-        response_body: RendererSyntheticResponseBody,
-    ) -> bool {
-        self.shared_worker_runtime_if_initialized()
-            .is_some_and(|runtime| {
-                runtime.fulfill_pending_fetch(
-                    instance_id,
-                    request,
-                    response_code,
-                    response_headers,
-                    response_body,
-                )
-            })
-    }
-
-    pub(crate) fn fulfill_shared_worker_xhr(
-        &self,
-        instance_id: SharedWorkerInstanceId,
-        request: WorkerPendingXhrContinue,
-        response_code: u16,
-        response_headers: Vec<(String, String)>,
-        response_body: RendererSyntheticResponseBody,
-    ) -> bool {
-        self.shared_worker_runtime_if_initialized()
-            .is_some_and(|runtime| {
-                runtime.fulfill_pending_xhr(
-                    instance_id,
-                    request,
-                    response_code,
-                    response_headers,
-                    response_body,
-                )
-            })
-    }
-
-    pub(crate) fn fulfill_shared_worker_csp_report(
-        &self,
-        instance_id: SharedWorkerInstanceId,
-        request: WorkerPendingFetchContinue,
-        response_code: u16,
-        response_headers: Vec<(String, String)>,
-        response_body: RendererSyntheticResponseBody,
-    ) -> bool {
-        self.shared_worker_runtime_if_initialized()
-            .is_some_and(|runtime| {
-                runtime.fulfill_pending_csp_report(
-                    instance_id,
-                    request,
-                    response_code,
-                    response_headers,
-                    response_body,
-                )
-            })
-    }
-
-    pub(crate) fn fulfill_shared_worker_fetch_response(
-        &self,
-        instance_id: SharedWorkerInstanceId,
-        request: WorkerPendingFetchContinue,
-        response_code: u16,
-        response_headers: Vec<(String, String)>,
-        response_body: RendererSyntheticResponseBody,
-    ) -> bool {
-        self.shared_worker_runtime_if_initialized()
-            .is_some_and(|runtime| {
-                runtime.fulfill_pending_fetch_response(
-                    instance_id,
-                    request,
-                    response_code,
-                    response_headers,
-                    response_body,
-                )
-            })
-    }
-
-    pub(crate) fn fulfill_shared_worker_xhr_response(
-        &self,
-        instance_id: SharedWorkerInstanceId,
-        request: WorkerPendingXhrContinue,
-        response_code: u16,
-        response_headers: Vec<(String, String)>,
-        response_body: RendererSyntheticResponseBody,
-    ) -> bool {
-        self.shared_worker_runtime_if_initialized()
-            .is_some_and(|runtime| {
-                runtime.fulfill_pending_xhr_response(
-                    instance_id,
-                    request,
-                    response_code,
-                    response_headers,
-                    response_body,
-                )
-            })
     }
 }
 

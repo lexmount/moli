@@ -306,6 +306,7 @@ impl BrowserContext {
         resource_type: Option<SubresourceResourceType>,
         accept_stale_completion: bool,
     ) -> Result<Option<PendingDocumentFetchCommand>, String> {
+        self.install_web_contents_fetch_interception_policy(web_contents, enabled, resource_type)?;
         let contents = self.web_contents_mut(web_contents)?;
         let document = contents
             .main_frame
@@ -332,6 +333,10 @@ impl BrowserContext {
         enabled: bool,
         resource_type: Option<SubresourceResourceType>,
     ) -> Result<(), String> {
+        if !enabled && let Some(document) = self.document_handle(web_contents)? {
+            self.network_requests
+                .release_worker_pauses_for_document(document);
+        }
         self.web_contents_mut(web_contents)?
             .install_fetch_interception_policy(enabled, resource_type);
         Ok(())

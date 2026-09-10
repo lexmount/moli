@@ -43,6 +43,45 @@ pub(crate) struct NetworkPreparedOutputSlot {
 }
 
 impl NetworkPreparedOutputs {
+    pub(crate) fn from_worker_subresource_continue(
+        conn: &mut CdpConnection,
+        owner: &CommandOwnerScope,
+        pause: moli_core::browser::WorkerFetchPause,
+        event: moli_core::page::PendingSubresourceContinueEvent,
+    ) -> Self {
+        Self {
+            pending_subresource_continue_actions:
+                PreparedSubresourceContinueAction::capture_worker(conn, owner, pause, event)
+                    .into_iter()
+                    .collect(),
+            ..Self::default()
+        }
+    }
+
+    pub(crate) async fn emit_fetch_snapshot(
+        mut self,
+        conn: &mut CdpConnection,
+        owner: &CommandOwnerScope,
+    ) -> Vec<crate::conn::BackgroundProtocolEvent> {
+        let mut events = Vec::new();
+        flush_prepared_subresource_continue_actions_background_events_async(
+            conn,
+            &mut events,
+            owner,
+            std::mem::take(&mut self.pending_subresource_continue_actions),
+        )
+        .await;
+        let sessions = conn.network_event_session_ids_for_owner(owner);
+        fetch::emit_subresource_fetch_pause_outputs(
+            conn,
+            &mut events,
+            owner,
+            &sessions,
+            self.subresource_fetch_pauses,
+        );
+        events
+    }
+
     pub(crate) fn from_renderer_live_delivery(
         renderer_live: TargetNetworkBacklogPreparedDelivery,
     ) -> Self {

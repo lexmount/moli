@@ -333,6 +333,29 @@ async fn project_renderer_output_records_for_owner(
                             committed.occurrence().source,
                             moli_core::page::RendererNetworkSource::Worker(_)
                         ) {
+                            conn.retire_completed_worker_fetch(committed.occurrence());
+                            if let Some(pause) =
+                                conn.committed_worker_fetch_pause(committed.occurrence())
+                            {
+                                if let Some((observer, outputs)) =
+                                    crate::domains::fetch::native_worker_fetch_prepared_outputs(
+                                        conn, pause,
+                                    )
+                                    .await
+                                {
+                                    order
+                                        .route_publication_outputs(
+                                            conn,
+                                            &observer,
+                                            None,
+                                            Some(cursor),
+                                            PreparedProtocolOutputs::from_worker_fetch(outputs),
+                                            command_context,
+                                        )
+                                        .await;
+                                }
+                                continue;
+                            }
                             let outputs = PreparedProtocolOutputs::from_browser_worker_network(
                                 conn,
                                 owner,

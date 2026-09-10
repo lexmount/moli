@@ -167,6 +167,11 @@ impl Browser {
                 })
             }
         };
+        if let BrowserEvent::WorkerDestroyed(worker) = &event {
+            // Registry retirement revokes decisions immediately, even when
+            // the physical thread has not yet emitted its SourceClosed tail.
+            context.network_requests.retire_worker_pauses(*worker);
+        }
         // Mutation, native occurrence and FIFO acknowledgement form one owner
         // turn. Protocol cannot invent or commit this lifecycle by draining output.
         let record = self.events.publish(event);

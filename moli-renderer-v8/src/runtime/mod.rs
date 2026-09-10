@@ -50,6 +50,12 @@ pub use network_observation::{
     RendererWorkerIdentity,
 };
 pub(crate) use network_observation::{RendererNetworkReporter, RendererWorkerNetworkReporter};
+mod worker_fetch;
+pub use worker_fetch::{
+    PendingWorkerFetchDecision, RendererWorkerFetchPause, RendererWorkerFetchStage,
+    WorkerFetchDecision,
+};
+pub(crate) use worker_fetch::{WorkerFetchDecisionDispatch, WorkerFetchPhase, WorkerFetchTarget};
 mod worker_inspection;
 mod worker_output_streams;
 pub use worker_inspection::RendererWorkerInspectionEndpoint;

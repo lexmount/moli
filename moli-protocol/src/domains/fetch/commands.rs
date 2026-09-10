@@ -1,6 +1,6 @@
 use crate::conn::{
-    CdpConnection, Cmd, CommandOwnerScope, CompletedDocumentFetchCommand, DEFAULT_LOADER_ID,
-    DocumentFetchCommand, monotonic_timestamp_seconds,
+    CdpConnection, Cmd, CommandOwnerScope, DEFAULT_LOADER_ID, DocumentFetchCommand,
+    monotonic_timestamp_seconds,
 };
 use crate::devtools_runtime::{
     DevToolsAuthChallengeAction, DevToolsCommand, DevToolsContinueInterceptedRequestCommand,
@@ -299,9 +299,10 @@ fn start_devtools_continue_intercepted_request_command(
                 ));
             }
         };
-        let pending_page = super::start_document_fetch_command_for_owner(
+        let pending_page = super::start_subresource_fetch_command(
             conn,
             owner,
+            &pending.residence,
             DocumentFetchCommand::ContinueRequest {
                 internal_id: pending.internal_id,
                 url: parsed_url,
@@ -329,7 +330,7 @@ fn start_devtools_continue_intercepted_request_command(
             PendingFetchCommandKind::ContinueRequest {
                 state: Box::new(PendingContinueRequestState::SubresourceFetch { correlation }),
             },
-            PendingFetchCommandOperation::DocumentFetch(Ok(pending_page)),
+            pending_page,
         ));
     }
     if let Some(mut pending) = take_pending_navigation(conn, owner, action_session_id, &request_id)
@@ -378,7 +379,7 @@ fn start_devtools_continue_intercepted_request_command(
 
 pub(super) async fn complete_continue_request_command_async(
     conn: &mut CdpConnection,
-    completed: Option<Result<CompletedDocumentFetchCommand, String>>,
+    completed: Option<Result<super::CompletedFetchExecution, String>>,
     state: PendingContinueRequestState,
     out: &mut FetchCommandOutput,
 ) {
@@ -400,7 +401,7 @@ pub(super) async fn complete_continue_request_command_async(
 
 fn finish_continue_subresource_request(
     conn: &mut CdpConnection,
-    completed: Option<Result<CompletedDocumentFetchCommand, String>>,
+    completed: Option<Result<super::CompletedFetchExecution, String>>,
 ) -> Result<(), String> {
     super::finish_document_fetch_command(conn, completed)
         .and_then(crate::conn::DocumentFetchCommandOutcome::into_continue_outcome)
@@ -526,9 +527,10 @@ fn start_devtools_fail_intercepted_request_command(
             plan.extend_background_events(events);
             return FetchCommandTaskStep::Complete(plan);
         }
-        let pending_page = match super::start_document_fetch_command_for_owner(
+        let pending_page = match super::start_subresource_fetch_command(
             conn,
             owner,
+            &pending.residence,
             DocumentFetchCommand::FailRequest {
                 internal_id: pending.internal_id,
                 error_text: error_text.clone(),
@@ -550,7 +552,7 @@ fn start_devtools_fail_intercepted_request_command(
                     pending: Box::new(pending),
                 }),
             },
-            PendingFetchCommandOperation::DocumentFetch(Ok(pending_page)),
+            pending_page,
         ));
     }
 
@@ -560,9 +562,10 @@ fn start_devtools_fail_intercepted_request_command(
         action_session_id,
         &request_id,
     ) {
-        let pending_page = match super::start_document_fetch_command_for_owner(
+        let pending_page = match super::start_subresource_fetch_command(
             conn,
             owner,
+            &pending.residence,
             DocumentFetchCommand::FailResponse {
                 internal_id: pending.internal_id,
                 error_text: error_text.clone(),
@@ -584,7 +587,7 @@ fn start_devtools_fail_intercepted_request_command(
                     pending: Box::new(pending),
                 }),
             },
-            PendingFetchCommandOperation::DocumentFetch(Ok(pending_page)),
+            pending_page,
         ));
     }
 
@@ -613,7 +616,7 @@ fn start_devtools_fail_intercepted_request_command(
 pub(super) async fn complete_fail_request_command_async(
     conn: &mut CdpConnection,
     owner: &CommandOwnerScope,
-    completed: Option<Result<CompletedDocumentFetchCommand, String>>,
+    completed: Option<Result<super::CompletedFetchExecution, String>>,
     state: PendingFailRequestState,
     out: &mut FetchCommandOutput,
 ) {
@@ -820,9 +823,10 @@ fn start_devtools_fulfill_intercepted_request_command(
         let websocket_socket_id = pending.websocket_socket_id;
         let register_synthetic_websocket =
             pending.resource_type == SubresourceResourceType::WebSocket && response_code == 101;
-        let pending_page = match super::start_document_fetch_command_for_owner(
+        let pending_page = match super::start_subresource_fetch_command(
             conn,
             owner,
+            &pending.residence,
             DocumentFetchCommand::FulfillRequest {
                 internal_id: pending.internal_id,
                 response_code,
@@ -850,7 +854,7 @@ fn start_devtools_fulfill_intercepted_request_command(
                     register_synthetic_websocket,
                 }),
             },
-            PendingFetchCommandOperation::DocumentFetch(Ok(pending_page)),
+            pending_page,
         ));
     }
 
@@ -860,9 +864,10 @@ fn start_devtools_fulfill_intercepted_request_command(
         action_session_id,
         &request_id,
     ) {
-        let pending_page = match super::start_document_fetch_command_for_owner(
+        let pending_page = match super::start_subresource_fetch_command(
             conn,
             owner,
+            &pending.residence,
             DocumentFetchCommand::FulfillResponse {
                 internal_id: pending.internal_id,
                 response_code,
@@ -886,7 +891,7 @@ fn start_devtools_fulfill_intercepted_request_command(
                     pending: Box::new(pending),
                 }),
             },
-            PendingFetchCommandOperation::DocumentFetch(Ok(pending_page)),
+            pending_page,
         ));
     }
 
@@ -933,7 +938,7 @@ fn start_devtools_fulfill_intercepted_request_command(
 pub(super) async fn complete_fulfill_request_command_async(
     conn: &mut CdpConnection,
     owner: &CommandOwnerScope,
-    completed: Option<Result<CompletedDocumentFetchCommand, String>>,
+    completed: Option<Result<super::CompletedFetchExecution, String>>,
     state: PendingFulfillRequestState,
     out: &mut FetchCommandOutput,
 ) {
@@ -1150,7 +1155,7 @@ pub(super) fn start_close_websocket_command(
 
 pub(super) fn complete_websocket_page_command(
     conn: &mut CdpConnection,
-    completed: Option<Result<CompletedDocumentFetchCommand, String>>,
+    completed: Option<Result<super::CompletedFetchExecution, String>>,
     out: &mut FetchCommandOutput,
 ) {
     match super::finish_document_fetch_command(conn, completed) {
@@ -1361,9 +1366,10 @@ fn start_devtools_continue_intercepted_response_command(
             response_headers
         };
         let pending_internal_id = pending.internal_id;
-        let pending_page = match super::start_document_fetch_command_for_owner(
+        let pending_page = match super::start_subresource_fetch_command(
             conn,
             owner,
+            &pending.residence,
             DocumentFetchCommand::ContinueResponse {
                 internal_id: pending_internal_id,
                 response_code: continue_response_code,
@@ -1386,7 +1392,7 @@ fn start_devtools_continue_intercepted_response_command(
                     pending: Box::new(pending),
                 }),
             },
-            PendingFetchCommandOperation::DocumentFetch(Ok(pending_page)),
+            pending_page,
         ));
     }
     if let Some(step) = super::auth::start_devtools_continue_with_auth_command_for_pending(
@@ -1461,7 +1467,7 @@ fn continue_response_transfer(
 pub(super) async fn complete_continue_response_command_async(
     conn: &mut CdpConnection,
     owner: &CommandOwnerScope,
-    completed: Option<Result<CompletedDocumentFetchCommand, String>>,
+    completed: Option<Result<super::CompletedFetchExecution, String>>,
     state: PendingContinueResponseState,
     out: &mut FetchCommandOutput,
 ) {
@@ -1801,7 +1807,7 @@ mod protocol_neutral_tests {
             .target_page_residence_identity_for_session(Some("SID-primary"))
             .expect("test target should expose a Page residence identity");
         let pending = PendingSubresourceFetchResponseRequest {
-            page_owner,
+            residence: crate::conn::PendingSubresourceFetchResidence::InstalledPage(page_owner),
             owner_session_id: Some("SID-primary".to_owned()),
             action_session_id: Some("SID-primary".to_owned()),
             owner_kind: PendingSubresourceFetchOwnerKind::Fetch,
