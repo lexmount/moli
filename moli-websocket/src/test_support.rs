@@ -32,6 +32,7 @@ where
 
 pub fn test_websocket_context() -> ConnectOptions {
     ConnectOptions {
+        connector: None,
         origin: "https://example.com".to_owned(),
         user_agent: "Moli-WebSocket-Test/1.0".to_owned(),
         extra_headers: Vec::new(),

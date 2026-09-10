@@ -967,6 +967,10 @@ impl ResourceRequestClient {
         self.resource_runtime.client().tls_verify_host()
     }
 
+    pub fn websocket_connector(&self) -> moli_fetch::CurlWebSocketConnector {
+        self.resource_runtime.client().websocket_connector()
+    }
+
     pub fn tls_config(&self) -> &moli_fetch::CurlTlsConfig {
         self.resource_runtime.client().tls_config()
     }

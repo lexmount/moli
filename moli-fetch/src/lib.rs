@@ -46,6 +46,7 @@ pub use headers::{
 };
 pub use moli_cookie_jar::SharedBrowserCookieStore as SharedCookieStore;
 pub use moli_curl::CurlTlsConfig;
+pub use moli_curl::websocket::CurlWebSocketConnector;
 pub use moli_web_bot_auth::{WebBotAuthProfile, WebBotAuthSigner};
 pub use network_fetch_result::{
     NetworkExchangeObservation, NetworkFetchFailureContext, NetworkFetchFailureRequestContext,

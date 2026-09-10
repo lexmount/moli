@@ -1,3 +1,5 @@
+mod websocket;
+
 use anyhow::Result;
 use std::{
     path::PathBuf,

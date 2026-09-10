@@ -35,6 +35,13 @@ pub struct FetchClient {
 }
 
 impl FetchClientHandle {
+    /// Creates native WebSockets on this client's HTTP owner and Multi. The
+    /// capability does not keep the FetchClient owner alive; shutdown closes
+    /// its WebSockets and makes future connection attempts fail.
+    pub fn websocket_connector(&self) -> crate::CurlWebSocketConnector {
+        self.runtime.websocket_connector()
+    }
+
     /// Materialized text compatibility API.
     ///
     /// Non-auth requests enter the streaming raw transport first and only

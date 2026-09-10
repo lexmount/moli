@@ -50,6 +50,7 @@ impl JsContextHost {
             .ok()
             .and_then(|header| header.clone());
         let context = WebSocketConnectOptions {
+            connector: loader.map(|loader| loader.websocket_connector()),
             origin: moli_url::origin_ascii_serialization(&document_url),
             user_agent: loader
                 .map(|loader| loader.user_agent().to_owned())

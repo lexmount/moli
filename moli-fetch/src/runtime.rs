@@ -161,6 +161,7 @@ pub(crate) struct FetchRuntimeHandle {
 
 #[derive(Debug)]
 struct FetchRuntimeInner {
+    websocket_connector: crate::CurlWebSocketConnector,
     request_tx: Sender<RuntimeCommand>,
     shutdown_requested: Arc<AtomicBool>,
     #[cfg(test)]
@@ -388,6 +389,7 @@ impl FetchRuntimeOwner {
         let owner_started = Arc::new(AtomicBool::new(false));
         let (curl_runtime, curl_completion_rx) = CurlMultiRuntime::new(curl_runtime_config(config))
             .expect("failed to start fetch curl multi runtime");
+        let websocket_connector = curl_runtime.websocket_connector();
         let owner = RuntimeOwner {
             config: config.clone(),
             cookie_store,
@@ -421,6 +423,7 @@ impl FetchRuntimeOwner {
 
         let handle = FetchRuntimeHandle {
             inner: Arc::new(FetchRuntimeInner {
+                websocket_connector,
                 request_tx,
                 shutdown_requested,
                 #[cfg(test)]
@@ -533,6 +536,10 @@ fn panic_report(
 }
 
 impl FetchRuntimeHandle {
+    pub(crate) fn websocket_connector(&self) -> crate::CurlWebSocketConnector {
+        self.inner.websocket_connector.clone()
+    }
+
     #[cfg(test)]
     pub(crate) fn submit(&self, request: Request) -> Result<oneshot::Receiver<Result<Response>>> {
         self.submit_with_cancel(request, FetchCancelHandle::new())

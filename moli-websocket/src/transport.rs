@@ -57,12 +57,18 @@ pub(crate) async fn open_websocket_connection(
             );
         }
     }
-    static RUNTIME: OnceLock<Result<CurlWebSocketRuntime, String>> = OnceLock::new();
-    let runtime = RUNTIME
-        .get_or_init(|| CurlWebSocketRuntime::new().map_err(|error| error.to_string()))
-        .as_ref()
-        .map_err(Clone::clone)?;
-    let mut connection = runtime.connect(native).map_err(|error| error.to_string())?;
+    let mut connection = match &context.connector {
+        Some(connector) => connector.connect(native),
+        None => {
+            static RUNTIME: OnceLock<Result<CurlWebSocketRuntime, String>> = OnceLock::new();
+            let runtime = RUNTIME
+                .get_or_init(|| CurlWebSocketRuntime::new().map_err(|error| error.to_string()))
+                .as_ref()
+                .map_err(Clone::clone)?;
+            runtime.connect(native)
+        }
+    }
+    .map_err(|error| error.to_string())?;
     match connection.recv().await {
         Some(CurlWebSocketEvent::Handshake {
             request: actual,

@@ -2,6 +2,7 @@ mod cookie_context;
 mod cookie_store;
 mod support;
 mod tls_credentials;
+mod websocket_transport;
 
 use anyhow::{Context, Result};
 use curl::easy::Handler;

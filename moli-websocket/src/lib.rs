@@ -42,3 +42,6 @@ mod tests;
 mod native_tests;
 #[cfg(test)]
 mod terminal_tests;
+
+#[cfg(test)]
+mod runtime_tests;

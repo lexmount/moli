@@ -1,5 +1,8 @@
 #[derive(Debug, Clone)]
 pub struct ConnectOptions {
+    /// Native runtime for this network scope. None selects the standalone
+    /// process runtime. A closed provided connector fails without fallback.
+    pub connector: Option<moli_curl::websocket::CurlWebSocketConnector>,
     pub origin: String,
     pub user_agent: String,
     pub extra_headers: Vec<(String, String)>,
