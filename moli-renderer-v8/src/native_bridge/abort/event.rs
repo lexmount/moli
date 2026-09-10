@@ -1,4 +1,5 @@
-use super::{AbortDispatchSnapshot, AbortStore};
+use super::AbortDispatchSnapshot;
+use crate::context_bootstrap::abort_signal_events;
 use crate::context_bootstrap::{
     EVENT_PASSIVE_SLOT, EVENT_STOP_IMMEDIATE_PROPAGATION_SLOT, construct_original_event,
     event_internal_bool_flag, set_event_internal_flag,
@@ -47,9 +48,6 @@ pub(super) fn dispatch_abort<'s>(
     let Some(event) = construct_original_event(scope, "abort") else {
         return;
     };
-    AbortStore::define_hidden_value(scope, event, "target", signal.into());
-    AbortStore::define_hidden_value(scope, event, "currentTarget", signal.into());
-
     invoke_abort_event_callbacks(
         scope,
         host_ptr,
@@ -78,6 +76,10 @@ pub(super) fn invoke_abort_event_callbacks<'s>(
     event_type: &str,
     event: v8::Local<'s, v8::Object>,
 ) {
+    if !abort_signal_events::begin_dispatch(scope, signal, event) {
+        abort_signal_events::finish_dispatch(scope, event);
+        return;
+    }
     for listener in dispatch_snapshot.listeners {
         let Some(listener) = (unsafe { &mut *host_ptr })
             .claim_abort_signal_event_listener_for_dispatch(
@@ -105,10 +107,8 @@ pub(super) fn invoke_abort_event_callbacks<'s>(
             break;
         }
     }
-    if event_internal_bool_flag(scope, event, EVENT_STOP_IMMEDIATE_PROPAGATION_SLOT) {
-        return;
-    }
-    if event_type == "abort"
+    if !event_internal_bool_flag(scope, event, EVENT_STOP_IMMEDIATE_PROPAGATION_SLOT)
+        && event_type == "abort"
         && let Some(onabort) = dispatch_snapshot.onabort
     {
         let onabort = v8::Local::new(scope, &onabort);
@@ -120,4 +120,5 @@ pub(super) fn invoke_abort_event_callbacks<'s>(
             &[event.into()],
         );
     }
+    abort_signal_events::finish_dispatch(scope, event);
 }

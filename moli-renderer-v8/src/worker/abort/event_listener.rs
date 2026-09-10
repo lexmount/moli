@@ -4,12 +4,13 @@ use moli_webidl_callback::{PreparedWebIdlCallbackInterface, WebIdlCallbackInterf
 
 use super::{WorkerAbortSignalState, WorkerAbortStore, local_object_in_scope, worker_abort_store};
 use crate::callback_invocation::{CallbackInvocation, CallbackInvocationOutcome, CallbackInvoker};
+use crate::context_bootstrap::abort_signal_events;
 use crate::context_bootstrap::{
-    EVENT_PASSIVE_SLOT, EVENT_STOP_IMMEDIATE_PROPAGATION_SLOT, event_internal_bool_flag,
-    set_event_internal_flag,
+    EVENT_PASSIVE_SLOT, EVENT_STOP_IMMEDIATE_PROPAGATION_SLOT, construct_original_event,
+    event_internal_bool_flag, set_event_internal_flag,
 };
 use crate::exception_reporting::{CallbackExceptionLogLevel, invoke_callback};
-use crate::util::{v8_string, v8str};
+use crate::util::v8str;
 use crate::webidl;
 
 /// Identity of one EventListener registration inside a worker run.
@@ -281,18 +282,12 @@ pub(crate) fn worker_abort_signal_dispatch_event_callback<'s>(
         rv.set_bool(false);
         return;
     };
-    let Ok(event) = v8::Local::<v8::Object>::try_from(parsed.event) else {
-        rv.set_bool(false);
-        return;
-    };
     let Some(signal_id) = WorkerAbortStore::signal_id_from_object(scope, signal) else {
         rv.set_bool(false);
         return;
     };
-    let Some(event_type) = event
-        .get(scope, v8str(scope, "type").into())
-        .and_then(|value| value.to_string(scope))
-        .map(|value| value.to_rust_string_lossy(scope))
+    let Some((event, event_type)) =
+        abort_signal_events::prepare_script_dispatch(scope, parsed.event)
     else {
         rv.set_bool(false);
         return;
@@ -301,8 +296,6 @@ pub(crate) fn worker_abort_signal_dispatch_event_callback<'s>(
     let default_prevented_key = v8str(scope, "defaultPrevented");
     let signal = local_object_in_scope(scope, signal);
     let event = local_object_in_scope(scope, event);
-    WorkerAbortStore::define_hidden_value(scope, event, "target", signal.into());
-    WorkerAbortStore::define_hidden_value(scope, event, "currentTarget", signal.into());
     let dispatch_snapshot = store
         .borrow()
         .signal_state(signal_id)
@@ -331,21 +324,13 @@ pub(super) fn dispatch_abort<'s>(
     signal_id: u32,
     dispatch_snapshot: WorkerAbortDispatchSnapshot,
 ) {
-    let global = scope.get_current_context().global(scope);
-    let Some(event_ctor) = global
-        .get(scope, v8str(scope, "Event").into())
-        .and_then(|value| v8::Local::<v8::Function>::try_from(value).ok())
-    else {
+    let context = signal
+        .get_creation_context(scope)
+        .unwrap_or_else(|| scope.get_current_context());
+    let scope = &mut v8::ContextScope::new(scope, context);
+    let Some(event) = construct_original_event(scope, "abort") else {
         return;
     };
-    let Some(event_type) = v8_string(scope, "abort") else {
-        return;
-    };
-    let Some(event) = event_ctor.new_instance(scope, &[event_type.into()]) else {
-        return;
-    };
-    WorkerAbortStore::define_hidden_value(scope, event, "target", signal.into());
-    WorkerAbortStore::define_hidden_value(scope, event, "currentTarget", signal.into());
     dispatch_event_callbacks(
         store,
         scope,
@@ -367,6 +352,10 @@ fn dispatch_event_callbacks<'s>(
     dispatch_snapshot: WorkerAbortDispatchSnapshot,
     event: v8::Local<'s, v8::Object>,
 ) {
+    if !abort_signal_events::begin_dispatch(scope, signal, event) {
+        abort_signal_events::finish_dispatch(scope, event);
+        return;
+    }
     for listener_id in dispatch_snapshot.listener_ids {
         let listener =
             store
@@ -389,10 +378,9 @@ fn dispatch_event_callbacks<'s>(
         }
     }
 
-    if event_internal_bool_flag(scope, event, EVENT_STOP_IMMEDIATE_PROPAGATION_SLOT) {
-        return;
-    }
-    if let Some(onabort) = dispatch_snapshot.onabort {
+    if !event_internal_bool_flag(scope, event, EVENT_STOP_IMMEDIATE_PROPAGATION_SLOT)
+        && let Some(onabort) = dispatch_snapshot.onabort
+    {
         let onabort = v8::Local::new(scope, &onabort);
         let _ = invoke_callback(
             scope,
@@ -402,6 +390,7 @@ fn dispatch_event_callbacks<'s>(
             &[event.into()],
         );
     }
+    abort_signal_events::finish_dispatch(scope, event);
 }
 
 fn invoke_worker_abort_event_listener<'s>(
