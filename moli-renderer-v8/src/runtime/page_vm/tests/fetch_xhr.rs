@@ -4345,10 +4345,12 @@ async fn window_fetch_no_cors_cross_origin_returns_opaque_filtered_response() {
                         "fetch no-cors should resolve",
                     )
                     .await?;
-                    while page_vm
-                        .run_exact_page_websocket_selected_task_for_test().await?
-                        .is_some()
-                    {}
+                    // The opaque response resolves at headers, before its hidden
+                    // body finishes and produces the completed network record.
+                    drain_page_work_until_no_pending_subresources(
+                        &mut page_vm,
+                        "fetch no-cors network record should complete",
+                    ).await?;
                     let observed = page_vm.vm_mut().eval("String(globalThis.__fetchObserved)")?;
                     Ok::<_, anyhow::Error>((observed, page_vm.vm_mut().take_network_output()))
                 })
