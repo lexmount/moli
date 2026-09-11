@@ -107,21 +107,23 @@ impl TargetSessionOwnerMut<'_> {
         &mut self,
         locale_override: Option<String>,
         fallback_identity: &moli_browser_profile::BrowserIdentityProfile,
-    ) -> bool {
+    ) -> Result<(), &'static str> {
         self.mutate_page_state(|state, _session_key| {
-            state.set_base_locale_override(locale_override.clone());
+            state.set_base_locale_override(locale_override.clone())?;
             state
                 .network_policy
                 .set_base_accept_language_override(locale_override, fallback_identity);
-        });
-        true
+            Ok(())
+        })
     }
 
-    fn set_base_timezone_override(&mut self, timezone_override: Option<String>) -> bool {
+    fn set_base_timezone_override(
+        &mut self,
+        timezone_override: Option<String>,
+    ) -> Result<(), &'static str> {
         self.mutate_page_state(|state, _session_key| {
-            state.set_base_timezone_override(timezone_override);
-        });
-        true
+            state.set_base_timezone_override(timezone_override)
+        })
     }
 }
 
@@ -185,21 +187,21 @@ impl CdpConnection {
         &mut self,
         owner: &crate::conn::CommandOwnerScope,
         locale_override: Option<String>,
-    ) -> bool {
+    ) -> Result<(), &'static str> {
         let fallback_identity = self.base_browser_identity.clone();
         self.target_session_owner_mut_for_owner(owner)
-            .is_some_and(|mut owner| {
-                owner.set_base_locale_override(locale_override, &fallback_identity)
-            })
+            .ok_or("BrowserContextNotLoaded")?
+            .set_base_locale_override(locale_override, &fallback_identity)
     }
 
     pub(crate) fn set_base_timezone_override_for_owner(
         &mut self,
         owner: &crate::conn::CommandOwnerScope,
         timezone_override: Option<String>,
-    ) -> bool {
+    ) -> Result<(), &'static str> {
         self.target_session_owner_mut_for_owner(owner)
-            .is_some_and(|mut owner| owner.set_base_timezone_override(timezone_override))
+            .ok_or("BrowserContextNotLoaded")?
+            .set_base_timezone_override(timezone_override)
     }
 
     pub(crate) fn emit_touch_events_for_mouse_for_session_owner(

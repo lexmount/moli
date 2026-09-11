@@ -336,7 +336,7 @@ async fn attached_session_first_io_emulation_response_uses_its_session_host() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn timezone_override_can_complete_through_pending_command_dispatch() {
+async fn timezone_override_completes_without_replaying_a_renderer_command() {
     let mut ctx = TestContext::new();
     load_session_page_for_pending_emulation_test(&mut ctx).await;
 
@@ -347,11 +347,9 @@ async fn timezone_override_can_complete_through_pending_command_dispatch() {
         "params": { "timezoneId": "Asia/Shanghai" }
     })
     .to_string();
-    let pending = ctx
-        .conn
-        .try_start_pending_command_dispatch(&raw)
-        .expect("timezone override should use pending command dispatch");
-    let messages = complete_pending_command_task_for_test(&mut ctx, pending).await;
+    ctx.process_async(serde_json::from_str::<serde_json::Value>(&raw).unwrap())
+        .await;
+    let messages = ctx.take_all();
 
     assert!(messages.iter().any(|message| {
         message["id"] == json!(9102)
@@ -364,8 +362,9 @@ async fn timezone_override_can_complete_through_pending_command_dispatch() {
             .as_ref()
             .unwrap()
             .active_page_target()
-            .effective_policy()
-            .timezone_override(),
+            .devtools_sessions
+            .effective_timezone_override()
+            .as_deref(),
         Some("Asia/Shanghai")
     );
 }
@@ -440,7 +439,7 @@ async fn pending_emulation_completion_follows_the_exact_target_across_activation
         !super::pending_emulation_page_configuration_will_be_replayed(
             &ctx.conn,
             &target,
-            &super::PendingEmulationPageOperation::SetTimezoneOverride,
+            &super::PendingEmulationPageOperation::SetCpuThrottlingRate,
             Some(dispatched_attachment_id),
         ),
         "changing foreground selection must not make an error from the same Page look stale"
@@ -458,7 +457,7 @@ async fn pending_emulation_completion_follows_the_exact_target_across_activation
         super::pending_emulation_page_configuration_will_be_replayed(
             &ctx.conn,
             &target,
-            &super::PendingEmulationPageOperation::SetTimezoneOverride,
+            &super::PendingEmulationPageOperation::SetCpuThrottlingRate,
             Some(dispatched_attachment_id),
         ),
         "only replacement of the exact target attachment may retire its renderer error"
@@ -481,7 +480,7 @@ async fn pending_emulation_completion_follows_the_exact_target_across_activation
             completed: super::CompletedEmulationRendererDispatch::Pages(vec![
                 super::CompletedEmulationPageCommand {
                     target,
-                    operation: super::PendingEmulationPageOperation::SetTimezoneOverride,
+                    operation: super::PendingEmulationPageOperation::SetCpuThrottlingRate,
                     dispatched_attachment_id: Some(dispatched_attachment_id),
                     completed: Err("renderer attachment retired".to_owned()),
                 },
@@ -1108,7 +1107,7 @@ async fn live_cpu_throttling_rate_uses_pending_command_dispatch() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn set_timezone_override_without_loaded_browser_context_errors() {
+async fn process_environment_overrides_without_a_configuration_owner_error() {
     let mut ctx = TestContext::new();
 
     ctx.process_async(json!({
@@ -1118,6 +1117,13 @@ async fn set_timezone_override_without_loaded_browser_context_errors() {
     }))
     .await;
     ctx.expect_error(7, -31998, "BrowserContextNotLoaded");
+    ctx.process_async(json!({
+        "id": 8,
+        "method": "Emulation.setLocaleOverride",
+        "params": { "locale": "fr_FR" }
+    }))
+    .await;
+    ctx.expect_error(8, -31998, "BrowserContextNotLoaded");
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -1148,8 +1154,9 @@ async fn invalid_timezone_override_is_rejected_without_replacing_active_state() 
             .as_ref()
             .expect("browser context")
             .active_page_target()
-            .effective_policy()
-            .timezone_override(),
+            .devtools_sessions
+            .effective_timezone_override()
+            .as_deref(),
         Some("Europe/Paris")
     );
 }
@@ -1215,11 +1222,17 @@ async fn multi_session_locale_and_timezone_claims_match_chromium() {
         .expect("browser context")
         .active_page_target();
     assert_eq!(
-        page_state.effective_policy().locale_override(),
+        page_state
+            .devtools_sessions
+            .effective_locale_override()
+            .as_deref(),
         Some("fr-FR")
     );
     assert_eq!(
-        page_state.effective_policy().timezone_override(),
+        page_state
+            .devtools_sessions
+            .effective_timezone_override()
+            .as_deref(),
         Some("Europe/Paris")
     );
 }
@@ -3119,8 +3132,9 @@ async fn context_locale_override_applies_to_loaded_background_page_without_activ
     assert_eq!(
         browser_context
             .active_page_target()
-            .effective_policy()
-            .locale_override(),
+            .devtools_sessions
+            .effective_locale_override()
+            .as_deref(),
         Some("fr-FR")
     );
     assert!(
@@ -3129,8 +3143,9 @@ async fn context_locale_override_applies_to_loaded_background_page_without_activ
             .filter(|target| target.has_non_default_session_state())
             .and_then(|state| {
                 state
-                    .effective_policy()
-                    .locale_override()
+                    .devtools_sessions
+                    .effective_locale_override()
+                    .as_deref()
                     .map(str::to_owned)
             })
             .is_none(),
@@ -3254,8 +3269,9 @@ async fn session_emulation_routes_to_loaded_background_owner_without_activation(
     assert!(
         browser_context
             .active_page_target()
-            .effective_policy()
-            .locale_override()
+            .devtools_sessions
+            .effective_locale_override()
+            .as_deref()
             .is_none(),
         "background Emulation should not mutate the active target locale override"
     );
@@ -3272,7 +3288,10 @@ async fn session_emulation_routes_to_loaded_background_owner_without_activation(
         Some("dark")
     );
     assert_eq!(
-        background.effective_policy().locale_override(),
+        background
+            .devtools_sessions
+            .effective_locale_override()
+            .as_deref(),
         Some("zh-CN")
     );
     assert_eq!(

@@ -71,8 +71,6 @@ async fn assert_streaming_redirect_chain(reply_boundary: RendererReplyBoundary) 
                 Vec::new(),
                 Vec::new(),
                 Vec::new(),
-                None,
-                None,
                 false,
                 false,
                 1.0,

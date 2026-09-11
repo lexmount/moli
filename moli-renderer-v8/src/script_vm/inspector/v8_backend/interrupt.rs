@@ -92,6 +92,9 @@ pub(super) unsafe extern "C" fn dispatch_inspector_interrupt(
     };
     let mut isolate_ptr = isolate;
     let isolate = unsafe { v8::Isolate::ref_from_raw_isolate_ptr_mut(&mut isolate_ptr) };
+    // Running JavaScript has not returned to the owner loop to consume the
+    // foreground notification. An Inspector interrupt is also an observation.
+    moli_v8_platform::refresh_process_environment(isolate);
     with_scoped_inspector_microtasks(isolate, || {
         session_executor.dispatch_next_io_command_from_interrupt();
     });
@@ -115,6 +118,7 @@ pub(crate) fn dispatch_inspector_io_owner_wake(wake: RendererInspectorIoOwnerWak
         isolate.enter();
     }
     let _entered_isolate = EnteredOwnerWakeIsolateGuard(isolate);
+    moli_v8_platform::refresh_process_environment(isolate);
     let scope = pin!(v8::HandleScope::new(isolate));
     let scope = &mut scope.init();
     with_scoped_inspector_microtasks(scope, || {

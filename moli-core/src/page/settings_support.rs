@@ -246,57 +246,6 @@ impl Page {
         )
     }
 
-    pub async fn set_locale_override_async(&mut self, locale: Option<&str>) -> Result<()> {
-        self.dispatch_unit_page_command_async(
-            RendererPageCommand::SetLocaleOverride(locale.map(str::to_owned)),
-            "set locale override",
-        )
-        .await
-    }
-
-    pub fn start_set_locale_override(&self, locale: Option<&str>) -> Result<PendingPageCommand> {
-        self.start_page_command(RendererPageCommand::SetLocaleOverride(
-            locale.map(str::to_owned),
-        ))
-    }
-
-    pub fn finish_set_locale_override(&mut self, completion: CompletedPageCommand) -> Result<()> {
-        let reply = self.finish_page_command(completion);
-        expect_page_reply!(
-            reply,
-            "set locale override",
-            "a unit reply",
-            RendererPageReply::Unit => Ok(()),
-        )
-    }
-
-    pub async fn set_timezone_override_async(&mut self, timezone: Option<&str>) -> Result<()> {
-        self.dispatch_unit_page_command_async(
-            RendererPageCommand::SetTimezoneOverride(timezone.map(str::to_owned)),
-            "set timezone override",
-        )
-        .await
-    }
-
-    pub fn start_set_timezone_override(
-        &self,
-        timezone: Option<&str>,
-    ) -> Result<PendingPageCommand> {
-        self.start_page_command(RendererPageCommand::SetTimezoneOverride(
-            timezone.map(str::to_owned),
-        ))
-    }
-
-    pub fn finish_set_timezone_override(&mut self, completion: CompletedPageCommand) -> Result<()> {
-        let reply = self.finish_page_command(completion);
-        expect_page_reply!(
-            reply,
-            "set timezone override",
-            "a unit reply",
-            RendererPageReply::Unit => Ok(()),
-        )
-    }
-
     pub async fn set_script_execution_disabled_async(&mut self, disabled: bool) -> Result<()> {
         self.dispatch_unit_page_command_async(
             RendererPageCommand::SetScriptExecutionDisabled(disabled),

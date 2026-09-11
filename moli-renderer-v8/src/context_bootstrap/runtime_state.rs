@@ -1,4 +1,3 @@
-use super::date_locale_runtime::install_date_locale_runtime_state;
 use super::file_api::initialize_file_api_runtime_queues;
 use super::shared::*;
 use super::webassembly_runtime::install_webassembly_runtime_extensions;
@@ -1970,7 +1969,6 @@ fn install_window_runtime_state<'s>(
         WINDOW_SECURE_CONTEXT_AVAILABLE_SLOT,
         v8::Boolean::new(scope, secure_context_available).into(),
     );
-    install_date_locale_runtime_state(scope, global)?;
     install_webassembly_runtime_state(scope, global)?;
     install_webidl_collection_iterator_intrinsics(scope, global)?;
 

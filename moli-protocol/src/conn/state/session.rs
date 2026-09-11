@@ -87,16 +87,6 @@ impl PageTargetHost {
                 .devtools_sessions
                 .effective_renderer_browser_identity_override()
                 .or_else(|| self.network_policy.base_browser_identity.profile_owned()),
-            locale_override: self
-                .devtools_sessions
-                .effective_locale_override()
-                .map(str::to_owned)
-                .or_else(|| self.base_locale_override.clone()),
-            timezone_override: self
-                .devtools_sessions
-                .effective_timezone_override()
-                .map(str::to_owned)
-                .or_else(|| self.base_timezone_override.clone()),
         }
     }
 
@@ -143,12 +133,22 @@ impl PageTargetHost {
             .set_timezone_override(session_key, timezone_override)
     }
 
-    pub(crate) fn set_base_locale_override(&mut self, locale_override: Option<String>) {
-        self.base_locale_override = locale_override;
+    pub(crate) fn set_base_locale_override(
+        &mut self,
+        locale_override: Option<String>,
+    ) -> Result<(), &'static str> {
+        self.environment_owner
+            .set_locale(locale_override.as_deref())?;
+        Ok(())
     }
 
-    pub(crate) fn set_base_timezone_override(&mut self, timezone_override: Option<String>) {
-        self.base_timezone_override = timezone_override;
+    pub(crate) fn set_base_timezone_override(
+        &mut self,
+        timezone_override: Option<String>,
+    ) -> Result<(), &'static str> {
+        self.environment_owner
+            .set_timezone(timezone_override.as_deref())?;
+        Ok(())
     }
 
     pub(crate) fn clear_devtools_network_state(
@@ -182,8 +182,7 @@ impl PageTargetHost {
             || self.http_proxy_override.is_some()
             || self.http_no_proxy_override.is_some()
             || self.tls_verify_host_override.is_some()
-            || self.base_locale_override.is_some()
-            || self.base_timezone_override.is_some()
+            || self.environment_owner.has_override()
             || self.effective_emulation_state != super::EffectiveTargetEmulationState::default()
             || self.input_intercept_drags_enabled
             || self.input_drag_intercepted
@@ -225,8 +224,6 @@ pub(crate) struct EffectiveTargetPolicy {
     extra_headers: Vec<(String, String)>,
     browser_identity_override: Option<moli_browser_profile::BrowserIdentityProfile>,
     renderer_browser_identity_override: Option<moli_browser_profile::BrowserIdentityProfile>,
-    locale_override: Option<String>,
-    timezone_override: Option<String>,
 }
 
 impl EffectiveTargetPolicy {
@@ -239,8 +236,6 @@ impl EffectiveTargetPolicy {
             browser_identity: self.browser_identity_override != next.browser_identity_override,
             renderer_browser_identity: self.renderer_browser_identity_override
                 != next.renderer_browser_identity_override,
-            locale: self.locale_override != next.locale_override,
-            timezone: self.timezone_override != next.timezone_override,
         }
     }
 
@@ -271,14 +266,6 @@ impl EffectiveTargetPolicy {
     ) -> Option<moli_browser_profile::BrowserIdentityProfile> {
         self.renderer_browser_identity_override.clone()
     }
-
-    pub(crate) fn locale_override(&self) -> Option<&str> {
-        self.locale_override.as_deref()
-    }
-
-    pub(crate) fn timezone_override(&self) -> Option<&str> {
-        self.timezone_override.as_deref()
-    }
 }
 
 /// Renderer surfaces that must be replayed after an effective policy change.
@@ -287,8 +274,6 @@ pub(crate) struct EffectiveTargetPolicyDelta {
     pub(crate) network_request: bool,
     pub(crate) browser_identity: bool,
     pub(crate) renderer_browser_identity: bool,
-    pub(crate) locale: bool,
-    pub(crate) timezone: bool,
 }
 
 impl EffectiveTargetPolicyDelta {
@@ -297,11 +282,7 @@ impl EffectiveTargetPolicyDelta {
     }
 
     pub(crate) fn is_empty(self) -> bool {
-        !self.network_request
-            && !self.browser_identity
-            && !self.renderer_browser_identity
-            && !self.locale
-            && !self.timezone
+        !self.network_request && !self.browser_identity && !self.renderer_browser_identity
     }
 }
 
@@ -706,8 +687,6 @@ mod tests {
     #[test]
     fn devtools_emulation_overrides_reveal_target_base_state_when_cleared() {
         let mut state = PageTargetHost::empty("TID-policy-test".to_owned());
-        state.set_base_locale_override(Some("en-GB".to_owned()));
-        state.set_base_timezone_override(Some("Europe/London".to_owned()));
         state.network_policy.set_browser_identity_override(
             moli_browser_profile::BrowserIdentityProfile::new("Moli/Base", "en-GB"),
         );
@@ -737,8 +716,6 @@ mod tests {
             .emulation_session_state
             .cpu_throttling_rate = 4.0;
         let effective = state.effective_policy();
-        assert_eq!(effective.locale_override(), Some("fr-FR"));
-        assert_eq!(effective.timezone_override(), Some("Europe/Paris"));
         assert_eq!(
             effective
                 .browser_identity_override()
@@ -749,8 +726,6 @@ mod tests {
         state.clear_devtools_network_state(&DevToolsSessionKey::Primary);
         state.clear_devtools_emulation_policy_state(&DevToolsSessionKey::Primary);
         let effective = state.effective_policy();
-        assert_eq!(effective.locale_override(), Some("en-GB"));
-        assert_eq!(effective.timezone_override(), Some("Europe/London"));
         assert_eq!(
             state
                 .devtools_sessions

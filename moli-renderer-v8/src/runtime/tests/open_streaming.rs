@@ -194,8 +194,6 @@ impl OpenStreamingPage {
                 Vec::new(),
                 Vec::new(),
                 Vec::new(),
-                None,
-                None,
                 false,
                 false,
                 1.0,

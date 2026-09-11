@@ -2825,7 +2825,7 @@ async fn same_context_background_session_can_clear_its_own_user_agent_before_act
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn same_context_background_session_stages_locale_without_changing_request_language() {
+async fn process_environment_conflicts_do_not_stage_navigation_policy_or_change_request_language() {
     async fn handler(
         State(seen): State<Arc<Mutex<Vec<(String, Option<String>)>>>>,
         headers: HeaderMap,
@@ -2928,7 +2928,10 @@ async fn same_context_background_session_stages_locale_without_changing_request_
         "params": { "locale": "fr-FR" }
     }))
     .await;
-    ctx.expect_result(10419484, json!({}), Some(&second_session_id));
+    assert_eq!(
+        take_response_by_id(&mut ctx, 10419484)["error"]["message"],
+        "Another locale override is already in effect"
+    );
 
     ctx.process_async(json!({
         "id": 10419485,
@@ -2937,7 +2940,10 @@ async fn same_context_background_session_stages_locale_without_changing_request_
         "params": { "timezoneId": "Asia/Shanghai" }
     }))
     .await;
-    ctx.expect_result(10419485, json!({}), Some(&second_session_id));
+    assert_eq!(
+        take_response_by_id(&mut ctx, 10419485)["error"]["message"],
+        "Timezone override is already in effect"
+    );
 
     {
         let active = ctx
@@ -2948,25 +2954,36 @@ async fn same_context_background_session_stages_locale_without_changing_request_
         assert_eq!(
             active
                 .active_page_target()
-                .effective_policy()
-                .locale_override(),
+                .devtools_sessions
+                .effective_locale_override()
+                .as_deref(),
             Some("en-GB")
         );
         assert_eq!(
             active
                 .active_page_target()
-                .effective_policy()
-                .timezone_override(),
+                .devtools_sessions
+                .effective_timezone_override()
+                .as_deref(),
             Some("UTC")
         );
         let staged = active
             .background_target(&second_target_id)
-            .filter(|target| target.has_non_default_session_state())
-            .expect("second target should have staged background page session state");
-        assert_eq!(staged.effective_policy().locale_override(), Some("fr-FR"));
+            .expect("second target is present without a process environment claim");
         assert_eq!(
-            staged.effective_policy().timezone_override(),
-            Some("Asia/Shanghai")
+            staged
+                .devtools_sessions
+                .effective_locale_override()
+                .as_deref(),
+            None,
+            "a rejected process claim must not be replayed by navigation"
+        );
+        assert_eq!(
+            staged
+                .devtools_sessions
+                .effective_timezone_override()
+                .as_deref(),
+            None
         );
     }
 
@@ -3015,6 +3032,26 @@ async fn same_context_background_session_stages_locale_without_changing_request_
     .await;
     let _ = take_response_by_id(&mut ctx, 10419488);
     ctx.take_all();
+
+    // The rejected values were not staged. After the owning target closes,
+    // this session can explicitly acquire both claims for the first time.
+    for (id, method, params) in [
+        (
+            104194880,
+            "Emulation.setLocaleOverride",
+            json!({"locale": "fr-FR"}),
+        ),
+        (
+            104194881,
+            "Emulation.setTimezoneOverride",
+            json!({"timezoneId": "Asia/Shanghai"}),
+        ),
+    ] {
+        ctx.process_async(json!({"id": id, "method": method,
+            "sessionId": second_session_id, "params": params}))
+            .await;
+        ctx.expect_result(id, json!({}), Some(&second_session_id));
+    }
 
     let url_b = format!("http://{addr}/page-b");
     ctx.process_async(json!({
@@ -3159,8 +3196,9 @@ async fn same_context_background_session_can_clear_its_own_locale_before_activat
         assert!(
             active
                 .active_page_target()
-                .effective_policy()
-                .locale_override()
+                .devtools_sessions
+                .effective_locale_override()
+                .as_deref()
                 .is_none(),
             "active target should keep its default locale override",
         );
@@ -3323,8 +3361,9 @@ async fn same_context_background_session_can_clear_its_own_timezone_before_activ
         assert!(
             active
                 .active_page_target()
-                .effective_policy()
-                .timezone_override()
+                .devtools_sessions
+                .effective_timezone_override()
+                .as_deref()
                 .is_none(),
             "active target should keep its default timezone override",
         );

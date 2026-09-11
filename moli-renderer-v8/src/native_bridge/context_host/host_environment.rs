@@ -1,7 +1,7 @@
-use std::{collections::HashSet, rc::Rc};
+use std::collections::HashSet;
 
 use super::{
-    DateLocaleRuntimeState, JsContextHost,
+    JsContextHost,
     permissions::{permission_names_match, permission_override_name},
 };
 use crate::{
@@ -702,22 +702,6 @@ impl JsContextHost {
         &self,
     ) -> &[crate::protocol_types::PermissionOverrideRegistration] {
         &self.permission_overrides
-    }
-
-    pub(crate) fn set_locale_override(&self, locale: Option<&str>) {
-        self.date_locale_runtime_state.set_locale(locale);
-    }
-
-    pub(crate) fn set_timezone_override(&self, timezone: Option<&str>) {
-        self.date_locale_runtime_state.set_timezone(timezone);
-    }
-
-    pub(crate) fn date_locale_runtime_state(&self) -> Rc<DateLocaleRuntimeState> {
-        Rc::clone(&self.date_locale_runtime_state)
-    }
-
-    pub(crate) fn timezone_override(&self) -> Option<String> {
-        self.date_locale_runtime_state.timezone()
     }
 
     pub(crate) fn set_idle_override(

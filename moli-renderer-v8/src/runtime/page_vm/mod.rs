@@ -1081,8 +1081,6 @@ pub(crate) struct PageVmEnvConfig {
     pub(crate) document_policy_container: crate::document_runtime::DocumentPolicyContainer,
     pub(crate) document_default_language: Option<String>,
     pub(crate) document_last_modified: Option<f64>,
-    pub(crate) locale_override: Option<String>,
-    pub(crate) timezone_override: Option<String>,
     pub(crate) script_execution_disabled: bool,
     pub(crate) bypass_content_security_policy: bool,
     pub(crate) cpu_throttling_rate: f64,
@@ -1605,8 +1603,6 @@ pub(crate) struct PageVm {
     pub(super) runtime_inspector_protocol_configurations:
         BTreeMap<DevToolsSessionKey, RendererInspectorProtocolConfiguration>,
     pub(super) extra_http_headers: Vec<(String, String)>,
-    pub(super) locale_override: Option<String>,
-    pub(super) timezone_override: Option<String>,
     pub(super) bypass_content_security_policy: bool,
     pub(super) cpu_throttling_rate: f64,
     pub(super) emulated_media: crate::protocol_types::EmulatedMediaOverrides,
@@ -4325,8 +4321,6 @@ impl PageVm {
                 })
                 .collect(),
             extra_http_headers: env.extra_http_headers.clone(),
-            locale_override: env.locale_override.clone(),
-            timezone_override: env.timezone_override.clone(),
             bypass_content_security_policy: env.bypass_content_security_policy,
             cpu_throttling_rate: env.cpu_throttling_rate,
             emulated_media: env.emulated_media.clone(),
@@ -4387,12 +4381,6 @@ impl PageVm {
         page_vm
             .vm_mut()
             .set_stored_runtime_bindings(&env.runtime_bindings);
-        page_vm
-            .vm_mut()
-            .set_locale_override(env.locale_override.as_deref());
-        page_vm
-            .vm_mut()
-            .set_timezone_override(env.timezone_override.as_deref());
         page_vm.vm_mut().set_emulated_media(&env.emulated_media);
         page_vm.vm_mut().set_idle_override(env.idle_override);
         page_vm

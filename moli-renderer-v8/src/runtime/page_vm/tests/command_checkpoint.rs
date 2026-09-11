@@ -47,8 +47,9 @@ Promise.resolve().then(() => __passiveTimezoneCheckpoint += 1);
         )
         .expect("timezone checkpoint witness should queue a reaction");
 
-    page_vm
-        .set_timezone_override(Some("UTC"))
+    let environment = moli_v8_platform::ProcessEnvironmentOwner::default();
+    environment
+        .set_timezone(Some("UTC"))
         .expect("timezone surface should update without executing Page work");
 
     assert_eq!(

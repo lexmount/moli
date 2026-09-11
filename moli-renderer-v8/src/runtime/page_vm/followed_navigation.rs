@@ -1189,8 +1189,6 @@ impl PageVm {
             },
             document_default_language: None,
             document_last_modified: None,
-            locale_override: self.locale_override.clone(),
-            timezone_override: self.timezone_override.clone(),
             script_execution_disabled: self.script_execution_disabled(),
             bypass_content_security_policy: self.bypass_content_security_policy,
             cpu_throttling_rate: self.cpu_throttling_rate,

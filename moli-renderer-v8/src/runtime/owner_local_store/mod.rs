@@ -910,8 +910,6 @@ impl RendererOwnerLocalStore {
                 request.runtime_isolated_worlds = configuration.runtime_isolated_worlds;
                 request.permission_overrides = configuration.permission_overrides;
                 request.extra_http_headers = configuration.extra_http_headers;
-                request.locale_override = configuration.locale_override;
-                request.timezone_override = configuration.timezone_override;
                 request.script_execution_disabled = configuration.script_execution_disabled;
                 request.bypass_content_security_policy =
                     configuration.bypass_content_security_policy;

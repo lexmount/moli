@@ -94,12 +94,10 @@ pub(crate) enum EmulationCommandTaskStep {
 
 enum PendingEmulationPageOperation {
     SetExtraHttpHeaders,
-    SetLocaleOverride,
     SetNetworkConditions,
     SetCpuThrottlingRate,
     SetIdleOverride,
     SetNavigatorOverrides,
-    SetTimezoneOverride,
     SetEmulatedMedia,
     SetViewportSurface,
     SetUserAgentLoader,
@@ -112,10 +110,8 @@ impl PendingEmulationPageOperation {
         match self {
             Self::SetExtraHttpHeaders
             | Self::SetNavigatorOverrides
-            | Self::SetLocaleOverride
             | Self::SetNetworkConditions
             | Self::SetCpuThrottlingRate
-            | Self::SetTimezoneOverride
             | Self::SetEmulatedMedia
             | Self::SetViewportSurface
             | Self::SetUserAgentLoader
@@ -503,12 +499,9 @@ fn start_locale_override_command(
             ));
         }
     };
-    if conn.browser_context.is_none() {
-        return EmulationCommandTaskStep::Complete(CommandOutputPlan::result(json!({})));
-    }
-    let locale_override = params.locale.clone().filter(|value| !value.is_empty());
+    let locale_override = params.locale.filter(|value| !value.is_empty());
     if let Err(message) =
-        conn.set_devtools_locale_override_for_session_owner(cmd.session_id, locale_override.clone())
+        conn.set_devtools_locale_override_for_session_owner(cmd.session_id, locale_override)
     {
         let code = if message == "BrowserContextNotLoaded" {
             -31998
@@ -517,29 +510,9 @@ fn start_locale_override_command(
         };
         return EmulationCommandTaskStep::Complete(CommandOutputPlan::error(code, message));
     }
-    let pending = if emulation_command_is_context_wide(conn, cmd.session_id) {
-        match start_context_locale_override_page_commands(conn, locale_override.as_deref()) {
-            Ok(pending) => pending,
-            Err(error) => {
-                return EmulationCommandTaskStep::Complete(CommandOutputPlan::error(-32000, error));
-            }
-        }
-    } else {
-        match start_session_locale_override_page_commands(conn, cmd.session_id) {
-            Ok(pending) => pending,
-            Err(error) => {
-                return EmulationCommandTaskStep::Complete(CommandOutputPlan::error(-32000, error));
-            }
-        }
-    };
-    if pending.is_empty() {
-        return EmulationCommandTaskStep::Complete(CommandOutputPlan::result(json!({})));
-    }
-    EmulationCommandTaskStep::Pending(PendingEmulationCommandDispatch {
-        command_id: cmd.id,
-        session_id: cmd.session_id.map(str::to_owned),
-        pending: PendingEmulationRendererDispatch::Pages(pending),
-    })
+    // The session owns a process-wide ICU claim. Isolate entry/foreground
+    // notifications refresh native V8 caches; navigation must not re-acquire it.
+    EmulationCommandTaskStep::Complete(CommandOutputPlan::result(json!({})))
 }
 
 fn start_idle_override_command(
@@ -621,35 +594,19 @@ fn start_timezone_override_command(
         let trimmed = params.timezone_id.trim();
         (!trimmed.is_empty()).then(|| trimmed.to_owned())
     };
-    if let Err(message) = validate_timezone_override(timezone_override.as_deref()) {
-        return EmulationCommandTaskStep::Complete(CommandOutputPlan::error(-32602, message));
-    }
-    if let Err(message) = conn
-        .set_devtools_timezone_override_for_session_owner(cmd.session_id, timezone_override.clone())
+    if let Err(message) =
+        conn.set_devtools_timezone_override_for_session_owner(cmd.session_id, timezone_override)
     {
         let code = if message == "BrowserContextNotLoaded" {
             -31998
+        } else if message == "Invalid timezone id" {
+            -32602
         } else {
             -32000
         };
         return EmulationCommandTaskStep::Complete(CommandOutputPlan::error(code, message));
     }
-    let owner_scope = CommandOwnerScope::capture(conn, cmd.session_id);
-    let Some(page) = loaded_page_mut_for_target_configuration(conn, cmd.session_id) else {
-        return EmulationCommandTaskStep::Complete(CommandOutputPlan::result(json!({})));
-    };
-    match page.start_set_timezone_override(timezone_override.as_deref()) {
-        Ok(pending) => EmulationCommandTaskStep::Pending(single_pending_emulation_dispatch(
-            cmd.id,
-            owner_scope,
-            PendingEmulationPageOperation::SetTimezoneOverride,
-            pending,
-            None,
-        )),
-        Err(error) => {
-            EmulationCommandTaskStep::Complete(CommandOutputPlan::error(-32000, error.to_string()))
-        }
-    }
+    EmulationCommandTaskStep::Complete(CommandOutputPlan::result(json!({})))
 }
 
 fn start_geolocation_override_command(
@@ -1091,7 +1048,7 @@ pub(crate) async fn execute_devtools_emulation_command_async(
             execute_devtools_set_locale_override_command_async(conn, command).await
         }
         DevToolsCommand::SetTimezoneOverride(command) => {
-            execute_devtools_set_timezone_override_command_async(conn, command).await
+            execute_devtools_set_timezone_override_command(conn, command)
         }
         DevToolsCommand::SetGeolocationOverride(command) => {
             execute_devtools_set_geolocation_override_command_async(conn, command).await
@@ -1712,6 +1669,19 @@ fn start_user_agent_loader_update_for_current_route(
     }))
 }
 
+/// One process cannot promise independent BiDi environments. Reject a batch
+/// before changing any owner rather than applying a prefix and then conflicting.
+/// Choosing one owner already updates every Page/Worker's native defaults.
+fn single_environment_owner<T>(owners: &[T]) -> Result<&T, DevToolsError> {
+    let [owner] = owners else {
+        return Err(DevToolsError::new(
+            DevToolsErrorKind::Unsupported,
+            "Locale/timezone overrides are process-wide; select one configuration owner",
+        ));
+    };
+    Ok(owner)
+}
+
 async fn execute_devtools_set_locale_override_command_async(
     conn: &mut CdpConnection,
     command: DevToolsSetLocaleOverrideCommand,
@@ -1732,16 +1702,13 @@ async fn execute_devtools_set_locale_override_for_targets(
     conn: &mut CdpConnection,
     command: DevToolsSetLocaleOverrideCommand,
 ) -> Result<DevToolsCommandResult, DevToolsError> {
-    let mut pending = Vec::new();
-    for target_id in &command.target_ids {
-        let route = emulation_route_for_target(
-            conn,
-            target_id,
-            "ChildFrameContextNotSupportedForLocaleOverride",
-        )?;
-        let result = start_locale_override_for_current_route(conn, &route, command.locale.clone());
-        pending.extend(result?);
-    }
+    let target_id = single_environment_owner(&command.target_ids)?;
+    let route = emulation_route_for_target(
+        conn,
+        target_id,
+        "ChildFrameContextNotSupportedForLocaleOverride",
+    )?;
+    let pending = start_locale_override_for_current_route(conn, &route, command.locale)?;
     complete_emulation_page_updates(conn, devtools_command_session_id(&command.context), pending)
         .await
 }
@@ -1752,12 +1719,11 @@ async fn execute_devtools_set_locale_override_for_browser_contexts(
 ) -> Result<DevToolsCommandResult, DevToolsError> {
     let browser_context_ids = resolve_bidi_browser_context_ids(conn, &command.browser_context_ids)?;
     let fallback_identity = conn.base_browser_identity().clone();
-    for browser_context_id in &browser_context_ids {
-        let browser_context = conn
-            .browser_context_by_id_mut(browser_context_id)
-            .expect("resolved browser context must remain addressable");
-        browser_context.set_default_locale_override(command.locale.clone(), &fallback_identity);
-    }
+    let browser_context_id = single_environment_owner(&browser_context_ids)?;
+    conn.browser_context_by_id_mut(browser_context_id)
+        .expect("resolved browser context must remain addressable")
+        .set_default_locale_override(command.locale, &fallback_identity)
+        .map_err(|message| DevToolsError::new(DevToolsErrorKind::InvalidArgument, message))?;
     let routes = top_level_target_routes_for_browser_contexts(conn, Some(&browser_context_ids));
     execute_locale_updates_for_routes(conn, devtools_command_session_id(&command.context), routes)
         .await
@@ -1782,11 +1748,8 @@ fn start_locale_override_for_current_route(
     locale: Option<String>,
 ) -> Result<Vec<PendingEmulationPageCommand>, DevToolsError> {
     let owner = CommandOwnerScope::for_route(route.clone());
-    if !conn.set_base_locale_override_for_owner(&owner, locale) {
-        return Err(devtools_emulation_owner_error(
-            "BrowserContextNotLoaded".to_owned(),
-        ));
-    }
+    conn.set_base_locale_override_for_owner(&owner, locale)
+        .map_err(|message| DevToolsError::new(DevToolsErrorKind::InvalidArgument, message))?;
     start_locale_update_for_current_route(conn, route)
 }
 
@@ -1794,39 +1757,24 @@ fn start_locale_update_for_current_route(
     conn: &mut CdpConnection,
     route: &CdpSessionRoute,
 ) -> Result<Vec<PendingEmulationPageCommand>, DevToolsError> {
-    let mut pending = Vec::new();
-    if let Some(identity_update) = start_user_agent_loader_update_for_current_route(conn, route)? {
-        pending.push(identity_update);
-    }
-    let target = pending_emulation_target_for_route(conn, route)?;
-    let owner = CommandOwnerScope::for_route(route.clone());
-    let Some(locale_override) = locale_override_for_owner(conn, &owner) else {
-        return Ok(pending);
-    };
-    let Some(page) = conn
-        .loaded_page_mut_for_target_configuration_for_owner(&owner)
-        .ok()
-    else {
-        return Ok(pending);
-    };
-    pending.extend(
-        start_locale_override_page_command(target, page, locale_override.as_deref())
-            .map_err(|error| DevToolsError::new(DevToolsErrorKind::Internal, error))?,
-    );
-    Ok(pending)
+    // BiDi locale also controls transport language. Date/Intl use the already
+    // committed process default, not a second renderer-side configuration.
+    Ok(
+        start_user_agent_loader_update_for_current_route(conn, route)?
+            .into_iter()
+            .collect(),
+    )
 }
 
-async fn execute_devtools_set_timezone_override_command_async(
+fn execute_devtools_set_timezone_override_command(
     conn: &mut CdpConnection,
     command: DevToolsSetTimezoneOverrideCommand,
 ) -> Result<DevToolsCommandResult, DevToolsError> {
-    validate_timezone_override(command.timezone.as_deref())
-        .map_err(|message| DevToolsError::new(DevToolsErrorKind::InvalidArgument, message))?;
     if !command.target_ids.is_empty() {
-        return execute_devtools_set_timezone_override_for_targets(conn, command).await;
+        return execute_devtools_set_timezone_override_for_targets(conn, command);
     }
     if !command.browser_context_ids.is_empty() {
-        return execute_devtools_set_timezone_override_for_browser_contexts(conn, command).await;
+        return execute_devtools_set_timezone_override_for_browser_contexts(conn, command);
     }
     Err(DevToolsError::new(
         DevToolsErrorKind::InvalidArgument,
@@ -1834,101 +1782,33 @@ async fn execute_devtools_set_timezone_override_command_async(
     ))
 }
 
-fn validate_timezone_override(timezone: Option<&str>) -> Result<(), &'static str> {
-    if timezone.is_some_and(|timezone| !moli_time::is_valid_time_zone_identifier(timezone)) {
-        return Err("Invalid timezone id");
-    }
-    Ok(())
-}
-
-async fn execute_devtools_set_timezone_override_for_targets(
+fn execute_devtools_set_timezone_override_for_targets(
     conn: &mut CdpConnection,
     command: DevToolsSetTimezoneOverrideCommand,
 ) -> Result<DevToolsCommandResult, DevToolsError> {
-    let mut pending = Vec::new();
-    for target_id in &command.target_ids {
-        let route = emulation_route_for_target(
-            conn,
-            target_id,
-            "ChildFrameContextNotSupportedForTimezoneOverride",
-        )?;
-        let result =
-            start_timezone_override_for_current_route(conn, &route, command.timezone.clone());
-        if let Some(pending_command) = result? {
-            pending.push(pending_command);
-        }
-    }
-    complete_emulation_page_updates(conn, devtools_command_session_id(&command.context), pending)
-        .await
+    let target_id = single_environment_owner(&command.target_ids)?;
+    let route = emulation_route_for_target(
+        conn,
+        target_id,
+        "ChildFrameContextNotSupportedForTimezoneOverride",
+    )?;
+    let owner = CommandOwnerScope::for_route(route);
+    conn.set_base_timezone_override_for_owner(&owner, command.timezone)
+        .map_err(|message| DevToolsError::new(DevToolsErrorKind::InvalidArgument, message))?;
+    Ok(DevToolsCommandResult::Empty)
 }
 
-async fn execute_devtools_set_timezone_override_for_browser_contexts(
+fn execute_devtools_set_timezone_override_for_browser_contexts(
     conn: &mut CdpConnection,
     command: DevToolsSetTimezoneOverrideCommand,
 ) -> Result<DevToolsCommandResult, DevToolsError> {
     let browser_context_ids = resolve_bidi_browser_context_ids(conn, &command.browser_context_ids)?;
-    for browser_context_id in &browser_context_ids {
-        let browser_context = conn
-            .browser_context_by_id_mut(browser_context_id)
-            .expect("resolved browser context must remain addressable");
-        browser_context.default_timezone_override = command.timezone.clone();
-    }
-    let routes = top_level_target_routes_for_browser_contexts(conn, Some(&browser_context_ids));
-    execute_timezone_updates_for_routes(conn, devtools_command_session_id(&command.context), routes)
-        .await
-}
-
-async fn execute_timezone_updates_for_routes(
-    conn: &mut CdpConnection,
-    session_id: Option<String>,
-    routes: Vec<CdpSessionRoute>,
-) -> Result<DevToolsCommandResult, DevToolsError> {
-    let mut pending = Vec::new();
-    for route in routes {
-        let result = start_timezone_update_for_current_route(conn, &route);
-        if let Some(pending_command) = result? {
-            pending.push(pending_command);
-        }
-    }
-    complete_emulation_page_updates(conn, session_id, pending).await
-}
-
-fn start_timezone_override_for_current_route(
-    conn: &mut CdpConnection,
-    route: &CdpSessionRoute,
-    timezone: Option<String>,
-) -> Result<Option<PendingEmulationPageCommand>, DevToolsError> {
-    let owner = CommandOwnerScope::for_route(route.clone());
-    if !conn.set_base_timezone_override_for_owner(&owner, timezone) {
-        return Err(devtools_emulation_owner_error(
-            "BrowserContextNotLoaded".to_owned(),
-        ));
-    }
-    start_timezone_update_for_current_route(conn, route)
-}
-
-fn start_timezone_update_for_current_route(
-    conn: &mut CdpConnection,
-    route: &CdpSessionRoute,
-) -> Result<Option<PendingEmulationPageCommand>, DevToolsError> {
-    let target = pending_emulation_target_for_route(conn, route)?;
-    let owner = CommandOwnerScope::for_route(route.clone());
-    let load_inputs = conn.navigation_load_inputs_for_owner(&owner);
-    let Some(page) = conn
-        .loaded_page_mut_for_target_configuration_for_owner(&owner)
-        .ok()
-    else {
-        return Ok(None);
-    };
-    let pending = page
-        .start_set_timezone_override(load_inputs.timezone_override.as_deref())
-        .map_err(|error| DevToolsError::new(DevToolsErrorKind::Internal, error.to_string()))?;
-    Ok(Some(PendingEmulationPageCommand {
-        target,
-        operation: PendingEmulationPageOperation::SetTimezoneOverride,
-        pending,
-        runtime_response_rx: None,
-    }))
+    let browser_context_id = single_environment_owner(&browser_context_ids)?;
+    conn.browser_context_by_id_mut(browser_context_id)
+        .expect("resolved browser context must remain addressable")
+        .set_default_timezone_override(command.timezone)
+        .map_err(|message| DevToolsError::new(DevToolsErrorKind::InvalidArgument, message))?;
+    Ok(DevToolsCommandResult::Empty)
 }
 
 fn pending_emulation_target_for_route(
@@ -2808,53 +2688,6 @@ fn start_context_emulated_media_page_commands(
     Ok(pending)
 }
 
-fn start_session_locale_override_page_commands(
-    conn: &mut CdpConnection,
-    session_id: Option<&str>,
-) -> Result<Vec<PendingEmulationPageCommand>, String> {
-    let Some(locale_override) = locale_override_for_session(conn, session_id) else {
-        return Ok(Vec::new());
-    };
-    let owner_scope = CommandOwnerScope::capture(conn, session_id);
-    let Some(page) = loaded_page_mut_for_target_configuration(conn, session_id) else {
-        return Ok(Vec::new());
-    };
-    start_locale_override_page_command(
-        PendingEmulationPageTarget::SessionOwner { owner_scope },
-        page,
-        locale_override.as_deref(),
-    )
-}
-
-fn start_context_locale_override_page_commands(
-    conn: &mut CdpConnection,
-    locale_override: Option<&str>,
-) -> Result<Vec<PendingEmulationPageCommand>, String> {
-    let mut pending = Vec::new();
-    for browser_context in conn
-        .browser_context
-        .iter_mut()
-        .chain(conn.inactive_browser_contexts.iter_mut())
-    {
-        let browser_context_id = browser_context.id.clone();
-        for target in browser_context.page_targets.iter_mut() {
-            let target_id = target.target_id().to_owned();
-            let Some(page) = target.loaded_page_mut() else {
-                continue;
-            };
-            pending.extend(start_locale_override_page_command(
-                PendingEmulationPageTarget::BrowserContextTarget {
-                    browser_context_id: browser_context_id.clone(),
-                    target_id,
-                },
-                page,
-                locale_override,
-            )?);
-        }
-    }
-    Ok(pending)
-}
-
 fn start_geolocation_surface_override_page_commands(
     conn: &mut CdpConnection,
     cmd: &Cmd<'_>,
@@ -3022,42 +2855,6 @@ fn start_surface_override_page_command(
     ])
 }
 
-fn start_locale_override_page_command(
-    target: PendingEmulationPageTarget,
-    page: &moli_core::page::Page,
-    locale_override: Option<&str>,
-) -> Result<Vec<PendingEmulationPageCommand>, String> {
-    let locale_update = page
-        .start_set_locale_override(locale_override)
-        .map_err(|error| format!("failed to update page locale override: {error}"))?;
-    Ok(vec![PendingEmulationPageCommand {
-        target,
-        operation: PendingEmulationPageOperation::SetLocaleOverride,
-        pending: locale_update,
-        runtime_response_rx: None,
-    }])
-}
-
-fn locale_override_for_session(
-    conn: &CdpConnection,
-    session_id: Option<&str>,
-) -> Option<Option<String>> {
-    let owner = CommandOwnerScope::capture(conn, session_id);
-    locale_override_for_owner(conn, &owner)
-}
-
-fn locale_override_for_owner(
-    conn: &CdpConnection,
-    owner: &CommandOwnerScope,
-) -> Option<Option<String>> {
-    let (browser_context_id, target_id) = conn.target_owner_identity_for_owner(owner)?;
-    let browser_context = conn.browser_context_by_id(&browser_context_id)?;
-    if let Some(target_id) = target_id {
-        return Some(browser_context.effective_locale_override_for_target_owned(&target_id));
-    }
-    Some(browser_context.effective_active_locale_override_owned())
-}
-
 fn finish_pending_emulation_page_command(
     conn: &mut CdpConnection,
     operation: PendingEmulationPageOperation,
@@ -3124,9 +2921,6 @@ fn finish_emulation_page_operation(
         PendingEmulationPageOperation::SetExtraHttpHeaders => page
             .finish_set_extra_http_headers(completion)
             .map_err(|error| error.to_string()),
-        PendingEmulationPageOperation::SetLocaleOverride => page
-            .finish_set_locale_override(completion)
-            .map_err(|error| error.to_string()),
         PendingEmulationPageOperation::SetNetworkConditions => page
             .finish_set_network_offline(completion)
             .map_err(|error| error.to_string()),
@@ -3138,9 +2932,6 @@ fn finish_emulation_page_operation(
             .map_err(|error| error.to_string()),
         PendingEmulationPageOperation::SetNavigatorOverrides => page
             .finish_set_navigator_overrides(completion)
-            .map_err(|error| error.to_string()),
-        PendingEmulationPageOperation::SetTimezoneOverride => page
-            .finish_set_timezone_override(completion)
             .map_err(|error| error.to_string()),
         PendingEmulationPageOperation::SetEmulatedMedia => page
             .finish_set_emulated_media(completion)

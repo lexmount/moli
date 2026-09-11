@@ -12345,7 +12345,7 @@ fn maps_emulation_set_geolocation_override_reset_and_error_to_distinct_shared_st
 }
 
 #[test]
-fn accepts_valid_iana_timezone_regions_for_emulation_set_timezone_override() {
+fn timezone_adapter_defers_name_validation_to_native_environment_controller() {
     for timezone in [
         "Africa/Cairo",
         "Pacific/Auckland",
@@ -12355,6 +12355,11 @@ fn accepts_valid_iana_timezone_regions_for_emulation_set_timezone_override() {
         "Arctic/Longyearbyen",
         "Antarctica/McMurdo",
         "Etc/GMT+5",
+        "CET",
+        "Japan",
+        "Europe/Bielefeld",
+        "America/Not_A_Zone",
+        "Z",
     ] {
         let command = super::parse_bidi_command(json!({
             "id": 29,
@@ -12552,11 +12557,9 @@ fn rejects_chromium_wpt_invalid_emulation_set_timezone_override_params() {
             "timezone": "Asia/Tokyo"
         }),
         json!({"contexts": ["TARGET-1"], "timezone": ""}),
-        json!({"contexts": ["TARGET-1"], "timezone": "Europe/Bielefeld"}),
         json!({"contexts": ["TARGET-1"], "timezone": "+1:00"}),
         json!({"contexts": ["TARGET-1"], "timezone": "GMT+05:00"}),
         json!({"contexts": ["TARGET-1"], "timezone": "UTC+05:00"}),
-        json!({"contexts": ["TARGET-1"], "timezone": "Z"}),
     ] {
         assert_bidi_adapter_invalid("emulation.setTimezoneOverride", params);
     }

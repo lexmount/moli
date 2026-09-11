@@ -1377,8 +1377,6 @@ async fn build_navigation_from_streaming_raw_response_with_engine_async(
                     .runtime_inspector_session_restore_snapshots
                     .clone(),
                 load_inputs.extra_http_headers.clone(),
-                load_inputs.locale_override.clone(),
-                load_inputs.timezone_override.clone(),
                 load_inputs.script_execution_disabled,
                 load_inputs.bypass_content_security_policy,
                 load_inputs.cpu_throttling_rate,
@@ -1449,8 +1447,6 @@ async fn build_navigation_from_streaming_raw_response_with_engine_async(
                 .runtime_inspector_session_restore_snapshots
                 .clone(),
             load_inputs.extra_http_headers.clone(),
-            load_inputs.locale_override.clone(),
-            load_inputs.timezone_override.clone(),
             load_inputs.script_execution_disabled,
             load_inputs.bypass_content_security_policy,
             load_inputs.cpu_throttling_rate,
@@ -1559,8 +1555,6 @@ impl CdpConnection {
             runtime_isolated_worlds: Vec::new(),
             permission_overrides: load_inputs.permission_overrides,
             extra_http_headers: load_inputs.extra_http_headers,
-            locale_override: load_inputs.locale_override,
-            timezone_override: load_inputs.timezone_override,
             script_execution_disabled: load_inputs.script_execution_disabled,
             bypass_content_security_policy: load_inputs.bypass_content_security_policy,
             cpu_throttling_rate: load_inputs.cpu_throttling_rate,
@@ -1687,8 +1681,6 @@ impl CdpConnection {
                     .runtime_inspector_session_restore_snapshots
                     .clone(),
                 load_inputs.extra_http_headers.clone(),
-                load_inputs.locale_override.clone(),
-                load_inputs.timezone_override.clone(),
                 load_inputs.script_execution_disabled,
                 load_inputs.bypass_content_security_policy,
                 load_inputs.cpu_throttling_rate,
@@ -1947,8 +1939,6 @@ impl CdpConnection {
                     .runtime_inspector_session_restore_snapshots
                     .clone(),
                 load_inputs.extra_http_headers.clone(),
-                load_inputs.locale_override.clone(),
-                load_inputs.timezone_override.clone(),
                 load_inputs.script_execution_disabled,
                 load_inputs.bypass_content_security_policy,
                 load_inputs.cpu_throttling_rate,
@@ -2904,8 +2894,6 @@ impl CdpConnection {
                     .runtime_inspector_session_restore_snapshots
                     .clone(),
                 load_inputs.extra_http_headers.clone(),
-                load_inputs.locale_override.clone(),
-                load_inputs.timezone_override.clone(),
                 load_inputs.script_execution_disabled,
                 load_inputs.bypass_content_security_policy,
                 load_inputs.cpu_throttling_rate,
@@ -3198,8 +3186,6 @@ impl CdpConnection {
                     .runtime_inspector_session_restore_snapshots
                     .clone(),
                 load_inputs.extra_http_headers.clone(),
-                load_inputs.locale_override.clone(),
-                load_inputs.timezone_override.clone(),
                 load_inputs.script_execution_disabled,
                 load_inputs.bypass_content_security_policy,
                 load_inputs.cpu_throttling_rate,
@@ -3832,8 +3818,6 @@ async fn prepare_captured_document_response_with_engine_async(
                 .runtime_inspector_session_restore_snapshots
                 .clone(),
             load_inputs.extra_http_headers.clone(),
-            load_inputs.locale_override.clone(),
-            load_inputs.timezone_override.clone(),
             load_inputs.script_execution_disabled,
             load_inputs.bypass_content_security_policy,
             load_inputs.cpu_throttling_rate,
@@ -3918,12 +3902,8 @@ async fn apply_navigation_load_input_overrides_async(
     if mode == NavigationLoadInputOverrideMode::FreshlyBuiltPage {
         return Ok(());
     }
-    page.set_locale_override_async(load_inputs.locale_override.as_deref())
-        .await
-        .map_err(|error| format!("failed to apply page locale override: {error}"))?;
-    page.set_timezone_override_async(load_inputs.timezone_override.as_deref())
-        .await
-        .map_err(|error| format!("failed to apply page timezone override: {error}"))?;
+    // Locale/timezone claims belong to the protocol configuration owner, not
+    // the new Document. Native isolates inherit the process default at entry.
     page.set_script_execution_disabled_async(load_inputs.script_execution_disabled)
         .await
         .map_err(|error| format!("failed to apply page script execution override: {error}"))?;

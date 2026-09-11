@@ -1,7 +1,7 @@
 use super::*;
 
 #[tokio::test(flavor = "multi_thread")]
-async fn same_context_targets_restore_their_own_page_session_overrides_after_switching() {
+async fn same_context_targets_keep_local_network_policy_but_share_process_locale() {
     let mut ctx = TestContext::new();
     load_bc_with_titled_page_async(
         &mut ctx,
@@ -117,7 +117,10 @@ async fn same_context_targets_restore_their_own_page_session_overrides_after_swi
         "params": { "locale": "fr-FR" }
     }))
     .await;
-    ctx.expect_result(104165, json!({}), Some(&second_session_id));
+    assert_eq!(
+        take_response_by_id(&mut ctx, 104165)["error"]["message"],
+        "Another locale override is already in effect"
+    );
 
     ctx.process_async(json!({
         "id": 104166,
@@ -139,7 +142,10 @@ async fn same_context_targets_restore_their_own_page_session_overrides_after_swi
             vec![("X-Target".into(), "A".into())]
         );
         assert_eq!(
-            bc.active_page_target().effective_policy().locale_override(),
+            bc.active_page_target()
+                .devtools_sessions
+                .effective_locale_override()
+                .as_deref(),
             Some("en-GB")
         );
     }
@@ -200,8 +206,12 @@ async fn same_context_targets_restore_their_own_page_session_overrides_after_swi
             vec![("X-Target".into(), "B".into())]
         );
         assert_eq!(
-            bc.active_page_target().effective_policy().locale_override(),
-            Some("fr-FR")
+            bc.active_page_target()
+                .devtools_sessions
+                .effective_locale_override()
+                .as_deref(),
+            None,
+            "a rejected process claim must not become target-local policy"
         );
     }
 
@@ -239,7 +249,7 @@ async fn same_context_targets_restore_their_own_page_session_overrides_after_swi
         serde_json::from_str(second_payload).expect("second payload should be valid json");
     assert_eq!(second_payload["title"], json!("second-restored"));
     assert_eq!(second_payload["lang"], json!("en-US"));
-    assert_eq!(second_payload["locale"], json!("fr-FR"));
+    assert_eq!(second_payload["locale"], json!("en-GB"));
 }
 
 #[tokio::test(flavor = "multi_thread")]

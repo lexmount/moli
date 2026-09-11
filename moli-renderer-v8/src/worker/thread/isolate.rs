@@ -64,6 +64,7 @@ impl WorkerIsolateState {
     }
 
     pub(super) fn worker_isolate_mut(&mut self) -> &mut v8::OwnedIsolate {
+        moli_v8_platform::refresh_process_environment(&mut self.isolate);
         &mut self.isolate
     }
 
@@ -74,6 +75,7 @@ impl WorkerIsolateState {
     pub(super) fn worker_isolate_and_runtime_inspector(
         &mut self,
     ) -> (&mut v8::OwnedIsolate, Rc<WorkerRuntimeInspector>) {
+        moli_v8_platform::refresh_process_environment(&mut self.isolate);
         (&mut self.isolate, Rc::clone(&self.runtime_inspector))
     }
 

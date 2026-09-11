@@ -1286,8 +1286,6 @@ impl Browser {
                 document_start_scripts,
                 vec![],
                 vec![],
-                None,
-                None,
                 self.config.script_execution_disabled(),
                 false,
                 1.0,

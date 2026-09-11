@@ -5001,14 +5001,6 @@ impl ScriptVm {
             .set_permission_overrides(overrides);
     }
 
-    pub(super) fn set_locale_override(&self, locale: Option<&str>) {
-        self._context_host.borrow().set_locale_override(locale);
-    }
-
-    pub(super) fn set_timezone_override(&self, timezone: Option<&str>) {
-        self._context_host.borrow().set_timezone_override(timezone);
-    }
-
     pub(super) fn set_emulated_media(
         &mut self,
         overrides: &crate::protocol_types::EmulatedMediaOverrides,

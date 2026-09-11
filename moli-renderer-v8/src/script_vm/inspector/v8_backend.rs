@@ -211,6 +211,12 @@ impl RendererInspectorSessionExecutorLocal {
             }
             command
         }) {
+            // Pause-loop work bypasses normal isolate entry and foreground
+            // notifications. Refresh for each nested command, not just when
+            // entering the pause: process defaults may change while waiting.
+            let isolate = unsafe { &mut *self.isolate.get() };
+            let isolate = unsafe { v8::Isolate::ref_from_raw_isolate_ptr_mut(isolate) };
+            moli_v8_platform::refresh_process_environment(isolate);
             match command {
                 RendererInspectorNestedCommand::Main(command) => {
                     self.dispatch_main_command(context_group_id, command);

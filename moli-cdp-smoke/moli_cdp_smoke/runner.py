@@ -40,6 +40,7 @@ from .groups.inspector_routing import run_inspector_routing_group
 from .groups.iframe_input import run_iframe_input_group
 from .groups.layout_screenshot import run_layout_screenshot_group
 from .groups.locale_timezone_inputs import run_locale_timezone_inputs_group
+from .groups.process_environment import run_process_environment_group
 from .groups.multi_client import run_multi_client_group
 from .groups.multi_context import run_multi_context_group
 from .groups.multi_page import run_multi_page_group
@@ -372,6 +373,12 @@ BROWSER_GROUPS: tuple[SmokeGroup, ...] = (
         "Unicode and legacy Date input, ICU locale IDs, frozen Intl options and getter contracts.",
         "browser",
         run_locale_timezone_inputs_group,
+    ),
+    SmokeGroup(
+        "process-environment",
+        "Process-wide locale/timezone claims, existing/new Pages and Workers, detach and close.",
+        "browser",
+        run_process_environment_group,
     ),
     SmokeGroup(
         "multi-context",

@@ -164,8 +164,6 @@ pub(crate) struct TargetNavigationLoadInputs {
     pub(crate) runtime_inspector_session_restore_snapshots:
         Vec<RendererInspectorSessionRestoreSnapshot>,
     pub(crate) extra_http_headers: Vec<(String, String)>,
-    pub(crate) locale_override: Option<String>,
-    pub(crate) timezone_override: Option<String>,
     pub(crate) script_execution_disabled: bool,
     pub(crate) bypass_content_security_policy: bool,
     pub(crate) cpu_throttling_rate: f64,
@@ -317,14 +315,6 @@ impl TargetNavigationLoadInputs {
                 .runtime_inspector_restore_snapshots(),
             extra_http_headers: browser_context
                 .merged_extra_headers_for_target_policy(effective_policy.extra_headers()),
-            locale_override: effective_policy
-                .locale_override()
-                .map(str::to_owned)
-                .or_else(|| browser_context.default_locale_override.clone()),
-            timezone_override: effective_policy
-                .timezone_override()
-                .map(str::to_owned)
-                .or_else(|| browser_context.default_timezone_override.clone()),
             script_execution_disabled: page_state
                 .effective_emulation_state
                 .script_execution_disabled,
@@ -368,8 +358,6 @@ impl TargetNavigationLoadInputs {
             browser_context.effective_active_tls_verify_host_override();
         inputs.document_start_scripts = browser_context.default_document_start_script_descriptors();
         inputs.extra_http_headers = browser_context.effective_extra_headers();
-        inputs.locale_override = browser_context.effective_active_locale_override_owned();
-        inputs.timezone_override = browser_context.effective_active_timezone_override_owned();
         inputs.viewport_surface = browser_context
             .default_emulated_device_metrics
             .as_ref()
@@ -399,8 +387,6 @@ impl TargetNavigationLoadInputs {
             runtime_bindings: Vec::new(),
             runtime_inspector_session_restore_snapshots: Vec::new(),
             extra_http_headers: Vec::new(),
-            locale_override: None,
-            timezone_override: None,
             script_execution_disabled: false,
             bypass_content_security_policy: false,
             cpu_throttling_rate: 1.0,
@@ -2940,9 +2926,6 @@ mod tests {
         let mut background = BrowserContext::new_with_page_for_test("BID-background", "TID-active");
         background
             .active_page_target_mut()
-            .set_base_locale_override(Some("zh-CN".to_owned()));
-        background
-            .active_page_target_mut()
             .network_policy
             .set_browser_identity_override(test_browser_identity("Active-Only-UA"));
         background.replace_default_browser_identity_override_for_test(test_browser_identity(
@@ -3105,9 +3088,6 @@ mod tests {
     #[test]
     fn target_session_owner_ref_snapshots_background_navigation_load_inputs() {
         let mut background = BrowserContext::new_with_page_for_test("BID-background", "TID-active");
-        background
-            .active_page_target_mut()
-            .set_base_locale_override(Some("zh-CN".to_owned()));
         background.insert_page_target_host(crate::conn::PageTargetHost::with_url(
             "TID-background".to_owned(),
             Some("SID-background".to_owned()),
@@ -3117,8 +3097,6 @@ mod tests {
             let state = background
                 .background_target_mut("TID-background")
                 .expect("background target must exist");
-            state.set_base_locale_override(Some("fr-FR".to_owned()));
-            state.set_base_timezone_override(Some("Europe/Paris".to_owned()));
             state.http_proxy_override = Some("http://proxy.example:8080".to_owned());
             state.http_no_proxy_override = Some("localhost,127.0.0.1".to_owned());
             state.tls_verify_host_override = Some(false);
@@ -3213,8 +3191,6 @@ mod tests {
                 .iter()
                 .all(|(name, _)| !name.eq_ignore_ascii_case("accept-language"))
         );
-        assert_eq!(inputs.locale_override.as_deref(), Some("fr-FR"));
-        assert_eq!(inputs.timezone_override.as_deref(), Some("Europe/Paris"));
         assert_eq!(
             inputs
                 .browser_identity_override

@@ -565,6 +565,10 @@ impl WorkerRuntimeInspector {
     }
 
     pub(super) fn execute_task(&self, isolate: &mut v8::Isolate, task: WorkerInspectorTask) {
+        // This common entry also serves active-JS interrupts and nested pauses,
+        // where neither ordinary Worker entry nor foreground tasks can refresh
+        // V8's cached locale/timezone before the next Inspector observation.
+        moli_v8_platform::refresh_process_environment(isolate);
         match task {
             WorkerInspectorTask::DispatchProtocolMessage {
                 inspector_session_id,
@@ -799,6 +803,59 @@ mod tests {
         scope.memory_pressure_notification(v8::MemoryPressureLevel::Critical);
         scope.low_memory_notification();
         rv.set(v8::Boolean::new(scope, inspector_policy_is_scoped).into());
+    }
+
+    #[test]
+    fn worker_inspector_observes_environment_without_an_owner_loop_turn() {
+        crate::ensure_v8_for_test();
+        let mut isolate = v8::Isolate::new(Default::default());
+        isolate.set_microtasks_policy(v8::MicrotasksPolicy::Explicit);
+        let inspector = WorkerRuntimeInspector::new_for_test(&mut isolate);
+        {
+            let scope = pin!(v8::HandleScope::new(&mut isolate));
+            let scope = &mut scope.init();
+            let context = v8::Context::new(scope, Default::default());
+            inspector.attach_context(
+                context,
+                v8::Global::new(scope, context),
+                "https://worker-environment.test/worker.js",
+            );
+        }
+        let read_defaults = |isolate: &mut v8::Isolate| {
+            let (response_tx, mut response_rx) = tokio::sync::oneshot::channel();
+            // Interrupts and nested pauses enter execute_task directly, without
+            // WorkerIsolateState or a foreground task refreshing the isolate.
+            inspector.execute_task(
+                isolate,
+                WorkerInspectorTask::DispatchProtocolMessage {
+                    inspector_session_id: None,
+                    raw_json: json!({
+                        "id": 1,
+                        "method": "Runtime.evaluate",
+                        "params": {
+                            "expression": "[new Intl.NumberFormat().resolvedOptions().locale, new Intl.DateTimeFormat().resolvedOptions().timeZone, new Date('2024-01-01T00:00:00Z').getTimezoneOffset()]",
+                            "returnByValue": true,
+                        },
+                    }).to_string(),
+                    deferred_response: None,
+                    response_tx,
+                },
+            );
+            let messages = response_rx.try_recv().unwrap().unwrap();
+            let response = protocol_response(&messages, 1);
+            assert!(response.get("error").is_none(), "{response:#?}");
+            response["result"]["result"]["value"].clone()
+        };
+        let baseline = read_defaults(&mut isolate);
+        let owner = moli_v8_platform::ProcessEnvironmentOwner::default();
+        owner.set_locale(Some("fr_FR")).unwrap();
+        owner.set_timezone(Some("Europe/Paris")).unwrap();
+        assert_eq!(
+            read_defaults(&mut isolate),
+            json!(["fr-FR", "Europe/Paris", -60])
+        );
+        owner.release();
+        assert_eq!(read_defaults(&mut isolate), baseline);
     }
 
     #[test]

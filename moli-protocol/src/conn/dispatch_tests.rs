@@ -8287,9 +8287,6 @@ async fn pending_emulation_timezone_keeps_background_owner_route_across_completi
         .replace_loaded_page(Some(background_page));
     conn.install_browser_context_fixture_for_test(browser_context);
 
-    let background_route = conn
-        .target_session_route_for_target_id("TID-emulation-timezone-background")
-        .expect("background target route");
     let background_session =
         attach_page_session_for_test(&mut conn, "TID-emulation-timezone-background").await;
     let raw = serde_json::to_string(&json!({
@@ -8299,17 +8296,7 @@ async fn pending_emulation_timezone_keeps_background_owner_route_across_completi
         "sessionId": background_session
     }))
     .unwrap();
-    let pending = match conn.start_command_dispatch(&raw) {
-        CdpCommandTaskStep::Pending(pending) => pending,
-        CdpCommandTaskStep::Complete(outcome) => {
-            panic!(
-                "background Emulation.setTimezoneOverride should update the live background page: {:?}",
-                outcome.into_parts().0
-            )
-        }
-    };
-
-    let messages = complete_command_task_for_test(&mut conn, *pending).await;
+    let messages = complete_messages(conn.start_command_dispatch(&raw));
 
     assert_eq!(
         messages,
@@ -8337,14 +8324,22 @@ async fn pending_emulation_timezone_keeps_background_owner_route_across_completi
         "background timezone",
         "background Emulation completion should preserve the captured owner"
     );
-    let background_inputs = conn.navigation_load_inputs_for_owner(
-        &crate::conn::CommandOwnerScope::for_route(background_route.clone()),
+    assert_eq!(
+        browser_context
+            .background_target("TID-emulation-timezone-background")
+            .unwrap()
+            .devtools_sessions
+            .effective_timezone_override()
+            .as_deref(),
+        Some("UTC")
     );
-    assert_eq!(background_inputs.timezone_override.as_deref(), Some("UTC"));
-    assert!(
-        conn.navigation_load_inputs_for_session_owner(None)
-            .timezone_override
-            .is_none()
+    assert_eq!(
+        browser_context
+            .active_page_target()
+            .devtools_sessions
+            .effective_timezone_override()
+            .as_deref(),
+        None
     );
 }
 
@@ -8371,16 +8366,8 @@ async fn command_dispatch_completes_live_emulation_locale_without_legacy_fallbac
         "params": { "locale": "fr-FR" }
     }))
     .unwrap();
-    let pending = match conn.start_command_dispatch(&raw) {
-        CdpCommandTaskStep::Pending(pending) => pending,
-        CdpCommandTaskStep::Complete(_) => {
-            panic!("live Emulation.setLocaleOverride should update the live page")
-        }
-    };
-    let completed = pending.wait().await;
-    let step = conn.complete_pending_command_dispatch(completed).await;
     assert_eq!(
-        complete_messages(step),
+        complete_messages(conn.start_command_dispatch(&raw)),
         vec![json!({ "id": 685, "result": {} })]
     );
 }

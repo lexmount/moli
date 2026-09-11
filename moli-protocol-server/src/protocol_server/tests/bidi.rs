@@ -11909,10 +11909,10 @@ async fn websocket_bidi_emulation_user_context_overrides_apply_to_later_http_nav
 }
 
 #[tokio::test]
-async fn websocket_bidi_emulation_set_locale_and_timezone_override_match_wpt_precedence() {
-    // Ported from Chromium/WPT
-    // webdriver/tests/bidi/emulation/set_locale_override/{locale,contexts,user_contexts}.py
-    // and set_timezone_override/{timezone,contexts,user_contexts}.py.
+async fn websocket_bidi_environment_uses_process_claims_instead_of_per_context_precedence() {
+    // One Moli renderer process shares native ICU defaults. User contexts
+    // cannot create independent Date/Intl environments; conflicting ownership
+    // must fail without mutating or staging a later navigation policy.
     let (cdp_addr, protocol_server) = spawn_test_protocol_server().await;
     let (mut socket, default_context_id) = bidi_session_with_context(cdp_addr).await;
 
@@ -11975,6 +11975,29 @@ async fn websocket_bidi_emulation_set_locale_and_timezone_override_match_wpt_pre
         .expect("created userContext tab")
         .to_owned();
 
+    let batch = send_bidi_command(
+        &mut socket,
+        600,
+        "emulation.setLocaleOverride",
+        json!({"contexts": [default_context_id, user_context_tab_id], "locale": "fr-FR"}),
+    )
+    .await;
+    assert_bidi_error(
+        &batch,
+        "unsupported operation",
+        "multi-owner claim cannot partially commit",
+    );
+    assert_eq!(
+        bidi_string_script_value(
+            &mut socket,
+            601,
+            &default_context_id,
+            "Intl.DateTimeFormat().resolvedOptions().locale"
+        )
+        .await,
+        default_locale
+    );
+
     let set_user_context_locale = send_bidi_command(
         &mut socket,
         7,
@@ -12025,8 +12048,8 @@ async fn websocket_bidi_emulation_set_locale_and_timezone_override_match_wpt_pre
             "Intl.DateTimeFormat().resolvedOptions().locale"
         )
         .await,
-        default_locale,
-        "non-default userContext locale should not affect default contexts"
+        user_context_locale,
+        "native locale is shared across every context in this process"
     );
     assert_eq!(
         bidi_string_script_value(
@@ -12036,8 +12059,8 @@ async fn websocket_bidi_emulation_set_locale_and_timezone_override_match_wpt_pre
             "Intl.DateTimeFormat().resolvedOptions().timeZone"
         )
         .await,
-        default_timezone,
-        "non-default userContext timezone should not affect default contexts"
+        user_context_timezone,
+        "native timezone is shared across every context in this process"
     );
 
     let set_context_locale = send_bidi_command(
@@ -12050,7 +12073,11 @@ async fn websocket_bidi_emulation_set_locale_and_timezone_override_match_wpt_pre
         }),
     )
     .await;
-    assert_eq!(set_context_locale["type"], json!("success"));
+    assert_bidi_error(
+        &set_context_locale,
+        "invalid argument",
+        "another owner holds the process claim",
+    );
     let set_context_timezone = send_bidi_command(
         &mut socket,
         14,
@@ -12061,7 +12088,11 @@ async fn websocket_bidi_emulation_set_locale_and_timezone_override_match_wpt_pre
         }),
     )
     .await;
-    assert_eq!(set_context_timezone["type"], json!("success"));
+    assert_bidi_error(
+        &set_context_timezone,
+        "invalid argument",
+        "another owner holds the process claim",
+    );
     assert_eq!(
         bidi_string_script_value(
             &mut socket,
@@ -12070,7 +12101,7 @@ async fn websocket_bidi_emulation_set_locale_and_timezone_override_match_wpt_pre
             "Intl.DateTimeFormat().resolvedOptions().locale"
         )
         .await,
-        context_locale
+        user_context_locale
     );
     assert_eq!(
         bidi_string_script_value(
@@ -12080,7 +12111,7 @@ async fn websocket_bidi_emulation_set_locale_and_timezone_override_match_wpt_pre
             "Intl.DateTimeFormat().resolvedOptions().timeZone"
         )
         .await,
-        context_timezone
+        user_context_timezone
     );
 
     let reset_context_locale = send_bidi_command(
@@ -12093,7 +12124,11 @@ async fn websocket_bidi_emulation_set_locale_and_timezone_override_match_wpt_pre
         }),
     )
     .await;
-    assert_eq!(reset_context_locale["type"], json!("success"));
+    assert_bidi_error(
+        &reset_context_locale,
+        "invalid argument",
+        "another owner holds the process claim",
+    );
     let reset_context_timezone = send_bidi_command(
         &mut socket,
         18,
@@ -12114,7 +12149,7 @@ async fn websocket_bidi_emulation_set_locale_and_timezone_override_match_wpt_pre
         )
         .await,
         user_context_locale,
-        "context locale reset should reveal userContext locale override"
+        "a rejected non-owner reset must preserve the process locale"
     );
     assert_eq!(
         bidi_string_script_value(
@@ -12125,7 +12160,7 @@ async fn websocket_bidi_emulation_set_locale_and_timezone_override_match_wpt_pre
         )
         .await,
         user_context_timezone,
-        "context timezone reset should reveal userContext timezone override"
+        "a non-owner reset must preserve the process timezone"
     );
 
     let reset_user_context_locale = send_bidi_command(
@@ -12166,6 +12201,56 @@ async fn websocket_bidi_emulation_set_locale_and_timezone_override_match_wpt_pre
             24,
             &user_context_tab_id,
             "Intl.DateTimeFormat().resolvedOptions().timeZone"
+        )
+        .await,
+        default_timezone
+    );
+
+    // Disposal must release process claims even while another context stays
+    // alive; no explicit reset or navigation is necessary for that peer.
+    for (id, method, params) in [
+        (
+            25,
+            "emulation.setLocaleOverride",
+            json!({
+                "userContexts": [user_context_id], "locale": user_context_locale
+            }),
+        ),
+        (
+            26,
+            "emulation.setTimezoneOverride",
+            json!({
+                "userContexts": [user_context_id], "timezone": user_context_timezone
+            }),
+        ),
+    ] {
+        let response = send_bidi_command(&mut socket, id, method, params).await;
+        assert_eq!(response["type"], json!("success"));
+    }
+    let removed = send_bidi_command(
+        &mut socket,
+        27,
+        "browser.removeUserContext",
+        json!({"userContext": user_context_id}),
+    )
+    .await;
+    assert_eq!(removed["type"], json!("success"));
+    assert_eq!(
+        bidi_string_script_value(
+            &mut socket,
+            28,
+            &default_context_id,
+            "Intl.DateTimeFormat().resolvedOptions().locale",
+        )
+        .await,
+        default_locale
+    );
+    assert_eq!(
+        bidi_string_script_value(
+            &mut socket,
+            29,
+            &default_context_id,
+            "Intl.DateTimeFormat().resolvedOptions().timeZone",
         )
         .await,
         default_timezone
@@ -18702,6 +18787,14 @@ async fn websocket_bidi_emulation_locale_timezone_invalid_parameters_match_wpt_e
         (
             "emulation.setTimezoneOverride",
             json!({"contexts": [context_id.clone()], "timezone": "Europe/Bielefeld"}),
+        ),
+        (
+            "emulation.setTimezoneOverride",
+            json!({"contexts": [context_id.clone()], "timezone": "America/Not_A_Zone"}),
+        ),
+        (
+            "emulation.setTimezoneOverride",
+            json!({"contexts": [context_id.clone()], "timezone": "Z"}),
         ),
         (
             "emulation.setTimezoneOverride",

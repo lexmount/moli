@@ -2953,62 +2953,14 @@ fn normalized_bidi_timezone(timezone: String) -> Result<String, BidiError> {
             "invalid timezone",
         ));
     }
-    if !is_valid_named_timezone(&timezone) {
-        return Err(BidiError::new(
-            BidiErrorCode::InvalidArgument,
-            "invalid timezone",
-        ));
-    }
+    // This adapter only normalizes BiDi syntax. The process environment
+    // controller validates names against the same ICU database that Date/Intl
+    // use. System zoneinfo and region heuristics can disagree with that data.
     Ok(timezone)
 }
 
 fn is_timezone_name_char(value: char) -> bool {
     value.is_ascii_alphanumeric() || matches!(value, '_' | '-' | '+' | '/')
-}
-
-fn is_valid_named_timezone(timezone: &str) -> bool {
-    if matches!(timezone, "UTC" | "Etc/UTC" | "GMT") {
-        return true;
-    }
-    if timezone.starts_with('/')
-        || timezone.ends_with('/')
-        || timezone.contains("//")
-        || timezone.ends_with("/Bielefeld")
-    {
-        return false;
-    }
-    if let Some(valid) = timezone_exists_in_system_zoneinfo(timezone) {
-        return valid;
-    }
-    [
-        "Africa/",
-        "America/",
-        "Antarctica/",
-        "Arctic/",
-        "Asia/",
-        "Atlantic/",
-        "Australia/",
-        "Europe/",
-        "Indian/",
-        "Pacific/",
-        "Etc/",
-        "Brazil/",
-        "Canada/",
-        "Chile/",
-        "Mexico/",
-        "US/",
-    ]
-    .iter()
-    .any(|prefix| timezone.starts_with(prefix))
-}
-
-fn timezone_exists_in_system_zoneinfo(timezone: &str) -> Option<bool> {
-    let root = std::path::Path::new("/usr/share/zoneinfo");
-    if !root.is_dir() {
-        return None;
-    }
-    let path = root.join(timezone);
-    path.is_file().then_some(true)
 }
 
 fn is_timezone_offset_string(timezone: &str) -> bool {

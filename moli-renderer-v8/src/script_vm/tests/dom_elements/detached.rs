@@ -3495,10 +3495,11 @@ fn document_metadata_uses_document_and_node_prototype_accessors() {
 
 #[test]
 fn document_last_modified_uses_source_time_and_readonly_document_accessor() {
+    let environment = moli_v8_platform::ProcessEnvironmentOwner::default();
     let mut vm = new_storage_test_vm("https://document-last-modified.test/");
     vm.document_runtime
         .set_document_source_last_modified(Some(5_025_000.0));
-    vm.set_timezone_override(Some("Asia/Shanghai"));
+    environment.set_timezone(Some("Asia/Shanghai")).unwrap();
 
     let result = vm
         .eval(

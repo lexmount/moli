@@ -91,16 +91,17 @@ fn service_worker_csp_report_seen(
 
 #[test]
 fn date_locale_methods_use_shared_time_formatting_surface() {
+    let environment = moli_v8_platform::ProcessEnvironmentOwner::default();
     let mut vm = new_storage_test_vm("https://date-locale-formatting.test/");
-    vm.set_timezone_override(Some("UTC"));
+    environment.set_timezone(Some("UTC")).unwrap();
 
     let us = vm
         .eval("new Date(0).toLocaleString()")
         .expect("default Date locale formatting should evaluate");
     assert_eq!(us, "1/1/1970, 12:00:00 AM");
 
-    vm.set_locale_override(Some("fr-FR"));
-    vm.set_timezone_override(Some("Asia/Shanghai"));
+    environment.set_locale(Some("fr-FR")).unwrap();
+    environment.set_timezone(Some("Asia/Shanghai")).unwrap();
 
     let result = vm
         .eval(
@@ -141,6 +142,7 @@ fn date_locale_methods_use_shared_time_formatting_surface() {
 
 #[test]
 fn emulation_defaults_drive_real_intl_and_local_date_operations() {
+    let environment = moli_v8_platform::ProcessEnvironmentOwner::default();
     let mut vm = new_storage_test_vm("https://date-locale-emulation-surface.test/");
     let baseline = vm
         .eval(
@@ -167,8 +169,8 @@ fn emulation_defaults_drive_real_intl_and_local_date_operations() {
 "#,
         )
         .expect("baseline Intl and Date surfaces should evaluate");
-    vm.set_locale_override(Some("fr-FR"));
-    vm.set_timezone_override(Some("Europe/Paris"));
+    environment.set_locale(Some("fr-FR")).unwrap();
+    environment.set_timezone(Some("Europe/Paris")).unwrap();
 
     let result = vm
         .eval(
@@ -205,11 +207,11 @@ fn emulation_defaults_drive_real_intl_and_local_date_operations() {
 
     assert_eq!(
         result,
-        r#"{"locales":["fr-FR","fr-FR","fr-FR","fr-FR"],"timezone":"Europe/Paris","formattedAsFrench":true,"winter":[-60,1,1],"summer":[-120,2,1],"strings":["Mon Jan 01 2024 01:00:00 GMT+0100","Mon Jan 01 2024","01:00:00 GMT+0100"],"explicit":["en-US","UTC"],"invalidOptions":"TypeError","navigatorLanguage":"en-US"}"#
+        r#"{"locales":["fr-FR","fr-FR","fr-FR","fr-FR"],"timezone":"Europe/Paris","formattedAsFrench":true,"winter":[-60,1,1],"summer":[-120,2,1],"strings":["Mon Jan 01 2024 01:00:00 GMT+0100 (heure normale d’Europe centrale)","Mon Jan 01 2024","01:00:00 GMT+0100 (heure normale d’Europe centrale)"],"explicit":["en-US","UTC"],"invalidOptions":"TypeError","navigatorLanguage":"en-US"}"#
     );
 
-    vm.set_locale_override(None);
-    vm.set_timezone_override(None);
+    environment.set_locale(None).unwrap();
+    environment.set_timezone(None).unwrap();
     let restored = vm
         .eval(
             r#"
@@ -240,9 +242,10 @@ fn emulation_defaults_drive_real_intl_and_local_date_operations() {
 
 #[test]
 fn emulation_preserves_intl_construction_and_complete_local_date_operations() {
+    let environment = moli_v8_platform::ProcessEnvironmentOwner::default();
     let mut vm = new_storage_test_vm("https://date-locale-native-semantics.test/");
-    vm.set_locale_override(Some("fr-FR"));
-    vm.set_timezone_override(Some("America/New_York"));
+    environment.set_locale(Some("fr-FR")).unwrap();
+    environment.set_timezone(Some("America/New_York")).unwrap();
 
     let result = vm
         .eval(
@@ -336,6 +339,7 @@ fn emulation_preserves_intl_construction_and_complete_local_date_operations() {
 
 #[test]
 fn date_locale_override_updates_reach_existing_main_child_and_isolated_realms() {
+    let environment = moli_v8_platform::ProcessEnvironmentOwner::default();
     let mut vm = new_parsed_test_vm(
         "https://date-locale-shared-state.test/",
         "<!doctype html><html><body></body></html>",
@@ -368,8 +372,8 @@ document.body.appendChild(iframe);
 ].join("|")
 "#;
 
-    vm.set_locale_override(Some("fr-FR"));
-    vm.set_timezone_override(Some("Asia/Shanghai"));
+    environment.set_locale(Some("fr-FR")).unwrap();
+    environment.set_timezone(Some("Asia/Shanghai")).unwrap();
     assert_eq!(vm.eval(PROBE).unwrap(), "fr-FR|Asia/Shanghai|8");
     assert_eq!(
         vm.eval_in_child_default_context(child_context_id, PROBE)
@@ -382,8 +386,8 @@ document.body.appendChild(iframe);
         "fr-FR|Asia/Shanghai|8"
     );
 
-    vm.set_locale_override(Some("en-US"));
-    vm.set_timezone_override(Some("America/New_York"));
+    environment.set_locale(Some("en-US")).unwrap();
+    environment.set_timezone(Some("America/New_York")).unwrap();
     assert_eq!(vm.eval(PROBE).unwrap(), "en-US|America/New_York|19");
     assert_eq!(
         vm.eval_in_child_default_context(child_context_id, PROBE)
@@ -399,8 +403,9 @@ document.body.appendChild(iframe);
 
 #[test]
 fn date_locale_methods_are_declared_on_date_prototype() {
+    let environment = moli_v8_platform::ProcessEnvironmentOwner::default();
     let mut vm = new_storage_test_vm("https://date-locale-declared.test/");
-    vm.set_timezone_override(Some("UTC"));
+    environment.set_timezone(Some("UTC")).unwrap();
 
     let result = vm
         .eval(

@@ -797,50 +797,6 @@ impl PendingImageLoadEvent {
 pub(crate) type JsContextHostPageTaskCapabilities =
     crate::page_task_queue::RendererPageJsContextTaskSenders;
 
-#[derive(Debug, Default)]
-pub(crate) struct DateLocaleRuntimeState {
-    overrides: RefCell<DateLocaleOverrides>,
-}
-
-#[derive(Debug, Default)]
-struct DateLocaleOverrides {
-    locale: Option<String>,
-    timezone: Option<String>,
-}
-
-impl DateLocaleRuntimeState {
-    pub(crate) fn set_locale(&self, locale: Option<&str>) {
-        // CDP accepts ICU locale IDs, while explicit Intl locale arguments
-        // require BCP47. Normalize once at the shared state boundary so every
-        // Window realm and Date locale method consumes the same language tag.
-        // Conversion errors fall back to native Intl validation of the input.
-        self.overrides.borrow_mut().locale = locale.map(|locale| {
-            let tag = v8::icu::language_tag_for_locale(locale).unwrap_or_else(|| locale.to_owned());
-            // V8's Isolate::DefaultLocale maps ICU's en_US_POSIX to en-US.
-            // Passing the otherwise valid POSIX tag explicitly would suppress
-            // number grouping, unlike Chromium's emulated default locale.
-            if tag == "en-US-u-va-posix" {
-                "en-US".to_owned()
-            } else {
-                tag
-            }
-        });
-    }
-
-    pub(crate) fn set_timezone(&self, timezone: Option<&str>) {
-        self.overrides.borrow_mut().timezone = timezone.map(str::to_owned);
-    }
-
-    pub(crate) fn snapshot(&self) -> (Option<String>, Option<String>) {
-        let overrides = self.overrides.borrow();
-        (overrides.locale.clone(), overrides.timezone.clone())
-    }
-
-    pub(crate) fn timezone(&self) -> Option<String> {
-        self.overrides.borrow().timezone.clone()
-    }
-}
-
 pub(crate) struct JsContextHost {
     runtime: *mut DocumentRuntime,
     layout_policy: moli_page_types::LayoutPolicy,
@@ -911,7 +867,6 @@ pub(crate) struct JsContextHost {
     app_manifest_link_change_epoch: u64,
     extra_http_headers: Vec<(String, String)>,
     permission_overrides: Vec<crate::protocol_types::PermissionOverrideRegistration>,
-    date_locale_runtime_state: Rc<DateLocaleRuntimeState>,
     idle_override: Option<crate::protocol_types::EmulatedIdleOverride>,
     protocol_user_gesture_activation_depth: usize,
     current_input_event: Option<crate::native_bridge::CurrentInputEvent>,

@@ -13,6 +13,7 @@ pub use moli_dom as dom;
 pub use moli_page_types as protocol_types;
 pub use moli_parser as parser;
 pub use moli_selector as selector;
+pub use moli_v8_platform::ProcessEnvironmentOwner;
 
 pub use app_manifest::{
     RendererAppManifest, RendererAppManifestDisplayMode, RendererAppManifestError,

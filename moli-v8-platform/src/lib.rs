@@ -22,6 +22,9 @@ use tracing::trace;
 const MAX_V8_BACKGROUND_WORKER_THREADS: usize = 8;
 
 mod cpu_tracing;
+mod environment;
+
+pub use environment::{ProcessEnvironmentOwner, refresh_process_environment};
 
 pub use cpu_tracing::{
     PendingV8CpuTraceStart, PendingV8CpuTraceStop, V8CpuProfileSegment, V8CpuTraceConfiguration,
@@ -312,6 +315,7 @@ pub struct V8PlatformIsolateRegistration {
 
 impl V8PlatformIsolateRegistration {
     pub fn register(isolate: &mut v8::OwnedIsolate, wake: V8ForegroundTaskWake) -> Self {
+        refresh_process_environment(isolate);
         // SAFETY: `OwnedIsolate::as_raw_isolate_ptr` returns the V8 isolate
         // pointer used by platform foreground-task callbacks. Ownership remains
         // with `OwnedIsolate`; this registration stores only the address value.

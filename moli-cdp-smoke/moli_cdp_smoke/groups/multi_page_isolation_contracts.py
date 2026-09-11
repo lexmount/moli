@@ -594,8 +594,8 @@ async def _same_target_session_policies_follow_chromium(
             contract=(
                 "Enabled Network sessions merge non-conflicting headers and select wire "
                 "and live renderer identity by attachment order; locale/timezone use "
-                "exclusive claims, and detach "
-                "recomputes only the owning target."
+                "process-wide exclusive claims. Detach restores native defaults "
+                "process-wide while Network identity remains target-local."
             ),
             source="Chromium NetworkHandler and InspectorEmulationAgent executable oracle",
             commands=[

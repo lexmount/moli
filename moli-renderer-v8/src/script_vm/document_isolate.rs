@@ -710,6 +710,7 @@ fn with_entered_owned_isolate<T>(
         isolate.enter();
     }
     let _guard = EnteredIsolateGuard(isolate);
+    moli_v8_platform::refresh_process_environment(isolate);
     op(isolate)
 }
 
@@ -721,6 +722,7 @@ fn with_entered_owned_isolate_value<T>(
         isolate.enter();
     }
     let _guard = EnteredIsolateGuard(isolate);
+    moli_v8_platform::refresh_process_environment(isolate);
     op(isolate)
 }
 

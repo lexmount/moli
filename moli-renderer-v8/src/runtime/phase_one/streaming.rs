@@ -944,8 +944,6 @@ mod tests {
             document_policy_container: Default::default(),
             document_default_language: None,
             document_last_modified: None,
-            locale_override: None,
-            timezone_override: None,
             script_execution_disabled: false,
             bypass_content_security_policy: false,
             cpu_throttling_rate: 1.0,

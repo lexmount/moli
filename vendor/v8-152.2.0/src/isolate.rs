@@ -2093,6 +2093,19 @@ impl Isolate {
     }
   }
 
+  /// Invalidates this isolate's cached default locale after an ICU default
+  /// locale change. Existing explicitly constructed Intl objects are unchanged.
+  pub fn locale_configuration_change_notification(&mut self) {
+    unsafe extern "C" {
+      fn v8__Isolate__LocaleConfigurationChangeNotification(
+        isolate: *mut RealIsolate,
+      );
+    }
+    unsafe {
+      v8__Isolate__LocaleConfigurationChangeNotification(self.as_real_ptr());
+    }
+  }
+
   /// Returns true if there is ongoing background work within V8 that will
   /// eventually post a foreground task, like asynchronous WebAssembly
   /// compilation.

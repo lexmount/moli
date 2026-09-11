@@ -32,7 +32,7 @@ def multi_page_contract_cases() -> tuple[MultiPageCase, ...]:
         _same_name_runtime_bindings_keep_session_authority,
         _session_detach_cancels_only_its_pending_await,
         _fetch_interception_is_session_local,
-        _network_and_emulation_profiles_are_target_local,
+        _network_profiles_are_target_local_with_shared_native_environment,
         _closed_target_new_document_script_does_not_leak,
         _broadcast_channel_context_partition,
         _same_target_navigation_supersession,
@@ -2091,7 +2091,7 @@ async def _fetch_interception_is_session_local(
         await close_context(context)
 
 
-async def _network_and_emulation_profiles_are_target_local(
+async def _network_profiles_are_target_local_with_shared_native_environment(
     browser: Any,
     fixture: str,
     results: list[dict[str, Any]],
@@ -2111,20 +2111,25 @@ async def _network_and_emulation_profiles_are_target_local(
             session_a.send("Network.enable"),
             session_b.send("Network.enable"),
         )
+        runtime_profile = """({
+          userAgent: navigator.userAgent,
+          language: navigator.language,
+          locale: Intl.NumberFormat().resolvedOptions().locale,
+          timezone: Intl.DateTimeFormat().resolvedOptions().timeZone,
+        })"""
+        baseline_runtime = await page_a.evaluate(runtime_profile)
         profiles = (
             (
                 session_a,
                 "target-a",
                 "MultiPageAgentA/1.0",
                 "fr-FR",
-                "Europe/Paris",
             ),
             (
                 session_b,
                 "target-b",
                 "MultiPageAgentB/1.0",
                 "ja-JP",
-                "Asia/Tokyo",
             ),
         )
         await asyncio.gather(
@@ -2141,17 +2146,15 @@ async def _network_and_emulation_profiles_are_target_local(
                             "acceptLanguage": language,
                         },
                     ),
-                    session.send(
-                        "Emulation.setLocaleOverride",
-                        {"locale": language},
-                    ),
-                    session.send(
-                        "Emulation.setTimezoneOverride",
-                        {"timezoneId": timezone},
-                    ),
                 )
-                for session, marker, user_agent, language, timezone in profiles
+                for session, marker, user_agent, language in profiles
             )
+        )
+        # Unlike request/navigator identity, native ICU defaults belong to the
+        # renderer process. A single session owns them for both live targets.
+        await session_a.send("Emulation.setLocaleOverride", {"locale": "fr-FR"})
+        await session_a.send(
+            "Emulation.setTimezoneOverride", {"timezoneId": "Europe/Paris"}
         )
 
         tokens = ("multi-page-profile-a", "multi-page-profile-b")
@@ -2203,11 +2206,7 @@ async def _network_and_emulation_profiles_are_target_local(
                     response = await session.send(
                         "Runtime.evaluate",
                         {
-                            "expression": """({
-                              userAgent: navigator.userAgent,
-                              language: navigator.language,
-                              timezone: Intl.DateTimeFormat().resolvedOptions().timeZone,
-                            })""",
+                            "expression": runtime_profile,
                             "returnByValue": True,
                         },
                     )
@@ -2239,18 +2238,20 @@ async def _network_and_emulation_profiles_are_target_local(
             {
                 "userAgent": "MultiPageAgentA/1.0",
                 "language": "fr-FR",
+                "locale": "fr-FR",
                 "timezone": "Europe/Paris",
             },
             {
                 "userAgent": "MultiPageAgentB/1.0",
                 "language": "ja-JP",
-                "timezone": "Asia/Tokyo",
+                "locale": "fr-FR",
+                "timezone": "Europe/Paris",
             },
         ]
         assert_equal(
             runtime_profiles,
             expected_runtime_profiles,
-            "target-local Runtime emulation profiles",
+            "target-local navigator identity with shared Date/Intl defaults",
         )
         assert_equal(
             [
@@ -2288,44 +2289,33 @@ async def _network_and_emulation_profiles_are_target_local(
             f"{fixture}/profile-result?token={detached_token}",
         )
         detached_runtime_profile, surviving_runtime_profile = await asyncio.gather(
-            page_a.evaluate(
-                """() => ({
-                  userAgent: navigator.userAgent,
-                  language: navigator.language,
-                  timezone: Intl.DateTimeFormat().resolvedOptions().timeZone,
-                })"""
-            ),
-            page_b.evaluate(
-                """() => ({
-                  userAgent: navigator.userAgent,
-                  language: navigator.language,
-                  timezone: Intl.DateTimeFormat().resolvedOptions().timeZone,
-                })"""
-            ),
+            page_a.evaluate(runtime_profile),
+            page_b.evaluate(runtime_profile),
         )
         if detached_wire_profile.get("extraHeader") is not None:
             raise SmokeError(
                 "detached target retained its session-owned extra header: "
                 f"{detached_wire_profile!r}"
             )
-        if detached_runtime_profile == expected_runtime_profiles[0]:
-            raise SmokeError(
-                "detached target retained every session-owned emulation override: "
-                f"{detached_runtime_profile!r}"
-            )
+        assert_equal(detached_runtime_profile, baseline_runtime, "owner detach restores defaults")
         assert_equal(
             surviving_runtime_profile,
-            expected_runtime_profiles[1],
-            "peer target emulation profile after owner detach",
+            {
+                **expected_runtime_profiles[1],
+                "locale": baseline_runtime["locale"],
+                "timezone": baseline_runtime["timezone"],
+            },
+            "peer keeps navigator identity while native process defaults restore",
         )
         record_contract(
             results,
             "multi_page_network_and_emulation_profile_ownership",
             contract=(
-                "Headers, user agent, locale, and timezone overrides are target-local; "
-                "detaching their owning session clears that target without mutating a peer."
+                "Headers and navigator identity are target-local. Date/Intl defaults "
+                "are process-wide; owner detach restores those defaults for every peer "
+                "without changing peer network/navigator policy."
             ),
-            source="Chromium Network and Emulation agent oracle",
+            source="Chromium single-renderer ICU defaults and target-local Network policy",
             commands=[
                 "Network.setExtraHTTPHeaders",
                 "Emulation.setUserAgentOverride",

@@ -63,6 +63,7 @@ pub(crate) struct DevToolsSessionRegistry {
     primary_session_id: Option<String>,
     states: BTreeMap<DevToolsSessionKey, DevToolsSessionState>,
     attached_order: Vec<String>,
+    environment_owners: BTreeMap<DevToolsSessionKey, moli_core::ProcessEnvironmentOwner>,
 }
 
 impl Default for DevToolsSessionRegistry {
@@ -74,6 +75,7 @@ impl Default for DevToolsSessionRegistry {
                 DevToolsSessionState::default(),
             )]),
             attached_order: Vec::new(),
+            environment_owners: BTreeMap::new(),
         }
     }
 }
@@ -148,6 +150,7 @@ impl DevToolsSessionRegistry {
 
     pub(crate) fn remove_attached(&mut self, session_id: &str) -> Option<DevToolsSessionState> {
         let key = DevToolsSessionKey::Attached(session_id.to_owned());
+        self.release_environment_owner(&key);
         let removed = self.states.remove(&key);
         if removed.is_some() {
             self.attached_order
@@ -172,6 +175,7 @@ impl DevToolsSessionRegistry {
                     return None;
                 }
                 self.primary_session_id = None;
+                self.release_environment_owner(session_key);
                 Some(std::mem::take(self.primary_mut()))
             }
             DevToolsSessionKey::Attached(attached_session_id)
@@ -333,19 +337,15 @@ impl DevToolsSessionRegistry {
         session_key: &DevToolsSessionKey,
         locale_override: Option<String>,
     ) -> Result<(), &'static str> {
-        let current_session_owns_override = self
-            .states
+        // Admission is process-wide and precedes publishing session policy.
+        // A rejected claim must not be replayed later during navigation.
+        let owner = self
+            .environment_owners
             .get(session_key)
-            .is_some_and(|state| state.emulation_session_state.locale_override.is_some());
-        let another_session_owns_override = self.states.iter().any(|(candidate, state)| {
-            candidate != session_key && state.emulation_session_state.locale_override.is_some()
-        });
-        if !current_session_owns_override && another_session_owns_override {
-            return Err("Another locale override is already in effect");
-        }
-        self.ensure_session(session_key)
-            .emulation_session_state
-            .locale_override = locale_override;
+            .cloned()
+            .unwrap_or_default();
+        owner.set_locale(locale_override.as_deref())?;
+        self.retain_environment_owner(session_key, owner);
         Ok(())
     }
 
@@ -354,35 +354,43 @@ impl DevToolsSessionRegistry {
         session_key: &DevToolsSessionKey,
         timezone_override: Option<String>,
     ) -> Result<(), &'static str> {
-        let current_session_owns_override = self
-            .states
+        let owner = self
+            .environment_owners
             .get(session_key)
-            .is_some_and(|state| state.emulation_session_state.timezone_override.is_some());
-        let another_session_owns_override = self.states.iter().any(|(candidate, state)| {
-            candidate != session_key && state.emulation_session_state.timezone_override.is_some()
-        });
-        if timezone_override.is_some()
-            && !current_session_owns_override
-            && another_session_owns_override
-        {
-            return Err("Timezone override is already in effect");
-        }
-        self.ensure_session(session_key)
-            .emulation_session_state
-            .timezone_override = timezone_override;
+            .cloned()
+            .unwrap_or_default();
+        owner.set_timezone(timezone_override.as_deref())?;
+        self.retain_environment_owner(session_key, owner);
         Ok(())
     }
 
-    pub(crate) fn effective_locale_override(&self) -> Option<&str> {
-        self.states
-            .values()
-            .find_map(|state| state.emulation_session_state.locale_override.as_deref())
+    fn retain_environment_owner(
+        &mut self,
+        key: &DevToolsSessionKey,
+        owner: moli_core::ProcessEnvironmentOwner,
+    ) {
+        // Same-timezone non-owner success creates no retained state. There is
+        // no second copy of the claim in an Emulation snapshot or navigation.
+        if owner.has_override() {
+            self.ensure_session(key);
+            self.environment_owners.insert(key.clone(), owner);
+        } else {
+            self.environment_owners.remove(key);
+        }
     }
 
-    pub(crate) fn effective_timezone_override(&self) -> Option<&str> {
-        self.states
+    #[cfg(test)]
+    pub(crate) fn effective_locale_override(&self) -> Option<String> {
+        self.environment_owners
             .values()
-            .find_map(|state| state.emulation_session_state.timezone_override.as_deref())
+            .find_map(moli_core::ProcessEnvironmentOwner::locale)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn effective_timezone_override(&self) -> Option<String> {
+        self.environment_owners
+            .values()
+            .find_map(moli_core::ProcessEnvironmentOwner::timezone)
     }
 
     pub(crate) fn clear_network_state(&mut self, session_key: &DevToolsSessionKey) {
@@ -392,11 +400,16 @@ impl DevToolsSessionRegistry {
     }
 
     pub(crate) fn clear_emulation_policy_state(&mut self, session_key: &DevToolsSessionKey) {
+        self.release_environment_owner(session_key);
         if let Some(state) = self.states.get_mut(session_key) {
             let emulation = &mut state.emulation_session_state;
             emulation.browser_identity_override = None;
-            emulation.locale_override = None;
-            emulation.timezone_override = None;
+        }
+    }
+
+    fn release_environment_owner(&mut self, session_key: &DevToolsSessionKey) {
+        if let Some(owner) = self.environment_owners.remove(session_key) {
+            owner.release();
         }
     }
 
@@ -405,7 +418,12 @@ impl DevToolsSessionRegistry {
     }
 
     pub(crate) fn has_non_default_state(&self) -> bool {
-        self.primary() != &DevToolsSessionState::default() || !self.attached_is_empty()
+        self.primary() != &DevToolsSessionState::default()
+            || !self.attached_is_empty()
+            || self
+                .environment_owners
+                .values()
+                .any(moli_core::ProcessEnvironmentOwner::has_override)
     }
 
     pub(crate) fn has_pending_inspector_awaits(&self) -> bool {
@@ -666,8 +684,6 @@ pub(crate) struct DevToolsEmulationSessionState {
     // UA, Accept-Language, and platform are independent handler contributions.
     pub(crate) browser_identity_override: Option<DevToolsBrowserIdentityOverride>,
     // Locale and timezone are exclusive controller claims, unlike UA fields.
-    pub(crate) locale_override: Option<String>,
-    pub(crate) timezone_override: Option<String>,
     pub(crate) network_conditions: Option<super::EmulatedNetworkConditions>,
     pub(crate) geolocation_override: Option<super::EmulatedGeolocationOverrideState>,
     pub(crate) emulated_media: super::EmulatedMediaOverrides,
@@ -683,8 +699,6 @@ impl Default for DevToolsEmulationSessionState {
     fn default() -> Self {
         Self {
             browser_identity_override: None,
-            locale_override: None,
-            timezone_override: None,
             network_conditions: None,
             geolocation_override: None,
             emulated_media: super::EmulatedMediaOverrides::default(),
@@ -1364,7 +1378,10 @@ mod tests {
         sessions
             .set_locale_override(&session_a, Some("it-IT".to_owned()))
             .unwrap();
-        assert_eq!(sessions.effective_locale_override(), Some("it-IT"));
+        assert_eq!(
+            sessions.effective_locale_override().as_deref(),
+            Some("it-IT")
+        );
 
         sessions
             .set_timezone_override(&session_a, Some("Europe/Paris".to_owned()))
@@ -1378,11 +1395,14 @@ mod tests {
         sessions
             .set_timezone_override(&session_b, None)
             .expect("Chromium accepts a non-owner timezone clear as a no-op");
-        assert_eq!(sessions.effective_timezone_override(), Some("Europe/Paris"));
+        assert_eq!(
+            sessions.effective_timezone_override().as_deref(),
+            Some("Europe/Paris")
+        );
 
         sessions.remove_attached("SID-a");
-        assert_eq!(sessions.effective_locale_override(), None);
-        assert_eq!(sessions.effective_timezone_override(), None);
+        assert_eq!(sessions.effective_locale_override().as_deref(), None);
+        assert_eq!(sessions.effective_timezone_override().as_deref(), None);
         sessions
             .set_locale_override(&session_b, Some("de-DE".to_owned()))
             .unwrap();

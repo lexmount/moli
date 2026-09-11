@@ -968,14 +968,16 @@ fn document_last_modified_getter_function<'s>(
         return;
     };
     let runtime = unsafe { &*runtime_ptr };
-    let timezone_override = runtime.timezone_override();
-    let value = moli_time::format_document_last_modified_value(
-        runtime
-            .dom_host()
-            .document_source_last_modified_for_handle(handle),
-        moli_time::unix_epoch_millis(),
-        timezone_override.as_deref(),
-    );
+    let format = |timestamp| {
+        let offset = v8::icu::default_time_zone_offset_seconds(timestamp)?;
+        moli_time::format_document_last_modified_value(timestamp, offset)
+    };
+    let value = runtime
+        .dom_host()
+        .document_source_last_modified_for_handle(handle)
+        .and_then(format)
+        .or_else(|| format(moli_time::unix_epoch_millis()))
+        .unwrap_or_else(|| "01/01/1970 00:00:00".to_owned());
     set_document_string_return_value(scope, &mut rv, &value);
 }
 

@@ -1116,14 +1116,6 @@ impl PageVm {
                 self.set_navigator_overrides(&overrides)?;
                 Ok(RendererPageReply::Unit)
             }
-            RendererPageCommand::SetLocaleOverride(locale) => {
-                self.set_locale_override(locale.as_deref())?;
-                Ok(RendererPageReply::Unit)
-            }
-            RendererPageCommand::SetTimezoneOverride(timezone) => {
-                self.set_timezone_override(timezone.as_deref())?;
-                Ok(RendererPageReply::Unit)
-            }
             RendererPageCommand::SetScriptExecutionDisabled(disabled) => {
                 self.set_script_execution_disabled(disabled);
                 Ok(RendererPageReply::Unit)

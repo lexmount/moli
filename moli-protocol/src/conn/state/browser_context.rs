@@ -64,8 +64,7 @@ pub struct BrowserContext {
     pub(crate) default_extra_headers: Vec<(String, String)>,
     pub(crate) global_extra_headers: Vec<(String, String)>,
     default_browser_identity: super::BaseBrowserIdentityOverrideState,
-    pub(crate) default_locale_override: Option<String>,
-    pub(crate) default_timezone_override: Option<String>,
+    environment_owner: moli_core::ProcessEnvironmentOwner,
     pub(crate) default_network_conditions: Option<EmulatedNetworkConditions>,
     pub(crate) default_geolocation_override: Option<EmulatedGeolocationOverrideState>,
     pub(crate) global_network_conditions: Option<EmulatedNetworkConditions>,
@@ -516,8 +515,7 @@ impl BrowserContext {
             default_extra_headers: Vec::new(),
             global_extra_headers: Vec::new(),
             default_browser_identity: super::BaseBrowserIdentityOverrideState::default(),
-            default_locale_override: None,
-            default_timezone_override: None,
+            environment_owner: Default::default(),
             default_network_conditions: None,
             default_geolocation_override: None,
             global_network_conditions: None,
@@ -1549,10 +1547,19 @@ impl BrowserContext {
         &mut self,
         locale: Option<String>,
         fallback: &moli_browser_profile::BrowserIdentityProfile,
-    ) {
-        self.default_locale_override = locale.clone();
+    ) -> Result<(), &'static str> {
+        self.environment_owner.set_locale(locale.as_deref())?;
         self.default_browser_identity
             .set_accept_language(locale, fallback);
+        Ok(())
+    }
+
+    pub(crate) fn set_default_timezone_override(
+        &mut self,
+        timezone: Option<String>,
+    ) -> Result<(), &'static str> {
+        self.environment_owner.set_timezone(timezone.as_deref())?;
+        Ok(())
     }
 
     #[cfg(test)]
@@ -1561,24 +1568,6 @@ impl BrowserContext {
         identity: moli_browser_profile::BrowserIdentityProfile,
     ) {
         self.default_browser_identity.replace_profile(identity);
-    }
-
-    pub(crate) fn effective_active_locale_override_owned(&self) -> Option<String> {
-        self.page_targets
-            .active()
-            .and_then(|host| host.effective_policy().locale_override().map(str::to_owned))
-            .or_else(|| self.default_locale_override.clone())
-    }
-
-    pub(crate) fn effective_active_timezone_override_owned(&self) -> Option<String> {
-        self.page_targets
-            .active()
-            .and_then(|host| {
-                host.effective_policy()
-                    .timezone_override()
-                    .map(str::to_owned)
-            })
-            .or_else(|| self.default_timezone_override.clone())
     }
 
     pub(crate) fn effective_active_network_conditions(&self) -> Option<EmulatedNetworkConditions> {
@@ -1638,20 +1627,6 @@ impl BrowserContext {
     pub(crate) fn effective_network_offline_for_target(&self, target_id: &str) -> bool {
         self.effective_network_conditions_for_target(target_id)
             .is_some_and(|conditions| !conditions.navigator_online())
-    }
-
-    pub(crate) fn effective_locale_override_for_target_owned(
-        &self,
-        target_id: &str,
-    ) -> Option<String> {
-        self.page_target(target_id)
-            .and_then(|state| {
-                state
-                    .effective_policy()
-                    .locale_override()
-                    .map(str::to_owned)
-            })
-            .or_else(|| self.default_locale_override.clone())
     }
 
     pub(crate) fn has_active_target(&self) -> bool {

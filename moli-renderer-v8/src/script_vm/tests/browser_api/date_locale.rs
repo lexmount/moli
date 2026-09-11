@@ -1,10 +1,91 @@
 use super::*;
 
 #[test]
+fn process_environment_defaults_reach_existing_and_new_isolates_without_wrapping_builtins() {
+    let owner = moli_v8_platform::ProcessEnvironmentOwner::default();
+    let mut peer = new_storage_test_vm("https://environment-peer.test/");
+    let defaults = r#"JSON.stringify([
+        new Intl.NumberFormat().resolvedOptions().locale,
+        new Intl.DateTimeFormat().resolvedOptions().timeZone,
+        new Date('2024-01-01T00:00:00Z').getTimezoneOffset()
+    ])"#;
+    let baseline = peer.eval(defaults).unwrap();
+    peer.eval(
+        r#"globalThis.originalDate = Date;
+        globalThis.originalParse = Date.parse;
+        globalThis.originalIntl = Intl.DateTimeFormat;
+        globalThis.savedFormatter = new Intl.DateTimeFormat();
+        globalThis.savedZone = savedFormatter.resolvedOptions().timeZone;
+        globalThis.savedDate = new Date('2024-01-01T00:00:00Z');"#,
+    )
+    .unwrap();
+    owner.set_locale(Some("fr_FR")).unwrap();
+    owner.set_timezone(Some("Europe/Paris")).unwrap();
+    assert_eq!(
+        peer.eval(defaults).unwrap(),
+        r#"["fr-FR","Europe/Paris",-60]"#
+    );
+    let mut late = new_storage_test_vm("https://environment-late.test/");
+    assert_eq!(late.eval(defaults).unwrap(), peer.eval(defaults).unwrap());
+    assert_eq!(
+        peer.eval(
+            r#"JSON.stringify([
+        Date === originalDate, Date.parse === originalParse,
+        Intl.DateTimeFormat === originalIntl,
+        Function.prototype.toString.call(Date).includes('[native code]'),
+        savedFormatter.resolvedOptions().timeZone === savedZone,
+        savedDate.getTimezoneOffset() === -60
+    ])"#
+        )
+        .unwrap(),
+        "[true,true,true,true,true,true]"
+    );
+    drop(owner);
+    assert_eq!(peer.eval(defaults).unwrap(), baseline);
+    assert_eq!(late.eval(defaults).unwrap(), baseline);
+}
+
+#[test]
+fn process_environment_claim_conflicts_and_failed_updates_leave_the_default_unchanged() {
+    let peer_owner = moli_v8_platform::ProcessEnvironmentOwner::default();
+    let owner = moli_v8_platform::ProcessEnvironmentOwner::default();
+    let mut peer = new_storage_test_vm("https://environment-other.test/");
+    let probe = r#"JSON.stringify([
+        new Intl.NumberFormat().resolvedOptions().locale,
+        new Intl.DateTimeFormat().resolvedOptions().timeZone
+    ])"#;
+    let baseline = peer.eval(probe).unwrap();
+    owner.set_locale(Some("fr_FR")).unwrap();
+    owner.set_timezone(Some("Europe/Paris")).unwrap();
+    assert!(peer_owner.set_locale(Some("fr_FR")).is_err());
+    assert!(peer_owner.set_locale(None).is_err());
+    assert!(peer_owner.set_timezone(Some("Asia/Shanghai")).is_err());
+    // Success without ownership must neither reset nor resurrect the claim.
+    peer_owner.set_timezone(Some("Europe/Paris")).unwrap();
+    peer_owner.set_timezone(None).unwrap();
+    for invalid in ["_@invalid", "fr_FR\0en_US"] {
+        assert!(owner.set_locale(Some(invalid)).is_err());
+    }
+    for invalid in ["Mars/Olympus", "Etc/Unknown", "UTC\0Europe/Paris"] {
+        assert!(owner.set_timezone(Some(invalid)).is_err());
+    }
+    assert_eq!(peer.eval(probe).unwrap(), r#"["fr-FR","Europe/Paris"]"#);
+    drop(owner);
+    assert_eq!(peer.eval(probe).unwrap(), baseline);
+    peer_owner.set_locale(Some("de_DE")).unwrap();
+    peer_owner.set_timezone(Some("Asia/Shanghai")).unwrap();
+    assert_eq!(peer.eval(probe).unwrap(), r#"["de-DE","Asia/Shanghai"]"#);
+    peer_owner.set_locale(None).unwrap();
+    peer_owner.set_timezone(None).unwrap();
+    assert_eq!(peer.eval(probe).unwrap(), baseline);
+}
+
+#[test]
 fn emulation_date_constructor_converts_objects_once_with_default_hint() {
+    let environment = moli_v8_platform::ProcessEnvironmentOwner::default();
     let mut vm = new_storage_test_vm("https://date-object-conversion.test/");
     for timezone in ["UTC", "Europe/Paris", "America/New_York", "Asia/Shanghai"] {
-        vm.set_timezone_override(Some(timezone));
+        environment.set_timezone(Some(timezone)).unwrap();
         assert_eq!(vm.eval(r#"JSON.stringify((() => {
           const input = '2024-01-01T00:00:00';
           const expected = +new Date(2024, 0, 1);
@@ -41,9 +122,10 @@ fn emulation_date_constructor_converts_objects_once_with_default_hint() {
 
 #[test]
 fn emulation_locale_fallback_covers_empty_and_unmatched_lists() {
+    let environment = moli_v8_platform::ProcessEnvironmentOwner::default();
     let mut vm = new_storage_test_vm("https://intl-locale-fallback.test/");
-    vm.set_locale_override(Some("fr_FR"));
-    vm.set_timezone_override(Some("Europe/Paris"));
+    environment.set_locale(Some("fr_FR")).unwrap();
+    environment.set_timezone(Some("Europe/Paris")).unwrap();
     assert_eq!(vm.eval(r#"JSON.stringify((() => {
       const constructors = ['Collator', 'DateTimeFormat', 'DisplayNames', 'DurationFormat',
         'ListFormat', 'NumberFormat', 'PluralRules', 'RelativeTimeFormat', 'Segmenter'];
@@ -70,6 +152,7 @@ fn emulation_locale_fallback_covers_empty_and_unmatched_lists() {
 
 #[test]
 fn emulation_locale_fallback_preserves_native_observation_order() {
+    let environment = moli_v8_platform::ProcessEnvironmentOwner::default();
     let mut vm = new_storage_test_vm("https://intl-locale-coercion.test/");
     let probe = r#"JSON.stringify((() => {
       const date = new Date(0);
@@ -94,8 +177,8 @@ fn emulation_locale_fallback_preserves_native_observation_order() {
       });
     })())"#;
     let baseline = vm.eval(probe).unwrap();
-    vm.set_locale_override(Some("fr_FR"));
-    vm.set_timezone_override(Some("Europe/Paris"));
+    environment.set_locale(Some("fr_FR")).unwrap();
+    environment.set_timezone(Some("Europe/Paris")).unwrap();
     assert_eq!(vm.eval(probe).unwrap(), baseline);
     assert_eq!(
         vm.eval(
@@ -119,9 +202,10 @@ fn emulation_locale_fallback_preserves_native_observation_order() {
 
 #[test]
 fn emulation_default_arguments_do_not_read_array_prototype() {
+    let environment = moli_v8_platform::ProcessEnvironmentOwner::default();
     let mut vm = new_storage_test_vm("https://intl-private-arguments.test/");
-    vm.set_locale_override(Some("fr_FR"));
-    vm.set_timezone_override(Some("Europe/Paris"));
+    environment.set_locale(Some("fr_FR")).unwrap();
+    environment.set_timezone(Some("Europe/Paris")).unwrap();
     assert_eq!(
         vm.eval(
             r#"(() => {
@@ -148,8 +232,9 @@ fn emulation_default_arguments_do_not_read_array_prototype() {
 
 #[test]
 fn emulation_timezone_boxes_primitive_options_without_losing_defaults() {
+    let environment = moli_v8_platform::ProcessEnvironmentOwner::default();
     let mut vm = new_storage_test_vm("https://intl-primitive-options.test/");
-    vm.set_timezone_override(Some("Europe/Paris"));
+    environment.set_timezone(Some("Europe/Paris")).unwrap();
     assert_eq!(vm.eval(r#"JSON.stringify((() => {
       const date = new Date('2024-01-01T00:00:00Z');
       const options = [42, true, '', Symbol(), 1n];
@@ -165,9 +250,10 @@ fn emulation_timezone_boxes_primitive_options_without_losing_defaults() {
 
 #[test]
 fn emulation_date_time_first_legacy_hyphens_are_not_timezone_offsets() {
+    let environment = moli_v8_platform::ProcessEnvironmentOwner::default();
     let mut vm = new_storage_test_vm("https://date-time-first.test/");
     for timezone in ["Europe/Paris", "America/New_York", "Asia/Shanghai"] {
-        vm.set_timezone_override(Some(timezone));
+        environment.set_timezone(Some(timezone)).unwrap();
         assert_eq!(
             vm.eval(
                 r#"JSON.stringify([
@@ -185,7 +271,8 @@ fn emulation_date_time_first_legacy_hyphens_are_not_timezone_offsets() {
 }
 
 #[test]
-fn date_and_intl_declared_wrappers_preserve_native_method_descriptors() {
+fn date_and_intl_native_method_descriptors_are_unchanged() {
+    let environment = moli_v8_platform::ProcessEnvironmentOwner::default();
     let mut vm = new_storage_test_vm("https://date-intl-declarations.test/");
     let probe = r#"JSON.stringify((() => {
       const constructors = ['Collator', 'DateTimeFormat', 'DisplayNames', 'DurationFormat',
@@ -206,7 +293,7 @@ fn date_and_intl_declared_wrappers_preserve_native_method_descriptors() {
       });
     })())"#;
     for timezone in [None, Some("Europe/Paris"), None] {
-        vm.set_timezone_override(timezone);
+        environment.set_timezone(timezone).unwrap();
         let rows: Vec<Vec<bool>> = serde_json::from_str(&vm.eval(probe).unwrap()).unwrap();
         assert!(
             rows.len() >= 9,
@@ -220,6 +307,7 @@ fn date_and_intl_declared_wrappers_preserve_native_method_descriptors() {
 
 #[test]
 fn emulation_constructor_envelopes_do_not_convert_page_arguments() {
+    let environment = moli_v8_platform::ProcessEnvironmentOwner::default();
     let mut vm = new_storage_test_vm("https://date-intl-raw-arguments.test/");
     let probe = r#"JSON.stringify((() => {
       const sentinel = {};
@@ -258,8 +346,8 @@ fn emulation_constructor_envelopes_do_not_convert_page_arguments() {
         (Some("zh_Hant_TW"), Some("Asia/Shanghai")),
         (None, None),
     ] {
-        vm.set_locale_override(locale);
-        vm.set_timezone_override(timezone);
+        environment.set_locale(locale).unwrap();
+        environment.set_timezone(timezone).unwrap();
         assert_eq!(
             vm.eval(probe).unwrap(),
             r#"[true,["0:number","1:number","2:number","3:number","4:number","5:number","6:number"],[2024,0,2,3,4,5,6],true,true,true,true,true,true,true,true]"#,
@@ -270,8 +358,9 @@ fn emulation_constructor_envelopes_do_not_convert_page_arguments() {
 
 #[test]
 fn emulation_private_declarations_do_not_invoke_inherited_setters() {
+    let environment = moli_v8_platform::ProcessEnvironmentOwner::default();
     let mut vm = new_storage_test_vm("https://date-intl-private-declarations.test/");
-    vm.set_timezone_override(Some("Europe/Paris"));
+    environment.set_timezone(Some("Europe/Paris")).unwrap();
     let result = vm
         .eval(
             r#"JSON.stringify((() => {
@@ -307,35 +396,10 @@ fn emulation_private_declarations_do_not_invoke_inherited_setters() {
 }
 
 #[test]
-fn icu_locale_conversion_is_fallible_and_does_not_set_the_global_default() {
-    let mut vm = new_storage_test_vm("https://icu-language-tag.test/");
-    let baseline = vm
-        .eval("new Intl.NumberFormat().resolvedOptions().locale")
-        .unwrap();
-    assert_eq!(
-        v8::icu::language_tag_for_locale("en_US").as_deref(),
-        Some("en-US")
-    );
-    assert_eq!(
-        v8::icu::language_tag_for_locale("de_DE@collation=phonebook;numbers=latn").as_deref(),
-        Some("de-DE-u-co-phonebk-nu-latn")
-    );
-    assert_eq!(
-        v8::icu::language_tag_for_locale("en_US_POSIX").as_deref(),
-        Some("en-US-u-va-posix")
-    );
-    assert_eq!(v8::icu::language_tag_for_locale("en_US\0fr_FR"), None);
-    assert_eq!(
-        vm.eval("new Intl.NumberFormat().resolvedOptions().locale")
-            .unwrap(),
-        baseline
-    );
-}
-
-#[test]
-fn emulation_icu_locale_ids_are_converted_before_default_intl_arguments() {
+fn native_icu_locale_ids_drive_default_intl_behavior() {
+    let environment = moli_v8_platform::ProcessEnvironmentOwner::default();
     let mut vm = new_storage_test_vm("https://icu-locale-defaults.test/");
-    vm.set_timezone_override(Some("UTC"));
+    environment.set_timezone(Some("UTC")).unwrap();
     for (locale, language_tag) in [
         ("en_US", "en-US"),
         ("fr_FR", "fr-FR"),
@@ -345,7 +409,7 @@ fn emulation_icu_locale_ids_are_converted_before_default_intl_arguments() {
         ("th_TH@calendar=buddhist", "th-TH-u-ca-buddhist"),
         ("ar_EG@numbers=latn", "ar-EG-u-nu-latn"),
     ] {
-        vm.set_locale_override(Some(locale));
+        environment.set_locale(Some(locale)).unwrap();
         let result = vm.eval(&format!(
             r#"(() => {{
               const tag = {language_tag:?};
@@ -371,6 +435,7 @@ fn emulation_icu_locale_ids_are_converted_before_default_intl_arguments() {
 
 #[test]
 fn emulation_date_unicode_and_invalid_input_stays_invalid() {
+    let environment = moli_v8_platform::ProcessEnvironmentOwner::default();
     let mut vm = new_storage_test_vm("https://unicode-date-input.test/");
     let probe = r#"JSON.stringify([
       '你好', '🙂', '+你好啊', '-🙂abc', '2024-你好', '\ud800', '\udfff',
@@ -379,16 +444,17 @@ fn emulation_date_unicode_and_invalid_input_stays_invalid() {
     let expected = serde_json::to_string(&vec![(true, "Invalid Date"); 11]).unwrap();
     assert_eq!(vm.eval(probe).unwrap(), expected);
     for timezone in ["UTC", "Europe/Paris", "America/New_York", "Asia/Shanghai"] {
-        vm.set_timezone_override(Some(timezone));
+        environment.set_timezone(Some(timezone)).unwrap();
         assert_eq!(vm.eval(probe).unwrap(), expected, "{timezone}");
     }
 }
 
 #[test]
 fn emulation_date_local_grammar_and_coercion_preserve_native_contracts() {
+    let environment = moli_v8_platform::ProcessEnvironmentOwner::default();
     let mut vm = new_storage_test_vm("https://local-date-input.test/");
     for timezone in ["UTC", "Europe/Paris", "America/New_York", "Asia/Shanghai"] {
-        vm.set_timezone_override(Some(timezone));
+        environment.set_timezone(Some(timezone)).unwrap();
         let result = vm
             .eval(
                 r#"(() => {
@@ -424,6 +490,7 @@ fn emulation_date_local_grammar_and_coercion_preserve_native_contracts() {
 
 #[test]
 fn emulation_timezone_does_not_change_option_get_order_or_exceptions() {
+    let environment = moli_v8_platform::ProcessEnvironmentOwner::default();
     let mut vm = new_storage_test_vm("https://intl-option-read-order.test/");
     // Capture native behavior in this same V8, without hard-coding the list of
     // options that a particular V8 release implements or reads more than once.
@@ -458,16 +525,17 @@ fn emulation_timezone_does_not_change_option_get_order_or_exceptions() {
         assert_eq!(row[2], true, "the original thrown value must propagate");
         assert_eq!(row[3], 1, "a throwing timeZone getter is read once");
     }
-    vm.set_timezone_override(Some("Europe/Paris"));
+    environment.set_timezone(Some("Europe/Paris")).unwrap();
     assert_eq!(vm.eval(probe).unwrap(), baseline);
-    vm.set_timezone_override(None);
+    environment.set_timezone(None).unwrap();
     assert_eq!(vm.eval(probe).unwrap(), baseline);
 }
 
 #[test]
 fn emulation_timezone_preserves_frozen_options_and_original_getter_receivers() {
+    let environment = moli_v8_platform::ProcessEnvironmentOwner::default();
     let mut vm = new_storage_test_vm("https://frozen-intl-options.test/");
-    vm.set_timezone_override(Some("Europe/Paris"));
+    environment.set_timezone(Some("Europe/Paris")).unwrap();
     let result = vm.eval(r#"(() => {
       const date = new Date('2024-01-01T00:00:00Z');
       const frozen = Object.freeze({timeZone: undefined});
@@ -493,6 +561,7 @@ fn emulation_timezone_preserves_frozen_options_and_original_getter_receivers() {
 
 #[test]
 fn emulation_date_parsing_preserves_native_explicit_legacy_timezones() {
+    let environment = moli_v8_platform::ProcessEnvironmentOwner::default();
     let mut vm = new_storage_test_vm("https://legacy-date-zones.test/");
     vm.eval(
         r#"globalThis.explicitDateInputs = [
@@ -513,7 +582,7 @@ fn emulation_date_parsing_preserves_native_explicit_legacy_timezones() {
         "JSON.stringify(explicitDateInputs.map(input => [Date.parse(input), +new Date(input)]))";
     let baseline = vm.eval(probe).unwrap();
     for timezone in ["UTC", "Europe/Paris", "America/New_York", "Asia/Shanghai"] {
-        vm.set_timezone_override(Some(timezone));
+        environment.set_timezone(Some(timezone)).unwrap();
         assert_eq!(vm.eval(probe).unwrap(), baseline, "{timezone}");
     }
 }
