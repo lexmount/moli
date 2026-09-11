@@ -1,5 +1,6 @@
 mod bindings;
 mod delivery;
+mod encoding;
 mod events;
 mod header_surface;
 mod instance_state;
@@ -59,6 +60,8 @@ pub(crate) use self::delivery::{
     apply_xhr_streaming_response_chunk, apply_xhr_streaming_response_head, apply_xhr_timeout,
     finish_xhr_abort, throw_synchronous_xhr_failure,
 };
+pub(crate) use self::encoding::xhr_response_text_decoder;
+pub(crate) use self::events::xhr_dispatch_progress_event;
 pub(crate) use self::instance_state::xhr_has_upload_listeners;
 pub(crate) use self::instance_state::{
     XHR_METHOD_SLOT, XHR_OPEN_GENERATION_SLOT, XHR_REQUEST_HEADERS_SLOT, XHR_RESPONSE_URL_SLOT,
@@ -78,7 +81,7 @@ pub(crate) use self::request_state::begin_xhr_send;
 use self::request_state::{
     XhrReadyState, clear_xhr_active_request, set_xhr_ready_state, xhr_ready_state,
 };
-use self::response_type::XmlHttpRequestResponseType;
+use self::response_type::{XmlHttpRequestResponseType, xhr_response_type};
 #[cfg(test)]
 pub(crate) use self::send::prepare_xhr_send_body;
 pub(crate) use self::send::{
