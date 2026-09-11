@@ -384,7 +384,10 @@ pub(super) fn create_object_url_for_object<'s>(
         lifetime_id,
         blob_id,
         &origin,
-        Some(ObjectUrlAccessKey { partition, storage_key }),
+        Some(ObjectUrlAccessKey {
+            partition,
+            storage_key,
+        }),
     )
 }
 
