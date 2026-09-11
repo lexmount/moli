@@ -784,6 +784,126 @@ fn xml_http_request_open_and_abort_keep_accessor_backed_state_without_own_props(
 }
 
 #[test]
+fn xml_http_request_loadstart_orders_upload_events_and_handles_abort() {
+    let mut vm = new_storage_test_vm("https://xhr-upload-start.test/");
+    let result = vm
+        .eval(
+            r#"
+JSON.stringify(["xhr", "upload", "empty"].map(abortAt => {
+  const xhr = new XMLHttpRequest();
+  const events = [];
+  xhr.onloadstart = event => {
+    events.push(`xhr-start:${event.loaded}:${event.total}:${event.lengthComputable}`);
+    if (abortAt === "xhr") xhr.abort();
+  };
+  xhr.upload.onloadstart = event => {
+    events.push(`upload-start:${event.loaded}:${event.total}:${event.lengthComputable}`);
+    if (abortAt !== "xhr") xhr.abort();
+  };
+  for (const type of ["progress", "load", "abort", "loadend"]) {
+    xhr.upload.addEventListener(type, event => events.push(
+      `upload-${type}:${xhr.readyState}:${event.loaded}:${event.total}:${event.lengthComputable}`));
+  }
+  xhr.onabort = () => events.push(`xhr-abort:${xhr.readyState}`);
+  xhr.onloadend = () => events.push(`xhr-loadend:${xhr.readyState}`);
+  xhr.open("POST", "/unused");
+  xhr.send(abortAt === "empty" ? "" : "é");
+  events.push(`after-send:${xhr.readyState}:${xhr.status}`);
+  return events;
+}))
+"#,
+        )
+        .expect("abort during either loadstart should end the pending upload");
+    assert_eq!(
+        result,
+        r#"[["xhr-start:0:0:false","upload-abort:4:0:0:false","upload-loadend:4:0:0:false","xhr-abort:4","xhr-loadend:4","after-send:0:0"],["xhr-start:0:0:false","upload-start:0:2:true","upload-abort:4:0:0:false","upload-loadend:4:0:0:false","xhr-abort:4","xhr-loadend:4","after-send:0:0"],["xhr-start:0:0:false","upload-start:0:0:false","upload-abort:4:0:0:false","upload-loadend:4:0:0:false","xhr-abort:4","xhr-loadend:4","after-send:0:0"]]"#
+    );
+}
+
+#[test]
+fn xml_http_request_upload_listener_flag_is_captured_before_loadstart() {
+    let mut vm = new_storage_test_vm("https://xhr-upload-listeners.test/");
+    let result = vm
+        .eval(
+            r#"
+["none", "removed", "cleared", "signal", "custom", "handler", "getter"].map(mode => {
+  const xhr = new XMLHttpRequest();
+  const upload = xhr.upload;
+  const listener = () => {};
+  const events = [];
+  if (mode === "removed") {
+    upload.addEventListener("custom", listener);
+    upload.removeEventListener("custom", listener);
+  } else if (mode === "cleared") {
+    upload.onprogress = listener;
+    upload.onprogress = null;
+  } else if (mode === "signal") {
+    const controller = new AbortController();
+    upload.addEventListener("custom", listener, {signal: controller.signal});
+    controller.abort();
+  } else if (mode === "custom") {
+    upload.addEventListener("custom", {handleEvent() {}});
+  } else if (mode === "handler") {
+    upload.onprogress = listener;
+  } else if (mode === "getter") {
+    Object.defineProperty(upload, "onprogress", {get() {throw new Error("public handler read");}});
+  }
+  xhr.onloadstart = () => {
+    upload.onloadstart = event => {
+      events.push(`${event.loaded}:${event.total}`);
+      xhr.abort();
+    };
+  };
+  xhr.open("POST", "/unused");
+  xhr.send("é");
+  xhr.abort();
+  return `${mode}:${events.join()}`;
+}).join("|")
+"#,
+        )
+        .expect("only listeners registered before send should enable upload events");
+    assert_eq!(
+        result,
+        "none:|removed:|cleared:|signal:|custom:0:2|handler:0:2|getter:"
+    );
+}
+
+#[test]
+fn xml_http_request_upload_loadstart_preserves_reopened_request() {
+    let mut vm = new_storage_test_vm("https://xhr-upload-reopen.test/");
+    vm.eval(
+        r#"
+(() => {
+  const xhr = new XMLHttpRequest();
+  const events = globalThis.__xhrUploadReopenEvents = [];
+  xhr.onloadstart = () => events.push(`xhr-start:${xhr.readyState}`);
+  xhr.upload.onloadstart = event => {
+    events.push(`upload-start:${event.loaded}:${event.total}`);
+    xhr.open("GET", "data:text/plain,replacement");
+    xhr.send();
+    events.push(`after-reopen:${xhr.readyState}`);
+  };
+  for (const type of ["progress", "load", "abort", "loadend"]) {
+    xhr.upload.addEventListener(type, () => events.push(`unexpected-upload-${type}`));
+  }
+  xhr.onload = () => events.push(`load:${xhr.responseText}`);
+  xhr.onloadend = () => events.push(`loadend:${xhr.readyState}`);
+  xhr.open("POST", "/unused");
+  xhr.send("é");
+})()
+"#,
+    )
+    .expect("upload loadstart should be able to reopen and send another request");
+    vm.eval("0")
+        .expect("replacement request should complete at the following checkpoint");
+    assert_eq!(
+        vm.eval("__xhrUploadReopenEvents.join('|')")
+            .expect("replacement request event trace"),
+        "xhr-start:1|upload-start:0:2|xhr-start:1|after-reopen:1|load:replacement|loadend:4"
+    );
+}
+
+#[test]
 fn xml_http_request_abort_uses_internal_state_and_resets_completed_response() {
     let mut vm = new_storage_test_vm("https://xhr-abort-internal-state.test/");
     let result = vm
