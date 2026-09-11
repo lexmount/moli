@@ -1091,6 +1091,8 @@ fn xml_http_request_response_document_uses_response_url_and_requester_origin() {
                 "https://requester.example/page/index.html",
                 "<!doctype html><html><body></body></html>",
             );
+            vm.set_timezone_override_and_sync_surface(Some("UTC"))
+                .unwrap();
             vm.eval(&format!(
                 r#"(() => {{
                     const frame = document.createElement('iframe');
@@ -1117,7 +1119,10 @@ fn xml_http_request_response_document_uses_response_url_and_requester_origin() {
                         status_text: None,
                         final_url: Url::parse("https://response.example/resource/doc#fragment").unwrap(),
                         status: 200,
-                        headers: vec![("Content-Type".to_owned(), mime.to_owned())],
+                        headers: vec![
+                            ("Content-Type".to_owned(), mime.to_owned()),
+                            ("lAsT-mOdIfIeD".to_owned(), "Thu, 01 Jan 1970 01:23:45 GMT".to_owned()),
+                        ],
                         request_cookie_report: None,
                         cookie_set_reports: Vec::new(),
                         redirected: false,
@@ -1140,6 +1145,9 @@ fn xml_http_request_response_document_uses_response_url_and_requester_origin() {
                 check(__documentXhr.responseURL === url.split('#')[0], 'responseURL serialization');
                 check(doc.domain === 'requester.example', 'origin belongs to requester');
                 check(doc.defaultView === null && doc.hidden, 'windowless response document');
+                check(doc.lastModified === '01/01/1970 01:23:45', 'response source modification time');
+                const getter = Object.getOwnPropertyDescriptor(Document.prototype, 'lastModified').get;
+                check(getter.call(doc) === doc.lastModified, 'cross-realm metadata getter');
                 check(doc.baseURI === 'https://response.example/assets/', 'relative parsed base');
                 const link = doc.getElementById('link');
                 check(link.href === 'https://response.example/assets/child', 'relative link');
@@ -1153,6 +1161,7 @@ fn xml_http_request_response_document_uses_response_url_and_requester_origin() {
                 check(doc.baseURI === url, 'base adoption');
                 __documentXhr.open('GET', '/next');
                 check(__documentXhr.responseXML === null && doc.URL === url, 'XHR reuse');
+                check(doc.lastModified === '01/01/1970 01:23:45', 'source time survives XHR reuse');
                 return 'ok';
             })()"#,
                 )
@@ -1293,6 +1302,136 @@ fn xml_http_request_document_response_requires_an_eligible_mime_and_well_formed_
                 );
             }
         }
+    }
+}
+
+#[test]
+fn xhr_streamed_response_documents_keep_distinct_source_modification_times() {
+    for (mime, response_type) in [
+        ("application/xml", ""),
+        ("application/xml", "document"),
+        ("text/html", "document"),
+    ] {
+        let mut vm = new_storage_test_vm("https://xhr-document-modified.test/");
+        vm.document_runtime
+            .set_document_source_last_modified(Some(5_025_000.0));
+        vm.set_timezone_override_and_sync_surface(Some("UTC"))
+            .unwrap();
+        vm.set_fetch_subresource_interception(
+            true,
+            Some(crate::types::SubresourceResourceType::Xhr),
+        );
+        vm.eval(
+            r#"
+            globalThis.__modifiedXhr = new XMLHttpRequest();
+            globalThis.__responseDocuments = [];
+            __modifiedXhr.onload = () => __responseDocuments.push(__modifiedXhr.responseXML);
+        "#,
+        )
+        .unwrap();
+        for (header, expected) in [
+            (
+                Some("Sun, 06 Nov 1994 08:49:37 GMT"),
+                Some("11/06/1994 08:49:37"),
+            ),
+            (
+                Some("Thu, 01 Jan 1970 00:00:00 GMT"),
+                Some("01/01/1970 00:00:00"),
+            ),
+            (Some("not a date"), None),
+            (None, None),
+        ] {
+            vm.eval(&format!(
+                r#"
+                __modifiedXhr.open('GET', '/response');
+                __modifiedXhr.responseType = '{response_type}';
+                __modifiedXhr.send();
+            "#
+            ))
+            .unwrap();
+            let pending = vm.take_pending_subresource_fetch_infos();
+            assert_eq!(pending.len(), 1);
+            let request = &pending[0];
+            let mut headers = vec![("Content-Type".to_owned(), mime.to_owned())];
+            if let Some(header) = header {
+                headers.push(("lAsT-mOdIfIeD".to_owned(), header.to_owned()));
+            }
+            let body_source_id = crate::network_host::new_network_body_source_id();
+            vm.start_streaming_async_subresource_fetch(
+                crate::types::AsyncSubresourceStreamingStarted {
+                    internal_id: request.internal_id,
+                    request_url: request.url.clone(),
+                    request_method: "GET".to_owned(),
+                    request_headers: Vec::new(),
+                    request_body: None,
+                    body_source_id,
+                    head: moli_fetch::ResponseHead {
+                        final_url: request.url.clone(),
+                        status: 200,
+                        status_text: None,
+                        headers,
+                        request_cookie_report: None,
+                        cookie_set_reports: Vec::new(),
+                        redirected: false,
+                        redirect_chain: Vec::new(),
+                        from_cache: false,
+                        negotiated_http_version: None,
+                    },
+                    network_request_headers: None,
+                },
+            )
+            .unwrap();
+            for chunk in [
+                b"<html><body>".as_slice(),
+                b"response</body></html>".as_slice(),
+            ] {
+                vm.append_streaming_async_subresource_fetch_chunk(body_source_id, chunk.to_vec());
+                assert_eq!(
+                    vm.eval("__modifiedXhr.responseXML === null").unwrap(),
+                    "true"
+                );
+            }
+            vm.finish_streaming_async_subresource_fetch(
+                request.internal_id,
+                body_source_id,
+                Ok(()),
+            )
+            .unwrap();
+            if let Some(expected) = expected {
+                assert_eq!(
+                    vm.eval("__modifiedXhr.responseXML.lastModified").unwrap(),
+                    expected
+                );
+            } else {
+                assert_eq!(vm.eval(r#"(() => {
+                    const doc = __modifiedXhr.responseXML;
+                    const match = /^(\d\d)\/(\d\d)\/(\d{4}) (\d\d):(\d\d):(\d\d)$/.exec(doc.lastModified);
+                    const time = Date.UTC(+match[3], +match[1] - 1, +match[2], +match[4], +match[5], +match[6]);
+                    return Math.abs(Date.now() - time) < 5000;
+                })()"#).unwrap(), "true", "mime={mime}, response_type={response_type}, header={header:?}");
+            }
+        }
+        assert_eq!(
+            vm.eval(
+                r#"(() => {
+            const [first, second, third, fourth] = __responseDocuments;
+            __modifiedXhr.abort();
+            first.documentElement.remove();
+            return JSON.stringify([
+                first.lastModified, second.lastModified,
+                document.lastModified, first !== second && third !== fourth
+            ]);
+        })()"#
+            )
+            .unwrap(),
+            r#"["11/06/1994 08:49:37","01/01/1970 00:00:00","01/01/1970 01:23:45",true]"#
+        );
+        vm.set_timezone_override_and_sync_surface(Some("Asia/Shanghai"))
+            .unwrap();
+        assert_eq!(
+            vm.eval("__responseDocuments[0].lastModified").unwrap(),
+            "11/06/1994 16:49:37"
+        );
     }
 }
 

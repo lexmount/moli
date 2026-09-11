@@ -458,22 +458,15 @@ fn parse_xhr_response_document<'s>(
     if (!is_xml && !is_html) || (is_html && response_type != XmlHttpRequestResponseType::Document) {
         return v8::null(scope).into();
     }
-    build_xhr_response_document(
-        scope,
-        xhr,
-        xhr_response_url(head).clone(),
-        body_text,
-        &mime,
-        character_set,
-    )
-    .map(Into::into)
-    .unwrap_or_else(|| v8::null(scope).into())
+    build_xhr_response_document(scope, xhr, head, body_text, &mime, character_set)
+        .map(Into::into)
+        .unwrap_or_else(|| v8::null(scope).into())
 }
 
 fn build_xhr_response_document<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     xhr: v8::Local<'_, v8::Object>,
-    response_url: url::Url,
+    head: &moli_fetch::ResponseHead,
     body_text: &str,
     mime: &str,
     character_set: &str,
@@ -499,6 +492,7 @@ fn build_xhr_response_document<'s>(
         host_ptr,
         origin_document_handle,
     )?;
+    let response_url = xhr_response_url(head).clone();
     let document = if is_html_document_mime(mime) {
         dom_parser::parse_detached_html_document_from_source_with_encoding(
             scope,
@@ -515,6 +509,17 @@ fn build_xhr_response_document<'s>(
             dom_parser::XmlParseErrorBehavior::ReturnNone,
         )
     }?;
+    let (runtime_ptr, document_handle) =
+        crate::native_bridge::node_runtime_and_handle_from_object_or_detached(scope, document)
+            .ok()?;
+    // Source metadata belongs to this response Document, independently of
+    // the requesting Document and any later reuse of the XHR object.
+    unsafe { &mut *runtime_ptr }
+        .dom_host_mut()
+        .set_document_source_last_modified_for_handle(
+            document_handle,
+            crate::document_last_modified::document_last_modified_from_headers(&head.headers),
+        );
     // The response URL controls relative URL resolution; its origin does not
     // replace the XHR environment's origin (including for CORS responses).
     crate::native_bridge::document::inherit_detached_document_origin(
