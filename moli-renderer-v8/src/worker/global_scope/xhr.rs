@@ -1,5 +1,6 @@
 use super::*;
 use crate::network_host::ResolveContextUrlError;
+use crate::network_host::{CapturedBlobUrl, blob_url_entry, local_url_response_with_blob_entry};
 use crossbeam_channel::{after, bounded, never, select};
 use moli_webapi_declare::WebApiObject;
 use std::thread;
@@ -8,6 +9,7 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 pub(in crate::worker) struct PreparedWorkerXhrSendRequest {
     document_url: Url,
     resolved_url: Url,
+    blob_url_entry: Option<CapturedBlobUrl>,
     method: String,
     request_headers: moli_fetch::RequestHeaders,
     send_body: Option<Vec<u8>>,
@@ -389,8 +391,12 @@ pub(crate) fn try_worker_xhr_send_callback<'s>(
     // A rejected fetch still completes in a networking task. Keep the pending
     // XHR and its load lease until delivery so abort/open can cancel that task.
     let local_response = request_error.map(Err).or_else(|| {
-        local_url_response_result(&prepared.resolved_url, &prepared.method)
-            .map(|response| response.map_err(|error| error.to_string()))
+        local_url_response_with_blob_entry(
+            &prepared.resolved_url,
+            &prepared.method,
+            prepared.blob_url_entry.as_ref(),
+        )
+        .map(|response| response.map_err(|error| error.to_string()))
     });
     if !async_request && let Some(result) = local_response {
         match result {
@@ -1156,7 +1162,7 @@ pub(in crate::worker) fn drain_worker_xhr_completion(
 pub(in crate::worker) fn prepare_worker_xhr_send_request<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     state: &Rc<RefCell<WorkerGlobalState>>,
-    xhr: v8::Local<'_, v8::Object>,
+    xhr: v8::Local<'s, v8::Object>,
     method: String,
     prepared_body: PreparedXhrSendBody,
 ) -> Result<PreparedWorkerXhrSendRequest, WorkerXhrSendPrepareError> {
@@ -1180,6 +1186,7 @@ pub(in crate::worker) fn prepare_worker_xhr_send_request<'s>(
     Ok(PreparedWorkerXhrSendRequest {
         document_url,
         resolved_url,
+        blob_url_entry: blob_url_entry(scope, xhr),
         method,
         request_headers: moli_fetch::RequestHeaders::from_byte_strings(&request_headers)
             .expect("validated worker XHR headers are ByteStrings"),

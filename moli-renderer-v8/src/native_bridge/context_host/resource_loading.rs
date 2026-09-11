@@ -584,6 +584,7 @@ impl JsContextHost {
         request_origin: moli_url::WebOrigin,
         network_partition_key: Option<String>,
         policy_context: crate::types::SubresourcePolicyContext,
+        blob_url_entry: Option<crate::network_host::CapturedBlobUrl>,
         mut info: PendingSubresourceFetchInfo,
     ) {
         self.assign_pending_subresource_fetch_identity(&mut info);
@@ -620,6 +621,7 @@ impl JsContextHost {
                     ),
                 ),
                 deferred_request_started: false,
+                blob_url_entry,
             },
         );
         self.note_subresource_activity();
@@ -658,6 +660,7 @@ impl JsContextHost {
                     fetch_id,
                 },
                 deferred_request_started: false,
+                blob_url_entry: None,
             },
         );
         self.note_subresource_activity();
@@ -692,6 +695,7 @@ impl JsContextHost {
                 policy_context: Default::default(),
                 continuation: PendingSubresourceContinuation::WorkerXhr { worker_id, xhr_id },
                 deferred_request_started: false,
+                blob_url_entry: None,
             },
         );
         self.note_subresource_activity();
@@ -730,6 +734,7 @@ impl JsContextHost {
                     report_id,
                 },
                 deferred_request_started: false,
+                blob_url_entry: None,
             },
         );
         self.note_subresource_activity();
@@ -768,6 +773,7 @@ impl JsContextHost {
                     fetch_id,
                 },
                 deferred_request_started: false,
+                blob_url_entry: None,
             },
         );
         self.note_subresource_activity();
@@ -805,6 +811,7 @@ impl JsContextHost {
                     xhr_id,
                 },
                 deferred_request_started: false,
+                blob_url_entry: None,
             },
         );
         self.note_subresource_activity();
@@ -843,6 +850,7 @@ impl JsContextHost {
                     report_id,
                 },
                 deferred_request_started: false,
+                blob_url_entry: None,
             },
         );
         self.note_subresource_activity();
@@ -901,6 +909,7 @@ impl JsContextHost {
                     ),
                 ),
                 deferred_request_started: defer_request_started,
+                blob_url_entry: None,
             },
         );
         self.note_subresource_activity();
@@ -949,6 +958,7 @@ impl JsContextHost {
                 policy_context,
                 continuation: PendingSubresourceContinuation::EventSource(event_source),
                 deferred_request_started: false,
+                blob_url_entry: None,
             },
         );
         self.note_subresource_activity();
@@ -1006,6 +1016,7 @@ impl JsContextHost {
                     sequence,
                 },
                 deferred_request_started: false,
+                blob_url_entry: None,
             },
         );
         self.note_subresource_activity();
@@ -1078,6 +1089,7 @@ impl JsContextHost {
                     request_initiator_type,
                 },
                 deferred_request_started: false,
+                blob_url_entry: None,
             },
         );
         self.note_subresource_activity();
@@ -1194,6 +1206,7 @@ impl JsContextHost {
                     sequence,
                 },
                 deferred_request_started: false,
+                blob_url_entry: None,
             },
         );
         self.note_subresource_activity();
@@ -1251,6 +1264,7 @@ impl JsContextHost {
                     css_image,
                 },
                 deferred_request_started: false,
+                blob_url_entry: None,
             },
         );
         self.note_subresource_activity();
@@ -1289,6 +1303,7 @@ impl JsContextHost {
                 policy_context: Default::default(),
                 continuation: PendingSubresourceContinuation::Beacon,
                 deferred_request_started: false,
+                blob_url_entry: None,
             },
         );
         self.note_subresource_activity();
@@ -1330,6 +1345,7 @@ impl JsContextHost {
                 policy_context,
                 continuation: PendingSubresourceContinuation::CspReport { client_id },
                 deferred_request_started: false,
+                blob_url_entry: None,
             },
         );
         self.note_subresource_activity();
@@ -1367,6 +1383,7 @@ impl JsContextHost {
                 policy_context: Default::default(),
                 continuation: PendingSubresourceContinuation::Beacon,
                 deferred_request_started: false,
+                blob_url_entry: None,
             },
         );
         self.note_subresource_activity();
@@ -1408,6 +1425,7 @@ impl JsContextHost {
                 policy_context,
                 continuation: PendingSubresourceContinuation::CspReport { client_id },
                 deferred_request_started: false,
+                blob_url_entry: None,
             },
         );
         self.note_subresource_activity();
@@ -1421,6 +1439,7 @@ impl JsContextHost {
         credentials_mode: moli_fetch::RequestCredentialsMode,
         network_partition_key: Option<String>,
         policy_context: crate::types::SubresourcePolicyContext,
+        blob_url_entry: Option<crate::network_host::CapturedBlobUrl>,
         mut info: PendingSubresourceFetchInfo,
     ) -> u64 {
         self.assign_pending_subresource_fetch_identity(&mut info);
@@ -1446,6 +1465,7 @@ impl JsContextHost {
                 policy_context,
                 continuation: PendingSubresourceContinuation::Xhr(xhr),
                 deferred_request_started: false,
+                blob_url_entry,
             },
         );
         self.note_subresource_activity();
@@ -1482,6 +1502,7 @@ impl JsContextHost {
                 policy_context: Default::default(),
                 continuation: PendingSubresourceContinuation::WebSocket(connection),
                 deferred_request_started: false,
+                blob_url_entry: None,
             },
         );
         self.note_subresource_activity();
@@ -1521,6 +1542,7 @@ impl JsContextHost {
                 policy_context,
                 continuation: PendingSubresourceContinuation::Xhr(xhr),
                 deferred_request_started: false,
+                blob_url_entry: None,
             },
         );
         self.note_subresource_activity();
