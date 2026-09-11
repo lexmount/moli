@@ -1,4 +1,5 @@
 use super::*;
+use crate::network_host::{CapturedBlobUrl, blob_url_entry, local_url_response_with_blob_entry};
 use crossbeam_channel::{after, bounded, never, select};
 use moli_webapi_declare::WebApiObject;
 use std::thread;
@@ -7,6 +8,7 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 pub(in crate::worker) struct PreparedWorkerXhrSendRequest {
     document_url: Url,
     resolved_url: Url,
+    blob_url_entry: Option<CapturedBlobUrl>,
     method: String,
     request_headers: Vec<(String, String)>,
     send_body: Option<Vec<u8>>,
@@ -408,7 +410,11 @@ pub(crate) fn try_worker_xhr_send_callback<'s>(
         return true;
     }
 
-    let local_response = local_url_response_result(&prepared.resolved_url, &prepared.method);
+    let local_response = local_url_response_with_blob_entry(
+        &prepared.resolved_url,
+        &prepared.method,
+        prepared.blob_url_entry.as_ref(),
+    );
     if !async_request && let Some(result) = local_response {
         match result {
             Ok(response) => apply_xhr_response(scope, xhr, response),
@@ -1166,7 +1172,7 @@ pub(in crate::worker) fn drain_worker_xhr_completion(
 pub(in crate::worker) fn prepare_worker_xhr_send_request<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     state: &Rc<RefCell<WorkerGlobalState>>,
-    xhr: v8::Local<'_, v8::Object>,
+    xhr: v8::Local<'s, v8::Object>,
     method: String,
     prepared_body: PreparedXhrSendBody,
 ) -> Result<PreparedWorkerXhrSendRequest, WorkerXhrSendPrepareError> {
@@ -1190,6 +1196,7 @@ pub(in crate::worker) fn prepare_worker_xhr_send_request<'s>(
     Ok(PreparedWorkerXhrSendRequest {
         document_url,
         resolved_url,
+        blob_url_entry: blob_url_entry(scope, xhr),
         method,
         request_headers,
         send_body: prepared_body.body,

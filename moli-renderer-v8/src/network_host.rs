@@ -1,6 +1,7 @@
 mod async_fetch;
 mod beacon;
 mod bindings;
+mod blob_url_entry;
 mod body;
 mod body_source;
 mod browser_response;
@@ -26,6 +27,9 @@ use moli_fetch::{Request, Response, observe_cookie_access_report_for_request};
 use moli_webapi_declare::WebApiObject;
 
 use crate::network::ResourceRequestClient;
+
+pub(in crate::network_host) use self::blob_url_entry::BLOB_URL_ENTRY_SLOT;
+pub(crate) use self::blob_url_entry::{CapturedBlobUrl, blob_url_entry, set_blob_url_entry};
 
 pub(crate) use self::async_fetch::{
     browser_request_needs_manual_preflight_redirects,
@@ -64,7 +68,9 @@ pub(crate) use self::body_source::{
     pending_network_body_stream, release_pending_opaque_response_body,
 };
 pub(in crate::network_host) use self::browser_response::http_status_text;
-pub(crate) use self::browser_response::{local_url_response, local_url_response_result};
+pub(crate) use self::browser_response::{
+    local_url_response, local_url_response_result, local_url_response_with_blob_entry,
+};
 pub(crate) use self::csp_reports::{
     WindowCspReportRequestContext, capture_window_csp_report_request_context,
     send_content_security_policy_reports_for_lightweight_popup,

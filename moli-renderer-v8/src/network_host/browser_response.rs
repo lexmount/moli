@@ -10,11 +10,15 @@ pub(in crate::network_host) fn http_status_text(status: u16) -> &'static str {
 
 pub(crate) fn blob_url_response(url: &url::Url) -> Option<Response> {
     let (body_bytes, mime_type) = blob::object_url_bytes_and_type(url.as_str())?;
+    Some(blob_response(url, body_bytes, mime_type))
+}
+
+pub(super) fn blob_response(url: &url::Url, body_bytes: Vec<u8>, mime_type: String) -> Response {
     let mut headers = Vec::new();
     if !mime_type.is_empty() {
         headers.push(("Content-Type".to_owned(), mime_type));
     }
-    Some(Response::from_head_and_lossy_body_bytes(
+    Response::from_head_and_lossy_body_bytes(
         moli_fetch::ResponseHead {
             final_url: url.clone(),
             status: 200,
@@ -27,7 +31,7 @@ pub(crate) fn blob_url_response(url: &url::Url) -> Option<Response> {
             negotiated_http_version: None,
         },
         body_bytes,
-    ))
+    )
 }
 
 pub(crate) fn data_url_response(url: &url::Url) -> Option<Response> {
@@ -64,12 +68,24 @@ pub(crate) fn local_url_response_result(
     url: &url::Url,
     method: &str,
 ) -> Option<Result<Response, String>> {
+    local_url_response_with_blob_entry(url, method, None)
+}
+
+pub(crate) fn local_url_response_with_blob_entry(
+    url: &url::Url,
+    method: &str,
+    entry: Option<&CapturedBlobUrl>,
+) -> Option<Result<Response, String>> {
     match url.scheme() {
         "blob" if method != "GET" => {
             Some(Err(format!("blob URL fetch requires GET, got `{method}`")))
         }
         "blob" => {
-            Some(blob_url_response(url).ok_or_else(|| format!("blob URL `{url}` is unavailable")))
+            let response = match entry.filter(|entry| entry.matches(url)) {
+                Some(entry) => entry.response(url),
+                None => blob_url_response(url),
+            };
+            Some(response.ok_or_else(|| format!("blob URL `{url}` is unavailable")))
         }
         "data" => {
             Some(data_url_response(url).ok_or_else(|| format!("data URL `{url}` is invalid")))
