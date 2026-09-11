@@ -411,6 +411,7 @@ pub(crate) fn cors_preflight_request_headers(
     request_url: &url::Url,
     method: &str,
     request_headers: &[(String, String)],
+    use_cors_preflight: bool,
 ) -> Option<Vec<(String, String)>> {
     if !cors_tainted {
         return None;
@@ -421,7 +422,7 @@ pub(crate) fn cors_preflight_request_headers(
 
     let unsafe_header_names = moli_fetch::cors_unsafe_request_header_names(request_headers);
     let method_requires_preflight = !moli_fetch::is_cors_safelisted_method(method);
-    if !method_requires_preflight && unsafe_header_names.is_empty() {
+    if !use_cors_preflight && !method_requires_preflight && unsafe_header_names.is_empty() {
         return None;
     }
 
@@ -736,8 +737,13 @@ mod tests {
             ("X-Other".to_owned(), "ok".to_owned()),
         ];
 
-        let preflight =
-            cors_preflight_request_headers(true, &url("http://other.test/data"), "PUT", &headers);
+        let preflight = cors_preflight_request_headers(
+            true,
+            &url("http://other.test/data"),
+            "PUT",
+            &headers,
+            false,
+        );
 
         assert_eq!(
             preflight,
@@ -763,7 +769,13 @@ mod tests {
         ];
 
         assert_eq!(
-            cors_preflight_request_headers(true, &url("http://other.test/data"), "POST", &headers,),
+            cors_preflight_request_headers(
+                true,
+                &url("http://other.test/data"),
+                "POST",
+                &headers,
+                false
+            ),
             None
         );
     }
