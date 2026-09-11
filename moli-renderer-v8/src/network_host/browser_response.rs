@@ -48,8 +48,9 @@ pub(crate) fn data_url_response(url: &url::Url) -> Option<Response> {
     ))
 }
 
+/// Reads a local resource for consumers whose requests always use GET.
 pub(crate) fn local_url_response(url: &url::Url) -> Option<Response> {
-    local_url_response_result(url).and_then(Result::ok)
+    local_url_response_result(url, "GET").and_then(Result::ok)
 }
 
 /// Resolves renderer-owned URL schemes without falling through to the network
@@ -58,8 +59,15 @@ pub(crate) fn local_url_response(url: &url::Url) -> Option<Response> {
 /// `None` means that the URL is not owned by this resolver. `Some(Err(..))`
 /// means that it is a local URL and therefore must fail locally instead of
 /// being handed to libcurl.
-pub(crate) fn local_url_response_result(url: &url::Url) -> Option<Result<Response, String>> {
+/// `method` is the request's already normalized method.
+pub(crate) fn local_url_response_result(
+    url: &url::Url,
+    method: &str,
+) -> Option<Result<Response, String>> {
     match url.scheme() {
+        "blob" if method != "GET" => {
+            Some(Err(format!("blob URL fetch requires GET, got `{method}`")))
+        }
         "blob" => {
             Some(blob_url_response(url).ok_or_else(|| format!("blob URL `{url}` is unavailable")))
         }
@@ -107,7 +115,7 @@ mod tests {
     fn unavailable_blob_url_is_a_local_failure() {
         let url = url::Url::parse("blob:https://example.test/not-registered").unwrap();
 
-        let error = local_url_response_result(&url)
+        let error = local_url_response_result(&url, "GET")
             .expect("blob URL must be owned by the local resolver")
             .expect_err("an unregistered blob URL must fail locally");
 

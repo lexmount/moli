@@ -165,11 +165,11 @@ pub(in crate::worker) fn spawn_worker_fetch_network(
                 .validate_request_mode(request_mode, &moli_url::WebOrigin::from_url(&document_url))
         {
             (Err(message), None)
-        } else if matches!(resolved_url.scheme(), "blob" | "data") {
+        } else if let Some(result) = local_url_response_result(&resolved_url, &method) {
             (
-                local_url_response(&resolved_url)
+                result
                     .map(|response| WorkerFetchResponse::Materialized(Box::new(response)))
-                    .ok_or_else(|| format!("fetch: local url `{resolved_url}` is unavailable")),
+                    .map_err(|error| format!("fetch: {error}")),
                 None,
             )
         } else {

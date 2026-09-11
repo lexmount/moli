@@ -192,13 +192,22 @@ pub(super) fn xhr_send_callback<'s>(
         return;
     }
 
-    if let Some(response) = local_url_response(&prepared.resolved_url) {
-        if !xhr_is_async(scope, xhr) {
-            record_xhr_response_success(host, &prepared, &response);
-            apply_xhr_response(scope, xhr, response);
-            return;
+    if let Some(result) = local_url_response_result(&prepared.resolved_url, &prepared.method) {
+        match result {
+            Ok(response) if async_request => {
+                queue_local_xhr_response(scope, host, xhr, prepared, response);
+            }
+            Ok(response) => {
+                record_xhr_response_success(host, &prepared, &response);
+                apply_xhr_response(scope, xhr, response);
+            }
+            Err(message) if async_request => {
+                record_url_policy_xhr_failure(scope, host, xhr, prepared, message);
+            }
+            Err(message) => {
+                record_synchronous_xhr_failure(scope, host, xhr, prepared, message);
+            }
         }
-        queue_local_xhr_response(scope, host, xhr, prepared, response);
         return;
     }
 
