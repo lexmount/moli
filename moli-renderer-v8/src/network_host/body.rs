@@ -123,9 +123,3 @@ pub(crate) fn append_default_body_content_type(
     }
     headers.push(("Content-Type".to_owned(), content_type.to_owned()));
 }
-
-pub(crate) fn has_header(headers: &[(String, String)], name: &str) -> bool {
-    headers
-        .iter()
-        .any(|(header_name, _)| header_name.eq_ignore_ascii_case(name))
-}
