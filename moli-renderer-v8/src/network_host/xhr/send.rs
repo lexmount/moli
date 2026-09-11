@@ -192,7 +192,11 @@ pub(super) fn xhr_send_callback<'s>(
         return;
     }
 
-    if let Some(result) = local_url_response_result(&prepared.resolved_url, &prepared.method) {
+    if let Some(result) = local_url_response_with_blob_entry(
+        &prepared.resolved_url,
+        &prepared.method,
+        prepared.blob_url_entry.as_ref(),
+    ) {
         match result {
             Ok(response) if async_request => {
                 queue_local_xhr_response(scope, host, xhr, prepared, response);
