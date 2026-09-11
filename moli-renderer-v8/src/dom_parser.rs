@@ -242,28 +242,7 @@ pub(crate) fn install_dom_parser_template_bindings<'s>(
     );
 }
 
-pub(super) fn parse_detached_document_from_string<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    source: &str,
-    mime: &str,
-) -> Option<v8::Local<'s, v8::Object>> {
-    let is_html = is_html_document_mime(mime);
-    let is_xml = is_dom_parser_xml_mime(mime);
-    if !is_html && !is_xml {
-        return None;
-    }
-
-    let host_ptr = context_host_ptr_from_global_bridge(scope)?;
-    let runtime = unsafe { &*host_ptr };
-    parse_detached_document_from_string_with_url(
-        scope,
-        runtime.document_url().clone(),
-        source,
-        mime,
-    )
-}
-
-fn parse_detached_document_from_string_with_url<'s>(
+pub(super) fn parse_detached_document_from_string_with_url<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     document_url: Url,
     source: &str,
