@@ -24,6 +24,7 @@ impl fmt::Debug for StreamingResponseLifetimeLease {
 pub struct StreamingHtmlResponse {
     pub final_url: Url,
     pub status: u16,
+    pub status_text: Option<String>,
     pub headers: Vec<(String, String)>,
     pub request_cookie_report: Option<StoredCookieQueryReport>,
     pub cookie_set_reports: Vec<StoredCookieSetReport>,
@@ -48,6 +49,7 @@ impl StreamingHtmlResponse {
     ) -> Self {
         Self::new_with_head(
             ResponseHead {
+                status_text: None,
                 final_url,
                 status,
                 headers,
@@ -73,6 +75,7 @@ impl StreamingHtmlResponse {
         Self {
             final_url: head.final_url,
             status: head.status,
+            status_text: head.status_text,
             headers: head.headers,
             request_cookie_report: head.request_cookie_report,
             cookie_set_reports: head.cookie_set_reports,
@@ -91,6 +94,7 @@ impl StreamingHtmlResponse {
         ResponseHead {
             final_url: self.final_url.clone(),
             status: self.status,
+            status_text: self.status_text.clone(),
             headers: self.headers.clone(),
             request_cookie_report: self.request_cookie_report.clone(),
             cookie_set_reports: self.cookie_set_reports.clone(),
@@ -163,6 +167,7 @@ impl Drop for StreamingHtmlResponse {
 pub struct StreamingRawResponse {
     pub final_url: Url,
     pub status: u16,
+    pub status_text: Option<String>,
     pub headers: Vec<(String, String)>,
     pub request_cookie_report: Option<StoredCookieQueryReport>,
     pub cookie_set_reports: Vec<StoredCookieSetReport>,
@@ -193,6 +198,7 @@ impl StreamingRawResponse {
         Self {
             final_url,
             status,
+            status_text: None,
             headers,
             request_cookie_report,
             cookie_set_reports,
@@ -217,6 +223,7 @@ impl StreamingRawResponse {
         Self {
             final_url: head.final_url,
             status: head.status,
+            status_text: head.status_text,
             headers: head.headers,
             request_cookie_report: head.request_cookie_report,
             cookie_set_reports: head.cookie_set_reports,
@@ -307,6 +314,7 @@ impl StreamingRawResponse {
         ResponseHead {
             final_url: self.final_url.clone(),
             status: self.status,
+            status_text: self.status_text.clone(),
             headers: self.headers.clone(),
             request_cookie_report: self.request_cookie_report.clone(),
             cookie_set_reports: self.cookie_set_reports.clone(),
@@ -370,6 +378,7 @@ mod tests {
 
     fn sample_response_head() -> ResponseHead {
         ResponseHead {
+            status_text: None,
             final_url: Url::parse("http://example.test/final").expect("test URL"),
             status: 203,
             headers: vec![("content-type".to_owned(), "text/plain".to_owned())],

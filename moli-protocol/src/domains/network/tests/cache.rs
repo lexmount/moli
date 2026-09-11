@@ -673,6 +673,7 @@ async fn clear_browser_cache_keeps_pending_response_navigation_transfer() {
             request_headers: Vec::new(),
             response: RawResponse::from_head_and_body(
                 ResponseHead {
+                    status_text: None,
                     final_url: url,
                     status: 200,
                     headers: Vec::new(),

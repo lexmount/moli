@@ -64,6 +64,7 @@ pub(crate) enum RequestHttpVersion {
 pub struct StreamingHtmlResponseStart {
     pub final_url: Url,
     pub status: u16,
+    pub status_text: Option<String>,
     pub headers: Vec<(String, String)>,
     pub request_cookie_report: Option<StoredCookieQueryReport>,
     pub cookie_set_reports: Vec<StoredCookieSetReport>,
@@ -79,6 +80,7 @@ impl StreamingHtmlResponseStart {
         ResponseHead {
             final_url: self.final_url,
             status: self.status,
+            status_text: self.status_text,
             headers: self.headers,
             request_cookie_report: self.request_cookie_report,
             cookie_set_reports: self.cookie_set_reports,
