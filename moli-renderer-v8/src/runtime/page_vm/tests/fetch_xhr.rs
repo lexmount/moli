@@ -4423,6 +4423,64 @@ async fn request_init_exceptions_preserve_identity_without_fetching_or_consuming
 }
 
 #[tokio::test]
+async fn blob_url_revocation_uses_window_and_worker_creator_storage_keys() {
+    run_page_vm_async_test(async move {
+        for document_url in ["https://example.com/", "data:text/html,opaque-parent"] {
+        let mut page_vm = test_page_vm_with_document_url(Url::parse(document_url).unwrap());
+        let local_executor = page_vm.local_executor.clone();
+        let result = local_executor.run(async move {
+            page_vm.vm_mut().eval(r#"
+                globalThis.__revocationResult = 'pending';
+                (async () => {
+                    const check = (value, message) => { if (!value) throw new Error(message); };
+                    const source = `onmessage = async event => {
+                        const {action, url} = event.data;
+                        if (action === 'create') postMessage(URL.createObjectURL(new Blob(['payload'])));
+                        if (action === 'revoke') { URL.revokeObjectURL(url); postMessage('done'); }
+                        if (action === 'read') {
+                            try { postMessage(await (await fetch(url)).text()); }
+                            catch (error) { postMessage(error.name); }
+                        }
+                    };`;
+                    const sourceUrl = URL.createObjectURL(new Blob([source]));
+                    const workers = [new Worker(sourceUrl), new Worker('data:text/javascript,' + encodeURIComponent(source))];
+                    const rpc = (worker, action, url) => new Promise((resolve, reject) => {
+                        worker.onmessage = event => resolve(event.data);
+                        worker.onerror = event => reject(new Error(event.message));
+                        worker.postMessage({action, url});
+                    });
+                    try {
+                        for (let i = 0; i < workers.length; i++) {
+                            const worker = workers[i];
+                            const url = URL.createObjectURL(new Blob(['payload']));
+                            await rpc(worker, 'revoke', url);
+                            let body;
+                            try { body = await (await fetch(url)).text(); }
+                            catch (error) { body = error.name; }
+                            check(body === (i === 0 ? 'TypeError' : 'payload'), 'worker revocation authority');
+                            URL.revokeObjectURL(url);
+                            const childUrl = await rpc(worker, 'create');
+                            URL.revokeObjectURL(childUrl);
+                            check(await rpc(worker, 'read', childUrl) === (i === 0 ? 'TypeError' : 'payload'), 'parent revocation authority');
+                            await rpc(worker, 'revoke', childUrl);
+                            check(await rpc(worker, 'read', childUrl) === 'TypeError', 'worker can revoke its own opaque URL');
+                        }
+                    } finally {
+                        for (const worker of workers) worker.terminate();
+                        URL.revokeObjectURL(sourceUrl);
+                    }
+                    return 'ok';
+                })().then(value => { globalThis.__revocationResult = value; }, error => { globalThis.__revocationResult = String(error); });
+            "#)?;
+            drive_websocket_until_done(&mut page_vm, "String(globalThis.__revocationResult !== 'pending')", "revocation checks should finish").await?;
+            page_vm.vm_mut().eval("globalThis.__revocationResult")
+        }).await.expect("blob revocation checks should run on owner lane");
+        assert_eq!(result, "ok", "document_url={document_url}");
+        }
+    }).await;
+}
+
+#[tokio::test]
 async fn blob_url_entries_survive_request_cloning_and_xhr_open_in_window_and_worker() {
     run_page_vm_async_test(async move {
         for worker in [false, true] {

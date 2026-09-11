@@ -40,11 +40,12 @@ impl<OwnerId, PartitionId> Default for BlobEntries<OwnerId, PartitionId> {
     }
 }
 
-#[derive(Clone, Copy, Debug)]
-struct ObjectUrlState<OwnerId> {
+#[derive(Debug)]
+struct ObjectUrlState<OwnerId, AccessKey> {
     owner_id: Option<OwnerId>,
     lifetime_id: Option<u64>,
     blob_id: BlobId,
+    access_key: Option<AccessKey>,
 }
 
 /// Renderer-neutral Blob and object URL backing store.
@@ -53,13 +54,13 @@ struct ObjectUrlState<OwnerId> {
 /// counts. The embedding layer owns JS wrappers and calls the retain/release
 /// hooks from its finalizers.
 #[derive(Debug)]
-pub struct BlobStore<OwnerId, PartitionId> {
+pub struct BlobStore<OwnerId, PartitionId, AccessKey = ()> {
     blobs: Mutex<BlobEntries<OwnerId, PartitionId>>,
     next_blob_id: AtomicU64,
-    object_urls: Mutex<HashMap<String, ObjectUrlState<OwnerId>>>,
+    object_urls: Mutex<HashMap<String, ObjectUrlState<OwnerId, AccessKey>>>,
 }
 
-impl<OwnerId, PartitionId> Default for BlobStore<OwnerId, PartitionId> {
+impl<OwnerId, PartitionId, AccessKey> Default for BlobStore<OwnerId, PartitionId, AccessKey> {
     fn default() -> Self {
         Self {
             blobs: Mutex::default(),
@@ -69,7 +70,7 @@ impl<OwnerId, PartitionId> Default for BlobStore<OwnerId, PartitionId> {
     }
 }
 
-impl<OwnerId, PartitionId> BlobStore<OwnerId, PartitionId>
+impl<OwnerId, PartitionId, AccessKey> BlobStore<OwnerId, PartitionId, AccessKey>
 where
     OwnerId: Copy + Eq + Hash,
     PartitionId: Eq,
@@ -177,6 +178,25 @@ where
         blob_id: BlobId,
         origin: &str,
     ) -> Option<String> {
+        self.create_object_url_with_lifetime_and_access_key(
+            owner_id,
+            lifetime_id,
+            blob_id,
+            origin,
+            None,
+        )
+    }
+
+    /// Create an object URL with the creator environment's access key. This
+    /// key belongs to the URL, independently of the Blob's owner or partition.
+    pub fn create_object_url_with_lifetime_and_access_key(
+        &self,
+        owner_id: Option<OwnerId>,
+        lifetime_id: Option<u64>,
+        blob_id: BlobId,
+        origin: &str,
+        access_key: Option<AccessKey>,
+    ) -> Option<String> {
         self.retain_blob_object_url_ref(blob_id)?;
         let mut object_urls = self.object_urls.lock();
         let object_url = loop {
@@ -191,6 +211,7 @@ where
                 owner_id,
                 lifetime_id,
                 blob_id,
+                access_key,
             },
         );
         Some(object_url)
@@ -198,8 +219,29 @@ where
 
     /// Revoke an object URL and release its Blob object-URL reference.
     pub fn revoke_object_url(&self, url: &str) -> bool {
-        let Some(state) = self.object_urls.lock().remove(url) else {
-            return false;
+        self.revoke_object_url_if(url, |_| true)
+    }
+
+    /// Revoke an object URL only when its creator's key matches the caller's.
+    /// Missing keys are unauthorized; checking and removal are atomic.
+    pub fn revoke_object_url_with_access_key(&self, url: &str, access_key: &AccessKey) -> bool
+    where
+        AccessKey: Eq,
+    {
+        self.revoke_object_url_if(url, |state| state.access_key.as_ref() == Some(access_key))
+    }
+
+    fn revoke_object_url_if(
+        &self,
+        url: &str,
+        is_authorized: impl FnOnce(&ObjectUrlState<OwnerId, AccessKey>) -> bool,
+    ) -> bool {
+        let state = {
+            let mut object_urls = self.object_urls.lock();
+            if !object_urls.get(url).is_some_and(is_authorized) {
+                return false;
+            }
+            object_urls.remove(url).expect("authorized entry is locked")
         };
         self.release_blob_object_url_ref(state.blob_id);
         true
@@ -351,6 +393,52 @@ fn random_uuid() -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn object_url_access_keys_preserve_unauthorized_entries_and_release_authorized_entries() {
+        let store = BlobStore::<u64, u64, String>::default();
+        let blob = store.create_blob(Some(1), Some(10), b"payload".to_vec(), String::new());
+        let first_key = "first URL creator".to_owned();
+        let second_key = "second URL creator".to_owned();
+        let first = store
+            .create_object_url_with_lifetime_and_access_key(
+                Some(2),
+                Some(101),
+                blob,
+                "null",
+                Some(first_key.clone()),
+            )
+            .unwrap();
+        let second = store
+            .create_object_url_with_lifetime_and_access_key(
+                Some(3),
+                Some(101),
+                blob,
+                "null",
+                Some(second_key.clone()),
+            )
+            .unwrap();
+        let unkeyed = store.create_object_url(Some(1), blob, "null").unwrap();
+        store.release_blob_wrapper_ref(blob);
+
+        assert!(!store.revoke_object_url_with_access_key(&first, &second_key));
+        assert!(!store.revoke_object_url_with_access_key(&second, &first_key));
+        assert!(!store.revoke_object_url_with_access_key(&unkeyed, &first_key));
+        assert!(!store.revoke_object_url_with_access_key(&format!("{first}#fragment"), &first_key));
+        assert_eq!(store.object_url_body_and_type(&first).unwrap().0, "payload");
+        assert!(store.revoke_object_url_with_access_key(&first, &first_key));
+        assert!(!store.revoke_object_url_with_access_key(&first, &first_key));
+        assert!(store.object_url_body_and_type(&first).is_none());
+        assert_eq!(
+            store.object_url_body_and_type(&second).unwrap().0,
+            "payload"
+        );
+        assert!(store.revoke_object_url(&unkeyed));
+        assert!(store.blob_bytes(blob).is_some());
+        assert_eq!(store.cleanup_object_url_lifetime(3, 101), 1);
+        assert!(store.blob_bytes(blob).is_none());
+        assert!(!store.revoke_object_url_with_access_key(&second, &second_key));
+    }
 
     #[test]
     fn captured_object_url_entries_outlive_revocation_and_creator_cleanup() {
