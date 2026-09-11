@@ -132,7 +132,8 @@ pub(crate) fn browser_request_needs_manual_preflight_redirects(
         )
     ) && request.request_mode != RequestMode::NoCors
         && request.cookie_context.initiator_url.is_some()
-        && (!is_cors_safelisted_method(&request.method)
+        && (request.use_cors_preflight()
+            || !is_cors_safelisted_method(&request.method)
             || !moli_fetch::cors_unsafe_request_header_names(preflight_request_headers).is_empty())
 }
 
@@ -510,6 +511,7 @@ async fn run_cors_preflight_if_needed(
             &request.url,
             &request.method,
             preflight_request_headers,
+            request.use_cors_preflight(),
         )
     {
         let observable_preflight_headers = preflight_headers.clone();
@@ -568,6 +570,7 @@ async fn run_cors_preflight_if_needed(
             preflight_request_headers,
             preflight_response.status,
             &preflight_response.headers,
+            request.credentials_mode,
         )?;
     }
     Ok(())

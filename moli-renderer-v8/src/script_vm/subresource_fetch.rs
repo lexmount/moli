@@ -1415,6 +1415,7 @@ impl ScriptVm {
         .with_initiator_url(&pending.info.document_url)
         .with_request_origin(request_origin)
         .with_request_mode(pending.request_mode)
+        .with_use_cors_preflight(pending.continuation.use_cors_preflight())
         .with_credentials_mode(pending.credentials_mode)
         .with_network_partition_key(pending.network_partition_key.clone())
         .with_subframe_context(pending.info.frame_id.is_some());
@@ -1685,6 +1686,7 @@ impl ScriptVm {
         .with_initiator_url(&pending_fetch.info.document_url)
         .with_request_origin(request_origin)
         .with_request_mode(pending_fetch.request_mode)
+        .with_use_cors_preflight(pending_fetch.continuation.use_cors_preflight())
         .with_credentials_mode(pending_fetch.credentials_mode)
         .with_auth(auth.into())
         .with_subframe_context(pending_fetch.info.frame_id.is_some());
@@ -3756,7 +3758,7 @@ impl ScriptVm {
                             }
                             resolver.resolve(scope, response_obj.into());
                         }
-                        PendingSubresourceContinuation::Xhr(xhr) => {
+                        PendingSubresourceContinuation::Xhr { xhr, .. } => {
                             crate::context_bootstrap::record_resource_performance_entry(
                                 scope,
                                 crate::context_bootstrap::ResourcePerformanceEntry::from_network_response(
@@ -3914,7 +3916,7 @@ impl ScriptVm {
                                 .unwrap_or_else(|| v8::undefined(scope).into());
                             resolver.reject(scope, exception);
                         }
-                        PendingSubresourceContinuation::Xhr(xhr) => {
+                        PendingSubresourceContinuation::Xhr { xhr, .. } => {
                             let xhr = v8::Local::new(scope, &xhr);
                             crate::network_host::apply_xhr_failure(scope, xhr);
                         }
@@ -4676,7 +4678,7 @@ impl ScriptVm {
                             .unwrap_or_else(|| v8::undefined(scope).into());
                         resolver.reject(scope, exception);
                     }
-                    PendingSubresourceContinuation::Xhr(xhr) => {
+                    PendingSubresourceContinuation::Xhr { xhr, .. } => {
                         let xhr = v8::Local::new(scope, xhr);
                         crate::network_host::apply_xhr_failure(scope, xhr);
                     }
@@ -4828,7 +4830,7 @@ impl ScriptVm {
                 );
             }
 
-            if matches!(&pending.continuation, PendingSubresourceContinuation::Xhr(_))
+            if matches!(&pending.continuation, PendingSubresourceContinuation::Xhr { .. })
                 && let Some(handle) = pending.info.network_request_handle
             {
                 self._context_host
@@ -4854,7 +4856,7 @@ impl ScriptVm {
                     );
             }
 
-            if let PendingSubresourceContinuation::Xhr(xhr) = &pending.continuation {
+            if let PendingSubresourceContinuation::Xhr { xhr, .. } = &pending.continuation {
                 let xhr = v8::Local::new(scope, xhr);
                 let pending_owner = pending.execution_context.dispatch_scope();
                 let xhr_response = crate::types::XhrStreamingResponseState::new(
@@ -5003,7 +5005,7 @@ impl ScriptVm {
                 }
                 PendingSubresourceContinuation::Beacon
                 | PendingSubresourceContinuation::CspReport { .. }
-                | PendingSubresourceContinuation::Xhr(_)
+                | PendingSubresourceContinuation::Xhr { .. }
                 | PendingSubresourceContinuation::WebSocket(_)
                 | PendingSubresourceContinuation::WorkerFetch { .. }
                 | PendingSubresourceContinuation::WorkerXhr { .. }
@@ -5634,7 +5636,7 @@ impl ScriptVm {
                         );
                         let xhr_delivery_body = if matches!(
                             &streaming.pending.continuation,
-                            PendingSubresourceContinuation::Xhr(_)
+                            PendingSubresourceContinuation::Xhr { .. }
                         ) {
                             let materialize_started =
                                 moli_trace::cdp_runtime_trace_enabled().then(Instant::now);
@@ -5678,7 +5680,7 @@ impl ScriptVm {
                                     context_host
                                         .borrow_mut()
                                         .record_subresource_network(network_record);
-                                    if let PendingSubresourceContinuation::Xhr(xhr) =
+                                    if let PendingSubresourceContinuation::Xhr { xhr, .. } =
                                         streaming.pending.continuation
                                     {
                                         let xhr = v8::Local::new(scope, &xhr);
@@ -5721,7 +5723,7 @@ impl ScriptVm {
                         let request_handle = streaming.pending.info.network_request_handle;
                         if matches!(
                             &streaming.pending.continuation,
-                            PendingSubresourceContinuation::Xhr(_)
+                            PendingSubresourceContinuation::Xhr { .. }
                         ) && let Some(handle) = request_handle
                         {
                             context_host.borrow_mut().record_subresource_body_finished(
@@ -5779,7 +5781,7 @@ impl ScriptVm {
                         let request_origin = streaming
                             .pending
                             .response_request_origin(streaming.head.redirect_chain.iter().map(|redirect| (&redirect.from_url, &redirect.to_url)));
-                        if let PendingSubresourceContinuation::Xhr(xhr) =
+                        if let PendingSubresourceContinuation::Xhr { xhr, .. } =
                             streaming.pending.continuation
                             && let Some(response_body) = xhr_delivery_body
                         {
@@ -5835,7 +5837,7 @@ impl ScriptVm {
                             let partial_body = streaming.body_writer.finish();
                             if !matches!(
                                 &streaming.pending.continuation,
-                                PendingSubresourceContinuation::Xhr(_)
+                                PendingSubresourceContinuation::Xhr { .. }
                             ) {
                                 context_host
                                     .borrow_mut()
@@ -6356,7 +6358,7 @@ fn pending_subresource_continuation_kind(
         PendingSubresourceContinuation::StylesheetSubresource { .. } => "stylesheet_subresource",
         PendingSubresourceContinuation::Beacon => "beacon",
         PendingSubresourceContinuation::CspReport { .. } => "csp_report",
-        PendingSubresourceContinuation::Xhr(_) => "xhr",
+        PendingSubresourceContinuation::Xhr { .. } => "xhr",
         PendingSubresourceContinuation::WebSocket(_) => "websocket",
         PendingSubresourceContinuation::WorkerFetch { .. } => "worker_fetch",
         PendingSubresourceContinuation::WorkerXhr { .. } => "worker_xhr",

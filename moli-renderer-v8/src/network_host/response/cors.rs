@@ -537,6 +537,7 @@ pub(crate) fn cors_preflight_request_headers(
         request_url,
         method,
         request_headers,
+        false,
     )
 }
 
@@ -545,6 +546,7 @@ pub(crate) fn cors_preflight_request_headers_for_origin(
     request_url: &url::Url,
     method: &str,
     request_headers: &[(String, String)],
+    use_cors_preflight: bool,
 ) -> Option<Vec<(String, String)>> {
     if request_origin.same_origin_url(request_url) {
         return None;
@@ -555,7 +557,7 @@ pub(crate) fn cors_preflight_request_headers_for_origin(
 
     let unsafe_header_names = moli_fetch::cors_unsafe_request_header_names(request_headers);
     let method_requires_preflight = !moli_fetch::is_cors_safelisted_method(method);
-    if !method_requires_preflight && unsafe_header_names.is_empty() {
+    if !use_cors_preflight && !method_requires_preflight && unsafe_header_names.is_empty() {
         return None;
     }
 
@@ -588,6 +590,7 @@ pub(crate) fn validate_cors_preflight_response(
         request_headers,
         response_status,
         response_headers,
+        RequestCredentialsMode::SameOrigin,
     )
 }
 
@@ -598,6 +601,7 @@ pub(crate) fn validate_cors_preflight_response_for_origin(
     request_headers: &[(String, String)],
     response_status: u16,
     response_headers: &[(String, String)],
+    credentials_mode: RequestCredentialsMode,
 ) -> Result<(), String> {
     if !(200..300).contains(&response_status) {
         return Err(format!(
@@ -608,7 +612,7 @@ pub(crate) fn validate_cors_preflight_response_for_origin(
         request_origin,
         response_url,
         response_headers,
-        RequestCredentialsMode::SameOrigin,
+        credentials_mode,
     )?;
 
     if !moli_fetch::is_cors_safelisted_method(requested_method) {

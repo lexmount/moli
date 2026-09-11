@@ -3664,6 +3664,92 @@ async fn worker_xmlhttprequest_upload_dispatches_completion_events() {
 }
 
 #[tokio::test]
+async fn worker_xhr_upload_listener_preflight_survives_sync_and_interception() {
+    ensure_v8();
+    for mode in ["async", "sync", "intercept", "none", "late", "clear"] {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let url = format!("http://{}/upload", listener.local_addr().unwrap());
+        let requires_preflight = !matches!(mode, "none" | "late");
+        let server = tokio::spawn(async move {
+            use tokio::io::{AsyncReadExt, AsyncWriteExt};
+            let methods: &[&str] = if requires_preflight {
+                &["OPTIONS", "POST"]
+            } else {
+                &["POST"]
+            };
+            for method in methods {
+                let (mut socket, _) = listener.accept().await.unwrap();
+                let mut head = Vec::new();
+                let mut byte = [0; 1];
+                while !head.ends_with(b"\r\n\r\n") {
+                    assert_eq!(socket.read(&mut byte).await.unwrap(), 1);
+                    head.push(byte[0]);
+                }
+                let head = String::from_utf8(head).unwrap();
+                assert!(
+                    head.starts_with(&format!("{method} /upload HTTP/1.1\r\n")),
+                    "{mode}: {head}"
+                );
+                if *method == "OPTIONS" {
+                    let lower = head.to_ascii_lowercase();
+                    assert!(lower.contains("access-control-request-method: post\r\n"));
+                    assert!(!lower.contains("access-control-request-headers:"));
+                } else {
+                    let mut body = [0; 7];
+                    socket.read_exact(&mut body).await.unwrap();
+                    assert_eq!(&body, b"payload");
+                }
+                socket.write_all(b"HTTP/1.1 200 OK\r\nAccess-Control-Allow-Origin: *\r\nContent-Length: 2\r\nConnection: close\r\n\r\nok").await.unwrap();
+            }
+        });
+        let mut config = FetchConfig::default();
+        config.set_http_no_proxy(Some("*".to_owned()));
+        let loader = ResourceRequestClient::new(&config).unwrap();
+        let mut handle = spawn_worker_with_request_client(
+            format!(
+                r#"
+            onmessage = () => {{
+                const xhr = new XMLHttpRequest();
+                const mode = {mode:?};
+                const listener = () => {{}};
+                if (mode !== "none" && mode !== "late") xhr.upload.addEventListener("custom", listener);
+                xhr.onloadstart = () => {{
+                    if (mode === "late") xhr.upload.addEventListener("custom", listener);
+                    if (mode === "clear") xhr.upload.removeEventListener("custom", listener);
+                }};
+                const finish = () => {{ postMessage([xhr.status, xhr.responseText]); close(); }};
+                xhr.open("POST", {url:?}, mode !== "sync");
+                if (mode !== "sync") xhr.onloadend = finish;
+                xhr.send("payload");
+                if (mode === "sync") finish();
+            }};
+        "#
+            ),
+            "http://origin.test/worker.js".to_owned(),
+            loader,
+        );
+        if mode == "intercept" {
+            handle.set_fetch_subresource_interception(true, Some(SubresourceResourceType::Xhr));
+        }
+        handle.post_message(serialize_test_string("go"));
+        if mode == "intercept" {
+            let message = timeout(TIMEOUT, handle.recv()).await.unwrap().unwrap();
+            let WorkerToParentMessage::PendingSubresourceFetch(pending) = message else {
+                panic!("expected intercepted XHR, got {message:?}");
+            };
+            handle.continue_pending_xhr(pending_worker_xhr_continue(
+                pending.fetch_id,
+                47,
+                &pending.info,
+                false,
+            ));
+        }
+        assert_eq!(recv_post_json(&mut handle).await, "[200,\"ok\"]", "{mode}");
+        timeout(TIMEOUT, server).await.unwrap().unwrap();
+    }
+}
+
+#[tokio::test]
 async fn worker_fetch_uses_worker_script_base_url_and_resolves_response_text() {
     ensure_v8();
     let (base_url, server) = spawn_path_response_http_server(vec![(

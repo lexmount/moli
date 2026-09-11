@@ -240,6 +240,7 @@ fn register_pending_window_xhr_for_test(
     let internal_id = host.record_async_subresource_xhr(
         execution_context,
         v8::Global::new(scope, v8::Object::new(scope)),
+        false,
         Some(cancel_handle),
         moli_fetch::RequestCredentialsMode::SameOrigin,
         None,

@@ -2689,6 +2689,7 @@ async fn service_worker_fetch_event_request_exposes_destination_metadata() {
             integrity: "sha256-test".to_owned(),
             keepalive: true,
             request_origin: None,
+            use_cors_preflight: false,
         },
     };
     let completion =

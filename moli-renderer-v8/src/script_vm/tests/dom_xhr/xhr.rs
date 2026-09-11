@@ -3008,9 +3008,10 @@ async fn streaming_subresource_finish_preserves_response_head_cache_state() {
                             request_mode: moli_fetch::RequestMode::Cors,
                             network_partition_key: None,
                             policy_context: Default::default(),
-                            continuation: super::PendingSubresourceContinuation::Xhr(
-                                v8::Global::new(scope, xhr),
-                            ),
+                            continuation: super::PendingSubresourceContinuation::Xhr {
+                                xhr: v8::Global::new(scope, xhr),
+                                use_cors_preflight: false,
+                            },
                             load: crate::network::loads::resource_load_lease_for_test(
                                 load_client,
                                 None,
@@ -4182,9 +4183,10 @@ async fn streaming_xhr_materialization_failure_errors_body_source_before_close()
                         request_mode: moli_fetch::RequestMode::Cors,
                         network_partition_key: None,
                         policy_context: Default::default(),
-                        continuation: super::PendingSubresourceContinuation::Xhr(v8::Global::new(
-                            scope, xhr,
-                        )),
+                        continuation: super::PendingSubresourceContinuation::Xhr {
+                            xhr: v8::Global::new(scope, xhr),
+                            use_cors_preflight: false,
+                        },
                         load: crate::network::loads::resource_load_lease_for_test(
                             load_client,
                             None,

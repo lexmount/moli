@@ -1371,6 +1371,7 @@ impl JsContextHost {
         &mut self,
         execution_context: super::WindowExecutionContextBinding,
         xhr: v8::Global<v8::Object>,
+        use_cors_preflight: bool,
         credentials_mode: moli_fetch::RequestCredentialsMode,
         network_partition_key: Option<String>,
         policy_context: crate::types::SubresourcePolicyContext,
@@ -1396,7 +1397,10 @@ impl JsContextHost {
                 request_mode: moli_fetch::RequestMode::Cors,
                 network_partition_key,
                 policy_context,
-                continuation: PendingSubresourceContinuation::Xhr(xhr),
+                continuation: PendingSubresourceContinuation::Xhr {
+                    xhr,
+                    use_cors_preflight,
+                },
                 deferred_request_started: false,
                 blob_url_entry,
             },
@@ -1444,6 +1448,7 @@ impl JsContextHost {
         &mut self,
         execution_context: super::WindowExecutionContextBinding,
         xhr: v8::Global<v8::Object>,
+        use_cors_preflight: bool,
         cancel_handle: Option<moli_fetch::FetchCancelHandle>,
         credentials_mode: moli_fetch::RequestCredentialsMode,
         network_partition_key: Option<String>,
@@ -1469,7 +1474,10 @@ impl JsContextHost {
                 request_mode: moli_fetch::RequestMode::Cors,
                 network_partition_key,
                 policy_context,
-                continuation: PendingSubresourceContinuation::Xhr(xhr),
+                continuation: PendingSubresourceContinuation::Xhr {
+                    xhr,
+                    use_cors_preflight,
+                },
                 deferred_request_started: false,
                 blob_url_entry: None,
             },
@@ -1754,7 +1762,8 @@ impl JsContextHost {
                 .streaming_subresource_fetches
                 .values_mut()
                 .find(|state| state.body_source_id == body_source_id)?;
-            let PendingSubresourceContinuation::Xhr(xhr) = &state.pending.continuation else {
+            let PendingSubresourceContinuation::Xhr { xhr, .. } = &state.pending.continuation
+            else {
                 return None;
             };
             let context = v8::Local::new(scope, state.pending.execution_context.context_global()?);
@@ -1914,7 +1923,8 @@ impl JsContextHost {
     fn record_observable_abort_before_response(&mut self, pending: &PendingSubresourceFetchState) {
         if !matches!(
             &pending.continuation,
-            PendingSubresourceContinuation::EventSource(_) | PendingSubresourceContinuation::Xhr(_)
+            PendingSubresourceContinuation::EventSource(_)
+                | PendingSubresourceContinuation::Xhr { .. }
         ) {
             return;
         }
@@ -1946,7 +1956,8 @@ impl JsContextHost {
     ) {
         if !matches!(
             &pending.pending.continuation,
-            PendingSubresourceContinuation::EventSource(_) | PendingSubresourceContinuation::Xhr(_)
+            PendingSubresourceContinuation::EventSource(_)
+                | PendingSubresourceContinuation::Xhr { .. }
         ) {
             return;
         }
@@ -1997,7 +2008,8 @@ impl JsContextHost {
     fn record_observable_stream_abort(&mut self, streaming: StreamingSubresourceFetchState) {
         if !matches!(
             &streaming.pending.continuation,
-            PendingSubresourceContinuation::EventSource(_) | PendingSubresourceContinuation::Xhr(_)
+            PendingSubresourceContinuation::EventSource(_)
+                | PendingSubresourceContinuation::Xhr { .. }
         ) {
             return;
         }

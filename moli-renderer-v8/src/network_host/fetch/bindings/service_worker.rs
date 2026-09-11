@@ -47,6 +47,7 @@ pub(super) fn dispatch_service_worker_fetch(
             &prepared.resolved_url,
             &prepared.method,
             &prepared.cors_preflight_request_headers,
+            false,
         )
         .is_some();
     let request_body_text = request_body_text(&prepared.body);
@@ -96,6 +97,7 @@ pub(super) fn dispatch_service_worker_fetch(
             integrity: prepared.integrity.clone(),
             keepalive: prepared.keepalive,
             request_origin: Some(prepared.request_origin.clone()),
+            use_cors_preflight: false,
         },
     );
     let dispatch = ServiceWorkerFetchDispatch {

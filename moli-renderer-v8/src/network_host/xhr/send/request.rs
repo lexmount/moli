@@ -26,6 +26,7 @@ pub(super) struct PreparedXhrSendRequest {
     pub(super) cors_preflight_request_headers: Vec<(String, String)>,
     pub(super) send_body: Option<Vec<u8>>,
     pub(super) credentials_mode: moli_fetch::RequestCredentialsMode,
+    pub(super) use_cors_preflight: bool,
 }
 
 pub(super) enum XhrSendPrepareError {
@@ -95,6 +96,7 @@ pub(super) fn prepare_xhr_send_request<'s>(
         cors_preflight_request_headers,
         send_body: prepared_body.body,
         credentials_mode,
+        use_cors_preflight: super::capture_xhr_upload_listener_flag(scope, xhr),
     })
 }
 

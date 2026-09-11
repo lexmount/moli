@@ -262,14 +262,10 @@ fn xhr_open_generation_changed(
         .is_some_and(|current| current != expected)
 }
 
-pub(crate) fn dispatch_xhr_loadstart(
+pub(crate) fn capture_xhr_upload_listener_flag(
     scope: &mut v8::PinScope<'_, '_>,
     xhr: v8::Local<'_, v8::Object>,
-    send_body: Option<&[u8]>,
 ) -> bool {
-    let open_generation =
-        xhr_state_number_property(scope, xhr, XHR_OPEN_GENERATION_SLOT).unwrap_or(0.0);
-    // The XHR loadstart listener can abort before upload.loadstart runs.
     let has_upload_listeners = xhr_upload_object(scope, xhr).is_some_and(|upload| {
         crate::context_bootstrap::simple_object_has_event_listeners(
             scope,
@@ -278,6 +274,17 @@ pub(crate) fn dispatch_xhr_loadstart(
         )
     });
     set_xhr_state_bool(scope, xhr, XHR_UPLOAD_LISTENER_SLOT, has_upload_listeners);
+    has_upload_listeners
+}
+
+pub(crate) fn dispatch_xhr_loadstart(
+    scope: &mut v8::PinScope<'_, '_>,
+    xhr: v8::Local<'_, v8::Object>,
+    send_body: Option<&[u8]>,
+) -> bool {
+    let open_generation =
+        xhr_state_number_property(scope, xhr, XHR_OPEN_GENERATION_SLOT).unwrap_or(0.0);
+    // The XHR loadstart listener can abort before upload.loadstart runs.
     set_xhr_state_bool(scope, xhr, XHR_UPLOAD_IN_PROGRESS_SLOT, send_body.is_some());
     xhr_dispatch_progress_event(scope, xhr, "loadstart", 0.0, 0.0);
     if xhr_is_aborted(scope, xhr) || xhr_open_generation_changed(scope, xhr, open_generation) {
@@ -337,7 +344,8 @@ fn send_synchronous_network_xhr(
     .with_initiator_url(&prepared.document_url)
     .with_credentials_mode(prepared.credentials_mode)
     .with_network_partition_key(prepared.network_partition_key.clone())
-    .with_browser_request_metadata(BrowserRequestMetadata::Xhr);
+    .with_browser_request_metadata(BrowserRequestMetadata::Xhr)
+    .with_use_cors_preflight(prepared.use_cors_preflight);
 
     let request_cookie_report = observe_subresource_request_cookie_report(
         prepared.resource_loader.request_client(),

@@ -252,6 +252,7 @@ pub(super) fn spawn_network_fetch(
             &prepared.resolved_url,
             &prepared.method,
             &prepared.cors_preflight_request_headers,
+            false,
         )
         .is_some();
     let internal_id = host.record_async_subresource_fetch(

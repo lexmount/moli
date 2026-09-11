@@ -25,6 +25,7 @@ pub(super) fn record_intercepted_xhr(
     host.record_pending_subresource_xhr(
         prepared.execution_context,
         v8::Global::new(scope, xhr),
+        prepared.use_cors_preflight,
         prepared.credentials_mode,
         prepared.network_partition_key,
         prepared.policy_context,
@@ -80,6 +81,7 @@ pub(super) fn dispatch_service_worker_xhr(
     let internal_id = host.record_async_subresource_xhr(
         prepared.execution_context.duplicate(scope),
         v8::Global::new(scope, xhr),
+        prepared.use_cors_preflight,
         Some(cancel_handle.clone()),
         prepared.credentials_mode,
         prepared.network_partition_key.clone(),
@@ -110,7 +112,10 @@ pub(super) fn dispatch_service_worker_xhr(
         prepared.credentials_mode,
         RequestRedirectMode::Follow,
         None,
-        ServiceWorkerFetchRequestMetadata::default(),
+        ServiceWorkerFetchRequestMetadata {
+            use_cors_preflight: prepared.use_cors_preflight,
+            ..ServiceWorkerFetchRequestMetadata::default()
+        },
     );
     let dispatch = ServiceWorkerFetchDispatch {
         internal_id,
@@ -307,6 +312,7 @@ pub(super) fn spawn_network_xhr_fetch(
     .with_credentials_mode(prepared.credentials_mode)
     .with_network_partition_key(prepared.network_partition_key.clone())
     .with_browser_request_metadata(BrowserRequestMetadata::Xhr)
+    .with_use_cors_preflight(prepared.use_cors_preflight)
     .with_subframe_context(prepared.frame_id.is_some());
 
     let request_cookie_report = observe_subresource_request_cookie_report(
@@ -326,6 +332,7 @@ pub(super) fn spawn_network_xhr_fetch(
     let internal_id = host.record_async_subresource_xhr(
         prepared.execution_context,
         v8::Global::new(scope, xhr),
+        prepared.use_cors_preflight,
         Some(cancel_handle.clone()),
         prepared.credentials_mode,
         prepared.network_partition_key.clone(),

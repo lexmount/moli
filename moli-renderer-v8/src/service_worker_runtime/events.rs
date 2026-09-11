@@ -489,6 +489,7 @@ pub(crate) struct ServiceWorkerFetchRequestMetadata {
     pub(crate) integrity: String,
     pub(crate) keepalive: bool,
     pub(crate) request_origin: Option<moli_url::WebOrigin>,
+    pub(crate) use_cors_preflight: bool,
 }
 
 impl Default for ServiceWorkerFetchRequestMetadata {
@@ -500,6 +501,7 @@ impl Default for ServiceWorkerFetchRequestMetadata {
             integrity: String::new(),
             keepalive: false,
             request_origin: None,
+            use_cors_preflight: false,
         }
     }
 }
@@ -523,6 +525,7 @@ pub(crate) fn service_worker_fetch_request_metadata(
             .unwrap_or_default(),
         keepalive: false,
         request_origin: request.explicit_request_origin().cloned(),
+        use_cors_preflight: request.use_cors_preflight(),
     }
 }
 
