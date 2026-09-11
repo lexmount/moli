@@ -1344,7 +1344,7 @@ fn document_state_and_collection_accessors_live_on_document_prototype() {
 
               const xml = document.implementation.createDocument("urn:test", "root", null);
               assert(!own(xml, "images"), "xml images should not be own");
-              assert(xml.images === undefined, "xml images value");
+              assert(xml.images instanceof HTMLCollection && xml.images.length === 0, "xml images value");
               assert(xml.hidden === true, "xml hidden value");
               assert(xml.visibilityState === "hidden", "xml visibility value");
 
@@ -1374,6 +1374,51 @@ fn document_state_and_collection_accessors_live_on_document_prototype() {
         result,
         "[object FontFaceSet]|true|false|visible|false|example.com|true|1|1|1|1|1|1|1|0"
     );
+}
+
+#[test]
+fn document_collection_getters_preserve_receiver_realm_and_validate_brand() {
+    let mut vm = new_parsed_test_vm(
+        "https://document-collection-realm.test/",
+        "<!doctype html><html><body><iframe id='child'></iframe></body></html>",
+    );
+    materialize_single_child_default_realm_for_test(&mut vm, "Document collection child realm");
+
+    let result = vm
+        .eval(
+            r#"
+(() => {
+  const assert = (ok, message) => { if (!ok) throw new Error(message); };
+  const child = document.getElementById("child").contentWindow;
+  const doc = child.document;
+  for (const name of ["forms", "images", "scripts", "links", "anchors", "embeds", "plugins", "applets"]) {
+    const getter = Object.getOwnPropertyDescriptor(Document.prototype, name).get;
+    const collection = getter.call(doc);
+    assert(Object.getPrototypeOf(collection) === child.HTMLCollection.prototype, `${name} realm`);
+    assert(collection === doc[name], `${name} SameObject across realms`);
+    for (const receiver of [{}, document.createElement("div"), document.createDocumentFragment(), null]) {
+      let error;
+      try { getter.call(receiver); } catch (caught) { error = caught; }
+      assert(error instanceof TypeError, `${name} receiver brand`);
+    }
+  }
+  const embeds = doc.embeds;
+  const embed = doc.createElement("embed");
+  const foreign = doc.createElementNS("urn:foreign", "embed");
+  doc.body.appendChild(foreign);
+  assert(embeds.length === 0, "foreign embed excluded");
+  doc.body.appendChild(embed);
+  assert(embeds.length === 1 && embeds[0] === embed, "live child collection");
+  assert(embeds === doc.plugins, "child plugins aliases embeds");
+  embed.remove();
+  assert(embeds.length === 0, "child collection removal");
+  return "ok";
+})()
+"#,
+        )
+        .expect("Document collection realm and brand probes should evaluate");
+
+    assert_eq!(result, "ok");
 }
 
 #[test]
