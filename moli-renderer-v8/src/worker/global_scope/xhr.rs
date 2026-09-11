@@ -1169,8 +1169,7 @@ pub(in crate::worker) fn prepare_worker_xhr_send_request<'s>(
         .ok_or(WorkerXhrSendPrepareError::ScriptUrlUnavailable)?;
     let resolved_url = resolve_context_url(&document_url, &url_str, None)
         .map_err(WorkerXhrSendPrepareError::Url)?;
-    let request_headers =
-        xhr_author_request_headers(scope, xhr, prepared_body.default_content_type);
+    let request_headers = xhr_author_request_headers(scope, xhr, &prepared_body);
     let credentials_mode =
         if xhr_state_bool_property(scope, xhr, XHR_WITH_CREDENTIALS_SLOT).unwrap_or(false) {
             RequestCredentialsMode::Include
