@@ -131,7 +131,7 @@ pub(crate) use self::media::{
 pub(in crate::network_host) use self::preflight_events::CorsPreflightNetworkObserver;
 pub(in crate::network_host) use self::request::normalize_request_method;
 pub(crate) use self::request::request_constructor_callback;
-pub(crate) use self::request::{FetchArgumentError, RequestUrlError, convert_fetch_arguments};
+pub(crate) use self::request::{FetchArgumentError, RequestUrlError};
 pub(crate) use self::request::{
     mark_request_input_body_used_for_fetch, request_input_snapshot,
     try_resolve_request_constructor_url, try_resolve_request_constructor_url_for_base,
