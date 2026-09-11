@@ -85,6 +85,7 @@ XHR_RESOURCE_PATHS = {
     "/xhr/resources/inspect-headers.py",
     "/xhr/resources/echo-headers.py",
     "/xhr/resources/content.py",
+    "/xhr/resources/corsenabled.py",
     "/xhr/resources/echo-content-type.py",
     "/xhr/resources/status.py",
     "/xhr/resources/last-modified.py",
@@ -2700,6 +2701,33 @@ def _make_handler(
                     headers = [("Content-Type", "text/plain")]
                     # wptserve exposes the same HTTPMessage as raw_headers.
                     body = str(self.headers).encode("utf-8")
+                elif path == "/xhr/resources/corsenabled.py":
+                    params = parse_qs(parsed.query, keep_blank_values=True, encoding="latin-1")
+                    if "delay" in params:
+                        time.sleep(int(params["delay"][0]))
+                    request_body = self._read_content_length_request_body()
+                    if request_body is None:
+                        return True
+                    upload_consumed = True
+                    status, reason, body = 200, None, b"Test"
+                    headers = [
+                        ("Access-Control-Allow-Origin", "*"),
+                        ("Access-Control-Allow-Credentials", "true"),
+                        ("Access-Control-Allow-Methods", "GET, POST, PUT, FOO"),
+                        ("Access-Control-Allow-Headers", "x-test, x-foo"),
+                        ("Access-Control-Expose-Headers",
+                         "x-request-method, x-request-content-type, x-request-query, "
+                         "x-request-content-length, x-request-data"),
+                    ]
+                    if "safelist_content_type" in params:
+                        headers.append(("Access-Control-Allow-Headers", "content-type"))
+                    headers.extend([
+                        ("X-Request-Method", self.command),
+                        ("X-Request-Query", parsed.query or "NO"),
+                        ("X-Request-Content-Length", self.headers.get("Content-Length", "NO")),
+                        ("X-Request-Content-Type", self.headers.get("Content-Type", "NO")),
+                        ("X-Request-Data", request_body.decode("latin-1")),
+                    ])
                 elif path == "/xhr/resources/content.py":
                     params = parse_qs(parsed.query, keep_blank_values=True, encoding="latin-1")
                     if "content" in params:
