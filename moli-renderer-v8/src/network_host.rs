@@ -40,7 +40,7 @@ pub(super) use self::bindings::install_window_network_bindings;
 pub(in crate::network_host) use self::body::{
     PreparedBodyInit, body_init, body_is_unusable, body_is_used, readable_body_stream_unusable,
 };
-pub(crate) use self::body::{append_default_body_content_type, body_stream_object, has_header};
+pub(crate) use self::body::{append_default_body_content_type, body_stream_object};
 #[cfg(test)]
 pub(crate) use self::body_source::pending_network_body_source_buffered_len_for_test;
 pub(in crate::network_host) use self::body_source::{
