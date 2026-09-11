@@ -672,12 +672,6 @@ fn expand_function_template_accessor_property_field(
     attrs: &crate::attrs::FieldAttrs,
     template_name: &proc_macro2::TokenStream,
 ) -> Result<proc_macro2::TokenStream, Error> {
-    if attrs.readonly {
-        return Err(Error::new(
-            field.span(),
-            "function-template `accessor_property` fields have no writable attribute; omit #[webapi(setter)] instead of using readonly",
-        ));
-    }
     let key = webapi_field_key(field, attrs)?;
     let getter_class_name = expand_template_accessor_class_name(
         "get",
@@ -691,35 +685,27 @@ fn expand_function_template_accessor_property_field(
     );
     let name = key.display_name;
     let property_key = key.property_key;
-    let Some(getter) = attrs.getter.as_ref() else {
+    let (getter_member, setter) = expand_accessor_callbacks(attrs, |callback, is_setter, data| {
+        let class_name = if is_setter {
+            &setter_class_name
+        } else {
+            &getter_class_name
+        };
+        expand_template_function_member(
+            callback,
+            i32::from(is_setter),
+            data,
+            template_name,
+            &name,
+            quote!(#class_name),
+        )
+    });
+    let Some(getter_member) = getter_member else {
         return Err(Error::new(
             field.span(),
             "`accessor_property` field requires #[webapi(getter = path)]",
         ));
     };
-    let getter = expand_callback(getter, attrs, false);
-    let getter_member = expand_template_function_member(
-        &getter,
-        0,
-        attrs.data.as_ref(),
-        template_name,
-        &name,
-        quote!(#getter_class_name),
-    );
-    let setter = attrs.setter.as_ref().map(|setter| {
-        let setter_data = attrs.setter_data.as_ref().or(attrs.data.as_ref());
-        let setter = expand_callback(setter, attrs, true);
-        let setter_member = expand_template_function_member(
-            &setter,
-            1,
-            setter_data,
-            template_name,
-            &name,
-            quote!(#setter_class_name),
-        );
-        quote!(::std::option::Option::Some(#setter_member))
-    });
-    let setter = setter.unwrap_or_else(|| quote!(::std::option::Option::None));
     let attributes = property_attributes(attrs);
     let field_read = field
         .ident
@@ -773,49 +759,17 @@ fn expand_function_template_native_data_property_field(
     field: &Field,
     attrs: &crate::attrs::FieldAttrs,
 ) -> Result<proc_macro2::TokenStream, Error> {
-    if attrs.readonly {
-        return Err(Error::new(
-            field.span(),
-            "function-template `native_data_property` fields have no writable attribute; omit #[webapi(setter)] instead of using readonly",
-        ));
-    }
-    if attrs.setter_data.is_some() {
-        return Err(Error::new(
-            field.span(),
-            "function-template `native_data_property` fields share one callback data value and cannot use #[webapi(setter_data = ...)]",
-        ));
-    }
     let key = webapi_field_key(field, attrs)?;
     let name = key.display_name;
     let property_key = key.property_key;
-    let Some(getter) = attrs.getter.as_ref() else {
-        return Err(Error::new(
-            field.span(),
-            "`native_data_property` field requires #[webapi(getter = path)]",
-        ));
-    };
-    let setter = attrs.setter.as_ref().map(|setter| {
-        quote! {
-            .setter(#setter)
-        }
-    });
-    let data = attrs.data.as_ref().map(|data| {
-        quote! {
-            .data((#data).into())
-        }
-    });
-    let attributes = property_attributes(attrs);
+    let configuration = expand_native_data_property_configuration(field, attrs)?;
     let field_read = field
         .ident
         .as_ref()
         .map(|ident| quote!(let _ = ::std::stringify!(#ident);));
     Ok(quote! {
         #field_read
-        let __webapi_native_data_property_configuration =
-            ::moli_webapi_declare::v8::NativeDataPropertyConfiguration::new(#getter)
-                #setter
-                #data
-                .property_attribute(#attributes);
+        let __webapi_native_data_property_configuration = #configuration;
         prototype.set_native_data_property_with_configuration(
             #property_key,
             __webapi_native_data_property_configuration,
@@ -1093,12 +1047,6 @@ fn expand_accessor_property_field(
     attrs: &crate::attrs::FieldAttrs,
     object: proc_macro2::TokenStream,
 ) -> Result<proc_macro2::TokenStream, Error> {
-    if attrs.readonly {
-        return Err(Error::new(
-            field.span(),
-            "runtime-object `accessor_property` fields have no writable attribute; omit #[webapi(setter)] instead of using readonly",
-        ));
-    }
     let key = webapi_field_key(field, attrs)?;
     let name = key.display_name;
     let property_key = key.property_key;
@@ -1108,41 +1056,22 @@ fn expand_accessor_property_field(
             "`accessor_property` field cannot declare both #[webapi(getter = ...)] and #[webapi(getter_value = ...)]",
         ));
     }
-    let getter = if let Some(getter) = attrs.getter.as_ref() {
-        let getter = expand_callback(getter, attrs, false);
-        let getter = expand_function_builder(&getter, 0, attrs.data.as_ref(), &name);
+    let (getter, setter) = expand_accessor_callbacks(attrs, |callback, is_setter, data| {
+        let accessor_name = if is_setter { "setter" } else { "getter" };
+        let function = expand_function_builder(callback, i32::from(is_setter), data, &name);
         quote! {
-            #getter.ok_or_else(|| {
+            #function.ok_or_else(|| {
                 ::moli_webapi_declare::BindError::new(
-                    ::std::format!("failed to build declared `{}` getter", #name)
+                    ::std::format!("failed to build declared `{}` {}", #name, #accessor_name)
                 )
             })?
         }
-    } else if let Some(getter_value) = attrs.getter_value.as_ref() {
-        quote!(#getter_value)
-    } else {
-        return Err(Error::new(
+    });
+    let getter = getter.or_else(|| attrs.getter_value.as_ref().map(|value| quote!(#value)))
+        .ok_or_else(|| Error::new(
             field.span(),
             "`accessor_property` field requires #[webapi(getter = path)] or #[webapi(getter_value = expr)]",
-        ));
-    };
-    let setter = attrs.setter.as_ref().map(|setter| {
-        let setter_data = attrs.setter_data.as_ref().or(attrs.data.as_ref());
-        let setter = expand_callback(setter, attrs, true);
-        expand_function_builder(&setter, 1, setter_data, &name)
-    });
-    let setter = match setter {
-        Some(setter) => quote! {
-            ::std::option::Option::Some(
-                #setter.ok_or_else(|| {
-                    ::moli_webapi_declare::BindError::new(
-                        ::std::format!("failed to build declared `{}` setter", #name)
-                    )
-                })?
-            )
-        },
-        None => quote!(::std::option::Option::None),
-    };
+        ))?;
     let attributes = property_attributes(attrs);
     let field_read = field
         .ident
@@ -1168,43 +1097,17 @@ fn expand_native_data_property_field(
     field: &Field,
     attrs: &crate::attrs::FieldAttrs,
 ) -> Result<proc_macro2::TokenStream, Error> {
-    if attrs.readonly {
-        return Err(Error::new(
-            field.span(),
-            "`native_data_property` fields have no writable attribute; omit #[webapi(setter)] instead of using readonly",
-        ));
-    }
     let key = webapi_field_key(field, attrs)?;
     let name = key.display_name;
     let property_key = key.property_key;
-    let Some(getter) = attrs.getter.as_ref() else {
-        return Err(Error::new(
-            field.span(),
-            "`native_data_property` field requires #[webapi(getter = path)]",
-        ));
-    };
-    let setter = attrs.setter.as_ref().map(|setter| {
-        quote! {
-            .setter(#setter)
-        }
-    });
-    let data = attrs.data.as_ref().map(|data| {
-        quote! {
-            .data((#data).into())
-        }
-    });
-    let attributes = property_attributes(attrs);
+    let configuration = expand_native_data_property_configuration(field, attrs)?;
     let field_read = field
         .ident
         .as_ref()
         .map(|ident| quote!(let _ = &self.#ident;));
     Ok(quote! {
         #field_read
-        let __webapi_native_data_property_configuration =
-            ::moli_webapi_declare::v8::NativeDataPropertyConfiguration::new(#getter)
-                #setter
-                #data
-                .property_attribute(#attributes);
+        let __webapi_native_data_property_configuration = #configuration;
         object
             .set_native_data_property_with_configuration(
                 scope,
@@ -1374,6 +1277,61 @@ fn expand_alias_field(
         #field_read
         #install_alias
     })
+}
+
+fn expand_native_data_property_configuration(
+    field: &Field,
+    attrs: &FieldAttrs,
+) -> Result<proc_macro2::TokenStream, Error> {
+    let getter = attrs.getter.as_ref().ok_or_else(|| {
+        Error::new(
+            field.span(),
+            "`native_data_property` field requires #[webapi(getter = path)]",
+        )
+    })?;
+    let setter = attrs.setter.as_ref().map(|setter| quote!(.setter(#setter)));
+    let data = attrs
+        .data
+        .as_ref()
+        .map(|data| quote!(.data((#data).into())));
+    let attributes = property_attributes(attrs);
+    Ok(quote! {
+        ::moli_webapi_declare::v8::NativeDataPropertyConfiguration::new(#getter)
+            #setter
+            #data
+            .property_attribute(#attributes)
+    })
+}
+
+/// Resolve callback policies and setter-data fallback once. Each backend owns
+/// function construction and its installation-time failure handling.
+fn expand_accessor_callbacks(
+    attrs: &FieldAttrs,
+    mut build: impl FnMut(
+        &proc_macro2::TokenStream,
+        bool,
+        Option<&syn::Expr>,
+    ) -> proc_macro2::TokenStream,
+) -> (Option<proc_macro2::TokenStream>, proc_macro2::TokenStream) {
+    let mut expand = |callback: &Option<syn::Path>, is_setter| {
+        callback.as_ref().map(|callback| {
+            let data = if is_setter {
+                attrs.setter_data.as_ref().or(attrs.data.as_ref())
+            } else {
+                attrs.data.as_ref()
+            };
+            build(
+                &expand_callback(callback, attrs, is_setter),
+                is_setter,
+                data,
+            )
+        })
+    };
+    let getter = expand(&attrs.getter, false);
+    let setter = expand(&attrs.setter, true)
+        .map(|setter| quote!(::std::option::Option::Some(#setter)))
+        .unwrap_or_else(|| quote!(::std::option::Option::None));
+    (getter, setter)
 }
 
 /// Generate a native callback adapter, without changing callback data or
@@ -2108,7 +2066,7 @@ mod tests {
         };
         assert_eq!(
             error.to_string(),
-            "function-template `accessor_property` fields have no writable attribute; omit #[webapi(setter)] instead of using readonly"
+            "`accessor_property` fields have no writable attribute; omit #[webapi(setter)] instead of using readonly"
         );
     }
 
@@ -2127,7 +2085,7 @@ mod tests {
         };
         assert_eq!(
             error.to_string(),
-            "runtime-object `accessor_property` fields have no writable attribute; omit #[webapi(setter)] instead of using readonly"
+            "`accessor_property` fields have no writable attribute; omit #[webapi(setter)] instead of using readonly"
         );
     }
 

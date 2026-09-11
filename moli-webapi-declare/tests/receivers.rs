@@ -272,6 +272,8 @@ fn object_and_template_declarations_use_the_same_receiver_policy() {
             assert(throwsTypeError(() => surface.method.call({})), 'invalid receiver');
             const value = Object.getOwnPropertyDescriptor(surface, 'value');
             assert(value.get.call(object) === 9, 'getter data');
+            assert(value.set.call(object, 'ok') === 9, 'setter falls back to getter data');
+            assert(value.get.length === 0 && value.set.length === 1, 'accessor lengths');
             assert(throwsTypeError(() => value.set.call({})), 'invalid setter receiver');
             const promise = Object.getOwnPropertyDescriptor(surface, 'ready').get.call({});
             assert(promise instanceof Promise, 'invalid Promise getter receiver');

@@ -738,33 +738,34 @@ pub(crate) fn parse_field_attrs_with_defaults(
             "field setter can only be specified for #[webapi(accessor_property)] or #[webapi(native_data_property)] fields",
         ));
     }
-    if matches!(parsed.kind, FieldKind::AccessorProperty) && parsed.callback.is_some() {
-        return Err(Error::new(
-            field.span(),
-            "`accessor_property` fields use #[webapi(getter = path)] and optional #[webapi(setter = path)] instead of callback",
-        ));
-    }
-    if matches!(parsed.kind, FieldKind::AccessorProperty)
-        && (parsed.length.is_some() || parsed.value.is_some() || parsed.init.is_some())
-    {
-        return Err(Error::new(
-            field.span(),
-            "`accessor_property` fields cannot use length, value, or init attributes",
-        ));
-    }
-    if matches!(parsed.kind, FieldKind::NativeDataProperty) && parsed.callback.is_some() {
-        return Err(Error::new(
-            field.span(),
-            "`native_data_property` fields use #[webapi(getter = path)] and optional #[webapi(setter = path)] instead of callback",
-        ));
-    }
-    if matches!(parsed.kind, FieldKind::NativeDataProperty)
-        && (parsed.length.is_some() || parsed.value.is_some() || parsed.init.is_some())
-    {
-        return Err(Error::new(
-            field.span(),
-            "`native_data_property` fields cannot use length, value, or init attributes",
-        ));
+    let accessor_kind = match parsed.kind {
+        FieldKind::AccessorProperty => Some("accessor_property"),
+        FieldKind::NativeDataProperty => Some("native_data_property"),
+        _ => None,
+    };
+    if let Some(kind) = accessor_kind {
+        if parsed.readonly {
+            return Err(Error::new(
+                field.span(),
+                format!(
+                    "`{kind}` fields have no writable attribute; omit #[webapi(setter)] instead of using readonly"
+                ),
+            ));
+        }
+        if parsed.callback.is_some() {
+            return Err(Error::new(
+                field.span(),
+                format!(
+                    "`{kind}` fields use #[webapi(getter = path)] and optional #[webapi(setter = path)] instead of callback"
+                ),
+            ));
+        }
+        if parsed.length.is_some() || parsed.value.is_some() || parsed.init.is_some() {
+            return Err(Error::new(
+                field.span(),
+                format!("`{kind}` fields cannot use length, value, or init attributes"),
+            ));
+        }
     }
     if matches!(parsed.kind, FieldKind::IntrinsicDataProperty(_))
         && (parsed.function_name.is_some()
@@ -992,6 +993,7 @@ mod tests {
         parse_field_attrs_with_defaults, parse_function_template_attrs, parse_object_attrs,
     };
     use syn::Field;
+    use syn::parse::Parser;
 
     #[test]
     fn object_roles_are_exclusive() {
@@ -1126,14 +1128,23 @@ mod tests {
     }
 
     #[test]
-    fn readonly_accessor_property_attribute_is_parsed() {
-        let field = syn::parse_quote! {
-            #[webapi(accessor_property, readonly, getter = sample_getter)]
-            value: ()
-        };
-        let attrs = parse_field_attrs(&field).expect("readonly accessor property should parse");
-        assert!(matches!(attrs.kind, FieldKind::AccessorProperty));
-        assert!(attrs.readonly);
+    fn readonly_accessor_properties_are_rejected() {
+        for kind in ["accessor_property", "native_data_property"] {
+            let field: Field = syn::Field::parse_named
+                .parse_str(&format!(
+                    "#[webapi({kind}, readonly, getter = sample_getter)] value: ()"
+                ))
+                .expect("parse field");
+            let error = parse_field_attrs(&field)
+                .err()
+                .expect("invalid writable attribute");
+            assert_eq!(
+                error.to_string(),
+                format!(
+                    "`{kind}` fields have no writable attribute; omit #[webapi(setter)] instead of using readonly"
+                )
+            );
+        }
     }
 
     #[test]
