@@ -103,6 +103,7 @@ fn service_worker_fetch_stream_response_head(
     response_head: &MaterializedServiceWorkerFetchResponseHead,
 ) -> moli_fetch::ResponseHead {
     moli_fetch::ResponseHead {
+        status_text: Some(response_head.status_text.clone()),
         final_url: response_head
             .final_url
             .clone()
@@ -602,6 +603,7 @@ impl ServiceWorkerRuntimeService {
         let response_filter = service_worker_fetch_response_filter(&response);
         let navigation_response = crate::protocol_types::NavigationResponse::from_head_and_body(
             moli_fetch::ResponseHead {
+                status_text: Some(response.status_text.clone()),
                 final_url,
                 status: response.status,
                 headers: response.headers,
@@ -1362,6 +1364,7 @@ mod tests {
                 response_type: "default".to_owned(),
                 redirected: false,
                 status: 202,
+                status_text: "Accepted".to_owned(),
                 headers: vec![("content-type".to_owned(), b"text/plain".to_vec())],
             },
         });
@@ -1446,6 +1449,7 @@ mod tests {
                 response_type: "default".to_owned(),
                 redirected: false,
                 status: 200,
+                status_text: "OK".to_owned(),
                 headers: vec![("content-type".to_owned(), b"text/plain".to_vec())],
             },
         });
@@ -3007,6 +3011,7 @@ mod tests {
                 response_type: "default".to_owned(),
                 redirected: false,
                 status: 200,
+                status_text: "OK".to_owned(),
                 headers: vec![("content-type".to_owned(), b"image/png".to_vec())],
             },
         });
@@ -3074,6 +3079,7 @@ mod tests {
                 response_type: "default".to_owned(),
                 redirected: false,
                 status: 200,
+                status_text: "OK".to_owned(),
                 headers: vec![("content-type".to_owned(), b"image/png".to_vec())],
             },
         });
@@ -3138,6 +3144,7 @@ mod tests {
                 response_type: "default".to_owned(),
                 redirected: false,
                 status: 200,
+                status_text: "OK".to_owned(),
                 headers: vec![("content-type".to_owned(), b"image/png".to_vec())],
             },
         });

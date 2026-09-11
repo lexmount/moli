@@ -1958,6 +1958,7 @@ fn isolated_realm_destruction_aborts_fetch_and_detaches_keepalive() {
         body_source_id,
         network_request_headers: None,
         head: moli_fetch::ResponseHead {
+            status_text: None,
             final_url: request_url,
             status: 200,
             headers: vec![("content-type".to_owned(), b"text/plain".to_vec())],
