@@ -121,7 +121,7 @@ pub(in crate::context_bootstrap) fn publish_required_stream_promise_reactions<'s
     publish_required_stream_value(scope, None, "promise reaction attachment", role)
 }
 
-fn publish_required_stream_value<T>(
+pub(in crate::context_bootstrap::stream_adapter) fn publish_required_stream_value<T>(
     scope: &mut v8::PinScope<'_, '_>,
     value: Option<T>,
     operation: &'static str,

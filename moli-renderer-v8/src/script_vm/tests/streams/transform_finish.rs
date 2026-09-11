@@ -1,6 +1,67 @@
 use super::*;
 
 #[test]
+fn transform_finish_reactions_keep_their_context_alive_across_gc() {
+    for operation in ["cancel", "abort", "close"] {
+        let mut vm = stream_test_vm();
+        vm.eval(&format!("globalThis.__finishOperation = {operation:?}"))
+            .expect("finish operation");
+        vm.eval(
+            r#"
+(() => {
+  const state = globalThis.__finishState = { calls: 0, closed: false, finished: false };
+  const gate = new Promise(resolve => { globalThis.__releaseFinish = resolve; });
+  const stream = new TransformStream({
+    cancel() { state.calls++; return gate; },
+    flush() { state.calls++; return gate; }
+  });
+  const reason = { marker: 'original reason' };
+  const expectedReason = new WeakRef(reason);
+  const operation = __finishOperation;
+  const closed = operation === 'cancel'
+    ? stream.writable.getWriter().closed
+    : stream.readable.getReader().closed;
+  closed.then(
+    () => { state.closed = operation === 'close'; },
+    error => { state.closed = error === expectedReason.deref() && error.marker === 'original reason'; }
+  );
+  const finish = operation === 'cancel' ? stream.readable.cancel(reason)
+    : operation === 'abort' ? stream.writable.abort(reason) : stream.writable.close();
+  finish.then(
+    () => { state.finished = true; },
+    error => { state.finished = String(error); }
+  );
+})()
+"#,
+        )
+        .expect("pending finish setup");
+        assert_eq!(
+            vm.eval("JSON.stringify(__finishState)")
+                .expect("pending finish state"),
+            r#"{"calls":1,"closed":false,"finished":false}"#,
+            "{operation} must wait for its callback promise"
+        );
+
+        vm.renderer_document_isolate
+            .clone()
+            .with_entered_renderer_document_isolate(|isolate| {
+                isolate.low_memory_notification();
+                Ok(())
+            })
+            .expect("collect while only the pending reactions retain their context");
+
+        vm.eval("__releaseFinish()")
+            .expect("release finish callback promise");
+        assert_eq!(
+            vm.eval("JSON.stringify(__finishState)")
+                .expect("finish after GC"),
+            r#"{"calls":1,"closed":true,"finished":true}"#,
+            "{operation} must retain its streams, residence and original reason"
+        );
+    }
+}
+
+#[test]
 fn transform_finish_pending_cancel_observes_writable_error_at_fulfillment() {
     let mut vm = stream_test_vm();
     vm.eval(

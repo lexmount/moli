@@ -1,6 +1,8 @@
 use super::*;
+mod finish_context;
 use crate::text_codec::{TextCodecStore, TextDecodeError};
 use crate::util::get_private_value;
+use finish_context::{TransformFinishContext, TransformFinishWithReason};
 use moli_streams::queue::{QueueBounds, QueueRemainderPlan};
 use moli_streams::strategy::StrategySnapshot;
 use moli_streams::transform::{
@@ -760,7 +762,14 @@ pub(in crate::context_bootstrap::stream_adapter) fn transform_stream_readable_ca
         rv.set(finish_promise.into());
         return;
     };
-    attach_transform_source_cancel_reactions(scope, cancel_promise, writable, residence, reason);
+    attach_transform_source_cancel_reactions(
+        scope,
+        cancel_promise,
+        writable,
+        readable,
+        residence,
+        reason,
+    );
     rv.set(finish_promise.into());
 }
 
@@ -902,13 +911,21 @@ fn attach_transform_source_cancel_reactions<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     cancel_promise: v8::Local<'s, v8::Promise>,
     writable: v8::Local<'s, v8::Object>,
+    readable: v8::Local<'s, v8::Object>,
     residence: v8::Local<'s, v8::Object>,
     reason: v8::Local<'s, v8::Value>,
 ) {
-    let data = v8::Array::new(scope, 3);
-    let _ = data.set_index(scope, 0, writable.into());
-    let _ = data.set_index(scope, 1, residence.into());
-    let _ = data.set_index(scope, 2, reason);
+    let StreamOwnerPublication::Published(data) = (TransformFinishWithReason {
+        finish: TransformFinishContext {
+            writable,
+            readable,
+            residence,
+        },
+        reason,
+    })
+    .into_callback_data(scope) else {
+        return;
+    };
     publish_required_stream_promise_reactions(
         scope,
         cancel_promise,
@@ -926,20 +943,19 @@ fn transform_source_cancel_fulfilled_callback<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'_, v8::Value>,
 ) {
-    let Some((writable, residence, reason)) =
-        transform_source_cancel_reaction_values(scope, args.data())
+    let StreamOwnerPublication::Published(TransformFinishWithReason { finish, reason }) =
+        TransformFinishWithReason::from_callback_data(scope, args.data())
     else {
         rv.set_undefined();
         return;
     };
-    let Some(readable) = stream_slot_object(scope, writable, WRITABLE_STREAM_TARGET_READABLE_SLOT)
-        .filter(|readable| !readable.is_null_or_undefined())
-    else {
-        reject_pending_read(scope, residence, reason);
-        rv.set_undefined();
-        return;
-    };
-    apply_transform_source_cancel_fulfillment(scope, writable, readable, residence, reason);
+    apply_transform_source_cancel_fulfillment(
+        scope,
+        finish.writable,
+        finish.readable,
+        finish.residence,
+        reason,
+    );
     rv.set_undefined();
 }
 
@@ -970,20 +986,18 @@ fn transform_source_cancel_rejected_callback<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'_, v8::Value>,
 ) {
-    let Some((writable, residence, _)) =
-        transform_source_cancel_reaction_values(scope, args.data())
+    let StreamOwnerPublication::Published(context) =
+        TransformFinishWithReason::from_callback_data(scope, args.data())
     else {
         rv.set_undefined();
         return;
     };
+    let TransformFinishContext {
+        writable,
+        readable,
+        residence,
+    } = context.finish;
     let error = args.get(0);
-    let Some(readable) = stream_slot_object(scope, writable, WRITABLE_STREAM_TARGET_READABLE_SLOT)
-        .filter(|readable| !readable.is_null_or_undefined())
-    else {
-        reject_pending_read(scope, residence, error);
-        rv.set_undefined();
-        return;
-    };
     match transform_stream_snapshot(scope, writable, readable)
         .plan_finish_settlement(FinishOperation::ReadableCancel, AlgorithmOutcome::Rejected)
     {
@@ -994,27 +1008,6 @@ fn transform_source_cancel_rejected_callback<'s>(
         _ => unreachable!("readable cancel rejection produced an invalid plan"),
     }
     rv.set_undefined();
-}
-
-fn transform_source_cancel_reaction_values<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    data: v8::Local<'s, v8::Value>,
-) -> Option<(
-    v8::Local<'s, v8::Object>,
-    v8::Local<'s, v8::Object>,
-    v8::Local<'s, v8::Value>,
-)> {
-    let data = v8::Local::<v8::Array>::try_from(data).ok()?;
-    let writable = data
-        .get_index(scope, 0)
-        .and_then(|value| v8::Local::<v8::Object>::try_from(value).ok())?;
-    let residence = data
-        .get_index(scope, 1)
-        .and_then(|value| v8::Local::<v8::Object>::try_from(value).ok())?;
-    let reason = data
-        .get_index(scope, 2)
-        .unwrap_or_else(|| v8::undefined(scope).into());
-    Some((writable, residence, reason))
 }
 
 fn transform_stream_sink_abort_algorithm<'s>(
@@ -1069,11 +1062,17 @@ fn transform_stream_sink_abort_algorithm_in_relevant_realm<'s>(
         );
         return Some(finish_promise.into());
     };
-    let data = v8::Array::new(scope, 4);
-    let _ = data.set_index(scope, 0, writable.into());
-    let _ = data.set_index(scope, 1, readable.into());
-    let _ = data.set_index(scope, 2, residence.into());
-    let _ = data.set_index(scope, 3, reason);
+    let StreamOwnerPublication::Published(data) = (TransformFinishWithReason {
+        finish: TransformFinishContext {
+            writable,
+            readable,
+            residence,
+        },
+        reason,
+    })
+    .into_callback_data(scope) else {
+        return Some(finish_promise.into());
+    };
     if matches!(
         publish_required_stream_promise_reactions(
             scope,
@@ -1096,18 +1095,19 @@ fn transform_sink_abort_fulfilled_callback<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'_, v8::Value>,
 ) {
-    let Some((readable, residence, reason)) =
-        transform_sink_abort_reaction_values(scope, args.data())
+    let StreamOwnerPublication::Published(TransformFinishWithReason { finish, reason }) =
+        TransformFinishWithReason::from_callback_data(scope, args.data())
     else {
         rv.set_undefined();
         return;
     };
-    let Some(writable) = transform_sink_abort_reaction_writable(scope, args.data()) else {
-        reject_pending_read(scope, residence, reason);
-        rv.set_undefined();
-        return;
-    };
-    apply_transform_sink_abort_fulfillment(scope, writable, readable, residence, reason);
+    apply_transform_sink_abort_fulfillment(
+        scope,
+        finish.writable,
+        finish.readable,
+        finish.residence,
+        reason,
+    );
     rv.set_undefined();
 }
 
@@ -1138,17 +1138,18 @@ fn transform_sink_abort_rejected_callback<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'_, v8::Value>,
 ) {
-    let Some((readable, residence, _)) = transform_sink_abort_reaction_values(scope, args.data())
+    let StreamOwnerPublication::Published(context) =
+        TransformFinishWithReason::from_callback_data(scope, args.data())
     else {
         rv.set_undefined();
         return;
     };
+    let TransformFinishContext {
+        writable,
+        readable,
+        residence,
+    } = context.finish;
     let error = args.get(0);
-    let Some(writable) = transform_sink_abort_reaction_writable(scope, args.data()) else {
-        reject_pending_read(scope, residence, error);
-        rv.set_undefined();
-        return;
-    };
     match transform_stream_snapshot(scope, writable, readable)
         .plan_finish_settlement(FinishOperation::WritableAbort, AlgorithmOutcome::Rejected)
     {
@@ -1159,36 +1160,6 @@ fn transform_sink_abort_rejected_callback<'s>(
         _ => unreachable!("writable abort rejection produced an invalid plan"),
     }
     rv.set_undefined();
-}
-
-fn transform_sink_abort_reaction_values<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    data: v8::Local<'s, v8::Value>,
-) -> Option<(
-    v8::Local<'s, v8::Object>,
-    v8::Local<'s, v8::Object>,
-    v8::Local<'s, v8::Value>,
-)> {
-    let data = v8::Local::<v8::Array>::try_from(data).ok()?;
-    let readable = data
-        .get_index(scope, 1)
-        .and_then(|value| v8::Local::<v8::Object>::try_from(value).ok())?;
-    let residence = data
-        .get_index(scope, 2)
-        .and_then(|value| v8::Local::<v8::Object>::try_from(value).ok())?;
-    let reason = data
-        .get_index(scope, 3)
-        .unwrap_or_else(|| v8::undefined(scope).into());
-    Some((readable, residence, reason))
-}
-
-fn transform_sink_abort_reaction_writable<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    data: v8::Local<'s, v8::Value>,
-) -> Option<v8::Local<'s, v8::Object>> {
-    let data = v8::Local::<v8::Array>::try_from(data).ok()?;
-    data.get_index(scope, 0)
-        .and_then(|value| v8::Local::<v8::Object>::try_from(value).ok())
 }
 
 fn process_transform_writable_queue<'s>(
@@ -2690,10 +2661,14 @@ fn attach_transform_sink_close_reactions<'s>(
     readable: v8::Local<'s, v8::Object>,
     residence: v8::Local<'s, v8::Object>,
 ) {
-    let data = v8::Array::new(scope, 3);
-    let _ = data.set_index(scope, 0, writable.into());
-    let _ = data.set_index(scope, 1, readable.into());
-    let _ = data.set_index(scope, 2, residence.into());
+    let StreamOwnerPublication::Published(data) = (TransformFinishContext {
+        writable,
+        readable,
+        residence,
+    })
+    .into_callback_data(scope) else {
+        return;
+    };
     publish_required_stream_promise_reactions(
         scope,
         flush_promise,
@@ -2711,8 +2686,11 @@ fn transform_sink_close_fulfilled_callback<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'_, v8::Value>,
 ) {
-    let Some((writable, readable, residence)) =
-        transform_sink_close_reaction_values(scope, args.data())
+    let StreamOwnerPublication::Published(TransformFinishContext {
+        writable,
+        readable,
+        residence,
+    }) = TransformFinishContext::from_callback_data(scope, args.data())
     else {
         rv.set_undefined();
         return;
@@ -2742,8 +2720,11 @@ fn transform_sink_close_rejected_callback<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'_, v8::Value>,
 ) {
-    let Some((writable, readable, residence)) =
-        transform_sink_close_reaction_values(scope, args.data())
+    let StreamOwnerPublication::Published(TransformFinishContext {
+        writable,
+        readable,
+        residence,
+    }) = TransformFinishContext::from_callback_data(scope, args.data())
     else {
         rv.set_undefined();
         return;
@@ -2759,27 +2740,6 @@ fn transform_sink_close_rejected_callback<'s>(
         _ => unreachable!("transform flush rejection produced an invalid plan"),
     }
     rv.set_undefined();
-}
-
-fn transform_sink_close_reaction_values<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    data: v8::Local<'s, v8::Value>,
-) -> Option<(
-    v8::Local<'s, v8::Object>,
-    v8::Local<'s, v8::Object>,
-    v8::Local<'s, v8::Object>,
-)> {
-    let data = v8::Local::<v8::Array>::try_from(data).ok()?;
-    let writable = data
-        .get_index(scope, 0)
-        .and_then(|value| v8::Local::<v8::Object>::try_from(value).ok())?;
-    let readable = data
-        .get_index(scope, 1)
-        .and_then(|value| v8::Local::<v8::Object>::try_from(value).ok())?;
-    let residence = data
-        .get_index(scope, 2)
-        .and_then(|value| v8::Local::<v8::Object>::try_from(value).ok())?;
-    Some((writable, readable, residence))
 }
 
 fn attach_transform_writable_close_settlement<'s>(
