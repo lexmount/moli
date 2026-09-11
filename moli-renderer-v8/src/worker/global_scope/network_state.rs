@@ -15,6 +15,7 @@ pub(in crate::worker) struct PendingWorkerFetch {
     pub(in crate::worker) signal_id: Option<u32>,
     pub(in crate::worker) load: ResourceLoadLease,
     pub(in crate::worker) request_url: Url,
+    pub(in crate::worker) blob_url_entry: Option<crate::network_host::CapturedBlobUrl>,
     pub(in crate::worker) request_method: String,
     pub(in crate::worker) request_headers: moli_fetch::RequestHeaders,
     pub(in crate::worker) request_body: Option<String>,
