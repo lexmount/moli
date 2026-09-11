@@ -1,6 +1,190 @@
 use super::*;
 
 #[test]
+fn emulation_date_constructor_converts_objects_once_with_default_hint() {
+    let mut vm = new_storage_test_vm("https://date-object-conversion.test/");
+    for timezone in ["UTC", "Europe/Paris", "America/New_York", "Asia/Shanghai"] {
+        vm.set_timezone_override(Some(timezone));
+        assert_eq!(vm.eval(r#"JSON.stringify((() => {
+          const input = '2024-01-01T00:00:00';
+          const expected = +new Date(2024, 0, 1);
+          const calls = [];
+          const objects = [new String(input), [input],
+            {[Symbol.toPrimitive](hint) { calls.push(hint); return input; }},
+            {valueOf() { calls.push('valueOf'); return {}; },
+             toString() { calls.push('toString'); return input; }}];
+          const dates = objects.map(value => +new Date(value) === expected);
+          const original = new Date(1234);
+          const sentinel = {};
+          Object.defineProperty(original, Symbol.toPrimitive, {get() {throw sentinel;}});
+          const copied = +new Date(original) === 1234;
+          const primitiveValues = [1234, null, true, false, undefined];
+          const numeric = primitiveValues.every(value =>
+            Object.is(+new Date({[Symbol.toPrimitive]() {return value;}}), +new Date(value)));
+          const errors = [
+            [{[Symbol.toPrimitive]() {throw sentinel;}}, sentinel],
+            [{get [Symbol.toPrimitive]() {throw sentinel;}}, sentinel],
+            [{[Symbol.toPrimitive]: 1}, TypeError],
+            [{[Symbol.toPrimitive]() {return {};}}, TypeError],
+            [{valueOf() {return {};}, toString() {return {};}}, TypeError],
+            [{[Symbol.toPrimitive]() {return Symbol();}}, TypeError],
+            [{[Symbol.toPrimitive]() {return 1n;}}, TypeError]
+          ].every(([value, expected]) => {
+            try { new Date(value); return false; }
+            catch (error) {return expected === sentinel ? error === sentinel : error instanceof expected;}
+          });
+          return [dates, calls, copied, numeric, errors];
+        })())"#).unwrap(),
+        r#"[[true,true,true,true],["default","valueOf","toString"],true,true,true]"#, "{timezone}");
+    }
+}
+
+#[test]
+fn emulation_locale_fallback_covers_empty_and_unmatched_lists() {
+    let mut vm = new_storage_test_vm("https://intl-locale-fallback.test/");
+    vm.set_locale_override(Some("fr_FR"));
+    vm.set_timezone_override(Some("Europe/Paris"));
+    assert_eq!(vm.eval(r#"JSON.stringify((() => {
+      const constructors = ['Collator', 'DateTimeFormat', 'DisplayNames', 'DurationFormat',
+        'ListFormat', 'NumberFormat', 'PluralRules', 'RelativeTimeFormat', 'Segmenter'];
+      const date = new Date('2024-01-01T00:00:00Z');
+      const cases = [undefined, [], {}, ['zz-ZZ']];
+      const resolved = constructors.every(name => {
+        const Ctor = Intl[name];
+        if (!Ctor) return true;
+        return ['lookup', 'best fit'].every(localeMatcher => {
+          const options = {localeMatcher, type: name === 'DisplayNames' ? 'language' : undefined};
+          const expected = new Ctor(undefined, options).resolvedOptions().locale;
+          return cases.every(locales => new Ctor(locales, options).resolvedOptions().locale === expected);
+        });
+      });
+      const numbers = cases.every(locales => new Intl.NumberFormat(locales).format(1234.5) ===
+        new Intl.NumberFormat('fr-FR').format(1234.5));
+      const dates = ['toLocaleString', 'toLocaleDateString', 'toLocaleTimeString'].every(method =>
+        cases.every(locales => date[method](locales) === date[method]('fr-FR')));
+      const explicit = [new Intl.Locale('en-US'), ['zz-ZZ', 'en-US'], ['en-US', 'fr-FR']].every(
+        locales => new Intl.NumberFormat(locales).format(1234.5) === '1,234.5');
+      return [resolved, numbers, dates, explicit];
+    })())"#).unwrap(), "[true,true,true,true]");
+}
+
+#[test]
+fn emulation_locale_fallback_preserves_native_observation_order() {
+    let mut vm = new_storage_test_vm("https://intl-locale-coercion.test/");
+    let probe = r#"JSON.stringify((() => {
+      const date = new Date(0);
+      return ['Collator', 'DateTimeFormat', 'NumberFormat', 'PluralRules',
+        'toLocaleString', 'toLocaleDateString', 'toLocaleTimeString'].map(name => {
+        const trace = [];
+        const locales = new Proxy({length: 1, 0: {toString() {trace.push('locale:string'); return 'zz-ZZ';}}}, {
+          get(target, key, receiver) {trace.push(`locales:get:${String(key)}`); return Reflect.get(target, key, receiver);},
+          has(target, key) {trace.push(`locales:has:${String(key)}`); return Reflect.has(target, key);}
+        });
+        const options = new Proxy({localeMatcher: {toString() {trace.push('matcher:string'); return 'lookup';}}}, {
+          get(target, key, receiver) {trace.push(`options:get:${String(key)}`); return Reflect.get(target, key, receiver);}
+        });
+        if (name.startsWith('toLocale')) date[name](locales, options);
+        else {
+          const newTarget = new Proxy(function() {}, {get(target, key, receiver) {
+            trace.push(`newTarget:get:${String(key)}`); return Reflect.get(target, key, receiver);
+          }});
+          Reflect.construct(Intl[name], [locales, options], newTarget);
+        }
+        return trace;
+      });
+    })())"#;
+    let baseline = vm.eval(probe).unwrap();
+    vm.set_locale_override(Some("fr_FR"));
+    vm.set_timezone_override(Some("Europe/Paris"));
+    assert_eq!(vm.eval(probe).unwrap(), baseline);
+    assert_eq!(
+        vm.eval(
+            r#"JSON.stringify((() => {
+      const sentinel = {};
+      const poison = new Proxy({}, {get() {throw sentinel;}});
+      const invalidDate = new Date(NaN).toLocaleString(poison, poison) === 'Invalid Date';
+      let getterError = false;
+      try {new Intl.NumberFormat(poison);} catch (error) {getterError = error === sentinel;}
+      const invalidLocales = [null, ['en_US'], [1]].every(locales => {
+        try {new Intl.NumberFormat(locales); return false;}
+        catch (error) {return error instanceof TypeError || error instanceof RangeError;}
+      });
+      return [invalidDate, getterError, invalidLocales];
+    })())"#
+        )
+        .unwrap(),
+        "[true,true,true]"
+    );
+}
+
+#[test]
+fn emulation_default_arguments_do_not_read_array_prototype() {
+    let mut vm = new_storage_test_vm("https://intl-private-arguments.test/");
+    vm.set_locale_override(Some("fr_FR"));
+    vm.set_timezone_override(Some("Europe/Paris"));
+    assert_eq!(
+        vm.eval(
+            r#"(() => {
+      const sentinel = {};
+      const zero = Object.getOwnPropertyDescriptor(Array.prototype, '0');
+      const one = Object.getOwnPropertyDescriptor(Array.prototype, '1');
+      try {
+        for (const key of ['0', '1']) Object.defineProperty(Array.prototype, key, {
+          get() {throw sentinel;}, set() {throw sentinel;}, configurable: true
+        });
+        return new Intl.NumberFormat().resolvedOptions().locale === 'fr-FR' &&
+          new Intl.DateTimeFormat().resolvedOptions().timeZone === 'Europe/Paris' &&
+          new Intl.DateTimeFormat(undefined, {}).resolvedOptions().timeZone === 'Europe/Paris';
+      } finally {
+        if (zero) Object.defineProperty(Array.prototype, '0', zero); else delete Array.prototype[0];
+        if (one) Object.defineProperty(Array.prototype, '1', one); else delete Array.prototype[1];
+      }
+    })()"#
+        )
+        .unwrap(),
+        "true"
+    );
+}
+
+#[test]
+fn emulation_timezone_boxes_primitive_options_without_losing_defaults() {
+    let mut vm = new_storage_test_vm("https://intl-primitive-options.test/");
+    vm.set_timezone_override(Some("Europe/Paris"));
+    assert_eq!(vm.eval(r#"JSON.stringify((() => {
+      const date = new Date('2024-01-01T00:00:00Z');
+      const options = [42, true, '', Symbol(), 1n];
+      const zones = options.every(value =>
+        new Intl.DateTimeFormat('en-US', value).resolvedOptions().timeZone === 'Europe/Paris');
+      const dates = ['toLocaleString', 'toLocaleDateString', 'toLocaleTimeString'].every(method =>
+        options.every(value => date[method]('en-US', value) === date[method]('en-US', {timeZone: 'Europe/Paris'})));
+      let nullRejected = false;
+      try {new Intl.DateTimeFormat('en-US', null);} catch (error) {nullRejected = error instanceof TypeError;}
+      return [zones, dates, nullRejected];
+    })())"#).unwrap(), "[true,true,true]");
+}
+
+#[test]
+fn emulation_date_time_first_legacy_hyphens_are_not_timezone_offsets() {
+    let mut vm = new_storage_test_vm("https://date-time-first.test/");
+    for timezone in ["Europe/Paris", "America/New_York", "Asia/Shanghai"] {
+        vm.set_timezone_override(Some(timezone));
+        assert_eq!(
+            vm.eval(
+                r#"JSON.stringify([
+          '00:00:00 Jan-01-2024', '00:00:00 01-01-2024',
+          '00:00 Jan-01-2024', '00:00:00.000 Jan-01-2024',
+          '00:00:00 January-01-2024', '00:00:00 Jan-01-2024 (PST)'
+        ].map(input => [Date.parse(input) === +new Date(2024, 0, 1),
+          +new Date(input) === +new Date(2024, 0, 1)]))"#
+            )
+            .unwrap(),
+            "[[true,true],[true,true],[true,true],[true,true],[true,true],[true,true]]",
+            "{timezone}"
+        );
+    }
+}
+
+#[test]
 fn date_and_intl_declared_wrappers_preserve_native_method_descriptors() {
     let mut vm = new_storage_test_vm("https://date-intl-declarations.test/");
     let probe = r#"JSON.stringify((() => {

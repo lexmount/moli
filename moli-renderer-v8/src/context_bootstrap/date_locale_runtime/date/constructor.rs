@@ -1,5 +1,5 @@
 use super::{DateIntrinsic, original_date_method};
-use crate::util::{call_script_visible_function, v8_string, v8str};
+use crate::util::{call_script_visible_function, throw_type_error, v8_string, v8str};
 use crate::webidl;
 use anyhow::{Result, anyhow};
 use moli_webapi_declare::WebApiObject;
@@ -202,8 +202,17 @@ fn date_constructor_timezone_arguments<'s>(
         .ok_or(())?
     } else if arguments.length() == 1 {
         let input = arguments.get_index(scope, 0).ok_or(())?;
-        if !input.is_string() {
+        // Date copies another Date's [[DateValue]] without invoking even an
+        // own @@toPrimitive getter. Every other object is converted with the
+        // default hint, then strings are parsed and other primitives become
+        // numeric epochs. Forward the primitive, never the original object,
+        // so V8 cannot run the page's conversion hooks a second time.
+        if input.is_date() {
             return Ok(None);
+        }
+        let input = date_constructor_primitive(scope, input).ok_or(())?;
+        if !input.is_string() {
+            return Ok(Some(v8::Array::new_with_elements(scope, &[input])));
         }
         let input = v8::Local::<v8::String>::try_from(input).map_err(|_| ())?;
         let epoch = parse_date_string(scope, date_parse, input, Some(timezone)).ok_or(())?;
@@ -216,6 +225,57 @@ fn date_constructor_timezone_arguments<'s>(
         wall_clock.number_value(scope),
         timezone,
     )))
+}
+
+/// ECMA-262 ToPrimitive with no preferred type (Date constructor step 3.b.i).
+/// rusty_v8 does not expose this abstract operation. Keep the small conversion
+/// boundary here rather than using ToString/ToNumber, which change both the
+/// hint and which branch the native Date constructor must take.
+fn date_constructor_primitive<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    input: v8::Local<'s, v8::Value>,
+) -> Option<v8::Local<'s, v8::Value>> {
+    if !input.is_object() {
+        return Some(input);
+    }
+    let object = v8::Local::<v8::Object>::try_from(input).ok()?;
+    let key = v8::Symbol::get_to_primitive(scope);
+    let exotic = object.get(scope, key.into())?;
+    if !exotic.is_null_or_undefined() {
+        let Ok(method) = v8::Local::<v8::Function>::try_from(exotic) else {
+            throw_type_error(scope, "Symbol.toPrimitive is not callable");
+            return None;
+        };
+        let hint = v8str(scope, "default");
+        let result = call_script_visible_function(
+            scope,
+            method,
+            input,
+            &[hint.into()],
+            "Date constructor ToPrimitive",
+        )?;
+        if !result.is_object() {
+            return Some(result);
+        }
+    } else {
+        for key in ["valueOf", "toString"] {
+            let method = object.get(scope, v8str(scope, key).into())?;
+            if let Ok(method) = v8::Local::<v8::Function>::try_from(method) {
+                let result = call_script_visible_function(
+                    scope,
+                    method,
+                    input,
+                    &[],
+                    "Date constructor OrdinaryToPrimitive",
+                )?;
+                if !result.is_object() {
+                    return Some(result);
+                }
+            }
+        }
+    }
+    throw_type_error(scope, "Cannot convert object to primitive value");
+    None
 }
 
 fn single_date_epoch_argument<'s>(

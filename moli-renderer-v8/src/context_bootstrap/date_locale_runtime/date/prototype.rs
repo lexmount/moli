@@ -2,7 +2,8 @@ use super::*;
 use crate::util::call_script_visible_function;
 
 use super::super::{
-    intl::intl_datetime_options_with_default_timezone, overrides::current_date_locale_overrides,
+    intl::{intl_date_locales_with_default, intl_datetime_options_with_default_timezone},
+    overrides::current_date_locale_overrides,
 };
 
 const DATE_LOCAL_FIELD_INTRINSICS: &[DateIntrinsic] = &[
@@ -87,13 +88,12 @@ fn set_date_locale_method_result<'s>(
         .map(|index| args.get(index))
         .collect::<Vec<_>>();
     if let Some(locale) = locale_override.as_deref()
-        && forwarded.first().is_none_or(|value| value.is_undefined())
-        && let Some(locale) = v8_string(scope, locale)
+        && let Some(locale) = intl_date_locales_with_default(scope, args.get(0), locale)
     {
         if forwarded.is_empty() {
-            forwarded.push(locale.into());
+            forwarded.push(locale);
         } else {
-            forwarded[0] = locale.into();
+            forwarded[0] = locale;
         }
     }
     if let Some(timezone) = timezone_override.as_deref()

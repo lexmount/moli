@@ -61,10 +61,13 @@ fn legacy_timezone(input: &str) -> (bool, usize) {
     const ZONES: &[&str] = &[
         "ut", "utc", "gmt", "z", "est", "edt", "cst", "cdt", "mst", "mdt", "pst", "pdt",
     ];
+    const MONTHS: &[&str] = &[
+        "jan", "feb", "mar", "apr", "may", "jun", "jul", "aug", "sep", "oct", "nov", "dec",
+    ];
     let mut chars = input.char_indices().peekable();
     let mut comments = 0;
     let mut number_seen = false;
-    let mut time_seen = false;
+    let mut time_fields = 0;
     while let Some((start, ch)) = chars.next() {
         if ch == '(' {
             comments += 1;
@@ -74,9 +77,35 @@ fn legacy_timezone(input: &str) -> (bool, usize) {
             }
         } else if ch.is_ascii_digit() {
             number_seen = true;
-        } else if ch == ':' {
-            time_seen = true;
-        } else if matches!(ch, '+' | '-') && time_seen {
+            let mut number = ch.to_digit(10).unwrap();
+            while let Some((_, digit)) = chars.next_if(|(_, ch)| ch.is_ascii_digit()) {
+                number = number
+                    .saturating_mul(10)
+                    .saturating_add(digit.to_digit(10).unwrap());
+            }
+            // Mirror DateParser's token consumption, not a full date parser:
+            // day numbers and month names consume their following '-' before
+            // the timezone branch sees it. A completed time does NOT consume
+            // that sign (00:00:00-0100 is an offset). The original native parse
+            // above still decides validity, ranges and calendar composition.
+            if chars.next_if(|(_, ch)| *ch == ':').is_some() {
+                time_fields += 1;
+                if chars.next_if(|(_, ch)| *ch == ':').is_some() {
+                    time_fields += 1;
+                } else {
+                    let _ = chars.next_if(|(_, ch)| *ch == '.');
+                }
+            } else if ((time_fields == 1 || time_fields == 2) && number <= 59)
+                || (time_fields == 3 && number <= 999)
+            {
+                time_fields = 4;
+                if chars.next_if(|(_, ch)| *ch == '.').is_some() {
+                    while chars.next_if(|(_, ch)| ch.is_ascii_digit()).is_some() {}
+                }
+            } else {
+                let _ = chars.next_if(|(_, ch)| *ch == '-');
+            }
+        } else if matches!(ch, '+' | '-') && time_fields > 0 {
             return (true, comments);
         } else if is_legacy_word_char(ch) {
             while chars.peek().is_some_and(|(_, ch)| is_legacy_word_char(*ch)) {
@@ -87,6 +116,13 @@ fn legacy_timezone(input: &str) -> (bool, usize) {
             let word = &input[start..end];
             if number_seen && ZONES.iter().any(|zone| word.eq_ignore_ascii_case(zone)) {
                 return (true, comments);
+            }
+            if word.as_bytes().get(..3).is_some_and(|prefix| {
+                MONTHS
+                    .iter()
+                    .any(|month| prefix.eq_ignore_ascii_case(month.as_bytes()))
+            }) {
+                let _ = chars.next_if(|(_, ch)| *ch == '-');
             }
         }
     }
@@ -125,6 +161,9 @@ mod tests {
             "Jan 1 2024 00:00:00 PST",
             "Jan 1 2024 00:00:00 eSt\u{a0}",
             "Jan 1 2024 00:00:00 +0530",
+            "00:00:00-0100 Jan-01-2024",
+            "00:00-01:00 01-01-2024",
+            "00:00:00.000-0100 Jan-01-2024",
         ] {
             assert_eq!(local_date_parse_input_as_utc(input), None, "{input}");
         }
@@ -133,6 +172,10 @@ mod tests {
             "Thu Jan 04 2024 00:00:00",
             "Jan 1 2024 (PST)",
             " 2024-01-01 ",
+            "00:00:00 Jan-01-2024",
+            "00:00:00 01-01-2024",
+            "00:00 January-01-2024",
+            "00:00:00.000 Jan-01-2024",
         ] {
             assert_eq!(
                 local_date_parse_input_as_utc(input),
