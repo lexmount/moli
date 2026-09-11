@@ -750,6 +750,7 @@ async fn response_clone_tees_pending_network_body_after_parent_consumption() {
                         mode: moli_fetch::RequestMode::Cors,
                     },
                     moli_fetch::ResponseHead {
+                        status_text: None,
                         final_url: response_url,
                         status: 200,
 
@@ -862,6 +863,7 @@ fn pending_fetch_body_pipe_through_text_decoder_stream_pulls_future_chunks() {
                         mode: moli_fetch::RequestMode::Cors,
                     },
                     moli_fetch::ResponseHead {
+                        status_text: None,
                         final_url: response_url,
                         status: 200,
 
@@ -988,6 +990,7 @@ fn materialize_response_object_preserves_redirected_slot() {
                 },
                 moli_fetch::Response::from_head_and_text_body(
                     moli_fetch::ResponseHead {
+                        status_text: None,
                         final_url: final_url.clone(),
                         status: 200,
 
@@ -1658,6 +1661,7 @@ fn opaque_window_fetch_keeps_blocked_bytes_out_of_internal_clone_consumers() {
                 body_source_id: id,
                 network_request_headers: None,
                 head: moli_fetch::ResponseHead {
+                    status_text: None,
                     final_url: pending.url.clone(),
                     status: 200,
                     headers: vec![("Content-Type".to_owned(), mime.to_owned())],

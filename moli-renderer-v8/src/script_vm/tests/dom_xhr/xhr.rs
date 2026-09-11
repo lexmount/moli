@@ -1070,6 +1070,7 @@ fn xml_http_request_blob_response_uses_final_mime_type() {
                     scope,
                     xhr,
                     moli_fetch::ResponseHead {
+                        status_text: None,
                         final_url: Url::parse("https://xhr-override-mime.test/mime")
                             .expect("response URL should parse"),
                         status: 200,
@@ -1172,6 +1173,7 @@ fn xml_http_request_default_response_type_parses_response_xml_for_document_mime(
                 scope,
                 xml_xhr,
                 moli_fetch::ResponseHead {
+                    status_text: None,
                     final_url: Url::parse("https://xhr-response-xml.test/xml-doc")
                         .expect("XML response URL should parse"),
                     status: 200,
@@ -1200,6 +1202,7 @@ fn xml_http_request_default_response_type_parses_response_xml_for_document_mime(
                 scope,
                 plain_xhr,
                 moli_fetch::ResponseHead {
+                    status_text: None,
                     final_url: Url::parse("https://xhr-response-xml.test/plain")
                         .expect("plain response URL should parse"),
                     status: 200,
@@ -1275,6 +1278,7 @@ fn xml_http_request_response_document_uses_response_url_and_requester_origin() {
                     scope,
                     xhr,
                     moli_fetch::ResponseHead {
+                        status_text: None,
                         final_url: Url::parse("https://response.example/resource/doc#fragment").unwrap(),
                         status: 200,
                         headers: vec![("Content-Type".to_owned(), mime.to_owned())],
@@ -2467,6 +2471,7 @@ __streamingXhr.send();
     let request_url = pending.url.clone();
     let body_source_id = crate::network_host::new_network_body_source_id();
     let response_head = moli_fetch::ResponseHead {
+        status_text: Some("Streamed message".to_owned()),
         final_url: request_url.clone(),
         status: 200,
         status_text: None,
@@ -2505,12 +2510,13 @@ __streamingXhr.send();
   events: __streamingXhrEvents,
   readyState: __streamingXhr.readyState,
   status: __streamingXhr.status,
+  statusText: __streamingXhr.statusText,
   responseText: __streamingXhr.responseText,
   contentType: __streamingXhr.getResponseHeader("content-type")
 })"#,
         )
         .expect("XHR response head should be Web-visible"),
-        r#"{"events":["readystatechange:1:0:","readystatechange:2:200:"],"readyState":2,"status":200,"responseText":"","contentType":"text/plain; charset=utf-8"}"#
+        r#"{"events":["readystatechange:1:0:","readystatechange:2:200:"],"readyState":2,"status":200,"statusText":"Streamed message","responseText":"","contentType":"text/plain; charset=utf-8"}"#
     );
 
     vm.append_streaming_async_subresource_fetch_chunk(body_source_id, b"hi \xe2".to_vec());
@@ -2543,6 +2549,15 @@ __streamingXhr.send();
             .expect("completed streaming XHR should be Web-visible"),
         r#"[4,200,"hi €!",["readystatechange:3:200:hi €!","progress:7:7:true","readystatechange:4:200:hi €!","load","loadend"]]"#,
         "DONE must flush the latest deferred progress before readystatechange 4"
+    );
+    assert_eq!(
+        vm.eval("__streamingXhr.statusText").unwrap(),
+        "Streamed message"
+    );
+    assert_eq!(
+        vm.eval("__streamingXhr.open('GET', '/next'); __streamingXhr.statusText")
+            .unwrap(),
+        ""
     );
 }
 
@@ -2737,6 +2752,7 @@ async fn streaming_subresource_finish_preserves_response_head_cache_state() {
                         request_body: None,
                         body_source_id,
                         head: moli_fetch::ResponseHead {
+                            status_text: None,
                             final_url: final_url.clone(),
                             status: 200,
                             status_text: None,
@@ -3039,6 +3055,7 @@ async fn streaming_fetch_body_error_records_response_started_then_body_failed() 
                         request_body: None,
                         body_source_id,
                         head: moli_fetch::ResponseHead {
+                            status_text: None,
                             final_url: final_url.clone(),
                             status: 206,
                             status_text: None,
@@ -3314,6 +3331,7 @@ async fn streaming_fetch_body_cancel_aborts_streaming_subresource() {
                         request_body: None,
                         body_source_id,
                         head: moli_fetch::ResponseHead {
+                            status_text: None,
                             final_url: request_url,
                             status: 200,
                             status_text: None,
@@ -3975,6 +3993,7 @@ async fn streaming_xhr_materialization_failure_errors_body_source_before_close()
                     request_body: None,
                     body_source_id,
                     head: moli_fetch::ResponseHead {
+                        status_text: None,
                         final_url: request_url,
                         status: 200,
                         status_text: None,
