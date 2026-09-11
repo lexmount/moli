@@ -757,7 +757,7 @@ fn xml_http_request_open_and_abort_keep_accessor_backed_state_without_own_props(
   xhr.abort();
   return [
     ...afterOpen,
-    xhr.readyState === 0,
+    xhr.readyState === 1,
     xhr.status === 0,
     xhr.statusText === '',
     xhr.responseURL === '',
@@ -779,9 +779,87 @@ fn xml_http_request_open_and_abort_keep_accessor_backed_state_without_own_props(
 
     assert_eq!(
         result,
-        "true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|false|true|true|true|false|true|true|true"
+        "true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|false|false|false|true|false|false|false|true|true"
     );
 }
+
+#[test]
+fn xml_http_request_abort_uses_internal_state_and_resets_completed_response() {
+    let mut vm = new_storage_test_vm("https://xhr-abort-internal-state.test/");
+    let result = vm
+        .eval(
+            r#"
+(() => {
+  const xhr = new XMLHttpRequest();
+  const state = Object.getOwnPropertyDescriptor(XMLHttpRequest.prototype, "readyState").get;
+  const states = [];
+  let aborts = 0;
+  xhr.onreadystatechange = () => states.push(state.call(xhr));
+  xhr.onabort = () => ++aborts;
+  Object.defineProperty(xhr, "readyState", { get() { throw new Error("public readyState read"); } });
+  xhr.abort();
+  const unsent = state.call(xhr);
+  xhr.open("POST", "data:text/plain,complete", false);
+  xhr.abort();
+  const opened = state.call(xhr);
+  xhr.send({ toString() { xhr.abort(); return "payload"; } });
+  const completed = [state.call(xhr), xhr.status, xhr.responseText];
+  xhr.abort();
+  return JSON.stringify({ unsent, opened, completed,
+    reset: [state.call(xhr), xhr.status, xhr.statusText, xhr.responseText,
+      xhr.responseURL, xhr.getAllResponseHeaders()], states, aborts });
+})()
+"#,
+        )
+        .expect("abort should use private state and clear a completed response without events");
+    assert_eq!(
+        result,
+        r#"{"unsent":0,"opened":1,"completed":[4,200,"complete"],"reset":[0,0,"","","",""],"states":[1,4],"aborts":0}"#
+    );
+}
+
+#[test]
+fn xml_http_request_abort_preserves_request_started_by_readystatechange() {
+    let mut vm = new_storage_test_vm("https://xhr-abort-reopen.test/");
+    vm.eval(
+        r#"
+(() => {
+  const xhr = new XMLHttpRequest();
+  const events = globalThis.__xhrAbortReopenEvents = [];
+  let restarted = false;
+  xhr.onreadystatechange = () => {
+    if (xhr.readyState === 4 && !restarted) {
+      restarted = true;
+      events.push(`abort-ready:${xhr.readyState}:${xhr.status}`);
+      xhr.open("GET", "data:text/plain,second");
+      xhr.send();
+      events.push(`reopened:${xhr.readyState}`);
+    }
+  };
+  xhr.onloadstart = () => {
+    if (!restarted) {
+      xhr.abort();
+      events.push(`after-abort:${xhr.readyState}`);
+    }
+  };
+  xhr.onabort = () => events.push(`abort:${xhr.readyState}`);
+  xhr.onload = () => events.push(`load:${xhr.responseText}`);
+  xhr.onloadend = () => events.push(`loadend:${xhr.readyState}`);
+  xhr.open("GET", "data:text/plain,first");
+  xhr.send();
+})()
+"#,
+    )
+    .expect("abort readystatechange should be able to reopen and send another request");
+    vm.eval("0")
+        .expect("follow-up checkpoint should deliver the replacement request");
+    assert_eq!(
+        vm.eval("__xhrAbortReopenEvents.join('|')")
+            .expect("replacement request events"),
+        "abort-ready:4:0|reopened:1|abort:1|loadend:1|after-abort:1|load:second|loadend:4"
+    );
+}
+
 #[test]
 fn xml_http_request_methods_apply_webidl_argument_conversion() {
     let mut vm = new_storage_test_vm("https://xhr-webidl-args.test/");

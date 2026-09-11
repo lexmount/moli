@@ -7597,6 +7597,71 @@ async fn worker_fetch_body_consumption_after_stream_abort_preserves_abort_reason
 }
 
 #[tokio::test]
+async fn worker_xmlhttprequest_abort_uses_internal_state_and_preserves_reopened_request() {
+    ensure_v8();
+    let mut handle = spawn_worker(
+        r#"
+        (() => {
+            const probe = new XMLHttpRequest();
+            const state = Object.getOwnPropertyDescriptor(XMLHttpRequest.prototype, "readyState").get;
+            const states = [];
+            let aborts = 0;
+            probe.onreadystatechange = () => states.push(state.call(probe));
+            probe.onabort = () => ++aborts;
+            Object.defineProperty(probe, "readyState", { get() { throw new Error("public readyState read"); } });
+            probe.abort();
+            const unsent = state.call(probe);
+            probe.open("POST", "data:text/plain,complete", false);
+            probe.abort();
+            const opened = state.call(probe);
+            probe.send({ toString() { probe.abort(); return "payload"; } });
+            const completed = [state.call(probe), probe.status, probe.responseText];
+            probe.abort();
+            const reset = [state.call(probe), probe.status, probe.statusText,
+                probe.responseText, probe.responseURL, probe.getAllResponseHeaders()];
+
+            const xhr = new XMLHttpRequest();
+            const events = [];
+            let restarted = false;
+            xhr.onreadystatechange = () => {
+                if (xhr.readyState === 4 && !restarted) {
+                    restarted = true;
+                    events.push(`abort-ready:${xhr.readyState}:${xhr.status}`);
+                    xhr.open("GET", "data:text/plain,second");
+                    xhr.send();
+                    events.push(`reopened:${xhr.readyState}`);
+                }
+            };
+            xhr.onloadstart = () => {
+                if (!restarted) {
+                    xhr.abort();
+                    events.push(`after-abort:${xhr.readyState}`);
+                }
+            };
+            xhr.onabort = () => events.push(`abort:${xhr.readyState}`);
+            xhr.onload = () => events.push(`load:${xhr.responseText}`);
+            xhr.onloadend = () => {
+                events.push(`loadend:${xhr.readyState}`);
+                if (xhr.readyState === 4) {
+                    postMessage({ unsent, opened, completed, reset, states, aborts, events });
+                    close();
+                }
+            };
+            xhr.open("GET", "data:text/plain,first");
+            xhr.send();
+        })();
+        "#
+        .into(),
+        "https://worker-xhr-abort-state.test/main.js".into(),
+    );
+
+    assert_eq!(
+        recv_post_json(&mut handle).await,
+        r#"{"unsent":0,"opened":1,"completed":[4,200,"complete"],"reset":[0,0,"","","",""],"states":[1,4],"aborts":0,"events":["abort-ready:4:0","reopened:1","abort:1","loadend:1","after-abort:1","load:second","loadend:4"]}"#
+    );
+}
+
+#[tokio::test]
 async fn worker_xmlhttprequest_abort_cancels_inflight_request_and_ignores_late_completion() {
     ensure_v8();
     let (base_url, server) = spawn_path_response_http_server(vec![(

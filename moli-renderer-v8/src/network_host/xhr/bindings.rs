@@ -10,7 +10,7 @@ use super::header_surface::{
     xhr_get_all_response_headers_callback, xhr_get_response_header_callback,
     xhr_override_mime_type_callback, xhr_set_request_header_callback,
 };
-use super::send::{dispatch_xhr_upload_abort_if_in_progress, xhr_send_callback};
+use super::send::xhr_send_callback;
 use super::*;
 
 pub(crate) use self::constants::{
