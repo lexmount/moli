@@ -2,6 +2,7 @@ use super::*;
 use crate::blob;
 use crate::dom::native::SelectedFile;
 use crate::util::get_private_value;
+use crate::web_api_interfaces;
 use crate::webidl;
 use moli_file_api::file::normalize_file_last_modified;
 use moli_webapi_declare::{WebApiFunctionTemplate, WebApiObject};
@@ -10,7 +11,7 @@ const FILE_NAME_SLOT: &str = "__lmFileName";
 const FILE_LAST_MODIFIED_SLOT: &str = "__lmFileLastModified";
 
 #[derive(WebApiObject)]
-#[webapi(interface = "File")]
+#[webapi(interface = web_api_interfaces::File)]
 struct FileMetadataDeclaration {
     #[webapi(slot = FILE_NAME_SLOT)]
     name: String,
@@ -19,7 +20,7 @@ struct FileMetadataDeclaration {
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(name = "File")]
+#[webapi(interface = web_api_interfaces::File)]
 struct FilePrototypeAccessorsDeclaration {
     #[webapi(accessor_property, getter = file_name_attribute_getter_callback, enumerable)]
     name: (),

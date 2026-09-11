@@ -166,7 +166,7 @@ struct SamplePerformanceInterface {
 
 #[derive(WebApiFunctionTemplate)]
 #[webapi(
-    name = "ConstructibleSample",
+    interface = interfaces::ConstructibleSample,
     constructor_callback = sample_constructor_callback,
     constructor_length = 2
 )]
@@ -180,7 +180,7 @@ struct InterfaceDescriptorSample {
 }
 
 #[derive(WebApiObject)]
-#[webapi(interface = "SamplePerformance")]
+#[webapi(interface = interfaces::SamplePerformance)]
 struct SamplePerformanceObject {
     #[webapi(data_property = SAMPLE_TIME_ORIGIN_SLOT)]
     time_origin: f64,
@@ -260,7 +260,7 @@ struct SamplePerformanceObject {
 }
 
 #[derive(WebApiObject)]
-#[webapi(interface = "SamplePerformance")]
+#[webapi(interface = interfaces::SamplePerformance)]
 struct SampleLocalObjectSlot<'scope> {
     #[webapi(slot = SAMPLE_LOCAL_OBJECT_SLOT)]
     local_object: v8::Local<'scope, v8::Object>,
@@ -369,7 +369,7 @@ struct ConstantObject {
 
 #[derive(WebApiFunctionTemplate)]
 #[webapi(
-    name = "SampleTemplate",
+    interface = interfaces::SampleTemplate,
     constructor_callback = sample_constructor_callback,
     constructor_length = 1,
     enumerable
@@ -510,7 +510,7 @@ struct DefaultEnumerablePropertiesObject {
 }
 
 #[derive(WebApiObject)]
-#[webapi(interface = "SamplePerformance", data_properties, enumerable)]
+#[webapi(interface = interfaces::SamplePerformance, data_properties, enumerable)]
 struct PrototypeBackedEnumerablePropertiesObject {
     client_x: f64,
 }
@@ -523,7 +523,7 @@ struct ExplicitSnakeCasePropertiesObject {
 
 #[derive(WebApiObject)]
 #[webapi(
-    interface = "SamplePerformance",
+    interface = interfaces::SamplePerformance,
     own_to_string_tag = "ReadonlySample",
     readonly_to_string_tag,
     allow_empty
@@ -531,7 +531,7 @@ struct ExplicitSnakeCasePropertiesObject {
 struct ReadonlyTagObject {}
 
 #[derive(WebApiObject)]
-#[webapi(interface = "MissingSampleInterface", require_prototype, allow_empty)]
+#[webapi(interface = interfaces::MissingSampleInterface, require_prototype, allow_empty)]
 struct RequiredPrototypeObject {}
 
 #[derive(WebApiObject)]
@@ -576,7 +576,7 @@ struct RuntimeReadonlyLockedTagObject {
 
 #[derive(WebApiObject)]
 #[webapi(
-    interface = "SamplePerformance",
+    interface = interfaces::SamplePerformance,
     fallback_to_string_tag = "SampleFallback",
     allow_empty
 )]
@@ -584,7 +584,7 @@ struct PrototypeBackedFallbackTagObject {}
 
 #[derive(WebApiObject)]
 #[webapi(
-    interface = "MissingSampleInterface",
+    interface = interfaces::MissingSampleInterface,
     fallback_to_string_tag = "MissingSample",
     allow_empty
 )]
@@ -2988,5 +2988,14 @@ fn get_private_value<'s>(
         None
     } else {
         Some(value)
+    }
+}
+
+mod interfaces {
+    moli_webapi_declare::declare_web_api_interfaces! {
+        pub(super) ConstructibleSample;
+        pub(super) MissingSampleInterface;
+        pub(super) SamplePerformance;
+        pub(super) SampleTemplate;
     }
 }

@@ -11,10 +11,11 @@ use crate::definitions::{
     define_native_data_property as define_attr_instance_native_data_property,
     define_native_data_property_with_setter as define_attr_instance_native_data_property_with_setter,
 };
+use crate::web_api_interfaces;
 use moli_webapi_declare::WebApiObject;
 
 #[derive(WebApiObject)]
-#[webapi(interface = "Attr")]
+#[webapi(interface = web_api_interfaces::Attr)]
 struct AttrInstanceMethodsDeclaration {
     #[webapi(method, length = 0, callback = attr_instance_is_same_node_callback)]
     is_same_node: (),

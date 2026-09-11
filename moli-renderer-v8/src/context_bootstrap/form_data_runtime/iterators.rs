@@ -4,6 +4,7 @@ use crate::util::{
     get_private_object, get_private_value, materialize_hidden_function_template_prototype,
     set_private_value,
 };
+use crate::web_api_interfaces;
 use moli_webapi_declare::{WebApiFunctionTemplate, WebApiObject};
 
 const FORM_DATA_ITERATOR_TARGET_SLOT: &str = "__moliFormDataIteratorTarget";
@@ -12,7 +13,7 @@ const FORM_DATA_ITERATOR_KIND_SLOT: &str = "__moliFormDataIteratorKind";
 const FORM_DATA_ITERATOR_PROTOTYPE_SLOT: &str = "__moliFormDataIteratorPrototype";
 
 #[derive(WebApiObject)]
-#[webapi(prototype = "Object", interface = "FormData Iterator")]
+#[webapi(prototype = "Object", interface = web_api_interfaces::FormDataIterator)]
 struct FormDataIteratorDeclaration<'scope> {
     #[webapi(slot = FORM_DATA_ITERATOR_TARGET_SLOT)]
     target: v8::Local<'scope, v8::Object>,
@@ -24,7 +25,7 @@ struct FormDataIteratorDeclaration<'scope> {
 
 #[derive(WebApiFunctionTemplate)]
 #[webapi(
-    name = "FormData Iterator",
+    interface = web_api_interfaces::FormDataIterator,
     intrinsic_prototype_parent = v8::Intrinsic::IteratorPrototype,
     prototype_to_string_tag = "FormData Iterator",
     readonly_prototype,

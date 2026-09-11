@@ -1,8 +1,9 @@
 use super::*;
+use crate::web_api_interfaces;
 use moli_webapi_declare::WebApiFunctionTemplate;
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(name = "IDBObjectStore", enumerable)]
+#[webapi(interface = web_api_interfaces::IDBObjectStore, enumerable)]
 struct IdbObjectStorePrototypeDeclaration {
     #[webapi(method, length = 1, callback = idb_object_store_get_callback)]
     get: (),

@@ -1,5 +1,6 @@
 use super::*;
 use crate::util::{callback_data_index_value, get_private_value, set_private_value};
+use crate::web_api_interfaces;
 use crate::webidl;
 use moli_webapi_declare::{WebApiFunctionTemplate, WebApiObject};
 
@@ -9,7 +10,7 @@ const DOM_RECT_WIDTH_SLOT: &str = "__moliDomRectWidth";
 const DOM_RECT_HEIGHT_SLOT: &str = "__moliDomRectHeight";
 
 #[derive(WebApiObject)]
-#[webapi(interface = "DOMRect")]
+#[webapi(interface = web_api_interfaces::DOMRect)]
 struct DomRectObjectDeclaration {
     #[webapi(slot = DOM_RECT_X_SLOT)]
     x: f64,
@@ -22,7 +23,7 @@ struct DomRectObjectDeclaration {
 }
 
 #[derive(WebApiObject)]
-#[webapi(interface = "DOMRectReadOnly")]
+#[webapi(interface = web_api_interfaces::DOMRectReadOnly)]
 struct DomRectReadOnlyObjectDeclaration {
     #[webapi(slot = DOM_RECT_X_SLOT)]
     x: f64,
@@ -35,7 +36,7 @@ struct DomRectReadOnlyObjectDeclaration {
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(name = "DOMRectReadOnly")]
+#[webapi(interface = web_api_interfaces::DOMRectReadOnly)]
 struct DomRectReadOnlyPrototypeDeclaration {
     #[webapi(
         accessor_property,
@@ -98,7 +99,7 @@ struct DomRectReadOnlyPrototypeDeclaration {
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(name = "DOMRect")]
+#[webapi(interface = web_api_interfaces::DOMRect)]
 struct DomRectPrototypeDeclaration {
     #[webapi(
         accessor_property,
@@ -135,7 +136,7 @@ struct DomRectPrototypeDeclaration {
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(name = "DOMRectReadOnly")]
+#[webapi(interface = web_api_interfaces::DOMRectReadOnly)]
 struct DomRectReadOnlyConstructorDeclaration {
     #[webapi(
         static_method = "fromRect",
@@ -146,7 +147,7 @@ struct DomRectReadOnlyConstructorDeclaration {
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(name = "DOMRect")]
+#[webapi(interface = web_api_interfaces::DOMRect)]
 struct DomRectConstructorDeclaration {
     #[webapi(
         static_method = "fromRect",

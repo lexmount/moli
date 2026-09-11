@@ -6,6 +6,7 @@ use crate::util::{
     callback_data_index_value, callback_data_item, get_private_value, set_private_value,
     throw_type_error,
 };
+use crate::web_api_interfaces;
 use anyhow::Result;
 use moli_webapi_declare::{WebApiFunctionTemplate, WebApiObject, v8};
 
@@ -37,7 +38,7 @@ const SPEECH_VOICE_LOCAL_SERVICE_SLOT: &str = "__lmSpeechSynthesisVoiceLocalServ
 const SPEECH_VOICE_DEFAULT_SLOT: &str = "__lmSpeechSynthesisVoiceDefault";
 
 #[derive(Default, WebApiObject)]
-#[webapi(interface = "SpeechSynthesis")]
+#[webapi(interface = web_api_interfaces::SpeechSynthesis)]
 struct SpeechSynthesisObjectDeclaration {
     #[webapi(slot = SPEECH_SYNTHESIS_PENDING_SLOT, init = false)]
     pending: (),
@@ -59,7 +60,7 @@ struct SpeechSynthesisObjectDeclaration {
 }
 
 #[derive(Default, WebApiFunctionTemplate)]
-#[webapi(name = "SpeechSynthesis", enumerable)]
+#[webapi(interface = web_api_interfaces::SpeechSynthesis, enumerable)]
 struct SpeechSynthesisPrototypeDeclaration {
     #[webapi(
         accessor_property,
@@ -106,7 +107,7 @@ struct SpeechSynthesisPrototypeDeclaration {
 }
 
 #[derive(WebApiObject)]
-#[webapi(interface = "SpeechSynthesisUtterance")]
+#[webapi(interface = web_api_interfaces::SpeechSynthesisUtterance)]
 struct SpeechSynthesisUtteranceObjectDeclaration<'scope> {
     #[webapi(slot = SPEECH_UTTERANCE_TEXT_SLOT)]
     text: v8::Local<'scope, v8::String>,
@@ -155,7 +156,7 @@ struct SpeechSynthesisUtteranceObjectDeclaration<'scope> {
 }
 
 #[derive(Default, WebApiFunctionTemplate)]
-#[webapi(name = "SpeechSynthesisUtterance", enumerable)]
+#[webapi(interface = web_api_interfaces::SpeechSynthesisUtterance, enumerable)]
 struct SpeechSynthesisUtterancePrototypeDeclaration {
     #[webapi(
         accessor_property,
@@ -232,7 +233,7 @@ struct SpeechSynthesisUtterancePrototypeDeclaration {
 }
 
 #[derive(Default, WebApiFunctionTemplate)]
-#[webapi(name = "SpeechSynthesisVoice", enumerable)]
+#[webapi(interface = web_api_interfaces::SpeechSynthesisVoice, enumerable)]
 struct SpeechSynthesisVoicePrototypeDeclaration {
     #[webapi(accessor_property = "voiceURI", getter = speech_voice_getter, data = callback_data_index_value(scope, 0))]
     voice_uri: (),

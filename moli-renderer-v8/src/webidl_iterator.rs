@@ -1,3 +1,4 @@
+use crate::web_api_interfaces;
 use crate::{
     callback_invocation::invoke_synchronous_webidl_callback_function,
     util::{
@@ -156,7 +157,7 @@ struct SnapshotWebIdlIteratorResultDeclaration<'s> {
 
 #[derive(WebApiFunctionTemplate)]
 #[webapi(
-    name = "StylePropertyMapReadOnly Iterator",
+    interface = web_api_interfaces::StylePropertyMapReadOnlyIterator,
     intrinsic_prototype_parent = v8::Intrinsic::IteratorPrototype,
     prototype_to_string_tag = "StylePropertyMapReadOnly Iterator",
     readonly_prototype,
@@ -169,7 +170,7 @@ struct StylePropertyMapReadOnlyIteratorPrototypeDeclaration {
 
 #[derive(WebApiFunctionTemplate)]
 #[webapi(
-    name = "EventCounts Iterator",
+    interface = web_api_interfaces::EventCountsIterator,
     intrinsic_prototype_parent = v8::Intrinsic::MapIteratorPrototype,
     prototype_to_string_tag = "EventCounts Iterator",
     readonly_prototype,
@@ -182,7 +183,7 @@ struct EventCountsIteratorPrototypeDeclaration {
 
 #[derive(WebApiFunctionTemplate)]
 #[webapi(
-    name = "FontFaceSet Iterator",
+    interface = web_api_interfaces::FontFaceSetIterator,
     intrinsic_prototype_parent = v8::Intrinsic::SetIteratorPrototype,
     prototype_to_string_tag = "FontFaceSet Iterator",
     readonly_prototype,
@@ -195,7 +196,7 @@ struct FontFaceSetIteratorPrototypeDeclaration {
 
 #[derive(WebApiFunctionTemplate)]
 #[webapi(
-    name = "ViewTransitionTypeSet Iterator",
+    interface = web_api_interfaces::ViewTransitionTypeSetIterator,
     intrinsic_prototype_parent = v8::Intrinsic::SetIteratorPrototype,
     prototype_to_string_tag = "ViewTransitionTypeSet Iterator",
     readonly_prototype,
@@ -212,7 +213,7 @@ struct ViewTransitionTypeSetIteratorPrototypeDeclaration {
 
 #[derive(WebApiFunctionTemplate)]
 #[webapi(
-    name = "CustomStateSet Iterator",
+    interface = web_api_interfaces::CustomStateSetIterator,
     intrinsic_prototype_parent = v8::Intrinsic::SetIteratorPrototype,
     prototype_to_string_tag = "CustomStateSet Iterator",
     readonly_prototype,
@@ -229,7 +230,7 @@ struct CustomStateSetIteratorPrototypeDeclaration {
 
 #[derive(WebApiFunctionTemplate)]
 #[webapi(
-    name = "CSSFontFeatureValuesMap Iterator",
+    interface = web_api_interfaces::CSSFontFeatureValuesMapIterator,
     intrinsic_prototype_parent = v8::Intrinsic::MapIteratorPrototype,
     prototype_to_string_tag = "CSSFontFeatureValuesMap Iterator",
     readonly_prototype,
@@ -315,7 +316,7 @@ pub(crate) fn new_snapshot_webidl_iterator<'s>(
     let iterator = SnapshotWebIdlIteratorDeclaration::new(values, 0)
         .bind(scope)
         .ok()?;
-    moli_webapi_declare::initialize_web_api_object(scope, iterator, kind.interface()).ok()?;
+    web_api_interfaces::initialize(scope, iterator, kind.interface()).ok()?;
     let prototype = snapshot_webidl_iterator_prototype(scope, kind)?;
     (iterator.set_prototype(scope, prototype.into()) == Some(true)).then_some(iterator)
 }
@@ -330,7 +331,7 @@ pub(crate) fn new_setlike_webidl_iterator<'s>(
     let iterator = NativeCollectionWebIdlIteratorDeclaration::new(native_iterator, next)
         .bind(scope)
         .ok()?;
-    moli_webapi_declare::initialize_web_api_object(scope, iterator, kind.interface()).ok()?;
+    web_api_interfaces::initialize(scope, iterator, kind.interface()).ok()?;
     let prototype = setlike_webidl_iterator_prototype(scope, kind)?;
     (iterator.set_prototype(scope, prototype.into()) == Some(true)).then_some(iterator)
 }

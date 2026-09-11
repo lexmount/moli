@@ -3,6 +3,7 @@ use crate::util::{
     call_script_visible_function, get_private_object,
     materialize_hidden_function_template_prototype,
 };
+use crate::web_api_interfaces;
 use crate::webidl_iterator::webidl_collection_reflect_apply_intrinsic;
 
 const HIGHLIGHT_ITERATOR_RECORDS_SLOT: &str = "__moliHighlightIteratorRecords";
@@ -31,7 +32,7 @@ struct HighlightIteratorResultDeclaration<'s> {
 
 #[derive(WebApiFunctionTemplate)]
 #[webapi(
-    name = "Highlight Iterator",
+    interface = web_api_interfaces::HighlightIterator,
     intrinsic_prototype_parent = v8::Intrinsic::SetIteratorPrototype,
     prototype_to_string_tag = "Highlight Iterator",
     readonly_prototype,
@@ -44,7 +45,7 @@ struct HighlightIteratorPrototypeDeclaration {
 
 #[derive(WebApiFunctionTemplate)]
 #[webapi(
-    name = "HighlightRegistry Iterator",
+    interface = web_api_interfaces::HighlightRegistryIterator,
     intrinsic_prototype_parent = v8::Intrinsic::MapIteratorPrototype,
     prototype_to_string_tag = "HighlightRegistry Iterator",
     readonly_prototype,
@@ -136,7 +137,7 @@ pub(super) fn build_highlight_runtime_state<'s>(
     };
     let registry = v8::Local::<v8::Object>::try_from(value)
         .map_err(|_| anyhow!("Highlight runtime did not return a registry object"))?;
-    moli_webapi_declare::initialize_web_api_object(scope, registry, "HighlightRegistry")?;
+    web_api_interfaces::HighlightRegistry::DESCRIPTOR.initialize(scope, registry)?;
     let highlight_constructor = highlight_constructor(scope, registry)?;
     let registry_constructor = highlight_registry_constructor(scope, registry)?;
     Ok(HighlightRuntimeState {
@@ -154,7 +155,7 @@ fn initialize_highlight_identity_callback<'s>(
     let Ok(object) = v8::Local::<v8::Object>::try_from(args.get(0)) else {
         return;
     };
-    if let Err(error) = moli_webapi_declare::initialize_web_api_object(scope, object, "Highlight") {
+    if let Err(error) = web_api_interfaces::Highlight::DESCRIPTOR.initialize(scope, object) {
         throw_type_error(scope, &error.to_string());
     }
 }
@@ -197,7 +198,7 @@ fn highlight_iterator_factory_callback<'s>(
         HighlightIteratorKind::Highlight => "Highlight Iterator",
         HighlightIteratorKind::Registry => "HighlightRegistry Iterator",
     };
-    if moli_webapi_declare::initialize_web_api_object(scope, iterator, interface).is_err() {
+    if web_api_interfaces::initialize(scope, iterator, interface).is_err() {
         return;
     }
     rv.set(iterator.into());

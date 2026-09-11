@@ -12,17 +12,18 @@ use super::{
     },
     specs::ConstructorSpec,
 };
+use crate::web_api_interfaces;
 use moli_webapi_declare::WebApiFunctionTemplate;
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(name = "FontFace", enumerable, receiver = "FontFace")]
+#[webapi(interface = web_api_interfaces::FontFace, enumerable, receiver)]
 struct FontFaceTemplateMethodsDeclaration {
     #[webapi(method, length = 0, callback = font_face_load_callback, returns_promise)]
     load: (),
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(name = "FontFaceSet", enumerable)]
+#[webapi(interface = web_api_interfaces::FontFaceSet, enumerable)]
 struct FontFaceSetTemplateMethodsDeclaration {
     #[webapi(method, length = 1, callback = font_face_set_add_callback)]
     add: (),
@@ -76,7 +77,7 @@ pub(super) fn install_style_font_template_bindings<'s>(
     template: v8::Local<'s, v8::FunctionTemplate>,
     spec: ConstructorSpec,
 ) {
-    match spec.name {
+    match spec.interface.name() {
         "FontFace" => {
             let prototype = template.prototype_template(scope);
             FontFaceTemplateMethodsDeclaration::initialize_prototype_template(scope, prototype);

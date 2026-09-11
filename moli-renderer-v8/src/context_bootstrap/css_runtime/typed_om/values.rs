@@ -1,4 +1,5 @@
 use super::*;
+use crate::web_api_interfaces;
 
 const CSS_STYLE_VALUE_TEXT_SLOT: &str = "__moliCssStyleValueText";
 const CSS_KEYWORD_VALUE_VALUE_SLOT: &str = "__moliCssKeywordValueValue";
@@ -12,21 +13,21 @@ const VALID_UNIT_NAMES: &[&str] = &[
 ];
 
 #[derive(WebApiObject)]
-#[webapi(interface = "CSSStyleValue")]
+#[webapi(interface = web_api_interfaces::CSSStyleValue)]
 struct CssStyleValueObjectDeclaration {
     #[webapi(slot = CSS_STYLE_VALUE_TEXT_SLOT)]
     text: String,
 }
 
 #[derive(WebApiObject)]
-#[webapi(interface = "CSSKeywordValue")]
+#[webapi(interface = web_api_interfaces::CSSKeywordValue)]
 struct CssKeywordValueObjectDeclaration {
     #[webapi(slot = CSS_KEYWORD_VALUE_VALUE_SLOT)]
     value: String,
 }
 
 #[derive(WebApiObject)]
-#[webapi(interface = "CSSUnitValue")]
+#[webapi(interface = web_api_interfaces::CSSUnitValue)]
 struct CssUnitValueObjectDeclaration {
     #[webapi(slot = CSS_UNIT_VALUE_VALUE_SLOT)]
     value: f64,
@@ -35,7 +36,7 @@ struct CssUnitValueObjectDeclaration {
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(name = "CSSKeywordValue", enumerable)]
+#[webapi(interface = web_api_interfaces::CSSKeywordValue, enumerable)]
 struct CssKeywordValuePrototypeDeclaration {
     #[webapi(
         accessor_property,
@@ -46,14 +47,14 @@ struct CssKeywordValuePrototypeDeclaration {
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(name = "CSSStyleValue", enumerable)]
+#[webapi(interface = web_api_interfaces::CSSStyleValue, enumerable)]
 struct CssStyleValuePrototypeDeclaration {
     #[webapi(method = "toString", callback = css_style_value_to_string_callback, length = 0)]
     to_string: (),
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(name = "CSSUnitValue", enumerable)]
+#[webapi(interface = web_api_interfaces::CSSUnitValue, enumerable)]
 struct CssUnitValuePrototypeDeclaration {
     #[webapi(
         accessor_property,

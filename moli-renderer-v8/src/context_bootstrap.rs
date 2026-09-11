@@ -477,6 +477,7 @@ pub(super) use super::{
         v8str,
     },
 };
+use crate::web_api_interfaces;
 use anyhow::{Result, anyhow};
 pub(crate) use exposed_interfaces::{
     ensure_intrinsic_interface_constructor, ensure_intrinsic_interface_prototype,
@@ -536,7 +537,7 @@ pub(crate) fn build_lightweight_popup_window_navigator_object<'s>(
 fn find_constructor_spec(name: &str) -> Result<self::specs::ConstructorSpec> {
     constructor_specs()
         .into_iter()
-        .find(|spec| spec.name == name)
+        .find(|spec| spec.interface.name() == name)
         .ok_or_else(|| anyhow!("missing context bootstrap constructor spec `{name}`"))
 }
 
@@ -593,12 +594,12 @@ pub(in crate::context_bootstrap) fn build_profiled_exposed_interface_template<'s
 ) -> Result<v8::Local<'s, v8::FunctionTemplate>> {
     if profile == exposed_interfaces::TemplateBuildProfile::Window {
         let template = build_constructor_template(scope, spec)?;
-        if spec.name == "XMLHttpRequest" {
+        if spec.interface.name() == "XMLHttpRequest" {
             crate::network_host::install_window_xml_http_request_template_bindings(scope, template);
         }
         return Ok(template);
     }
-    let template = match spec.name {
+    let template = match spec.interface.name() {
         "StorageManager" => {
             let template = navigator_runtime::build_storage_manager_worker_template(scope);
             template.read_only_prototype();
@@ -612,13 +613,21 @@ pub(in crate::context_bootstrap) fn build_profiled_exposed_interface_template<'s
         "AbortSignal" => {
             let template = WorkerAbortSignalTemplateDeclaration::build(scope);
             template.read_only_prototype();
-            exposed_interfaces::install_interface_template_metadata(scope, template, spec.name);
+            exposed_interfaces::install_interface_template_metadata(
+                scope,
+                template,
+                spec.interface.name(),
+            );
             template
         }
         "AbortController" => {
             let template = WorkerAbortControllerTemplateDeclaration::build(scope);
             template.read_only_prototype();
-            exposed_interfaces::install_interface_template_metadata(scope, template, spec.name);
+            exposed_interfaces::install_interface_template_metadata(
+                scope,
+                template,
+                spec.interface.name(),
+            );
             template
         }
         "EventSource" => build_constructor_template_with_callback(
@@ -629,7 +638,7 @@ pub(in crate::context_bootstrap) fn build_profiled_exposed_interface_template<'s
         _ => build_constructor_template(scope, spec)?,
     };
     if profile == exposed_interfaces::TemplateBuildProfile::DedicatedWorker
-        && spec.name == "FileSystemFileHandle"
+        && spec.interface.name() == "FileSystemFileHandle"
     {
         opfs::install_file_system_file_handle_sync_template_binding(scope, template);
     }
@@ -687,7 +696,7 @@ pub(crate) fn install_worker_base64_runtime_state<'s>(
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(name = "AbortSignal", enumerable)]
+#[webapi(interface = web_api_interfaces::AbortSignal, enumerable)]
 struct WorkerAbortSignalTemplateDeclaration {
     #[webapi(
         static_method = "abort",
@@ -754,7 +763,7 @@ struct WorkerAbortSignalTemplateDeclaration {
 
 #[derive(WebApiFunctionTemplate)]
 #[webapi(
-    name = "AbortController",
+    interface = web_api_interfaces::AbortController,
     constructor_callback = crate::worker::abort::worker_abort_controller_constructor_callback,
     constructor_length = 0,
     enumerable

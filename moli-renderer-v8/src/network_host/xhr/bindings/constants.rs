@@ -3,11 +3,12 @@ use crate::context_bootstrap::simple_object_event_set_ordered_handler;
 use crate::util::{
     callback_data_index_value, callback_data_item, get_private_value, set_private_value,
 };
+use crate::web_api_interfaces;
 use crate::webidl;
 use moli_webapi_declare::WebApiFunctionTemplate;
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(name = "XMLHttpRequest", enumerable)]
+#[webapi(interface = web_api_interfaces::XMLHttpRequest, enumerable)]
 struct XmlHttpRequestConstantsDeclaration {
     #[webapi(constant = "UNSENT", value = 0u32)]
     _unsent: (),
@@ -22,7 +23,7 @@ struct XmlHttpRequestConstantsDeclaration {
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(name = "XMLHttpRequest", enumerable)]
+#[webapi(interface = web_api_interfaces::XMLHttpRequest, enumerable)]
 struct XmlHttpRequestPrototypeAccessorsDeclaration {
     #[webapi(accessor_property, getter = xhr_number_getter, data = callback_data_index_value(scope, 0))]
     ready_state: (),
@@ -69,14 +70,14 @@ struct XmlHttpRequestPrototypeAccessorsDeclaration {
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(name = "XMLHttpRequest", enumerable)]
+#[webapi(interface = web_api_interfaces::XMLHttpRequest, enumerable)]
 struct XmlHttpRequestResponseXmlAccessorDeclaration {
     #[webapi(accessor_property = "responseXML", getter = xhr_response_xml_getter, data = callback_data_index_value(scope, 7))]
     response_xml: (),
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(name = "XMLHttpRequestEventTarget", enumerable)]
+#[webapi(interface = web_api_interfaces::XMLHttpRequestEventTarget, enumerable)]
 struct XmlHttpRequestEventTargetPrototypeAccessorsDeclaration {
     #[webapi(accessor_property, getter = xhr_value_getter, setter = xhr_value_setter, data = callback_data_index_value(scope, 12))]
     onload: (),

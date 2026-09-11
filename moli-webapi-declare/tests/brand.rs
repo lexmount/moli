@@ -7,11 +7,11 @@ use moli_webapi_declare::{
 };
 
 #[derive(WebApiObject)]
-#[webapi(interface = "TestBase", allow_empty)]
+#[webapi(interface = interfaces::TestBase, allow_empty)]
 struct Base {}
 
 #[derive(WebApiObject)]
-#[webapi(interface = "TestDerived", parent = "TestBase", allow_empty)]
+#[webapi(interface = interfaces::TestDerived, allow_empty)]
 struct Derived {}
 
 #[derive(WebApiObject)]
@@ -21,7 +21,7 @@ struct Record {
 }
 
 #[derive(WebApiObject)]
-#[webapi(interface = "TestBase", unbranded, allow_empty)]
+#[webapi(interface = interfaces::TestBase, unbranded, allow_empty)]
 struct PrototypeMembers {}
 
 fn eval<'s>(scope: &mut v8::PinScope<'s, '_>, source: &str) -> v8::Local<'s, v8::Value> {
@@ -137,7 +137,7 @@ fn inheritance_registration_is_atomic_and_rejects_conflicts_and_cycles() {
 }
 
 #[derive(moli_webapi_declare::WebApiFunctionTemplate)]
-#[webapi(name = "NativeConstructor", constructor_callback = native_constructor)]
+#[webapi(interface = interfaces::NativeConstructor, constructor_callback = native_constructor)]
 struct NativeConstructor {}
 
 fn native_constructor<'s>(
@@ -290,5 +290,55 @@ fn generated_interface_receivers_accept_subtypes_and_reject_forgery_before_conve
             .unwrap()
             .to_rust_string_lossy(scope),
         "TypeError"
+    );
+}
+
+mod interfaces {
+    moli_webapi_declare::declare_web_api_interfaces! {
+        pub(super) NativeConstructor;
+        pub(super) TestBase;
+        pub(super) TestDerived: TestBase;
+    }
+}
+
+#[test]
+fn descriptor_registers_unexposed_ancestry_and_rejects_forged_receivers() {
+    ensure_v8();
+    let mut isolate = v8::Isolate::new(Default::default());
+    let scope = pin!(v8::HandleScope::new(&mut isolate));
+    let scope = &mut scope.init();
+    let context = v8::Context::new(scope, Default::default());
+    let scope = &mut v8::ContextScope::new(scope, context);
+    let real = v8::Object::new(scope);
+    interfaces::TestDerived::DESCRIPTOR
+        .initialize(scope, real)
+        .unwrap();
+    assert!(interfaces::TestBase::is_instance(scope, real));
+    assert!(interfaces::TestDerived::is_instance(scope, real));
+    let forged = v8::Object::new(scope);
+    forged.set_prototype(scope, real.into()).unwrap();
+    assert!(!interfaces::TestBase::is_instance(scope, forged));
+    assert!(!interfaces::TestDerived::is_instance(scope, forged));
+    real.set_prototype(scope, v8::null(scope).into()).unwrap();
+    assert!(interfaces::TestBase::is_instance(scope, real));
+}
+
+#[test]
+fn cyclic_native_descriptors_fail_during_registration() {
+    use moli_webapi_declare::WebApiInterfaceDescriptor;
+    static FIRST: WebApiInterfaceDescriptor =
+        WebApiInterfaceDescriptor::new("CycleFirst", Some(&SECOND));
+    static SECOND: WebApiInterfaceDescriptor =
+        WebApiInterfaceDescriptor::new("CycleSecond", Some(&FIRST));
+    ensure_v8();
+    let mut isolate = v8::Isolate::new(Default::default());
+    let scope = pin!(v8::HandleScope::new(&mut isolate));
+    let scope = &mut scope.init();
+    assert!(
+        FIRST
+            .register(scope)
+            .unwrap_err()
+            .to_string()
+            .contains("cycle")
     );
 }

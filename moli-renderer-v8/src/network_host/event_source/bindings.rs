@@ -1,9 +1,10 @@
 use super::*;
 use crate::context_bootstrap::mark_event_trusted;
+use crate::web_api_interfaces;
 use moli_webapi_declare::{WebApiFunctionTemplate, WebApiObject};
 
 #[derive(WebApiObject)]
-#[webapi(interface = "EventSource")]
+#[webapi(interface = web_api_interfaces::EventSource)]
 struct EventSourceObjectDeclaration<'scope> {
     #[webapi(slot = EVENT_SOURCE_URL_SLOT)]
     url: v8::Local<'scope, v8::String>,
@@ -46,7 +47,7 @@ struct EventSourceObjectDeclaration<'scope> {
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(name = "EventSource", enumerable)]
+#[webapi(interface = web_api_interfaces::EventSource, enumerable)]
 struct EventSourceTemplateDeclaration {
     #[webapi(constant = "CONNECTING", value = EVENT_SOURCE_CONNECTING)]
     connecting: (),
@@ -62,7 +63,7 @@ struct EventSourceTemplateDeclaration {
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(name = "EventSource")]
+#[webapi(interface = web_api_interfaces::EventSource)]
 struct EventSourceAccessorsDeclaration {
     #[webapi(accessor_property, getter = event_source_url_getter, enumerable)]
     url: (),

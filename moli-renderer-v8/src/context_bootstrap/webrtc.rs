@@ -2,6 +2,7 @@ use super::*;
 use crate::util::{
     callback_data_index_value, callback_data_item, get_private_value, set_private_value,
 };
+use crate::web_api_interfaces;
 use moli_webapi_declare::{WebApiFunctionTemplate, WebApiObject};
 
 mod ice_candidate;
@@ -64,7 +65,7 @@ const RTC_DATA_CHANNEL_VALUE_SLOTS: &[&str] = &[
 ];
 
 #[derive(WebApiObject)]
-#[webapi(interface = "RTCPeerConnection")]
+#[webapi(interface = web_api_interfaces::RTCPeerConnection)]
 struct RtcPeerConnectionObjectDeclaration<'scope> {
     #[webapi(slot = RTC_PEER_CONNECTION_CONFIGURATION_SLOT)]
     configuration: v8::Local<'scope, v8::Object>,
@@ -91,7 +92,7 @@ struct RtcPeerConnectionObjectDeclaration<'scope> {
 }
 
 #[derive(WebApiObject)]
-#[webapi(interface = "RTCDataChannel")]
+#[webapi(interface = web_api_interfaces::RTCDataChannel)]
 struct RtcDataChannelObjectDeclaration<'scope> {
     #[webapi(slot = RTC_DATA_CHANNEL_LABEL_SLOT)]
     label: v8::Local<'scope, v8::String>,
@@ -129,7 +130,7 @@ struct RtcSessionDescriptionInitDeclaration<'scope> {
 }
 
 #[derive(Default, WebApiFunctionTemplate)]
-#[webapi(name = "RTCPeerConnection", enumerable)]
+#[webapi(interface = web_api_interfaces::RTCPeerConnection, enumerable)]
 struct RtcPeerConnectionPrototypeDeclaration {
     #[webapi(accessor_property, getter = rtc_peer_connection_state_getter, data = callback_data_index_value(scope, 0))]
     signaling_state: (),
@@ -160,14 +161,14 @@ struct RtcPeerConnectionPrototypeDeclaration {
 }
 
 #[derive(Default, WebApiFunctionTemplate)]
-#[webapi(name = "RTCRtpReceiver")]
+#[webapi(interface = web_api_interfaces::RTCRtpReceiver)]
 struct RtcRtpReceiverConstructorDeclaration {
     #[webapi(static_method = "getCapabilities", enumerable, length = 1, callback = rtc_rtp_receiver_get_capabilities_callback)]
     get_capabilities: (),
 }
 
 #[derive(Default, WebApiFunctionTemplate)]
-#[webapi(name = "RTCDataChannel", enumerable)]
+#[webapi(interface = web_api_interfaces::RTCDataChannel, enumerable)]
 struct RtcDataChannelPrototypeDeclaration {
     #[webapi(accessor_property, getter = rtc_data_channel_value_getter, data = callback_data_index_value(scope, 0))]
     label: (),

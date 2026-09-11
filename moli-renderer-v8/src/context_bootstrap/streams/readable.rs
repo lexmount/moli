@@ -8,13 +8,14 @@ use super::super::stream_adapter::{
 };
 use super::*;
 use crate::context_bootstrap::stream_objects::readable_stream_async_iterator_prototype;
+use crate::web_api_interfaces;
 use crate::webidl;
 use moli_streams::pipe::{PipeEntryObservation, PipeEntryPlan, PipeOptions};
 use moli_streams::readable::{AcquireReaderPlan, CancelEntryPlan, ReadableKind, ReaderKind};
 use moli_webapi_declare::WebApiObject;
 
 #[derive(WebApiObject)]
-#[webapi(prototype = "Object", interface = "ReadableStream AsyncIterator")]
+#[webapi(prototype = "Object", interface = web_api_interfaces::ReadableStreamAsyncIterator)]
 struct ReadableStreamAsyncIteratorObjectDeclaration<'scope> {
     #[webapi(slot = READABLE_STREAM_ITERATOR_READER_SLOT)]
     reader: v8::Local<'scope, v8::Object>,

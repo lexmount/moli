@@ -4,6 +4,7 @@ use super::url_form::{
 };
 use super::*;
 use crate::util::{get_private_object, get_private_value, set_private_value};
+use crate::web_api_interfaces;
 use moli_webapi_declare::WebApiFunctionTemplate;
 
 mod callbacks;
@@ -18,7 +19,7 @@ pub(crate) use storage::url_search_params_request_body;
 pub(super) use template::build_url_search_params_constructor_template;
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(name = "URLSearchParams", enumerable)]
+#[webapi(interface = web_api_interfaces::URLSearchParams, enumerable)]
 struct UrlSearchParamsPrototypeAccessorsDeclaration {
     #[webapi(accessor_property, getter = callbacks::url_search_params_size_getter_callback, enumerable)]
     size: (),

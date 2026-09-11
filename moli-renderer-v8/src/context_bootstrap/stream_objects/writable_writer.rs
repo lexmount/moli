@@ -1,5 +1,6 @@
 use super::*;
 use crate::util::v8str;
+use crate::web_api_interfaces;
 use crate::webidl;
 use moli_streams::writable::{AcquireWriterPlan, DesiredSizePlan, WriterWriteEntryPlan};
 use moli_webapi_declare::WebApiObject;
@@ -7,7 +8,7 @@ use moli_webapi_declare::WebApiObject;
 const WRITER_LOCK_RELEASED_MESSAGE: &str = "WritableStreamDefaultWriter lock released";
 
 #[derive(WebApiObject)]
-#[webapi(interface = "WritableStreamDefaultWriter")]
+#[webapi(interface = web_api_interfaces::WritableStreamDefaultWriter)]
 struct WritableStreamWriterObjectDeclaration<'scope> {
     #[webapi(slot = WRITABLE_STREAM_WRITER_STREAM_SLOT)]
     stream: v8::Local<'scope, v8::Object>,

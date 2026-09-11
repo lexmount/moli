@@ -1,11 +1,12 @@
 use super::*;
+use crate::web_api_interfaces;
 
 const DEFAULT_VALUE: &str = "__moliAudioParamDefaultValue";
 const MIN_VALUE: &str = "__moliAudioParamMinValue";
 const MAX_VALUE: &str = "__moliAudioParamMaxValue";
 
 #[derive(WebApiObject)]
-#[webapi(interface = "AudioParam")]
+#[webapi(interface = web_api_interfaces::AudioParam)]
 struct AudioParamObjectDeclaration {
     #[webapi(data_property)]
     value: f64,
@@ -20,7 +21,7 @@ struct AudioParamObjectDeclaration {
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(name = "AudioParam", enumerable)]
+#[webapi(interface = web_api_interfaces::AudioParam, enumerable)]
 struct AudioParamPrototypeDeclaration {
     #[webapi(accessor_property, getter = default_value)]
     default_value: (),

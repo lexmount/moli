@@ -1,10 +1,11 @@
 use super::*;
+use crate::web_api_interfaces;
 use crate::webidl;
 use moli_file_api::{file_reader_binary_string, file_reader_data_url, file_reader_text};
 use moli_webapi_declare::WebApiFunctionTemplate;
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(name = "FileReaderSync", enumerable)]
+#[webapi(interface = web_api_interfaces::FileReaderSync, enumerable)]
 struct FileReaderSyncPrototypeDeclaration {
     #[webapi(method, length = 1, callback = file_reader_sync_read_as_text_callback)]
     read_as_text: (),

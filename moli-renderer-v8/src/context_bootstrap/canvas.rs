@@ -2,6 +2,7 @@ use super::super::blob::build_blob_object;
 use super::super::native_bridge::element;
 use super::super::util::{throw_type_error, v8_string};
 use super::shared::{global_constructor_object, global_constructor_prototype};
+use crate::web_api_interfaces;
 use crate::webidl;
 use moli_webapi_declare::WebApiFunctionTemplate;
 use std::str::FromStr;
@@ -119,7 +120,7 @@ const WEBGL_SUPPORTED_EXTENSIONS: &[&str] = &[
 ];
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(name = "HTMLCanvasElement", receiver = "HTMLCanvasElement")]
+#[webapi(interface = web_api_interfaces::HTMLCanvasElement, receiver)]
 struct HtmlCanvasElementPrototypeAccessorsDeclaration {
     #[webapi(
         accessor_property,

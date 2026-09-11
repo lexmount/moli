@@ -13,10 +13,11 @@ use super::{
         view_transition_type_set_values_callback,
     },
 };
+use crate::web_api_interfaces;
 use moli_webapi_declare::WebApiFunctionTemplate;
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(name = "Document", enumerable)]
+#[webapi(interface = web_api_interfaces::Document, enumerable)]
 struct DocumentViewTransitionTemplateDeclaration {
     #[webapi(
         method = "startViewTransition",
@@ -33,7 +34,7 @@ struct DocumentViewTransitionTemplateDeclaration {
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(name = "ViewTransition", enumerable)]
+#[webapi(interface = web_api_interfaces::ViewTransition, enumerable)]
 struct ViewTransitionTemplateDeclaration {
     #[webapi(method = "skipTransition", length = 0, callback = view_transition_skip_callback)]
     skip_transition: (),
@@ -58,7 +59,7 @@ struct ViewTransitionTemplateDeclaration {
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(name = "ViewTransitionTypeSet", enumerable)]
+#[webapi(interface = web_api_interfaces::ViewTransitionTypeSet, enumerable)]
 struct ViewTransitionTypeSetTemplateDeclaration {
     #[webapi(accessor_property, getter = view_transition_type_set_size_getter)]
     size: (),

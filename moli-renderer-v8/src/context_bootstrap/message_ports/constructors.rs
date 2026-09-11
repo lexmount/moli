@@ -1,8 +1,9 @@
 use super::*;
+use crate::web_api_interfaces;
 use moli_webapi_declare::WebApiObject;
 
 #[derive(WebApiObject)]
-#[webapi(interface = "MessageChannel")]
+#[webapi(interface = web_api_interfaces::MessageChannel)]
 struct MessageChannelObjectDeclaration<'scope> {
     #[webapi(slot = MESSAGE_CHANNEL_PORT1_SLOT)]
     port1: v8::Local<'scope, v8::Object>,

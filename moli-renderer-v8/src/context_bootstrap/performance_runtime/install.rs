@@ -5,6 +5,7 @@ use crate::util::{
     callback_data_index_value, callback_data_item, get_private_value, serialize_v8_array,
     set_private_value,
 };
+use crate::web_api_interfaces;
 use crate::webidl_iterator::{
     SnapshotWebIdlIteratorKind, invoke_webidl_collection_for_each_callback,
     new_snapshot_webidl_iterator, prepare_webidl_collection_for_each_callback,
@@ -58,7 +59,7 @@ pub(super) const LOAD_END_INDEX: usize = 3;
 const LIFECYCLE_TIMESTAMP_COUNT: usize = 4;
 
 #[derive(WebApiObject)]
-#[webapi(interface = "Performance")]
+#[webapi(interface = web_api_interfaces::Performance)]
 struct PerformanceObjectDeclaration<'scope> {
     #[webapi(slot = PERFORMANCE_TIME_ORIGIN_SLOT)]
     time_origin: f64,
@@ -92,7 +93,7 @@ struct PerformanceObserverConstructorDeclaration {
 }
 
 #[derive(WebApiObject)]
-#[webapi(interface = "PerformanceNavigation")]
+#[webapi(interface = web_api_interfaces::PerformanceNavigation)]
 struct PerformanceNavigationObjectDeclaration {
     #[webapi(slot = PERFORMANCE_NAVIGATION_TYPE_SLOT)]
     navigation_type: f64,
@@ -105,7 +106,7 @@ struct PerformanceNavigationObjectDeclaration {
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(name = "PerformanceNavigation")]
+#[webapi(interface = web_api_interfaces::PerformanceNavigation)]
 struct PerformanceNavigationConstantsDeclaration {
     #[webapi(constant = "TYPE_NAVIGATE", value = 0.0)]
     type_navigate: (),
@@ -121,14 +122,14 @@ struct PerformanceNavigationConstantsDeclaration {
 }
 
 #[derive(WebApiObject)]
-#[webapi(interface = "EventCounts")]
+#[webapi(interface = web_api_interfaces::EventCounts)]
 struct EventCountsObjectDeclaration {
     #[webapi(slot = PERFORMANCE_EVENT_COUNTS_VALUES_SLOT)]
     values: Vec<u32>,
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(name = "Performance", enumerable)]
+#[webapi(interface = web_api_interfaces::Performance, enumerable)]
 struct PerformancePrototypeMethodsDeclaration {
     #[webapi(method, length = 0, callback = performance_now_callback)]
     now: (),
@@ -159,7 +160,7 @@ struct PerformancePrototypeMethodsDeclaration {
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(name = "Performance", enumerable)]
+#[webapi(interface = web_api_interfaces::Performance, enumerable)]
 struct PerformancePrototypeAccessorsDeclaration {
     #[webapi(accessor_property, getter = super::memory::performance_memory_getter)]
     memory: (),
@@ -194,7 +195,7 @@ struct PerformancePrototypeAccessorsDeclaration {
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(name = "PerformanceNavigation", enumerable)]
+#[webapi(interface = web_api_interfaces::PerformanceNavigation, enumerable)]
 struct PerformanceNavigationPrototypeAccessorsDeclaration {
     #[webapi(
         accessor_property,
@@ -212,7 +213,7 @@ struct PerformanceNavigationPrototypeAccessorsDeclaration {
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(name = "EventCounts", enumerable)]
+#[webapi(interface = web_api_interfaces::EventCounts, enumerable)]
 struct EventCountsPrototypeMethodsDeclaration {
     #[webapi(accessor_property, getter = event_counts_size_getter)]
     size: (),
@@ -240,7 +241,7 @@ struct EventCountsPrototypeMethodsDeclaration {
 }
 
 #[derive(WebApiObject)]
-#[webapi(interface = "PerformanceTiming")]
+#[webapi(interface = web_api_interfaces::PerformanceTiming)]
 struct PerformanceTimingObjectDeclaration {
     #[webapi(data_property, enumerable)]
     navigation_start: u64,
@@ -522,7 +523,7 @@ const PERFORMANCE_NAVIGATION_TIMING_ATTRIBUTE_SLOTS: &[&str] = &[
 ];
 
 #[derive(WebApiObject)]
-#[webapi(interface = "PerformanceNavigationTiming")]
+#[webapi(interface = web_api_interfaces::PerformanceNavigationTiming)]
 struct PerformanceNavigationTimingSlotDeclaration {
     #[webapi(slot = NAV_INITIATOR_TYPE_SLOT, constructor_default = "navigation")]
     initiator_type: &'static str,
@@ -583,7 +584,7 @@ struct PerformanceNavigationTimingSlotDeclaration {
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(name = "PerformanceNavigationTiming", enumerable)]
+#[webapi(interface = web_api_interfaces::PerformanceNavigationTiming, enumerable)]
 struct PerformanceNavigationTimingPrototypeAccessorsDeclaration {
     #[webapi(
         accessor_property,

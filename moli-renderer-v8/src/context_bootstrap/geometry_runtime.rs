@@ -1,6 +1,7 @@
 use super::*;
 use crate::native_bridge::throw_dom_exception;
 use crate::util::{callback_data_index_value, get_private_value, set_private_value};
+use crate::web_api_interfaces;
 use crate::webidl;
 use moli_geometry::{
     DOM_MATRIX_COMPONENT_COUNT, DomMatrixComponents, dom_matrix_components_from_values,
@@ -32,7 +33,7 @@ const DOM_MATRIX_M44_SLOT: &str = "__moliDomMatrixM44";
 const DOM_MATRIX_TYPED_ARRAY_LENGTH: usize = DOM_MATRIX_COMPONENT_COUNT;
 
 #[derive(WebApiObject)]
-#[webapi(interface = "DOMPoint", fallback_to_string_tag = "DOMPoint")]
+#[webapi(interface = web_api_interfaces::DOMPoint, fallback_to_string_tag = "DOMPoint")]
 struct DomPointObjectDeclaration {
     #[webapi(slot = DOM_POINT_X_SLOT)]
     x: f64,
@@ -154,7 +155,7 @@ struct DomMatrixJsonDeclaration {
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(name = "DOMPoint")]
+#[webapi(interface = web_api_interfaces::DOMPoint)]
 struct DomPointPrototypeAccessorsDeclaration {
     #[webapi(
         accessor_property,
@@ -191,21 +192,21 @@ struct DomPointPrototypeAccessorsDeclaration {
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(name = "DOMPoint")]
+#[webapi(interface = web_api_interfaces::DOMPoint)]
 struct DomPointPrototypeMethodsDeclaration {
     #[webapi(method = "toJSON", enumerable, callback = dom_point_to_json_callback)]
     to_json: (),
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(name = "DOMPoint")]
+#[webapi(interface = web_api_interfaces::DOMPoint)]
 struct DomPointConstructorDeclaration {
     #[webapi(static_method = "fromPoint", length = 0, callback = dom_point_from_point_callback)]
     from_point: (),
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(name = "DOMMatrixReadOnly")]
+#[webapi(interface = web_api_interfaces::DOMMatrixReadOnly)]
 struct DomMatrixReadOnlyPrototypeAccessorsDeclaration {
     #[webapi(accessor_property, getter = dom_matrix_getter_callback, data = callback_data_index_value(scope, 0), enumerable)]
     a: (),
@@ -258,7 +259,7 @@ struct DomMatrixReadOnlyPrototypeAccessorsDeclaration {
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(name = "DOMMatrixReadOnly")]
+#[webapi(interface = web_api_interfaces::DOMMatrixReadOnly)]
 struct DomMatrixReadOnlyPrototypeMethodsDeclaration {
     #[webapi(method = "toJSON", enumerable, callback = dom_matrix_to_json_callback)]
     to_json: (),
@@ -316,7 +317,7 @@ struct DomMatrixReadOnlyPrototypeMethodsDeclaration {
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(name = "DOMMatrixReadOnly")]
+#[webapi(interface = web_api_interfaces::DOMMatrixReadOnly)]
 struct DomMatrixReadOnlyConstructorDeclaration {
     #[webapi(
         static_method = "fromMatrix",
@@ -341,7 +342,7 @@ struct DomMatrixReadOnlyConstructorDeclaration {
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(name = "DOMMatrix")]
+#[webapi(interface = web_api_interfaces::DOMMatrix)]
 struct DomMatrixPrototypeAccessorsDeclaration {
     #[webapi(accessor_property, getter = dom_matrix_getter_callback, setter = dom_matrix_setter_callback, data = callback_data_index_value(scope, 0), enumerable)]
     a: (),
@@ -390,7 +391,7 @@ struct DomMatrixPrototypeAccessorsDeclaration {
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(name = "DOMMatrix")]
+#[webapi(interface = web_api_interfaces::DOMMatrix)]
 struct DomMatrixPrototypeMethodsDeclaration {
     #[webapi(method = "translateSelf", callback = dom_matrix_translate_self_callback)]
     translate_self: (),
@@ -436,7 +437,7 @@ struct DomMatrixPrototypeMethodsDeclaration {
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(name = "DOMMatrix")]
+#[webapi(interface = web_api_interfaces::DOMMatrix)]
 struct DomMatrixConstructorDeclaration {
     #[webapi(
         static_method = "fromMatrix",

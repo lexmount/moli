@@ -2,6 +2,7 @@ use super::init::read_event_init;
 use super::*;
 use crate::context_bootstrap::{current_performance_time_origin, dom_time_since_origin_millis};
 use crate::util::{get_private_value, set_private_value};
+use crate::web_api_interfaces;
 use crate::webidl;
 use moli_webapi_declare::WebApiObject;
 
@@ -31,7 +32,7 @@ struct InitializedEventHeaderDeclaration<'scope> {
 }
 
 #[derive(WebApiObject)]
-#[webapi(prototype = "Object", interface = "Event", data_properties, enumerable)]
+#[webapi(prototype = "Object", interface = web_api_interfaces::Event, data_properties, enumerable)]
 struct InitializedEventStateDeclaration {
     bubbles: bool,
     cancelable: bool,

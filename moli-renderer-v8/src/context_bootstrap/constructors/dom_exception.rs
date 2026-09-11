@@ -1,4 +1,5 @@
 use super::*;
+use crate::web_api_interfaces;
 use crate::{util::get_private_value, webidl};
 use moli_web_errors::{DOM_EXCEPTION_CONSTANTS, dom_exception_legacy_code};
 use moli_webapi_declare::{WebApiFunctionTemplate, WebApiObject, WebApiTemplateValue};
@@ -55,7 +56,7 @@ struct QuotaExceededErrorConstructorArgs {
 }
 
 #[derive(WebApiObject)]
-#[webapi(interface = "DOMException")]
+#[webapi(interface = web_api_interfaces::DOMException)]
 struct DomExceptionObjectDeclaration<'scope> {
     #[webapi(slot = DOM_EXCEPTION_MESSAGE_SLOT)]
     message: Option<v8::Local<'scope, v8::String>>,
@@ -66,7 +67,7 @@ struct DomExceptionObjectDeclaration<'scope> {
 }
 
 #[derive(WebApiObject)]
-#[webapi(interface = "DOMError", fallback_to_string_tag = "DOMError")]
+#[webapi(interface = web_api_interfaces::DOMError, fallback_to_string_tag = "DOMError")]
 struct DomErrorObjectDeclaration<'scope> {
     #[webapi(slot = DOM_ERROR_NAME_SLOT)]
     name: Option<v8::Local<'scope, v8::String>>,
@@ -76,7 +77,7 @@ struct DomErrorObjectDeclaration<'scope> {
 
 #[derive(WebApiFunctionTemplate)]
 #[webapi(
-    name = "DOMException",
+    interface = web_api_interfaces::DOMException,
     intrinsic_prototype_parent = v8::Intrinsic::ErrorPrototype
 )]
 struct DomExceptionPrototypeAccessorsDeclaration {
@@ -89,7 +90,7 @@ struct DomExceptionPrototypeAccessorsDeclaration {
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(name = "DOMError")]
+#[webapi(interface = web_api_interfaces::DOMError)]
 struct DomErrorPrototypeAccessorsDeclaration {
     #[webapi(accessor_property, getter = dom_error_name_getter_callback, enumerable)]
     name: (),
@@ -98,7 +99,7 @@ struct DomErrorPrototypeAccessorsDeclaration {
 }
 
 #[derive(WebApiObject)]
-#[webapi(interface = "QuotaExceededError")]
+#[webapi(interface = web_api_interfaces::QuotaExceededError)]
 struct QuotaExceededErrorObjectDeclaration<'scope> {
     #[webapi(slot = DOM_EXCEPTION_MESSAGE_SLOT)]
     message: Option<v8::Local<'scope, v8::String>>,
@@ -113,7 +114,7 @@ struct QuotaExceededErrorObjectDeclaration<'scope> {
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(name = "QuotaExceededError")]
+#[webapi(interface = web_api_interfaces::QuotaExceededError)]
 struct QuotaExceededErrorPrototypeAccessorsDeclaration {
     #[webapi(accessor_property, getter = quota_exceeded_error_quota_getter_callback, enumerable)]
     quota: (),
@@ -126,7 +127,7 @@ struct QuotaExceededErrorPrototypeAccessorsDeclaration {
 }
 
 #[derive(WebApiObject)]
-#[webapi(interface = "WebSocketError")]
+#[webapi(interface = web_api_interfaces::WebSocketError)]
 struct WebSocketErrorObjectDeclaration<'scope> {
     #[webapi(slot = DOM_EXCEPTION_MESSAGE_SLOT)]
     message: Option<v8::Local<'scope, v8::String>>,
@@ -141,7 +142,7 @@ struct WebSocketErrorObjectDeclaration<'scope> {
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(name = "WebSocketError")]
+#[webapi(interface = web_api_interfaces::WebSocketError)]
 struct WebSocketErrorPrototypeAccessorsDeclaration {
     #[webapi(accessor_property, getter = websocket_error_close_code_getter_callback, enumerable)]
     close_code: (),

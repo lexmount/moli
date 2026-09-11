@@ -12,11 +12,12 @@ use crate::context_bootstrap::{
 };
 use crate::native_bridge::throw_dom_exception;
 use crate::util::{get_private_value, set_private_value};
+use crate::web_api_interfaces;
 use crate::worker::WORKER_STATE_SLOT;
 use moli_webapi_declare::WebApiFunctionTemplate;
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(name = "ProgressEvent")]
+#[webapi(interface = web_api_interfaces::ProgressEvent)]
 struct ProgressEventPrototypeDeclaration {
     #[webapi(
         accessor_property = "lengthComputable",

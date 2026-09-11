@@ -1,4 +1,5 @@
 use super::*;
+use crate::web_api_interfaces;
 
 fn event_subclass_kind_from_callback_data(
     data: v8::Local<'_, v8::Value>,
@@ -168,7 +169,7 @@ fn event_subclass_constructor_callback<'s>(
         }
     }
 
-    moli_webapi_declare::initialize_web_api_object(scope, event, kind.constructor_name())
+    web_api_interfaces::initialize(scope, event, kind.constructor_name())
         .expect("event primary interface should initialize");
     set_private_value(
         scope,

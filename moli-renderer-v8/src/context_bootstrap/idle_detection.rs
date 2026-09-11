@@ -1,6 +1,7 @@
 use super::{
     SIMPLE_EVENT_TARGET_SLOT, dispatch_simple_event_target_event, global_constructor_object,
 };
+use crate::web_api_interfaces;
 use crate::{
     context_bootstrap::events::mark_event_trusted,
     util::{
@@ -24,7 +25,7 @@ const ACTUAL_IDLE_STATE: crate::protocol_types::EmulatedIdleOverride =
     };
 
 #[derive(WebApiObject)]
-#[webapi(interface = "IdleDetector")]
+#[webapi(interface = web_api_interfaces::IdleDetector)]
 struct IdleDetectorObjectDeclaration {
     #[webapi(slot = IDLE_DETECTOR_STARTED_SLOT)]
     started: bool,
@@ -43,7 +44,7 @@ struct IdleDetectorObjectDeclaration {
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(name = "IdleDetector")]
+#[webapi(interface = web_api_interfaces::IdleDetector)]
 struct IdleDetectorPrototypeDeclaration {
     #[webapi(
         accessor_property = "userState",
@@ -64,7 +65,7 @@ struct IdleDetectorPrototypeDeclaration {
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(name = "IdleDetector", enumerable)]
+#[webapi(interface = web_api_interfaces::IdleDetector, enumerable)]
 struct IdleDetectorConstructorDeclaration {
     #[webapi(
         static_method = "requestPermission",

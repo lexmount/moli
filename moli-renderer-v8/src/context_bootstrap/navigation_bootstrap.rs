@@ -20,11 +20,12 @@ use super::navigation_surface::{
 use super::navigation_window::set_runtime_window_owner;
 use super::*;
 use crate::util::{get_private_value, set_private_value};
+use crate::web_api_interfaces;
 use anyhow::Result;
 use moli_webapi_declare::WebApiObject;
 
 #[derive(WebApiObject)]
-#[webapi(interface = "Location", require_prototype)]
+#[webapi(interface = web_api_interfaces::Location, require_prototype)]
 struct LocationRuntimeObjectDeclaration<'scope> {
     #[webapi(slot = WINDOW_RUNTIME_OWNER_SLOT)]
     owner: v8::Local<'scope, v8::Object>,

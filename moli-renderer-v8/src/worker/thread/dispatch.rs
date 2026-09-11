@@ -1,3 +1,4 @@
+use crate::web_api_interfaces;
 use std::{
     cell::{Cell, RefCell},
     pin::pin,
@@ -126,7 +127,7 @@ struct WorkerPromiseRejectionEventInitDeclaration<'scope> {
 }
 
 #[derive(WebApiObject)]
-#[webapi(interface = "ErrorEvent", prototype = "Object")]
+#[webapi(interface = web_api_interfaces::ErrorEvent, prototype = "Object")]
 struct WorkerErrorEventFallbackDeclaration<'scope> {
     #[webapi(data_property, enumerable)]
     message: v8::Local<'scope, v8::String>,
@@ -141,7 +142,7 @@ struct WorkerErrorEventFallbackDeclaration<'scope> {
 }
 
 #[derive(WebApiObject)]
-#[webapi(interface = "PromiseRejectionEvent", prototype = "Object")]
+#[webapi(interface = web_api_interfaces::PromiseRejectionEvent, prototype = "Object")]
 struct WorkerPromiseRejectionEventFallbackDeclaration<'scope> {
     #[webapi(data_property, enumerable)]
     promise: v8::Local<'scope, v8::Promise>,
@@ -150,7 +151,7 @@ struct WorkerPromiseRejectionEventFallbackDeclaration<'scope> {
 }
 
 #[derive(WebApiObject)]
-#[webapi(interface = "Event", prototype = "Object")]
+#[webapi(interface = web_api_interfaces::Event, prototype = "Object")]
 struct WorkerBasicEventDeclaration<'scope> {
     #[webapi(data_property, enumerable)]
     r#type: v8::Local<'scope, v8::String>,
@@ -161,7 +162,7 @@ struct WorkerBasicEventDeclaration<'scope> {
 }
 
 #[derive(WebApiObject)]
-#[webapi(interface = "ExtendableEvent", prototype = "Object", parent = "Event")]
+#[webapi(interface = web_api_interfaces::ExtendableEvent, prototype = "Object",)]
 struct ServiceWorkerLifecycleEventDeclaration<'scope> {
     #[webapi(data_property, enumerable)]
     r#type: v8::Local<'scope, v8::String>,
@@ -175,10 +176,8 @@ struct ServiceWorkerLifecycleEventDeclaration<'scope> {
 
 #[derive(WebApiObject)]
 #[webapi(
-    interface = "FetchEvent",
-    prototype = "Object",
-    parent = "ExtendableEvent"
-)]
+    interface = web_api_interfaces::FetchEvent,
+    prototype = "Object",)]
 struct ServiceWorkerFetchEventDeclaration<'scope> {
     #[webapi(data_property, enumerable)]
     r#type: v8::Local<'scope, v8::String>,
@@ -206,10 +205,8 @@ struct ServiceWorkerFetchEventDeclaration<'scope> {
 
 #[derive(WebApiObject)]
 #[webapi(
-    interface = "ExtendableMessageEvent",
-    prototype = "Object",
-    parent = "ExtendableEvent"
-)]
+    interface = web_api_interfaces::ExtendableMessageEvent,
+    prototype = "Object",)]
 struct ServiceWorkerMessageEventDeclaration<'scope> {
     #[webapi(data_property, enumerable)]
     r#type: v8::Local<'scope, v8::String>,
@@ -263,10 +260,8 @@ struct ServiceWorkerMessageDispatchMethodsDeclaration {
 
 #[derive(WebApiObject)]
 #[webapi(
-    interface = "NotificationEvent",
-    prototype = "Object",
-    parent = "ExtendableEvent"
-)]
+    interface = web_api_interfaces::NotificationEvent,
+    prototype = "Object",)]
 struct ServiceWorkerNotificationEventDeclaration<'scope> {
     #[webapi(data_property, enumerable)]
     r#type: v8::Local<'scope, v8::String>,
@@ -284,10 +279,8 @@ struct ServiceWorkerNotificationEventDeclaration<'scope> {
 
 #[derive(WebApiObject)]
 #[webapi(
-    interface = "PushEvent",
-    prototype = "Object",
-    parent = "ExtendableEvent"
-)]
+    interface = web_api_interfaces::PushEvent,
+    prototype = "Object",)]
 struct ServiceWorkerPushEventDeclaration<'scope> {
     #[webapi(data_property, enumerable)]
     r#type: v8::Local<'scope, v8::String>,
@@ -302,7 +295,7 @@ struct ServiceWorkerPushEventDeclaration<'scope> {
 }
 
 #[derive(WebApiObject)]
-#[webapi(interface = "PushMessageData")]
+#[webapi(interface = web_api_interfaces::PushMessageData)]
 struct ServiceWorkerPushMessageDataDeclaration {
     #[webapi(method = "arrayBuffer", length = 0, callback = push_message_data_array_buffer_callback)]
     array_buffer: (),
@@ -316,10 +309,8 @@ struct ServiceWorkerPushMessageDataDeclaration {
 
 #[derive(WebApiObject)]
 #[webapi(
-    interface = "SyncEvent",
-    prototype = "Object",
-    parent = "ExtendableEvent"
-)]
+    interface = web_api_interfaces::SyncEvent,
+    prototype = "Object",)]
 struct ServiceWorkerSyncEventDeclaration<'scope> {
     #[webapi(data_property, enumerable)]
     r#type: v8::Local<'scope, v8::String>,
@@ -337,10 +328,8 @@ struct ServiceWorkerSyncEventDeclaration<'scope> {
 
 #[derive(WebApiObject)]
 #[webapi(
-    interface = "PeriodicSyncEvent",
-    prototype = "Object",
-    parent = "ExtendableEvent"
-)]
+    interface = web_api_interfaces::PeriodicSyncEvent,
+    prototype = "Object",)]
 struct ServiceWorkerPeriodicSyncEventDeclaration<'scope> {
     #[webapi(data_property, enumerable)]
     r#type: v8::Local<'scope, v8::String>,
@@ -753,7 +742,8 @@ fn new_worker_message_event<'s>(
         ports,
     )
     .initialize(scope, event);
-    moli_webapi_declare::initialize_web_api_object(scope, event, "MessageEvent")
+    web_api_interfaces::MessageEvent::DESCRIPTOR
+        .initialize(scope, event)
         .expect("worker fallback MessageEvent identity should initialize");
     event
 }

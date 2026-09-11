@@ -1,5 +1,6 @@
 use super::objects::{build_webgl_debug_renderer_info_object, build_webgl_lose_context_object};
 use super::*;
+use crate::web_api_interfaces;
 use crate::{
     util::{callback_data_item, get_private_value, set_private_value, v8_string, v8str},
     webidl,
@@ -90,7 +91,7 @@ struct WebGl2GetInternalformatParameterArgs {
 #[derive(WebApiObject)]
 #[webapi(
     allow_empty,
-    interface = "WebGLBuffer",
+    interface = web_api_interfaces::WebGLBuffer,
     fallback_to_string_tag = "WebGLBuffer"
 )]
 struct WebGlBufferHandleDeclaration {}
@@ -98,7 +99,7 @@ struct WebGlBufferHandleDeclaration {}
 #[derive(WebApiObject)]
 #[webapi(
     allow_empty,
-    interface = "WebGLProgram",
+    interface = web_api_interfaces::WebGLProgram,
     fallback_to_string_tag = "WebGLProgram"
 )]
 struct WebGlProgramHandleDeclaration {}
@@ -106,7 +107,7 @@ struct WebGlProgramHandleDeclaration {}
 #[derive(WebApiObject)]
 #[webapi(
     allow_empty,
-    interface = "WebGLShader",
+    interface = web_api_interfaces::WebGLShader,
     fallback_to_string_tag = "WebGLShader"
 )]
 struct WebGlShaderHandleDeclaration {}
@@ -114,7 +115,7 @@ struct WebGlShaderHandleDeclaration {}
 #[derive(WebApiObject)]
 #[webapi(
     allow_empty,
-    interface = "WebGLUniformLocation",
+    interface = web_api_interfaces::WebGLUniformLocation,
     fallback_to_string_tag = "WebGLUniformLocation"
 )]
 struct WebGlUniformLocationHandleDeclaration {}
@@ -122,7 +123,7 @@ struct WebGlUniformLocationHandleDeclaration {}
 #[derive(WebApiObject)]
 #[webapi(
     allow_empty,
-    interface = "WebGLFramebuffer",
+    interface = web_api_interfaces::WebGLFramebuffer,
     fallback_to_string_tag = "WebGLFramebuffer"
 )]
 struct WebGlFramebufferHandleDeclaration {}
@@ -130,13 +131,13 @@ struct WebGlFramebufferHandleDeclaration {}
 #[derive(WebApiObject)]
 #[webapi(
     allow_empty,
-    interface = "WebGLRenderbuffer",
+    interface = web_api_interfaces::WebGLRenderbuffer,
     fallback_to_string_tag = "WebGLRenderbuffer"
 )]
 struct WebGlRenderbufferHandleDeclaration {}
 
 #[derive(WebApiObject)]
-#[webapi(interface = "WebGL2RenderingContext")]
+#[webapi(interface = web_api_interfaces::WebGL2RenderingContext)]
 struct WebGl2ContextObjectDeclaration {
     #[webapi(slot = WEBGL2_DRAWING_BUFFER_COLOR_SPACE_SLOT)]
     drawing_buffer_color_space: String,
@@ -789,7 +790,7 @@ pub(crate) fn webgl_get_shader_precision_format_callback(
 
 #[derive(WebApiObject)]
 #[webapi(
-    interface = "WebGLShaderPrecisionFormat",
+    interface = web_api_interfaces::WebGLShaderPrecisionFormat,
     prototype = "Object",
     data_properties,
     enumerable

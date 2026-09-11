@@ -1,4 +1,5 @@
 use super::*;
+use crate::web_api_interfaces;
 
 #[cfg(test)]
 thread_local! {
@@ -257,7 +258,7 @@ pub(crate) fn build_css_generic_at_rule_object_from_stylo_rule_type<'s>(
         declaration,
         stylo_rule_type == CssRuleType::Keyframes,
     );
-    moli_webapi_declare::initialize_web_api_object(scope, object, prototype_name)
+    web_api_interfaces::initialize(scope, object, prototype_name)
         .expect("CSS rule interface identity should initialize");
     if let Some(prototype) = global_constructor_prototype(scope, prototype_name) {
         let _ = object.set_prototype(scope, prototype.into());
@@ -551,7 +552,7 @@ pub(crate) fn build_css_rule_object_with_rule_context<'s>(
     };
     let object =
         bind_css_at_rule_declaration(scope, declaration, rule_kind == CssAtRuleKind::Keyframes);
-    moli_webapi_declare::initialize_web_api_object(scope, object, prototype_name)
+    web_api_interfaces::initialize(scope, object, prototype_name)
         .expect("CSS rule interface identity should initialize");
     if let Some(prototype) = global_constructor_prototype(scope, prototype_name) {
         let _ = object.set_prototype(scope, prototype.into());

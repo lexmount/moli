@@ -1,3 +1,4 @@
+use crate::web_api_interfaces;
 use std::cell::Cell;
 use std::pin::pin;
 
@@ -158,8 +159,7 @@ fn insecure_window_filter_rejects_a_failed_interface_deletion() {
     let context = v8::Context::new(scope, Default::default());
     let scope = &mut v8::ContextScope::new(scope, context);
     let specs = vec![ConstructorSpec {
-        name: "StorageManager",
-        parent: None,
+        interface: web_api_interfaces::StorageManager::DESCRIPTOR,
         kind: ConstructorKind::StorageManager,
     }];
     super::template_registry::ExposedInterfaceTemplateRegistry::install(

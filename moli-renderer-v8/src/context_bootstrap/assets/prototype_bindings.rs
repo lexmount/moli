@@ -71,6 +71,7 @@ use super::super::{
     window_runtime::storage_bucket_persisted_callback,
     window_runtime::storage_bucket_set_expires_callback,
 };
+use crate::web_api_interfaces;
 use crate::{
     detached_css_style::install_css_style_declaration_template_bindings,
     dom_parser::install_dom_parser_template_bindings, native_bridge::element, network_host,
@@ -79,7 +80,7 @@ use crate::{
 use moli_webapi_declare::WebApiFunctionTemplate;
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(name = "CSSStyleDeclaration", enumerable)]
+#[webapi(interface = web_api_interfaces::CSSStyleDeclaration, enumerable)]
 struct CssStyleDeclarationTemplateMethodsDeclaration {
     #[webapi(
         method = "getPropertyValue",
@@ -110,7 +111,7 @@ struct CssStyleDeclarationTemplateMethodsDeclaration {
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(name = "HTMLDocument", enumerable)]
+#[webapi(interface = web_api_interfaces::HTMLDocument, enumerable)]
 struct HtmlDocumentTemplateAccessorsDeclaration {
     #[webapi(
         accessor_property = "location",
@@ -121,7 +122,7 @@ struct HtmlDocumentTemplateAccessorsDeclaration {
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(name = "Animation", enumerable)]
+#[webapi(interface = web_api_interfaces::Animation, enumerable)]
 struct AnimationTemplateAccessorsDeclaration {
     #[webapi(accessor_property = "playState", getter = animation_play_state_getter)]
     play_state: (),
@@ -165,7 +166,7 @@ struct AnimationTemplateAccessorsDeclaration {
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(name = "HTMLCanvasElement", enumerable)]
+#[webapi(interface = web_api_interfaces::HTMLCanvasElement, enumerable)]
 struct HtmlCanvasElementTemplateMethodsDeclaration {
     #[webapi(method = "getContext", length = 1, callback = element::canvas_get_context_callback)]
     get_context: (),
@@ -182,7 +183,7 @@ struct HtmlCanvasElementTemplateMethodsDeclaration {
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(name = "AudioBuffer", enumerable)]
+#[webapi(interface = web_api_interfaces::AudioBuffer, enumerable)]
 struct AudioBufferTemplateMethodsDeclaration {
     #[webapi(
         method = "getChannelData",
@@ -193,7 +194,7 @@ struct AudioBufferTemplateMethodsDeclaration {
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(name = "Worker", enumerable)]
+#[webapi(interface = web_api_interfaces::Worker, enumerable)]
 struct WorkerTemplateMethodsDeclaration {
     #[webapi(
         method = "postMessage",
@@ -211,7 +212,7 @@ struct WorkerTemplateMethodsDeclaration {
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(name = "DataTransfer", enumerable)]
+#[webapi(interface = web_api_interfaces::DataTransfer, enumerable)]
 struct DataTransferTemplateMethodsDeclaration {
     #[webapi(
         method = "getData",
@@ -236,7 +237,7 @@ struct DataTransferTemplateMethodsDeclaration {
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(name = "DataTransferItem", enumerable)]
+#[webapi(interface = web_api_interfaces::DataTransferItem, enumerable)]
 struct DataTransferItemTemplateMethodsDeclaration {
     #[webapi(
         method = "getAsFile",
@@ -261,7 +262,7 @@ struct DataTransferItemTemplateMethodsDeclaration {
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(name = "DataTransferItemList", enumerable)]
+#[webapi(interface = web_api_interfaces::DataTransferItemList, enumerable)]
 struct DataTransferItemListTemplateMethodsDeclaration {
     #[webapi(
         intrinsic_data_property = v8::Intrinsic::ArrayProtoValues,
@@ -299,7 +300,7 @@ struct DataTransferItemListTemplateMethodsDeclaration {
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(name = "FileSystemFileEntry", enumerable)]
+#[webapi(interface = web_api_interfaces::FileSystemFileEntry, enumerable)]
 struct FileSystemFileEntryTemplateMethodsDeclaration {
     #[webapi(
         method = "file",
@@ -310,7 +311,7 @@ struct FileSystemFileEntryTemplateMethodsDeclaration {
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(name = "FileSystemDirectoryEntry", enumerable)]
+#[webapi(interface = web_api_interfaces::FileSystemDirectoryEntry, enumerable)]
 struct FileSystemDirectoryEntryTemplateMethodsDeclaration {
     #[webapi(
         method = "createReader",
@@ -321,7 +322,7 @@ struct FileSystemDirectoryEntryTemplateMethodsDeclaration {
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(name = "FileSystemDirectoryReader", enumerable)]
+#[webapi(interface = web_api_interfaces::FileSystemDirectoryReader, enumerable)]
 struct FileSystemDirectoryReaderTemplateMethodsDeclaration {
     #[webapi(
         method = "readEntries",
@@ -332,7 +333,7 @@ struct FileSystemDirectoryReaderTemplateMethodsDeclaration {
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(name = "StorageBucketManager", enumerable)]
+#[webapi(interface = web_api_interfaces::StorageBucketManager, enumerable)]
 struct StorageBucketManagerTemplateMethodsDeclaration {
     #[webapi(method = "open", length = 1, callback = storage_bucket_manager_open_callback)]
     open: (),
@@ -349,7 +350,7 @@ struct StorageBucketManagerTemplateMethodsDeclaration {
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(name = "StorageBucket", enumerable)]
+#[webapi(interface = web_api_interfaces::StorageBucket, enumerable)]
 struct StorageBucketTemplateMethodsDeclaration {
     #[webapi(accessor_property, getter = storage_bucket_name_getter_callback)]
     name: (),
@@ -402,98 +403,140 @@ pub(super) fn install_constructor_template_bindings<'s>(
     template: v8::Local<'s, v8::FunctionTemplate>,
     spec: ConstructorSpec,
 ) {
-    install_node_mixin_unscopables(scope, template, spec.name);
-    install_constructor_constant_template_bindings(scope, template, spec.name);
-    install_css_style_declaration_template_accessors(scope, template, spec.name);
-    install_abort_template_bindings(scope, template, spec.name);
-    install_attr_template_bindings(scope, template, spec.name);
-    install_dom_rect_template_bindings(scope, template, spec.name);
-    install_dom_exception_template_bindings(scope, template, spec.name);
-    install_dom_implementation_template_bindings(scope, template, spec.name);
-    install_custom_element_registry_template_bindings(scope, template, spec.name);
-    install_text_codec_template_bindings(scope, template, spec.name);
-    install_geometry_template_bindings(scope, template, spec.name);
-    if spec.name == "ImageData" {
+    install_node_mixin_unscopables(scope, template, spec.interface.name());
+    install_constructor_constant_template_bindings(scope, template, spec.interface.name());
+    install_css_style_declaration_template_accessors(scope, template, spec.interface.name());
+    install_abort_template_bindings(scope, template, spec.interface.name());
+    install_attr_template_bindings(scope, template, spec.interface.name());
+    install_dom_rect_template_bindings(scope, template, spec.interface.name());
+    install_dom_exception_template_bindings(scope, template, spec.interface.name());
+    install_dom_implementation_template_bindings(scope, template, spec.interface.name());
+    install_custom_element_registry_template_bindings(scope, template, spec.interface.name());
+    install_text_codec_template_bindings(scope, template, spec.interface.name());
+    install_geometry_template_bindings(scope, template, spec.interface.name());
+    if spec.interface.name() == "ImageData" {
         install_image_data_template_bindings(scope, template);
     }
-    if spec.name == "MediaQueryList" {
+    if spec.interface.name() == "MediaQueryList" {
         install_media_query_list_template_bindings(scope, template);
     }
-    install_media_cue_template_bindings(scope, template, spec.name);
-    install_media_source_template_bindings(scope, template, spec.name);
-    install_message_port_template_bindings(scope, template, spec.name);
-    if spec.name == "BroadcastChannel" {
+    install_media_cue_template_bindings(scope, template, spec.interface.name());
+    install_media_source_template_bindings(scope, template, spec.interface.name());
+    install_message_port_template_bindings(scope, template, spec.interface.name());
+    if spec.interface.name() == "BroadcastChannel" {
         install_broadcast_channel_template_bindings(scope, template);
     }
-    if spec.name == "EventSource" {
+    if spec.interface.name() == "EventSource" {
         network_host::install_event_source_bindings(scope, template);
     }
-    if spec.name == "IdleDetector" {
+    if spec.interface.name() == "IdleDetector" {
         install_idle_detector_template_bindings(scope, template);
     }
-    if spec.name == "IdleDeadline" {
+    if spec.interface.name() == "IdleDeadline" {
         crate::window_host::install_idle_deadline_template_bindings(scope, template);
     }
-    if spec.name == "Notification" {
+    if spec.interface.name() == "Notification" {
         install_notification_template_bindings(scope, template);
     }
-    install_animation_template_bindings(scope, template, spec.name);
-    crate::blob::install_blob_template_bindings(scope, template, spec.name);
-    install_css_style_declaration_template_bindings(scope, template, spec.name);
+    install_animation_template_bindings(scope, template, spec.interface.name());
+    crate::blob::install_blob_template_bindings(scope, template, spec.interface.name());
+    install_css_style_declaration_template_bindings(scope, template, spec.interface.name());
     install_event_template_bindings(scope, template, spec);
-    install_media_file_template_bindings(scope, template, spec.name);
-    install_observer_template_bindings(scope, template, spec.name);
+    install_media_file_template_bindings(scope, template, spec.interface.name());
+    install_observer_template_bindings(scope, template, spec.interface.name());
     install_style_font_template_bindings(scope, template, spec);
-    install_stream_template_bindings(scope, template, spec.name);
-    crate::native_bridge::install_character_data_template_bindings(scope, template, spec.name);
-    crate::native_bridge::install_node_template_bindings(scope, template, spec.name);
-    crate::native_bridge::install_document_template_bindings(scope, template, spec.name);
-    crate::native_bridge::install_collection_template_bindings(scope, template, spec.name);
-    crate::native_bridge::install_traversal_template_bindings(scope, template, spec.name);
+    install_stream_template_bindings(scope, template, spec.interface.name());
+    crate::native_bridge::install_character_data_template_bindings(
+        scope,
+        template,
+        spec.interface.name(),
+    );
+    crate::native_bridge::install_node_template_bindings(scope, template, spec.interface.name());
+    crate::native_bridge::install_document_template_bindings(
+        scope,
+        template,
+        spec.interface.name(),
+    );
+    crate::native_bridge::install_collection_template_bindings(
+        scope,
+        template,
+        spec.interface.name(),
+    );
+    crate::native_bridge::install_traversal_template_bindings(
+        scope,
+        template,
+        spec.interface.name(),
+    );
     crate::native_bridge::element::install_global_event_handler_template_bindings(
-        scope, template, spec.name,
+        scope,
+        template,
+        spec.interface.name(),
     );
-    crate::native_bridge::element::install_element_template_bindings(scope, template, spec.name);
+    crate::native_bridge::element::install_element_template_bindings(
+        scope,
+        template,
+        spec.interface.name(),
+    );
     crate::native_bridge::element::install_element_internals_template_bindings(
-        scope, template, spec.name,
+        scope,
+        template,
+        spec.interface.name(),
     );
-    crate::native_bridge::element::install_text_track_template_bindings(scope, template, spec.name);
+    crate::native_bridge::element::install_text_track_template_bindings(
+        scope,
+        template,
+        spec.interface.name(),
+    );
     crate::native_bridge::document::install_caret_position_template_bindings(
-        scope, template, spec.name,
+        scope,
+        template,
+        spec.interface.name(),
     );
     crate::native_bridge::document::install_named_node_map_template_bindings(
-        scope, template, spec.name,
+        scope,
+        template,
+        spec.interface.name(),
     );
-    crate::native_bridge::document::install_xpath_template_bindings(scope, template, spec.name);
+    crate::native_bridge::document::install_xpath_template_bindings(
+        scope,
+        template,
+        spec.interface.name(),
+    );
     crate::observer_runtime::install_intersection_observer_template_accessors(
-        scope, template, spec.name,
+        scope,
+        template,
+        spec.interface.name(),
     );
-    crate::network_host::install_progress_event_template_bindings(scope, template, spec.name);
-    install_svg_template_bindings(scope, template, spec.name);
-    install_opfs_constructor_template_bindings(scope, template, spec.name);
-    install_css_typed_om_template_bindings(scope, template, spec.name);
-    install_css_stylesheet_template_bindings(scope, template, spec.name);
-    install_range_template_bindings(scope, template, spec.name);
-    install_indexed_db_template_bindings(scope, template, spec.name);
-    install_selection_template_bindings(scope, template, spec.name);
-    install_file_api_template_bindings(scope, template, spec.name);
-    install_dom_parser_template_bindings(scope, template, spec.name);
-    install_performance_template_bindings(scope, template, spec.name);
-    install_crypto_template_bindings(scope, template, spec.name);
-    install_navigator_template_bindings(scope, template, spec.name);
-    install_screen_template_bindings(scope, template, spec.name);
-    install_visual_viewport_template_bindings(scope, template, spec.name);
-    install_speech_synthesis_template_bindings(scope, template, spec.name);
-    install_storage_access_template_bindings(scope, template, spec.name);
-    install_touch_template_bindings(scope, template, spec.name);
-    install_view_transition_template_bindings(scope, template, spec.name);
-    install_web_audio_template_bindings(scope, template, spec.name);
-    install_webrtc_template_bindings(scope, template, spec.name);
+    crate::network_host::install_progress_event_template_bindings(
+        scope,
+        template,
+        spec.interface.name(),
+    );
+    install_svg_template_bindings(scope, template, spec.interface.name());
+    install_opfs_constructor_template_bindings(scope, template, spec.interface.name());
+    install_css_typed_om_template_bindings(scope, template, spec.interface.name());
+    install_css_stylesheet_template_bindings(scope, template, spec.interface.name());
+    install_range_template_bindings(scope, template, spec.interface.name());
+    install_indexed_db_template_bindings(scope, template, spec.interface.name());
+    install_selection_template_bindings(scope, template, spec.interface.name());
+    install_file_api_template_bindings(scope, template, spec.interface.name());
+    install_dom_parser_template_bindings(scope, template, spec.interface.name());
+    install_performance_template_bindings(scope, template, spec.interface.name());
+    install_crypto_template_bindings(scope, template, spec.interface.name());
+    install_navigator_template_bindings(scope, template, spec.interface.name());
+    install_screen_template_bindings(scope, template, spec.interface.name());
+    install_visual_viewport_template_bindings(scope, template, spec.interface.name());
+    install_speech_synthesis_template_bindings(scope, template, spec.interface.name());
+    install_storage_access_template_bindings(scope, template, spec.interface.name());
+    install_touch_template_bindings(scope, template, spec.interface.name());
+    install_view_transition_template_bindings(scope, template, spec.interface.name());
+    install_web_audio_template_bindings(scope, template, spec.interface.name());
+    install_webrtc_template_bindings(scope, template, spec.interface.name());
     crate::context_bootstrap::navigation_activation::install_navigation_activation_template_bindings(
-        scope, template, spec.name,
+        scope, template, spec.interface.name(),
     );
 
-    match spec.name {
+    match spec.interface.name() {
         "HTMLDocument" => {
             let proto = template.prototype_template(scope);
             HtmlDocumentTemplateAccessorsDeclaration::initialize_prototype_template(scope, proto);

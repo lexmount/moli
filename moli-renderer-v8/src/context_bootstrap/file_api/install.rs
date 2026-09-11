@@ -1,9 +1,10 @@
 use super::*;
+use crate::web_api_interfaces;
 use anyhow::Result;
 use moli_webapi_declare::{WebApiFunctionTemplate, WebApiObject};
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(name = "FileReader", enumerable)]
+#[webapi(interface = web_api_interfaces::FileReader, enumerable)]
 struct FileReaderConstantsDeclaration {
     #[webapi(constant = "EMPTY", value = 0u32)]
     empty: (),

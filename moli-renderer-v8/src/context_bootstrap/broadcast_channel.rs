@@ -1,4 +1,5 @@
 use super::*;
+use crate::web_api_interfaces;
 use crate::{
     broadcast_channel_runtime::{
         BroadcastChannelEvent, BroadcastChannelOwner, BroadcastChannelStorageKey,
@@ -26,7 +27,7 @@ const BROADCAST_CHANNEL_ONMESSAGE_SLOT: &str = "__lmBroadcastChannelOnmessage";
 const BROADCAST_CHANNEL_ONMESSAGEERROR_SLOT: &str = "__lmBroadcastChannelOnmessageerror";
 
 #[derive(WebApiObject)]
-#[webapi(interface = "BroadcastChannel")]
+#[webapi(interface = web_api_interfaces::BroadcastChannel)]
 struct BroadcastChannelObjectDeclaration<'scope> {
     #[webapi(slot = BROADCAST_CHANNEL_ID_SLOT)]
     channel_id: v8::Local<'scope, v8::Value>,
@@ -72,7 +73,7 @@ struct BroadcastChannelObjectDeclaration<'scope> {
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(name = "BroadcastChannel", enumerable)]
+#[webapi(interface = web_api_interfaces::BroadcastChannel, enumerable)]
 struct BroadcastChannelPrototypeDeclaration {
     #[webapi(
         accessor_property,

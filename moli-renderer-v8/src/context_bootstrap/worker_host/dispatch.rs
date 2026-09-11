@@ -1,3 +1,4 @@
+use crate::web_api_interfaces;
 use std::pin::pin;
 
 use moli_webapi_declare::WebApiObject;
@@ -21,7 +22,7 @@ struct WorkerHostEventInitDeclaration {
 }
 
 #[derive(WebApiObject)]
-#[webapi(interface = "Event", prototype = "Object")]
+#[webapi(interface = web_api_interfaces::Event, prototype = "Object")]
 struct WorkerHostEventFallbackDeclaration {
     #[webapi(data_property, enumerable)]
     r#type: String,
@@ -39,7 +40,7 @@ struct WorkerHostMessageEventInitDeclaration<'scope> {
 }
 
 #[derive(WebApiObject)]
-#[webapi(interface = "MessageEvent", prototype = "Object", scope_lifetime = 'scope)]
+#[webapi(interface = web_api_interfaces::MessageEvent, prototype = "Object", scope_lifetime = 'scope)]
 struct WorkerHostMessageEventFallbackDeclaration<'scope, 'event> {
     #[webapi(data_property, enumerable)]
     data: v8::Local<'scope, v8::Value>,
@@ -67,7 +68,7 @@ struct WorkerHostErrorEventInitDeclaration<'scope> {
 }
 
 #[derive(WebApiObject)]
-#[webapi(interface = "ErrorEvent", prototype = "Object", scope_lifetime = 'scope)]
+#[webapi(interface = web_api_interfaces::ErrorEvent, prototype = "Object", scope_lifetime = 'scope)]
 struct WorkerHostErrorEventFallbackDeclaration<'scope, 'text> {
     #[webapi(data_property, enumerable)]
     r#type: &'static str,

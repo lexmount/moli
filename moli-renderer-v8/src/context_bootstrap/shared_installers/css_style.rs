@@ -1,9 +1,10 @@
 use super::*;
 use crate::native_bridge::element;
+use crate::web_api_interfaces;
 use moli_webapi_declare::WebApiFunctionTemplate;
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(name = "CSSStyleDeclaration")]
+#[webapi(interface = web_api_interfaces::CSSStyleDeclaration)]
 struct CssStyleDeclarationPrototypeDeclaration {
     #[webapi(accessor_property, enumerable, getter = element::style_length_getter_callback)]
     length: (),

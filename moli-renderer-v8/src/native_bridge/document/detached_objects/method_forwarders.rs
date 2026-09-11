@@ -4,6 +4,7 @@ use crate::dom_parser::map_live_value_to_foreign;
 use crate::util::{
     context_host_ptr_from_global_bridge, get_private_object, get_private_value, set_private_value,
 };
+use crate::web_api_interfaces;
 use crate::webidl;
 use moli_webapi_declare::WebApiObject;
 
@@ -15,7 +16,7 @@ const DETACHED_NODE_ITERATOR_NODES_SLOT: &str = "__moliDetachedNodeIteratorNodes
 const DETACHED_NODE_ITERATOR_INDEX_SLOT: &str = "__moliDetachedNodeIteratorIndex";
 
 #[derive(WebApiObject)]
-#[webapi(interface = "NodeIterator")]
+#[webapi(interface = web_api_interfaces::NodeIterator)]
 struct DetachedNodeIteratorDeclaration<'scope> {
     #[webapi(slot = DETACHED_NODE_ITERATOR_NODES_SLOT)]
     nodes: v8::Local<'scope, v8::Array>,
@@ -28,7 +29,7 @@ struct DetachedNodeIteratorDeclaration<'scope> {
 }
 
 #[derive(WebApiObject)]
-#[webapi(interface = "DOMImplementation", prototype = "Object")]
+#[webapi(interface = web_api_interfaces::DOMImplementation, prototype = "Object")]
 struct DetachedDomImplementationDeclaration<'scope> {
     #[webapi(slot = DOM_IMPLEMENTATION_OWNER_DOCUMENT_SLOT)]
     owner_document: v8::Local<'scope, v8::Object>,

@@ -3,6 +3,7 @@ use crate::util::{
     callback_data_index_value, callback_data_item, get_private_value, set_private_value,
     throw_type_error,
 };
+use crate::web_api_interfaces;
 use moli_webapi_declare::WebApiObject;
 use std::time::{Duration, Instant};
 
@@ -30,7 +31,7 @@ struct MemoryInfoPrototypeDeclaration {
 }
 
 #[derive(WebApiObject)]
-#[webapi(prototype = "Object", interface = "MemoryInfo")]
+#[webapi(prototype = "Object", interface = web_api_interfaces::MemoryInfo)]
 struct MemoryInfoObjectDeclaration<'scope> {
     #[webapi(prototype)]
     prototype: Option<v8::Local<'scope, v8::Object>>,

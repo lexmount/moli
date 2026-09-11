@@ -1,5 +1,6 @@
 use super::*;
 use crate::util::{callback_data_index_value, get_private_value};
+use crate::web_api_interfaces;
 use crate::webidl;
 use moli_canvas::byte_len as rgba8_byte_len;
 use moli_webapi_declare::{WebApiFunctionTemplate, WebApiObject};
@@ -12,7 +13,7 @@ const IMAGE_DATA_PIXEL_FORMAT_SLOT: &str = "__moliImageDataPixelFormat";
 const IMAGE_DATA_DATA_SLOT: &str = "__moliImageDataData";
 
 #[derive(WebApiObject)]
-#[webapi(interface = "ImageData")]
+#[webapi(interface = web_api_interfaces::ImageData)]
 struct ImageDataObjectDeclaration<'s> {
     #[webapi(slot = IMAGE_DATA_WIDTH_SLOT)]
     width: u32,
@@ -27,7 +28,7 @@ struct ImageDataObjectDeclaration<'s> {
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(name = "ImageData")]
+#[webapi(interface = web_api_interfaces::ImageData)]
 struct ImageDataPrototypeDeclaration {
     #[webapi(
         accessor_property,

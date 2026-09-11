@@ -3,10 +3,11 @@ use crate::context_bootstrap::stream_adapter::{
     EnqueueChunkError, enqueue_byte_chunk, maybe_pull_stream, prepare_readable_byte_stream_close,
     readable_byte_stream_byob_request, readable_stream_is_byte_stream,
 };
+use crate::web_api_interfaces;
 use moli_webapi_declare::{WebApiFunctionTemplate, WebApiObject};
 
 #[derive(WebApiObject)]
-#[webapi(interface = "ReadableStreamDefaultController")]
+#[webapi(interface = web_api_interfaces::ReadableStreamDefaultController)]
 struct ReadableStreamControllerObjectDeclaration<'scope> {
     #[webapi(slot = STREAM_CONTROLLER_STREAM_SLOT)]
     stream: v8::Local<'scope, v8::Object>,
@@ -15,7 +16,7 @@ struct ReadableStreamControllerObjectDeclaration<'scope> {
 }
 
 #[derive(WebApiObject)]
-#[webapi(interface = "ReadableByteStreamController")]
+#[webapi(interface = web_api_interfaces::ReadableByteStreamController)]
 struct ReadableByteStreamControllerObjectDeclaration<'scope> {
     #[webapi(slot = STREAM_CONTROLLER_STREAM_SLOT)]
     stream: v8::Local<'scope, v8::Object>,
@@ -24,7 +25,7 @@ struct ReadableByteStreamControllerObjectDeclaration<'scope> {
 }
 
 #[derive(WebApiObject)]
-#[webapi(interface = "TransformStreamDefaultController")]
+#[webapi(interface = web_api_interfaces::TransformStreamDefaultController)]
 struct TransformStreamControllerObjectDeclaration<'scope> {
     #[webapi(slot = STREAM_CONTROLLER_STREAM_SLOT)]
     stream: v8::Local<'scope, v8::Object>,
@@ -51,7 +52,7 @@ struct TransformStreamControllerObjectDeclaration<'scope> {
 }
 
 #[derive(WebApiObject)]
-#[webapi(interface = "WritableStreamDefaultController")]
+#[webapi(interface = web_api_interfaces::WritableStreamDefaultController)]
 struct WritableStreamControllerObjectDeclaration<'scope> {
     #[webapi(slot = STREAM_CONTROLLER_STREAM_SLOT)]
     stream: v8::Local<'scope, v8::Object>,
@@ -60,7 +61,7 @@ struct WritableStreamControllerObjectDeclaration<'scope> {
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(name = "ReadableStreamDefaultController", enumerable)]
+#[webapi(interface = web_api_interfaces::ReadableStreamDefaultController, enumerable)]
 struct ReadableStreamDefaultControllerPrototypeDeclaration {
     #[webapi(method, length = 0, callback = readable_stream_controller_enqueue_callback)]
     enqueue: (),
@@ -73,7 +74,7 @@ struct ReadableStreamDefaultControllerPrototypeDeclaration {
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(name = "ReadableByteStreamController", enumerable)]
+#[webapi(interface = web_api_interfaces::ReadableByteStreamController, enumerable)]
 struct ReadableByteStreamControllerPrototypeDeclaration {
     #[webapi(method, length = 1, callback = readable_stream_controller_enqueue_callback)]
     enqueue: (),
@@ -88,7 +89,7 @@ struct ReadableByteStreamControllerPrototypeDeclaration {
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(name = "TransformStreamDefaultController", enumerable)]
+#[webapi(interface = web_api_interfaces::TransformStreamDefaultController, enumerable)]
 struct TransformStreamDefaultControllerPrototypeDeclaration {
     #[webapi(method, length = 0, callback = readable_stream_controller_enqueue_callback)]
     enqueue: (),
@@ -101,7 +102,7 @@ struct TransformStreamDefaultControllerPrototypeDeclaration {
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(name = "WritableStreamDefaultController", enumerable)]
+#[webapi(interface = web_api_interfaces::WritableStreamDefaultController, enumerable)]
 struct WritableStreamControllerPrototypeDeclaration {
     #[webapi(accessor_property, getter = writable_stream_controller_signal_getter)]
     signal: (),

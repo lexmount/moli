@@ -101,24 +101,25 @@
 //! fragment stays unbranded. Do not opt actual instances out of branding to
 //! make them pass structured clone.
 //!
-//! Register inheritance with `register_web_api_interfaces` using the same
-//! interface metadata that drives constructor installation. Identity is independent of
-//! realm exposure and mutable JavaScript prototypes. Use `web_api_object_type`
-//! for the primary interface and `implements_interface` for inherited receiver
-//! checks. Native factories can call `initialize_web_api_object` directly.
-//! An object declaration outside the exposed-interface registry can declare
-//! `parent = "BaseInterface"`; this registers inheritance before initialization.
-//! JavaScript subclasses retain the native interface implemented by their
-//! constructor. Base initialization never downgrades an existing derived type.
-//! Inconsistent parents, cycles, and unrelated rebranding fail. The renderer
-//! registers inheritance from `ConstructorSpec.name` and `.parent` before lazy
-//! constructor exposure, without maintaining another type list.
-//! Factories using that registry should not repeat `parent`: deleting a public
-//! constructor or taking a fallback path does not remove registered inheritance.
+//! Declare each interface once with `declare_web_api_interfaces!` and reference
+//! it using `#[webapi(interface = interfaces::ProgressEvent)]`. The generated
+//! descriptor supplies the name and parent to constructor specs, factories and
+//! receiver predicates. Initialization registers the full ancestry, including
+//! when public constructors are absent. Do not repeat `parent` on object state
+//! declarations. A template's optional `name` is only its display name and must
+//! not be used to infer the identity of a shared implementation fragment.
+//!
+//! Identity is independent of realm exposure and mutable JavaScript prototypes.
+//! Use `web_api_object_type` for the primary interface. Native factories can use
+//! `Interface::DESCRIPTOR.initialize(scope, object)`; dynamic factories resolve
+//! their selected name through the same native catalog. JavaScript subclasses
+//! retain the interface implemented by their native constructor, and base
+//! initialization never downgrades a derived object. Inconsistent parents,
+//! cycles and unrelated rebranding fail.
 //!
 //! `WebApiFunctionTemplate` adapts native constructor
 //! callbacks automatically. Hand-written templates can use
-//! `web_api_constructor!("Interface", callback)` when construction does not
+//! `web_api_constructor!(interfaces::Interface, callback)` when construction does not
 //! already go through a named object declaration. Only successful construction
 //! brands the resulting native object; constructors and prototypes are not
 //! instances. A factory implemented with a native Proxy must brand its target
@@ -158,8 +159,10 @@
 //!
 //! # Receiver checks and Promise-returning members
 //!
-//! `receiver = "Interface"` on a method or `accessor_property` generates an
-//! `implements_interface` check before argument conversion and implementation.
+//! `#[webapi(interface = interfaces::Event, receiver)]` checks instance methods
+//! and accessors against the declared interface before argument conversion.
+//! A field can use `receiver = interfaces::Other::is_instance` to select another
+//! interface. Merely naming a template does not enable receiver checks.
 //! Invalid receivers throw `TypeError("Illegal invocation")`. Native subtypes
 //! and cross-realm objects are accepted even after their JavaScript prototypes
 //! change. Forged prototypes, public properties, and author Proxies cannot pass.
@@ -172,7 +175,7 @@
 //! `receiver = path` remains available for a custom native predicate with
 //! signature `fn(&mut v8::PinScope, v8::Local<v8::Object>) -> bool`. It must not
 //! execute JavaScript or throw. Use it for checks that additionally require
-//! native resource state; ordinary interface checks should use the string form.
+//! native resource state; ordinary interface checks should use their descriptor.
 //!
 //! `returns_promise` on a method (including a static method) or accessor getter
 //! converts synchronous exceptions from both the receiver check and the callback
@@ -228,27 +231,35 @@ mod brand;
 mod callback;
 mod declaration;
 mod error;
+mod interface;
 mod property;
 mod prototype;
 mod value;
 
 pub mod __private;
 
+pub use interface::WebApiInterfaceDescriptor;
 pub use moli_webapi_declare_derive::{WebApiFunctionTemplate, WebApiObject};
 pub use v8;
 
 /// Adapts a manual native constructor to the same identity initialization used
-/// by interface derives. The interface must be a native declaration literal,
+/// by interface derives. The interface must be a generated native identity type,
 /// never a name obtained from `new.target` or another JavaScript property.
 #[macro_export]
 macro_rules! web_api_constructor {
-    ($interface:literal, $callback:path) => {{
+    ($interface:path, $callback:path) => {{
         fn __moli_native_constructor_adapter<'s>(
             scope: &mut $crate::v8::PinScope<'s, '_>,
             args: $crate::v8::FunctionCallbackArguments<'s>,
             rv: $crate::v8::ReturnValue<'s>,
         ) {
-            $crate::__private::invoke_web_api_constructor(scope, args, rv, $interface, $callback);
+            $crate::__private::invoke_web_api_constructor(
+                scope,
+                args,
+                rv,
+                <$interface>::DESCRIPTOR,
+                $callback,
+            );
         }
         __moli_native_constructor_adapter
     }};

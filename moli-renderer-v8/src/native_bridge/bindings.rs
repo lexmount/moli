@@ -1,3 +1,4 @@
+use crate::web_api_interfaces;
 use std::{collections::HashMap, ffi::c_void};
 
 use anyhow::{Result, anyhow};
@@ -139,8 +140,10 @@ impl NativeBridgeBindings {
         let mut node_wrapper_templates = HashMap::new();
         for descriptor in node_bridge_descriptors() {
             let template = build_node_wrapper_template(scope, descriptor);
-            node_wrapper_templates
-                .insert(descriptor.prototype_name, v8::Global::new(scope, template));
+            node_wrapper_templates.insert(
+                descriptor.interface.name(),
+                v8::Global::new(scope, template),
+            );
         }
 
         let bridge_template = build_native_bridge_template(scope);
@@ -277,7 +280,7 @@ impl NativeBridgeBindings {
                 "`{prototype_name}` wrapper must expose its reflector identity field"
             );
         }
-        moli_webapi_declare::initialize_web_api_object(scope, wrapper, prototype_name)
+        web_api_interfaces::initialize(scope, wrapper, prototype_name)
             .expect("native wrapper identity should initialize");
         set_named_constructor_prototype(scope, wrapper, prototype_name);
         self.sync_wrapper_owner_realm_prototype(scope, host_ptr, &handle, wrapper);

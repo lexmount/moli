@@ -278,10 +278,10 @@ impl ExposedInterfaceMetadataTable {
         let mut by_name = HashMap::with_capacity(specs.len());
         for (index, spec) in specs.iter().enumerate() {
             let id = InterfaceId::from_index(index)?;
-            if by_name.insert(spec.name, id).is_some() {
+            if by_name.insert(spec.interface.name(), id).is_some() {
                 return Err(anyhow!(
                     "duplicate exposed interface metadata name `{}`",
-                    spec.name
+                    spec.interface.name()
                 ));
             }
         }
@@ -289,18 +289,19 @@ impl ExposedInterfaceMetadataTable {
         let mut entries = Vec::with_capacity(specs.len());
         for (index, spec) in specs.iter().enumerate() {
             let parent = spec
-                .parent
+                .interface
+                .parent_name()
                 .map(|name| {
                     by_name.get(name).copied().ok_or_else(|| {
                         anyhow!(
                             "exposed interface `{}` references unknown parent `{name}`",
-                            spec.name
+                            spec.interface.name()
                         )
                     })
                 })
                 .transpose()?;
-            let is_storage = STORAGE_INTERFACE_NAMES.contains(&spec.name);
-            let exposure = exposure_for_name(spec.name);
+            let is_storage = STORAGE_INTERFACE_NAMES.contains(&spec.interface.name());
+            let exposure = exposure_for_name(spec.interface.name());
             let prototype_property = match spec.prototype_property() {
                 ConstructorPrototypeProperty::TemplateReadOnly => {
                     ResolvedPrototypeProperty::TemplateReadOnly
@@ -311,7 +312,7 @@ impl ExposedInterfaceMetadataTable {
                     let prototype = by_name.get(prototype_interface).copied().ok_or_else(|| {
                         anyhow!(
                             "exposed interface `{}` references unknown runtime prototype interface `{prototype_interface}`",
-                            spec.name
+                            spec.interface.name()
                         )
                     })?;
                     ResolvedPrototypeProperty::RuntimeInstalled { prototype }
@@ -319,12 +320,12 @@ impl ExposedInterfaceMetadataTable {
             };
             entries.push(ExposedInterfaceMetadata {
                 id: InterfaceId::from_index(index)?,
-                name: spec.name,
+                name: spec.interface.name(),
                 kind: spec.kind,
                 parent,
                 exposure,
                 secure_context_only: is_storage
-                    || SECURE_CONTEXT_ONLY_INTERFACE_NAMES.contains(&spec.name),
+                    || SECURE_CONTEXT_ONLY_INTERFACE_NAMES.contains(&spec.interface.name()),
                 installation: installation_for_spec(*spec),
                 prototype_property,
             });
@@ -357,9 +358,9 @@ impl ExposedInterfaceMetadataTable {
 }
 
 pub(super) fn installation_for_spec(spec: ConstructorSpec) -> GlobalInstallation {
-    if NON_EXPOSED_INTERFACE_NAMES.contains(&spec.name) {
+    if NON_EXPOSED_INTERFACE_NAMES.contains(&spec.interface.name()) {
         GlobalInstallation::NotExposed
-    } else if EAGER_INTERFACE_NAMES.contains(&spec.name) {
+    } else if EAGER_INTERFACE_NAMES.contains(&spec.interface.name()) {
         GlobalInstallation::Eager
     } else {
         GlobalInstallation::Lazy
@@ -431,11 +432,15 @@ fn validate_materialization_cycles(entries: &[ExposedInterfaceMetadata]) -> Resu
 mod tests {
     use super::*;
     use crate::context_bootstrap::specs::ConstructorKind;
+    use crate::web_api_interfaces;
+    use moli_webapi_declare::WebApiInterfaceDescriptor;
 
-    fn spec(name: &'static str, parent: Option<&'static str>) -> ConstructorSpec {
+    fn spec(
+        name: &'static str,
+        parent: Option<&'static moli_webapi_declare::WebApiInterfaceDescriptor>,
+    ) -> ConstructorSpec {
         ConstructorSpec {
-            name,
-            parent,
+            interface: moli_webapi_declare::WebApiInterfaceDescriptor::new(name, parent),
             kind: ConstructorKind::Illegal,
         }
     }
@@ -444,7 +449,10 @@ mod tests {
     fn metadata_assigns_stable_ids_and_resolves_parents() {
         let table = ExposedInterfaceMetadataTable::from_constructor_specs(&[
             spec("Parent", None),
-            spec("Child", Some("Parent")),
+            spec(
+                "Child",
+                Some(&const { WebApiInterfaceDescriptor::new("Parent", None) }),
+            ),
         ])
         .expect("valid metadata");
         let parent = table.metadata_by_name("Parent").expect("parent metadata");
@@ -528,13 +536,28 @@ mod tests {
     #[test]
     fn chromium_worker_exposure_exceptions_are_preserved() {
         let table = ExposedInterfaceMetadataTable::from_constructor_specs(&[
-            spec("Worker", Some("EventTarget")),
+            spec(
+                "Worker",
+                Some(&const { WebApiInterfaceDescriptor::new("EventTarget", None) }),
+            ),
             spec("EventTarget", None),
-            spec("ProgressEvent", Some("Event")),
+            spec(
+                "ProgressEvent",
+                Some(&const { WebApiInterfaceDescriptor::new("Event", None) }),
+            ),
             spec("Event", None),
-            spec("XMLHttpRequestEventTarget", Some("EventTarget")),
-            spec("XMLHttpRequestUpload", Some("XMLHttpRequestEventTarget")),
-            spec("XMLHttpRequest", Some("XMLHttpRequestEventTarget")),
+            spec(
+                "XMLHttpRequestEventTarget",
+                Some(&const { WebApiInterfaceDescriptor::new("EventTarget", None) }),
+            ),
+            spec(
+                "XMLHttpRequestUpload",
+                Some(&const { WebApiInterfaceDescriptor::new("XMLHttpRequestEventTarget", None) }),
+            ),
+            spec(
+                "XMLHttpRequest",
+                Some(&const { WebApiInterfaceDescriptor::new("XMLHttpRequestEventTarget", None) }),
+            ),
             spec("FileReaderSync", None),
         ])
         .expect("worker exposure metadata");
@@ -580,8 +603,7 @@ mod tests {
             spec("Window", None),
             spec("DOMError", None),
             ConstructorSpec {
-                name: "Audio",
-                parent: None,
+                interface: web_api_interfaces::Audio::DESCRIPTOR,
                 kind: ConstructorKind::Audio,
             },
             spec("HTMLAudioElement", None),
@@ -629,14 +651,20 @@ mod tests {
         assert!(
             ExposedInterfaceMetadataTable::from_constructor_specs(&[spec(
                 "Child",
-                Some("Missing"),
+                Some(&const { WebApiInterfaceDescriptor::new("Missing", None) }),
             )])
             .is_err()
         );
         assert!(
             ExposedInterfaceMetadataTable::from_constructor_specs(&[
-                spec("A", Some("B")),
-                spec("B", Some("A")),
+                spec(
+                    "A",
+                    Some(&const { WebApiInterfaceDescriptor::new("B", None) })
+                ),
+                spec(
+                    "B",
+                    Some(&const { WebApiInterfaceDescriptor::new("A", None) })
+                ),
             ])
             .is_err()
         );
@@ -646,8 +674,7 @@ mod tests {
     fn metadata_resolves_and_validates_runtime_prototype_dependencies() {
         let table = ExposedInterfaceMetadataTable::from_constructor_specs(&[
             ConstructorSpec {
-                name: "Audio",
-                parent: None,
+                interface: web_api_interfaces::Audio::DESCRIPTOR,
                 kind: ConstructorKind::Audio,
             },
             spec("HTMLAudioElement", None),
@@ -666,8 +693,7 @@ mod tests {
 
         assert!(
             ExposedInterfaceMetadataTable::from_constructor_specs(&[ConstructorSpec {
-                name: "Audio",
-                parent: None,
+                interface: web_api_interfaces::Audio::DESCRIPTOR,
                 kind: ConstructorKind::Audio,
             }])
             .is_err(),
@@ -676,11 +702,13 @@ mod tests {
         assert!(
             ExposedInterfaceMetadataTable::from_constructor_specs(&[
                 ConstructorSpec {
-                    name: "Audio",
-                    parent: None,
+                    interface: web_api_interfaces::Audio::DESCRIPTOR,
                     kind: ConstructorKind::Audio,
                 },
-                spec("HTMLAudioElement", Some("Audio")),
+                spec(
+                    "HTMLAudioElement",
+                    Some(&const { WebApiInterfaceDescriptor::new("Audio", None) })
+                ),
             ])
             .is_err(),
             "runtime prototype dependencies must participate in cycle validation"

@@ -1,4 +1,5 @@
 use crate::util::{get_private_object, throw_type_error};
+use crate::web_api_interfaces;
 use crate::webidl;
 use moli_webapi_declare::{
     DataPropertyDescriptorDeclaration, WebApiFunctionTemplate, WebApiObject,
@@ -7,7 +8,7 @@ use moli_webapi_declare::{
 const DOM_STRING_LIST_VALUES_SLOT: &str = "moli.IndexedDb.DOMStringListValues";
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(name = "DOMStringList", enumerable)]
+#[webapi(interface = web_api_interfaces::DOMStringList, enumerable)]
 struct DomStringListPrototypeDeclaration {
     #[webapi(accessor_property, getter = dom_string_list_length_getter)]
     length: (),
@@ -23,7 +24,7 @@ struct DomStringListPrototypeDeclaration {
 }
 
 #[derive(WebApiObject)]
-#[webapi(interface = "DOMStringList", require_prototype)]
+#[webapi(interface = web_api_interfaces::DOMStringList, require_prototype)]
 struct DomStringListObjectDeclaration<'s> {
     #[webapi(slot = DOM_STRING_LIST_VALUES_SLOT)]
     values: v8::Local<'s, v8::Array>,

@@ -1,9 +1,10 @@
 use super::*;
+use crate::web_api_interfaces;
 use moli_url::search_params::{SearchParamPair, SearchParams, serialize_search_params_pairs};
 use moli_webapi_declare::WebApiObject;
 
 #[derive(WebApiObject)]
-#[webapi(interface = "URLSearchParams")]
+#[webapi(interface = web_api_interfaces::URLSearchParams)]
 struct UrlSearchParamsObjectDeclaration<'s> {
     #[webapi(slot = URL_SEARCH_PARAMS_OWNER_SLOT)]
     owner: v8::Local<'s, v8::Value>,

@@ -1,9 +1,10 @@
 use super::*;
+use crate::web_api_interfaces;
 use moli_webapi_declare::WebApiObject;
 
 #[derive(WebApiObject)]
 #[webapi(
-    interface = "IDBDatabase",
+    interface = web_api_interfaces::IDBDatabase,
     require_prototype,
     scope_lifetime = 'scope,
     data_properties,

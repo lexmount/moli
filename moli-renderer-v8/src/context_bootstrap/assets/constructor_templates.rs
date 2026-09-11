@@ -69,6 +69,7 @@ use super::super::{
     worker_host::worker_constructor_callback,
 };
 use super::prototype_bindings::install_constructor_template_bindings;
+use crate::web_api_interfaces;
 use crate::{
     blob, dom_parser, native_bridge::abort, network_host, observer_runtime, util::v8_string,
     xml_serializer,
@@ -88,11 +89,14 @@ pub(in crate::context_bootstrap) fn build_constructor_template<'s>(
                 .length(0)
                 .build(scope)
         }
-        ConstructorKind::Event => v8::FunctionTemplate::builder(
-            moli_webapi_declare::web_api_constructor!("Event", event_constructor_callback),
-        )
-        .length(1)
-        .build(scope),
+        ConstructorKind::Event => {
+            v8::FunctionTemplate::builder(moli_webapi_declare::web_api_constructor!(
+                web_api_interfaces::Event,
+                event_constructor_callback
+            ))
+            .length(1)
+            .build(scope)
+        }
         ConstructorKind::UiEvent => {
             build_event_subclass_template(scope, EventSubclassKind::UiEvent)
         }
@@ -119,7 +123,7 @@ pub(in crate::context_bootstrap) fn build_constructor_template<'s>(
         }
         ConstructorKind::ClipboardItem => {
             v8::FunctionTemplate::builder(moli_webapi_declare::web_api_constructor!(
-                "ClipboardItem",
+                web_api_interfaces::ClipboardItem,
                 clipboard_item_constructor_callback
             ))
             .length(1)
@@ -191,20 +195,23 @@ pub(in crate::context_bootstrap) fn build_constructor_template<'s>(
         }
         ConstructorKind::DomException => {
             v8::FunctionTemplate::builder(moli_webapi_declare::web_api_constructor!(
-                "DOMException",
+                web_api_interfaces::DOMException,
                 dom_exception_constructor_callback
             ))
             .length(0)
             .build(scope)
         }
-        ConstructorKind::DomError => v8::FunctionTemplate::builder(
-            moli_webapi_declare::web_api_constructor!("DOMError", dom_error_constructor_callback),
-        )
-        .length(1)
-        .build(scope),
+        ConstructorKind::DomError => {
+            v8::FunctionTemplate::builder(moli_webapi_declare::web_api_constructor!(
+                web_api_interfaces::DOMError,
+                dom_error_constructor_callback
+            ))
+            .length(1)
+            .build(scope)
+        }
         ConstructorKind::QuotaExceededError => {
             v8::FunctionTemplate::builder(moli_webapi_declare::web_api_constructor!(
-                "QuotaExceededError",
+                web_api_interfaces::QuotaExceededError,
                 quota_exceeded_error_constructor_callback
             ))
             .length(0)
@@ -212,7 +219,7 @@ pub(in crate::context_bootstrap) fn build_constructor_template<'s>(
         }
         ConstructorKind::CustomElementRegistry => {
             v8::FunctionTemplate::builder(moli_webapi_declare::web_api_constructor!(
-                "CustomElementRegistry",
+                web_api_interfaces::CustomElementRegistry,
                 custom_elements_registry_constructor_callback
             ))
             .length(0)
@@ -228,7 +235,7 @@ pub(in crate::context_bootstrap) fn build_constructor_template<'s>(
         }
         ConstructorKind::XmlHttpRequest => {
             v8::FunctionTemplate::builder(moli_webapi_declare::web_api_constructor!(
-                "XMLHttpRequest",
+                web_api_interfaces::XMLHttpRequest,
                 network_host::xhr_constructor_callback
             ))
             .length(0)
@@ -236,7 +243,7 @@ pub(in crate::context_bootstrap) fn build_constructor_template<'s>(
         }
         ConstructorKind::Headers => {
             v8::FunctionTemplate::builder(moli_webapi_declare::web_api_constructor!(
-                "Headers",
+                web_api_interfaces::Headers,
                 network_host::headers_constructor_callback
             ))
             .length(0)
@@ -244,7 +251,7 @@ pub(in crate::context_bootstrap) fn build_constructor_template<'s>(
         }
         ConstructorKind::Request => {
             v8::FunctionTemplate::builder(moli_webapi_declare::web_api_constructor!(
-                "Request",
+                web_api_interfaces::Request,
                 network_host::request_constructor_callback
             ))
             .length(1)
@@ -252,7 +259,7 @@ pub(in crate::context_bootstrap) fn build_constructor_template<'s>(
         }
         ConstructorKind::Response => {
             v8::FunctionTemplate::builder(moli_webapi_declare::web_api_constructor!(
-                "Response",
+                web_api_interfaces::Response,
                 network_host::response_constructor_callback
             ))
             .length(0)
@@ -260,7 +267,7 @@ pub(in crate::context_bootstrap) fn build_constructor_template<'s>(
         }
         ConstructorKind::ProgressEvent => {
             v8::FunctionTemplate::builder(moli_webapi_declare::web_api_constructor!(
-                "ProgressEvent",
+                web_api_interfaces::ProgressEvent,
                 network_host::progress_event_constructor_callback
             ))
             .length(1)
@@ -268,7 +275,7 @@ pub(in crate::context_bootstrap) fn build_constructor_template<'s>(
         }
         ConstructorKind::DomParser => {
             v8::FunctionTemplate::builder(moli_webapi_declare::web_api_constructor!(
-                "DOMParser",
+                web_api_interfaces::DOMParser,
                 dom_parser::dom_parser_constructor_callback
             ))
             .length(0)
@@ -276,7 +283,7 @@ pub(in crate::context_bootstrap) fn build_constructor_template<'s>(
         }
         ConstructorKind::TextEncoder => {
             v8::FunctionTemplate::builder(moli_webapi_declare::web_api_constructor!(
-                "TextEncoder",
+                web_api_interfaces::TextEncoder,
                 text_encoder_constructor_callback
             ))
             .length(0)
@@ -284,7 +291,7 @@ pub(in crate::context_bootstrap) fn build_constructor_template<'s>(
         }
         ConstructorKind::TextDecoder => {
             v8::FunctionTemplate::builder(moli_webapi_declare::web_api_constructor!(
-                "TextDecoder",
+                web_api_interfaces::TextDecoder,
                 text_decoder_constructor_callback
             ))
             .length(0)
@@ -357,14 +364,17 @@ pub(in crate::context_bootstrap) fn build_constructor_template<'s>(
                 .length(1)
                 .build(scope)
         }
-        ConstructorKind::Blob => v8::FunctionTemplate::builder(
-            moli_webapi_declare::web_api_constructor!("Blob", blob::blob_constructor_callback),
-        )
-        .length(0)
-        .build(scope),
+        ConstructorKind::Blob => {
+            v8::FunctionTemplate::builder(moli_webapi_declare::web_api_constructor!(
+                web_api_interfaces::Blob,
+                blob::blob_constructor_callback
+            ))
+            .length(0)
+            .build(scope)
+        }
         ConstructorKind::DataTransfer => {
             v8::FunctionTemplate::builder(moli_webapi_declare::web_api_constructor!(
-                "DataTransfer",
+                web_api_interfaces::DataTransfer,
                 data_transfer_constructor_callback
             ))
             .length(0)
@@ -373,7 +383,7 @@ pub(in crate::context_bootstrap) fn build_constructor_template<'s>(
         ConstructorKind::ImageData => {
             let template =
                 v8::FunctionTemplate::builder(moli_webapi_declare::web_api_constructor!(
-                    "ImageData",
+                    web_api_interfaces::ImageData,
                     image_data_constructor_callback
                 ))
                 .length(2)
@@ -384,7 +394,7 @@ pub(in crate::context_bootstrap) fn build_constructor_template<'s>(
         }
         ConstructorKind::OffscreenCanvas => {
             v8::FunctionTemplate::builder(moli_webapi_declare::web_api_constructor!(
-                "OffscreenCanvas",
+                web_api_interfaces::OffscreenCanvas,
                 offscreen_canvas_constructor_callback
             ))
             .length(2)
@@ -392,7 +402,7 @@ pub(in crate::context_bootstrap) fn build_constructor_template<'s>(
         }
         ConstructorKind::CanvasRenderingContext2D => {
             v8::FunctionTemplate::builder(moli_webapi_declare::web_api_constructor!(
-                "CanvasRenderingContext2D",
+                web_api_interfaces::CanvasRenderingContext2D,
                 canvas_rendering_context_2d_constructor_callback
             ))
             .length(0)
@@ -400,7 +410,7 @@ pub(in crate::context_bootstrap) fn build_constructor_template<'s>(
         }
         ConstructorKind::OffscreenCanvasRenderingContext2D => {
             v8::FunctionTemplate::builder(moli_webapi_declare::web_api_constructor!(
-                "OffscreenCanvasRenderingContext2D",
+                web_api_interfaces::OffscreenCanvasRenderingContext2D,
                 offscreen_canvas_rendering_context_2d_constructor_callback
             ))
             .length(0)
@@ -408,7 +418,7 @@ pub(in crate::context_bootstrap) fn build_constructor_template<'s>(
         }
         ConstructorKind::WebGLRenderingContext => {
             v8::FunctionTemplate::builder(moli_webapi_declare::web_api_constructor!(
-                "WebGLRenderingContext",
+                web_api_interfaces::WebGLRenderingContext,
                 webgl_rendering_context_constructor_callback
             ))
             .length(0)
@@ -416,7 +426,7 @@ pub(in crate::context_bootstrap) fn build_constructor_template<'s>(
         }
         ConstructorKind::WebGlDebugRendererInfo => {
             v8::FunctionTemplate::builder(moli_webapi_declare::web_api_constructor!(
-                "WEBGL_debug_renderer_info",
+                web_api_interfaces::WEBGLDebugRendererInfo,
                 webgl_debug_renderer_info_constructor_callback
             ))
             .length(0)
@@ -424,25 +434,31 @@ pub(in crate::context_bootstrap) fn build_constructor_template<'s>(
         }
         ConstructorKind::WebGlLoseContext => {
             v8::FunctionTemplate::builder(moli_webapi_declare::web_api_constructor!(
-                "WEBGL_lose_context",
+                web_api_interfaces::WEBGLLoseContext,
                 webgl_lose_context_constructor_callback
             ))
             .length(0)
             .build(scope)
         }
-        ConstructorKind::File => v8::FunctionTemplate::builder(
-            moli_webapi_declare::web_api_constructor!("File", file_constructor_callback),
-        )
-        .length(2)
-        .build(scope),
-        ConstructorKind::FileList => v8::FunctionTemplate::builder(
-            moli_webapi_declare::web_api_constructor!("FileList", file_list_constructor_callback),
-        )
-        .length(0)
-        .build(scope),
+        ConstructorKind::File => {
+            v8::FunctionTemplate::builder(moli_webapi_declare::web_api_constructor!(
+                web_api_interfaces::File,
+                file_constructor_callback
+            ))
+            .length(2)
+            .build(scope)
+        }
+        ConstructorKind::FileList => {
+            v8::FunctionTemplate::builder(moli_webapi_declare::web_api_constructor!(
+                web_api_interfaces::FileList,
+                file_list_constructor_callback
+            ))
+            .length(0)
+            .build(scope)
+        }
         ConstructorKind::FileReader => {
             v8::FunctionTemplate::builder(moli_webapi_declare::web_api_constructor!(
-                "FileReader",
+                web_api_interfaces::FileReader,
                 file_reader_constructor_callback
             ))
             .length(0)
@@ -450,7 +466,7 @@ pub(in crate::context_bootstrap) fn build_constructor_template<'s>(
         }
         ConstructorKind::FileReaderSync => {
             v8::FunctionTemplate::builder(moli_webapi_declare::web_api_constructor!(
-                "FileReaderSync",
+                web_api_interfaces::FileReaderSync,
                 file_reader_sync_constructor_callback
             ))
             .length(0)
@@ -458,7 +474,7 @@ pub(in crate::context_bootstrap) fn build_constructor_template<'s>(
         }
         ConstructorKind::DomRectReadOnly => {
             v8::FunctionTemplate::builder(moli_webapi_declare::web_api_constructor!(
-                "DOMRectReadOnly",
+                web_api_interfaces::DOMRectReadOnly,
                 super::super::dom_rect::dom_rect_readonly_constructor_callback
             ))
             .length(0)
@@ -466,17 +482,20 @@ pub(in crate::context_bootstrap) fn build_constructor_template<'s>(
         }
         ConstructorKind::DomRect => {
             v8::FunctionTemplate::builder(moli_webapi_declare::web_api_constructor!(
-                "DOMRect",
+                web_api_interfaces::DOMRect,
                 super::super::dom_rect::dom_rect_constructor_callback
             ))
             .length(0)
             .build(scope)
         }
-        ConstructorKind::DomPoint => v8::FunctionTemplate::builder(
-            moli_webapi_declare::web_api_constructor!("DOMPoint", dom_point_constructor_callback),
-        )
-        .length(0)
-        .build(scope),
+        ConstructorKind::DomPoint => {
+            v8::FunctionTemplate::builder(moli_webapi_declare::web_api_constructor!(
+                web_api_interfaces::DOMPoint,
+                dom_point_constructor_callback
+            ))
+            .length(0)
+            .build(scope)
+        }
         ConstructorKind::DomMatrix => {
             v8::FunctionTemplate::builder(dom_matrix_constructor_callback)
                 .length(0)
@@ -484,7 +503,7 @@ pub(in crate::context_bootstrap) fn build_constructor_template<'s>(
         }
         ConstructorKind::XmlSerializer => {
             v8::FunctionTemplate::builder(moli_webapi_declare::web_api_constructor!(
-                "XMLSerializer",
+                web_api_interfaces::XMLSerializer,
                 xml_serializer::xml_serializer_constructor_callback
             ))
             .length(0)
@@ -492,7 +511,7 @@ pub(in crate::context_bootstrap) fn build_constructor_template<'s>(
         }
         ConstructorKind::AbortController => {
             v8::FunctionTemplate::builder(moli_webapi_declare::web_api_constructor!(
-                "AbortController",
+                web_api_interfaces::AbortController,
                 abort::abort_controller_constructor_callback
             ))
             .length(0)
@@ -500,7 +519,7 @@ pub(in crate::context_bootstrap) fn build_constructor_template<'s>(
         }
         ConstructorKind::MessageChannel => {
             v8::FunctionTemplate::builder(moli_webapi_declare::web_api_constructor!(
-                "MessageChannel",
+                web_api_interfaces::MessageChannel,
                 message_channel_constructor_callback
             ))
             .length(0)
@@ -508,7 +527,7 @@ pub(in crate::context_bootstrap) fn build_constructor_template<'s>(
         }
         ConstructorKind::MessagePort => {
             v8::FunctionTemplate::builder(moli_webapi_declare::web_api_constructor!(
-                "MessagePort",
+                web_api_interfaces::MessagePort,
                 message_port_constructor_callback
             ))
             .length(0)
@@ -523,7 +542,7 @@ pub(in crate::context_bootstrap) fn build_constructor_template<'s>(
         }
         ConstructorKind::EventSource => {
             v8::FunctionTemplate::builder(moli_webapi_declare::web_api_constructor!(
-                "EventSource",
+                web_api_interfaces::EventSource,
                 network_host::event_source_constructor_callback
             ))
             .length(1)
@@ -531,7 +550,7 @@ pub(in crate::context_bootstrap) fn build_constructor_template<'s>(
         }
         ConstructorKind::IdleDetector => {
             v8::FunctionTemplate::builder(moli_webapi_declare::web_api_constructor!(
-                "IdleDetector",
+                web_api_interfaces::IdleDetector,
                 idle_detector_constructor_callback
             ))
             .length(0)
@@ -539,20 +558,23 @@ pub(in crate::context_bootstrap) fn build_constructor_template<'s>(
         }
         ConstructorKind::Notification => {
             v8::FunctionTemplate::builder(moli_webapi_declare::web_api_constructor!(
-                "Notification",
+                web_api_interfaces::Notification,
                 notification_constructor_callback
             ))
             .length(1)
             .build(scope)
         }
-        ConstructorKind::WebSocket => v8::FunctionTemplate::builder(
-            moli_webapi_declare::web_api_constructor!("WebSocket", websocket_constructor_callback),
-        )
-        .length(1)
-        .build(scope),
+        ConstructorKind::WebSocket => {
+            v8::FunctionTemplate::builder(moli_webapi_declare::web_api_constructor!(
+                web_api_interfaces::WebSocket,
+                websocket_constructor_callback
+            ))
+            .length(1)
+            .build(scope)
+        }
         ConstructorKind::RtcPeerConnection => {
             v8::FunctionTemplate::builder(moli_webapi_declare::web_api_constructor!(
-                "RTCPeerConnection",
+                web_api_interfaces::RTCPeerConnection,
                 rtc_peer_connection_constructor_callback
             ))
             .length(0)
@@ -560,7 +582,7 @@ pub(in crate::context_bootstrap) fn build_constructor_template<'s>(
         }
         ConstructorKind::RtcIceCandidate => {
             v8::FunctionTemplate::builder(moli_webapi_declare::web_api_constructor!(
-                "RTCIceCandidate",
+                web_api_interfaces::RTCIceCandidate,
                 rtc_ice_candidate_constructor_callback
             ))
             .length(0)
@@ -568,7 +590,7 @@ pub(in crate::context_bootstrap) fn build_constructor_template<'s>(
         }
         ConstructorKind::RtcSessionDescription => {
             v8::FunctionTemplate::builder(moli_webapi_declare::web_api_constructor!(
-                "RTCSessionDescription",
+                web_api_interfaces::RTCSessionDescription,
                 rtc_session_description_constructor_callback
             ))
             .length(1)
@@ -584,7 +606,7 @@ pub(in crate::context_bootstrap) fn build_constructor_template<'s>(
             .build(scope),
         ConstructorKind::SpeechSynthesisUtterance => {
             v8::FunctionTemplate::builder(moli_webapi_declare::web_api_constructor!(
-                "SpeechSynthesisUtterance",
+                web_api_interfaces::SpeechSynthesisUtterance,
                 speech_synthesis_utterance_constructor_callback
             ))
             .length(0)
@@ -592,7 +614,7 @@ pub(in crate::context_bootstrap) fn build_constructor_template<'s>(
         }
         ConstructorKind::WebSocketError => {
             v8::FunctionTemplate::builder(moli_webapi_declare::web_api_constructor!(
-                "WebSocketError",
+                web_api_interfaces::WebSocketError,
                 websocket_error_constructor_callback
             ))
             .length(0)
@@ -600,7 +622,7 @@ pub(in crate::context_bootstrap) fn build_constructor_template<'s>(
         }
         ConstructorKind::WebSocketStream => {
             v8::FunctionTemplate::builder(moli_webapi_declare::web_api_constructor!(
-                "WebSocketStream",
+                web_api_interfaces::WebSocketStream,
                 websocket_stream_constructor_callback
             ))
             .length(1)
@@ -608,7 +630,7 @@ pub(in crate::context_bootstrap) fn build_constructor_template<'s>(
         }
         ConstructorKind::ResizeObserver => {
             v8::FunctionTemplate::builder(moli_webapi_declare::web_api_constructor!(
-                "ResizeObserver",
+                web_api_interfaces::ResizeObserver,
                 resize_observer_constructor_callback
             ))
             .length(1)
@@ -616,7 +638,7 @@ pub(in crate::context_bootstrap) fn build_constructor_template<'s>(
         }
         ConstructorKind::PerformanceObserver => {
             v8::FunctionTemplate::builder(moli_webapi_declare::web_api_constructor!(
-                "PerformanceObserver",
+                web_api_interfaces::PerformanceObserver,
                 performance_observer_constructor_callback
             ))
             .length(1)
@@ -634,7 +656,7 @@ pub(in crate::context_bootstrap) fn build_constructor_template<'s>(
         | ConstructorKind::TextTrackList
         | ConstructorKind::TextTrackCueList => {
             v8::FunctionTemplate::builder(moli_webapi_declare::web_api_constructor!(
-                "TextTrackCueList",
+                web_api_interfaces::TextTrackCueList,
                 media_error_constructor_callback
             ))
             .length(0)
@@ -645,23 +667,26 @@ pub(in crate::context_bootstrap) fn build_constructor_template<'s>(
         }
         ConstructorKind::TextTrackCue => {
             v8::FunctionTemplate::builder(moli_webapi_declare::web_api_constructor!(
-                "TextTrackCue",
+                web_api_interfaces::TextTrackCue,
                 text_track_cue_constructor_callback
             ))
             .length(0)
             .build(scope)
         }
-        ConstructorKind::VTTCue => v8::FunctionTemplate::builder(
-            moli_webapi_declare::web_api_constructor!("VTTCue", vtt_cue_constructor_callback),
-        )
-        .length(3)
-        .build(scope),
+        ConstructorKind::VTTCue => {
+            v8::FunctionTemplate::builder(moli_webapi_declare::web_api_constructor!(
+                web_api_interfaces::VTTCue,
+                vtt_cue_constructor_callback
+            ))
+            .length(3)
+            .build(scope)
+        }
         ConstructorKind::PerformanceObserverEntryList => {
             v8::FunctionTemplate::builder(illegal_constructor_callback).build(scope)
         }
         ConstructorKind::PerformanceMark => {
             v8::FunctionTemplate::builder(moli_webapi_declare::web_api_constructor!(
-                "PerformanceMark",
+                web_api_interfaces::PerformanceMark,
                 performance_mark_constructor_callback
             ))
             .length(1)
@@ -688,27 +713,30 @@ pub(in crate::context_bootstrap) fn build_constructor_template<'s>(
         }
         ConstructorKind::MediaSource => {
             v8::FunctionTemplate::builder(moli_webapi_declare::web_api_constructor!(
-                "MediaSource",
+                web_api_interfaces::MediaSource,
                 media_source_constructor_callback
             ))
             .length(0)
             .build(scope)
         }
-        ConstructorKind::Animation => v8::FunctionTemplate::builder(
-            moli_webapi_declare::web_api_constructor!("Animation", animation_constructor_callback),
-        )
-        .length(0)
-        .build(scope),
+        ConstructorKind::Animation => {
+            v8::FunctionTemplate::builder(moli_webapi_declare::web_api_constructor!(
+                web_api_interfaces::Animation,
+                animation_constructor_callback
+            ))
+            .length(0)
+            .build(scope)
+        }
         ConstructorKind::KeyframeEffect => {
             v8::FunctionTemplate::builder(moli_webapi_declare::web_api_constructor!(
-                "KeyframeEffect",
+                web_api_interfaces::KeyframeEffect,
                 keyframe_effect_constructor_callback
             ))
             .length(2)
             .build(scope)
         }
         ConstructorKind::HtmlElement => {
-            let Some(constructor_name) = v8_string(scope, spec.name) else {
+            let Some(constructor_name) = v8_string(scope, spec.interface.name()) else {
                 return Err(anyhow!("failed to allocate HTML element constructor name"));
             };
             v8::FunctionTemplate::builder(html_element_constructor_callback)
@@ -718,7 +746,7 @@ pub(in crate::context_bootstrap) fn build_constructor_template<'s>(
         }
         ConstructorKind::Option => {
             v8::FunctionTemplate::builder(moli_webapi_declare::web_api_constructor!(
-                "HTMLOptionElement",
+                web_api_interfaces::HTMLOptionElement,
                 option_constructor_callback
             ))
             .length(0)
@@ -726,7 +754,7 @@ pub(in crate::context_bootstrap) fn build_constructor_template<'s>(
         }
         ConstructorKind::MutationObserver => {
             v8::FunctionTemplate::builder(moli_webapi_declare::web_api_constructor!(
-                "MutationObserver",
+                web_api_interfaces::MutationObserver,
                 observer_runtime::mutation_observer_constructor_callback
             ))
             .length(1)
@@ -734,7 +762,7 @@ pub(in crate::context_bootstrap) fn build_constructor_template<'s>(
         }
         ConstructorKind::IntersectionObserver => {
             v8::FunctionTemplate::builder(moli_webapi_declare::web_api_constructor!(
-                "IntersectionObserver",
+                web_api_interfaces::IntersectionObserver,
                 observer_runtime::intersection_observer_constructor_callback
             ))
             .length(1)
@@ -742,7 +770,7 @@ pub(in crate::context_bootstrap) fn build_constructor_template<'s>(
         }
         ConstructorKind::IntersectionObserverEntry => {
             v8::FunctionTemplate::builder(moli_webapi_declare::web_api_constructor!(
-                "IntersectionObserverEntry",
+                web_api_interfaces::IntersectionObserverEntry,
                 observer_runtime::intersection_observer_entry_constructor_callback
             ))
             .length(1)
@@ -755,7 +783,7 @@ pub(in crate::context_bootstrap) fn build_constructor_template<'s>(
         }
         ConstructorKind::Image => {
             v8::FunctionTemplate::builder(moli_webapi_declare::web_api_constructor!(
-                "HTMLImageElement",
+                web_api_interfaces::HTMLImageElement,
                 image_constructor_callback
             ))
             .length(2)
@@ -763,7 +791,7 @@ pub(in crate::context_bootstrap) fn build_constructor_template<'s>(
         }
         ConstructorKind::Audio => {
             v8::FunctionTemplate::builder(moli_webapi_declare::web_api_constructor!(
-                "HTMLAudioElement",
+                web_api_interfaces::HTMLAudioElement,
                 audio_constructor_callback
             ))
             .length(1)
@@ -781,7 +809,7 @@ pub(in crate::context_bootstrap) fn build_constructor_template<'s>(
         }
         ConstructorKind::CssStyleSheet => {
             v8::FunctionTemplate::builder(moli_webapi_declare::web_api_constructor!(
-                "CSSStyleSheet",
+                web_api_interfaces::CSSStyleSheet,
                 css_style_sheet_constructor_callback
             ))
             .length(0)
@@ -789,7 +817,7 @@ pub(in crate::context_bootstrap) fn build_constructor_template<'s>(
         }
         ConstructorKind::CssKeywordValue => {
             v8::FunctionTemplate::builder(moli_webapi_declare::web_api_constructor!(
-                "CSSKeywordValue",
+                web_api_interfaces::CSSKeywordValue,
                 css_keyword_value_constructor_callback
             ))
             .length(1)
@@ -797,20 +825,23 @@ pub(in crate::context_bootstrap) fn build_constructor_template<'s>(
         }
         ConstructorKind::CssUnitValue => {
             v8::FunctionTemplate::builder(moli_webapi_declare::web_api_constructor!(
-                "CSSUnitValue",
+                web_api_interfaces::CSSUnitValue,
                 css_unit_value_constructor_callback
             ))
             .length(2)
             .build(scope)
         }
-        ConstructorKind::FontFace => v8::FunctionTemplate::builder(
-            moli_webapi_declare::web_api_constructor!("FontFace", font_face_constructor_callback),
-        )
-        .length(2)
-        .build(scope),
+        ConstructorKind::FontFace => {
+            v8::FunctionTemplate::builder(moli_webapi_declare::web_api_constructor!(
+                web_api_interfaces::FontFace,
+                font_face_constructor_callback
+            ))
+            .length(2)
+            .build(scope)
+        }
         ConstructorKind::FontFaceSet => {
             v8::FunctionTemplate::builder(moli_webapi_declare::web_api_constructor!(
-                "FontFaceSet",
+                web_api_interfaces::FontFaceSet,
                 font_face_set_constructor_callback
             ))
             .length(0)
@@ -820,7 +851,7 @@ pub(in crate::context_bootstrap) fn build_constructor_template<'s>(
         ConstructorKind::AudioWorkletNode => build_audio_worklet_node_constructor_template(scope),
         ConstructorKind::OfflineAudioContext => {
             v8::FunctionTemplate::builder(moli_webapi_declare::web_api_constructor!(
-                "OfflineAudioContext",
+                web_api_interfaces::OfflineAudioContext,
                 offline_audio_context_constructor_callback
             ))
             .length(3)
@@ -844,14 +875,17 @@ pub(in crate::context_bootstrap) fn build_constructor_template<'s>(
         ConstructorKind::Comment => v8::FunctionTemplate::builder(comment_constructor_callback)
             .length(0)
             .build(scope),
-        ConstructorKind::Touch => v8::FunctionTemplate::builder(
-            moli_webapi_declare::web_api_constructor!("Touch", touch_constructor_callback),
-        )
-        .length(1)
-        .build(scope),
+        ConstructorKind::Touch => {
+            v8::FunctionTemplate::builder(moli_webapi_declare::web_api_constructor!(
+                web_api_interfaces::Touch,
+                touch_constructor_callback
+            ))
+            .length(1)
+            .build(scope)
+        }
         ConstructorKind::EventTarget => {
             v8::FunctionTemplate::builder(moli_webapi_declare::web_api_constructor!(
-                "EventTarget",
+                web_api_interfaces::EventTarget,
                 event_target_constructor_callback
             ))
             .length(0)
@@ -859,20 +893,23 @@ pub(in crate::context_bootstrap) fn build_constructor_template<'s>(
         }
         ConstructorKind::XPathEvaluator => {
             v8::FunctionTemplate::builder(moli_webapi_declare::web_api_constructor!(
-                "XPathEvaluator",
+                web_api_interfaces::XPathEvaluator,
                 xpath_evaluator_constructor_callback
             ))
             .length(0)
             .build(scope)
         }
-        ConstructorKind::Worker => v8::FunctionTemplate::builder(
-            moli_webapi_declare::web_api_constructor!("Worker", worker_constructor_callback),
-        )
-        .length(1)
-        .build(scope),
+        ConstructorKind::Worker => {
+            v8::FunctionTemplate::builder(moli_webapi_declare::web_api_constructor!(
+                web_api_interfaces::Worker,
+                worker_constructor_callback
+            ))
+            .length(1)
+            .build(scope)
+        }
         ConstructorKind::SharedWorker => {
             v8::FunctionTemplate::builder(moli_webapi_declare::web_api_constructor!(
-                "SharedWorker",
+                web_api_interfaces::SharedWorker,
                 shared_worker_constructor_callback
             ))
             .length(1)
@@ -889,7 +926,7 @@ pub(in crate::context_bootstrap) fn build_constructor_template<'s>(
             .build(scope),
         ConstructorKind::IndexedDbVersionChangeEvent => {
             v8::FunctionTemplate::builder(moli_webapi_declare::web_api_constructor!(
-                "IDBVersionChangeEvent",
+                web_api_interfaces::IDBVersionChangeEvent,
                 crate::context_bootstrap::indexed_db::idb_version_change_event_constructor_callback
             ))
             .length(2)
@@ -915,8 +952,12 @@ fn finalize_constructor_template<'s>(
     spec: ConstructorSpec,
     template: v8::Local<'s, v8::FunctionTemplate>,
 ) -> Result<v8::Local<'s, v8::FunctionTemplate>> {
-    let class_name = v8_string(scope, spec.name)
-        .ok_or_else(|| anyhow!("failed to allocate context bootstrap class `{}`", spec.name))?;
+    let class_name = v8_string(scope, spec.interface.name()).ok_or_else(|| {
+        anyhow!(
+            "failed to allocate context bootstrap class `{}`",
+            spec.interface.name()
+        )
+    })?;
     template.set_class_name(class_name);
     // WebIDL interface objects expose a non-writable `prototype` property.
     // V8 FunctionTemplate defaults to writable, so make the binding-level
@@ -927,7 +968,7 @@ fn finalize_constructor_template<'s>(
     }
 
     install_constructor_template_bindings(scope, template, spec);
-    install_interface_template_metadata(scope, template, spec.name);
+    install_interface_template_metadata(scope, template, spec.interface.name());
 
     Ok(template)
 }

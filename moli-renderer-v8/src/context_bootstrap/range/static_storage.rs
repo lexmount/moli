@@ -1,10 +1,11 @@
 use super::*;
 use crate::native_bridge::RangeBoundarySide;
 use crate::util::{get_private_value, set_private_value};
+use crate::web_api_interfaces;
 use moli_webapi_declare::WebApiObject;
 
 #[derive(WebApiObject)]
-#[webapi(interface = "AbstractRange")]
+#[webapi(interface = web_api_interfaces::AbstractRange)]
 struct StaticRangeBoundaryStorageDeclaration<'scope> {
     #[webapi(slot = STATIC_RANGE_START_CONTAINER_STORAGE_KEY)]
     start_container: v8::Local<'scope, v8::Object>,

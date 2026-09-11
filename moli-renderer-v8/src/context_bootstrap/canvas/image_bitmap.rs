@@ -5,6 +5,7 @@ use crate::context_bootstrap::new_dom_exception_value;
 use crate::util::{
     callback_data_index_value, callback_data_item, get_private_value, set_private_value,
 };
+use crate::web_api_interfaces;
 use moli_webapi_declare::{WebApiFunctionTemplate, WebApiObject};
 
 const IMAGE_BITMAP_WIDTH_SLOT: &str = "__moliImageBitmapWidth";
@@ -13,7 +14,7 @@ const IMAGE_BITMAP_HEIGHT_SLOT: &str = "__moliImageBitmapHeight";
 const IMAGE_BITMAP_DIMENSION_SLOTS: &[&str] = &[IMAGE_BITMAP_WIDTH_SLOT, IMAGE_BITMAP_HEIGHT_SLOT];
 
 #[derive(WebApiObject)]
-#[webapi(interface = "ImageBitmap")]
+#[webapi(interface = web_api_interfaces::ImageBitmap)]
 struct ImageBitmapObjectDeclaration {
     #[webapi(slot = IMAGE_BITMAP_WIDTH_SLOT)]
     width: f64,
@@ -22,7 +23,7 @@ struct ImageBitmapObjectDeclaration {
 }
 
 #[derive(Default, WebApiFunctionTemplate)]
-#[webapi(name = "ImageBitmap", enumerable)]
+#[webapi(interface = web_api_interfaces::ImageBitmap, enumerable)]
 struct ImageBitmapPrototypeDeclaration {
     #[webapi(
         accessor_property,

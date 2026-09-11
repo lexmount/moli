@@ -4,11 +4,12 @@ use super::callbacks::{
     form_data_get_callback, form_data_has_callback, form_data_keys_callback,
     form_data_set_callback, form_data_values_callback,
 };
+use crate::web_api_interfaces;
 use moli_webapi_declare::{WebApiFunctionTemplate, v8};
 
 #[derive(WebApiFunctionTemplate)]
 #[webapi(
-    name = "FormData",
+    interface = web_api_interfaces::FormData,
     constructor_callback = form_data_constructor_callback,
     constructor_length = 0,
     enumerable

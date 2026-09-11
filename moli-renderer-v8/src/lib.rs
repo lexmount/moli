@@ -381,3 +381,5 @@ pub mod renderer {
         RendererTopLevelNavigationDispatch, is_on_js_local_executor,
     };
 }
+
+mod web_api_interfaces;

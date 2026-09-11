@@ -1,3 +1,4 @@
+use crate::web_api_interfaces;
 use crate::{
     custom_elements,
     dom::native::{DocumentTitleSetterTarget, Node},
@@ -301,7 +302,7 @@ pub(crate) const XHTML_NS: &str = "http://www.w3.org/1999/xhtml";
 pub(crate) const SVG_NS: &str = "http://www.w3.org/2000/svg";
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(name = "Document", enumerable)]
+#[webapi(interface = web_api_interfaces::Document, enumerable)]
 struct DocumentMetadataPrototypeDeclaration {
     #[webapi(accessor_property = "URL", getter = document_url_getter_function)]
     url: (),
@@ -324,12 +325,12 @@ struct DocumentMetadataPrototypeDeclaration {
         getter = document_last_modified_getter_function
     )]
     last_modified: (),
-    #[webapi(accessor_property, getter = document_referrer_getter_function, receiver = "Document")]
+    #[webapi(accessor_property, getter = document_referrer_getter_function, receiver = web_api_interfaces::Document::is_instance)]
     referrer: (),
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(name = "Document", enumerable)]
+#[webapi(interface = web_api_interfaces::Document, enumerable)]
 struct DocumentStructurePrototypeDeclaration {
     #[webapi(
         accessor_property,
@@ -355,7 +356,7 @@ struct DocumentStructurePrototypeDeclaration {
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(name = "Document", enumerable)]
+#[webapi(interface = web_api_interfaces::Document, enumerable)]
 struct DocumentViewPrototypeDeclaration {
     #[webapi(
         accessor_property = "defaultView",
@@ -365,7 +366,7 @@ struct DocumentViewPrototypeDeclaration {
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(name = "Document", enumerable)]
+#[webapi(interface = web_api_interfaces::Document, enumerable)]
 struct DocumentFocusPrototypeDeclaration {
     #[webapi(
         accessor_property = "activeElement",
@@ -375,7 +376,7 @@ struct DocumentFocusPrototypeDeclaration {
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(name = "Document", enumerable)]
+#[webapi(interface = web_api_interfaces::Document, enumerable)]
 struct DocumentStatePrototypeDeclaration {
     #[webapi(
         accessor_property,
@@ -412,7 +413,7 @@ struct DocumentStatePrototypeDeclaration {
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(name = "Document", enumerable)]
+#[webapi(interface = web_api_interfaces::Document, enumerable)]
 struct DocumentCollectionAccessorsPrototypeDeclaration {
     #[webapi(accessor_property, getter = document_forms_getter_function)]
     forms: (),
@@ -433,7 +434,7 @@ struct DocumentCollectionAccessorsPrototypeDeclaration {
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(name = "Document")]
+#[webapi(interface = web_api_interfaces::Document)]
 struct DocumentCollectionQueryPrototypeDeclaration {
     #[webapi(
         method,
@@ -462,7 +463,7 @@ struct DocumentCollectionQueryPrototypeDeclaration {
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(name = "Document", enumerable)]
+#[webapi(interface = web_api_interfaces::Document, enumerable)]
 struct DocumentObsoleteMethodsPrototypeDeclaration {
     #[webapi(method, length = 0, callback = document_obsolete_noop_callback)]
     clear: (),
@@ -473,7 +474,7 @@ struct DocumentObsoleteMethodsPrototypeDeclaration {
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(name = "DocumentFragment")]
+#[webapi(interface = web_api_interfaces::DocumentFragment)]
 struct DocumentFragmentCollectionQueryPrototypeDeclaration {
     #[webapi(method, length = 1, callback = node_get_element_by_id_callback)]
     get_element_by_id: (),
@@ -1399,14 +1400,14 @@ pub(crate) fn install_document_template_bindings<'s>(
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(name = "Document")]
+#[webapi(interface = web_api_interfaces::Document)]
 struct DocumentGetElementByIdTemplateDeclaration {
     #[webapi(method = "getElementById", length = 1, callback = node_get_element_by_id_callback)]
     get_element_by_id: (),
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(name = "Document", enumerable)]
+#[webapi(interface = web_api_interfaces::Document, enumerable)]
 struct DocumentPrototypeMethodsDeclaration {
     #[webapi(method = "createElement", length = 1, callback = node_create_element_callback)]
     create_element: (),

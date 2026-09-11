@@ -1,8 +1,9 @@
 use super::*;
+use crate::web_api_interfaces;
 use moli_webapi_declare::WebApiFunctionTemplate;
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(name = "Attr")]
+#[webapi(interface = web_api_interfaces::Attr)]
 struct AttrPrototypeDeclaration {
     #[webapi(method = "toString", length = 0, callback = attr_to_string_callback)]
     to_string: (),

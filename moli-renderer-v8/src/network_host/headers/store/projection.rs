@@ -3,10 +3,11 @@ use super::entries::{
     HEADERS_ENTRIES_SLOT, HEADERS_GUARD_SLOT, HEADERS_IMMUTABLE_SLOT, HeadersGuard,
     headers_entries, headers_entries_json, normalized_header_name_or_throw,
 };
+use crate::web_api_interfaces;
 use moli_webapi_declare::WebApiObject;
 
 #[derive(WebApiObject)]
-#[webapi(interface = "Headers", prototype = "Object")]
+#[webapi(interface = web_api_interfaces::Headers, prototype = "Object")]
 struct HeadersStorageDeclaration {
     #[webapi(slot = HEADERS_ENTRIES_SLOT)]
     entries: String,

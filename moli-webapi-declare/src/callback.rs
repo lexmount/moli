@@ -14,7 +14,7 @@ pub fn invoke_web_api_constructor<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     args: v8::FunctionCallbackArguments<'s>,
     rv: v8::ReturnValue<'s>,
-    interface: &'static str,
+    interface: crate::WebApiInterfaceDescriptor,
     callback: MemberCallback,
 ) {
     let receiver = args.this();
@@ -34,7 +34,7 @@ pub fn invoke_web_api_constructor<'s>(
         Err(_) if construct => receiver,
         Err(_) => return,
     };
-    if let Err(error) = crate::initialize_web_api_object(scope, object, interface) {
+    if let Err(error) = interface.initialize(scope, object) {
         let message =
             v8::String::new(scope, &error.to_string()).expect("constructor identity error");
         let exception = v8::Exception::type_error(scope, message);

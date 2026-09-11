@@ -7,6 +7,7 @@ use crate::util::{
     callback_data_index_value, callback_data_item, get_private_value, set_private_value,
     throw_range_error,
 };
+use crate::web_api_interfaces;
 use crate::webidl;
 use moli_webapi_declare::{WebApiFunctionTemplate, WebApiObject};
 
@@ -46,7 +47,7 @@ pub(crate) const RESPONSE_BODY_SLOT: &str = "__lmResponseBody";
 pub(crate) const RESPONSE_BODY_USED_SLOT: &str = "__lmResponseBodyUsed";
 
 #[derive(WebApiObject)]
-#[webapi(interface = "Response", prototype = "Response")]
+#[webapi(interface = web_api_interfaces::Response, prototype = "Response")]
 struct ResponseCloneShellDeclaration<'scope> {
     #[webapi(slot = RESPONSE_BODY_USED_SLOT, init = false)]
     body_used: (),
@@ -63,7 +64,7 @@ struct ResponseInitObjectDeclaration<'scope> {
 }
 
 #[derive(Default, WebApiObject)]
-#[webapi(interface = "Response")]
+#[webapi(interface = web_api_interfaces::Response)]
 struct ResponseErrorStateDeclaration {
     #[webapi(slot = RESPONSE_TYPE_SLOT, init = string("error"))]
     response_type: (),
@@ -74,14 +75,14 @@ struct ResponseErrorStateDeclaration {
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(name = "Request", enumerable)]
+#[webapi(interface = web_api_interfaces::Request, enumerable)]
 struct RequestTemplateMethodsDeclaration {
     #[webapi(method = "clone", length = 0, callback = request_clone_callback)]
     clone: (),
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(name = "Response", enumerable)]
+#[webapi(interface = web_api_interfaces::Response, enumerable)]
 struct ResponseTemplateMethodsDeclaration {
     #[webapi(static_method = "error", length = 0, callback = response_static_error_callback)]
     error: (),
@@ -101,7 +102,7 @@ struct ResponseTemplateMethodsDeclaration {
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(name = "Request", enumerable)]
+#[webapi(interface = web_api_interfaces::Request, enumerable)]
 struct RequestSlotAccessorsDeclaration {
     #[webapi(accessor_property, getter = request_slot_attribute_getter_callback, data = callback_data_index_value(scope, 0))]
     method: (),
@@ -142,7 +143,7 @@ struct RequestSlotAccessorsDeclaration {
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(name = "Response", enumerable)]
+#[webapi(interface = web_api_interfaces::Response, enumerable)]
 struct ResponseSlotAccessorsDeclaration {
     #[webapi(accessor_property, name = "type", getter = response_slot_attribute_getter_callback, data = callback_data_index_value(scope, 18))]
     response_type: (),
@@ -168,7 +169,8 @@ pub(in crate::network_host) fn mark_request_object<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     object: v8::Local<'s, v8::Object>,
 ) {
-    moli_webapi_declare::initialize_web_api_object(scope, object, "Request")
+    web_api_interfaces::Request::DESCRIPTOR
+        .initialize(scope, object)
         .expect("Request brand declaration should initialize");
 }
 
@@ -293,7 +295,8 @@ pub(in crate::network_host) fn mark_response_object<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     object: v8::Local<'s, v8::Object>,
 ) {
-    moli_webapi_declare::initialize_web_api_object(scope, object, "Response")
+    web_api_interfaces::Response::DESCRIPTOR
+        .initialize(scope, object)
         .expect("Response brand declaration should initialize");
 }
 

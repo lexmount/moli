@@ -1,4 +1,5 @@
 use super::*;
+use crate::web_api_interfaces;
 use crate::{
     util::{get_private_value, global_constructor_prototype, set_private_value},
     webidl,
@@ -24,7 +25,9 @@ pub(super) fn new_view_transition_type_set<'s>(
     if object.set_prototype(scope, prototype.into()) != Some(true) {
         return None;
     }
-    moli_webapi_declare::initialize_web_api_object(scope, object, "ViewTransitionTypeSet").ok()?;
+    web_api_interfaces::ViewTransitionTypeSet::DESCRIPTOR
+        .initialize(scope, object)
+        .ok()?;
     set_private_value(
         scope,
         object,

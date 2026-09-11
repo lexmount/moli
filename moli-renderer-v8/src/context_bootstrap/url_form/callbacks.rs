@@ -4,11 +4,12 @@ use super::helpers::{
 };
 use super::*;
 use crate::util::get_private_value;
+use crate::web_api_interfaces;
 use crate::webidl;
 use moli_webapi_declare::WebApiObject;
 
 #[derive(WebApiObject)]
-#[webapi(interface = "URL")]
+#[webapi(interface = web_api_interfaces::URL)]
 struct UrlObjectDeclaration<'s> {
     #[webapi(slot = URL_HREF_SLOT)]
     href: String,

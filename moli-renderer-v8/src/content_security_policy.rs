@@ -1,3 +1,4 @@
+use crate::web_api_interfaces;
 use std::collections::BTreeMap;
 
 use crate::context_bootstrap::{initialize_event_object, mark_event_trusted};
@@ -185,7 +186,7 @@ pub(crate) struct ContentSecurityPolicyViolationEventFields<'a> {
 
 #[derive(WebApiObject)]
 #[webapi(
-    interface = "SecurityPolicyViolationEvent",
+    interface = web_api_interfaces::SecurityPolicyViolationEvent,
     data_properties,
     enumerable
 )]

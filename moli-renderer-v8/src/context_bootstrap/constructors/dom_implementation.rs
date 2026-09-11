@@ -1,18 +1,19 @@
 use super::*;
 use crate::native_bridge::throw_dom_exception;
 use crate::util::{get_private_object, get_private_value, set_private_value};
+use crate::web_api_interfaces;
 use crate::webidl;
 use moli_webapi_declare::{WebApiFunctionTemplate, WebApiObject};
 
 #[derive(WebApiObject)]
-#[webapi(interface = "DOMImplementation")]
+#[webapi(interface = web_api_interfaces::DOMImplementation)]
 struct DomImplementationSingletonDeclaration<'scope> {
     #[webapi(slot = DOM_IMPLEMENTATION_OWNER_DOCUMENT_SLOT)]
     owner_document: Option<v8::Local<'scope, v8::Object>>,
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(name = "DOMImplementation")]
+#[webapi(interface = web_api_interfaces::DOMImplementation)]
 struct DomImplementationPrototypeMethodsDeclaration {
     #[webapi(method, enumerable, length = 0, callback = dom_implementation_has_feature_callback)]
     has_feature: (),

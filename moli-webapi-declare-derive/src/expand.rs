@@ -5,9 +5,9 @@ use syn::spanned::Spanned;
 use syn::{Data, DeriveInput, Error, Field, Fields, GenericParam, Ident, Lit, LitStr, Type};
 
 use crate::attrs::{
-    ConstructorAttr, ConstructorDefaultAttr, FieldAttrs, FieldDefaults, FieldKind, ObjectAttrs,
-    RenameRule, ValueInitAttr, parse_field_attrs_with_defaults, parse_function_template_attrs,
-    parse_object_attrs,
+    ConstructorAttr, ConstructorDefaultAttr, FieldAttrs, FieldDefaults, FieldKind, InterfaceAttr,
+    ObjectAttrs, RenameRule, ValueInitAttr, parse_field_attrs_with_defaults,
+    parse_function_template_attrs, parse_object_attrs,
 };
 
 struct DeclaredField {
@@ -59,10 +59,14 @@ pub(crate) fn expand_webapi_function_template(
     let generics = input.generics;
     let (impl_generics, ty_generics, where_clause) = generics.split_for_impl();
     let attrs = parse_function_template_attrs(&input.attrs)?;
-    let template_name = attrs
-        .name
-        .clone()
-        .unwrap_or_else(|| LitStr::new(&struct_name.to_string(), struct_name.span()));
+    let template_name = if let Some(name) = &attrs.name {
+        quote!(#name)
+    } else if let Some(interface) = &attrs.interface {
+        interface.name()
+    } else {
+        let name = LitStr::new(&struct_name.to_string(), struct_name.span());
+        quote!(#name)
+    };
     let constructor_callback = match attrs
         .constructor
         .clone()
@@ -72,7 +76,13 @@ pub(crate) fn expand_webapi_function_template(
             quote!(::moli_webapi_declare::illegal_constructor_callback)
         }
         ConstructorAttr::Callback(callback) => {
-            quote!(::moli_webapi_declare::web_api_constructor!(#template_name, #callback))
+            let Some(InterfaceAttr::Descriptor(interface)) = &attrs.interface else {
+                return Err(Error::new(
+                    struct_name.span(),
+                    "constructor_callback requires an interface descriptor",
+                ));
+            };
+            quote!(::moli_webapi_declare::web_api_constructor!(#interface, #callback))
         }
     };
     let constructor_length = attrs.constructor_length.unwrap_or(0);
@@ -207,7 +217,12 @@ pub(crate) fn expand_webapi_object(input: DeriveInput) -> Result<proc_macro2::To
         .clone()
         .ok_or_else(|| Error::new(struct_name.span(), "missing #[webapi(interface = \"...\")]"))?;
     let has_explicit_prototype = attrs.prototype.is_some();
-    let prototype = attrs.prototype.clone().unwrap_or_else(|| interface.clone());
+    let interface_name = interface.name();
+    let prototype = attrs
+        .prototype
+        .as_ref()
+        .map(|name| quote!(#name))
+        .unwrap_or_else(|| interface_name.clone());
     let own_to_string_tag = match attrs.own_to_string_tag.as_ref() {
         Some(tag) => quote!(::std::option::Option::Some(#tag)),
         None => quote!(::std::option::Option::None),
@@ -292,13 +307,21 @@ pub(crate) fn expand_webapi_object(input: DeriveInput) -> Result<proc_macro2::To
         ));
     }
 
-    let initialize_brand = (!attrs.unbranded && interface.value() != "Object").then(|| {
-        quote! {
-            ::moli_webapi_declare::initialize_web_api_object(scope, object, #interface)?;
+    let initialize_brand = if attrs.unbranded {
+        quote!()
+    } else {
+        match &interface {
+            InterfaceAttr::Descriptor(path) => {
+                quote!(<#path>::DESCRIPTOR.initialize(scope, object)?;)
+            }
+            InterfaceAttr::Name(name) if name.value() == "Object" => quote!(),
+            InterfaceAttr::Name(name) => {
+                quote!(::moli_webapi_declare::initialize_web_api_object(scope, object, #name)?;)
+            }
         }
-    });
+    };
     let register_parent = attrs.parent.as_ref().map(|parent| quote! {
-        ::moli_webapi_declare::register_web_api_interfaces(scope, [(#interface, Some(#parent))])?;
+        ::moli_webapi_declare::register_web_api_interfaces(scope, [(#interface_name, Some(#parent))])?;
     });
     let initialize_body = quote! {
         #register_parent
@@ -315,7 +338,7 @@ pub(crate) fn expand_webapi_object(input: DeriveInput) -> Result<proc_macro2::To
     let (trait_impl_generics, _, trait_where_clause) = trait_generics.split_for_impl();
     let trait_impl = quote! {
         impl #trait_impl_generics ::moli_webapi_declare::WebApiObjectDeclaration<#method_scope_lifetime> for #struct_name #ty_generics #trait_where_clause {
-            const INTERFACE: &'static str = #interface;
+            const INTERFACE: &'static str = #interface_name;
             const OWN_TO_STRING_TAG: ::std::option::Option<&'static str> = #own_to_string_tag;
 
             fn initialize(
@@ -445,7 +468,7 @@ struct FunctionTemplateFieldExpansions {
 
 fn expand_function_template_fields(
     fields: &[DeclaredField],
-    template_name: &LitStr,
+    template_name: &proc_macro2::TokenStream,
 ) -> Result<FunctionTemplateFieldExpansions, Error> {
     let mut template_methods = Vec::new();
     let mut prototype_methods = Vec::new();
@@ -570,7 +593,7 @@ fn expand_function_template_constant_field(
 fn expand_function_template_method_field(
     field: &Field,
     attrs: &crate::attrs::FieldAttrs,
-    template_name: &LitStr,
+    template_name: &proc_macro2::TokenStream,
     binding: syn::Ident,
 ) -> Result<proc_macro2::TokenStream, Error> {
     let key = webapi_field_key(field, attrs)?;
@@ -662,7 +685,7 @@ fn expand_template_method_key(
 fn expand_function_template_accessor_property_field(
     field: &Field,
     attrs: &crate::attrs::FieldAttrs,
-    template_name: &LitStr,
+    template_name: &proc_macro2::TokenStream,
 ) -> Result<proc_macro2::TokenStream, Error> {
     if attrs.readonly {
         return Err(Error::new(
@@ -1458,7 +1481,7 @@ fn expand_template_function_member(
     callback: &proc_macro2::TokenStream,
     length: i32,
     data: Option<&syn::Expr>,
-    template_name: &LitStr,
+    template_name: &proc_macro2::TokenStream,
     display_name: &proc_macro2::TokenStream,
     class_name: proc_macro2::TokenStream,
 ) -> proc_macro2::TokenStream {

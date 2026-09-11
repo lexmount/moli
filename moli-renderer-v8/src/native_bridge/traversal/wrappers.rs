@@ -1,3 +1,4 @@
+use crate::web_api_interfaces;
 use std::ffi::c_void;
 
 use crate::{
@@ -22,7 +23,7 @@ use crate::native_bridge::bindings::set_named_constructor_prototype;
 use crate::webidl::WebIdlCallbackInterface;
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(name = "NodeIterator", enumerable)]
+#[webapi(interface = web_api_interfaces::NodeIterator, enumerable)]
 struct NodeIteratorPrototypeDeclaration {
     #[webapi(accessor_property, getter = node_iterator_root_getter)]
     root: (),
@@ -43,7 +44,7 @@ struct NodeIteratorPrototypeDeclaration {
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(name = "TreeWalker", enumerable)]
+#[webapi(interface = web_api_interfaces::TreeWalker, enumerable)]
 struct TreeWalkerPrototypeDeclaration {
     #[webapi(accessor_property, getter = tree_walker_root_getter)]
     root: (),

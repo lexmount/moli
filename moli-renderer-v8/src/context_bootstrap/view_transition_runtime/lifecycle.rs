@@ -1,5 +1,6 @@
 use super::type_set::new_view_transition_type_set;
 use super::*;
+use crate::web_api_interfaces;
 use crate::{
     util::{get_private_value, set_private_value},
     window_webidl_callback::{
@@ -28,7 +29,7 @@ const CALLBACK_SUCCEEDED: &str = "succeeded";
 const CALLBACK_FAILED: &str = "failed";
 
 #[derive(WebApiObject)]
-#[webapi(interface = "ViewTransition")]
+#[webapi(interface = web_api_interfaces::ViewTransition)]
 struct ViewTransitionObjectDeclaration<'s> {
     #[webapi(slot = VIEW_TRANSITION_DOCUMENT_SLOT)]
     document: v8::Local<'s, v8::Object>,

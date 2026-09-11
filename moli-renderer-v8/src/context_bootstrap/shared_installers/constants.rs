@@ -1,4 +1,5 @@
 use super::*;
+use crate::web_api_interfaces;
 use moli_webapi_declare::{WebApiFunctionTemplate, WebApiObject};
 
 #[derive(Default, WebApiObject)]
@@ -46,7 +47,7 @@ struct NodeFilterGlobalDeclaration<'scope> {
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(name = "Node", enumerable)]
+#[webapi(interface = web_api_interfaces::Node, enumerable)]
 struct NodeConstantsDeclaration {
     #[webapi(constant = "ELEMENT_NODE", value = 1u32)]
     _element_node: (),
@@ -90,7 +91,7 @@ struct NodeConstantsDeclaration {
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(name = "HTMLTrackElement", enumerable)]
+#[webapi(interface = web_api_interfaces::HTMLTrackElement, enumerable)]
 struct HtmlTrackElementConstantsDeclaration {
     #[webapi(constant = "NONE", value = 0u32)]
     _none: (),
@@ -103,7 +104,7 @@ struct HtmlTrackElementConstantsDeclaration {
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(name = "HTMLMediaElement", enumerable)]
+#[webapi(interface = web_api_interfaces::HTMLMediaElement, enumerable)]
 struct MediaElementPrototypeConstantsDeclaration {
     #[webapi(constant = "NETWORK_EMPTY", value = 0u32)]
     _network_empty: (),

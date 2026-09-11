@@ -7,11 +7,12 @@ use super::callbacks::{
     url_search_params_sort_callback, url_search_params_to_string_callback,
     url_search_params_values_callback,
 };
+use crate::web_api_interfaces;
 use moli_webapi_declare::{WebApiFunctionTemplate, v8};
 
 #[derive(WebApiFunctionTemplate)]
 #[webapi(
-    name = "URLSearchParams",
+    interface = web_api_interfaces::URLSearchParams,
     constructor_callback = url_search_params_constructor_callback,
     constructor_length = 0,
     enumerable

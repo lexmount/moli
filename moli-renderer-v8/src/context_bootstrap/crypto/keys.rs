@@ -3,6 +3,7 @@ use crate::util::{
     callback_data_index_value, get_private_value, global_constructor_object,
     serialize_v8_iter_array, set_private_value,
 };
+use crate::web_api_interfaces;
 use moli_webapi_declare::{WebApiFunctionTemplate, WebApiObject};
 
 #[derive(WebApiObject)]
@@ -139,7 +140,7 @@ const CRYPTO_KEY_USAGE_ORDER: &[&str] = &[
 ];
 
 #[derive(WebApiObject)]
-#[webapi(interface = "CryptoKey", require_prototype, scope_lifetime = 'scope)]
+#[webapi(interface = web_api_interfaces::CryptoKey, require_prototype, scope_lifetime = 'scope)]
 struct CryptoKeyObjectDeclaration<'scope, 'value> {
     #[webapi(slot = CRYPTO_KEY_KIND_SLOT)]
     key_type: &'value str,
@@ -158,7 +159,7 @@ struct CryptoKeyObjectDeclaration<'scope, 'value> {
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(name = "CryptoKey")]
+#[webapi(interface = web_api_interfaces::CryptoKey)]
 struct CryptoKeyPrototypeAccessorsDeclaration {
     #[webapi(
         accessor_property,

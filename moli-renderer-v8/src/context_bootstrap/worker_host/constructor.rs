@@ -1,4 +1,5 @@
 use super::*;
+use crate::web_api_interfaces;
 
 struct WorkerOptionsMembers {
     worker_type: WorkerScriptKind,
@@ -46,7 +47,7 @@ const WORKER_EVENT_HANDLERS: &[WorkerEventHandler] = &[
 ];
 
 #[derive(WebApiObject)]
-#[webapi(interface = "Worker")]
+#[webapi(interface = web_api_interfaces::Worker)]
 struct WorkerObjectDeclaration {
     #[webapi(slot = SIMPLE_EVENT_TARGET_SLOT, value = WORKER_LISTENERS_SLOT)]
     event_target_slot: (),

@@ -1,11 +1,12 @@
 use super::helpers::init_canvas_like_context_object;
 use super::offscreen::init_offscreen_canvas_object;
 use super::*;
+use crate::web_api_interfaces;
 use crate::webidl;
 use moli_webapi_declare::WebApiObject;
 
 #[derive(WebApiObject)]
-#[webapi(interface = "WEBGL_debug_renderer_info")]
+#[webapi(interface = web_api_interfaces::WEBGLDebugRendererInfo)]
 struct WebGlDebugRendererInfoObjectDeclaration {
     #[webapi(data_property = "UNMASKED_VENDOR_WEBGL")]
     unmasked_vendor_webgl: f64,

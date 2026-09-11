@@ -3,6 +3,7 @@ mod iteration;
 mod mutation;
 
 use super::*;
+use crate::web_api_interfaces;
 
 pub(super) use self::access::{
     headers_get_callback, headers_get_set_cookie_callback, headers_has_callback,
@@ -28,7 +29,7 @@ pub(super) fn require_headers_receiver<'s>(
 }
 
 #[derive(Default, WebApiObject)]
-#[webapi(interface = "Headers")]
+#[webapi(interface = web_api_interfaces::Headers)]
 struct HeadersObjectMethodsDeclaration {
     #[webapi(method, enumerable, length = 1, callback = headers_get_callback)]
     get: (),
@@ -55,7 +56,7 @@ struct HeadersObjectMethodsDeclaration {
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(name = "Headers", enumerable)]
+#[webapi(interface = web_api_interfaces::Headers, enumerable)]
 struct HeadersPrototypeMethodsDeclaration {
     #[webapi(method, length = 1, callback = headers_get_callback)]
     get: (),

@@ -4,10 +4,11 @@ use crate::util::{
     callback_data_index_value, callback_data_item, get_private_value, serialize_v8_iter_array,
     set_private_value,
 };
+use crate::web_api_interfaces;
 use moli_webapi_declare::{WebApiFunctionTemplate, WebApiObject};
 
 #[derive(Default, WebApiObject)]
-#[webapi(interface = "FontFaceSet")]
+#[webapi(interface = web_api_interfaces::FontFaceSet)]
 struct FontFaceSetObjectDeclaration {
     #[webapi(slot = FONT_FACE_SET_FACES_SLOT, init = "array")]
     faces: (),
@@ -24,7 +25,7 @@ struct FontFaceSetObjectDeclaration {
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(name = "FontFaceSet")]
+#[webapi(interface = web_api_interfaces::FontFaceSet)]
 struct FontFaceSetPrototypeAccessorsDeclaration {
     #[webapi(
         accessor_property,

@@ -14,6 +14,7 @@ use crate::util::{
     node_wrapper_from_handle, serialize_v8_array, set_private_value, throw_type_error, v8_string,
     v8str,
 };
+use crate::web_api_interfaces;
 use moli_webapi_declare::{WebApiFunctionTemplate, WebApiObject};
 
 use super::super::super::node::node_runtime_and_handle_from_object_or_detached;
@@ -48,14 +49,14 @@ const TRACK_READY_STATE_LOADED: u32 = 2;
 const TRACK_READY_STATE_ERROR: u32 = 3;
 
 #[derive(WebApiObject)]
-#[webapi(interface = "TextTrackCueList")]
+#[webapi(interface = web_api_interfaces::TextTrackCueList)]
 struct TextTrackCueListObjectDeclaration<'scope> {
     #[webapi(slot = TEXT_TRACK_LIST_ITEMS_SLOT)]
     items: Vec<v8::Local<'scope, v8::Value>>,
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(name = "TextTrackCueList", enumerable)]
+#[webapi(interface = web_api_interfaces::TextTrackCueList, enumerable)]
 struct TextTrackCueListTemplateDeclaration {
     #[webapi(
         intrinsic_data_property = v8::Intrinsic::ArrayProtoValues,
@@ -76,7 +77,7 @@ struct TextTrackCueListTemplateDeclaration {
 }
 
 #[derive(WebApiObject)]
-#[webapi(interface = "TextTrackList")]
+#[webapi(interface = web_api_interfaces::TextTrackList)]
 struct TextTrackListObjectDeclaration<'scope> {
     #[webapi(slot = TEXT_TRACK_LIST_ITEMS_SLOT)]
     items: Vec<v8::Local<'scope, v8::Value>>,
@@ -89,7 +90,7 @@ struct TextTrackListObjectDeclaration<'scope> {
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(name = "TextTrackList", enumerable)]
+#[webapi(interface = web_api_interfaces::TextTrackList, enumerable)]
 struct TextTrackListTemplateDeclaration {
     #[webapi(
         intrinsic_data_property = v8::Intrinsic::ArrayProtoValues,
@@ -124,7 +125,7 @@ struct TextTrackListTemplateDeclaration {
 }
 
 #[derive(WebApiObject)]
-#[webapi(interface = "TextTrack")]
+#[webapi(interface = web_api_interfaces::TextTrack)]
 struct TextTrackObjectDeclaration {
     #[webapi(slot = TEXT_TRACK_KIND_SLOT)]
     kind: String,
@@ -152,7 +153,7 @@ struct TextTrackObjectDeclaration {
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(name = "TextTrack", enumerable)]
+#[webapi(interface = web_api_interfaces::TextTrack, enumerable)]
 struct TextTrackTemplateDeclaration {
     #[webapi(accessor_property, getter = text_track_kind_getter)]
     kind: (),

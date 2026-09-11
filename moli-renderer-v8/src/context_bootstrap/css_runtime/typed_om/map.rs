@@ -1,4 +1,5 @@
 use super::*;
+use crate::web_api_interfaces;
 use crate::webidl_iterator::{
     SnapshotWebIdlIteratorKind, invoke_webidl_collection_for_each_callback,
     new_snapshot_webidl_iterator, prepare_webidl_collection_for_each_callback,
@@ -8,14 +9,14 @@ const ELEMENT_COMPUTED_STYLE_MAP_SLOT: &str = "__moliElementComputedStyleMap";
 const STYLE_PROPERTY_MAP_STYLE_SLOT: &str = "__moliStylePropertyMapStyle";
 
 #[derive(WebApiObject)]
-#[webapi(interface = "StylePropertyMapReadOnly")]
+#[webapi(interface = web_api_interfaces::StylePropertyMapReadOnly)]
 struct ComputedStylePropertyMapDeclaration<'s> {
     #[webapi(slot = STYLE_PROPERTY_MAP_STYLE_SLOT)]
     style: v8::Local<'s, v8::Object>,
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(name = "Element", enumerable)]
+#[webapi(interface = web_api_interfaces::Element, enumerable)]
 struct ElementComputedStyleMapPrototypeDeclaration {
     #[webapi(
         method = "computedStyleMap",
@@ -26,7 +27,7 @@ struct ElementComputedStyleMapPrototypeDeclaration {
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(name = "StylePropertyMapReadOnly", enumerable)]
+#[webapi(interface = web_api_interfaces::StylePropertyMapReadOnly, enumerable)]
 struct StylePropertyMapReadOnlyPrototypeDeclaration {
     #[webapi(method, callback = style_property_map_get_callback, length = 1)]
     get: (),

@@ -12,6 +12,7 @@ use super::{
     window_events::*,
     window_runtime::*,
 };
+use crate::web_api_interfaces;
 use crate::{
     network_host,
     queue_microtask::window_queue_microtask_callback,
@@ -22,7 +23,7 @@ use anyhow::{Result, anyhow};
 use moli_webapi_declare::WebApiFunctionTemplate;
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(name = "Window", enumerable)]
+#[webapi(interface = web_api_interfaces::Window, enumerable)]
 struct WindowEarlyTemplateMethodsDeclaration {
     #[webapi(method, length = 1, callback = window_host::window_set_timeout_callback)]
     set_timeout: (),
@@ -82,7 +83,7 @@ struct WindowEarlyTemplateMethodsDeclaration {
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(name = "Window", enumerable)]
+#[webapi(interface = web_api_interfaces::Window, enumerable)]
 struct WindowObsoleteTemplateMethodsDeclaration {
     #[webapi(method, length = 0, callback = window_obsolete_noop_callback)]
     capture_events: (),
@@ -92,7 +93,7 @@ struct WindowObsoleteTemplateMethodsDeclaration {
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(name = "Window", enumerable)]
+#[webapi(interface = web_api_interfaces::Window, enumerable)]
 struct WindowPostNetworkTemplateMethodsDeclaration {
     #[webapi(
         method = "createImageBitmap",
@@ -158,21 +159,21 @@ struct WindowPostNetworkTemplateMethodsDeclaration {
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(name = "Window", enumerable)]
+#[webapi(interface = web_api_interfaces::Window, enumerable)]
 struct WindowSelectionTemplateMethodsDeclaration {
     #[webapi(method, length = 0, callback = window_get_selection_callback)]
     get_selection: (),
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(name = "Window", enumerable)]
+#[webapi(interface = web_api_interfaces::Window, enumerable)]
 struct WindowMediaTemplateMethodsDeclaration {
     #[webapi(method, length = 1, callback = window_match_media_callback)]
     match_media: (),
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(name = "Window", enumerable)]
+#[webapi(interface = web_api_interfaces::Window, enumerable)]
 struct WindowIdentityAccessorsDeclaration {
     #[webapi(accessor_property, getter = window_window_getter)]
     window: (),
@@ -236,7 +237,7 @@ struct WindowIdentityAccessorsDeclaration {
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(name = "Window", enumerable)]
+#[webapi(interface = web_api_interfaces::Window, enumerable)]
 struct WindowPostRuntimeAccessorsDeclaration {
     #[webapi(accessor_property, getter = window_opener_getter)]
     opener: (),
@@ -307,7 +308,7 @@ struct WindowPostRuntimeAccessorsDeclaration {
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(name = "Window", enumerable)]
+#[webapi(interface = web_api_interfaces::Window, enumerable)]
 struct WindowStorageAccessorsDeclaration {
     #[webapi(accessor_property, getter = window_local_storage_getter)]
     local_storage: (),

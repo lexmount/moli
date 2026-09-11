@@ -1,3 +1,4 @@
+use crate::web_api_interfaces;
 use moli_web_mime::{is_dom_parser_xml_mime, is_html_document_mime};
 use moli_webapi_declare::WebApiFunctionTemplate;
 use url::Url;
@@ -91,7 +92,7 @@ fn dom_parser_source_arg<'s>(
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(name = "DOMParser", enumerable)]
+#[webapi(interface = web_api_interfaces::DOMParser, enumerable)]
 struct DomParserPrototypeMethodsDeclaration {
     #[webapi(method, length = 2, callback = dom_parser_parse_from_string_callback)]
     parse_from_string: (),

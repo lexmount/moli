@@ -70,11 +70,19 @@ impl ContextBootstrapAssets {
             if !constructor_spec_is_eager(*spec) {
                 continue;
             }
-            let id = registry
-                .id_by_name(spec.name)
-                .ok_or_else(|| anyhow!("missing constructor template metadata `{}`", spec.name))?;
+            let id = registry.id_by_name(spec.interface.name()).ok_or_else(|| {
+                anyhow!(
+                    "missing constructor template metadata `{}`",
+                    spec.interface.name()
+                )
+            })?;
             let template = registry.get_or_build_template(scope, id)?;
-            define_global_template_value(scope, global_template, spec.name, template.into())?;
+            define_global_template_value(
+                scope,
+                global_template,
+                spec.interface.name(),
+                template.into(),
+            )?;
         }
 
         if timing_enabled {

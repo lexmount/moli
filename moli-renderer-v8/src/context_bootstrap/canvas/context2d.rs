@@ -10,6 +10,7 @@ use crate::context_bootstrap::image_data::{
 };
 use crate::native_bridge::element::image_selected_source;
 use crate::util::{get_private_value, set_private_value};
+use crate::web_api_interfaces;
 use crate::webidl;
 use moli_canvas::{
     DEFAULT_FILL_STYLE, DEFAULT_FONT, DrawImageBlit, ScaleFilter, blit_draw_image_filtered,
@@ -38,14 +39,14 @@ pub(super) fn reset_canvas_context_state<'s>(
 }
 
 #[derive(WebApiObject)]
-#[webapi(interface = "TextMetrics")]
+#[webapi(interface = web_api_interfaces::TextMetrics)]
 struct CanvasTextMetricsDeclaration {
     #[webapi(slot = TEXT_METRICS_WIDTH_SLOT)]
     width: f64,
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(name = "TextMetrics", enumerable)]
+#[webapi(interface = web_api_interfaces::TextMetrics, enumerable)]
 struct TextMetricsPrototypeDeclaration {
     #[webapi(accessor_property, getter = text_metrics_width_getter)]
     width: (),

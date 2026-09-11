@@ -1,4 +1,5 @@
 use super::*;
+use crate::web_api_interfaces;
 use crate::webidl_iterator::{
     MaplikeWebIdlIteratorMethod, call_maplike_webidl_for_each, new_maplike_webidl_iterator,
 };
@@ -302,7 +303,8 @@ pub(crate) fn build_css_font_face_rule_object_from_stylo_view<'s>(
     }
     .bind(scope)
     .expect("CSSFontFaceRule declaration should bind");
-    moli_webapi_declare::initialize_web_api_object(scope, object, "CSSFontFaceRule")
+    web_api_interfaces::CSSFontFaceRule::DESCRIPTOR
+        .initialize(scope, object)
         .expect("CSS rule interface identity should initialize");
     if let Some(prototype) = global_constructor_prototype(scope, "CSSFontFaceRule") {
         let _ = object.set_prototype(scope, prototype.into());

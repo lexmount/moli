@@ -1,3 +1,4 @@
+use crate::web_api_interfaces;
 use std::{
     cell::RefCell,
     collections::{HashMap, HashSet},
@@ -145,7 +146,7 @@ pub(crate) fn set_lightweight_css_style_stylo_declaration_block_id<'s>(
 
 #[derive(WebApiObject)]
 #[webapi(
-    interface = "CSSStyleProperties",
+    interface = web_api_interfaces::CSSStyleProperties,
     own_to_string_tag = "CSSStyleProperties"
 )]
 struct LightweightCssStylePropertiesDeclaration<'scope> {
@@ -157,7 +158,7 @@ struct LightweightCssStylePropertiesDeclaration<'scope> {
 
 #[derive(WebApiObject)]
 #[webapi(
-    interface = "CSSFontFaceDescriptors",
+    interface = web_api_interfaces::CSSFontFaceDescriptors,
     own_to_string_tag = "CSSFontFaceDescriptors"
 )]
 struct LightweightCssFontFaceDescriptorsDeclaration<'scope> {
@@ -169,7 +170,7 @@ struct LightweightCssFontFaceDescriptorsDeclaration<'scope> {
 
 #[derive(WebApiObject)]
 #[webapi(
-    interface = "CSSPageDescriptors",
+    interface = web_api_interfaces::CSSPageDescriptors,
     own_to_string_tag = "CSSPageDescriptors"
 )]
 struct LightweightCssPageDescriptorsDeclaration<'scope> {
@@ -180,7 +181,7 @@ struct LightweightCssPageDescriptorsDeclaration<'scope> {
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(name = "CSSStyleProperties")]
+#[webapi(interface = web_api_interfaces::CSSStyleProperties)]
 struct LightweightCssStylePrototypeDeclaration {
     #[webapi(
         accessor_property,

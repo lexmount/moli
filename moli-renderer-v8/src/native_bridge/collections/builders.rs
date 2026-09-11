@@ -1,6 +1,7 @@
 use super::*;
 use crate::native_bridge::element::element_attribute_for_object;
 use crate::util::throw_type_error;
+use crate::web_api_interfaces;
 use moli_webapi_declare::WebApiFunctionTemplate;
 
 pub(in crate::native_bridge) const STATIC_COLLECTION_LENGTH_SLOT: &str =
@@ -11,7 +12,7 @@ pub(in crate::native_bridge::collections) const STATIC_HANDLE_COLLECTION_ID_INTE
 const STATIC_HANDLE_NODE_LIST_EAGER_LIMIT: usize = 1_000;
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(name = "HTMLOptionsCollection", enumerable)]
+#[webapi(interface = web_api_interfaces::HTMLOptionsCollection, enumerable)]
 struct OptionsCollectionPrototypeDeclaration {
     #[webapi(
         intrinsic_data_property = v8::Intrinsic::ArrayProtoValues,
@@ -41,7 +42,7 @@ struct OptionsCollectionPrototypeDeclaration {
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(name = "RadioNodeList", enumerable)]
+#[webapi(interface = web_api_interfaces::RadioNodeList, enumerable)]
 struct RadioNodeListPrototypeDeclaration {
     #[webapi(
         intrinsic_data_property = v8::Intrinsic::ArrayProtoValues,
@@ -58,7 +59,7 @@ struct RadioNodeListPrototypeDeclaration {
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(name = "HTMLCollection")]
+#[webapi(interface = web_api_interfaces::HTMLCollection)]
 struct HtmlCollectionPrototypeMembersDeclaration {
     #[webapi(
         accessor_property,
@@ -91,7 +92,7 @@ struct HtmlCollectionPrototypeMembersDeclaration {
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(name = "NodeList")]
+#[webapi(interface = web_api_interfaces::NodeList)]
 struct NodeListPrototypeMembersDeclaration {
     #[webapi(accessor_property, enumerable, getter = node_list_length_getter)]
     length: (),
@@ -131,7 +132,7 @@ struct NodeListPrototypeMembersDeclaration {
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(name = "HTMLFormControlsCollection")]
+#[webapi(interface = web_api_interfaces::HTMLFormControlsCollection)]
 struct FormControlsCollectionPrototypeDeclaration {
     #[webapi(
         intrinsic_data_property = v8::Intrinsic::ArrayProtoValues,
@@ -141,7 +142,7 @@ struct FormControlsCollectionPrototypeDeclaration {
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(name = "HTMLAllCollection")]
+#[webapi(interface = web_api_interfaces::HTMLAllCollection)]
 struct HtmlAllCollectionPrototypeDeclaration {
     #[webapi(
         intrinsic_data_property = v8::Intrinsic::ArrayProtoValues,

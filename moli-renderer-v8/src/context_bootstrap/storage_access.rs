@@ -1,3 +1,4 @@
+use crate::web_api_interfaces;
 use moli_storage_service::StorageBucketLocator;
 use moli_webapi_declare::{WebApiFunctionTemplate, WebApiObject};
 
@@ -109,7 +110,7 @@ impl StorageAccessTypes {
 }
 
 #[derive(WebApiObject)]
-#[webapi(interface = "StorageAccessHandle", require_prototype)]
+#[webapi(interface = web_api_interfaces::StorageAccessHandle, require_prototype)]
 struct StorageAccessHandleObjectDeclaration {
     #[webapi(slot = STORAGE_ACCESS_HANDLE_GET_DIRECTORY_SLOT)]
     get_directory: bool,
@@ -118,7 +119,7 @@ struct StorageAccessHandleObjectDeclaration {
 }
 
 #[derive(Default, WebApiFunctionTemplate)]
-#[webapi(name = "StorageAccessHandle", enumerable)]
+#[webapi(interface = web_api_interfaces::StorageAccessHandle, enumerable)]
 struct StorageAccessHandlePrototypeDeclaration {
     #[webapi(
         method,

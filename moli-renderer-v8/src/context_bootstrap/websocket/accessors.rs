@@ -1,4 +1,5 @@
 use super::*;
+use crate::web_api_interfaces;
 use crate::webidl;
 use moli_webapi_declare::WebApiFunctionTemplate;
 use std::str::FromStr;
@@ -29,7 +30,7 @@ const WEBSOCKET_EVENT_HANDLERS: &[WebSocketEventHandler] = &[
 ];
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(name = "WebSocket")]
+#[webapi(interface = web_api_interfaces::WebSocket)]
 struct WebSocketEventHandlerAccessorsDeclaration {
     #[webapi(
         accessor_property,

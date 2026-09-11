@@ -1,3 +1,4 @@
+use crate::web_api_interfaces;
 use std::collections::HashSet;
 
 use super::super::element::{
@@ -21,7 +22,7 @@ const CARET_POSITION_RECT_WIDTH_SLOT: &str = "__moliCaretPositionRectWidth";
 const CARET_POSITION_RECT_HEIGHT_SLOT: &str = "__moliCaretPositionRectHeight";
 
 #[derive(WebApiObject)]
-#[webapi(interface = "CaretPosition")]
+#[webapi(interface = web_api_interfaces::CaretPosition)]
 struct CaretPositionDeclaration<'scope> {
     #[webapi(slot = CARET_POSITION_OFFSET_NODE_SLOT)]
     offset_node: v8::Local<'scope, v8::Object>,
@@ -38,7 +39,7 @@ struct CaretPositionDeclaration<'scope> {
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(name = "CaretPosition", enumerable)]
+#[webapi(interface = web_api_interfaces::CaretPosition, enumerable)]
 struct CaretPositionPrototypeDeclaration {
     #[webapi(accessor_property, getter = caret_position_offset_node_getter)]
     offset_node: (),

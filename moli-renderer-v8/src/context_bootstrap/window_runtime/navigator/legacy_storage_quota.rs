@@ -7,6 +7,7 @@
 //! Quota state is intentionally synthetic; scheduling, owner authorization,
 //! task completion, and retry policy do not live in this module.
 
+use crate::web_api_interfaces;
 use moli_webapi_declare::WebApiObject;
 use moli_webidl_callback::WebIdlCallbackFunction;
 
@@ -30,7 +31,7 @@ const TEMPORARY_STORAGE_TYPE: f64 = 0.0;
 const PERSISTENT_STORAGE_TYPE: f64 = 1.0;
 
 #[derive(Default, WebApiObject)]
-#[webapi(prototype = "Object", interface = "DeprecatedStorageQuota")]
+#[webapi(prototype = "Object", interface = web_api_interfaces::DeprecatedStorageQuota)]
 struct LegacyStorageQuotaObjectDeclaration {
     #[webapi(
         method,
@@ -50,7 +51,7 @@ struct LegacyStorageQuotaObjectDeclaration {
 }
 
 #[derive(WebApiObject)]
-#[webapi(prototype = "Object", interface = "DeprecatedStorageInfo")]
+#[webapi(prototype = "Object", interface = web_api_interfaces::DeprecatedStorageInfo)]
 struct LegacyStorageInfoObjectDeclaration {
     #[webapi(data_property = "TEMPORARY", enumerable)]
     temporary: f64,

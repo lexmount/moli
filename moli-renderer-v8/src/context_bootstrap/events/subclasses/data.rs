@@ -14,6 +14,7 @@ use crate::native_bridge::element::scroll_to_url_fragment_or_top;
 use crate::native_bridge::throw_dom_exception;
 use crate::util::context_host_ptr_from_global_bridge;
 use crate::util::{get_private_value, set_private_value};
+use crate::web_api_interfaces;
 use crate::webidl;
 use moli_webapi_declare::WebApiObject;
 use url::Url;
@@ -73,7 +74,7 @@ struct NavigationInterceptOptionsMembers {
 }
 
 #[derive(WebApiObject)]
-#[webapi(prototype = "Object", interface = "NavigationPrecommitController")]
+#[webapi(prototype = "Object", interface = web_api_interfaces::NavigationPrecommitController)]
 struct PrecommitControllerDeclaration<'scope> {
     #[webapi(slot = PRECOMMIT_CONTROLLER_EVENT_SLOT)]
     event: v8::Local<'scope, v8::Object>,
@@ -98,7 +99,7 @@ struct PrecommitControllerDeclaration<'scope> {
 }
 
 #[derive(Default, WebApiObject)]
-#[webapi(interface = "NavigateEvent")]
+#[webapi(interface = web_api_interfaces::NavigateEvent)]
 struct NavigateEventMethodsDeclaration {
     #[webapi(
         method,

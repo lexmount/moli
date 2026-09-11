@@ -1,3 +1,4 @@
+use crate::web_api_interfaces;
 use v8::RegExpCreationFlags;
 
 use crate::custom_elements::is_form_associated_custom_element_handle;
@@ -29,7 +30,7 @@ struct SetCustomValidityArgs {
 type ControlValidity = FormControlValidity;
 
 #[derive(WebApiObject)]
-#[webapi(interface = "ValidityState", data_properties, enumerable)]
+#[webapi(interface = web_api_interfaces::ValidityState, data_properties, enumerable)]
 struct ValidityStateDeclaration {
     value_missing: bool,
     type_mismatch: bool,

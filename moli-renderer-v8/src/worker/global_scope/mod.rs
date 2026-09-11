@@ -11,6 +11,7 @@
 //! - `requestAnimationFrame` / `cancelAnimationFrame`
 //! - `globalThis`
 
+use crate::web_api_interfaces;
 use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
 use std::ffi::c_void;
@@ -271,7 +272,7 @@ struct WorkerConsoleObjectDeclaration {
 }
 
 #[derive(WebApiObject)]
-#[webapi(prototype = "Object", interface = "Performance")]
+#[webapi(prototype = "Object", interface = web_api_interfaces::Performance)]
 struct WorkerPerformanceObjectDeclaration {
     #[webapi(data_property, readonly)]
     time_origin: f64,
@@ -542,7 +543,7 @@ struct ServiceWorkerGlobalEventHandlerStateDeclaration {
 }
 
 #[derive(Default, WebApiObject)]
-#[webapi(interface = "Clients", prototype = "Object")]
+#[webapi(interface = web_api_interfaces::Clients, prototype = "Object")]
 struct ServiceWorkerClientsDeclaration {
     #[webapi(method, callback = service_worker_clients_claim_callback, length = 0)]
     claim: (),
@@ -575,7 +576,7 @@ struct ServiceWorkerGlobalRuntimeDeclaration<'scope> {
 
 #[derive(WebApiFunctionTemplate)]
 #[webapi(
-    name = "ExtendableEvent",
+    interface = web_api_interfaces::ExtendableEvent,
     constructor_callback = extendable_event_constructor_callback,
     constructor_length = 1
 )]
@@ -586,7 +587,7 @@ struct ExtendableEventTemplateDeclaration {
 
 #[derive(WebApiFunctionTemplate)]
 #[webapi(
-    name = "ExtendableMessageEvent",
+    interface = web_api_interfaces::ExtendableMessageEvent,
     constructor_callback = extendable_message_event_constructor_callback,
     constructor_length = 1
 )]
@@ -649,7 +650,7 @@ struct WorkerPrototypeTagDeclaration {
 }
 
 #[derive(WebApiObject)]
-#[webapi(interface = "ServiceWorkerRegistration", parent = "EventTarget")]
+#[webapi(interface = web_api_interfaces::ServiceWorkerRegistration,)]
 struct ServiceWorkerGlobalRegistrationDeclaration<'scope> {
     #[webapi(data_property, readonly)]
     scope: String,
@@ -703,7 +704,7 @@ struct ServiceWorkerGlobalRegistrationDeclaration<'scope> {
 }
 
 #[derive(WebApiObject)]
-#[webapi(interface = "ServiceWorker", parent = "EventTarget")]
+#[webapi(interface = web_api_interfaces::ServiceWorker,)]
 struct ServiceWorkerGlobalServiceWorkerDeclaration {
     #[webapi(data_property = "scriptURL", readonly)]
     script_url: String,
@@ -716,7 +717,7 @@ struct ServiceWorkerGlobalServiceWorkerDeclaration {
 }
 
 #[derive(WebApiObject)]
-#[webapi(interface = "SyncManager")]
+#[webapi(interface = web_api_interfaces::SyncManager)]
 struct ServiceWorkerGlobalSyncManagerDeclaration {
     #[webapi(
         method = "register",
@@ -734,7 +735,7 @@ struct ServiceWorkerGlobalSyncManagerDeclaration {
 }
 
 #[derive(WebApiObject)]
-#[webapi(interface = "PeriodicSyncManager")]
+#[webapi(interface = web_api_interfaces::PeriodicSyncManager)]
 struct ServiceWorkerGlobalPeriodicSyncManagerDeclaration {
     #[webapi(
         method = "register",
@@ -759,7 +760,7 @@ struct ServiceWorkerGlobalPeriodicSyncManagerDeclaration {
 }
 
 #[derive(WebApiObject)]
-#[webapi(interface = "PushManager")]
+#[webapi(interface = web_api_interfaces::PushManager)]
 struct ServiceWorkerGlobalPushManagerDeclaration {
     #[webapi(
         method = "subscribe",
@@ -784,7 +785,7 @@ struct ServiceWorkerGlobalPushManagerDeclaration {
 }
 
 #[derive(WebApiObject)]
-#[webapi(interface = "NavigationPreloadManager")]
+#[webapi(interface = web_api_interfaces::NavigationPreloadManager)]
 struct ServiceWorkerGlobalNavigationPreloadManagerDeclaration {
     #[webapi(
         method,
@@ -816,7 +817,7 @@ struct ServiceWorkerGlobalNavigationPreloadManagerDeclaration {
 }
 
 #[derive(WebApiObject)]
-#[webapi(interface = "PushSubscription")]
+#[webapi(interface = web_api_interfaces::PushSubscription)]
 struct ServiceWorkerPushSubscriptionDeclaration<'scope> {
     #[webapi(data_property, readonly)]
     endpoint: String,
@@ -839,7 +840,7 @@ struct ServiceWorkerPushSubscriptionDeclaration<'scope> {
 }
 
 #[derive(WebApiObject)]
-#[webapi(interface = "PushSubscriptionOptions", prototype = "Object")]
+#[webapi(interface = web_api_interfaces::PushSubscriptionOptions, prototype = "Object")]
 struct ServiceWorkerPushSubscriptionOptionsDeclaration<'scope> {
     #[webapi(data_property = "userVisibleOnly", readonly)]
     user_visible_only: bool,
@@ -859,7 +860,7 @@ struct WorkerNavigationPreloadStateDeclaration {
 }
 
 #[derive(WebApiObject)]
-#[webapi(interface = "ExtendableEvent", parent = "Event", prototype = "Object")]
+#[webapi(interface = web_api_interfaces::ExtendableEvent, prototype = "Object")]
 struct InitializedExtendableEventStateDeclaration<'scope> {
     #[webapi(data_property = "type", enumerable)]
     event_type: String,
@@ -894,8 +895,7 @@ struct InitializedExtendableEventStateDeclaration<'scope> {
 
 #[derive(WebApiObject)]
 #[webapi(
-    interface = "ExtendableMessageEvent",
-    parent = "ExtendableEvent",
+    interface = web_api_interfaces::ExtendableMessageEvent,
     prototype = "Object"
 )]
 struct ExtendableMessageEventStateDeclaration<'scope> {
@@ -916,7 +916,7 @@ struct ExtendableMessageEventStateDeclaration<'scope> {
 }
 
 #[derive(WebApiObject)]
-#[webapi(interface = "Client")]
+#[webapi(interface = web_api_interfaces::Client)]
 pub(super) struct ServiceWorkerBaseClientDeclaration<'scope> {
     #[webapi(data_property, readonly)]
     id: String,
@@ -932,7 +932,7 @@ pub(super) struct ServiceWorkerBaseClientDeclaration<'scope> {
 }
 
 #[derive(WebApiObject)]
-#[webapi(interface = "WindowClient")]
+#[webapi(interface = web_api_interfaces::WindowClient)]
 pub(super) struct ServiceWorkerWindowClientDeclaration<'scope> {
     #[webapi(data_property, readonly)]
     id: String,
@@ -5479,21 +5479,12 @@ fn install_worker_global_scope_constructors<'s>(
     global: v8::Local<'s, v8::Object>,
     global_kind: &super::thread::WorkerGlobalKind,
 ) -> Result<()> {
-    moli_webapi_declare::register_web_api_interfaces(
-        scope,
-        [
-            ("WorkerGlobalScope", Some("EventTarget")),
-            ("DedicatedWorkerGlobalScope", Some("WorkerGlobalScope")),
-            ("SharedWorkerGlobalScope", Some("WorkerGlobalScope")),
-            ("ServiceWorkerGlobalScope", Some("WorkerGlobalScope")),
-        ],
-    )?;
     let interface = match global_kind {
         super::thread::WorkerGlobalKind::Dedicated { .. } => "DedicatedWorkerGlobalScope",
         super::thread::WorkerGlobalKind::Shared { .. } => "SharedWorkerGlobalScope",
         super::thread::WorkerGlobalKind::Service { .. } => "ServiceWorkerGlobalScope",
     };
-    moli_webapi_declare::initialize_web_api_object(scope, global, interface)?;
+    web_api_interfaces::initialize(scope, global, interface)?;
     let worker_ctor = worker_scope_constructor(scope, "WorkerGlobalScope")?;
     let worker_proto = constructor_prototype(scope, worker_ctor, "WorkerGlobalScope")?;
     set_worker_to_string_tag(scope, worker_proto, "WorkerGlobalScope");
@@ -5617,10 +5608,7 @@ fn install_service_worker_extendable_event_constructors<'s>(
         .map_err(|error| anyhow!("failed to initialize ExtendableMessageEvent global: {error}"))?;
 
     ensure_worker_interface_constructor(scope, "ServiceWorker")?;
-    moli_webapi_declare::register_web_api_interfaces(
-        scope,
-        [("Client", None), ("WindowClient", Some("Client"))],
-    )?;
+    web_api_interfaces::WindowClient::DESCRIPTOR.register(scope)?;
     ensure_worker_interface_constructor(scope, "Client")?;
     ensure_worker_interface_constructor(scope, "WindowClient")?;
     if let Some(client_ctor) = global_constructor_object(scope, "Client")

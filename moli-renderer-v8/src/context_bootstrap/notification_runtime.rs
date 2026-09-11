@@ -3,6 +3,7 @@ use super::{
     simple_event_target_add_event_listener_callback, simple_event_target_dispatch_event_callback,
     simple_event_target_remove_event_listener_callback, structured_clone_value_for_storage,
 };
+use crate::web_api_interfaces;
 use crate::{
     runtime::{
         ServiceWorkerNotificationMetadata, ServiceWorkerNotificationSnapshot,
@@ -47,7 +48,7 @@ pub(crate) struct NotificationOptionsPayload {
 }
 
 #[derive(WebApiObject)]
-#[webapi(interface = "Notification")]
+#[webapi(interface = web_api_interfaces::Notification)]
 struct NotificationObjectDeclaration<'scope> {
     #[webapi(slot = NOTIFICATION_TITLE_SLOT)]
     title: String,
@@ -138,7 +139,7 @@ struct NotificationObjectDeclaration<'scope> {
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(name = "Notification")]
+#[webapi(interface = web_api_interfaces::Notification)]
 struct NotificationPrototypeDeclaration {
     #[webapi(
         accessor_property,
@@ -195,14 +196,14 @@ struct NotificationPrototypeDeclaration {
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(name = "Notification", enumerable)]
+#[webapi(interface = web_api_interfaces::Notification, enumerable)]
 struct NotificationConstructorDeclaration {
     #[webapi(static_method, length = 0, callback = notification_request_permission_callback)]
     request_permission: (),
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(name = "Notification")]
+#[webapi(interface = web_api_interfaces::Notification)]
 struct NotificationConstructorConstantsDeclaration {
     #[webapi(constant = "maxActions", value = NOTIFICATION_MAX_ACTIONS)]
     max_actions: (),

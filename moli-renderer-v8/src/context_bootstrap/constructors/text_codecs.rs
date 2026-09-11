@@ -1,4 +1,5 @@
 use super::*;
+use crate::web_api_interfaces;
 use crate::{
     text_codec::TextDecodeError,
     util::{callback_data_index_value, callback_data_item, get_private_value},
@@ -16,14 +17,14 @@ const TEXT_DECODER_FATAL_SLOT_INDEX: usize = 2;
 const TEXT_DECODER_IGNORE_BOM_SLOT_INDEX: usize = 3;
 
 #[derive(WebApiObject)]
-#[webapi(interface = "TextEncoder")]
+#[webapi(interface = web_api_interfaces::TextEncoder)]
 struct TextEncoderObjectDeclaration {
     #[webapi(slot = TEXT_ENCODER_ENCODING_SLOT)]
     encoding: &'static str,
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(name = "TextEncoder", enumerable)]
+#[webapi(interface = web_api_interfaces::TextEncoder, enumerable)]
 struct TextEncoderPrototypeDeclaration {
     #[webapi(method, length = 0, callback = text_encoder_encode_callback)]
     encode: (),
@@ -39,7 +40,7 @@ struct TextEncoderPrototypeDeclaration {
 }
 
 #[derive(WebApiObject)]
-#[webapi(interface = "TextDecoder")]
+#[webapi(interface = web_api_interfaces::TextDecoder)]
 struct TextDecoderObjectDeclaration {
     #[webapi(slot = TEXT_DECODER_ENCODING_SLOT)]
     encoding: String,
@@ -50,7 +51,7 @@ struct TextDecoderObjectDeclaration {
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(name = "TextDecoder", enumerable)]
+#[webapi(interface = web_api_interfaces::TextDecoder, enumerable)]
 struct TextDecoderPrototypeDeclaration {
     #[webapi(method, length = 0, callback = text_decoder_decode_callback)]
     decode: (),

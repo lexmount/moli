@@ -1,5 +1,6 @@
 use super::*;
 use crate::util::{get_private_value, set_private_value};
+use crate::web_api_interfaces;
 use moli_webapi_declare::{WebApiFunctionTemplate, WebApiObject};
 
 const FILE_READER_READY_STATE_SLOT: &str = "__lmFileReaderReadyState";
@@ -7,7 +8,7 @@ const FILE_READER_RESULT_SLOT: &str = "__lmFileReaderResult";
 const FILE_READER_ERROR_SLOT: &str = "__lmFileReaderError";
 
 #[derive(Default, WebApiObject)]
-#[webapi(interface = "FileReader")]
+#[webapi(interface = web_api_interfaces::FileReader)]
 struct FileReaderObjectDeclaration {
     #[webapi(slot = SIMPLE_EVENT_TARGET_SLOT, value = FILE_READER_LISTENERS_SLOT)]
     event_target_slot: (),
@@ -59,7 +60,7 @@ struct FileReaderObjectDeclaration {
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(name = "FileReader")]
+#[webapi(interface = web_api_interfaces::FileReader)]
 struct FileReaderPrototypeAccessorsDeclaration {
     #[webapi(
         accessor_property,

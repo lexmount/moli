@@ -1,4 +1,5 @@
 use super::super::*;
+use crate::web_api_interfaces;
 use crate::{
     document_runtime::DomHandle,
     host::HostTimerOwner,
@@ -23,7 +24,7 @@ const POSITION_UNAVAILABLE: u16 = 2;
 const TIMEOUT: u16 = 3;
 
 #[derive(WebApiObject)]
-#[webapi(interface = "Geolocation")]
+#[webapi(interface = web_api_interfaces::Geolocation)]
 struct GeolocationObjectDeclaration {
     #[webapi(slot = GEOLOCATION_SECURE_CONTEXT_SLOT)]
     secure_context: bool,
@@ -33,7 +34,7 @@ struct GeolocationObjectDeclaration {
 }
 
 #[derive(Default, WebApiFunctionTemplate)]
-#[webapi(name = "Geolocation", enumerable)]
+#[webapi(interface = web_api_interfaces::Geolocation, enumerable)]
 struct GeolocationPrototypeMethodsDeclaration {
     #[webapi(method, length = 1, callback = geolocation_get_current_position_callback)]
     get_current_position: (),
@@ -46,7 +47,7 @@ struct GeolocationPrototypeMethodsDeclaration {
 }
 
 #[derive(WebApiObject)]
-#[webapi(interface = "GeolocationPositionError")]
+#[webapi(interface = web_api_interfaces::GeolocationPositionError)]
 struct GeolocationPositionErrorObjectDeclaration {
     #[webapi(slot = GEOLOCATION_POSITION_ERROR_CODE_SLOT)]
     code: u16,
@@ -56,7 +57,7 @@ struct GeolocationPositionErrorObjectDeclaration {
 }
 
 #[derive(Default, WebApiFunctionTemplate)]
-#[webapi(name = "GeolocationPositionError", enumerable)]
+#[webapi(interface = web_api_interfaces::GeolocationPositionError, enumerable)]
 struct GeolocationPositionErrorPrototypeDeclaration {
     #[webapi(accessor_property, getter = geolocation_position_error_code_getter_callback)]
     code: (),
@@ -66,7 +67,7 @@ struct GeolocationPositionErrorPrototypeDeclaration {
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(name = "GeolocationPositionError", enumerable)]
+#[webapi(interface = web_api_interfaces::GeolocationPositionError, enumerable)]
 struct GeolocationPositionErrorConstantsDeclaration {
     #[webapi(constant = "PERMISSION_DENIED", value = 1u32)]
     permission_denied: (),

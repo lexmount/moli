@@ -10,10 +10,11 @@ use super::methods::{
     websocket_close_callback, websocket_send_callback, websocket_stream_close_callback,
 };
 use super::*;
+use crate::web_api_interfaces;
 use moli_webapi_declare::WebApiFunctionTemplate;
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(name = "WebSocket", enumerable)]
+#[webapi(interface = web_api_interfaces::WebSocket, enumerable)]
 struct WebSocketTemplateMethodsDeclaration {
     #[webapi(constant = "CONNECTING", value = CONNECTING)]
     connecting: (),
@@ -35,14 +36,14 @@ struct WebSocketTemplateMethodsDeclaration {
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(name = "WebSocketStream", enumerable)]
+#[webapi(interface = web_api_interfaces::WebSocketStream, enumerable)]
 struct WebSocketStreamTemplateMethodsDeclaration {
     #[webapi(method, length = 0, callback = websocket_stream_close_callback)]
     close: (),
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(name = "WebSocket")]
+#[webapi(interface = web_api_interfaces::WebSocket)]
 struct WebSocketPrototypeAccessorsDeclaration {
     #[webapi(accessor_property, getter = websocket_url_getter_function, enumerable)]
     url: (),
@@ -79,7 +80,7 @@ struct WebSocketPrototypeAccessorsDeclaration {
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(name = "WebSocketStream")]
+#[webapi(interface = web_api_interfaces::WebSocketStream)]
 struct WebSocketStreamPrototypeAccessorsDeclaration {
     #[webapi(accessor_property, getter = websocket_stream_url_getter_function, enumerable)]
     url: (),

@@ -7,11 +7,12 @@ use crate::native_bridge::{
     document::{detached_node_type, detached_tree_root_object},
     node_runtime_and_handle_from_object,
 };
+use crate::web_api_interfaces;
 use crate::webidl;
 use moli_webapi_declare::WebApiFunctionTemplate;
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(name = "XPathEvaluator", enumerable)]
+#[webapi(interface = web_api_interfaces::XPathEvaluator, enumerable)]
 struct XPathEvaluatorPrototypeDeclaration {
     #[webapi(method, length = 2, callback = xpath_evaluator_evaluate_callback)]
     evaluate: (),

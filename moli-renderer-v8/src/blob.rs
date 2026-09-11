@@ -1,3 +1,4 @@
+use crate::web_api_interfaces;
 use moli_file_api::{
     BlobId, BlobLineEndings, BlobStore, blob_slice_relative_index, clamp_blob_long_long,
     normalize_blob_line_endings_with_native_ending, normalize_blob_mime_type,
@@ -27,14 +28,14 @@ fn native_blob_line_ending() -> &'static str {
 }
 
 #[derive(WebApiObject)]
-#[webapi(prototype = "Object", interface = "Blob")]
+#[webapi(prototype = "Object", interface = web_api_interfaces::Blob)]
 struct BlobInstanceDeclaration<'scope> {
     #[webapi(slot = BLOB_ID_SLOT)]
     blob_id: v8::Local<'scope, v8::BigInt>,
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(name = "Blob", enumerable)]
+#[webapi(interface = web_api_interfaces::Blob, enumerable)]
 struct BlobPrototypeDeclaration {
     #[webapi(accessor_property, getter = blob_size_attribute_getter_callback)]
     size: (),

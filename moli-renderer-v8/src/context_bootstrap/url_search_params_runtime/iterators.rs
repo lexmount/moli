@@ -4,6 +4,7 @@ use crate::util::{
     get_private_object, get_private_value, materialize_hidden_function_template_prototype,
     set_private_value,
 };
+use crate::web_api_interfaces;
 use moli_url::search_params::{
     SearchParamsIteratorKind, SearchParamsIteratorValue, search_params_iterator_step,
 };
@@ -15,7 +16,7 @@ const URL_SEARCH_PARAMS_ITERATOR_KIND_SLOT: &str = "__moliUrlSearchParamsIterato
 const URL_SEARCH_PARAMS_ITERATOR_PROTOTYPE_SLOT: &str = "__moliUrlSearchParamsIteratorPrototype";
 
 #[derive(WebApiObject)]
-#[webapi(prototype = "Object", interface = "URLSearchParams Iterator")]
+#[webapi(prototype = "Object", interface = web_api_interfaces::URLSearchParamsIterator)]
 struct UrlSearchParamsIteratorDeclaration<'scope> {
     #[webapi(slot = URL_SEARCH_PARAMS_ITERATOR_TARGET_SLOT)]
     target: v8::Local<'scope, v8::Object>,
@@ -27,7 +28,7 @@ struct UrlSearchParamsIteratorDeclaration<'scope> {
 
 #[derive(WebApiFunctionTemplate)]
 #[webapi(
-    name = "URLSearchParams Iterator",
+    interface = web_api_interfaces::URLSearchParamsIterator,
     intrinsic_prototype_parent = v8::Intrinsic::IteratorPrototype,
     prototype_to_string_tag = "URLSearchParams Iterator",
     readonly_prototype,

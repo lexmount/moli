@@ -1,5 +1,6 @@
 use super::super::store::headers_entries;
 use super::*;
+use crate::web_api_interfaces;
 use crate::{
     callback_invocation::invoke_synchronous_webidl_callback_function,
     util::{
@@ -42,7 +43,7 @@ struct HeadersIteratorResultDeclaration<'scope> {
 }
 
 #[derive(WebApiObject)]
-#[webapi(prototype = "Object", interface = "Headers Iterator")]
+#[webapi(prototype = "Object", interface = web_api_interfaces::HeadersIterator)]
 struct HeadersIteratorDeclaration<'scope> {
     #[webapi(slot = HEADERS_ITERATOR_TARGET_SLOT)]
     target: v8::Local<'scope, v8::Object>,
@@ -54,7 +55,7 @@ struct HeadersIteratorDeclaration<'scope> {
 
 #[derive(WebApiFunctionTemplate)]
 #[webapi(
-    name = "Headers Iterator",
+    interface = web_api_interfaces::HeadersIterator,
     intrinsic_prototype_parent = v8::Intrinsic::IteratorPrototype,
     prototype_to_string_tag = "Headers Iterator",
     readonly_prototype,

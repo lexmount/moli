@@ -6,6 +6,7 @@ use super::*;
 use crate::util::{
     callback_data_index_value, callback_data_item, get_private_value, set_private_value, v8str,
 };
+use crate::web_api_interfaces;
 use crate::webidl;
 use moli_webapi_declare::{WebApiFunctionTemplate, WebApiObject};
 
@@ -13,7 +14,7 @@ const OFFSCREEN_CANVAS_CONTEXT_SLOT: &str = "__moliOffscreenCanvasContext";
 const OFFSCREEN_CANVAS_CONTEXT_KIND_SLOT: &str = "__moliOffscreenCanvasContextKind";
 
 #[derive(WebApiObject)]
-#[webapi(interface = "OffscreenCanvas")]
+#[webapi(interface = web_api_interfaces::OffscreenCanvas)]
 struct OffscreenCanvasObjectDeclaration {
     #[webapi(slot = OFFSCREEN_CANVAS_WIDTH_SLOT)]
     width: f64,
@@ -22,7 +23,7 @@ struct OffscreenCanvasObjectDeclaration {
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(name = "OffscreenCanvas")]
+#[webapi(interface = web_api_interfaces::OffscreenCanvas)]
 struct OffscreenCanvasPrototypeAccessorsDeclaration {
     #[webapi(
         accessor_property,

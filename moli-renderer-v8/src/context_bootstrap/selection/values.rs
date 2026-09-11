@@ -11,13 +11,14 @@ use crate::native_bridge::{
     callback_value_dom_handle,
 };
 use crate::util::{get_private_value, set_private_value};
+use crate::web_api_interfaces;
 use moli_webapi_declare::WebApiObject;
 
 const SELECTION_RECORD_INTERNAL_FIELD_INDEX: usize = 0;
 const SELECTION_WRAPPER_INTERNAL_FIELD_COUNT: usize = 1;
 
 #[derive(WebApiObject)]
-#[webapi(interface = "Selection")]
+#[webapi(interface = web_api_interfaces::Selection)]
 struct SelectionObjectDeclaration {
     #[webapi(slot = SELECTION_RANGE_SLOT, init = "null")]
     range: (),

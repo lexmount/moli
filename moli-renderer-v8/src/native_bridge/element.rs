@@ -18,6 +18,7 @@ use super::node::{
     throw_incompatible_setter_receiver,
 };
 use crate::document_runtime::DomHandle;
+use crate::web_api_interfaces;
 use moli_webapi_declare::{WebApiFunctionTemplate, WebApiTemplateValue};
 
 mod activation;
@@ -338,7 +339,7 @@ pub(crate) use forms::{
 use rendered_state::{node_check_visibility_callback, node_current_css_zoom_getter_function};
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(name = "HTMLFormElement", enumerable)]
+#[webapi(interface = web_api_interfaces::HTMLFormElement, enumerable)]
 struct HtmlFormElementTemplateMethodsDeclaration {
     #[webapi(
         intrinsic_data_property = v8::Intrinsic::ArrayProtoValues,
@@ -359,7 +360,7 @@ struct HtmlFormElementTemplateMethodsDeclaration {
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(name = "HTMLSelectElement")]
+#[webapi(interface = web_api_interfaces::HTMLSelectElement)]
 struct HtmlSelectElementIndexedPropertiesDeclaration {
     #[webapi(
         intrinsic_data_property = v8::Intrinsic::ArrayProtoValues,
@@ -660,7 +661,7 @@ use url_attributes::{
 };
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(name = "Element")]
+#[webapi(interface = web_api_interfaces::Element)]
 struct ElementPrototypeReflectionDeclaration {
     #[webapi(
         accessor_property,
@@ -799,7 +800,7 @@ struct ElementPrototypeReflectionDeclaration {
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(name = "Element")]
+#[webapi(interface = web_api_interfaces::Element)]
 struct ElementPrototypeQueryAndAttributeMethodsDeclaration {
     #[webapi(
         method,
@@ -897,7 +898,7 @@ struct ElementPrototypeQueryAndAttributeMethodsDeclaration {
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(name = "Element", enumerable)]
+#[webapi(interface = web_api_interfaces::Element, enumerable)]
 struct ExtendedElementPrototypeMethodsDeclaration {
     #[webapi(method, length = 1, callback = node_get_attribute_node_callback)]
     get_attribute_node: (),
@@ -936,7 +937,7 @@ struct ExtendedElementPrototypeMethodsDeclaration {
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(name = "Element")]
+#[webapi(interface = web_api_interfaces::Element)]
 struct ElementGeometryPrototypeDeclaration {
     #[webapi(
         accessor_property = "currentCSSZoom",
@@ -997,19 +998,19 @@ struct ElementGeometryPrototypeDeclaration {
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(name = "HTMLElement")]
+#[webapi(interface = web_api_interfaces::HTMLElement)]
 struct HtmlElementGeometryPrototypeDeclaration {
     #[webapi(
         accessor_property = "offsetWidth",
         enumerable,
-        receiver = "HTMLElement",
+        receiver = web_api_interfaces::HTMLElement::is_instance,
         getter = node_offset_width_getter_function
     )]
     offset_width: (),
     #[webapi(
         accessor_property = "offsetHeight",
         enumerable,
-        receiver = "HTMLElement",
+        receiver = web_api_interfaces::HTMLElement::is_instance,
         getter = node_offset_height_getter_function
     )]
     offset_height: (),
@@ -1034,7 +1035,7 @@ struct HtmlElementGeometryPrototypeDeclaration {
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(name = "Element", enumerable)]
+#[webapi(interface = web_api_interfaces::Element, enumerable)]
 struct ElementAriaStringReflectionDeclaration {
     #[webapi(
         accessor_property,
@@ -1326,7 +1327,7 @@ struct ElementAriaStringReflectionDeclaration {
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(name = "Element", enumerable)]
+#[webapi(interface = web_api_interfaces::Element, enumerable)]
 struct ElementAriaElementReflectionDeclaration {
     #[webapi(
         accessor_property = "ariaActiveDescendantElement",
@@ -1387,7 +1388,7 @@ struct ElementAriaElementReflectionDeclaration {
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(name = "Document")]
+#[webapi(interface = web_api_interfaces::Document)]
 struct DocumentCustomElementRegistryPrototypeDeclaration {
     #[webapi(
         accessor_property = "customElementRegistry",
@@ -1398,7 +1399,7 @@ struct DocumentCustomElementRegistryPrototypeDeclaration {
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(name = "Element")]
+#[webapi(interface = web_api_interfaces::Element)]
 struct ElementStylePrototypeDeclaration {
     #[webapi(
         accessor_property,
@@ -1410,7 +1411,7 @@ struct ElementStylePrototypeDeclaration {
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(name = "HTMLElement", receiver = "HTMLElement")]
+#[webapi(interface = web_api_interfaces::HTMLElement, receiver)]
 struct HtmlElementStandardPrototypeDeclaration {
     #[webapi(
         accessor_property,
@@ -1546,7 +1547,7 @@ struct HtmlElementStandardPrototypeDeclaration {
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(name = "HTMLElement")]
+#[webapi(interface = web_api_interfaces::HTMLElement)]
 struct HtmlElementActionPrototypeDeclaration {
     #[webapi(method, length = 0, enumerable, callback = node_focus_callback)]
     focus: (),
@@ -1611,7 +1612,7 @@ struct HtmlOrForeignElementPrototypeDeclaration {
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(name = "HTMLElement")]
+#[webapi(interface = web_api_interfaces::HTMLElement)]
 struct HtmlElementPopoverPrototypeDeclaration {
     #[webapi(
         accessor_property,
@@ -1686,7 +1687,7 @@ const HTML_COMPACT_REFLECTION_INTERFACES: &[&str] = &[
 ];
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(name = "HTMLLIElement", enumerable)]
+#[webapi(interface = web_api_interfaces::HTMLLIElement, enumerable)]
 struct HtmlLiElementValuePrototypeDeclaration {
     #[webapi(
         accessor_property,
@@ -1704,7 +1705,7 @@ struct HtmlLiElementValuePrototypeDeclaration {
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(name = "HTMLOListElement", enumerable)]
+#[webapi(interface = web_api_interfaces::HTMLOListElement, enumerable)]
 struct HtmlOListElementPrototypeDeclaration {
     #[webapi(
         accessor_property,
@@ -1727,7 +1728,7 @@ struct HtmlOListElementPrototypeDeclaration {
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(name = "HTMLUListElement", enumerable)]
+#[webapi(interface = web_api_interfaces::HTMLUListElement, enumerable)]
 struct HtmlUListElementPrototypeDeclaration {
     #[webapi(
         accessor_property,
@@ -1762,7 +1763,7 @@ struct HtmlBodyOrFrameSetEventHandlersPrototypeDeclaration {
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(name = "HTMLBodyElement", enumerable)]
+#[webapi(interface = web_api_interfaces::HTMLBodyElement, enumerable)]
 struct HtmlBodyElementLegacyPrototypeDeclaration {
     #[webapi(
         accessor_property,
@@ -1804,7 +1805,7 @@ struct HtmlBodyElementLegacyPrototypeDeclaration {
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(name = "HTMLHRElement", enumerable)]
+#[webapi(interface = web_api_interfaces::HTMLHRElement, enumerable)]
 struct HtmlHrElementLegacyPrototypeDeclaration {
     #[webapi(
         accessor_property,
@@ -1836,7 +1837,7 @@ struct HtmlHrElementLegacyPrototypeDeclaration {
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(name = "HTMLFontElement", enumerable)]
+#[webapi(interface = web_api_interfaces::HTMLFontElement, enumerable)]
 struct HtmlFontElementLegacyPrototypeDeclaration {
     #[webapi(
         accessor_property,
@@ -1855,7 +1856,7 @@ struct HtmlFontElementLegacyPrototypeDeclaration {
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(name = "HTMLMarqueeElement", enumerable)]
+#[webapi(interface = web_api_interfaces::HTMLMarqueeElement, enumerable)]
 struct HtmlMarqueeElementLegacyPrototypeDeclaration {
     #[webapi(
         accessor_property = "loop",
@@ -1913,7 +1914,7 @@ struct HtmlMarqueeElementLegacyPrototypeDeclaration {
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(name = "HTMLTableElement")]
+#[webapi(interface = web_api_interfaces::HTMLTableElement)]
 struct HtmlTableElementPrototypeDeclaration {
     #[webapi(
         accessor_property,
@@ -3414,7 +3415,7 @@ fn object_content_window_getter_function<'s>(
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(name = "HTMLScriptElement", enumerable)]
+#[webapi(interface = web_api_interfaces::HTMLScriptElement, enumerable)]
 struct HtmlScriptElementPrototypeDeclaration {
     #[webapi(
         accessor_property = "innerText",
@@ -3513,7 +3514,7 @@ struct HtmlScriptElementPrototypeDeclaration {
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(name = "SVGScriptElement", enumerable)]
+#[webapi(interface = web_api_interfaces::SVGScriptElement, enumerable)]
 struct SvgScriptElementPrototypeDeclaration {
     #[webapi(
         accessor_property = "type",
@@ -3530,7 +3531,7 @@ struct SvgScriptElementPrototypeDeclaration {
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(name = "HTMLAnchorElement", enumerable)]
+#[webapi(interface = web_api_interfaces::HTMLAnchorElement, enumerable)]
 struct HtmlAnchorElementUrlPrototypeDeclaration {
     #[webapi(
         accessor_property,
@@ -3597,7 +3598,7 @@ struct HtmlAnchorElementUrlPrototypeDeclaration {
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(name = "HTMLAreaElement", enumerable)]
+#[webapi(interface = web_api_interfaces::HTMLAreaElement, enumerable)]
 struct HtmlAreaElementUrlPrototypeDeclaration {
     #[webapi(method = "toString", length = 0, callback = area_to_string_callback)]
     to_string: (),
@@ -3666,7 +3667,7 @@ struct HtmlAreaElementUrlPrototypeDeclaration {
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(name = "HTMLImageElement", enumerable)]
+#[webapi(interface = web_api_interfaces::HTMLImageElement, enumerable)]
 struct HtmlImageElementUrlPrototypeDeclaration {
     #[webapi(
         accessor_property,
@@ -3800,7 +3801,7 @@ struct HtmlImageElementUrlPrototypeDeclaration {
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(name = "HTMLSourceElement", enumerable)]
+#[webapi(interface = web_api_interfaces::HTMLSourceElement, enumerable)]
 struct HtmlSourceElementUrlPrototypeDeclaration {
     #[webapi(
         accessor_property,
@@ -3850,7 +3851,7 @@ struct HtmlSourceElementUrlPrototypeDeclaration {
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(name = "HTMLEmbedElement", enumerable)]
+#[webapi(interface = web_api_interfaces::HTMLEmbedElement, enumerable)]
 struct HtmlEmbedElementUrlPrototypeDeclaration {
     #[webapi(
         accessor_property,
@@ -3882,7 +3883,7 @@ struct HtmlEmbedElementUrlPrototypeDeclaration {
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(name = "HTMLFrameElement", enumerable)]
+#[webapi(interface = web_api_interfaces::HTMLFrameElement, enumerable)]
 struct HtmlFrameElementLegacyPrototypeDeclaration {
     #[webapi(
         accessor_property,
@@ -3928,7 +3929,7 @@ struct HtmlFrameElementLegacyPrototypeDeclaration {
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(name = "HTMLIFrameElement", enumerable)]
+#[webapi(interface = web_api_interfaces::HTMLIFrameElement, enumerable)]
 struct HtmlIFrameElementPrototypeDeclaration {
     #[webapi(
         accessor_property,
@@ -4040,19 +4041,19 @@ struct HtmlIFrameElementPrototypeDeclaration {
     #[webapi(
         accessor_property,
         getter = frame_owner_content_document_getter_function,
-        receiver = "HTMLIFrameElement"
+        receiver = web_api_interfaces::HTMLIFrameElement::is_instance
     )]
     content_document: (),
     #[webapi(
         accessor_property,
         getter = frame_owner_content_window_getter_function,
-        receiver = "HTMLIFrameElement"
+        receiver = web_api_interfaces::HTMLIFrameElement::is_instance
     )]
     content_window: (),
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(name = "HTMLBaseElement", enumerable)]
+#[webapi(interface = web_api_interfaces::HTMLBaseElement, enumerable)]
 struct HtmlBaseElementUrlPrototypeDeclaration {
     #[webapi(
         accessor_property,
@@ -4063,7 +4064,7 @@ struct HtmlBaseElementUrlPrototypeDeclaration {
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(name = "HTMLLinkElement", enumerable)]
+#[webapi(interface = web_api_interfaces::HTMLLinkElement, enumerable)]
 struct HtmlLinkElementUrlPrototypeDeclaration {
     #[webapi(
         accessor_property,
@@ -4129,7 +4130,7 @@ struct HtmlLinkElementUrlPrototypeDeclaration {
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(name = "HTMLStyleElement", enumerable)]
+#[webapi(interface = web_api_interfaces::HTMLStyleElement, enumerable)]
 struct HtmlStyleElementPrototypeDeclaration {
     #[webapi(
         accessor_property,
@@ -4160,7 +4161,7 @@ struct HtmlStyleElementPrototypeDeclaration {
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(name = "SVGStyleElement", enumerable)]
+#[webapi(interface = web_api_interfaces::SVGStyleElement, enumerable)]
 struct SvgStyleElementPrototypeDeclaration {
     #[webapi(
         accessor_property,
@@ -4311,7 +4312,7 @@ fn svg_style_disabled_setter_function<'s>(
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(name = "HTMLDetailsElement", enumerable)]
+#[webapi(interface = web_api_interfaces::HTMLDetailsElement, enumerable)]
 struct HtmlDetailsElementPrototypeDeclaration {
     #[webapi(
         accessor_property,
@@ -4322,7 +4323,7 @@ struct HtmlDetailsElementPrototypeDeclaration {
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(name = "HTMLDialogElement", enumerable)]
+#[webapi(interface = web_api_interfaces::HTMLDialogElement, enumerable)]
 struct HtmlDialogElementPrototypeDeclaration {
     #[webapi(
         accessor_property,
@@ -4345,7 +4346,7 @@ struct HtmlDialogElementPrototypeDeclaration {
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(name = "HTMLMetaElement", enumerable)]
+#[webapi(interface = web_api_interfaces::HTMLMetaElement, enumerable)]
 struct HtmlMetaElementPrototypeDeclaration {
     #[webapi(
         accessor_property,
@@ -4362,7 +4363,7 @@ struct HtmlMetaElementPrototypeDeclaration {
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(name = "HTMLMetaElement", enumerable)]
+#[webapi(interface = web_api_interfaces::HTMLMetaElement, enumerable)]
 struct HtmlMetaElementMediaPrototypeDeclaration {
     #[webapi(
         accessor_property,
@@ -4374,7 +4375,7 @@ struct HtmlMetaElementMediaPrototypeDeclaration {
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(name = "HTMLAnchorElement", enumerable)]
+#[webapi(interface = web_api_interfaces::HTMLAnchorElement, enumerable)]
 struct HtmlAnchorElementTargetPrototypeDeclaration {
     #[webapi(
         accessor_property,
@@ -4385,7 +4386,7 @@ struct HtmlAnchorElementTargetPrototypeDeclaration {
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(name = "HTMLAreaElement", enumerable)]
+#[webapi(interface = web_api_interfaces::HTMLAreaElement, enumerable)]
 struct HtmlAreaElementTargetPrototypeDeclaration {
     #[webapi(
         accessor_property,
@@ -4396,7 +4397,7 @@ struct HtmlAreaElementTargetPrototypeDeclaration {
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(name = "HTMLAreaElement", enumerable)]
+#[webapi(interface = web_api_interfaces::HTMLAreaElement, enumerable)]
 struct HtmlAreaElementReferrerPolicyPrototypeDeclaration {
     #[webapi(
         accessor_property = "referrerPolicy",
@@ -4408,7 +4409,7 @@ struct HtmlAreaElementReferrerPolicyPrototypeDeclaration {
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(name = "HTMLAreaElement", enumerable)]
+#[webapi(interface = web_api_interfaces::HTMLAreaElement, enumerable)]
 struct HtmlAreaElementPrototypeDeclaration {
     #[webapi(
         accessor_property,
@@ -4454,7 +4455,7 @@ struct HtmlAreaElementPrototypeDeclaration {
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(name = "HTMLBaseElement", enumerable)]
+#[webapi(interface = web_api_interfaces::HTMLBaseElement, enumerable)]
 struct HtmlBaseElementTargetPrototypeDeclaration {
     #[webapi(
         accessor_property,
@@ -4465,7 +4466,7 @@ struct HtmlBaseElementTargetPrototypeDeclaration {
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(name = "HTMLLinkElement", enumerable)]
+#[webapi(interface = web_api_interfaces::HTMLLinkElement, enumerable)]
 struct HtmlLinkElementTargetPrototypeDeclaration {
     #[webapi(
         accessor_property,
@@ -4588,7 +4589,7 @@ struct LabelableElementPrototypeDeclaration {
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(name = "HTMLFieldSetElement", enumerable)]
+#[webapi(interface = web_api_interfaces::HTMLFieldSetElement, enumerable)]
 struct HtmlFieldSetElementPrototypeDeclaration {
     #[webapi(
         accessor_property,
@@ -4603,21 +4604,21 @@ struct HtmlFieldSetElementPrototypeDeclaration {
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(name = "HTMLDataListElement", enumerable)]
+#[webapi(interface = web_api_interfaces::HTMLDataListElement, enumerable)]
 struct HtmlDataListElementPrototypeDeclaration {
     #[webapi(accessor_property, getter = datalist_options_getter_function)]
     options: (),
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(name = "HTMLLegendElement", enumerable)]
+#[webapi(interface = web_api_interfaces::HTMLLegendElement, enumerable)]
 struct HtmlLegendElementPrototypeDeclaration {
     #[webapi(accessor_property, getter = legend_form_getter_function)]
     form: (),
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(name = "HTMLButtonElement", enumerable)]
+#[webapi(interface = web_api_interfaces::HTMLButtonElement, enumerable)]
 struct HtmlButtonElementValuePrototypeDeclaration {
     #[webapi(
         accessor_property,
@@ -4694,7 +4695,7 @@ struct HtmlButtonElementValuePrototypeDeclaration {
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(name = "HTMLInputElement", enumerable)]
+#[webapi(interface = web_api_interfaces::HTMLInputElement, enumerable)]
 struct HtmlInputElementValuePrototypeDeclaration {
     #[webapi(
         accessor_property,
@@ -4900,7 +4901,7 @@ struct HtmlInputElementValuePrototypeDeclaration {
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(name = "HTMLOutputElement", enumerable)]
+#[webapi(interface = web_api_interfaces::HTMLOutputElement, enumerable)]
 struct HtmlOutputElementValuePrototypeDeclaration {
     #[webapi(
         accessor_property,
@@ -4919,7 +4920,7 @@ struct HtmlOutputElementValuePrototypeDeclaration {
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(name = "HTMLMeterElement", enumerable)]
+#[webapi(interface = web_api_interfaces::HTMLMeterElement, enumerable)]
 struct HtmlMeterElementPrototypeDeclaration {
     #[webapi(
         accessor_property,
@@ -4960,7 +4961,7 @@ struct HtmlMeterElementPrototypeDeclaration {
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(name = "HTMLProgressElement", enumerable)]
+#[webapi(interface = web_api_interfaces::HTMLProgressElement, enumerable)]
 struct HtmlProgressElementPrototypeDeclaration {
     #[webapi(
         accessor_property,
@@ -4979,7 +4980,7 @@ struct HtmlProgressElementPrototypeDeclaration {
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(name = "HTMLTextAreaElement", enumerable)]
+#[webapi(interface = web_api_interfaces::HTMLTextAreaElement, enumerable)]
 struct HtmlTextAreaElementValuePrototypeDeclaration {
     #[webapi(
         accessor_property,
@@ -5060,7 +5061,7 @@ struct HtmlTextAreaElementValuePrototypeDeclaration {
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(name = "HTMLOptionElement", enumerable)]
+#[webapi(interface = web_api_interfaces::HTMLOptionElement, enumerable)]
 struct HtmlOptionElementValuePrototypeDeclaration {
     #[webapi(
         accessor_property,
@@ -5071,7 +5072,7 @@ struct HtmlOptionElementValuePrototypeDeclaration {
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(name = "HTMLOptionElement", enumerable)]
+#[webapi(interface = web_api_interfaces::HTMLOptionElement, enumerable)]
 struct HtmlOptionElementStatePrototypeDeclaration {
     #[webapi(
         accessor_property,
@@ -5098,7 +5099,7 @@ struct HtmlOptionElementStatePrototypeDeclaration {
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(name = "HTMLOptGroupElement", enumerable)]
+#[webapi(interface = web_api_interfaces::HTMLOptGroupElement, enumerable)]
 struct HtmlOptGroupElementDisabledPrototypeDeclaration {
     #[webapi(
         accessor_property,
@@ -5109,7 +5110,7 @@ struct HtmlOptGroupElementDisabledPrototypeDeclaration {
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(name = "HTMLOptGroupElement", enumerable)]
+#[webapi(interface = web_api_interfaces::HTMLOptGroupElement, enumerable)]
 struct HtmlOptGroupElementLabelPrototypeDeclaration {
     #[webapi(
         accessor_property,
@@ -5121,7 +5122,7 @@ struct HtmlOptGroupElementLabelPrototypeDeclaration {
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(name = "HTMLOptionElement", enumerable)]
+#[webapi(interface = web_api_interfaces::HTMLOptionElement, enumerable)]
 struct HtmlOptionElementLabelPrototypeDeclaration {
     #[webapi(
         accessor_property,
@@ -5132,7 +5133,7 @@ struct HtmlOptionElementLabelPrototypeDeclaration {
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(name = "HTMLTrackElement", enumerable)]
+#[webapi(interface = web_api_interfaces::HTMLTrackElement, enumerable)]
 struct HtmlTrackElementPrototypeDeclaration {
     #[webapi(
         accessor_property = "default",
@@ -5172,7 +5173,7 @@ struct HtmlTrackElementPrototypeDeclaration {
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(name = "HTMLDataElement", enumerable)]
+#[webapi(interface = web_api_interfaces::HTMLDataElement, enumerable)]
 struct HtmlDataElementValuePrototypeDeclaration {
     #[webapi(
         accessor_property,
@@ -5184,7 +5185,7 @@ struct HtmlDataElementValuePrototypeDeclaration {
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(name = "HTMLParamElement", enumerable)]
+#[webapi(interface = web_api_interfaces::HTMLParamElement, enumerable)]
 struct HtmlParamElementPrototypeDeclaration {
     #[webapi(
         accessor_property,
@@ -5210,7 +5211,7 @@ struct HtmlParamElementPrototypeDeclaration {
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(name = "HTMLObjectElement", enumerable)]
+#[webapi(interface = web_api_interfaces::HTMLObjectElement, enumerable)]
 struct HtmlObjectElementPrototypeDeclaration {
     #[webapi(
         accessor_property,
@@ -5322,7 +5323,7 @@ struct HtmlObjectElementPrototypeDeclaration {
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(name = "HTMLHtmlElement", enumerable)]
+#[webapi(interface = web_api_interfaces::HTMLHtmlElement, enumerable)]
 struct HtmlHtmlElementPrototypeDeclaration {
     #[webapi(
         accessor_property,
@@ -5334,7 +5335,7 @@ struct HtmlHtmlElementPrototypeDeclaration {
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(name = "HTMLMediaElement", enumerable)]
+#[webapi(interface = web_api_interfaces::HTMLMediaElement, enumerable)]
 struct HtmlMediaElementPrototypeDeclaration {
     #[webapi(accessor_property, getter = media_error_getter_function)]
     error: (),
@@ -5427,7 +5428,7 @@ struct HtmlMediaElementPrototypeDeclaration {
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(name = "HTMLVideoElement", enumerable)]
+#[webapi(interface = web_api_interfaces::HTMLVideoElement, enumerable)]
 struct HtmlVideoElementPrototypeDeclaration {
     #[webapi(
         accessor_property,
@@ -5460,7 +5461,7 @@ struct HtmlVideoElementPrototypeDeclaration {
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(name = "HTMLQuoteElement", enumerable)]
+#[webapi(interface = web_api_interfaces::HTMLQuoteElement, enumerable)]
 struct HtmlQuoteElementPrototypeDeclaration {
     #[webapi(
         accessor_property,
@@ -5472,7 +5473,7 @@ struct HtmlQuoteElementPrototypeDeclaration {
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(name = "HTMLModElement", enumerable)]
+#[webapi(interface = web_api_interfaces::HTMLModElement, enumerable)]
 struct HtmlModElementPrototypeDeclaration {
     #[webapi(
         accessor_property,
@@ -5491,7 +5492,7 @@ struct HtmlModElementPrototypeDeclaration {
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(name = "HTMLTimeElement", enumerable)]
+#[webapi(interface = web_api_interfaces::HTMLTimeElement, enumerable)]
 struct HtmlTimeElementPrototypeDeclaration {
     #[webapi(
         accessor_property,
@@ -5503,7 +5504,7 @@ struct HtmlTimeElementPrototypeDeclaration {
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(name = "HTMLPreElement", enumerable)]
+#[webapi(interface = web_api_interfaces::HTMLPreElement, enumerable)]
 struct HtmlPreElementPrototypeDeclaration {
     #[webapi(
         accessor_property,
@@ -5514,7 +5515,7 @@ struct HtmlPreElementPrototypeDeclaration {
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(name = "HTMLBRElement", enumerable)]
+#[webapi(interface = web_api_interfaces::HTMLBRElement, enumerable)]
 struct HtmlBrElementPrototypeDeclaration {
     #[webapi(
         accessor_property,
@@ -5526,7 +5527,7 @@ struct HtmlBrElementPrototypeDeclaration {
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(name = "HTMLAnchorElement", enumerable)]
+#[webapi(interface = web_api_interfaces::HTMLAnchorElement, enumerable)]
 struct HtmlAnchorElementPrototypeDeclaration {
     #[webapi(
         accessor_property = "referrerPolicy",
@@ -5601,7 +5602,7 @@ struct HtmlAnchorElementPrototypeDeclaration {
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(name = "HTMLTitleElement", enumerable)]
+#[webapi(interface = web_api_interfaces::HTMLTitleElement, enumerable)]
 struct HtmlTitleElementTextPrototypeDeclaration {
     #[webapi(
         accessor_property,
@@ -5612,7 +5613,7 @@ struct HtmlTitleElementTextPrototypeDeclaration {
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(name = "HTMLOptionElement", enumerable)]
+#[webapi(interface = web_api_interfaces::HTMLOptionElement, enumerable)]
 struct HtmlOptionElementTextPrototypeDeclaration {
     #[webapi(
         accessor_property,
@@ -5623,7 +5624,7 @@ struct HtmlOptionElementTextPrototypeDeclaration {
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(name = "HTMLLabelElement", enumerable)]
+#[webapi(interface = web_api_interfaces::HTMLLabelElement, enumerable)]
 struct HtmlLabelElementPrototypeDeclaration {
     #[webapi(
         accessor_property = "htmlFor",
@@ -5638,7 +5639,7 @@ struct HtmlLabelElementPrototypeDeclaration {
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(name = "HTMLFormElement", enumerable)]
+#[webapi(interface = web_api_interfaces::HTMLFormElement, enumerable)]
 struct HtmlFormElementPrototypeAccessorsDeclaration {
     #[webapi(
         accessor_property,
@@ -5701,7 +5702,7 @@ struct HtmlFormElementPrototypeAccessorsDeclaration {
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(name = "HTMLMediaElement", enumerable)]
+#[webapi(interface = web_api_interfaces::HTMLMediaElement, enumerable)]
 struct HtmlMediaElementPrototypeMethodsDeclaration {
     #[webapi(method, length = 0, callback = media_play_callback)]
     play: (),
@@ -5716,14 +5717,14 @@ struct HtmlMediaElementPrototypeMethodsDeclaration {
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(name = "HTMLImageElement", enumerable)]
+#[webapi(interface = web_api_interfaces::HTMLImageElement, enumerable)]
 struct HtmlImageElementPrototypeMethodsDeclaration {
     #[webapi(method, length = 0, callback = image_decode_callback)]
     decode: (),
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(name = "HTMLInputElement", enumerable)]
+#[webapi(interface = web_api_interfaces::HTMLInputElement, enumerable)]
 struct HtmlInputElementPrototypeMethodsDeclaration {
     #[webapi(
         accessor_property,
@@ -5774,7 +5775,7 @@ struct TextControlSelectionPrototypeDeclaration {
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(name = "HTMLTextAreaElement", enumerable)]
+#[webapi(interface = web_api_interfaces::HTMLTextAreaElement, enumerable)]
 struct HtmlTextAreaElementPrototypeDeclaration {
     #[webapi(
         accessor_property,
@@ -5785,7 +5786,7 @@ struct HtmlTextAreaElementPrototypeDeclaration {
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(name = "HTMLSelectElement", enumerable)]
+#[webapi(interface = web_api_interfaces::HTMLSelectElement, enumerable)]
 struct HtmlSelectElementPrototypeMethodsDeclaration {
     #[webapi(
         accessor_property,
@@ -5872,7 +5873,7 @@ struct FormControlValidationPrototypeAccessorsDeclaration {
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(name = "HTMLTableSectionElement", enumerable)]
+#[webapi(interface = web_api_interfaces::HTMLTableSectionElement, enumerable)]
 struct HtmlTableSectionElementPrototypeMethodsDeclaration {
     #[webapi(method, length = 0, callback = table_section_insert_row_callback)]
     insert_row: (),
@@ -5881,14 +5882,14 @@ struct HtmlTableSectionElementPrototypeMethodsDeclaration {
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(name = "HTMLTableSectionElement", enumerable)]
+#[webapi(interface = web_api_interfaces::HTMLTableSectionElement, enumerable)]
 struct HtmlTableSectionElementPrototypeDeclaration {
     #[webapi(accessor_property, getter = table_section_rows_getter_function)]
     rows: (),
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(name = "HTMLTableSectionElement", enumerable)]
+#[webapi(interface = web_api_interfaces::HTMLTableSectionElement, enumerable)]
 struct HtmlTableSectionElementLegacyPrototypeDeclaration {
     #[webapi(
         accessor_property,
@@ -5914,7 +5915,7 @@ struct HtmlTableSectionElementLegacyPrototypeDeclaration {
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(name = "HTMLTableRowElement", enumerable)]
+#[webapi(interface = web_api_interfaces::HTMLTableRowElement, enumerable)]
 struct HtmlTableRowElementPrototypeMethodsDeclaration {
     #[webapi(method, length = 0, callback = table_row_insert_cell_callback)]
     insert_cell: (),
@@ -5923,7 +5924,7 @@ struct HtmlTableRowElementPrototypeMethodsDeclaration {
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(name = "HTMLTableRowElement", enumerable)]
+#[webapi(interface = web_api_interfaces::HTMLTableRowElement, enumerable)]
 struct HtmlTableRowElementPrototypeDeclaration {
     #[webapi(accessor_property, getter = table_row_index_getter_function)]
     row_index: (),
@@ -5934,7 +5935,7 @@ struct HtmlTableRowElementPrototypeDeclaration {
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(name = "HTMLTableRowElement", enumerable)]
+#[webapi(interface = web_api_interfaces::HTMLTableRowElement, enumerable)]
 struct HtmlTableRowElementLegacyPrototypeDeclaration {
     #[webapi(
         accessor_property = "bgColor",
@@ -5967,7 +5968,7 @@ struct HtmlTableRowElementLegacyPrototypeDeclaration {
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(name = "HTMLTableColElement", enumerable)]
+#[webapi(interface = web_api_interfaces::HTMLTableColElement, enumerable)]
 struct HtmlTableColElementLegacyPrototypeDeclaration {
     #[webapi(
         accessor_property,
@@ -6006,7 +6007,7 @@ struct HtmlTableColElementLegacyPrototypeDeclaration {
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(name = "HTMLTableCellElement", enumerable)]
+#[webapi(interface = web_api_interfaces::HTMLTableCellElement, enumerable)]
 struct HtmlTableCellElementLegacyPrototypeDeclaration {
     #[webapi(
         accessor_property = "bgColor",
@@ -6087,7 +6088,7 @@ struct HtmlTableCellElementLegacyPrototypeDeclaration {
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(name = "HTMLTableCellElement", enumerable)]
+#[webapi(interface = web_api_interfaces::HTMLTableCellElement, enumerable)]
 struct HtmlTableCellElementPrototypeDeclaration {
     #[webapi(
         accessor_property,
@@ -6106,7 +6107,7 @@ struct HtmlTableCellElementPrototypeDeclaration {
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(name = "ShadowRoot")]
+#[webapi(interface = web_api_interfaces::ShadowRoot)]
 struct ShadowRootPrototypeReflectionDeclaration {
     #[webapi(accessor_property, enumerable, getter = shadow_root_host_getter_function)]
     host: (),
@@ -6188,14 +6189,14 @@ struct ShadowRootPrototypeReflectionDeclaration {
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(name = "Text")]
+#[webapi(interface = web_api_interfaces::Text)]
 struct TextPrototypeReflectionDeclaration {
     #[webapi(accessor_property = "assignedSlot", enumerable, getter = slot_assigned_slot_getter_function)]
     assigned_slot: (),
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(name = "HTMLSlotElement")]
+#[webapi(interface = web_api_interfaces::HTMLSlotElement)]
 struct HtmlSlotElementPrototypeDeclaration {
     #[webapi(
         accessor_property,
@@ -6213,7 +6214,7 @@ struct HtmlSlotElementPrototypeDeclaration {
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(name = "HTMLTemplateElement")]
+#[webapi(interface = web_api_interfaces::HTMLTemplateElement)]
 struct HtmlTemplateElementPrototypeDeclaration {
     #[webapi(accessor_property, enumerable, getter = template_content_getter_function)]
     content: (),

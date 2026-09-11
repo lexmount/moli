@@ -8,6 +8,7 @@ use crate::util::{
     callback_data_index_value, callback_data_item, context_host_ptr_from_global_bridge,
     get_private_value, set_private_value, throw_type_error,
 };
+use crate::web_api_interfaces;
 use crate::webidl;
 use moli_webapi_declare::{WebApiFunctionTemplate, WebApiObject};
 
@@ -46,7 +47,7 @@ struct ScreenOrientationLockArgs {
 }
 
 #[derive(WebApiObject)]
-#[webapi(interface = "Screen")]
+#[webapi(interface = web_api_interfaces::Screen)]
 struct ScreenObjectDeclaration {
     #[webapi(slot = SCREEN_WIDTH_SLOT)]
     width: f64,
@@ -67,7 +68,7 @@ struct ScreenObjectDeclaration {
 }
 
 #[derive(Default, WebApiFunctionTemplate)]
-#[webapi(name = "Screen")]
+#[webapi(interface = web_api_interfaces::Screen)]
 struct ScreenPrototypeAccessorsDeclaration {
     #[webapi(accessor_property, getter = screen_attribute_getter_callback, data = callback_data_index_value(scope, 0), enumerable)]
     avail_width: (),
@@ -90,7 +91,7 @@ struct ScreenPrototypeAccessorsDeclaration {
 }
 
 #[derive(WebApiObject)]
-#[webapi(interface = "ScreenOrientation")]
+#[webapi(interface = web_api_interfaces::ScreenOrientation)]
 struct ScreenOrientationObjectDeclaration {
     #[webapi(slot = SCREEN_ORIENTATION_TYPE_SLOT)]
     orientation_type: &'static str,
@@ -101,7 +102,7 @@ struct ScreenOrientationObjectDeclaration {
 }
 
 #[derive(Default, WebApiFunctionTemplate)]
-#[webapi(name = "ScreenOrientation")]
+#[webapi(interface = web_api_interfaces::ScreenOrientation)]
 struct ScreenOrientationPrototypeAccessorsDeclaration {
     #[webapi(accessor_property, name = "type", getter = screen_orientation_attribute_getter_callback, data = callback_data_index_value(scope, 0), enumerable)]
     orientation_type: (),
@@ -112,7 +113,7 @@ struct ScreenOrientationPrototypeAccessorsDeclaration {
 }
 
 #[derive(Default, WebApiFunctionTemplate)]
-#[webapi(name = "ScreenOrientation")]
+#[webapi(interface = web_api_interfaces::ScreenOrientation)]
 struct ScreenOrientationPrototypeMethodsDeclaration {
     #[webapi(method, enumerable, length = 1, callback = screen_orientation_lock_callback)]
     lock: (),
@@ -121,7 +122,7 @@ struct ScreenOrientationPrototypeMethodsDeclaration {
 }
 
 #[derive(Default, WebApiFunctionTemplate)]
-#[webapi(name = "Screen", enumerable)]
+#[webapi(interface = web_api_interfaces::Screen, enumerable)]
 struct ScreenEventTargetMethodsDeclaration {
     #[webapi(method, length = 2, callback = screen_event_target_add_event_listener_callback)]
     add_event_listener: (),
@@ -136,7 +137,7 @@ struct ScreenEventTargetMethodsDeclaration {
 }
 
 #[derive(Default, WebApiFunctionTemplate)]
-#[webapi(name = "ScreenOrientation", enumerable)]
+#[webapi(interface = web_api_interfaces::ScreenOrientation, enumerable)]
 struct ScreenOrientationEventTargetMethodsDeclaration {
     #[webapi(
         method,

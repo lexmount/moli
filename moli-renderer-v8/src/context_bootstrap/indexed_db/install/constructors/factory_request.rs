@@ -1,8 +1,9 @@
 use super::*;
+use crate::web_api_interfaces;
 use moli_webapi_declare::WebApiFunctionTemplate;
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(name = "IDBFactory", enumerable)]
+#[webapi(interface = web_api_interfaces::IDBFactory, enumerable)]
 struct IdbFactoryPrototypeDeclaration {
     #[webapi(method, length = 2, callback = idb_factory_open_callback)]
     open: (),

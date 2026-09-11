@@ -1,8 +1,9 @@
 use super::*;
+use crate::web_api_interfaces;
 use moli_webapi_declare::WebApiObject;
 
 #[derive(WebApiObject)]
-#[webapi(interface = "IDBObjectStore", require_prototype)]
+#[webapi(interface = web_api_interfaces::IDBObjectStore, require_prototype)]
 struct IdbObjectStoreObjectDeclaration<'scope> {
     #[webapi(data_property, enumerable)]
     transaction: v8::Local<'scope, v8::Object>,

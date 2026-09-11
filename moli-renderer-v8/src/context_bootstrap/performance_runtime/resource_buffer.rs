@@ -1,4 +1,5 @@
 use super::*;
+use crate::web_api_interfaces;
 use crate::{
     native_bridge::{JsContextHost, ResourceTimingBufferId},
     util::{
@@ -18,7 +19,7 @@ struct SetResourceTimingBufferSizeArgs {
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(name = "Performance", enumerable)]
+#[webapi(interface = web_api_interfaces::Performance, enumerable)]
 struct PerformanceResourceTimingBufferMembersDeclaration {
     #[webapi(method, length = 0, callback = clear_resource_timings_callback)]
     clear_resource_timings: (),

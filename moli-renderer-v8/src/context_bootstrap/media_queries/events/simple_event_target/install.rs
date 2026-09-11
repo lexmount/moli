@@ -1,13 +1,14 @@
 use super::*;
 use crate::util::set_private_value;
+use crate::web_api_interfaces;
 use moli_webapi_declare::WebApiObject;
 
 #[derive(WebApiObject)]
 #[webapi(
-    interface = "EventTarget",
+    interface = web_api_interfaces::EventTarget,
     prototype = "Object",
     enumerable,
-    receiver = "EventTarget"
+    receiver
 )]
 struct SimpleEventTargetMethodsDeclaration<'scope> {
     #[webapi(method, length = 2, callback = simple_event_target_add_event_listener_callback)]

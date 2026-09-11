@@ -17,6 +17,7 @@ pub(crate) use dom_access::{
     retire_execution_context_owner,
 };
 
+use crate::web_api_interfaces;
 use std::{
     cmp::Ordering,
     collections::{HashMap, HashSet},
@@ -82,7 +83,7 @@ const ROOTLESS_IO_VERTICAL_GEOMETRY_PROPERTIES: [&str; 18] = [
 ];
 
 #[derive(WebApiObject)]
-#[webapi(interface = "MutationRecord", data_properties, enumerable)]
+#[webapi(interface = web_api_interfaces::MutationRecord, data_properties, enumerable)]
 struct MutationRecordDeclaration<'scope> {
     target: v8::Local<'scope, v8::Value>,
     #[webapi(data_property = "type")]
@@ -97,7 +98,7 @@ struct MutationRecordDeclaration<'scope> {
 }
 
 #[derive(WebApiObject)]
-#[webapi(interface = "IntersectionObserverEntry")]
+#[webapi(interface = web_api_interfaces::IntersectionObserverEntry)]
 struct IntersectionObserverEntryDeclaration<'scope> {
     #[webapi(slot = "__moliIntersectionEntryTarget")]
     target: v8::Local<'scope, v8::Value>,
@@ -118,7 +119,7 @@ struct IntersectionObserverEntryDeclaration<'scope> {
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(name = "IntersectionObserver", enumerable)]
+#[webapi(interface = web_api_interfaces::IntersectionObserver, enumerable)]
 struct IntersectionObserverPrototypeAccessorsDeclaration {
     #[webapi(accessor_property, getter = intersection_observer_attribute_getter_callback, data = callback_data_index_value(scope, 0))]
     root: (),
@@ -136,9 +137,9 @@ struct IntersectionObserverPrototypeAccessorsDeclaration {
 
 #[derive(WebApiFunctionTemplate)]
 #[webapi(
-    name = "IntersectionObserverEntry",
+    interface = web_api_interfaces::IntersectionObserverEntry,
     enumerable,
-    receiver = "IntersectionObserverEntry"
+    receiver
 )]
 struct IntersectionObserverEntryPrototypeAccessorsDeclaration {
     #[webapi(accessor_property, getter = intersection_observer_entry_attribute_getter_callback, data = callback_data_index_value(scope, 0))]

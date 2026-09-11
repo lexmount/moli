@@ -1,4 +1,5 @@
 use super::*;
+use crate::web_api_interfaces;
 use moli_webapi_declare::WebApiFunctionTemplate;
 
 mod cache;
@@ -17,7 +18,7 @@ pub(in crate::native_bridge::document) use methods::{
     named_node_map_set_named_item_ns_method_callback,
 };
 #[derive(WebApiFunctionTemplate)]
-#[webapi(name = "NamedNodeMap", enumerable)]
+#[webapi(interface = web_api_interfaces::NamedNodeMap, enumerable)]
 struct NamedNodeMapPrototypeDeclaration {
     #[webapi(accessor_property, getter = named_node_map_length_getter_callback)]
     length: (),

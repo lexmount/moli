@@ -2,12 +2,13 @@ use super::*;
 use crate::host::report_event_callback_exception;
 use crate::observer_runtime::ObserverCallbackId;
 use crate::util::{get_private_value, serialize_v8_iter_array, set_private_value};
+use crate::web_api_interfaces;
 use crate::webidl;
 use crate::window_webidl_callback::WindowWebIdlCallbackFunctionOutcome;
 use moli_webapi_declare::WebApiObject;
 
 #[derive(WebApiObject)]
-#[webapi(interface = "ResizeObserver")]
+#[webapi(interface = web_api_interfaces::ResizeObserver)]
 struct ResizeObserverObjectDeclaration<'s> {
     #[webapi(slot = RESIZE_OBSERVER_CALLBACK_ID_SLOT)]
     callback_id: u32,
@@ -26,7 +27,7 @@ struct ResizeObserverObjectDeclaration<'s> {
 }
 
 #[derive(WebApiObject)]
-#[webapi(interface = "ResizeObserverEntry", prototype = "Object")]
+#[webapi(interface = web_api_interfaces::ResizeObserverEntry, prototype = "Object")]
 struct ResizeObserverEntryDeclaration<'scope> {
     #[webapi(data_property, enumerable)]
     target: v8::Local<'scope, v8::Value>,
@@ -50,7 +51,7 @@ struct ResizeObserverObservedRecordDeclaration<'scope> {
 }
 
 #[derive(WebApiObject)]
-#[webapi(interface = "ResizeObserverSize", prototype = "Object")]
+#[webapi(interface = web_api_interfaces::ResizeObserverSize, prototype = "Object")]
 struct ResizeObserverSizeDeclaration {
     #[webapi(data_property, enumerable)]
     inline_size: f64,

@@ -8,6 +8,7 @@ use super::realm::{effective_websocket_document_scope, websocket_constructor_rel
 use super::stream::{new_websocket_stream_promise, reject_websocket_stream_abort};
 use super::*;
 use crate::context_bootstrap::constructors::initialize_websocket_error;
+use crate::web_api_interfaces;
 use crate::webidl;
 use moli_webapi_declare::WebApiObject;
 use moli_websocket::{normalize_websocket_close_info, websocket_url_is_potentially_trustworthy};
@@ -15,7 +16,7 @@ use moli_websocket::{normalize_websocket_close_info, websocket_url_is_potentiall
 const WEBSOCKET_STREAM_ABORT_LISTENER_STREAM_SLOT: &str = "__moliWebSocketStreamAbortStream";
 
 #[derive(WebApiObject)]
-#[webapi(interface = "WebSocket")]
+#[webapi(interface = web_api_interfaces::WebSocket)]
 struct WebSocketObjectDeclaration {
     #[webapi(slot = WEBSOCKET_URL_SLOT)]
     url: String,
@@ -68,7 +69,7 @@ struct WebSocketObjectDeclaration {
 }
 
 #[derive(WebApiObject)]
-#[webapi(interface = "WebSocketStream")]
+#[webapi(interface = web_api_interfaces::WebSocketStream)]
 struct WebSocketStreamObjectDeclaration<'scope> {
     #[webapi(slot = WEBSOCKET_STREAM_URL_SLOT)]
     url: v8::Local<'scope, v8::String>,
@@ -87,7 +88,7 @@ struct WebSocketStreamObjectDeclaration<'scope> {
 }
 
 #[derive(WebApiObject)]
-#[webapi(interface = "WebSocketStream")]
+#[webapi(interface = web_api_interfaces::WebSocketStream)]
 struct WebSocketStreamRegisteredSocketDeclaration {
     #[webapi(slot = WEBSOCKET_ID_SLOT)]
     socket_id: f64,

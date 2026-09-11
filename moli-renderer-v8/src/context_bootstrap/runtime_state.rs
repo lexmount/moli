@@ -21,6 +21,7 @@ use super::{
     window_runtime::{build_legacy_storage_info_object, window_noop_callback},
     window_template::install_window_named_properties_object,
 };
+use crate::web_api_interfaces;
 use crate::{
     document_runtime::{DocumentRuntime, DomHandle},
     native_bridge::{
@@ -418,7 +419,7 @@ struct ConsoleObjectDeclaration {
 }
 
 #[derive(WebApiObject)]
-#[webapi(interface = "Window", prototype = "Object")]
+#[webapi(interface = web_api_interfaces::Window, prototype = "Object")]
 struct WindowBootstrapGlobalSlotsDeclaration<'scope> {
     #[webapi(slot = WINDOW_CONSOLE_SLOT)]
     console: v8::Local<'scope, v8::Object>,

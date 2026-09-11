@@ -1,4 +1,5 @@
 use super::RtcSessionDescriptionInitDeclaration;
+use crate::web_api_interfaces;
 use crate::{
     util::{
         apply_webidl_constructor_prototype_fallback, callback_data_index_value, callback_data_item,
@@ -13,7 +14,7 @@ const DESCRIPTION_SDP_SLOT: &str = "__moliRtcSessionDescriptionSdp";
 const DESCRIPTION_SLOTS: &[&str] = &[DESCRIPTION_TYPE_SLOT, DESCRIPTION_SDP_SLOT];
 
 #[derive(WebApiObject)]
-#[webapi(interface = "RTCSessionDescription")]
+#[webapi(interface = web_api_interfaces::RTCSessionDescription)]
 struct SessionDescriptionObjectDeclaration<'scope> {
     #[webapi(slot = DESCRIPTION_TYPE_SLOT)]
     r#type: v8::Local<'scope, v8::String>,
@@ -22,7 +23,7 @@ struct SessionDescriptionObjectDeclaration<'scope> {
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(name = "RTCSessionDescription", enumerable)]
+#[webapi(interface = web_api_interfaces::RTCSessionDescription, enumerable)]
 struct SessionDescriptionPrototypeDeclaration {
     #[webapi(accessor_property, getter = description_attribute_getter, data = callback_data_index_value(scope, 0))]
     r#type: (),

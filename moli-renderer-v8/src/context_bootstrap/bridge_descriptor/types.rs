@@ -73,9 +73,7 @@ pub(crate) struct RuntimeInstallGroups {
 
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct BridgeDescriptor {
-    pub(crate) prototype_name: &'static str,
-    pub(crate) constructor_name: &'static str,
-    pub(crate) parent_constructor: Option<&'static str>,
+    pub(crate) interface: moli_webapi_declare::WebApiInterfaceDescriptor,
     pub(crate) install_groups: InstallGroups,
     pub(crate) specialized_template_installer: SpecializedTemplateInstaller,
     pub(crate) runtime_install_groups: RuntimeInstallGroups,

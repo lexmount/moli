@@ -2,6 +2,7 @@ use super::super::*;
 use super::types::*;
 use crate::native_bridge::document::detached_tree_query_version;
 use crate::util::{get_private_value, set_private_value};
+use crate::web_api_interfaces;
 use crate::webidl;
 use moli_webapi_declare::{WebApiFunctionTemplate, WebApiObject};
 use moli_xpath::SnapshotValue;
@@ -27,7 +28,7 @@ struct XPathResultSnapshotItemArgs {
 }
 
 #[derive(WebApiObject)]
-#[webapi(interface = "XPathResult")]
+#[webapi(interface = web_api_interfaces::XPathResult)]
 struct XPathResultBaseDeclaration<'scope> {
     #[webapi(slot = XPATH_RESULT_TYPE_SLOT)]
     result_type: u32,
@@ -48,7 +49,7 @@ struct XPathResultBaseDeclaration<'scope> {
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(name = "XPathResult", enumerable)]
+#[webapi(interface = web_api_interfaces::XPathResult, enumerable)]
 struct XPathResultPrototypeDeclaration {
     #[webapi(accessor_property, getter = xpath_result_result_type_getter_callback)]
     result_type: (),
@@ -71,7 +72,7 @@ struct XPathResultPrototypeDeclaration {
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(name = "XPathResult")]
+#[webapi(interface = web_api_interfaces::XPathResult)]
 struct XPathResultConstantsDeclaration {
     #[webapi(constant = "ANY_TYPE", value = XPATH_ANY_TYPE)]
     any_type: (),

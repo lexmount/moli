@@ -1,3 +1,4 @@
+use crate::web_api_interfaces;
 use moli_crypto::fill_secure_random;
 use moli_storage_service::{
     DirectoryEntry, EntryKind, FileSnapshotIdentity, Opfs, OpfsBucketKey, OpfsError, OpfsPath,
@@ -701,7 +702,7 @@ fn dispatch_opfs_quota_mutation_task<'s, T, Operation, Wrap>(
 }
 
 #[derive(WebApiObject)]
-#[webapi(interface = "FileSystemDirectoryHandle", require_prototype)]
+#[webapi(interface = web_api_interfaces::FileSystemDirectoryHandle, require_prototype)]
 struct FileSystemDirectoryHandleObjectDeclaration {
     #[webapi(slot = FILE_SYSTEM_HANDLE_STATE_SLOT)]
     state_json: String,
@@ -710,7 +711,7 @@ struct FileSystemDirectoryHandleObjectDeclaration {
 }
 
 #[derive(WebApiObject)]
-#[webapi(interface = "FileSystemFileHandle", require_prototype)]
+#[webapi(interface = web_api_interfaces::FileSystemFileHandle, require_prototype)]
 struct FileSystemFileHandleObjectDeclaration {
     #[webapi(slot = FILE_SYSTEM_HANDLE_STATE_SLOT)]
     state_json: String,
@@ -719,7 +720,7 @@ struct FileSystemFileHandleObjectDeclaration {
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(name = "FileSystemHandle", enumerable)]
+#[webapi(interface = web_api_interfaces::FileSystemHandle, enumerable)]
 struct FileSystemHandlePrototypeDeclaration {
     #[webapi(accessor_property, getter = file_system_handle_kind_getter_callback)]
     kind: (),
@@ -738,7 +739,7 @@ struct FileSystemHandlePrototypeDeclaration {
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(name = "FileSystemDirectoryHandle", enumerable)]
+#[webapi(interface = web_api_interfaces::FileSystemDirectoryHandle, enumerable)]
 struct FileSystemDirectoryHandlePrototypeDeclaration {
     #[webapi(method, length = 1, callback = file_system_directory_get_file_handle_callback)]
     get_file_handle: (),
@@ -761,7 +762,7 @@ struct FileSystemDirectoryHandlePrototypeDeclaration {
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(name = "FileSystemFileHandle", enumerable)]
+#[webapi(interface = web_api_interfaces::FileSystemFileHandle, enumerable)]
 struct FileSystemFileHandlePrototypeDeclaration {
     #[webapi(method, length = 0, callback = file_system_file_create_writable_callback)]
     create_writable: (),
@@ -772,7 +773,7 @@ struct FileSystemFileHandlePrototypeDeclaration {
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(name = "FileSystemFileHandle", enumerable)]
+#[webapi(interface = web_api_interfaces::FileSystemFileHandle, enumerable)]
 struct FileSystemFileHandleSyncPrototypeDeclaration {
     #[webapi(
         method,
@@ -783,14 +784,14 @@ struct FileSystemFileHandleSyncPrototypeDeclaration {
 }
 
 #[derive(WebApiObject)]
-#[webapi(interface = "FileSystemWritableFileStream", require_prototype)]
+#[webapi(interface = web_api_interfaces::FileSystemWritableFileStream, require_prototype)]
 struct FileSystemWritableFileStreamObjectDeclaration {
     #[webapi(slot = FILE_SYSTEM_WRITABLE_MODE_SLOT)]
     mode: String,
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(name = "FileSystemWritableFileStream", enumerable)]
+#[webapi(interface = web_api_interfaces::FileSystemWritableFileStream, enumerable)]
 struct FileSystemWritableFileStreamPrototypeDeclaration {
     #[webapi(accessor_property, getter = file_system_writable_mode_getter_callback)]
     mode: (),
@@ -817,7 +818,7 @@ struct FileSystemWritableSinkObjectDeclaration {
 }
 
 #[derive(WebApiObject)]
-#[webapi(interface = "FileSystemSyncAccessHandle", require_prototype)]
+#[webapi(interface = web_api_interfaces::FileSystemSyncAccessHandle, require_prototype)]
 struct FileSystemSyncAccessHandleObjectDeclaration {
     #[webapi(slot = FILE_SYSTEM_SYNC_ACCESS_STATE_SLOT)]
     state_json: String,
@@ -826,7 +827,7 @@ struct FileSystemSyncAccessHandleObjectDeclaration {
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(name = "FileSystemSyncAccessHandle", enumerable)]
+#[webapi(interface = web_api_interfaces::FileSystemSyncAccessHandle, enumerable)]
 struct FileSystemSyncAccessHandlePrototypeDeclaration {
     #[webapi(accessor_property, getter = file_system_sync_access_mode_getter_callback)]
     mode: (),
@@ -847,7 +848,7 @@ struct FileSystemSyncAccessHandlePrototypeDeclaration {
 #[derive(WebApiObject)]
 #[webapi(
     prototype = "Object",
-    interface = "FileSystemDirectoryHandle AsyncIterator"
+    interface = web_api_interfaces::FileSystemDirectoryHandleAsyncIterator
 )]
 struct FileSystemDirectoryIteratorObjectDeclaration {
     #[webapi(slot = FILE_SYSTEM_ITERATOR_ID_SLOT)]
@@ -856,7 +857,7 @@ struct FileSystemDirectoryIteratorObjectDeclaration {
 
 #[derive(WebApiFunctionTemplate)]
 #[webapi(
-    name = "FileSystemDirectoryHandle AsyncIterator",
+    interface = web_api_interfaces::FileSystemDirectoryHandleAsyncIterator,
     intrinsic_prototype_parent = v8::Intrinsic::AsyncIteratorPrototype,
     prototype_to_string_tag = "FileSystemDirectoryHandle AsyncIterator",
     readonly_prototype,

@@ -1,11 +1,12 @@
 use super::callbacks::*;
 use super::*;
 use crate::util::serialize_v8_iter_array;
+use crate::web_api_interfaces;
 use moli_webapi_declare::WebApiObject;
 
 #[derive(WebApiObject)]
 #[webapi(
-    interface = "SVGAnimatedNumber",
+    interface = web_api_interfaces::SVGAnimatedNumber,
     own_to_string_tag = "SVGAnimatedNumber"
 )]
 struct SvgAnimatedNumberObjectDeclaration {
@@ -16,7 +17,7 @@ struct SvgAnimatedNumberObjectDeclaration {
 }
 
 #[derive(WebApiObject)]
-#[webapi(interface = "SVGNumber", own_to_string_tag = "SVGNumber")]
+#[webapi(interface = web_api_interfaces::SVGNumber, own_to_string_tag = "SVGNumber")]
 struct SvgNumberObjectDeclaration {
     #[webapi(slot = SVG_NUMBER_VALUE_SLOT)]
     value: f64,
@@ -24,7 +25,7 @@ struct SvgNumberObjectDeclaration {
 
 #[derive(WebApiObject)]
 #[webapi(
-    interface = "SVGAnimatedEnumeration",
+    interface = web_api_interfaces::SVGAnimatedEnumeration,
     own_to_string_tag = "SVGAnimatedEnumeration"
 )]
 struct SvgAnimatedEnumerationObjectDeclaration {
@@ -35,7 +36,7 @@ struct SvgAnimatedEnumerationObjectDeclaration {
 }
 
 #[derive(WebApiObject)]
-#[webapi(interface = "SVGMatrix", own_to_string_tag = "SVGMatrix")]
+#[webapi(interface = web_api_interfaces::SVGMatrix, own_to_string_tag = "SVGMatrix")]
 struct SvgMatrixObjectDeclaration {
     #[webapi(slot = SVG_MATRIX_A_SLOT)]
     a: f64,
@@ -83,7 +84,7 @@ struct SvgMatrixObjectDeclaration {
 
 #[derive(WebApiObject)]
 #[webapi(
-    interface = "SVGAnimatedLength",
+    interface = web_api_interfaces::SVGAnimatedLength,
     fallback_to_string_tag = "SVGAnimatedLength"
 )]
 struct SvgAnimatedLengthObjectDeclaration<'scope> {
@@ -94,7 +95,7 @@ struct SvgAnimatedLengthObjectDeclaration<'scope> {
 }
 
 #[derive(WebApiObject)]
-#[webapi(interface = "SVGLength", fallback_to_string_tag = "SVGLength")]
+#[webapi(interface = web_api_interfaces::SVGLength, fallback_to_string_tag = "SVGLength")]
 struct SvgLengthObjectDeclaration {
     #[webapi(slot = SVG_LENGTH_UNIT_TYPE_SLOT)]
     unit_type: u32,
@@ -106,7 +107,7 @@ struct SvgLengthObjectDeclaration {
 
 #[derive(WebApiObject)]
 #[webapi(
-    interface = "SVGAnimatedLengthList",
+    interface = web_api_interfaces::SVGAnimatedLengthList,
     own_to_string_tag = "SVGAnimatedLengthList"
 )]
 struct SvgAnimatedLengthListObjectDeclaration<'scope> {
@@ -118,7 +119,7 @@ struct SvgAnimatedLengthListObjectDeclaration<'scope> {
 
 #[derive(WebApiObject)]
 #[webapi(
-    interface = "SVGAnimatedNumberList",
+    interface = web_api_interfaces::SVGAnimatedNumberList,
     own_to_string_tag = "SVGAnimatedNumberList"
 )]
 struct SvgAnimatedNumberListObjectDeclaration<'scope> {
@@ -130,7 +131,7 @@ struct SvgAnimatedNumberListObjectDeclaration<'scope> {
 
 #[derive(WebApiObject)]
 #[webapi(
-    interface = "SVGAnimatedTransformList",
+    interface = web_api_interfaces::SVGAnimatedTransformList,
     own_to_string_tag = "SVGAnimatedTransformList"
 )]
 struct SvgAnimatedTransformListObjectDeclaration<'scope> {
@@ -141,7 +142,7 @@ struct SvgAnimatedTransformListObjectDeclaration<'scope> {
 }
 
 #[derive(WebApiObject)]
-#[webapi(interface = "SVGLengthList", own_to_string_tag = "SVGLengthList")]
+#[webapi(interface = web_api_interfaces::SVGLengthList, own_to_string_tag = "SVGLengthList")]
 struct SvgLengthListObjectDeclaration<'scope> {
     #[webapi(slot = SVG_LENGTH_LIST_ITEMS_SLOT)]
     items: Vec<v8::Local<'scope, v8::Value>>,
@@ -166,7 +167,7 @@ struct SvgLengthListObjectDeclaration<'scope> {
 }
 
 #[derive(WebApiObject)]
-#[webapi(interface = "SVGNumberList", own_to_string_tag = "SVGNumberList")]
+#[webapi(interface = web_api_interfaces::SVGNumberList, own_to_string_tag = "SVGNumberList")]
 struct SvgNumberListObjectDeclaration<'scope> {
     #[webapi(slot = SVG_NUMBER_LIST_ITEMS_SLOT)]
     items: Vec<v8::Local<'scope, v8::Value>>,
@@ -191,7 +192,7 @@ struct SvgNumberListObjectDeclaration<'scope> {
 }
 
 #[derive(WebApiObject)]
-#[webapi(interface = "SVGTransformList", own_to_string_tag = "SVGTransformList")]
+#[webapi(interface = web_api_interfaces::SVGTransformList, own_to_string_tag = "SVGTransformList")]
 struct SvgTransformListObjectDeclaration<'scope> {
     #[webapi(slot = SVG_TRANSFORM_LIST_ITEMS_SLOT)]
     items: Vec<v8::Local<'scope, v8::Value>>,
@@ -228,7 +229,7 @@ struct SvgTransformListObjectDeclaration<'scope> {
 }
 
 #[derive(WebApiObject)]
-#[webapi(interface = "SVGTransform", own_to_string_tag = "SVGTransform")]
+#[webapi(interface = web_api_interfaces::SVGTransform, own_to_string_tag = "SVGTransform")]
 struct SvgTransformObjectDeclaration<'scope> {
     #[webapi(slot = SVG_TRANSFORM_TYPE_SLOT)]
     transform_type: u32,

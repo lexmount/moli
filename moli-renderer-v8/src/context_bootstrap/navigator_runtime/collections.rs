@@ -1,4 +1,5 @@
 use super::super::*;
+use crate::web_api_interfaces;
 use crate::{
     util::{get_private_value, throw_type_error},
     webidl,
@@ -35,7 +36,7 @@ const PDF_MIME_TYPES: &[(&str, &str, &str)] = &[
 const COLLECTION_LENGTH_SLOT: &str = "__moliNavigatorCollectionLength";
 
 #[derive(WebApiObject)]
-#[webapi(interface = "MimeType")]
+#[webapi(interface = web_api_interfaces::MimeType)]
 struct MimeTypeObjectDeclaration<'scope> {
     #[webapi(data_property)]
     r#type: v8::Local<'scope, v8::String>,
@@ -51,21 +52,21 @@ struct MimeTypeObjectDeclaration<'scope> {
 }
 
 #[derive(WebApiObject)]
-#[webapi(interface = "MimeTypeArray")]
+#[webapi(interface = web_api_interfaces::MimeTypeArray)]
 struct MimeTypeArrayObjectDeclaration {
     #[webapi(slot = COLLECTION_LENGTH_SLOT)]
     length: u32,
 }
 
 #[derive(WebApiObject)]
-#[webapi(interface = "PluginArray")]
+#[webapi(interface = web_api_interfaces::PluginArray)]
 struct PluginArrayObjectDeclaration {
     #[webapi(slot = COLLECTION_LENGTH_SLOT)]
     length: u32,
 }
 
 #[derive(WebApiObject)]
-#[webapi(interface = "Plugin")]
+#[webapi(interface = web_api_interfaces::Plugin)]
 struct PluginObjectDeclaration<'scope> {
     #[webapi(slot = COLLECTION_LENGTH_SLOT)]
     length: u32,
@@ -81,7 +82,7 @@ struct PluginObjectDeclaration<'scope> {
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(name = "MimeTypeArray", enumerable)]
+#[webapi(interface = web_api_interfaces::MimeTypeArray, enumerable)]
 struct MimeTypeArrayPrototypeDeclaration {
     #[webapi(accessor_property, getter = mime_type_array_length_getter)]
     length: (),
@@ -100,7 +101,7 @@ struct MimeTypeArrayPrototypeDeclaration {
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(name = "PluginArray", enumerable)]
+#[webapi(interface = web_api_interfaces::PluginArray, enumerable)]
 struct PluginArrayPrototypeDeclaration {
     #[webapi(accessor_property, getter = plugin_array_length_getter)]
     length: (),
@@ -122,7 +123,7 @@ struct PluginArrayPrototypeDeclaration {
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(name = "Plugin", enumerable)]
+#[webapi(interface = web_api_interfaces::Plugin, enumerable)]
 struct PluginPrototypeDeclaration {
     #[webapi(accessor_property, getter = plugin_length_getter)]
     length: (),

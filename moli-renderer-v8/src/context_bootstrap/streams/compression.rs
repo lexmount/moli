@@ -6,6 +6,7 @@ use super::super::stream_adapter::{
     EnqueueChunkError, maybe_pull_stream, value_buffer_source_bytes,
 };
 use super::*;
+use crate::web_api_interfaces;
 use crate::{util::set_private_value, webidl};
 use moli_v8_util::set_static_property;
 
@@ -73,7 +74,7 @@ pub(in crate::context_bootstrap) fn compression_stream_constructor_callback<
     } else {
         "CompressionStream"
     };
-    moli_webapi_declare::initialize_web_api_object(scope, args.this(), interface)
+    web_api_interfaces::initialize(scope, args.this(), interface)
         .expect("compression stream identity should initialize");
     rv.set(args.this().into());
 }
@@ -197,7 +198,7 @@ fn endpoint_getter<'s, const DECOMPRESS: bool, const READABLE: bool>(
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(name = "CompressionStream", enumerable)]
+#[webapi(interface = web_api_interfaces::CompressionStream, enumerable)]
 struct CompressionPrototype {
     #[webapi(accessor_property, getter = endpoint_getter::<false, true>)]
     readable: (),
@@ -206,7 +207,7 @@ struct CompressionPrototype {
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(name = "DecompressionStream", enumerable)]
+#[webapi(interface = web_api_interfaces::DecompressionStream, enumerable)]
 struct DecompressionPrototype {
     #[webapi(accessor_property, getter = endpoint_getter::<true, true>)]
     readable: (),

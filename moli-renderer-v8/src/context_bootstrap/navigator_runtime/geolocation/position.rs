@@ -1,3 +1,4 @@
+use crate::web_api_interfaces;
 use moli_page_types::GeolocationPositionOverride;
 use moli_webapi_declare::{WebApiFunctionTemplate, WebApiObject};
 
@@ -19,14 +20,14 @@ const COORDINATE_NAMES: &[&str] = &[
 ];
 
 #[derive(WebApiObject)]
-#[webapi(interface = "GeolocationCoordinates")]
+#[webapi(interface = web_api_interfaces::GeolocationCoordinates)]
 struct CoordinatesDeclaration<'s> {
     #[webapi(slot = COORDINATES_SLOT)]
     values: v8::Local<'s, v8::Array>,
 }
 
 #[derive(WebApiObject)]
-#[webapi(interface = "GeolocationPosition")]
+#[webapi(interface = web_api_interfaces::GeolocationPosition)]
 struct PositionDeclaration<'s> {
     #[webapi(slot = POSITION_COORDS_SLOT)]
     coords: v8::Local<'s, v8::Object>,
@@ -35,7 +36,7 @@ struct PositionDeclaration<'s> {
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(name = "GeolocationCoordinates", enumerable)]
+#[webapi(interface = web_api_interfaces::GeolocationCoordinates, enumerable)]
 struct CoordinatesPrototype {
     #[webapi(accessor_property, getter = coordinate_getter, data = callback_data_index_value(scope, 0))]
     latitude: (),
@@ -56,7 +57,7 @@ struct CoordinatesPrototype {
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(name = "GeolocationPosition", enumerable)]
+#[webapi(interface = web_api_interfaces::GeolocationPosition, enumerable)]
 struct PositionPrototype {
     #[webapi(accessor_property, getter = position_getter, data = callback_data_index_value(scope, 0))]
     coords: (),

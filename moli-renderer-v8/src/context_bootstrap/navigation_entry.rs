@@ -14,6 +14,7 @@ use super::navigation_window::{
 };
 use super::*;
 use crate::util::{get_private_value, set_private_value};
+use crate::web_api_interfaces;
 use moli_page_types::{NavigationHistoryEntryId, NavigationHistoryEntryKey};
 use moli_webapi_declare::WebApiObject;
 
@@ -28,7 +29,7 @@ const NAVIGATION_ENTRY_SCROLL_Y_SLOT: &str = "__lmNavigationEntryScrollY";
 
 #[derive(WebApiObject)]
 #[webapi(
-    interface = "NavigationHistoryEntry",
+    interface = web_api_interfaces::NavigationHistoryEntry,
     own_to_string_tag = "NavigationHistoryEntry",
     readonly_to_string_tag,
     enumerable,

@@ -5,11 +5,12 @@ use self::init::{install_response_body_stream, install_response_headers, respons
 use super::super::fetch_surface::{RESPONSE_BODY_USED_SLOT, mark_response_object};
 use super::*;
 use crate::util::throw_range_error;
+use crate::web_api_interfaces;
 use crate::webidl;
 use moli_webapi_declare::WebApiObject;
 
 #[derive(WebApiObject)]
-#[webapi(interface = "Response")]
+#[webapi(interface = web_api_interfaces::Response)]
 struct ResponseInstanceDeclaration {
     #[webapi(slot = RESPONSE_STATUS_SLOT)]
     status: f64,

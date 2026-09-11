@@ -1,6 +1,7 @@
 use super::{
     JsContextHost, NavigationHistoryEntrySeed, child_frame_runtime::WINDOW_EVENT_HANDLER_PROPERTIES,
 };
+use crate::web_api_interfaces;
 use crate::{
     content_security_policy::content_security_policy_forces_opaque_origin,
     context_bootstrap::{
@@ -142,13 +143,13 @@ struct LightweightPopupDocumentStreamMethodsDeclaration<'scope> {
 }
 
 #[derive(WebApiObject)]
-#[webapi(interface = "Event", prototype = "Object", data_properties, enumerable)]
+#[webapi(interface = web_api_interfaces::Event, prototype = "Object", data_properties, enumerable)]
 struct LightweightPopupEventDeclaration<'scope> {
     r#type: v8::Local<'scope, v8::String>,
 }
 
 #[derive(WebApiObject)]
-#[webapi(interface = "PopStateEvent", prototype = "Object")]
+#[webapi(interface = web_api_interfaces::PopStateEvent, prototype = "Object")]
 struct LightweightPopupPopStateEventDeclaration<'scope> {
     #[webapi(data_property)]
     state: v8::Local<'scope, v8::Value>,

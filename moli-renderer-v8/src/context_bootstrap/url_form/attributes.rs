@@ -1,6 +1,7 @@
 use super::helpers::{require_url_receiver, url_href_slot};
 use super::*;
 use crate::util::{callback_data_index_value, callback_data_item, get_private_value};
+use crate::web_api_interfaces;
 use crate::webidl;
 use moli_webapi_declare::WebApiFunctionTemplate;
 
@@ -40,7 +41,7 @@ impl UrlAttribute {
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(name = "URL", enumerable)]
+#[webapi(interface = web_api_interfaces::URL, enumerable)]
 struct UrlPrototypeAccessorsDeclaration {
     #[webapi(
         accessor_property,

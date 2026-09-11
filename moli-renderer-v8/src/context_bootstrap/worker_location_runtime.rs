@@ -1,5 +1,6 @@
 use super::*;
 use crate::util::{callback_data_index_value, callback_data_item, get_private_object};
+use crate::web_api_interfaces;
 use anyhow::{Result, anyhow};
 use moli_webapi_declare::WebApiObject;
 
@@ -9,7 +10,7 @@ const WORKER_LOCATION_PROPERTIES: &[&str] = &[
 ];
 
 #[derive(WebApiObject)]
-#[webapi(interface = "WorkerLocation")]
+#[webapi(interface = web_api_interfaces::WorkerLocation)]
 struct WorkerLocationObjectDeclaration<'scope> {
     #[webapi(slot = WORKER_LOCATION_DATA_SLOT)]
     data: v8::Local<'scope, v8::Object>,

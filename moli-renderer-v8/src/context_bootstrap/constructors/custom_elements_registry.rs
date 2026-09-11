@@ -1,10 +1,11 @@
 use super::*;
+use crate::web_api_interfaces;
 use crate::webidl;
 use anyhow::Result;
 use moli_webapi_declare::WebApiFunctionTemplate;
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(name = "CustomElementRegistry", enumerable)]
+#[webapi(interface = web_api_interfaces::CustomElementRegistry, enumerable)]
 struct CustomElementRegistryPrototypeMethodsDeclaration {
     #[webapi(method, enumerable, length = 2, callback = custom_elements_define_callback)]
     define: (),

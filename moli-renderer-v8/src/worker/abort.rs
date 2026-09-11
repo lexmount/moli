@@ -1,3 +1,4 @@
+use crate::web_api_interfaces;
 use std::collections::HashMap;
 use std::{cell::RefCell, rc::Rc};
 
@@ -52,7 +53,7 @@ struct WorkerAbortLinkedMessagePortListener {
 }
 
 #[derive(WebApiObject)]
-#[webapi(prototype = "Object", interface = "AbortSignal")]
+#[webapi(prototype = "Object", interface = web_api_interfaces::AbortSignal)]
 struct WorkerAbortSignalObjectDeclaration<'scope> {
     #[webapi(prototype)]
     prototype: v8::Local<'scope, v8::Object>,

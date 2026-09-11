@@ -14,6 +14,7 @@ use crate::util::{
     callback_data_index_value, callback_data_item, context_host_ptr_from_global_bridge,
     get_private_value, set_private_value,
 };
+use crate::web_api_interfaces;
 use crate::webidl;
 use moli_webapi_declare::{WebApiFunctionTemplate, WebApiObject};
 
@@ -30,7 +31,7 @@ fn current_window_style_viewport(
 }
 
 #[derive(WebApiObject)]
-#[webapi(interface = "MediaQueryList")]
+#[webapi(interface = web_api_interfaces::MediaQueryList)]
 struct MediaQueryListObjectDeclaration {
     #[webapi(slot = MEDIA_QUERY_LIST_MEDIA_SLOT)]
     media: String,
@@ -41,7 +42,7 @@ struct MediaQueryListObjectDeclaration {
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(name = "MediaQueryList")]
+#[webapi(interface = web_api_interfaces::MediaQueryList)]
 struct MediaQueryListPrototypeAccessorsDeclaration {
     #[webapi(
         accessor_property,
@@ -67,11 +68,11 @@ struct MediaQueryListPrototypeAccessorsDeclaration {
 }
 
 #[derive(WebApiObject)]
-#[webapi(interface = "Event", allow_empty)]
+#[webapi(interface = web_api_interfaces::Event, allow_empty)]
 struct MediaQueryListChangeEventObjectDeclaration {}
 
 #[derive(WebApiObject)]
-#[webapi(interface = "Event")]
+#[webapi(interface = web_api_interfaces::Event)]
 struct MediaQueryListChangeEventPropertiesDeclaration {
     #[webapi(data_property)]
     media: String,

@@ -1,3 +1,4 @@
+use crate::web_api_interfaces;
 use crate::webidl;
 use moli_web_mime::is_media_source_type_supported;
 use moli_webapi_declare::WebApiFunctionTemplate;
@@ -10,7 +11,7 @@ struct MediaSourceIsTypeSupportedArgs {
 }
 
 #[derive(Default, WebApiFunctionTemplate)]
-#[webapi(name = "MediaSource")]
+#[webapi(interface = web_api_interfaces::MediaSource)]
 struct MediaSourceTemplateDeclaration {
     #[webapi(
         static_method = "isTypeSupported",

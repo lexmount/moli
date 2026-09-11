@@ -7,11 +7,12 @@ use super::observer::{
 };
 use super::*;
 use crate::host::report_event_callback_exception;
+use crate::web_api_interfaces;
 use crate::window_webidl_callback::WindowWebIdlCallbackFunctionOutcome;
 use moli_webapi_declare::WebApiObject;
 
 #[derive(WebApiObject)]
-#[webapi(interface = "PerformanceObserverEntryList")]
+#[webapi(interface = web_api_interfaces::PerformanceObserverEntryList)]
 struct PerformanceObserverEntryListObjectDeclaration<'scope> {
     #[webapi(slot = PERFORMANCE_ENTRY_LIST_ENTRIES_SLOT)]
     entries: v8::Local<'scope, v8::Array>,

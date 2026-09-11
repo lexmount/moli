@@ -36,6 +36,7 @@ use crate::util::{
     callback_data_index_value, callback_data_item, get_private_value, serialize_v8_array,
     set_private_value, throw_type_error,
 };
+use crate::web_api_interfaces;
 use moli_browser_profile::{BrowserIdentityProfile, navigator_app_version};
 use moli_webapi_declare::{WebApiFunctionTemplate, WebApiObject};
 
@@ -106,25 +107,25 @@ pub(in crate::context_bootstrap) const SERVICE_WORKER_OWNER_TOKEN_SLOT: &str =
     "__moliServiceWorkerOwner";
 
 #[derive(Default, WebApiObject)]
-#[webapi(interface = "Permissions", allow_empty)]
+#[webapi(interface = web_api_interfaces::Permissions, allow_empty)]
 struct PermissionsObjectDeclaration {}
 
 #[derive(Default, WebApiFunctionTemplate)]
-#[webapi(name = "Permissions", enumerable)]
+#[webapi(interface = web_api_interfaces::Permissions, enumerable)]
 struct PermissionsPrototypeMethodsDeclaration {
     #[webapi(method, length = 1, callback = navigator_permissions_query_callback)]
     query: (),
 }
 
 #[derive(WebApiObject)]
-#[webapi(interface = "Navigator")]
+#[webapi(interface = web_api_interfaces::Navigator)]
 struct NavigatorObjectDeclaration<'scope> {
     #[webapi(slot = NAVIGATOR_RUNTIME_DATA_SLOT)]
     runtime_data: v8::Local<'scope, v8::Object>,
 }
 
 #[derive(Default, WebApiFunctionTemplate)]
-#[webapi(name = "Navigator", enumerable)]
+#[webapi(interface = web_api_interfaces::Navigator, enumerable)]
 struct NavigatorRuntimeDataPrototypeDeclaration {
     #[webapi(accessor_property, getter = navigator_runtime_data_getter_callback, data = callback_data_index_value(scope, 0))]
     user_agent: (),
@@ -197,7 +198,7 @@ struct NavigatorRuntimeDataPrototypeDeclaration {
 }
 
 #[derive(Default, WebApiFunctionTemplate)]
-#[webapi(name = "Navigator")]
+#[webapi(interface = web_api_interfaces::Navigator)]
 struct NavigatorPrototypeMethodsDeclaration {
     #[webapi(method, enumerable, length = 0, callback = navigator_get_gamepads_callback)]
     get_gamepads: (),
@@ -219,14 +220,14 @@ struct NavigatorPrototypeMethodsDeclaration {
 }
 
 #[derive(WebApiObject)]
-#[webapi(interface = "WorkerNavigator")]
+#[webapi(interface = web_api_interfaces::WorkerNavigator)]
 struct WorkerNavigatorObjectDeclaration<'scope> {
     #[webapi(slot = NAVIGATOR_RUNTIME_DATA_SLOT)]
     runtime_data: v8::Local<'scope, v8::Object>,
 }
 
 #[derive(Default, WebApiFunctionTemplate)]
-#[webapi(name = "WorkerNavigator", enumerable)]
+#[webapi(interface = web_api_interfaces::WorkerNavigator, enumerable)]
 struct WorkerNavigatorRuntimeDataPrototypeDeclaration {
     #[webapi(accessor_property, getter = navigator_runtime_data_getter_callback, data = callback_data_index_value(scope, 0))]
     user_agent: (),
@@ -269,7 +270,7 @@ struct WorkerNavigatorRuntimeDataPrototypeDeclaration {
 }
 
 #[derive(Default, WebApiFunctionTemplate)]
-#[webapi(name = "PermissionStatus", enumerable)]
+#[webapi(interface = web_api_interfaces::PermissionStatus, enumerable)]
 struct PermissionStatusPrototypeDeclaration {
     #[webapi(accessor_property, getter = permission_status_name_getter_callback)]
     name: (),
@@ -279,8 +280,7 @@ struct PermissionStatusPrototypeDeclaration {
 
 #[derive(Default, WebApiObject)]
 #[webapi(
-    interface = "NetworkInformation",
-    parent = "EventTarget",
+    interface = web_api_interfaces::NetworkInformation,
     prototype = "Object"
 )]
 struct NavigatorConnectionDeclaration {
@@ -323,11 +323,11 @@ struct NavigatorConnectionDeclaration {
 }
 
 #[derive(WebApiObject)]
-#[webapi(allow_empty, interface = "StorageManager")]
+#[webapi(allow_empty, interface = web_api_interfaces::StorageManager)]
 struct StorageManagerObjectDeclaration {}
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(name = "StorageManager", enumerable)]
+#[webapi(interface = web_api_interfaces::StorageManager, enumerable)]
 struct StorageManagerTemplateMethodsDeclaration {
     #[webapi(method, length = 0, callback = navigator_storage_persisted_callback)]
     persisted: (),
@@ -343,7 +343,7 @@ struct StorageManagerTemplateMethodsDeclaration {
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(name = "StorageManager", enumerable)]
+#[webapi(interface = web_api_interfaces::StorageManager, enumerable)]
 struct StorageManagerWorkerTemplateMethodsDeclaration {
     #[webapi(method, length = 0, callback = navigator_storage_persisted_callback)]
     persisted: (),
@@ -377,11 +377,11 @@ pub(in crate::context_bootstrap) fn install_storage_manager_constructor_template
 }
 
 #[derive(WebApiObject)]
-#[webapi(allow_empty, interface = "StorageBucketManager")]
+#[webapi(allow_empty, interface = web_api_interfaces::StorageBucketManager)]
 struct StorageBucketManagerObjectDeclaration {}
 
 #[derive(Default, WebApiFunctionTemplate)]
-#[webapi(name = "NavigatorUAData", enumerable)]
+#[webapi(interface = web_api_interfaces::NavigatorUAData, enumerable)]
 struct NavigatorUaDataPrototypeMethodsDeclaration {
     #[webapi(method, name = "toJSON", length = 0, callback = navigator_ua_data_to_json_callback)]
     to_json: (),
@@ -391,7 +391,7 @@ struct NavigatorUaDataPrototypeMethodsDeclaration {
 }
 
 #[derive(Default, WebApiObject)]
-#[webapi(interface = "ServiceWorkerContainer", prototype = "Object")]
+#[webapi(interface = web_api_interfaces::ServiceWorkerContainer, prototype = "Object")]
 struct ServiceWorkerContainerDeclaration {
     #[webapi(slot = SIMPLE_EVENT_TARGET_SLOT, value = SERVICE_WORKER_CONTAINER_LISTENERS_SLOT)]
     event_target_slot: (),
@@ -458,7 +458,7 @@ struct ServiceWorkerContainerDeclaration {
 }
 
 #[derive(Default, WebApiObject)]
-#[webapi(interface = "UserActivation")]
+#[webapi(interface = web_api_interfaces::UserActivation)]
 struct UserActivationObjectDeclaration {
     #[webapi(accessor_property, getter = navigator_user_activation_state_getter_callback, enumerable)]
     is_active: (),

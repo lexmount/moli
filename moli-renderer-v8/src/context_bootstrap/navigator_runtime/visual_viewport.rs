@@ -2,6 +2,7 @@ use super::super::*;
 use crate::util::{
     callback_data_index_value, callback_data_item, get_private_value, throw_type_error,
 };
+use crate::web_api_interfaces;
 use moli_webapi_declare::{WebApiFunctionTemplate, WebApiObject};
 
 const VISUAL_VIEWPORT_OFFSET_LEFT_SLOT: &str = "__moliVisualViewportOffsetLeft";
@@ -13,7 +14,7 @@ const VISUAL_VIEWPORT_HEIGHT_SLOT: &str = "__moliVisualViewportHeight";
 const VISUAL_VIEWPORT_SCALE_SLOT: &str = "__moliVisualViewportScale";
 
 #[derive(WebApiObject)]
-#[webapi(interface = "VisualViewport")]
+#[webapi(interface = web_api_interfaces::VisualViewport)]
 struct VisualViewportObjectDeclaration {
     #[webapi(slot = VISUAL_VIEWPORT_OFFSET_LEFT_SLOT)]
     offset_left: f64,
@@ -32,7 +33,7 @@ struct VisualViewportObjectDeclaration {
 }
 
 #[derive(Default, WebApiFunctionTemplate)]
-#[webapi(name = "VisualViewport")]
+#[webapi(interface = web_api_interfaces::VisualViewport)]
 struct VisualViewportPrototypeDeclaration {
     #[webapi(accessor_property, getter = visual_viewport_attribute_getter_callback, data = callback_data_index_value(scope, 0), enumerable)]
     offset_left: (),

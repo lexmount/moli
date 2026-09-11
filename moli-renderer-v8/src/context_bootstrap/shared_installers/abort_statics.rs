@@ -1,8 +1,9 @@
 use crate::native_bridge::abort;
+use crate::web_api_interfaces;
 use moli_webapi_declare::{WebApiFunctionTemplate, v8};
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(name = "AbortSignal")]
+#[webapi(interface = web_api_interfaces::AbortSignal)]
 struct AbortSignalConstructorDeclaration {
     #[webapi(
         static_method = "abort",
@@ -28,7 +29,7 @@ struct AbortSignalConstructorDeclaration {
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(name = "AbortSignal", enumerable)]
+#[webapi(interface = web_api_interfaces::AbortSignal, enumerable)]
 struct AbortSignalPrototypeDeclaration {
     #[webapi(
         method,
@@ -76,7 +77,7 @@ struct AbortSignalPrototypeDeclaration {
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(name = "AbortController", enumerable)]
+#[webapi(interface = web_api_interfaces::AbortController, enumerable)]
 struct AbortControllerPrototypeDeclaration {
     #[webapi(method, length = 0, callback = abort::abort_controller_abort_callback)]
     abort: (),

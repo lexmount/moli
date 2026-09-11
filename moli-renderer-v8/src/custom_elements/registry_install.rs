@@ -1,4 +1,5 @@
 use super::registry_runtime::CUSTOM_ELEMENTS_REGISTRY_CHILD_HANDLE_SLOT;
+use crate::web_api_interfaces;
 use crate::{
     context_bootstrap::{WindowLazySurface, rematerialize_window_lazy_surface_if_cached},
     document_runtime::DomHandle,
@@ -8,7 +9,7 @@ use anyhow::Result;
 use moli_webapi_declare::WebApiObject;
 
 #[derive(WebApiObject)]
-#[webapi(interface = "CustomElementRegistry", prototype = "Object")]
+#[webapi(interface = web_api_interfaces::CustomElementRegistry, prototype = "Object")]
 struct CustomElementsRegistryDeclaration<'scope> {
     #[webapi(prototype)]
     prototype: v8::Local<'scope, v8::Object>,

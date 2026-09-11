@@ -61,7 +61,9 @@ impl ExposedInterfaceTemplateRegistry {
         let metadata = ExposedInterfaceMetadataTable::from_constructor_specs(&specs)?;
         moli_webapi_declare::register_web_api_interfaces(
             scope,
-            specs.iter().map(|spec| (spec.name, spec.parent)),
+            specs
+                .iter()
+                .map(|spec| (spec.interface.name(), spec.interface.parent_name())),
         )?;
         let templates = (0..metadata.len())
             .map(|_| ExposedInterfaceTemplateEntry::new())
@@ -220,10 +222,10 @@ impl ExposedInterfaceTemplateRegistry {
                 metadata.name
             )
         })?;
-        if spec.name != metadata.name {
+        if spec.interface.name() != metadata.name {
             return Err(anyhow!(
                 "constructor spec `{}` does not match metadata `{}`",
-                spec.name,
+                spec.interface.name(),
                 metadata.name
             ));
         }

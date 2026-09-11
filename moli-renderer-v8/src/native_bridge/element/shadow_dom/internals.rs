@@ -1,3 +1,4 @@
+use crate::web_api_interfaces;
 use crate::{
     context_bootstrap::exposed_interfaces::ensure_intrinsic_interface_prototype,
     custom_elements,
@@ -39,7 +40,7 @@ const ELEMENT_INTERNALS_FORM_VALUE_SLOT: &str = "__moliElementInternalsFormValue
 const ELEMENT_INTERNALS_VALIDITY_SLOT: &str = "__moliElementInternalsValidity";
 const ELEMENT_INTERNALS_VALIDATION_MESSAGE_SLOT: &str = "__moliElementInternalsValidationMessage";
 #[derive(WebApiObject)]
-#[webapi(interface = "ElementInternals")]
+#[webapi(interface = web_api_interfaces::ElementInternals)]
 struct ElementInternalsDeclaration<'scope> {
     #[webapi(slot = ELEMENT_INTERNALS_TARGET_SLOT)]
     target: v8::Local<'scope, v8::Object>,
@@ -47,7 +48,7 @@ struct ElementInternalsDeclaration<'scope> {
 
 #[derive(WebApiFunctionTemplate)]
 #[webapi(
-    name = "ElementInternals",
+    interface = web_api_interfaces::ElementInternals,
     enumerable,
     prototype_to_string_tag = "ElementInternals"
 )]
@@ -59,7 +60,7 @@ struct ElementInternalsCorePrototypeDeclaration {
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(name = "ElementInternals", enumerable)]
+#[webapi(interface = web_api_interfaces::ElementInternals, enumerable)]
 struct ElementInternalsAccessibilityPrototypeDeclaration {
     #[webapi(
         accessor_property,
@@ -407,7 +408,7 @@ struct ElementInternalsAccessibilityPrototypeDeclaration {
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(name = "ElementInternals", enumerable)]
+#[webapi(interface = web_api_interfaces::ElementInternals, enumerable)]
 struct ElementInternalsFormPrototypeDeclaration {
     #[webapi(method, length = 1, callback = element_internals_set_form_value_callback)]
     set_form_value: (),
@@ -430,7 +431,7 @@ struct ElementInternalsFormPrototypeDeclaration {
 }
 
 #[derive(WebApiObject)]
-#[webapi(interface = "ValidityState", data_properties, enumerable)]
+#[webapi(interface = web_api_interfaces::ValidityState, data_properties, enumerable)]
 struct ValidityStateDeclaration {
     value_missing: bool,
     type_mismatch: bool,
@@ -446,7 +447,7 @@ struct ValidityStateDeclaration {
 }
 
 #[derive(WebApiObject)]
-#[webapi(interface = "ValidityState", data_properties, enumerable)]
+#[webapi(interface = web_api_interfaces::ValidityState, data_properties, enumerable)]
 struct ValidityStateFlagsUpdateDeclaration {
     value_missing: bool,
     type_mismatch: bool,
@@ -461,20 +462,20 @@ struct ValidityStateFlagsUpdateDeclaration {
 }
 
 #[derive(WebApiObject)]
-#[webapi(interface = "ValidityState", data_properties, enumerable)]
+#[webapi(interface = web_api_interfaces::ValidityState, data_properties, enumerable)]
 struct ValidityStateValidUpdateDeclaration {
     valid: bool,
 }
 
 #[derive(WebApiObject)]
-#[webapi(prototype = "Object", interface = "CustomStateSet")]
+#[webapi(prototype = "Object", interface = web_api_interfaces::CustomStateSet)]
 struct CustomStateSetObjectDeclaration<'s> {
     #[webapi(slot = CUSTOM_STATE_SET_BACKING_SLOT)]
     backing: v8::Local<'s, v8::Set>,
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(name = "CustomStateSet", enumerable)]
+#[webapi(interface = web_api_interfaces::CustomStateSet, enumerable)]
 struct CustomStateSetPrototypeDeclaration {
     #[webapi(accessor_property, getter = custom_state_set_size_getter)]
     size: (),

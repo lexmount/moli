@@ -1,3 +1,4 @@
+use crate::web_api_interfaces;
 use std::ffi::c_void;
 
 use crate::dom::{forms::InputType, native::Node};
@@ -84,7 +85,7 @@ pub(in crate::native_bridge) fn initialize_collection_identity<'s>(
     kind: CollectionKind,
 ) {
     let interface = collection_interface_name(kind);
-    moli_webapi_declare::initialize_web_api_object(scope, object, interface)
+    web_api_interfaces::initialize(scope, object, interface)
         .expect("native collection identity should initialize");
 }
 

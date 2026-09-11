@@ -1,4 +1,5 @@
 use super::ice_candidate_parser::parse_ice_candidate;
+use crate::web_api_interfaces;
 use crate::{
     util::{
         apply_webidl_constructor_prototype_fallback, callback_data_index_value, get_private_value,
@@ -11,14 +12,14 @@ use moli_webapi_declare::{WebApiFunctionTemplate, WebApiObject};
 const CANDIDATE_VALUES_SLOT: &str = "__moliRtcIceCandidateValues";
 
 #[derive(WebApiObject)]
-#[webapi(interface = "RTCIceCandidate")]
+#[webapi(interface = web_api_interfaces::RTCIceCandidate)]
 struct IceCandidateObjectDeclaration<'scope> {
     #[webapi(slot = CANDIDATE_VALUES_SLOT)]
     values: v8::Local<'scope, v8::Array>,
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(name = "RTCIceCandidate", enumerable)]
+#[webapi(interface = web_api_interfaces::RTCIceCandidate, enumerable)]
 struct IceCandidatePrototypeDeclaration {
     #[webapi(accessor_property, getter = candidate_attribute_getter, data = callback_data_index_value(scope, 0))]
     candidate: (),

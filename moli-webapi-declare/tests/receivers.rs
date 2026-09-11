@@ -56,7 +56,7 @@ fn promise_callback<'s>(
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(name = "NativeSample", constructor_callback = constructor, receiver = has_brand, enumerable)]
+#[webapi(interface = interfaces::NativeSample, constructor_callback = constructor, receiver = has_brand, enumerable)]
 struct NativeSample {
     #[webapi(method, callback = callback, length = 1, data = 7)]
     method: (),
@@ -88,7 +88,7 @@ struct PlainInterface {
 }
 
 #[derive(WebApiObject)]
-#[webapi(interface = "PlainInterface", receiver = has_brand)]
+#[webapi(interface = interfaces::PlainInterface, receiver = has_brand)]
 struct PlainObject {
     #[webapi(slot = BRAND)]
     brand: bool,
@@ -385,4 +385,11 @@ fn promise_callbacks_do_not_convert_execution_termination_into_rejection() {
     }
     scope.cancel_terminate_execution();
     assert!(run_script(scope, "new NativeSample().method() === 7").is_true());
+}
+
+mod interfaces {
+    moli_webapi_declare::declare_web_api_interfaces! {
+        pub(super) NativeSample;
+        pub(super) PlainInterface;
+    }
 }

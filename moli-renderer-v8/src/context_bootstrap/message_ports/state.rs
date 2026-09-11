@@ -1,4 +1,5 @@
 use super::*;
+use crate::web_api_interfaces;
 use crate::{
     message_port_runtime::{MessagePortOwner, SharedMessagePortRegistry},
     types::MessagePortId,
@@ -115,7 +116,7 @@ impl MessagePortRealmBinding {
 }
 
 #[derive(WebApiObject)]
-#[webapi(prototype = "Object", interface = "MessagePort")]
+#[webapi(prototype = "Object", interface = web_api_interfaces::MessagePort)]
 struct MessagePortObjectDeclaration<'scope> {
     #[webapi(prototype)]
     prototype: v8::Local<'scope, v8::Object>,
@@ -150,7 +151,7 @@ struct MessagePortObjectDeclaration<'scope> {
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(name = "MessagePort", enumerable)]
+#[webapi(interface = web_api_interfaces::MessagePort, enumerable)]
 struct MessagePortPrototypeDeclaration {
     #[webapi(method, length = 1, callback = message_port_post_message_callback)]
     post_message: (),
@@ -190,7 +191,7 @@ struct MessagePortPrototypeDeclaration {
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(name = "MessageChannel")]
+#[webapi(interface = web_api_interfaces::MessageChannel)]
 struct MessageChannelPrototypeDeclaration {
     #[webapi(
         accessor_property,

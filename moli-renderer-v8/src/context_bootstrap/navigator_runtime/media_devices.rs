@@ -1,13 +1,14 @@
 use super::super::window_runtime::navigator_media_devices_get_user_media_callback;
 use super::super::*;
 use crate::util::{get_private_value, set_private_value, throw_type_error};
+use crate::web_api_interfaces;
 use moli_webapi_declare::{WebApiFunctionTemplate, WebApiObject};
 
 const MEDIA_DEVICES_LISTENERS_SLOT: &str = "__moliMediaDevicesListeners";
 const MEDIA_DEVICES_ONDEVICECHANGE_SLOT: &str = "__moliMediaDevicesOndevicechange";
 
 #[derive(Default, WebApiObject)]
-#[webapi(interface = "MediaDevices")]
+#[webapi(interface = web_api_interfaces::MediaDevices)]
 struct MediaDevicesObjectDeclaration {
     #[webapi(slot = SIMPLE_EVENT_TARGET_SLOT, value = MEDIA_DEVICES_LISTENERS_SLOT)]
     event_target_slot: (),
@@ -20,7 +21,7 @@ struct MediaDevicesObjectDeclaration {
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(name = "MediaDevices", enumerable)]
+#[webapi(interface = web_api_interfaces::MediaDevices, enumerable)]
 struct MediaDevicesPrototypeDeclaration {
     #[webapi(method, length = 0, callback = enumerate_devices_callback)]
     enumerate_devices: (),

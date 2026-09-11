@@ -1,6 +1,7 @@
 use crate::document_runtime::DomHandle;
 use crate::native_bridge::collections;
 use crate::util::v8str;
+use crate::web_api_interfaces;
 use moli_webapi_declare::WebApiObject;
 
 use super::super::super::super::JsContextHost;
@@ -19,7 +20,7 @@ struct DocumentAllCollectionDataDeclaration<'scope> {
 }
 
 #[derive(WebApiObject)]
-#[webapi(interface = "HTMLAllCollection")]
+#[webapi(interface = web_api_interfaces::HTMLAllCollection)]
 struct DocumentAllCollectionSurfaceDeclaration<'scope> {
     /// Declaration-only input shared by `item` and `namedItem`.
     ///

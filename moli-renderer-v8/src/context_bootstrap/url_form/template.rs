@@ -4,11 +4,12 @@ use super::callbacks::{
     url_parse_callback, url_revoke_object_url_callback, url_to_json_callback,
     url_to_string_callback,
 };
+use crate::web_api_interfaces;
 use moli_webapi_declare::{WebApiFunctionTemplate, v8};
 
 #[derive(WebApiFunctionTemplate)]
 #[webapi(
-    name = "URL",
+    interface = web_api_interfaces::URL,
     constructor_callback = url_constructor_callback,
     constructor_length = 1,
     enumerable

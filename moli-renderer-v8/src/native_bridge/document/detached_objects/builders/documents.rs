@@ -1,6 +1,7 @@
 use super::*;
 use crate::dom::native::DomHost;
 use crate::util::context_host_ptr_from_global_bridge;
+use crate::web_api_interfaces;
 use moli_webapi_declare::WebApiObject;
 use url::Url;
 
@@ -50,12 +51,8 @@ fn new_detached_document_object<'s>(
         DetachedDocumentObjectDeclaration::new(prototype, to_string_tag, v8::null(scope).into())
             .bind(scope)
             .ok()?;
-    moli_webapi_declare::initialize_web_api_object(
-        scope,
-        document,
-        detached_document_constructor_name(kind),
-    )
-    .ok()?;
+    web_api_interfaces::initialize(scope, document, detached_document_constructor_name(kind))
+        .ok()?;
     Some(document)
 }
 

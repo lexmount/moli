@@ -1,4 +1,5 @@
 use super::*;
+use crate::web_api_interfaces;
 use crate::{
     util::{get_private_value, set_private_value},
     webidl,
@@ -13,14 +14,14 @@ const BYTE_LENGTH_QUEUING_STRATEGY_HIGH_WATER_MARK_SLOT: &str =
     "__moliByteLengthQueuingStrategyHighWaterMark";
 
 #[derive(WebApiObject)]
-#[webapi(interface = "TextEncoderStream")]
+#[webapi(interface = web_api_interfaces::TextEncoderStream)]
 struct TextEncoderStreamObjectDeclaration {
     #[webapi(data_property)]
     encoding: &'static str,
 }
 
 #[derive(WebApiObject)]
-#[webapi(interface = "TextDecoderStream")]
+#[webapi(interface = web_api_interfaces::TextDecoderStream)]
 struct TextDecoderStreamObjectDeclaration {
     #[webapi(data_property)]
     encoding: String,
@@ -31,21 +32,21 @@ struct TextDecoderStreamObjectDeclaration {
 }
 
 #[derive(WebApiObject)]
-#[webapi(interface = "CountQueuingStrategy")]
+#[webapi(interface = web_api_interfaces::CountQueuingStrategy)]
 struct CountQueuingStrategyObjectDeclaration {
     #[webapi(slot = COUNT_QUEUING_STRATEGY_HIGH_WATER_MARK_SLOT)]
     high_water_mark: f64,
 }
 
 #[derive(WebApiObject)]
-#[webapi(interface = "ByteLengthQueuingStrategy")]
+#[webapi(interface = web_api_interfaces::ByteLengthQueuingStrategy)]
 struct ByteLengthQueuingStrategyObjectDeclaration {
     #[webapi(slot = BYTE_LENGTH_QUEUING_STRATEGY_HIGH_WATER_MARK_SLOT)]
     high_water_mark: f64,
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(name = "CountQueuingStrategy", enumerable)]
+#[webapi(interface = web_api_interfaces::CountQueuingStrategy, enumerable)]
 struct CountQueuingStrategyPrototypeDeclaration {
     #[webapi(accessor_property, getter = count_queuing_strategy_high_water_mark_getter)]
     high_water_mark: (),
@@ -54,7 +55,7 @@ struct CountQueuingStrategyPrototypeDeclaration {
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(name = "ByteLengthQueuingStrategy", enumerable)]
+#[webapi(interface = web_api_interfaces::ByteLengthQueuingStrategy, enumerable)]
 struct ByteLengthQueuingStrategyPrototypeDeclaration {
     #[webapi(accessor_property, getter = byte_length_queuing_strategy_high_water_mark_getter)]
     high_water_mark: (),

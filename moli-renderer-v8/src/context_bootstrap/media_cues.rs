@@ -5,6 +5,7 @@ use crate::document_runtime::DomHandle;
 use crate::native_bridge::JsContextHost;
 use crate::native_bridge::throw_dom_exception;
 use crate::util::{get_private_value, set_private_value, v8str};
+use crate::web_api_interfaces;
 use crate::webidl;
 use moli_webapi_declare::{WebApiFunctionTemplate, WebApiObject};
 
@@ -37,7 +38,7 @@ struct VttCueConstructorArgs {
 }
 
 #[derive(WebApiObject)]
-#[webapi(interface = "VTTCue")]
+#[webapi(interface = web_api_interfaces::VTTCue)]
 struct VttCuePrivateStateDeclaration {
     #[webapi(slot = TEXT_TRACK_CUE_START_TIME_SLOT)]
     _start_time: f64,
@@ -83,7 +84,7 @@ struct VttCuePrivateStateDeclaration {
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(name = "TextTrackCue", enumerable)]
+#[webapi(interface = web_api_interfaces::TextTrackCue, enumerable)]
 struct TextTrackCueTemplateDeclaration {
     #[webapi(accessor_property, getter = text_track_cue_track_getter)]
     track: (),
@@ -132,7 +133,7 @@ struct TextTrackCueTemplateDeclaration {
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(name = "VTTCue", enumerable)]
+#[webapi(interface = web_api_interfaces::VTTCue, enumerable)]
 struct VttCueTemplateDeclaration {
     #[webapi(
         accessor_property,
@@ -193,7 +194,7 @@ struct VttCueTemplateDeclaration {
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(name = "MediaError", enumerable)]
+#[webapi(interface = web_api_interfaces::MediaError, enumerable)]
 struct MediaErrorConstantsDeclaration {
     #[webapi(constant = "MEDIA_ERR_ABORTED", value = 1u32)]
     media_err_aborted: (),
@@ -206,7 +207,7 @@ struct MediaErrorConstantsDeclaration {
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(name = "MediaError", enumerable)]
+#[webapi(interface = web_api_interfaces::MediaError, enumerable)]
 struct MediaErrorPrototypeDeclaration {
     #[webapi(
         accessor_property,

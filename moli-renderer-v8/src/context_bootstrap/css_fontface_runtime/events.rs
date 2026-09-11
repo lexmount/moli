@@ -8,6 +8,7 @@ use crate::util::{
     callback_data_index_value, callback_data_item, get_private_value, global_constructor_prototype,
     set_private_value,
 };
+use crate::web_api_interfaces;
 use crate::webidl;
 use moli_webapi_declare::WebApiFunctionTemplate;
 
@@ -38,7 +39,7 @@ const FONT_FACE_SET_EVENT_HANDLERS: &[FontFaceSetEventHandler] = &[
 ];
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(name = "FontFaceSet")]
+#[webapi(interface = web_api_interfaces::FontFaceSet)]
 struct FontFaceSetEventHandlerAccessorsDeclaration {
     #[webapi(
         accessor_property,
@@ -69,7 +70,7 @@ struct FontFaceSetEventHandlerAccessorsDeclaration {
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(name = "FontFaceSetLoadEvent", enumerable)]
+#[webapi(interface = web_api_interfaces::FontFaceSetLoadEvent, enumerable)]
 struct FontFaceSetLoadEventPrototypeDeclaration {
     #[webapi(
         accessor_property,

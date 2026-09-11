@@ -1,3 +1,4 @@
+use crate::web_api_interfaces;
 use std::collections::{HashMap, HashSet};
 
 use super::super::document_runtime::EventTargetHandle;
@@ -95,7 +96,7 @@ struct AbortLinkedMessagePortListener {
 }
 
 #[derive(WebApiObject)]
-#[webapi(prototype = "Object", interface = "AbortSignal")]
+#[webapi(prototype = "Object", interface = web_api_interfaces::AbortSignal)]
 struct AbortSignalObjectDeclaration<'scope> {
     #[webapi(prototype)]
     prototype: v8::Local<'scope, v8::Object>,

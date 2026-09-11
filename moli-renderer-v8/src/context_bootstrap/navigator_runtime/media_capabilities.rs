@@ -1,4 +1,5 @@
 use super::super::*;
+use crate::web_api_interfaces;
 use crate::{util::get_private_value, webidl};
 use moli_webapi_declare::{WebApiFunctionTemplate, WebApiObject};
 
@@ -6,7 +7,7 @@ const MEDIA_CAPABILITIES_SECURE_CONTEXT_SLOT: &str = "__moliMediaCapabilitiesSec
 const MEDIA_CAPABILITIES_WORKER_SLOT: &str = "__moliMediaCapabilitiesWorker";
 
 #[derive(WebApiObject)]
-#[webapi(interface = "MediaCapabilities")]
+#[webapi(interface = web_api_interfaces::MediaCapabilities)]
 struct MediaCapabilitiesObjectDeclaration {
     #[webapi(slot = MEDIA_CAPABILITIES_SECURE_CONTEXT_SLOT)]
     secure_context: bool,
@@ -16,7 +17,7 @@ struct MediaCapabilitiesObjectDeclaration {
 }
 
 #[derive(Default, WebApiFunctionTemplate)]
-#[webapi(name = "MediaCapabilities", enumerable)]
+#[webapi(interface = web_api_interfaces::MediaCapabilities, enumerable)]
 struct MediaCapabilitiesPrototypeDeclaration {
     #[webapi(method, length = 1, callback = media_capabilities_decoding_info_callback)]
     decoding_info: (),

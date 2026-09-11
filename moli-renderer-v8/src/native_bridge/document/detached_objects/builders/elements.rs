@@ -3,6 +3,7 @@ use crate::util::{
     call_global_bridge_method, context_host_ptr_from_global_bridge, get_private_value,
     set_private_value, v8str,
 };
+use crate::web_api_interfaces;
 use crate::{
     context_bootstrap::ensure_intrinsic_interface_prototype,
     custom_elements,
@@ -493,7 +494,7 @@ pub(in crate::native_bridge::document) fn build_detached_element_object<'s>(
         new_detached_object_with_prototype(scope, "__detachedElementPrototype", to_string_tag)?
     };
     let interface = to_string_tag.unwrap_or("Element");
-    moli_webapi_declare::initialize_web_api_object(scope, object, interface).ok()?;
+    web_api_interfaces::initialize(scope, object, interface).ok()?;
     let state = new_detached_state_object(scope, "element", 1, &node_name)?;
     let _ = state.set(
         scope,

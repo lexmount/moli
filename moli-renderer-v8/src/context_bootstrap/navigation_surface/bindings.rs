@@ -1,8 +1,9 @@
 use super::*;
+use crate::web_api_interfaces;
 use moli_webapi_declare::WebApiFunctionTemplate;
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(name = "History", enumerable)]
+#[webapi(interface = web_api_interfaces::History, enumerable)]
 struct HistoryTemplateMethodsDeclaration {
     #[webapi(method, length = 0, callback = history_back_callback)]
     back: (),
@@ -21,7 +22,7 @@ struct HistoryTemplateMethodsDeclaration {
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(name = "Navigation", enumerable)]
+#[webapi(interface = web_api_interfaces::Navigation, enumerable)]
 struct NavigationTemplateMethodsDeclaration {
     #[webapi(method, length = 2, callback = navigation_navigate_callback)]
     navigate: (),

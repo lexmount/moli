@@ -190,8 +190,7 @@ pub(in crate::context_bootstrap) enum ConstructorPrototypeProperty {
 
 #[derive(Clone, Copy)]
 pub(in crate::context_bootstrap) struct ConstructorSpec {
-    pub(in crate::context_bootstrap) name: &'static str,
-    pub(in crate::context_bootstrap) parent: Option<&'static str>,
+    pub(in crate::context_bootstrap) interface: moli_webapi_declare::WebApiInterfaceDescriptor,
     pub(in crate::context_bootstrap) kind: ConstructorKind,
 }
 

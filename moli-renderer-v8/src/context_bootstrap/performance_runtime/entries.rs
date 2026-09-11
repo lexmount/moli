@@ -6,6 +6,7 @@ use crate::util::{
     callback_data_index_value, callback_data_item, get_private_value, set_private_value,
     throw_type_error,
 };
+use crate::web_api_interfaces;
 use crate::webidl;
 use moli_webapi_declare::{WebApiFunctionTemplate, WebApiObject};
 
@@ -25,7 +26,7 @@ struct PerformanceGetEntriesByNameArgs {
 }
 
 #[derive(WebApiObject)]
-#[webapi(interface = "PerformanceEntry", scope_lifetime = 'scope)]
+#[webapi(interface = web_api_interfaces::PerformanceEntry, scope_lifetime = 'scope)]
 struct PerformanceEntryObjectDeclaration<'scope, 'name, 'entry_type> {
     #[webapi(slot = PERFORMANCE_ENTRY_NAME_SLOT)]
     name: &'name str,
@@ -53,7 +54,7 @@ struct PerformanceEntryJsonSnapshotDeclaration {
 }
 
 #[derive(WebApiObject)]
-#[webapi(interface = "PerformanceResourceTiming")]
+#[webapi(interface = web_api_interfaces::PerformanceResourceTiming)]
 struct PerformanceResourceTimingSlotDeclaration {
     #[webapi(slot = PERFORMANCE_RESOURCE_INITIATOR_TYPE_SLOT)]
     initiator_type: String,
@@ -208,7 +209,7 @@ impl PerformanceResourceTimingJsonSnapshotDeclaration {
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(name = "PerformanceEntry", receiver = "PerformanceEntry")]
+#[webapi(interface = web_api_interfaces::PerformanceEntry, receiver)]
 struct PerformanceEntryPrototypeAccessorsDeclaration {
     #[webapi(
         accessor_property,
@@ -241,7 +242,7 @@ struct PerformanceEntryPrototypeAccessorsDeclaration {
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(name = "PerformanceEntry", enumerable, receiver = "PerformanceEntry")]
+#[webapi(interface = web_api_interfaces::PerformanceEntry, enumerable, receiver)]
 struct PerformanceEntryPrototypeMethodsDeclaration {
     #[webapi(
         method,
@@ -266,8 +267,8 @@ struct PerformanceEntryDetailPrototypeAccessorsDeclaration {
 
 #[derive(WebApiFunctionTemplate)]
 #[webapi(
-    name = "PerformanceResourceTiming",
-    receiver = "PerformanceResourceTiming"
+    interface = web_api_interfaces::PerformanceResourceTiming,
+    receiver
 )]
 struct PerformanceResourceTimingPrototypeAccessorsDeclaration {
     #[webapi(
@@ -414,9 +415,9 @@ struct PerformanceResourceTimingPrototypeAccessorsDeclaration {
 
 #[derive(WebApiFunctionTemplate)]
 #[webapi(
-    name = "PerformanceResourceTiming",
+    interface = web_api_interfaces::PerformanceResourceTiming,
     enumerable,
-    receiver = "PerformanceResourceTiming"
+    receiver
 )]
 struct PerformanceResourceTimingPrototypeMethodsDeclaration {
     #[webapi(
@@ -756,7 +757,7 @@ pub(super) fn create_performance_entry<'s>(
         "resource" => "PerformanceResourceTiming",
         _ => "PerformanceEntry",
     };
-    moli_webapi_declare::initialize_web_api_object(scope, entry, prototype_name)
+    web_api_interfaces::initialize(scope, entry, prototype_name)
         .expect("PerformanceEntry primary interface should initialize");
     if let Ok(prototype) =
         crate::context_bootstrap::ensure_intrinsic_interface_prototype(scope, prototype_name)

@@ -1,3 +1,4 @@
+use crate::web_api_interfaces;
 use crate::{
     context_bootstrap,
     dom::native::{DocumentType, Node, NodeType},
@@ -37,7 +38,7 @@ pub(super) use self::mutation::*;
 pub(super) use self::tree::*;
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(name = "Node", enumerable)]
+#[webapi(interface = web_api_interfaces::Node, enumerable)]
 struct NodePrototypeReflectionDeclaration {
     #[webapi(accessor_property = "nodeType", getter = node_node_type_getter_function)]
     node_type: (),
@@ -158,7 +159,7 @@ struct NonDocumentTypeChildNodePrototypeDeclaration {
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(name = "DocumentType", enumerable)]
+#[webapi(interface = web_api_interfaces::DocumentType, enumerable)]
 struct DocumentTypePrototypeDeclaration {
     #[webapi(accessor_property, getter = document_type_name_getter_function)]
     name: (),

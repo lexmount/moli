@@ -9,6 +9,7 @@ use crate::service_worker_runtime::{
     ServiceWorkerRegistrationError, ServiceWorkerUpdateViaCache,
 };
 use crate::util::{get_private_value, set_private_value};
+use crate::web_api_interfaces;
 use crate::webidl;
 use crate::worker::WorkerScriptKind;
 use moli_webapi_declare::{ObjectLiteralDeclaration, WebApiObject, WebApiObjectDeclaration};
@@ -39,7 +40,7 @@ const SERVICE_WORKER_CONTAINER_REGISTRATIONS_SLOT: &str =
 const SERVICE_WORKER_CONTAINER_CONTROLLER_SLOT: &str = "__moliServiceWorkerContainerController";
 
 #[derive(WebApiObject)]
-#[webapi(interface = "ServiceWorkerRegistration")]
+#[webapi(interface = web_api_interfaces::ServiceWorkerRegistration)]
 struct ServiceWorkerRegistrationObjectDeclaration<'scope> {
     #[webapi(data_property, readonly)]
     scope: String,
@@ -116,7 +117,7 @@ struct ServiceWorkerNavigationPreloadStateDeclaration {
 }
 
 #[derive(WebApiObject)]
-#[webapi(interface = "PushSubscriptionOptions", prototype = "Object")]
+#[webapi(interface = web_api_interfaces::PushSubscriptionOptions, prototype = "Object")]
 struct ServiceWorkerPushSubscriptionOptionsDeclaration<'scope> {
     #[webapi(data_property = "userVisibleOnly", readonly)]
     user_visible_only: bool,
@@ -126,7 +127,7 @@ struct ServiceWorkerPushSubscriptionOptionsDeclaration<'scope> {
 }
 
 #[derive(WebApiObject)]
-#[webapi(interface = "SyncManager")]
+#[webapi(interface = web_api_interfaces::SyncManager)]
 struct ServiceWorkerSyncManagerDeclaration {
     #[webapi(
         method = "register",
@@ -144,7 +145,7 @@ struct ServiceWorkerSyncManagerDeclaration {
 }
 
 #[derive(WebApiObject)]
-#[webapi(interface = "PeriodicSyncManager")]
+#[webapi(interface = web_api_interfaces::PeriodicSyncManager)]
 struct ServiceWorkerPeriodicSyncManagerDeclaration {
     #[webapi(
         method = "register",
@@ -169,7 +170,7 @@ struct ServiceWorkerPeriodicSyncManagerDeclaration {
 }
 
 #[derive(WebApiObject)]
-#[webapi(interface = "PushManager")]
+#[webapi(interface = web_api_interfaces::PushManager)]
 struct ServiceWorkerPushManagerDeclaration {
     #[webapi(
         method = "subscribe",
@@ -194,7 +195,7 @@ struct ServiceWorkerPushManagerDeclaration {
 }
 
 #[derive(WebApiObject)]
-#[webapi(interface = "NavigationPreloadManager")]
+#[webapi(interface = web_api_interfaces::NavigationPreloadManager)]
 struct ServiceWorkerNavigationPreloadManagerDeclaration {
     #[webapi(
         method,
@@ -226,7 +227,7 @@ struct ServiceWorkerNavigationPreloadManagerDeclaration {
 }
 
 #[derive(WebApiObject)]
-#[webapi(interface = "PushSubscription")]
+#[webapi(interface = web_api_interfaces::PushSubscription)]
 struct ServiceWorkerPushSubscriptionDeclaration<'scope> {
     #[webapi(data_property, readonly)]
     endpoint: String,
@@ -249,7 +250,7 @@ struct ServiceWorkerPushSubscriptionDeclaration<'scope> {
 }
 
 #[derive(WebApiObject)]
-#[webapi(interface = "ServiceWorker")]
+#[webapi(interface = web_api_interfaces::ServiceWorker)]
 struct ServiceWorkerObjectDeclaration {
     #[webapi(data_property = "scriptURL", readonly)]
     script_url: String,
@@ -296,7 +297,7 @@ struct ServiceWorkerMessageEventInitDeclaration<'scope> {
 }
 
 #[derive(WebApiObject)]
-#[webapi(interface = "Event", prototype = "Object")]
+#[webapi(interface = web_api_interfaces::Event, prototype = "Object")]
 struct ServiceWorkerSimpleEventDeclaration<'scope> {
     #[webapi(data_property = "type", enumerable)]
     event_type: v8::Local<'scope, v8::String>,

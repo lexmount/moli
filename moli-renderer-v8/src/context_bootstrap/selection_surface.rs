@@ -15,10 +15,11 @@ use super::selection_callbacks::{
 };
 use super::*;
 use crate::util::{callback_data_index_value, get_private_value, set_private_value};
+use crate::web_api_interfaces;
 use moli_webapi_declare::WebApiFunctionTemplate;
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(name = "Selection", enumerable)]
+#[webapi(interface = web_api_interfaces::Selection, enumerable)]
 struct SelectionPrototypeMethodsDeclaration {
     #[webapi(method, length = 1, callback = selection_get_range_at_callback)]
     get_range_at: (),
@@ -57,7 +58,7 @@ struct SelectionPrototypeMethodsDeclaration {
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(name = "Selection")]
+#[webapi(interface = web_api_interfaces::Selection)]
 struct SelectionPrototypeAccessorsDeclaration {
     #[webapi(
         accessor_property,

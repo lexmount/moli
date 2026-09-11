@@ -1,5 +1,6 @@
 use super::*;
 use crate::util::get_private_value;
+use crate::web_api_interfaces;
 use crate::webidl;
 use moli_webapi_declare::WebApiObject;
 
@@ -8,7 +9,7 @@ const PROGRESS_EVENT_LOADED_SLOT: &str = "__lmProgressEventLoaded";
 const PROGRESS_EVENT_TOTAL_SLOT: &str = "__lmProgressEventTotal";
 
 #[derive(WebApiObject)]
-#[webapi(interface = "ProgressEvent")]
+#[webapi(interface = web_api_interfaces::ProgressEvent)]
 struct ProgressEventStateDeclaration {
     #[webapi(slot = PROGRESS_EVENT_LENGTH_COMPUTABLE_SLOT)]
     length_computable: bool,

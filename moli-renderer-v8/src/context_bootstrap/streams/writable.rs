@@ -1,5 +1,6 @@
 use super::*;
 use crate::context_bootstrap::stream_adapter::{stream_slot_object, writable_stream_abort_promise};
+use crate::web_api_interfaces;
 use crate::webidl;
 use moli_streams::writable::{AcquireWriterPlan, UnlockedCloseEntryPlan, UnlockedEntryPlan};
 use moli_webapi_declare::WebApiFunctionTemplate;
@@ -170,7 +171,7 @@ fn set_rejected_writable_stream_type_error(
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(name = "TransformStream", enumerable)]
+#[webapi(interface = web_api_interfaces::TransformStream, enumerable)]
 struct TransformStreamPrototypeAttributesDeclaration {
     #[webapi(accessor_property, getter = transform_stream_readable_getter_callback)]
     readable: (),
@@ -180,7 +181,7 @@ struct TransformStreamPrototypeAttributesDeclaration {
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(name = "TextEncoderStream", enumerable)]
+#[webapi(interface = web_api_interfaces::TextEncoderStream, enumerable)]
 struct TextEncoderStreamPrototypeAttributesDeclaration {
     #[webapi(accessor_property, getter = transform_stream_readable_getter_callback)]
     readable: (),
@@ -190,7 +191,7 @@ struct TextEncoderStreamPrototypeAttributesDeclaration {
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(name = "TextDecoderStream", enumerable)]
+#[webapi(interface = web_api_interfaces::TextDecoderStream, enumerable)]
 struct TextDecoderStreamPrototypeAttributesDeclaration {
     #[webapi(accessor_property, getter = transform_stream_readable_getter_callback)]
     readable: (),

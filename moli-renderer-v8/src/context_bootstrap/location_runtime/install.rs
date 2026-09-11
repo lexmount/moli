@@ -14,6 +14,7 @@ use super::slots::{location_href_slot, sync_location_object_fields};
 use super::*;
 use crate::context_bootstrap::exposed_interfaces::build_intrinsic_interface_instance;
 use crate::util::{callback_data_index_value, callback_data_item};
+use crate::web_api_interfaces;
 use anyhow::{Result, anyhow};
 use moli_webapi_declare::WebApiObject;
 
@@ -32,7 +33,7 @@ enum LocationAttribute {
 }
 
 #[derive(Default, WebApiObject)]
-#[webapi(interface = "Location")]
+#[webapi(interface = web_api_interfaces::Location)]
 struct LocationOwnSurfaceDeclaration {
     #[webapi(
         accessor_property,

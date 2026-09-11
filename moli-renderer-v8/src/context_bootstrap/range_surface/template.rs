@@ -2,11 +2,12 @@ use super::{
     RANGE_WRAPPER_INTERNAL_FIELD_COUNT,
     construction::{range_constructor_callback, static_range_constructor_callback},
 };
+use crate::web_api_interfaces;
 use moli_webapi_declare::WebApiFunctionTemplate;
 
 #[derive(WebApiFunctionTemplate)]
 #[webapi(
-    name = "AbstractRange",
+    interface = web_api_interfaces::AbstractRange,
     constructor = "illegal",
     constructor_length = 0
 )]
@@ -14,7 +15,7 @@ struct AbstractRangeTemplateDeclaration {}
 
 #[derive(WebApiFunctionTemplate)]
 #[webapi(
-    name = "Range",
+    interface = web_api_interfaces::Range,
     constructor_callback = range_constructor_callback,
     constructor_length = 0
 )]
@@ -34,7 +35,7 @@ struct RangeConstructorTemplateDeclaration {
 
 #[derive(WebApiFunctionTemplate)]
 #[webapi(
-    name = "StaticRange",
+    interface = web_api_interfaces::StaticRange,
     constructor_callback = static_range_constructor_callback,
     constructor_length = 1
 )]

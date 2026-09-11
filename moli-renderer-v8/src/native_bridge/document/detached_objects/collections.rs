@@ -10,6 +10,7 @@ use crate::util::{
     context_host_ptr_from_global_bridge, get_private_value, serialize_v8_iter_array,
     set_private_value,
 };
+use crate::web_api_interfaces;
 use crate::webidl;
 use moli_webapi_declare::{ObjectLiteralDeclaration, WebApiObject};
 
@@ -23,7 +24,7 @@ struct DetachedCollectionItemsAndNamedDataDeclaration<'scope> {
 }
 
 #[derive(WebApiObject)]
-#[webapi(interface = "HTMLAllCollection")]
+#[webapi(interface = web_api_interfaces::HTMLAllCollection)]
 struct DetachedDocumentAllCollectionDeclaration<'scope> {
     /// Declaration-only input shared by `item` and `namedItem`.
     ///
@@ -46,7 +47,7 @@ struct DetachedDocumentAllCollectionDeclaration<'scope> {
 /// All fixed members come from the shared `NodeList` prototype. The wrapper
 /// only carries its indexed values and private collection brand/length state.
 #[derive(WebApiObject)]
-#[webapi(interface = "NodeList", require_prototype, allow_empty)]
+#[webapi(interface = web_api_interfaces::NodeList, require_prototype, allow_empty)]
 struct DetachedNodeListDeclaration {}
 
 /// Declares the detached `HTMLCollection` wrapper surface.
@@ -55,7 +56,7 @@ struct DetachedNodeListDeclaration {}
 /// reusable interface template. Only indexed/named snapshot entries remain
 /// own properties.
 #[derive(WebApiObject)]
-#[webapi(interface = "HTMLCollection", require_prototype, allow_empty)]
+#[webapi(interface = web_api_interfaces::HTMLCollection, require_prototype, allow_empty)]
 struct DetachedHtmlCollectionDeclaration {}
 
 #[derive(webidl::WebIdlArgs)]

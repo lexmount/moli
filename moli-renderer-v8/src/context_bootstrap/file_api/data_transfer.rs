@@ -3,6 +3,7 @@ use crate::blob;
 use crate::native_bridge::throw_dom_exception;
 use crate::runtime::{RendererDragData, RendererDraggedDirectory, RendererDraggedFile};
 use crate::util::{get_private_object, get_private_value, set_private_value};
+use crate::web_api_interfaces;
 use crate::webidl;
 use moli_file_api::data_transfer::{
     DataTransferItemSummary, child_entry_full_path, clear_data_removes_item,
@@ -43,7 +44,7 @@ pub(super) const FILE_SYSTEM_DIRECTORY_READER_ERROR_SLOT: &str =
     "__lmFileSystemDirectoryReaderError";
 
 #[derive(WebApiObject)]
-#[webapi(interface = "DataTransfer", require_prototype)]
+#[webapi(interface = web_api_interfaces::DataTransfer, require_prototype)]
 struct DataTransferObjectDeclaration<'s> {
     #[webapi(slot = DATA_TRANSFER_FILES_SLOT)]
     files: v8::Local<'s, v8::Object>,
@@ -67,7 +68,7 @@ pub(crate) fn is_branded_data_transfer_object<'s>(
 }
 
 #[derive(Default, WebApiObject)]
-#[webapi(interface = "DataTransfer", require_prototype)]
+#[webapi(interface = web_api_interfaces::DataTransfer, require_prototype)]
 struct DataTransferShellDeclaration {
     #[webapi(slot = DATA_TRANSFER_FILES_SLOT, init = "null")]
     files: (),
@@ -82,7 +83,7 @@ struct DataTransferShellDeclaration {
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(name = "DataTransfer")]
+#[webapi(interface = web_api_interfaces::DataTransfer)]
 struct DataTransferPrototypeAccessorsDeclaration {
     #[webapi(accessor_property, getter = data_transfer_files_getter, enumerable)]
     files: (),
@@ -107,7 +108,7 @@ struct DataTransferPrototypeAccessorsDeclaration {
 }
 
 #[derive(WebApiObject)]
-#[webapi(interface = "DataTransferItemList", require_prototype)]
+#[webapi(interface = web_api_interfaces::DataTransferItemList, require_prototype)]
 struct DataTransferItemListObjectDeclaration<'s> {
     #[webapi(
         slot = DATA_TRANSFER_ITEM_LIST_ARRAY_SLOT,
@@ -124,14 +125,14 @@ struct DataTransferItemListObjectDeclaration<'s> {
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(name = "DataTransferItemList")]
+#[webapi(interface = web_api_interfaces::DataTransferItemList)]
 struct DataTransferItemListPrototypeAccessorsDeclaration {
     #[webapi(accessor_property, getter = data_transfer_item_list_length_getter, enumerable)]
     length: (),
 }
 
 #[derive(WebApiObject)]
-#[webapi(interface = "DataTransferItem", scope_lifetime = 's, require_prototype)]
+#[webapi(interface = web_api_interfaces::DataTransferItem, scope_lifetime = 's, require_prototype)]
 struct DataTransferFileItemObjectDeclaration<'s, 'item_type> {
     #[webapi(slot = DATA_TRANSFER_ITEM_KIND_SLOT, constructor_default = "file")]
     kind: &'static str,
@@ -144,7 +145,7 @@ struct DataTransferFileItemObjectDeclaration<'s, 'item_type> {
 }
 
 #[derive(WebApiObject)]
-#[webapi(interface = "DataTransferItem", require_prototype)]
+#[webapi(interface = web_api_interfaces::DataTransferItem, require_prototype)]
 struct DataTransferDirectoryItemObjectDeclaration<'s> {
     #[webapi(slot = DATA_TRANSFER_ITEM_KIND_SLOT, constructor_default = "file")]
     kind: &'static str,
@@ -155,7 +156,7 @@ struct DataTransferDirectoryItemObjectDeclaration<'s> {
 }
 
 #[derive(WebApiObject)]
-#[webapi(interface = "DataTransferItem", require_prototype)]
+#[webapi(interface = web_api_interfaces::DataTransferItem, require_prototype)]
 struct DataTransferStringItemObjectDeclaration<'item_type, 'data> {
     #[webapi(slot = DATA_TRANSFER_ITEM_KIND_SLOT, constructor_default = "string")]
     kind: &'static str,
@@ -166,7 +167,7 @@ struct DataTransferStringItemObjectDeclaration<'item_type, 'data> {
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(name = "DataTransferItem")]
+#[webapi(interface = web_api_interfaces::DataTransferItem)]
 struct DataTransferItemPrototypeAccessorsDeclaration {
     #[webapi(accessor_property, getter = data_transfer_item_kind_getter, enumerable)]
     kind: (),
@@ -175,7 +176,7 @@ struct DataTransferItemPrototypeAccessorsDeclaration {
 }
 
 #[derive(WebApiObject)]
-#[webapi(interface = "FileSystem", require_prototype)]
+#[webapi(interface = web_api_interfaces::FileSystem, require_prototype)]
 struct FileSystemObjectDeclaration<'s> {
     #[webapi(data_property, constructor_default = "")]
     name: &'static str,
@@ -185,7 +186,7 @@ struct FileSystemObjectDeclaration<'s> {
 
 #[derive(WebApiObject)]
 #[webapi(
-    interface = "FileSystemFileEntry",
+    interface = web_api_interfaces::FileSystemFileEntry,
     scope_lifetime = 's,
     require_prototype
 )]
@@ -206,7 +207,7 @@ struct FileSystemFileEntryObjectDeclaration<'s, 'full_path, 'name> {
 
 #[derive(WebApiObject)]
 #[webapi(
-    interface = "FileSystemDirectoryEntry",
+    interface = web_api_interfaces::FileSystemDirectoryEntry,
     scope_lifetime = 's,
     require_prototype
 )]
@@ -226,7 +227,7 @@ struct FileSystemDirectoryEntryObjectDeclaration<'s, 'full_path, 'name> {
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(name = "FileSystemEntry")]
+#[webapi(interface = web_api_interfaces::FileSystemEntry)]
 struct FileSystemEntryPrototypeAccessorsDeclaration {
     #[webapi(accessor_property, getter = file_system_entry_filesystem_getter, enumerable)]
     filesystem: (),
@@ -253,7 +254,7 @@ struct FileSystemEntryPrototypeAccessorsDeclaration {
 }
 
 #[derive(WebApiObject)]
-#[webapi(interface = "FileSystemDirectoryReader", require_prototype)]
+#[webapi(interface = web_api_interfaces::FileSystemDirectoryReader, require_prototype)]
 struct FileSystemDirectoryReaderObjectDeclaration<'s> {
     #[webapi(slot = FILE_SYSTEM_DIRECTORY_READER_ENTRIES_SLOT)]
     entries: v8::Local<'s, v8::Array>,

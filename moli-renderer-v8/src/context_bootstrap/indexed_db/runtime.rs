@@ -1,5 +1,6 @@
 use super::*;
 use crate::util::{get_private_object, get_private_value, set_private_value};
+use crate::web_api_interfaces;
 use moli_webapi_declare::WebApiObject;
 use std::rc::Rc;
 
@@ -13,7 +14,7 @@ const INDEXED_DB_READWRITE_TRANSACTION_QUEUE_FIELD: &str =
     "moli.IndexedDb.runtime.readwriteTransactionQueue";
 
 #[derive(Default, WebApiObject)]
-#[webapi(interface = "IDBFactory", require_prototype)]
+#[webapi(interface = web_api_interfaces::IDBFactory, require_prototype)]
 struct IndexedDbFactoryRuntimeDeclaration {
     #[webapi(slot = INDEXED_DB_EVENT_LISTENERS_SLOT, init = "null_object")]
     event_listeners: (),

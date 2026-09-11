@@ -1,5 +1,6 @@
 use super::*;
 use crate::util::{define_v8_array_data_property, set_null_prototype, v8str};
+use crate::web_api_interfaces;
 use crate::webidl;
 use moli_streams::readable::byte_controller::{
     ArrayBufferViewKind, ByobRequestPlan, ByteControllerSnapshot, ByteEnqueueContinuationPlan,
@@ -54,7 +55,7 @@ fn array_buffer_view_kind(value: v8::Local<'_, v8::Value>) -> Option<ArrayBuffer
 }
 
 #[derive(WebApiObject)]
-#[webapi(interface = "ReadableStreamBYOBRequest")]
+#[webapi(interface = web_api_interfaces::ReadableStreamBYOBRequest)]
 struct ReadableStreamByobRequestObjectDeclaration<'scope> {
     #[webapi(slot = READABLE_STREAM_BYOB_REQUEST_CONTROLLER_SLOT)]
     controller: v8::Local<'scope, v8::Object>,

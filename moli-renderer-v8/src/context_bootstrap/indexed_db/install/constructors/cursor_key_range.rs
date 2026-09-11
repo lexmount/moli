@@ -1,8 +1,9 @@
 use super::*;
+use crate::web_api_interfaces;
 use moli_webapi_declare::WebApiFunctionTemplate;
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(name = "IDBCursor", enumerable)]
+#[webapi(interface = web_api_interfaces::IDBCursor, enumerable)]
 struct IdbCursorPrototypeDeclaration {
     #[webapi(method, length = 1, callback = idb_cursor_advance_callback)]
     advance: (),
@@ -21,14 +22,14 @@ struct IdbCursorPrototypeDeclaration {
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(name = "IDBKeyRange", enumerable)]
+#[webapi(interface = web_api_interfaces::IDBKeyRange, enumerable)]
 struct IdbKeyRangePrototypeDeclaration {
     #[webapi(method, length = 1, callback = idb_key_range_includes_callback)]
     includes: (),
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(name = "IDBKeyRange", enumerable)]
+#[webapi(interface = web_api_interfaces::IDBKeyRange, enumerable)]
 struct IdbKeyRangeConstructorDeclaration {
     #[webapi(static_method, length = 1, callback = idb_key_range_only_callback)]
     only: (),

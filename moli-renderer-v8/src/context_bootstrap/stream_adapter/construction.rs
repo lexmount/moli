@@ -1,8 +1,9 @@
 use super::*;
+use crate::web_api_interfaces;
 use moli_webapi_declare::WebApiObject;
 
 #[derive(Default, WebApiObject)]
-#[webapi(interface = "ReadableStream")]
+#[webapi(interface = web_api_interfaces::ReadableStream)]
 struct ReadableStreamShellDeclaration {
     #[webapi(slot = READABLE_STREAM_QUEUE_SLOT, init = "array")]
     queue: (),
@@ -31,7 +32,7 @@ struct ReadableStreamShellDeclaration {
 }
 
 #[derive(Default, WebApiObject)]
-#[webapi(interface = "WritableStream")]
+#[webapi(interface = web_api_interfaces::WritableStream)]
 struct WritableStreamShellDeclaration {
     #[webapi(slot = WRITABLE_STREAM_LOCKED_SLOT, init = false)]
     locked: (),
@@ -58,7 +59,7 @@ struct WritableStreamShellDeclaration {
 }
 
 #[derive(Default, WebApiObject)]
-#[webapi(interface = "TransformStream")]
+#[webapi(interface = web_api_interfaces::TransformStream)]
 struct TransformStreamShellDeclaration {
     #[webapi(slot = TRANSFORM_STREAM_READABLE_SLOT, init = "null")]
     readable: (),
@@ -67,7 +68,7 @@ struct TransformStreamShellDeclaration {
 }
 
 #[derive(WebApiObject)]
-#[webapi(interface = "ReadableStream")]
+#[webapi(interface = web_api_interfaces::ReadableStream)]
 struct ReadableStreamObjectDeclaration<'scope> {
     #[webapi(slot = READABLE_STREAM_QUEUE_SLOT, init = "array")]
     queue: (),
@@ -116,7 +117,7 @@ const READABLE_STREAM_START_PULL_AFTER_START_SLOT: &str = "__moliReadableStreamS
 
 #[derive(WebApiObject)]
 #[webapi(
-    interface = "WritableStream",
+    interface = web_api_interfaces::WritableStream,
     scope_lifetime = 'scope,
 )]
 struct WritableStreamObjectDeclaration<'scope, 'value> {
@@ -219,7 +220,7 @@ pub(in crate::context_bootstrap) fn initialize_transform_stream_object<'s>(
         Some("text-decoder") => "TextDecoderStream",
         _ => "TransformStream",
     };
-    moli_webapi_declare::initialize_web_api_object(scope, stream, interface)
+    web_api_interfaces::initialize(scope, stream, interface)
         .expect("stream identity should initialize");
 }
 
@@ -322,7 +323,8 @@ pub(in crate::context_bootstrap) fn initialize_webidl_transform_stream_object<'s
     TransformStreamObjectDeclaration::new(readable, writable)
         .initialize(scope, stream)
         .expect("TransformStream declaration should initialize object");
-    moli_webapi_declare::initialize_web_api_object(scope, stream, "TransformStream")
+    web_api_interfaces::TransformStream::DESCRIPTOR
+        .initialize(scope, stream)
         .expect("TransformStream identity should initialize");
 }
 

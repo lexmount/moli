@@ -1,8 +1,9 @@
 use super::fetch::window_fetch_callback;
+use crate::web_api_interfaces;
 use moli_webapi_declare::WebApiFunctionTemplate;
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(name = "Window", enumerable)]
+#[webapi(interface = web_api_interfaces::Window, enumerable)]
 struct WindowNetworkTemplateMethodsDeclaration {
     #[webapi(method = "fetch", length = 1, callback = window_fetch_callback)]
     fetch: (),

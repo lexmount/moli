@@ -1,10 +1,11 @@
 use super::*;
+use crate::web_api_interfaces;
 use moli_webapi_declare::WebApiObject;
 
 #[derive(WebApiObject)]
 #[webapi(
     prototype = "Object",
-    interface = "IDBCursor",
+    interface = web_api_interfaces::IDBCursor,
     data_properties,
     enumerable
 )]
@@ -121,7 +122,7 @@ fn create_cursor_object_in_current_context<'s>(
     } else {
         "IDBCursorWithValue"
     };
-    moli_webapi_declare::initialize_web_api_object(scope, cursor, interface).ok()?;
+    web_api_interfaces::initialize(scope, cursor, interface).ok()?;
     let storage_scope = indexed_db_typed_storage_scope(scope, request);
     let owner = indexed_db_typed_execution_owner(scope, request)
         .expect("IDBCursor should inherit typed owner from request");

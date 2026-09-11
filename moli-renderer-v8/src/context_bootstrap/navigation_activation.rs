@@ -13,11 +13,12 @@ use super::navigation_window::{
 use super::*;
 use crate::native_bridge::{NavigationActivationSeed, NavigationHistorySerializedEntry};
 use crate::util::{get_private_value, set_private_value};
+use crate::web_api_interfaces;
 use moli_webapi_declare::WebApiObject;
 
 #[derive(WebApiObject)]
 #[webapi(
-    interface = "NavigationActivation",
+    interface = web_api_interfaces::NavigationActivation,
     own_to_string_tag = "NavigationActivation",
     readonly_to_string_tag
 )]
@@ -34,7 +35,7 @@ struct NavigationActivationObjectDeclaration<'scope> {
 
 #[derive(WebApiObject)]
 #[webapi(
-    interface = "NavigationTransition",
+    interface = web_api_interfaces::NavigationTransition,
     own_to_string_tag = "NavigationTransition",
     readonly_to_string_tag
 )]

@@ -1,5 +1,6 @@
 use super::*;
 use crate::util::{callback_data_index_value, get_private_value};
+use crate::web_api_interfaces;
 use crate::webidl;
 use moli_webapi_declare::{WebApiFunctionTemplate, WebApiObject};
 
@@ -27,7 +28,7 @@ const TOUCH_EVENT_CTRL_KEY_SLOT: &str = "__lmTouchEventCtrlKey";
 const TOUCH_EVENT_SHIFT_KEY_SLOT: &str = "__lmTouchEventShiftKey";
 
 #[derive(WebApiObject)]
-#[webapi(interface = "Touch")]
+#[webapi(interface = web_api_interfaces::Touch)]
 struct TouchObjectDeclaration<'scope> {
     #[webapi(slot = TOUCH_IDENTIFIER_SLOT)]
     identifier: f64,
@@ -56,7 +57,7 @@ struct TouchObjectDeclaration<'scope> {
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(name = "Touch")]
+#[webapi(interface = web_api_interfaces::Touch)]
 struct TouchPrototypeDeclaration {
     #[webapi(accessor_property, getter = touch_getter, data = callback_data_index_value(scope, 0), enumerable)]
     identifier: (),
@@ -85,14 +86,14 @@ struct TouchPrototypeDeclaration {
 }
 
 #[derive(WebApiObject)]
-#[webapi(interface = "TouchList")]
+#[webapi(interface = web_api_interfaces::TouchList)]
 struct TouchListObjectDeclaration {
     #[webapi(slot = TOUCH_LIST_LENGTH_SLOT)]
     length: u32,
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(name = "TouchList", enumerable)]
+#[webapi(interface = web_api_interfaces::TouchList, enumerable)]
 struct TouchListPrototypeDeclaration {
     #[webapi(
         intrinsic_data_property = v8::Intrinsic::ArrayProtoValues,
@@ -115,7 +116,7 @@ struct TouchUiEventInitDeclaration<'scope> {
 }
 
 #[derive(WebApiObject)]
-#[webapi(interface = "TouchEvent")]
+#[webapi(interface = web_api_interfaces::TouchEvent)]
 struct TouchEventObjectDeclaration<'scope> {
     #[webapi(slot = TOUCH_EVENT_TOUCHES_SLOT)]
     touches: v8::Local<'scope, v8::Object>,
@@ -134,7 +135,7 @@ struct TouchEventObjectDeclaration<'scope> {
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(name = "TouchEvent")]
+#[webapi(interface = web_api_interfaces::TouchEvent)]
 struct TouchEventPrototypeDeclaration {
     #[webapi(accessor_property, getter = touch_event_getter, data = callback_data_index_value(scope, 0), enumerable)]
     touches: (),

@@ -1,3 +1,4 @@
+use crate::web_api_interfaces;
 use crate::{
     native_bridge::{document, node::node_runtime_and_handle_from_args},
     webidl,
@@ -7,7 +8,7 @@ use moli_webapi_declare::WebApiFunctionTemplate;
 use super::*;
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(name = "CharacterData", enumerable)]
+#[webapi(interface = web_api_interfaces::CharacterData, enumerable)]
 struct CharacterDataPrototypeDeclaration {
     #[webapi(
         accessor_property,
@@ -30,7 +31,7 @@ struct CharacterDataPrototypeDeclaration {
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(name = "Text", enumerable)]
+#[webapi(interface = web_api_interfaces::Text, enumerable)]
 struct TextPrototypeDeclaration {
     #[webapi(accessor_property, getter = text_whole_text_getter_callback)]
     whole_text: (),
@@ -39,7 +40,7 @@ struct TextPrototypeDeclaration {
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(name = "ProcessingInstruction", enumerable)]
+#[webapi(interface = web_api_interfaces::ProcessingInstruction, enumerable)]
 struct ProcessingInstructionPrototypeDeclaration {
     #[webapi(accessor_property, getter = processing_instruction_target_getter_callback)]
     target: (),

@@ -9,6 +9,7 @@ use crate::util::{
     array_push_value, call_object_method, get_private_value, object_string_property,
     set_private_value, set_symbol_to_string_tag,
 };
+use crate::web_api_interfaces;
 use crate::webidl;
 use moli_webapi_declare::{WebApiFunctionTemplate, WebApiObject};
 
@@ -40,7 +41,7 @@ const DYNAMICS_COMPRESSOR_REDUCTION_SLOT: &str = "__moliDynamicsCompressorReduct
 const ANALYSER_FFT_SIZE_SLOT: &str = "__moliAnalyserFftSize";
 
 #[derive(WebApiObject)]
-#[webapi(interface = "AudioContext")]
+#[webapi(interface = web_api_interfaces::AudioContext)]
 struct AudioContextObjectDeclaration<'scope> {
     #[webapi(data_property = "currentTime")]
     current_time: f64,
@@ -63,7 +64,7 @@ struct AudioContextObjectDeclaration<'scope> {
 }
 
 #[derive(WebApiObject)]
-#[webapi(interface = "AudioWorklet")]
+#[webapi(interface = web_api_interfaces::AudioWorklet)]
 struct AudioWorkletObjectDeclaration<'scope> {
     #[webapi(slot = AUDIO_WORKLET_CONTEXT_SLOT)]
     context: v8::Local<'scope, v8::Object>,
@@ -72,7 +73,7 @@ struct AudioWorkletObjectDeclaration<'scope> {
 }
 
 #[derive(WebApiObject)]
-#[webapi(interface = "AudioWorkletNode")]
+#[webapi(interface = web_api_interfaces::AudioWorkletNode)]
 struct AudioWorkletNodeObjectDeclaration<'scope> {
     #[webapi(data_property)]
     context: v8::Local<'scope, v8::Object>,
@@ -128,7 +129,7 @@ struct AudioWorkletProcessorConstructMessageDeclaration<'scope> {
 }
 
 #[derive(WebApiObject)]
-#[webapi(interface = "OfflineAudioContext")]
+#[webapi(interface = web_api_interfaces::OfflineAudioContext)]
 struct OfflineAudioContextObjectDeclaration<'scope> {
     #[webapi(data_property = "currentTime")]
     current_time: f64,
@@ -165,7 +166,7 @@ struct OfflineAudioContextObjectDeclaration<'scope> {
 }
 
 #[derive(WebApiObject)]
-#[webapi(interface = "OscillatorNode")]
+#[webapi(interface = web_api_interfaces::OscillatorNode)]
 struct OscillatorNodeObjectDeclaration<'scope> {
     #[webapi(data_property = "type")]
     kind: &'static str,
@@ -182,7 +183,7 @@ struct OscillatorNodeObjectDeclaration<'scope> {
 }
 
 #[derive(WebApiObject)]
-#[webapi(interface = "DynamicsCompressorNode")]
+#[webapi(interface = web_api_interfaces::DynamicsCompressorNode)]
 struct DynamicsCompressorNodeObjectDeclaration<'scope> {
     #[webapi(data_property)]
     threshold: v8::Local<'scope, v8::Object>,
@@ -203,14 +204,14 @@ struct DynamicsCompressorNodeObjectDeclaration<'scope> {
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(name = "DynamicsCompressorNode", enumerable)]
+#[webapi(interface = web_api_interfaces::DynamicsCompressorNode, enumerable)]
 struct DynamicsCompressorNodePrototypeDeclaration {
     #[webapi(accessor_property, getter = dynamics_compressor_reduction_getter_callback)]
     reduction: (),
 }
 
 #[derive(WebApiObject)]
-#[webapi(interface = "AnalyserNode")]
+#[webapi(interface = web_api_interfaces::AnalyserNode)]
 struct AnalyserNodeObjectDeclaration {
     #[webapi(slot = ANALYSER_FFT_SIZE_SLOT)]
     fft_size: f64,
@@ -227,7 +228,7 @@ struct AnalyserNodeObjectDeclaration {
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(name = "AnalyserNode", enumerable)]
+#[webapi(interface = web_api_interfaces::AnalyserNode, enumerable)]
 struct AnalyserNodePrototypeDeclaration {
     #[webapi(accessor_property = "fftSize", getter = analyser_fft_size_getter_callback, setter = analyser_fft_size_setter_callback)]
     fft_size: (),
@@ -254,10 +255,8 @@ struct OfflineAudioCompletePayloadDeclaration<'scope> {
 
 #[derive(WebApiObject)]
 #[webapi(
-    interface = "OfflineAudioCompletionEvent",
-    prototype = "Object",
-    parent = "Event"
-)]
+    interface = web_api_interfaces::OfflineAudioCompletionEvent,
+    prototype = "Object",)]
 struct OfflineAudioCompletionEventDeclaration<'scope> {
     #[webapi(data_property = "type")]
     event_type: &'static str,
@@ -266,11 +265,11 @@ struct OfflineAudioCompletionEventDeclaration<'scope> {
 }
 
 #[derive(Default, WebApiObject)]
-#[webapi(interface = "AudioDestinationNode", allow_empty)]
+#[webapi(interface = web_api_interfaces::AudioDestinationNode, allow_empty)]
 struct AudioDestinationNodeObjectDeclaration {}
 
 #[derive(WebApiObject)]
-#[webapi(interface = "AudioBuffer")]
+#[webapi(interface = web_api_interfaces::AudioBuffer)]
 struct AudioBufferObjectDeclaration<'scope> {
     #[webapi(data_property)]
     length: f64,
@@ -390,7 +389,7 @@ struct AnalyserFftSizeArgs {
 
 #[derive(WebApiFunctionTemplate)]
 #[webapi(
-    name = "AudioContext",
+    interface = web_api_interfaces::AudioContext,
     constructor_callback = audio_context_constructor_callback,
     constructor_length = 0,
     enumerable
@@ -402,7 +401,7 @@ struct AudioContextTemplateDeclaration {
 
 #[derive(WebApiFunctionTemplate)]
 #[webapi(
-    name = "AudioWorkletNode",
+    interface = web_api_interfaces::AudioWorkletNode,
     constructor_callback = audio_worklet_node_constructor_callback,
     constructor_length = 2,
     enumerable
@@ -415,7 +414,7 @@ struct AudioWorkletNodeTemplateDeclaration {
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(name = "BaseAudioContext", enumerable)]
+#[webapi(interface = web_api_interfaces::BaseAudioContext, enumerable)]
 struct BaseAudioContextPrototypeDeclaration {
     #[webapi(method = "createBiquadFilter", length = 0, callback = biquad::create_biquad_filter)]
     create_biquad_filter: (),
@@ -443,7 +442,7 @@ struct BaseAudioContextPrototypeDeclaration {
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(name = "OfflineAudioContext", enumerable)]
+#[webapi(interface = web_api_interfaces::OfflineAudioContext, enumerable)]
 struct OfflineAudioContextPrototypeDeclaration {
     #[webapi(
         method = "startRendering",

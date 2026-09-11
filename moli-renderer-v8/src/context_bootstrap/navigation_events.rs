@@ -27,6 +27,7 @@ use super::*;
 use crate::document_runtime::EventTargetHandle;
 use crate::page_task_queue::RendererPageHashChangeData;
 use crate::util::{get_private_value, set_private_value};
+use crate::web_api_interfaces;
 use moli_webapi_declare::WebApiObject;
 
 const NAVIGATION_DESTINATION_STATE_SLOT: &str = "__lmNavigationDestinationState";
@@ -148,7 +149,7 @@ struct ActiveNavigateEventDataDeclaration<'scope> {
 }
 
 #[derive(WebApiObject)]
-#[webapi(interface = "NavigationDestination", prototype = "Object", enumerable)]
+#[webapi(interface = web_api_interfaces::NavigationDestination, prototype = "Object", enumerable)]
 struct NavigationDestinationDeclaration<'scope> {
     #[webapi(data_property)]
     url: v8::Local<'scope, v8::String>,
@@ -167,7 +168,7 @@ struct NavigationDestinationDeclaration<'scope> {
 }
 
 #[derive(WebApiObject)]
-#[webapi(interface = "NavigationDestination", prototype = "Object", enumerable)]
+#[webapi(interface = web_api_interfaces::NavigationDestination, prototype = "Object", enumerable)]
 struct NavigationEntryBackedDestinationDeclaration<'scope> {
     #[webapi(data_property)]
     url: v8::Local<'scope, v8::String>,

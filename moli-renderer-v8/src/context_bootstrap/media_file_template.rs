@@ -52,11 +52,12 @@ use super::file_api::{
     file_reader_read_as_data_url_callback, file_reader_read_as_text_callback,
     file_reader_remove_event_listener_callback,
 };
+use crate::web_api_interfaces;
 use crate::{blob, util::callback_data_index_value, xml_serializer};
 use moli_webapi_declare::WebApiFunctionTemplate;
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(name = "Blob", enumerable)]
+#[webapi(interface = web_api_interfaces::Blob, enumerable)]
 struct BlobTemplateMethodsDeclaration {
     #[webapi(method, length = 0, callback = blob::blob_text_callback)]
     text: (),
@@ -75,7 +76,7 @@ struct BlobTemplateMethodsDeclaration {
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(name = "OffscreenCanvas", enumerable)]
+#[webapi(interface = web_api_interfaces::OffscreenCanvas, enumerable)]
 struct OffscreenCanvasTemplateMethodsDeclaration {
     #[webapi(method, length = 1, callback = offscreen_canvas_get_context_callback)]
     get_context: (),
@@ -85,7 +86,7 @@ struct OffscreenCanvasTemplateMethodsDeclaration {
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(name = "FileList", enumerable)]
+#[webapi(interface = web_api_interfaces::FileList, enumerable)]
 struct FileListTemplateMethodsDeclaration {
     #[webapi(method, length = 1, callback = file_list_item_callback)]
     item: (),
@@ -98,7 +99,7 @@ struct FileListTemplateMethodsDeclaration {
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(name = "FileReader", enumerable)]
+#[webapi(interface = web_api_interfaces::FileReader, enumerable)]
 struct FileReaderTemplateMethodsDeclaration {
     #[webapi(method, length = 1, callback = file_reader_read_as_text_callback)]
     read_as_text: (),
@@ -135,7 +136,7 @@ struct FileReaderTemplateMethodsDeclaration {
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(name = "XMLSerializer", enumerable)]
+#[webapi(interface = web_api_interfaces::XMLSerializer, enumerable)]
 struct XmlSerializerTemplateMethodsDeclaration {
     #[webapi(
         method,
@@ -146,7 +147,7 @@ struct XmlSerializerTemplateMethodsDeclaration {
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(name = "CanvasRenderingContext2D", enumerable)]
+#[webapi(interface = web_api_interfaces::CanvasRenderingContext2D, enumerable)]
 struct CanvasRenderingContext2dTemplateDeclaration {
     #[webapi(
         accessor_property = "fillStyle",
@@ -402,7 +403,7 @@ struct CanvasRenderingContext2dTemplateDeclaration {
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(name = "CanvasGradient", enumerable)]
+#[webapi(interface = web_api_interfaces::CanvasGradient, enumerable)]
 struct CanvasGradientTemplateMethodsDeclaration {
     #[webapi(
         method = "addColorStop",
@@ -413,7 +414,7 @@ struct CanvasGradientTemplateMethodsDeclaration {
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(name = "WebGLRenderingContext", enumerable)]
+#[webapi(interface = web_api_interfaces::WebGLRenderingContext, enumerable)]
 struct WebGlRenderingContextTemplateMethodsDeclaration {
     #[webapi(method = "viewport", length = 4, callback = webgl_viewport_callback)]
     viewport: (),
@@ -611,7 +612,7 @@ struct WebGlRenderingContextTemplateMethodsDeclaration {
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(name = "WebGL2RenderingContext", enumerable)]
+#[webapi(interface = web_api_interfaces::WebGL2RenderingContext, enumerable)]
 struct WebGl2RenderingContextTemplateDeclaration {
     #[webapi(
         method = "getSupportedExtensions",
@@ -653,7 +654,7 @@ struct WebGl2RenderingContextTemplateDeclaration {
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(name = "WEBGL_lose_context", enumerable)]
+#[webapi(interface = web_api_interfaces::WEBGLLoseContext, enumerable)]
 struct WebGlLoseContextTemplateMethodsDeclaration {
     #[webapi(method = "loseContext", length = 0, callback = webgl_lose_context_noop_callback)]
     lose_context: (),

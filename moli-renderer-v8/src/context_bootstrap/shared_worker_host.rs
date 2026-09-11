@@ -18,6 +18,7 @@ use super::{
         worker_script_resource_url, worker_script_scheme_can_load,
     },
 };
+use crate::web_api_interfaces;
 use crate::{
     context_bootstrap::{SharedStorageBucketStore, WeakIndexedDbManager},
     document_runtime::DomHandle,
@@ -50,7 +51,7 @@ const SHARED_WORKER_CLIENT_ID_SLOT: &str = "__moliSharedWorkerClientId";
 const SHARED_WORKER_ONERROR_SLOT: &str = "__moliSharedWorkerOnError";
 
 #[derive(WebApiObject)]
-#[webapi(interface = "SharedWorker")]
+#[webapi(interface = web_api_interfaces::SharedWorker)]
 struct SharedWorkerObjectDeclaration<'scope> {
     #[webapi(slot = SIMPLE_EVENT_TARGET_SLOT, value = SHARED_WORKER_LISTENERS_SLOT)]
     event_target_slot: (),
@@ -94,7 +95,7 @@ struct SharedWorkerHostEventInitDeclaration {
 }
 
 #[derive(WebApiObject)]
-#[webapi(interface = "Event", prototype = "Object")]
+#[webapi(interface = web_api_interfaces::Event, prototype = "Object")]
 struct SharedWorkerHostEventFallbackDeclaration {
     #[webapi(data_property, enumerable)]
     r#type: String,
@@ -120,7 +121,7 @@ struct SharedWorkerHostErrorEventInitDeclaration<'scope> {
 }
 
 #[derive(WebApiObject)]
-#[webapi(interface = "ErrorEvent", prototype = "Object", scope_lifetime = 'scope)]
+#[webapi(interface = web_api_interfaces::ErrorEvent, prototype = "Object", scope_lifetime = 'scope)]
 struct SharedWorkerHostErrorEventFallbackDeclaration<'scope, 'text> {
     #[webapi(data_property, enumerable)]
     r#type: &'static str,

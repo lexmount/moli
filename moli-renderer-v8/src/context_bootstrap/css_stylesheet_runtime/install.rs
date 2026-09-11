@@ -1,15 +1,16 @@
 use super::*;
+use crate::web_api_interfaces;
 use moli_webapi_declare::{WebApiFunctionTemplate, WebApiObject};
 
 #[derive(WebApiObject)]
-#[webapi(prototype = "Object", interface = "CSSFontFeatureValuesMap")]
+#[webapi(prototype = "Object", interface = web_api_interfaces::CSSFontFeatureValuesMap)]
 struct CssFontFeatureValuesMapObjectDeclaration<'s> {
     #[webapi(slot = CSS_FONT_FEATURE_VALUES_MAP_BACKING_SLOT)]
     backing: v8::Local<'s, v8::Map>,
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(name = "CSSFontFeatureValuesMap", enumerable)]
+#[webapi(interface = web_api_interfaces::CSSFontFeatureValuesMap, enumerable)]
 struct CssFontFeatureValuesMapPrototypeDeclaration {
     #[webapi(accessor_property, getter = css_font_feature_values_map_size_getter_callback)]
     size: (),

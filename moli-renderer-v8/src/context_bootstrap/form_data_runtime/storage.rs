@@ -1,10 +1,11 @@
 use super::*;
 use crate::util::{get_private_value, serialize_v8_array, set_private_value};
+use crate::web_api_interfaces;
 use crate::{dom::native::SelectedFile, webidl};
 use moli_webapi_declare::WebApiObject;
 
 #[derive(WebApiObject)]
-#[webapi(interface = "FormData")]
+#[webapi(interface = web_api_interfaces::FormData)]
 struct FormDataObjectDeclaration<'scope> {
     #[webapi(slot = FORM_DATA_ENTRIES_SLOT)]
     entries: v8::Local<'scope, v8::Array>,

@@ -1,19 +1,20 @@
 use super::*;
 use crate::util::{get_private_value, set_private_value};
+use crate::web_api_interfaces;
 use crate::webidl;
 use moli_webapi_declare::{WebApiFunctionTemplate, WebApiObject};
 
 const FILE_LIST_LENGTH_SLOT: &str = "__lmFileListLength";
 
 #[derive(WebApiObject)]
-#[webapi(interface = "FileList", require_prototype)]
+#[webapi(interface = web_api_interfaces::FileList, require_prototype)]
 struct FileListObjectDeclaration {
     #[webapi(slot = FILE_LIST_LENGTH_SLOT)]
     length: f64,
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(name = "FileList")]
+#[webapi(interface = web_api_interfaces::FileList)]
 struct FileListPrototypeAccessorsDeclaration {
     #[webapi(accessor_property, getter = file_list_length_getter_callback, enumerable)]
     length: (),

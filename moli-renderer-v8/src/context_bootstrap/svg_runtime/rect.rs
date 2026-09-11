@@ -3,6 +3,7 @@
 //! JSXGraph uses this method to detect SVG support. Returning a DOMRect would
 //! pass that check but expose the wrong interface and double (not float) fields.
 
+use crate::web_api_interfaces;
 use crate::{
     native_bridge::node_runtime_and_handle_from_object_or_detached,
     util::{callback_data_index_value, callback_data_item, get_private_value, set_private_value},
@@ -17,7 +18,7 @@ const HEIGHT: &str = "__moliSvgRectHeight";
 const FIELDS: &[(&str, &str)] = &[("x", X), ("y", Y), ("width", WIDTH), ("height", HEIGHT)];
 
 #[derive(WebApiObject)]
-#[webapi(interface = "SVGRect")]
+#[webapi(interface = web_api_interfaces::SVGRect)]
 struct SvgRectObjectDeclaration {
     #[webapi(slot = X)]
     x: f64,
@@ -30,7 +31,7 @@ struct SvgRectObjectDeclaration {
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(name = "SVGRect", enumerable)]
+#[webapi(interface = web_api_interfaces::SVGRect, enumerable)]
 struct SvgRectAccessorsDeclaration {
     #[webapi(accessor_property, getter = get_field, setter = set_field,
         data = callback_data_index_value(scope, 0))]

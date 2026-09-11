@@ -5,11 +5,12 @@ use crate::observer_runtime::ObserverCallbackId;
 use crate::util::{
     define_v8_array_data_property, get_private_value, serialize_v8_iter_array, set_private_value,
 };
+use crate::web_api_interfaces;
 use crate::webidl;
 use moli_webapi_declare::WebApiObject;
 
 #[derive(WebApiObject)]
-#[webapi(interface = "PerformanceObserver")]
+#[webapi(interface = web_api_interfaces::PerformanceObserver)]
 struct PerformanceObserverObjectDeclaration<'s> {
     #[webapi(slot = PERFORMANCE_OBSERVER_CALLBACK_ID_SLOT)]
     callback_id: u32,

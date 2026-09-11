@@ -47,6 +47,7 @@ use super::{
     },
     webidl,
 };
+use crate::web_api_interfaces;
 use moli_webapi_declare::{WebApiFunctionTemplate, WebApiObject};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use url::Url;
@@ -79,7 +80,7 @@ struct WindowDocumentEventInitDeclaration {
 }
 
 #[derive(WebApiObject)]
-#[webapi(interface = "IdleDeadline")]
+#[webapi(interface = web_api_interfaces::IdleDeadline)]
 struct IdleDeadlineDeclaration {
     #[webapi(slot = IDLE_DEADLINE_MS_SLOT)]
     deadline_ms: f64,
@@ -126,7 +127,7 @@ struct WindowCancelIdleCallbackArgs {
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(name = "IdleDeadline", enumerable)]
+#[webapi(interface = web_api_interfaces::IdleDeadline, enumerable)]
 struct IdleDeadlinePrototypeDeclaration {
     #[webapi(
         accessor_property = "didTimeout",

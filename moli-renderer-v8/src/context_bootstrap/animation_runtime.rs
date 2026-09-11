@@ -1,4 +1,5 @@
 use super::*;
+use crate::web_api_interfaces;
 use moli_webapi_declare::{WebApiFunctionTemplate, WebApiObject};
 
 use crate::native_bridge::node_runtime_and_handle_from_object;
@@ -33,7 +34,7 @@ struct AnimationPromiseEntryDeclaration {
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(name = "Animation", enumerable)]
+#[webapi(interface = web_api_interfaces::Animation, enumerable)]
 struct AnimationPrototypeMethodsDeclaration {
     #[webapi(
         accessor_property,
@@ -56,7 +57,7 @@ struct AnimationPrototypeMethodsDeclaration {
 }
 
 #[derive(WebApiObject)]
-#[webapi(interface = "Animation")]
+#[webapi(interface = web_api_interfaces::Animation)]
 struct AnimationObjectDeclaration<'s> {
     #[webapi(slot = ANIMATION_ID_SLOT, constructor_default = "")]
     id: &'static str,
@@ -130,7 +131,7 @@ fn animation_id_setter_callback<'s>(
 }
 
 #[derive(WebApiObject)]
-#[webapi(interface = "KeyframeEffect")]
+#[webapi(interface = web_api_interfaces::KeyframeEffect)]
 struct KeyframeEffectObjectDeclaration<'s> {
     #[webapi(slot = KEYFRAME_EFFECT_TARGET_SLOT)]
     target: v8::Local<'s, v8::Value>,
@@ -139,14 +140,14 @@ struct KeyframeEffectObjectDeclaration<'s> {
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(name = "KeyframeEffect", enumerable)]
+#[webapi(interface = web_api_interfaces::KeyframeEffect, enumerable)]
 struct KeyframeEffectPrototypeDeclaration {
     #[webapi(method, length = 1, callback = keyframe_effect_set_keyframes_callback)]
     set_keyframes: (),
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(name = "Element", enumerable)]
+#[webapi(interface = web_api_interfaces::Element, enumerable)]
 struct ElementAnimationPrototypeDeclaration {
     #[webapi(method, length = 0, callback = element_animate_callback)]
     animate: (),

@@ -17,6 +17,7 @@ use super::interceptors::{
 };
 use super::*;
 use crate::util::{get_private_value, set_private_value};
+use crate::web_api_interfaces;
 use moli_webapi_declare::{WebApiFunctionTemplate, WebApiObject};
 
 #[derive(Default, WebApiObject)]
@@ -60,7 +61,7 @@ struct StorageConstructorGlobalDeclaration<'scope> {
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(name = "Storage", constructor = "illegal", constructor_length = 0)]
+#[webapi(interface = web_api_interfaces::Storage, constructor = "illegal", constructor_length = 0)]
 struct StorageConstructorTemplateDeclaration {}
 
 pub(in crate::context_bootstrap) fn install_storage_runtime_state<'s>(
@@ -132,7 +133,7 @@ fn install_named_storage_runtime_state<'s>(
     if let Some(prototype) = prototype {
         let _ = storage.set_prototype(scope, prototype.into());
     }
-    moli_webapi_declare::initialize_web_api_object(scope, storage, "Storage")?;
+    web_api_interfaces::Storage::DESCRIPTOR.initialize(scope, storage)?;
     set_private_value(scope, global, slot_name, storage.into());
     Ok(storage)
 }

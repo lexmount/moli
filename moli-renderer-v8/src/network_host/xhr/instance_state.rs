@@ -1,5 +1,6 @@
 use super::*;
 use crate::util::{get_private_value, global_constructor_prototype, set_private_value};
+use crate::web_api_interfaces;
 use moli_webapi_declare::WebApiObject;
 
 pub(crate) const XHR_METHOD_SLOT: &str = "__lmMethod";
@@ -125,7 +126,7 @@ struct XmlHttpRequestStateDeclaration {
 }
 
 #[derive(WebApiObject)]
-#[webapi(interface = "XMLHttpRequestUpload", prototype = "Object")]
+#[webapi(interface = web_api_interfaces::XMLHttpRequestUpload, prototype = "Object")]
 struct XmlHttpRequestUploadDeclaration<'scope> {
     #[webapi(prototype)]
     prototype: Option<v8::Local<'scope, v8::Object>>,

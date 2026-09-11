@@ -1,5 +1,6 @@
 use super::*;
 use crate::util::v8str;
+use crate::web_api_interfaces;
 use crate::webidl;
 use moli_streams::readable::{
     AcquireReaderPlan, ReadableKind, ReaderKind, ReaderReleaseSnapshot, ReleaseReaderPlan,
@@ -10,14 +11,14 @@ use moli_webapi_declare::WebApiObject;
 const READER_LOCK_RELEASED_MESSAGE: &str = "ReadableStreamDefaultReader lock released";
 
 #[derive(WebApiObject)]
-#[webapi(interface = "ReadableStreamDefaultReader")]
+#[webapi(interface = web_api_interfaces::ReadableStreamDefaultReader)]
 struct ReadableStreamReaderObjectDeclaration<'scope> {
     #[webapi(slot = READABLE_STREAM_READER_STREAM_SLOT)]
     stream: v8::Local<'scope, v8::Object>,
 }
 
 #[derive(WebApiObject)]
-#[webapi(interface = "ReadableStreamBYOBReader")]
+#[webapi(interface = web_api_interfaces::ReadableStreamBYOBReader)]
 struct ReadableStreamByobReaderObjectDeclaration<'scope> {
     #[webapi(slot = READABLE_STREAM_READER_STREAM_SLOT)]
     stream: v8::Local<'scope, v8::Object>,

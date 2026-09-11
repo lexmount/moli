@@ -2,6 +2,55 @@ use syn::spanned::Spanned;
 use syn::{Error, Expr, ExprLit, Field, Lit, LitInt, LitStr, Path, Token};
 
 #[derive(Clone)]
+pub(crate) enum InterfaceAttr {
+    Name(LitStr),
+    Descriptor(Path),
+}
+
+impl syn::parse::Parse for InterfaceAttr {
+    fn parse(input: syn::parse::ParseStream<'_>) -> Result<Self, Error> {
+        if input.peek(LitStr) {
+            input.parse().map(Self::Name)
+        } else {
+            input.parse().map(Self::Descriptor)
+        }
+    }
+}
+
+impl InterfaceAttr {
+    pub(crate) fn name(&self) -> proc_macro2::TokenStream {
+        match self {
+            Self::Name(name) => quote::quote!(#name),
+            Self::Descriptor(path) => quote::quote!(<#path>::DESCRIPTOR.name()),
+        }
+    }
+}
+
+fn resolve_interface_receiver(
+    receiver: &mut Option<ReceiverAttr>,
+    interface: Option<&InterfaceAttr>,
+    shorthand: Option<proc_macro2::Span>,
+) -> Result<(), Error> {
+    if let Some(span) = shorthand {
+        if receiver.is_some() {
+            return Err(Error::new(span, "receiver can only be specified once"));
+        }
+        *receiver = Some(match interface {
+            Some(InterfaceAttr::Descriptor(path)) => {
+                ReceiverAttr::Predicate(syn::parse_quote!(#path::is_instance))
+            }
+            _ => {
+                return Err(Error::new(
+                    span,
+                    "receiver shorthand requires an interface descriptor",
+                ));
+            }
+        });
+    }
+    Ok(())
+}
+
+#[derive(Clone)]
 pub(crate) enum ReceiverAttr {
     Predicate(Path),
     Interface(LitStr),
@@ -60,7 +109,7 @@ pub(crate) enum RenameRule {
 #[derive(Default)]
 pub(crate) struct ObjectAttrs {
     pub(crate) receiver: Option<ReceiverAttr>,
-    pub(crate) interface: Option<LitStr>,
+    pub(crate) interface: Option<InterfaceAttr>,
     pub(crate) parent: Option<LitStr>,
     pub(crate) prototype: Option<LitStr>,
     pub(crate) own_to_string_tag: Option<LitStr>,
@@ -78,6 +127,7 @@ pub(crate) struct ObjectAttrs {
 
 #[derive(Default)]
 pub(crate) struct FunctionTemplateAttrs {
+    pub(crate) interface: Option<InterfaceAttr>,
     pub(crate) receiver: Option<ReceiverAttr>,
     pub(crate) name: Option<LitStr>,
     pub(crate) constructor: Option<ConstructorAttr>,
@@ -213,6 +263,7 @@ impl FieldAttrs {
 
 pub(crate) fn parse_object_attrs(attrs: &[syn::Attribute]) -> Result<ObjectAttrs, Error> {
     let mut parsed = ObjectAttrs::default();
+    let mut interface_receiver = None;
     for attr in attrs.iter().filter(|attr| attr.path().is_ident("webapi")) {
         attr.parse_nested_meta(|meta| {
             if meta.path.is_ident("parent") {
@@ -224,7 +275,11 @@ pub(crate) fn parse_object_attrs(attrs: &[syn::Attribute]) -> Result<ObjectAttrs
                 return Ok(());
             }
             if meta.path.is_ident("receiver") {
-                parsed.receiver = Some(meta.value()?.parse()?);
+                if meta.input.peek(Token![=]) {
+                    parsed.receiver = Some(meta.value()?.parse()?);
+                } else {
+                    interface_receiver = Some(meta.path.span());
+                }
                 return Ok(());
             }
             if meta.path.is_ident("interface") {
@@ -279,6 +334,19 @@ pub(crate) fn parse_object_attrs(attrs: &[syn::Attribute]) -> Result<ObjectAttrs
             Err(meta.error("unsupported #[webapi(...)] object attribute"))
         })?;
     }
+    if let Some(parent) = &parsed.parent
+        && matches!(parsed.interface, Some(InterfaceAttr::Descriptor(_)))
+    {
+        return Err(Error::new(
+            parent.span(),
+            "parent belongs in the interface descriptor, not the object declaration",
+        ));
+    }
+    resolve_interface_receiver(
+        &mut parsed.receiver,
+        parsed.interface.as_ref(),
+        interface_receiver,
+    )?;
     Ok(parsed)
 }
 
@@ -286,10 +354,19 @@ pub(crate) fn parse_function_template_attrs(
     attrs: &[syn::Attribute],
 ) -> Result<FunctionTemplateAttrs, Error> {
     let mut parsed = FunctionTemplateAttrs::default();
+    let mut interface_receiver = None;
     for attr in attrs.iter().filter(|attr| attr.path().is_ident("webapi")) {
         attr.parse_nested_meta(|meta| {
             if meta.path.is_ident("receiver") {
-                parsed.receiver = Some(meta.value()?.parse()?);
+                if meta.input.peek(Token![=]) {
+                    parsed.receiver = Some(meta.value()?.parse()?);
+                } else {
+                    interface_receiver = Some(meta.path.span());
+                }
+                return Ok(());
+            }
+            if meta.path.is_ident("interface") {
+                parsed.interface = Some(meta.value()?.parse()?);
                 return Ok(());
             }
             if meta.path.is_ident("name") {
@@ -355,6 +432,11 @@ pub(crate) fn parse_function_template_attrs(
             Err(meta.error("unsupported #[webapi(...)] function template attribute"))
         })?;
     }
+    resolve_interface_receiver(
+        &mut parsed.receiver,
+        parsed.interface.as_ref(),
+        interface_receiver,
+    )?;
     Ok(parsed)
 }
 

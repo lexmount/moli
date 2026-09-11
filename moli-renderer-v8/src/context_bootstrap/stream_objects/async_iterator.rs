@@ -1,5 +1,6 @@
 use super::*;
 use crate::util::materialize_hidden_function_template_prototype;
+use crate::web_api_interfaces;
 use moli_streams::readable::iterator::{
     IteratorLifecycle, IteratorNextOutcome, IteratorOperationKind, IteratorPumpPlan, IteratorState,
     IteratorTransition,
@@ -15,7 +16,7 @@ const ITERATOR_OPERATION_RETURN: u32 = 1;
 
 #[derive(WebApiFunctionTemplate)]
 #[webapi(
-    name = "ReadableStream AsyncIterator",
+    interface = web_api_interfaces::ReadableStreamAsyncIterator,
     intrinsic_prototype_parent = v8::Intrinsic::AsyncIteratorPrototype,
     prototype_to_string_tag = "ReadableStream AsyncIterator",
     readonly_prototype,

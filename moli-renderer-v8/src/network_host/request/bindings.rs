@@ -5,11 +5,12 @@ use self::init::{
 };
 use super::input::request_headers_guard_for_mode;
 use super::*;
+use crate::web_api_interfaces;
 use crate::webidl;
 use moli_webapi_declare::WebApiObject;
 
 #[derive(WebApiObject)]
-#[webapi(interface = "Request")]
+#[webapi(interface = web_api_interfaces::Request)]
 struct RequestInstanceDeclaration<'scope> {
     #[webapi(slot = REQUEST_METHOD_SLOT)]
     method: String,

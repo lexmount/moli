@@ -1,4 +1,5 @@
 use crate::util::v8str;
+use crate::web_api_interfaces;
 use moli_webapi_declare::WebApiObject;
 use url::Url;
 
@@ -10,7 +11,7 @@ use super::iframe_window_messaging::install_detached_iframe_window_messaging;
 
 #[derive(WebApiObject)]
 #[webapi(
-    interface = "Window",
+    interface = web_api_interfaces::Window,
     prototype = "Object",
     own_to_string_tag = "Window"
 )]

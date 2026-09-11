@@ -7,10 +7,11 @@ use super::accessors::{
 use super::*;
 use crate::native_bridge::NavigationHistoryEntrySeed;
 use crate::util::get_private_value;
+use crate::web_api_interfaces;
 use moli_webapi_declare::WebApiObject;
 
 #[derive(WebApiObject)]
-#[webapi(interface = "History")]
+#[webapi(interface = web_api_interfaces::History)]
 struct HistoryRuntimeObjectDeclaration<'scope> {
     #[webapi(slot = HISTORY_STATE_SLOT)]
     state: v8::Local<'scope, v8::Value>,
@@ -29,7 +30,7 @@ struct HistoryRuntimeObjectDeclaration<'scope> {
 }
 
 #[derive(WebApiObject)]
-#[webapi(interface = "Navigation")]
+#[webapi(interface = web_api_interfaces::Navigation)]
 struct NavigationRuntimeObjectDeclaration<'scope> {
     #[webapi(slot = NAVIGATION_CURRENT_ENTRY_SLOT)]
     current_entry: v8::Local<'scope, v8::Object>,

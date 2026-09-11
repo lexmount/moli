@@ -1,4 +1,5 @@
 use super::*;
+use crate::web_api_interfaces;
 use moli_browser_profile::BrowserIdentityProfile;
 use moli_webapi_declare::{ObjectLiteralDeclaration, WebApiObject};
 
@@ -70,7 +71,7 @@ const NAVIGATOR_UA_DATA_USER_AGENT_SLOT: &str = "__moliNavigatorUADataUserAgent"
 #[derive(Default, WebApiObject)]
 #[webapi(
     prototype = "Object",
-    interface = "CacheStorage",
+    interface = web_api_interfaces::CacheStorage,
     own_to_string_tag = "CacheStorage"
 )]
 struct StorageBucketCacheStorageObjectDeclaration {
@@ -107,7 +108,7 @@ struct StorageBucketCacheStorageObjectDeclaration {
 }
 
 #[derive(WebApiObject)]
-#[webapi(prototype = "Object", interface = "Cache", own_to_string_tag = "Cache")]
+#[webapi(prototype = "Object", interface = web_api_interfaces::Cache, own_to_string_tag = "Cache")]
 struct StorageBucketCacheObjectDeclaration {
     #[webapi(slot = STORAGE_BUCKET_CACHE_NAME_SLOT)]
     cache_name: String,
@@ -126,7 +127,7 @@ struct StorageBucketCacheObjectDeclaration {
 }
 
 #[derive(WebApiObject)]
-#[webapi(interface = "PermissionStatus")]
+#[webapi(interface = web_api_interfaces::PermissionStatus)]
 struct PermissionStatusObjectDeclaration {
     #[webapi(slot = PERMISSION_STATUS_NAME_SLOT)]
     name: String,
@@ -166,7 +167,7 @@ struct NavigatorUaBrandEntryDeclaration {
 }
 
 #[derive(WebApiObject)]
-#[webapi(interface = "NavigatorUAData")]
+#[webapi(interface = web_api_interfaces::NavigatorUAData)]
 struct NavigatorUaDataObjectDeclaration {
     #[webapi(slot = NAVIGATOR_UA_DATA_USER_AGENT_SLOT)]
     user_agent: String,
@@ -256,7 +257,7 @@ struct StorageUsageDetailsObjectDeclaration {
 }
 
 #[derive(WebApiObject)]
-#[webapi(prototype = "Object", interface = "BatteryManager", data_properties)]
+#[webapi(prototype = "Object", interface = web_api_interfaces::BatteryManager, data_properties)]
 struct NavigatorBatteryStatusObjectDeclaration {
     #[webapi(data_property, enumerable)]
     charging: bool,
@@ -290,7 +291,7 @@ struct NavigatorBatteryStatusObjectDeclaration {
 }
 
 #[derive(WebApiObject)]
-#[webapi(allow_empty, interface = "StorageBucket")]
+#[webapi(allow_empty, interface = web_api_interfaces::StorageBucket)]
 struct StorageBucketObjectDeclaration {}
 
 #[derive(Debug)]

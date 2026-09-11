@@ -1,4 +1,5 @@
 use super::super::{SIMPLE_EVENT_TARGET_ORDERED_HANDLERS_SLOT, SIMPLE_EVENT_TARGET_SLOT};
+use crate::web_api_interfaces;
 use crate::{
     blob,
     util::{get_private_value, set_private_value, throw_type_error, v8_string},
@@ -17,7 +18,7 @@ const CLIPBOARD_ITEM_TYPES_SLOT: &str = "__moliClipboardItemTypes";
 const CLIPBOARD_ITEM_PRESENTATION_STYLE_SLOT: &str = "__moliClipboardItemPresentationStyle";
 
 #[derive(Default, WebApiObject)]
-#[webapi(interface = "Clipboard")]
+#[webapi(interface = web_api_interfaces::Clipboard)]
 struct ClipboardObjectDeclaration {
     #[webapi(slot = SIMPLE_EVENT_TARGET_SLOT, value = CLIPBOARD_EVENT_LISTENERS_SLOT)]
     event_target_slot: (),
@@ -33,7 +34,7 @@ struct ClipboardObjectDeclaration {
 }
 
 #[derive(Default, WebApiFunctionTemplate)]
-#[webapi(name = "Clipboard", enumerable)]
+#[webapi(interface = web_api_interfaces::Clipboard, enumerable)]
 struct ClipboardPrototypeDeclaration {
     #[webapi(method, length = 0, callback = clipboard_read_callback)]
     read: (),
@@ -49,7 +50,7 @@ struct ClipboardPrototypeDeclaration {
 }
 
 #[derive(WebApiObject)]
-#[webapi(interface = "ClipboardItem")]
+#[webapi(interface = web_api_interfaces::ClipboardItem)]
 struct ClipboardItemObjectDeclaration<'scope> {
     #[webapi(slot = CLIPBOARD_ITEM_DATA_SLOT)]
     data: v8::Local<'scope, v8::Object>,
@@ -65,7 +66,7 @@ struct ClipboardItemObjectDeclaration<'scope> {
 }
 
 #[derive(Default, WebApiFunctionTemplate)]
-#[webapi(name = "ClipboardItem", enumerable)]
+#[webapi(interface = web_api_interfaces::ClipboardItem, enumerable)]
 struct ClipboardItemPrototypeDeclaration {
     #[webapi(accessor_property, getter = clipboard_item_presentation_style_getter)]
     presentation_style: (),
@@ -78,7 +79,7 @@ struct ClipboardItemPrototypeDeclaration {
 }
 
 #[derive(Default, WebApiFunctionTemplate)]
-#[webapi(name = "ClipboardItem", enumerable)]
+#[webapi(interface = web_api_interfaces::ClipboardItem, enumerable)]
 struct ClipboardItemConstructorDeclaration {
     #[webapi(static_method, length = 1, callback = clipboard_item_supports_callback)]
     supports: (),
