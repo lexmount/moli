@@ -5,9 +5,25 @@ use syn::spanned::Spanned;
 use syn::{Data, DeriveInput, Error, Field, Fields, GenericParam, Ident, Lit, LitStr, Type};
 
 use crate::attrs::{
-    ConstructorAttr, ConstructorDefaultAttr, FunctionTemplateAttrs, ObjectAttrs, RenameRule,
-    ValueInitAttr, parse_field_attrs, parse_function_template_attrs, parse_object_attrs,
+    ConstructorAttr, ConstructorDefaultAttr, FieldAttrs, FieldDefaults, FieldKind,
+    FunctionTemplateAttrs, ObjectAttrs, RenameRule, ValueInitAttr, parse_field_attrs_with_defaults,
+    parse_function_template_attrs, parse_object_attrs,
 };
+
+struct DeclaredField {
+    field: Field,
+    attrs: FieldAttrs,
+}
+
+fn declared_fields(data: &Data, defaults: FieldDefaults<'_>) -> Result<Vec<DeclaredField>, Error> {
+    named_fields(data)?
+        .into_iter()
+        .map(|field| {
+            let attrs = parse_field_attrs_with_defaults(&field, defaults)?;
+            Ok(DeclaredField { field, attrs })
+        })
+        .collect()
+}
 
 struct WebApiFieldKey {
     display_name: proc_macro2::TokenStream,
@@ -76,8 +92,15 @@ pub(crate) fn expand_webapi_function_template(
             );
         }
     });
-    let fields = named_fields(&input.data)?;
-    let declaration_field_reads = fields.iter().filter_map(|field| {
+    let fields = declared_fields(
+        &input.data,
+        FieldDefaults {
+            receiver: attrs.receiver.as_ref(),
+            enumerable: attrs.default_enumerable,
+            ..FieldDefaults::default()
+        },
+    )?;
+    let declaration_field_reads = fields.iter().filter_map(|DeclaredField { field, .. }| {
         field.ident.as_ref().map(|ident| {
             quote! {
                 let _ = &self.#ident;
@@ -209,7 +232,14 @@ pub(crate) fn expand_webapi_object(input: DeriveInput) -> Result<proc_macro2::To
             }
         }
     };
-    let fields = named_fields(&input.data)?;
+    let fields = declared_fields(
+        &input.data,
+        FieldDefaults {
+            receiver: attrs.receiver.as_ref(),
+            data_properties: attrs.default_data_properties,
+            enumerable: attrs.default_enumerable,
+        },
+    )?;
     let generated_constructor = expand_object_generated_constructor(&fields, &attrs, &struct_name)?;
     let inferred_scope_lifetime = attrs
         .scope_lifetime
@@ -404,7 +434,7 @@ pub(crate) fn expand_webapi_object(input: DeriveInput) -> Result<proc_macro2::To
 }
 
 fn expand_object_generated_constructor(
-    fields: &[Field],
+    fields: &[DeclaredField],
     attrs: &ObjectAttrs,
     struct_name: &Ident,
 ) -> Result<proc_macro2::TokenStream, Error> {
@@ -413,15 +443,18 @@ fn expand_object_generated_constructor(
     }
     let mut parameters = Vec::new();
     let mut initializers = Vec::new();
-    for field in fields {
+    for DeclaredField {
+        field,
+        attrs: field_attrs,
+    } in fields
+    {
         let ident = field
             .ident
             .as_ref()
             .ok_or_else(|| Error::new(field.span(), "WebApiObject field requires a name"))?;
-        let field_attrs = parse_field_attrs(field)?;
         if type_is_unit(&field.ty) {
             initializers.push(quote!(#ident: ()));
-        } else if let Some(default) = field_attrs.constructor_default {
+        } else if let Some(default) = &field_attrs.constructor_default {
             let default = match default {
                 ConstructorDefaultAttr::Default => quote!(::std::default::Default::default()),
                 ConstructorDefaultAttr::Expr(expr) => quote!(#expr),
@@ -449,54 +482,41 @@ struct FunctionTemplateFieldExpansions {
 }
 
 fn expand_function_template_fields(
-    fields: &[Field],
+    fields: &[DeclaredField],
     template_attrs: &FunctionTemplateAttrs,
     template_name: &LitStr,
 ) -> Result<FunctionTemplateFieldExpansions, Error> {
     let mut template_methods = Vec::new();
     let mut prototype_methods = Vec::new();
     let mut method_bindings = HashMap::new();
-    for (index, field) in fields.iter().enumerate() {
-        let mut attrs = parse_field_attrs(field)?;
-        attrs.inherit_receiver(template_attrs.receiver.as_ref())?;
-        if template_attrs.default_enumerable
-            && attrs.symbol.is_none()
-            && (attrs.method
-                || attrs.static_method
-                || attrs.accessor_property
-                || attrs.native_data_property
-                || attrs.intrinsic_data_property.is_some()
-                || attrs.alias.is_some())
-        {
-            attrs.enumerable = true;
-        }
-        if attrs.constant {
+    for (index, DeclaredField { field, attrs }) in fields.iter().enumerate() {
+        if matches!(attrs.kind, FieldKind::Constant) {
             template_methods.push(expand_function_template_constant_field(
                 field,
-                &attrs,
+                attrs,
                 template_attrs.rename_all,
                 quote!(template),
             )?);
             prototype_methods.push(expand_function_template_constant_field(
                 field,
-                &attrs,
+                attrs,
                 template_attrs.rename_all,
                 quote!(prototype),
             )?);
             continue;
         }
-        if attrs.static_method {
+        if matches!(attrs.kind, FieldKind::StaticMethod) {
             let binding = format_ident!("__webapi_template_static_method_{index}");
             template_methods.push(expand_function_template_static_method_field(
                 field,
-                &attrs,
+                attrs,
                 template_attrs.rename_all,
                 template_name,
                 binding,
             )?);
             continue;
         }
-        if attrs.method {
+        if matches!(attrs.kind, FieldKind::Method) {
             let binding = format_ident!("__webapi_template_method_{index}");
             if attrs.symbol.is_none()
                 && let Some(name) = webapi_field_name_literal(
@@ -509,42 +529,42 @@ fn expand_function_template_fields(
             }
             prototype_methods.push(expand_function_template_method_field(
                 field,
-                &attrs,
+                attrs,
                 template_attrs.rename_all,
                 template_name,
                 binding,
             )?);
             continue;
         }
-        if attrs.accessor_property {
+        if matches!(attrs.kind, FieldKind::AccessorProperty) {
             prototype_methods.push(expand_function_template_accessor_property_field(
                 field,
-                &attrs,
+                attrs,
                 template_attrs.rename_all,
                 template_name,
             )?);
             continue;
         }
-        if attrs.native_data_property {
+        if matches!(attrs.kind, FieldKind::NativeDataProperty) {
             prototype_methods.push(expand_function_template_native_data_property_field(
                 field,
-                &attrs,
+                attrs,
                 template_attrs.rename_all,
             )?);
             continue;
         }
-        if attrs.intrinsic_data_property.is_some() {
+        if matches!(attrs.kind, FieldKind::IntrinsicDataProperty(_)) {
             prototype_methods.push(expand_function_template_intrinsic_data_property_field(
                 field,
-                &attrs,
+                attrs,
                 template_attrs.rename_all,
             )?);
             continue;
         }
-        if attrs.alias.is_some() {
+        if matches!(attrs.kind, FieldKind::Alias(_)) {
             prototype_methods.push(expand_function_template_alias_field(
                 field,
-                &attrs,
+                attrs,
                 template_attrs.rename_all,
                 &method_bindings,
             )?);
@@ -901,7 +921,7 @@ fn expand_function_template_intrinsic_data_property_field(
     let key = webapi_field_key(field, attrs, rename_all)?;
     let name = key.display_name;
     let property_key = key.property_key;
-    let Some(intrinsic) = attrs.intrinsic_data_property.as_ref() else {
+    let FieldKind::IntrinsicDataProperty(intrinsic) = &attrs.kind else {
         return Err(Error::new(
             field.span(),
             "function template intrinsic data property requires an intrinsic value",
@@ -943,7 +963,7 @@ fn expand_function_template_alias_field(
             "function template alias fields cannot define callbacks, function metadata, data, or values",
         ));
     }
-    let Some(source_name) = attrs.alias.as_ref() else {
+    let FieldKind::Alias(source_name) = &attrs.kind else {
         return Err(Error::new(
             field.span(),
             "function template alias field requires a source name",
@@ -989,46 +1009,10 @@ fn single_lifetime_param(generics: &syn::Generics) -> Option<syn::Lifetime> {
 }
 
 fn expand_object_field(
-    field: &Field,
+    declaration: &DeclaredField,
     object_attrs: &ObjectAttrs,
 ) -> Option<Result<proc_macro2::TokenStream, Error>> {
-    let mut attrs = match parse_field_attrs(field) {
-        Ok(attrs) => attrs,
-        Err(error) => return Some(Err(error)),
-    };
-    if let Err(error) = attrs.inherit_receiver(object_attrs.receiver.as_ref()) {
-        return Some(Err(error));
-    }
-    // Struct-level `#[webapi(data_properties)]` is the only mode where an unannotated
-    // field becomes part of the JavaScript surface by default. Without it,
-    // unannotated fields are declaration-only inputs that can still be consumed
-    // by other attributes, for example `#[webapi(method, data = self.cache)]`.
-    if object_attrs.default_data_properties
-        && !attrs.method
-        && !attrs.static_method
-        && !attrs.constant
-        && !attrs.accessor_property
-        && !attrs.native_data_property
-        && attrs.intrinsic_data_property.is_none()
-        && !attrs.data_property
-        && attrs.alias.is_none()
-        && !attrs.hidden
-        && !attrs.slot
-        && !attrs.prototype
-        && !attrs.to_string_tag
-    {
-        attrs.data_property = true;
-    }
-    if object_attrs.default_enumerable
-        && attrs.symbol.is_none()
-        && (attrs.data_property
-            || attrs.method
-            || attrs.accessor_property
-            || attrs.native_data_property
-            || attrs.alias.is_some())
-    {
-        attrs.enumerable = true;
-    }
+    let DeclaredField { field, attrs } = declaration;
     if !attrs.has_installation_kind() {
         if attrs.has_installation_attribute() {
             return Some(Err(Error::new(
@@ -1038,24 +1022,24 @@ fn expand_object_field(
         }
         return None;
     }
-    if attrs.static_method {
+    if matches!(attrs.kind, FieldKind::StaticMethod) {
         return Some(Err(Error::new(
             field.span(),
             "object fields with #[webapi(...)] attributes cannot declare #[webapi(static_method)]",
         )));
     }
-    if attrs.intrinsic_data_property.is_some() {
+    if matches!(attrs.kind, FieldKind::IntrinsicDataProperty(_)) {
         return Some(Err(Error::new(
             field.span(),
             "`intrinsic_data_property` is only supported by WebApiFunctionTemplate",
         )));
     }
-    if attrs.constant {
+    if matches!(attrs.kind, FieldKind::Constant) {
         let name = match webapi_field_name(field, attrs.name.as_ref(), object_attrs.rename_all) {
             Ok(name) => name,
             Err(error) => return Some(Err(error)),
         };
-        let value = match expand_object_field_value(field, &attrs, false) {
+        let value = match expand_object_field_value(field, attrs, false) {
             Ok(value) => value,
             Err(error) => return Some(Err(error)),
         };
@@ -1069,39 +1053,39 @@ fn expand_object_field(
             )?;
         }));
     }
-    if attrs.method {
+    if matches!(attrs.kind, FieldKind::Method) {
         return Some(expand_object_method_field(
             field,
-            &attrs,
+            attrs,
             object_attrs.rename_all,
         ));
     }
-    if attrs.accessor_property {
+    if matches!(attrs.kind, FieldKind::AccessorProperty) {
         return Some(expand_accessor_property_field(
             field,
-            &attrs,
+            attrs,
             object_attrs.rename_all,
             quote!(object),
         ));
     }
-    if attrs.native_data_property {
+    if matches!(attrs.kind, FieldKind::NativeDataProperty) {
         return Some(expand_native_data_property_field(
             field,
-            &attrs,
+            attrs,
             object_attrs.rename_all,
         ));
     }
-    if attrs.alias.is_some() {
-        return Some(expand_alias_field(field, &attrs, object_attrs.rename_all));
+    if matches!(attrs.kind, FieldKind::Alias(_)) {
+        return Some(expand_alias_field(field, attrs, object_attrs.rename_all));
     }
-    if attrs.prototype || attrs.to_string_tag {
+    if matches!(attrs.kind, FieldKind::Prototype | FieldKind::ToStringTag) {
         let field_is_option = type_is_option(&field.ty);
         let optional = field_is_option && attrs.value.is_none() && attrs.init.is_none();
-        let value = match expand_object_field_value(field, &attrs, optional) {
+        let value = match expand_object_field_value(field, attrs, optional) {
             Ok(value) => value,
             Err(error) => return Some(Err(error)),
         };
-        let bind_value = if attrs.prototype {
+        let bind_value = if matches!(attrs.kind, FieldKind::Prototype) {
             quote! {
                 ::moli_webapi_declare::set_declared_prototype(
                     scope,
@@ -1110,7 +1094,7 @@ fn expand_object_field(
                 )?;
             }
         } else {
-            let attributes = to_string_tag_property_attributes(&attrs);
+            let attributes = to_string_tag_property_attributes(attrs);
             quote! {
                 ::moli_webapi_declare::define_declared_to_string_tag_with_attributes(
                     scope,
@@ -1136,10 +1120,13 @@ fn expand_object_field(
     // object. This allows declarations to carry Rust/V8 values used only while
     // generating methods or metadata. Keeping the skip here prevents accidental
     // own-data-property exposure on web-facing wrappers.
-    if !attrs.data_property && !attrs.hidden && !attrs.slot {
+    if !matches!(
+        attrs.kind,
+        FieldKind::DataProperty | FieldKind::Hidden | FieldKind::Slot
+    ) {
         return None;
     }
-    let rename_all = if attrs.hidden || attrs.slot {
+    let rename_all = if matches!(attrs.kind, FieldKind::Hidden | FieldKind::Slot) {
         RenameRule::None
     } else {
         object_attrs.rename_all
@@ -1150,11 +1137,11 @@ fn expand_object_field(
     };
     let field_is_option = type_is_option(&field.ty);
     let optional = field_is_option && attrs.value.is_none() && attrs.init.is_none();
-    let value = match expand_object_field_value(field, &attrs, optional) {
+    let value = match expand_object_field_value(field, attrs, optional) {
         Ok(value) => value,
         Err(error) => return Some(Err(error)),
     };
-    let define_value = if attrs.slot {
+    let define_value = if matches!(attrs.kind, FieldKind::Slot) {
         quote! {
             ::moli_webapi_declare::define_declared_private_slot(
                 scope,
@@ -1163,7 +1150,7 @@ fn expand_object_field(
                 __webapi_value_ref,
             )?;
         }
-    } else if attrs.hidden {
+    } else if matches!(attrs.kind, FieldKind::Hidden) {
         let writable = syn::LitBool::new(!attrs.readonly, proc_macro2::Span::call_site());
         let configurable = syn::LitBool::new(!attrs.dont_delete, proc_macro2::Span::call_site());
         quote! {
@@ -1229,13 +1216,13 @@ fn expand_object_field(
             }
         }));
     }
-    if attrs.hidden {
+    if matches!(attrs.kind, FieldKind::Hidden) {
         return Some(Ok(quote! {
             #value
             #define_value
         }));
     }
-    if attrs.slot {
+    if matches!(attrs.kind, FieldKind::Slot) {
         return Some(Ok(quote! {
             #value
             ::moli_webapi_declare::define_declared_private_slot(
@@ -1468,7 +1455,7 @@ fn expand_alias_field(
     let key = webapi_field_key(field, attrs, rename_all)?;
     let name = key.display_name;
     let property_key = key.property_key;
-    let Some(source_name) = attrs.alias.as_ref() else {
+    let FieldKind::Alias(source_name) = &attrs.kind else {
         return Err(Error::new(
             field.span(),
             "alias field requires a source name",
@@ -2050,7 +2037,12 @@ fn expand_object_field_value(
             }
         });
     }
-    if attrs.data_property || attrs.hidden || attrs.slot || attrs.prototype || attrs.to_string_tag {
+    if matches!(attrs.kind, FieldKind::DataProperty | FieldKind::Hidden)
+        || matches!(
+            attrs.kind,
+            FieldKind::Slot | FieldKind::Prototype | FieldKind::ToStringTag
+        )
+    {
         let Some(ident) = field.ident.as_ref() else {
             return Err(Error::new(field.span(), "object field requires a name"));
         };

@@ -89,23 +89,39 @@ pub(crate) struct FunctionTemplateAttrs {
     pub(crate) default_enumerable: bool,
 }
 
+/// A field has exactly one installation role. Alias and intrinsic payloads
+/// belong to that role instead of being optional flags alongside other kinds.
+#[derive(Clone, Default)]
+pub(crate) enum FieldKind {
+    #[default]
+    Input,
+    Method,
+    StaticMethod,
+    Constant,
+    AccessorProperty,
+    NativeDataProperty,
+    IntrinsicDataProperty(Box<Expr>),
+    DataProperty,
+    Alias(LitStr),
+    Hidden,
+    Slot,
+    Prototype,
+    ToStringTag,
+}
+
+#[derive(Clone, Copy, Default)]
+pub(crate) struct FieldDefaults<'a> {
+    pub(crate) receiver: Option<&'a ReceiverAttr>,
+    pub(crate) data_properties: bool,
+    pub(crate) enumerable: bool,
+}
+
 #[derive(Clone, Default)]
 pub(crate) struct FieldAttrs {
     pub(crate) receiver: Option<ReceiverAttr>,
     pub(crate) returns_promise: bool,
-    pub(crate) method: bool,
-    pub(crate) static_method: bool,
-    pub(crate) constant: bool,
-    pub(crate) accessor_property: bool,
-    pub(crate) native_data_property: bool,
-    pub(crate) intrinsic_data_property: Option<Expr>,
-    pub(crate) data_property: bool,
-    pub(crate) alias: Option<LitStr>,
+    pub(crate) kind: FieldKind,
     pub(crate) enumerable: bool,
-    pub(crate) hidden: bool,
-    pub(crate) slot: bool,
-    pub(crate) prototype: bool,
-    pub(crate) to_string_tag: bool,
     pub(crate) readonly: bool,
     pub(crate) dont_delete: bool,
     pub(crate) name: Option<Expr>,
@@ -128,7 +144,7 @@ impl FieldAttrs {
         &mut self,
         receiver: Option<&ReceiverAttr>,
     ) -> Result<(), Error> {
-        if self.method || self.accessor_property {
+        if matches!(self.kind, FieldKind::Method | FieldKind::AccessorProperty) {
             self.receiver = self.receiver.take().or_else(|| receiver.cloned());
         }
         if (self.receiver.is_some() || self.returns_promise)
@@ -143,18 +159,34 @@ impl FieldAttrs {
     }
 
     pub(crate) fn has_installation_kind(&self) -> bool {
-        self.method
-            || self.static_method
-            || self.constant
-            || self.accessor_property
-            || self.native_data_property
-            || self.intrinsic_data_property.is_some()
-            || self.data_property
-            || self.alias.is_some()
-            || self.hidden
-            || self.slot
-            || self.prototype
-            || self.to_string_tag
+        !matches!(self.kind, FieldKind::Input)
+    }
+
+    fn set_kind(&mut self, kind: FieldKind, span: proc_macro2::Span) -> Result<(), Error> {
+        if self.has_installation_kind() {
+            // Repeating a flag remains harmless; payload-bearing kinds must
+            // appear once so later attributes cannot silently replace values.
+            if std::mem::discriminant(&self.kind) != std::mem::discriminant(&kind) {
+                return Err(Error::new(
+                    span,
+                    "field can only declare one installation kind",
+                ));
+            }
+            match kind {
+                FieldKind::Alias(_) => {
+                    return Err(Error::new(span, "field alias can only be specified once"));
+                }
+                FieldKind::IntrinsicDataProperty(_) => {
+                    return Err(Error::new(
+                        span,
+                        "field intrinsic_data_property can only be specified once",
+                    ));
+                }
+                _ => {}
+            }
+        }
+        self.kind = kind;
+        Ok(())
     }
 
     pub(crate) fn has_installation_attribute(&self) -> bool {
@@ -163,7 +195,7 @@ impl FieldAttrs {
             || self.enumerable
             || self.readonly
             || self.dont_delete
-            || self.alias.is_some()
+            || matches!(self.kind, FieldKind::Alias(_))
             || self.name.is_some()
             || self.symbol.is_some()
             || self.function_name.is_some()
@@ -336,7 +368,15 @@ fn parse_rename_rule(value: &LitStr) -> Result<RenameRule, Error> {
     }
 }
 
+#[cfg(test)]
 pub(crate) fn parse_field_attrs(field: &Field) -> Result<FieldAttrs, Error> {
+    parse_field_attrs_with_defaults(field, FieldDefaults::default())
+}
+
+pub(crate) fn parse_field_attrs_with_defaults(
+    field: &Field,
+    defaults: FieldDefaults<'_>,
+) -> Result<FieldAttrs, Error> {
     let mut parsed = FieldAttrs::default();
     for attr in field
         .attrs
@@ -355,63 +395,56 @@ pub(crate) fn parse_field_attrs(field: &Field) -> Result<FieldAttrs, Error> {
                 return Ok(());
             }
             if meta.path.is_ident("method") {
-                parsed.method = true;
+                parsed.set_kind(FieldKind::Method, meta.path.span())?;
                 if meta.input.peek(Token![=]) {
                     set_field_name(&mut parsed.name, meta.value()?.parse()?, meta.path.span())?;
                 }
                 return Ok(());
             }
             if meta.path.is_ident("static_method") {
-                parsed.static_method = true;
+                parsed.set_kind(FieldKind::StaticMethod, meta.path.span())?;
                 if meta.input.peek(Token![=]) {
                     set_field_name(&mut parsed.name, meta.value()?.parse()?, meta.path.span())?;
                 }
                 return Ok(());
             }
             if meta.path.is_ident("constant") {
-                parsed.constant = true;
+                parsed.set_kind(FieldKind::Constant, meta.path.span())?;
                 if meta.input.peek(Token![=]) {
                     set_field_name(&mut parsed.name, meta.value()?.parse()?, meta.path.span())?;
                 }
                 return Ok(());
             }
             if meta.path.is_ident("accessor_property") {
-                parsed.accessor_property = true;
+                parsed.set_kind(FieldKind::AccessorProperty, meta.path.span())?;
                 if meta.input.peek(Token![=]) {
                     set_field_name(&mut parsed.name, meta.value()?.parse()?, meta.path.span())?;
                 }
                 return Ok(());
             }
             if meta.path.is_ident("native_data_property") {
-                parsed.native_data_property = true;
+                parsed.set_kind(FieldKind::NativeDataProperty, meta.path.span())?;
                 if meta.input.peek(Token![=]) {
                     set_field_name(&mut parsed.name, meta.value()?.parse()?, meta.path.span())?;
                 }
                 return Ok(());
             }
             if meta.path.is_ident("intrinsic_data_property") {
-                if parsed
-                    .intrinsic_data_property
-                    .replace(meta.value()?.parse()?)
-                    .is_some()
-                {
-                    return Err(
-                        meta.error("field intrinsic_data_property can only be specified once")
-                    );
-                }
+                parsed.set_kind(
+                    FieldKind::IntrinsicDataProperty(meta.value()?.parse()?),
+                    meta.path.span(),
+                )?;
                 return Ok(());
             }
             if meta.path.is_ident("data_property") {
-                parsed.data_property = true;
+                parsed.set_kind(FieldKind::DataProperty, meta.path.span())?;
                 if meta.input.peek(Token![=]) {
                     set_field_name(&mut parsed.name, meta.value()?.parse()?, meta.path.span())?;
                 }
                 return Ok(());
             }
             if meta.path.is_ident("alias") {
-                if parsed.alias.replace(meta.value()?.parse()?).is_some() {
-                    return Err(meta.error("field alias can only be specified once"));
-                }
+                parsed.set_kind(FieldKind::Alias(meta.value()?.parse()?), meta.path.span())?;
                 return Ok(());
             }
             if meta.path.is_ident("enumerable") {
@@ -419,14 +452,14 @@ pub(crate) fn parse_field_attrs(field: &Field) -> Result<FieldAttrs, Error> {
                 return Ok(());
             }
             if meta.path.is_ident("hidden") {
-                parsed.hidden = true;
+                parsed.set_kind(FieldKind::Hidden, meta.path.span())?;
                 if meta.input.peek(Token![=]) {
                     set_field_name(&mut parsed.name, meta.value()?.parse()?, meta.path.span())?;
                 }
                 return Ok(());
             }
             if meta.path.is_ident("slot") {
-                parsed.slot = true;
+                parsed.set_kind(FieldKind::Slot, meta.path.span())?;
                 if meta.input.peek(Token![=]) {
                     set_field_name(&mut parsed.name, meta.value()?.parse()?, meta.path.span())?;
                 }
@@ -436,14 +469,14 @@ pub(crate) fn parse_field_attrs(field: &Field) -> Result<FieldAttrs, Error> {
                 if meta.input.peek(Token![=]) {
                     return Err(meta.error("field prototype uses #[webapi(prototype)]"));
                 }
-                parsed.prototype = true;
+                parsed.set_kind(FieldKind::Prototype, meta.path.span())?;
                 return Ok(());
             }
             if meta.path.is_ident("to_string_tag") {
                 if meta.input.peek(Token![=]) {
                     return Err(meta.error("field to_string_tag uses #[webapi(to_string_tag)]"));
                 }
-                parsed.to_string_tag = true;
+                parsed.set_kind(FieldKind::ToStringTag, meta.path.span())?;
                 return Ok(());
             }
             if meta.path.is_ident("readonly") {
@@ -541,47 +574,45 @@ pub(crate) fn parse_field_attrs(field: &Field) -> Result<FieldAttrs, Error> {
         })?;
     }
 
-    if parsed.receiver.is_some() && !parsed.method && !parsed.accessor_property {
+    if defaults.data_properties && !parsed.has_installation_kind() {
+        parsed.kind = FieldKind::DataProperty;
+    }
+    if defaults.enumerable
+        && parsed.symbol.is_none()
+        && matches!(
+            parsed.kind,
+            FieldKind::DataProperty
+                | FieldKind::Method
+                | FieldKind::StaticMethod
+                | FieldKind::AccessorProperty
+                | FieldKind::NativeDataProperty
+                | FieldKind::IntrinsicDataProperty(_)
+                | FieldKind::Alias(_)
+        )
+    {
+        parsed.enumerable = true;
+    }
+    if parsed.receiver.is_some()
+        && !matches!(parsed.kind, FieldKind::Method | FieldKind::AccessorProperty)
+    {
         return Err(Error::new(
             field.span(),
             "receiver is only supported on instance methods and accessor_property fields",
         ));
     }
     if parsed.returns_promise
-        && !parsed.method
-        && !parsed.static_method
-        && !parsed.accessor_property
+        && !matches!(
+            parsed.kind,
+            FieldKind::Method | FieldKind::StaticMethod | FieldKind::AccessorProperty
+        )
     {
         return Err(Error::new(
             field.span(),
             "returns_promise is only supported on methods and accessor_property getters",
         ));
     }
-    parsed.inherit_receiver(None)?;
+    parsed.inherit_receiver(defaults.receiver)?;
 
-    let kinds = [
-        parsed.method,
-        parsed.static_method,
-        parsed.constant,
-        parsed.accessor_property,
-        parsed.native_data_property,
-        parsed.intrinsic_data_property.is_some(),
-        parsed.data_property,
-        parsed.alias.is_some(),
-        parsed.hidden,
-        parsed.slot,
-        parsed.prototype,
-        parsed.to_string_tag,
-    ]
-    .into_iter()
-    .filter(|enabled| *enabled)
-    .count();
-    if kinds > 1 {
-        return Err(Error::new(
-            field.span(),
-            "field can only be one of #[webapi(method)], #[webapi(static_method)], #[webapi(constant)], #[webapi(accessor_property)], #[webapi(native_data_property)], #[webapi(intrinsic_data_property = ...)], #[webapi(data_property)], #[webapi(alias = ...)], #[webapi(hidden)], #[webapi(slot)], #[webapi(prototype)], or #[webapi(to_string_tag)]",
-        ));
-    }
     if parsed.value.is_some() && parsed.init.is_some() {
         return Err(Error::new(
             field.span(),
@@ -589,17 +620,18 @@ pub(crate) fn parse_field_attrs(field: &Field) -> Result<FieldAttrs, Error> {
         ));
     }
     if parsed.data.is_some()
-        && !parsed.method
-        && !parsed.static_method
-        && !parsed.accessor_property
-        && !parsed.native_data_property
+        && !matches!(parsed.kind, FieldKind::Method | FieldKind::StaticMethod)
+        && !matches!(
+            parsed.kind,
+            FieldKind::AccessorProperty | FieldKind::NativeDataProperty
+        )
     {
         return Err(Error::new(
             field.span(),
             "field data can only be specified for #[webapi(method)], #[webapi(static_method)], #[webapi(accessor_property)], or #[webapi(native_data_property)] fields",
         ));
     }
-    if parsed.setter_data.is_some() && !parsed.accessor_property {
+    if parsed.setter_data.is_some() && !matches!(parsed.kind, FieldKind::AccessorProperty) {
         return Err(Error::new(
             field.span(),
             "field setter_data can only be specified for #[webapi(accessor_property)] fields",
@@ -612,7 +644,7 @@ pub(crate) fn parse_field_attrs(field: &Field) -> Result<FieldAttrs, Error> {
         ));
     }
     if let Some(function_name) = parsed.function_name.as_ref() {
-        if !parsed.method && !parsed.static_method {
+        if !matches!(parsed.kind, FieldKind::Method | FieldKind::StaticMethod) {
             return Err(Error::new(
                 field.span(),
                 "field function_name can only be specified for #[webapi(method)] or #[webapi(static_method)] fields",
@@ -632,12 +664,15 @@ pub(crate) fn parse_field_attrs(field: &Field) -> Result<FieldAttrs, Error> {
                 "field can only specify one of #[webapi(name = ...)] or #[webapi(symbol = ...)]",
             ));
         }
-        if !parsed.method
-            && !parsed.static_method
-            && !parsed.accessor_property
-            && !parsed.native_data_property
-            && parsed.intrinsic_data_property.is_none()
-            && parsed.alias.is_none()
+        if !matches!(parsed.kind, FieldKind::Method | FieldKind::StaticMethod)
+            && !matches!(
+                parsed.kind,
+                FieldKind::AccessorProperty | FieldKind::NativeDataProperty
+            )
+            && !matches!(
+                parsed.kind,
+                FieldKind::IntrinsicDataProperty(_) | FieldKind::Alias(_)
+            )
         {
             return Err(Error::new(
                 field.span(),
@@ -645,25 +680,35 @@ pub(crate) fn parse_field_attrs(field: &Field) -> Result<FieldAttrs, Error> {
             ));
         }
     }
-    if parsed.getter.is_some() && !parsed.accessor_property && !parsed.native_data_property {
+    if parsed.getter.is_some()
+        && !matches!(
+            parsed.kind,
+            FieldKind::AccessorProperty | FieldKind::NativeDataProperty
+        )
+    {
         return Err(Error::new(
             field.span(),
             "field getter can only be specified for #[webapi(accessor_property)] or #[webapi(native_data_property)] fields",
         ));
     }
-    if parsed.setter.is_some() && !parsed.accessor_property && !parsed.native_data_property {
+    if parsed.setter.is_some()
+        && !matches!(
+            parsed.kind,
+            FieldKind::AccessorProperty | FieldKind::NativeDataProperty
+        )
+    {
         return Err(Error::new(
             field.span(),
             "field setter can only be specified for #[webapi(accessor_property)] or #[webapi(native_data_property)] fields",
         ));
     }
-    if parsed.accessor_property && parsed.callback.is_some() {
+    if matches!(parsed.kind, FieldKind::AccessorProperty) && parsed.callback.is_some() {
         return Err(Error::new(
             field.span(),
             "`accessor_property` fields use #[webapi(getter = path)] and optional #[webapi(setter = path)] instead of callback",
         ));
     }
-    if parsed.accessor_property
+    if matches!(parsed.kind, FieldKind::AccessorProperty)
         && (parsed.length.is_some() || parsed.value.is_some() || parsed.init.is_some())
     {
         return Err(Error::new(
@@ -671,13 +716,13 @@ pub(crate) fn parse_field_attrs(field: &Field) -> Result<FieldAttrs, Error> {
             "`accessor_property` fields cannot use length, value, or init attributes",
         ));
     }
-    if parsed.native_data_property && parsed.callback.is_some() {
+    if matches!(parsed.kind, FieldKind::NativeDataProperty) && parsed.callback.is_some() {
         return Err(Error::new(
             field.span(),
             "`native_data_property` fields use #[webapi(getter = path)] and optional #[webapi(setter = path)] instead of callback",
         ));
     }
-    if parsed.native_data_property
+    if matches!(parsed.kind, FieldKind::NativeDataProperty)
         && (parsed.length.is_some() || parsed.value.is_some() || parsed.init.is_some())
     {
         return Err(Error::new(
@@ -685,7 +730,7 @@ pub(crate) fn parse_field_attrs(field: &Field) -> Result<FieldAttrs, Error> {
             "`native_data_property` fields cannot use length, value, or init attributes",
         ));
     }
-    if parsed.intrinsic_data_property.is_some()
+    if matches!(parsed.kind, FieldKind::IntrinsicDataProperty(_))
         && (parsed.function_name.is_some()
             || parsed.length.is_some()
             || parsed.callback.is_some()
@@ -702,7 +747,7 @@ pub(crate) fn parse_field_attrs(field: &Field) -> Result<FieldAttrs, Error> {
             "`intrinsic_data_property` fields can only use name, symbol, enumerable, readonly, or dont_delete attributes",
         ));
     }
-    if (parsed.method || parsed.static_method)
+    if (matches!(parsed.kind, FieldKind::Method | FieldKind::StaticMethod))
         && (parsed.getter.is_some()
             || parsed.setter.is_some()
             || parsed.value.is_some()
@@ -713,7 +758,7 @@ pub(crate) fn parse_field_attrs(field: &Field) -> Result<FieldAttrs, Error> {
             "method fields cannot use getter, setter, value, or init attributes",
         ));
     }
-    if parsed.constant
+    if matches!(parsed.kind, FieldKind::Constant)
         && (parsed.symbol.is_some()
             || parsed.function_name.is_some()
             || parsed.length.is_some()
@@ -731,13 +776,13 @@ pub(crate) fn parse_field_attrs(field: &Field) -> Result<FieldAttrs, Error> {
             "constant fields can only use name, value, and optional enumerable attributes",
         ));
     }
-    if parsed.constant && parsed.value.is_none() {
+    if matches!(parsed.kind, FieldKind::Constant) && parsed.value.is_none() {
         return Err(Error::new(
             field.span(),
             "constant field requires #[webapi(value = expr)]",
         ));
     }
-    if parsed.alias.is_some()
+    if matches!(parsed.kind, FieldKind::Alias(_))
         && (parsed.callback.is_some()
             || parsed.function_name.is_some()
             || parsed.length.is_some()
@@ -753,7 +798,7 @@ pub(crate) fn parse_field_attrs(field: &Field) -> Result<FieldAttrs, Error> {
             "alias fields cannot use callback, length, getter, setter, data, value, or init attributes",
         ));
     }
-    if parsed.data_property
+    if matches!(parsed.kind, FieldKind::DataProperty)
         && (parsed.callback.is_some()
             || parsed.length.is_some()
             || parsed.getter.is_some()
@@ -764,7 +809,7 @@ pub(crate) fn parse_field_attrs(field: &Field) -> Result<FieldAttrs, Error> {
             "`data_property` fields cannot use callback, length, getter, or setter attributes",
         ));
     }
-    if parsed.hidden
+    if matches!(parsed.kind, FieldKind::Hidden)
         && (parsed.callback.is_some()
             || parsed.length.is_some()
             || parsed.getter.is_some()
@@ -777,7 +822,7 @@ pub(crate) fn parse_field_attrs(field: &Field) -> Result<FieldAttrs, Error> {
             "hidden fields cannot use callback, length, getter, setter, or enumerable attributes",
         ));
     }
-    if parsed.slot
+    if matches!(parsed.kind, FieldKind::Slot)
         && (parsed.callback.is_some()
             || parsed.length.is_some()
             || parsed.getter.is_some()
@@ -792,7 +837,7 @@ pub(crate) fn parse_field_attrs(field: &Field) -> Result<FieldAttrs, Error> {
             "slot fields cannot use callback, length, getter, setter, enumerable, readonly, or dont_delete attributes",
         ));
     }
-    if parsed.prototype
+    if matches!(parsed.kind, FieldKind::Prototype)
         && (parsed.name.is_some()
             || parsed.symbol.is_some()
             || parsed.function_name.is_some()
@@ -811,7 +856,7 @@ pub(crate) fn parse_field_attrs(field: &Field) -> Result<FieldAttrs, Error> {
             "prototype fields can only use value, init, or optional field state",
         ));
     }
-    if parsed.to_string_tag
+    if matches!(parsed.kind, FieldKind::ToStringTag)
         && (parsed.name.is_some()
             || parsed.symbol.is_some()
             || parsed.function_name.is_some()
@@ -907,10 +952,71 @@ fn set_field_name(
 #[cfg(test)]
 mod tests {
     use super::{
-        RenameRule, ValueInitAttr, parse_field_attrs, parse_function_template_attrs,
-        parse_object_attrs,
+        FieldDefaults, FieldKind, RenameRule, ValueInitAttr, parse_field_attrs,
+        parse_field_attrs_with_defaults, parse_function_template_attrs, parse_object_attrs,
     };
     use syn::Field;
+
+    #[test]
+    fn installation_kinds_conflict_even_across_separate_attributes() {
+        let fields: [Field; 3] = [
+            syn::parse_quote!(#[webapi(method)] #[webapi(slot)] value: ()),
+            syn::parse_quote!(#[webapi(alias = "values", method)] value: ()),
+            syn::parse_quote!(#[webapi(intrinsic_data_property = v8::Intrinsic::ArrayProtoValues, data_property)] value: ()),
+        ];
+        for field in fields {
+            let error = parse_field_attrs(&field).err().expect("conflicting kinds");
+            assert_eq!(
+                error.to_string(),
+                "field can only declare one installation kind"
+            );
+        }
+    }
+
+    #[test]
+    fn inherited_defaults_respect_member_roles() {
+        let receiver = syn::parse_quote!("Example");
+        let defaults = FieldDefaults {
+            receiver: Some(&receiver),
+            data_properties: true,
+            enumerable: true,
+        };
+        let fields: [Field; 5] = [
+            syn::parse_quote!(value: u32),
+            syn::parse_quote!(#[webapi(method, callback = call)] call: ()),
+            syn::parse_quote!(#[webapi(method, symbol = "iterator", callback = call)] iterator: ()),
+            syn::parse_quote!(#[webapi(slot)] state: u32),
+            syn::parse_quote!(#[webapi(native_data_property, getter = get)] native: ()),
+        ];
+        let attrs: Vec<_> = fields
+            .iter()
+            .map(|field| parse_field_attrs_with_defaults(field, defaults).expect("defaults"))
+            .collect();
+        assert!(matches!(attrs[0].kind, FieldKind::DataProperty));
+        assert!(attrs[0].enumerable && attrs[0].receiver.is_none());
+        assert!(attrs[1].enumerable && attrs[1].receiver.is_some());
+        assert!(!attrs[2].enumerable && attrs[2].receiver.is_some());
+        assert!(!attrs[3].enumerable && attrs[3].receiver.is_none());
+        assert!(attrs[4].enumerable && attrs[4].receiver.is_none());
+    }
+
+    #[test]
+    fn implicit_data_properties_are_validated_like_explicit_ones() {
+        let field = syn::parse_quote!(#[webapi(length = 1)] value: u32);
+        let error = parse_field_attrs_with_defaults(
+            &field,
+            FieldDefaults {
+                data_properties: true,
+                ..FieldDefaults::default()
+            },
+        )
+        .err()
+        .expect("length is not data");
+        assert_eq!(
+            error.to_string(),
+            "`data_property` fields cannot use callback, length, getter, or setter attributes"
+        );
+    }
 
     #[test]
     fn object_enumerable_default_can_be_used_without_default_data_properties() {
@@ -960,7 +1066,7 @@ mod tests {
             value: ()
         };
         let attrs = parse_field_attrs(&field).expect("readonly accessor property should parse");
-        assert!(attrs.accessor_property);
+        assert!(matches!(attrs.kind, FieldKind::AccessorProperty));
         assert!(attrs.readonly);
     }
 
@@ -971,7 +1077,7 @@ mod tests {
             value: ()
         };
         let attrs = parse_field_attrs(&field).expect("setter_data accessor property should parse");
-        assert!(attrs.accessor_property);
+        assert!(matches!(attrs.kind, FieldKind::AccessorProperty));
         assert!(attrs.data.is_some());
         assert!(attrs.setter_data.is_some());
     }
@@ -1131,7 +1237,7 @@ mod tests {
             value: ()
         };
         let attrs = parse_field_attrs(&field).expect("native data property should parse");
-        assert!(attrs.native_data_property);
+        assert!(matches!(attrs.kind, FieldKind::NativeDataProperty));
         assert!(attrs.enumerable);
         assert!(attrs.getter.is_some());
         assert!(attrs.setter.is_some());
@@ -1149,7 +1255,7 @@ mod tests {
             iterator: ()
         };
         let attrs = parse_field_attrs(&field).expect("intrinsic data property should parse");
-        assert!(attrs.intrinsic_data_property.is_some());
+        assert!(matches!(attrs.kind, FieldKind::IntrinsicDataProperty(_)));
         assert_eq!(
             attrs
                 .symbol
@@ -1224,7 +1330,7 @@ mod tests {
             value: ()
         };
         let attrs = parse_field_attrs(&field).expect("method descriptor attrs should parse");
-        assert!(attrs.method);
+        assert!(matches!(attrs.kind, FieldKind::Method));
         assert!(attrs.readonly);
         assert!(attrs.dont_delete);
     }
@@ -1377,7 +1483,7 @@ mod tests {
             value: ()
         };
         let attrs = parse_field_attrs(&field).expect("toStringTag attrs should parse");
-        assert!(attrs.to_string_tag);
+        assert!(matches!(attrs.kind, FieldKind::ToStringTag));
         assert!(attrs.readonly);
         assert!(attrs.dont_delete);
     }
