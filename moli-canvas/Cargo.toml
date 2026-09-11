@@ -5,10 +5,15 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
+anyrender = { git = "https://github.com/ldm0/anyrender", rev = "18fd67d7a5622a9821d86434857fd69856912a43" }
+anyrender_vello_cpu = { git = "https://github.com/ldm0/anyrender", rev = "18fd67d7a5622a9821d86434857fd69856912a43", default-features = false, features = ["bitmap-glyphs"] }
 base64 = "0.22"
 font8x8 = "0.3"
+kurbo = "=0.13.1"
 moli-image = { path = "../moli-image" }
 moli-web-mime = { path = "../moli-web-mime" }
+peniko = "0.6"
+vello_cpu = "0.2"
 
 [lints]
 workspace = true

@@ -298,6 +298,47 @@ pub fn paint_rect(
     }
 }
 
+/// Composites a straight-alpha RGBA color over a premultiplied RGBA8 surface
+/// within the given rectangle using source-over blending. The color channels
+/// are premultiplied internally before compositing.
+pub fn paint_rect_premul(
+    pixels: &mut [u8],
+    canvas_width: u32,
+    canvas_height: u32,
+    rect: CanvasRect,
+    straight_rgba: [u8; 4],
+) {
+    if !surface_matches_len(pixels, canvas_width, canvas_height) {
+        return;
+    }
+    let (left, top, right, bottom) = rect;
+    if left >= right || top >= bottom {
+        return;
+    }
+    let start_x = left.max(0).min(canvas_width as i32) as u32;
+    let start_y = top.max(0).min(canvas_height as i32) as u32;
+    let end_x = right.max(0).min(canvas_width as i32) as u32;
+    let end_y = bottom.max(0).min(canvas_height as i32) as u32;
+    let sa = straight_rgba[3] as u32;
+    if sa == 0 {
+        return;
+    }
+    let spr = (straight_rgba[0] as u32 * sa + 128) / 255;
+    let spg = (straight_rgba[1] as u32 * sa + 128) / 255;
+    let spb = (straight_rgba[2] as u32 * sa + 128) / 255;
+    let inv_sa = 255 - sa;
+    for y in start_y..end_y {
+        for x in start_x..end_x {
+            let index = ((y * canvas_width + x) * 4) as usize;
+            let d = &mut pixels[index..index + 4];
+            d[0] = ((spr * 255 + d[0] as u32 * inv_sa + 128) / 255).min(255) as u8;
+            d[1] = ((spg * 255 + d[1] as u32 * inv_sa + 128) / 255).min(255) as u8;
+            d[2] = ((spb * 255 + d[2] as u32 * inv_sa + 128) / 255).min(255) as u8;
+            d[3] = ((sa * 255 + d[3] as u32 * inv_sa + 128) / 255).min(255) as u8;
+        }
+    }
+}
+
 fn canonical_hex_color(value: &str) -> Option<String> {
     let [red, green, blue, alpha] = hex_color_rgba(value)?;
     if alpha == u8::MAX {

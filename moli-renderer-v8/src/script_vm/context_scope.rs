@@ -57,7 +57,7 @@ impl ScriptVm {
     /// Like `with_context_scope_by_ptr`, this is deliberately body-only. Its
     /// name must not imply that returning from the Rust closure completes an
     /// HTML task or a protocol command.
-    pub(super) fn with_default_context_scope<T>(
+    pub(crate) fn with_default_context_scope<T>(
         &mut self,
         op: impl FnOnce(&mut v8::PinScope<'_, '_>, *mut JsContextHost) -> Result<T>,
     ) -> Result<T> {
