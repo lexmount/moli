@@ -1694,7 +1694,7 @@ async fn request_headers_distinguish_empty_values_from_absent_upload_content_typ
             .parse::<usize>()?;
         seen.insert(index);
         let case = &cases[index];
-        let (_, method, _, content_type) = case;
+        let (_, method, body, content_type) = case;
         assert!(request.starts_with(&format!("{method} /empty-headers/{index} HTTP/1.1\r\n")));
         let values = |name: &str| {
             request
@@ -1713,8 +1713,66 @@ async fn request_headers_distinguish_empty_values_from_absent_upload_content_typ
             content_type.iter().copied().collect::<Vec<_>>(),
             "{case:?}: {request}"
         );
+        if body.as_ref().is_none_or(Vec::is_empty) {
+            let expected_length = if body.is_some() || matches!(*method, "POST" | "PUT") {
+                vec!["0"]
+            } else {
+                vec![]
+            };
+            assert_eq!(
+                values("content-length"),
+                expected_length,
+                "{case:?}: {request}"
+            );
+            assert!(
+                values("transfer-encoding").is_empty(),
+                "{case:?}: {request}"
+            );
+        }
     }
     assert_eq!(seen, (0..cases.len()).collect());
+    Ok(())
+}
+
+#[tokio::test]
+async fn fetch_redirects_recompute_bodyless_put_content_length() -> Result<()> {
+    for status in [301, 302, 303, 307, 308] {
+        let server = ScriptedHttpServer::spawn(vec![
+            ScriptedResponse::status(status, "Redirect").with_header("Location", "/final"),
+            ScriptedResponse::ok("done"),
+        ]);
+        let client = FetchClient::new(&FetchConfig::default(), new_shared_browser_cookie_store());
+        let response = client
+            .fetch_raw(Request::new(
+                "PUT",
+                &server.url_path("/start"),
+                None,
+                vec![],
+            )?)
+            .await?;
+        assert_eq!(response.status, 200);
+        assert!(response.redirected);
+        let requests = server.requests();
+        server.shutdown();
+        assert_eq!(requests.len(), 2, "{status}: {requests:?}");
+        let final_method = if status == 303 { "GET" } else { "PUT" };
+        for (request, method, path) in [
+            (&requests[0], "PUT", "/start"),
+            (&requests[1], final_method, "/final"),
+        ] {
+            assert!(request.starts_with(&format!("{method} {path} HTTP/1.1\r\n")));
+            assert_eq!(
+                request_head_header_value(request, "content-length"),
+                if method == "PUT" { Some("0") } else { None },
+                "{status}: {request}"
+            );
+            assert_eq!(request_head_header_value(request, "content-type"), None);
+            assert_eq!(
+                request_head_header_value(request, "transfer-encoding"),
+                None
+            );
+        }
+    }
     Ok(())
 }
 

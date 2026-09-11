@@ -706,8 +706,9 @@ pub(crate) fn configure_easy<H: Handler>(
         method => {
             easy.custom_request(method)
                 .with_context(|| anyhow!("failed to configure {method} request"))?;
-            if let Some(ref body) = request.body {
-                easy.post_fields_copy(body)
+            // Fetch requires Content-Length: 0 for a bodyless PUT, just as for POST.
+            if request.body.is_some() || method == "PUT" {
+                easy.post_fields_copy(request.body.as_deref().unwrap_or(&[]))
                     .context("failed to set custom request body")?;
                 uses_post_fields = true;
             }
