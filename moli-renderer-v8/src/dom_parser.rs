@@ -30,6 +30,12 @@ const HTML_NAMESPACE: &str = "http://www.w3.org/1999/xhtml";
 const PARSER_ERROR_STYLE: &str = "display: block; white-space: pre; border: 2px solid #c77; padding: 0 1em 0 1em; margin: 1em; background-color: #fdd; color: black";
 const PARSER_ERROR_DETAIL_STYLE: &str = "font-family:monospace;font-size:12px";
 
+#[derive(Clone, Copy)]
+pub(super) enum XmlParseErrorBehavior {
+    ParserErrorDocument,
+    ReturnNone,
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum DetachedDocumentKind {
     Document,
@@ -241,7 +247,7 @@ pub(crate) fn install_dom_parser_template_bindings<'s>(
     );
 }
 
-pub(super) fn parse_detached_document_from_string_with_url<'s>(
+fn parse_detached_document_from_string_with_url<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     document_url: Url,
     source: &str,
@@ -264,12 +270,6 @@ pub(super) fn parse_detached_document_from_string_with_url<'s>(
         mime,
         XmlParseErrorBehavior::ParserErrorDocument,
     )
-}
-
-#[derive(Clone, Copy)]
-pub(super) enum XmlParseErrorBehavior {
-    ParserErrorDocument,
-    ReturnNone,
 }
 
 pub(super) fn parse_detached_xml_document_from_source<'s>(
