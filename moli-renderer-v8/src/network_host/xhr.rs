@@ -37,6 +37,7 @@ pub(crate) const XHR_SEND_FLAG_SLOT: &str = "__lmXhrSendFlag";
 pub(crate) const XHR_UPLOAD_IN_PROGRESS_SLOT: &str = "__lmXhrUploadInProgress";
 const XHR_PENDING_KIND_SLOT: &str = "__lmXhrPendingKind";
 const XHR_PENDING_STATUS_SLOT: &str = "__lmXhrPendingStatus";
+const XHR_PENDING_STATUS_TEXT_SLOT: &str = "__lmXhrPendingStatusText";
 const XHR_PENDING_URL_SLOT: &str = "__lmXhrPendingUrl";
 const XHR_PENDING_BODY_SLOT: &str = "__lmXhrPendingBody";
 const XHR_PENDING_BODY_BYTES_SLOT: &str = "__lmXhrPendingBodyBytes";

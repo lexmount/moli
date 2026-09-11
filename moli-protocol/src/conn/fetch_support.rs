@@ -483,6 +483,7 @@ impl PendingFetchAuthNavigation {
         Arc::new(NetworkFetchResult::without_request_observation(
             RawResponse::from_head_and_body(
                 ResponseHead {
+                    status_text: None,
                     final_url: url,
                     status: 401,
                     headers: vec![(
@@ -1293,6 +1294,7 @@ impl ActiveDocumentBodyStreamState {
 
     fn finish_pending_body_source(&mut self) -> Result<DocumentBodySource, String> {
         let head = ResponseHead {
+            status_text: self.response.status_text.clone(),
             final_url: self.response.final_url.clone(),
             status: self.response.status,
             headers: self.response.headers.clone(),

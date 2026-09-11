@@ -107,6 +107,7 @@ pub(crate) fn create_streaming_cache_body_writer_for_response_parts(
         request_url,
         request_url,
         status,
+        None,
         headers,
         false,
     ) else {
@@ -122,6 +123,7 @@ pub(crate) fn finish_streaming_cached_response(
     cookie_header: Option<&str>,
     final_url: &Url,
     status: u16,
+    status_text: Option<&str>,
     headers: &[(String, String)],
     redirected: bool,
     writer: HttpCacheBodyWriter,
@@ -136,6 +138,7 @@ pub(crate) fn finish_streaming_cached_response(
         request_url,
         final_url,
         status,
+        status_text,
         headers,
         redirected,
     ) else {
