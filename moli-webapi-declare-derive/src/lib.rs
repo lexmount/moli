@@ -4,21 +4,6 @@ mod expand;
 use proc_macro::TokenStream;
 use syn::{DeriveInput, parse_macro_input};
 
-/// Derives a Web API interface constructor/prototype binder.
-///
-/// The generated implementation creates a prototype object, links the declared
-/// parent prototype when present, installs declared prototype methods, creates
-/// the constructor function, and publishes the constructor on the supplied
-/// global object. The derive is intended for renderer bootstrap code and future
-/// WebIDL codegen, not for parsing or converting WebIDL argument lists.
-#[proc_macro_derive(WebApiInterface, attributes(webapi))]
-pub fn derive_webapi_interface(input: TokenStream) -> TokenStream {
-    match expand::expand_webapi_interface(parse_macro_input!(input as DeriveInput)) {
-        Ok(tokens) => tokens.into(),
-        Err(error) => error.to_compile_error().into(),
-    }
-}
-
 /// Derives a Web API function-template declaration binder.
 ///
 /// The generated implementation creates a V8 `FunctionTemplate`, sets its class

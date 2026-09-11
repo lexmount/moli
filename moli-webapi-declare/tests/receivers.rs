@@ -2,7 +2,7 @@ use std::pin::pin;
 
 use moli_v8_test_util::ensure_v8;
 use moli_v8_util::{get_private_value, set_private_value, v8str};
-use moli_webapi_declare::{WebApiFunctionTemplate, WebApiInterface, WebApiObject};
+use moli_webapi_declare::{WebApiFunctionTemplate, WebApiObject};
 
 const BRAND: &str = "__receiverTestBrand";
 const OTHER_BRAND: &str = "__receiverTestOtherBrand";
@@ -76,7 +76,7 @@ struct NativeSample {
     static_promise: (),
 }
 
-#[derive(WebApiInterface)]
+#[derive(WebApiFunctionTemplate)]
 #[webapi(name = "PlainInterface", receiver = has_brand)]
 struct PlainInterface {
     #[webapi(method, callback = callback, data = 7)]
@@ -242,7 +242,7 @@ fn promise_members_reject_all_synchronous_errors_and_preserve_success_identity()
 }
 
 #[test]
-fn object_and_interface_declarations_use_the_same_receiver_policy() {
+fn object_and_template_declarations_use_the_same_receiver_policy() {
     ensure_v8();
     let mut isolate = v8::Isolate::new(Default::default());
     let scope = pin!(v8::HandleScope::new(&mut isolate));
@@ -250,13 +250,15 @@ fn object_and_interface_declarations_use_the_same_receiver_policy() {
     let context = v8::Context::new(scope, Default::default());
     let scope = &mut v8::ContextScope::new(scope, context);
     let global = context.global(scope);
-    PlainInterface {
-        method: (),
-        value: (),
-        ready: (),
-    }
-    .bind(scope, global)
-    .unwrap();
+    let constructor = PlainInterface::build(scope).get_function(scope).unwrap();
+    global
+        .define_own_property(
+            scope,
+            v8str(scope, "PlainInterface").into(),
+            constructor.into(),
+            v8::PropertyAttribute::DONT_ENUM,
+        )
+        .unwrap();
     let object = PlainObject::new(true).bind(scope).unwrap();
     global
         .set(scope, v8str(scope, "object").into(), object.into())

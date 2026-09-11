@@ -24,16 +24,6 @@ impl syn::parse::Parse for ReceiverAttr {
     }
 }
 
-#[derive(Default)]
-pub(crate) struct InterfaceAttrs {
-    pub(crate) receiver: Option<ReceiverAttr>,
-    pub(crate) name: Option<LitStr>,
-    pub(crate) parent: Option<LitStr>,
-    pub(crate) constructor: Option<ConstructorAttr>,
-    pub(crate) constructor_length: Option<i32>,
-    pub(crate) rename_all: RenameRule,
-}
-
 #[derive(Clone)]
 pub(crate) enum ConstructorAttr {
     Illegal,
@@ -187,50 +177,6 @@ impl FieldAttrs {
             || self.value.is_some()
             || self.init.is_some()
     }
-}
-
-pub(crate) fn parse_interface_attrs(attrs: &[syn::Attribute]) -> Result<InterfaceAttrs, Error> {
-    let mut parsed = InterfaceAttrs::default();
-    for attr in attrs.iter().filter(|attr| attr.path().is_ident("webapi")) {
-        attr.parse_nested_meta(|meta| {
-            if meta.path.is_ident("receiver") {
-                parsed.receiver = Some(meta.value()?.parse()?);
-                return Ok(());
-            }
-            if meta.path.is_ident("name") {
-                parsed.name = Some(meta.value()?.parse()?);
-                return Ok(());
-            }
-            if meta.path.is_ident("parent") {
-                parsed.parent = Some(meta.value()?.parse()?);
-                return Ok(());
-            }
-            if meta.path.is_ident("constructor") {
-                let value: LitStr = meta.value()?.parse()?;
-                parsed.constructor = Some(match value.value().as_str() {
-                    "illegal" => ConstructorAttr::Illegal,
-                    _ => return Err(Error::new(value.span(), "unsupported constructor kind")),
-                });
-                return Ok(());
-            }
-            if meta.path.is_ident("constructor_callback") {
-                parsed.constructor = Some(ConstructorAttr::Callback(meta.value()?.parse()?));
-                return Ok(());
-            }
-            if meta.path.is_ident("constructor_length") {
-                let length: LitInt = meta.value()?.parse()?;
-                parsed.constructor_length = Some(length.base10_parse()?);
-                return Ok(());
-            }
-            if meta.path.is_ident("rename_all") {
-                let value: LitStr = meta.value()?.parse()?;
-                parsed.rename_all = parse_rename_rule(&value)?;
-                return Ok(());
-            }
-            Err(meta.error("unsupported #[webapi(...)] interface attribute"))
-        })?;
-    }
-    Ok(parsed)
 }
 
 pub(crate) fn parse_object_attrs(attrs: &[syn::Attribute]) -> Result<ObjectAttrs, Error> {

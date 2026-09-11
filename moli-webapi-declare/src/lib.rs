@@ -102,8 +102,7 @@
 //! make them pass structured clone.
 //!
 //! Register inheritance with `register_web_api_interfaces` using the same
-//! interface metadata that drives constructor installation. `WebApiInterface`
-//! registers its own name and parent automatically. Identity is independent of
+//! interface metadata that drives constructor installation. Identity is independent of
 //! realm exposure and mutable JavaScript prototypes. Use `web_api_object_type`
 //! for the primary interface and `implements_interface` for inherited receiver
 //! checks. Native factories can call `initialize_web_api_object` directly.
@@ -117,7 +116,7 @@
 //! Factories using that registry should not repeat `parent`: deleting a public
 //! constructor or taking a fallback path does not remove registered inheritance.
 //!
-//! `WebApiInterface` and `WebApiFunctionTemplate` adapt native constructor
+//! `WebApiFunctionTemplate` adapts native constructor
 //! callbacks automatically. Hand-written templates can use
 //! `web_api_constructor!("Interface", callback)` when construction does not
 //! already go through a named object declaration. Only successful construction
@@ -166,7 +165,7 @@
 //! change. Forged prototypes, public properties, and author Proxies cannot pass.
 //!
 //! Struct-level `receiver` supplies the default for instance methods and
-//! accessor properties in all three derives; a field can override it. Static
+//! accessor properties in both derives; a field can override it. Static
 //! methods, data properties, and holder-based native data properties do not
 //! inherit this policy. Already-built `getter_value` functions cannot use it.
 //!
@@ -235,7 +234,7 @@ mod value;
 
 pub mod __private;
 
-pub use moli_webapi_declare_derive::{WebApiFunctionTemplate, WebApiInterface, WebApiObject};
+pub use moli_webapi_declare_derive::{WebApiFunctionTemplate, WebApiObject};
 pub use v8;
 
 /// Adapts a manual native constructor to the same identity initialization used
@@ -262,7 +261,7 @@ pub use brand::{
 
 pub use declaration::{
     DataPropertyDescriptorDeclaration, ObjectLiteralDeclaration, WebApiFunctionTemplateDeclaration,
-    WebApiInterfaceDeclaration, WebApiObjectDeclaration,
+    WebApiObjectDeclaration,
 };
 pub use error::BindError;
 pub use property::{
@@ -277,7 +276,6 @@ pub use property::{
 };
 pub use prototype::{
     define_declared_to_string_tag, define_declared_to_string_tag_with_attributes,
-    define_interface_constructor_property, define_interface_prototype_property,
     define_to_string_tag, define_to_string_tag_with_attributes, set_declared_prototype,
     set_interface_prototype, set_required_interface_prototype,
 };

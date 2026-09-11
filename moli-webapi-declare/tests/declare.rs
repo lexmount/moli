@@ -2,9 +2,27 @@ use std::pin::pin;
 
 use moli_v8_test_util::ensure_v8;
 use moli_webapi_declare::{
-    ObjectLiteralDeclaration, WebApiFunctionTemplate, WebApiInterface, WebApiObject, WebApiValue,
-    define_array_data_property,
+    ObjectLiteralDeclaration, WebApiFunctionTemplate, WebApiFunctionTemplateDeclaration,
+    WebApiObject, WebApiValue, define_array_data_property,
 };
+
+fn install_template<'s, D: WebApiFunctionTemplateDeclaration>(
+    scope: &mut v8::PinScope<'s, '_>,
+    global: v8::Local<'s, v8::Object>,
+) -> v8::Local<'s, v8::Function> {
+    let constructor = D::build(scope)
+        .get_function(scope)
+        .expect("build constructor");
+    global
+        .define_own_property(
+            scope,
+            v8::String::new(scope, D::NAME).unwrap().into(),
+            constructor.into(),
+            v8::PropertyAttribute::DONT_ENUM,
+        )
+        .expect("publish constructor");
+    constructor
+}
 
 fn run_script<'s>(scope: &mut v8::PinScope<'s, '_>, source: &str) -> v8::Local<'s, v8::Value> {
     let source = v8::String::new(scope, source).expect("test source should allocate");
@@ -129,8 +147,13 @@ const SAMPLE_HIDDEN_SLOT: &str = "__lmSampleHidden";
 const SAMPLE_LOCKED_HIDDEN_SLOT: &str = "__lmSampleLockedHidden";
 const SAMPLE_LOCAL_OBJECT_SLOT: &str = "__lmSampleLocalObject";
 
-#[derive(WebApiInterface)]
-#[webapi(name = "SamplePerformance", constructor = "illegal")]
+#[derive(WebApiFunctionTemplate)]
+#[webapi(
+    name = "SamplePerformance",
+    constructor = "illegal",
+    readonly_prototype,
+    prototype_to_string_tag = "SamplePerformance"
+)]
 struct SamplePerformanceInterface {
     #[webapi(method, length = 0, callback = sample_now_callback)]
     now: (),
@@ -141,7 +164,7 @@ struct SamplePerformanceInterface {
     current_time: (),
 }
 
-#[derive(WebApiInterface)]
+#[derive(WebApiFunctionTemplate)]
 #[webapi(
     name = "ConstructibleSample",
     constructor_callback = sample_constructor_callback,
@@ -149,7 +172,7 @@ struct SamplePerformanceInterface {
 )]
 struct ConstructibleSampleInterface {}
 
-#[derive(WebApiInterface)]
+#[derive(WebApiFunctionTemplate)]
 #[webapi(name = "InterfaceDescriptorSample", constructor = "illegal")]
 struct InterfaceDescriptorSample {
     #[webapi(method, enumerable, readonly, dont_delete, callback = sample_now_callback)]
@@ -568,7 +591,7 @@ struct PrototypeBackedFallbackTagObject {}
 struct MissingPrototypeFallbackTagObject {}
 
 #[test]
-fn declared_interface_and_object_have_expected_surface() {
+fn declared_template_and_object_have_expected_surface() {
     ensure_v8();
     let mut isolate = v8::Isolate::new(v8::CreateParams::default());
     let scope = pin!(v8::HandleScope::new(&mut isolate));
@@ -577,12 +600,7 @@ fn declared_interface_and_object_have_expected_surface() {
     let scope = &mut v8::ContextScope::new(scope, context);
     let global = context.global(scope);
 
-    let interface = SamplePerformanceInterface {
-        now: (),
-        sample_now: (),
-        current_time: (),
-    };
-    interface.bind(scope, global).expect("bind interface");
+    install_template::<SamplePerformanceInterface>(scope, global);
     let declaration = SamplePerformanceObject {
         time_origin: 12.0,
         public_time_origin: 12.0,
@@ -1704,9 +1722,7 @@ fn declared_constructor_callback_uses_configured_length() {
     let scope = &mut v8::ContextScope::new(scope, context);
     let global = context.global(scope);
 
-    let constructor = ConstructibleSampleInterface {}
-        .bind(scope, global)
-        .expect("bind interface");
+    let constructor = install_template::<ConstructibleSampleInterface>(scope, global);
     let length = constructor
         .get(scope, v8::String::new(scope, "length").unwrap().into())
         .and_then(|value| value.number_value(scope));
@@ -1739,7 +1755,7 @@ fn declared_native_data_property_uses_native_holder() {
 }
 
 #[test]
-fn declared_interface_method_descriptor_attributes_are_applied() {
+fn declared_template_method_descriptor_attributes_are_applied() {
     ensure_v8();
     let mut isolate = v8::Isolate::new(v8::CreateParams::default());
     let scope = pin!(v8::HandleScope::new(&mut isolate));
@@ -1748,9 +1764,7 @@ fn declared_interface_method_descriptor_attributes_are_applied() {
     let scope = &mut v8::ContextScope::new(scope, context);
     let global = context.global(scope);
 
-    let constructor = InterfaceDescriptorSample { locked_visible: () }
-        .bind(scope, global)
-        .expect("bind descriptor sample");
+    let constructor = install_template::<InterfaceDescriptorSample>(scope, global);
     let prototype = constructor
         .get(scope, v8::String::new(scope, "prototype").unwrap().into())
         .and_then(|value| v8::Local::<v8::Object>::try_from(value).ok())
@@ -2159,13 +2173,7 @@ fn declared_enumerable_properties_bypass_prototype_assignment_semantics() {
     let scope = &mut v8::ContextScope::new(scope, context);
     let global = context.global(scope);
 
-    SamplePerformanceInterface {
-        now: (),
-        sample_now: (),
-        current_time: (),
-    }
-    .bind(scope, global)
-    .expect("bind SamplePerformance");
+    install_template::<SamplePerformanceInterface>(scope, global);
     let constructor = global
         .get(
             scope,

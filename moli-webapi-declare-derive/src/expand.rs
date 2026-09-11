@@ -6,8 +6,7 @@ use syn::{Data, DeriveInput, Error, Field, Fields, GenericParam, Ident, Lit, Lit
 
 use crate::attrs::{
     ConstructorAttr, ConstructorDefaultAttr, FunctionTemplateAttrs, ObjectAttrs, RenameRule,
-    ValueInitAttr, parse_field_attrs, parse_function_template_attrs, parse_interface_attrs,
-    parse_object_attrs,
+    ValueInitAttr, parse_field_attrs, parse_function_template_attrs, parse_object_attrs,
 };
 
 struct WebApiFieldKey {
@@ -16,127 +15,6 @@ struct WebApiFieldKey {
     property_key: proc_macro2::TokenStream,
     function_name: Option<proc_macro2::TokenStream>,
     shared_template_method_name: Option<proc_macro2::TokenStream>,
-}
-
-pub(crate) fn expand_webapi_interface(
-    input: DeriveInput,
-) -> Result<proc_macro2::TokenStream, Error> {
-    let struct_name = input.ident;
-    let generics = input.generics;
-    let (impl_generics, ty_generics, where_clause) = generics.split_for_impl();
-    let attrs = parse_interface_attrs(&input.attrs)?;
-    let interface_name = attrs
-        .name
-        .unwrap_or_else(|| LitStr::new(&struct_name.to_string(), struct_name.span()));
-    let parent = match attrs.parent {
-        Some(parent) => quote!(::std::option::Option::Some(#parent)),
-        None => quote!(::std::option::Option::None),
-    };
-    let constructor_callback = match attrs
-        .constructor
-        .clone()
-        .unwrap_or(ConstructorAttr::Illegal)
-    {
-        ConstructorAttr::Illegal => {
-            quote!(::moli_webapi_declare::illegal_constructor_callback)
-        }
-        ConstructorAttr::Callback(callback) => {
-            quote!(::moli_webapi_declare::web_api_constructor!(#interface_name, #callback))
-        }
-    };
-    let constructor_length = attrs.constructor_length.unwrap_or(0);
-    let fields = named_fields(&input.data)?;
-    let methods = fields
-        .iter()
-        .filter_map(|field| {
-            expand_interface_field(field, attrs.rename_all, attrs.receiver.as_ref())
-        })
-        .collect::<Result<Vec<_>, _>>()?;
-
-    let body = quote! {
-        const INTERFACE_NAME: &'static str = #interface_name;
-        const PARENT_INTERFACE: ::std::option::Option<&'static str> = #parent;
-
-        ::moli_webapi_declare::register_web_api_interfaces(
-            scope, [(INTERFACE_NAME, PARENT_INTERFACE)],
-        )?;
-
-        let prototype = ::moli_webapi_declare::v8::Object::new(scope);
-        if let ::std::option::Option::Some(parent) = PARENT_INTERFACE {
-            if let ::std::option::Option::Some(parent_prototype) =
-                ::moli_webapi_declare::__private::global_constructor_prototype(scope, parent)
-            {
-                let _ = prototype.set_prototype(scope, parent_prototype.into());
-            }
-        }
-        #(#methods)*
-        let constructor = ::moli_webapi_declare::v8::Function::builder(#constructor_callback)
-            .length(#constructor_length)
-            .build(scope)
-            .ok_or_else(|| {
-                ::moli_webapi_declare::BindError::new(
-                    ::std::format!("failed to build `{}` constructor", INTERFACE_NAME)
-                )
-            })?;
-        constructor.set_name(::moli_webapi_declare::__private::v8str(scope, INTERFACE_NAME));
-        ::moli_webapi_declare::define_interface_prototype_property(
-            scope,
-            constructor,
-            prototype,
-        )?;
-        ::moli_webapi_declare::define_interface_constructor_property(
-            scope,
-            prototype,
-            constructor,
-        )?;
-        ::moli_webapi_declare::define_to_string_tag(scope, prototype, INTERFACE_NAME);
-        global
-            .define_own_property(
-                scope,
-                ::moli_webapi_declare::__private::v8str(scope, INTERFACE_NAME).into(),
-                constructor.into(),
-                ::moli_webapi_declare::v8::PropertyAttribute::DONT_ENUM,
-            )
-            .unwrap_or(false)
-            .then_some(())
-            .ok_or_else(|| {
-                ::moli_webapi_declare::BindError::new(
-                    ::std::format!("failed to define `{}` constructor", INTERFACE_NAME)
-                )
-            })?;
-        ::std::result::Result::Ok(constructor)
-    };
-
-    Ok(quote! {
-        impl #impl_generics #struct_name #ty_generics #where_clause {
-            pub fn bind<'s>(
-                &self,
-                scope: &mut ::moli_webapi_declare::v8::PinScope<'s, '_>,
-                global: ::moli_webapi_declare::v8::Local<'s, ::moli_webapi_declare::v8::Object>,
-            ) -> ::std::result::Result<
-                ::moli_webapi_declare::v8::Local<'s, ::moli_webapi_declare::v8::Function>,
-                ::moli_webapi_declare::BindError,
-            > {
-                #body
-            }
-        }
-
-        impl #impl_generics ::moli_webapi_declare::WebApiInterfaceDeclaration for #struct_name #ty_generics #where_clause {
-            const NAME: &'static str = #interface_name;
-            const PARENT: ::std::option::Option<&'static str> = #parent;
-
-            fn bind<'s>(
-                &self,
-                scope: &mut ::moli_webapi_declare::v8::PinScope<'s, '_>,
-                global: ::moli_webapi_declare::v8::Local<'s, ::moli_webapi_declare::v8::Object>,
-            ) -> ::std::result::Result<
-                ::moli_webapi_declare::v8::Local<'s, ::moli_webapi_declare::v8::Function>,
-                ::moli_webapi_declare::BindError,
-            > {
-                self.bind(scope, global)
-            }
-        }
-    })
 }
 
 pub(crate) fn expand_webapi_function_template(
@@ -1094,97 +972,6 @@ fn expand_function_template_alias_field(
         );
         let _ = #name;
     })
-}
-
-fn expand_interface_field(
-    field: &Field,
-    rename_all: RenameRule,
-    receiver: Option<&crate::attrs::ReceiverAttr>,
-) -> Option<Result<proc_macro2::TokenStream, Error>> {
-    let mut attrs = match parse_field_attrs(field) {
-        Ok(attrs) => attrs,
-        Err(error) => return Some(Err(error)),
-    };
-    if let Err(error) = attrs.inherit_receiver(receiver) {
-        return Some(Err(error));
-    }
-    if !attrs.method && !attrs.accessor_property {
-        if attrs.has_installation_kind() || attrs.has_installation_attribute() {
-            return Some(Err(Error::new(
-                field.span(),
-                "interface fields with #[webapi(...)] attributes must declare #[webapi(method)] or #[webapi(accessor_property)]",
-            )));
-        }
-        return None;
-    }
-    if attrs.method {
-        let key = match webapi_field_key(field, &attrs, rename_all) {
-            Ok(key) => key,
-            Err(error) => return Some(Err(error)),
-        };
-        let name = key.display_name;
-        let property_key = key.property_key;
-        let set_function_name = key.function_name.map(|function_name| {
-            quote! {
-                function.set_name(#function_name);
-            }
-        });
-        let Some(callback) = attrs.callback.as_ref() else {
-            return Some(Err(Error::new(
-                field.span(),
-                "method field requires #[webapi(callback = path)]",
-            )));
-        };
-        let length = attrs.length.unwrap_or(0);
-        let enumerable = attrs.enumerable;
-        let writable = !attrs.readonly;
-        let configurable = !attrs.dont_delete;
-        let callback = expand_callback(callback, &attrs, false);
-        let build_function =
-            expand_method_function_builder(&callback, length, attrs.data.as_ref(), &name);
-        let field_read = field
-            .ident
-            .as_ref()
-            .map(|ident| quote!(let _ = &self.#ident;));
-        return Some(Ok(quote! {
-            #field_read
-            let function = #build_function.ok_or_else(|| {
-                ::moli_webapi_declare::BindError::new(
-                    ::std::format!("failed to build `{}.{}` function", INTERFACE_NAME, #name)
-                )
-            })?;
-            #set_function_name
-            let mut descriptor =
-                ::moli_webapi_declare::v8::PropertyDescriptor::new_from_value_writable(
-                    function.into(),
-                    #writable,
-                );
-            descriptor.set_configurable(#configurable);
-            descriptor.set_enumerable(#enumerable);
-            prototype
-                .define_property(
-                    scope,
-                    #property_key,
-                    &descriptor,
-                )
-                .unwrap_or(false)
-                .then_some(())
-                .ok_or_else(|| {
-                    ::moli_webapi_declare::BindError::new(
-                        ::std::format!("failed to define `{}.{}` function", INTERFACE_NAME, #name)
-                    )
-                })?;
-        }));
-    }
-    if attrs.accessor_property {
-        return Some(expand_accessor_property_field(
-            field,
-            &attrs,
-            rename_all,
-            quote!(prototype),
-        ));
-    }
-    None
 }
 
 fn single_lifetime_param(generics: &syn::Generics) -> Option<syn::Lifetime> {
@@ -2316,7 +2103,7 @@ fn named_fields(data: &Data) -> Result<Vec<Field>, Error> {
 
 #[cfg(test)]
 mod tests {
-    use super::{expand_webapi_function_template, expand_webapi_interface, expand_webapi_object};
+    use super::{expand_webapi_function_template, expand_webapi_object};
 
     #[test]
     fn callback_policies_reject_fields_that_cannot_apply_them() {
@@ -2480,49 +2267,6 @@ mod tests {
             .expect("manual object should expand")
             .to_string();
         assert!(!tokens.contains("pub fn new"));
-    }
-
-    #[test]
-    fn interface_fields_with_ignored_attributes_are_rejected() {
-        let input = syn::parse_quote! {
-            #[webapi(name = "Sample")]
-            struct BadInterface {
-                #[webapi(enumerable)]
-                ignored: (),
-            }
-        };
-        let error = match expand_webapi_interface(input) {
-            Ok(_) => panic!("ignored interface field attributes should be rejected"),
-            Err(error) => error,
-        };
-        assert_eq!(
-            error.to_string(),
-            "interface fields with #[webapi(...)] attributes must declare #[webapi(method)] or #[webapi(accessor_property)]"
-        );
-    }
-
-    #[test]
-    fn interface_fields_with_unsupported_installation_kinds_are_rejected() {
-        for kind in ["data_property", "slot", "hidden"] {
-            let input = syn::parse_str(&format!(
-                r#"
-                #[webapi(name = "Sample")]
-                struct BadInterface {{
-                    #[webapi({kind})]
-                    ignored: (),
-                }}
-                "#
-            ))
-            .expect("parse interface");
-            let error = match expand_webapi_interface(input) {
-                Ok(_) => panic!("unsupported interface field kind should be rejected"),
-                Err(error) => error,
-            };
-            assert_eq!(
-                error.to_string(),
-                "interface fields with #[webapi(...)] attributes must declare #[webapi(method)] or #[webapi(accessor_property)]"
-            );
-        }
     }
 
     #[test]

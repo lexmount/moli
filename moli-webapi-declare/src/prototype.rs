@@ -1,6 +1,6 @@
 use moli_v8_util::{define_static_symbol_to_string_tag, global_constructor_prototype};
 
-use crate::{__private, BindError, WebApiValue, v8};
+use crate::{BindError, WebApiValue, v8};
 
 pub fn set_interface_prototype<'s>(
     scope: &mut v8::PinScope<'s, '_>,
@@ -120,42 +120,4 @@ where
         .unwrap_or(false)
         .then_some(())
         .ok_or_else(|| BindError::new("failed to define declared toStringTag"))
-}
-
-pub fn define_interface_prototype_property(
-    scope: &mut v8::PinScope<'_, '_>,
-    constructor: v8::Local<'_, v8::Function>,
-    prototype: v8::Local<'_, v8::Object>,
-) -> Result<(), BindError> {
-    let mut descriptor = v8::PropertyDescriptor::new_from_value_writable(prototype.into(), false);
-    descriptor.set_configurable(false);
-    descriptor.set_enumerable(false);
-    constructor
-        .define_property(
-            scope,
-            __private::v8str(scope, "prototype").into(),
-            &descriptor,
-        )
-        .unwrap_or(false)
-        .then_some(())
-        .ok_or_else(|| BindError::new("failed to define interface prototype property"))
-}
-
-pub fn define_interface_constructor_property(
-    scope: &mut v8::PinScope<'_, '_>,
-    prototype: v8::Local<'_, v8::Object>,
-    constructor: v8::Local<'_, v8::Function>,
-) -> Result<(), BindError> {
-    let mut descriptor = v8::PropertyDescriptor::new_from_value_writable(constructor.into(), true);
-    descriptor.set_configurable(true);
-    descriptor.set_enumerable(false);
-    prototype
-        .define_property(
-            scope,
-            __private::v8str(scope, "constructor").into(),
-            &descriptor,
-        )
-        .unwrap_or(false)
-        .then_some(())
-        .ok_or_else(|| BindError::new("failed to define interface constructor property"))
 }
