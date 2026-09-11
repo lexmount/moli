@@ -1,6 +1,7 @@
 mod async_fetch;
 mod beacon;
 mod bindings;
+mod blob_url_entry;
 mod body;
 mod body_source;
 mod browser_response;
@@ -30,6 +31,9 @@ pub(crate) use font_face::{
 use moli_fetch::{Request, Response, observe_cookie_access_report_for_request};
 
 use crate::network::ResourceRequestClient;
+
+pub(in crate::network_host) use self::blob_url_entry::BLOB_URL_ENTRY_SLOT;
+pub(crate) use self::blob_url_entry::{CapturedBlobUrl, blob_url_entry, set_blob_url_entry};
 
 pub(crate) use self::async_fetch::{
     browser_request_needs_manual_preflight_redirects, collect_image_response_into_parkable,
@@ -69,7 +73,7 @@ pub(crate) use self::body_source::{
     retain_pending_network_body_state_in_retired_realm,
 };
 pub(crate) use self::browser_response::{
-    LocalUrlError, local_url_response, local_url_response_result,
+    LocalUrlError, local_url_response, local_url_response_result, local_url_response_with_blob_entry,
 };
 pub(crate) use self::csp_reports::{
     WindowCspReportRequestContext, capture_window_csp_report_request_context,
