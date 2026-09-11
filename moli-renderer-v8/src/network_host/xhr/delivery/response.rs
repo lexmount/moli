@@ -3,8 +3,8 @@ use super::super::events::{
 };
 use super::super::*;
 use moli_web_mime::{
-    effective_response_mime_essence, effective_response_mime_type, is_dom_parser_xml_mime,
-    is_html_document_mime, normalize_response_blob_mime_type,
+    effective_response_mime_essence, effective_response_mime_type, is_html_document_mime,
+    normalize_response_blob_mime_type,
 };
 
 pub(crate) fn apply_xhr_response(
@@ -221,14 +221,12 @@ fn apply_xhr_response_body(
                 .unwrap_or_else(|| v8::null(scope).into())
         }
         XmlHttpRequestResponseType::Document => {
-            let mime = xhr_response_mime_essence(scope, xhr, &head.headers)
-                .unwrap_or_else(|| "text/html".to_owned());
             let document = parse_xhr_response_document(
                 scope,
                 xhr,
                 &head,
                 body_text.as_deref().unwrap_or(""),
-                Some(&mime),
+                response_type,
             );
             set_xhr_state_value(scope, xhr, XHR_RESPONSE_XML_SLOT, document);
             document
@@ -244,11 +242,12 @@ fn apply_xhr_response_body(
         }
         XmlHttpRequestResponseType::Default | XmlHttpRequestResponseType::Text => {
             if response_type == XmlHttpRequestResponseType::Default {
-                let document = parse_default_xhr_response_xml(
+                let document = parse_xhr_response_document(
                     scope,
                     xhr,
                     &head,
                     body_text.as_deref().unwrap_or(""),
+                    response_type,
                 );
                 set_xhr_state_value(scope, xhr, XHR_RESPONSE_XML_SLOT, document);
             }
@@ -286,15 +285,15 @@ fn apply_xhr_response_text(
             v8_json_parse(scope, &body_text).unwrap_or_else(|| v8::null(scope).into())
         }
         XmlHttpRequestResponseType::Document => {
-            let mime = xhr_response_mime_essence(scope, xhr, &head.headers)
-                .unwrap_or_else(|| "text/html".to_owned());
-            let document = parse_xhr_response_document(scope, xhr, &head, &body_text, Some(&mime));
+            let document =
+                parse_xhr_response_document(scope, xhr, &head, &body_text, response_type);
             set_xhr_state_value(scope, xhr, XHR_RESPONSE_XML_SLOT, document);
             document
         }
         XmlHttpRequestResponseType::Default | XmlHttpRequestResponseType::Text => {
             if response_type == XmlHttpRequestResponseType::Default {
-                let document = parse_default_xhr_response_xml(scope, xhr, &head, &body_text);
+                let document =
+                    parse_xhr_response_document(scope, xhr, &head, &body_text, response_type);
                 set_xhr_state_value(scope, xhr, XHR_RESPONSE_XML_SLOT, document);
             }
             v8_string(scope, &body_text)
@@ -586,16 +585,6 @@ fn xhr_response_mime_essence(
     effective_response_mime_essence(headers, override_mime.as_deref())
 }
 
-fn parse_default_xhr_response_xml<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    xhr: v8::Local<'_, v8::Object>,
-    head: &moli_fetch::ResponseHead,
-    body_text: &str,
-) -> v8::Local<'s, v8::Value> {
-    let mime = xhr_response_mime_essence(scope, xhr, &head.headers);
-    parse_xhr_response_document(scope, xhr, head, body_text, mime.as_deref())
-}
-
 fn xhr_response_url(head: &moli_fetch::ResponseHead) -> &url::Url {
     head.redirect_chain
         .last()
@@ -608,14 +597,18 @@ fn parse_xhr_response_document<'s>(
     xhr: v8::Local<'_, v8::Object>,
     head: &moli_fetch::ResponseHead,
     body_text: &str,
-    mime: Option<&str>,
+    response_type: XmlHttpRequestResponseType,
 ) -> v8::Local<'s, v8::Value> {
-    let Some(mime) =
-        mime.filter(|mime| is_html_document_mime(mime) || is_dom_parser_xml_mime(mime))
-    else {
+    // XHR defaults a missing or invalid response MIME type to text/xml.
+    // Its XML MIME types include any +xml subtype, unlike DOMParser's enum.
+    let mime = xhr_response_mime_essence(scope, xhr, &head.headers)
+        .unwrap_or_else(|| "text/xml".to_owned());
+    let is_xml = matches!(mime.as_str(), "text/xml" | "application/xml") || mime.ends_with("+xml");
+    let is_html = is_html_document_mime(&mime);
+    if (!is_xml && !is_html) || (is_html && response_type != XmlHttpRequestResponseType::Document) {
         return v8::null(scope).into();
-    };
-    build_xhr_response_document(scope, xhr, xhr_response_url(head).clone(), body_text, mime)
+    }
+    build_xhr_response_document(scope, xhr, xhr_response_url(head).clone(), body_text, &mime)
         .map(Into::into)
         .unwrap_or_else(|| v8::null(scope).into())
 }
@@ -648,12 +641,17 @@ fn build_xhr_response_document<'s>(
         host_ptr,
         origin_document_handle,
     )?;
-    let document = dom_parser::parse_detached_document_from_string_with_url(
-        scope,
-        response_url,
-        body_text,
-        mime,
-    )?;
+    let document = if is_html_document_mime(mime) {
+        dom_parser::parse_detached_html_document_from_source(scope, response_url, body_text)
+    } else {
+        dom_parser::parse_detached_xml_document_from_source(
+            scope,
+            response_url,
+            body_text,
+            mime,
+            dom_parser::XmlParseErrorBehavior::ReturnNone,
+        )
+    }?;
     // The response URL controls relative URL resolution; its origin does not
     // replace the XHR environment's origin (including for CORS responses).
     crate::native_bridge::document::inherit_detached_document_origin(

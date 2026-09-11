@@ -165,7 +165,10 @@ pub(super) fn xhr_override_mime_type_callback<'s>(
         );
         return;
     }
-    set_xhr_state_string(scope, xhr, XHR_OVERRIDE_MIME_TYPE_SLOT, &parsed.mime);
+    let mime = moli_content_type::parse_mime_type(&parsed.mime)
+        .map(|mime| mime.to_string())
+        .unwrap_or_else(|| "application/octet-stream".to_owned());
+    set_xhr_state_string(scope, xhr, XHR_OVERRIDE_MIME_TYPE_SLOT, &mime);
     rv.set_undefined();
 }
 
