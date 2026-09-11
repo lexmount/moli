@@ -38,6 +38,35 @@ an explicit allowlist of device attributes. No API reply within the fixed
 12-second post-navigation window means **no valid verdict**. Identity reads
 happen after that window. Responses are not intercepted or rewritten.
 
+## DeviceAndBrowser demo login: request, response, and UI
+
+```sh
+uv run python -m moli_cdp_smoke.diagnostics.device_browser_behavior \
+  --engine moli --binary ../target/release/moli --output behavior-moli
+
+xvfb-run -a uv run python -m moli_cdp_smoke.diagnostics.device_browser_behavior \
+  --engine chromium --binary /usr/bin/chromium --output behavior-chromium
+```
+
+This uses only the site's demo form with dummy credentials: wait 20 seconds,
+click/type using the original survey's fixed 80 ms delay, then click Login.
+No human-behavior simulation or page event listener is injected. The baseline
+is frozen 20 seconds after submission. An optional `--extra-wait` (default 40
+seconds) produces a separate extended observation, never a replacement for
+the baseline.
+
+The collector correlates only the form's `POST /fingerprint_bot_test` with
+response headers, loading completion/failure, parsed verdict, and `#jsonResult`.
+Other network-fingerprint services are not mistaken for the final verdict.
+It retains a whitelist of interaction booleans/counts/timing summaries, not
+credentials, opaque fingerprints or raw stack traces. A submitted request
+with no headers is `headers_pending`, not a failed assertion, bot verdict,
+or evidence that the renderer failed to show a received response.
+
+Tests cover terminal-state classification, allowlists, unrelated probes and
+the immutability of a baseline when a later response arrives. Site responses
+can change; retain both observations even if neither supplies a verdict.
+
 ## Evidence handling
 
 Keep `environment.json` and `result.json` with the investigation. Do not
