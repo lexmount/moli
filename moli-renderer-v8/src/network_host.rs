@@ -137,7 +137,7 @@ pub(crate) use self::request::request_constructor_callback;
 pub(crate) use self::request::{
     FetchArgs, RequestInitValidation, validate_fetch_body, parse_fetch_init, parse_request_redirect_mode_label, request_object_credentials_mode,
 };
-pub(crate) use self::request::{FetchArgumentError, convert_fetch_arguments};
+pub(crate) use self::request::{FetchArgumentError, RequestUrlError, convert_fetch_arguments};
 pub(crate) use self::request::{
     mark_request_input_body_used_for_fetch, request_body_already_used_error,
     try_resolve_request_constructor_url, try_resolve_request_constructor_url_for_base,
