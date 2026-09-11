@@ -300,7 +300,7 @@ impl ResourceRequestClient {
         request: Request,
     ) -> Result<Response> {
         let request = self.apply_network_policy(self.script_request_with_client_origin(request))?;
-        if let Some(result) = local_text_response(&request.url) {
+        if let Some(result) = local_text_response(&request) {
             return result;
         }
         let timing_enabled = moli_trace::cdp_nav_timing_enabled();
@@ -467,7 +467,7 @@ impl ResourceRequestClient {
         F: FnOnce(Result<Response>) + Send + 'static,
     {
         let request = self.apply_network_policy(self.script_request_with_client_origin(request))?;
-        if let Some(result) = local_text_response(&request.url) {
+        if let Some(result) = local_text_response(&request) {
             let task_runner = resource_load.task_runner();
             task_runner.spawn(async move {
                 resource_load.finish();
@@ -727,7 +727,7 @@ impl ResourceRequestClient {
     where
         F: FnOnce(Result<Response>) + Send + 'static,
     {
-        if let Some(result) = local_text_response(&request.url) {
+        if let Some(result) = local_text_response(&request) {
             callback(result);
             return Ok(());
         }
@@ -741,7 +741,7 @@ impl ResourceRequestClient {
         request: Request,
         cancel_handle: FetchCancelHandle,
     ) -> Result<StreamingRawResponse> {
-        if let Some(response) = local_text_response(&request.url) {
+        if let Some(response) = local_text_response(&request) {
             return streaming_raw_response_from_local_response(response?);
         }
 
@@ -777,7 +777,7 @@ impl ResourceRequestClient {
         request: Request,
         cancel_handle: FetchCancelHandle,
     ) -> Result<NetworkFetchResult<StreamingRawResponse>> {
-        if let Some(response) = local_text_response(&request.url) {
+        if let Some(response) = local_text_response(&request) {
             return Ok(NetworkFetchResult::without_request_observation(
                 streaming_raw_response_from_local_response(response?)?,
             ));
@@ -1174,8 +1174,8 @@ fn streaming_raw_response_from_cached_subresource(
     streaming_raw_response_from_head_and_body(head, response.clone_body_bytes())
 }
 
-fn local_text_response(url: &url::Url) -> Option<Result<Response>> {
-    crate::network_host::local_url_response_result(url)
+fn local_text_response(request: &Request) -> Option<Result<Response>> {
+    crate::network_host::local_url_response_result(&request.url, &request.method)
         .map(|result| result.map_err(anyhow::Error::msg))
 }
 

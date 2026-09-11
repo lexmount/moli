@@ -161,12 +161,13 @@ pub(in crate::worker) fn spawn_worker_fetch_network(
 ) {
     tokio::task::spawn_local(async move {
         let loader = load.request_client();
-        let (result, network_request_headers) = if matches!(resolved_url.scheme(), "blob" | "data")
+        let (result, network_request_headers) = if let Some(result) =
+            local_url_response_result(&resolved_url, &method)
         {
             (
-                local_url_response(&resolved_url)
+                result
                     .map(|response| WorkerFetchResponse::Materialized(Box::new(response)))
-                    .ok_or_else(|| format!("fetch: local url `{resolved_url}` is unavailable")),
+                    .map_err(|error| format!("fetch: {error}")),
                 None,
             )
         } else {

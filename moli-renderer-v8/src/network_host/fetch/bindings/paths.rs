@@ -144,11 +144,15 @@ pub(super) fn resolve_local_fetch(
     host: &mut JsContextHost,
     prepared: &PreparedWindowFetchRequest,
 ) -> Result<Option<(url::Url, Response)>, String> {
-    let Some(response) = local_url_response(&prepared.resolved_url) else {
-        if prepared.resolved_url.scheme() != "blob" {
-            return Ok(None);
-        }
-        let message = FILE_NOT_FOUND_ERROR_TEXT.to_owned();
+    let Some(result) = local_url_response_result(&prepared.resolved_url, &prepared.method) else {
+        return Ok(None);
+    };
+    let response = result.map_err(|message| {
+        let message = if prepared.resolved_url.scheme() == "blob" && prepared.method == "GET" {
+            FILE_NOT_FOUND_ERROR_TEXT.to_owned()
+        } else {
+            message
+        };
         host.record_subresource_network(SubresourceNetworkRecord::failure(
             prepared.frame_id.clone(),
             prepared.document_url.clone(),
@@ -159,8 +163,8 @@ pub(super) fn resolve_local_fetch(
             SubresourceResourceType::Fetch,
             message.clone(),
         ));
-        return Err(message);
-    };
+        message
+    })?;
     let document_url = prepared.document_url.clone();
     host.record_subresource_network(
         SubresourceNetworkRecord::success_with_body(

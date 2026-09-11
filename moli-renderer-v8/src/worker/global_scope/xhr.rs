@@ -409,15 +409,32 @@ pub(crate) fn try_worker_xhr_send_callback<'s>(
         return true;
     }
 
-    if let Some(response) = local_url_response(&prepared.resolved_url) {
-        apply_xhr_response(scope, xhr, response);
+    let local_response = local_url_response_result(&prepared.resolved_url, &prepared.method);
+    if !async_request && let Some(result) = local_response {
+        match result {
+            Ok(response) => apply_xhr_response(scope, xhr, response),
+            Err(message) => {
+                record_worker_subresource_failure(
+                    &state.borrow(),
+                    prepared.document_url,
+                    prepared.resolved_url,
+                    prepared.method,
+                    prepared.request_headers,
+                    request_body_text(&prepared.send_body),
+                    SubresourceResourceType::Xhr,
+                    message,
+                );
+                throw_synchronous_xhr_failure(scope, xhr, &request_url, "NetworkError");
+            }
+        }
         return true;
     }
 
     let loader = state.borrow().loader.clone();
 
     let cancel_handle = FetchCancelHandle::new();
-    let intercept_request_stage = fetch_subresource_interception_enabled
+    let intercept_request_stage = local_response.is_none()
+        && fetch_subresource_interception_enabled
         && fetch_subresource_interception_resource_type.is_none_or(|expected| {
             expected.has_same_cdp_fetch_interception_type(SubresourceResourceType::Xhr)
         });
@@ -475,6 +492,17 @@ pub(crate) fn try_worker_xhr_send_callback<'s>(
     };
     set_xhr_state_number(scope, xhr, XHR_ACTIVE_INTERNAL_ID_SLOT, xhr_id as f64);
     schedule_worker_xhr_timeout(scope, &state, xhr, xhr_id);
+
+    if let Some(result) = local_response {
+        // Local responses and network errors still complete asynchronously, so
+        // abort(), open() and timeout processing use the ordinary pending XHR.
+        let _ = state.borrow().xhr_completion_tx.send(WorkerXhrCompletion {
+            xhr_id,
+            network_request_headers: None,
+            result: result.map(|response| WorkerXhrResponse::Materialized(Box::new(response))),
+        });
+        return true;
+    }
 
     if intercept_request_stage {
         let info = PendingSubresourceFetchInfo {

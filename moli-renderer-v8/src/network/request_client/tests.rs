@@ -949,6 +949,63 @@ async fn text_stream_fetch_handles_local_data_stylesheet_urls() -> Result<()> {
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn local_blob_method_errors_reach_streaming_and_callback_consumers() -> Result<()> {
+    let loader = ResourceRequestClient::new(&FetchConfig::default())?;
+    for method in [
+        "HEAD", "POST", "PUT", "DELETE", "OPTIONS", "PATCH", "CUSTOM",
+    ] {
+        let request = Request::new_bytes(
+            method,
+            "blob:https://method.test/unregistered",
+            None,
+            Vec::new(),
+        )?;
+        let expected = format!("blob URL fetch requires GET, got `{method}`");
+        let error = loader.fetch_text_stream(request.clone()).await.unwrap_err();
+        assert_eq!(error.to_string(), expected);
+        let error = loader
+            .fetch_cacheable_script_text_stream(request.clone())
+            .await
+            .unwrap_err();
+        assert_eq!(error.to_string(), expected);
+        let error = loader
+            .fetch_raw_stream_with_cancel(request.clone(), FetchCancelHandle::new())
+            .await
+            .expect_err("raw stream must reject non-GET blob requests");
+        assert_eq!(error.to_string(), expected);
+        let error = loader
+            .fetch_raw_stream_with_cancel_and_network_metadata(
+                request.clone(),
+                FetchCancelHandle::new(),
+            )
+            .await
+            .expect_err("observed raw stream must reject non-GET blob requests");
+        assert_eq!(error.to_string(), expected);
+        let (tx, rx) = oneshot::channel();
+        loader.fetch_text_callback(request, move |result| {
+            tx.send(result).expect("callback receiver is live");
+        })?;
+        let error = rx.await?.unwrap_err();
+        assert_eq!(error.to_string(), expected);
+
+        let data = loader
+            .fetch_text_stream(Request::new_bytes(
+                method,
+                "data:text/plain,payload",
+                None,
+                Vec::new(),
+            )?)
+            .await?;
+        assert_eq!(
+            data.status, 200,
+            "data: must not inherit the blob method restriction"
+        );
+        assert_eq!(data.body_text(), "payload");
+    }
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn concurrent_script_text_waiter_preserves_owner_cache_state() -> Result<()> {
     let listener = TcpListener::bind("127.0.0.1:0").await?;
     let addr = listener.local_addr()?;

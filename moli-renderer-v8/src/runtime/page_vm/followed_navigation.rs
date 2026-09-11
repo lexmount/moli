@@ -74,8 +74,10 @@ pub(super) async fn load_followed_location_navigation(
 ) -> Result<LoadedFollowedLocationNavigation> {
     debug!(%url, "starting pre-commit location navigation fetch");
     if let Some(response) = about_blank_navigation_response(&url)
-        .or_else(|| crate::network_host::local_url_response(&url))
+        .map(Ok)
+        .or_else(|| crate::network_host::local_url_response_result(&url, &request_method))
     {
+        let response = response.map_err(anyhow::Error::msg)?;
         if matches!(response.status, 204 | 205) {
             return Ok(LoadedFollowedLocationNavigation::NoDocument);
         }
@@ -1257,7 +1259,11 @@ impl PageVm {
 
 #[cfg(test)]
 mod tests {
-    use super::{about_blank_navigation_response, build_followed_location_navigation_request};
+    use super::{
+        LoadedFollowedLocationNavigation, about_blank_navigation_response,
+        build_followed_location_navigation_request, load_followed_location_navigation,
+    };
+    use crate::network::ResourceRequestClient;
     use moli_fetch::{BrowserNavigationRequestKind, outgoing_request_headers};
     use url::Url;
 
@@ -1362,6 +1368,49 @@ mod tests {
                 "application/x-www-form-urlencoded".to_owned(),
             )]
         );
+    }
+
+    #[tokio::test]
+    async fn local_navigation_fetch_preserves_the_request_method() {
+        let loader = ResourceRequestClient::new(&Default::default()).unwrap();
+        let initiator = Url::parse("https://navigation.test/form").unwrap();
+        for method in ["HEAD", "POST"] {
+            let result = load_followed_location_navigation(
+                &loader,
+                initiator.clone(),
+                Url::parse("blob:https://navigation.test/unregistered").unwrap(),
+                method.to_owned(),
+                None,
+                Vec::new(),
+                BrowserNavigationRequestKind::Navigate,
+            )
+            .await;
+            match result {
+                Err(error) => assert_eq!(
+                    error.to_string(),
+                    format!("blob URL fetch requires GET, got `{method}`")
+                ),
+                Ok(_) => panic!("blob navigation must not substitute GET for {method}"),
+            }
+        }
+        let data = load_followed_location_navigation(
+            &loader,
+            initiator,
+            Url::parse("data:text/html,<p>payload</p>").unwrap(),
+            "POST".to_owned(),
+            Some(b"upload".to_vec()),
+            Vec::new(),
+            BrowserNavigationRequestKind::Navigate,
+        )
+        .await
+        .unwrap();
+        assert!(matches!(
+            data,
+            LoadedFollowedLocationNavigation::ExternalDocument {
+                response_status: 200,
+                ..
+            }
+        ));
     }
 
     #[test]

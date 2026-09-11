@@ -4233,6 +4233,129 @@ async fn window_fetch_file_url_rejects_before_interception_or_transport() {
 }
 
 #[tokio::test]
+async fn blob_fetch_and_xhr_reject_non_get_methods_in_window_and_worker() {
+    run_page_vm_async_test(async move {
+        for worker in [false, true] {
+            let mut page_vm = test_page_vm();
+            let local_executor = page_vm.local_executor.clone();
+            let probe = r#"(async () => {
+                const check = (value, message) => { if (!value) throw new Error(message); };
+                const blob = URL.createObjectURL(new Blob(['payload'], {type: 'text/plain'}));
+                try {
+                    for (const api of ['fetch', 'fetch-clone', 'xhr-async', 'xhr-sync']) {
+                        for (const scheme of ['blob', 'data']) {
+                            const raw = scheme === 'blob' ? blob : 'data:text/plain,payload';
+                            const methods = scheme === 'blob'
+                                ? ['GET', 'gEt', 'HEAD', 'POST', 'PUT', 'DELETE', 'OPTIONS', 'PATCH', 'CUSTOM']
+                                : ['GET', 'POST', 'CUSTOM'];
+                            for (const fragment of ['', '#fragment']) {
+                                for (const method of methods) {
+                                    const url = raw + fragment;
+                                    const success = scheme === 'data' || method.toUpperCase() === 'GET';
+                                    const label = [api, scheme, fragment, method].join(':');
+                                    if (api.startsWith('fetch')) {
+                                        let response;
+                                        try {
+                                            response = await (api === 'fetch-clone'
+                                                ? fetch(new Request(url, {method}).clone())
+                                                : fetch(url, {method}));
+                                        } catch (error) {
+                                            check(!success && error instanceof TypeError, label + ': wrong rejection ' + error);
+                                            continue;
+                                        }
+                                        check(success, label + ': unexpectedly fulfilled');
+                                        check(response.status === 200 && response.url === raw, label + ': response metadata');
+                                        check(await response.text() === 'payload', label + ': response body');
+                                        continue;
+                                    }
+                                    const async = api === 'xhr-async';
+                                    const xhr = new XMLHttpRequest();
+                                    xhr.open(method, url, async);
+                                    const checkResponse = () => {
+                                        check(xhr.readyState === 4 && xhr.status === (success ? 200 : 0), label + ': state/status');
+                                        check(xhr.responseText === (success ? 'payload' : ''), label + ': response text');
+                                        check(xhr.responseURL === (success ? raw : ''), label + ': response URL');
+                                        check(xhr.getResponseHeader('Content-Type') === (success ? 'text/plain' : null), label + ': headers');
+                                    };
+                                    if (!async) {
+                                        let failure;
+                                        try { xhr.send(); } catch (error) { failure = error; }
+                                        check(success ? failure === undefined : failure instanceof DOMException && failure.name === 'NetworkError', label + ': sync exception');
+                                        checkResponse();
+                                        continue;
+                                    }
+                                    await new Promise((resolve, reject) => {
+                                        let returned = false;
+                                        const events = [];
+                                        xhr.onload = () => events.push('load');
+                                        xhr.onerror = () => events.push('error');
+                                        xhr.onloadend = () => {
+                                            events.push('loadend');
+                                            try {
+                                                check(returned, label + ': completion during send');
+                                                check(events.join(',') === (success ? 'load,loadend' : 'error,loadend'), label + ': terminal events');
+                                                checkResponse();
+                                                resolve();
+                                            } catch (error) { reject(error); }
+                                        };
+                                        xhr.send();
+                                        returned = true;
+                                    });
+                                }
+                            }
+                        }
+                    }
+                } finally { URL.revokeObjectURL(blob); }
+            })()"#;
+            let script = if worker {
+                let source = serde_json::to_string(&format!(
+                    "{probe}.then(() => postMessage('ok'), error => postMessage(String(error)))"
+                ))
+                .expect("worker source");
+                format!(
+                    r#"globalThis.__blobMethodResult = 'pending';
+                    const source = URL.createObjectURL(new Blob([{source}]));
+                    const worker = new Worker(source);
+                    worker.onmessage = event => {{
+                        globalThis.__blobMethodResult = event.data;
+                        worker.terminate();
+                        URL.revokeObjectURL(source);
+                    }};
+                    worker.onerror = event => {{ globalThis.__blobMethodResult = event.message; }};"#
+                )
+            } else {
+                format!(
+                    "globalThis.__blobMethodResult = 'pending'; {probe}.then(() => {{ globalThis.__blobMethodResult = 'ok'; }}, error => {{ globalThis.__blobMethodResult = String(error); }})"
+                )
+            };
+            let (result, network_output) = local_executor
+                .run(async move {
+                    page_vm.vm_mut().eval(&script)?;
+                    drive_websocket_until_done(
+                        &mut page_vm,
+                        "String(globalThis.__blobMethodResult !== 'pending')",
+                        "blob method checks should complete",
+                    )
+                    .await?;
+                    let result = page_vm.vm_mut().eval("globalThis.__blobMethodResult")?;
+                    Ok::<_, anyhow::Error>((result, page_vm.vm_mut().take_network_output()))
+                })
+                .await
+                .expect("blob method probe should run on owner lane");
+            assert_eq!(result, "ok", "worker={worker}");
+            let (records, _, _) = split_network_output_items(network_output);
+            let failures = records
+                .iter()
+                .filter(|record| matches!(record.outcome(), SubresourceNetworkOutcome::Failure { error_text }
+                    if error_text.contains("blob URL fetch requires GET")))
+                .count();
+            assert_eq!(failures, 56, "each rejected request must record a local network error; worker={worker}");
+        }
+    })
+    .await;
+}
+
+#[tokio::test]
 async fn window_fetch_revoked_blob_url_records_file_not_found_failure() {
     run_page_vm_async_test(async move {
         let mut page_vm = test_page_vm();
