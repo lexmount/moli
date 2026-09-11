@@ -61,7 +61,6 @@ pub(crate) use self::delivery::{
     finish_xhr_abort, throw_synchronous_xhr_failure,
 };
 pub(crate) use self::encoding::xhr_response_text_decoder;
-pub(crate) use self::instance_state::xhr_has_upload_listeners;
 pub(crate) use self::instance_state::{
     XHR_METHOD_SLOT, XHR_OPEN_GENERATION_SLOT, XHR_REQUEST_HEADERS_SLOT, XHR_RESPONSE_URL_SLOT,
     XHR_RESPONSE_XML_SLOT, XHR_STATUS_SLOT, XHR_STATUS_TEXT_SLOT, XHR_TIMEOUT_SLOT,
@@ -84,7 +83,7 @@ use self::response_type::{XmlHttpRequestResponseType, xhr_response_type};
 #[cfg(test)]
 pub(crate) use self::send::prepare_xhr_send_body;
 pub(crate) use self::send::{
-    PreparedXhrSendBody, convert_xhr_send_body_from_args, dispatch_xhr_loadstart,
+    PreparedXhrSendBody, capture_xhr_upload_listener_flag, convert_xhr_send_body_from_args, dispatch_xhr_loadstart,
     dispatch_xhr_upload_complete, xhr_author_request_headers,
 };
 
