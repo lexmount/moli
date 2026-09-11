@@ -38,6 +38,7 @@ import uuid
 from collections.abc import Callable, Mapping
 from email import policy
 from email.parser import BytesParser
+from email.utils import formatdate
 from html import escape as html_escape
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -84,6 +85,8 @@ XHR_RESOURCE_PATHS = {
     "/xhr/resources/inspect-headers.py",
     "/xhr/resources/content.py",
     "/xhr/resources/echo-content-type.py",
+    "/xhr/resources/status.py",
+    "/xhr/resources/last-modified.py",
     *XHR_DOCUMENT_FIXTURES,
 }
 FETCH_ABORT_RESOURCE_PATHS = {
@@ -1082,7 +1085,7 @@ def _response_content_type_and_extra_headers(
 
 
 def _fetch_status_response(query: str) -> tuple[int, str, str, bytes]:
-    """Model fetch/api/resources/status.py without decoding its byte payload."""
+    """Model the identical Fetch/XHR status.py handlers without decoding payloads."""
     params = parse_qs(query, keep_blank_values=True, encoding="latin-1")
     return (
         int(params.get("code", ["200"])[0]),
@@ -2744,6 +2747,21 @@ def _make_handler(
                     status, reason = 200, None
                     headers = [("Content-Type", "text/plain")]
                     body = self.headers.get("Content-Type", "").encode("latin-1")
+                elif path == "/xhr/resources/status.py":
+                    status, reason, content_type, body = _fetch_status_response(parsed.query)
+                    headers = [
+                        ("Content-Type", content_type),
+                        ("X-Request-Method", self.command),
+                    ]
+                elif path == "/xhr/resources/last-modified.py":
+                    source = wpt_root / "xhr/resources/well-formed.xml"
+                    modified = formatdate(source.stat().st_mtime, usegmt=True)
+                    body = source.read_text(encoding="utf-8").encode("utf-8")
+                    status, reason = 200, None
+                    headers = [
+                        ("Content-Type", "application/xml"),
+                        ("Last-Modified", modified),
+                    ]
                 elif path in XHR_DOCUMENT_FIXTURES:
                     content_type, body = XHR_DOCUMENT_FIXTURES[path]
                     status, reason = 200, None
@@ -2754,7 +2772,7 @@ def _make_handler(
                     )
                     if delay is not None:
                         time.sleep(delay)
-            except (ValueError, KeyError, OverflowError):
+            except (ValueError, KeyError, OverflowError, OSError):
                 self.send_error(500)
                 return True
             # Close connections with unread uploads so early responses and

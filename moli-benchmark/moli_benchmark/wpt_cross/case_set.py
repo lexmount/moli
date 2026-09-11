@@ -721,7 +721,7 @@ def _xhr_handler_reference_patterns(directory: str) -> tuple[re.Pattern[str], ..
         "requri.py", "redirect.py", "inspect-headers.py", "content.py",
         "echo-content-type.py", "win-1252-xml.py", "win-1252-html.py",
         "invalid-utf8-html.py", "shift-jis-html.py", "img-utf8-html.py",
-        "empty-div-utf8-html.py",
+        "empty-div-utf8-html.py", "status.py", "last-modified.py",
     ):
         resource = f"xhr/resources/{name}"
         relative = posixpath.relpath(resource, directory)
