@@ -692,7 +692,7 @@ impl ScriptVm {
                             }
                             resolver.resolve(scope, response_obj.into());
                         }
-                        PendingSubresourceContinuation::Xhr(xhr) => {
+                        PendingSubresourceContinuation::Xhr { xhr, .. } => {
                             crate::context_bootstrap::record_resource_performance_entry(
                                 scope,
                                 crate::context_bootstrap::ResourcePerformanceEntry::from_network_response(
@@ -863,7 +863,7 @@ impl ScriptVm {
                                 .unwrap_or_else(|| v8::undefined(scope).into());
                             resolver.reject(scope, exception);
                         }
-                        PendingSubresourceContinuation::Xhr(xhr) => {
+                        PendingSubresourceContinuation::Xhr { xhr, .. } => {
                             let xhr = v8::Local::new(scope, &xhr);
                             crate::network_host::apply_xhr_failure(scope, xhr);
                         }

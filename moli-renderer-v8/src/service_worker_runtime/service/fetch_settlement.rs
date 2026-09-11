@@ -73,6 +73,7 @@ pub(super) fn service_worker_network_fallback_request_for_job(
     let mut request = job
         .request
         .clone()
+        .with_use_cors_preflight(job.metadata.use_cors_preflight)
         .with_browser_request_metadata(service_worker_fetch_browser_metadata(
             job.network_context.resource_type,
         ))
@@ -1287,6 +1288,49 @@ mod tests {
             vec![("content-type".to_owned(), b"text/plain".to_vec())]
         );
         assert_eq!(response.body_text(), "service-worker-body");
+    }
+
+    #[test]
+    fn xhr_upload_listener_preflight_survives_service_worker_network_fallback() {
+        let service = new_service_worker_runtime_service();
+        let event_id = ServiceWorkerEventId(211);
+        let completion_queue = crate::page_task_queue::RendererResourceCompletionTestHarness::new();
+        insert_active_fetch_job(
+            &service,
+            event_id,
+            ServiceWorkerVersionId(1),
+            &RendererServiceWorkerRunIdentity::fresh(),
+            311,
+            completion_queue.sender(),
+        );
+        let mut job = service
+            .inner
+            .state
+            .lock()
+            .pending_fetch_jobs
+            .remove(&event_id)
+            .unwrap();
+        job.network_context.resource_type = crate::types::SubresourceResourceType::Xhr;
+        job.metadata.use_cors_preflight = true;
+        let request = service_worker_network_fallback_request_for_job(&job);
+        assert!(request.use_cors_preflight());
+        let request_origin = moli_url::WebOrigin::from_url(&job.network_context.document_url);
+        let request_url = url("https://other.test/upload");
+        let preflight_headers = crate::network_host::cors_preflight_request_headers(
+            !request_origin.same_origin_url(&request_url),
+            &request_url,
+            "POST",
+            &[],
+            request.use_cors_preflight(),
+        )
+        .expect("upload listener should force the fallback's simple POST through OPTIONS");
+        assert_eq!(
+            preflight_headers,
+            vec![(
+                "Access-Control-Request-Method".to_owned(),
+                "POST".to_owned()
+            )]
+        );
     }
 
     #[test]
