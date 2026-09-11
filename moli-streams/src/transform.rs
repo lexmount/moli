@@ -1,8 +1,9 @@
 //! Runtime-independent `TransformStream` coordination.
 //!
 //! The renderer owns JavaScript chunks, reasons, callbacks, promises, and the
-//! controller's finish promise/resolver pair. This module owns the decisions
-//! that coordinate the readable and writable sides around those values.
+//! controller's finish promise/resolver pair. This module coordinates start,
+//! write, backpressure, and admission to a shared finish operation. The renderer
+//! applies cancel/abort/flush settlement in the corresponding promise reaction.
 
 use crate::readable::ReadableState;
 use crate::strategy::StrategySnapshot;

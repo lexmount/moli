@@ -1,9 +1,9 @@
 //! V8 storage and effect adapter for the runtime-independent Streams core.
 //!
 //! JavaScript payload identity, wrappers, promises, callbacks, private slots,
-//! ArrayBuffer operations, and queue storage live here. Stream lifecycle and
-//! orchestration decisions are decoded into `moli-streams` snapshots and
-//! committed from typed plans.
+//! ArrayBuffer operations, and queue storage live here. Queue and lifecycle
+//! coordination use `moli-streams` snapshots and typed plans. Transform finish
+//! reactions read the relevant stream state and apply their effects directly.
 
 use super::*;
 use crate::util::{get_private_value, set_private_value};
@@ -50,6 +50,7 @@ mod readable;
 mod readable_byte;
 mod readable_state;
 mod tee;
+mod transform_finish;
 mod utils;
 mod writable;
 
@@ -109,13 +110,13 @@ pub(super) use readable_state::{
     readable_stream_closed, readable_stream_error, readable_stream_locked,
     reject_pending_read_requests, remove_pending_closed_promise, writable_stream_locked,
 };
+pub(in crate::context_bootstrap::stream_adapter) use transform_finish::transform_stream_readable_cancel_callback;
 pub(super) use utils::{
     done_result, promise_then_undefined, reject_pending_read, rejected_promise_value,
     resolved_promise_value, set_resolved_promise, suppress_pending_read_unhandled_rejection,
     suppress_promise_unhandled_rejection, value_buffer_source_bytes,
 };
 pub(in crate::context_bootstrap) use writable::register_writable_stream_pipe_owner;
-pub(in crate::context_bootstrap::stream_adapter) use writable::transform_stream_readable_cancel_callback;
 pub(in crate::context_bootstrap::stream_adapter) use writable::transform_stream_readable_pull_callback;
 pub(super) use writable::{
     acquire_writable_stream_writer, begin_writable_stream_start, error_transform_stream_with_value,
