@@ -12,6 +12,7 @@ from moli_benchmark.wpt_cross.server import WptFixtureServer
 
 
 RESOURCE = "/xhr/resources/inspect-headers.py"
+ECHO_RESOURCE = "/xhr/resources/echo-headers.py"
 
 
 class XhrHeaderFixtureTests(unittest.TestCase):
@@ -30,11 +31,11 @@ class XhrHeaderFixtureTests(unittest.TestCase):
 
     def request(
         self, port: int, query: str, headers: list[tuple[str, str]],
-        *, method: str = "GET",
+        *, method: str = "GET", resource: str = RESOURCE,
     ) -> tuple[int, dict[str, str], bytes]:
         connection = HTTPConnection("127.0.0.1", port, timeout=2)
         try:
-            connection.putrequest(method, RESOURCE + "?" + query)
+            connection.putrequest(method, resource + "?" + query)
             for name, value in headers:
                 connection.putheader(name, value)
             connection.endheaders()
@@ -138,6 +139,66 @@ class XhrHeaderFixtureTests(unittest.TestCase):
                 self.assertEqual((status, body), (200, f"{name}: {value}\n".encode()))
                 self.assertEqual(headers["connection"], "close")
 
+    def test_echo_preserves_header_order_case_duplicates_and_serialization(self) -> None:
+        server = self.server()
+        status, headers, body = self.request(server.port, "", [
+            ("x-Case", "first"),
+            ("X-Unrelated", "middle"),
+            ("X-CASE", "second"),
+            ("X-Empty", ""),
+            ("X-Whitespace", "value \t"),
+            ("X-Fold", "first\r\n\tsecond"),
+            ("X-Bytes", "caf\xe9\xff"),
+        ], resource=ECHO_RESOURCE)
+        self.assertEqual(status, 200)
+        self.assertEqual(body, (
+            f"Host: 127.0.0.1:{server.port}\nAccept-Encoding: identity\n".encode()
+            + b"x-Case: first\nX-Unrelated: middle\nX-CASE: second\n"
+            b"X-Empty: \nX-Whitespace: value \t\nX-Fold: first\n\tsecond\n"
+            b"X-Bytes: =?utf-8?b?Y2Fmw6nDvw==?=\n\n"
+        ))
+        self.assertEqual(headers["content-type"], "text/plain")
+        self.assertEqual(headers["content-length"], str(len(body)))
+        self.assertEqual(headers["connection"], "close")
+
+    def test_echo_supports_methods_head_and_ignores_query_filters(self) -> None:
+        server = self.server()
+        expected = (
+            f"Host: 127.0.0.1:{server.port}\nAccept-Encoding: identity\n"
+            "X-Test: value\n\n"
+        ).encode()
+        for method in ("GET", "HEAD", "POST", "PUT", "PATCH", "DELETE", "OPTIONS", "YO", "FOO"):
+            with self.subTest(method=method):
+                status, headers, body = self.request(
+                    server.port, "filter_name=missing&cors", [("X-Test", "value")],
+                    method=method, resource=ECHO_RESOURCE,
+                )
+                self.assertEqual((status, body), (200, b"" if method == "HEAD" else expected))
+                self.assertEqual(headers["content-length"], str(len(expected)))
+                self.assertEqual(headers["connection"], "close")
+                self.assertFalse(any(name.startswith("access-control-") for name in headers))
+
+    def test_echo_does_not_wait_for_or_validate_the_upload(self) -> None:
+        server = self.server()
+        for name, value in (("Content-Length", "100000000"), ("Transfer-Encoding", "chunked")):
+            with self.subTest(framing=name):
+                status, headers, body = self.request(
+                    server.port, "", [(name, value)], method="POST", resource=ECHO_RESOURCE,
+                )
+                self.assertEqual(status, 200)
+                self.assertIn(f"{name}: {value}\n".encode(), body)
+                self.assertEqual(headers["connection"], "close")
+
+    def test_echo_only_handles_the_exact_resource_path(self) -> None:
+        server = self.server()
+        for path in (
+            ECHO_RESOURCE + "2", ECHO_RESOURCE + ".js", "/wrong" + ECHO_RESOURCE,
+            "/resources/echo-headers.py",
+        ):
+            with self.subTest(path=path):
+                status, _, _ = self.request(server.port, "", [], resource=path)
+                self.assertEqual(status, 404)
+
     def test_case_selection_allows_only_supported_header_fixture_references(self) -> None:
         sources = {
             "xhr/absolute.window.js": "fetch('/xhr/resources/inspect-headers.py');",
@@ -151,13 +212,22 @@ class XhrHeaderFixtureTests(unittest.TestCase):
             "xhr/wrong-root.window.js": "fetch('inspect-headers.py');",
             "xhr/nested/wrong-relative.window.js": "fetch('resources/inspect-headers.py');",
         }
+        sources.update({
+            path.replace(".window.js", "-echo.window.js"): source.replace(
+                "inspect-headers.py", "echo-headers.py"
+            )
+            for path, source in list(sources.items())
+        })
         for path, source in sources.items():
             target = self.root / path
             target.parent.mkdir(parents=True, exist_ok=True)
             target.write_text(source)
         selected = enumerate_cases(self.root, dir_prefixes=("xhr",))
         self.assertEqual([case.case_path for case in selected], [
+            "xhr/absolute-echo.window.js?moli-wpt-script=window",
             "xhr/absolute.window.js?moli-wpt-script=window",
+            "xhr/nested/parent-echo.window.js?moli-wpt-script=window",
             "xhr/nested/parent.window.js?moli-wpt-script=window",
+            "xhr/relative-echo.window.js?moli-wpt-script=window",
             "xhr/relative.window.js?moli-wpt-script=window",
         ])

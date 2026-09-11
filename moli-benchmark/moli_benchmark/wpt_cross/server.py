@@ -83,6 +83,7 @@ XHR_RESOURCE_PATHS = {
     "/xhr/resources/requri.py",
     "/xhr/resources/redirect.py",
     "/xhr/resources/inspect-headers.py",
+    "/xhr/resources/echo-headers.py",
     "/xhr/resources/content.py",
     "/xhr/resources/echo-content-type.py",
     "/xhr/resources/status.py",
@@ -2688,6 +2689,11 @@ def _make_handler(
                     headers, body = _xhr_inspect_headers_fixture_response(
                         parsed.query, list(self.headers.raw_items())
                     )
+                elif path == "/xhr/resources/echo-headers.py":
+                    status, reason = 200, None
+                    headers = [("Content-Type", "text/plain")]
+                    # wptserve exposes the same HTTPMessage as raw_headers.
+                    body = str(self.headers).encode("utf-8")
                 elif path == "/xhr/resources/content.py":
                     params = parse_qs(parsed.query, keep_blank_values=True, encoding="latin-1")
                     if "content" in params:
@@ -2742,7 +2748,9 @@ def _make_handler(
                 return True
             # Close connections with unread uploads so early responses and
             # redirects do not wait for the request body to finish.
-            if path == "/xhr/resources/echo-content-type.py" or not upload_consumed and (
+            if path in {
+                "/xhr/resources/echo-content-type.py", "/xhr/resources/echo-headers.py"
+            } or not upload_consumed and (
                 self.headers.get("Transfer-Encoding") is not None
                 or self.headers.get("Content-Length", "0").strip() not in {"", "0"}
             ):
