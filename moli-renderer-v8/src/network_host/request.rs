@@ -13,7 +13,8 @@ pub(crate) use self::error::{FetchArgumentError, RequestUrlError};
 pub(crate) use self::init::convert_fetch_arguments;
 pub(in crate::network_host) use self::init::request_credentials_mode_label;
 pub(crate) use self::init::{
-    RequestInitValidation, parse_fetch_init, request_object_credentials_mode, validate_fetch_body,
+    RequestInitValidation, convert_fetch_arguments, parse_fetch_init,
+    request_object_credentials_mode, validate_fetch_body,
 };
 pub(crate) use self::init::{parse_request_redirect_mode_label, request_redirect_mode_label};
 pub(in crate::network_host) use self::input::normalize_request_method;
