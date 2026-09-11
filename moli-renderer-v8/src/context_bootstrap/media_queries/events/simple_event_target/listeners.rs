@@ -564,6 +564,34 @@ pub(crate) fn simple_object_event_listeners_snapshot<'s>(
     snapshot
 }
 
+pub(crate) fn simple_object_has_event_listeners<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    target: v8::Local<'s, v8::Object>,
+    slot_name: &str,
+) -> bool {
+    let Some(registry) = simple_object_event_listener_registry(scope, target, slot_name, false)
+    else {
+        return false;
+    };
+    let Some(event_types) = simple_object_event_type_order(scope, registry, false) else {
+        return false;
+    };
+    for index in 0..event_types.length() {
+        let Some(event_type) = event_types
+            .get_index(scope, index)
+            .and_then(|value| value.to_string(scope))
+            .map(|value| value.to_rust_string_lossy(scope))
+        else {
+            continue;
+        };
+        if !simple_object_event_listeners_snapshot(scope, target, slot_name, &event_type).is_empty()
+        {
+            return true;
+        }
+    }
+    false
+}
+
 pub(crate) fn simple_event_target_inspector_listener_snapshots<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     target: v8::Local<'s, v8::Object>,

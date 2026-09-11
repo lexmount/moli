@@ -140,15 +140,17 @@ pub(crate) fn xhr_dispatch_upload_progress_event(
     loaded: f64,
     total: f64,
 ) {
+    if !xhr_state_bool_property(scope, xhr, XHR_UPLOAD_LISTENER_SLOT).unwrap_or(false) {
+        return;
+    }
     let Some(upload) = xhr_upload_object(scope, xhr) else {
         return;
     };
     if !xhr_has_event_observers(scope, upload, event_type) {
         return;
     }
-    // Upload dispatch always knows the request body length, including zero-byte bodies.
     let event =
-        super::progress::make_progress_event(scope, event_type, upload, true, loaded, total);
+        super::progress::make_progress_event(scope, event_type, upload, total > 0.0, loaded, total);
     let handler_name = format!("on{event_type}");
     xhr_invoke_handler(scope, upload, &handler_name, event);
 }
