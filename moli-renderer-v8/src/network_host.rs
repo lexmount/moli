@@ -187,7 +187,6 @@ pub(in crate::network_host) use self::url_helpers::merge_subresource_request_hea
 pub(crate) use self::url_helpers::{ResolveContextUrlError, resolve_context_url};
 #[cfg(test)]
 pub(crate) use self::xhr::prepare_xhr_send_body;
-pub(crate) use self::xhr::xhr_has_upload_listeners;
 pub(crate) use self::xhr::{
     PreparedXhrSendBody, XHR_ABORTED_SLOT, XHR_ACTIVE_INTERNAL_ID_SLOT, XHR_ASYNC_SLOT,
     XHR_METHOD_SLOT, XHR_OPEN_GENERATION_SLOT, XHR_SEND_FLAG_SLOT, XHR_TIMEOUT_SLOT,
@@ -195,7 +194,7 @@ pub(crate) use self::xhr::{
     apply_xhr_failure, apply_xhr_response, apply_xhr_response_body_source,
     apply_xhr_response_body_source_with_status_text, apply_xhr_streaming_response_body_source,
     apply_xhr_streaming_response_chunk, apply_xhr_streaming_response_head, apply_xhr_timeout,
-    begin_xhr_send, convert_xhr_send_body_from_args, dispatch_xhr_loadstart,
+    begin_xhr_send, capture_xhr_upload_listener_flag, convert_xhr_send_body_from_args, dispatch_xhr_loadstart,
     dispatch_xhr_upload_complete, finish_xhr_abort, install_progress_event_template_bindings,
     install_window_xml_http_request_template_bindings, install_xml_http_request_bindings,
     install_xml_http_request_event_target_bindings, progress_event_constructor_callback,
