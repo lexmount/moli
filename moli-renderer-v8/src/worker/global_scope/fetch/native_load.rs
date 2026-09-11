@@ -1,14 +1,20 @@
 use super::*;
 
+pub(super) struct NativeWorkerFetchRequest {
+    pub(super) request: Request,
+    pub(super) blob_url_entry: Option<CapturedBlobUrl>,
+}
+
 pub(super) fn start<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     state: &Rc<RefCell<WorkerGlobalState>>,
-    request: Request,
+    request: NativeWorkerFetchRequest,
     document_url: Url,
     signal_id: Option<u32>,
     metadata: ServiceWorkerFetchRequestMetadata,
     policy_context: SubresourcePolicyContext,
 ) -> Option<v8::Local<'s, v8::Promise>> {
+    let NativeWorkerFetchRequest { request, blob_url_entry } = request;
     let resolver = v8::PromiseResolver::new(scope)?;
     let promise = resolver.get_promise(scope);
     let cancel = FetchCancelHandle::new();
@@ -78,6 +84,7 @@ pub(super) fn start<'s>(
     task_runner.spawn(async move {
         control
             .fetch_load(request, info, load, cancel, policy_context)
+            .with_blob_url_entry(blob_url_entry)
             .with_service_worker(service_worker, service_worker_client, metadata)
             .run_fetch(completion, fetch_id, resource_timing)
             .await;

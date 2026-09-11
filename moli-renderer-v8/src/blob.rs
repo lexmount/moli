@@ -161,6 +161,10 @@ pub(super) fn object_url_bytes_and_type(url: &str) -> Option<(Vec<u8>, String)> 
     blob_store().object_url_bytes_and_type(url)
 }
 
+pub(super) fn object_url_shared_bytes_and_type(url: &str) -> Option<(Arc<[u8]>, String)> {
+    blob_store().object_url_shared_bytes_and_type(url)
+}
+
 #[cfg(feature = "devtools")]
 fn blob_uuid(blob_id: BlobId) -> Option<String> {
     blob_store().blob_uuid(blob_id)

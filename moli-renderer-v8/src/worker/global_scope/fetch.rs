@@ -3,6 +3,7 @@ mod native_load;
 use std::sync::atomic::AtomicU64;
 
 use crate::network::interception_output::ResourceInterceptionContext;
+use crate::network_host::CapturedBlobUrl;
 use crate::network_host::{FetchArgumentError, combined_headers_entries, convert_fetch_arguments};
 use crate::network_host::{HeadersGuard, validate_fetch_response_headers};
 use crate::service_worker_runtime::ServiceWorkerFetchRequestMetadata;
@@ -575,6 +576,7 @@ pub(in crate::worker) fn make_rejected_promise_with_value<'s>(
 
 pub(in crate::worker) struct ResolvedWorkerFetchInput<'s> {
     resolved_url: Url,
+    blob_url_entry: Option<CapturedBlobUrl>,
     method: String,
     body: Option<bytes::Bytes>,
     body_stream: Option<v8::Global<v8::Object>>,
@@ -605,6 +607,9 @@ pub(in crate::worker) fn resolve_worker_fetch_input<'s>(
     let signal;
     let body_stream;
     let has_stream_body;
+    let blob_url_entry = inherited
+        .as_ref()
+        .and_then(|request| request.blob_url_entry.clone());
     let (
         url_input,
         method,
@@ -761,11 +766,13 @@ pub(in crate::worker) fn resolve_worker_fetch_input<'s>(
         metadata.referrer = referrer;
     }
     let signal = signal.as_ref().map(|signal| v8::Local::new(scope, signal));
+    let blob_url_entry = blob_url_entry.or_else(|| CapturedBlobUrl::capture(&resolved_url));
     if consumes_request_body && let Some(request_like) = request_like {
         crate::network_host::mark_request_input_body_used_for_fetch(scope, request_like);
     }
     Ok(ResolvedWorkerFetchInput {
         resolved_url,
+        blob_url_entry,
         method,
         body,
         body_stream,
@@ -827,6 +834,7 @@ pub(in crate::worker) fn worker_fetch_callback<'s>(
 
     let ResolvedWorkerFetchInput {
         resolved_url,
+        blob_url_entry,
         method,
         body,
         body_stream,
@@ -1005,7 +1013,7 @@ pub(in crate::worker) fn worker_fetch_callback<'s>(
         if let Some(promise) = native_load::start(
             scope,
             &state,
-            request,
+            native_load::NativeWorkerFetchRequest { request, blob_url_entry },
             document_url,
             signal_id,
             request_metadata,

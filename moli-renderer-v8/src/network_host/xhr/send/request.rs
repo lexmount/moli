@@ -24,6 +24,7 @@ pub(super) struct PreparedXhrSendRequest {
     pub(super) network_partition_key: Option<String>,
     pub(super) policy_context: crate::types::SubresourcePolicyContext,
     pub(super) resolved_url: url::Url,
+    pub(super) blob_url_entry: Option<CapturedBlobUrl>,
     pub(super) method: String,
     pub(super) request_headers: moli_fetch::RequestHeaders,
     pub(super) cors_preflight_request_headers: Vec<(String, String)>,
@@ -86,7 +87,7 @@ pub(super) fn xhr_dom_debugger_request_url<'s>(
 pub(super) fn prepare_xhr_send_request<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     host: &PageScriptHost,
-    xhr: v8::Local<'_, v8::Object>,
+    xhr: v8::Local<'s, v8::Object>,
     method: String,
     prepared_body: PreparedXhrSendBody,
 ) -> Result<PreparedXhrSendRequest, XhrSendPrepareError> {
@@ -134,6 +135,7 @@ pub(super) fn prepare_xhr_send_request<'s>(
         referrer_source: host.document_referrer_source_url_for_dispatch_scope(owner),
         policy_context,
         resolved_url,
+        blob_url_entry: blob_url_entry(scope, xhr),
         method,
         request_headers,
         cors_preflight_request_headers,
