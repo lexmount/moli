@@ -405,10 +405,22 @@ mod tests {
         let first_key = "first URL creator".to_owned();
         let second_key = "second URL creator".to_owned();
         let first = store
-            .create_object_url_with_access_key(Some(2), blob, "null", Some(first_key.clone()))
+            .create_object_url_with_lifetime_and_access_key(
+                Some(2),
+                Some(101),
+                blob,
+                "null",
+                Some(first_key.clone()),
+            )
             .unwrap();
         let second = store
-            .create_object_url_with_access_key(Some(3), blob, "null", Some(second_key.clone()))
+            .create_object_url_with_lifetime_and_access_key(
+                Some(3),
+                Some(101),
+                blob,
+                "null",
+                Some(second_key.clone()),
+            )
             .unwrap();
         let unkeyed = store.create_object_url(Some(1), blob, "null").unwrap();
         store.release_blob_wrapper_ref(blob);
@@ -427,7 +439,7 @@ mod tests {
         );
         assert!(store.revoke_object_url(&unkeyed));
         assert!(store.blob_bytes(blob).is_some());
-        assert!(store.revoke_object_url_with_access_key(&second, &second_key));
+        assert_eq!(store.cleanup_object_url_lifetime(3, 101), 1);
         assert!(store.blob_bytes(blob).is_none());
         assert!(!store.revoke_object_url_with_access_key(&second, &second_key));
     }
