@@ -34,7 +34,6 @@ mod source;
 mod stacking;
 mod style;
 mod stylo_to_parley;
-mod system_fonts;
 mod table;
 mod taffy_tree;
 mod text;

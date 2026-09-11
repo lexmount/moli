@@ -11,6 +11,7 @@ use std::{
     sync::Arc,
 };
 
+use moli_system_fonts::SystemFontFamilyResolver;
 use parley::{
     FontContext, FontFamily, FontFamilyName, LayoutContext, TextStyle,
     fontique::{
@@ -21,7 +22,6 @@ use parley::{
 use thiserror::Error;
 
 use crate::stylo_to_parley::TextBrush;
-use crate::system_fonts::SystemFontFamilyResolver;
 
 pub(crate) struct ParleyDocumentServices {
     pub(crate) font_context: FontContext,
@@ -133,7 +133,23 @@ impl ParleyDocumentServices {
 
         self.resolve_segmented_web_font_families(style, character);
         if let Some(resolver) = self.system_font_family_resolver.as_mut() {
-            resolver.resolve_text_style(&mut self.font_context.collection, style);
+            let mut resolve_family = |family: &mut FontFamilyName<'static>| {
+                if let FontFamilyName::Named(name) = family
+                    && let Some(substitute) =
+                        resolver.substitute_family(&mut self.font_context.collection, name)
+                {
+                    *name = Cow::Owned(substitute);
+                }
+            };
+            match &mut style.font_family {
+                FontFamily::Single(family) => resolve_family(family),
+                FontFamily::List(families) => {
+                    for family in Cow::to_mut(families) {
+                        resolve_family(family);
+                    }
+                }
+                FontFamily::Source(_) => {}
+            }
         }
         let resolved = style.font_family.clone().into_owned();
         match character {
@@ -963,6 +979,34 @@ mod tests {
 
         assert_eq!(parley.font_family_resolution_plans.len(), 1);
         assert_eq!(parley.font_family_resolution_miss_count, 1);
+    }
+
+    #[test]
+    fn system_family_substitution_preserves_css_fallback_order() {
+        let mut parley = build_parley_services(SystemFontPolicy::Disabled, &BTreeMap::new());
+        parley.system_font_family_resolver = Some(SystemFontFamilyResolver::new(
+            &mut parley.font_context.collection,
+        ));
+        assert!(register_font(
+            &mut parley.font_context,
+            &RegisteredWebFont {
+                face: WebFontFace::new("Moli Ahem"),
+                sfnt_bytes: Arc::from(TEST_TTF),
+            },
+        ));
+        let families = FontFamily::List(Cow::Owned(vec![
+            FontFamilyName::Named(Cow::Borrowed("__moli_missing_css_family_order_3d16__")),
+            FontFamilyName::Named(Cow::Borrowed("Moli Ahem")),
+            FontFamilyName::Generic(parley::fontique::GenericFamily::Serif),
+        ]));
+        let mut style = TextStyle {
+            font_family: families.clone(),
+            ..TextStyle::default()
+        };
+
+        parley.resolve_font_families(&mut style, None);
+
+        assert_eq!(style.font_family, families);
     }
 
     #[test]

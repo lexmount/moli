@@ -5,7 +5,7 @@
 #   "fonttools==4.59.0",
 # ]
 # ///
-"""Generate the deterministic fixed fonts used by Phase 3 layout tests."""
+"""Generate deterministic fonts for layout and system font matching tests."""
 
 import hashlib
 import os
@@ -20,6 +20,7 @@ from fontTools.ttLib import TTFont
 ROOT = Path(__file__).resolve().parents[1]
 FIXTURES = ROOT / "moli-layout" / "tests" / "fixtures"
 TTF_PATH = FIXTURES / "moli-ahem.ttf"
+SYSTEM_FONT_TTF_PATH = ROOT / "moli-system-fonts" / "tests" / "fixtures" / "moli-ahem.ttf"
 HEBREW_EMOJI_PATH = FIXTURES / "moli-hebrew-emoji.ttf"
 CJK_PATH = FIXTURES / "moli-cjk.ttf"
 DEJAVU_SOURCE = Path(
@@ -142,6 +143,8 @@ def main() -> None:
     verify_source(DEJAVU_SOURCE, DEJAVU_SOURCE_SHA256)
     verify_source(DROID_CJK_SOURCE, DROID_CJK_SOURCE_SHA256)
     build_ttf()
+    SYSTEM_FONT_TTF_PATH.parent.mkdir(parents=True, exist_ok=True)
+    SYSTEM_FONT_TTF_PATH.write_bytes(TTF_PATH.read_bytes())
     convert("woff")
     convert("woff2")
     subset_font(DEJAVU_SOURCE, HEBREW_EMOJI_PATH, [0x20, 0x05D0, 0x05D1, 0x1F600])

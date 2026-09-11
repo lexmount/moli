@@ -51,6 +51,7 @@ members = [
     "moli-structured-clone",
     "moli-stylesheet-blocking",
     "moli-svg",
+    "moli-system-fonts",
     "moli-test-support",
     "moli-url",
     "moli-url-policy",

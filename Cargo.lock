@@ -2644,14 +2644,13 @@ dependencies = [
  "euclid",
  "kurbo",
  "moli-image",
- "parking_lot",
+ "moli-system-fonts",
  "parley",
  "stylo",
  "stylo_taffy",
  "taffy",
  "thiserror",
  "wuff",
- "yeslogic-fontconfig-sys",
 ]
 
 [[package]]
@@ -3089,6 +3088,15 @@ dependencies = [
  "kurbo",
  "moli-css-parse",
  "svgtypes",
+]
+
+[[package]]
+name = "moli-system-fonts"
+version = "0.1.0"
+dependencies = [
+ "fontique",
+ "parking_lot",
+ "yeslogic-fontconfig-sys",
 ]
 
 [[package]]
