@@ -603,6 +603,8 @@ fn parse_xhr_response_document<'s>(
     body_text: &str,
     response_type: XmlHttpRequestResponseType,
 ) -> v8::Local<'s, v8::Value> {
+    // XHR defaults a missing or invalid response MIME type to text/xml.
+    // Its XML MIME types include any +xml subtype, unlike DOMParser's enum.
     let mime = xhr_response_mime_essence(scope, xhr, &head.headers)
         .unwrap_or_else(|| "text/xml".to_owned());
     let is_xml = matches!(mime.as_str(), "text/xml" | "application/xml") || mime.ends_with("+xml");
