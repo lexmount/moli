@@ -12,7 +12,7 @@ function byteLength(value) {
 
 function uploadCompletionEvents(size) {
   return [
-    `loadstart:true:true:true:${size}:${size}`,
+    `loadstart:true:true:true:0:${size}`,
     `progress:true:true:true:${size}:${size}`,
     `load:true:true:true:${size}:${size}`,
     `loadend:true:true:true:${size}:${size}`,
@@ -135,7 +135,7 @@ promise_test(async function () {
   assert_array_equals(
     result.uploadEvents,
     [
-      "loadstart:true:true:true:20:20",
+      "loadstart:true:true:true:0:20",
       "progress:true:true:true:20:20",
       "load:true:true:true:20:20",
       "loadend:true:true:true:20:20",
@@ -231,10 +231,10 @@ promise_test(async function () {
   assert_array_equals(
     result.uploadEvents,
     [
-      "loadstart:true:true:true:0:0",
-      "progress:true:true:true:0:0",
-      "load:true:true:true:0:0",
-      "loadend:true:true:true:0:0",
+      "loadstart:true:true:false:0:0",
+      "progress:true:true:false:0:0",
+      "load:true:true:false:0:0",
+      "loadend:true:true:false:0:0",
     ],
     "send(\"\") should dispatch upload completion events with zero-byte totals",
   );
@@ -249,9 +249,9 @@ promise_test(async function () {
   assert_array_equals(
     result.uploadEvents,
     [
-      "loadstart:true:true:true:12:12",
-      "abort:true:true:true:0:0",
-      "loadend:true:true:true:0:0",
+      "loadstart:true:true:true:0:12",
+      "abort:true:true:false:0:0",
+      "loadend:true:true:false:0:0",
     ],
     "aborting from upload loadstart should stop upload completion and emit upload abort/loadend",
   );
@@ -270,10 +270,10 @@ promise_test(async function () {
   assert_array_equals(
     result.uploadEvents,
     [
-      "loadstart:true:true:true:12:12",
+      "loadstart:true:true:true:0:12",
       "progress:true:true:true:12:12",
-      "abort:true:true:true:0:0",
-      "loadend:true:true:true:0:0",
+      "abort:true:true:false:0:0",
+      "loadend:true:true:false:0:0",
     ],
     "aborting from upload progress should stop upload completion and emit upload abort/loadend",
   );
