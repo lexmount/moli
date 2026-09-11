@@ -206,6 +206,7 @@ pub(super) enum DomStringReflection {
     LinkCharset,
     LinkFetchPriority,
     LinkHreflang,
+    LinkIntegrity,
     LinkMedia,
     LinkReferrerPolicy,
     LiType,
@@ -507,6 +508,15 @@ const DOM_STRING_REFLECTION_DESCRIPTORS: &[(DomStringReflection, DomStringReflec
         (
             DomStringReflection::LinkHreflang,
             DomStringReflectionDescriptor::new("HTMLLinkElement", "hreflang", "hreflang"),
+        ),
+        (
+            DomStringReflection::LinkIntegrity,
+            DomStringReflectionDescriptor::new_html_element(
+                "HTMLLinkElement",
+                "link",
+                "integrity",
+                "integrity",
+            ),
         ),
         (
             DomStringReflection::LinkMedia,

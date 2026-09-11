@@ -8272,6 +8272,58 @@ fn html_link_as_reflects_attribute() {
 }
 
 #[test]
+fn html_link_integrity_reflects_attribute_on_live_and_detached_documents() {
+    let mut vm = new_storage_test_vm("https://link-integrity.test/");
+
+    let result = vm
+        .eval(
+            r#"
+(() => {
+  const assert = (condition, message) => {
+    if (!condition) throw new Error(message);
+  };
+  const descriptor = Object.getOwnPropertyDescriptor(HTMLLinkElement.prototype, "integrity");
+  assert(descriptor && typeof descriptor.get === "function" &&
+    typeof descriptor.set === "function", "prototype accessor");
+  assert(descriptor.enumerable && descriptor.configurable, "descriptor flags");
+  const documents = [
+    document,
+    document.implementation.createHTMLDocument(""),
+    new DOMParser().parseFromString("<link integrity='sha384-parsed'>", "text/html")
+  ];
+  assert(documents[2].querySelector("link").integrity === "sha384-parsed", "parsed attribute");
+  for (const doc of documents) {
+    const link = doc.createElement("link");
+    assert(link.integrity === "" && !link.hasAttribute("integrity"), "missing attribute");
+    link.integrity = "sha384-element";
+    assert(link.getAttribute("integrity") === "sha384-element", "IDL assignment sets attribute");
+    assert(!Object.prototype.hasOwnProperty.call(link, "integrity"), "assignment uses prototype");
+    link.setAttribute("integrity", "sha256-attribute");
+    assert(link.integrity === "sha256-attribute", "content attribute updates getter");
+    link.integrity = "";
+    assert(link.integrity === "" && link.hasAttribute("integrity"), "explicit empty attribute");
+    link.integrity = null;
+    assert(link.getAttribute("integrity") === "null", "DOMString conversion");
+    link.removeAttribute("integrity");
+    assert(link.integrity === "" && !link.hasAttribute("integrity"), "removed attribute");
+  }
+  const div = document.createElement("div");
+  for (const callback of [() => descriptor.get.call(div), () => descriptor.set.call(div, "hash")]) {
+    let error;
+    try { callback(); } catch (caught) { error = caught; }
+    assert(error instanceof TypeError, "incompatible receiver");
+  }
+  assert(!div.hasAttribute("integrity"), "invalid setter leaves receiver unchanged");
+  return "ok";
+})()
+"#,
+        )
+        .expect("link integrity should reflect its attribute through the owning prototype");
+
+    assert_eq!(result, "ok");
+}
+
+#[test]
 fn element_part_exposes_dom_token_list() {
     let mut vm = new_storage_test_vm("https://element-part-list.test/");
 
