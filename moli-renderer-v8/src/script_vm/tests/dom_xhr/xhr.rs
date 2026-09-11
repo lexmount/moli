@@ -756,7 +756,7 @@ fn xml_http_request_open_and_abort_keep_accessor_backed_state_without_own_props(
   xhr.abort();
   return [
     ...afterOpen,
-    xhr.readyState === 0,
+    xhr.readyState === 1,
     xhr.status === 0,
     xhr.statusText === '',
     xhr.responseURL === '',
@@ -778,9 +778,87 @@ fn xml_http_request_open_and_abort_keep_accessor_backed_state_without_own_props(
 
     assert_eq!(
         result,
-        "true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|false|true|true|true|false|true|true|true"
+        "true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|false|false|false|true|false|false|false|true|true"
     );
 }
+
+#[test]
+fn xml_http_request_abort_uses_internal_state_and_resets_completed_response() {
+    let mut vm = new_storage_test_vm("https://xhr-abort-internal-state.test/");
+    let result = vm
+        .eval(
+            r#"
+(() => {
+  const xhr = new XMLHttpRequest();
+  const state = Object.getOwnPropertyDescriptor(XMLHttpRequest.prototype, "readyState").get;
+  const states = [];
+  let aborts = 0;
+  xhr.onreadystatechange = () => states.push(state.call(xhr));
+  xhr.onabort = () => ++aborts;
+  Object.defineProperty(xhr, "readyState", { get() { throw new Error("public readyState read"); } });
+  xhr.abort();
+  const unsent = state.call(xhr);
+  xhr.open("POST", "data:text/plain,complete", false);
+  xhr.abort();
+  const opened = state.call(xhr);
+  xhr.send({ toString() { xhr.abort(); return "payload"; } });
+  const completed = [state.call(xhr), xhr.status, xhr.responseText];
+  xhr.abort();
+  return JSON.stringify({ unsent, opened, completed,
+    reset: [state.call(xhr), xhr.status, xhr.statusText, xhr.responseText,
+      xhr.responseURL, xhr.getAllResponseHeaders()], states, aborts });
+})()
+"#,
+        )
+        .expect("abort should use private state and clear a completed response without events");
+    assert_eq!(
+        result,
+        r#"{"unsent":0,"opened":1,"completed":[4,200,"complete"],"reset":[0,0,"","","",""],"states":[1,4],"aborts":0}"#
+    );
+}
+
+#[test]
+fn xml_http_request_abort_preserves_request_started_by_readystatechange() {
+    let mut vm = new_storage_test_vm("https://xhr-abort-reopen.test/");
+    vm.eval(
+        r#"
+(() => {
+  const xhr = new XMLHttpRequest();
+  const events = globalThis.__xhrAbortReopenEvents = [];
+  let restarted = false;
+  xhr.onreadystatechange = () => {
+    if (xhr.readyState === 4 && !restarted) {
+      restarted = true;
+      events.push(`abort-ready:${xhr.readyState}:${xhr.status}`);
+      xhr.open("GET", "data:text/plain,second");
+      xhr.send();
+      events.push(`reopened:${xhr.readyState}`);
+    }
+  };
+  xhr.onloadstart = () => {
+    if (!restarted) {
+      xhr.abort();
+      events.push(`after-abort:${xhr.readyState}`);
+    }
+  };
+  xhr.onabort = () => events.push(`abort:${xhr.readyState}`);
+  xhr.onload = () => events.push(`load:${xhr.responseText}`);
+  xhr.onloadend = () => events.push(`loadend:${xhr.readyState}`);
+  xhr.open("GET", "data:text/plain,first");
+  xhr.send();
+})()
+"#,
+    )
+    .expect("abort readystatechange should be able to reopen and send another request");
+    vm.eval("0")
+        .expect("follow-up checkpoint should deliver the replacement request");
+    assert_eq!(
+        vm.eval("__xhrAbortReopenEvents.join('|')")
+            .expect("replacement request events"),
+        "abort-ready:4:0|reopened:1|abort:1|loadend:1|after-abort:1|load:second|loadend:4"
+    );
+}
+
 #[test]
 fn xml_http_request_methods_apply_webidl_argument_conversion() {
     let mut vm = new_storage_test_vm("https://xhr-webidl-args.test/");
@@ -1080,6 +1158,7 @@ fn xml_http_request_default_response_type_parses_response_xml_for_document_mime(
 
 #[test]
 fn xml_http_request_response_document_uses_response_url_and_requester_origin() {
+    let environment = moli_v8_platform::ProcessEnvironmentOwner::default();
     for child_realm in [false, true] {
         for (mime, response_type) in [
             ("application/xml", ""),
@@ -1090,8 +1169,7 @@ fn xml_http_request_response_document_uses_response_url_and_requester_origin() {
                 "https://requester.example/page/index.html",
                 "<!doctype html><html><body></body></html>",
             );
-            vm.set_timezone_override_and_sync_surface(Some("UTC"))
-                .unwrap();
+            environment.set_timezone(Some("UTC")).unwrap();
             vm.eval(&format!(
                 r#"(() => {{
                     const frame = document.createElement('iframe');
@@ -1235,6 +1313,8 @@ fn xml_http_request_document_response_requires_an_eligible_mime_and_well_formed_
                             request_method: "GET".to_owned(),
                             request_headers: Vec::new(),
                             request_body: None,
+                            skip_fetch_security_validation: false,
+                            response_filter: None,
                             body_source_id,
                             head,
                             network_request_headers: None,
@@ -1306,6 +1386,7 @@ fn xml_http_request_document_response_requires_an_eligible_mime_and_well_formed_
 
 #[test]
 fn xhr_streamed_response_documents_keep_distinct_source_modification_times() {
+    let environment = moli_v8_platform::ProcessEnvironmentOwner::default();
     for (mime, response_type) in [
         ("application/xml", ""),
         ("application/xml", "document"),
@@ -1314,8 +1395,7 @@ fn xhr_streamed_response_documents_keep_distinct_source_modification_times() {
         let mut vm = new_storage_test_vm("https://xhr-document-modified.test/");
         vm.document_runtime
             .set_document_source_last_modified(Some(5_025_000.0));
-        vm.set_timezone_override_and_sync_surface(Some("UTC"))
-            .unwrap();
+        environment.set_timezone(Some("UTC")).unwrap();
         vm.set_fetch_subresource_interception(
             true,
             Some(crate::types::SubresourceResourceType::Xhr),
@@ -1363,6 +1443,8 @@ fn xhr_streamed_response_documents_keep_distinct_source_modification_times() {
                     request_method: "GET".to_owned(),
                     request_headers: Vec::new(),
                     request_body: None,
+                    skip_fetch_security_validation: false,
+                    response_filter: None,
                     body_source_id,
                     head: moli_fetch::ResponseHead {
                         final_url: request.url.clone(),
@@ -1425,8 +1507,7 @@ fn xhr_streamed_response_documents_keep_distinct_source_modification_times() {
             .unwrap(),
             r#"["11/06/1994 08:49:37","01/01/1970 00:00:00","01/01/1970 01:23:45",true]"#
         );
-        vm.set_timezone_override_and_sync_surface(Some("Asia/Shanghai"))
-            .unwrap();
+        environment.set_timezone(Some("Asia/Shanghai")).unwrap();
         assert_eq!(
             vm.eval("__responseDocuments[0].lastModified").unwrap(),
             "11/06/1994 16:49:37"
@@ -1500,6 +1581,8 @@ fn xhr_response_decoding_uses_headers_received_overrides_for_buffered_and_stream
                         request_method: "GET".to_owned(),
                         request_headers: Vec::new(),
                         request_body: None,
+                        skip_fetch_security_validation: false,
+                        response_filter: None,
                         body_source_id,
                         head,
                         network_request_headers: None,
