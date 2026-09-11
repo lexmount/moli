@@ -1,20 +1,5 @@
 use super::super::super::{detached_child_node_objects, detached_node_type};
 
-pub(super) fn collect_detached_elements<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    root: v8::Local<'s, v8::Object>,
-    out: &mut Vec<v8::Local<'s, v8::Object>>,
-    matches: &mut impl FnMut(&mut v8::PinScope<'s, '_>, v8::Local<'s, v8::Object>) -> bool,
-) {
-    let mut stack = vec![root];
-    while let Some(node) = stack.pop() {
-        if detached_node_type(scope, node) == Some(1) && matches(scope, node) {
-            out.push(node);
-        }
-        stack.extend(detached_child_node_objects(scope, node).into_iter().rev());
-    }
-}
-
 pub(super) fn find_detached_element<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     root: v8::Local<'s, v8::Object>,
